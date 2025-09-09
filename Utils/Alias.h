@@ -27,7 +27,7 @@ namespace Utils {
 		{
 			std::vector<double> probabilities(statevector.size());
 			double accum = 0.;
-			for (Eigen::Index i = 0; i < statevector.size(); ++i)
+			for (Eigen::Index i = 0; i < static_cast<Eigen::Index>(statevector.size()); ++i)
 			{
 				probabilities[i] = std::norm(statevector[i]);
 				accum += probabilities[i];
@@ -47,7 +47,7 @@ namespace Utils {
 			under.reserve(probabilities.size());
 			over.reserve(probabilities.size());
 
-			for (Eigen::Index i = 0; i < probabilities.size(); ++i)
+			for (Eigen::Index i = 0; i < static_cast<Eigen::Index>(probabilities.size()); ++i)
 			{
 				const double prob = probabilities[i] * probabilities.size();
 				if (prob < 1.)
