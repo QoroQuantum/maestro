@@ -51,8 +51,9 @@ namespace TensorNetworks {
 			Eigen::Index maxRank = 4;
 			Eigen::Index nextRank = 4;
 
-			Eigen::Index tensor1Id;
-			Eigen::Index tensor2Id;
+			// the first two initialized just to keep the compiler happy
+			Eigen::Index tensor1Id = 0;
+			Eigen::Index tensor2Id = 1;
 			Eigen::Index resultRank = 4;
 			Eigen::Index bestCost = 4;
 
