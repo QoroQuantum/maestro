@@ -19,7 +19,7 @@
 #include "QubitRegister.h"
 
 #include "NetworkJob.h"
-#include "Estimators/SimulatorsEstimatorInterface.h"
+#include "../Estimators/SimulatorsEstimatorInterface.h"
 
 namespace Network {
 

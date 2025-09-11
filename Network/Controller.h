@@ -29,8 +29,8 @@ Any files within this Codebase can not be copied and/or distributed without the 
 #define _CONTROLLER_INTERFACE_H_
 
 #include "Host.h"
-#include "Simulators/Simulator.h"
-#include "Circuit/Circuit.h"
+#include "../Simulators/Simulator.h"
+#include "../Circuit/Circuit.h"
 
 namespace Distribution {
 	template<typename Time> class IRemapper;

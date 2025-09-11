@@ -19,8 +19,8 @@
 #include <boost/container_hash/hash.hpp>
 #include <unordered_set>
 
-#include "Simulators/Factory.h"
-#include "Circuit/Circuit.h"
+#include "../Simulators/Factory.h"
+#include "../Circuit/Circuit.h"
 #include "Controller.h"
 
 

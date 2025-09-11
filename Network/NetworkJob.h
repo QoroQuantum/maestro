@@ -12,8 +12,8 @@
 #ifndef  _NETWORK_JOB_H
 #define _NETWORK_JOB_H
 
-#include "Utils/ThreadsPool.h"
-#include "Types.h"
+#include "../Utils/ThreadsPool.h"
+#include "../Types.h"
 
 namespace Network {
 

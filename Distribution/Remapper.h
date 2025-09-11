@@ -15,10 +15,10 @@
 #ifndef _REMAPPER_H_
 #define _REMAPPER_H_
 
-#include "Circuit/Circuit.h"
-#include "Circuit/Operations.h"
-#include "Circuit/Reset.h"
-#include "Network/Network.h"
+#include "../Circuit/Circuit.h"
+#include "../Circuit/Operations.h"
+#include "../Circuit/Reset.h"
+#include "../Network/Network.h"
 
 
 namespace Distribution {

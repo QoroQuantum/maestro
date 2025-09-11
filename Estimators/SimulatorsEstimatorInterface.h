@@ -12,8 +12,8 @@
 #ifndef __SIMULATORS_ESTIMATOR_INTERFACE_H_
 #define __SIMULATORS_ESTIMATOR_INTERFACE_H_
 
-#include "Simulators/Simulator.h"
-#include "Circuit/Circuit.h"
+#include "../Simulators/Simulator.h"
+#include "../Circuit/Circuit.h"
 
 namespace Estimators {
 

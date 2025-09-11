@@ -12,7 +12,7 @@
 #ifndef _OPTIMISER_H_
 #define _OPTIMISER_H_
 
-#include "Network/Network.h"
+#include "../Network/Network.h"
 
 namespace Graphs {
 
