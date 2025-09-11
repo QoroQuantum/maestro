@@ -1,15 +1,3 @@
-/*******************************************************
-
-Copyright (C) 2023 2639731 ONTARIO INC. <joe.diadamo.dryrock@gmail.com>
-
-The files in this repository make up the Codebase.
-
-All files in this Codebase are owned by 2639731 ONTARIO INC..
-
-Any files within this Codebase can not be copied and/or distributed without the express permission of 2639731 ONTARIO INC.
-
-*******************************************************/
-
 /**
  * @file Remapper.h
  * @version 1.0
