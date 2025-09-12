@@ -37,8 +37,6 @@ public:
 #else
 		auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(qubits, cbits);
 #endif
-		
-		network->CreateSimulator();
 
 		// lock the mutex to safely add the simulator
 		std::lock_guard<std::mutex> lock(simpleSimulatorsMutex);
