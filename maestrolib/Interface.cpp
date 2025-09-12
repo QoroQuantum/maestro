@@ -131,15 +131,15 @@ extern "C" char* SimpleExecute(unsigned long int simpleSim, const char* jsonCirc
 
 	const std::string maxBondDim = Json::JsonParserMaestro<>::GetConfigString("matrix_product_state_max_bond_dimension", configJson);
 	if (!maxBondDim.empty())
-		network->GetSimulator()->Configure("matrix_product_state_max_bond_dimension", maxBondDim.c_str());
+		network->Configure("matrix_product_state_max_bond_dimension", maxBondDim.c_str());
 
 	const std::string singularValueThreshold = Json::JsonParserMaestro<>::GetConfigString("matrix_product_state_truncation_threshold", configJson);
 	if (!singularValueThreshold.empty())
-		network->GetSimulator()->Configure("matrix_product_state_truncation_threshold", singularValueThreshold.c_str());
+		network->Configure("matrix_product_state_truncation_threshold", singularValueThreshold.c_str());
 	
 	const std::string mpsSample = Json::JsonParserMaestro<>::GetConfigString("mps_sample_measure_algorithm", configJson);
 	if (!mpsSample.empty())
-		network->GetSimulator()->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
+		network->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
 
 
 	// TODO: get from config the allowed simulators types and so on, if set

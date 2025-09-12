@@ -577,6 +577,31 @@ namespace Network {
 		}
 
 		/**
+		 * @brief Configures the network.
+		 *
+		 * This function is called to configure the network (for example the simulator(s) used by the network.
+		 *
+		 * @param key The key of the configuration option.
+		 * @param value The value of the configuration.
+		 */
+		void Configure(const char* key, const char* value) override
+		{
+			if (!key || !value) return;
+
+			if (std::string("matrix_product_state_max_bond_dimension") == key)
+				maxBondDim = value;
+			else if (std::string("matrix_product_state_truncation_threshold") == key)
+				singularValueThreshold = value;
+			else if (std::string("mps_sample_measure_algorithm") == key)
+				mpsSample = value;
+			else if (std::string("max_simulators") == key)
+				maxSimulators = std::stoull(value);
+
+			if (simulator)
+				simulator->Configure(key, value);
+		}
+
+		/**
 		 * @brief Get the simulator for the network.
 		 *
 		 * Get the simulator for the network.

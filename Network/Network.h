@@ -212,6 +212,17 @@ namespace Network {
 
 
 		/**
+		 * @brief Configures the network.
+		 *
+		 * This function is called to configure the network (for example the simulator(s) used by the network.
+		 * 
+		 * @param key The key of the configuration option.
+		 * @param value The value of the configuration.
+		 */
+		virtual void Configure(const char* key, const char* value) = 0;
+
+
+		/**
 		 * @brief Create the scheduler for the network.
 		 *
 		 * Creates the scheduler for the network.
