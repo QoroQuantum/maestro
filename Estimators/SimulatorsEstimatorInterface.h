@@ -17,6 +17,15 @@
 
 namespace Estimators {
 
+	/**
+     * @class SimulatorsEstimatorInterface
+     * @brief An interface for runtime estimators.
+     *
+	 * A class derived from this is able to estimate the time to simulate a circuit, using various means (for example using the O() complexity of the algorithms).
+	 * It uses the estimation to choose the best simulator for a given circuit and number of shots.
+	 * 
+	 * @tparam Time The time type used for operation timing.
+     */
 	template<typename Time = Types::time_type> class SimulatorsEstimatorInterface {
 	public:
 		virtual ~SimulatorsEstimatorInterface() = default;

@@ -16,6 +16,16 @@
 
 namespace Estimators {
 
+	/**
+	 * @class EstimatorInterface
+	 * @brief An interface for various runtime estimators.
+	 *
+	 * This interface defines a method for estimating the execution time of quantum simulations.
+	 * There could be various implementations of this interface that provide different estimation strategies,
+	 * also they might be specialized for certain simulators and/or simulation types (for example clifford, mps, statevector).
+	 * It's not used directly, but in an implementation of the SimulatorsEstimatorInterface.
+	 * @sa SimulatorsEstimatorInterface
+	 */
 	class EstimatorInterface {
 	public:
 		virtual ~EstimatorInterface() = default;

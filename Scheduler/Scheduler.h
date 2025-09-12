@@ -20,6 +20,15 @@
 
 namespace Schedulers {
 
+	/**
+	 * @struct ExecuteCircuit
+	 * @brief A struct representing a circuit to be executed along with the number of shots.
+	 * 
+	 * A struct representing a circuit to be executed along with the number of shots.
+	 * 
+	 * @tparam Time The time type to use for the circuit.
+	 * @sa Circuits::Circuit
+	 */
 	template<typename Time = Types::time_type> struct CircuitInfo : ExecuteCircuit<Time>
 	{
 		using BitMapping = typename Circuits::Circuit<Time>::BitMapping;
@@ -53,6 +62,17 @@ namespace Schedulers {
 	};
 
 
+	/**
+	 * @struct ExecuteJob
+	 * @brief A struct representing a job to be executed on a host.
+	 * 
+	 * A struct representing a job to be executed on a host, containing both the circuit and the number of shots information, also a shared pointer to the network to execute on.
+	 * Calling DoWork() will execute the job on the host network and store the results in the results member.
+	 * 
+	 * @tparam Time The time type to use for the network and circuit.
+	 * @sa Network::INetwork
+	 * @sa Circuits::Circuit
+	 */
 	template<typename Time = Types::time_type> struct ExecuteJob
 	{
 		using NetworkClass = typename Network::INetwork<Time>;
