@@ -16,6 +16,13 @@
 
 namespace Graphs {
 
+	/**
+	 * @enum OptimiserType
+	 * @brief The type of optimiser.
+	 * 
+	 * The type of optimiser to use.
+	 * The 'optimal' is not actually optimal, unless the number of qubits is small.
+	 */
 	enum class OptimiserType {
 		kMonteCarlo,
 		kGreedy,
@@ -24,6 +31,15 @@ namespace Graphs {
 		kNone
 	};
 
+	/**
+	 * @class IOptimiser
+	 * @brief Interface for optimiser classes.
+	 *
+	 * Circuit optimisers should implement this interface.
+	 * They are use to optimise the circuit for a given network, reducing the number of cuts/distributed quantum gates needed.
+	 * 
+	 * @tparam Time The time type used for operations timing.
+	 */
 	template<typename Time = Types::time_type> class IOptimiser : public std::enable_shared_from_this<IOptimiser<Time>>
 	{
 	public:
