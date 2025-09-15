@@ -117,6 +117,8 @@ namespace Simulators {
 						CheckFunction((void*)fBasisStateProbability, __LINE__);
 						fAllProbabilities = (int (*)(void* obj, double* probabilities))GetFunction("AllProbabilities");
 						CheckFunction((void*)fAllProbabilities, __LINE__);
+						fExpectationValue = (double (*)(void*, char*, int))GetFunction("ExpectationValue");
+						CheckFunction((void*)fExpectationValue, __LINE__);
 
 						fApplyX = (int (*)(void*, int))GetFunction("ApplyX");
 						CheckFunction((void*)fApplyX, __LINE__);
@@ -579,6 +581,16 @@ namespace Simulators {
 				throw std::runtime_error("GpuLibrary: Unable to get all probabilities");
 
 			return false;
+		}
+
+		double ExpectationValue(void* obj, char* pauliString, int len) const
+		{
+			if (LibraryHandle)
+				return fExpectationValue(obj, pauliString, len);
+			else
+				throw std::runtime_error("GpuLibrary: Unable to get expectation value");
+
+			return 0;
 		}
 
 		bool ApplyX(void* obj, int qubit)
@@ -1449,6 +1461,7 @@ namespace Simulators {
 		double (*fProbability)(void*, int*, int*, int);
 		double (*fBasisStateProbability)(void*, long long int);
 		int (*fAllProbabilities)(void*, double*);
+		double (*fExpectationValue)(void*, char*, int);
 
 		int (*fApplyX)(void*, int);
 		int (*fApplyY)(void*, int);
