@@ -241,6 +241,9 @@ namespace Simulators {
 						fMPSClone = (void* (*)(void*))GetFunction("MPSClone");
 						CheckFunction((void*)fMPSClone, __LINE__);
 
+						fMPSExpectationValue = (double (*)(void*, char*, int))GetFunction("MPSExpectationValue");
+						CheckFunction((void*)fMPSExpectationValue, __LINE__);
+
 						fMPSApplyX = (int (*)(void*, unsigned int))GetFunction("MPSApplyX");
 						CheckFunction((void*)fMPSApplyX, __LINE__);
 						fMPSApplyY = (int (*)(void*, unsigned int))GetFunction("MPSApplyY");
@@ -1149,6 +1152,16 @@ namespace Simulators {
 			return nullptr;
 		}
 
+		double MPSExpectationValue(void* obj, char* pauliString, int len) const
+		{
+			if (LibraryHandle)
+				return fMPSExpectationValue(obj, pauliString, len);
+			else
+				throw std::runtime_error("GpuLibrary: Unable to get mps expectation value");
+
+			return 0;
+		}
+
 		bool MPSApplyX(void* obj, unsigned int siteA)
 		{
 			if (LibraryHandle)
@@ -1526,6 +1539,8 @@ namespace Simulators {
 		int (*fMPSRestoreState)(void*);
 		int (*fMPSCleanSavedState)(void*);
 		void* (*fMPSClone)(void*);
+
+		double (*fMPSExpectationValue)(void*, char*, int);
 
 		int (*fMPSApplyX)(void*, unsigned int);
 		int (*fMPSApplyY)(void*, unsigned int);
