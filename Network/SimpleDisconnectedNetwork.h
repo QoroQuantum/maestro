@@ -1537,6 +1537,28 @@ namespace Network {
 			}
 #endif
 
+			if (simulatorTypes.empty()) return nullptr;
+			else if (simulatorTypes.size() == 1)
+			{
+				simType = simulatorTypes[0].first;
+				method = simulatorTypes[0].second;
+				
+				std::shared_ptr<Simulators::ISimulator> sim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
+				if (sim)
+				{
+					if (method == Simulators::SimulationType::kMatrixProductState)
+					{
+						if (!maxBondDim.empty()) sim->Configure("matrix_product_state_max_bond_dimension", maxBondDim.c_str());
+						if (!singularValueThreshold.empty()) sim->Configure("matrix_product_state_truncation_threshold", singularValueThreshold.c_str());
+						if (!mpsSample.empty()) sim->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
+					}
+					sim->SetMultithreading(true);
+					Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(counts, dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed, multithreading);
+
+					return sim;
+				}
+			}
+
 			return simulatorsEstimator->ChooseBestSimulator(simulatorTypes, dcirc, counts, nrQubits, nrCbits, nrResultCbits, simType, method, executed,
 				maxBondDim, singularValueThreshold, mpsSample,
 				GetMaxSimulators(),

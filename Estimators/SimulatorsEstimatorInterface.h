@@ -36,6 +36,25 @@ namespace Estimators {
 			const std::string& maxBondDim, const std::string& singularValueThreshold, const std::string& mpsSample,
 			size_t maxSimulators,
 			bool multithreading = false) const = 0;
+
+
+		static void ExecuteUpToMeasurements(size_t shots, const std::shared_ptr<Circuits::Circuit<Time>>& dcirc, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, const std::shared_ptr<Simulators::ISimulator>& sim, std::vector<bool>& executed, bool multithreading)
+		{
+			Circuits::OperationState state;
+			state.AllocateBits(nrCbits);
+
+			const bool hasMeasurementsOnlyAtEnd = !dcirc->HasOpsAfterMeasurements();
+			const bool specialOptimizationForStatevector = sim->GetSimulationType() == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
+			const bool specialOptimizationForMPS = sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductState && hasMeasurementsOnlyAtEnd;
+
+			sim->AllocateQubits(nrQubits);
+			sim->Initialize();
+
+			executed = dcirc->ExecuteNonMeasurements(sim, state);
+
+			if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
+				sim->SaveState();
+		}
 	};
 
 }
