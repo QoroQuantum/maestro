@@ -238,7 +238,7 @@ namespace Simulators {
 			return nullptr;
 		}
 
-		double ExpectationValue(char* pauliString, int len) const
+		double ExpectationValue(const char* pauliString, int len) const
 		{
 			if (obj)
 				return lib->MPSExpectationValue(obj, pauliString, len);

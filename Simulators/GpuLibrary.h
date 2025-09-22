@@ -117,7 +117,7 @@ namespace Simulators {
 						CheckFunction((void*)fBasisStateProbability, __LINE__);
 						fAllProbabilities = (int (*)(void* obj, double* probabilities))GetFunction("AllProbabilities");
 						CheckFunction((void*)fAllProbabilities, __LINE__);
-						fExpectationValue = (double (*)(void*, char*, int))GetFunction("ExpectationValue");
+						fExpectationValue = (double (*)(void*, const char*, int))GetFunction("ExpectationValue");
 						CheckFunction((void*)fExpectationValue, __LINE__);
 
 						fApplyX = (int (*)(void*, int))GetFunction("ApplyX");
@@ -241,7 +241,7 @@ namespace Simulators {
 						fMPSClone = (void* (*)(void*))GetFunction("MPSClone");
 						CheckFunction((void*)fMPSClone, __LINE__);
 
-						fMPSExpectationValue = (double (*)(void*, char*, int))GetFunction("MPSExpectationValue");
+						fMPSExpectationValue = (double (*)(void*, const char*, int))GetFunction("MPSExpectationValue");
 						CheckFunction((void*)fMPSExpectationValue, __LINE__);
 
 						fMPSApplyX = (int (*)(void*, unsigned int))GetFunction("MPSApplyX");
@@ -586,7 +586,7 @@ namespace Simulators {
 			return false;
 		}
 
-		double ExpectationValue(void* obj, char* pauliString, int len) const
+		double ExpectationValue(void* obj, const char* pauliString, int len) const
 		{
 			if (LibraryHandle)
 				return fExpectationValue(obj, pauliString, len);
@@ -1152,7 +1152,7 @@ namespace Simulators {
 			return nullptr;
 		}
 
-		double MPSExpectationValue(void* obj, char* pauliString, int len) const
+		double MPSExpectationValue(void* obj, const char* pauliString, int len) const
 		{
 			if (LibraryHandle)
 				return fMPSExpectationValue(obj, pauliString, len);
@@ -1474,7 +1474,7 @@ namespace Simulators {
 		double (*fProbability)(void*, int*, int*, int);
 		double (*fBasisStateProbability)(void*, long long int);
 		int (*fAllProbabilities)(void*, double*);
-		double (*fExpectationValue)(void*, char*, int);
+		double (*fExpectationValue)(void*, const char*, int);
 
 		int (*fApplyX)(void*, int);
 		int (*fApplyY)(void*, int);
@@ -1540,7 +1540,7 @@ namespace Simulators {
 		int (*fMPSCleanSavedState)(void*);
 		void* (*fMPSClone)(void*);
 
-		double (*fMPSExpectationValue)(void*, char*, int);
+		double (*fMPSExpectationValue)(void*, const char*, int);
 
 		int (*fMPSApplyX)(void*, unsigned int);
 		int (*fMPSApplyY)(void*, unsigned int);

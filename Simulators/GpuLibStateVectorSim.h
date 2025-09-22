@@ -229,7 +229,7 @@ namespace Simulators {
 			return false;
 		}
 
-		double ExpectationValue(char* pauliString, int len) const
+		double ExpectationValue(const char* pauliString, int len) const
 		{
 			if (obj)
 				return lib->ExpectationValue(obj, pauliString, len);
