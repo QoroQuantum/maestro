@@ -196,7 +196,7 @@ namespace Simulators {
 			 * @brief Configures the state.
 			 *
 			 * This function is called to configure the simulator.
-			 * 
+			 *
 			 * @param key The key of the configuration option.
 			 * @param value The value of the configuration.
 			 */
@@ -559,7 +559,7 @@ namespace Simulators {
 				// TODO: this is inefficient, maybe implement it better in qcsim
 				// for now it has the possibility of measuring a qubits interval, but not a list of qubits
 				std::unordered_map<Types::qubit_t, Types::qubit_t> result;
-				
+
 				DontNotify();
 
 				if (simulationType == SimulationType::kMatrixProductState)
@@ -672,11 +672,64 @@ namespace Simulators {
 						}
 					}
 				}
-				
+
 				Notify();
 				NotifyObservers(qubits);
 
 				return result;
+			}
+
+
+			/**
+			 * @brief Returns the expected value of a Pauli string.
+			 *
+			 * Use it to obtain the expected value of a Pauli string.
+			 * The Pauli string is a string of characters representing the Pauli operators, e.g. "XIZY".
+			 * The length of the string should be less or equal to the number of qubits (if it's less, it's completed with I).
+			 *
+			 * @param pauliString The Pauli string to obtain the expected value for.
+			 * @return The expected value of the specified Pauli string.
+			 */
+			double ExpectationValue(const std::string& pauliString) override
+			{
+				if (simulationType == SimulationType::kStabilizer)
+					return cliffordSimulator->ExpectationValue(pauliString);
+				else if (simulationType == SimulationType::kTensorNetwork)
+					return tensorNetwork->ExpectationValue(pauliString);
+
+				// statevector or mps
+				static const QC::Gates::PauliXGate<> xgate;
+				static const QC::Gates::PauliYGate<> ygate;
+				static const QC::Gates::PauliZGate<> zgate;
+
+				std::vector<QC::Gates::AppliedGate<Eigen::MatrixXcd>> pauliStringVec;
+				pauliStringVec.reserve(pauliString.size());
+
+				for (size_t q = 0; q < pauliString.size(); ++q)
+				{
+					QC::Gates::AppliedGate<Eigen::MatrixXcd> ag;
+
+					switch (toupper(pauliString[q])) {
+					case 'X':
+						pauliStringVec.emplace_back(xgate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
+						break;
+					case 'Y':
+						pauliStringVec.emplace_back(ygate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
+						break;
+					case 'Z':
+						pauliStringVec.emplace_back(zgate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
+						break;
+					case 'I':
+						[[fallthrough]];
+					default:
+						break;
+					}
+				}
+
+				if (simulationType == SimulationType::kMatrixProductState)
+					return mpsSimulator->ExpectationValue(pauliStringVec).real();
+
+				return state->ExpectationValue(pauliStringVec).real();
 			}
 
 			/**
@@ -695,7 +748,7 @@ namespace Simulators {
 			 * @brief Returns the type of simulation.
 			 *
 			 * Returns the type of simulation.
-			 * 
+			 *
 			 * @return The type of simulation.
 			 * @sa SimulationType
 			 */
@@ -856,7 +909,7 @@ namespace Simulators {
 					}
 					return result;
 				}
-				
+
 				throw std::runtime_error("QCSimState::MeasureNoCollapse: Invalid simulation type for measuring all the qubits without collapsing the state.");
 
 				return 0;

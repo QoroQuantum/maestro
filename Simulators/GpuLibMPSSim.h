@@ -238,10 +238,10 @@ namespace Simulators {
 			return nullptr;
 		}
 
-		double ExpectationValue(const char* pauliString, int len) const
+		double ExpectationValue(const std::string& pauliString) const
 		{
 			if (obj)
-				return lib->MPSExpectationValue(obj, pauliString, len);
+				return lib->MPSExpectationValue(obj, pauliString.c_str(), pauliString.length());
 
 			return 0.0;
 		}

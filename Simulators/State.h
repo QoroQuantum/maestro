@@ -279,6 +279,18 @@ namespace Simulators {
 		virtual std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(const Types::qubits_vector& qubits, size_t shots = 1000) = 0;
 
 		/**
+		 * @brief Returns the expected value of a Pauli string.
+		 *
+		 * Use it to obtain the expected value of a Pauli string.
+		 * The Pauli string is a string of characters representing the Pauli operators, e.g. "XIZY".
+		 * The length of the string should be less or equal to the number of qubits (if it's less, it's completed with I).
+		 * 
+		 * @param pauliString The Pauli string to obtain the expected value for.
+		 * @return The expected value of the specified Pauli string.
+		 */
+		virtual double ExpectationValue(const std::string& pauliString) = 0;
+
+		/**
 		 * @brief Registers an observer.
 		 *
 		 * Registers an observer that will be notified when the state changes.

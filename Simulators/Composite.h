@@ -481,7 +481,41 @@ namespace Simulators {
 				return result;
 			}
 
-			// part of the interface is easy:
+
+			/**
+			 * @brief Returns the expected value of a Pauli string.
+			 *
+			 * Use it to obtain the expected value of a Pauli string.
+			 * The Pauli string is a string of characters representing the Pauli operators, e.g. "XIZY".
+			 * The length of the string should be less or equal to the number of qubits (if it's less, it's completed with I).
+			 *
+			 * @param pauliString The Pauli string to obtain the expected value for.
+			 * @return The expected value of the specified Pauli string.
+			 */
+			double ExpectationValue(const std::string& pauliString) override
+			{
+				std::unordered_map<size_t, std::string> pauliStrings;
+
+				for (size_t q = 0; q < pauliString.size(); ++q)
+				{
+					const char op = toupper(pauliString[q]);
+					if (op == 'I') continue;
+
+					const size_t simId = qubitsMap[q];
+					const size_t localQubit = simulators[simId]->GetQubitsMap().at(q);
+
+					if (pauliStrings[simId].size() <= localQubit)
+						pauliStrings[simId].resize(localQubit + 1, 'I');
+					
+					pauliStrings[simId][localQubit] = op;
+				}
+
+				double result = 1.0;
+				for (auto& [id, localPauliString] : pauliStrings)
+					result *= simulators[id]->ExpectationValue(localPauliString);
+
+				return result;
+			}
 
 			/**
 			 * @brief Returns the type of simulator.

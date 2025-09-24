@@ -121,40 +121,69 @@ namespace TensorNetworks {
 			return result;
 		}
 
+		/**
+		 * @brief Returns the expected value of a Pauli string.
+		 *
+		 * Use it to obtain the expected value of a Pauli string.
+		 * The Pauli string is a string of characters representing the Pauli operators, e.g. "XIZY".
+		 * The length of the string should be less or equal to the number of qubits (if it's less, it's completed with I).
+		 *
+		 * @param pauliString The Pauli string to obtain the expected value for.
+		 * @return The expected value of the specified Pauli string.
+		 */
+		double ExpectationValue(const std::string& pauliString)
+		{
+			if (!contractor) return 0.;
+			contractor->SetMultithreading(enableMultithreading);
+
+			// save
+			const size_t savedSize = tensors.size();
+
+			auto sLastTensors = lastTensors;
+			auto sLastTensorIndices = lastTensorIndices;
+
+			// add the gates from the Pauli string
+			static const QC::Gates::PauliXGate<TensorNode::MatrixClass> XGate;
+			static const QC::Gates::PauliYGate<TensorNode::MatrixClass> YGate;
+			static const QC::Gates::PauliZGate<TensorNode::MatrixClass> ZGate;
+
+			for (Types::qubit_t q = 0; q < pauliString.size(); ++q)
+			{
+				const char op = toupper(pauliString[q]);
+				switch (op)
+				{
+				case 'X':
+					AddOneQubitGate(XGate, q, false, false);
+					break;
+				case 'Y':
+					AddOneQubitGate(YGate, q, false, false);
+					break;
+				case 'Z':
+					AddOneQubitGate(ZGate, q, false, false);
+					break;
+				case 'I':
+					[[fallthrough]];
+				default:
+					break;
+				}
+			}
+
+			const double result = Contract();
+
+			// restore
+			tensors.resize(savedSize);
+			lastTensors.swap(sLastTensors);
+			lastTensorIndices.swap(sLastTensorIndices);
+
+			return result;
+		}
+
 
 		double getBasisStateProbability(size_t outcome)
 		{
-			// WARNING: this is quite costly!
 			SaveStateMinimal();
-			//SaveState();
-
+	
 			size_t mask = 1ULL;
-
-			/*
-			size_t lastQubit = GetNumQubits() - 1;	
-
-			double prob = 1.;
-			for (Types::qubit_t q = 0; q < lastQubit; ++q)
-			{
-				const bool expected = (outcome & mask) == 0;
-				const double p = Probability(q, expected);
-
-				if (p == 0.)
-				{
-					//RestoreSavedStateMinimalDestructive();
-					RestoreSavedState();
-					return 0.;
-				}
-
-				prob *= p;
-
-				AddProjectorOp(q, expected, p);
-
-				mask <<= 1;
-			}
-
-			prob *= Probability(lastQubit, (outcome & mask) == 0);
-			*/
 
 			for (Types::qubit_t q = 0; q < GetNumQubits(); ++q)
 			{
@@ -168,9 +197,6 @@ namespace TensorNetworks {
 			const double prob = Contract();
 
 			RestoreSavedStateMinimalDestructive();
-			//RestoreSavedState();
-
-			//Disconnect();
 
 			return prob;
 		}

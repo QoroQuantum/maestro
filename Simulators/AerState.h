@@ -21,9 +21,7 @@
 #include "Simulator.h"
 #include "QubitRegister.h"
 
-#ifdef INCLUDED_BY_FACTORY
-
-#include "controllers/state_controller.hpp"
+#include "QiskitAerState.h"
 
 namespace Simulators {
 	// TODO: Maybe use the pimpl idiom https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation for good
@@ -392,6 +390,23 @@ namespace Simulators {
 			}
 
 			/**
+             * @brief Returns the expected value of a Pauli string.
+             *
+             * Use it to obtain the expected value of a Pauli string.
+             * The Pauli string is a string of characters representing the Pauli operators, e.g. "XIZY".
+             * The length of the string should be less or equal to the number of qubits (if it's less, it's completed with I).
+             *
+             * @param pauliString The Pauli string to obtain the expected value for.
+             * @return The expected value of the specified Pauli string.
+             */
+			double ExpectationValue(const std::string& pauliString) override
+			{
+				throw std::runtime_error("ExpectedValue is not implemented for AerState yet.");
+
+				return 0.;
+			}
+
+			/**
 			 * @brief Returns the type of simulator.
 			 *
 			 * Returns the type of simulator.
@@ -707,7 +722,7 @@ namespace Simulators {
 
 		protected:
 			SimulationType simulationType = SimulationType::kStatevector; /**< The simulation type. */
-			std::unique_ptr<AER::AerState> state = std::make_unique<AER::AerState>(); /**< The qiskit aer state. */
+			std::unique_ptr<QiskitAerState> state = std::make_unique<QiskitAerState>(); /**< The qiskit aer state. */
 			AER::Vector<complex_t> savedAmplitudes; /**< The amplitudes, saved. */
 			bool limitSize = false;
 			bool limitEntanglement = false;
@@ -722,8 +737,6 @@ namespace Simulators {
 
 	}
 }
-
-#endif
 
 #endif
 

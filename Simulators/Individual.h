@@ -683,6 +683,21 @@ namespace Simulators {
 			}
 
 			/**
+			 * @brief Returns the expected value of a Pauli string.
+			 *
+			 * Use it to obtain the expected value of a Pauli string.
+			 * The Pauli string is a string of characters representing the Pauli operators, e.g. "XIZY".
+			 * The length of the string should be less or equal to the number of qubits (if it's less, it's completed with I).
+			 *
+			 * @param pauliString The Pauli string to obtain the expected value for.
+			 * @return The expected value of the specified Pauli string.
+			 */
+			double ExpectationValue(const std::string& pauliString) override
+			{
+				return simulator->ExpectationValue(pauliString);
+			}
+
+			/**
 			 * @brief Returns the type of simulator.
 			 *
 			 * Returns the type of simulator.
