@@ -18,9 +18,22 @@
 
 #ifdef INCLUDED_BY_FACTORY
 
-#define private protected
 #include "controllers/state_controller.hpp"
-#undef private
+
+namespace AER {
+
+	class AerStateFake {
+	public:
+		virtual ~AerStateFake() = default;
+
+		bool initialized_;
+		uint_t num_of_qubits_;
+		RngEngine rng_;
+		int seed_ = std::random_device()();
+		std::shared_ptr<QuantumState::Base> state_;
+	};
+
+}
 
 namespace Simulators {
 	// TODO: Maybe use the pimpl idiom https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation for good
@@ -37,11 +50,21 @@ namespace Simulators {
 		class QiskitAerState : public AER::AerState
 		{
 		public:
+			std::shared_ptr<AER::QuantumState::Base> get_state() const
+			{
+				void* ptr = (void*)this;
+				AER::AerStateFake* fakeState = (AER::AerStateFake*)ptr;
+				return fakeState->state_;
+			}
+
 			double expval_pauli(const reg_t& qubits, const std::string& pauli)
 			{
-				if (!state_) return 0.0;
+				auto state = get_state();
+				if (!state)
+					return 0.;
 
-				return state_->expval_pauli(qubits, pauli);
+
+				return state->expval_pauli(qubits, pauli);
 			}
 		};
 
