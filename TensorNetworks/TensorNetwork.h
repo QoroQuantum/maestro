@@ -134,13 +134,8 @@ namespace TensorNetworks {
 		double ExpectationValue(const std::string& pauliString)
 		{
 			if (!contractor) return 0.;
-			contractor->SetMultithreading(enableMultithreading);
 
-			// save
-			const size_t savedSize = tensors.size();
-
-			auto sLastTensors = lastTensors;
-			auto sLastTensorIndices = lastTensorIndices;
+			SaveStateMinimal();
 
 			// add the gates from the Pauli string
 			static const QC::Gates::PauliXGate<TensorNode::MatrixClass> XGate;
@@ -153,13 +148,13 @@ namespace TensorNetworks {
 				switch (op)
 				{
 				case 'X':
-					AddOneQubitGate(XGate, q, false, false);
+					AddOneQubitExpectationValueOp(XGate, q);
 					break;
 				case 'Y':
-					AddOneQubitGate(YGate, q, false, false);
+					AddOneQubitExpectationValueOp(YGate, q);
 					break;
 				case 'Z':
-					AddOneQubitGate(ZGate, q, false, false);
+					AddOneQubitExpectationValueOp(ZGate, q);
 					break;
 				case 'I':
 					[[fallthrough]];
@@ -170,10 +165,7 @@ namespace TensorNetworks {
 
 			const double result = Contract();
 
-			// restore
-			tensors.resize(savedSize);
-			lastTensors.swap(sLastTensors);
-			lastTensorIndices.swap(sLastTensorIndices);
+			RestoreSavedStateMinimalDestructive();
 
 			return result;
 		}
@@ -457,6 +449,40 @@ namespace TensorNetworks {
 		}
 
 	private:
+		void AddOneQubitExpectationValueOp(const QC::Gates::QuantumGateWithOp<TensorNode::MatrixClass>& gate, Types::qubit_t q)
+		{
+			auto tensorNode = std::make_shared<TensorNode>();
+			tensorNode->SetGate(gate, q);
+
+			const auto newTensorId = static_cast<Index>(tensors.size());
+			tensorNode->SetId(newTensorId);
+
+			// connect the tensor to the last tensors on the qubits
+
+			// first, tensors from the network are connected to the new tensor
+			// that is, their output indices are connected to the input indices of the new tensor
+			// second, the new tensor is connected to the tensors from the network
+
+			const auto tensorOnQubitId = lastTensors[q];
+			const auto indexOnQubit = lastTensorIndices[q];
+
+			// connect the last tensor on qubit with the projection tensor
+			const auto& lastTensor = tensors[tensorOnQubitId];
+			lastTensor->connections[indexOnQubit] = newTensorId;
+			lastTensor->connectionsIndices[indexOnQubit] = 0;
+
+			// also do the connection between the projection tensor back to the last tensor
+			tensorNode->connections[0] = tensorOnQubitId;
+			tensorNode->connectionsIndices[0] = indexOnQubit;
+
+			// add the tensor to the network
+			tensors.emplace_back(std::move(tensorNode));
+
+			// and set the last tensor on the qubit to be the new tensor
+			lastTensors[q] = newTensorId;
+			lastTensorIndices[q] = 1; // the next index is 1, this is going to be the 'connect' one
+		}
+
 		void AddOneQubitGate(const QC::Gates::QuantumGateWithOp<TensorNode::MatrixClass>& gate, Types::qubit_t q, bool contractWithTwoQubitTensors = false, bool contract = true)
 		{
 			// instead of adding it to the network, simply contract it with the previous tensor on the qubit

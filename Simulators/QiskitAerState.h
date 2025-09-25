@@ -17,7 +17,9 @@
 #ifndef NO_QISKIT_AER
 #ifdef INCLUDED_BY_FACTORY
 
+#define private protected
 #include "controllers/state_controller.hpp"
+#undef private
 
 namespace Simulators {
 	// TODO: Maybe use the pimpl idiom https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation for good
@@ -34,6 +36,12 @@ namespace Simulators {
 		class QiskitAerState : public AER::AerState
 		{
 		public:
+			double expval_pauli(const reg_t& qubits, const std::string& pauli)
+			{
+				if (!state_) return 0.0;
+
+				return state_->expval_pauli(qubits, pauli);
+			}
 		};
 
 	}

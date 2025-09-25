@@ -401,9 +401,35 @@ namespace Simulators {
              */
 			double ExpectationValue(const std::string& pauliString) override
 			{
-				throw std::runtime_error("ExpectedValue is not implemented for AerState yet.");
+				if (pauliString.empty()) return 1.0;
 
-				return 0.;
+				AER::reg_t qubits;
+				std::string pauli;
+
+				pauli.reserve(pauliString.size());
+				qubits.reserve(pauliString.size());
+
+				for (size_t q = 0; q < pauliString.size(); ++q)
+				{
+					const char p = toupper(pauliString[q]);
+					if (p == 'I') continue;
+				
+					pauli.push_back(p);
+					qubits.push_back(q);
+				}
+
+				/*
+				for (size_t q = pauliString.size(); q < GetNumberOfQubits(); ++q)
+				{
+					pauli.push_back('I');
+					qubits.push_back(q);
+				}
+				*/
+
+				// qiskit aer expects the pauli string in reverse order
+				std::reverse(pauli.begin(), pauli.end());
+
+				return state->expval_pauli(qubits, pauli);
 			}
 
 			/**

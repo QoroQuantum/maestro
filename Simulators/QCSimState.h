@@ -692,6 +692,8 @@ namespace Simulators {
 			 */
 			double ExpectationValue(const std::string& pauliString) override
 			{
+				if (pauliString.empty()) return 1.0;
+
 				if (simulationType == SimulationType::kStabilizer)
 					return cliffordSimulator->ExpectationValue(pauliString);
 				else if (simulationType == SimulationType::kTensorNetwork)
