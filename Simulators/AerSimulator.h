@@ -802,5 +802,3 @@ namespace Simulators {
 
 #endif
 
-#endif // !_AER_SIMULATOR_H_
-

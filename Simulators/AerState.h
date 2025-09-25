@@ -16,6 +16,8 @@
 
 #ifndef NO_QISKIT_AER
 
+#ifdef INCLUDED_BY_FACTORY
+
 #include <algorithm>
 
 #include "Simulator.h"
@@ -763,6 +765,8 @@ namespace Simulators {
 
 	}
 }
+
+#endif
 
 #endif
 
