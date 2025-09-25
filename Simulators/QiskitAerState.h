@@ -15,6 +15,7 @@
 #define _QISKIT_AER_STATE_H_
 
 #ifndef NO_QISKIT_AER
+
 #ifdef INCLUDED_BY_FACTORY
 
 #define private protected
