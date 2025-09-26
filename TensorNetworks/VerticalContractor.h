@@ -118,13 +118,13 @@ namespace  TensorNetworks {
 				if (resultRankBest == 0)
 				{
 					if (tensors.size() == 1 || tensors[tensor1IdBest]->contractsTheNeededQubit)
-						return std::abs(tensors[tensor1IdBest]->tensor->atOffset(0));
+						return std::real(tensors[tensor1IdBest]->tensor->atOffset(0));
 					// erasing this tensor happens because (not the case anymore, it's avoided) the tensor network might be a disjoint one and a subnetwork is contracted that does not contain the needed qubit
 					tensors.erase(tensor1IdBest);
 				}
 			}
 
-			return std::abs(tensors.begin()->second->tensor->atOffset(0));
+			return std::real(tensors.begin()->second->tensor->atOffset(0));
 		}
 
 		/**

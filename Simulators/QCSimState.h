@@ -728,6 +728,8 @@ namespace Simulators {
 					}
 				}
 
+				if (pauliStringVec.empty()) return 1.0;
+
 				if (simulationType == SimulationType::kMatrixProductState)
 					return mpsSimulator->ExpectationValue(pauliStringVec).real();
 
