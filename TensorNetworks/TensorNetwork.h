@@ -83,25 +83,7 @@ namespace TensorNetworks {
 			// add the projection tensor to the network
 			AddProjector(qubit, zero);
 
-			// connect all last tensors to the corresponding super tensors
-			for (Types::qubit_t q = 0; q < GetNumQubits(); ++q)
-			{
-				const auto lastTensorId = lastTensors[q];
-				const auto lastTensorSuperId = lastTensorsSuper[q];
-				const auto& lastTensor = tensors[lastTensorId];
-				const auto& lastTensorSuper = tensors[lastTensorSuperId];
-
-				const auto tensorIndexOnQubit = lastTensorIndices[q];
-				const auto tensorSuperIndexOnQubit = lastTensorIndicesSuper[q];
-
-				// tensor connection to the super one
-				lastTensor->connections[tensorIndexOnQubit] = lastTensorSuperId;
-				lastTensor->connectionsIndices[tensorIndexOnQubit] = tensorSuperIndexOnQubit;
-
-				// the super tensor connected to the left tensor
-				lastTensorSuper->connections[tensorSuperIndexOnQubit] = lastTensorId;
-				lastTensorSuper->connectionsIndices[tensorSuperIndexOnQubit] = tensorIndexOnQubit;
-			}
+			Connect();
 
 			// contract the network, save result to return
 			const double result = contractor->Contract(*this, qubit);
@@ -133,14 +115,19 @@ namespace TensorNetworks {
 		 */
 		double ExpectationValue(const std::string& pauliString)
 		{
-			if (!contractor) return 0.;
+			if (pauliString.empty()) return 1.;
+			else if (!contractor) return 0.;
 
-			SaveStateMinimal();
+			auto savedTensorsNrLocal = tensors.size();
+			auto saveLastTensorsLocal = lastTensors;
+			auto saveLastTensorIndicesLocal = lastTensorIndices;
 
 			// add the gates from the Pauli string
-			static const QC::Gates::PauliXGate<TensorNode::MatrixClass> XGate;
-			static const QC::Gates::PauliYGate<TensorNode::MatrixClass> YGate;
-			static const QC::Gates::PauliZGate<TensorNode::MatrixClass> ZGate;
+			const QC::Gates::PauliXGate<TensorNode::MatrixClass> XGate;
+			const QC::Gates::PauliYGate<TensorNode::MatrixClass> YGate;
+			const QC::Gates::PauliZGate<TensorNode::MatrixClass> ZGate;
+
+			std::unordered_set<Types::qubit_t> usedQubits;
 
 			for (Types::qubit_t q = 0; q < pauliString.size(); ++q)
 			{
@@ -149,12 +136,15 @@ namespace TensorNetworks {
 				{
 				case 'X':
 					AddOneQubitExpectationValueOp(XGate, q);
+					usedQubits.insert(q);
 					break;
 				case 'Y':
 					AddOneQubitExpectationValueOp(YGate, q);
+					usedQubits.insert(q);
 					break;
 				case 'Z':
 					AddOneQubitExpectationValueOp(ZGate, q);
+					usedQubits.insert(q);
 					break;
 				case 'I':
 					[[fallthrough]];
@@ -163,9 +153,15 @@ namespace TensorNetworks {
 				}
 			}
 
-			const double result = Contract();
+			if (usedQubits.empty()) return 1.;
 
-			RestoreSavedStateMinimalDestructive();
+			const double result = Contract(usedQubits);
+
+			tensors.resize(savedTensorsNrLocal);
+			lastTensors.swap(saveLastTensorsLocal);
+			lastTensorIndices.swap(saveLastTensorIndicesLocal);
+
+			Disconnect();
 
 			return result;
 		}
@@ -369,6 +365,29 @@ namespace TensorNetworks {
 			saveLastTensorIndicesSuper.clear();
 		}
 
+		void Connect()
+		{
+			// connect all last tensors to the corresponding super tensors
+			for (Types::qubit_t q = 0; q < GetNumQubits(); ++q)
+			{
+				const auto lastTensorId = lastTensors[q];
+				const auto lastTensorSuperId = lastTensorsSuper[q];
+				const auto& lastTensor = tensors[lastTensorId];
+				const auto& lastTensorSuper = tensors[lastTensorSuperId];
+
+				const auto tensorIndexOnQubit = lastTensorIndices[q];
+				const auto tensorSuperIndexOnQubit = lastTensorIndicesSuper[q];
+
+				// tensor connection to the super one
+				lastTensor->connections[tensorIndexOnQubit] = lastTensorSuperId;
+				lastTensor->connectionsIndices[tensorIndexOnQubit] = tensorSuperIndexOnQubit;
+
+				// the super tensor connected to the left tensor
+				lastTensorSuper->connections[tensorSuperIndexOnQubit] = lastTensorId;
+				lastTensorSuper->connectionsIndices[tensorSuperIndexOnQubit] = tensorIndexOnQubit;
+			}
+		}
+
 		void Disconnect()
 		{
 			for (Types::qubit_t q = 0; q < GetNumQubits(); ++q)
@@ -454,8 +473,19 @@ namespace TensorNetworks {
 			auto tensorNode = std::make_shared<TensorNode>();
 			tensorNode->SetGate(gate, q);
 
-			const auto newTensorId = static_cast<Index>(tensors.size());
-			tensorNode->SetId(newTensorId);
+			auto lastTensorId = lastTensors[q];
+			const auto& lastTensor = tensors[lastTensorId];
+
+			// can be either 0 if the last tensor is for a single qubit (the first tensor)
+			// or 1 if it's from a one qubit gate tensor
+			// or either 2 or 3 if it corresponds to a two qubit gate tensor
+			// for 0 or 1 do nothing to qubits or connections in the altered node, nothing changes
+			// for 3 also nothing should be done, as the qubit is the second one in the gate and contraction doesn't change anything
+			// but if it's 2, the order changes
+			auto lastTensorIndexForQubit = lastTensorIndices[q];
+
+			auto tensorId = static_cast<Index>(tensors.size());
+			tensorNode->SetId(tensorId);
 
 			// connect the tensor to the last tensors on the qubits
 
@@ -463,24 +493,18 @@ namespace TensorNetworks {
 			// that is, their output indices are connected to the input indices of the new tensor
 			// second, the new tensor is connected to the tensors from the network
 
-			const auto tensorOnQubitId = lastTensors[q];
-			const auto indexOnQubit = lastTensorIndices[q];
+			lastTensor->connections[lastTensorIndexForQubit] = tensorId;
+			lastTensor->connectionsIndices[lastTensorIndexForQubit] = 0; // connect it to the zero index of the new tensor
 
-			// connect the last tensor on qubit with the projection tensor
-			const auto& lastTensor = tensors[tensorOnQubitId];
-			lastTensor->connections[indexOnQubit] = newTensorId;
-			lastTensor->connectionsIndices[indexOnQubit] = 0;
+			tensorNode->connections[0] = lastTensorId;
+			tensorNode->connectionsIndices[0] = lastTensorIndexForQubit;
 
-			// also do the connection between the projection tensor back to the last tensor
-			tensorNode->connections[0] = tensorOnQubitId;
-			tensorNode->connectionsIndices[0] = indexOnQubit;
-
-			// add the tensor to the network
 			tensors.emplace_back(std::move(tensorNode));
 
-			// and set the last tensor on the qubit to be the new tensor
-			lastTensors[q] = newTensorId;
-			lastTensorIndices[q] = 1; // the next index is 1, this is going to be the 'connect' one
+			// now set the last tensors and indices
+			lastTensors[q] = tensorId;
+
+			lastTensorIndices[q] = 1;
 		}
 
 		void AddOneQubitGate(const QC::Gates::QuantumGateWithOp<TensorNode::MatrixClass>& gate, Types::qubit_t q, bool contractWithTwoQubitTensors = false, bool contract = true)
@@ -587,7 +611,7 @@ namespace TensorNetworks {
 				// that is, their output indices are connected to the input indices of the new tensor
 				// second, the new tensor is connected to the tensors from the network
 
-				lastTensor->connections[lastTensorIndexForQubit] = tensorNode->GetId();
+				lastTensor->connections[lastTensorIndexForQubit] = tensorId;
 				lastTensor->connectionsIndices[lastTensorIndexForQubit] = 0; // connect it to the zero index of the new tensor
 
 				tensorNode->connections[0] = lastTensorId;
@@ -619,7 +643,7 @@ namespace TensorNetworks {
 				lastTensorId = lastTensorsSuper[q];
 				const auto& lastTensorSuper = tensors[lastTensorId];
 				lastTensorIndexForQubit = lastTensorIndicesSuper[q];
-				lastTensorSuper->connections[lastTensorIndexForQubit] = tensorNode->GetId();
+				lastTensorSuper->connections[lastTensorIndexForQubit] = tensorId;
 				lastTensorSuper->connectionsIndices[lastTensorIndexForQubit] = 0;
 
 				tensorNode->connections[0] = lastTensorId;
@@ -669,7 +693,7 @@ namespace TensorNetworks {
 
 			const auto& lastTensor = tensors[lastTensorId];
 			auto lastTensorIndexForQubit = lastTensorIndices[q1];
-			lastTensor->connections[lastTensorIndexForQubit] = tensorNode->GetId();
+			lastTensor->connections[lastTensorIndexForQubit] = tensorId;
 			lastTensor->connectionsIndices[lastTensorIndexForQubit] = 0; // connect it to the zero index of the new tensor
 
 			tensorNode->connections[0] = lastTensorId;
@@ -679,7 +703,7 @@ namespace TensorNetworks {
 			lastTensorId = lastTensors[q2];
 			const auto& lastTensor2 = tensors[lastTensorId];
 			lastTensorIndexForQubit = lastTensorIndices[q2];
-			lastTensor2->connections[lastTensorIndexForQubit] = tensorNode->GetId();
+			lastTensor2->connections[lastTensorIndexForQubit] = tensorId;
 			lastTensor2->connectionsIndices[lastTensorIndexForQubit] = 1; // connect it to the first index of the new tensor
 
 			tensorNode->connections[1] = lastTensorId;
@@ -713,7 +737,7 @@ namespace TensorNetworks {
 			lastTensorId = lastTensorsSuper[q1];
 			const auto& lastTensorSuper = tensors[lastTensorId];
 			lastTensorIndexForQubit = lastTensorIndicesSuper[q1];
-			lastTensorSuper->connections[lastTensorIndexForQubit] = tensorNode->GetId();
+			lastTensorSuper->connections[lastTensorIndexForQubit] = tensorId;
 			lastTensorSuper->connectionsIndices[lastTensorIndexForQubit] = 0;
 
 			tensorNode->connections[0] = lastTensorId;
@@ -723,7 +747,7 @@ namespace TensorNetworks {
 			lastTensorId = lastTensorsSuper[q2];
 			const auto& lastTensor2Super = tensors[lastTensorId];
 			lastTensorIndexForQubit = lastTensorIndicesSuper[q2];
-			lastTensor2Super->connections[lastTensorIndexForQubit] = tensorNode->GetId();
+			lastTensor2Super->connections[lastTensorIndexForQubit] = tensorId;
 			lastTensor2Super->connectionsIndices[lastTensorIndexForQubit] = 1;
 
 			tensorNode->connections[1] = lastTensorId;
@@ -744,34 +768,48 @@ namespace TensorNetworks {
 			if (!contractor) return 0;
 			contractor->SetMultithreading(enableMultithreading);
 
-			// connect all last tensors to the corresponding super tensors
-			for (Types::qubit_t q = 0; q < GetNumQubits(); ++q)
-			{
-				const auto lastTensorId = lastTensors[q];
-				const auto lastTensorSuperId = lastTensorsSuper[q];
-				const auto& lastTensor = tensors[lastTensorId];
-				const auto& lastTensorSuper = tensors[lastTensorSuperId];
-
-				const auto tensorIndexOnQubit = lastTensorIndices[q];
-				const auto tensorSuperIndexOnQubit = lastTensorIndicesSuper[q];
-
-				// tensor connection to the super one
-				lastTensor->connections[tensorIndexOnQubit] = lastTensorSuperId;
-				lastTensor->connectionsIndices[tensorIndexOnQubit] = tensorSuperIndexOnQubit;
-
-				// the super tensor connected to the left tensor
-				lastTensorSuper->connections[tensorSuperIndexOnQubit] = lastTensorId;
-				lastTensorSuper->connectionsIndices[tensorSuperIndexOnQubit] = tensorIndexOnQubit;
-			}
+			Connect();
 
 			// contract the network, save result to return
 			double result = 1;
 
 			for (auto& group : qubitsGroups)
 			{
-				const double groupResult = contractor->Contract(*this, *group.second.begin());
+				const double groupResult = contractor->Contract(*this, *group.second.begin());  // doesn't really matter which qubit is passed as long it belongs to the group
 				if (groupResult == 0) return 0;
-				result *= groupResult; // doesn't really matter which qubit is passed as long it belongs to the group
+				result *= groupResult;
+			}
+
+			// no need to actually disconnect the indices, as they are not used unless they are connected again
+			// when adding a new gate/projection for measurement, they are reconnected anyway, the same goes for doing another contraction
+
+			// return the result
+			return result;
+		}
+
+		double Contract(const std::unordered_set<Types::qubit_t>& qubits)
+		{
+			if (!contractor) return 0;
+			contractor->SetMultithreading(enableMultithreading);
+
+			Connect();
+
+			// contract the network, save result to return
+			double result = 1;
+
+			for (auto& group : qubitsGroups)
+			{
+				// this is probably less costly than contracting
+				for (const auto q : group.second)
+					if (qubits.find(q) != qubits.end())
+					{
+						// this group has at least one qubit in the set, contract it
+						// break to avoid contracting it multiple times
+						const double groupResult = contractor->Contract(*this, q);  // doesn't really matter which qubit is passed as long it belongs to the group
+						if (groupResult == 0) return 0;
+						result *= groupResult; 
+						break;
+					}
 			}
 
 			// no need to actually disconnect the indices, as they are not used unless they are connected again

@@ -420,13 +420,7 @@ namespace Simulators {
 					qubits.push_back(q);
 				}
 
-				/*
-				for (size_t q = pauliString.size(); q < GetNumberOfQubits(); ++q)
-				{
-					pauli.push_back('I');
-					qubits.push_back(q);
-				}
-				*/
+				if (qubits.empty()) return 1.0;
 
 				// qiskit aer expects the pauli string in reverse order
 				std::reverse(pauli.begin(), pauli.end());

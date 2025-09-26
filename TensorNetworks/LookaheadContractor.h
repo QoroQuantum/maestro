@@ -75,14 +75,14 @@ namespace TensorNetworks {
 				if (resultRank == 0)
 				{
 					if (tensors.size() == 1 || tensor->contractsTheNeededQubit)
-						return std::abs(tensor->tensor->atOffset(0));
+						return std::real(tensor->tensor->atOffset(0));
 					// erasing this tensor happens because (not the case anymore, it's avoided) the tensor network might be a disjoint one and a subnetwork is contracted that does not contain the needed qubit
 					tensors.erase(tensor1Id);
 					dummyTensors.erase(tensor1Id);
 				}
 			}
 
-			return std::abs(tensors.begin()->second->tensor->atOffset(0));
+			return std::real(tensors.begin()->second->tensor->atOffset(0));
 		}
 
 

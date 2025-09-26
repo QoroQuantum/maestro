@@ -50,19 +50,22 @@ namespace Simulators {
 		class QiskitAerState : public AER::AerState
 		{
 		public:
-			std::shared_ptr<AER::QuantumState::Base> get_state() const
+			const std::shared_ptr<AER::QuantumState::Base>& get_state() const
 			{
-				void* ptr = (void*)this;
-				AER::AerStateFake* fakeState = (AER::AerStateFake*)ptr;
+				const AER::AerStateFake* fakeState = (AER::AerStateFake*)(void*)this;
 				return fakeState->state_;
 			}
 
 			double expval_pauli(const reg_t& qubits, const std::string& pauli)
 			{
-				auto state = get_state();
+				if (qubits.empty() || pauli.empty())
+					return 1.;
+
+				const auto& state = get_state();
 				if (!state)
 					return 0.;
 
+				flush_ops();
 
 				return state->expval_pauli(qubits, pauli);
 			}

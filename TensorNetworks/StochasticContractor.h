@@ -127,7 +127,7 @@ namespace TensorNetworks {
 					if (resultRank == 0)
 					{
 						if (tensors.size() == 1 || tensors[tensor1Id]->contractsTheNeededQubit)
-							return std::abs(tensors[tensor1Id]->tensor->atOffset(0));
+							return std::real(tensors[tensor1Id]->tensor->atOffset(0));
 
 						// erasing this tensor happens because (not the case anymore, it's avoided) the tensor network might be a disjoint one and a subnetwork is contracted that does not contain the needed qubit
 						keys[pos1] = keys.back();
@@ -150,7 +150,7 @@ namespace TensorNetworks {
 				}
 			}
 
-			return std::abs(tensors.begin()->second->tensor->atOffset(0));
+			return std::real(tensors.begin()->second->tensor->atOffset(0));
 		}
 
 		size_t GetMaxRejections() const
