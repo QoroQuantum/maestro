@@ -30,12 +30,6 @@ namespace Utils {
 			}
 		}
 
-		~LogFile()
-		{
-			if (logFile.is_open())
-				logFile.close();
-		}
-
 		void Log(const std::string& message)
 		{
 			if (logFile.is_open())
