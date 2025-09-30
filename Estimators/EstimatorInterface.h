@@ -14,6 +14,9 @@
 
 #include "Simulators/Simulator.h"
 
+#include <vector>
+#include <string>
+
 namespace Estimators {
 
 	/**
@@ -31,6 +34,7 @@ namespace Estimators {
 		virtual ~EstimatorInterface() = default;
 
 		virtual double EstimateTime(Simulators::SimulatorType type, Simulators::SimulationType method) const = 0;
+		virtual double EstimateExpectationValuesTime(Simulators::SimulatorType type, Simulators::SimulationType method, const std::vector<std::string> &paulis) = 0;
 	};
 }
 
