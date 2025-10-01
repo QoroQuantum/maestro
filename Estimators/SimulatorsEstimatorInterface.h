@@ -35,10 +35,10 @@ namespace Estimators {
 			Simulators::SimulatorType& simType, Simulators::SimulationType& method, std::vector<bool>& executed, 
 			const std::string& maxBondDim, const std::string& singularValueThreshold, const std::string& mpsSample,
 			size_t maxSimulators,
-			bool multithreading = false) const = 0;
+			bool multithreading = false, bool dontRunCircuitStart = false) const = 0;
 
 
-		static void ExecuteUpToMeasurements(size_t shots, const std::shared_ptr<Circuits::Circuit<Time>>& dcirc, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, const std::shared_ptr<Simulators::ISimulator>& sim, std::vector<bool>& executed, bool multithreading)
+		static void ExecuteUpToMeasurements(const std::shared_ptr<Circuits::Circuit<Time>>& dcirc, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, const std::shared_ptr<Simulators::ISimulator>& sim, std::vector<bool>& executed, bool multithreading)
 		{
 			Circuits::OperationState state;
 			state.AllocateBits(nrCbits);

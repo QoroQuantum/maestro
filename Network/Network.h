@@ -768,7 +768,7 @@ namespace Network {
 		 * @param multithreading If true, allows simulators to support multithreading (default is false). Multithreading will be set to false if multithreading is implemented at a higher level (multiple simulators in parallel).
 		 * @return A shared pointer to the chosen simulator.
 		 */
-		virtual std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(const std::shared_ptr<Circuits::Circuit<Time>>& dcirc, size_t& counts, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, Simulators::SimulatorType& simType, Simulators::SimulationType& method, std::vector<bool>& executed, bool multithreading = false) const = 0;
+		virtual std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(const std::shared_ptr<Circuits::Circuit<Time>>& dcirc, size_t& counts, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, Simulators::SimulatorType& simType, Simulators::SimulationType& method, std::vector<bool>& executed, bool multithreading = false, bool dontRunCircuitStart = false) const = 0;
  
 	};
 

@@ -150,7 +150,23 @@ namespace Network {
 			const bool specialOptimizationForStatevector = optimiseMultipleShots && method == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
 			const bool specialOptimizationForMPS = optimiseMultipleShots && method == Simulators::SimulationType::kMatrixProductState && hasMeasurementsOnlyAtEnd;
 
-			if (!optSim)
+			if (optSim)
+			{
+				optSim->SetMultithreading(true);
+
+				if (optSim->GetNumberOfQubits() != nrQubits)
+				{
+					optSim->Clear();
+
+					if (!maxBondDim.empty()) optSim->Configure("matrix_product_state_max_bond_dimension", maxBondDim.c_str());
+					if (!singularValueThreshold.empty()) optSim->Configure("matrix_product_state_truncation_threshold", singularValueThreshold.c_str());
+					if (!mpsSample.empty()) optSim->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
+
+					optSim->AllocateQubits(nrQubits);
+					optSim->Initialize();
+				}
+			}
+			else
 			{
 				optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
 				if (!optSim)
@@ -164,15 +180,16 @@ namespace Network {
 
 				optSim->AllocateQubits(nrQubits);
 				optSim->Initialize();
-
-				if (optimiseMultipleShots)
-				{
-					executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
-					
-					if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
-						optSim->SaveState();
-				}
 			}
+
+			if (optimiseMultipleShots && executedGates.empty())
+			{
+				executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
+
+				if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
+					optSim->SaveState();
+			}
+
 
 			std::shared_ptr<Circuits::MeasurementOperation<Time>> measurementsOp;
 
@@ -225,7 +242,7 @@ namespace Network {
 				else
 				{
 					dcirc->Execute(optSim, state);
-					optSim->Reset();
+					if (i < curCnt - 1) optSim->Reset(); // leave the simulator state for the last iteration
 				}
 
 				auto bits = state.GetAllBits();

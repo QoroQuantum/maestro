@@ -98,29 +98,14 @@ namespace Network {
 		 */
 		void Execute(const std::shared_ptr<Circuits::Circuit<Time>>& circuit) override
 		{
-			if (!controller || !circuit) return;
+			const auto res = RepeatedExecute(circuit, 1);
 
-			distCirc = controller->DistributeCircuit(BaseClass::getptr(), circuit);
-
-			if (simulator)
+			// put the results in the state
+			if (!res.empty())
 			{
-				auto simType = simulator->GetType();
-				if (distCirc->HasOpsAfterMeasurements() && (
-#ifndef NO_QISKIT_AER
-					simType == Simulators::SimulatorType::kCompositeQiskitAer ||
-#endif
-					simType == Simulators::SimulatorType::kCompositeQCSim))
-					distCirc->MoveMeasurementsAndResets();
-
-				auto method = simulator->GetSimulationType();
-
-				lastSimulatorType = simType;
-				lastMethod = method;
-
-				distCirc->Execute(simulator, GetState());
+				const auto& first = *res.begin();
+				GetState().SetResultsInOrder(first.first);
 			}
-
-			ConvertBackState();
 		}
 
 
@@ -138,46 +123,14 @@ namespace Network {
 		 */
 		void ExecuteOnHost(const std::shared_ptr<Circuits::Circuit<Time>>& circuit, size_t hostId) override
 		{
-			if (!circuit || hostId >= GetNumHosts()) return;
+			const auto res = RepeatedExecuteOnHost(circuit, hostId, 1);
 
-			size_t nrQubits = 0;
-			size_t nrCbits = 0;
-			std::shared_ptr<Circuits::Circuit<Time>> optCircuit;
-			if (GetController()->GetOptimizeCircuit()) {
-				optCircuit = std::static_pointer_cast<Circuits::Circuit<Time>>(circuit->Clone());
-				optCircuit->Optimize();
-			}
-			const auto reverseQubitsMap = MapCircuitOnHost(GetController()->GetOptimizeCircuit() ? optCircuit : circuit, hostId, nrQubits, nrCbits, true);
-
-			if (simulator)
+			// put the results in the state
+			if (!res.empty())
 			{
-				auto simType = simulator->GetType();
-				if (distCirc->HasOpsAfterMeasurements() && (
-#ifndef NO_QISKIT_AER
-					simType == Simulators::SimulatorType::kCompositeQiskitAer ||
-#endif
-					simType == Simulators::SimulatorType::kCompositeQCSim))
-					distCirc->MoveMeasurementsAndResets();
-
-				auto method = simulator->GetSimulationType();
-
-				maxBondDim = simulator->GetConfiguration("matrix_product_state_max_bond_dimension");
-				singularValueThreshold = simulator->GetConfiguration("matrix_product_state_truncation_threshold");
-				mpsSample = simulator->GetConfiguration("mps_sample_measure_algorithm");
-
-				lastSimulatorType = simType;
-				lastMethod = method;
-
-				if (nrQubits < GetNumQubits())
-					CreateSimulator(simType, method, nrQubits);
-
-				distCirc->Execute(simulator, GetState());
-
-				if (nrQubits < GetNumQubits())
-					CreateSimulator(simType, method);
+				const auto& first = *res.begin();
+				GetState().SetResultsInOrder(first.first);
 			}
-
-			if (!reverseQubitsMap.empty()) ConvertBackState(reverseQubitsMap);
 		}
 
 
@@ -209,7 +162,7 @@ namespace Network {
 			}
 #endif
 
-			if (!simulator || distCirc->empty() || shots == 0) return {};
+			if (!simulator || distCirc->empty()) return {};
 
 			auto simType = simulator->GetType();
 			if (distCirc->HasOpsAfterMeasurements() && (
@@ -249,9 +202,12 @@ namespace Network {
 			singularValueThreshold = simulator->GetConfiguration("matrix_product_state_truncation_threshold");
 			mpsSample = simulator->GetConfiguration("mps_sample_measure_algorithm");
 
-			// since it's going to execute on multiple threads, free the memory from the network's simulator and state, it's going to use other ones, created in the threads
-			simulator->Clear();
-			GetState().Clear();
+			// do that only if the optimization for simulator is on and the estimator is available, ortherwise an 'optimal' simulator won't be created
+			if (optimizeSimulator && simulatorsEstimator)
+			{
+				simulator->Clear();
+				GetState().Clear();
+			}
 
 			std::vector<bool> executed;
 			auto optSim = ChooseBestSimulator(distCirc, shots, nrQubits, nrQubits, nrCbitsResults, simType, method, executed);
@@ -277,6 +233,14 @@ namespace Network {
 
 			if (nrThreads > 1)
 			{
+				// since it's going to execute on multiple threads, free the memory from the network's simulator and state, it's going to use other ones, created in the threads
+				// if optimization already exists, it will be cloned in the threads, otherwise a new one will be created in the threads
+				if (!optimizeSimulator || !simulatorsEstimator) // otherwise it was already cleared
+				{
+					simulator->Clear();
+					GetState().Clear();
+				}
+
 				const size_t cntPerThread = std::max<size_t>(shots / nrThreads, 1ULL);
 
 				threadsPool.Resize(nrThreads);
@@ -322,6 +286,12 @@ namespace Network {
 				}
 				else
 				{
+					if (simulator && method == saveMethod && simType == saveSimType)
+					{
+						optSim = simulator;
+						job->optSim = optSim;
+						simulator = nullptr;
+					}
 					job->maxBondDim = maxBondDim;
 					job->mpsSample = mpsSample;
 					job->singularValueThreshold = singularValueThreshold;
@@ -330,7 +300,10 @@ namespace Network {
 				job->DoWorkNoLock();
 			}
 
-			CreateSimulator(saveSimType, saveMethod);
+			if (!optSim || method != saveMethod || simType != saveSimType)
+				CreateSimulator(saveSimType, saveMethod);
+			else
+				simulator = optSim;
 
 			ConvertBackResults(res);
 
@@ -367,7 +340,7 @@ namespace Network {
 			const auto reverseQubitsMap = MapCircuitOnHost(GetController()->GetOptimizeCircuit() ? optCircuit : circuit, hostId, nrQubits, nrCbits, true);
 			if (nrCbits == 0) nrCbits = nrQubits;
 
-			if (!simulator || distCirc->empty() || shots == 0) return {};
+			if (!simulator || distCirc->empty()) return {};
 
 			auto simType = simulator->GetType();
 
@@ -1473,7 +1446,7 @@ namespace Network {
 			return cloned;
 		}
 
-		std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(const std::shared_ptr<Circuits::Circuit<Time>>& dcirc, size_t& counts, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, Simulators::SimulatorType& simType, Simulators::SimulationType& method, std::vector<bool>& executed, bool multithreading = false) const override
+		std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(const std::shared_ptr<Circuits::Circuit<Time>>& dcirc, size_t& counts, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, Simulators::SimulatorType& simType, Simulators::SimulationType& method, std::vector<bool>& executed, bool multithreading = false, bool dontRunCircuitStart = false) const override
 		{
 			if (!optimizeSimulator || !simulatorsEstimator)
 				return nullptr;
@@ -1553,7 +1526,7 @@ namespace Network {
 						if (!mpsSample.empty()) sim->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
 					}
 					sim->SetMultithreading(true);
-					Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(counts, dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed, multithreading);
+					if (!dontRunCircuitStart) Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed, multithreading);
 
 					return sim;
 				}
