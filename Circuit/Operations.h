@@ -264,6 +264,21 @@ namespace Circuits {
 		}
 		
 		/**
+         * @brief Set the classical bits.
+         *
+         * Set the values of the classical bits to the values specified in results.
+         * Each bit in results specifies a value.
+         * @param results A vector of bools that contains the values for the bits.
+         */
+		void SetResultsInOrder(const std::vector<bool>& results)
+		{
+			const size_t theSize = std::max(bits.size(), results.size());
+
+			bits = results;
+			bits.resize(theSize, false);
+		}
+
+		/**
 		 * @brief Set the classical bits at the specified indices.
 		 * 
 		 * Set the values of the classical bits at the specified indices to the values specified in results.
