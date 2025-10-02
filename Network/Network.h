@@ -103,6 +103,35 @@ namespace Network {
 
 
 		/**
+         * @brief Execute the circuit on the network and return the expectation values for the specified Pauli strings.
+         *
+         * Execute the circuit on the network, using the controller for distributing the operations to the hosts and return the expectation values for the specified Pauli strings.
+         * The base class functionality is used for circuit distribution, but then the distributed circuit is converted to netqasm.
+         * Ensure the quantum computing simulator and the netqasm virtual machines have been created before calling this.
+         *
+         * @param circuit The circuit to execute.
+		 * @param paulis The Pauli strings to measure the expectations for.
+         * @sa Circuits::Circuit
+         */
+		virtual std::vector<double> ExecuteExpectations(const std::shared_ptr<Circuits::Circuit<Time>>& circuit, const std::vector<std::string>& paulis) = 0;
+
+
+		/**
+		 * @brief Execute the circuit on the specified host and return the expectation values for the specified Pauli strings.
+		 *
+		 * Execute the circuit on the specified host and return the expectation values for the specified Pauli strings.
+		 * The circuit must fit on the host, otherwise an exception is thrown.
+		 * The circuit will be mapped on the specified host, if its qubits start with indexing from 0 (if already mapped, the qubits won't be altered).
+		 *
+		 * @param circuit The circuit to execute.
+		 * @param hostId The id of the host to execute the circuit on.
+		 * @param paulis The Pauli strings to measure the expectations for.
+		 * @sa Circuits::Circuit
+		 */
+		virtual std::vector<double> ExecuteOnHostExpectations(const std::shared_ptr<Circuits::Circuit<Time>>& circuit, size_t hostId, const std::vector<std::string>& paulis) = 0;
+
+
+		/**
 		 * @brief Execute the circuit on the network, repeatedly.
 		 *
 		 * Execute the circuit on the network, distributing the operations to the hosts, repeating the execution 'shots' times.

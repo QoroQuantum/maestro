@@ -28,7 +28,7 @@ namespace Network {
 	 * @brief The simple network implementation.
 	 *
 	 * The simple network implementation.
-     * A simple network class, implementing a network containing a buch of hosts, no communication (classical or quantum) among them.
+	 * A simple network class, implementing a network containing a buch of hosts, no communication (classical or quantum) among them.
 	 *
 	 * @tparam Time The time type used for execution times.
 	 * @sa INetwork
@@ -54,13 +54,13 @@ namespace Network {
 		}
 
 		/**
-         * @brief Creates the network hosts and controller.
-         *
-         * Creates the network hosts and controller with the specified number of qubits and classical bits.
-         *
-         * @param qubits The number of qubits for each host.
-         * @param cbits The number of classical bits for each host.
-         */
+		 * @brief Creates the network hosts and controller.
+		 *
+		 * Creates the network hosts and controller with the specified number of qubits and classical bits.
+		 *
+		 * @param qubits The number of qubits for each host.
+		 * @param cbits The number of classical bits for each host.
+		 */
 		void CreateNetwork(const std::vector<Types::qubit_t>& qubits, const std::vector<size_t>& cbits)
 		{
 			size_t qubitsOffset = 0;
@@ -98,7 +98,23 @@ namespace Network {
 		 */
 		void Execute(const std::shared_ptr<Circuits::Circuit<Time>>& circuit) override
 		{
+			const auto recreate = recreateIfNeeded;
+
+			auto simType = Simulators::SimulatorType::kQCSim;
+			auto method = Simulators::SimulationType::kMatrixProductState;
+			size_t numQubits = 2;
+			if (simulator)
+			{
+				simType = simulator->GetType();
+				method = simulator->GetSimulationType();
+				numQubits = simulator->GetNumberOfQubits();
+			}
+
+			recreateIfNeeded = false;
+
 			const auto res = RepeatedExecute(circuit, 1);
+
+			recreateIfNeeded = recreate;
 
 			// put the results in the state
 			if (!res.empty())
@@ -106,6 +122,9 @@ namespace Network {
 				const auto& first = *res.begin();
 				GetState().SetResultsInOrder(first.first);
 			}
+
+			if (recreate && (!simulator || (simulator && (simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))))
+				CreateSimulator(simType, method);
 		}
 
 
@@ -123,7 +142,23 @@ namespace Network {
 		 */
 		void ExecuteOnHost(const std::shared_ptr<Circuits::Circuit<Time>>& circuit, size_t hostId) override
 		{
+			const auto recreate = recreateIfNeeded;
+
+			auto simType = Simulators::SimulatorType::kQCSim;
+			auto method = Simulators::SimulationType::kMatrixProductState;
+			size_t numQubits = 2;
+			if (simulator)
+			{
+				simType = simulator->GetType();
+				method = simulator->GetSimulationType();
+				numQubits = simulator->GetNumberOfQubits();
+			}
+
+			recreateIfNeeded = false;
+
 			const auto res = RepeatedExecuteOnHost(circuit, hostId, 1);
+
+			recreateIfNeeded = recreate;
 
 			// put the results in the state
 			if (!res.empty())
@@ -131,6 +166,165 @@ namespace Network {
 				const auto& first = *res.begin();
 				GetState().SetResultsInOrder(first.first);
 			}
+
+			if (recreate && (!simulator || (simulator && (simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))))
+				CreateSimulator(simType, method);
+		}
+
+
+		/**
+		 * @brief Execute the circuit on the network and return the expectation values for the specified Pauli strings.
+		 *
+		 * Execute the circuit on the network, using the controller for distributing the operations to the hosts and return the expectation values for the specified Pauli strings.
+		 * The base class functionality is used for circuit distribution, but then the distributed circuit is converted to netqasm.
+		 * Ensure the quantum computing simulator and the netqasm virtual machines have been created before calling this.
+		 *
+		 * @param circuit The circuit to execute.
+		 * @param paulis The Pauli strings to measure the expectations for.
+		 * @sa Circuits::Circuit
+		 */
+		std::vector<double> ExecuteExpectations(const std::shared_ptr<Circuits::Circuit<Time>>& circuit, const std::vector<std::string>& paulis) override
+		{
+			inExpectationValue = true;
+			const auto recreate = recreateIfNeeded;
+
+			auto simType = Simulators::SimulatorType::kQCSim;
+			auto method = Simulators::SimulationType::kMatrixProductState;
+			size_t numQubits = 2;
+			if (simulator)
+			{
+				simType = simulator->GetType();
+				method = simulator->GetSimulationType();
+				numQubits = simulator->GetNumberOfQubits();
+			}
+
+			recreateIfNeeded = false;
+
+			const auto res = RepeatedExecute(circuit, 1);
+
+			recreateIfNeeded = recreate;
+
+			// put the results in the state
+			if (!res.empty())
+			{
+				const auto& first = *res.begin();
+				GetState().SetResultsInOrder(first.first);
+			}
+
+			std::vector<double> expectations(paulis.size());
+			if (simulator)
+			{
+				// translate the pauli strings to the mapped order of qubits
+				const size_t numOps = simulator->GetNumberOfQubits();
+
+				auto optimiser = controller->GetOptimiser();
+				if (optimiser)
+				{
+					// convert the classical state results back to the expected order
+					const auto& qubitsMap = optimiser->GetQubitsMap();
+
+					for (size_t i = 0; i < paulis.size(); ++i)
+					{
+						std::string translated(numOps, 'I');
+
+						for (size_t j = 0; j < paulis[i].size(); ++j)
+						{
+							const auto pos = qubitsMap.find(j);
+							if (pos != qubitsMap.end())
+								translated[pos->second] = paulis[i][j];
+							else
+								translated[j] = paulis[i][j];
+						}
+
+						expectations[i] = simulator->ExpectationValue(translated);
+					}
+				}
+				else
+				{
+					for (size_t i = 0; i < paulis.size(); ++i)
+						expectations[i] = simulator->ExpectationValue(paulis[i]);
+				}
+			}
+
+			if (recreate && (!simulator || simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))
+				CreateSimulator(simType, method);
+
+			inExpectationValue = false;
+
+			return expectations;
+		}
+
+
+		/**
+		 * @brief Execute the circuit on the specified host and return the expectation values for the specified Pauli strings.
+		 *
+		 * Execute the circuit on the specified host and return the expectation values for the specified Pauli strings.
+		 * The circuit must fit on the host, otherwise an exception is thrown.
+		 * The circuit will be mapped on the specified host, if its qubits start with indexing from 0 (if already mapped, the qubits won't be altered).
+		 *
+		 * @param circuit The circuit to execute.
+		 * @param hostId The id of the host to execute the circuit on.
+		 * @param paulis The Pauli strings to measure the expectations for.
+		 * @sa Circuits::Circuit
+		 */
+		std::vector<double> ExecuteOnHostExpectations(const std::shared_ptr<Circuits::Circuit<Time>>& circuit, size_t hostId, const std::vector<std::string>& paulis)
+		{
+			inExpectationValue = true;
+			const auto recreate = recreateIfNeeded;
+
+			auto simType = Simulators::SimulatorType::kQCSim;
+			auto method = Simulators::SimulationType::kMatrixProductState;
+			size_t numQubits = 2;
+			if (simulator)
+			{
+				simType = simulator->GetType();
+				method = simulator->GetSimulationType();
+				numQubits = simulator->GetNumberOfQubits();
+			}
+
+			recreateIfNeeded = false;
+
+			const auto res = RepeatedExecuteOnHost(circuit, hostId, 1);
+
+			recreateIfNeeded = recreate;
+
+			// put the results in the state
+			if (!res.empty())
+			{
+				const auto& first = *res.begin();
+				GetState().SetResultsInOrder(first.first);
+			}
+
+			std::vector<double> expectations(paulis.size(), 1.);
+			if (simulator)
+			{
+				// translate the pauli strings to the mapped order of qubits
+				const size_t numOps = simulator->GetNumberOfQubits();
+
+				// convert the pauli strings to the actual qubits order
+				for (size_t i = 0; i < paulis.size(); ++i)
+				{
+					std::string translated(numOps, 'I');
+
+					for (size_t j = 0; j < paulis[i].size(); ++j)
+					{
+						const auto pos = qubitsMapOnHost.find(j);
+						if (pos != qubitsMapOnHost.end())
+							translated[pos->second] = paulis[i][j];
+						else
+							translated[j] = paulis[i][j];
+					}
+
+					expectations[i] = simulator->ExpectationValue(translated);
+				}
+			}
+
+			if (recreate && (!simulator || simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))
+				CreateSimulator(simType, method);
+
+			inExpectationValue = false;
+
+			return expectations;
 		}
 
 
@@ -298,12 +492,12 @@ namespace Network {
 				}
 
 				job->DoWorkNoLock();
+				if (!recreateIfNeeded)
+					simulator = job->optSim;
 			}
 
-			if (!optSim || method != saveMethod || simType != saveSimType)
+			if (recreateIfNeeded)
 				CreateSimulator(saveSimType, saveMethod);
-			else
-				simulator = optSim;
 
 			ConvertBackResults(res);
 
@@ -338,6 +532,7 @@ namespace Network {
 				optCircuit->Optimize();
 			}
 			const auto reverseQubitsMap = MapCircuitOnHost(GetController()->GetOptimizeCircuit() ? optCircuit : circuit, hostId, nrQubits, nrCbits, true);
+			if (inExpectationValue) nrQubits = std::max(nrQubits, GetNumQubitsForHost(hostId));
 			if (nrCbits == 0) nrCbits = nrQubits;
 
 			if (!simulator || distCirc->empty()) return {};
@@ -458,9 +653,12 @@ namespace Network {
 				}
 
 				job->DoWorkNoLock();
+				if (!recreateIfNeeded)
+					simulator = job->optSim;
 			}
 
-			CreateSimulator(saveSimType, saveMethod);
+			if (recreateIfNeeded)
+				CreateSimulator(saveSimType, saveMethod);
 
 			if (!reverseQubitsMap.empty()) ConvertBackResults(res, reverseQubitsMap);
 
@@ -502,7 +700,7 @@ namespace Network {
 		std::vector<ExecuteResults> ExecuteScheduled(const std::vector<Schedulers::ExecuteCircuit<Time>>& circuits) override
 		{
 			// create a default one if not set
-			if (!GetScheduler()) 
+			if (!GetScheduler())
 			{
 				CreateScheduler();
 
@@ -1211,7 +1409,7 @@ namespace Network {
 		 * Mark the pair of the specified qubits used for entanglement between hosts as busy.
 		 * This is used to mark the qubits as busy when they are used for creating an entanglement between hosts.
 		 * It's not used in the simple network, because it doesn't allow quantum communication between hosts.
-		 * 
+		 *
 		 * @param qubitId1 The id of the first qubit to mark as busy.
 		 * @param qubitId2 The id of the second qubit to mark as busy.
 		 */
@@ -1226,7 +1424,7 @@ namespace Network {
 		 * Mark the specified qubit used for entanglement between hosts as free.
 		 * This is used to mark the qubits as free when they are not used anymore for an entanglement between hosts.
 		 * It's not used in the simple network, because it doesn't allow quantum communication between hosts.
-		 * 
+		 *
 		 * @param qubitId The id of the qubit to mark as free.
 		 */
 		void MarkEntangledQubitFree(size_t qubitId) override
@@ -1515,7 +1713,7 @@ namespace Network {
 			{
 				simType = simulatorTypes[0].first;
 				method = simulatorTypes[0].second;
-				
+
 				std::shared_ptr<Simulators::ISimulator> sim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
 				if (sim)
 				{
@@ -1639,6 +1837,7 @@ namespace Network {
 		 */
 		std::unordered_map<Types::qubit_t, Types::qubit_t> MapCircuitOnHost(const std::shared_ptr<Circuits::Circuit<Time>>& circuit, size_t hostId, size_t& nrQubits, size_t& nrCbits, bool useSeparateSimForHosts = false)
 		{
+			qubitsMapOnHost.clear();
 			nrQubits = 0;
 			nrCbits = 0;
 			if (!circuit) return {};
@@ -1683,18 +1882,16 @@ namespace Network {
 				if (nrQubits > hostNrQubits + 1) // the host has an additional 'special' qubit for the entanglement or other operations (like those for cutting)
 					throw std::runtime_error("Circuit does not fit on the host!");
 
-				std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsMap;
-
 				for (size_t i = 0; i < nrCbits; ++i)
 				{
 					const size_t mapFrom = mnq + i;
 					const size_t mapTo = startQubit + i;
 
-					qubitsMap[mapFrom] = mapTo;
+					qubitsMapOnHost[mapFrom] = mapTo;
 					reverseQubitsMap[mapTo] = mapFrom;
 				}
 
-				distCirc = std::static_pointer_cast<Circuits::Circuit<Time>>(circuit->Remap(qubitsMap, qubitsMap));
+				distCirc = std::static_pointer_cast<Circuits::Circuit<Time>>(circuit->Remap(qubitsMapOnHost, qubitsMapOnHost));
 			}
 			else if (useSeparateSimForHosts /*&& mnq > 0*/)
 			{
@@ -1704,12 +1901,12 @@ namespace Network {
 					const size_t mapFrom = mnq + i;
 					const size_t mapTo = i;
 
-					qubitsMap[mapFrom] = mapTo;
+					qubitsMapOnHost[mapFrom] = mapTo;
 					reverseQubitsMap[mapTo] = mapFrom;
 				}
 				*/
 
-				distCirc = circuit->RemapToContinuous(reverseQubitsMap, nrQubits, nrCbits);
+				distCirc = circuit->RemapToContinuous(qubitsMapOnHost, reverseQubitsMap, nrQubits, nrCbits);
 
 				if (nrQubits > hostNrQubits + 1) // the host has an additional 'special' qubit for the entanglement or other operations (like those for cutting)
 					throw std::runtime_error("Circuit does not fit on the host!");
@@ -1737,13 +1934,16 @@ namespace Network {
 
 		std::shared_ptr<IController<Time>> controller;     /**< The controller for the network. */
 		// TODO: depending on the network topology, we will have adiacency lists, etc.
-        // or simply a vector of hosts for a totally connected network (or where the communication details do not matter so much)
+		// or simply a vector of hosts for a totally connected network (or where the communication details do not matter so much)
 		std::vector<std::shared_ptr<IHost<Time>>> hosts;   /**< The hosts in the network. */
 
 		std::unique_ptr<Estimators::SimulatorsEstimatorInterface<Time>> simulatorsEstimator;  /**< The simulators estimator. */
 
 	private:
 		Utils::ThreadsPool<ExecuteJob<Time>> threadsPool;  /**< The threads pool for the execution of the circuits. */
+		bool recreateIfNeeded = true;               /**< The flag to recreate the simulator if needed. */
+		bool inExpectationValue = false;          /**< The flag to indicate if we are in the expectation value calculation. */
+		std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsMapOnHost; /**< The map with the qubits mapping when executing on a host. Relevant only when computing expectation values. */
 	};
 
 }

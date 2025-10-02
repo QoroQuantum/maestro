@@ -248,11 +248,10 @@ namespace Circuits {
          * @param bitsMap The map of classical bits, to allow remapping the results back to the original circuit results.
          * @return A shared pointer to the remapped circuit.
          */
-		std::shared_ptr<Circuit<Time>> RemapToContinuous(BitMapping& bitsMap, size_t& nrQubits, size_t& nrCbits) const
+		std::shared_ptr<Circuit<Time>> RemapToContinuous(BitMapping& newQubitsMap, BitMapping& reverseBitsMap, size_t& nrQubits, size_t& nrCbits) const
 		{
 			OperationsVector newops;
 
-			BitMapping newQubitsMap;
 			BitMapping newBitsMap;
 
 			nrQubits = 0;
@@ -279,7 +278,7 @@ namespace Circuits {
 					if (it == newBitsMap.end())
 					{
 						newBitsMap[bit] = nrCbits;
-						bitsMap[nrCbits] = bit;
+						reverseBitsMap[nrCbits] = bit;
 						++nrCbits;
 					}
 				}
