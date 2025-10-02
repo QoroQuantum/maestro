@@ -112,6 +112,7 @@ namespace Network {
 				return;
 			}
 
+			const auto curCnt1 = curCnt > 0 ? curCnt - 1 : 0;
 			for (size_t i = 0; i < curCnt; ++i)
 			{
 				if (optimiseMultipleShots)
@@ -122,7 +123,7 @@ namespace Network {
 				else
 				{
 					dcirc->Execute(optSim, state);
-					optSim->Reset();
+					if (i < curCnt1) optSim->Reset();
 				}
 
 				auto bits = state.GetAllBits();
@@ -164,6 +165,14 @@ namespace Network {
 
 					optSim->AllocateQubits(nrQubits);
 					optSim->Initialize();
+				
+					if (optimiseMultipleShots)
+					{
+						executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
+
+						if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
+							optSim->SaveState();
+					}
 				}
 			}
 			else
@@ -180,16 +189,15 @@ namespace Network {
 
 				optSim->AllocateQubits(nrQubits);
 				optSim->Initialize();
+
+				if (optimiseMultipleShots)
+				{
+					executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
+
+					if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
+						optSim->SaveState();
+				}
 			}
-
-			if (optimiseMultipleShots && executedGates.empty())
-			{
-				executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
-
-				if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
-					optSim->SaveState();
-			}
-
 
 			std::shared_ptr<Circuits::MeasurementOperation<Time>> measurementsOp;
 
@@ -232,6 +240,7 @@ namespace Network {
 				return;
 			}
 
+			const auto curCnt1 = curCnt > 0 ? curCnt - 1 : 0;
 			for (size_t i = 0; i < curCnt; ++i)
 			{
 				if (optimiseMultipleShots)
@@ -242,7 +251,7 @@ namespace Network {
 				else
 				{
 					dcirc->Execute(optSim, state);
-					if (i < curCnt - 1) optSim->Reset(); // leave the simulator state for the last iteration
+					if (i < curCnt1) optSim->Reset(); // leave the simulator state for the last iteration
 				}
 
 				auto bits = state.GetAllBits();
