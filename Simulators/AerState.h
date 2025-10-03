@@ -401,9 +401,22 @@ namespace Simulators {
              * @param pauliString The Pauli string to obtain the expected value for.
              * @return The expected value of the specified Pauli string.
              */
-			double ExpectationValue(const std::string& pauliString) override
+			double ExpectationValue(const std::string& pauliStringOrig) override
 			{
-				if (pauliString.empty()) return 1.0;
+				if (pauliStringOrig.empty()) return 1.0;
+
+				std::string pauliString = pauliStringOrig;
+				if (pauliString.size() > GetNumberOfQubits())
+				{
+					for (size_t i = GetNumberOfQubits(); i < pauliString.size(); ++i)
+					{
+						const auto pauliOp = toupper(pauliString[i]);
+						if (pauliOp != 'I' && pauliOp != 'Z')
+							return 0.0;
+					}
+
+					pauliString.resize(GetNumberOfQubits());
+				}
 
 				AER::reg_t qubits;
 				std::string pauli;

@@ -690,9 +690,22 @@ namespace Simulators {
 			 * @param pauliString The Pauli string to obtain the expected value for.
 			 * @return The expected value of the specified Pauli string.
 			 */
-			double ExpectationValue(const std::string& pauliString) override
+			double ExpectationValue(const std::string& pauliStringOrig) override
 			{
-				if (pauliString.empty()) return 1.0;
+				if (pauliStringOrig.empty()) return 1.0;
+
+				std::string pauliString = pauliStringOrig;
+				if (pauliString.size() > GetNumberOfQubits())
+				{
+					for (size_t i = GetNumberOfQubits(); i < pauliString.size(); ++i)
+					{
+						const auto pauliOp = toupper(pauliString[i]);
+						if (pauliOp != 'I' && pauliOp != 'Z')
+							return 0.0;
+					}
+
+					pauliString.resize(GetNumberOfQubits());
+				}
 
 				if (simulationType == SimulationType::kStabilizer)
 					return cliffordSimulator->ExpectationValue(pauliString);
@@ -709,17 +722,24 @@ namespace Simulators {
 
 				for (size_t q = 0; q < pauliString.size(); ++q)
 				{
-					QC::Gates::AppliedGate<Eigen::MatrixXcd> ag;
-
 					switch (toupper(pauliString[q])) {
 					case 'X':
-						pauliStringVec.emplace_back(xgate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
+					{
+						QC::Gates::AppliedGate<Eigen::MatrixXcd> ag(xgate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
+						pauliStringVec.emplace_back(std::move(ag));
+					}
 						break;
 					case 'Y':
-						pauliStringVec.emplace_back(ygate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
+					{
+						QC::Gates::AppliedGate<Eigen::MatrixXcd> ag(ygate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
+						pauliStringVec.emplace_back(std::move(ag));
+					}
 						break;
 					case 'Z':
-						pauliStringVec.emplace_back(zgate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
+					{
+						QC::Gates::AppliedGate<Eigen::MatrixXcd> ag(zgate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
+						pauliStringVec.emplace_back(std::move(ag));
+					}
 						break;
 					case 'I':
 						[[fallthrough]];

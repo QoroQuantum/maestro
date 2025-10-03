@@ -185,7 +185,6 @@ namespace Network {
 		 */
 		std::vector<double> ExecuteExpectations(const std::shared_ptr<Circuits::Circuit<Time>>& circuit, const std::vector<std::string>& paulis) override
 		{
-			inExpectationValue = true;
 			const auto recreate = recreateIfNeeded;
 
 			auto simType = Simulators::SimulatorType::kQCSim;
@@ -249,8 +248,6 @@ namespace Network {
 			if (recreate && (!simulator || simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))
 				CreateSimulator(simType, method);
 
-			inExpectationValue = false;
-
 			return expectations;
 		}
 
@@ -269,7 +266,6 @@ namespace Network {
 		 */
 		std::vector<double> ExecuteOnHostExpectations(const std::shared_ptr<Circuits::Circuit<Time>>& circuit, size_t hostId, const std::vector<std::string>& paulis)
 		{
-			inExpectationValue = true;
 			const auto recreate = recreateIfNeeded;
 
 			auto simType = Simulators::SimulatorType::kQCSim;
@@ -295,6 +291,11 @@ namespace Network {
 				GetState().SetResultsInOrder(first.first);
 			}
 
+			//for (const auto& m : qubitsMapOnHost)
+			//	std::cout << "Mapping qubit " << m.first << " to " << m.second << std::endl;
+
+			const size_t offsetBase = qubitsMapOnHost.size();
+
 			std::vector<double> expectations(paulis.size(), 1.);
 			if (simulator)
 			{
@@ -304,16 +305,23 @@ namespace Network {
 				// convert the pauli strings to the actual qubits order
 				for (size_t i = 0; i < paulis.size(); ++i)
 				{
-					std::string translated(numOps, 'I');
+					std::string translated(std::max(numOps, paulis[i].size()), 'I');
+
+					size_t offset = offsetBase;
 
 					for (size_t j = 0; j < paulis[i].size(); ++j)
 					{
-						const auto pos = qubitsMapOnHost.find(j);
+						auto pos = qubitsMapOnHost.find(j);
 						if (pos != qubitsMapOnHost.end())
 							translated[pos->second] = paulis[i][j];
 						else
-							translated[j] = paulis[i][j];
+						{
+							translated[offset] = paulis[i][j];
+							++offset;
+						}
 					}
+
+					//std::cout << "Translated pauli string: " << translated << std::endl;
 
 					expectations[i] = simulator->ExpectationValue(translated);
 				}
@@ -321,8 +329,6 @@ namespace Network {
 
 			if (recreate && (!simulator || simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))
 				CreateSimulator(simType, method);
-
-			inExpectationValue = false;
 
 			return expectations;
 		}
@@ -532,7 +538,6 @@ namespace Network {
 				optCircuit->Optimize();
 			}
 			const auto reverseQubitsMap = MapCircuitOnHost(GetController()->GetOptimizeCircuit() ? optCircuit : circuit, hostId, nrQubits, nrCbits, true);
-			if (inExpectationValue) nrQubits = std::max(nrQubits, GetNumQubitsForHost(hostId));
 			if (nrCbits == 0) nrCbits = nrQubits;
 
 			if (!simulator || distCirc->empty()) return {};
@@ -1908,6 +1913,9 @@ namespace Network {
 
 				distCirc = circuit->RemapToContinuous(qubitsMapOnHost, reverseQubitsMap, nrQubits, nrCbits);
 
+				nrQubits = qubitsMapOnHost.size();
+				if (nrQubits == 0) nrQubits = 1;
+
 				if (nrQubits > hostNrQubits + 1) // the host has an additional 'special' qubit for the entanglement or other operations (like those for cutting)
 					throw std::runtime_error("Circuit does not fit on the host!");
 			}
@@ -1942,7 +1950,6 @@ namespace Network {
 	private:
 		Utils::ThreadsPool<ExecuteJob<Time>> threadsPool;  /**< The threads pool for the execution of the circuits. */
 		bool recreateIfNeeded = true;               /**< The flag to recreate the simulator if needed. */
-		bool inExpectationValue = false;          /**< The flag to indicate if we are in the expectation value calculation. */
 		std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsMapOnHost; /**< The map with the qubits mapping when executing on a host. Relevant only when computing expectation values. */
 	};
 
