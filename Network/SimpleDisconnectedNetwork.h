@@ -199,7 +199,9 @@ namespace Network {
 
 			recreateIfNeeded = false;
 
+			pauliStrings = &paulis;
 			const auto res = RepeatedExecute(circuit, 1);
+			pauliStrings = nullptr;
 
 			recreateIfNeeded = recreate;
 
@@ -279,8 +281,9 @@ namespace Network {
 			}
 
 			recreateIfNeeded = false;
-
+			pauliStrings = &paulis;
 			const auto res = RepeatedExecuteOnHost(circuit, hostId, 1);
+			pauliStrings = nullptr;
 
 			recreateIfNeeded = recreate;
 
@@ -1649,7 +1652,8 @@ namespace Network {
 			return cloned;
 		}
 
-		std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(const std::shared_ptr<Circuits::Circuit<Time>>& dcirc, size_t& counts, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, Simulators::SimulatorType& simType, Simulators::SimulationType& method, std::vector<bool>& executed, bool multithreading = false, bool dontRunCircuitStart = false) const override
+		std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(const std::shared_ptr<Circuits::Circuit<Time>>& dcirc, size_t& counts, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, 
+			Simulators::SimulatorType& simType, Simulators::SimulationType& method, std::vector<bool>& executed, bool multithreading = false, bool dontRunCircuitStart = false) const override
 		{
 			if (!optimizeSimulator || !simulatorsEstimator)
 				return nullptr;
@@ -1737,8 +1741,8 @@ namespace Network {
 
 			return simulatorsEstimator->ChooseBestSimulator(simulatorTypes, dcirc, counts, nrQubits, nrCbits, nrResultCbits, simType, method, executed,
 				maxBondDim, singularValueThreshold, mpsSample,
-				GetMaxSimulators(),
-				multithreading);
+				GetMaxSimulators(), pauliStrings,
+				multithreading, dontRunCircuitStart);
 		}
 
 
@@ -1951,6 +1955,7 @@ namespace Network {
 		Utils::ThreadsPool<ExecuteJob<Time>> threadsPool;  /**< The threads pool for the execution of the circuits. */
 		bool recreateIfNeeded = true;               /**< The flag to recreate the simulator if needed. */
 		std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsMapOnHost; /**< The map with the qubits mapping when executing on a host. Relevant only when computing expectation values. */
+		const std::vector<std::string>* pauliStrings = nullptr;  /**< Set to the vector of pauli strings if computing the expectation values. */
 	};
 
 }
