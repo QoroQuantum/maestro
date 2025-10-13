@@ -6,6 +6,10 @@
  * Implementation for the library functionality.
  */
 
+#define _CRT_SECURE_NO_WARNINGS 1
+
+#include <cassert>
+
 #include "../Simulators/Factory.cpp"
 
 #ifndef __linux__

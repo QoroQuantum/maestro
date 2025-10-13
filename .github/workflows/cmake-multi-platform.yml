@@ -14,20 +14,20 @@ jobs:
       uses: actions/checkout@v4
     
     - name: Download Eigen
-      run: curl https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz --output eigen.tgz
+      run: curl https://gitlab.com/libeigen/eigen/-/archive/5.0.0/eigen-5.0.0.tar.gz --output eigen.tgz
       
     - name: Unzip Eigen
       run: tar -xzvf eigen.tgz
    
     - name: Download Boost
-      run: curl https://archives.boost.io/release/1.87.0/source/boost_1_87_0.tar.gz --output boost.tgz
+      run: curl https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz --output boost.tgz
     - name: Unzip Boost
       run: tar -xzvf boost.tgz
     - name: Configure Boost
-      working-directory: ./boost_1_87_0/
+      working-directory: ./boost_1_89_0/
       run: ./bootstrap.sh --prefix=.
     - name: Compile Boost
-      working-directory: ./boost_1_87_0/
+      working-directory: ./boost_1_89_0/
       run: ./b2 --with-container --with-json --with-serialization install
    
     - name: Download QCSim
@@ -45,8 +45,8 @@ jobs:
               
     - name: Run CMake
       run: |
-        export EIGEN3_INCLUDE_DIR=$PWD/eigen-3.4.0/
-        export BOOST_ROOT=$PWD/boost_1_87_0
+        export EIGEN5_INCLUDE_DIR=$PWD/eigen-5.0.0/
+        export BOOST_ROOT=$PWD/boost_1_89_0
         export QCSIM_INCLUDE_DIR=$PWD/QCSim/QCSim/
         export JSON_INCLUDE_DIR=$PWD/json/single_include
         export AER_INCLUDE_DIR=$PWD/qiskit-aer/src/
