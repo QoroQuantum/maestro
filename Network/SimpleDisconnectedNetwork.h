@@ -458,15 +458,13 @@ namespace Network {
 					auto job = std::make_shared<ExecuteJob<Time>>(dcirc, res, curCnt, nrQubits, nrQubits, nrCbitsResults, simType, method, resultsMutex);
 					job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
 
+					job->maxBondDim = maxBondDim;
+					job->mpsSample = mpsSample;
+					job->singularValueThreshold = singularValueThreshold;
+
 					if (optSim) {
 						job->optSim = optSim->Clone();
 						job->executedGates = executed;
-					}
-					else
-					{
-						job->maxBondDim = maxBondDim;
-						job->mpsSample = mpsSample;
-						job->singularValueThreshold = singularValueThreshold;
 					}
 
 					threadsPool.AddRunJob(std::move(job));
@@ -482,6 +480,10 @@ namespace Network {
 				auto job = std::make_shared<ExecuteJob<Time>>(dcirc, res, curCnt, nrQubits, nrQubits, nrCbitsResults, simType, method, resultsMutex);
 				job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
 
+				job->maxBondDim = maxBondDim;
+				job->mpsSample = mpsSample;
+				job->singularValueThreshold = singularValueThreshold;
+
 				if (optSim) {
 					optSim->SetMultithreading(true);
 					job->optSim = optSim;
@@ -495,9 +497,6 @@ namespace Network {
 						job->optSim = optSim;
 						simulator = nullptr;
 					}
-					job->maxBondDim = maxBondDim;
-					job->mpsSample = mpsSample;
-					job->singularValueThreshold = singularValueThreshold;
 				}
 
 				job->DoWorkNoLock();
@@ -626,14 +625,13 @@ namespace Network {
 					auto job = std::make_shared<ExecuteJob<Time>>(dcirc, res, curCnt, nrQubits, nrCbits, nrCbits, simType, method, resultsMutex);
 					job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
 
+					job->maxBondDim = maxBondDim;
+					job->mpsSample = mpsSample;
+					job->singularValueThreshold = singularValueThreshold;
+
 					if (optSim) {
 						job->optSim = optSim->Clone();
 						job->executedGates = executed;
-					}
-					else {
-						job->maxBondDim = maxBondDim;
-						job->mpsSample = mpsSample;
-						job->singularValueThreshold = singularValueThreshold;
 					}
 
 					threadsPool.AddRunJob(std::move(job));
@@ -649,15 +647,14 @@ namespace Network {
 				auto job = std::make_shared<ExecuteJob<Time>>(dcirc, res, curCnt, nrQubits, nrCbits, nrCbits, simType, method, resultsMutex);
 				job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
 
+				job->maxBondDim = maxBondDim;
+				job->mpsSample = mpsSample;
+				job->singularValueThreshold = singularValueThreshold;
+
 				if (optSim) {
 					optSim->SetMultithreading(true);
 					job->optSim = optSim;
 					job->executedGates = executed;
-				}
-				else {
-					job->maxBondDim = maxBondDim;
-					job->mpsSample = mpsSample;
-					job->singularValueThreshold = singularValueThreshold;
 				}
 
 				job->DoWorkNoLock();
