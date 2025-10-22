@@ -766,10 +766,12 @@ namespace Simulators {
 
 				cloned->simulationType = simulationType;
 				cloned->nrQubits = nrQubits;
+
 				cloned->limitSize = limitSize;
 				cloned->limitEntanglement = limitEntanglement;
 				cloned->chi = chi;
 				cloned->singularValueThreshold = singularValueThreshold;
+				
 				cloned->enableMultithreading = enableMultithreading;
 				cloned->useMPSMeasureNoCollapse = useMPSMeasureNoCollapse;
 
@@ -777,7 +779,14 @@ namespace Simulators {
 					cloned->state = state->Clone();
 
 				if (mpsSimulator)
+				{
 					cloned->mpsSimulator = mpsSimulator->Clone();
+
+					if (limitEntanglement && singularValueThreshold > 0.)
+						cloned->mpsSimulator->setLimitEntanglement(singularValueThreshold);
+					if (limitSize && chi > 0)
+						cloned->mpsSimulator->setLimitBondDimension(chi);
+				}
 
 				if (cliffordSimulator)
 					cloned->cliffordSimulator = cliffordSimulator->Clone();
