@@ -1851,78 +1851,71 @@ namespace Network {
 			nrCbits = 0;
 			if (!circuit) return {};
 
-			size_t mxq = 0;
-			size_t mnq = std::numeric_limits<size_t>::max();
-			size_t mxb = 0;
-			size_t mnb = std::numeric_limits<size_t>::max();
-
-			for (const auto& op : circuit->GetOperations())
-			{
-				const auto qbits = op->AffectedQubits();
-				for (auto q : qbits)
-				{
-					if (q > mxq) mxq = q;
-					if (q < mnq) mnq = q;
-				}
-				const auto cbits = op->AffectedBits();
-				for (auto b : cbits)
-				{
-					if (b > mxb) mxb = b;
-					if (b < mnb) mnb = b;
-				}
-			}
-
-			if (mnq > mxq) mnq = 0;
-			if (mnb > mxb) mnb = 0;
-
 			const auto host = std::static_pointer_cast<SimpleHost<Time>>(GetHost(hostId));
 			const size_t hostNrQubits = host->GetNumQubits();
 
-			nrQubits = mxq - mnq + 1;
-			nrCbits = mxb - mnb + 1;
-			if (nrCbits < nrQubits) nrCbits = nrQubits;
-
-			const size_t startQubit = host->GetStartQubitId();
-
 			std::unordered_map<Types::qubit_t, Types::qubit_t> reverseQubitsMap;
 
-			if (!useSeparateSimForHosts && (mnq < startQubit || mxq >= startQubit + hostNrQubits))
+			if (!useSeparateSimForHosts)
 			{
-				if (nrQubits > hostNrQubits + 1) // the host has an additional 'special' qubit for the entanglement or other operations (like those for cutting)
-					throw std::runtime_error("Circuit does not fit on the host!");
+				size_t mxq = 0;
+				size_t mnq = std::numeric_limits<size_t>::max();
+				size_t mxb = 0;
+				size_t mnb = std::numeric_limits<size_t>::max();
 
-				for (size_t i = 0; i < nrCbits; ++i)
+				for (const auto& op : circuit->GetOperations())
 				{
-					const size_t mapFrom = mnq + i;
-					const size_t mapTo = startQubit + i;
-
-					qubitsMapOnHost[mapFrom] = mapTo;
-					reverseQubitsMap[mapTo] = mapFrom;
+					const auto qbits = op->AffectedQubits();
+					for (auto q : qbits)
+					{
+						if (q > mxq) mxq = q;
+						if (q < mnq) mnq = q;
+					}
+					const auto cbits = op->AffectedBits();
+					for (auto b : cbits)
+					{
+						if (b > mxb) mxb = b;
+						if (b < mnb) mnb = b;
+					}
 				}
 
-				distCirc = std::static_pointer_cast<Circuits::Circuit<Time>>(circuit->Remap(qubitsMapOnHost, qubitsMapOnHost));
-			}
-			else if (useSeparateSimForHosts /*&& mnq > 0*/)
-			{
-				/*
-				for (size_t i = 0; i < nrCbits; ++i)
+				if (mnq > mxq) mnq = 0;
+				if (mnb > mxb) mnb = 0;
+
+				nrQubits = mxq - mnq + 1;
+				nrCbits = mxb - mnb + 1;
+				if (nrCbits < nrQubits) nrCbits = nrQubits;
+
+				const size_t startQubit = host->GetStartQubitId();
+
+				if (mnq < startQubit || mxq >= startQubit + hostNrQubits)
 				{
-					const size_t mapFrom = mnq + i;
-					const size_t mapTo = i;
+					if (nrQubits > hostNrQubits + 1) // the host has an additional 'special' qubit for the entanglement or other operations (like those for cutting)
+						throw std::runtime_error("Circuit does not fit on the host!");
 
-					qubitsMapOnHost[mapFrom] = mapTo;
-					reverseQubitsMap[mapTo] = mapFrom;
+					for (size_t i = 0; i < nrCbits; ++i)
+					{
+						const size_t mapFrom = mnq + i;
+						const size_t mapTo = startQubit + i;
+
+						qubitsMapOnHost[mapFrom] = mapTo;
+						reverseQubitsMap[mapTo] = mapFrom;
+					}
+
+					distCirc = std::static_pointer_cast<Circuits::Circuit<Time>>(circuit->Remap(qubitsMapOnHost, qubitsMapOnHost));
 				}
-				*/
 
-				distCirc = circuit->RemapToContinuous(qubitsMapOnHost, reverseQubitsMap, nrQubits, nrCbits);
-
-				nrQubits = qubitsMapOnHost.size();
-				if (nrQubits == 0) nrQubits = 1;
-
-				if (nrQubits > hostNrQubits + 1) // the host has an additional 'special' qubit for the entanglement or other operations (like those for cutting)
-					throw std::runtime_error("Circuit does not fit on the host!");
+				return reverseQubitsMap;
 			}
+			
+			distCirc = circuit->RemapToContinuous(qubitsMapOnHost, reverseQubitsMap, nrQubits, nrCbits);
+
+			assert(nrQubits == qubitsMapOnHost.size());
+
+			if (nrQubits == 0) nrQubits = 1;
+
+			if (nrQubits > hostNrQubits + 1) // the host has an additional 'special' qubit for the entanglement or other operations (like those for cutting)
+				throw std::runtime_error("Circuit does not fit on the host!");
 
 			return reverseQubitsMap;
 		}
