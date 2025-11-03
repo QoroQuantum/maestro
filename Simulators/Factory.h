@@ -87,7 +87,7 @@ namespace Simulators {
 
 	private:
 		static std::shared_ptr<GpuLibrary> gpuLibrary;
-		static bool std::atomic_bool firstTime;
+		static std::atomic_bool firstTime;
 #else		
 		static bool IsGpuLibraryAvailable()
 		{
