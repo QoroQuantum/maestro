@@ -46,6 +46,24 @@ extern "C" void* GetMaestroObject()
 	return (void*)maestroInstance.get();
 }
 
+extern "C" void* GetMaestroObjectWitMute()
+{
+	if (!isInitialized.exchange(true))
+	{
+#ifdef __linux__
+		Simulators::SimulatorsFactory::InitGpuLibraryWithMute();
+#endif
+
+#ifdef COMPOSER
+		Estimators::ExecutionEstimator<>::InitializeRegressors();
+#endif
+
+		maestroInstance = std::make_unique<Maestro>();
+	}
+
+	return (void*)maestroInstance.get();
+}
+
 
 extern "C" unsigned long int CreateSimpleSimulator(int nrQubits)
 {

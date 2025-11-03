@@ -14,6 +14,7 @@
 extern "C" {
 
 	void* GetMaestroObject();
+	void* GetMaestroObjectWithMute();
 
 	unsigned long int CreateSimpleSimulator(int nrQubits);
 	void DestroySimpleSimulator(unsigned long int simHandle);

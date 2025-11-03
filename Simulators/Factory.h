@@ -83,6 +83,7 @@ namespace Simulators {
 		}
 
 		static bool InitGpuLibrary();
+		static bool InitGpuLibraryWithMute();
 
 	private:
 		static std::shared_ptr<GpuLibrary> gpuLibrary;
