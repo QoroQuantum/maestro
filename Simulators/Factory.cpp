@@ -34,7 +34,7 @@ namespace Simulators {
 
 #ifdef __linux__
 	std::shared_ptr<GpuLibrary> SimulatorsFactory::gpuLibrary = nullptr;
-	bool std::atomic_bool SimulatorsFactory::firstTime = true;
+	std::atomic_bool SimulatorsFactory::firstTime = true;
 
 	bool SimulatorsFactory::InitGpuLibrary()
 	{
