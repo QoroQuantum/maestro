@@ -307,7 +307,7 @@ namespace Simulators {
 				}
 				else std::cout << "GpuLibrary: Unable to get initialization function for gpu library" << std::endl;
 			}
-			else std::cout << "GpuLibrary: Unable to load gpu library" << std::endl;
+			else if (!Utils::Library::IsMuted()) std::cout << "GpuLibrary: Unable to load gpu library" << std::endl;
 
 			return false;
 		}

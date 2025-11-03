@@ -58,7 +58,7 @@ namespace Utils {
 			if (handle == nullptr)
 			{
 				const char* dlsym_error = dlerror();
-				if (dlsym_error)
+				if (!mute && dlsym_error)
 					std::cout << "Library: Unable to load library, error: " << dlsym_error << std::endl;
 
 				return false;
@@ -68,7 +68,8 @@ namespace Utils {
 			if (handle == nullptr)
 			{
 				const DWORD error = GetLastError();
-				std::cout << "Library: Unable to load library, error code: " << error << std::endl;
+				if (!mute)
+					std::cout << "Library: Unable to load library, error code: " << error << std::endl;
 				return false;
 			}
 #endif
@@ -90,12 +91,23 @@ namespace Utils {
 			return handle;
 		}
 
+		bool IsMuted() const noexcept
+		{
+			return mute;
+		}
+
+		void SetMute(bool m) noexcept
+		{
+			mute = m;
+		}
+
 	private:
 #ifdef __linux__
 		void* handle = nullptr;
 #elif defined(_WIN32)
 		HINSTANCE handle = nullptr;
 #endif
+		bool mute = false;
 	};
 
 }
