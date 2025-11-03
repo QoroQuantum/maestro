@@ -34,12 +34,15 @@ namespace Simulators {
 
 #ifdef __linux__
 	std::shared_ptr<GpuLibrary> SimulatorsFactory::gpuLibrary = nullptr;
+	static bool std::atomic_bool SimulatorsFactory::firstTime = true;
 
 	bool SimulatorsFactory::InitGpuLibrary()
 	{
 		if (!gpuLibrary)
 		{
 			gpuLibrary = std::make_shared<GpuLibrary>();
+			if (!firstTime.exchange(false))
+				gpuLibrary->SetMute(true);
 
 			if (gpuLibrary->Init("libcomposer_gpu_simulators.so"))
 				return true;
