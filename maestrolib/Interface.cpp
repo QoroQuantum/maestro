@@ -46,7 +46,7 @@ extern "C" void* GetMaestroObject()
 	return (void*)maestroInstance.get();
 }
 
-extern "C" void* GetMaestroObjectWitMute()
+extern "C" void* GetMaestroObjectWithMute()
 {
 	if (!isInitialized.exchange(true))
 	{
