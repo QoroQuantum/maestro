@@ -53,7 +53,8 @@ namespace Circuits {
 		kCSxDagGateType,
 		kCUGateType,
 		kCSwapGateType,
-		kCCXGateType
+		kCCXGateType,
+		kNone
 	};
 
 	/**

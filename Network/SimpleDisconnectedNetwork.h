@@ -1652,7 +1652,10 @@ namespace Network {
 		std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(const std::shared_ptr<Circuits::Circuit<Time>>& dcirc, size_t& counts, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, 
 			Simulators::SimulatorType& simType, Simulators::SimulationType& method, std::vector<bool>& executed, bool multithreading = false, bool dontRunCircuitStart = false) const override
 		{
-			if (!optimizeSimulator || !simulatorsEstimator)
+			if (!optimizeSimulator) 
+				return nullptr;
+
+			if (!simulatorsEstimator && simulatorsForOptimizations.size() != 1)
 				return nullptr;
 
 			// when multithreading is set to true it means it needs a multithreaded simulator
@@ -1664,7 +1667,7 @@ namespace Network {
 			// the others are to be picked between statevector, composite, tensor networks and mps, for now at least
 			// for tensor networks in the future it's worth checking different contractors!!!!
 			// 
-				// clifford was decided at higher level
+			// clifford was decided at higher level
 			if (method == Simulators::SimulationType::kStabilizer)
 			{
 				// compare qcsim with qiskit aer if qiskit aer is available, let the best one win
