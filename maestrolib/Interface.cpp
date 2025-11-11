@@ -180,8 +180,13 @@ extern "C" char* SimpleExecute(unsigned long int simpleSim, const char* jsonCirc
 		network->CreateSimulator();
 
 	// TODO: get from config the allowed simulators types and so on, if set
-
+	auto start = std::chrono::high_resolution_clock::now();
 	auto results = network->RepeatedExecuteOnHost(circuit, 0, nrShots);
+	auto end = std::chrono::high_resolution_clock::now();
+
+	std::chrono::duration<double> duration = end - start;
+	double time_taken = duration.count();
+	std::string timeStr = std::to_string(time_taken);
 
 	// convert the results into a JSON string
 	// allocate memory for the result string and copy the JSON result into it
@@ -189,18 +194,74 @@ extern "C" char* SimpleExecute(unsigned long int simpleSim, const char* jsonCirc
 
 	// TODO: Implement it!
 
-	boost::json::object response;
 	boost::json::object jsonResult;
+	jsonResult.reserve(results.size());
 
-	for (const auto& result : results)
+	for (auto& result : results)
 	{
 		boost::json::string bits;
+		bits.reserve(result.first.size());
 		for (const auto bit : result.first)
 			bits.append(bit ? "1" : "0");
 
-		jsonResult[bits] = result.second;
+		jsonResult.emplace(std::move(bits), std::move(result.second));
 	}
-	response["counts"] = jsonResult;
+
+	boost::json::object response;
+	response.reserve(4);
+
+	response.emplace("counts", std::move(jsonResult));
+	response.emplace("sim_time", timeStr);
+
+	auto simulatorType = network->GetLastSimulatorType();
+	
+	switch (simulatorType)
+	{
+#ifndef NO_QISKIT_AER
+		case Simulators::SimulatorType::kQiskitAer:
+			response.emplace("simulator", "aer");
+			break;
+#endif
+		case Simulators::SimulatorType::kQCSim:
+			response.emplace("simulator", "qcsim");
+			break;
+#ifndef NO_QISKIT_AER
+		case Simulators::SimulatorType::kCompositeQiskitAer:
+			response.emplace("simulator", "composite_aer");
+#endif
+		case Simulators::SimulatorType::kCompositeQCSim:
+			response.emplace("simulator", "composite_qcsim");
+			break;
+#ifdef __linux__
+		case Simulators::SimulatorType::kGpuSim:
+			response.emplace("simulator", "gpu_simulator");
+			break;
+#endif
+		default:
+			response.emplace("simulator", "unknown");
+			break;
+	}
+
+	auto simulationType = network->GetLastSimulationType();
+	switch (simulationType)
+	{
+		case Simulators::SimulationType::kStatevector:
+			response.emplace("method", "statevector");
+			break;
+		case Simulators::SimulationType::kMatrixProductState:
+			response.emplace("method", "matrix_product_state");
+			break;
+		case Simulators::SimulationType::kStabilizer:
+			response.emplace("method", "stabilizer");
+			break;
+		case Simulators::SimulationType::kTensorNetwork:
+			response.emplace("method", "tensor_network");
+			break;
+		default:
+			response.emplace("method", "unknown");
+			break;
+	}
+
 	const std::string responseStr = boost::json::serialize(response);
 	const size_t responseSize = responseStr.length();
 	char* result = new char[responseSize + 1];
