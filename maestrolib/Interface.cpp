@@ -211,7 +211,7 @@ extern "C" char* SimpleExecute(unsigned long int simpleSim, const char* jsonCirc
 	response.reserve(4);
 
 	response.emplace("counts", std::move(jsonResult));
-	response.emplace("sim_time", timeStr);
+	response.emplace("time_taken", timeStr);
 
 	auto simulatorType = network->GetLastSimulatorType();
 	
@@ -228,6 +228,7 @@ extern "C" char* SimpleExecute(unsigned long int simpleSim, const char* jsonCirc
 #ifndef NO_QISKIT_AER
 		case Simulators::SimulatorType::kCompositeQiskitAer:
 			response.emplace("simulator", "composite_aer");
+			break;
 #endif
 		case Simulators::SimulatorType::kCompositeQCSim:
 			response.emplace("simulator", "composite_qcsim");
