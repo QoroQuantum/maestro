@@ -192,8 +192,6 @@ extern "C" char* SimpleExecute(unsigned long int simpleSim, const char* jsonCirc
 	// allocate memory for the result string and copy the JSON result into it
 	// return the result string
 
-	// TODO: Implement it!
-
 	boost::json::object jsonResult;
 	jsonResult.reserve(results.size());
 
@@ -267,7 +265,6 @@ extern "C" char* SimpleExecute(unsigned long int simpleSim, const char* jsonCirc
 	const size_t responseSize = responseStr.length();
 	char* result = new char[responseSize + 1];
 
-	//strncpy_s(result, responseSize, responseStr.c_str(), responseSize);
 	const char* responseData = responseStr.c_str();
 	std::copy(responseData, responseData + responseSize, result);
 
