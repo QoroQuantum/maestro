@@ -17,7 +17,10 @@
 #ifndef __APPLE__
 #ifndef _QV_AVX2_IMPL
 #define _QV_AVX2_IMPL
+#pragma warning( push )
+#pragma warning( disable : 4789 )
 #include "simulators/statevector/qv_avx2.cpp"
+#pragma warning( pop )
 #endif
 #endif
 #endif
