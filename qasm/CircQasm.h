@@ -15,7 +15,6 @@
 #define _CIRCQASM_H_
 
 #include "Circuit/Circuit.h"
-#include "../Distribution/Factory.h"
 
 namespace qasm {
 
