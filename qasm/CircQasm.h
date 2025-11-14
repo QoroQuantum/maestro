@@ -273,7 +273,8 @@ namespace qasm {
 
 			// swap is converted to three CX gates
 			case Circuits::QuantumGateType::kSwapGateType:
-				[[fallthrough]];
+				qasm += "swap q[" + std::to_string(gate->GetQubit(0)) + "],q[" + std::to_string(gate->GetQubit(1)) + "];\n";
+				break;
 			// three qubit gates, do not need to be converted as they are converted to two qubit gates already
 			case Circuits::QuantumGateType::kCSwapGateType:					
 				[[fallthrough]];
@@ -367,12 +368,20 @@ namespace qasm {
 					//*************************************************************************************************
 					// defined here, not in the 'standard' header
 					case Circuits::QuantumGateType::kSxGateType:
+						//neededGates[static_cast<size_t>(QasmGateType::S)] = true;
+						//neededGates[static_cast<size_t>(QasmGateType::H)] = true;
+						//neededGates[static_cast<size_t>(QasmGateType::Z)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::Sx)] = true;
 						break;
 					case Circuits::QuantumGateType::kSxDagGateType:
+						//neededGates[static_cast<size_t>(QasmGateType::S)] = true;
+						//neededGates[static_cast<size_t>(QasmGateType::H)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::SxDG)] = true;
 						break;
 					case Circuits::QuantumGateType::kKGateType:
+						neededGates[static_cast<size_t>(QasmGateType::Z)] = true;
+						neededGates[static_cast<size_t>(QasmGateType::S)] = true;
+						neededGates[static_cast<size_t>(QasmGateType::H)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::K)] = true;
 						break;
 					//*************************************************************************************************
@@ -454,7 +463,7 @@ namespace qasm {
 
 						// swap is converted to three CX gates
 					case Circuits::QuantumGateType::kSwapGateType:
-						[[fallthrough]];
+						break;
 						// three qubit gates, do not need to be converted as they are converted to two qubit gates already
 					case Circuits::QuantumGateType::kCSwapGateType:
 						[[fallthrough]];
@@ -549,27 +558,30 @@ namespace qasm {
 		// the following two introduce a global phase compared with the operators for sx and sxdg, but that should be ok
 		static std::string SxGateDefinition()
 		{
-			return "gate sx a { U(pi/2,-pi/2,pi/2) a; }\n";
+			//return "gate sx a { z a; s a; h a; z a; s a; }\n";
+			return "gate sx a { U(pi/2,-pi/2,pi/2) a; }\n"; // this is a rotation, equivalent up to a global phase
 		}
 
 		static std::string SxDGGateDefinition()
 		{
+			//return "gate sxdg a { s a; h a; s a; }\n";
 			return "gate sxdg a { U(-pi/2,-pi/2,pi/2) a; }\n";
 		}
 
 		static std::string KGateDefinition()
 		{
-			return "gate k a { U(pi/2,pi/2,pi/2) a; }\n";
+			//return "gate k a { U(pi/2,pi/2,pi/2) a; }\n";
+			return "gate k a { z a; s a; h a; s a; }\n";
 		}
 
 		static std::string TGateDefinition()
 		{
-			return "gate t a { U(0,0,pi/4) a; }";
+			return "gate t a { U(0,0,pi/4) a; }\n";
 		}
 
 		static std::string TDGGateDefinition()
 		{
-			return "gate tdg a { U(0,0,-pi/4) a; }";
+			return "gate tdg a { U(0,0,-pi/4) a; }\n";
 		}
 
 		static std::string RxGateDefinition()
@@ -585,6 +597,11 @@ namespace qasm {
 		static std::string RzGateDefinition()
 		{
 			return "gate rz(phi) a { U(0,0,phi) a; }\n";
+		}
+
+		static std::string SwapGateDefinition()
+		{
+			return "gate swap a b { CX a,b; CX b,a; CX a,b; }\n";
 		}
 
 		// with hadamard it's going to the x basis... then after cx, back to the z basis, applying hadamard again
