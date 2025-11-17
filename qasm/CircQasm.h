@@ -45,8 +45,12 @@ namespace qasm {
 			CU3, // CUGate
 			CRX, // CRxGate
 			CRY, // CRyGate
+			CS,
+			CSDAG,
 			CSX, // CSxGate
 			CSXDAG, // CSxDagGate
+			SWAP,
+			IncludedGate,
 			NoGate
 		};
 
@@ -84,8 +88,8 @@ namespace qasm {
 			circ->ConvertForDistribution(); // get rid of swap and 3 qubit gates
 
 			std::string qasm = QasmHeader();
-			qasm += QasmRegisters(circ);
-			qasm += QasmGatesDefinitions(circ);
+			
+			qasm += QasmGatesAndRegsDefinitions(circ);
 
 			// iterate over the circuit and generate the qasm
 			for (const auto& gate : circ->GetOperations())
@@ -318,7 +322,7 @@ namespace qasm {
 			return qasm;
 		}
 
-		static std::string QasmGatesDefinitions(const std::shared_ptr<Circuits::Circuit<Time>>& circuit)
+		static std::string QasmGatesAndRegsDefinitions(const std::shared_ptr<Circuits::Circuit<Time>>& circuit)
 		{
 			// for now just define all that could be used!
 
@@ -327,6 +331,9 @@ namespace qasm {
 
 
 			std::vector<bool> neededGates(static_cast<size_t>(QasmGateType::NoGate), false);
+
+
+//#define DONT_USE_HEADER_DEFINITIONS 1
 
 			for (const auto& op : circuit->GetOperations())
 			{
@@ -338,124 +345,214 @@ namespace qasm {
 					switch (gate->GetGateType())
 					{
 					case Circuits::QuantumGateType::kPhaseGateType:
-						// uses the U gate
+#ifdef DONT_USE_HEADER_DEFINITIONS
+						neededGates[static_cast<size_t>(QasmGateType::U)] = true;
+#else						
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kXGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::X)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kYGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::Y)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kZGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::Z)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kHadamardGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::H)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kSGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::S)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kSdgGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::SDG)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kTGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::T)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kTdgGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::TDG)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 
 					//*************************************************************************************************
 					// defined here, not in the 'standard' header
 					case Circuits::QuantumGateType::kSxGateType:
-						//neededGates[static_cast<size_t>(QasmGateType::S)] = true;
-						//neededGates[static_cast<size_t>(QasmGateType::H)] = true;
-						//neededGates[static_cast<size_t>(QasmGateType::Z)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::Sx)] = true;
+#ifndef DONT_USE_HEADER_DEFINITIONS
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kSxDagGateType:
-						//neededGates[static_cast<size_t>(QasmGateType::S)] = true;
-						//neededGates[static_cast<size_t>(QasmGateType::H)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::SxDG)] = true;
+#ifndef DONT_USE_HEADER_DEFINITIONS
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kKGateType:
-						neededGates[static_cast<size_t>(QasmGateType::Z)] = true;
-						neededGates[static_cast<size_t>(QasmGateType::S)] = true;
-						neededGates[static_cast<size_t>(QasmGateType::H)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::K)] = true;
+#ifndef DONT_USE_HEADER_DEFINITIONS
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					//*************************************************************************************************
 
 					case Circuits::QuantumGateType::kRxGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::Rx)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kRyGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::Ry)] = true;
+#else						
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kRzGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::Rz)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 
 					case Circuits::QuantumGateType::kUGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::U)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 
 					case Circuits::QuantumGateType::kCXGateType:
 						// standard gate
+#ifndef DONT_USE_HEADER_DEFINITIONS
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kCYGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::CY)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::SDG)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::S)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kCZGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::CZ)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::H)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kCPGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::CU1)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 
 					//*************************************************************************************************
 					// defined here, not in the 'standard' header
 					case Circuits::QuantumGateType::kCRxGateType:
 						neededGates[static_cast<size_t>(QasmGateType::CRX)] = true;
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::CU3)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kCRyGateType:
 						neededGates[static_cast<size_t>(QasmGateType::CRY)] = true;
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::CU3)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					//*************************************************************************************************
 
 
 					case Circuits::QuantumGateType::kCRzGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::CRZ)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 					case Circuits::QuantumGateType::kCHGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
 						neededGates[static_cast<size_t>(QasmGateType::CH)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::H)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::SDG)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::T)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::S)] = true;
 						neededGates[static_cast<size_t>(QasmGateType::X)] = true;
+#else
+						neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
 						break;
 
 						//*************************************************************************************************
 						// defined here, not in the 'standard' header
 					case Circuits::QuantumGateType::kCSxGateType:
 						neededGates[static_cast<size_t>(QasmGateType::CSX)] = true;
-						neededGates[static_cast<size_t>(QasmGateType::CU3)] = true;
+						neededGates[static_cast<size_t>(QasmGateType::CS)] = true;
 						break;
 					case Circuits::QuantumGateType::kCSxDagGateType:
 						neededGates[static_cast<size_t>(QasmGateType::CSXDAG)] = true;
-						neededGates[static_cast<size_t>(QasmGateType::CU3)] = true;
+						neededGates[static_cast<size_t>(QasmGateType::CSDAG)] = true;
 						break;
 
 						// we have a problem with this, our CU is with 4 parameters, so not fully converted if the 4th parameter is not zero!
 					case Circuits::QuantumGateType::kCUGateType:
 						if (gate->GetParams()[3] == 0)
+						{
+#ifdef DONT_USE_HEADER_DEFINITIONS
 							neededGates[static_cast<size_t>(QasmGateType::CU3)] = true;
+#else
+							neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+#endif
+						}
 						else
 							throw std::runtime_error("CU with gamma non zero not supported yet!");
 						break;
@@ -463,6 +560,7 @@ namespace qasm {
 
 						// swap is converted to three CX gates
 					case Circuits::QuantumGateType::kSwapGateType:
+						neededGates[static_cast<size_t>(QasmGateType::SWAP)] = true;
 						break;
 						// three qubit gates, do not need to be converted as they are converted to two qubit gates already
 					case Circuits::QuantumGateType::kCSwapGateType:
@@ -475,6 +573,12 @@ namespace qasm {
 			}
 
 			std::string qasm;
+
+			if (neededGates[static_cast<size_t>(QasmGateType::IncludedGate)]) qasm += "include \"qelib1.inc\";\n";
+
+			qasm += QasmRegisters(circuit);
+			
+			// WARNING: order matters, so be sure you won't define gates based on gates that are defined later here
 			
 			if (neededGates[static_cast<size_t>(QasmGateType::X)]) qasm += XGateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::Y)]) qasm += YGateDefinition();
@@ -482,24 +586,36 @@ namespace qasm {
 			if (neededGates[static_cast<size_t>(QasmGateType::H)]) qasm += HGateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::S)]) qasm += SGateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::SDG)]) qasm += SDGGateDefinition();
+			
 			if (neededGates[static_cast<size_t>(QasmGateType::Sx)]) qasm += SxGateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::SxDG)]) qasm += SxDGGateDefinition();
+			
 			if (neededGates[static_cast<size_t>(QasmGateType::K)]) qasm += KGateDefinition();
+			
+			
 			if (neededGates[static_cast<size_t>(QasmGateType::T)]) qasm += TGateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::TDG)]) qasm += TDGGateDefinition();
+			
 			if (neededGates[static_cast<size_t>(QasmGateType::Rx)]) qasm += RxGateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::Ry)]) qasm += RyGateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::Rz)]) qasm += RzGateDefinition();
 
+			
 			if (neededGates[static_cast<size_t>(QasmGateType::CZ)]) qasm += CZGateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::CY)]) qasm += CYGateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::CH)]) qasm += CHGateDefinition();
 			//qasm += CCXGateDefinition();
+			
 			if (neededGates[static_cast<size_t>(QasmGateType::CRZ)]) qasm += CRZGateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::CU1)]) qasm += CU1GateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::CU3)]) qasm += CU3GateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::CRX)]) qasm += CRXGateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::CRY)]) qasm += CRYGateDefinition();
+			if (neededGates[static_cast<size_t>(QasmGateType::SWAP)]) qasm += SwapGateDefinition();
+
+			if (neededGates[static_cast<size_t>(QasmGateType::CS)]) qasm += CSGateDefinition();
+			if (neededGates[static_cast<size_t>(QasmGateType::CSDAG)]) qasm += CSDAGGateDefinition();
+
 			if (neededGates[static_cast<size_t>(QasmGateType::CSX)]) qasm += CSXGateDefinition();
 			if (neededGates[static_cast<size_t>(QasmGateType::CSXDAG)]) qasm += CSXDAGGateDefinition();
 
@@ -508,7 +624,6 @@ namespace qasm {
 
 
 		// gates definitions
-		/*
 		static std::string U3GateDefinition()
 		{
 			return "gate u3(theta,phi,lambda) q { U(theta,phi,lambda) q; }\n";
@@ -523,7 +638,6 @@ namespace qasm {
 		{
 			return "gate u1(lambda) q { U(0,0,lambda) q; }\n";
 		}
-		*/
 
 		static std::string XGateDefinition()
 		{
@@ -558,20 +672,17 @@ namespace qasm {
 		// the following two introduce a global phase compared with the operators for sx and sxdg, but that should be ok
 		static std::string SxGateDefinition()
 		{
-			//return "gate sx a { z a; s a; h a; z a; s a; }\n";
 			return "gate sx a { U(pi/2,-pi/2,pi/2) a; }\n"; // this is a rotation, equivalent up to a global phase
 		}
 
 		static std::string SxDGGateDefinition()
 		{
-			//return "gate sxdg a { s a; h a; s a; }\n";
 			return "gate sxdg a { U(-pi/2,-pi/2,pi/2) a; }\n";
 		}
 
 		static std::string KGateDefinition()
 		{
-			//return "gate k a { U(pi/2,pi/2,pi/2) a; }\n";
-			return "gate k a { z a; s a; h a; s a; }\n";
+			return "gate k a { U(pi/2,pi/2,pi/2) a; }\n";
 		}
 
 		static std::string TGateDefinition()
@@ -601,7 +712,7 @@ namespace qasm {
 
 		static std::string SwapGateDefinition()
 		{
-			return "gate swap a b { CX a,b; CX b,a; CX a,b; }\n";
+			return "gate swap a,b { CX a,b; CX b,a; CX a,b; }\n";
 		}
 
 		// with hadamard it's going to the x basis... then after cx, back to the z basis, applying hadamard again
@@ -617,10 +728,9 @@ namespace qasm {
 
 		static std::string CHGateDefinition()
 		{
-			return "gate ch a,b { h b; sdg b; CX a, b; h b; t b; CX a, b; t b; h b; s b; x b; s a; }\n";
+			return "gate ch a,b { h b; sdg b; CX a,b; h b; t b; CX a,b; t b; h b; s b; x b; s a; }\n";
 		}
 
-		/*
 		static std::string CCXGateDefinition()
 		{
 			return "gate ccx a,b,c\
@@ -634,12 +744,6 @@ namespace qasm {
 				cx a, b;\
 			}\n";
 		}
-		*/
-
-		static std::string CRZGateDefinition()
-		{
-			return "gate crz(lambda) a,b { U(0,0,lambda/2) b; CX a,b; U(0,0,-lambda/2) b; CX a,b; }\n";
-		}
 
 		static std::string CU1GateDefinition()
 		{
@@ -648,7 +752,7 @@ namespace qasm {
 
 		static std::string CU3GateDefinition()
 		{
-			return "gate cu3(theta,phi,lambda) c,t { U(0,0,(lambda-phi)/2) t; CX c,t; U(-theta/2,0,-(phi+lambda)/2) t; CX c,t; U(theta/2,phi,0) t; }\n";
+			return "gate cu3(theta,phi,lambda) c,t { U(0,0,(lambda+phi)/2) c; U(0,0,(lambda-phi)/2) t; CX c,t; U(-theta/2,0,-(phi+lambda)/2) t; CX c,t; U(theta/2,phi,0) t; }\n";
 		}
 
 		//*************************************************************************************************
@@ -664,14 +768,29 @@ namespace qasm {
 			return "gate cry(theta) a,b { cu3(theta,0,0) a,b; }\n";
 		}
 
+		static std::string CRZGateDefinition()
+		{
+			return "gate crz(lambda) a,b { U(0,0,lambda/2) b; CX a,b; U(0,0,-lambda/2) b; CX a,b; }\n";
+		}
+
+		static std::string CSGateDefinition()
+		{
+			return "gate cs c,t { U(0,0,pi/4) c; U(0,0,pi/4) t; CX c,t; U(0,0,-pi/4) t; CX c,t; }\n";
+		}
+
+		static std::string CSDAGGateDefinition()
+		{
+			return "gate csdag c,t { CX c,t; U(0,0,pi/4) t; CX c,t; U(0,0,-pi/4) c; U(0,0,-pi/4) t; }\n";
+		}
+
 		static std::string CSXGateDefinition()
 		{
-			return "gate csx a,b { cu3(pi/2,-pi/2,pi/2) a,b; }\n";
+			return "gate csx c,t { U(pi/2,0,pi) t; cs c,t; U(pi/2,0,pi) t; }\n";
 		}
 
 		static std::string CSXDAGGateDefinition()
 		{
-			return "gate csxdag a,b { cu3(-pi/2,-pi/2,pi/2) a,b; }\n";
+			return "gate csxdag c,t { U(pi/2,0,pi) t; csdag c,t; U(pi/2,0,pi) t; }\n";
 		}
 	};
 
