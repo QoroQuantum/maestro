@@ -316,8 +316,17 @@ namespace qasm {
 					measQubits.insert(bit);
 			}
 
+			int creg_count = 0;
 			for (auto bit : measQubits)
+			{
+				// this completion is needed to have a proper total cregister definition
+				// we need this to be able to address the bits properly, otherwise conversion circuit -> qasm -> circuit would not work properly
+				if (creg_count < static_cast<int>(bit))
+					qasm += "creg c" + std::to_string(creg_count) + "[" + std::to_string(bit - creg_count) + "];\n";
+				
 				qasm += "creg c" + std::to_string(bit) + "[1];\n";
+				creg_count = bit + 1;
+			}
 
 			return qasm;
 		}
