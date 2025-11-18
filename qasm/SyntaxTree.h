@@ -15,7 +15,7 @@
 #define _SYNTAXTREE_H_
 
 #include "SimpleOps.h"
-#include "Circuit/Factory.h"
+#include "../Circuit/Factory.h"
 
 namespace qasm {
 	struct AddGateExpr : public AbstractSyntaxTree
