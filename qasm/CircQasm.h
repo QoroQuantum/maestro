@@ -333,14 +333,7 @@ namespace qasm {
 
 		static std::string QasmGatesAndRegsDefinitions(const std::shared_ptr<Circuits::Circuit<Time>>& circuit)
 		{
-			// for now just define all that could be used!
-
-			// alternatively, if the header exists (might need additional definitions, though):
-			// return "include \"qelib1.inc\";\n"; 
-
-
 			std::vector<bool> neededGates(static_cast<size_t>(QasmGateType::NoGate), false);
-
 
 //#define DONT_USE_HEADER_DEFINITIONS 1
 
