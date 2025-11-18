@@ -22,7 +22,7 @@ extern "C" {
 	int RemoveAllOptimizationSimulatorsAndAdd(unsigned long int simHandle, int simType, int simExecType);
 	int AddOptimizationSimulator(unsigned long int simHandle, int simType, int simExecType);
 
-	char* SimpleExecute(unsigned long int simpleSim, const char* jsonCircuit, const char* jsonConfig);
+	char* SimpleExecute(unsigned long int simpleSim, const char* circuitStr, const char* jsonConfig);
 	void FreeResult(char* result);
 
 	unsigned long int CreateSimulator(int simType, int simExecType);
