@@ -24,6 +24,7 @@
 #include <memory>
 
 #include "../Utils/LogFile.h"
+#include "../qasm/QasmCirc.h"
 
 static std::atomic_bool isInitialized = false;
 static std::unique_ptr<Maestro> maestroInstance = nullptr;
@@ -97,9 +98,9 @@ extern "C" int AddOptimizationSimulator(unsigned long int simHandle, int simType
 	return maestroInstance->AddOptimizationSimulator(simHandle, static_cast<Simulators::SimulatorType>(simType), static_cast<Simulators::SimulationType>(simExecType));
 }
 
-extern "C" char* SimpleExecute(unsigned long int simpleSim, const char* jsonCircuit, const char* jsonConfig)
+extern "C" char* SimpleExecute(unsigned long int simpleSim, const char* circuitStr, const char* jsonConfig)
 {
-	if (simpleSim == 0 || !jsonCircuit || !jsonConfig || !maestroInstance)
+	if (simpleSim == 0 || !circuitStr || !jsonConfig || !maestroInstance)
 		return nullptr;
 
 	auto network = maestroInstance->GetSimpleSimulator(simpleSim);
@@ -122,10 +123,22 @@ extern "C" char* SimpleExecute(unsigned long int simpleSim, const char* jsonCirc
 	// "quantum_registers": {"q": [0, 1]}, 
 	// "classical_registers": {"c": [0, 1], "other_measure_name": [2], "meas": [3]}}
 
-	Json::JsonParserMaestro<> jsonParser;
+	std::shared_ptr<Circuits::Circuit<>> circuit;
 
-	auto circuit = jsonParser.ParseCircuit(jsonCircuit);
-	
+	if (circuitStr[0] == '{' || circuitStr[0] =='[')
+	{
+		// assume JSON format only if either object or array
+		Json::JsonParserMaestro<> jsonParser;
+		circuit = jsonParser.ParseCircuit(circuitStr);
+	}
+	else
+	{
+		// QASM 2.0 format
+		qasm::QasmToCirc<> parser;
+		std::string qasmInput(circuitStr);
+		circuit = parser.ParseAndTranslate(qasmInput);
+	}
+
 	// check if the circuit has measurements only at the end
 
 	// get the number of shots from the configuration

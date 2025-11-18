@@ -20,6 +20,7 @@
 #include <boost/json.hpp>
 
 #include "../Circuit/Factory.h"
+#include "../qasm/QasmCirc.h"
 
 namespace Json {
 
@@ -46,13 +47,38 @@ namespace Json {
 		{
 			const boost::json::value circuitJson = ParseString(str);
 
-			if (!circuitJson.is_array())
-				return nullptr;
-
 			std::shared_ptr<Circuits::Circuit<Time>> circuit;
 
-			const auto circuitArray = circuitJson.as_array();
-			circuit = ParseCircuitArray(circuitArray);
+			if (circuitJson.is_array())
+			{
+				const auto circuitArray = circuitJson.as_array();
+				circuit = ParseCircuitArray(circuitArray);
+			}
+			else if (circuitJson.is_object())
+			{
+				std::string circuitStr;
+				const auto jsonObject = circuitJson.as_object();
+				if (jsonObject.contains("qasm"))
+				{
+					const auto qasmValue = jsonObject.at("qasm");
+					if (qasmValue.is_string())
+						circuitStr = qasmValue.as_string().c_str();
+				}
+				else if (jsonObject.contains("QASM"))
+				{
+					const auto qasmValue = jsonObject.at("QASM");
+					if (qasmValue.is_string())
+						circuitStr = qasmValue.as_string().c_str();
+				}
+				if (circuitStr.empty())
+					return nullptr;
+
+				// QASM 2.0 format
+				qasm::QasmToCirc<> parser;
+				std::string qasmInput(circuitStr);
+				circuit = parser.ParseAndTranslate(qasmInput);
+			}
+			else return nullptr;
 
 			return circuit;
 		}
