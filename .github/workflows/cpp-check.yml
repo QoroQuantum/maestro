@@ -1,0 +1,34 @@
+name: C++ Code Check
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  cpp-code-check:
+    name: Pre-commit checks (C++)
+    runs-on: ubuntu-latest
+    steps:
+      #----------------------------------------------
+      # check-out repo
+      #----------------------------------------------
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      #----------------------------------------------
+      # set-up python
+      #----------------------------------------------
+      # We still need Python to run the pre-commit framework
+      - name: Set up python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      #----------------------------------------------
+      # run pre-commit
+      #----------------------------------------------
+      - name: Run pre-commit
+        uses: pre-commit/action@v3.0.1
+        with:
+          extra_args: --all-files

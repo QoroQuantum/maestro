@@ -6,7 +6,8 @@
  *
  * The qiskit aer state class, derived from AER::AerState.
  *
- * Should not be used directly, this should allow exposing more from AER::AerState than it's available through the public interface, if needed.
+ * Should not be used directly, this should allow exposing more from
+ * AER::AerState than it's available through the public interface, if needed.
  */
 
 #pragma once
@@ -22,57 +23,56 @@
 
 namespace AER {
 
-	class AerStateFake {
-	public:
-		virtual ~AerStateFake() = default;
+class AerStateFake {
+public:
+  virtual ~AerStateFake() = default;
 
-		bool initialized_;
-		uint_t num_of_qubits_;
-		RngEngine rng_;
-		int seed_ = std::random_device()();
-		std::shared_ptr<QuantumState::Base> state_;
-	};
+  bool initialized_;
+  uint_t num_of_qubits_;
+  RngEngine rng_;
+  int seed_ = std::random_device()();
+  std::shared_ptr<QuantumState::Base> state_;
+};
 
-}
+} // namespace AER
 
 namespace Simulators {
-	// TODO: Maybe use the pimpl idiom https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation for good
-	// but during development this should be good enough
-	namespace Private {
+// TODO: Maybe use the pimpl idiom
+// https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation
+// for good but during development this should be good enough
+namespace Private {
 
-		/**
-         * @class QiskitAerState
-         * @brief Class for the qiskit aer simulator.
-         *
-         * Derived from AER::AerState, could add more functionality and expose more than it's available through the base class public interface.
-         * Do not use this class directly.
-         */
-		class QiskitAerState : public AER::AerState
-		{
-		public:
-			const std::shared_ptr<AER::QuantumState::Base>& get_state() const
-			{
-				const AER::AerStateFake* fakeState = (AER::AerStateFake*)(void*)this;
-				return fakeState->state_;
-			}
+/**
+ * @class QiskitAerState
+ * @brief Class for the qiskit aer simulator.
+ *
+ * Derived from AER::AerState, could add more functionality and expose more than
+ * it's available through the base class public interface. Do not use this class
+ * directly.
+ */
+class QiskitAerState : public AER::AerState {
+public:
+  const std::shared_ptr<AER::QuantumState::Base> &get_state() const {
+    const AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
+    return fakeState->state_;
+  }
 
-			double expval_pauli(const reg_t& qubits, const std::string& pauli)
-			{
-				if (qubits.empty() || pauli.empty())
-					return 1.;
+  double expval_pauli(const reg_t &qubits, const std::string &pauli) {
+    if (qubits.empty() || pauli.empty())
+      return 1.;
 
-				const auto& state = get_state();
-				if (!state)
-					return 0.;
+    const auto &state = get_state();
+    if (!state)
+      return 0.;
 
-				flush_ops();
+    flush_ops();
 
-				return state->expval_pauli(qubits, pauli);
-			}
-		};
+    return state->expval_pauli(qubits, pauli);
+  }
+};
 
-	}
-}
+} // namespace Private
+} // namespace Simulators
 
 #endif
 #endif

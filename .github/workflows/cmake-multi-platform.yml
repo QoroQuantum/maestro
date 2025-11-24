@@ -7,18 +7,18 @@ on:
     branches: [ "main" ]
 
 jobs:
-  build:          
+  build:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout Repo
       uses: actions/checkout@v4
-    
+
     - name: Download Eigen
       run: curl https://gitlab.com/libeigen/eigen/-/archive/5.0.0/eigen-5.0.0.tar.gz --output eigen.tgz
-      
+
     - name: Unzip Eigen
       run: tar -xzvf eigen.tgz
-   
+
     - name: Download Boost
       run: curl https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz --output boost.tgz
     - name: Unzip Boost
@@ -29,20 +29,20 @@ jobs:
     - name: Compile Boost
       working-directory: ./boost_1_89_0/
       run: ./b2 --with-container --with-json --with-serialization install
-   
+
     - name: Download QCSim
       run: git clone https://github.com/aromanro/QCSim.git
-   
+
     - name: Download JSON
       run: git clone https://github.com/nlohmann/json.git
-   
+
     - name: Download AER
       run: git clone https://github.com/InvictusWingsSRL/qiskit-aer.git
-   
+
     - name: Install OpenBlas
-      run: | 
+      run: |
         sudo apt install libopenblas-dev
-              
+
     - name: Run CMake
       run: |
         export EIGEN5_INCLUDE_DIR=$PWD/eigen-5.0.0/
@@ -51,6 +51,6 @@ jobs:
         export JSON_INCLUDE_DIR=$PWD/json/single_include
         export AER_INCLUDE_DIR=$PWD/qiskit-aer/src/
         cmake .
-        
+
     - name: Run Make
       run: make
