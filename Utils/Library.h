@@ -24,92 +24,77 @@
 
 #include <windows.h>
 
-#endif 
+#endif
 
 namespace Utils {
 
-	class Library
-	{
-	public:
-		Library(const Library&) = delete;
-		Library& operator=(const Library&) = delete;
-		Library(Library&&) = default;
-		Library& operator=(Library&&) = default;
+class Library {
+public:
+  Library(const Library &) = delete;
+  Library &operator=(const Library &) = delete;
+  Library(Library &&) = default;
+  Library &operator=(Library &&) = default;
 
-		Library() noexcept
-		{
-		}
+  Library() noexcept {}
 
-		virtual ~Library()
-		{
-			if (handle)
+  virtual ~Library() {
+    if (handle)
 #ifdef __linux__
-				dlclose(handle);
+      dlclose(handle);
 #elif defined(_WIN32)
-				FreeLibrary(handle);
+      FreeLibrary(handle);
 #endif
-		}
+  }
 
-		virtual bool Init(const char* libName) noexcept
-		{
+  virtual bool Init(const char *libName) noexcept {
 #ifdef __linux__
-			handle = dlopen(libName, RTLD_NOW);
+    handle = dlopen(libName, RTLD_NOW);
 
-			if (handle == nullptr)
-			{
-				const char* dlsym_error = dlerror();
-				if (!mute && dlsym_error)
-					std::cout << "Library: Unable to load library, error: " << dlsym_error << std::endl;
+    if (handle == nullptr) {
+      const char *dlsym_error = dlerror();
+      if (!mute && dlsym_error)
+        std::cout << "Library: Unable to load library, error: " << dlsym_error
+                  << std::endl;
 
-				return false;
-			}
+      return false;
+    }
 #elif defined(_WIN32)
-			handle = LoadLibraryA(libName);
-			if (handle == nullptr)
-			{
-				const DWORD error = GetLastError();
-				if (!mute)
-					std::cout << "Library: Unable to load library, error code: " << error << std::endl;
-				return false;
-			}
+    handle = LoadLibraryA(libName);
+    if (handle == nullptr) {
+      const DWORD error = GetLastError();
+      if (!mute)
+        std::cout << "Library: Unable to load library, error code: " << error
+                  << std::endl;
+      return false;
+    }
 #endif
 
-			return true;
-		}
+    return true;
+  }
 
-		void* GetFunction(const char* funcName) noexcept
-		{
+  void *GetFunction(const char *funcName) noexcept {
 #ifdef __linux__
-			return dlsym(handle, funcName);
+    return dlsym(handle, funcName);
 #elif defined(_WIN32)
-			return GetProcAddress(handle, funcName);
+    return GetProcAddress(handle, funcName);
 #endif
-		}
+  }
 
-		const void* GetHandle() const noexcept
-		{
-			return handle;
-		}
+  const void *GetHandle() const noexcept { return handle; }
 
-		bool IsMuted() const noexcept
-		{
-			return mute;
-		}
+  bool IsMuted() const noexcept { return mute; }
 
-		void SetMute(bool m) noexcept
-		{
-			mute = m;
-		}
+  void SetMute(bool m) noexcept { mute = m; }
 
-	private:
+private:
 #ifdef __linux__
-		void* handle = nullptr;
+  void *handle = nullptr;
 #elif defined(_WIN32)
-		HINSTANCE handle = nullptr;
+  HINSTANCE handle = nullptr;
 #endif
-		bool mute = false;
-	};
+  bool mute = false;
+};
 
-}
+} // namespace Utils
 
 #endif
