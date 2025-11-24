@@ -527,7 +527,7 @@ public:
     // apply not on the target entangled qubit
     // ops.emplace_back(std::make_shared<Circuits::ConditionalGate<Time>>(std::make_shared<Circuits::XGate<Time>>(tgtEntangledQubit),
     //	std::make_shared<Circuits::EqualCondition>(std::vector<size_t>{
-    //ctrlEntangledMeasureBit }, std::vector<bool>{true})));
+    // ctrlEntangledMeasureBit }, std::vector<bool>{true})));
     ops[4] = std::make_shared<Circuits::ConditionalGate<Time>>(
         std::make_shared<Circuits::XGate<Time>>(tgtEntangledQubit),
         std::make_shared<Circuits::EqualCondition>(
