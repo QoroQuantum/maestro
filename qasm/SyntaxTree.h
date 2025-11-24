@@ -567,7 +567,7 @@ namespace qasm {
 
 	struct Program
 	{
-		double version = 0.0;
+		double version = 2.0;
 		std::vector<StatementType> statements;
 		std::vector<std::string> comments;
 		std::vector<std::string> includes;
@@ -585,7 +585,7 @@ namespace qasm {
 			comments.clear();
 			includes.clear();
 			statements.clear();
-			version = 0.0;
+			version = 2.0;
 		}
 
 		template<typename Time = Types::time_type> std::shared_ptr<Circuits::Circuit<Time>> ToCircuit(std::unordered_map<std::string, StatementType>& opaqueGates, std::unordered_map<std::string, StatementType>& definedGates) const
