@@ -19,6 +19,8 @@
 
 #include "GpuLibrary.h"
 
+#include <memory>
+
 namespace Simulators {
 
 class GpuLibStateVectorSim {
