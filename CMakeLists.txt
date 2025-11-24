@@ -123,6 +123,7 @@ endif()
 LINK_LIBRARIES()
 
 add_library(maestro SHARED ${MAESTROSRC})
+install(TARGETS maestro DESTINATION lib)
 
 if(OpenMP_CXX_FOUND)
     message("Setting OpenMP")
