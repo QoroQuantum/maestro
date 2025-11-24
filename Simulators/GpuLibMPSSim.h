@@ -16,6 +16,8 @@
 
 #ifdef __linux__
 
+#include <memory>
+
 #include "GpuLibrary.h"
 
 namespace Simulators {
