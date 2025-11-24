@@ -307,7 +307,7 @@ public:
 
     // for (const auto& m : qubitsMapOnHost)
     //	std::cout << "Mapping qubit " << m.first << " to " << m.second <<
-    //std::endl;
+    // std::endl;
 
     const size_t offsetBase = qubitsMapOnHost.size();
 
