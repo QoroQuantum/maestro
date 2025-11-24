@@ -15,6 +15,7 @@
 #define __BASE_CONTRACTOR_H_ 1
 
 #include "TensorContractor.h"
+#include "TensorNetwork.h"
 
 #include <random>
 
