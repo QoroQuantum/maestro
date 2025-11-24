@@ -18,7 +18,7 @@ if (NOT "$ENV{NO_QISKIT_AER}" STREQUAL "")
 	set(QAER False)
 endif()
 
-if (NOT DEFINED EIGEN5_INCLUDE_DIR) 
+if (NOT DEFINED EIGEN5_INCLUDE_DIR)
 	SET( EIGEN5_INCLUDE_DIR "$ENV{EIGEN5_INCLUDE_DIR}" )
 	IF( NOT EIGEN5_INCLUDE_DIR )
 		MESSAGE( FATAL_ERROR "Please set EIGEN5_INCLUDE_DIR env variable to the include directory of Eigen5")
@@ -26,7 +26,7 @@ if (NOT DEFINED EIGEN5_INCLUDE_DIR)
 ENDIF()
 
 
-if (NOT DEFINED QCSIM_INCLUDE_DIR) 
+if (NOT DEFINED QCSIM_INCLUDE_DIR)
 	SET( QCSIM_INCLUDE_DIR "$ENV{QCSIM_INCLUDE_DIR}" )
 	IF( NOT QCSIM_INCLUDE_DIR )
 		MESSAGE( FATAL_ERROR "Please set QCSIM_INCLUDE_DIR env variable to the include directory of qcsim")
@@ -34,14 +34,14 @@ if (NOT DEFINED QCSIM_INCLUDE_DIR)
 ENDIF()
 
 if (QAER)
-	if (NOT DEFINED JSON_INCLUDE_DIR) 
+	if (NOT DEFINED JSON_INCLUDE_DIR)
 		SET( JSON_INCLUDE_DIR "$ENV{JSON_INCLUDE_DIR}" )
 		IF( NOT JSON_INCLUDE_DIR )
 			MESSAGE( FATAL_ERROR "Please set JSON_INCLUDE_DIR env variable to the single include directory of nlohmann json")
 		ENDIF()
 	ENDIF()
-	
-	if (NOT DEFINED AER_INCLUDE_DIR) 
+
+	if (NOT DEFINED AER_INCLUDE_DIR)
 		SET( AER_INCLUDE_DIR "$ENV{AER_INCLUDE_DIR}" )
 		IF( NOT AER_INCLUDE_DIR )
 			MESSAGE( FATAL_ERROR "Please set AER_INCLUDE_DIR env variable to the src directory of qiskit aer")
@@ -50,7 +50,7 @@ if (QAER)
 endif()
 
 # add here common sources
-						
+
 set(MAESTROSRC maestrolib/dllmain.cpp
 			   maestrolib/Interface.cpp)
 
@@ -92,18 +92,18 @@ if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64" OR CMAKE_HOST_SYSTEM_PROCESSOR 
             enable_cxx_flag("-mpopcnt")
         endif()
     elseif(MSVC)
-        message("Setting SIMD...")	
+        message("Setting SIMD...")
         set(SIMD_FLAGS "/arch:AVX2")
     endif()
 endif()
 
 
-set(Boost_USE_STATIC_LIBS OFF) 
-set(Boost_USE_MULTITHREADED ON)  
-set(Boost_USE_STATIC_RUNTIME OFF) 
+set(Boost_USE_STATIC_LIBS OFF)
+set(Boost_USE_MULTITHREADED ON)
+set(Boost_USE_STATIC_RUNTIME OFF)
 set(Boost_USE_RELEASE_LIBS ON)
 set(Boost_USE_DEBUG_LIBS OFF)
-find_package(Boost REQUIRED COMPONENTS json container serialization) 
+find_package(Boost REQUIRED COMPONENTS json container serialization)
 
 IF(NOT Boost_FOUND)
     MESSAGE( FATAL_ERROR "Couldn't find boost libs")
@@ -111,11 +111,11 @@ ENDIF()
 
 if (QAER)
 	INCLUDE_DIRECTORIES ( ${EIGEN5_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${QCSIM_INCLUDE_DIR} ${JSON_INCLUDE_DIR} ${AER_INCLUDE_DIR})
-	
+
 	find_package(BLAS REQUIRED)
 	IF(NOT BLAS_FOUND)
 		MESSAGE( FATAL_ERROR "Couldn't find blas libs")
-	ENDIF()	
+	ENDIF()
 else()
 	INCLUDE_DIRECTORIES ( ${EIGEN5_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${QCSIM_INCLUDE_DIR})
 endif()
@@ -126,10 +126,10 @@ add_library(maestro SHARED ${MAESTROSRC})
 
 if(OpenMP_CXX_FOUND)
     message("Setting OpenMP")
-	
+
 	target_link_libraries(maestro PUBLIC OpenMP::OpenMP_CXX)
     target_link_libraries(maestro PRIVATE ${OpenMP_CXX_FLAGS})
-    target_compile_options(maestro PRIVATE ${OpenMP_CXX_FLAGS})	
+    target_compile_options(maestro PRIVATE ${OpenMP_CXX_FLAGS})
 endif()
 
 IF(QAER AND BLAS_FOUND)
@@ -141,7 +141,7 @@ ENDIF()
 IF(SIMD_FLAGS)
     message("Setting SIMD flags")
 
-	target_compile_options(maestro PUBLIC ${SIMD_FLAGS})	
+	target_compile_options(maestro PUBLIC ${SIMD_FLAGS})
 ENDIF()
 
 if (UNIX)
@@ -151,5 +151,3 @@ endif()
 IF(Boost_FOUND)
 	target_link_libraries(maestro PRIVATE Boost::serialization)
 ENDIF()
-
-
