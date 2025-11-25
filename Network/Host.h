@@ -29,6 +29,8 @@ express permission of 2639731 ONTARIO INC.
 
 #include <vector>
 
+#include "../Types/Types.h"
+
 namespace Network {
 
 /**
