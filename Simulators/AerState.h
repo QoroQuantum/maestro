@@ -687,8 +687,8 @@ public:
 		  std::to_string(enableMultithreading ? 0 : 1); // 0 means auto/all available, 1 limits to 1
       state->configure("max_parallel_threads", nrThreads);
       state->configure("parallel_state_update", nrThreads);
-      //const std::string threadsLimit = std::to_string(12);
-      //state->configure("statevector_parallel_threshold", threadsLimit);
+      const std::string threadsLimit = std::to_string(13);
+      state->configure("statevector_parallel_threshold", threadsLimit);
     }
   }
 
