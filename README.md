@@ -60,6 +60,17 @@ The model normalizes performance features to reduce hardware dependence and can 
 - [Installation Guide](INSTALL.md): Detailed build and installation instructions.
 - [Tutorial](TUTORIAL.md): Usage examples and API overview.
 
+### API Documentation
+To generate the API documentation using Doxygen:
+
+```bash
+# Ensure Doxygen is installed
+cd build
+cmake ..
+make doc
+```
+The documentation will be generated in `docs/html/index.html`.
+
 ## Building Maestro
 
 Quick start:
