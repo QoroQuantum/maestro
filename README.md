@@ -56,14 +56,20 @@ Maestro includes a prediction engine that:
 
 The model normalizes performance features to reduce hardware dependence and can be recalibrated on installation.
 
+## Documentation
+- [Installation Guide](INSTALL.md): Detailed build and installation instructions.
+- [Tutorial](TUTORIAL.md): Usage examples and API overview.
+
 ## Building Maestro
 
-Example build instructions:
+Quick start:
 
 ```bash
 chmod +x build.sh
 ./build.sh
 ```
+
+For detailed instructions, see [INSTALL.md](INSTALL.md).
 
 ## Citation
 An Article detailing Maestro will be published shorty. This reference can be used for citation.
