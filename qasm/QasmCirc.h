@@ -26,8 +26,10 @@ public:
   }
 
   std::shared_ptr<Circuits::Circuit<Time>>
-  ParseAndTranslate(std::string &qasmInput) {
+  ParseAndTranslate(const std::string &qasmInputStr) {
     clear();
+
+    std::string qasmInput = qasmInputStr;
 
     try {
       auto it = qasmInput.begin();
