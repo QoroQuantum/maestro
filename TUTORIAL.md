@@ -18,7 +18,7 @@ The core workflow involves:
 
 ### Step-by-Step Example
 
-Below is a complete C++ example.
+Below is a complete C++ example. You can also find this in `examples/basic_simulation.cpp`.
 
 ```cpp
 #include <iostream>
@@ -58,7 +58,7 @@ int main() {
 
     // 3. Define a Circuit
     // We'll use a simple Bell State circuit in OpenQASM 2.0 format.
-    const char* qasmCircuit = 
+    const char* qasmCircuit =
         "OPENQASM 2.0;\n"
         "include \"qelib1.inc\";\n"
         "qreg q[2];\n"
@@ -110,13 +110,13 @@ g++ -std=c++17 -o maestro_example example.cpp \
 
 ### Manual Simulator Control
 
-Instead of `SimpleExecute`, you can manually control the simulator state:
+Instead of `SimpleExecute`, you can manually control the simulator state. See `examples/advanced_simulation.cpp` for a complete runnable example.
 
 ```cpp
 // Create a specific simulator type (e.g., Statevector)
 // See Simulators::SimulatorType enum for values (mapped to int)
 // 0: Statevector, 1: MPS, etc. (Check source for exact mapping)
-unsigned long int simHandle = CreateSimulator(0, 0); 
+unsigned long int simHandle = CreateSimulator(0, 0);
 void* sim = GetSimulator(simHandle);
 
 // Apply gates directly
