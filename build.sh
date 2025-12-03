@@ -50,3 +50,4 @@ export AER_INCLUDE_DIR=$PWD/qiskit-aer/src
 
 cmake ..
 make
+make docs
