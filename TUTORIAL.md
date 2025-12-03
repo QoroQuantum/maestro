@@ -18,7 +18,7 @@ The core workflow involves:
 
 ### Step-by-Step Example
 
-Below is a complete C++ example.
+Below is a complete C++ example. You can also find this in `examples/basic_simulation.cpp`.
 
 ```cpp
 #include <iostream>
@@ -110,7 +110,7 @@ g++ -std=c++17 -o maestro_example example.cpp \
 
 ### Manual Simulator Control
 
-Instead of `SimpleExecute`, you can manually control the simulator state:
+Instead of `SimpleExecute`, you can manually control the simulator state. See `examples/advanced_simulation.cpp` for a complete runnable example.
 
 ```cpp
 // Create a specific simulator type (e.g., Statevector)

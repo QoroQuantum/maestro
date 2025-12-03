@@ -1,5 +1,12 @@
 var NAVTREEINDEX3 =
 {
+"classCircuits_1_1ComparableCircuit.html#af94b3b11a1162f8122df868e55039fe5":[0,0,0,1,3],
+"classCircuits_1_1ComparableCircuit.html#af94b3b11a1162f8122df868e55039fe5":[1,0,0,1,3],
+"classCircuits_1_1ConditionalGate.html":[0,0,0,5],
+"classCircuits_1_1ConditionalGate.html":[1,0,0,5],
+"classCircuits_1_1ConditionalGate.html#a3218e487cfafce51540aa7cb801665b5":[0,0,0,5,0],
+"classCircuits_1_1ConditionalGate.html#a3218e487cfafce51540aa7cb801665b5":[1,0,0,5,0],
+"classCircuits_1_1ConditionalGate.html#a65af9f2ff373f9a5c7674c1a582e274f":[0,0,0,5,2],
 "classCircuits_1_1ConditionalGate.html#a65af9f2ff373f9a5c7674c1a582e274f":[1,0,0,5,2],
 "classCircuits_1_1ConditionalGate.html#a6f0d0e785e4e28db8b491317662a564b":[0,0,0,5,1],
 "classCircuits_1_1ConditionalGate.html#a6f0d0e785e4e28db8b491317662a564b":[1,0,0,5,1],
@@ -242,12 +249,5 @@ var NAVTREEINDEX3 =
 "classCircuits_1_1OperationState.html#a1af3bfb64717e833af1965494ff9e99a":[0,0,0,11,18],
 "classCircuits_1_1OperationState.html#a1af3bfb64717e833af1965494ff9e99a":[1,0,0,11,18],
 "classCircuits_1_1OperationState.html#a216695894d548235c45e9756a2c63fa9":[0,0,0,11,1],
-"classCircuits_1_1OperationState.html#a216695894d548235c45e9756a2c63fa9":[1,0,0,11,1],
-"classCircuits_1_1OperationState.html#a2a9ef24dc20e96711ec6c4be4a5af383":[0,0,0,11,7],
-"classCircuits_1_1OperationState.html#a2a9ef24dc20e96711ec6c4be4a5af383":[1,0,0,11,7],
-"classCircuits_1_1OperationState.html#a2ca91d5ae9668aa24352dc93668d342a":[0,0,0,11,0],
-"classCircuits_1_1OperationState.html#a2ca91d5ae9668aa24352dc93668d342a":[1,0,0,11,0],
-"classCircuits_1_1OperationState.html#a34a5de0a3b11b3566805ad26dda6c81d":[0,0,0,11,5],
-"classCircuits_1_1OperationState.html#a34a5de0a3b11b3566805ad26dda6c81d":[1,0,0,11,5],
-"classCircuits_1_1OperationState.html#a44d8b7c1df2789de832a102fa1211895":[0,0,0,11,4]
+"classCircuits_1_1OperationState.html#a216695894d548235c45e9756a2c63fa9":[1,0,0,11,1]
 };

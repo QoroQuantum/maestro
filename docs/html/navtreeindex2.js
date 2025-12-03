@@ -1,5 +1,12 @@
 var NAVTREEINDEX2 =
 {
+"classCircuits_1_1CZGate.html#ae9c029dea9bff5c9e1c77ea362337207":[0,0,0,39,2],
+"classCircuits_1_1CZGate.html#ae9c029dea9bff5c9e1c77ea362337207":[1,0,0,39,2],
+"classCircuits_1_1Circuit.html":[0,0,0,0],
+"classCircuits_1_1Circuit.html":[1,0,0,0],
+"classCircuits_1_1Circuit.html#a06bd6f6c8e8c4dd32baccaeb547fd06c":[0,0,0,0,28],
+"classCircuits_1_1Circuit.html#a06bd6f6c8e8c4dd32baccaeb547fd06c":[1,0,0,0,28],
+"classCircuits_1_1Circuit.html#a08c818de5b59f9534f27d0b14f0342ee":[0,0,0,0,36],
 "classCircuits_1_1Circuit.html#a08c818de5b59f9534f27d0b14f0342ee":[1,0,0,0,36],
 "classCircuits_1_1Circuit.html#a0930d1454f469951a7985eb429b8da9a":[0,0,0,0,14],
 "classCircuits_1_1Circuit.html#a0930d1454f469951a7985eb429b8da9a":[1,0,0,0,14],
@@ -242,12 +249,5 @@ var NAVTREEINDEX2 =
 "classCircuits_1_1ComparableCircuit.html#ab8b447298616c71186d1e8891c51a91c":[0,0,0,1,4],
 "classCircuits_1_1ComparableCircuit.html#ab8b447298616c71186d1e8891c51a91c":[1,0,0,1,4],
 "classCircuits_1_1ComparableCircuit.html#ae1d5602b9fd4a442678012df8fe2fdb4":[0,0,0,1,12],
-"classCircuits_1_1ComparableCircuit.html#ae1d5602b9fd4a442678012df8fe2fdb4":[1,0,0,1,12],
-"classCircuits_1_1ComparableCircuit.html#af94b3b11a1162f8122df868e55039fe5":[0,0,0,1,3],
-"classCircuits_1_1ComparableCircuit.html#af94b3b11a1162f8122df868e55039fe5":[1,0,0,1,3],
-"classCircuits_1_1ConditionalGate.html":[0,0,0,5],
-"classCircuits_1_1ConditionalGate.html":[1,0,0,5],
-"classCircuits_1_1ConditionalGate.html#a3218e487cfafce51540aa7cb801665b5":[0,0,0,5,0],
-"classCircuits_1_1ConditionalGate.html#a3218e487cfafce51540aa7cb801665b5":[1,0,0,5,0],
-"classCircuits_1_1ConditionalGate.html#a65af9f2ff373f9a5c7674c1a582e274f":[0,0,0,5,2]
+"classCircuits_1_1ComparableCircuit.html#ae1d5602b9fd4a442678012df8fe2fdb4":[1,0,0,1,12]
 };
