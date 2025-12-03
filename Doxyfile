@@ -1,5 +1,5 @@
 PROJECT_NAME           = "Maestro"
-PROJECT_NUMBER         = "1.0"
+PROJECT_NUMBER         = "0.1.0"
 PROJECT_BRIEF          = "Unified interface for quantum circuit simulation"
 
 OUTPUT_DIRECTORY       = docs
