@@ -793,7 +793,7 @@ div.line {
 	font-size: 13px;
 	min-height: 13px;
 	line-height: 1.2;
-	text-wrap: wrap; 
+	text-wrap: wrap;
 	word-break: break-all;
 	white-space: -moz-pre-wrap; /* Moz */
 	white-space: -pre-wrap;     /* Opera 4-6 */
@@ -1025,19 +1025,19 @@ span.xmlcdata {
 	color: var(--code-xml-cdata-color);
 }
 
-span.vhdldigit { 
+span.vhdldigit {
 	color: var(--code-vhdl-digit-color);
 }
 
-span.vhdlchar { 
+span.vhdlchar {
 	color: var(--code-vhdl-char-color);
 }
 
-span.vhdlkeyword { 
+span.vhdlkeyword {
 	color: var(--code-vhdl-keyword-color);
 }
 
-span.vhdllogic { 
+span.vhdllogic {
 	color: var(--code-vhdl-logic-color);
 }
 
@@ -2497,4 +2497,3 @@ span.timestamp:before { content: var(--timestamp); }
 ::-webkit-scrollbar-corner {
         background-color: var(--scrollbar-background-color);
 }
-
