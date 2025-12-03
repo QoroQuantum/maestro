@@ -59,7 +59,7 @@ if(APPLE)
     if(CMAKE_C_COMPILER_ID MATCHES "Clang")
       set(OpenMP_C "${CMAKE_C_COMPILER}")
       set(OpenMP_C_FLAGS "-fopenmp")
-      set(OpenMP_CXX_LIB_NAMES "omp")
+      set(OpenMP_C_LIB_NAMES "omp")
       set(OpenMP_omp_LIBRARY omp)
     endif()
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -152,3 +152,18 @@ endif()
 IF(Boost_FOUND)
 	target_link_libraries(maestro PRIVATE Boost::serialization)
 ENDIF()
+
+find_package(Doxygen)
+if(DOXYGEN_FOUND)
+    add_custom_target(doc
+        ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Generating API documentation with Doxygen"
+        VERBATIM)
+else()
+    add_custom_target(doc
+        COMMAND ${CMAKE_COMMAND} -E echo "Error: Doxygen not found. Please install Doxygen to generate documentation."
+        COMMAND ${CMAKE_COMMAND} -E false
+        COMMENT "Check for Doxygen"
+        VERBATIM)
+endif()
