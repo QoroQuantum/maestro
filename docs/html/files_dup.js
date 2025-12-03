@@ -3,6 +3,7 @@ var files_dup =
     [ "Circuit", "dir_2480c9fe653202a2adfa4a9ad44330ad.html", "dir_2480c9fe653202a2adfa4a9ad44330ad" ],
     [ "Distribution", "dir_126ac545585d7ea7831c4d4a0b466d21.html", "dir_126ac545585d7ea7831c4d4a0b466d21" ],
     [ "Estimators", "dir_f75a46c5c982618628beecbcb815a4c9.html", "dir_f75a46c5c982618628beecbcb815a4c9" ],
+    [ "examples", "dir_d28a4824dc47e487b107a5db32ef43c4.html", "dir_d28a4824dc47e487b107a5db32ef43c4" ],
     [ "graph", "dir_12552d7fa429bf94a2e32e5cf39f7e69.html", "dir_12552d7fa429bf94a2e32e5cf39f7e69" ],
     [ "maestrolib", "dir_d1c118ca2b28436db26421bee78de1a1.html", "dir_d1c118ca2b28436db26421bee78de1a1" ],
     [ "Network", "dir_356d85c7fe3a31f6238a1e4b453e8aed.html", "dir_356d85c7fe3a31f6238a1e4b453e8aed" ],
