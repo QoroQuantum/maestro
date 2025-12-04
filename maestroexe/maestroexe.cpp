@@ -12,6 +12,7 @@ static std::string  _get_env_var(const char* envs)
 {
 	std::string val;
 
+#ifdef _WIN32
 	size_t sz;
 
 	getenv_s(&sz, NULL, 0, envs);
@@ -23,6 +24,11 @@ static std::string  _get_env_var(const char* envs)
 
 	buf[49] = 0;
 	val = buf;
+#else
+	const char* env = getenv(envs);
+	if (env)
+		val = env;
+#endif
 
 	return val;
 }
