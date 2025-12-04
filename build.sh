@@ -21,7 +21,7 @@ then
 fi
 cd boost_1_89_0
 ./bootstrap.sh --prefix=.
-./b2 --with-json --with-container --with-serialization --prefix=. install
+./b2 --with-program_options --with-url --with-json --with-container --with-serialization --prefix=. install
 cd ..
 
 if [ ! -d QCSim ]
