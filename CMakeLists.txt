@@ -127,6 +127,10 @@ LINK_LIBRARIES()
 add_executable(maestroexe ${MAESTROEXESRC})
 add_library(maestro SHARED ${MAESTROSRC})
 
+set_target_properties(maestro PROPERTIES PREFIX "")
+set_target_properties(maestro PROPERTIES OUTPUT_NAME "maestro")
+set_target_properties(maestroexe PROPERTIES OUTPUT_NAME "maestro")
+
 install(TARGETS maestro DESTINATION lib)
 install(TARGETS maestroexe DESTINATION bin)
 
@@ -160,9 +164,6 @@ IF(Boost_FOUND)
 	target_link_libraries(maestroexe PRIVATE Boost::serialization)
 	target_link_libraries(maestroexe PRIVATE Boost::program_options)
 ENDIF()
-
-set_target_properties(maestro PROPERTIES OUTPUT_NAME "maestro")
-set_target_properties(maestroexe PROPERTIES OUTPUT_NAME "maestro")
 
 find_package(Doxygen)
 if(DOXYGEN_FOUND)
