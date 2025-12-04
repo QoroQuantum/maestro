@@ -111,7 +111,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
 
           stmt.gateType = GetGateType(gateNameLower);
           const int expectedNrQubits = GateNrQubits(stmt.gateType);
-          if (args.size() != expectedNrQubits)
+          if (static_cast<int>(args.size()) != expectedNrQubits)
             throw std::invalid_argument(
                 "Gate " + gateName + " requires exactly " +
                 std::to_string(expectedNrQubits) + " qubits");
@@ -120,7 +120,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
           const StatementType &definedGateStmt = it->second;
           const int expectedNrQubits =
               static_cast<int>(definedGateStmt.qubitsDecl.size());
-          if (args.size() != expectedNrQubits)
+          if (static_cast<int>(args.size()) != expectedNrQubits)
             throw std::invalid_argument(
                 "Defined gate " + gateName + " requires exactly " +
                 std::to_string(expectedNrQubits) + " qubits");
@@ -202,7 +202,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
 
             stmt.gateType = GetGateType(gateNameLower);
             const int expectedNrQubits = GateNrQubits(stmt.gateType);
-            if (args.size() != expectedNrQubits)
+            if (static_cast<int>(args.size()) != expectedNrQubits)
               throw std::invalid_argument(
                   "Gate " + gateName + " requires exactly " +
                   std::to_string(expectedNrQubits) + " qubits");
@@ -320,7 +320,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
           const StatementType &definedGateStmt = it->second;
           const int expectedNrQubits =
               static_cast<int>(definedGateStmt.qubitsDecl.size());
-          if (args.size() != expectedNrQubits)
+          if (static_cast<int>(args.size()) != expectedNrQubits)
             throw std::invalid_argument(
                 "Defined gate " + gateName + " requires exactly " +
                 std::to_string(expectedNrQubits) + " qubits");

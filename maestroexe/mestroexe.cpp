@@ -255,15 +255,18 @@ int main(int argc, char** argv)
 		std::string result;
 		if (!qasmStr.empty()) {
 			char* res = simulator.SimpleExecute(qasmStr.c_str(), configStr.c_str());
-			result = res;
-			simulator.FreeResult(res);
+			if (res)
+			{
+				result = res;
+				simulator.FreeResult(res);
+			}
 		}
 
 		// depending on params, write it on stdout or in a file
 
 		if (vars.count("output"))
 		{
-			const std::string fileName = vars["type"].as<std::string>();
+			const std::string fileName = vars["output"].as<std::string>();
 			if (!fileName.empty())
 			{
 				std::ofstream outFile(fileName);
