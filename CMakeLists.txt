@@ -161,6 +161,9 @@ IF(Boost_FOUND)
 	target_link_libraries(maestroexe PRIVATE Boost::program_options)
 ENDIF()
 
+set_target_properties(maestro PROPERTIES OUTPUT_NAME "maestro")
+set_target_properties(maestroexe PROPERTIES OUTPUT_NAME "maestro")
+
 find_package(Doxygen)
 if(DOXYGEN_FOUND)
     add_custom_target(doc
