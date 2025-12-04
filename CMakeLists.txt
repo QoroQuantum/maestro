@@ -105,7 +105,7 @@ set(Boost_USE_MULTITHREADED ON)
 set(Boost_USE_STATIC_RUNTIME OFF)
 set(Boost_USE_RELEASE_LIBS ON)
 set(Boost_USE_DEBUG_LIBS OFF)
-find_package(Boost REQUIRED COMPONENTS program_options url json container serialization)
+find_package(Boost REQUIRED COMPONENTS program_options json container serialization)
 
 IF(NOT Boost_FOUND)
     MESSAGE( FATAL_ERROR "Couldn't find boost libs")
@@ -157,6 +157,8 @@ endif()
 
 IF(Boost_FOUND)
 	target_link_libraries(maestro PRIVATE Boost::serialization)
+	target_link_libraries(maestroexe PRIVATE Boost::serialization)
+	target_link_libraries(maestroexe PRIVATE Boost::program_options)
 ENDIF()
 
 find_package(Doxygen)
