@@ -53,6 +53,8 @@ endif()
 
 set(MAESTROSRC maestrolib/dllmain.cpp
 			   maestrolib/Interface.cpp)
+			   
+set(MAESTROEXESRC maestroexe/maestroexe.cpp)
 
 
 if(APPLE)
@@ -103,7 +105,7 @@ set(Boost_USE_MULTITHREADED ON)
 set(Boost_USE_STATIC_RUNTIME OFF)
 set(Boost_USE_RELEASE_LIBS ON)
 set(Boost_USE_DEBUG_LIBS OFF)
-find_package(Boost REQUIRED COMPONENTS json container serialization)
+find_package(Boost REQUIRED COMPONENTS program_options url json container serialization)
 
 IF(NOT Boost_FOUND)
     MESSAGE( FATAL_ERROR "Couldn't find boost libs")
@@ -122,8 +124,11 @@ endif()
 
 LINK_LIBRARIES()
 
+add_executable(maestroexe ${MAESTROEXESRC})
 add_library(maestro SHARED ${MAESTROSRC})
+
 install(TARGETS maestro DESTINATION lib)
+install(TARGETS maestroexe DESTINATION bin)
 
 if(OpenMP_CXX_FOUND)
     message("Setting OpenMP")
@@ -147,6 +152,7 @@ ENDIF()
 
 if (UNIX)
 	target_link_libraries(maestro PRIVATE dl)
+	target_link_libraries(maestroexe PRIVATE dl)	
 endif()
 
 IF(Boost_FOUND)
