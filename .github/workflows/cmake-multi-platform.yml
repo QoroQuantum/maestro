@@ -28,7 +28,7 @@ jobs:
       run: ./bootstrap.sh --prefix=.
     - name: Compile Boost
       working-directory: ./boost_1_89_0/
-      run: ./b2 --with-container --with-json --with-serialization install
+      run: ./b2 --with-program_options --with-url --with-container --with-json --with-serialization install
 
     - name: Download QCSim
       run: git clone https://github.com/aromanro/QCSim.git
