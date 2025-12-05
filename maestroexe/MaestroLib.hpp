@@ -23,7 +23,7 @@ public:
 	{
 		if (Utils::Library::Init(libName))
 		{
-			fGetMaestroObject = (void* (*)())GetFunction("GetMaestroObjectWithMute");
+			fGetMaestroObject = (void* (*)())GetFunction("GetMaestroObject");
 			CheckFunction((void*)fGetMaestroObject, __LINE__);
 			if (fGetMaestroObject)
 			{
@@ -179,11 +179,11 @@ public:
 		return false;
 	}
 
-	static void CheckFunction(void* func, int line)
+	static void CheckFunction(void* func, int line) noexcept
 	{
 		if (!func)
 		{
-			std::cout << "MaestroLibrary: Unable to load function, line #: " << std::to_string(line);
+			std::cout << "MaestroLibrary: Unable to load function, line #: " << line;
 
 #ifdef __linux__
 			const char* dlsym_error = dlerror();

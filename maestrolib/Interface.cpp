@@ -46,6 +46,8 @@ extern "C"
 
             maestroInstance = std::make_unique<Maestro>();
         }
+		if (!maestroInstance)
+            return nullptr;
 
         return (void*)maestroInstance.get();
     }
@@ -66,6 +68,8 @@ extern "C"
 
             maestroInstance = std::make_unique<Maestro>();
         }
+        if (!maestroInstance)
+            return nullptr;
 
         return (void*)maestroInstance.get();
     }
