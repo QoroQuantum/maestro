@@ -63,7 +63,7 @@ int main(int argc, char** argv)
 			("mbd,m", boost::program_options::value<int>(), "Specify the max bond dimension for the MPS simulator")
 			("simulator,r", boost::program_options::value<std::string>(), "Simulator type, either aer, qcsim, composite_aer, composite_qcsim or gpu")
 			("type,p", boost::program_options::value<std::string>(), "Simulation type, either statevector, mps, stabilizer or tensor")
-			("file,f", boost::program_options::value<std::string>()->required(), "Provide a qasm file for execution")
+			("file,f", boost::program_options::value<std::string>(), "Provide a qasm file for execution")
 			("output,o", boost::program_options::value<std::string>(), "Specify the json output file")
 			;
 
@@ -196,25 +196,31 @@ int main(int argc, char** argv)
 		else
 			simulationType = 0; // statevector for composite
 
+		if (vars.count("file") == 0)
+		{
+			std::cerr << "No qasm file provided" << std::endl;
+			return 3;
+		}
+
 		const std::string qasmFileName = vars["file"].as<std::string>();
 		if (qasmFileName.empty())
 		{
 			std::cerr << "Invalid qasm file" << std::endl;
-			return 3;
+			return 4;
 		}
 
 		std::ifstream file(qasmFileName);
 		if (!file.is_open())
 		{
 			std::cerr << "Couldn't read the qasm file" << std::endl;
-			return 4;
+			return 5;
 		}
 
 		std::string qasmStr((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 		if (qasmStr.empty())
 		{
 			std::cerr << "Empty qasm" << std::endl;
-			return 5;
+			return 6;
 		}
 
 		// after getting all params and so on, execute:
