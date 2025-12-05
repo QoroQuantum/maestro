@@ -26,8 +26,8 @@
 #include "../Utils/LogFile.h"
 #include "../qasm/QasmCirc.h"
 
-static std::atomic_bool isInitialized = false;
-static std::unique_ptr<Maestro> maestroInstance = nullptr;
+static std::atomic_bool isInitialized{ false };
+static std::unique_ptr<Maestro> maestroInstance;
 
 extern "C" 
 {
