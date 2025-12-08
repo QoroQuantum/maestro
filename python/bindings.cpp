@@ -22,7 +22,6 @@ NB_MODULE(maestro_py, m) {
         .value("QiskitAer", Simulators::SimulatorType::kQiskitAer)
         .value("CompositeQiskitAer", Simulators::SimulatorType::kCompositeQiskitAer)
         .value("CompositeQCSim", Simulators::SimulatorType::kCompositeQCSim)
-
         .export_values();
 
     // Bind SimulationType enum
