@@ -191,24 +191,32 @@ else()
         VERBATIM)
 endif()
 
-# Python Bindings
-find_package(Python 3.8 COMPONENTS Interpreter Development.Module REQUIRED)
-message(STATUS "Python_INCLUDE_DIRS: ${Python_INCLUDE_DIRS}")
-message(STATUS "Python_LIBRARIES: ${Python_LIBRARIES}")
+# Option to build Python bindings
+option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
 
-include(FetchContent)
-FetchContent_Declare(
-  nanobind
-  GIT_REPOSITORY https://github.com/wjakob/nanobind.git
-  GIT_TAG        v2.0.0
-)
-FetchContent_MakeAvailable(nanobind)
+if(BUILD_PYTHON_BINDINGS)
+    find_package(Python 3.8 COMPONENTS Interpreter Development.Module QUIET)
+    if(Python_FOUND)
+        message(STATUS "Python_INCLUDE_DIRS: ${Python_INCLUDE_DIRS}")
+        message(STATUS "Python_LIBRARIES: ${Python_LIBRARIES}")
 
-nanobind_add_module(maestro_py python/bindings.cpp)
-target_link_libraries(maestro_py PRIVATE maestro)
-target_include_directories(maestro_py PRIVATE 
-    ${CMAKE_CURRENT_SOURCE_DIR}/maestrolib
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
+        include(FetchContent)
+        FetchContent_Declare(
+          nanobind
+          GIT_REPOSITORY https://github.com/wjakob/nanobind.git
+          GIT_TAG        v2.0.0
+        )
+        FetchContent_MakeAvailable(nanobind)
 
-install(TARGETS maestro_py LIBRARY DESTINATION .)
+        nanobind_add_module(maestro_py python/bindings.cpp)
+        target_link_libraries(maestro_py PRIVATE maestro)
+        target_include_directories(maestro_py PRIVATE 
+            ${CMAKE_CURRENT_SOURCE_DIR}/maestrolib
+            ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+
+        install(TARGETS maestro_py LIBRARY DESTINATION .)
+    else()
+        message(WARNING "Python 3.8 (with Interpreter and Development.Module) not found. Skipping Python bindings.")
+    endif()
+endif()
