@@ -51,8 +51,12 @@ endif()
 
 # add here common sources
 
-set(MAESTROSRC maestrolib/dllmain.cpp
-			   maestrolib/Interface.cpp)
+set(MAESTROSRC maestrolib/Interface.cpp)
+if(WIN32)
+    list(APPEND MAESTROSRC maestrolib/dllmain.cpp)
+else()
+    list(APPEND MAESTROSRC Simulators/Factory.cpp)
+endif()
 			   
 set(MAESTROEXESRC maestroexe/maestroexe.cpp)
 
@@ -137,9 +141,16 @@ install(TARGETS maestroexe DESTINATION bin)
 if(OpenMP_CXX_FOUND)
     message("Setting OpenMP")
 
-	target_link_libraries(maestro PUBLIC OpenMP::OpenMP_CXX)
-    target_link_libraries(maestro PRIVATE ${OpenMP_CXX_FLAGS})
-    target_compile_options(maestro PRIVATE ${OpenMP_CXX_FLAGS})
+if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(maestro PUBLIC -Xpreprocessor -fopenmp)
+        target_include_directories(maestro PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "$ENV{OpenMP_ROOT}/include")
+        target_link_directories(maestro PUBLIC "$ENV{OpenMP_ROOT}/lib")
+        target_link_libraries(maestro PUBLIC ${OpenMP_CXX_LIBRARIES})
+    else()
+        target_link_libraries(maestro PUBLIC OpenMP::OpenMP_CXX)
+        target_link_libraries(maestro PRIVATE ${OpenMP_CXX_FLAGS})
+        target_compile_options(maestro PRIVATE ${OpenMP_CXX_FLAGS})
+    endif()
 endif()
 
 IF(QAER AND BLAS_FOUND)
@@ -179,3 +190,25 @@ else()
         COMMENT "Check for Doxygen"
         VERBATIM)
 endif()
+
+# Python Bindings
+find_package(Python 3.8 COMPONENTS Interpreter Development.Module REQUIRED)
+message(STATUS "Python_INCLUDE_DIRS: ${Python_INCLUDE_DIRS}")
+message(STATUS "Python_LIBRARIES: ${Python_LIBRARIES}")
+
+include(FetchContent)
+FetchContent_Declare(
+  nanobind
+  GIT_REPOSITORY https://github.com/wjakob/nanobind.git
+  GIT_TAG        v2.0.0
+)
+FetchContent_MakeAvailable(nanobind)
+
+nanobind_add_module(maestro_py python/bindings.cpp)
+target_link_libraries(maestro_py PRIVATE maestro)
+target_include_directories(maestro_py PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/maestrolib
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+install(TARGETS maestro_py LIBRARY DESTINATION .)

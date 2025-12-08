@@ -1,0 +1,21 @@
+[build-system]
+requires = ["scikit-build-core", "nanobind"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "maestro_py"
+version = "0.1.0"
+description = "Python bindings for Maestro"
+readme = "README.md"
+authors = [
+  { name = "Qoro Quantum", email = "team@qoroquantum.de" },
+]
+requires-python = ">=3.8"
+classifiers = [
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+]
+
+[tool.scikit-build]
+cmake.version = ">=3.15"
+cmake.build-type = "Release"
