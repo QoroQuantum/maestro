@@ -101,6 +101,14 @@ int main(int argc, char** argv)
 		if (vars.count("nrqubits"))
 		{
 			nrQubits = vars["nrqubits"].as<int>();
+
+			const std::string qstr = _get_env_var("maestro_nrqubits");
+			if (!qstr.empty())
+			{
+				const int nrQubitsMax = std::stoi(qstr);
+				if (nrQubits > nrQubitsMax)
+					nrQubits = nrQubitsMax;
+			}
 		}
 		else
 		{
@@ -118,6 +126,14 @@ int main(int argc, char** argv)
 		if (vars.count("shots"))
 		{
 			nrShots = vars["shots"].as<int>();
+
+			const std::string sstr = _get_env_var("maestro_shots");
+			if (!sstr.empty())
+			{
+				const int nrShotsMax = std::stoi(sstr);
+				if (nrShots > nrShotsMax)
+					nrShots = nrShotsMax;
+			}
 		}
 		else
 		{
@@ -132,6 +148,14 @@ int main(int argc, char** argv)
 		if (vars.count("mbd"))
 		{
 			maxBondDim = vars["mbd"].as<int>();
+
+			const std::string mbds = _get_env_var("maestro_max_bond_dim");
+			if (!mbds.empty())
+			{
+				const int mbdMax = std::stoi(mbds);
+				if (maxBondDim > mbdMax || (maxBondDim <= 0 && mbdMax > 0))
+					maxBondDim = mbdMax;
+			}
 		}
 		else
 		{
