@@ -62,7 +62,7 @@ int main(int argc, char** argv)
 			("shots,s", boost::program_options::value<int>(), "Specify the number of shots for execution")
 			("mbd,m", boost::program_options::value<int>(), "Specify the max bond dimension for the MPS simulator")
 			("simulator,r", boost::program_options::value<std::string>(), "Simulator type, either aer, qcsim, composite_aer, composite_qcsim or gpu")
-			("type,p", boost::program_options::value<std::string>(), "Simulation type, either statevector, mps, stabilizer or tensor")
+			("type,t", boost::program_options::value<std::string>(), "Simulation type, either statevector, mps, stabilizer or tensor")
 			("file,f", boost::program_options::value<std::string>(), "Provide a qasm file for execution")
 			("output,o", boost::program_options::value<std::string>(), "Specify the json output file")
 			;
@@ -121,7 +121,7 @@ int main(int argc, char** argv)
 		}
 		else
 		{
-			const std::string sstr = _get_env_var("maestro_nrshots");
+			const std::string sstr = _get_env_var("maestro_shots");
 			if (!sstr.empty())
 				nrShots = std::stoi(sstr);
 		}
