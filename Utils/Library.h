@@ -53,7 +53,7 @@ public:
     if (handle == nullptr) {
       const char *dlsym_error = dlerror();
       if (!mute && dlsym_error)
-        std::cout << "Library: Unable to load library, error: " << dlsym_error
+        std::cerr << "Library: Unable to load library, error: " << dlsym_error
                   << std::endl;
 
       return false;
@@ -63,7 +63,7 @@ public:
     if (handle == nullptr) {
       const DWORD error = GetLastError();
       if (!mute)
-        std::cout << "Library: Unable to load library, error code: " << error
+        std::cerr << "Library: Unable to load library, error code: " << error
                   << std::endl;
       return false;
     }
