@@ -23,7 +23,7 @@ public:
 	{
 		if (Utils::Library::Init(libName))
 		{
-			fGetMaestroObject = (void* (*)())GetFunction("GetMaestroObject");
+			fGetMaestroObject = (void* (*)())GetFunction("GetMaestroObjectWithMute");
 			CheckFunction((void*)fGetMaestroObject, __LINE__);
 			if (fGetMaestroObject)
 			{
@@ -172,9 +172,9 @@ public:
 					return true;
 				}
 			}
-			else std::cout << "MaestroLibrary: Unable to get initialization function for library" << std::endl;
+			else std::cerr << "MaestroLibrary: Unable to get initialization function for library" << std::endl;
 		}
-		else std::cout << "MaestroLibrary: Unable to load the library" << std::endl;
+		else std::cerr << "MaestroLibrary: Unable to load the library" << std::endl;
 
 		return false;
 	}
@@ -183,18 +183,18 @@ public:
 	{
 		if (!func)
 		{
-			std::cout << "MaestroLibrary: Unable to load function, line #: " << line;
+			std::cerr << "MaestroLibrary: Unable to load function, line #: " << line;
 
 #ifdef __linux__
 			const char* dlsym_error = dlerror();
 			if (dlsym_error)
-				std::cout << ", error: " << dlsym_error;
+				std::cerr << ", error: " << dlsym_error;
 #elif defined(_WIN32)
 			const DWORD error = GetLastError();
-			std::cout << ", error code: " << error;
+			std::cerr << ", error code: " << error;
 #endif
 
-			std::cout << std::endl;
+			std::cerr << std::endl;
 		}
 	}
 

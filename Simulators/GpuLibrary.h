@@ -355,27 +355,27 @@ public:
 
           return true;
         } else
-          std::cout << "GpuLibrary: Unable to initialize gpu library"
+          std::cerr << "GpuLibrary: Unable to initialize gpu library"
                     << std::endl;
       } else
-        std::cout << "GpuLibrary: Unable to get initialization function for "
+        std::cerr << "GpuLibrary: Unable to get initialization function for "
                      "gpu library"
                   << std::endl;
     } else if (!Utils::Library::IsMuted())
-      std::cout << "GpuLibrary: Unable to load gpu library" << std::endl;
+      std::cerr << "GpuLibrary: Unable to load gpu library" << std::endl;
 
     return false;
   }
 
   static void CheckFunction(void *func, int line) {
     if (!func) {
-      std::cout << "GpuLibrary: Unable to load function, line #: "
+      std::cerr << "GpuLibrary: Unable to load function, line #: "
                 << line;
       const char *dlsym_error = dlerror();
       if (dlsym_error)
-        std::cout << ", error: " << dlsym_error;
+        std::cerr << ", error: " << dlsym_error;
 
-      std::cout << std::endl;
+      std::cerr << std::endl;
     }
   }
 
