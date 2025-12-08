@@ -80,7 +80,7 @@ NB_MODULE(maestro_py, m) {
              nb::arg("simExecType") = Simulators::SimulationType::kMatrixProductState)
         .def("GetSimulator", [](Maestro& self, unsigned long int simHandle) {
             return static_cast<Simulators::ISimulator*>(self.GetSimulator(simHandle));
-        })
+        }, nb::rv_policy::reference_internal)
         .def("DestroySimulator", &Maestro::DestroySimulator);
 
     // Bind Circuit class
