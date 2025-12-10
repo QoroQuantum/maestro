@@ -57,7 +57,7 @@ if(WIN32)
 else()
     list(APPEND MAESTROSRC Simulators/Factory.cpp)
 endif()
-			   
+
 set(MAESTROEXESRC maestroexe/maestroexe.cpp)
 
 
@@ -149,7 +149,7 @@ if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         endif()
 
         target_compile_options(maestro PUBLIC -Xpreprocessor -fopenmp)
-        
+
         if(LIBOMP_PREFIX)
             target_include_directories(maestro PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "${LIBOMP_PREFIX}/include")
             target_link_directories(maestro PUBLIC "${LIBOMP_PREFIX}/lib")
@@ -157,7 +157,7 @@ if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
              target_include_directories(maestro PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "$ENV{OpenMP_ROOT}/include")
              target_link_directories(maestro PUBLIC "$ENV{OpenMP_ROOT}/lib")
         endif()
-        
+
         target_link_libraries(maestro PUBLIC ${OpenMP_CXX_LIBRARIES})
     else()
         target_link_libraries(maestro PUBLIC OpenMP::OpenMP_CXX)
@@ -180,7 +180,7 @@ ENDIF()
 
 if (UNIX)
 	target_link_libraries(maestro PRIVATE dl)
-	target_link_libraries(maestroexe PRIVATE dl)	
+	target_link_libraries(maestroexe PRIVATE dl)
 endif()
 
 IF(Boost_FOUND)
@@ -223,7 +223,7 @@ if(BUILD_PYTHON_BINDINGS)
 
         nanobind_add_module(maestro_py python/bindings.cpp)
         target_link_libraries(maestro_py PRIVATE maestro)
-        target_include_directories(maestro_py PRIVATE 
+        target_include_directories(maestro_py PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/maestrolib
             ${CMAKE_CURRENT_SOURCE_DIR}
         )

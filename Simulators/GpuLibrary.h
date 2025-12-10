@@ -369,8 +369,7 @@ public:
 
   static void CheckFunction(void *func, int line) {
     if (!func) {
-      std::cerr << "GpuLibrary: Unable to load function, line #: "
-                << line;
+      std::cerr << "GpuLibrary: Unable to load function, line #: " << line;
       const char *dlsym_error = dlerror();
       if (dlsym_error)
         std::cerr << ", error: " << dlsym_error;
