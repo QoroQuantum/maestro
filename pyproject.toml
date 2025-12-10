@@ -19,3 +19,9 @@ classifiers = [
 [tool.scikit-build]
 cmake.version = ">=3.15"
 cmake.build-type = "Release"
+
+[tool.scikit-build.cmake.define]
+EIGEN5_INCLUDE_DIR = {env = "EIGEN5_INCLUDE_DIR"}
+QCSIM_INCLUDE_DIR = {env = "QCSIM_INCLUDE_DIR"}
+JSON_INCLUDE_DIR = {env = "JSON_INCLUDE_DIR"}
+AER_INCLUDE_DIR = {env = "AER_INCLUDE_DIR"}
