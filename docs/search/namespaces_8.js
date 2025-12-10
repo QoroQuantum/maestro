@@ -1,5 +1,5 @@
 var searchData=
 [
-  ['tensornetworks_0',['TensorNetworks',['../namespaceTensorNetworks.html',1,'']]],
-  ['types_1',['Types',['../namespaceTypes.html',1,'']]]
+  ['schedulers_0',['Schedulers',['../namespaceSchedulers.html',1,'']]],
+  ['simulators_1',['Simulators',['../namespaceSimulators.html',1,'']]]
 ];

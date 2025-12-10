@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['ygate_0',['YGate',['../classCircuits_1_1YGate.html#a160d6f2ffe40cbc609e41ee8113766ee',1,'Circuits::YGate']]]
+  ['xgate_0',['XGate',['../classCircuits_1_1XGate.html#af1a8f9e556756c4cf2ec8ac7785b532b',1,'Circuits::XGate']]]
 ];
