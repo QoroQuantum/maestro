@@ -1,7 +1,28 @@
 var searchData=
 [
-  ['ugate_0',['UGate',['../classCircuits_1_1UGate.html#a7485fa65ce252afe6af1fb8611fcfd4f',1,'Circuits::UGate']]],
-  ['unaryoperator_1',['UnaryOperator',['../classqasm_1_1UnaryOperator.html#a7c612708062aa8391a7ef6dfa518403a',1,'qasm::UnaryOperator::UnaryOperator()'],['../classqasm_1_1UnaryOperator.html#a06c0444590063b8b5a9bb568e52e7a84',1,'qasm::UnaryOperator::UnaryOperator(char op, const R &amp;right)']]],
-  ['unregisterobserver_2',['UnregisterObserver',['../classSimulators_1_1IState.html#a3771ea3937f4c95867d3dd5ba23fa481',1,'Simulators::IState']]],
-  ['update_3',['Update',['../classSimulators_1_1ISimulatorObserver.html#a3b2127b93a5c7ce651e5cf9c02b6ce6e',1,'Simulators::ISimulatorObserver::Update()'],['../classSimulators_1_1SimulatorObserverProxy.html#a6d63fcad814ace0e44fd1918a29bfada',1,'Simulators::SimulatorObserverProxy::Update()']]]
+  ['tdggate_0',['TdgGate',['../classCircuits_1_1TdgGate.html#ab8aa6a70549df4c8bcfbb4dca18b0789',1,'Circuits::TdgGate']]],
+  ['tensor_1',['Tensor',['../classUtils_1_1Tensor.html#aca39ccb9b6f01c926bd3d3f6e9df9dac',1,'Utils::Tensor::Tensor()'],['../classUtils_1_1Tensor.html#a159d74625b99f35a74cd0d027ba0d543',1,'Utils::Tensor::Tensor(const std::vector&lt; size_t &gt; &amp;dims, bool dummy=false)'],['../classUtils_1_1Tensor.html#a654ca72fb3c4c320a2edc35738ea3c01',1,'Utils::Tensor::Tensor(const std::vector&lt; int &gt; &amp;dims, bool dummy=false)'],['../classUtils_1_1Tensor.html#a4f17b3ea094637dff35c5d88e3edd35c',1,'Utils::Tensor::Tensor(std::initializer_list&lt; indT &gt; dims, bool dummy=false)'],['../classUtils_1_1Tensor.html#a85dde5d5ebcb079af847090daba9cfa0',1,'Utils::Tensor::Tensor(const Tensor&lt; T, Storage &gt; &amp;other)'],['../classUtils_1_1Tensor.html#a8d796dd6ea3d52b6f4c9694dc900ce30',1,'Utils::Tensor::Tensor(Tensor&lt; T, Storage &gt; &amp;&amp;other) noexcept']]],
+  ['tensornetwork_2',['TensorNetwork',['../classTensorNetworks_1_1TensorNetwork.html#a9c90ec939bf0021b3477405b4272bc30',1,'TensorNetworks::TensorNetwork::TensorNetwork()=delete'],['../classTensorNetworks_1_1TensorNetwork.html#aa6614f348b6697b23a4cf692baa3bc12',1,'TensorNetworks::TensorNetwork::TensorNetwork(size_t numQubits)']]],
+  ['tensorproduct_3',['TensorProduct',['../classUtils_1_1Tensor.html#ac58bd1cf56c9fa939efb92c270abac85',1,'Utils::Tensor']]],
+  ['tgate_4',['TGate',['../classCircuits_1_1TGate.html#acc2fa780b6ec46470924e5d917775634',1,'Circuits::TGate']]],
+  ['threadspool_5',['ThreadsPool',['../classUtils_1_1ThreadsPool.html#abd7f305a0a02283f6fe3730bfc53e780',1,'Utils::ThreadsPool']]],
+  ['threequbitsgate_6',['ThreeQubitsGate',['../classCircuits_1_1ThreeQubitsGate.html#aa7a06bd244157234e42c84a250a35690',1,'Circuits::ThreeQubitsGate']]],
+  ['tocircuit_7',['ToCircuit',['../classCircuits_1_1Converter.html#ab6e7e22fda084f263593c29e56506edd',1,'Circuits::Converter::ToCircuit()'],['../structqasm_1_1Program.html#a1654330c19c86a5ade07baf19b5d8502',1,'qasm::Program::ToCircuit()']]],
+  ['toconditionalgate_8',['ToConditionalGate',['../classCircuits_1_1Converter.html#a2931ea4fafb19b856bbe251295d9838b',1,'Circuits::Converter']]],
+  ['toconditionalmeasurement_9',['ToConditionalMeasurement',['../classCircuits_1_1Converter.html#a233d92214677aa0f73b291af2df9817e',1,'Circuits::Converter']]],
+  ['toconditionalrandom_10',['ToConditionalRandom',['../classCircuits_1_1Converter.html#a6ee172434aeed1f6a2cc38e7905620cf',1,'Circuits::Converter']]],
+  ['toequalcondition_11',['ToEqualCondition',['../classCircuits_1_1Converter.html#ab6ddd7243bf47ef2e9492943d227c6a2',1,'Circuits::Converter']]],
+  ['tomeasurement_12',['ToMeasurement',['../classCircuits_1_1Converter.html#ae86e8bc15956901509d4ec7a73702ed7',1,'Circuits::Converter']]],
+  ['toquantumgate_13',['ToQuantumGate',['../classCircuits_1_1Converter.html#a3b477f2bdc229437ef5d409b41f33b05',1,'Circuits::Converter']]],
+  ['torandom_14',['ToRandom',['../classCircuits_1_1Converter.html#a556d7265f1cd7fddb8f2a4e1b41d62fd',1,'Circuits::Converter']]],
+  ['toreset_15',['ToReset',['../classCircuits_1_1Converter.html#a250ff62268f0bc793ac44cf0d9e38394',1,'Circuits::Converter']]],
+  ['tosinglequbitgate_16',['ToSingleQubitGate',['../classCircuits_1_1Converter.html#afe26bc9d1872a03dd8fae63406dc2840',1,'Circuits::Converter']]],
+  ['tothreequbitsgate_17',['ToThreeQubitsGate',['../classCircuits_1_1Converter.html#a8e7d60a594017ac7696a5d1870d1f20b',1,'Circuits::Converter']]],
+  ['totwoqubitsgate_18',['ToTwoQubitsGate',['../classCircuits_1_1Converter.html#a3e41eb12415839f1529c4eca4d43a2be',1,'Circuits::Converter']]],
+  ['trace_19',['Trace',['../classUtils_1_1Tensor.html#a2073d2b17270a1ebd45a23522903d47b',1,'Utils::Tensor::Trace() const'],['../classUtils_1_1Tensor.html#ad67f361458c2067ec43935e8b3f0205d',1,'Utils::Tensor::Trace(size_t ind1, size_t ind2) const'],['../classUtils_1_1Tensor.html#a5b49575839bb94d48b1ebb7249b2ab3c',1,'Utils::Tensor::Trace(const std::vector&lt; size_t &gt; &amp;tindices) const'],['../classUtils_1_1Tensor.html#ae5b2190ef56dbce44fcde5a310d5a780',1,'Utils::Tensor::Trace(std::initializer_list&lt; indT &gt; args) const']]],
+  ['translatequbitfromoriginal_20',['TranslateQubitFromOriginal',['../classGraphs_1_1IOptimiser.html#a93ab53f0d03fc2d7870f605bb79b24c2',1,'Graphs::IOptimiser']]],
+  ['translatequbittooriginal_21',['TranslateQubitToOriginal',['../classGraphs_1_1IOptimiser.html#a56aebb70725c173de1fd52aa24995cc7',1,'Graphs::IOptimiser']]],
+  ['translatestatefromoriginal_22',['TranslateStateFromOriginal',['../classGraphs_1_1IOptimiser.html#afd31ad60628451b52347c3dcae2967c4',1,'Graphs::IOptimiser']]],
+  ['translatestatetooriginal_23',['TranslateStateToOriginal',['../classGraphs_1_1IOptimiser.html#a883d0044fbeb69867a4057022d1dbf3b',1,'Graphs::IOptimiser']]],
+  ['twoqubitsgate_24',['TwoQubitsGate',['../classCircuits_1_1TwoQubitsGate.html#acb0ac8dc574da783104c87313e5f3ede',1,'Circuits::TwoQubitsGate']]]
 ];

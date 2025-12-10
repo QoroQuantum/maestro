@@ -149,7 +149,12 @@ var hierarchy =
       ] ]
     ] ],
     [ "Json::JsonParserMaestro&lt; Time &gt;", "classJson_1_1JsonParserMaestro.html", null ],
-    [ "Utils::Library", "classUtils_1_1Library.html", null ],
+    [ "Utils::Library", "classUtils_1_1Library.html", [
+      [ "MaestroLibrary", "classMaestroLibrary.html", [
+        [ "SimpleSimulator", "classSimpleSimulator.html", null ],
+        [ "Simulator", "classSimulator.html", null ]
+      ] ]
+    ] ],
     [ "Utils::LogFile", "classUtils_1_1LogFile.html", null ],
     [ "Maestro", "classMaestro.html", null ],
     [ "qasm::MakeBinaryExpression", "structqasm_1_1MakeBinaryExpression.html", null ],

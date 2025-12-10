@@ -145,5 +145,8 @@ var annotated_dup =
     ] ],
     [ "avoid_init_allocator", "classavoid__init__allocator.html", null ],
     [ "CRotationGate", "classCRotationGate.html", null ],
-    [ "Maestro", "classMaestro.html", "classMaestro" ]
+    [ "Maestro", "classMaestro.html", "classMaestro" ],
+    [ "MaestroLibrary", "classMaestroLibrary.html", "classMaestroLibrary" ],
+    [ "SimpleSimulator", "classSimpleSimulator.html", "classSimpleSimulator" ],
+    [ "Simulator", "classSimulator.html", "classSimulator" ]
 ];

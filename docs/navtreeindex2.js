@@ -1,5 +1,12 @@
 var NAVTREEINDEX2 =
 {
+"classCircuits_1_1CZGate.html#a1d92271d4bc53cac9356e5127bcbbddd":[1,0,0,39,4],
+"classCircuits_1_1CZGate.html#a4fc6edda91b9d76024fe9ad93669b800":[0,0,0,39,3],
+"classCircuits_1_1CZGate.html#a4fc6edda91b9d76024fe9ad93669b800":[1,0,0,39,3],
+"classCircuits_1_1CZGate.html#a65d6500d0d41d01c901b09e22d751222":[0,0,0,39,1],
+"classCircuits_1_1CZGate.html#a65d6500d0d41d01c901b09e22d751222":[1,0,0,39,1],
+"classCircuits_1_1CZGate.html#ab25efd5ecb8b55317d719b39fc4cfa67":[0,0,0,39,0],
+"classCircuits_1_1CZGate.html#ab25efd5ecb8b55317d719b39fc4cfa67":[1,0,0,39,0],
 "classCircuits_1_1CZGate.html#ae9c029dea9bff5c9e1c77ea362337207":[0,0,0,39,2],
 "classCircuits_1_1CZGate.html#ae9c029dea9bff5c9e1c77ea362337207":[1,0,0,39,2],
 "classCircuits_1_1Circuit.html":[0,0,0,0],
@@ -242,12 +249,5 @@ var NAVTREEINDEX2 =
 "classCircuits_1_1ComparableCircuit.html#a77a5cdd37eee623b494ef5ad182522ed":[1,0,0,1,5],
 "classCircuits_1_1ComparableCircuit.html#a8610fb7fde4f4f3ba4da97f5da76d251":[0,0,0,1,1],
 "classCircuits_1_1ComparableCircuit.html#a8610fb7fde4f4f3ba4da97f5da76d251":[1,0,0,1,1],
-"classCircuits_1_1ComparableCircuit.html#a8ba33d207c9448c9478db1d509476124":[0,0,0,1,8],
-"classCircuits_1_1ComparableCircuit.html#a8ba33d207c9448c9478db1d509476124":[1,0,0,1,8],
-"classCircuits_1_1ComparableCircuit.html#ab1941abda6df1afc7b84527daeec9a4f":[0,0,0,1,0],
-"classCircuits_1_1ComparableCircuit.html#ab1941abda6df1afc7b84527daeec9a4f":[1,0,0,1,0],
-"classCircuits_1_1ComparableCircuit.html#ab8b447298616c71186d1e8891c51a91c":[0,0,0,1,4],
-"classCircuits_1_1ComparableCircuit.html#ab8b447298616c71186d1e8891c51a91c":[1,0,0,1,4],
-"classCircuits_1_1ComparableCircuit.html#ae1d5602b9fd4a442678012df8fe2fdb4":[0,0,0,1,12],
-"classCircuits_1_1ComparableCircuit.html#ae1d5602b9fd4a442678012df8fe2fdb4":[1,0,0,1,12]
+"classCircuits_1_1ComparableCircuit.html#a8ba33d207c9448c9478db1d509476124":[0,0,0,1,8]
 };
