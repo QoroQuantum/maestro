@@ -1,12 +1,10 @@
+#include <iostream>
 #include <boost/program_options.hpp>
-#include <iostream>
 
-#include <fstream>
-#include <iostream>
-#include <stdio.h>
 #include <stdlib.h>
-
-#include "Simulator.hpp"
+#include <stdio.h>
+#include <iostream>
+#include <fstream>
 
 static std::string _get_env_var(const char *envs) {
   std::string val;
