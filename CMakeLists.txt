@@ -142,9 +142,22 @@ if(OpenMP_CXX_FOUND)
     message("Setting OpenMP")
 
 if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        find_program(BREW_CMD brew)
+        if(BREW_CMD)
+            execute_process(COMMAND ${BREW_CMD} --prefix libomp OUTPUT_VARIABLE LIBOMP_PREFIX OUTPUT_STRIP_TRAILING_WHITESPACE)
+            message(STATUS "Found libomp at: ${LIBOMP_PREFIX}")
+        endif()
+
         target_compile_options(maestro PUBLIC -Xpreprocessor -fopenmp)
-        target_include_directories(maestro PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "$ENV{OpenMP_ROOT}/include")
-        target_link_directories(maestro PUBLIC "$ENV{OpenMP_ROOT}/lib")
+        
+        if(LIBOMP_PREFIX)
+            target_include_directories(maestro PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "${LIBOMP_PREFIX}/include")
+            target_link_directories(maestro PUBLIC "${LIBOMP_PREFIX}/lib")
+        else()
+             target_include_directories(maestro PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "$ENV{OpenMP_ROOT}/include")
+             target_link_directories(maestro PUBLIC "$ENV{OpenMP_ROOT}/lib")
+        endif()
+        
         target_link_libraries(maestro PUBLIC ${OpenMP_CXX_LIBRARIES})
     else()
         target_link_libraries(maestro PUBLIC OpenMP::OpenMP_CXX)
@@ -214,6 +227,17 @@ if(BUILD_PYTHON_BINDINGS)
             ${CMAKE_CURRENT_SOURCE_DIR}/maestrolib
             ${CMAKE_CURRENT_SOURCE_DIR}
         )
+
+        # Set RPATH for macOS to find maestro.dylib at runtime
+        if(APPLE)
+            set_target_properties(maestro_py PROPERTIES
+                BUILD_RPATH "${CMAKE_BINARY_DIR}"
+                INSTALL_RPATH "@loader_path;@loader_path/../lib"
+            )
+            set_target_properties(maestro PROPERTIES
+                INSTALL_NAME_DIR "@rpath"
+            )
+        endif()
 
         install(TARGETS maestro_py LIBRARY DESTINATION .)
     else()

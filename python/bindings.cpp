@@ -10,6 +10,9 @@
 #include "Simulators/Factory.h"
 #include "Circuit/Circuit.h"
 #include "qasm/QasmCirc.h"
+#include "Interface.h"
+
+#include <boost/json.hpp>
 
 namespace nb = nanobind;
 
@@ -91,4 +94,118 @@ NB_MODULE(maestro_py, m) {
     nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
         .def(nb::init<>())
         .def("ParseAndTranslate", &qasm::QasmToCirc<double>::ParseAndTranslate);
+
+    // Bind simple_execute convenience function
+    m.def("simple_execute", 
+        [](const std::string& qasm_circuit,
+           Simulators::SimulatorType sim_type,
+           Simulators::SimulationType sim_exec_type,
+           int shots) -> nb::object {
+            
+            // Initialize Maestro instance if needed
+            GetMaestroObject();
+            
+            // Parse the QASM circuit first to determine the number of qubits
+            qasm::QasmToCirc<> parser;
+            auto circuit = parser.ParseAndTranslate(qasm_circuit);
+            if (parser.Failed() || !circuit) {
+                return nb::none();
+            }
+            
+            // Get the number of qubits from the circuit
+            int num_qubits = static_cast<int>(circuit->GetMaxQubitIndex()) + 1;
+            
+            // Create a simple simulator with the correct number of qubits
+            unsigned long int sim_handle = CreateSimpleSimulator(num_qubits);
+            if (sim_handle == 0) {
+                return nb::none();
+            }
+            
+            // Add optimization simulator with the desired types
+            int result = AddOptimizationSimulator(sim_handle, 
+                static_cast<int>(sim_type), 
+                static_cast<int>(sim_exec_type));
+            
+            if (result == 0) {
+                DestroySimpleSimulator(sim_handle);
+                return nb::none();
+            }
+            
+            // Build JSON configuration with shots
+            boost::json::object config;
+            config["shots"] = shots;
+            std::string json_config = boost::json::serialize(config);
+            
+            // Execute the circuit
+            char* result_str = SimpleExecute(sim_handle, qasm_circuit.c_str(), json_config.c_str());
+            
+            // Clean up simulator
+            DestroySimpleSimulator(sim_handle);
+            
+            if (result_str == nullptr) {
+                return nb::none();
+            }
+            
+            // Parse JSON result
+            try {
+                boost::json::value json_result = boost::json::parse(result_str);
+                FreeResult(result_str);
+                
+                if (!json_result.is_object()) {
+                    return nb::none();
+                }
+                
+                auto result_obj = json_result.as_object();
+                
+                // Convert to Python dictionary
+                nb::dict py_result;
+                
+                // Convert counts
+                if (result_obj.contains("counts") && result_obj.at("counts").is_object()) {
+                    nb::dict counts;
+                    auto counts_obj = result_obj.at("counts").as_object();
+                    for (const auto& pair : counts_obj) {
+                        std::string key(pair.key());
+                        if (pair.value().is_int64()) {
+                            counts[key.c_str()] = pair.value().as_int64();
+                        } else if (pair.value().is_uint64()) {
+                            counts[key.c_str()] = static_cast<int64_t>(pair.value().as_uint64());
+                        }
+                    }
+                    py_result["counts"] = counts;
+                }
+                
+                // Add other metadata
+                if (result_obj.contains("simulator")) {
+                    py_result["simulator"] = std::string(result_obj.at("simulator").as_string());
+                }
+                if (result_obj.contains("method")) {
+                    py_result["method"] = std::string(result_obj.at("method").as_string());
+                }
+                if (result_obj.contains("time_taken")) {
+                    auto time_str = std::string(result_obj.at("time_taken").as_string());
+                    py_result["time_taken"] = std::stod(time_str);
+                }
+                
+                return py_result;
+                
+            } catch (const std::exception& e) {
+                FreeResult(result_str);
+                return nb::none();
+            }
+        },
+        nb::arg("qasm_circuit"),
+        nb::arg("simulator_type") = Simulators::SimulatorType::kQCSim,
+        nb::arg("simulation_type") = Simulators::SimulationType::kStatevector,
+        nb::arg("shots") = 1024,
+        "Execute a QASM circuit and return measurement results.\n\n"
+        "Args:\n"
+        "    qasm_circuit: QASM 2.0 quantum circuit as a string\n"
+        "    simulator_type: Type of simulator to use (default: QCSim)\n"
+        "    simulation_type: Simulation method to use (default: Statevector)\n"
+        "    shots: Number of measurement shots (default: 1024)\n\n"
+        "Returns:\n"
+        "    Dictionary with keys 'counts', 'simulator', 'method', and 'time_taken',\n"
+        "    or None if execution failed"
+    );
 }

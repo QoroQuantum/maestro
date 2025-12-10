@@ -16,7 +16,7 @@
 
 #include <iostream>
 
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 
 #include <dlfcn.h>
 
@@ -39,7 +39,7 @@ public:
 
   virtual ~Library() {
     if (handle)
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
       dlclose(handle);
 #elif defined(_WIN32)
       FreeLibrary(handle);
@@ -47,7 +47,7 @@ public:
   }
 
   virtual bool Init(const char *libName) noexcept {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     handle = dlopen(libName, RTLD_NOW);
 
     if (handle == nullptr) {
@@ -73,7 +73,7 @@ public:
   }
 
   void *GetFunction(const char *funcName) noexcept {
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
     return dlsym(handle, funcName);
 #elif defined(_WIN32)
     return GetProcAddress(handle, funcName);
@@ -87,7 +87,7 @@ public:
   void SetMute(bool m) noexcept { mute = m; }
 
 private:
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
   void *handle = nullptr;
 #elif defined(_WIN32)
   HINSTANCE handle = nullptr;
