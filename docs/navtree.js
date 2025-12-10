@@ -621,7 +621,7 @@ function initNavTree(toroot,relpath,allMembersFile) {
     $(sidenav).resizable({ minWidth: 0 });
     if (pagenav.length) {
       pagehandle  = $("#page-nav-resize-handle");
-      pagehandle.on('mousedown touchstart',function(e) { 
+      pagehandle.on('mousedown touchstart',function(e) {
          $('body').addClass('resizing');
          pagehandle.addClass('dragging');
          $(document).on('mousemove touchmove',function(e) {
@@ -879,7 +879,7 @@ function initNavTree(toroot,relpath,allMembersFile) {
           const targetPos=scrollTarget.offset().top-navy-ulOffset;
           const targetOffset=targetPos+my;
           if ( (scrollDown && targetOffset>lastScrollTargetOffset) ||
-              (!scrollDown && targetOffset<lastScrollTargetOffset)) 
+              (!scrollDown && targetOffset<lastScrollTargetOffset))
           { // force panel to scroll in the same direction as content window
             pagenavcontents.stop(); // avoid build-up of history
             pagenavcontents.scrollTo({ left:0, top:targetOffset },{ duration: 500, interrupt: true });

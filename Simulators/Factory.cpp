@@ -31,10 +31,9 @@
 
 #define INCLUDED_BY_FACTORY
 #include "AerSimulator.h"
-#include "QCSimSimulator.h"
 #include "Composite.h"
 #include "GpuSimulator.h"
-
+#include "QCSimSimulator.h"
 
 namespace Simulators {
 
