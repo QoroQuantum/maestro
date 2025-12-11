@@ -131,7 +131,7 @@ NB_MODULE(maestro_py, m) {
 
         // Add optimization simulator with the desired types
         int result =
-            AddOptimizationSimulator(sim_handle, static_cast<int>(sim_type),
+            RemoveAllOptimizationSimulatorsAndAdd(sim_handle, static_cast<int>(sim_type),
                                      static_cast<int>(sim_exec_type));
 
         if (result == 0) {
