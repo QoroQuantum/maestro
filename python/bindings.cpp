@@ -239,3 +239,4 @@ NB_MODULE(maestro_py, m) {
       "    Dictionary with keys 'counts', 'simulator', 'method', and "
       "'time_taken',\n"
       "    or None if execution failed");
+}
