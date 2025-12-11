@@ -3,24 +3,21 @@
 #include "MaestroLib.hpp"
 
 class SimpleSimulator : protected MaestroLibrary {
-public:
+ public:
   SimpleSimulator() noexcept {}
 
   virtual ~SimpleSimulator() {
-    if (handle)
-      DestroySimpleSimulator(handle);
+    if (handle) DestroySimpleSimulator(handle);
   }
 
   bool Init(const char *libName) noexcept override {
-    if (MaestroLibrary::Init(libName))
-      return true;
+    if (MaestroLibrary::Init(libName)) return true;
 
     return false;
   }
 
   unsigned long int CreateSimpleSimulator(int nrQubits) override {
-    if (handle)
-      DestroySimpleSimulator(handle);
+    if (handle) DestroySimpleSimulator(handle);
 
     handle = MaestroLibrary::CreateSimpleSimulator(nrQubits);
 
@@ -49,34 +46,30 @@ public:
 
   void FreeResult(char *result) override { MaestroLibrary::FreeResult(result); }
 
-private:
+ private:
   unsigned long int handle = 0;
 };
 
 class Simulator : protected MaestroLibrary {
-public:
+ public:
   Simulator() noexcept {}
 
   virtual ~Simulator() {
-    if (handle)
-      DestroySimulator(handle);
+    if (handle) DestroySimulator(handle);
   }
 
   bool Init(const char *libName) noexcept override {
-    if (MaestroLibrary::Init(libName))
-      return true;
+    if (MaestroLibrary::Init(libName)) return true;
 
     return false;
   }
 
   unsigned long int CreateSimulator(int simType, int simExecType) override {
-    if (handle)
-      DestroySimulator(handle);
+    if (handle) DestroySimulator(handle);
 
     handle = MaestroLibrary::CreateSimulator(simType, simExecType);
 
-    if (handle)
-      simulatorPtr = MaestroLibrary::GetSimulator(handle);
+    if (handle) simulatorPtr = MaestroLibrary::GetSimulator(handle);
 
     return handle;
   }
@@ -86,14 +79,12 @@ public:
   void FreeResult(char *result) { MaestroLibrary::FreeResult(result); }
 
   int InitializeSimulator() {
-    if (simulatorPtr)
-      return MaestroLibrary::InitializeSimulator(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::InitializeSimulator(simulatorPtr);
     return 0;
   }
 
   int ResetSimulator() {
-    if (simulatorPtr)
-      return MaestroLibrary::ResetSimulator(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::ResetSimulator(simulatorPtr);
     return 0;
   }
 
@@ -116,14 +107,12 @@ public:
   }
 
   unsigned long int GetNumberOfQubits() {
-    if (simulatorPtr)
-      return MaestroLibrary::GetNumberOfQubits(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::GetNumberOfQubits(simulatorPtr);
     return 0;
   }
 
   int ClearSimulator() {
-    if (simulatorPtr)
-      return MaestroLibrary::ClearSimulator(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::ClearSimulator(simulatorPtr);
     return 0;
   }
 
@@ -142,8 +131,7 @@ public:
   }
 
   double Probability(unsigned long long int outcome) {
-    if (simulatorPtr)
-      return MaestroLibrary::Probability(simulatorPtr, outcome);
+    if (simulatorPtr) return MaestroLibrary::Probability(simulatorPtr, outcome);
 
     return 0.0;
   }
@@ -157,14 +145,12 @@ public:
   }
 
   double *Amplitude(unsigned long long int outcome) {
-    if (simulatorPtr)
-      return MaestroLibrary::Amplitude(simulatorPtr, outcome);
+    if (simulatorPtr) return MaestroLibrary::Amplitude(simulatorPtr, outcome);
     return nullptr;
   }
 
   double *AllProbabilities() {
-    if (simulatorPtr)
-      return MaestroLibrary::AllProbabilities(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::AllProbabilities(simulatorPtr);
     return nullptr;
   }
 
@@ -185,20 +171,17 @@ public:
   }
 
   int GetSimulatorType() {
-    if (simulatorPtr)
-      return MaestroLibrary::GetSimulatorType(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::GetSimulatorType(simulatorPtr);
     return -1;
   }
 
   int GetSimulationType() {
-    if (simulatorPtr)
-      return MaestroLibrary::GetSimulationType(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::GetSimulationType(simulatorPtr);
     return -1;
   }
 
   int FlushSimulator() {
-    if (simulatorPtr)
-      return MaestroLibrary::FlushSimulator(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::FlushSimulator(simulatorPtr);
     return 0;
   }
 
@@ -215,14 +198,12 @@ public:
   }
 
   int SaveState() {
-    if (simulatorPtr)
-      return MaestroLibrary::SaveState(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::SaveState(simulatorPtr);
     return 0;
   }
 
   int RestoreState() {
-    if (simulatorPtr)
-      return MaestroLibrary::RestoreState(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::RestoreState(simulatorPtr);
     return 0;
   }
 
@@ -233,92 +214,77 @@ public:
   }
 
   int GetMultithreading() {
-    if (simulatorPtr)
-      return MaestroLibrary::GetMultithreading(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::GetMultithreading(simulatorPtr);
     return 0;
   }
 
   int IsQcsim() {
-    if (simulatorPtr)
-      return MaestroLibrary::IsQcsim(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::IsQcsim(simulatorPtr);
     return 0;
   }
 
   unsigned long long int MeasureNoCollapse() {
-    if (simulatorPtr)
-      return MaestroLibrary::MeasureNoCollapse(simulatorPtr);
+    if (simulatorPtr) return MaestroLibrary::MeasureNoCollapse(simulatorPtr);
     return 0;
   }
 
   int ApplyX(int qubit) {
-    if (simulatorPtr)
-      return MaestroLibrary::ApplyX(simulatorPtr, qubit);
+    if (simulatorPtr) return MaestroLibrary::ApplyX(simulatorPtr, qubit);
     return 0;
   }
 
   int ApplyY(int qubit) {
-    if (simulatorPtr)
-      return MaestroLibrary::ApplyY(simulatorPtr, qubit);
+    if (simulatorPtr) return MaestroLibrary::ApplyY(simulatorPtr, qubit);
     return 0;
   }
 
   int ApplyZ(int qubit) {
-    if (simulatorPtr)
-      return MaestroLibrary::ApplyZ(simulatorPtr, qubit);
+    if (simulatorPtr) return MaestroLibrary::ApplyZ(simulatorPtr, qubit);
     return 0;
   }
 
   int ApplyH(int qubit) {
-    if (simulatorPtr)
-      return MaestroLibrary::ApplyH(simulatorPtr, qubit);
+    if (simulatorPtr) return MaestroLibrary::ApplyH(simulatorPtr, qubit);
     return 0;
   }
 
   int ApplyS(int qubit) {
-    if (simulatorPtr)
-      return MaestroLibrary::ApplyS(simulatorPtr, qubit);
+    if (simulatorPtr) return MaestroLibrary::ApplyS(simulatorPtr, qubit);
     return 0;
   }
 
   int ApplySDG(int qubit) {
-    if (simulatorPtr)
-      return MaestroLibrary::ApplySDG(simulatorPtr, qubit);
+    if (simulatorPtr) return MaestroLibrary::ApplySDG(simulatorPtr, qubit);
     return 0;
   }
 
   int ApplyT(int qubit) {
-    if (simulatorPtr)
-      return MaestroLibrary::ApplyT(simulatorPtr, qubit);
+    if (simulatorPtr) return MaestroLibrary::ApplyT(simulatorPtr, qubit);
     return 0;
   }
 
   int ApplyTDG(int qubit) {
-    if (simulatorPtr)
-      return MaestroLibrary::ApplyTDG(simulatorPtr, qubit);
+    if (simulatorPtr) return MaestroLibrary::ApplyTDG(simulatorPtr, qubit);
     return 0;
   }
 
   int ApplySX(int qubit) {
-    if (simulatorPtr)
-      return MaestroLibrary::ApplySX(simulatorPtr, qubit);
+    if (simulatorPtr) return MaestroLibrary::ApplySX(simulatorPtr, qubit);
     return 0;
   }
 
   int ApplySXDG(int qubit) {
-    if (simulatorPtr)
-      return MaestroLibrary::ApplySXDG(simulatorPtr, qubit);
+    if (simulatorPtr) return MaestroLibrary::ApplySXDG(simulatorPtr, qubit);
     return 0;
   }
 
   int ApplyK(int qubit) {
-    if (simulatorPtr)
-      return MaestroLibrary::ApplyK(simulatorPtr, qubit);
+    if (simulatorPtr) return MaestroLibrary::ApplyK(simulatorPtr, qubit);
     return 0;
   }
 
   int ApplyP(int qubit, double theta) {
-    if (simulatorPtr)
-      return MaestroLibrary::ApplyP(simulatorPtr, qubit, theta);
+    if (simulatorPtr) return MaestroLibrary::ApplyP(simulatorPtr, qubit, theta);
     return 0;
   }
 
@@ -440,7 +406,7 @@ public:
     return 0;
   }
 
-private:
+ private:
   unsigned long int handle = 0;
   void *simulatorPtr = nullptr;
 };

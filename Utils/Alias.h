@@ -20,10 +20,11 @@
 namespace Utils {
 
 class Alias {
-public:
+ public:
   Alias() = delete;
 
-  template <class T = Eigen::VectorXcd> Alias(const T &statevector) {
+  template <class T = Eigen::VectorXcd>
+  Alias(const T &statevector) {
     std::vector<double> probabilities(statevector.size());
     double accum = 0.;
     for (Eigen::Index i = 0; i < static_cast<Eigen::Index>(statevector.size());
@@ -78,8 +79,7 @@ public:
     for (; !under.empty(); under.pop_back())
       aliasTable[under.back().alias] = one;
 
-    for (; !over.empty(); over.pop_back())
-      aliasTable[over.back().alias] = one;
+    for (; !over.empty(); over.pop_back()) aliasTable[over.back().alias] = one;
   }
 
   size_t Sample(double v) const {
@@ -94,9 +94,9 @@ public:
                                                : aliasTable[offset].alias;
   }
 
-private:
+ private:
   class AliasEntry {
-  public:
+   public:
     AliasEntry() : probability(1.), alias(-1) {}
     AliasEntry(double prob, long long int ali)
         : probability(prob), alias(ali) {}
@@ -108,6 +108,6 @@ private:
   std::vector<AliasEntry> aliasTable;
 };
 
-} // namespace Utils
+}  // namespace Utils
 
-#endif // _ALIAS_H_
+#endif  // _ALIAS_H_

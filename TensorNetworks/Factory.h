@@ -25,11 +25,11 @@ namespace TensorNetworks {
  * Creates the tensors for the gates.
  */
 class Factory {
-public:
+ public:
   using MatrixClass = Eigen::MatrixXcd;
 
-  static std::shared_ptr<Utils::Tensor<>>
-  CreateTensorFromGate(const QC::Gates::QuantumGateWithOp<MatrixClass> &gate) {
+  static std::shared_ptr<Utils::Tensor<>> CreateTensorFromGate(
+      const QC::Gates::QuantumGateWithOp<MatrixClass> &gate) {
     if (gate.getQubitsNumber() > 2)
       throw std::invalid_argument(
           "The gate has more than 2 qubits. Decompose gates on a higher number "
@@ -41,8 +41,8 @@ public:
     return CreateTensorFromGateOnTwoQubits(gate);
   }
 
-  static std::shared_ptr<Utils::Tensor<>>
-  CreateProjectionTensor(bool onZero = true) {
+  static std::shared_ptr<Utils::Tensor<>> CreateProjectionTensor(
+      bool onZero = true) {
     static const std::vector<size_t> dims{2, 2};
     auto tensor = std::make_shared<Utils::Tensor<>>(dims);
 
@@ -112,11 +112,11 @@ public:
     indices.resize(4);
 
     // q1l, q0l, q1c, q0c
-    for (int q0l = 0; q0l < 2; ++q0l) // ctrl qubit
+    for (int q0l = 0; q0l < 2; ++q0l)  // ctrl qubit
     {
       const int l0 = q0l << 1;
       indices[2] = q0l;
-      for (int q0c = 0; q0c < 2; ++q0c) // ctrl qubit
+      for (int q0c = 0; q0c < 2; ++q0c)  // ctrl qubit
       {
         indices[0] = q0c;
         const int c0 = q0c << 1;
@@ -134,6 +134,6 @@ public:
   }
 };
 
-} // namespace TensorNetworks
+}  // namespace TensorNetworks
 
-#endif // ! __TENSORS_FACTORY_H_
+#endif  // ! __TENSORS_FACTORY_H_

@@ -38,7 +38,7 @@ class CompositeSimulator;
 class IndividualSimulator : public ISimulator {
   friend class CompositeSimulator;
 
-public:
+ public:
   /**
    * @brief Constructs a simulator.
    *
@@ -117,9 +117,9 @@ public:
         // simulator->SetMultithreading(enableMultithreading);
         simulator->InitializeState(
             newNrQubits,
-            newAmplitudes); // this will end up by swapping the data from
-                            // newAmplitudes to the simulator, no allocation and
-                            // copying is done
+            newAmplitudes);  // this will end up by swapping the data from
+                             // newAmplitudes to the simulator, no allocation
+                             // and copying is done
       }
     }
 #ifndef NO_QISKIT_AER
@@ -129,8 +129,8 @@ public:
                    nrBasisStates, other, enableMultithreading);
       else {
         AER::Vector<std::complex<double>> newAmplitudes(
-            nrBasisStates, false); // the false here avoids data initialization,
-                                   // it will be set anyway
+            nrBasisStates, false);  // the false here avoids data
+                                    // initialization, it will be set anyway
 
         for (size_t state2 = 0; state2 < nrBasisStates2; ++state2) {
           const auto ampl2 = other->AmplitudeRaw(state2);
@@ -146,8 +146,8 @@ public:
         // simulator->SetMultithreading(enableMultithreading);
         simulator->InitializeState(
             newNrQubits,
-            newAmplitudes); // this will move the data from newAmplitudes to the
-                            // simulator, no allocation and copying is done
+            newAmplitudes);  // this will move the data from newAmplitudes to
+                             // the simulator, no allocation and copying is done
       }
     }
 #endif
@@ -171,8 +171,9 @@ public:
    * @param qubitOutcome The outcome of the qubit.
    * @return The new simulator split from this one.
    */
-  inline std::unique_ptr<IndividualSimulator>
-  Split(size_t qubit, bool qubitOutcome, bool enableMultithreading) {
+  inline std::unique_ptr<IndividualSimulator> Split(size_t qubit,
+                                                    bool qubitOutcome,
+                                                    bool enableMultithreading) {
     const size_t oldNrQubits = GetNumberOfQubits();
     const size_t newNrQubits = oldNrQubits - 1;
     const size_t nrBasisStates = 1ULL << newNrQubits;
@@ -185,8 +186,8 @@ public:
     auto newSimulator = std::make_unique<IndividualSimulator>(GetType());
     newSimulator->AllocateQubits(1);
     newSimulator->GetQubitsMap()[qubit] =
-        0; // the qubit is mapped to the only local qubit in the new simulator,
-           // which is 0
+        0;  // the qubit is mapped to the only local qubit in the new simulator,
+            // which is 0
     newSimulator->SetMultithreading(enableMultithreading);
     newSimulator->Initialize();
     if (qubitOutcome) {
@@ -194,7 +195,7 @@ public:
       // newSimulator->Flush();
     }
 
-    qubitsMap.erase(qubit); // the qubit is removed from the current simulator
+    qubitsMap.erase(qubit);  // the qubit is removed from the current simulator
 
     SaveStateToInternalDestructive();
 
@@ -227,9 +228,9 @@ public:
         // simulator->SetMultithreading(enableMultithreading);
         simulator->InitializeState(
             newNrQubits,
-            newAmplitudes); // this will end up by swapping the data from
-                            // newAmplitudes to the simulator, no allocation and
-                            // copying is done
+            newAmplitudes);  // this will end up by swapping the data from
+                             // newAmplitudes to the simulator, no allocation
+                             // and copying is done
       }
     }
 #ifndef NO_QISKIT_AER
@@ -243,8 +244,8 @@ public:
       {
         // now the adjusted current simulator, without the removed qubit
         AER::Vector<std::complex<double>> newAmplitudes(
-            nrBasisStates, false); // the false here avoids data initialization,
-                                   // it will be set anyway
+            nrBasisStates, false);  // the false here avoids data
+                                    // initialization, it will be set anyway
 
         // compute the new amplitudes
         const size_t localQubitMask = 1ULL << localQubit;
@@ -262,16 +263,15 @@ public:
         // simulator->SetMultithreading(enableMultithreading);
         simulator->InitializeState(
             newNrQubits,
-            newAmplitudes); // this will move the data from newAmplitudes to the
-                            // simulator, no allocation and copying is done
+            newAmplitudes);  // this will move the data from newAmplitudes to
+                             // the simulator, no allocation and copying is done
       }
     }
 #endif
 
     // now adjust the local qubits map
     for (auto &mapped : qubitsMap)
-      if (mapped.second > localQubit)
-        --mapped.second;
+      if (mapped.second > localQubit) --mapped.second;
 
     return newSimulator;
   }
@@ -321,14 +321,13 @@ public:
    * @param qubits The qubits to convert.
    * @return The converted qubits.
    */
-  inline Types::qubits_vector
-  ConvertQubits(const Types::qubits_vector &qubits) {
+  inline Types::qubits_vector ConvertQubits(
+      const Types::qubits_vector &qubits) {
     Types::qubits_vector converted;
     converted.reserve(qubits.size());
 
     for (auto qubit : qubits)
-      if (HasQubit(qubit))
-        converted.emplace_back(qubitsMap[qubit]);
+      if (HasQubit(qubit)) converted.emplace_back(qubitsMap[qubit]);
 
     return converted;
   }
@@ -357,8 +356,7 @@ public:
     Types::qubit_t res = 0;
 
     for (auto [origQubit, localQubit] : qubitsMap)
-      if (outcome & (1ULL << localQubit))
-        res |= (1ULL << origQubit);
+      if (outcome & (1ULL << localQubit)) res |= (1ULL << origQubit);
 
     return res;
   }
@@ -375,8 +373,7 @@ public:
     Types::qubit_t res = 0;
 
     for (auto [origQubit, localQubit] : qubitsMap)
-      if (outcome & (1ULL << origQubit))
-        res |= (1ULL << localQubit);
+      if (outcome & (1ULL << origQubit)) res |= (1ULL << localQubit);
 
     return res;
   }
@@ -387,8 +384,7 @@ public:
    * Saves the state.
    */
   void SaveState() {
-    if (!simulator)
-      return;
+    if (!simulator) return;
     const size_t nrBasisStates = 1ULL << simulator->GetNumberOfQubits();
     savedState.reserve(nrBasisStates);
 
@@ -409,8 +405,7 @@ public:
    * Restores the state.
    */
   void RestoreState() {
-    if (!simulator)
-      return;
+    if (!simulator) return;
     const size_t nrQubits = simulator->GetNumberOfQubits();
 
     simulator->Clear();
@@ -544,8 +539,7 @@ public:
    * @return The configuration value as a string.
    */
   std::string GetConfiguration(const char *key) const override {
-    if (!simulator)
-      return "";
+    if (!simulator) return "";
 
     return simulator->GetConfiguration(key);
   }
@@ -656,8 +650,8 @@ public:
    * @return A vector with the probabilities for the specified qubit
    * configurations.
    */
-  std::vector<double>
-  Probabilities(const Types::qubits_vector &qubits) override {
+  std::vector<double> Probabilities(
+      const Types::qubits_vector &qubits) override {
     return simulator->Probabilities(ConvertQubits(qubits));
   }
 
@@ -676,9 +670,8 @@ public:
    * @return A map with the counts for the otcomes of measurements of the
    * specified qubits.
    */
-  std::unordered_map<Types::qubit_t, Types::qubit_t>
-  SampleCounts(const Types::qubits_vector &qubits,
-               size_t shots = 1000) override {
+  std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
+      const Types::qubits_vector &qubits, size_t shots = 1000) override {
     std::unordered_map<Types::qubit_t, Types::qubit_t> res;
 
     const auto sc = simulator->SampleCounts(ConvertQubits(qubits), shots);
@@ -1092,8 +1085,7 @@ public:
    * enabled.
    */
   void SetMultithreading(bool multithreading = true) override {
-    if (simulator)
-      simulator->SetMultithreading(multithreading);
+    if (simulator) simulator->SetMultithreading(multithreading);
 
     processor_count =
         multithreading ? QC::QubitRegister<>::GetNumberOfThreads() : 1;
@@ -1107,8 +1099,7 @@ public:
    * @return The multithreading flag.
    */
   bool GetMultithreading() const override {
-    if (simulator)
-      return simulator->GetMultithreading();
+    if (simulator) return simulator->GetMultithreading();
 
     return false;
   }
@@ -1169,8 +1160,7 @@ public:
   }
 
   Types::qubit_t SampleFromAlias() {
-    if (!alias || !simulator)
-      return 0;
+    if (!alias || !simulator) return 0;
 
     double prob = 0.0;
     if (GetType() == SimulatorType::kQCSim) {
@@ -1190,7 +1180,7 @@ public:
     return ConvertOutcomeFromLocal(measRaw);
   }
 
-private:
+ private:
   void InitializeAlias() {
     // TODO: implement it!
     if (GetType() == SimulatorType::kQCSim) {
@@ -1231,8 +1221,8 @@ private:
                          const std::unique_ptr<IndividualSimulator> &other,
                          bool enableMultithreading) {
     AER::Vector<std::complex<double>> newAmplitudes(
-        nrBasisStates, false); // the false here avoids data initialization, it
-                               // will be set anyway
+        nrBasisStates, false);  // the false here avoids data initialization, it
+                                // will be set anyway
 
     /*
     const size_t state1Mask = nrBasisStates1 - 1ULL;
@@ -1260,8 +1250,8 @@ AmplitudeRaw(state & state1Mask) * other->AmplitudeRaw(state >> nrQubits1);
     // simulator->SetMultithreading(enableMultithreading);
     simulator->InitializeState(
         newNrQubits,
-        newAmplitudes); // this will move the data from newAmplitudes to the
-                        // simulator, no allocation and copying is done
+        newAmplitudes);  // this will move the data from newAmplitudes to the
+                         // simulator, no allocation and copying is done
   }
 #endif
 
@@ -1352,9 +1342,9 @@ AmplitudeRaw(state & state1Mask) * other->AmplitudeRaw(state >> nrQubits1);
     // simulator so transfer mapping keeping this in mind
     // simulator->SetMultithreading(enableMultithreading);
     simulator->InitializeState(
-        newNrQubits, newAmplitudes); // this will end up by swapping the data
-                                     // from newAmplitudes to the simulator, no
-                                     // allocation and copying is done
+        newNrQubits, newAmplitudes);  // this will end up by swapping the data
+                                      // from newAmplitudes to the simulator, no
+                                      // allocation and copying is done
   }
 
   /**
@@ -1419,8 +1409,8 @@ and copying is done
   // constexpr static size_t OmpLimitSplit = OmpLimitJoin * 16;
 };
 
-} // namespace Private
-} // namespace Simulators
+}  // namespace Private
+}  // namespace Simulators
 
 #endif
 #endif

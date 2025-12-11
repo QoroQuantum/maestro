@@ -13,8 +13,7 @@ static std::string _get_env_var(const char *envs) {
   size_t sz;
 
   getenv_s(&sz, NULL, 0, envs);
-  if (sz == 0 || sz > 49)
-    return val;
+  if (sz == 0 || sz > 49) return val;
 
   char buf[50];
 
@@ -24,8 +23,7 @@ static std::string _get_env_var(const char *envs) {
   val = buf;
 #else
   const char *env = getenv(envs);
-  if (env)
-    val = env;
+  if (env) val = env;
 #endif
 
   return val;
@@ -86,11 +84,9 @@ int main(int argc, char **argv) {
       return 1;
     }
 
-    if (vars.count("version"))
-      std::cout << "Version 1.0\n";
+    if (vars.count("version")) std::cout << "Version 1.0\n";
 
-    if (vars.count("help"))
-      std::cout << desc << "\n";
+    if (vars.count("help")) std::cout << desc << "\n";
 
     int nrQubits = 64;
     int nrShots = 1;
@@ -104,13 +100,11 @@ int main(int argc, char **argv) {
       const std::string qstr = _get_env_var("maestro_nrqubits");
       if (!qstr.empty()) {
         const int nrQubitsMax = std::stoi(qstr);
-        if (nrQubits > nrQubitsMax)
-          nrQubits = nrQubitsMax;
+        if (nrQubits > nrQubitsMax) nrQubits = nrQubitsMax;
       }
     } else {
       const std::string qstr = _get_env_var("maestro_nrqubits");
-      if (!qstr.empty())
-        nrQubits = std::stoi(qstr);
+      if (!qstr.empty()) nrQubits = std::stoi(qstr);
     }
 
     if (nrQubits <= 0) {
@@ -124,17 +118,14 @@ int main(int argc, char **argv) {
       const std::string sstr = _get_env_var("maestro_shots");
       if (!sstr.empty()) {
         const int nrShotsMax = std::stoi(sstr);
-        if (nrShots > nrShotsMax)
-          nrShots = nrShotsMax;
+        if (nrShots > nrShotsMax) nrShots = nrShotsMax;
       }
     } else {
       const std::string sstr = _get_env_var("maestro_shots");
-      if (!sstr.empty())
-        nrShots = std::stoi(sstr);
+      if (!sstr.empty()) nrShots = std::stoi(sstr);
     }
 
-    if (nrShots <= 0)
-      nrShots = 1;
+    if (nrShots <= 0) nrShots = 1;
 
     if (vars.count("mbd")) {
       maxBondDim = vars["mbd"].as<int>();
@@ -147,12 +138,10 @@ int main(int argc, char **argv) {
       }
     } else {
       const std::string mbds = _get_env_var("maestro_max_bond_dim");
-      if (!mbds.empty())
-        maxBondDim = std::stoi(mbds);
+      if (!mbds.empty()) maxBondDim = std::stoi(mbds);
     }
 
-    if (maxBondDim < 0)
-      maxBondDim = 0;
+    if (maxBondDim < 0) maxBondDim = 0;
 
     std::string stype;
     if (vars.count("simulator"))
@@ -175,7 +164,7 @@ int main(int argc, char **argv) {
       else if (stype == "gpu")
         simulatorType = 4;
       else
-        simulatorType = 1000; // something big, so it won't be set
+        simulatorType = 1000;  // something big, so it won't be set
     }
 
     if (simulatorType != 2 && simulatorType != 3) {
@@ -202,7 +191,7 @@ int main(int argc, char **argv) {
           simulationType = 1000;
       }
     } else
-      simulationType = 0; // statevector for composite
+      simulationType = 0;  // statevector for composite
 
     if (vars.count("file") == 0) {
       std::cerr << "No qasm file provided" << std::endl;
@@ -244,7 +233,7 @@ int main(int argc, char **argv) {
 
     simulator.CreateSimpleSimulator(nrQubits);
 
-    if (simulatorType < 2) // qcsim or aer
+    if (simulatorType < 2)  // qcsim or aer
     {
       if (simulationType < 4)
         simulator.RemoveAllOptimizationSimulatorsAndAdd(
@@ -256,16 +245,16 @@ int main(int argc, char **argv) {
         simulator.AddOptimizationSimulator(static_cast<int>(simulatorType), 2);
       }
     } else if (simulatorType <
-               4) // composite, ignore exec type and set statevector
+               4)  // composite, ignore exec type and set statevector
     {
       simulator.RemoveAllOptimizationSimulatorsAndAdd(
           static_cast<int>(simulatorType), 0);
-    } else if (simulatorType == 4) // gpu
+    } else if (simulatorType == 4)  // gpu
     {
-      if (simulationType < 2) // statevector or mps
+      if (simulationType < 2)  // statevector or mps
         simulator.RemoveAllOptimizationSimulatorsAndAdd(
             static_cast<int>(simulatorType), static_cast<int>(simulationType));
-      else // other types are not supported yet on gpu, set statevector
+      else  // other types are not supported yet on gpu, set statevector
         simulator.RemoveAllOptimizationSimulatorsAndAdd(
             static_cast<int>(simulatorType), 0);
     }

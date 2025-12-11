@@ -20,7 +20,7 @@ namespace qasm {
 // something like this id[value] used for example by qreg and creg declarations
 // also when a qubit or cbit is referenced
 class IndexedId : public AbstractSyntaxTree {
-public:
+ public:
   IndexedId() : index(0) {}
   IndexedId(const std::string &id, int index) : id(id), index(index) {}
 
@@ -34,12 +34,13 @@ public:
 
   std::string id;
   int index;
-  int base = 0; // to be used when allocating the qubits/cbits in the circuit
-  std::string declType; // "qreg" or "creg" or "id"
+  int base = 0;  // to be used when allocating the qubits/cbits in the circuit
+  std::string declType;  // "qreg" or "creg" or "id"
 };
 
 struct MakeIndexedIdExpression {
-  template <typename, typename> struct result {
+  template <typename, typename>
+  struct result {
     typedef IndexedId type;
   };
 
@@ -70,7 +71,7 @@ using UopType = std::variant<UGateCallType, CXGateCallType, GatecallType>;
 struct QoperationStatement : public AbstractSyntaxTree {
   enum class OperationType {
     Comment,
-    Declaration, // creg, qreg
+    Declaration,  // creg, qreg
     Barrier,
     Measurement,
     Reset,
@@ -204,14 +205,14 @@ struct AddMeasureExpr : public AbstractSyntaxTree {
     typedef QoperationStatement type;
   };
 
-  QoperationStatement
-  operator()(const MeasureType &measure,
-             const std::unordered_map<std::string, IndexedId> &creg_map,
-             const std::unordered_map<std::string, IndexedId> &qreg_map) const {
+  QoperationStatement operator()(
+      const MeasureType &measure,
+      const std::unordered_map<std::string, IndexedId> &creg_map,
+      const std::unordered_map<std::string, IndexedId> &qreg_map) const {
     QoperationStatement stmt;
     stmt.opType = QoperationStatement::OperationType::Measurement;
 
-    ArgumentType arg1 = boost::fusion::at_c<0>(measure); // qubits info
+    ArgumentType arg1 = boost::fusion::at_c<0>(measure);  // qubits info
 
     // there are two possibilities here, either it's an indexed id or a simple
     // id
@@ -228,12 +229,11 @@ struct AddMeasureExpr : public AbstractSyntaxTree {
       if (it != qreg_map.end()) {
         int base = it->second.base;
         int size = static_cast<int>(std::round(it->second.Eval()));
-        for (int i = 0; i < size; ++i)
-          stmt.qubits.push_back(base + i);
+        for (int i = 0; i < size; ++i) stmt.qubits.push_back(base + i);
       }
     }
 
-    ArgumentType arg2 = boost::fusion::at_c<1>(measure); // cbits info
+    ArgumentType arg2 = boost::fusion::at_c<1>(measure);  // cbits info
     // there are two possibilities here, either it's an indexed id or a simple
     // id
 
@@ -250,8 +250,7 @@ struct AddMeasureExpr : public AbstractSyntaxTree {
       if (it != creg_map.end()) {
         int base = it->second.base;
         int size = static_cast<int>(std::round(it->second.Eval()));
-        for (int i = 0; i < size; ++i)
-          stmt.cbits.push_back(base + i);
+        for (int i = 0; i < size; ++i) stmt.cbits.push_back(base + i);
       }
     }
 
@@ -266,9 +265,9 @@ struct AddResetExpr : public AbstractSyntaxTree {
     typedef QoperationStatement type;
   };
 
-  QoperationStatement
-  operator()(const ResetType &reset,
-             const std::unordered_map<std::string, IndexedId> &qreg_map) const {
+  QoperationStatement operator()(
+      const ResetType &reset,
+      const std::unordered_map<std::string, IndexedId> &qreg_map) const {
     QoperationStatement stmt;
     stmt.opType = QoperationStatement::OperationType::Reset;
 
@@ -287,8 +286,7 @@ struct AddResetExpr : public AbstractSyntaxTree {
       if (it != qreg_map.end()) {
         int base = it->second.base;
         int size = static_cast<int>(std::round(it->second.Eval()));
-        for (int i = 0; i < size; ++i)
-          stmt.qubits.push_back(base + i);
+        for (int i = 0; i < size; ++i) stmt.qubits.push_back(base + i);
       }
     }
 
@@ -303,9 +301,9 @@ struct AddBarrierExpr : public AbstractSyntaxTree {
     typedef QoperationStatement type;
   };
 
-  QoperationStatement
-  operator()(const BarrierType &barrier,
-             const std::unordered_map<std::string, IndexedId> &qreg_map) const {
+  QoperationStatement operator()(
+      const BarrierType &barrier,
+      const std::unordered_map<std::string, IndexedId> &qreg_map) const {
     StatementType stmt;
     stmt.opType = QoperationStatement::OperationType::Barrier;
     std::set<int> qubit_set;
@@ -326,8 +324,7 @@ struct AddBarrierExpr : public AbstractSyntaxTree {
         if (it != qreg_map.end()) {
           int base = it->second.base;
           int size = static_cast<int>(std::round(it->second.Eval()));
-          for (int i = 0; i < size; ++i)
-            qubit_set.insert(base + i);
+          for (int i = 0; i < size; ++i) qubit_set.insert(base + i);
         }
       }
     }
@@ -345,10 +342,10 @@ struct AddOpaqueDeclExpr : public AbstractSyntaxTree {
     typedef QoperationStatement type;
   };
 
-  QoperationStatement
-  operator()(const OpaqueDeclType &opaqueDecl,
-             std::unordered_map<std::string, StatementType> &opaqueGates,
-             const std::unordered_map<std::string, IndexedId> &qreg_map) const {
+  QoperationStatement operator()(
+      const OpaqueDeclType &opaqueDecl,
+      std::unordered_map<std::string, StatementType> &opaqueGates,
+      const std::unordered_map<std::string, IndexedId> &qreg_map) const {
     StatementType stmt;
     stmt.opType = QoperationStatement::OperationType::OpaqueDecl;
 
@@ -395,10 +392,11 @@ struct AddGateDeclExpr : public AbstractSyntaxTree {
           "Gate declaration must have at least one qubit argument: " +
           gateName);
     else if (definedGates.find(gateName) !=
-             definedGates.end()) // for now do not allow redefinition, the
-                                 // biggest problem is that defined gates can be
-                                 // used inside other defined gates, otherwise
-                                 // redefinition would be simple to handle
+             definedGates
+                 .end())  // for now do not allow redefinition, the
+                          // biggest problem is that defined gates can be
+                          // used inside other defined gates, otherwise
+                          // redefinition would be simple to handle
       throw std::invalid_argument("Gate already defined: " + gateName);
 
     stmt.comment = gateName;
@@ -427,6 +425,6 @@ struct AddGateDeclExpr : public AbstractSyntaxTree {
 };
 
 phx::function<AddGateDeclExpr> AddGateDecl;
-} // namespace qasm
+}  // namespace qasm
 
 #endif

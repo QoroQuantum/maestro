@@ -29,7 +29,7 @@
 namespace Utils {
 
 class Library {
-public:
+ public:
   Library(const Library &) = delete;
   Library &operator=(const Library &) = delete;
   Library(Library &&) = default;
@@ -86,7 +86,7 @@ public:
 
   void SetMute(bool m) noexcept { mute = m; }
 
-private:
+ private:
 #if defined(__linux__) || defined(__APPLE__)
   void *handle = nullptr;
 #elif defined(_WIN32)
@@ -95,6 +95,6 @@ private:
   bool mute = false;
 };
 
-} // namespace Utils
+}  // namespace Utils
 
 #endif

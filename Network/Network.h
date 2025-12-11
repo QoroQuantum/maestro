@@ -54,7 +54,7 @@ enum class NetworkType {
  */
 template <typename Time = Types::time_type>
 class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
-public:
+ public:
   using ExecuteResults = typename Circuits::Circuit<Time>::ExecuteResults;
   using SimulatorPair =
       std::pair<Simulators::SimulatorType, Simulators::SimulationType>;
@@ -91,8 +91,8 @@ public:
    * @param circuit The circuit to execute.
    * @sa Circuits::Circuit
    */
-  virtual void
-  Execute(const std::shared_ptr<Circuits::Circuit<Time>> &circuit) = 0;
+  virtual void Execute(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit) = 0;
 
   /**
    * @brief Execute the circuit on the specified host.
@@ -106,9 +106,9 @@ public:
    * @param hostId The id of the host to execute the circuit on.
    * @sa Circuits::Circuit
    */
-  virtual void
-  ExecuteOnHost(const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
-                size_t hostId) = 0;
+  virtual void ExecuteOnHost(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      size_t hostId) = 0;
 
   /**
    * @brief Execute the circuit on the network and return the expectation values
@@ -125,9 +125,9 @@ public:
    * @param paulis The Pauli strings to measure the expectations for.
    * @sa Circuits::Circuit
    */
-  virtual std::vector<double>
-  ExecuteExpectations(const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
-                      const std::vector<std::string> &paulis) = 0;
+  virtual std::vector<double> ExecuteExpectations(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      const std::vector<std::string> &paulis) = 0;
 
   /**
    * @brief Execute the circuit on the specified host and return the expectation
@@ -162,9 +162,9 @@ public:
    * times it was measured.
    * @sa Circuits::Circuit
    */
-  virtual ExecuteResults
-  RepeatedExecute(const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
-                  size_t shots = 1000) = 0;
+  virtual ExecuteResults RepeatedExecute(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      size_t shots = 1000) = 0;
 
   /**
    * @brief Execute the circuit on the network, repeatedly.
@@ -202,9 +202,9 @@ public:
    * times it was measured.
    * @sa Circuits::Circuit
    */
-  virtual ExecuteResults
-  RepeatedExecuteOnHost(const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
-                        size_t hostId, size_t shots = 1000) = 0;
+  virtual ExecuteResults RepeatedExecuteOnHost(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId,
+      size_t shots = 1000) = 0;
 
   /**
    * @brief Execute the circuit on the specified host, repeatedly.
@@ -316,8 +316,8 @@ public:
    * @return The scheduler for the network.
    * @sa Schedulers::IScheduler
    */
-  virtual std::shared_ptr<Schedulers::IScheduler<Time>>
-  GetScheduler() const = 0;
+  virtual std::shared_ptr<Schedulers::IScheduler<Time>> GetScheduler()
+      const = 0;
 
   /**
    * @brief Get the host with the specified id.
@@ -529,8 +529,8 @@ public:
    * @param hostId The id of the host to get the qubit ids for.
    * @return A vector with the qubit ids.
    */
-  virtual std::vector<size_t>
-  GetNetworkEntangledQubitsIds(size_t hostId) const = 0;
+  virtual std::vector<size_t> GetNetworkEntangledQubitsIds(
+      size_t hostId) const = 0;
 
   /**
    * @brief Get the classical bit ids for the specified host.
@@ -553,8 +553,8 @@ public:
    * @param hostId The id of the host to get the classical bit ids for.
    * @return A vector with the classical bit ids.
    */
-  virtual std::vector<size_t>
-  GetEntangledQubitMeasurementBitIds(size_t hostId) const = 0;
+  virtual std::vector<size_t> GetEntangledQubitMeasurementBitIds(
+      size_t hostId) const = 0;
 
   /**
    * @brief Check if the specified qubit id is for a qubit used for entanglement
@@ -760,8 +760,8 @@ public:
    * @return The distributed circuit.
    * @sa Circuits::Circuit
    */
-  virtual std::shared_ptr<Circuits::Circuit<Time>>
-  GetDistributedCircuit() const = 0;
+  virtual std::shared_ptr<Circuits::Circuit<Time>> GetDistributedCircuit()
+      const = 0;
 
   /**
    * @brief Allows using an optimized simulator.
@@ -844,9 +844,8 @@ public:
    * @param type The type of the simulator to add.
    * @param kind The kind of the simulation to add.
    */
-  virtual void
-  RemoveAllOptimizationSimulatorsAndAdd(Simulators::SimulatorType type,
-                                        Simulators::SimulationType kind) = 0;
+  virtual void RemoveAllOptimizationSimulatorsAndAdd(
+      Simulators::SimulatorType type, Simulators::SimulationType kind) = 0;
 
   /**
    * @brief Checks if a simulator exists in the optimization set.
@@ -858,9 +857,9 @@ public:
    * @return True if the simulator exists in the optimization set, false
    * otherwise.
    */
-  virtual bool
-  OptimizationSimulatorExists(Simulators::SimulatorType type,
-                              Simulators::SimulationType kind) const = 0;
+  virtual bool OptimizationSimulatorExists(
+      Simulators::SimulatorType type,
+      Simulators::SimulationType kind) const = 0;
 
   /**
    * @brief Get the maximum number of simulators that can be used in the
@@ -925,15 +924,14 @@ public:
    * is implemented at a higher level (multiple simulators in parallel).
    * @return A shared pointer to the chosen simulator.
    */
-  virtual std::shared_ptr<Simulators::ISimulator>
-  ChooseBestSimulator(const std::shared_ptr<Circuits::Circuit<Time>> &dcirc,
-                      size_t &counts, size_t nrQubits, size_t nrCbits,
-                      size_t nrResultCbits, Simulators::SimulatorType &simType,
-                      Simulators::SimulationType &method,
-                      std::vector<bool> &executed, bool multithreading = false,
-                      bool dontRunCircuitStart = false) const = 0;
+  virtual std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(
+      const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t &counts,
+      size_t nrQubits, size_t nrCbits, size_t nrResultCbits,
+      Simulators::SimulatorType &simType, Simulators::SimulationType &method,
+      std::vector<bool> &executed, bool multithreading = false,
+      bool dontRunCircuitStart = false) const = 0;
 };
 
-} // namespace Network
+}  // namespace Network
 
-#endif // !_NETWORK_INTERFACE_H_
+#endif  // !_NETWORK_INTERFACE_H_

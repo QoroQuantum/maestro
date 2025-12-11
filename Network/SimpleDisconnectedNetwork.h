@@ -40,7 +40,7 @@ namespace Network {
 template <typename Time = Types::time_type,
           class Controller = SimpleController<Time>>
 class SimpleDisconnectedNetwork : public INetwork<Time> {
-public:
+ public:
   using BaseClass = INetwork<Time>; /**< The base class type. */
   using ExecuteResults =
       typename BaseClass::ExecuteResults; /**< The execute results type. */
@@ -56,8 +56,7 @@ public:
    */
   SimpleDisconnectedNetwork(const std::vector<Types::qubit_t> &qubits = {},
                             const std::vector<size_t> &cbits = {}) {
-    if (!qubits.empty())
-      CreateNetwork(qubits, cbits);
+    if (!qubits.empty()) CreateNetwork(qubits, cbits);
   }
 
   /**
@@ -105,8 +104,8 @@ public:
    * @param circuit The circuit to execute.
    * @sa Circuits::Circuit
    */
-  void
-  Execute(const std::shared_ptr<Circuits::Circuit<Time>> &circuit) override {
+  void Execute(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit) override {
     const auto recreate = recreateIfNeeded;
 
     auto simType = Simulators::SimulatorType::kQCSim;
@@ -198,9 +197,9 @@ public:
    * @param paulis The Pauli strings to measure the expectations for.
    * @sa Circuits::Circuit
    */
-  std::vector<double>
-  ExecuteExpectations(const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
-                      const std::vector<std::string> &paulis) override {
+  std::vector<double> ExecuteExpectations(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      const std::vector<std::string> &paulis) override {
     const auto recreate = recreateIfNeeded;
 
     auto simType = Simulators::SimulatorType::kQCSim;
@@ -359,11 +358,10 @@ public:
    * id and the value is the number of times the qubit was measured to be 1.
    * @sa Circuits::Circuit
    */
-  ExecuteResults
-  RepeatedExecute(const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
-                  size_t shots = 1000) override {
-    if (!controller || !circuit)
-      return {};
+  ExecuteResults RepeatedExecute(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      size_t shots = 1000) override {
+    if (!controller || !circuit) return {};
 
     distCirc = controller->DistributeCircuit(BaseClass::getptr(), circuit);
 
@@ -378,8 +376,7 @@ public:
     }
 #endif
 
-    if (!simulator || distCirc->empty())
-      return {};
+    if (!simulator || distCirc->empty()) return {};
 
     auto simType = simulator->GetType();
     if (distCirc->HasOpsAfterMeasurements() &&
@@ -440,8 +437,7 @@ public:
     size_t nrThreads = GetMaxSimulators();
 
 #ifdef __linux__
-    if (simType == Simulators::SimulatorType::kGpuSim)
-      nrThreads = 1;
+    if (simType == Simulators::SimulatorType::kGpuSim) nrThreads = 1;
 #endif
     if (method == Simulators::SimulationType::kStatevector &&
         !distCirc->HasOpsAfterMeasurements())
@@ -460,7 +456,7 @@ public:
       // cloned in the threads, otherwise a new one will be created in the
       // threads
       if (!optimizeSimulator ||
-          !simulatorsEstimator) // otherwise it was already cleared
+          !simulatorsEstimator)  // otherwise it was already cleared
       {
         simulator->Clear();
         GetState().Clear();
@@ -520,12 +516,10 @@ public:
       }
 
       job->DoWorkNoLock();
-      if (!recreateIfNeeded)
-        simulator = job->optSim;
+      if (!recreateIfNeeded) simulator = job->optSim;
     }
 
-    if (recreateIfNeeded)
-      CreateSimulator(saveSimType, saveMethod);
+    if (recreateIfNeeded) CreateSimulator(saveSimType, saveMethod);
 
     ConvertBackResults(res);
 
@@ -547,11 +541,10 @@ public:
    * id and the value is the number of times the qubit was measured to be 1.
    * @sa Circuits::Circuit
    */
-  ExecuteResults
-  RepeatedExecuteOnHost(const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
-                        size_t hostId, size_t shots = 1000) override {
-    if (!circuit || hostId >= GetNumHosts())
-      return {};
+  ExecuteResults RepeatedExecuteOnHost(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId,
+      size_t shots = 1000) override {
+    if (!circuit || hostId >= GetNumHosts()) return {};
 
     size_t nrQubits = 0;
     size_t nrCbits = 0;
@@ -565,11 +558,9 @@ public:
     const auto reverseQubitsMap = MapCircuitOnHost(
         GetController()->GetOptimizeCircuit() ? optCircuit : circuit, hostId,
         nrQubits, nrCbits, true);
-    if (nrCbits == 0)
-      nrCbits = nrQubits;
+    if (nrCbits == 0) nrCbits = nrQubits;
 
-    if (!simulator || distCirc->empty())
-      return {};
+    if (!simulator || distCirc->empty()) return {};
 
     auto simType = simulator->GetType();
 
@@ -694,15 +685,12 @@ public:
       }
 
       job->DoWorkNoLock();
-      if (!recreateIfNeeded)
-        simulator = job->optSim;
+      if (!recreateIfNeeded) simulator = job->optSim;
     }
 
-    if (recreateIfNeeded)
-      CreateSimulator(saveSimType, saveMethod);
+    if (recreateIfNeeded) CreateSimulator(saveSimType, saveMethod);
 
-    if (!reverseQubitsMap.empty())
-      ConvertBackResults(res, reverseQubitsMap);
+    if (!reverseQubitsMap.empty()) ConvertBackResults(res, reverseQubitsMap);
 
     return res;
   }
@@ -717,14 +705,12 @@ public:
    */
   size_t GetNumberOfGatesDistributedOrCut(
       const std::shared_ptr<Circuits::Circuit<Time>> &circuit) const override {
-    if (!circuit)
-      return 0;
+    if (!circuit) return 0;
 
     size_t distgates = 0;
 
     for (const auto &op : circuit->GetOperations())
-      if (!IsLocalOperation(op))
-        ++distgates;
+      if (!IsLocalOperation(op)) ++distgates;
 
     return distgates;
   }
@@ -751,8 +737,7 @@ public:
     if (!GetScheduler()) {
       CreateScheduler();
 
-      if (!GetScheduler())
-        return {};
+      if (!GetScheduler()) return {};
     }
 
     return GetScheduler()->ExecuteScheduled(circuits);
@@ -816,8 +801,7 @@ public:
    * @param value The value of the configuration.
    */
   void Configure(const char *key, const char *value) override {
-    if (!key || !value)
-      return;
+    if (!key || !value) return;
 
     if (std::string("matrix_product_state_max_bond_dimension") == key)
       maxBondDim = value;
@@ -828,8 +812,7 @@ public:
     else if (std::string("max_simulators") == key)
       maxSimulators = std::stoull(value);
 
-    if (simulator)
-      simulator->Configure(key, value);
+    if (simulator) simulator->Configure(key, value);
   }
 
   /**
@@ -865,11 +848,10 @@ public:
    * @param simType The type of the scheduler to create.
    * @sa SchedulerType
    */
-  void
-  CreateScheduler(SchedulerType schType =
-                      SchedulerType::kNoEntanglementQubitsParallel) override {
-    if (!controller)
-      return;
+  void CreateScheduler(
+      SchedulerType schType =
+          SchedulerType::kNoEntanglementQubitsParallel) override {
+    if (!controller) return;
 
     controller->CreateScheduler(BaseClass::getptr(), schType);
   }
@@ -883,8 +865,7 @@ public:
    * @sa Schedulers::IScheduler
    */
   std::shared_ptr<Schedulers::IScheduler<Time>> GetScheduler() const override {
-    if (!controller)
-      return nullptr;
+    if (!controller) return nullptr;
 
     return controller->GetScheduler();
   }
@@ -899,8 +880,7 @@ public:
    * @sa IHost
    */
   const std::shared_ptr<IHost<Time>> GetHost(size_t hostId) const override {
-    if (hostId >= hosts.size())
-      return nullptr;
+    if (hostId >= hosts.size()) return nullptr;
 
     return hosts[hostId];
   }
@@ -937,8 +917,7 @@ public:
   size_t GetNumQubits() const override {
     size_t res = 0;
 
-    for (const auto &host : hosts)
-      res += host->GetNumQubits();
+    for (const auto &host : hosts) res += host->GetNumQubits();
 
     return res;
   }
@@ -953,8 +932,7 @@ public:
    * @return The number of qubits in the network for the specified host.
    */
   size_t GetNumQubitsForHost(size_t hostId) const override {
-    if (hostId >= hosts.size())
-      return 0;
+    if (hostId >= hosts.size()) return 0;
 
     return hosts[hostId]->GetNumQubits();
   }
@@ -970,8 +948,7 @@ public:
   size_t GetNumNetworkEntangledQubits() const override {
     size_t res = 0;
 
-    for (const auto &host : hosts)
-      res += host->GetNumNetworkEntangledQubits();
+    for (const auto &host : hosts) res += host->GetNumNetworkEntangledQubits();
 
     return res;
   }
@@ -989,8 +966,7 @@ public:
    * specified host.
    */
   size_t GetNumNetworkEntangledQubitsForHost(size_t hostId) const override {
-    if (hostId >= hosts.size())
-      return 0;
+    if (hostId >= hosts.size()) return 0;
 
     return hosts[hostId]->GetNumNetworkEntangledQubits();
   }
@@ -1006,8 +982,7 @@ public:
   size_t GetNumClassicalBits() const override {
     size_t res = 0;
 
-    for (const auto &host : hosts)
-      res += host->GetNumClassicalBits();
+    for (const auto &host : hosts) res += host->GetNumClassicalBits();
 
     return res;
   }
@@ -1024,8 +999,7 @@ public:
    * @return The number of classical bits in the network for the specified host.
    */
   size_t GetNumClassicalBitsForHost(size_t hostId) const override {
-    if (hostId >= hosts.size())
-      return 0;
+    if (hostId >= hosts.size()) return 0;
 
     return hosts[hostId]->GetNumClassicalBits();
   }
@@ -1095,14 +1069,12 @@ public:
       const std::shared_ptr<Circuits::IOperation<Time>> &op) const override {
     const auto qubits = op->AffectedQubits();
 
-    if (qubits.empty())
-      return true;
+    if (qubits.empty()) return true;
 
     size_t firstQubit = qubits[0];
 
     for (size_t q = 1; q < qubits.size(); ++q)
-      if (!AreQubitsOnSameHost(firstQubit, qubits[q]))
-        return false;
+      if (!AreQubitsOnSameHost(firstQubit, qubits[q])) return false;
 
     return true;
   }
@@ -1123,8 +1095,7 @@ public:
       const std::shared_ptr<Circuits::IOperation<Time>> &op) const override {
     const auto qubits = op->AffectedQubits();
 
-    if (qubits.empty())
-      return false;
+    if (qubits.empty()) return false;
 
     // grab the first qubit that is on a host (skip over network entangled
     // qubits)
@@ -1158,12 +1129,10 @@ public:
       const std::shared_ptr<Circuits::IOperation<Time>> &op) const override {
     const auto qubits = op->AffectedQubits();
 
-    if (qubits.empty())
-      return false;
+    if (qubits.empty()) return false;
 
     for (size_t q = 0; q < qubits.size(); ++q)
-      if (IsNetworkEntangledQubit(qubits[q]))
-        return true;
+      if (IsNetworkEntangledQubit(qubits[q])) return true;
 
     return false;
   }
@@ -1179,11 +1148,9 @@ public:
    */
   bool IsEntanglingGate(
       const std::shared_ptr<Circuits::IOperation<Time>> &op) const override {
-    if (op->GetType() != Circuits::OperationType::kGate)
-      return false;
+    if (op->GetType() != Circuits::OperationType::kGate) return false;
     const auto qubits = op->AffectedQubits();
-    if (qubits.size() != 2)
-      return false;
+    if (qubits.size() != 2) return false;
 
     return IsNetworkEntangledQubit(qubits[0]) &&
            IsNetworkEntangledQubit(qubits[1]);
@@ -1201,8 +1168,7 @@ public:
    */
   bool ExpectsClassicalBitFromOtherHost(
       const std::shared_ptr<Circuits::IOperation<Time>> &op) const override {
-    if (!op->IsConditional())
-      return false;
+    if (!op->IsConditional()) return false;
 
     const auto qubits = op->AffectedQubits();
 
@@ -1212,7 +1178,7 @@ public:
 
     if (qubits.empty() && classicalBits.empty())
       throw std::runtime_error(
-          "No classical bits specified!"); // this would be odd!
+          "No classical bits specified!");  // this would be odd!
 
     // consider it on the host where it has the first qubit (or bit, if there
     // are no qubits)
@@ -1221,8 +1187,7 @@ public:
 
     // now check the classical bits
     for (const auto bit : classicalBits)
-      if (hostId != GetHostIdForClassicalBit(bit))
-        return true;
+      if (hostId != GetHostIdForClassicalBit(bit)) return true;
 
     return false;
   }
@@ -1333,8 +1298,7 @@ public:
    */
   size_t GetHostIdForQubit(size_t qubitId) const override {
     for (const auto &host : hosts)
-      if (host->IsQubitOnHost(qubitId))
-        return host->GetId();
+      if (host->IsQubitOnHost(qubitId)) return host->GetId();
 
     return std::numeric_limits<size_t>::max();
   }
@@ -1353,8 +1317,7 @@ public:
    */
   size_t GetHostIdForEntangledQubit(size_t qubitId) const override {
     for (const auto &host : hosts)
-      if (host->IsEntangledQubitOnHost(qubitId))
-        return host->GetId();
+      if (host->IsEntangledQubitOnHost(qubitId)) return host->GetId();
 
     return std::numeric_limits<size_t>::max();
   }
@@ -1386,8 +1349,7 @@ public:
    */
   size_t GetHostIdForClassicalBit(size_t classicalBitId) const override {
     for (const auto &host : hosts)
-      if (host->IsClassicalBitOnHost(classicalBitId))
-        return host->GetId();
+      if (host->IsClassicalBitOnHost(classicalBitId)) return host->GetId();
 
     return std::numeric_limits<size_t>::max();
   }
@@ -1401,8 +1363,7 @@ public:
    * @return A vector with the qubit ids.
    */
   std::vector<size_t> GetQubitsIds(size_t hostId) const override {
-    if (hostId >= hosts.size())
-      return std::vector<size_t>();
+    if (hostId >= hosts.size()) return std::vector<size_t>();
 
     return hosts[hostId]->GetQubitsIds();
   }
@@ -1417,10 +1378,9 @@ public:
    * @param hostId The id of the host to get the qubit ids for.
    * @return A vector with the qubit ids.
    */
-  std::vector<size_t>
-  GetNetworkEntangledQubitsIds(size_t hostId) const override {
-    if (hostId >= hosts.size())
-      return std::vector<size_t>();
+  std::vector<size_t> GetNetworkEntangledQubitsIds(
+      size_t hostId) const override {
+    if (hostId >= hosts.size()) return std::vector<size_t>();
 
     return hosts[hostId]->GetNetworkEntangledQubitsIds();
   }
@@ -1435,8 +1395,7 @@ public:
    * @return A vector with the classical bit ids.
    */
   std::vector<size_t> GetClassicalBitsIds(size_t hostId) const override {
-    if (hostId >= hosts.size())
-      return std::vector<size_t>();
+    if (hostId >= hosts.size()) return std::vector<size_t>();
 
     return hosts[hostId]->GetClassicalBitsIds();
   }
@@ -1451,10 +1410,9 @@ public:
    * @param hostId The id of the host to get the classical bit ids for.
    * @return A vector with the classical bit ids.
    */
-  std::vector<size_t>
-  GetEntangledQubitMeasurementBitIds(size_t hostId) const override {
-    if (hostId >= hosts.size())
-      return std::vector<size_t>();
+  std::vector<size_t> GetEntangledQubitMeasurementBitIds(
+      size_t hostId) const override {
+    if (hostId >= hosts.size()) return std::vector<size_t>();
 
     return hosts[hostId]->GetEntangledQubitMeasurementBitIds();
   }
@@ -1564,8 +1522,8 @@ public:
    * @return The distributed circuit.
    * @sa Circuits::Circuit
    */
-  std::shared_ptr<Circuits::Circuit<Time>>
-  GetDistributedCircuit() const override {
+  std::shared_ptr<Circuits::Circuit<Time>> GetDistributedCircuit()
+      const override {
     return distCirc;
   }
 
@@ -1711,11 +1669,10 @@ public:
    * @return True if the simulator exists in the optimization set, false
    * otherwise.
    */
-  bool
-  OptimizationSimulatorExists(Simulators::SimulatorType type,
-                              Simulators::SimulationType kind) const override {
-    if (simulatorsForOptimizations.empty())
-      return true;
+  bool OptimizationSimulatorExists(
+      Simulators::SimulatorType type,
+      Simulators::SimulationType kind) const override {
+    if (simulatorsForOptimizations.empty()) return true;
 
     return simulatorsForOptimizations.find({type, kind}) !=
            simulatorsForOptimizations.end();
@@ -1756,15 +1713,13 @@ public:
     return cloned;
   }
 
-  std::shared_ptr<Simulators::ISimulator>
-  ChooseBestSimulator(const std::shared_ptr<Circuits::Circuit<Time>> &dcirc,
-                      size_t &counts, size_t nrQubits, size_t nrCbits,
-                      size_t nrResultCbits, Simulators::SimulatorType &simType,
-                      Simulators::SimulationType &method,
-                      std::vector<bool> &executed, bool multithreading = false,
-                      bool dontRunCircuitStart = false) const override {
-    if (!optimizeSimulator)
-      return nullptr;
+  std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(
+      const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t &counts,
+      size_t nrQubits, size_t nrCbits, size_t nrResultCbits,
+      Simulators::SimulatorType &simType, Simulators::SimulationType &method,
+      std::vector<bool> &executed, bool multithreading = false,
+      bool dontRunCircuitStart = false) const override {
+    if (!optimizeSimulator) return nullptr;
 
     if (!simulatorsEstimator && simulatorsForOptimizations.size() != 1)
       return nullptr;
@@ -1904,7 +1859,7 @@ public:
         dontRunCircuitStart);
   }
 
-protected:
+ protected:
   /**
    * @brief Converts back the state from the optimized network distribution
    * mapping
@@ -1981,8 +1936,7 @@ protected:
 
     size_t numClassicalBits = 0;
     for (const auto &[q, b] : bitsMap)
-      if (b >= numClassicalBits)
-        numClassicalBits = b + 1;
+      if (b >= numClassicalBits) numClassicalBits = b + 1;
 
     numClassicalBits = std::max(numClassicalBits, GetNumClassicalBits());
 
@@ -2007,15 +1961,13 @@ protected:
    * @param hostId The id of the host to map the circuit on.
    * @return The reverse qubits/cbits map.
    */
-  std::unordered_map<Types::qubit_t, Types::qubit_t>
-  MapCircuitOnHost(const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
-                   size_t hostId, size_t &nrQubits, size_t &nrCbits,
-                   bool useSeparateSimForHosts = false) {
+  std::unordered_map<Types::qubit_t, Types::qubit_t> MapCircuitOnHost(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId,
+      size_t &nrQubits, size_t &nrCbits, bool useSeparateSimForHosts = false) {
     qubitsMapOnHost.clear();
     nrQubits = 0;
     nrCbits = 0;
-    if (!circuit)
-      return {};
+    if (!circuit) return {};
 
     const auto host =
         std::static_pointer_cast<SimpleHost<Time>>(GetHost(hostId));
@@ -2032,37 +1984,30 @@ protected:
       for (const auto &op : circuit->GetOperations()) {
         const auto qbits = op->AffectedQubits();
         for (auto q : qbits) {
-          if (q > mxq)
-            mxq = q;
-          if (q < mnq)
-            mnq = q;
+          if (q > mxq) mxq = q;
+          if (q < mnq) mnq = q;
         }
         const auto cbits = op->AffectedBits();
         for (auto b : cbits) {
-          if (b > mxb)
-            mxb = b;
-          if (b < mnb)
-            mnb = b;
+          if (b > mxb) mxb = b;
+          if (b < mnb) mnb = b;
         }
       }
 
-      if (mnq > mxq)
-        mnq = 0;
-      if (mnb > mxb)
-        mnb = 0;
+      if (mnq > mxq) mnq = 0;
+      if (mnb > mxb) mnb = 0;
 
       nrQubits = mxq - mnq + 1;
       nrCbits = mxb - mnb + 1;
-      if (nrCbits < nrQubits)
-        nrCbits = nrQubits;
+      if (nrCbits < nrQubits) nrCbits = nrQubits;
 
       const size_t startQubit = host->GetStartQubitId();
 
       if (mnq < startQubit || mxq >= startQubit + hostNrQubits) {
         if (nrQubits >
             hostNrQubits +
-                1) // the host has an additional 'special' qubit for the
-                   // entanglement or other operations (like those for cutting)
+                1)  // the host has an additional 'special' qubit for the
+                    // entanglement or other operations (like those for cutting)
           throw std::runtime_error("Circuit does not fit on the host!");
 
         for (size_t i = 0; i < nrCbits; ++i) {
@@ -2085,13 +2030,12 @@ protected:
 
     assert(nrQubits == qubitsMapOnHost.size());
 
-    if (nrQubits == 0)
-      nrQubits = 1;
+    if (nrQubits == 0) nrQubits = 1;
 
     if (nrQubits >
         hostNrQubits +
-            1) // the host has an additional 'special' qubit for the
-               // entanglement or other operations (like those for cutting)
+            1)  // the host has an additional 'special' qubit for the
+                // entanglement or other operations (like those for cutting)
       throw std::runtime_error("Circuit does not fit on the host!");
 
     return reverseQubitsMap;
@@ -2133,7 +2077,7 @@ protected:
   std::unique_ptr<Estimators::SimulatorsEstimatorInterface<Time>>
       simulatorsEstimator; /**< The simulators estimator. */
 
-private:
+ private:
   Utils::ThreadsPool<ExecuteJob<Time>>
       threadsPool; /**< The threads pool for the execution of the circuits. */
   bool recreateIfNeeded =
@@ -2147,6 +2091,6 @@ private:
                   expectation values. */
 };
 
-} // namespace Network
+}  // namespace Network
 
-#endif // !_SIMPLE_NETWORK_H_
+#endif  // !_SIMPLE_NETWORK_H_

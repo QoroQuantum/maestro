@@ -25,7 +25,7 @@
 namespace TensorNetworks {
 
 class TensorNetwork {
-public:
+ public:
   using Index = Eigen::Index;
 
   TensorNetwork() = delete;
@@ -63,9 +63,9 @@ public:
     Clean(GetNumQubits());
   }
 
-  void
-  AddGate(const QC::Gates::QuantumGateWithOp<TensorNode::MatrixClass> &gate,
-          Types::qubit_t q1, Types::qubit_t q2 = 0) {
+  void AddGate(
+      const QC::Gates::QuantumGateWithOp<TensorNode::MatrixClass> &gate,
+      Types::qubit_t q1, Types::qubit_t q2 = 0) {
     const auto gateQubitsNumber = gate.getQubitsNumber();
     if (gateQubitsNumber > 1)
       AddTwoQubitsGate(gate, q1, q2);
@@ -74,8 +74,7 @@ public:
   }
 
   double Probability(Types::qubit_t qubit, bool zero = true) {
-    if (!contractor)
-      return 0;
+    if (!contractor) return 0;
     contractor->SetMultithreading(enableMultithreading);
 
     // save the qubit positions, to be able to restore them back after the
@@ -140,27 +139,26 @@ public:
     for (Types::qubit_t q = 0; q < pauliString.size(); ++q) {
       const char op = toupper(pauliString[q]);
       switch (op) {
-      case 'X':
-        AddOneQubitExpectationValueOp(XGate, q);
-        usedQubits.insert(q);
-        break;
-      case 'Y':
-        AddOneQubitExpectationValueOp(YGate, q);
-        usedQubits.insert(q);
-        break;
-      case 'Z':
-        AddOneQubitExpectationValueOp(ZGate, q);
-        usedQubits.insert(q);
-        break;
-      case 'I':
-        [[fallthrough]];
-      default:
-        break;
+        case 'X':
+          AddOneQubitExpectationValueOp(XGate, q);
+          usedQubits.insert(q);
+          break;
+        case 'Y':
+          AddOneQubitExpectationValueOp(YGate, q);
+          usedQubits.insert(q);
+          break;
+        case 'Z':
+          AddOneQubitExpectationValueOp(ZGate, q);
+          usedQubits.insert(q);
+          break;
+        case 'I':
+          [[fallthrough]];
+        default:
+          break;
       }
     }
 
-    if (usedQubits.empty())
-      return 1.;
+    if (usedQubits.empty()) return 1.;
 
     const double result = Contract(usedQubits);
 
@@ -241,7 +239,7 @@ public:
     // and set the last tensor on the qubit to be the new tensor
     lastTensors[qubit] = newTensorId;
     lastTensorIndices[qubit] =
-        1; // the next index is 1, this is going to be the 'connect' one
+        1;  // the next index is 1, this is going to be the 'connect' one
   }
 
   void AddProjectorOp(Types::qubit_t qubit, bool zero = true,
@@ -273,8 +271,8 @@ public:
     return tensors;
   }
 
-  const std::unordered_set<Types::qubit_t> &
-  GetQubitGroup(Types::qubit_t q) const {
+  const std::unordered_set<Types::qubit_t> &GetQubitGroup(
+      Types::qubit_t q) const {
     return qubitsGroups.at(qubitsMap[q]);
   }
 
@@ -425,18 +423,19 @@ public:
   std::unique_ptr<TensorNetwork> Clone() const {
     auto cloned = std::make_unique<TensorNetwork>(0);
 
-    cloned->tensors = tensors; // all tensors in the network
+    cloned->tensors = tensors;  // all tensors in the network
 
     cloned->lastTensors =
-        lastTensors; // the indices of the last tensors in the network
-    cloned->lastTensorsSuper = lastTensorsSuper; // the indices of the last
-                                                 // super tensors in the network
+        lastTensors;  // the indices of the last tensors in the network
+    cloned->lastTensorsSuper =
+        lastTensorsSuper;  // the indices of the last
+                           // super tensors in the network
 
     cloned->lastTensorIndices =
-        lastTensorIndices; // the indices of the last tensors in the network
+        lastTensorIndices;  // the indices of the last tensors in the network
     cloned->lastTensorIndicesSuper =
-        lastTensorIndicesSuper; // the indices of the last super tensors in the
-                                // network
+        lastTensorIndicesSuper;  // the indices of the last super tensors in the
+                                 // network
 
     cloned->qubitsMap = qubitsMap; /**< A map between qubits (as identified from
                                       outside) and the qubits group ids */
@@ -444,19 +443,20 @@ public:
                                             the qubits in that group */
 
     cloned->savedTensorsNr = savedTensorsNr;
-    cloned->saveTensors = saveTensors; // all tensors in the network
+    cloned->saveTensors = saveTensors;  // all tensors in the network
 
     cloned->saveLastTensors =
-        saveLastTensors; // the indices of the last tensors in the network
+        saveLastTensors;  // the indices of the last tensors in the network
     cloned->saveLastTensorsSuper =
-        saveLastTensorsSuper; // the indices of the last super tensors in the
-                              // network
+        saveLastTensorsSuper;  // the indices of the last super tensors in the
+                               // network
 
     cloned->saveLastTensorIndices =
-        saveLastTensorIndices; // the indices of the last tensors in the network
+        saveLastTensorIndices;  // the indices of the last tensors in the
+                                // network
     cloned->saveLastTensorIndicesSuper =
-        saveLastTensorIndicesSuper; // the indices of the last super tensors in
-                                    // the network
+        saveLastTensorIndicesSuper;  // the indices of the last super tensors in
+                                     // the network
 
     cloned->saveQubitsMap =
         saveQubitsMap; /**< A map between qubits (as identified from outside)
@@ -465,13 +465,12 @@ public:
         saveQubitsGroups; /**< A map between qubits group ids and the qubits in
                              that group */
 
-    if (contractor)
-      cloned->contractor = contractor->Clone();
+    if (contractor) cloned->contractor = contractor->Clone();
 
     return cloned;
   }
 
-private:
+ private:
   void AddOneQubitExpectationValueOp(
       const QC::Gates::QuantumGateWithOp<TensorNode::MatrixClass> &gate,
       Types::qubit_t q) {
@@ -501,7 +500,7 @@ private:
 
     lastTensor->connections[lastTensorIndexForQubit] = tensorId;
     lastTensor->connectionsIndices[lastTensorIndexForQubit] =
-        0; // connect it to the zero index of the new tensor
+        0;  // connect it to the zero index of the new tensor
 
     tensorNode->connections[0] = lastTensorId;
     tensorNode->connectionsIndices[0] = lastTensorIndexForQubit;
@@ -582,12 +581,12 @@ private:
           // another tensor went on top of the other qubit/leg, so update
           // connections
           const auto &otherTensor =
-              tensors[lastTensor->connections[2]]; // 3 was swapped with 2
+              tensors[lastTensor->connections[2]];  // 3 was swapped with 2
 
           const auto otherIndex =
-              lastTensor->connectionsIndices[2]; // 3 was swapped with 2
+              lastTensor->connectionsIndices[2];  // 3 was swapped with 2
           otherTensor->connectionsIndices[otherIndex] =
-              2; // 3 was swapped with 2
+              2;  // 3 was swapped with 2
         }
       }
 
@@ -597,10 +596,10 @@ private:
       const auto &lastTensorSuper = tensors[lastTensorId];
       lastTensorIndexForQubit = lastTensorIndicesSuper[q];
 
-      lastTensorSuper->tensor = std::make_shared<Utils::Tensor<>>(std::move(
-          lastTensorSuper->tensor->Contract(*(tensorNode->tensor),
-                                            lastTensorIndexForQubit, 0,
-                                            enableMultithreading)));
+      lastTensorSuper->tensor = std::make_shared<Utils::Tensor<>>(
+          std::move(lastTensorSuper->tensor->Contract(
+              *(tensorNode->tensor), lastTensorIndexForQubit, 0,
+              enableMultithreading)));
 
       if (lastTensorIndexForQubit == 2) {
         // lastTensorSuper->tensor =
@@ -622,12 +621,12 @@ private:
           // another tensor went on top of the other qubit/leg, so update
           // connections
           const auto &otherTensor =
-              tensors[lastTensorSuper->connections[2]]; // 3 was swapped with 2
+              tensors[lastTensorSuper->connections[2]];  // 3 was swapped with 2
 
           const auto otherIndex =
-              lastTensorSuper->connectionsIndices[2]; // 3 was swapped with 2
+              lastTensorSuper->connectionsIndices[2];  // 3 was swapped with 2
           otherTensor->connectionsIndices[otherIndex] =
-              2; // 3 was swapped with 2
+              2;  // 3 was swapped with 2
         }
       }
     } else {
@@ -643,7 +642,7 @@ private:
 
       lastTensor->connections[lastTensorIndexForQubit] = tensorId;
       lastTensor->connectionsIndices[lastTensorIndexForQubit] =
-          0; // connect it to the zero index of the new tensor
+          0;  // connect it to the zero index of the new tensor
 
       tensorNode->connections[0] = lastTensorId;
       tensorNode->connectionsIndices[0] = lastTensorIndexForQubit;
@@ -702,7 +701,7 @@ private:
         qubitsMap[qg] = q1group;
         qubitsGroups[q1group].insert(qg);
       }
-      qubitsGroups.erase(q2group); // remove the second group
+      qubitsGroups.erase(q2group);  // remove the second group
     }
 
     // TODO: if first two qubits gate on the 1-qubit tensors of the qubits,
@@ -728,7 +727,7 @@ private:
     auto lastTensorIndexForQubit = lastTensorIndices[q1];
     lastTensor->connections[lastTensorIndexForQubit] = tensorId;
     lastTensor->connectionsIndices[lastTensorIndexForQubit] =
-        0; // connect it to the zero index of the new tensor
+        0;  // connect it to the zero index of the new tensor
 
     tensorNode->connections[0] = lastTensorId;
     tensorNode->connectionsIndices[0] = lastTensorIndexForQubit;
@@ -738,7 +737,7 @@ private:
     lastTensorIndexForQubit = lastTensorIndices[q2];
     lastTensor2->connections[lastTensorIndexForQubit] = tensorId;
     lastTensor2->connectionsIndices[lastTensorIndexForQubit] =
-        1; // connect it to the first index of the new tensor
+        1;  // connect it to the first index of the new tensor
 
     tensorNode->connections[1] = lastTensorId;
     tensorNode->connectionsIndices[1] = lastTensorIndices[q2];
@@ -798,8 +797,7 @@ private:
   }
 
   double Contract() {
-    if (!contractor)
-      return 0;
+    if (!contractor) return 0;
     contractor->SetMultithreading(enableMultithreading);
 
     Connect();
@@ -810,10 +808,9 @@ private:
     for (auto &group : qubitsGroups) {
       const double groupResult = contractor->Contract(
           *this,
-          *group.second.begin()); // doesn't really matter which qubit is passed
-                                  // as long it belongs to the group
-      if (groupResult == 0)
-        return 0;
+          *group.second.begin());  // doesn't really matter which qubit is
+                                   // passed as long it belongs to the group
+      if (groupResult == 0) return 0;
       result *= groupResult;
     }
 
@@ -827,8 +824,7 @@ private:
   }
 
   double Contract(const std::unordered_set<Types::qubit_t> &qubits) {
-    if (!contractor)
-      return 0;
+    if (!contractor) return 0;
     contractor->SetMultithreading(enableMultithreading);
 
     Connect();
@@ -843,10 +839,9 @@ private:
           // this group has at least one qubit in the set, contract it
           // break to avoid contracting it multiple times
           const double groupResult = contractor->Contract(
-              *this, q); // doesn't really matter which qubit is passed as long
-                         // it belongs to the group
-          if (groupResult == 0)
-            return 0;
+              *this, q);  // doesn't really matter which qubit is passed as long
+                          // it belongs to the group
+          if (groupResult == 0) return 0;
           result *= groupResult;
           break;
         }
@@ -865,9 +860,9 @@ private:
 
   void SetQubitsTensors(size_t numQubits) {
     for (Types::qubit_t q = 0; q < numQubits; ++q) {
-      qubitsMap[q] = q; // the qubit group id is the qubit number itself
+      qubitsMap[q] = q;  // the qubit group id is the qubit number itself
       qubitsGroups[q].insert(
-          q); // the qubit group contains only the qubit itself
+          q);  // the qubit group contains only the qubit itself
 
       auto tensorNode = std::make_shared<TensorNode>();
       tensorNode->SetQubit(q);
@@ -890,9 +885,9 @@ private:
 
   void SetQubitsTensorsClear(size_t numQubits) {
     for (Types::qubit_t q = 0; q < numQubits; ++q) {
-      qubitsMap[q] = q; // the qubit group id is the qubit number itself
+      qubitsMap[q] = q;  // the qubit group id is the qubit number itself
       qubitsGroups[q].insert(
-          q); // the qubit group contains only the qubit itself
+          q);  // the qubit group contains only the qubit itself
 
       lastTensors[q] = 2 * q;
       lastTensorIndices[q] = 0;
@@ -903,17 +898,17 @@ private:
   }
 
   std::vector<std::shared_ptr<TensorNode>>
-      tensors; // all tensors in the network
+      tensors;  // all tensors in the network
 
   std::vector<Index>
-      lastTensors; // the indices of the last tensors in the network
+      lastTensors;  // the indices of the last tensors in the network
   std::vector<Index>
-      lastTensorsSuper; // the indices of the last super tensors in the network
+      lastTensorsSuper;  // the indices of the last super tensors in the network
 
   std::vector<Index>
-      lastTensorIndices; // the indices of the last tensors in the network
-  std::vector<Index> lastTensorIndicesSuper; // the indices of the last super
-                                             // tensors in the network
+      lastTensorIndices;  // the indices of the last tensors in the network
+  std::vector<Index> lastTensorIndicesSuper;  // the indices of the last super
+                                              // tensors in the network
 
   std::vector<size_t> qubitsMap; /**< A map between qubits (as identified from
                                     outside) and the qubits group ids */
@@ -923,17 +918,18 @@ private:
 
   size_t savedTensorsNr = 0;
   std::vector<std::shared_ptr<TensorNode>>
-      saveTensors; // all tensors in the network
+      saveTensors;  // all tensors in the network
 
   std::vector<Index>
-      saveLastTensors; // the indices of the last tensors in the network
-  std::vector<Index> saveLastTensorsSuper; // the indices of the last super
-                                           // tensors in the network
+      saveLastTensors;  // the indices of the last tensors in the network
+  std::vector<Index> saveLastTensorsSuper;  // the indices of the last super
+                                            // tensors in the network
 
   std::vector<Index>
-      saveLastTensorIndices; // the indices of the last tensors in the network
-  std::vector<Index> saveLastTensorIndicesSuper; // the indices of the last
-                                                 // super tensors in the network
+      saveLastTensorIndices;  // the indices of the last tensors in the network
+  std::vector<Index>
+      saveLastTensorIndicesSuper;  // the indices of the last
+                                   // super tensors in the network
 
   std::vector<size_t>
       saveQubitsMap; /**< A map between qubits (as identified from outside) and
@@ -950,6 +946,6 @@ private:
   std::uniform_real_distribution<double> uniformZeroOne;
 };
 
-} // namespace TensorNetworks
+}  // namespace TensorNetworks
 
-#endif // __TENSOR_NETWORK_H_
+#endif  // __TENSOR_NETWORK_H_

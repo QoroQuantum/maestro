@@ -16,8 +16,9 @@
 namespace Utils {
 
 // or simply use boost::hash
-template <typename T1, typename T2 = T1> class PairHash {
-public:
+template <typename T1, typename T2 = T1>
+class PairHash {
+ public:
   size_t operator()(const std::pair<T1, T2> &p) const {
     const auto h1 = std::hash<T1>{}(p.first);
     const auto h2 = std::hash<T2>{}(p.second);
@@ -35,6 +36,6 @@ public:
   }
 };
 
-} // namespace Utils
+}  // namespace Utils
 
 #endif

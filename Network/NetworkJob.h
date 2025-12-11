@@ -17,8 +17,9 @@
 
 namespace Network {
 
-template <typename Time = Types::time_type> class ExecuteJob {
-public:
+template <typename Time = Types::time_type>
+class ExecuteJob {
+ public:
   using ExecuteResults = typename Circuits::Circuit<Time>::ExecuteResults;
 
   ExecuteJob() = delete;
@@ -27,12 +28,18 @@ public:
                       ExecuteResults &r, size_t cnt, size_t nq, size_t nc,
                       size_t ncr, Simulators::SimulatorType t,
                       Simulators::SimulationType m, std::mutex &mut)
-      : dcirc(c), res(r), curCnt(cnt), nrQubits(nq), nrCbits(nc),
-        nrResultCbits(ncr), simType(t), method(m), resultsMutex(mut) {}
+      : dcirc(c),
+        res(r),
+        curCnt(cnt),
+        nrQubits(nq),
+        nrCbits(nc),
+        nrResultCbits(ncr),
+        simType(t),
+        method(m),
+        resultsMutex(mut) {}
 
   void DoWork() {
-    if (curCnt == 0)
-      return;
+    if (curCnt == 0) return;
 
     Circuits::OperationState state;
     state.AllocateBits(nrCbits);
@@ -50,8 +57,7 @@ public:
 
     if (!optSim) {
       optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
-      if (!optSim)
-        return;
+      if (!optSim) return;
 
       if (!maxBondDim.empty())
         optSim->Configure("matrix_product_state_max_bond_dimension",
@@ -113,8 +119,7 @@ public:
       }
 
       const std::lock_guard lock(resultsMutex);
-      for (const auto &r : localRes)
-        res[r.first] += r.second;
+      for (const auto &r : localRes) res[r.first] += r.second;
 
       return;
     }
@@ -126,8 +131,7 @@ public:
         dcirc->ExecuteMeasurements(optSim, state, executed);
       } else {
         dcirc->Execute(optSim, state);
-        if (i < curCnt1)
-          optSim->Reset();
+        if (i < curCnt1) optSim->Reset();
       }
 
       auto bits = state.GetAllBits();
@@ -139,13 +143,11 @@ public:
     }
 
     const std::lock_guard lock(resultsMutex);
-    for (const auto &r : localRes)
-      res[r.first] += r.second;
+    for (const auto &r : localRes) res[r.first] += r.second;
   }
 
   void DoWorkNoLock() {
-    if (curCnt == 0)
-      return;
+    if (curCnt == 0) return;
 
     Circuits::OperationState state;
     state.AllocateBits(nrCbits);
@@ -188,8 +190,7 @@ public:
       }
     } else {
       optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
-      if (!optSim)
-        return;
+      if (!optSim) return;
 
       optSim->SetMultithreading(true);
 
@@ -260,7 +261,7 @@ public:
       } else {
         dcirc->Execute(optSim, state);
         if (i < curCnt1)
-          optSim->Reset(); // leave the simulator state for the last iteration
+          optSim->Reset();  // leave the simulator state for the last iteration
       }
 
       auto bits = state.GetAllBits();
@@ -300,6 +301,6 @@ public:
   std::string mpsSample;
 };
 
-} // namespace Network
+}  // namespace Network
 
-#endif // ! _NETWORK_JOB_H
+#endif  // ! _NETWORK_JOB_H
