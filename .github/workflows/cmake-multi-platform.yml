@@ -78,7 +78,7 @@ jobs:
         export QCSIM_INCLUDE_DIR=$PWD/QCSim/QCSim/
         export JSON_INCLUDE_DIR=$PWD/json/single_include
         export AER_INCLUDE_DIR=$PWD/qiskit-aer/src/
-        
+
         # Tell CMake to use ccache as a "launcher" for the compiler
         cmake . \
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
