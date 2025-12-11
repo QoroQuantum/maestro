@@ -130,9 +130,9 @@ NB_MODULE(maestro_py, m) {
         }
 
         // Add optimization simulator with the desired types
-        int result =
-            RemoveAllOptimizationSimulatorsAndAdd(sim_handle, static_cast<int>(sim_type),
-                                     static_cast<int>(sim_exec_type));
+        int result = RemoveAllOptimizationSimulatorsAndAdd(
+            sim_handle, static_cast<int>(sim_type),
+            static_cast<int>(sim_exec_type));
 
         if (result == 0) {
           DestroySimpleSimulator(sim_handle);
@@ -224,8 +224,7 @@ NB_MODULE(maestro_py, m) {
       nb::arg("qasm_circuit"),
       nb::arg("simulator_type") = Simulators::SimulatorType::kQCSim,
       nb::arg("simulation_type") = Simulators::SimulationType::kStatevector,
-      nb::arg("shots") = 1024, 
-      nb::arg("max_bond_dimension") = 2,
+      nb::arg("shots") = 1024, nb::arg("max_bond_dimension") = 2,
       nb::arg("singular_value_threshold") = 1e-8,
       "Execute a QASM circuit and return measurement results.\n\n"
       "Args:\n"
