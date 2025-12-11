@@ -107,7 +107,9 @@ NB_MODULE(maestro_py, m) {
   m.def(
       "simple_execute",
       [](const std::string &qasm_circuit, Simulators::SimulatorType sim_type,
-         Simulators::SimulationType sim_exec_type, int shots) -> nb::object {
+         Simulators::SimulationType sim_exec_type, int shots,
+         std::optional<size_t> max_bond_dimension,
+         std::optional<double> singular_value_threshold) -> nb::object {
         // Initialize Maestro instance if needed
         GetMaestroObject();
 
@@ -137,9 +139,22 @@ NB_MODULE(maestro_py, m) {
           return nb::none();
         }
 
-        // Build JSON configuration with shots
+        // Build JSON configuration
         boost::json::object config;
         config["shots"] = shots;
+
+        // --- NEW CONFIGURATION VARIABLES ---
+        if (max_bond_dimension.has_value()) {
+          config["matrix_product_state_max_bond_dimension"] =
+              *max_bond_dimension;
+        }
+
+        if (singular_value_threshold.has_value()) {
+          config["matrix_product_state_truncation_threshold"] =
+              *singular_value_threshold;
+        }
+        // -----------------------------------
+
         std::string json_config = boost::json::serialize(config);
 
         // Execute the circuit
@@ -209,15 +224,19 @@ NB_MODULE(maestro_py, m) {
       nb::arg("qasm_circuit"),
       nb::arg("simulator_type") = Simulators::SimulatorType::kQCSim,
       nb::arg("simulation_type") = Simulators::SimulationType::kStatevector,
-      nb::arg("shots") = 1024,
+      nb::arg("shots") = 1024, 
+      nb::arg("max_bond_dimension") = 2,
+      nb::arg("singular_value_threshold") = 1e-8,
       "Execute a QASM circuit and return measurement results.\n\n"
       "Args:\n"
       "    qasm_circuit: QASM 2.0 quantum circuit as a string\n"
       "    simulator_type: Type of simulator to use (default: QCSim)\n"
       "    simulation_type: Simulation method to use (default: Statevector)\n"
-      "    shots: Number of measurement shots (default: 1024)\n\n"
+      "    shots: Number of measurement shots (default: 1024)\n"
+      "    max_bond_dimension: Max bond dimension for MPS (default: 2)\n"
+      "    singular_value_threshold: Truncation threshold for MPS (default: "
+      "1e-8)\n\n"
       "Returns:\n"
       "    Dictionary with keys 'counts', 'simulator', 'method', and "
       "'time_taken',\n"
       "    or None if execution failed");
-}
