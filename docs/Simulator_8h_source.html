@@ -58,7 +58,7 @@ $(function() {
       <div id="nav-sync" class="sync"></div>
     </div>
   </div>
-  <div id="splitbar" style="-moz-user-select:none;"
+  <div id="splitbar" style="-moz-user-select:none;" 
        class="ui-resizable-handle">
   </div>
 </div>
@@ -105,7 +105,7 @@ $(function(){initNavTree('Simulator_8h_source.html','',''); });
 <div class="line"><a id="l00021" name="l00021"></a><span class="lineno">   21</span></div>
 <div class="foldopen" id="foldopen00032" data-start="{" data-end="};">
 <div class="line"><a id="l00032" name="l00032"></a><span class="lineno"><a class="line" href="classSimulators_1_1ISimulator.html">   32</a></span><span class="keyword">class </span><a class="code hl_class" href="classSimulators_1_1ISimulator.html">ISimulator</a> : <span class="keyword">public</span> <a class="code hl_class" href="classSimulators_1_1IState.html">IState</a>, std::enable_shared_from_this&lt;ISimulator&gt; {</div>
-<div class="line"><a id="l00033" name="l00033"></a><span class="lineno">   33</span><span class="keyword">public</span>:</div>
+<div class="line"><a id="l00033" name="l00033"></a><span class="lineno">   33</span> <span class="keyword">public</span>:</div>
 <div class="line"><a id="l00041" name="l00041"></a><span class="lineno"><a class="line" href="classSimulators_1_1ISimulator.html#a2278b9f03198e2d7f2b9d9a29af81f23">   41</a></span>  <span class="keyword">virtual</span> <span class="keywordtype">void</span> <a class="code hl_function" href="classSimulators_1_1ISimulator.html#a2278b9f03198e2d7f2b9d9a29af81f23">ApplyP</a>(<a class="code hl_typedef" href="namespaceTypes.html#afda27b666a29ff2e858b10ee1a7e4b73">Types::qubit_t</a> qubit, <span class="keywordtype">double</span> lambda) = 0;</div>
 <div class="line"><a id="l00042" name="l00042"></a><span class="lineno">   42</span></div>
 <div class="line"><a id="l00049" name="l00049"></a><span class="lineno"><a class="line" href="classSimulators_1_1ISimulator.html#a1a5e32bfa230afebb442265ebd38d640">   49</a></span>  <span class="keyword">virtual</span> <span class="keywordtype">void</span> <a class="code hl_function" href="classSimulators_1_1ISimulator.html#a1a5e32bfa230afebb442265ebd38d640">ApplyX</a>(<a class="code hl_typedef" href="namespaceTypes.html#afda27b666a29ff2e858b10ee1a7e4b73">Types::qubit_t</a> qubit) = 0;</div>
@@ -184,9 +184,9 @@ $(function(){initNavTree('Simulator_8h_source.html','',''); });
 <div class="line"><a id="l00345" name="l00345"></a><span class="lineno"><a class="line" href="classSimulators_1_1ISimulator.html#a1e1a309ec3a015561985172209afe194">  345</a></span>  std::shared_ptr&lt;ISimulator&gt; <a class="code hl_function" href="classSimulators_1_1ISimulator.html#a1e1a309ec3a015561985172209afe194">getptr</a>() { <span class="keywordflow">return</span> shared_from_this(); }</div>
 <div class="line"><a id="l00346" name="l00346"></a><span class="lineno">  346</span>};</div>
 </div>
-<div class="line"><a id="l00347" name="l00347"></a><span class="lineno">  347</span>} <span class="comment">// namespace Simulators</span></div>
+<div class="line"><a id="l00347" name="l00347"></a><span class="lineno">  347</span>}  <span class="comment">// namespace Simulators</span></div>
 <div class="line"><a id="l00348" name="l00348"></a><span class="lineno">  348</span> </div>
-<div class="line"><a id="l00349" name="l00349"></a><span class="lineno">  349</span><span class="preprocessor">#endif </span><span class="comment">// !_SIMULATOR_INTERFACE_H_</span></div>
+<div class="line"><a id="l00349" name="l00349"></a><span class="lineno">  349</span><span class="preprocessor">#endif  </span><span class="comment">// !_SIMULATOR_INTERFACE_H_</span></div>
 <div class="ttc" id="aState_8h_html"><div class="ttname"><a href="State_8h.html">State.h</a></div></div>
 <div class="ttc" id="aclassSimulators_1_1ISimulator_html"><div class="ttname"><a href="classSimulators_1_1ISimulator.html">Simulators::ISimulator</a></div><div class="ttdoc">Interface class for a quantum computing simulator.</div><div class="ttdef"><b>Definition</b> <a href="#l00032">Simulator.h:32</a></div></div>
 <div class="ttc" id="aclassSimulators_1_1ISimulator_html_a1061b2e312801ef26dfb7cc8b3d55096"><div class="ttname"><a href="classSimulators_1_1ISimulator.html#a1061b2e312801ef26dfb7cc8b3d55096">Simulators::ISimulator::ApplyCRz</a></div><div class="ttdeci">virtual void ApplyCRz(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta)=0</div><div class="ttdoc">Applies a CRz gate to the qubits.</div></div>
@@ -223,7 +223,7 @@ $(function(){initNavTree('Simulator_8h_source.html','',''); });
 <div class="ttc" id="aclassSimulators_1_1ISimulator_html_aef81494c7de5645bae0847c0687af03e"><div class="ttname"><a href="classSimulators_1_1ISimulator.html#aef81494c7de5645bae0847c0687af03e">Simulators::ISimulator::ApplySxDAG</a></div><div class="ttdeci">virtual void ApplySxDAG(Types::qubit_t qubit)=0</div><div class="ttdoc">Applies a Sx dagger gate to the qubit.</div></div>
 <div class="ttc" id="aclassSimulators_1_1ISimulator_html_afccdb64684dee590def34f60f1036338"><div class="ttname"><a href="classSimulators_1_1ISimulator.html#afccdb64684dee590def34f60f1036338">Simulators::ISimulator::ApplyCP</a></div><div class="ttdeci">virtual void ApplyCP(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double lambda)=0</div><div class="ttdoc">Applies a CP gate to the qubits.</div></div>
 <div class="ttc" id="aclassSimulators_1_1IState_html"><div class="ttname"><a href="classSimulators_1_1IState.html">Simulators::IState</a></div><div class="ttdoc">Interface class for a quantum computing simulator state.</div><div class="ttdef"><b>Definition</b> <a href="State_8h_source.html#l00099">State.h:99</a></div></div>
-<div class="ttc" id="anamespaceSimulators_html"><div class="ttname"><a href="namespaceSimulators.html">Simulators</a></div><div class="ttdef"><b>Definition</b> <a href="Factory_8cpp_source.html#l00039">Factory.cpp:39</a></div></div>
+<div class="ttc" id="anamespaceSimulators_html"><div class="ttname"><a href="namespaceSimulators.html">Simulators</a></div><div class="ttdef"><b>Definition</b> <a href="Factory_8cpp_source.html#l00038">Factory.cpp:38</a></div></div>
 <div class="ttc" id="anamespaceTypes_html_afda27b666a29ff2e858b10ee1a7e4b73"><div class="ttname"><a href="namespaceTypes.html#afda27b666a29ff2e858b10ee1a7e4b73">Types::qubit_t</a></div><div class="ttdeci">uint_fast64_t qubit_t</div><div class="ttdoc">The type of a qubit.</div><div class="ttdef"><b>Definition</b> <a href="Types_8h_source.html#l00020">Types.h:20</a></div></div>
 </div><!-- fragment --></div><!-- contents -->
 </div><!-- doc-content -->

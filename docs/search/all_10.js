@@ -16,6 +16,8 @@ var searchData=
   ['program_13',['Program',['../structqasm_1_1Program.html',1,'qasm::Program'],['../structqasm_1_1Program.html#a78ffb22f4a7f0140a64d922814b04835',1,'qasm::Program::Program()']]],
   ['program_14',['program',['../classqasm_1_1QasmToCirc.html#a249177d105bfc53e2efbc5aec075d55e',1,'qasm::QasmToCirc']]],
   ['programtype_15',['ProgramType',['../namespaceqasm.html#a3f8c4f1b1100019055d0411fb7e99c3c',1,'qasm']]],
-  ['python_5fexample_16',['python_example',['../namespacepython__example.html',1,'']]],
-  ['python_5fexample_2epy_17',['python_example.py',['../python__example_8py.html',1,'']]]
+  ['python_5fexample_5f1_16',['python_example_1',['../namespacepython__example__1.html',1,'']]],
+  ['python_5fexample_5f1_2epy_17',['python_example_1.py',['../python__example__1_8py.html',1,'']]],
+  ['python_5fexample_5f2_18',['python_example_2',['../namespacepython__example__2.html',1,'']]],
+  ['python_5fexample_5f2_2epy_19',['python_example_2.py',['../python__example__2_8py.html',1,'']]]
 ];
