@@ -3,7 +3,7 @@
 #include "../Utils/Library.h"
 
 class MaestroLibrary : public Utils::Library {
-public:
+ public:
   MaestroLibrary(const MaestroLibrary &) = delete;
   MaestroLibrary &operator=(const MaestroLibrary &) = delete;
 
@@ -220,8 +220,7 @@ public:
 
 #ifdef __linux__
       const char *dlsym_error = dlerror();
-      if (dlsym_error)
-        std::cerr << ", error: " << dlsym_error;
+      if (dlsym_error) std::cerr << ", error: " << dlsym_error;
 #elif defined(_WIN32)
       const DWORD error = GetLastError();
       std::cerr << ", error code: " << error;
@@ -257,8 +256,9 @@ public:
       return fRemoveAllOptimizationSimulatorsAndAdd(simHandle, simType,
                                                     simExecType);
     else
-      throw std::runtime_error("MaestroLibrary: Unable to remove all "
-                               "optimization simulators and add a new one.");
+      throw std::runtime_error(
+          "MaestroLibrary: Unable to remove all "
+          "optimization simulators and add a new one.");
 
     return 0;
   }
@@ -369,8 +369,9 @@ public:
     if (maestro && sim && fGetNumberOfQubits)
       return fGetNumberOfQubits(sim);
     else
-      throw std::runtime_error("MaestroLibrary: Unable to get the number of "
-                               "qubits in the simulator.");
+      throw std::runtime_error(
+          "MaestroLibrary: Unable to get the number of "
+          "qubits in the simulator.");
     return 0;
   }
 
@@ -499,8 +500,9 @@ public:
     if (maestro && sim && fSaveStateToInternalDestructive)
       return fSaveStateToInternalDestructive(sim);
     else
-      throw std::runtime_error("MaestroLibrary: Unable to save the state to "
-                               "internal destructive storage.");
+      throw std::runtime_error(
+          "MaestroLibrary: Unable to save the state to "
+          "internal destructive storage.");
     return 0;
   }
 
@@ -508,8 +510,9 @@ public:
     if (maestro && sim && fRestoreInternalDestructiveSavedState)
       return fRestoreInternalDestructiveSavedState(sim);
     else
-      throw std::runtime_error("MaestroLibrary: Unable to restore the state "
-                               "from internal destructive storage.");
+      throw std::runtime_error(
+          "MaestroLibrary: Unable to restore the state "
+          "from internal destructive storage.");
     return 0;
   }
 
@@ -808,7 +811,7 @@ public:
     return 0;
   }
 
-private:
+ private:
   void *maestro = nullptr;
 
   void *(*fGetMaestroObject)();

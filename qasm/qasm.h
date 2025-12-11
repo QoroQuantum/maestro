@@ -19,7 +19,8 @@
 namespace qasm {
 
 struct error_handler_ {
-  template <typename, typename, typename> struct result {
+  template <typename, typename, typename>
+  struct result {
     typedef void type;
   };
 
@@ -31,7 +32,7 @@ struct error_handler_ {
 };
 
 phx::function<error_handler_> const error_handler = error_handler_();
-} // namespace qasm
+}  // namespace qasm
 
 BOOST_FUSION_ADAPT_STRUCT(qasm::Program,
                           (std::vector<std::string>, comments)(double, version)(
@@ -328,6 +329,6 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
   std::unordered_map<std::string, StatementType> definedGates;
 };
 
-} // namespace qasm
+}  // namespace qasm
 
-#endif // !_QASM_H_
+#endif  // !_QASM_H_

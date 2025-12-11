@@ -33,7 +33,7 @@ namespace TensorNetworks {
  * Tensor contractions using the Forest contraction method.
  */
 class ForestContractor : public BaseContractor {
-public:
+ public:
   /**
    * @brief Contract the tensor network.
    *
@@ -86,8 +86,7 @@ public:
           if (nextTensorId != TensorNode::NotConnected) {
             auto t1 = curTensorId;
             auto t2 = nextTensorId;
-            if (t1 > t2)
-              std::swap(t1, t2);
+            if (t1 > t2) std::swap(t1, t2);
 
             const auto p = std::make_pair(t1, t2);
             if (visitedPairs.find(p) != visitedPairs.end())
@@ -166,6 +165,6 @@ public:
   }
 };
 
-} // namespace TensorNetworks
+}  // namespace TensorNetworks
 
-#endif // __FOREST_CONTRACTOR_H_
+#endif  // __FOREST_CONTRACTOR_H_

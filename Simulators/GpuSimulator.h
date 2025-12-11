@@ -39,7 +39,7 @@ namespace Private {
  * @sa IState
  */
 class GpuSimulator : public GpuState {
-public:
+ public:
   GpuSimulator() = default;
   // allow no copy or assignment
   GpuSimulator(const GpuSimulator &) = delete;
@@ -493,9 +493,9 @@ public:
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCCX(qubit0, qubit1, qubit2);
     else if (GetSimulationType() == SimulationType::kMatrixProductState) {
-      const size_t q1 = qubit0; // control 1
-      const size_t q2 = qubit1; // control 2
-      const size_t q3 = qubit2; // target
+      const size_t q1 = qubit0;  // control 1
+      const size_t q2 = qubit1;  // control 2
+      const size_t q3 = qubit2;  // target
 
       // Sleator-Weinfurter decomposition
       mps->ApplyCSX(static_cast<unsigned int>(q2),
@@ -526,7 +526,7 @@ public:
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
     else if (GetSimulationType() == SimulationType::kMatrixProductState) {
-      const size_t q1 = ctrl_qubit; // control
+      const size_t q1 = ctrl_qubit;  // control
       const size_t q2 = qubit0;
       const size_t q3 = qubit1;
 
@@ -620,8 +620,8 @@ public:
   }
 };
 
-} // namespace Private
-} // namespace Simulators
+}  // namespace Private
+}  // namespace Simulators
 
 #endif
 #endif

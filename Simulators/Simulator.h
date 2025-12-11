@@ -30,7 +30,7 @@ namespace Simulators {
  * @sa QCSimSimulator
  */
 class ISimulator : public IState, std::enable_shared_from_this<ISimulator> {
-public:
+ public:
   /**
    * @brief Applies a phase shift gate to the qubit
    *
@@ -344,6 +344,6 @@ public:
    */
   std::shared_ptr<ISimulator> getptr() { return shared_from_this(); }
 };
-} // namespace Simulators
+}  // namespace Simulators
 
-#endif // !_SIMULATOR_INTERFACE_H_
+#endif  // !_SIMULATOR_INTERFACE_H_

@@ -37,7 +37,7 @@ enum class OptimiserType { kMonteCarlo, kGreedy, kOptimal, kClifford, kNone };
  */
 template <typename Time = Types::time_type>
 class IOptimiser : public std::enable_shared_from_this<IOptimiser<Time>> {
-public:
+ public:
   virtual ~IOptimiser() = default;
 
   virtual void SetNetworkAndCircuit(
@@ -54,11 +54,11 @@ public:
   virtual const std::unordered_map<Types::qubit_t, Types::qubit_t> &
   GetReverseQubitsMap() const = 0;
 
-  virtual Types::qubit_t
-  TranslateQubitToOriginal(Types::qubit_t qubit) const = 0;
+  virtual Types::qubit_t TranslateQubitToOriginal(
+      Types::qubit_t qubit) const = 0;
 
-  virtual Types::qubit_t
-  TranslateQubitFromOriginal(Types::qubit_t qubit) const = 0;
+  virtual Types::qubit_t TranslateQubitFromOriginal(
+      Types::qubit_t qubit) const = 0;
 
   virtual size_t TranslateStateToOriginal(size_t state) const = 0;
 
@@ -76,6 +76,6 @@ public:
   }
 };
 
-} // namespace Graphs
+}  // namespace Graphs
 
-#endif // _OPTIMISER_H_
+#endif  // _OPTIMISER_H_

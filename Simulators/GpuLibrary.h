@@ -26,7 +26,7 @@ namespace Simulators {
 
 // use it as a singleton
 class GpuLibrary : public Utils::Library {
-public:
+ public:
   GpuLibrary(const GpuLibrary &) = delete;
   GpuLibrary &operator=(const GpuLibrary &) = delete;
 
@@ -36,8 +36,7 @@ public:
   GpuLibrary() noexcept {}
 
   virtual ~GpuLibrary() {
-    if (LibraryHandle)
-      FreeLib();
+    if (LibraryHandle) FreeLib();
   }
 
   bool Init(const char *libName) noexcept override {
@@ -371,8 +370,7 @@ public:
     if (!func) {
       std::cerr << "GpuLibrary: Unable to load function, line #: " << line;
       const char *dlsym_error = dlerror();
-      if (dlsym_error)
-        std::cerr << ", error: " << dlsym_error;
+      if (dlsym_error) std::cerr << ", error: " << dlsym_error;
 
       std::cerr << std::endl;
     }
@@ -931,8 +929,9 @@ public:
     if (LibraryHandle)
       return fMPSCreate(obj, nrQubits) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to create mps with the "
-                               "specified number of qubits");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to create mps with the "
+          "specified number of qubits");
 
     return false;
   }
@@ -1094,8 +1093,8 @@ public:
     return nullptr;
   }
 
-  bool
-  MPSFreeMapForSample(std::unordered_map<std::vector<bool>, int64_t> *map) {
+  bool MPSFreeMapForSample(
+      std::unordered_map<std::vector<bool>, int64_t> *map) {
     if (LibraryHandle)
       return fMPSFreeMapForSample((void *)map) == 1;
     else
@@ -1426,7 +1425,7 @@ public:
     return false;
   }
 
-private:
+ private:
   void *LibraryHandle = nullptr;
 
   void *(*InitLib)();
@@ -1559,7 +1558,7 @@ private:
   int (*fMPSApplyCU)(void *, unsigned int, unsigned int, double, double, double,
                      double);
 };
-} // namespace Simulators
+}  // namespace Simulators
 
 #endif
 #endif

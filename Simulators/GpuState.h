@@ -36,7 +36,7 @@ namespace Private {
  * @sa GpuSimulator
  */
 class GpuState : public ISimulator {
-public:
+ public:
   /**
    * @brief Initializes the state.
    *
@@ -51,8 +51,9 @@ public:
         if (state) {
           const bool res = state->Create(nrQubits);
           if (!res)
-            throw std::runtime_error("GpuState::Initialize: Failed to create "
-                                     "and initialize the statevector state.");
+            throw std::runtime_error(
+                "GpuState::Initialize: Failed to create "
+                "and initialize the statevector state.");
         } else
           throw std::runtime_error(
               "GpuState::Initialize: Failed to create the statevector state.");
@@ -61,18 +62,19 @@ public:
         if (mps) {
           if (limitEntanglement && singularValueThreshold > 0.)
             mps->SetCutoff(singularValueThreshold);
-          if (limitSize && chi > 0)
-            mps->SetMaxExtent(chi);
+          if (limitSize && chi > 0) mps->SetMaxExtent(chi);
           const bool res = mps->Create(nrQubits);
           if (!res)
-            throw std::runtime_error("GpuState::Initialize: Failed to create "
-                                     "and initialize the MPS state.");
+            throw std::runtime_error(
+                "GpuState::Initialize: Failed to create "
+                "and initialize the MPS state.");
         } else
           throw std::runtime_error(
               "GpuState::Initialize: Failed to create the MPS state.");
       } else
-        throw std::runtime_error("GpuState::Initialize: Invalid simulation "
-                                 "type for initializing the state.");
+        throw std::runtime_error(
+            "GpuState::Initialize: Invalid simulation "
+            "type for initializing the state.");
     }
   }
 
@@ -89,15 +91,15 @@ public:
    */
   void InitializeState(size_t num_qubits,
                        std::vector<std::complex<double>> &amplitudes) override {
-    if (num_qubits == 0)
-      return;
+    if (num_qubits == 0) return;
     Clear();
     nrQubits = num_qubits;
     Initialize();
 
     if (simulationType != SimulationType::kStatevector)
-      throw std::runtime_error("GpuState::InitializeState: Invalid simulation "
-                               "type for initializing the state.");
+      throw std::runtime_error(
+          "GpuState::InitializeState: Invalid simulation "
+          "type for initializing the state.");
 
     if (nrQubits) {
       if (simulationType == SimulationType::kStatevector) {
@@ -123,15 +125,15 @@ public:
 #ifndef NO_QISKIT_AER
   void InitializeState(size_t num_qubits,
                        AER::Vector<std::complex<double>> &amplitudes) override {
-    if (num_qubits == 0)
-      return;
+    if (num_qubits == 0) return;
     Clear();
     nrQubits = num_qubits;
     Initialize();
 
     if (simulationType != SimulationType::kStatevector)
-      throw std::runtime_error("GpuState::InitializeState: Invalid simulation "
-                               "type for initializing the state.");
+      throw std::runtime_error(
+          "GpuState::InitializeState: Invalid simulation "
+          "type for initializing the state.");
 
     if (nrQubits) {
       if (simulationType == SimulationType::kStatevector) {
@@ -157,15 +159,15 @@ public:
    */
   void InitializeState(size_t num_qubits,
                        Eigen::VectorXcd &amplitudes) override {
-    if (num_qubits == 0)
-      return;
+    if (num_qubits == 0) return;
     Clear();
     nrQubits = num_qubits;
     Initialize();
 
     if (simulationType != SimulationType::kStatevector)
-      throw std::runtime_error("GpuState::InitializeState: Invalid simulation "
-                               "type for initializing the state.");
+      throw std::runtime_error(
+          "GpuState::InitializeState: Invalid simulation "
+          "type for initializing the state.");
 
     if (nrQubits) {
       if (simulationType == SimulationType::kStatevector) {
@@ -209,16 +211,14 @@ public:
       singularValueThreshold = std::stod(value);
       if (singularValueThreshold > 0.) {
         limitEntanglement = true;
-        if (mps)
-          mps->SetCutoff(singularValueThreshold);
+        if (mps) mps->SetCutoff(singularValueThreshold);
       } else
         limitEntanglement = false;
     } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
       chi = std::stoi(value);
       if (chi > 0) {
         limitSize = true;
-        if (mps)
-          mps->SetMaxExtent(chi);
+        if (mps) mps->SetMaxExtent(chi);
       } else
         limitSize = false;
     }
@@ -234,20 +234,19 @@ public:
   std::string GetConfiguration(const char *key) const override {
     if (std::string("method") == key) {
       switch (simulationType) {
-      case SimulationType::kStatevector:
-        return "statevector";
-      case SimulationType::kMatrixProductState:
-        return "matrix_product_state";
-      default:
-        return "other";
+        case SimulationType::kStatevector:
+          return "statevector";
+        case SimulationType::kMatrixProductState:
+          return "matrix_product_state";
+        default:
+          return "other";
       }
     } else if (std::string("matrix_product_state_truncation_threshold") ==
                key) {
       if (limitEntanglement && singularValueThreshold > 0.)
         return std::to_string(singularValueThreshold);
     } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
-      if (limitSize && limitSize > 0)
-        return std::to_string(chi);
+      if (limitSize && limitSize > 0) return std::to_string(chi);
     }
 
     return "";
@@ -310,15 +309,13 @@ public:
     if (simulationType == SimulationType::kStatevector) {
       // TODO: measure all qubits in one shot?
       for (size_t qubit : qubits) {
-        if (state->MeasureQubitCollapse(static_cast<int>(qubit)))
-          res |= mask;
+        if (state->MeasureQubitCollapse(static_cast<int>(qubit))) res |= mask;
         mask <<= 1;
       }
     } else if (simulationType == SimulationType::kMatrixProductState) {
       // TODO: measure all qubits in one shot?
       for (size_t qubit : qubits) {
-        if (mps->Measure(static_cast<unsigned int>(qubit)))
-          res |= mask;
+        if (mps->Measure(static_cast<unsigned int>(qubit))) res |= mask;
         mask <<= 1;
       }
     }
@@ -410,8 +407,7 @@ public:
    * @return A vector with the probabilities of all possible outcomes.
    */
   std::vector<double> AllProbabilities() override {
-    if (nrQubits == 0)
-      return {};
+    if (nrQubits == 0) return {};
     const size_t numStates = 1ULL << nrQubits;
     std::vector<double> result(numStates);
 
@@ -439,8 +435,8 @@ public:
    * @return A vector with the probabilities for the specified qubit
    * configurations.
    */
-  std::vector<double>
-  Probabilities(const Types::qubits_vector &qubits) override {
+  std::vector<double> Probabilities(
+      const Types::qubits_vector &qubits) override {
     std::vector<double> result(qubits.size());
 
     if (simulationType == SimulationType::kStatevector) {
@@ -469,11 +465,9 @@ public:
    * @return A map with the counts for the otcomes of measurements of the
    * specified qubits.
    */
-  std::unordered_map<Types::qubit_t, Types::qubit_t>
-  SampleCounts(const Types::qubits_vector &qubits,
-               size_t shots = 1000) override {
-    if (qubits.empty() || shots == 0)
-      return {};
+  std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
+      const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    if (qubits.empty() || shots == 0) return {};
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> result;
 
@@ -483,8 +477,7 @@ public:
       std::vector<long int> samples(shots);
       state->SampleAll(shots, samples.data());
 
-      for (auto outcome : samples)
-        ++result[outcome];
+      for (auto outcome : samples) ++result[outcome];
     } else if (simulationType == SimulationType::kMatrixProductState) {
       std::unordered_map<std::vector<bool>, int64_t> *map =
           mps->GetMapForSample();
@@ -498,8 +491,7 @@ public:
         Types::qubit_t outcome = 0;
         Types::qubit_t mask = 1ULL;
         for (Types::qubit_t q = 0; q < qubits.size(); ++q) {
-          if (meas[q])
-            outcome |= mask;
+          if (meas[q]) outcome |= mask;
           mask <<= 1;
         }
 
@@ -693,10 +685,9 @@ public:
       Types::qubits_vector fixedValues(nrQubits);
       std::iota(fixedValues.begin(), fixedValues.end(), 0);
       const auto res = SampleCounts(fixedValues, 1);
-      if (res.empty())
-        return 0;
+      if (res.empty()) return 0;
       return res.begin()
-          ->first; // return the first outcome, as it is the only one
+          ->first;  // return the first outcome, as it is the only one
     }
 
     throw std::runtime_error(
@@ -706,7 +697,7 @@ public:
     return 0;
   }
 
-protected:
+ protected:
   SimulationType simulationType =
       SimulationType::kStatevector; /**< The simulation type. */
 
@@ -717,12 +708,12 @@ protected:
   size_t nrQubits = 0; /**< The number of allocated qubits. */
   bool limitSize = false;
   bool limitEntanglement = false;
-  Eigen::Index chi = 10;              // if limitSize is true
-  double singularValueThreshold = 0.; // if limitEntanglement is true
+  Eigen::Index chi = 10;               // if limitSize is true
+  double singularValueThreshold = 0.;  // if limitEntanglement is true
 };
 
-} // namespace Private
-} // namespace Simulators
+}  // namespace Private
+}  // namespace Simulators
 
 #endif
 #endif

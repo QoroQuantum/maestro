@@ -29,7 +29,7 @@ namespace TensorNetworks {
  * Tensor contractions using a stochastic method.
  */
 class StochasticContractor : public BaseContractor {
-public:
+ public:
   /**
    * @brief Constructor.
    *
@@ -79,8 +79,7 @@ public:
 
       auto t1 = tensor1Id;
       auto t2 = tensor2Id;
-      if (t1 > t2)
-        std::swap(t1, t2);
+      if (t1 > t2) std::swap(t1, t2);
       if (visitedPairs.find(std::make_pair(t1, t2)) != visitedPairs.end()) {
         ++rejections;
         if (rejections >= MaxRejections) {
@@ -95,8 +94,7 @@ public:
       const auto tensor2 = tensors[tensor2Id];
 
       const auto keysKeysIt = keysKeys.find(tensor2Id);
-      if (keysKeysIt != keysKeys.end())
-        pos2 = keysKeysIt->second;
+      if (keysKeysIt != keysKeys.end()) pos2 = keysKeysIt->second;
 
       const Eigen::Index resultRank = GetResultRank(tensor1, tensor2);
       // const Eigen::Index Cost = resultRank - std::max(tensor1->GetRank(),
@@ -114,8 +112,7 @@ public:
         // also remove them from 'keys' vector
         // actually only one needs to be removed, the other one will be replaced
         // by the result tensor
-        if (pos1 == static_cast<Eigen::Index>(keys.size()) - 1)
-          pos1 = pos2;
+        if (pos1 == static_cast<Eigen::Index>(keys.size()) - 1) pos1 = pos2;
 
         keys[pos2] = keys.back();
         keysKeys[keys[pos2]] = pos2;
@@ -169,11 +166,11 @@ public:
     return cloned;
   }
 
-protected:
+ protected:
   std::mt19937 gen;
   size_t MaxRejections = 15;
 };
 
-} // namespace TensorNetworks
+}  // namespace TensorNetworks
 
-#endif // __STOCHASTIC_CONTRACTOR_H_
+#endif  // __STOCHASTIC_CONTRACTOR_H_

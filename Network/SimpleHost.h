@@ -42,7 +42,7 @@ namespace Network {
  */
 template <typename Time = Types::time_type>
 class SimpleHost : public IHost<Time> {
-public:
+ public:
   /**
    * @brief The constructor.
    *
@@ -59,7 +59,9 @@ public:
    */
   SimpleHost(size_t hostId, size_t startQubitId, size_t numQubits,
              size_t startClassicalBitId, size_t numClassicalBits)
-      : id(hostId), startQubitId(startQubitId), numQubits(numQubits),
+      : id(hostId),
+        startQubitId(startQubitId),
+        numQubits(numQubits),
         startClassicalBitId(startClassicalBitId),
         numClassicalBits(numClassicalBits) {}
 
@@ -89,8 +91,7 @@ public:
    * @return The number of network entangled qubits, in this case, one.
    */
   size_t GetNumNetworkEntangledQubits() const override {
-    if (std::numeric_limits<size_t>::max() == entangledQubitId)
-      return 0;
+    if (std::numeric_limits<size_t>::max() == entangledQubitId) return 0;
 
     return 1;
   }
@@ -148,8 +149,7 @@ public:
    * otherwise.
    */
   bool IsEntangledQubitOnHost(size_t qubitId) const override {
-    if (GetNumNetworkEntangledQubits() == 0)
-      return false;
+    if (GetNumNetworkEntangledQubits() == 0) return false;
 
     return qubitId == entangledQubitId;
   }
@@ -189,8 +189,7 @@ public:
    * host.
    */
   std::vector<size_t> GetNetworkEntangledQubitsIds() const override {
-    if (GetNumNetworkEntangledQubits() == 0)
-      return {};
+    if (GetNumNetworkEntangledQubits() == 0) return {};
 
     return {entangledQubitId};
   }
@@ -304,7 +303,7 @@ public:
     entangledQubitMeasurementBit = id;
   }
 
-private:
+ private:
   size_t id; /**< The host id */
 
   size_t startQubitId =
@@ -325,6 +324,6 @@ private:
                                              for entanglement between hosts */
 };
 
-} // namespace Network
+}  // namespace Network
 
-#endif // ! _SIMPLE_HOST_H_
+#endif  // ! _SIMPLE_HOST_H_

@@ -49,7 +49,7 @@ namespace Network {
  */
 template <typename Time = Types::time_type>
 class IHost : public std::enable_shared_from_this<IHost<Time>> {
-public:
+ public:
   /**
    * @brief The destructor.
    *
@@ -234,6 +234,6 @@ public:
   }
 };
 
-} // namespace Network
+}  // namespace Network
 
-#endif // !_HOST_H_
+#endif  // !_HOST_H_

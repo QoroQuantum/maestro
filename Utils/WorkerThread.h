@@ -30,8 +30,9 @@ namespace Utils {
  * @tparam Job The job class/type.
  * @sa ThreadsPool
  */
-template <class ThreadsPool, class Job> class WorkerThread {
-public:
+template <class ThreadsPool, class Job>
+class WorkerThread {
+ public:
   /**
    * @brief Construct a new Worker Thread object.
    *
@@ -59,8 +60,7 @@ public:
    * Starts the thread if not already started.
    */
   void Start() {
-    if (Thread.joinable())
-      return;
+    if (Thread.joinable()) return;
 
     {
       std::lock_guard lock(threadsPool->Mutex);
@@ -75,8 +75,7 @@ public:
    * Stops the thread if it is running, and waits for it to finish.
    */
   void Stop() {
-    if (!Thread.joinable())
-      return;
+    if (!Thread.joinable()) return;
 
     {
       std::lock_guard lock(threadsPool->Mutex);
@@ -100,11 +99,10 @@ public:
    * Joins the thread if it is joinable, waiting for it to finish.
    */
   inline void Join() {
-    if (Thread.joinable())
-      Thread.join();
+    if (Thread.joinable()) Thread.join();
   }
 
-private:
+ private:
   /**
    * @brief Check if the thread should terminate waiting.
    *
@@ -147,8 +145,7 @@ private:
         lock.lock();
       }
 
-      if (StopFlag)
-        break;
+      if (StopFlag) break;
       lock.unlock();
       threadsPool->NotifyFinish();
     }
@@ -161,6 +158,6 @@ private:
                   */
 };
 
-} // namespace Utils
+}  // namespace Utils
 
-#endif // !__WORKER_THREAD_H_
+#endif  // !__WORKER_THREAD_H_
