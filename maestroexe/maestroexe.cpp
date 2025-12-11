@@ -6,7 +6,9 @@
 #include <iostream>
 #include <fstream>
 
-static std::string _get_env_var(const char *envs) {
+#include "Simulator.hpp"
+
+static std::string _get_env_var(const char* envs) {
   std::string val;
 
 #ifdef _WIN32
@@ -22,7 +24,7 @@ static std::string _get_env_var(const char *envs) {
   buf[49] = 0;
   val = buf;
 #else
-  const char *env = getenv(envs);
+  const char* env = getenv(envs);
   if (env) val = env;
 #endif
 
@@ -43,7 +45,7 @@ static std::string GetConfigJson(int num_shots, int maxBondDim) {
   return config;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   try {
     std::ios_base::sync_with_stdio(false);
     std::cin.tie(nullptr);
@@ -79,7 +81,7 @@ int main(int argc, char **argv) {
 
       boost::program_options::store(parser.run(), vars);
       boost::program_options::notify(vars);
-    } catch (boost::program_options::error &e) {
+    } catch (boost::program_options::error& e) {
       std::cerr << "ERROR: " << e.what() << "\n";
       return 1;
     }
@@ -263,7 +265,7 @@ int main(int argc, char **argv) {
 
     std::string result;
     if (!qasmStr.empty()) {
-      char *res = simulator.SimpleExecute(qasmStr.c_str(), configStr.c_str());
+      char* res = simulator.SimpleExecute(qasmStr.c_str(), configStr.c_str());
       if (res) {
         result = res;
         simulator.FreeResult(res);
@@ -280,7 +282,7 @@ int main(int argc, char **argv) {
       }
     } else
       std::cout << result << std::endl;
-  } catch (std::exception &e) {
+  } catch (std::exception& e) {
     std::cerr << "ERROR: " << e.what() << std::endl;
     return 7;
   } catch (...) {
