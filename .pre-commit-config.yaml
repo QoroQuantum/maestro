@@ -1,5 +1,4 @@
-exclude: '^docs/'
-exclude: '^.github/'
+exclude: '^(docs/|.github/)'
 repos:
   # Standard hooks (Trailing whitespace, end of file, etc.)
   - repo: https://github.com/pre-commit/pre-commit-hooks
