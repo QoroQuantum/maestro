@@ -58,7 +58,7 @@ $(function() {
       <div id="nav-sync" class="sync"></div>
     </div>
   </div>
-  <div id="splitbar" style="-moz-user-select:none;"
+  <div id="splitbar" style="-moz-user-select:none;" 
        class="ui-resizable-handle">
   </div>
 </div>
@@ -93,16 +93,18 @@ $(function(){initNavTree('bindings_8cpp.html','',''); });
 </div><!--header-->
 <div class="contents">
 <div class="textblock"><code>#include &lt;nanobind/nanobind.h&gt;</code><br />
-<code>#include &lt;nanobind/stl/string.h&gt;</code><br />
-<code>#include &lt;nanobind/stl/vector.h&gt;</code><br />
 <code>#include &lt;nanobind/stl/shared_ptr.h&gt;</code><br />
+<code>#include &lt;nanobind/stl/string.h&gt;</code><br />
 <code>#include &lt;nanobind/stl/unique_ptr.h&gt;</code><br />
 <code>#include &lt;nanobind/stl/unordered_map.h&gt;</code><br />
-<code>#include &quot;<a class="el" href="Maestro_8h_source.html">Maestro.h</a>&quot;</code><br />
-<code>#include &quot;<a class="el" href="Simulator_8h_source.html">Simulators/Simulator.h</a>&quot;</code><br />
-<code>#include &quot;<a class="el" href="Simulators_2Factory_8h_source.html">Simulators/Factory.h</a>&quot;</code><br />
+<code>#include &lt;nanobind/stl/vector.h&gt;</code><br />
 <code>#include &quot;<a class="el" href="Circuit_8h_source.html">Circuit/Circuit.h</a>&quot;</code><br />
+<code>#include &quot;<a class="el" href="Interface_8h_source.html">Interface.h</a>&quot;</code><br />
+<code>#include &quot;<a class="el" href="Maestro_8h_source.html">Maestro.h</a>&quot;</code><br />
+<code>#include &quot;<a class="el" href="Simulators_2Factory_8h_source.html">Simulators/Factory.h</a>&quot;</code><br />
+<code>#include &quot;<a class="el" href="Simulator_8h_source.html">Simulators/Simulator.h</a>&quot;</code><br />
 <code>#include &quot;<a class="el" href="QasmCirc_8h_source.html">qasm/QasmCirc.h</a>&quot;</code><br />
+<code>#include &lt;boost/json.hpp&gt;</code><br />
 </div>
 <p><a href="bindings_8cpp_source.html">Go to the source code of this file.</a></p>
 <table class="memberdecls">
@@ -130,7 +132,7 @@ Functions</h2></td></tr>
       </table>
 </div><div class="memdoc">
 
-<p class="definition">Definition at line <a class="el" href="bindings_8cpp_source.html#l00016">16</a> of file <a class="el" href="bindings_8cpp_source.html">bindings.cpp</a>.</p>
+<p class="definition">Definition at line <a class="el" href="bindings_8cpp_source.html#l00019">19</a> of file <a class="el" href="bindings_8cpp_source.html">bindings.cpp</a>.</p>
 
 </div>
 </div>

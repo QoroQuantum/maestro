@@ -58,7 +58,7 @@ $(function() {
       <div id="nav-sync" class="sync"></div>
     </div>
   </div>
-  <div id="splitbar" style="-moz-user-select:none;"
+  <div id="splitbar" style="-moz-user-select:none;" 
        class="ui-resizable-handle">
   </div>
 </div>
@@ -101,7 +101,7 @@ $(function(){initNavTree('Library_8h_source.html','',''); });
 <div class="line"><a id="l00016" name="l00016"></a><span class="lineno">   16</span> </div>
 <div class="line"><a id="l00017" name="l00017"></a><span class="lineno">   17</span><span class="preprocessor">#include &lt;iostream&gt;</span></div>
 <div class="line"><a id="l00018" name="l00018"></a><span class="lineno">   18</span> </div>
-<div class="line"><a id="l00019" name="l00019"></a><span class="lineno">   19</span><span class="preprocessor">#ifdef __linux__</span></div>
+<div class="line"><a id="l00019" name="l00019"></a><span class="lineno">   19</span><span class="preprocessor">#if defined(__linux__) || defined(__APPLE__)</span></div>
 <div class="line"><a id="l00020" name="l00020"></a><span class="lineno">   20</span> </div>
 <div class="line"><a id="l00021" name="l00021"></a><span class="lineno">   21</span><span class="preprocessor">#include &lt;dlfcn.h&gt;</span></div>
 <div class="line"><a id="l00022" name="l00022"></a><span class="lineno">   22</span> </div>
@@ -115,7 +115,7 @@ $(function(){initNavTree('Library_8h_source.html','',''); });
 <div class="line"><a id="l00030" name="l00030"></a><span class="lineno">   30</span> </div>
 <div class="foldopen" id="foldopen00031" data-start="{" data-end="};">
 <div class="line"><a id="l00031" name="l00031"></a><span class="lineno"><a class="line" href="classUtils_1_1Library.html">   31</a></span><span class="keyword">class </span><a class="code hl_function" href="classUtils_1_1Library.html#a4062a2d212ee816b37d4d2514598bcba">Library</a> {</div>
-<div class="line"><a id="l00032" name="l00032"></a><span class="lineno">   32</span><span class="keyword">public</span>:</div>
+<div class="line"><a id="l00032" name="l00032"></a><span class="lineno">   32</span> <span class="keyword">public</span>:</div>
 <div class="line"><a id="l00033" name="l00033"></a><span class="lineno"><a class="line" href="classUtils_1_1Library.html#a4062a2d212ee816b37d4d2514598bcba">   33</a></span>  <a class="code hl_function" href="classUtils_1_1Library.html#a4062a2d212ee816b37d4d2514598bcba">Library</a>(<span class="keyword">const</span> <a class="code hl_function" href="classUtils_1_1Library.html#a4062a2d212ee816b37d4d2514598bcba">Library</a> &amp;) = <span class="keyword">delete</span>;</div>
 <div class="line"><a id="l00034" name="l00034"></a><span class="lineno"><a class="line" href="classUtils_1_1Library.html#ac763e35e9f7db7ac709dcf798ad7bff4">   34</a></span>  <a class="code hl_function" href="classUtils_1_1Library.html#a4062a2d212ee816b37d4d2514598bcba">Library</a> &amp;<a class="code hl_function" href="classUtils_1_1Library.html#ac763e35e9f7db7ac709dcf798ad7bff4">operator=</a>(<span class="keyword">const</span> <a class="code hl_function" href="classUtils_1_1Library.html#a4062a2d212ee816b37d4d2514598bcba">Library</a> &amp;) = <span class="keyword">delete</span>;</div>
 <div class="line"><a id="l00035" name="l00035"></a><span class="lineno"><a class="line" href="classUtils_1_1Library.html#a268449cfa1a30bfa61fe653aa46ea0fd">   35</a></span>  <a class="code hl_function" href="classUtils_1_1Library.html#a268449cfa1a30bfa61fe653aa46ea0fd">Library</a>(<a class="code hl_function" href="classUtils_1_1Library.html#a4062a2d212ee816b37d4d2514598bcba">Library</a> &amp;&amp;) = <span class="keywordflow">default</span>;</div>
@@ -126,7 +126,7 @@ $(function(){initNavTree('Library_8h_source.html','',''); });
 <div class="foldopen" id="foldopen00040" data-start="{" data-end="}">
 <div class="line"><a id="l00040" name="l00040"></a><span class="lineno"><a class="line" href="classUtils_1_1Library.html#a8999c366b4494bc031af209974f841d2">   40</a></span>  <span class="keyword">virtual</span> <a class="code hl_function" href="classUtils_1_1Library.html#a8999c366b4494bc031af209974f841d2">~Library</a>() {</div>
 <div class="line"><a id="l00041" name="l00041"></a><span class="lineno">   41</span>    <span class="keywordflow">if</span> (handle)</div>
-<div class="line"><a id="l00042" name="l00042"></a><span class="lineno">   42</span><span class="preprocessor">#ifdef __linux__</span></div>
+<div class="line"><a id="l00042" name="l00042"></a><span class="lineno">   42</span><span class="preprocessor">#if defined(__linux__) || defined(__APPLE__)</span></div>
 <div class="line"><a id="l00043" name="l00043"></a><span class="lineno">   43</span>      dlclose(handle);</div>
 <div class="line"><a id="l00044" name="l00044"></a><span class="lineno">   44</span><span class="preprocessor">#elif defined(_WIN32)</span></div>
 <div class="line"><a id="l00045" name="l00045"></a><span class="lineno">   45</span>      FreeLibrary(handle);</div>
@@ -136,7 +136,7 @@ $(function(){initNavTree('Library_8h_source.html','',''); });
 <div class="line"><a id="l00048" name="l00048"></a><span class="lineno">   48</span> </div>
 <div class="foldopen" id="foldopen00049" data-start="{" data-end="}">
 <div class="line"><a id="l00049" name="l00049"></a><span class="lineno"><a class="line" href="classUtils_1_1Library.html#ab2169c752f43beabb87731ec4d78d578">   49</a></span>  <span class="keyword">virtual</span> <span class="keywordtype">bool</span> <a class="code hl_function" href="classUtils_1_1Library.html#ab2169c752f43beabb87731ec4d78d578">Init</a>(<span class="keyword">const</span> <span class="keywordtype">char</span> *libName) <span class="keyword">noexcept</span> {</div>
-<div class="line"><a id="l00050" name="l00050"></a><span class="lineno">   50</span><span class="preprocessor">#ifdef __linux__</span></div>
+<div class="line"><a id="l00050" name="l00050"></a><span class="lineno">   50</span><span class="preprocessor">#if defined(__linux__) || defined(__APPLE__)</span></div>
 <div class="line"><a id="l00051" name="l00051"></a><span class="lineno">   51</span>    handle = dlopen(libName, RTLD_NOW);</div>
 <div class="line"><a id="l00052" name="l00052"></a><span class="lineno">   52</span> </div>
 <div class="line"><a id="l00053" name="l00053"></a><span class="lineno">   53</span>    <span class="keywordflow">if</span> (handle == <span class="keyword">nullptr</span>) {</div>
@@ -164,7 +164,7 @@ $(function(){initNavTree('Library_8h_source.html','',''); });
 <div class="line"><a id="l00074" name="l00074"></a><span class="lineno">   74</span> </div>
 <div class="foldopen" id="foldopen00075" data-start="{" data-end="}">
 <div class="line"><a id="l00075" name="l00075"></a><span class="lineno"><a class="line" href="classUtils_1_1Library.html#a186b4c8b06b387ca3e4596073e1397db">   75</a></span>  <span class="keywordtype">void</span> *<a class="code hl_function" href="classUtils_1_1Library.html#a186b4c8b06b387ca3e4596073e1397db">GetFunction</a>(<span class="keyword">const</span> <span class="keywordtype">char</span> *funcName) <span class="keyword">noexcept</span> {</div>
-<div class="line"><a id="l00076" name="l00076"></a><span class="lineno">   76</span><span class="preprocessor">#ifdef __linux__</span></div>
+<div class="line"><a id="l00076" name="l00076"></a><span class="lineno">   76</span><span class="preprocessor">#if defined(__linux__) || defined(__APPLE__)</span></div>
 <div class="line"><a id="l00077" name="l00077"></a><span class="lineno">   77</span>    <span class="keywordflow">return</span> dlsym(handle, funcName);</div>
 <div class="line"><a id="l00078" name="l00078"></a><span class="lineno">   78</span><span class="preprocessor">#elif defined(_WIN32)</span></div>
 <div class="line"><a id="l00079" name="l00079"></a><span class="lineno">   79</span>    <span class="keywordflow">return</span> GetProcAddress(handle, funcName);</div>
@@ -178,8 +178,8 @@ $(function(){initNavTree('Library_8h_source.html','',''); });
 <div class="line"><a id="l00086" name="l00086"></a><span class="lineno">   86</span> </div>
 <div class="line"><a id="l00087" name="l00087"></a><span class="lineno"><a class="line" href="classUtils_1_1Library.html#a869dfded9b44659c0b5bdcf2cea5b797">   87</a></span>  <span class="keywordtype">void</span> <a class="code hl_function" href="classUtils_1_1Library.html#a869dfded9b44659c0b5bdcf2cea5b797">SetMute</a>(<span class="keywordtype">bool</span> m) <span class="keyword">noexcept</span> { mute = m; }</div>
 <div class="line"><a id="l00088" name="l00088"></a><span class="lineno">   88</span> </div>
-<div class="line"><a id="l00089" name="l00089"></a><span class="lineno">   89</span><span class="keyword">private</span>:</div>
-<div class="line"><a id="l00090" name="l00090"></a><span class="lineno">   90</span><span class="preprocessor">#ifdef __linux__</span></div>
+<div class="line"><a id="l00089" name="l00089"></a><span class="lineno">   89</span> <span class="keyword">private</span>:</div>
+<div class="line"><a id="l00090" name="l00090"></a><span class="lineno">   90</span><span class="preprocessor">#if defined(__linux__) || defined(__APPLE__)</span></div>
 <div class="line"><a id="l00091" name="l00091"></a><span class="lineno">   91</span>  <span class="keywordtype">void</span> *handle = <span class="keyword">nullptr</span>;</div>
 <div class="line"><a id="l00092" name="l00092"></a><span class="lineno">   92</span><span class="preprocessor">#elif defined(_WIN32)</span></div>
 <div class="line"><a id="l00093" name="l00093"></a><span class="lineno">   93</span>  HINSTANCE handle = <span class="keyword">nullptr</span>;</div>
@@ -188,7 +188,7 @@ $(function(){initNavTree('Library_8h_source.html','',''); });
 <div class="line"><a id="l00096" name="l00096"></a><span class="lineno">   96</span>};</div>
 </div>
 <div class="line"><a id="l00097" name="l00097"></a><span class="lineno">   97</span> </div>
-<div class="line"><a id="l00098" name="l00098"></a><span class="lineno">   98</span>} <span class="comment">// namespace Utils</span></div>
+<div class="line"><a id="l00098" name="l00098"></a><span class="lineno">   98</span>}  <span class="comment">// namespace Utils</span></div>
 <div class="line"><a id="l00099" name="l00099"></a><span class="lineno">   99</span> </div>
 <div class="line"><a id="l00100" name="l00100"></a><span class="lineno">  100</span><span class="preprocessor">#endif</span></div>
 <div class="ttc" id="aclassUtils_1_1Library_html_a186b4c8b06b387ca3e4596073e1397db"><div class="ttname"><a href="classUtils_1_1Library.html#a186b4c8b06b387ca3e4596073e1397db">Utils::Library::GetFunction</a></div><div class="ttdeci">void * GetFunction(const char *funcName) noexcept</div><div class="ttdef"><b>Definition</b> <a href="#l00075">Library.h:75</a></div></div>
