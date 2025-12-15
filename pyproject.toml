@@ -1,0 +1,59 @@
+[build-system]
+requires = ["scikit-build-core", "nanobind"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "qoro-maestro"
+version = "0.1.0"
+description = "Python bindings for Maestro - A unified interface for quantum circuit simulation"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "GPL-3.0"}
+authors = [
+  { name = "Qoro Quantum", email = "team@qoroquantum.de" },
+]
+classifiers = [
+  "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: C++",
+  "Topic :: Scientific/Engineering :: Physics",
+  "Topic :: Scientific/Engineering :: Quantum Computing",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
+]
+keywords = ["quantum", "simulation", "circuit", "qiskit", "quantum-computing"]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/QoroQuantum/maestro"
+Documentation = "https://github.com/QoroQuantum/maestro"
+Repository = "https://github.com/QoroQuantum/maestro"
+Issues = "https://github.com/QoroQuantum/maestro/issues"
+
+[project.optional-dependencies]
+aer = []  # Optional: install if you want Qiskit Aer support
+
+[tool.scikit-build]
+cmake.version = ">=3.15"
+cmake.build-type = "Release"
+
+# Use rpath to handle library paths automatically
+cmake.args = [
+    "-DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON",
+    "-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON",
+]
+
+[tool.scikit-build.cmake.define]
+EIGEN5_INCLUDE_DIR = {env = "EIGEN5_INCLUDE_DIR"}
+QCSIM_INCLUDE_DIR = {env = "QCSIM_INCLUDE_DIR"}
+JSON_INCLUDE_DIR = {env = "JSON_INCLUDE_DIR"}
+AER_INCLUDE_DIR = {env = "AER_INCLUDE_DIR"}
+
+# Note: Users can override dependency paths via environment variables
+# (EIGEN5_INCLUDE_DIR, BOOST_ROOT, QCSIM_INCLUDE_DIR, etc.)
+# If not set, CMakeLists.txt will auto-fetch dependencies

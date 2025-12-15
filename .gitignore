@@ -63,3 +63,14 @@ _deps/
 *.pdb
 
 venv/*
+
+docs/
+
+# Python packaging
+dist/
+*.egg-info/
+*.egg
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo

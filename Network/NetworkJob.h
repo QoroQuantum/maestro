@@ -78,9 +78,13 @@ public:
     const std::vector<bool> executed = std::move(executedGates);
 
     if (optimiseMultipleShots && hasMeasurementsOnlyAtEnd) {
-      measurementsOp = dcirc->GetLastMeasurements(
-          executed, optSim->GetType() == Simulators::SimulatorType::kQiskitAer);
-
+      bool isQiskitAer = false;
+      #ifndef NO_QISKIT_AER
+          if (optSim->GetType() == Simulators::SimulatorType::kQiskitAer) {
+              isQiskitAer = true;
+          }
+      #endif
+      measurementsOp = dcirc->GetLastMeasurements(executed, isQiskitAer);
       const auto &qbits = measurementsOp->GetQubits();
       if (qbits.empty()) {
         auto bits = state.GetAllBits();
@@ -218,9 +222,13 @@ public:
     const std::vector<bool> executed = std::move(executedGates);
 
     if (optimiseMultipleShots && hasMeasurementsOnlyAtEnd) {
-      measurementsOp = dcirc->GetLastMeasurements(
-          executed, optSim->GetType() == Simulators::SimulatorType::kQiskitAer);
-
+      bool isQiskitAer = false;
+      #ifndef NO_QISKIT_AER
+          if (optSim->GetType() == Simulators::SimulatorType::kQiskitAer) {
+              isQiskitAer = true;
+          }
+      #endif
+      measurementsOp = dcirc->GetLastMeasurements(executed, isQiskitAer);
       const auto &qbits = measurementsOp->GetQubits();
       if (qbits.empty()) {
         auto bits = state.GetAllBits();
