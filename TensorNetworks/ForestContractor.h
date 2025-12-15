@@ -34,6 +34,7 @@ namespace TensorNetworks {
  */
 class ForestContractor : public BaseContractor {
 public:
+  virtual ~ForestContractor() = default;
   /**
    * @brief Contract the tensor network.
    *
