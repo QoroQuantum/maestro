@@ -51,13 +51,14 @@ int main() {
 
   // 3. Define a Circuit
   // We'll use a simple Bell State circuit in OpenQASM 2.0 format.
-  const char *qasmCircuit = "OPENQASM 2.0;\n"
-                            "include \"qelib1.inc\";\n"
-                            "qreg q[2];\n"
-                            "creg c[2];\n"
-                            "h q[0];\n"
-                            "cx q[0], q[1];\n"
-                            "measure q -> c;\n";
+  const char *qasmCircuit =
+      "OPENQASM 2.0;\n"
+      "include \"qelib1.inc\";\n"
+      "qreg q[2];\n"
+      "creg c[2];\n"
+      "h q[0];\n"
+      "cx q[0], q[1];\n"
+      "measure q -> c;\n";
 
   // 4. Configure Execution
   // Configuration is passed as a JSON string.
