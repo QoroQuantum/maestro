@@ -30,7 +30,7 @@ namespace TensorNetworks {
  * Tensor contractions using the Vertical Variable Elimination method.
  */
 class VerticalContractor : public BaseContractor {
-public:
+ public:
   /**
    * @brief Contract the tensor network.
    *
@@ -80,8 +80,7 @@ public:
             if (tensor2Id != TensorNode::NotConnected) {
               auto t1 = tensor1Id;
               auto t2 = tensor2Id;
-              if (t1 > t2)
-                std::swap(t1, t2);
+              if (t1 > t2) std::swap(t1, t2);
               if (visitedPairs.find(std::make_pair(t1, t2)) !=
                   visitedPairs.end())
                 continue;
@@ -147,6 +146,6 @@ public:
   }
 };
 
-} // namespace TensorNetworks
+}  // namespace TensorNetworks
 
-#endif // __VERTICAL_CONTRACTOR_H_
+#endif  // __VERTICAL_CONTRACTOR_H_

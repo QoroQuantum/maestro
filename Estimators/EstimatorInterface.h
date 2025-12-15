@@ -32,16 +32,15 @@ namespace Estimators {
  * @sa SimulatorsEstimatorInterface
  */
 class EstimatorInterface {
-public:
+ public:
   virtual ~EstimatorInterface() = default;
 
   virtual double EstimateTime(Simulators::SimulatorType type,
                               Simulators::SimulationType method) const = 0;
-  virtual double
-  EstimateExpectationValuesTime(Simulators::SimulatorType type,
-                                Simulators::SimulationType method,
-                                const std::vector<std::string> &paulis) = 0;
+  virtual double EstimateExpectationValuesTime(
+      Simulators::SimulatorType type, Simulators::SimulationType method,
+      const std::vector<std::string> &paulis) = 0;
 };
-} // namespace Estimators
+}  // namespace Estimators
 
-#endif // !__ESTIMATOR_INTERFACE_H_
+#endif  // !__ESTIMATOR_INTERFACE_H_

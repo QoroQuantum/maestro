@@ -34,7 +34,7 @@ namespace Circuits {
  */
 template <typename Time = Types::time_type>
 class MeasurementOperation : public IOperation<Time> {
-public:
+ public:
   /**
    * @brief Constructor.
    *
@@ -123,8 +123,7 @@ public:
    */
   void Execute(const std::shared_ptr<Simulators::ISimulator> &sim,
                OperationState &state) const override {
-    if (qubits.empty())
-      return;
+    if (qubits.empty()) return;
 
     size_t res = sim->Measure(qubits);
 
@@ -147,8 +146,7 @@ public:
    */
   void Sample(const std::shared_ptr<Simulators::ISimulator> &sim,
               OperationState &state) const {
-    if (qubits.empty())
-      return;
+    if (qubits.empty()) return;
 
     size_t res = sim->SampleCounts(qubits, 1).begin()->first;
 
@@ -159,8 +157,7 @@ public:
   }
 
   void SetStateFromSample(size_t measurements, OperationState &state) const {
-    if (qubits.empty())
-      return;
+    if (qubits.empty()) return;
 
     for (size_t index = 0; index < qubits.size(); ++index) {
       const auto cbit = bits[index];
@@ -171,8 +168,7 @@ public:
 
   void SetStateFromAllMeasurements(size_t allMeasurements,
                                    OperationState &state) const {
-    if (qubits.empty())
-      return;
+    if (qubits.empty()) return;
 
     for (size_t index = 0; index < qubits.size(); ++index) {
       const auto q = qubits[index];
@@ -225,9 +221,9 @@ public:
    * @param bitsMap The map of classical bits to remap.
    * @return A shared pointer to the remapped object.
    */
-  std::shared_ptr<IOperation<Time>>
-  Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
-        const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
+  std::shared_ptr<IOperation<Time>> Remap(
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
       const override {
     auto newOp = this->Clone();
 
@@ -271,8 +267,7 @@ public:
    * @param qubit The qubit to measure.
    */
   void SetQubit(size_t index, Types::qubit_t qubit) {
-    if (index < qubits.size())
-      qubits[index] = qubit;
+    if (index < qubits.size()) qubits[index] = qubit;
   }
 
   /**
@@ -283,16 +278,15 @@ public:
    * @param bit The classical bit index to set.
    */
   void SetBit(size_t index, Types::qubit_t bit) {
-    if (index < bits.size())
-      bits[index] = bit;
+    if (index < bits.size()) bits[index] = bit;
   }
 
-private:
+ private:
   Types::qubits_vector qubits; /**< The qubits to be measured */
   std::vector<size_t>
       bits; /**< The classical bits where the measurement results are stored */
 };
 
-} // namespace Circuits
+}  // namespace Circuits
 
-#endif // !_MEASUREMENTS_H_
+#endif  // !_MEASUREMENTS_H_

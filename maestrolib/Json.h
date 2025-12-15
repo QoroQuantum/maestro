@@ -24,8 +24,9 @@
 
 namespace Json {
 
-template <typename Time = Types::time_type> class JsonParserMaestro {
-public:
+template <typename Time = Types::time_type>
+class JsonParserMaestro {
+ public:
   /**
    * @brief Parses a string containing json.
    *
@@ -54,15 +55,12 @@ public:
       const auto jsonObject = circuitJson.as_object();
       if (jsonObject.contains("qasm")) {
         const auto qasmValue = jsonObject.at("qasm");
-        if (qasmValue.is_string())
-          circuitStr = qasmValue.as_string().c_str();
+        if (qasmValue.is_string()) circuitStr = qasmValue.as_string().c_str();
       } else if (jsonObject.contains("QASM")) {
         const auto qasmValue = jsonObject.at("QASM");
-        if (qasmValue.is_string())
-          circuitStr = qasmValue.as_string().c_str();
+        if (qasmValue.is_string()) circuitStr = qasmValue.as_string().c_str();
       }
-      if (circuitStr.empty())
-        return nullptr;
+      if (circuitStr.empty()) return nullptr;
 
       // QASM 2.0 format
       qasm::QasmToCirc<> parser;
@@ -99,7 +97,7 @@ public:
     return "";
   }
 
-private:
+ private:
   /**
    * @brief Parses a circuit array
    *
@@ -109,8 +107,8 @@ private:
    * @return A shared pointer to the parsed circuit.
    * @sa Circuits::Circuit
    */
-  std::shared_ptr<Circuits::Circuit<Time>>
-  ParseCircuitArray(const boost::json::array &circuitArray) const {
+  std::shared_ptr<Circuits::Circuit<Time>> ParseCircuitArray(
+      const boost::json::array &circuitArray) const {
     const auto circuit = std::make_shared<Circuits::Circuit<Time>>();
 
     for (auto operationJson : circuitArray) {
@@ -143,9 +141,8 @@ private:
    * @return A shared pointer to the parsed operation.
    * @sa Circuits::IOperation
    */
-  std::shared_ptr<Circuits::IOperation<Time>>
-  ParseOperation(const boost::json::string &type,
-                 boost::json::object &obj) const {
+  std::shared_ptr<Circuits::IOperation<Time>> ParseOperation(
+      const boost::json::string &type, boost::json::object &obj) const {
     std::shared_ptr<Circuits::IOperation<Time>> operation;
 
     if (type == measurementString)
@@ -165,8 +162,8 @@ private:
    * @return A shared pointer to the parsed measurement.
    * @sa Circuits::MeasurementOperation
    */
-  std::shared_ptr<Circuits::MeasurementOperation<Time>>
-  ParseMeasurement(boost::json::object &obj) const {
+  std::shared_ptr<Circuits::MeasurementOperation<Time>> ParseMeasurement(
+      boost::json::object &obj) const {
     const auto qubits = ParseQubits(obj);
     auto cbits = ParseCbits(obj);
     if (cbits.empty())
@@ -196,8 +193,8 @@ private:
    * @return A shared pointer to the parsed gate.
    * @sa Circuits::IGateOperation
    */
-  std::shared_ptr<Circuits::IOperation<Time>>
-  ParseGate(const boost::json::string &type, boost::json::object &obj) const {
+  std::shared_ptr<Circuits::IOperation<Time>> ParseGate(
+      const boost::json::string &type, boost::json::object &obj) const {
     const std::string gateName = type.c_str();
 
     const auto qubits = ParseQubits(obj);
@@ -252,11 +249,13 @@ private:
         else if (arr[0].is_int64())
           cbit = static_cast<unsigned long long int>(arr[0].as_int64());
         else
-          throw std::runtime_error("Conditional register must be an integer or "
-                                   "an array of one integer.");
+          throw std::runtime_error(
+              "Conditional register must be an integer or "
+              "an array of one integer.");
       } else
-        throw std::runtime_error("Conditional register must be an integer or "
-                                 "an array of one integer.");
+        throw std::runtime_error(
+            "Conditional register must be an integer or "
+            "an array of one integer.");
 
       return Circuits::CircuitFactory<Time>::CreateSimpleConditionalGate(
           operation, cbit);
@@ -304,8 +303,8 @@ private:
    * @param obj The json object to parse.
    * @return A vector containing the parsed qubits.
    */
-  std::vector<Types::qubit_t>
-  ParseQubits(const boost::json::object &obj) const {
+  std::vector<Types::qubit_t> ParseQubits(
+      const boost::json::object &obj) const {
     std::vector<Types::qubit_t> qubits;
 
     if (!obj.contains(qubitsString))
@@ -411,12 +410,10 @@ private:
     std::string line;
     while (std::getline(is, line)) {
       p.write(line, ec);
-      if (ec)
-        return nullptr;
+      if (ec) return nullptr;
     }
     p.finish(ec);
-    if (ec)
-      return nullptr;
+    if (ec) return nullptr;
 
     return p.release();
   }
@@ -467,6 +464,6 @@ private:
                                                      and gate types */
 };
 
-} // namespace Json
+}  // namespace Json
 
-#endif // !_JSON_H_
+#endif  // !_JSON_H_

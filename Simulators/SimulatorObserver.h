@@ -34,7 +34,7 @@ namespace Simulators {
 // no need to derive the Impl class from the interface, just implement 'Update')
 class ISimulatorObserver
     : public std::enable_shared_from_this<ISimulatorObserver> {
-public:
+ public:
   /**
    * @brief Virtual destructor.
    *
@@ -73,8 +73,9 @@ public:
  *
  * @tparam Impl The implementation of the observer.
  */
-template <class Impl> class SimulatorObserverProxy : public ISimulatorObserver {
-public:
+template <class Impl>
+class SimulatorObserverProxy : public ISimulatorObserver {
+ public:
   /**
    * @brief Constructor.
    *
@@ -92,15 +93,14 @@ public:
    * @param qubits The qubits that have been changed.
    */
   void Update(const Types::qubits_vector &qubits) override {
-    if (impl)
-      impl->Update(qubits);
+    if (impl) impl->Update(qubits);
   }
 
-private:
+ private:
   std::shared_ptr<Impl>
       impl; /**< A shared pointer to the implementation of the observer */
 };
 
-} // namespace Simulators
+}  // namespace Simulators
 
-#endif // _SIMULATOR_OBSERVER_H_
+#endif  // _SIMULATOR_OBSERVER_H_

@@ -33,7 +33,7 @@ namespace Circuits {
  * of a measurement).
  */
 class ICondition : public std::enable_shared_from_this<ICondition> {
-public:
+ public:
   /**
    * @brief Construct a new ICondition object.
    *
@@ -94,8 +94,8 @@ public:
    * @param bitsMap The map of classical bits to remap.
    * @return A shared pointer to the remapped object.
    */
-  virtual std::shared_ptr<ICondition>
-  Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
+  virtual std::shared_ptr<ICondition> Remap(
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
       const = 0;
 
   /**
@@ -109,7 +109,7 @@ public:
     return std::enable_shared_from_this<ICondition>::shared_from_this();
   }
 
-private:
+ private:
   std::vector<size_t>
       indices; /**< The indices of the bits used in the condition. */
 };
@@ -124,7 +124,7 @@ private:
  * @sa ICondition
  */
 class EqualCondition : public ICondition {
-public:
+ public:
   /**
    * @brief Construct a new EqualCondition object.
    *
@@ -182,16 +182,15 @@ public:
    * @param bitsMap The map of classical bits to remap.
    * @return A shared pointer to the remapped object.
    */
-  std::shared_ptr<ICondition>
-  Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
+  std::shared_ptr<ICondition> Remap(
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
       const override {
     auto newCond = this->Clone();
 
     auto newBits = newCond->GetBitsIndices();
     for (size_t i = 0; i < newBits.size(); ++i) {
       const auto bitit = bitsMap.find(newBits[i]);
-      if (bitit != bitsMap.end())
-        newBits[i] = bitit->second;
+      if (bitit != bitsMap.end()) newBits[i] = bitit->second;
       // else throw std::invalid_argument("Conditional operation: bit not found
       // in the map, couldn't remap.");
     }
@@ -200,7 +199,7 @@ public:
     return newCond;
   }
 
-private:
+ private:
   std::vector<bool> bits; /**< The values to compare the classical bits to. */
 };
 
@@ -216,7 +215,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class IConditionalOperation : public IOperation<Time> {
-public:
+ public:
   /**
    * @brief Construct a new IConditionalOperation object.
    *
@@ -247,11 +246,9 @@ public:
    */
   void Execute(const std::shared_ptr<Simulators::ISimulator> &sim,
                OperationState &state) const override {
-    if (!condition || !operation)
-      return;
+    if (!condition || !operation) return;
 
-    if (condition->IsConditionMet(state))
-      operation->Execute(sim, state);
+    if (condition->IsConditionMet(state)) operation->Execute(sim, state);
   }
 
   /**
@@ -261,8 +258,7 @@ public:
    * @param op The assigned operation.
    */
   void SetOperation(const std::shared_ptr<IOperation<Time>> &op) {
-    if (!op)
-      return;
+    if (!op) return;
     // the reason why 'recursive' conditional gates are not allowed (as in
     // conditional-conditional-...-gate) is because of the distribution for the
     // network execution would work fine as long as it's 'local'
@@ -313,8 +309,7 @@ public:
    * @return The bits involved.
    */
   std::vector<size_t> AffectedBits() const override {
-    if (!condition)
-      return {};
+    if (!condition) return {};
 
     return condition->GetBitsIndices();
   }
@@ -326,8 +321,7 @@ public:
    * @return The qubits affected by the operation.
    */
   Types::qubits_vector AffectedQubits() const override {
-    if (!operation)
-      return {};
+    if (!operation) return {};
 
     return operation->AffectedQubits();
   }
@@ -342,9 +336,9 @@ public:
    * @param bitsMap The map of classical bits to remap.
    * @return A shared pointer to the remapped object.
    */
-  std::shared_ptr<IOperation<Time>>
-  Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
-        const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
+  std::shared_ptr<IOperation<Time>> Remap(
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
       const override {
     const auto condOp =
         std::static_pointer_cast<IConditionalOperation<Time>>(this->Clone());
@@ -365,13 +359,12 @@ public:
    * otherwise.
    */
   bool IsClifford() const override {
-    if (!operation)
-      return true;
+    if (!operation) return true;
 
     return operation->IsClifford();
   }
 
-private:
+ private:
   std::shared_ptr<IOperation<Time>>
       operation; /**< The operation to execute if the condition is met. */
   std::shared_ptr<ICondition> condition; /**< The condition to check. */
@@ -388,7 +381,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class ConditionalGate : public IConditionalOperation<Time> {
-public:
+ public:
   /**
    * @brief Construct a new ConditionalGate object.
    *
@@ -444,7 +437,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class ConditionalMeasurement : public IConditionalOperation<Time> {
-public:
+ public:
   /**
    * @brief Construct a new ConditionalMeasurement object.
    *
@@ -500,7 +493,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class ConditionalRandomGen : public IConditionalOperation<Time> {
-public:
+ public:
   /**
    * @brief Construct a new ConditionalRandomGen object.
    *
@@ -555,6 +548,6 @@ public:
   Types::qubits_vector AffectedQubits() const override { return {}; }
 };
 
-} // namespace Circuits
+}  // namespace Circuits
 
-#endif // !_CONDITIONAL_H_
+#endif  // !_CONDITIONAL_H_

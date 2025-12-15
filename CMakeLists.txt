@@ -55,7 +55,7 @@ ENDIF()
 # QCSim (can be fetched automatically, but requires FFTW3)
 if (NOT DEFINED QCSIM_INCLUDE_DIR)
     SET( QCSIM_INCLUDE_DIR "$ENV{QCSIM_INCLUDE_DIR}" )
-    IF( NOT QCSIM_INCLUDE_DIR )     
+    IF( NOT QCSIM_INCLUDE_DIR )
         # Auto-fetch QCSim if not provided
         message(STATUS "QCSIM_INCLUDE_DIR not set, fetching QCSim...")
         FetchContent_Declare(
@@ -63,13 +63,13 @@ if (NOT DEFINED QCSIM_INCLUDE_DIR)
             GIT_REPOSITORY https://github.com/aromanro/QCSim.git
             GIT_TAG master
         )
-        
+
         # Just populate the source (don't build it with add_subdirectory)
         FetchContent_GetProperties(qcsim)
         if(NOT qcsim_POPULATED)
             FetchContent_Populate(qcsim)
         endif()
-        
+
         set(QCSIM_INCLUDE_DIR ${qcsim_SOURCE_DIR}/QCSim)
         message(STATUS "QCSim fetched to: ${QCSIM_INCLUDE_DIR}")
     ENDIF()
@@ -270,7 +270,7 @@ ENDIF()
 
 if (UNIX)
     target_link_libraries(maestro PRIVATE dl)
-    target_link_libraries(maestroexe PRIVATE dl)    
+    target_link_libraries(maestroexe PRIVATE dl)
 endif()
 
 IF(Boost_FOUND)

@@ -30,7 +30,7 @@ namespace Circuits {
  */
 template <typename Time = Types::time_type>
 class Reset : public IOperation<Time> {
-public:
+ public:
   /**
    * @brief Construct a new Reset object.
    *
@@ -139,9 +139,9 @@ public:
    * @param bitsMap The map of classical bits to remap.
    * @return A shared pointer to the remapped object.
    */
-  std::shared_ptr<IOperation<Time>>
-  Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
-        const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
+  std::shared_ptr<IOperation<Time>> Remap(
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
       const override {
     auto newOp = this->Clone();
 
@@ -166,7 +166,7 @@ public:
    */
   bool IsClifford() const override { return true; }
 
-protected:
+ protected:
   /**
    * @brief Set the qubit to reset.
    *
@@ -175,17 +175,16 @@ protected:
    * @param qubit The qubit to reset.
    */
   void SetQubit(size_t index, Types::qubit_t qubit) {
-    if (index < qubits.size())
-      qubits[index] = qubit;
+    if (index < qubits.size()) qubits[index] = qubit;
   }
 
-private:
+ private:
   Types::qubits_vector qubits;    /**< The qubits to be reset */
   std::vector<bool> resetTargets; /**< The values to reset the qubits to */
   mutable XGate<Time> xgate;      /**< The X gate used to change the qubit state
                                      after its measurement, if needed */
 };
 
-} // namespace Circuits
+}  // namespace Circuits
 
-#endif // !_RESET_STATE_H_
+#endif  // !_RESET_STATE_H_
