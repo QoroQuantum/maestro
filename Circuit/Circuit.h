@@ -1170,13 +1170,13 @@ class Circuit : public IOperation<Time> {
                     nextOp = std::make_shared<NoOperation<Time>>();
                     changed = true;  // continue merging gates, we found one
                                      // that was merged/removed
-                    found = true;  // don't put op in the new operations, we
-                                   // handled it
+                    found = true;    // don't put op in the new operations, we
+                                     // handled it
                     break;
                   } else
                     break;  // not the expected gate, acting on same qubits,
                             // bail out
-                }  // end for of looking forward
+                }           // end for of looking forward
 
                 if (!found) newops.push_back(op);
               } break;
