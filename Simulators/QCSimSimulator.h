@@ -44,7 +44,7 @@ class IndividualSimulator;
 class QCSimSimulator : public QCSimState {
   friend class IndividualSimulator;
 
-public:
+ public:
   QCSimSimulator() = default;
   // allow no copy or assignment
   QCSimSimulator(const QCSimSimulator &) = delete;
@@ -67,8 +67,9 @@ public:
       mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer) {
       if (std::abs(lambda - M_PI_2) > 1e-10)
-        throw std::runtime_error("QCSimSimulator::ApplyP: Invalid phase shift "
-                                 "angle for a Clifford gate.");
+        throw std::runtime_error(
+            "QCSimSimulator::ApplyP: Invalid phase shift "
+            "angle for a Clifford gate.");
       cliffordSimulator->ApplyS(static_cast<unsigned int>(qubit));
     } else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(pgate, static_cast<unsigned int>(qubit));
@@ -291,8 +292,9 @@ public:
     if (GetSimulationType() == SimulationType::kMatrixProductState)
       mpsSimulator->ApplyGate(rxgate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyRx: The stabilizer "
-                               "simulator does not support the Rx gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyRx: The stabilizer "
+          "simulator does not support the Rx gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(rxgate, static_cast<unsigned int>(qubit));
     else
@@ -312,8 +314,9 @@ public:
     if (GetSimulationType() == SimulationType::kMatrixProductState)
       mpsSimulator->ApplyGate(rygate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyRy: The stabilizer "
-                               "simulator does not support the Ry gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyRy: The stabilizer "
+          "simulator does not support the Ry gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(rygate, static_cast<unsigned int>(qubit));
     else
@@ -333,8 +336,9 @@ public:
     if (GetSimulationType() == SimulationType::kMatrixProductState)
       mpsSimulator->ApplyGate(rzgate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyRz: The stabilizer "
-                               "simulator does not support the Rz gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyRz: The stabilizer "
+          "simulator does not support the Rz gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(rzgate, static_cast<unsigned int>(qubit));
     else
@@ -358,8 +362,9 @@ public:
     if (GetSimulationType() == SimulationType::kMatrixProductState)
       mpsSimulator->ApplyGate(ugate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyU: The stabilizer "
-                               "simulator does not support the U gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyU: The stabilizer "
+          "simulator does not support the U gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(ugate, static_cast<unsigned int>(qubit));
     else
@@ -451,8 +456,9 @@ public:
       mpsSimulator->ApplyGate(cpgate, static_cast<unsigned int>(tgt_qubit),
                               static_cast<unsigned int>(ctrl_qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyCP: The stabilizer "
-                               "simulator does not support the CP gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyCP: The stabilizer "
+          "simulator does not support the CP gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(cpgate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
@@ -477,8 +483,9 @@ public:
       mpsSimulator->ApplyGate(crxgate, static_cast<unsigned int>(tgt_qubit),
                               static_cast<unsigned int>(ctrl_qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyCRx: The stabilizer "
-                               "simulator does not support the CRx gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyCRx: The stabilizer "
+          "simulator does not support the CRx gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(crxgate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
@@ -503,8 +510,9 @@ public:
       mpsSimulator->ApplyGate(crygate, static_cast<unsigned int>(tgt_qubit),
                               static_cast<unsigned int>(ctrl_qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyCRy: The stabilizer "
-                               "simulator does not support the CRy gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyCRy: The stabilizer "
+          "simulator does not support the CRy gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(crygate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
@@ -529,8 +537,9 @@ public:
       mpsSimulator->ApplyGate(crzgate, static_cast<unsigned int>(tgt_qubit),
                               static_cast<unsigned int>(ctrl_qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyCRz: The stabilizer "
-                               "simulator does not support the CRz gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyCRz: The stabilizer "
+          "simulator does not support the CRz gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(crzgate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
@@ -552,8 +561,9 @@ public:
       mpsSimulator->ApplyGate(ch, static_cast<unsigned int>(tgt_qubit),
                               static_cast<unsigned int>(ctrl_qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyCH: The stabilizer "
-                               "simulator does not support the CH gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyCH: The stabilizer "
+          "simulator does not support the CH gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(ch, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
@@ -575,8 +585,9 @@ public:
       mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(tgt_qubit),
                               static_cast<unsigned int>(ctrl_qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyCSx: The stabilizer "
-                               "simulator does not support the CSx gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyCSx: The stabilizer "
+          "simulator does not support the CSx gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(csx, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
@@ -599,8 +610,9 @@ public:
       mpsSimulator->ApplyGate(csxdag, static_cast<unsigned int>(tgt_qubit),
                               static_cast<unsigned int>(ctrl_qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyCSxDAG: The stabilizer "
-                               "simulator does not support the CSxDag gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyCSxDAG: The stabilizer "
+          "simulator does not support the CSxDag gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(csxdag, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
@@ -644,9 +656,9 @@ public:
   void ApplyCCX(Types::qubit_t qubit0, Types::qubit_t qubit1,
                 Types::qubit_t qubit2) override {
     if (GetSimulationType() == SimulationType::kMatrixProductState) {
-      const size_t q1 = qubit0; // control 1
-      const size_t q2 = qubit1; // control 2
-      const size_t q3 = qubit2; // target
+      const size_t q1 = qubit0;  // control 1
+      const size_t q2 = qubit1;  // control 2
+      const size_t q3 = qubit2;  // target
 
       // Sleator-Weinfurter decomposition
       mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3),
@@ -660,12 +672,13 @@ public:
       mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3),
                               static_cast<unsigned int>(q1));
     } else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyCCX: The stabilizer "
-                               "simulator does not support the CCX gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyCCX: The stabilizer "
+          "simulator does not support the CCX gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork) {
-      const size_t q1 = qubit0; // control 1
-      const size_t q2 = qubit1; // control 2
-      const size_t q3 = qubit2; // target
+      const size_t q1 = qubit0;  // control 1
+      const size_t q2 = qubit1;  // control 2
+      const size_t q3 = qubit2;  // target
 
       // Sleator-Weinfurter decomposition
       tensorNetwork->AddGate(csx, static_cast<unsigned int>(q2),
@@ -696,7 +709,7 @@ public:
   void ApplyCSwap(Types::qubit_t ctrl_qubit, Types::qubit_t qubit0,
                   Types::qubit_t qubit1) override {
     if (GetSimulationType() == SimulationType::kMatrixProductState) {
-      const size_t q1 = ctrl_qubit; // control
+      const size_t q1 = ctrl_qubit;  // control
       const size_t q2 = qubit0;
       const size_t q3 = qubit1;
 
@@ -727,10 +740,11 @@ public:
       mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2),
                               static_cast<unsigned int>(q3));
     } else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyCSwap: The stabilizer "
-                               "simulator does not support the CSwap gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyCSwap: The stabilizer "
+          "simulator does not support the CSwap gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork) {
-      const size_t q1 = ctrl_qubit; // control
+      const size_t q1 = ctrl_qubit;  // control
       const size_t q2 = qubit0;
       const size_t q3 = qubit1;
 
@@ -785,8 +799,9 @@ public:
       mpsSimulator->ApplyGate(cugate, static_cast<unsigned int>(tgt_qubit),
                               static_cast<unsigned int>(ctrl_qubit));
     else if (GetSimulationType() == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimSimulator::ApplyCU: The stabilizer "
-                               "simulator does not support the CU gate.");
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyCU: The stabilizer "
+          "simulator does not support the CU gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(cugate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
@@ -831,8 +846,7 @@ public:
     cloned->enableMultithreading = enableMultithreading;
     cloned->useMPSMeasureNoCollapse = useMPSMeasureNoCollapse;
 
-    if (state)
-      cloned->state = state->Clone();
+    if (state) cloned->state = state->Clone();
 
     if (mpsSimulator) {
       cloned->mpsSimulator = mpsSimulator->Clone();
@@ -846,13 +860,12 @@ public:
     if (cliffordSimulator)
       cloned->cliffordSimulator = cliffordSimulator->Clone();
 
-    if (tensorNetwork)
-      cloned->tensorNetwork = tensorNetwork->Clone();
+    if (tensorNetwork) cloned->tensorNetwork = tensorNetwork->Clone();
 
     return cloned;
   }
 
-private:
+ private:
   QC::Gates::PhaseShiftGate<> pgate;
   QC::Gates::PauliXGate<> xgate;
   QC::Gates::PauliYGate<> ygate;
@@ -886,9 +899,9 @@ private:
   QC::Gates::ControlledUGate<> cugate;
 };
 
-} // namespace Private
-} // namespace Simulators
+}  // namespace Private
+}  // namespace Simulators
 
 #endif
 
-#endif // !_QCSIMSIMULATOR_H
+#endif  // !_QCSIMSIMULATOR_H

@@ -35,7 +35,7 @@ namespace TensorNetworks {
  * Tensor contractions using the Dumb contraction method.
  */
 class DumbContractor : public BaseContractor {
-public:
+ public:
   /**
    * @brief Contract the tensor network.
    *
@@ -53,8 +53,7 @@ public:
 
     if (contractTheLowestTensorId) {
       for (const auto &tensor : tensors) {
-        if (tensor.first < minId)
-          minId = tensor.first;
+        if (tensor.first < minId) minId = tensor.first;
       }
     }
 
@@ -69,8 +68,7 @@ public:
         tensor1Id = minId;
         auto it = tensors.find(tensor1Id);
         ++it;
-        if (it == tensors.end())
-          it = tensors.begin();
+        if (it == tensors.end()) it = tensors.begin();
 
         tensor2Id = it->first;
       } else {
@@ -124,8 +122,7 @@ public:
         if (contractTheLowestTensorId) {
           minId = std::numeric_limits<Eigen::Index>::max();
           for (const auto &tensor : tensors) {
-            if (tensor.first < minId)
-              minId = tensor.first;
+            if (tensor.first < minId) minId = tensor.first;
           }
         }
       }
@@ -155,10 +152,10 @@ public:
     return cloned;
   }
 
-private:
+ private:
   bool contractTheLowestTensorId = true;
 };
 
-} // namespace TensorNetworks
+}  // namespace TensorNetworks
 
-#endif // __DUMB_CONTRACTOR_H_
+#endif  // __DUMB_CONTRACTOR_H_

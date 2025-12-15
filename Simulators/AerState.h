@@ -47,7 +47,7 @@ class IndividualSimulator;
 class AerState : public ISimulator {
   friend class IndividualSimulator; /**< Allows the IndividualSimulator to
                                        access the private members of AerState */
-public:
+ public:
   /**
    * @brief The constructor.
    *
@@ -211,24 +211,23 @@ public:
   std::string GetConfiguration(const char *key) const override {
     if (std::string("method") == key) {
       switch (simulationType) {
-      case SimulationType::kStatevector:
-        return "statevector";
-      case SimulationType::kMatrixProductState:
-        return "matrix_product_state";
-      case SimulationType::kStabilizer:
-        return "stabilizer";
-      case SimulationType::kTensorNetwork:
-        return "tensor_network";
-      default:
-        return "other";
+        case SimulationType::kStatevector:
+          return "statevector";
+        case SimulationType::kMatrixProductState:
+          return "matrix_product_state";
+        case SimulationType::kStabilizer:
+          return "stabilizer";
+        case SimulationType::kTensorNetwork:
+          return "tensor_network";
+        default:
+          return "other";
       }
     } else if (std::string("matrix_product_state_truncation_threshold") ==
                key) {
       if (limitEntanglement && singularValueThreshold > 0.)
         return std::to_string(singularValueThreshold);
     } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
-      if (limitSize && limitSize > 0)
-        return std::to_string(chi);
+      if (limitSize && limitSize > 0) return std::to_string(chi);
     } else if (std::string("mps_sample_measure_algorithm") == key) {
       return useMPSMeasureNoCollapse ? "mps_probabilities"
                                      : "mps_apply_measure";
@@ -256,8 +255,7 @@ public:
    * @return The number of qubits.
    */
   size_t GetNumberOfQubits() const override {
-    if (state->is_initialized())
-      return state->num_of_qubits();
+    if (state->is_initialized()) return state->num_of_qubits();
 
     return 0;
   }
@@ -360,8 +358,8 @@ public:
    * @return A vector with the probabilities for the specified qubit
    * configurations.
    */
-  std::vector<double>
-  Probabilities(const Types::qubits_vector &qubits) override {
+  std::vector<double> Probabilities(
+      const Types::qubits_vector &qubits) override {
     return state->probabilities(qubits);
   }
 
@@ -381,11 +379,9 @@ public:
    * @return A map with the counts for the outcomes of measurements of the
    * specified qubits.
    */
-  std::unordered_map<Types::qubit_t, Types::qubit_t>
-  SampleCounts(const Types::qubits_vector &qubits,
-               size_t shots = 1000) override {
-    if (qubits.empty() || shots == 0)
-      return {};
+  std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
+      const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    if (qubits.empty() || shots == 0) return {};
 
     const std::unordered_map<Types::qubit_t, Types::qubit_t> res =
         state->sample_counts(qubits, shots);
@@ -407,15 +403,13 @@ public:
    * @return The expected value of the specified Pauli string.
    */
   double ExpectationValue(const std::string &pauliStringOrig) override {
-    if (pauliStringOrig.empty())
-      return 1.0;
+    if (pauliStringOrig.empty()) return 1.0;
 
     std::string pauliString = pauliStringOrig;
     if (pauliString.size() > GetNumberOfQubits()) {
       for (size_t i = GetNumberOfQubits(); i < pauliString.size(); ++i) {
         const auto pauliOp = toupper(pauliString[i]);
-        if (pauliOp != 'I' && pauliOp != 'Z')
-          return 0.0;
+        if (pauliOp != 'I' && pauliOp != 'Z') return 0.0;
       }
 
       pauliString.resize(GetNumberOfQubits());
@@ -429,15 +423,13 @@ public:
 
     for (size_t q = 0; q < pauliString.size(); ++q) {
       const char p = toupper(pauliString[q]);
-      if (p == 'I')
-        continue;
+      if (p == 'I') continue;
 
       pauli.push_back(p);
       qubits.push_back(q);
     }
 
-    if (qubits.empty())
-      return 1.0;
+    if (qubits.empty()) return 1.0;
 
     // qiskit aer expects the pauli string in reverse order
     std::reverse(pauli.begin(), pauli.end());
@@ -511,8 +503,7 @@ public:
    * for multiple shots executions.
    */
   void SaveState() override {
-    if (!state)
-      return;
+    if (!state) return;
 
     const auto numQubits = GetNumberOfQubits();
 
@@ -532,8 +523,7 @@ public:
       op.save_type = AER::Operations::DataSubType::single;
       op.string_params.push_back("s");
 
-      for (size_t q = 0; q < numQubits; ++q)
-        op.qubits.push_back(q);
+      for (size_t q = 0; q < numQubits; ++q) op.qubits.push_back(q);
 
       state->buffer_op(std::move(op));
       Flush();
@@ -578,77 +568,78 @@ public:
     AER::Operations::Op op;
 
     switch (simulationType) {
-    case SimulationType::kStatevector: {
-      // op.type = AER::Operations::OpType::set_statevec;
-      // op.name = "set_statevec";
+      case SimulationType::kStatevector: {
+        // op.type = AER::Operations::OpType::set_statevec;
+        // op.name = "set_statevec";
 
-      // const auto& vec = static_cast<AER::DataMap<AER::SingleData,
-      // AER::Vector<complex_t>>>(savedState).value()["s"].value();
+        // const auto& vec = static_cast<AER::DataMap<AER::SingleData,
+        // AER::Vector<complex_t>>>(savedState).value()["s"].value();
 
-      // this is a hack until I figure it out
-      Clear();
-      numQubits = static_cast<size_t>(log2(savedAmplitudes.size()));
-      state->initialize_statevector(numQubits, savedAmplitudes.data(), true);
+        // this is a hack until I figure it out
+        Clear();
+        numQubits = static_cast<size_t>(log2(savedAmplitudes.size()));
+        state->initialize_statevector(numQubits, savedAmplitudes.data(), true);
 
-      return;
-    } break;
-    case SimulationType::kMatrixProductState:
-      op.type = AER::Operations::OpType::set_mps;
-      op.name = "set_mps";
-      op.mps = static_cast<AER::DataMap<AER::SingleData, AER::mps_container_t>>(
-                   savedState)
-                   .value()["s"]
-                   .value();
+        return;
+      } break;
+      case SimulationType::kMatrixProductState:
+        op.type = AER::Operations::OpType::set_mps;
+        op.name = "set_mps";
+        op.mps =
+            static_cast<AER::DataMap<AER::SingleData, AER::mps_container_t>>(
+                savedState)
+                .value()["s"]
+                .value();
 
-      /*
-      {
-              auto& value = static_cast<AER::DataMap<AER::SingleData,
-      AER::mps_container_t>>(savedState).value(); if (!value.empty())
-              {
-                      if (value.find("s") != value.end())
-                              op.mps = value["s"].value();
-                      else if (value.find("matrix_product_state") !=
-      value.end()) op.mps = value["matrix_product_state"].value();
-              }
-      }
-      */
+        /*
+        {
+                auto& value = static_cast<AER::DataMap<AER::SingleData,
+        AER::mps_container_t>>(savedState).value(); if (!value.empty())
+                {
+                        if (value.find("s") != value.end())
+                                op.mps = value["s"].value();
+                        else if (value.find("matrix_product_state") !=
+        value.end()) op.mps = value["matrix_product_state"].value();
+                }
+        }
+        */
 
-      numQubits = op.mps.first.size();
-      break;
-    case SimulationType::kStabilizer:
-      op.type = AER::Operations::OpType::set_stabilizer;
-      op.name = "set_stabilizer";
-      op.clifford =
-          static_cast<AER::DataMap<AER::SingleData, json_t>>(savedState)
-              .value()["s"]
-              .value();
+        numQubits = op.mps.first.size();
+        break;
+      case SimulationType::kStabilizer:
+        op.type = AER::Operations::OpType::set_stabilizer;
+        op.name = "set_stabilizer";
+        op.clifford =
+            static_cast<AER::DataMap<AER::SingleData, json_t>>(savedState)
+                .value()["s"]
+                .value();
 
-      /*
-      {
-              auto& value = static_cast<AER::DataMap<AER::SingleData,
-      json_t>>(savedState).value(); if (!value.empty())
-              {
-                      if (value.find("s") != value.end())
-                              op.clifford = value["s"].value();
-                      else if (value.find("stabilizer") != value.end())
-                              op.clifford = value["stabilizer"].value();
-              }
-      }
-      */
+        /*
+        {
+                auto& value = static_cast<AER::DataMap<AER::SingleData,
+        json_t>>(savedState).value(); if (!value.empty())
+                {
+                        if (value.find("s") != value.end())
+                                op.clifford = value["s"].value();
+                        else if (value.find("stabilizer") != value.end())
+                                op.clifford = value["stabilizer"].value();
+                }
+        }
+        */
 
-      numQubits = op.clifford.num_qubits();
-      break;
-    case SimulationType::kTensorNetwork:
-    default:
-      throw std::runtime_error("AerState::RestoreState: not implemented yet "
-                               "for this type of simulator.");
+        numQubits = op.clifford.num_qubits();
+        break;
+      case SimulationType::kTensorNetwork:
+      default:
+        throw std::runtime_error(
+            "AerState::RestoreState: not implemented yet "
+            "for this type of simulator.");
     }
 
     op.save_type = AER::Operations::DataSubType::single;
     op.string_params.push_back("s");
 
-    for (size_t q = 0; q < numQubits; ++q)
-      op.qubits.push_back(q);
+    for (size_t q = 0; q < numQubits; ++q) op.qubits.push_back(q);
 
     // WHY?
     if (!state->is_initialized()) {
@@ -684,10 +675,14 @@ public:
     enableMultithreading = multithreading;
     if (state && !state->is_initialized()) {
       const std::string nrThreads =
-		  std::to_string(enableMultithreading ? 0 : 1); // 0 means auto/all available, 1 limits to 1
+          std::to_string(enableMultithreading
+                             ? 0
+                             : 1);  // 0 means auto/all available, 1 limits to 1
       state->configure("max_parallel_threads", nrThreads);
       state->configure("parallel_state_update", nrThreads);
-	  const std::string threadsLimit = std::to_string(12); // set one less, multithreading is started if the value is bigger than this
+      const std::string threadsLimit =
+          std::to_string(12);  // set one less, multithreading is started if the
+                               // value is bigger than this
       state->configure("statevector_parallel_threshold", threadsLimit);
     }
   }
@@ -729,7 +724,7 @@ public:
   Types::qubit_t MeasureNoCollapse() override {
     if (simulationType == SimulationType::kStatevector) {
       const double prob =
-          1. - uniformZeroOne(rng); // this excludes 0 as probabiliy
+          1. - uniformZeroOne(rng);  // this excludes 0 as probabiliy
       double accum = 0;
       Types::qubit_t state = 0;
       for (Types::qubit_t i = 0; i < savedAmplitudes.size(); ++i) {
@@ -750,7 +745,7 @@ public:
     return 0;
   }
 
-protected:
+ protected:
   SimulationType simulationType =
       SimulationType::kStatevector; /**< The simulation type. */
   std::unique_ptr<QiskitAerState> state =
@@ -758,9 +753,9 @@ protected:
   AER::Vector<complex_t> savedAmplitudes; /**< The amplitudes, saved. */
   bool limitSize = false;
   bool limitEntanglement = false;
-  Eigen::Index chi = 10;              // if limitSize is true
-  double singularValueThreshold = 0.; // if limitEntanglement is true
-  bool enableMultithreading = true;   /**< The multithreading flag. */
+  Eigen::Index chi = 10;               // if limitSize is true
+  double singularValueThreshold = 0.;  // if limitEntanglement is true
+  bool enableMultithreading = true;    /**< The multithreading flag. */
   AER::Data savedState; /**< The saved data - here there will be the saved state
                            of the simulator */
   std::mt19937_64 rng;
@@ -769,11 +764,11 @@ protected:
       true; /**< The flag to use the mps measure no collapse algorithm. */
 };
 
-} // namespace Private
-} // namespace Simulators
+}  // namespace Private
+}  // namespace Simulators
 
 #endif
 
 #endif
 
-#endif // !_AER_STATE_H_
+#endif  // !_AER_STATE_H_

@@ -16,8 +16,9 @@
 #include "qasm.h"
 
 namespace qasm {
-template <typename Time = Types::time_type> class QasmToCirc {
-public:
+template <typename Time = Types::time_type>
+class QasmToCirc {
+ public:
   void clear() {
     grammar.clear();
     program.clear();
@@ -25,8 +26,8 @@ public:
     error = false;
   }
 
-  std::shared_ptr<Circuits::Circuit<Time>>
-  ParseAndTranslate(const std::string &qasmInputStr) {
+  std::shared_ptr<Circuits::Circuit<Time>> ParseAndTranslate(
+      const std::string &qasmInputStr) {
     clear();
 
     std::string qasmInput = qasmInputStr;
@@ -70,12 +71,12 @@ public:
     return program.includes;
   }
 
-protected:
+ protected:
   qasm::QasmGrammar<> grammar;
   qasm::Program program;
   std::string errorMessage;
   bool error = false;
 };
-} // namespace qasm
+}  // namespace qasm
 
-#endif //_QASMCIRC_H_
+#endif  //_QASMCIRC_H_

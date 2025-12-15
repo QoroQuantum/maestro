@@ -31,16 +31,16 @@ namespace Simulators {
  * Create either a qiskit aer or qcsim simulator.
  */
 class SimulatorsFactory {
-public:
+ public:
   /**
    * @brief Create a quantum computing simulator.
    *
    * @param t The type of simulator to create.
    * @return The simulator wrapped in a shared pointer.
    */
-  static std::shared_ptr<ISimulator>
-  CreateSimulator(SimulatorType t = SimulatorType::kQCSim,
-                  SimulationType method = SimulationType::kMatrixProductState);
+  static std::shared_ptr<ISimulator> CreateSimulator(
+      SimulatorType t = SimulatorType::kQCSim,
+      SimulationType method = SimulationType::kMatrixProductState);
 
   /**
    * @brief Create a quantum computing simulator.
@@ -54,22 +54,19 @@ public:
 
 #ifdef __linux__
   static std::unique_ptr<GpuLibStateVectorSim> CreateGpuLibStateVectorSim() {
-    if (!gpuLibrary || !gpuLibrary->IsValid())
-      return nullptr;
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
 
     return std::make_unique<GpuLibStateVectorSim>(gpuLibrary);
   }
 
   static std::unique_ptr<GpuLibMPSSim> CreateGpuLibMPSSim() {
-    if (!gpuLibrary || !gpuLibrary->IsValid())
-      return nullptr;
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
 
     return std::make_unique<GpuLibMPSSim>(gpuLibrary);
   }
 
   static std::shared_ptr<GpuLibrary> GetGpuLibrary() {
-    if (!gpuLibrary || !gpuLibrary->IsValid())
-      return nullptr;
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
     return gpuLibrary;
   }
 
@@ -80,7 +77,7 @@ public:
   static bool InitGpuLibrary();
   static bool InitGpuLibraryWithMute();
 
-private:
+ private:
   static std::shared_ptr<GpuLibrary> gpuLibrary;
   static std::atomic_bool firstTime;
 #else
@@ -90,6 +87,6 @@ private:
 #endif
 };
 
-} // namespace Simulators
+}  // namespace Simulators
 
-#endif // !_SIMULATORS_FACTORY_H_
+#endif  // !_SIMULATORS_FACTORY_H_

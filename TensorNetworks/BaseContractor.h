@@ -27,31 +27,28 @@ namespace TensorNetworks {
  * Tensor contractions common functionality.
  */
 class BaseContractor : public ITensorContractor {
-public:
+ public:
   using TensorsMap = ITensorContractor::TensorsMap;
 
-  TensorsMap
-  InitializeTensors(const TensorNetwork &network, Types::qubit_t qubit,
-                    std::vector<Eigen::Index> &keys,
-                    std::unordered_map<Eigen::Index, Eigen::Index> &keysKeys,
-                    bool fillKeys = true, bool contract = true) override {
+  TensorsMap InitializeTensors(
+      const TensorNetwork &network, Types::qubit_t qubit,
+      std::vector<Eigen::Index> &keys,
+      std::unordered_map<Eigen::Index, Eigen::Index> &keysKeys,
+      bool fillKeys = true, bool contract = true) override {
     maxTensorRank = 0;
 
     TensorsMap tensors;
 
-    if (fillKeys)
-      keys.reserve(network.GetTensors().size());
+    if (fillKeys) keys.reserve(network.GetTensors().size());
 
     const auto &qubitGroup = network.GetQubitGroup(qubit);
 
     if (contract) {
       for (const auto &tensor : network.GetTensors()) {
-        if (!tensor)
-          continue;
+        if (!tensor) continue;
 
         const auto firstQubit = tensor->qubits[0];
-        if (qubitGroup.find(firstQubit) == qubitGroup.end())
-          continue;
+        if (qubitGroup.find(firstQubit) == qubitGroup.end()) continue;
 
         const auto tensorId = tensor->GetId();
         tensors[tensorId] = tensor->CloneWithoutTensorCopy();
@@ -101,12 +98,10 @@ public:
       }
     } else {
       for (const auto &tensor : network.GetTensors()) {
-        if (!tensor)
-          continue;
+        if (!tensor) continue;
 
         const auto firstQubit = tensor->qubits[0];
-        if (qubitGroup.find(firstQubit) == qubitGroup.end())
-          continue;
+        if (qubitGroup.find(firstQubit) == qubitGroup.end()) continue;
 
         const auto tensorId = tensor->GetId();
         tensors[tensorId] = tensor->CloneWithoutTensorCopy();
@@ -124,10 +119,11 @@ public:
   }
 
   template <class PassedTensorsMap = TensorsMap>
-  inline Eigen::Index
-  ContractNodes(Types::qubit_t qubit, PassedTensorsMap &tensors,
-                Eigen::Index tensor1Id, Eigen::Index tensor2Id,
-                Eigen::Index resultRank) {
+  inline Eigen::Index ContractNodes(Types::qubit_t qubit,
+                                    PassedTensorsMap &tensors,
+                                    Eigen::Index tensor1Id,
+                                    Eigen::Index tensor2Id,
+                                    Eigen::Index resultRank) {
     const auto &tensor1 = tensors[tensor1Id];
     const auto &tensor2 = tensors[tensor2Id];
 
@@ -162,8 +158,7 @@ public:
 
     size_t pos = 0;
     for (size_t i = 0; i < tensor1->connections.size(); ++i) {
-      if (qubit == tensor1->qubits[i])
-        properQubit = true;
+      if (qubit == tensor1->qubits[i]) properQubit = true;
 
       const auto connectedTensorId = tensor1->connections[i];
       if (connectedTensorId != tensor2Id) {
@@ -186,8 +181,7 @@ public:
     }
 
     for (size_t i = 0; i < tensor2->connections.size(); ++i) {
-      if (qubit == tensor2->qubits[i])
-        properQubit = true;
+      if (qubit == tensor2->qubits[i]) properQubit = true;
 
       const auto connectedTensorId = tensor2->connections[i];
       if (connectedTensorId != tensor1Id) {
@@ -218,21 +212,19 @@ public:
     return tensor1Id;
   }
 
-  static inline size_t
-  GetResultRank(const std::shared_ptr<TensorNode> &tensor1,
-                const std::shared_ptr<TensorNode> &tensor2) {
+  static inline size_t GetResultRank(
+      const std::shared_ptr<TensorNode> &tensor1,
+      const std::shared_ptr<TensorNode> &tensor2) {
     size_t rank = 0;
 
     const Eigen::Index tensor1Id = tensor1->GetId();
     const Eigen::Index tensor2Id = tensor2->GetId();
 
     for (size_t i = 0; i < tensor1->connections.size(); ++i)
-      if (tensor1->connections[i] != tensor2Id)
-        ++rank;
+      if (tensor1->connections[i] != tensor2Id) ++rank;
 
     for (size_t i = 0; i < tensor2->connections.size(); ++i)
-      if (tensor2->connections[i] != tensor1Id)
-        ++rank;
+      if (tensor2->connections[i] != tensor1Id) ++rank;
 
     // even if the true rank of the result is 1 in such a case, return 0 as it
     // has inside only a scalar
@@ -264,13 +256,13 @@ public:
    */
   bool GetMultithreading() const override { return enableMultithreading; }
 
-protected:
+ protected:
   size_t maxTensorRank =
       0; /**< The maximum rank of the tensors in the network. */
   bool enableMultithreading =
       true; /**< A flag to indicate if multithreading should be enabled. */
 };
 
-} // namespace TensorNetworks
+}  // namespace TensorNetworks
 
-#endif // __BASE_CONTRACTOR_H_
+#endif  // __BASE_CONTRACTOR_H_

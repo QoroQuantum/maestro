@@ -39,7 +39,7 @@ namespace Private {
  * @sa IState
  */
 class AerSimulator : public AerState {
-public:
+ public:
   AerSimulator() = default;
   // allow no copy or assignment
   AerSimulator(const AerSimulator &) = delete;
@@ -702,8 +702,8 @@ public:
   void ApplyNop() override {
     AER::Operations::Op op;
     op.type =
-        AER::Operations::OpType::barrier; // there is also 'nop' but that one
-                                          // doesn't work with stabilizer
+        AER::Operations::OpType::barrier;  // there is also 'nop' but that one
+                                           // doesn't work with stabilizer
     state->buffer_op(std::move(op));
   }
 
@@ -753,14 +753,14 @@ public:
 
     // now the tricky part
     if (state && state->is_initialized()) {
-      SaveState(); // this also restores the state if it's destroyed in the
-                   // saving process!
+      SaveState();  // this also restores the state if it's destroyed in the
+                    // saving process!
       // now the current state is saved in savedAmplitudes or savedState, so use
       // it to initialize the cloned state, like this
       sim->savedAmplitudes = std::move(savedAmplitudes);
       sim->savedState = std::move(savedState);
 
-      sim->RestoreState(); // now the state is loaded in the cloned simulator
+      sim->RestoreState();  // now the state is loaded in the cloned simulator
 
       // those saved previously can be an older state, so put them in the clone,
       // too
@@ -775,17 +775,18 @@ public:
       sim->savedAmplitudes = std::move(localSavedAmplitudes);
       sim->savedState = std::move(localSavedState);
 
-      sim->RestoreState(); // this might not be necessary, but sometimes, not
-                           // very often, an exception is thrown about the state
-                           // not being initialized, this might prevent that
+      sim->RestoreState();  // this might not be necessary, but sometimes, not
+                            // very often, an exception is thrown about the
+                            // state not being initialized, this might prevent
+                            // that
     }
 
     return sim;
   }
 };
 
-} // namespace Private
-} // namespace Simulators
+}  // namespace Private
+}  // namespace Simulators
 
 #endif
 

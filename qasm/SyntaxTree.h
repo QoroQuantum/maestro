@@ -39,8 +39,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
 
       stmt.gateType = Circuits::QuantumGateType::kUGateType;
 
-      for (const auto &p : params)
-        stmt.parameters.push_back(p.Eval(variables));
+      for (const auto &p : params) stmt.parameters.push_back(p.Eval(variables));
 
       stmt.qubits = ParseQubits(arg, qreg_map);
     } else if (std::holds_alternative<CXGateCallType>(uop)) {
@@ -209,26 +208,26 @@ struct AddGateExpr : public AbstractSyntaxTree {
 
             if (gateNameLower == "u1") {
               const double lambda = stmt.parameters[0];
-              stmt.parameters[0] = 0.0; // theta
+              stmt.parameters[0] = 0.0;  // theta
               stmt.parameters.push_back(0.);
               stmt.parameters.push_back(lambda);
             } else if (gateNameLower == "u2") {
               const double phi = stmt.parameters[0];
               const double lambda = stmt.parameters[1];
 
-              stmt.parameters[0] = M_PI / 2.0; // theta
+              stmt.parameters[0] = M_PI / 2.0;  // theta
               stmt.parameters[1] = phi;
               stmt.parameters.push_back(lambda);
             } else if (gateNameLower == "cu1") {
               const double lambda = stmt.parameters[0];
-              stmt.parameters[0] = 0.0; // theta
+              stmt.parameters[0] = 0.0;  // theta
               stmt.parameters.push_back(0.);
               stmt.parameters.push_back(lambda);
             } else if (gateNameLower == "cu2") {
               const double phi = stmt.parameters[0];
               const double lambda = stmt.parameters[1];
 
-              stmt.parameters[0] = M_PI / 2.0; // theta
+              stmt.parameters[0] = M_PI / 2.0;  // theta
               stmt.parameters[1] = phi;
               stmt.parameters.push_back(lambda);
             }
@@ -240,7 +239,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
                   "Gate u1 requires exactly one parameter");
 
             const double lambda = stmt.parameters[0];
-            stmt.parameters[0] = 0.0; // theta
+            stmt.parameters[0] = 0.0;  // theta
             stmt.parameters.push_back(0.);
             stmt.parameters.push_back(lambda);
 
@@ -256,7 +255,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
             const double phi = stmt.parameters[0];
             const double lambda = stmt.parameters[1];
 
-            stmt.parameters[0] = M_PI / 2.0; // theta
+            stmt.parameters[0] = M_PI / 2.0;  // theta
             stmt.parameters[1] = phi;
             stmt.parameters.push_back(lambda);
 
@@ -281,7 +280,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
                   "Gate cu1 requires exactly one parameter");
 
             const double lambda = stmt.parameters[0];
-            stmt.parameters[0] = 0.0; // theta
+            stmt.parameters[0] = 0.0;  // theta
             stmt.parameters.push_back(0.);
             stmt.parameters.push_back(lambda);
 
@@ -297,7 +296,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
             const double phi = stmt.parameters[0];
             const double lambda = stmt.parameters[1];
 
-            stmt.parameters[0] = M_PI / 2.0; // theta
+            stmt.parameters[0] = M_PI / 2.0;  // theta
             stmt.parameters[1] = phi;
             stmt.parameters.push_back(lambda);
 
@@ -374,9 +373,9 @@ struct AddGateExpr : public AbstractSyntaxTree {
     return stmt;
   }
 
-  static std::vector<int>
-  ParseQubits(const ArgumentType &arg,
-              const std::unordered_map<std::string, IndexedId> &qreg_map) {
+  static std::vector<int> ParseQubits(
+      const ArgumentType &arg,
+      const std::unordered_map<std::string, IndexedId> &qreg_map) {
     std::vector<int> qubits;
     // there are two possibilities here, either it's an indexed id or a simple
     // id
@@ -393,8 +392,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
       if (it != qreg_map.end()) {
         int base = it->second.base;
         int size = static_cast<int>(std::round(it->second.Eval()));
-        for (int i = 0; i < size; ++i)
-          qubits.push_back(base + i);
+        for (int i = 0; i < size; ++i) qubits.push_back(base + i);
       }
     }
 
@@ -487,8 +485,8 @@ struct AddGateExpr : public AbstractSyntaxTree {
     else if (gateName == "cu" || gateName == "cu3" || gateName == "cu1")
       return Circuits::QuantumGateType::kCUGateType;
 
-    return Circuits::QuantumGateType::kNone; // this will be returnd also for
-                                             // 'id'
+    return Circuits::QuantumGateType::kNone;  // this will be returnd also for
+                                              // 'id'
   }
 
   static int GateNrQubits(Circuits::QuantumGateType gateType) {
@@ -505,7 +503,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
     return 0;
   }
 
-private:
+ private:
   static inline std::unordered_set<std::string> allowedNoParamGates = {
       "x",    "y",   "z",     "h",      "s",     "sdg",  "sdag", "t",  "tdg",
       "tdag", "sx",  "sxdg",  "sxdag",  "k",     "swap", "cx",   "cy", "cz",
@@ -513,7 +511,7 @@ private:
   static inline std::unordered_set<std::string> allowedOneParamGates = {
       "p", "rx", "ry", "rz", "cp", "crx", "cry", "crz", "u1", "cu1"};
   static inline std::unordered_set<std::string> allowedMultipleParamsGates = {
-      "u", "u3", "cu1", "cu3"}; // max 4
+      "u", "u3", "cu1", "cu3"};  // max 4
 };
 
 phx::function<AddGateExpr> AddGate;
@@ -523,12 +521,12 @@ struct AddCondQopExpr : public AbstractSyntaxTree {
     typedef QoperationStatement type;
   };
 
-  QoperationStatement
-  operator()(CondOpType &condOp,
-             const std::unordered_map<std::string, IndexedId> &qreg_map,
-             const std::unordered_map<std::string, IndexedId> &creg_map,
-             const std::unordered_map<std::string, StatementType> &opaqueGates,
-             const std::unordered_map<std::string, StatementType> &definedGates)
+  QoperationStatement operator()(
+      CondOpType &condOp,
+      const std::unordered_map<std::string, IndexedId> &qreg_map,
+      const std::unordered_map<std::string, IndexedId> &creg_map,
+      const std::unordered_map<std::string, StatementType> &opaqueGates,
+      const std::unordered_map<std::string, StatementType> &definedGates)
       const {
     StatementType stmt;
 
@@ -589,197 +587,207 @@ struct Program {
   }
 
   template <typename Time = Types::time_type>
-  static void
-  AddToCircuit(const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
-               const StatementType &stmt,
-               std::unordered_map<std::string, StatementType> &opaqueGates,
-               std::unordered_map<std::string, StatementType> &definedGates) {
+  static void AddToCircuit(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      const StatementType &stmt,
+      std::unordered_map<std::string, StatementType> &opaqueGates,
+      std::unordered_map<std::string, StatementType> &definedGates) {
     switch (stmt.opType) {
-    case QoperationStatement::OperationType::Measurement: {
-      if (stmt.qubits.size() != stmt.cbits.size())
-        throw std::invalid_argument("Measurement operation: number of qubits "
-                                    "and classical bits do not match.");
+      case QoperationStatement::OperationType::Measurement: {
+        if (stmt.qubits.size() != stmt.cbits.size())
+          throw std::invalid_argument(
+              "Measurement operation: number of qubits "
+              "and classical bits do not match.");
 
-      std::vector<std::pair<Types::qubit_t, size_t>> qs;
-      for (size_t i = 0; i < stmt.qubits.size(); ++i)
-        qs.push_back({static_cast<Types::qubit_t>(stmt.qubits[i]),
-                      static_cast<size_t>(stmt.cbits[i])});
+        std::vector<std::pair<Types::qubit_t, size_t>> qs;
+        for (size_t i = 0; i < stmt.qubits.size(); ++i)
+          qs.push_back({static_cast<Types::qubit_t>(stmt.qubits[i]),
+                        static_cast<size_t>(stmt.cbits[i])});
 
-      auto measureOp = Circuits::CircuitFactory<Time>::CreateMeasurement(qs);
-      circuit->AddOperation(measureOp);
-    } break;
-    case QoperationStatement::OperationType::Reset: {
-      Types::qubits_vector qubits(stmt.qubits.begin(), stmt.qubits.end());
-      auto resetOp = Circuits::CircuitFactory<Time>::CreateReset(qubits);
-      circuit->AddOperation(resetOp);
-    } break;
+        auto measureOp = Circuits::CircuitFactory<Time>::CreateMeasurement(qs);
+        circuit->AddOperation(measureOp);
+      } break;
+      case QoperationStatement::OperationType::Reset: {
+        Types::qubits_vector qubits(stmt.qubits.begin(), stmt.qubits.end());
+        auto resetOp = Circuits::CircuitFactory<Time>::CreateReset(qubits);
+        circuit->AddOperation(resetOp);
+      } break;
 
-    case QoperationStatement::OperationType::Uop: {
-      if (stmt.gateType != Circuits::QuantumGateType::kNone) {
-        // can add more than one gate here depending on what's in qubits
-        double param1 = stmt.parameters.size() > 0 ? stmt.parameters[0] : 0;
-        double param2 = stmt.parameters.size() > 1 ? stmt.parameters[1] : 0;
-        double param3 = stmt.parameters.size() > 2 ? stmt.parameters[2] : 0;
-        double param4 = stmt.parameters.size() > 3 ? stmt.parameters[3] : 0;
+      case QoperationStatement::OperationType::Uop: {
+        if (stmt.gateType != Circuits::QuantumGateType::kNone) {
+          // can add more than one gate here depending on what's in qubits
+          double param1 = stmt.parameters.size() > 0 ? stmt.parameters[0] : 0;
+          double param2 = stmt.parameters.size() > 1 ? stmt.parameters[1] : 0;
+          double param3 = stmt.parameters.size() > 2 ? stmt.parameters[2] : 0;
+          double param4 = stmt.parameters.size() > 3 ? stmt.parameters[3] : 0;
 
-        int nrQubits = AddGateExpr::GateNrQubits(stmt.gateType);
-        if (stmt.qubits.size() % nrQubits != 0)
-          throw std::invalid_argument("Uop operation: number of qubits does "
-                                      "not match the gate requirements.");
+          int nrQubits = AddGateExpr::GateNrQubits(stmt.gateType);
+          if (stmt.qubits.size() % nrQubits != 0)
+            throw std::invalid_argument(
+                "Uop operation: number of qubits does "
+                "not match the gate requirements.");
 
-        for (int pos = 0; pos < static_cast<int>(stmt.qubits.size());
-             pos += nrQubits) {
-          Types::qubits_vector gateQubits;
-          for (int q = 0; q < nrQubits; ++q)
-            gateQubits.push_back(
-                static_cast<Types::qubit_t>(stmt.qubits[pos + q]));
+          for (int pos = 0; pos < static_cast<int>(stmt.qubits.size());
+               pos += nrQubits) {
+            Types::qubits_vector gateQubits;
+            for (int q = 0; q < nrQubits; ++q)
+              gateQubits.push_back(
+                  static_cast<Types::qubit_t>(stmt.qubits[pos + q]));
 
-          auto gateOp = Circuits::CircuitFactory<Time>::CreateGate(
-              stmt.gateType, gateQubits[0], nrQubits > 1 ? gateQubits[1] : 0,
-              nrQubits > 2 ? gateQubits[2] : 0, param1, param2, param3, param4);
+            auto gateOp = Circuits::CircuitFactory<Time>::CreateGate(
+                stmt.gateType, gateQubits[0], nrQubits > 1 ? gateQubits[1] : 0,
+                nrQubits > 2 ? gateQubits[2] : 0, param1, param2, param3,
+                param4);
 
-          circuit->AddOperation(gateOp);
-        }
-      } else {
-        // it's a defined gate, check further and implement
-        // will add several gates to the circuit
-        if (stmt.paramsDecl.size() != stmt.parameters.size())
-          throw std::invalid_argument("Uop operation: number of parameters do "
-                                      "not match the declaration.");
-
-        std::unordered_map<std::string, double> variables;
-
-        for (size_t i = 0; i < stmt.paramsDecl.size(); ++i)
-          variables[stmt.paramsDecl[i]] = stmt.parameters[i];
-
-        int nrQubits = static_cast<int>(stmt.qubitsDecl.size());
-        if (stmt.qubits.size() % nrQubits != 0)
-          throw std::invalid_argument("Defined Uop operation: number of qubits "
-                                      "does not match the gate requirements.");
-
-        for (int pos = 0; pos < static_cast<int>(stmt.qubits.size());
-             pos += nrQubits) {
-          std::unordered_map<std::string, IndexedId> qubitMap;
-          for (int q = 0; q < nrQubits; ++q) {
-            IndexedId id;
-            id.id = stmt.qubitsDecl[q];
-            id.base = stmt.qubits[pos + q];
-            id.index = 1;
-            qubitMap[id.id] = id;
+            circuit->AddOperation(gateOp);
           }
+        } else {
+          // it's a defined gate, check further and implement
+          // will add several gates to the circuit
+          if (stmt.paramsDecl.size() != stmt.parameters.size())
+            throw std::invalid_argument(
+                "Uop operation: number of parameters do "
+                "not match the declaration.");
 
-          // now walk over all gates in declOps and add them to the circuit
-          AddGateExpr addGate;
-          for (const auto &op : stmt.declOps) {
-            StatementType gateStmt =
-                addGate(op, qubitMap, opaqueGates, definedGates, variables);
+          std::unordered_map<std::string, double> variables;
 
-            AddToCircuit(circuit, gateStmt, opaqueGates, definedGates);
-          }
-        }
-      }
-    } break;
-    case QoperationStatement::OperationType::CondUop: {
-      unsigned long long int condValue =
-          static_cast<unsigned long long int>(stmt.condValue);
+          for (size_t i = 0; i < stmt.paramsDecl.size(); ++i)
+            variables[stmt.paramsDecl[i]] = stmt.parameters[i];
 
-      if (stmt.gateType != Circuits::QuantumGateType::kNone) {
-        // can add more than one gate here depending on what's in qubits
-        double param1 = stmt.parameters.size() > 0 ? stmt.parameters[0] : 0;
-        double param2 = stmt.parameters.size() > 1 ? stmt.parameters[1] : 0;
-        double param3 = stmt.parameters.size() > 2 ? stmt.parameters[2] : 0;
-        double param4 = stmt.parameters.size() > 3 ? stmt.parameters[3] : 0;
+          int nrQubits = static_cast<int>(stmt.qubitsDecl.size());
+          if (stmt.qubits.size() % nrQubits != 0)
+            throw std::invalid_argument(
+                "Defined Uop operation: number of qubits "
+                "does not match the gate requirements.");
 
-        int nrQubits = AddGateExpr::GateNrQubits(stmt.gateType);
-        if (stmt.qubits.size() % nrQubits != 0)
-          throw std::invalid_argument("Uop operation: number of qubits does "
-                                      "not match the gate requirements.");
+          for (int pos = 0; pos < static_cast<int>(stmt.qubits.size());
+               pos += nrQubits) {
+            std::unordered_map<std::string, IndexedId> qubitMap;
+            for (int q = 0; q < nrQubits; ++q) {
+              IndexedId id;
+              id.id = stmt.qubitsDecl[q];
+              id.base = stmt.qubits[pos + q];
+              id.index = 1;
+              qubitMap[id.id] = id;
+            }
 
-        std::vector<size_t> ind;
-        std::vector<bool> condBits;
+            // now walk over all gates in declOps and add them to the circuit
+            AddGateExpr addGate;
+            for (const auto &op : stmt.declOps) {
+              StatementType gateStmt =
+                  addGate(op, qubitMap, opaqueGates, definedGates, variables);
 
-        for (size_t i = 0; i < stmt.cbits.size(); ++i) {
-          ind.push_back(static_cast<size_t>(stmt.cbits[i]));
-          condBits.push_back((condValue & 1) == 1);
-          condValue >>= 1;
-        }
-
-        const auto condition =
-            Circuits::CircuitFactory<Time>::CreateEqualCondition(ind, condBits);
-
-        for (int pos = 0; pos < static_cast<int>(stmt.qubits.size());
-             pos += nrQubits) {
-          Types::qubits_vector gateQubits;
-          for (int q = 0; q < nrQubits; ++q)
-            gateQubits.push_back(
-                static_cast<Types::qubit_t>(stmt.qubits[pos + q]));
-
-          auto gateOp = Circuits::CircuitFactory<Time>::CreateGate(
-              stmt.gateType, gateQubits[0], nrQubits > 1 ? gateQubits[1] : 0,
-              nrQubits > 2 ? gateQubits[2] : 0, param1, param2, param3, param4);
-
-          auto condOp = Circuits::CircuitFactory<Time>::CreateConditionalGate(
-              gateOp, condition);
-          circuit->AddOperation(condOp);
-        }
-      } else {
-        // it's a defined gate, check further and implement
-        // will add several gates to the circuit
-        if (stmt.paramsDecl.size() != stmt.parameters.size())
-          throw std::invalid_argument("Uop operation: number of parameters do "
-                                      "not match the declaration.");
-
-        std::unordered_map<std::string, double> variables;
-
-        for (size_t i = 0; i < stmt.paramsDecl.size(); ++i)
-          variables[stmt.paramsDecl[i]] = stmt.parameters[i];
-
-        int nrQubits = static_cast<int>(stmt.qubitsDecl.size());
-        if (stmt.qubits.size() % nrQubits != 0)
-          throw std::invalid_argument("Defined Uop operation: number of qubits "
-                                      "does not match the gate requirements.");
-
-        for (int pos = 0; pos < static_cast<int>(stmt.qubits.size());
-             pos += nrQubits) {
-          std::unordered_map<std::string, IndexedId> qubitMap;
-          for (int q = 0; q < nrQubits; ++q) {
-            IndexedId id;
-            id.id = stmt.qubitsDecl[q];
-            id.base = stmt.qubits[pos + q];
-            id.index = 1;
-            qubitMap[id.id] = id;
-          }
-
-          // now walk over all gates in declOps and add them to the circuit
-          AddGateExpr addGate;
-          for (const auto &op : stmt.declOps) {
-            StatementType gateStmt =
-                addGate(op, qubitMap, opaqueGates, definedGates, variables);
-
-            // make each of them conditioned on the original condition
-            gateStmt.opType = QoperationStatement::OperationType::CondUop;
-            gateStmt.condValue = static_cast<int>(condValue);
-            gateStmt.cbits = stmt.cbits;
-
-            AddToCircuit(circuit, gateStmt, opaqueGates, definedGates);
+              AddToCircuit(circuit, gateStmt, opaqueGates, definedGates);
+            }
           }
         }
-      }
-    } break;
-    case QoperationStatement::OperationType::Comment:
-    case QoperationStatement::OperationType::Declaration:
-    case QoperationStatement::OperationType::Barrier:
-    case QoperationStatement::OperationType::OpaqueDecl:
-    case QoperationStatement::OperationType::
-        GateDecl: // do not generate anything here, it's already handled when
-                  // the gate is called
-    default:
-      // those are ignored
-      break;
+      } break;
+      case QoperationStatement::OperationType::CondUop: {
+        unsigned long long int condValue =
+            static_cast<unsigned long long int>(stmt.condValue);
+
+        if (stmt.gateType != Circuits::QuantumGateType::kNone) {
+          // can add more than one gate here depending on what's in qubits
+          double param1 = stmt.parameters.size() > 0 ? stmt.parameters[0] : 0;
+          double param2 = stmt.parameters.size() > 1 ? stmt.parameters[1] : 0;
+          double param3 = stmt.parameters.size() > 2 ? stmt.parameters[2] : 0;
+          double param4 = stmt.parameters.size() > 3 ? stmt.parameters[3] : 0;
+
+          int nrQubits = AddGateExpr::GateNrQubits(stmt.gateType);
+          if (stmt.qubits.size() % nrQubits != 0)
+            throw std::invalid_argument(
+                "Uop operation: number of qubits does "
+                "not match the gate requirements.");
+
+          std::vector<size_t> ind;
+          std::vector<bool> condBits;
+
+          for (size_t i = 0; i < stmt.cbits.size(); ++i) {
+            ind.push_back(static_cast<size_t>(stmt.cbits[i]));
+            condBits.push_back((condValue & 1) == 1);
+            condValue >>= 1;
+          }
+
+          const auto condition =
+              Circuits::CircuitFactory<Time>::CreateEqualCondition(ind,
+                                                                   condBits);
+
+          for (int pos = 0; pos < static_cast<int>(stmt.qubits.size());
+               pos += nrQubits) {
+            Types::qubits_vector gateQubits;
+            for (int q = 0; q < nrQubits; ++q)
+              gateQubits.push_back(
+                  static_cast<Types::qubit_t>(stmt.qubits[pos + q]));
+
+            auto gateOp = Circuits::CircuitFactory<Time>::CreateGate(
+                stmt.gateType, gateQubits[0], nrQubits > 1 ? gateQubits[1] : 0,
+                nrQubits > 2 ? gateQubits[2] : 0, param1, param2, param3,
+                param4);
+
+            auto condOp = Circuits::CircuitFactory<Time>::CreateConditionalGate(
+                gateOp, condition);
+            circuit->AddOperation(condOp);
+          }
+        } else {
+          // it's a defined gate, check further and implement
+          // will add several gates to the circuit
+          if (stmt.paramsDecl.size() != stmt.parameters.size())
+            throw std::invalid_argument(
+                "Uop operation: number of parameters do "
+                "not match the declaration.");
+
+          std::unordered_map<std::string, double> variables;
+
+          for (size_t i = 0; i < stmt.paramsDecl.size(); ++i)
+            variables[stmt.paramsDecl[i]] = stmt.parameters[i];
+
+          int nrQubits = static_cast<int>(stmt.qubitsDecl.size());
+          if (stmt.qubits.size() % nrQubits != 0)
+            throw std::invalid_argument(
+                "Defined Uop operation: number of qubits "
+                "does not match the gate requirements.");
+
+          for (int pos = 0; pos < static_cast<int>(stmt.qubits.size());
+               pos += nrQubits) {
+            std::unordered_map<std::string, IndexedId> qubitMap;
+            for (int q = 0; q < nrQubits; ++q) {
+              IndexedId id;
+              id.id = stmt.qubitsDecl[q];
+              id.base = stmt.qubits[pos + q];
+              id.index = 1;
+              qubitMap[id.id] = id;
+            }
+
+            // now walk over all gates in declOps and add them to the circuit
+            AddGateExpr addGate;
+            for (const auto &op : stmt.declOps) {
+              StatementType gateStmt =
+                  addGate(op, qubitMap, opaqueGates, definedGates, variables);
+
+              // make each of them conditioned on the original condition
+              gateStmt.opType = QoperationStatement::OperationType::CondUop;
+              gateStmt.condValue = static_cast<int>(condValue);
+              gateStmt.cbits = stmt.cbits;
+
+              AddToCircuit(circuit, gateStmt, opaqueGates, definedGates);
+            }
+          }
+        }
+      } break;
+      case QoperationStatement::OperationType::Comment:
+      case QoperationStatement::OperationType::Declaration:
+      case QoperationStatement::OperationType::Barrier:
+      case QoperationStatement::OperationType::OpaqueDecl:
+      case QoperationStatement::OperationType::
+          GateDecl:  // do not generate anything here, it's already handled when
+                     // the gate is called
+      default:
+        // those are ignored
+        break;
     }
   }
 };
 
-} // namespace qasm
+}  // namespace qasm
 
-#endif // !_SYNTAXTREE_H_
+#endif  // !_SYNTAXTREE_H_
