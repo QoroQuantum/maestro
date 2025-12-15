@@ -47,7 +47,7 @@ namespace Private {
  * @sa QCSimSimulator
  */
 class QCSimState : public ISimulator {
-public:
+ public:
   QCSimState() : rng(std::random_device{}()), uniformZeroOne(0, 1) {}
 
   /**
@@ -64,8 +64,7 @@ public:
             std::make_unique<QC::TensorNetworks::MPSSimulator>(nrQubits);
         if (limitEntanglement && singularValueThreshold > 0.)
           mpsSimulator->setLimitEntanglement(singularValueThreshold);
-        if (limitSize && chi > 0)
-          mpsSimulator->setLimitBondDimension(chi);
+        if (limitSize && chi > 0) mpsSimulator->setLimitBondDimension(chi);
       } else if (simulationType == SimulationType::kStabilizer)
         cliffordSimulator =
             std::make_unique<QC::Clifford::StabilizerSimulator>(nrQubits);
@@ -97,14 +96,14 @@ public:
    */
   void InitializeState(size_t num_qubits,
                        std::vector<std::complex<double>> &amplitudes) override {
-    if (num_qubits == 0)
-      return;
+    if (num_qubits == 0) return;
     Clear();
     nrQubits = num_qubits;
     Initialize();
     if (simulationType != SimulationType::kStatevector)
-      throw std::runtime_error("QCSimState::InitializeState: Invalid "
-                               "simulation type for initializing the state.");
+      throw std::runtime_error(
+          "QCSimState::InitializeState: Invalid "
+          "simulation type for initializing the state.");
 
     Eigen::VectorXcd amplitudesEigen(
         Eigen::Map<Eigen::VectorXcd, Eigen::Unaligned>(amplitudes.data(),
@@ -150,14 +149,14 @@ public:
 #ifndef NO_QISKIT_AER
   void InitializeState(size_t num_qubits,
                        AER::Vector<std::complex<double>> &amplitudes) override {
-    if (num_qubits == 0)
-      return;
+    if (num_qubits == 0) return;
     Clear();
     nrQubits = num_qubits;
     Initialize();
     if (simulationType != SimulationType::kStatevector)
-      throw std::runtime_error("QCSimState::InitializeState: Invalid "
-                               "simulation type for initializing the state.");
+      throw std::runtime_error(
+          "QCSimState::InitializeState: Invalid "
+          "simulation type for initializing the state.");
 
     Eigen::VectorXcd amplitudesEigen(
         Eigen::Map<Eigen::VectorXcd, Eigen::Unaligned>(amplitudes.data(),
@@ -179,15 +178,15 @@ public:
    */
   void InitializeState(size_t num_qubits,
                        Eigen::VectorXcd &amplitudes) override {
-    if (num_qubits == 0)
-      return;
+    if (num_qubits == 0) return;
     Clear();
     nrQubits = num_qubits;
     Initialize();
 
     if (simulationType != SimulationType::kStatevector)
-      throw std::runtime_error("QCSimState::InitializeState: Invalid "
-                               "simulation type for initializing the state.");
+      throw std::runtime_error(
+          "QCSimState::InitializeState: Invalid "
+          "simulation type for initializing the state.");
 
     state = std::make_unique<QC::QubitRegister<>>(nrQubits, amplitudes);
     state->SetMultithreading(enableMultithreading);
@@ -241,8 +240,7 @@ public:
       chi = std::stoi(value);
       if (chi > 0) {
         limitSize = true;
-        if (mpsSimulator)
-          mpsSimulator->setLimitBondDimension(chi);
+        if (mpsSimulator) mpsSimulator->setLimitBondDimension(chi);
       } else
         limitSize = false;
     } else if (std::string("mps_sample_measure_algorithm") == key)
@@ -259,24 +257,23 @@ public:
   std::string GetConfiguration(const char *key) const override {
     if (std::string("method") == key) {
       switch (simulationType) {
-      case SimulationType::kStatevector:
-        return "statevector";
-      case SimulationType::kMatrixProductState:
-        return "matrix_product_state";
-      case SimulationType::kStabilizer:
-        return "stabilizer";
-      case SimulationType::kTensorNetwork:
-        return "tensor_network";
-      default:
-        return "other";
+        case SimulationType::kStatevector:
+          return "statevector";
+        case SimulationType::kMatrixProductState:
+          return "matrix_product_state";
+        case SimulationType::kStabilizer:
+          return "stabilizer";
+        case SimulationType::kTensorNetwork:
+          return "tensor_network";
+        default:
+          return "other";
       }
     } else if (std::string("matrix_product_state_truncation_threshold") ==
                key) {
       if (limitEntanglement && singularValueThreshold > 0.)
         return std::to_string(singularValueThreshold);
     } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
-      if (limitSize && limitSize > 0)
-        return std::to_string(chi);
+      if (limitSize && limitSize > 0) return std::to_string(chi);
     } else if (std::string("mps_sample_measure_algorithm") == key) {
       return useMPSMeasureNoCollapse ? "mps_probabilities"
                                      : "mps_apply_measure";
@@ -346,8 +343,7 @@ public:
     DontNotify();
     if (simulationType == SimulationType::kStatevector) {
       for (size_t qubit : qubits) {
-        if (state->MeasureQubit(static_cast<unsigned int>(qubit)))
-          res |= mask;
+        if (state->MeasureQubit(static_cast<unsigned int>(qubit))) res |= mask;
         mask <<= 1;
       }
     } else if (simulationType == SimulationType::kStabilizer) {
@@ -374,8 +370,7 @@ public:
       const std::set<Eigen::Index> qubitsSet(qubits.begin(), qubits.end());
       auto measured = mpsSimulator->MeasureQubits(qubitsSet);
       for (Types::qubit_t qubit : qubits) {
-        if (measured[qubit])
-          res |= mask;
+        if (measured[qubit]) res |= mask;
         mask <<= 1;
       }
     }
@@ -461,8 +456,9 @@ public:
           "QCSimState::Amplitude: Invalid simulation type for obtaining the "
           "amplitude of the specified outcome.");
     else if (simulationType == SimulationType::kTensorNetwork)
-      throw std::runtime_error("QCSimState::Amplitude: Not supported for the "
-                               "tensor network simulator.");
+      throw std::runtime_error(
+          "QCSimState::Amplitude: Not supported for the "
+          "tensor network simulator.");
 
     return state->getBasisStateAmplitude(static_cast<unsigned int>(outcome));
   }
@@ -480,8 +476,9 @@ public:
   std::vector<double> AllProbabilities() override {
     // TODO: In principle this could be done, but why? It should be costly.
     if (simulationType == SimulationType::kTensorNetwork)
-      throw std::runtime_error("QCSimState::AllProbabilities: Invalid "
-                               "simulation type for obtaining probabilities.");
+      throw std::runtime_error(
+          "QCSimState::AllProbabilities: Invalid "
+          "simulation type for obtaining probabilities.");
     else if (simulationType == SimulationType::kStabilizer)
       return cliffordSimulator->AllProbabilities();
 
@@ -492,8 +489,7 @@ public:
 
     std::vector<double> result(probs.size());
 
-    for (int i = 0; i < probs.size(); ++i)
-      result[i] = probs[i].real();
+    for (int i = 0; i < probs.size(); ++i) result[i] = probs[i].real();
 
     return result;
   }
@@ -509,15 +505,17 @@ public:
    * @return A vector with the probabilities for the specified qubit
    * configurations.
    */
-  std::vector<double>
-  Probabilities(const Types::qubits_vector &qubits) override {
+  std::vector<double> Probabilities(
+      const Types::qubits_vector &qubits) override {
     if (simulationType == SimulationType::kStabilizer)
-      throw std::runtime_error("QCSimState::Probabilities: Invalid simulation "
-                               "type for obtaining probabilities.");
+      throw std::runtime_error(
+          "QCSimState::Probabilities: Invalid simulation "
+          "type for obtaining probabilities.");
     else if (simulationType == SimulationType::kTensorNetwork) {
       // TODO: Implement this!!!
-      throw std::runtime_error("QCSimState::Probabilities: Not implemented yet "
-                               "for the tensor network simulator.");
+      throw std::runtime_error(
+          "QCSimState::Probabilities: Not implemented yet "
+          "for the tensor network simulator.");
     }
 
     std::vector<double> result(qubits.size());
@@ -548,11 +546,9 @@ public:
    * @return A map with the counts for the otcomes of measurements of the
    * specified qubits.
    */
-  std::unordered_map<Types::qubit_t, Types::qubit_t>
-  SampleCounts(const Types::qubits_vector &qubits,
-               size_t shots = 1000) override {
-    if (qubits.empty() || shots == 0)
-      return {};
+  std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
+      const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    if (qubits.empty() || shots == 0) return {};
 
     // TODO: this is inefficient, maybe implement it better in qcsim
     // for now it has the possibility of measuring a qubits interval, but not a
@@ -577,8 +573,7 @@ public:
             // translate the measurement
             for (auto q : qubits) {
               const size_t qubitMask = 1ULL << q;
-              if (measRaw & qubitMask)
-                meas |= mask;
+              if (measRaw & qubitMask) meas |= mask;
               mask <<= 1ULL;
             }
 
@@ -625,8 +620,7 @@ public:
           size_t mask = 1ULL;
           for (auto q : qubits) {
             const size_t qubitMask = 1ULL << q;
-            if ((measRaw & qubitMask) != 0)
-              meas |= mask;
+            if ((measRaw & qubitMask) != 0) meas |= mask;
             mask <<= 1ULL;
           }
 
@@ -640,8 +634,7 @@ public:
 
           for (auto q : qubits) {
             const size_t qubitMask = 1ULL << q;
-            if ((measRaw & qubitMask) != 0)
-              meas |= mask;
+            if ((measRaw & qubitMask) != 0) meas |= mask;
             mask <<= 1ULL;
           }
 
@@ -668,15 +661,13 @@ public:
    * @return The expected value of the specified Pauli string.
    */
   double ExpectationValue(const std::string &pauliStringOrig) override {
-    if (pauliStringOrig.empty())
-      return 1.0;
+    if (pauliStringOrig.empty()) return 1.0;
 
     std::string pauliString = pauliStringOrig;
     if (pauliString.size() > GetNumberOfQubits()) {
       for (size_t i = GetNumberOfQubits(); i < pauliString.size(); ++i) {
         const auto pauliOp = toupper(pauliString[i]);
-        if (pauliOp != 'I' && pauliOp != 'Z')
-          return 0.0;
+        if (pauliOp != 'I' && pauliOp != 'Z') return 0.0;
       }
 
       pauliString.resize(GetNumberOfQubits());
@@ -697,30 +688,29 @@ public:
 
     for (size_t q = 0; q < pauliString.size(); ++q) {
       switch (toupper(pauliString[q])) {
-      case 'X': {
-        QC::Gates::AppliedGate<Eigen::MatrixXcd> ag(
-            xgate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
-        pauliStringVec.emplace_back(std::move(ag));
-      } break;
-      case 'Y': {
-        QC::Gates::AppliedGate<Eigen::MatrixXcd> ag(
-            ygate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
-        pauliStringVec.emplace_back(std::move(ag));
-      } break;
-      case 'Z': {
-        QC::Gates::AppliedGate<Eigen::MatrixXcd> ag(
-            zgate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
-        pauliStringVec.emplace_back(std::move(ag));
-      } break;
-      case 'I':
-        [[fallthrough]];
-      default:
-        break;
+        case 'X': {
+          QC::Gates::AppliedGate<Eigen::MatrixXcd> ag(
+              xgate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
+          pauliStringVec.emplace_back(std::move(ag));
+        } break;
+        case 'Y': {
+          QC::Gates::AppliedGate<Eigen::MatrixXcd> ag(
+              ygate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
+          pauliStringVec.emplace_back(std::move(ag));
+        } break;
+        case 'Z': {
+          QC::Gates::AppliedGate<Eigen::MatrixXcd> ag(
+              zgate.getRawOperatorMatrix(), static_cast<Types::qubit_t>(q));
+          pauliStringVec.emplace_back(std::move(ag));
+        } break;
+        case 'I':
+          [[fallthrough]];
+        default:
+          break;
       }
     }
 
-    if (pauliStringVec.empty())
-      return 1.0;
+    if (pauliStringVec.empty()) return 1.0;
 
     if (simulationType == SimulationType::kMatrixProductState)
       return mpsSimulator->ExpectationValue(pauliStringVec).real();
@@ -836,12 +826,9 @@ public:
    */
   void SetMultithreading(bool multithreading = true) override {
     enableMultithreading = multithreading;
-    if (state)
-      state->SetMultithreading(multithreading);
-    if (cliffordSimulator)
-      cliffordSimulator->SetMultithreading(multithreading);
-    if (tensorNetwork)
-      tensorNetwork->SetMultithreading(multithreading);
+    if (state) state->SetMultithreading(multithreading);
+    if (cliffordSimulator) cliffordSimulator->SetMultithreading(multithreading);
+    if (tensorNetwork) tensorNetwork->SetMultithreading(multithreading);
   }
 
   /**
@@ -886,8 +873,7 @@ public:
       Types::qubit_t result = 0;
       Types::qubit_t mask = 1;
       for (const auto &meas : measured) {
-        if (meas)
-          result |= mask;
+        if (meas) result |= mask;
         mask <<= 1;
       }
       return result;
@@ -900,7 +886,7 @@ public:
     return 0;
   }
 
-protected:
+ protected:
   SimulationType simulationType =
       SimulationType::kStatevector; /**< The simulation type. */
 
@@ -915,9 +901,9 @@ protected:
   size_t nrQubits = 0; /**< The number of allocated qubits. */
   bool limitSize = false;
   bool limitEntanglement = false;
-  Eigen::Index chi = 10;              // if limitSize is true
-  double singularValueThreshold = 0.; // if limitEntanglement is true
-  bool enableMultithreading = true;   /**< The multithreading flag. */
+  Eigen::Index chi = 10;               // if limitSize is true
+  double singularValueThreshold = 0.;  // if limitEntanglement is true
+  bool enableMultithreading = true;    /**< The multithreading flag. */
   bool useMPSMeasureNoCollapse =
       true; /**< The flag to use the mps measure no collapse algorithm. */
 
@@ -925,9 +911,9 @@ protected:
   std::uniform_real_distribution<double> uniformZeroOne;
 };
 
-} // namespace Private
-} // namespace Simulators
+}  // namespace Private
+}  // namespace Simulators
 
 #endif
 
-#endif // !_QCSIMSTATE_H_
+#endif  // !_QCSIMSTATE_H_

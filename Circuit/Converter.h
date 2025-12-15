@@ -30,8 +30,9 @@ namespace Circuits {
  *
  * @tparam Time The time type.
  */
-template <typename Time = Types::time_type> class Converter {
-public:
+template <typename Time = Types::time_type>
+class Converter {
+ public:
   /**
    * Converts a smart pointer to the IOperation interface/base class to a smart
    * pointer to the Circuit class.
@@ -40,8 +41,8 @@ public:
    * @return The smart pointer to the Circuit class or a null pointer if the
    * conversion is not possible.
    */
-  static std::shared_ptr<Circuit<Time>>
-  ToCircuit(const std::shared_ptr<IOperation<Time>> &operation) {
+  static std::shared_ptr<Circuit<Time>> ToCircuit(
+      const std::shared_ptr<IOperation<Time>> &operation) {
     if (!operation || operation->GetType() != OperationType::kComposite)
       return nullptr;
 
@@ -56,8 +57,8 @@ public:
    * @return The smart pointer to the QuantumGate class or a null pointer if the
    * conversion is not possible.
    */
-  static std::shared_ptr<IQuantumGate<Time>>
-  ToQuantumGate(const std::shared_ptr<IOperation<Time>> &operation) {
+  static std::shared_ptr<IQuantumGate<Time>> ToQuantumGate(
+      const std::shared_ptr<IOperation<Time>> &operation) {
     if (!operation || operation->GetType() != OperationType::kGate)
       return nullptr;
 
@@ -72,11 +73,10 @@ public:
    * @return The smart pointer to the SingleQubitGate class or a null pointer if
    * the conversion is not possible.
    */
-  static std::shared_ptr<SingleQubitGate<Time>>
-  ToSingleQubitGate(const std::shared_ptr<IOperation<Time>> &operation) {
+  static std::shared_ptr<SingleQubitGate<Time>> ToSingleQubitGate(
+      const std::shared_ptr<IOperation<Time>> &operation) {
     auto op = ToQuantumGate(operation);
-    if (!op || op->GetNumQubits() != 1)
-      return nullptr;
+    if (!op || op->GetNumQubits() != 1) return nullptr;
 
     return Convert<SingleQubitGate<Time>>(operation);
   }
@@ -89,11 +89,10 @@ public:
    * @return The smart pointer to the TwoQubitsGate class or a null pointer if
    * the conversion is not possible.
    */
-  static std::shared_ptr<TwoQubitsGate<Time>>
-  ToTwoQubitsGate(const std::shared_ptr<IOperation<Time>> &operation) {
+  static std::shared_ptr<TwoQubitsGate<Time>> ToTwoQubitsGate(
+      const std::shared_ptr<IOperation<Time>> &operation) {
     auto op = ToQuantumGate(operation);
-    if (!op || op->GetNumQubits() != 2)
-      return nullptr;
+    if (!op || op->GetNumQubits() != 2) return nullptr;
 
     return Convert<TwoQubitsGate<Time>>(operation);
   }
@@ -106,11 +105,10 @@ public:
    * @return The smart pointer to the ThreeQubitsGate class or a null pointer if
    * the conversion is not possible.
    */
-  static std::shared_ptr<ThreeQubitsGate<Time>>
-  ToThreeQubitsGate(const std::shared_ptr<IOperation<Time>> &operation) {
+  static std::shared_ptr<ThreeQubitsGate<Time>> ToThreeQubitsGate(
+      const std::shared_ptr<IOperation<Time>> &operation) {
     auto op = ToQuantumGate(operation);
-    if (!op || op->GetNumQubits() != 3)
-      return nullptr;
+    if (!op || op->GetNumQubits() != 3) return nullptr;
 
     return Convert<ThreeQubitsGate<Time>>(operation);
   }
@@ -125,8 +123,8 @@ public:
    * @return The smart pointer to the Random class or a null pointer if the
    * conversion is not possible.
    */
-  static std::shared_ptr<Random<Time>>
-  ToRandom(const std::shared_ptr<IOperation<Time>> &operation) {
+  static std::shared_ptr<Random<Time>> ToRandom(
+      const std::shared_ptr<IOperation<Time>> &operation) {
     if (!operation || operation->GetType() != OperationType::kRandomGen)
       return nullptr;
 
@@ -141,8 +139,8 @@ public:
    * @return The smart pointer to the Reset class or a null pointer if the
    * conversion is not possible.
    */
-  static std::shared_ptr<Reset<Time>>
-  ToReset(const std::shared_ptr<IOperation<Time>> &operation) {
+  static std::shared_ptr<Reset<Time>> ToReset(
+      const std::shared_ptr<IOperation<Time>> &operation) {
     if (!operation || operation->GetType() != OperationType::kReset)
       return nullptr;
 
@@ -157,8 +155,8 @@ public:
    * @return The smart pointer to the MeasurementOperation class or a null
    * pointer if the conversion is not possible.
    */
-  static std::shared_ptr<MeasurementOperation<Time>>
-  ToMeasurement(const std::shared_ptr<IOperation<Time>> &operation) {
+  static std::shared_ptr<MeasurementOperation<Time>> ToMeasurement(
+      const std::shared_ptr<IOperation<Time>> &operation) {
     if (!operation || operation->GetType() != OperationType::kMeasurement)
       return nullptr;
 
@@ -173,8 +171,8 @@ public:
    * @return The smart pointer to the ConditionalGate class or a null pointer if
    * the conversion is not possible.
    */
-  static std::shared_ptr<ConditionalGate<Time>>
-  ToConditionalGate(const std::shared_ptr<IOperation<Time>> &operation) {
+  static std::shared_ptr<ConditionalGate<Time>> ToConditionalGate(
+      const std::shared_ptr<IOperation<Time>> &operation) {
     if (!operation || operation->GetType() != OperationType::kConditionalGate)
       return nullptr;
 
@@ -189,8 +187,8 @@ public:
    * @return The smart pointer to the ConditionalMeasurement class or a null
    * pointer if the conversion is not possible.
    */
-  static std::shared_ptr<ConditionalMeasurement<Time>>
-  ToConditionalMeasurement(const std::shared_ptr<IOperation<Time>> &operation) {
+  static std::shared_ptr<ConditionalMeasurement<Time>> ToConditionalMeasurement(
+      const std::shared_ptr<IOperation<Time>> &operation) {
     if (!operation ||
         operation->GetType() != OperationType::kConditionalMeasurement)
       return nullptr;
@@ -206,8 +204,8 @@ public:
    * @return The smart pointer to the ConditionalRandomGen class or a null
    * pointer if the conversion is not possible.
    */
-  static std::shared_ptr<ConditionalRandomGen<Time>>
-  ToConditionalRandom(const std::shared_ptr<IOperation<Time>> &operation) {
+  static std::shared_ptr<ConditionalRandomGen<Time>> ToConditionalRandom(
+      const std::shared_ptr<IOperation<Time>> &operation) {
     if (!operation ||
         operation->GetType() != OperationType::kConditionalRandomGen)
       return nullptr;
@@ -223,22 +221,21 @@ public:
    * @return The smart pointer to the EqualCondition class or a null pointer if
    * the conversion is not possible.
    */
-  static std::shared_ptr<EqualCondition>
-  ToEqualCondition(const std::shared_ptr<ICondition> &cond) {
-    if (!cond)
-      return nullptr;
+  static std::shared_ptr<EqualCondition> ToEqualCondition(
+      const std::shared_ptr<ICondition> &cond) {
+    if (!cond) return nullptr;
 
     return std::static_pointer_cast<EqualCondition>(cond);
   }
 
-private:
+ private:
   template <typename T>
-  static std::shared_ptr<T>
-  Convert(const std::shared_ptr<IOperation<Time>> &operation) {
+  static std::shared_ptr<T> Convert(
+      const std::shared_ptr<IOperation<Time>> &operation) {
     return std::static_pointer_cast<T>(operation);
   }
 };
 
-} // namespace Circuits
+}  // namespace Circuits
 
 #endif
