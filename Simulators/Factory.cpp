@@ -30,7 +30,9 @@
 #include "Factory.h"
 
 #define INCLUDED_BY_FACTORY
+#ifndef NO_QISKIT_AER
 #include "AerSimulator.h"
+#endif
 #include "QCSimSimulator.h"
 #include "Composite.h"
 #include "GpuSimulator.h"
