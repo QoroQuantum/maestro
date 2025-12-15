@@ -35,42 +35,6 @@ endif()
 # Include FetchContent for automatic dependency management
 include(FetchContent)
 
-# Helper function to find FFTW3
-function(find_fftw3)
-    if (NOT DEFINED FFTW3_DIR)
-        SET( FFTW3_DIR "$ENV{FFTW3_DIR}" PARENT_SCOPE)
-        IF( NOT FFTW3_DIR )
-            # Try to find FFTW3 using pkg-config
-            find_package(PkgConfig QUIET)
-            if(PkgConfig_FOUND)
-                pkg_check_modules(FFTW3 QUIET fftw3)
-                if(FFTW3_FOUND)
-                    get_filename_component(FFTW3_DIR "${FFTW3_INCLUDE_DIRS}" DIRECTORY)
-                    set(FFTW3_DIR ${FFTW3_DIR} PARENT_SCOPE)
-                endif()
-            endif()
-            
-            # If still not found, try common locations
-            # Note: QCSim expects FFTW3_DIR to point to the include directory, not the root
-            if( NOT FFTW3_DIR )
-                if(EXISTS "/usr/include/fftw3.h")
-                    set(FFTW3_DIR "/usr/include" PARENT_SCOPE)
-                elseif(EXISTS "/usr/local/include/fftw3.h")
-                    set(FFTW3_DIR "/usr/local/include" PARENT_SCOPE)
-                elseif(EXISTS "/opt/homebrew/include/fftw3.h")
-                    set(FFTW3_DIR "/opt/homebrew/include" PARENT_SCOPE)
-                endif()
-            endif()
-            
-            if( NOT FFTW3_DIR )
-                MESSAGE( WARNING "FFTW3 not found. QCSim requires FFTW3. Please install libfftw3-dev (Ubuntu/Debian) or fftw (macOS) and set FFTW3_DIR environment variable if needed." )
-            else()
-                message(STATUS "Found FFTW3 at: ${FFTW3_DIR}")
-            endif()
-        ENDIF()
-    endif()
-endfunction()
-
 # Eigen 5 (header-only, can be fetched automatically)
 if (NOT DEFINED EIGEN5_INCLUDE_DIR)
     SET( EIGEN5_INCLUDE_DIR "$ENV{EIGEN5_INCLUDE_DIR}" )
@@ -91,31 +55,7 @@ ENDIF()
 # QCSim (can be fetched automatically, but requires FFTW3)
 if (NOT DEFINED QCSIM_INCLUDE_DIR)
     SET( QCSIM_INCLUDE_DIR "$ENV{QCSIM_INCLUDE_DIR}" )
-    IF( NOT QCSIM_INCLUDE_DIR )
-        # QCSim requires FFTW3 - find it first
-        find_fftw3()
-        
-        # Set FFTW3_DIR and library paths for QCSim's CMake
-        if( FFTW3_DIR )
-            set(ENV{FFTW3_DIR} ${FFTW3_DIR})
-            # QCSim may need the library directory path
-            # Try to find the actual library location
-            if(EXISTS "${FFTW3_DIR}/lib/x86_64-linux-gnu/libfftw3.a")
-                set(ENV{FFTW3_LIB_DIR} "${FFTW3_DIR}/lib/x86_64-linux-gnu")
-                # Also set CMAKE variables that QCSim might use
-                set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};${FFTW3_DIR}" CACHE STRING "" FORCE)
-                link_directories("${FFTW3_DIR}/lib/x86_64-linux-gnu")
-            elseif(EXISTS "${FFTW3_DIR}/lib/libfftw3.a")
-                set(ENV{FFTW3_LIB_DIR} "${FFTW3_DIR}/lib")
-                set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};${FFTW3_DIR}" CACHE STRING "" FORCE)
-                link_directories("${FFTW3_DIR}/lib")
-            elseif(EXISTS "${FFTW3_DIR}/lib64/libfftw3.a")
-                set(ENV{FFTW3_LIB_DIR} "${FFTW3_DIR}/lib64")
-                set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};${FFTW3_DIR}" CACHE STRING "" FORCE)
-                link_directories("${FFTW3_DIR}/lib64")
-            endif()
-        endif()
-        
+    IF( NOT QCSIM_INCLUDE_DIR )     
         # Auto-fetch QCSim if not provided
         message(STATUS "QCSIM_INCLUDE_DIR not set, fetching QCSim...")
         FetchContent_Declare(
