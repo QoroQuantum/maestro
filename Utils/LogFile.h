@@ -19,7 +19,7 @@
 namespace Utils {
 
 class LogFile {
-public:
+ public:
   LogFile(const std::string &filename) {
     logFile.open(filename, std::ios::out | std::ios::app);
     if (!logFile.is_open()) {
@@ -35,10 +35,10 @@ public:
     }
   }
 
-private:
+ private:
   std::ofstream logFile;
 };
 
-} // namespace Utils
+}  // namespace Utils
 
-#endif // __LOG_FILE_H__
+#endif  // __LOG_FILE_H__

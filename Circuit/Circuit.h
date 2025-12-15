@@ -43,7 +43,7 @@ namespace Circuits {
  */
 template <typename Time = Types::time_type>
 class Circuit : public IOperation<Time> {
-public:
+ public:
   using ExecuteResults =
       std::unordered_map<std::vector<bool>,
                          size_t>; /**< The results of the execution of the
@@ -95,11 +95,9 @@ public:
   void Execute(const std::shared_ptr<Simulators::ISimulator> &sim,
                OperationState &state) const override {
     state.Reset();
-    if (!sim)
-      return;
+    if (!sim) return;
 
-    for (const auto &op : operations)
-      op->Execute(sim, state);
+    for (const auto &op : operations) op->Execute(sim, state);
     // sim->Flush();
   }
 
@@ -130,8 +128,7 @@ public:
    * @sa IOperation
    */
   void ReplaceOperation(size_t index, const OperationPtr &op) {
-    if (index >= operations.size())
-      return;
+    if (index >= operations.size()) return;
     operations[index] = op;
   }
 
@@ -190,8 +187,7 @@ public:
   OperationPtr Clone() const override {
     OperationsVector newops;
 
-    for (auto &op : operations)
-      newops.emplace_back(op->Clone());
+    for (auto &op : operations) newops.emplace_back(op->Clone());
 
     return std::make_shared<Circuit<Time>>(newops);
   }
@@ -206,8 +202,7 @@ public:
   OperationPtr CloneFlyweight() const {
     OperationsVector newops;
 
-    for (auto &op : operations)
-      newops.push_back(op);
+    for (auto &op : operations) newops.push_back(op);
 
     return std::make_shared<Circuit<Time>>(newops);
   }
@@ -303,8 +298,7 @@ public:
 
     if (!ignoreNotMapped && sz == 0) {
       for (const auto &[from, to] : bitsMap)
-        if (to > sz)
-          sz = to;
+        if (to > sz) sz = to;
 
       ++sz;
     }
@@ -330,8 +324,7 @@ public:
    */
   static void AccumulateResults(ExecuteResults &results,
                                 const ExecuteResults &newResults) {
-    for (const auto &res : newResults)
-      results[res.first] += res.second;
+    for (const auto &res : newResults) results[res.first] += res.second;
   }
 
   /**
@@ -355,8 +348,7 @@ public:
                                              size_t sz = 0) {
     if (!ignoreNotMapped && sz == 0) {
       for (const auto &[from, to] : bitsMap)
-        if (to > sz)
-          sz = to;
+        if (to > sz) sz = to;
 
       ++sz;
     }
@@ -457,8 +449,7 @@ public:
       for (; j < operations.size(); ++j) {
         const auto op2 = operations[j];
 
-        if (op2->GetType() != OperationType::kMeasurement)
-          break;
+        if (op2->GetType() != OperationType::kMeasurement) break;
 
         affectedQubits = op2->AffectedQubits();
 
@@ -492,8 +483,7 @@ public:
               bits.erase(bit);
             }
         }
-        if (bits.empty())
-          break;
+        if (bits.empty()) break;
       }
 
       // now add the measurements that were left in any order
@@ -518,8 +508,7 @@ public:
     for (const auto &op : operations) {
       const auto qbits = op->AffectedQubits();
       for (auto q : qbits)
-        if (q > mx)
-          mx = q;
+        if (q > mx) mx = q;
     }
 
     return mx;
@@ -537,8 +526,7 @@ public:
     for (const auto &op : operations) {
       const auto qbits = op->AffectedQubits();
       for (auto q : qbits)
-        if (q < mn)
-          mn = q;
+        if (q < mn) mn = q;
     }
 
     return mn;
@@ -556,8 +544,7 @@ public:
     for (const auto &op : operations) {
       const auto cbits = op->AffectedBits();
       for (auto q : cbits)
-        if (q > mx)
-          mx = q;
+        if (q > mx) mx = q;
     }
 
     return mx;
@@ -575,8 +562,7 @@ public:
     for (const auto &op : operations) {
       const auto cbits = op->AffectedBits();
       for (auto q : cbits)
-        if (q < mn)
-          mn = q;
+        if (q < mn) mn = q;
     }
 
     return mn;
@@ -630,8 +616,7 @@ public:
     Types::qubits_vector qubitsVec;
     qubitsVec.reserve(qubits.size());
 
-    for (auto q : qubits)
-      qubitsVec.emplace_back(q);
+    for (auto q : qubits) qubitsVec.emplace_back(q);
 
     return qubitsVec;
   }
@@ -648,8 +633,7 @@ public:
     std::vector<size_t> bitsVec;
     bitsVec.reserve(bits.size());
 
-    for (auto b : bits)
-      bitsVec.emplace_back(b);
+    for (auto b : bits) bitsVec.emplace_back(b);
 
     return bitsVec;
   }
@@ -665,8 +649,7 @@ public:
    */
   bool NeedsEntanglementForDistribution() const override {
     for (const auto &op : operations)
-      if (op->NeedsEntanglementForDistribution())
-        return true;
+      if (op->NeedsEntanglementForDistribution()) return true;
 
     return false;
   }
@@ -680,8 +663,7 @@ public:
    */
   bool CanAffectQuantumState() const override {
     for (const auto &op : operations)
-      if (op->CanAffectQuantumState())
-        return true;
+      if (op->CanAffectQuantumState()) return true;
 
     return false;
   }
@@ -698,8 +680,7 @@ public:
 
     for (const auto &op : operations) {
       const auto qbits = op->AffectedQubits();
-      for (auto q : qbits)
-        lastOps[q] = op;
+      for (auto q : qbits) lastOps[q] = op;
     }
 
     return lastOps;
@@ -718,8 +699,7 @@ public:
     for (const auto &op : operations) {
       const auto qbits = op->AffectedQubits();
       for (auto q : qbits) {
-        if (firstOps.find(q) == firstOps.end())
-          firstOps[q] = op;
+        if (firstOps.find(q) == firstOps.end()) firstOps[q] = op;
       }
     }
 
@@ -739,8 +719,8 @@ public:
 
     for (const auto &[q, op] : GetLastOps)
       if (op->GetType() !=
-          OperationType::kReset) // don't add it if there is already a reset
-                                 // operation on the qubit
+          OperationType::kReset)  // don't add it if there is already a reset
+                                  // operation on the qubit
         operations.emplace_back(
             std::make_shared<Reset<Time>>(Types::qubits_vector{q}, delay));
   }
@@ -758,8 +738,8 @@ public:
 
     for (const auto &[q, op] : GetFirstOps)
       if (op->GetType() !=
-          OperationType::kReset) // don't add it if there is already a reset
-                                 // operation on the qubit
+          OperationType::kReset)  // don't add it if there is already a reset
+                                  // operation on the qubit
         operations.insert(
             operations.begin(),
             std::make_shared<Reset<Time>>(Types::qubits_vector{q}, delay));
@@ -858,230 +838,229 @@ public:
             // with a single gate, depending on the type) set changed to true if
             // something was changed
             switch (gateType) {
-            case QuantumGateType::kRxGateType:
-              [[fallthrough]];
-            case QuantumGateType::kRyGateType:
-              [[fallthrough]];
-            case QuantumGateType::kRzGateType:
-              if (!optimizeRotationGates) {
+              case QuantumGateType::kRxGateType:
+                [[fallthrough]];
+              case QuantumGateType::kRyGateType:
+                [[fallthrough]];
+              case QuantumGateType::kRzGateType:
+                if (!optimizeRotationGates) {
+                  newops.push_back(op);
+                  break;
+                }
+                [[fallthrough]];
+              case QuantumGateType::kPhaseGateType:
+                replace = true;
+                [[fallthrough]];
+              // those above will be replaced the pair with a single gate, all
+              // the following are the ones that get removed
+              case QuantumGateType::kHadamardGateType:
+                [[fallthrough]];
+              case QuantumGateType::kXGateType:
+                [[fallthrough]];
+              case QuantumGateType::kYGateType:
+                [[fallthrough]];
+              case QuantumGateType::kZGateType:
+                [[fallthrough]];
+              case QuantumGateType::kKGateType:
+                [[fallthrough]];
+              case QuantumGateType::kSGateType:
+                [[fallthrough]];
+              case QuantumGateType::kSdgGateType:
+                [[fallthrough]];
+              case QuantumGateType::kTGateType:
+                [[fallthrough]];
+              case QuantumGateType::kTdgGateType:
+                [[fallthrough]];
+              case QuantumGateType::kSxGateType:
+                [[fallthrough]];
+              case QuantumGateType::kSxDagGateType: {
+                bool found = false;
+
+                if (gateType == QuantumGateType::kSGateType)
+                  gateType = QuantumGateType::kSdgGateType;
+                else if (gateType == QuantumGateType::kSdgGateType)
+                  gateType = QuantumGateType::kSGateType;
+                else if (gateType == QuantumGateType::kTGateType)
+                  gateType = QuantumGateType::kTdgGateType;
+                else if (gateType == QuantumGateType::kTdgGateType)
+                  gateType = QuantumGateType::kTGateType;
+                else if (gateType == QuantumGateType::kSxGateType)
+                  gateType = QuantumGateType::kSxDagGateType;
+                else if (gateType == QuantumGateType::kSxDagGateType)
+                  gateType = QuantumGateType::kSxGateType;
+
+                for (size_t j = i + 1; j < operations.size(); ++j) {
+                  auto &nextOp = operations[j];
+                  if (!nextOp->CanAffectQuantumState()) continue;
+
+                  const auto nextQubits = nextOp->AffectedQubits();
+                  bool hasQubit = false;
+
+                  for (auto q : nextQubits)
+                    if (q == qubits[0]) {
+                      hasQubit = true;
+                      break;
+                    }
+
+                  if (!hasQubit)
+                    continue;  // an op that does not touch the current qubit
+                               // can be skipped
+                  else if (nextQubits.size() != 1)
+                    break;  // if it touches the current qubit and it's
+                            // something else than a single qubit gate, stop
+
+                  const auto nextType = nextOp->GetType();
+                  if (nextType != OperationType::kGate)
+                    break;  // could be a classically conditioned gate, stop
+
+                  const auto &nextGate =
+                      std::static_pointer_cast<SingleQubitGate<Time>>(nextOp);
+                  if (nextGate->GetGateType() == gateType) {
+                    if (replace) {
+                      const auto params1 = gate->GetParams();
+                      const auto params2 = nextGate->GetParams();
+
+                      const double param = params1[0] + params2[0];
+                      const auto delay =
+                          gate->GetDelay() + nextGate->GetDelay();
+
+                      if (gateType == QuantumGateType::kPhaseGateType)
+                        newops.push_back(std::make_shared<PhaseGate<Time>>(
+                            qubits[0], param, delay));
+                      else if (gateType == QuantumGateType::kRxGateType)
+                        newops.push_back(std::make_shared<RxGate<Time>>(
+                            qubits[0], param, delay));
+                      else if (gateType == QuantumGateType::kRyGateType)
+                        newops.push_back(std::make_shared<RyGate<Time>>(
+                            qubits[0], param, delay));
+                      else
+                        newops.push_back(std::make_shared<RzGate<Time>>(
+                            qubits[0], param, delay));
+                    }
+                    nextOp = std::make_shared<NoOperation<Time>>();
+                    changed = true;
+                    found = true;
+                    break;
+                  } else if ((gateType == QuantumGateType::kSGateType &&
+                              nextGate->GetGateType() ==
+                                  QuantumGateType::kSdgGateType) ||
+                             (gateType == QuantumGateType::kSdgGateType &&
+                              nextGate->GetGateType() ==
+                                  QuantumGateType::kSGateType)) {
+                    // if expecting an S gate (or a Sdg gate) and found the
+                    // original one instead, replace the pair with a Z gate (S *
+                    // S = Z, Sdag * Sdag = Z)
+                    const auto delay = gate->GetDelay() + nextGate->GetDelay();
+                    newops.push_back(
+                        std::make_shared<ZGate<Time>>(qubits[0], delay));
+                    nextOp = std::make_shared<NoOperation<Time>>();
+                    changed = true;
+                    found = true;
+                    break;
+                  } else if ((gateType == QuantumGateType::kSxGateType &&
+                              nextGate->GetGateType() ==
+                                  QuantumGateType::kSxDagGateType) ||
+                             (gateType == QuantumGateType::kSxDagGateType &&
+                              nextGate->GetGateType() ==
+                                  QuantumGateType::kSxGateType)) {
+                    // if expecting an S gate (or a Sdg gate) and found the
+                    // original one instead, replace the pair with a X gate (Sx
+                    // * Sx = X, SXdag * SXdag = X)
+                    const auto delay = gate->GetDelay() + nextGate->GetDelay();
+                    newops.push_back(
+                        std::make_shared<XGate<Time>>(qubits[0], delay));
+                    nextOp = std::make_shared<NoOperation<Time>>();
+                    changed = true;
+                    found = true;
+                    break;
+                  } else if (gateType == QuantumGateType::kTGateType &&
+                             nextGate->GetGateType() ==
+                                 QuantumGateType::kTdgGateType) {
+                    // if expecting a T gate and found the Tdgate instead,
+                    // replace the pair with a Sdag gate (Tdg * Tdg = Sdag)
+                    const auto delay = gate->GetDelay() + nextGate->GetDelay();
+                    newops.push_back(
+                        std::make_shared<SdgGate<Time>>(qubits[0], delay));
+                    nextOp = std::make_shared<NoOperation<Time>>();
+                    changed = true;
+                    found = true;
+                    break;
+                  } else if (gateType == QuantumGateType::kTdgGateType &&
+                             nextGate->GetGateType() ==
+                                 QuantumGateType::kTGateType) {
+                    // if expecting a Tdg gate and found the T gate instead,
+                    // replace the pair with a S gate (T * T = S)
+                    const auto delay = gate->GetDelay() + nextGate->GetDelay();
+                    newops.push_back(
+                        std::make_shared<SGate<Time>>(qubits[0], delay));
+                    nextOp = std::make_shared<NoOperation<Time>>();
+                    changed = true;
+                    found = true;
+                    break;
+                  } else if (gateType == QuantumGateType::kPhaseGateType &&
+                             (nextGate->GetGateType() ==
+                                  QuantumGateType::kSGateType ||
+                              nextGate->GetGateType() ==
+                                  QuantumGateType::kSdgGateType ||
+                              nextGate->GetGateType() ==
+                                  QuantumGateType::kTGateType ||
+                              nextGate->GetGateType() ==
+                                  QuantumGateType::kTdgGateType)) {
+                    const auto delay = gate->GetDelay() + nextGate->GetDelay();
+                    double param2;
+                    if (nextGate->GetGateType() == QuantumGateType::kSGateType)
+                      param2 = 0.5 * M_PI;
+                    else if (nextGate->GetGateType() ==
+                             QuantumGateType::kSdgGateType)
+                      param2 = -0.5 * M_PI;
+                    else if (nextGate->GetGateType() ==
+                             QuantumGateType::kTGateType)
+                      param2 = 0.25 * M_PI;
+                    else
+                      param2 = -0.25 * M_PI;
+
+                    const auto param = gate->GetParams()[0] + param2;
+                    newops.push_back(std::make_shared<PhaseGate<Time>>(
+                        qubits[0], param, delay));
+                    nextOp = std::make_shared<NoOperation<Time>>();
+                    changed = true;
+                    found = true;
+                    break;
+                  } else if (nextGate->GetGateType() ==
+                                 QuantumGateType::kPhaseGateType &&
+                             (gateType == QuantumGateType::kSGateType ||
+                              gateType == QuantumGateType::kSdgGateType ||
+                              gateType == QuantumGateType::kTGateType ||
+                              gateType == QuantumGateType::kTdgGateType)) {
+                    const auto delay = gate->GetDelay() + nextGate->GetDelay();
+                    double param1;
+                    if (gateType == QuantumGateType::kSGateType)
+                      param1 = -0.5 * M_PI;
+                    else if (gateType == QuantumGateType::kSdgGateType)
+                      param1 = 0.5 * M_PI;
+                    else if (gateType == QuantumGateType::kTGateType)
+                      param1 = -0.25 * M_PI;
+                    else
+                      param1 = 0.25 * M_PI;
+
+                    const auto param = nextGate->GetParams()[0] + param1;
+                    newops.push_back(std::make_shared<PhaseGate<Time>>(
+                        qubits[0], param, delay));
+                    nextOp = std::make_shared<NoOperation<Time>>();
+                    changed = true;
+                    found = true;
+                    break;
+                  } else
+                    break;  // not the expected gate, acting on same qubit, bail
+                            // out
+                }
+
+                if (!found) newops.push_back(op);
+              } break;
+              default:
+                // if no, just add it
                 newops.push_back(op);
                 break;
-              }
-              [[fallthrough]];
-            case QuantumGateType::kPhaseGateType:
-              replace = true;
-              [[fallthrough]];
-            // those above will be replaced the pair with a single gate, all the
-            // following are the ones that get removed
-            case QuantumGateType::kHadamardGateType:
-              [[fallthrough]];
-            case QuantumGateType::kXGateType:
-              [[fallthrough]];
-            case QuantumGateType::kYGateType:
-              [[fallthrough]];
-            case QuantumGateType::kZGateType:
-              [[fallthrough]];
-            case QuantumGateType::kKGateType:
-              [[fallthrough]];
-            case QuantumGateType::kSGateType:
-              [[fallthrough]];
-            case QuantumGateType::kSdgGateType:
-              [[fallthrough]];
-            case QuantumGateType::kTGateType:
-              [[fallthrough]];
-            case QuantumGateType::kTdgGateType:
-              [[fallthrough]];
-            case QuantumGateType::kSxGateType:
-              [[fallthrough]];
-            case QuantumGateType::kSxDagGateType: {
-              bool found = false;
-
-              if (gateType == QuantumGateType::kSGateType)
-                gateType = QuantumGateType::kSdgGateType;
-              else if (gateType == QuantumGateType::kSdgGateType)
-                gateType = QuantumGateType::kSGateType;
-              else if (gateType == QuantumGateType::kTGateType)
-                gateType = QuantumGateType::kTdgGateType;
-              else if (gateType == QuantumGateType::kTdgGateType)
-                gateType = QuantumGateType::kTGateType;
-              else if (gateType == QuantumGateType::kSxGateType)
-                gateType = QuantumGateType::kSxDagGateType;
-              else if (gateType == QuantumGateType::kSxDagGateType)
-                gateType = QuantumGateType::kSxGateType;
-
-              for (size_t j = i + 1; j < operations.size(); ++j) {
-                auto &nextOp = operations[j];
-                if (!nextOp->CanAffectQuantumState())
-                  continue;
-
-                const auto nextQubits = nextOp->AffectedQubits();
-                bool hasQubit = false;
-
-                for (auto q : nextQubits)
-                  if (q == qubits[0]) {
-                    hasQubit = true;
-                    break;
-                  }
-
-                if (!hasQubit)
-                  continue; // an op that does not touch the current qubit can
-                            // be skipped
-                else if (nextQubits.size() != 1)
-                  break; // if it touches the current qubit and it's something
-                         // else than a single qubit gate, stop
-
-                const auto nextType = nextOp->GetType();
-                if (nextType != OperationType::kGate)
-                  break; // could be a classically conditioned gate, stop
-
-                const auto &nextGate =
-                    std::static_pointer_cast<SingleQubitGate<Time>>(nextOp);
-                if (nextGate->GetGateType() == gateType) {
-                  if (replace) {
-                    const auto params1 = gate->GetParams();
-                    const auto params2 = nextGate->GetParams();
-
-                    const double param = params1[0] + params2[0];
-                    const auto delay = gate->GetDelay() + nextGate->GetDelay();
-
-                    if (gateType == QuantumGateType::kPhaseGateType)
-                      newops.push_back(std::make_shared<PhaseGate<Time>>(
-                          qubits[0], param, delay));
-                    else if (gateType == QuantumGateType::kRxGateType)
-                      newops.push_back(std::make_shared<RxGate<Time>>(
-                          qubits[0], param, delay));
-                    else if (gateType == QuantumGateType::kRyGateType)
-                      newops.push_back(std::make_shared<RyGate<Time>>(
-                          qubits[0], param, delay));
-                    else
-                      newops.push_back(std::make_shared<RzGate<Time>>(
-                          qubits[0], param, delay));
-                  }
-                  nextOp = std::make_shared<NoOperation<Time>>();
-                  changed = true;
-                  found = true;
-                  break;
-                } else if ((gateType == QuantumGateType::kSGateType &&
-                            nextGate->GetGateType() ==
-                                QuantumGateType::kSdgGateType) ||
-                           (gateType == QuantumGateType::kSdgGateType &&
-                            nextGate->GetGateType() ==
-                                QuantumGateType::kSGateType)) {
-                  // if expecting an S gate (or a Sdg gate) and found the
-                  // original one instead, replace the pair with a Z gate (S * S
-                  // = Z, Sdag * Sdag = Z)
-                  const auto delay = gate->GetDelay() + nextGate->GetDelay();
-                  newops.push_back(
-                      std::make_shared<ZGate<Time>>(qubits[0], delay));
-                  nextOp = std::make_shared<NoOperation<Time>>();
-                  changed = true;
-                  found = true;
-                  break;
-                } else if ((gateType == QuantumGateType::kSxGateType &&
-                            nextGate->GetGateType() ==
-                                QuantumGateType::kSxDagGateType) ||
-                           (gateType == QuantumGateType::kSxDagGateType &&
-                            nextGate->GetGateType() ==
-                                QuantumGateType::kSxGateType)) {
-                  // if expecting an S gate (or a Sdg gate) and found the
-                  // original one instead, replace the pair with a X gate (Sx *
-                  // Sx = X, SXdag * SXdag = X)
-                  const auto delay = gate->GetDelay() + nextGate->GetDelay();
-                  newops.push_back(
-                      std::make_shared<XGate<Time>>(qubits[0], delay));
-                  nextOp = std::make_shared<NoOperation<Time>>();
-                  changed = true;
-                  found = true;
-                  break;
-                } else if (gateType == QuantumGateType::kTGateType &&
-                           nextGate->GetGateType() ==
-                               QuantumGateType::kTdgGateType) {
-                  // if expecting a T gate and found the Tdgate instead, replace
-                  // the pair with a Sdag gate (Tdg * Tdg = Sdag)
-                  const auto delay = gate->GetDelay() + nextGate->GetDelay();
-                  newops.push_back(
-                      std::make_shared<SdgGate<Time>>(qubits[0], delay));
-                  nextOp = std::make_shared<NoOperation<Time>>();
-                  changed = true;
-                  found = true;
-                  break;
-                } else if (gateType == QuantumGateType::kTdgGateType &&
-                           nextGate->GetGateType() ==
-                               QuantumGateType::kTGateType) {
-                  // if expecting a Tdg gate and found the T gate instead,
-                  // replace the pair with a S gate (T * T = S)
-                  const auto delay = gate->GetDelay() + nextGate->GetDelay();
-                  newops.push_back(
-                      std::make_shared<SGate<Time>>(qubits[0], delay));
-                  nextOp = std::make_shared<NoOperation<Time>>();
-                  changed = true;
-                  found = true;
-                  break;
-                } else if (gateType == QuantumGateType::kPhaseGateType &&
-                           (nextGate->GetGateType() ==
-                                QuantumGateType::kSGateType ||
-                            nextGate->GetGateType() ==
-                                QuantumGateType::kSdgGateType ||
-                            nextGate->GetGateType() ==
-                                QuantumGateType::kTGateType ||
-                            nextGate->GetGateType() ==
-                                QuantumGateType::kTdgGateType)) {
-                  const auto delay = gate->GetDelay() + nextGate->GetDelay();
-                  double param2;
-                  if (nextGate->GetGateType() == QuantumGateType::kSGateType)
-                    param2 = 0.5 * M_PI;
-                  else if (nextGate->GetGateType() ==
-                           QuantumGateType::kSdgGateType)
-                    param2 = -0.5 * M_PI;
-                  else if (nextGate->GetGateType() ==
-                           QuantumGateType::kTGateType)
-                    param2 = 0.25 * M_PI;
-                  else
-                    param2 = -0.25 * M_PI;
-
-                  const auto param = gate->GetParams()[0] + param2;
-                  newops.push_back(std::make_shared<PhaseGate<Time>>(
-                      qubits[0], param, delay));
-                  nextOp = std::make_shared<NoOperation<Time>>();
-                  changed = true;
-                  found = true;
-                  break;
-                } else if (nextGate->GetGateType() ==
-                               QuantumGateType::kPhaseGateType &&
-                           (gateType == QuantumGateType::kSGateType ||
-                            gateType == QuantumGateType::kSdgGateType ||
-                            gateType == QuantumGateType::kTGateType ||
-                            gateType == QuantumGateType::kTdgGateType)) {
-                  const auto delay = gate->GetDelay() + nextGate->GetDelay();
-                  double param1;
-                  if (gateType == QuantumGateType::kSGateType)
-                    param1 = -0.5 * M_PI;
-                  else if (gateType == QuantumGateType::kSdgGateType)
-                    param1 = 0.5 * M_PI;
-                  else if (gateType == QuantumGateType::kTGateType)
-                    param1 = -0.25 * M_PI;
-                  else
-                    param1 = 0.25 * M_PI;
-
-                  const auto param = nextGate->GetParams()[0] + param1;
-                  newops.push_back(std::make_shared<PhaseGate<Time>>(
-                      qubits[0], param, delay));
-                  nextOp = std::make_shared<NoOperation<Time>>();
-                  changed = true;
-                  found = true;
-                  break;
-                } else
-                  break; // not the expected gate, acting on same qubit, bail
-                         // out
-              }
-
-              if (!found)
-                newops.push_back(op);
-            } break;
-            default:
-              // if no, just add it
-              newops.push_back(op);
-              break;
             }
           } else if (qubits.size() == 2) {
             auto gateType = gate->GetGateType();
@@ -1093,119 +1072,118 @@ public:
             // with a single gate, depending on the type) set changed to true if
             // something was changed
             switch (gateType) {
-            case QuantumGateType::kCRxGateType:
-              [[fallthrough]];
-            case QuantumGateType::kCRyGateType:
-              [[fallthrough]];
-            case QuantumGateType::kCRzGateType:
-              if (!optimizeRotationGates) {
+              case QuantumGateType::kCRxGateType:
+                [[fallthrough]];
+              case QuantumGateType::kCRyGateType:
+                [[fallthrough]];
+              case QuantumGateType::kCRzGateType:
+                if (!optimizeRotationGates) {
+                  newops.push_back(op);
+                  break;
+                }
+                [[fallthrough]];
+              case QuantumGateType::kCPGateType:
+                replace = true;
+                [[fallthrough]];
+                // those above will be replaced the pair with a single gate, all
+                // the following are the ones that get removed
+              case QuantumGateType::kCXGateType:
+                [[fallthrough]];
+              case QuantumGateType::kCYGateType:
+                [[fallthrough]];
+              case QuantumGateType::kCZGateType:
+                [[fallthrough]];
+              case QuantumGateType::kCHGateType:
+                [[fallthrough]];
+              case QuantumGateType::kSwapGateType:
+                [[fallthrough]];
+              case QuantumGateType::kCSxGateType:
+                [[fallthrough]];
+              case QuantumGateType::kCSxDagGateType: {
+                bool found = false;
+
+                if (gateType == QuantumGateType::kCSxGateType)
+                  gateType = QuantumGateType::kCSxDagGateType;
+                else if (gateType == QuantumGateType::kCSxDagGateType)
+                  gateType = QuantumGateType::kCSxGateType;
+
+                // looking forward for the next operation that acts on the same
+                // qubits
+                for (size_t j = i + 1; j < operations.size(); ++j) {
+                  auto &nextOp = operations[j];
+                  if (!nextOp->CanAffectQuantumState()) continue;
+
+                  const auto nextQubits = nextOp->AffectedQubits();
+
+                  bool hasQubit = false;
+
+                  for (auto q : nextQubits)
+                    if (q == qubits[0] || q == qubits[1]) {
+                      hasQubit = true;
+                      break;
+                    }
+
+                  if (!hasQubit)
+                    continue;  // an op that does not touch the current qubit
+                               // can be skipped
+                  else if (nextQubits.size() != 2)
+                    break;  // if it touches a current qubit and it's something
+                            // else than a two qubits gate, stop
+                  // if it's not the same qubits, bail out
+                  else if (gateType == QuantumGateType::kSwapGateType &&
+                           !((qubits[0] == nextQubits[0] &&
+                              qubits[1] == nextQubits[1]) ||
+                             (qubits[0] == nextQubits[1] &&
+                              qubits[1] == nextQubits[0])))
+                    break;
+                  else if (!(qubits[0] == nextQubits[0] &&
+                             qubits[1] == nextQubits[1]))
+                    break;
+
+                  const auto nextType = nextOp->GetType();
+                  if (nextType != OperationType::kGate)
+                    break;  // could be a classically conditioned gate, stop
+
+                  const auto &nextGate =
+                      std::static_pointer_cast<TwoQubitsGate<Time>>(nextOp);
+                  if (nextGate->GetGateType() == gateType) {
+                    if (replace) {
+                      const auto params1 = gate->GetParams();
+                      const auto params2 = nextGate->GetParams();
+                      const double param = params1[0] + params2[0];
+                      const auto delay =
+                          gate->GetDelay() + nextGate->GetDelay();
+
+                      if (gateType == QuantumGateType::kCPGateType)
+                        newops.push_back(std::make_shared<CPGate<Time>>(
+                            qubits[0], qubits[1], param, delay));
+                      else if (gateType == QuantumGateType::kCRxGateType)
+                        newops.push_back(std::make_shared<CRxGate<Time>>(
+                            qubits[0], qubits[1], param, delay));
+                      else if (gateType == QuantumGateType::kCRyGateType)
+                        newops.push_back(std::make_shared<CRyGate<Time>>(
+                            qubits[0], qubits[1], param, delay));
+                      else
+                        newops.push_back(std::make_shared<CRzGate<Time>>(
+                            qubits[0], qubits[1], param, delay));
+                    }
+                    nextOp = std::make_shared<NoOperation<Time>>();
+                    changed = true;  // continue merging gates, we found one
+                                     // that was merged/removed
+                    found = true;  // don't put op in the new operations, we
+                                   // handled it
+                    break;
+                  } else
+                    break;  // not the expected gate, acting on same qubits,
+                            // bail out
+                }  // end for of looking forward
+
+                if (!found) newops.push_back(op);
+              } break;
+              default:
+                // if no, just add it
                 newops.push_back(op);
                 break;
-              }
-              [[fallthrough]];
-            case QuantumGateType::kCPGateType:
-              replace = true;
-              [[fallthrough]];
-              // those above will be replaced the pair with a single gate, all
-              // the following are the ones that get removed
-            case QuantumGateType::kCXGateType:
-              [[fallthrough]];
-            case QuantumGateType::kCYGateType:
-              [[fallthrough]];
-            case QuantumGateType::kCZGateType:
-              [[fallthrough]];
-            case QuantumGateType::kCHGateType:
-              [[fallthrough]];
-            case QuantumGateType::kSwapGateType:
-              [[fallthrough]];
-            case QuantumGateType::kCSxGateType:
-              [[fallthrough]];
-            case QuantumGateType::kCSxDagGateType: {
-              bool found = false;
-
-              if (gateType == QuantumGateType::kCSxGateType)
-                gateType = QuantumGateType::kCSxDagGateType;
-              else if (gateType == QuantumGateType::kCSxDagGateType)
-                gateType = QuantumGateType::kCSxGateType;
-
-              // looking forward for the next operation that acts on the same
-              // qubits
-              for (size_t j = i + 1; j < operations.size(); ++j) {
-                auto &nextOp = operations[j];
-                if (!nextOp->CanAffectQuantumState())
-                  continue;
-
-                const auto nextQubits = nextOp->AffectedQubits();
-
-                bool hasQubit = false;
-
-                for (auto q : nextQubits)
-                  if (q == qubits[0] || q == qubits[1]) {
-                    hasQubit = true;
-                    break;
-                  }
-
-                if (!hasQubit)
-                  continue; // an op that does not touch the current qubit can
-                            // be skipped
-                else if (nextQubits.size() != 2)
-                  break; // if it touches a current qubit and it's something
-                         // else than a two qubits gate, stop
-                // if it's not the same qubits, bail out
-                else if (gateType == QuantumGateType::kSwapGateType &&
-                         !((qubits[0] == nextQubits[0] &&
-                            qubits[1] == nextQubits[1]) ||
-                           (qubits[0] == nextQubits[1] &&
-                            qubits[1] == nextQubits[0])))
-                  break;
-                else if (!(qubits[0] == nextQubits[0] &&
-                           qubits[1] == nextQubits[1]))
-                  break;
-
-                const auto nextType = nextOp->GetType();
-                if (nextType != OperationType::kGate)
-                  break; // could be a classically conditioned gate, stop
-
-                const auto &nextGate =
-                    std::static_pointer_cast<TwoQubitsGate<Time>>(nextOp);
-                if (nextGate->GetGateType() == gateType) {
-                  if (replace) {
-                    const auto params1 = gate->GetParams();
-                    const auto params2 = nextGate->GetParams();
-                    const double param = params1[0] + params2[0];
-                    const auto delay = gate->GetDelay() + nextGate->GetDelay();
-
-                    if (gateType == QuantumGateType::kCPGateType)
-                      newops.push_back(std::make_shared<CPGate<Time>>(
-                          qubits[0], qubits[1], param, delay));
-                    else if (gateType == QuantumGateType::kCRxGateType)
-                      newops.push_back(std::make_shared<CRxGate<Time>>(
-                          qubits[0], qubits[1], param, delay));
-                    else if (gateType == QuantumGateType::kCRyGateType)
-                      newops.push_back(std::make_shared<CRyGate<Time>>(
-                          qubits[0], qubits[1], param, delay));
-                    else
-                      newops.push_back(std::make_shared<CRzGate<Time>>(
-                          qubits[0], qubits[1], param, delay));
-                  }
-                  nextOp = std::make_shared<NoOperation<Time>>();
-                  changed = true; // continue merging gates, we found one that
-                                  // was merged/removed
-                  found =
-                      true; // don't put op in the new operations, we handled it
-                  break;
-                } else
-                  break; // not the expected gate, acting on same qubits, bail
-                         // out
-              }          // end for of looking forward
-
-              if (!found)
-                newops.push_back(op);
-            } break;
-            default:
-              // if no, just add it
-              newops.push_back(op);
-              break;
             }
           } else if (qubits.size() == 3) {
             auto gateType = gate->GetGateType();
@@ -1216,77 +1194,75 @@ public:
             // with a single gate, depending on the type) set changed to true if
             // something was changed
             switch (gateType) {
-            case QuantumGateType::kCSwapGateType:
-              [[fallthrough]];
-            case QuantumGateType::kCCXGateType: {
-              bool found = false;
+              case QuantumGateType::kCSwapGateType:
+                [[fallthrough]];
+              case QuantumGateType::kCCXGateType: {
+                bool found = false;
 
-              for (size_t j = i + 1; j < operations.size(); ++j) {
-                auto &nextOp = operations[j];
-                if (!nextOp->CanAffectQuantumState())
-                  continue;
+                for (size_t j = i + 1; j < operations.size(); ++j) {
+                  auto &nextOp = operations[j];
+                  if (!nextOp->CanAffectQuantumState()) continue;
 
-                const auto nextQubits = nextOp->AffectedQubits();
+                  const auto nextQubits = nextOp->AffectedQubits();
 
-                bool hasQubit = false;
+                  bool hasQubit = false;
 
-                for (auto q : nextQubits)
-                  if (q == qubits[0] || q == qubits[1] || q == qubits[2]) {
-                    hasQubit = true;
+                  for (auto q : nextQubits)
+                    if (q == qubits[0] || q == qubits[1] || q == qubits[2]) {
+                      hasQubit = true;
+                      break;
+                    }
+
+                  if (!hasQubit)
+                    continue;  // an op that does not touch the current qubit
+                               // can be skipped
+                  else if (nextQubits.size() != 3)
+                    break;  // if it touches a current qubit and it's something
+                            // else than a three qubits gate, stop
+                  // if it's not the same qubits, bail out
+                  else if (gateType == QuantumGateType::kCSwapGateType &&
+                           (qubits[0] != nextQubits[0] ||
+                            !((qubits[1] == nextQubits[1] &&
+                               qubits[2] == nextQubits[2]) ||
+                              (qubits[1] == nextQubits[2] &&
+                               qubits[2] == nextQubits[1]))))
                     break;
-                  }
+                  else if (gateType == QuantumGateType::kCCXGateType &&
+                           (qubits[2] != nextQubits[2] ||
+                            !(qubits[1] == nextQubits[1] &&
+                              qubits[2] == nextQubits[2]) ||
+                            !(qubits[1] == nextQubits[2] &&
+                              qubits[2] == nextQubits[1])))
+                    break;
 
-                if (!hasQubit)
-                  continue; // an op that does not touch the current qubit can
-                            // be skipped
-                else if (nextQubits.size() != 3)
-                  break; // if it touches a current qubit and it's something
-                         // else than a three qubits gate, stop
-                // if it's not the same qubits, bail out
-                else if (gateType == QuantumGateType::kCSwapGateType &&
-                         (qubits[0] != nextQubits[0] ||
-                          !((qubits[1] == nextQubits[1] &&
-                             qubits[2] == nextQubits[2]) ||
-                            (qubits[1] == nextQubits[2] &&
-                             qubits[2] == nextQubits[1]))))
-                  break;
-                else if (gateType == QuantumGateType::kCCXGateType &&
-                         (qubits[2] != nextQubits[2] ||
-                          !(qubits[1] == nextQubits[1] &&
-                            qubits[2] == nextQubits[2]) ||
-                          !(qubits[1] == nextQubits[2] &&
-                            qubits[2] == nextQubits[1])))
-                  break;
+                  const auto nextType = nextOp->GetType();
+                  if (nextType != OperationType::kGate)
+                    break;  // could be a classically conditioned gate, stop
 
-                const auto nextType = nextOp->GetType();
-                if (nextType != OperationType::kGate)
-                  break; // could be a classically conditioned gate, stop
+                  const auto &nextGate =
+                      std::static_pointer_cast<ThreeQubitsGate<Time>>(nextOp);
+                  if (nextGate->GetGateType() == gateType) {
+                    nextOp = std::make_shared<NoOperation<Time>>();
+                    changed = true;
+                    found = true;
+                    break;
+                  } else
+                    break;  // not the expected gate, acting on same qubits,
+                            // bail out
+                }
 
-                const auto &nextGate =
-                    std::static_pointer_cast<ThreeQubitsGate<Time>>(nextOp);
-                if (nextGate->GetGateType() == gateType) {
-                  nextOp = std::make_shared<NoOperation<Time>>();
-                  changed = true;
-                  found = true;
-                  break;
-                } else
-                  break; // not the expected gate, acting on same qubits, bail
-                         // out
-              }
-
-              if (!found)
+                if (!found) newops.push_back(op);
+              } break;
+              default:
+                // if no, just add it
                 newops.push_back(op);
-            } break;
-            default:
-              // if no, just add it
-              newops.push_back(op);
-              break;
+                break;
             }
           } else
             newops.push_back(op);
         } else
           newops.push_back(op);
-      } // end for on circuit operations
+      }  // end for on circuit operations
 
       operations.swap(newops);
     } while (changed);
@@ -1317,8 +1293,7 @@ public:
       const auto cbits = op->AffectedBits();
       for (auto c : cbits) {
         const auto lastOp = lastOps[c];
-        if (lastOp)
-          dependencies.insert(lastOp);
+        if (lastOp) dependencies.insert(lastOp);
       }
 
       const auto qubits = op->AffectedQubits();
@@ -1326,14 +1301,12 @@ public:
         qubitOps[q].push_back(op);
 
         const auto lastOp = lastOps[q];
-        if (lastOp)
-          dependencies.insert(lastOp);
+        if (lastOp) dependencies.insert(lastOp);
 
         lastOps[q] = op;
       }
 
-      for (auto c : cbits)
-        lastOps[c] = op;
+      for (auto c : cbits) lastOps[c] = op;
 
       dependenciesMap[op] = dependencies;
     }
@@ -1348,7 +1321,7 @@ public:
       // a reset
       for (size_t q = 0; q < qubitsNo; ++q) {
         if (qubitOps.find(q) ==
-            qubitOps.end()) // no operation left on this qubit
+            qubitOps.end())  // no operation left on this qubit
           continue;
 
         // grab the current operation for this qubit
@@ -1379,8 +1352,7 @@ public:
         const auto qubits = nextOp->AffectedQubits();
         for (auto q : qubits) {
           ++indices[q];
-          if (indices[q] >= qubitOps[q].size())
-            qubitOps.erase(q);
+          if (indices[q] >= qubitOps[q].size()) qubitOps.erase(q);
         }
 
         newops.emplace_back(std::move(nextOp));
@@ -1390,7 +1362,7 @@ public:
       // if there is no measurement or reset, add the next gate
       for (Types::qubit_t q = 0; q < qubitsNo; ++q) {
         if (qubitOps.find(q) ==
-            qubitOps.end()) // no operation left on this qubit
+            qubitOps.end())  // no operation left on this qubit
           continue;
 
         // grab the current operation for this qubit
@@ -1417,8 +1389,7 @@ public:
         const auto qubits = nextOp->AffectedQubits();
         for (auto q : qubits) {
           ++indices[q];
-          if (indices[q] >= qubitOps[q].size())
-            qubitOps.erase(q);
+          if (indices[q] >= qubitOps[q].size()) qubitOps.erase(q);
         }
 
         newops.emplace_back(std::move(nextOp));
@@ -1458,10 +1429,8 @@ public:
       for (auto q : qbits) {
         qubitTimes[q] += delay;
         ++qubitDepths[q];
-        if (qubitTimes[q] > maxTime)
-          maxTime = qubitTimes[q];
-        if (qubitDepths[q] > maxDepth)
-          maxDepth = qubitDepths[q];
+        if (qubitTimes[q] > maxTime) maxTime = qubitTimes[q];
+        if (qubitDepths[q] > maxDepth) maxDepth = qubitDepths[q];
       }
 
       const auto t = op->GetType();
@@ -1476,8 +1445,7 @@ public:
         condbits = op->AffectedBits();
 
         for (auto bit : condbits) {
-          if (fromQubits.find(bit) != fromQubits.end())
-            bit = fromQubits[bit];
+          if (fromQubits.find(bit) != fromQubits.end()) bit = fromQubits[bit];
 
           bool found = false;
           for (auto q : qbits) {
@@ -1486,15 +1454,12 @@ public:
               break;
             }
           }
-          if (found || bit >= qubitsNo)
-            continue;
+          if (found || bit >= qubitsNo) continue;
 
           qubitTimes[bit] += delay;
           ++qubitDepths[bit];
-          if (qubitTimes[bit] > maxTime)
-            maxTime = qubitTimes[bit];
-          if (qubitDepths[bit] > maxDepth)
-            maxDepth = qubitDepths[bit];
+          if (qubitTimes[bit] > maxTime) maxTime = qubitTimes[bit];
+          if (qubitDepths[bit] > maxDepth) maxDepth = qubitDepths[bit];
         }
 
         if (t == OperationType::kConditionalMeasurement) {
@@ -1551,10 +1516,8 @@ public:
     Time maxTime = 0;
     size_t maxDepth = 0;
     for (size_t qubit = 0; qubit < qubitDepths.size(); ++qubit) {
-      if (qubitTimes[qubit] > maxTime)
-        maxTime = qubitTimes[qubit];
-      if (qubitDepths[qubit] > maxDepth)
-        maxDepth = qubitDepths[qubit];
+      if (qubitTimes[qubit] > maxTime) maxTime = qubitTimes[qubit];
+      if (qubitDepths[qubit] > maxDepth) maxDepth = qubitDepths[qubit];
     }
 
     return std::make_pair(maxDepth, maxTime);
@@ -1577,8 +1540,7 @@ public:
    * @return The operation at the given position.
    */
   OperationPtr GetOperation(size_t pos) const {
-    if (pos >= operations.size())
-      return nullptr;
+    if (pos >= operations.size()) return nullptr;
 
     return operations[pos];
   }
@@ -1608,12 +1570,10 @@ public:
       for (const auto q : qubits) {
         if (q < startQubit || q > endQubit) {
           containsOutsideQubits = true;
-          if (containsInsideQubits)
-            break;
+          if (containsInsideQubits) break;
         } else {
           containsInsideQubits = true;
-          if (containsOutsideQubits)
-            break;
+          if (containsOutsideQubits) break;
         }
       }
 
@@ -1649,8 +1609,8 @@ public:
       if (op->GetType() == OperationType::kMeasurement) {
         for (const auto qbit : qubits)
           if (resetQubits.find(qbit) !=
-              resetQubits.end()) // there is a reset on this qubit already and
-                                 // it's not at the beginning of the circuit
+              resetQubits.end())  // there is a reset on this qubit already and
+                                  // it's not at the beginning of the circuit
             return true;
 
         /*
@@ -1684,12 +1644,12 @@ public:
         for (const auto qbit : qubits) {
           if (measuredQubits.find(qbit) !=
               measuredQubits
-                  .end()) // there is a measurement on this qubit already
+                  .end())  // there is a measurement on this qubit already
             return true;
 
           if (resetQubits.find(qbit) !=
-              resetQubits.end()) // there is a reset on this qubit already and
-                                 // it's not at the beginning of the circuit
+              resetQubits.end())  // there is a reset on this qubit already and
+                                  // it's not at the beginning of the circuit
             return true;
 
           affectedQubits.insert(qbit);
@@ -1712,9 +1672,9 @@ public:
    * @sa ISimulator
    * @sa OperationState
    */
-  std::vector<bool>
-  ExecuteNonMeasurements(const std::shared_ptr<Simulators::ISimulator> &sim,
-                         OperationState &state) const {
+  std::vector<bool> ExecuteNonMeasurements(
+      const std::shared_ptr<Simulators::ISimulator> &sim,
+      OperationState &state) const {
     std::vector<bool> executedOps;
     executedOps.reserve(operations.size());
 
@@ -1745,11 +1705,10 @@ public:
           }
 
         if (executed) {
-          if (sim)
-            op->Execute(sim, state);
+          if (sim) op->Execute(sim, state);
         } else
           measuredQubits.insert(qubits.begin(), qubits.end());
-      } else // regular gate or conditional gate
+      } else  // regular gate or conditional gate
       {
         const auto bits = op->AffectedBits();
 
@@ -1760,9 +1719,9 @@ public:
 
         bool canExecute = op->GetType() == OperationType::kGate;
 
-        if (canExecute) // a conditional gate cannot be executed, it needs
-                        // something executed at each shot, either a measurement
-                        // or a random number generated
+        if (canExecute)  // a conditional gate cannot be executed, it needs
+                         // something executed at each shot, either a
+                         // measurement or a random number generated
         {
           for (auto bit : bits)
             if (measuredQubits.find(bit) != measuredQubits.end()) {
@@ -1778,8 +1737,7 @@ public:
         }
 
         if (canExecute) {
-          if (sim)
-            op->Execute(sim, state);
+          if (sim) op->Execute(sim, state);
           executed = true;
         } else {
           // this is a 'trick', if it cannot execute, then neither can any
@@ -1791,10 +1749,8 @@ public:
 
       affectedQubits.insert(qubits.begin(), qubits.end());
 
-      if (!executed)
-        executionStopped = true;
-      if (executionStopped)
-        executedOps.emplace_back(executed);
+      if (!executed) executionStopped = true;
+      if (executionStopped) executedOps.emplace_back(executed);
     }
 
     // if (sim) sim->Flush();
@@ -1817,8 +1773,7 @@ public:
                            OperationState &state,
                            const std::vector<bool> &executedOps) const {
     state.Reset();
-    if (!sim)
-      return;
+    if (!sim) return;
 
     // if (executedOps.empty() && !operations.empty()) throw
     // std::runtime_error("The executed operations vector is empty");
@@ -1826,17 +1781,15 @@ public:
     const size_t dif = operations.size() - executedOps.size();
 
     for (size_t i = dif; i < operations.size(); ++i)
-      if (!executedOps[i - dif])
-        operations[i]->Execute(sim, state);
+      if (!executedOps[i - dif]) operations[i]->Execute(sim, state);
 
     // sim->Flush();
   }
 
   // used internally to optimize measurements in the case of having measurements
   // only at the end of the circuit
-  std::shared_ptr<MeasurementOperation<Time>>
-  GetLastMeasurements(const std::vector<bool> &executedOps,
-                      bool sort = true) const {
+  std::shared_ptr<MeasurementOperation<Time>> GetLastMeasurements(
+      const std::vector<bool> &executedOps, bool sort = true) const {
     const size_t dif = operations.size() - executedOps.size();
     std::vector<std::pair<Types::qubit_t, size_t>> measurements;
     measurements.reserve(dif);
@@ -1896,12 +1849,10 @@ public:
   bool ActsOnlyOnAdjacentQubits() const {
     for (const auto &op : operations) {
       const auto qubits = op->AffectedQubits();
-      if (qubits.size() <= 1)
-        continue;
+      if (qubits.size() <= 1) continue;
 
       if (qubits.size() == 2) {
-        if (std::abs(qubits[0] - qubits[1]) != 1)
-          return false;
+        if (std::abs(qubits[0] - qubits[1]) != 1) return false;
       } else {
         Types::qubit_t minQubit = qubits[0];
         Types::qubit_t maxQubit = qubits[0];
@@ -1913,8 +1864,7 @@ public:
             maxQubit = qubits[i];
         }
 
-        if (maxQubit - minQubit >= qubits.size())
-          return false;
+        if (maxQubit - minQubit >= qubits.size()) return false;
       }
     }
 
@@ -1936,8 +1886,7 @@ public:
       const auto q = op->AffectedQubits();
       // one qubit gates or other operations that do not affect qubits do not
       // change anything
-      if (q.size() <= 1)
-        continue;
+      if (q.size() <= 1) continue;
 
       bool allInTheLastQubits = true;
 
@@ -1954,16 +1903,14 @@ public:
               break;
             }
 
-          if (!allInTheLastQubits)
-            break;
+          if (!allInTheLastQubits) break;
         }
       }
 
-      if (allInTheLastQubits)
-        continue;
+      if (allInTheLastQubits) continue;
 
       for (const auto qubit : q) {
-        if (qubits[qubit] > 1) // if the qubit is affected again...
+        if (qubits[qubit] > 1)  // if the qubit is affected again...
           return false;
 
         ++qubits[qubit];
@@ -1986,8 +1933,7 @@ public:
    */
   bool IsClifford() const override {
     for (const auto &op : operations)
-      if (!op->IsClifford())
-        return false;
+      if (!op->IsClifford()) return false;
 
     return true;
   }
@@ -2004,8 +1950,7 @@ public:
   double CliffordPercentage() const {
     size_t cliffordOps = 0;
     for (const auto &op : operations)
-      if (op->IsClifford())
-        ++cliffordOps;
+      if (op->IsClifford()) ++cliffordOps;
 
     return static_cast<double>(cliffordOps) / operations.size();
   }
@@ -2026,16 +1971,13 @@ public:
     for (const auto &op : operations) {
       const auto qubits = op->AffectedQubits();
       if (op->IsClifford()) {
-        for (const auto q : qubits)
-          cliffordQubits.insert(q);
+        for (const auto q : qubits) cliffordQubits.insert(q);
       } else {
-        for (const auto q : qubits)
-          nonCliffordQubits.insert(q);
+        for (const auto q : qubits) nonCliffordQubits.insert(q);
       }
     }
 
-    for (const auto q : nonCliffordQubits)
-      cliffordQubits.erase(q);
+    for (const auto q : nonCliffordQubits) cliffordQubits.erase(q);
 
     return cliffordQubits;
   }
@@ -2072,8 +2014,7 @@ public:
     for (const auto &op : operations) {
       const auto qubits = op->AffectedQubits();
 
-      if (qubits.empty())
-        continue;
+      if (qubits.empty()) continue;
 
       auto qubitIt = qubits.cbegin();
       auto firstQubit = *qubitIt;
@@ -2248,11 +2189,10 @@ public:
    * @param size The new size of the circuit.
    */
   void resize(size_t size) {
-    if (size < operations.size())
-      operations.resize(size);
+    if (size < operations.size()) operations.resize(size);
   }
 
-private:
+ private:
   /**
    * @brief Replaces the swap gate and three qubit gates with other operations
    *
@@ -2322,8 +2262,7 @@ private:
   static bool NeedsConversion(const std::shared_ptr<IQuantumGate<Time>> &gate,
                               bool onlyThreeQubits = false) {
     const bool hasThreeQubits = gate->GetNumQubits() == 3;
-    if (onlyThreeQubits)
-      return hasThreeQubits;
+    if (onlyThreeQubits) return hasThreeQubits;
 
     return hasThreeQubits ||
            gate->GetGateType() == QuantumGateType::kSwapGateType;
@@ -2341,9 +2280,8 @@ private:
    * @sa IQuantumGate
    * @sa IGateOperation
    */
-  static std::vector<std::shared_ptr<IGateOperation<Time>>>
-  ConvertGate(std::shared_ptr<IQuantumGate<Time>> &gate,
-              bool onlyThreeQubits = false) {
+  static std::vector<std::shared_ptr<IGateOperation<Time>>> ConvertGate(
+      std::shared_ptr<IQuantumGate<Time>> &gate, bool onlyThreeQubits = false) {
     // TODO: if delays are used, how to transfer delays from the converted gate
     // to the resulting gates?
     std::vector<std::shared_ptr<IGateOperation<Time>>> newops;
@@ -2351,9 +2289,9 @@ private:
     if (gate->GetNumQubits() == 3) {
       // must be converted no matter what
       if (gate->GetGateType() == QuantumGateType::kCCXGateType) {
-        const size_t q1 = gate->GetQubit(0); // control 1
-        const size_t q2 = gate->GetQubit(1); // control 2
-        const size_t q3 = gate->GetQubit(2); // target
+        const size_t q1 = gate->GetQubit(0);  // control 1
+        const size_t q2 = gate->GetQubit(1);  // control 2
+        const size_t q3 = gate->GetQubit(2);  // target
 
         // Sleator-Weinfurter decomposition
         newops.push_back(std::make_shared<CSxGate<Time>>(q2, q3));
@@ -2362,9 +2300,9 @@ private:
         newops.push_back(std::make_shared<CXGate<Time>>(q1, q2));
         newops.push_back(std::make_shared<CSxGate<Time>>(q1, q3));
       } else if (gate->GetGateType() == QuantumGateType::kCSwapGateType) {
-        const size_t q1 = gate->GetQubit(0); // control 1
-        const size_t q2 = gate->GetQubit(1); // control 2
-        const size_t q3 = gate->GetQubit(2); // target
+        const size_t q1 = gate->GetQubit(0);  // control 1
+        const size_t q2 = gate->GetQubit(1);  // control 2
+        const size_t q3 = gate->GetQubit(2);  // target
 
         // TODO: find a better decomposition
         // this one I've got with the qiskit transpiler
@@ -2420,7 +2358,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class ComparableCircuit : public Circuit<Time> {
-public:
+ public:
   using BaseClass = Circuit<Time>;                 /**< The base class type. */
   using Operation = IOperation<Time>;              /**< The operation type. */
   using OperationPtr = std::shared_ptr<Operation>; /**< The shared pointer to
@@ -2476,106 +2414,105 @@ public:
         return false;
 
       switch (BaseClass::GetOperations()[i]->GetType()) {
-      case OperationType::kGate:
-        if (std::static_pointer_cast<IQuantumGate<Time>>(
-                BaseClass::GetOperations()[i])
-                    ->GetGateType() !=
-                std::static_pointer_cast<IQuantumGate<Time>>(
-                    rhs.GetOperations()[i])
-                    ->GetGateType() ||
-            BaseClass::GetOperations()[i]->AffectedBits() !=
-                rhs.GetOperations()[i]->AffectedBits())
-          return false;
-        if (approximateParamsCheck) {
-          const auto params1 = std::static_pointer_cast<IQuantumGate<Time>>(
-                                   BaseClass::GetOperations()[i])
-                                   ->GetParams();
-          const auto params2 = std::static_pointer_cast<IQuantumGate<Time>>(
-                                   rhs.GetOperations()[i])
-                                   ->GetParams();
-          if (params1.size() != params2.size())
+        case OperationType::kGate:
+          if (std::static_pointer_cast<IQuantumGate<Time>>(
+                  BaseClass::GetOperations()[i])
+                      ->GetGateType() !=
+                  std::static_pointer_cast<IQuantumGate<Time>>(
+                      rhs.GetOperations()[i])
+                      ->GetGateType() ||
+              BaseClass::GetOperations()[i]->AffectedBits() !=
+                  rhs.GetOperations()[i]->AffectedBits())
+            return false;
+          if (approximateParamsCheck) {
+            const auto params1 = std::static_pointer_cast<IQuantumGate<Time>>(
+                                     BaseClass::GetOperations()[i])
+                                     ->GetParams();
+            const auto params2 = std::static_pointer_cast<IQuantumGate<Time>>(
+                                     rhs.GetOperations()[i])
+                                     ->GetParams();
+            if (params1.size() != params2.size()) return false;
+
+            for (size_t j = 0; j < params1.size(); ++j)
+              if (std::abs(params1[j] - params2[j]) > paramsEpsilon)
+                return false;
+          } else if (std::static_pointer_cast<IQuantumGate<Time>>(
+                         BaseClass::GetOperations()[i])
+                         ->GetParams() !=
+                     std::static_pointer_cast<IQuantumGate<Time>>(
+                         rhs.GetOperations()[i])
+                         ->GetParams())
+            return false;
+          break;
+        case OperationType::kMeasurement:
+          if (BaseClass::GetOperations()[i]->AffectedQubits() !=
+                  rhs.GetOperations()[i]->AffectedQubits() ||
+              BaseClass::GetOperations()[i]->AffectedBits() !=
+                  rhs.GetOperations()[i]->AffectedBits())
+            return false;
+          break;
+        case OperationType::kRandomGen:
+          if (BaseClass::GetOperations()[i]->AffectedBits() !=
+              rhs.GetOperations()[i]->AffectedBits())
+            return false;
+          break;
+        case OperationType::kConditionalGate:
+        case OperationType::kConditionalMeasurement:
+        case OperationType::kConditionalRandomGen: {
+          // first, check the conditions
+          const auto leftCondition =
+              std::static_pointer_cast<IConditionalOperation<Time>>(
+                  BaseClass::GetOperations()[i])
+                  ->GetCondition();
+          const auto rightCondition =
+              std::static_pointer_cast<IConditionalOperation<Time>>(
+                  rhs.GetOperations()[i])
+                  ->GetCondition();
+          if (leftCondition->GetBitsIndices() !=
+              rightCondition->GetBitsIndices())
             return false;
 
-          for (size_t j = 0; j < params1.size(); ++j)
-            if (std::abs(params1[j] - params2[j]) > paramsEpsilon)
-              return false;
-        } else if (std::static_pointer_cast<IQuantumGate<Time>>(
-                       BaseClass::GetOperations()[i])
-                       ->GetParams() !=
-                   std::static_pointer_cast<IQuantumGate<Time>>(
-                       rhs.GetOperations()[i])
-                       ->GetParams())
-          return false;
-        break;
-      case OperationType::kMeasurement:
-        if (BaseClass::GetOperations()[i]->AffectedQubits() !=
-                rhs.GetOperations()[i]->AffectedQubits() ||
-            BaseClass::GetOperations()[i]->AffectedBits() !=
-                rhs.GetOperations()[i]->AffectedBits())
-          return false;
-        break;
-      case OperationType::kRandomGen:
-        if (BaseClass::GetOperations()[i]->AffectedBits() !=
-            rhs.GetOperations()[i]->AffectedBits())
-          return false;
-        break;
-      case OperationType::kConditionalGate:
-      case OperationType::kConditionalMeasurement:
-      case OperationType::kConditionalRandomGen: {
-        // first, check the conditions
-        const auto leftCondition =
-            std::static_pointer_cast<IConditionalOperation<Time>>(
-                BaseClass::GetOperations()[i])
-                ->GetCondition();
-        const auto rightCondition =
-            std::static_pointer_cast<IConditionalOperation<Time>>(
-                rhs.GetOperations()[i])
-                ->GetCondition();
-        if (leftCondition->GetBitsIndices() != rightCondition->GetBitsIndices())
-          return false;
+          const auto leftEqCondition =
+              std::static_pointer_cast<EqualCondition>(leftCondition);
+          const auto rightEqCondition =
+              std::static_pointer_cast<EqualCondition>(rightCondition);
+          if (!leftEqCondition || !rightEqCondition) return false;
 
-        const auto leftEqCondition =
-            std::static_pointer_cast<EqualCondition>(leftCondition);
-        const auto rightEqCondition =
-            std::static_pointer_cast<EqualCondition>(rightCondition);
-        if (!leftEqCondition || !rightEqCondition)
-          return false;
+          if (leftEqCondition->GetAllBits() != rightEqCondition->GetAllBits())
+            return false;
 
-        if (leftEqCondition->GetAllBits() != rightEqCondition->GetAllBits())
-          return false;
+          // now check the operations
+          const auto leftOp =
+              std::static_pointer_cast<IConditionalOperation<Time>>(
+                  BaseClass::GetOperations()[i])
+                  ->GetOperation();
+          const auto rightOp =
+              std::static_pointer_cast<IConditionalOperation<Time>>(
+                  rhs.GetOperations()[i])
+                  ->GetOperation();
 
-        // now check the operations
-        const auto leftOp =
-            std::static_pointer_cast<IConditionalOperation<Time>>(
-                BaseClass::GetOperations()[i])
-                ->GetOperation();
-        const auto rightOp =
-            std::static_pointer_cast<IConditionalOperation<Time>>(
-                rhs.GetOperations()[i])
-                ->GetOperation();
+          ComparableCircuit<Time> leftCircuit;
+          BaseClass rightCircuit;
+          leftCircuit.SetApproximateParamsCheck(approximateParamsCheck);
+          leftCircuit.AddOperation(leftOp);
+          rightCircuit.AddOperation(rightOp);
 
-        ComparableCircuit<Time> leftCircuit;
-        BaseClass rightCircuit;
-        leftCircuit.SetApproximateParamsCheck(approximateParamsCheck);
-        leftCircuit.AddOperation(leftOp);
-        rightCircuit.AddOperation(rightOp);
-
-        if (leftCircuit != rightCircuit)
+          if (leftCircuit != rightCircuit) return false;
+        } break;
+        case OperationType::kReset:
+          if (BaseClass::GetOperations()[i]->AffectedQubits() !=
+                  rhs.GetOperations()[i]->AffectedQubits() ||
+              std::static_pointer_cast<Reset<Time>>(
+                  BaseClass::GetOperations()[i])
+                      ->GetResetTargets() !=
+                  std::static_pointer_cast<Reset<Time>>(rhs.GetOperations()[i])
+                      ->GetResetTargets())
+            return false;
+          break;
+        case OperationType::kNoOp:
+          break;
+        default:
           return false;
-      } break;
-      case OperationType::kReset:
-        if (BaseClass::GetOperations()[i]->AffectedQubits() !=
-                rhs.GetOperations()[i]->AffectedQubits() ||
-            std::static_pointer_cast<Reset<Time>>(BaseClass::GetOperations()[i])
-                    ->GetResetTargets() !=
-                std::static_pointer_cast<Reset<Time>>(rhs.GetOperations()[i])
-                    ->GetResetTargets())
-          return false;
-        break;
-      case OperationType::kNoOp:
-        break;
-      default:
-        return false;
       }
 
       if (BaseClass::GetOperations()[i]->GetDelay() !=
@@ -2630,13 +2567,13 @@ public:
    */
   double GetParamsEpsilon() const { return paramsEpsilon; }
 
-private:
+ private:
   bool approximateParamsCheck =
       false; /**< Whether to check approximate equality of gate parameters. */
   double paramsEpsilon = 1e-8; /**< The epsilon used for checking approximate
                                   equality of gate parameters. */
 };
 
-} // namespace Circuits
+}  // namespace Circuits
 
-#endif // !_CIRCUIT_H_
+#endif  // !_CIRCUIT_H_

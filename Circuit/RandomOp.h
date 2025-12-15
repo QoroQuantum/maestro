@@ -31,7 +31,7 @@ namespace Circuits {
  */
 template <typename Time = Types::time_type>
 class Random : public IOperation<Time> {
-public:
+ public:
   /**
    * @brief Construct a new Random object.
    *
@@ -54,8 +54,7 @@ public:
    */
   void Execute(const std::shared_ptr<Simulators::ISimulator> &sim,
                OperationState &state) const override {
-    for (size_t i : indices)
-      state.SetBit(i, dist_bool(rng));
+    for (size_t i : indices) state.SetBit(i, dist_bool(rng));
   }
 
   /**
@@ -123,9 +122,9 @@ public:
    * @param bitsMap The map of classical bits to remap.
    * @return A shared pointer to the remapped object.
    */
-  std::shared_ptr<IOperation<Time>>
-  Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
-        const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
+  std::shared_ptr<IOperation<Time>> Remap(
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
       const override {
     auto newOp = Clone();
 
@@ -149,7 +148,7 @@ public:
    */
   bool IsClifford() const override { return true; }
 
-protected:
+ protected:
   /**
    * @brief Set the classical bit to index.
    *
@@ -158,11 +157,10 @@ protected:
    * @param bit The classical bit index to set.
    */
   void SetBit(size_t index, Types::qubit_t bit) {
-    if (index < indices.size())
-      indices[index] = bit;
+    if (index < indices.size()) indices[index] = bit;
   }
 
-private:
+ private:
   std::vector<size_t> indices; /**< The indices of the classical bits to be set
                                   when the random values are generated */
   mutable std::mt19937_64 rng; /**< The random number generator */
@@ -172,6 +170,6 @@ private:
   size_t s;      /**< The seed used for the random number generator */
 };
 
-} // namespace Circuits
+}  // namespace Circuits
 
-#endif // !_RANDOM_OP_H_
+#endif  // !_RANDOM_OP_H_

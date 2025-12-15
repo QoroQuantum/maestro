@@ -36,24 +36,28 @@ express permission of 2639731 ONTARIO INC.
 #include "Host.h"
 
 namespace Distribution {
-template <typename Time> class IRemapper;
+template <typename Time>
+class IRemapper;
 }
 
 namespace Graphs {
-template <typename Time> class IOptimiser;
+template <typename Time>
+class IOptimiser;
 
 enum class OptimiserType;
-} // namespace Graphs
+}  // namespace Graphs
 
 namespace Schedulers {
-template <typename Time> class IScheduler;
+template <typename Time>
+class IScheduler;
 
 /**
  * @struct ExecuteCircuit
  * @brief A way to pack together a circuit and the number of shots for its
  * execution.
  */
-template <typename Time = Types::time_type> struct ExecuteCircuit {
+template <typename Time = Types::time_type>
+struct ExecuteCircuit {
   ExecuteCircuit() = default;
 
   ExecuteCircuit(const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
@@ -69,7 +73,7 @@ template <typename Time = Types::time_type> struct ExecuteCircuit {
   std::shared_ptr<Circuits::Circuit<Time>> circuit;
   size_t shots = 1000;
 };
-} // namespace Schedulers
+}  // namespace Schedulers
 
 namespace Network {
 
@@ -83,7 +87,8 @@ enum class SchedulerType : int {
   kNoEntanglementQubitsParallel
 };
 
-template <typename Time> class INetwork;
+template <typename Time>
+class INetwork;
 
 /**
  * @class IController
@@ -98,7 +103,7 @@ template <typename Time> class INetwork;
  */
 template <typename Time = Types::time_type>
 class IController : public IHost<Time> {
-public:
+ public:
   /**
    * @brief Distributes the circuit on the hosts.
    *
@@ -154,8 +159,8 @@ public:
    * @return The remapper.
    * @sa Distribution::IRemapper
    */
-  virtual std::shared_ptr<Distribution::IRemapper<Time>>
-  GetRemapper() const = 0;
+  virtual std::shared_ptr<Distribution::IRemapper<Time>> GetRemapper()
+      const = 0;
 
   /**
    * @brief Convert the circuit for distribution for specific networks.
@@ -217,8 +222,8 @@ public:
    * @return The scheduler for the network.
    * @sa Schedulers::IScheduler
    */
-  virtual std::shared_ptr<Schedulers::IScheduler<Time>>
-  GetScheduler() const = 0;
+  virtual std::shared_ptr<Schedulers::IScheduler<Time>> GetScheduler()
+      const = 0;
 
   /**
    * @brief Set circuit optimization.
@@ -244,6 +249,6 @@ public:
   virtual void SetOptimizeRotationGates(bool val = true) = 0;
 };
 
-} // namespace Network
+}  // namespace Network
 
-#endif // !_CONTROLLER_INTERFACE_H_
+#endif  // !_CONTROLLER_INTERFACE_H_

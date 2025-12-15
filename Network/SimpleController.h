@@ -40,7 +40,7 @@ namespace Network {
  */
 template <typename Time = Types::time_type>
 class SimpleController : public IController<Time> {
-public:
+ public:
   /**
    * @brief Distributes the circuit on the hosts.
    *
@@ -54,8 +54,7 @@ public:
   std::shared_ptr<Circuits::Circuit<Time>> DistributeCircuit(
       const std::shared_ptr<INetwork<Time>> &network,
       const std::shared_ptr<Circuits::Circuit<Time>> &circuit) override {
-    if (!remapper)
-      return nullptr; // maybe throw an exception?
+    if (!remapper) return nullptr;  // maybe throw an exception?
 
     // don't destroy the passed one, make a copy
     std::shared_ptr<Circuits::Circuit<Time>> distCirc =
@@ -70,8 +69,7 @@ public:
     // also if it merges three cnots into a swap, for example, it shouldn't be
     // done after 'ConvertForDistribution' because the swap is converted to 3
     // cnots
-    if (optimize)
-      distCirc->Optimize(optimizeRotationGates);
+    if (optimize) distCirc->Optimize(optimizeRotationGates);
 
     // this converts the 3 qubit gates and swap to 2-qubit gates (the swap to 3
     // cnots)
@@ -123,8 +121,7 @@ public:
   std::shared_ptr<Circuits::Circuit<Time>> SplitCompositeOperations(
       const std::shared_ptr<INetwork<Time>> &network,
       const std::shared_ptr<Circuits::Circuit<Time>> &circuit) override {
-    if (!remapper)
-      return nullptr; // maybe throw an exception?
+    if (!remapper) return nullptr;  // maybe throw an exception?
 
     return remapper->SplitCompositeOperations(network, circuit);
   }
@@ -380,8 +377,9 @@ public:
    * @param type The type of optimiser to create.
    */
   void CreateOptimiser(Graphs::OptimiserType type) override {
-    throw std::runtime_error("SimpleController::CreateOptimiser: not "
-                             "implemented for this type of network controller");
+    throw std::runtime_error(
+        "SimpleController::CreateOptimiser: not "
+        "implemented for this type of network controller");
   }
 
   /**
@@ -415,12 +413,13 @@ public:
    * @param simType The type of the scheduler to create.
    * @sa SchedulerType
    */
-  void
-  CreateScheduler(const std::shared_ptr<INetwork<Time>> &network,
-                  SchedulerType schType =
-                      SchedulerType::kNoEntanglementQubitsParallel) override {
-    throw std::runtime_error("SimpleController::CreateScheduler: not "
-                             "implemented for this type of network controller");
+  void CreateScheduler(
+      const std::shared_ptr<INetwork<Time>> &network,
+      SchedulerType schType =
+          SchedulerType::kNoEntanglementQubitsParallel) override {
+    throw std::runtime_error(
+        "SimpleController::CreateScheduler: not "
+        "implemented for this type of network controller");
   }
 
   /**
@@ -462,7 +461,7 @@ public:
    */
   bool GetOptimizeCircuit() const override { return optimize; }
 
-protected:
+ protected:
   std::shared_ptr<Distribution::IRemapper<Time>>
       remapper; /**< The remapper used to remap a circuit to a distributed one.
                  */
@@ -474,19 +473,19 @@ protected:
   // the number of distributions is reduced so better set it explicitly only
   // when tests for results are checked!
   std::shared_ptr<Graphs::IOptimiser<Time>>
-      optimiser; // =
-                 // Graphs::Factory<Time>::Create(Graphs::OptimiserType::kMonteCarlo);
-                 // /**< The optimiser used to optimise the circuit. */
+      optimiser;  // =
+                  // Graphs::Factory<Time>::Create(Graphs::OptimiserType::kMonteCarlo);
+                  // /**< The optimiser used to optimise the circuit. */
 
   std::shared_ptr<Schedulers::IScheduler<Time>>
       scheduler; /**< The scheduler used to schedule the circuits. */
 
-private:
+ private:
   bool optimize = true;
   bool optimizeRotationGates =
       true; /**< If true, the rotation gates are optimized - default, except for
                netqasm networks */
 };
-} // namespace Network
+}  // namespace Network
 
-#endif // !_SIMPLE_CONTROLLER_H_
+#endif  // !_SIMPLE_CONTROLLER_H_

@@ -17,15 +17,14 @@
 #include "../Simulators/Factory.h"
 
 class Maestro {
-public:
+ public:
   Maestro() = default;
   ~Maestro() = default;
 
   // Add methods to expose functionality to Maestro here.
   // For example, methods to create circuits, simulators, run simulations, etc.
   unsigned long int CreateSimpleSimulator(int nrQubits) {
-    if (nrQubits <= 0)
-      return 0;
+    if (nrQubits <= 0) return 0;
 
     const std::vector<Types::qubit_t> qubits{
         static_cast<Types::qubit_t>(nrQubits)};
@@ -58,12 +57,11 @@ public:
     simpleSimulators.erase(simHandle);
   }
 
-  std::shared_ptr<Network::INetwork<>>
-  GetSimpleSimulator(unsigned long int simHandle) {
+  std::shared_ptr<Network::INetwork<>> GetSimpleSimulator(
+      unsigned long int simHandle) {
     std::lock_guard<std::mutex> lock(simpleSimulatorsMutex);
     auto it = simpleSimulators.find(simHandle);
-    if (it != simpleSimulators.end())
-      return it->second;
+    if (it != simpleSimulators.end()) return it->second;
 
     return nullptr;
   }
@@ -72,8 +70,7 @@ public:
       unsigned long int simHandle, Simulators::SimulatorType simType,
       Simulators::SimulationType simExecType) {
     auto sim = GetSimpleSimulator(simHandle);
-    if (!sim)
-      return 0;
+    if (!sim) return 0;
 
     sim->RemoveAllOptimizationSimulatorsAndAdd(simType, simExecType);
 
@@ -84,8 +81,7 @@ public:
                                Simulators::SimulatorType simType,
                                Simulators::SimulationType simExecType) {
     auto sim = GetSimpleSimulator(simHandle);
-    if (!sim)
-      return 0;
+    if (!sim) return 0;
     sim->AddOptimizationSimulator(simType, simExecType);
     return 1;
   }
@@ -112,8 +108,7 @@ public:
   void *GetSimulator(unsigned long int simHandle) {
     std::lock_guard<std::mutex> lock(simulatorsMutex);
     auto it = simulators.find(simHandle);
-    if (it != simulators.end())
-      return it->second.get();
+    if (it != simulators.end()) return it->second.get();
 
     return nullptr;
   }
@@ -123,16 +118,16 @@ public:
     simulators.erase(simHandle);
   }
 
-private:
+ private:
   // allow multithreaded access
   std::mutex simpleSimulatorsMutex;
   std::mutex simulatorsMutex;
 
   std::unordered_map<unsigned long int, std::shared_ptr<Network::INetwork<>>>
-      simpleSimulators; // map for network simulators
+      simpleSimulators;  // map for network simulators
   std::unordered_map<unsigned long int, std::shared_ptr<Simulators::ISimulator>>
-      simulators; // map for simulators
+      simulators;  // map for simulators
 
   unsigned long int curHandle = 0;
-  unsigned long int curSimulatorHandle = 0; // current handle for simulators
+  unsigned long int curSimulatorHandle = 0;  // current handle for simulators
 };
