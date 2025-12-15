@@ -13,36 +13,64 @@ jobs:
     - name: Checkout Repo
       uses: actions/checkout@v4
 
-    - name: Download Eigen
-      run: curl https://gitlab.com/libeigen/eigen/-/archive/5.0.0/eigen-5.0.0.tar.gz --output eigen.tgz
+    # 1. INSTALL TOOLS
+    - name: Install System Tools
+      # We install ccache here along with OpenBLAS
+      run: sudo apt install -y libopenblas-dev ccache
 
-    - name: Unzip Eigen
-      run: tar -xzvf eigen.tgz
+    # 2. CACHE EXTERNAL LIBS (Boost/Eigen)
+    - name: Cache Boost and Eigen
+      id: cache-libs
+      uses: actions/cache@v4
+      with:
+        path: |
+          eigen-5.0.0
+          boost_1_89_0
+        key: ${{ runner.os }}-libs-boost1.89.0-eigen5.0.0
 
-    - name: Download Boost
-      run: curl https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz --output boost.tgz
-    - name: Unzip Boost
-      run: tar -xzvf boost.tgz
-    - name: Configure Boost
-      working-directory: ./boost_1_89_0/
-      run: ./bootstrap.sh --prefix=.
-    - name: Compile Boost
-      working-directory: ./boost_1_89_0/
-      run: ./b2 --with-program_options --with-url --with-container --with-json --with-serialization install
+    # 3. SETUP CCACHE (For your project files)
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: ~/.ccache
+        # The key includes the commit hash so it creates a new cache entry every run.
+        key: ccache-${{ runner.os }}-${{ github.sha }}
+        # The restore-key finds the most recent cache to use as a base.
+        restore-keys: |
+          ccache-${{ runner.os }}-
 
-    - name: Download QCSim
-      run: git clone https://github.com/aromanro/QCSim.git
-
-    - name: Download JSON
-      run: git clone https://github.com/nlohmann/json.git
-
-    - name: Download AER
-      run: git clone https://github.com/InvictusWingsSRL/qiskit-aer.git
-
-    - name: Install OpenBlas
+    - name: Configure ccache
       run: |
-        sudo apt install libopenblas-dev
+        # Set max cache size to prevent it from growing too large in GitHub Actions
+        ccache --max-size=400M
+        ccache --set-config=compression=true
+        # Zero stats so we can see how much we hit the cache in this run
+        ccache -z
 
+    # 4. INSTALL DEPENDENCIES (If not cached)
+    - name: Install Eigen
+      if: steps.cache-libs.outputs.cache-hit != 'true'
+      run: |
+        curl -L https://gitlab.com/libeigen/eigen/-/archive/5.0.0/eigen-5.0.0.tar.gz --output eigen.tgz
+        tar -xzvf eigen.tgz && rm eigen.tgz
+
+    - name: Install and Compile Boost
+      if: steps.cache-libs.outputs.cache-hit != 'true'
+      run: |
+        curl -L https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz --output boost.tgz
+        tar -xzvf boost.tgz && rm boost.tgz
+        cd boost_1_89_0
+        ./bootstrap.sh --prefix=.
+        ./b2 --with-program_options --with-url --with-container --with-json --with-serialization install
+
+    # 5. DOWNLOAD DYNAMIC DEPENDENCIES
+    - name: Download Dependencies (QCSim, JSON, AER)
+      run: |
+        git clone https://github.com/aromanro/QCSim.git
+        git clone https://github.com/nlohmann/json.git
+        git clone https://github.com/InvictusWingsSRL/qiskit-aer.git
+
+    # 6. BUILD WITH CCACHE
     - name: Run CMake
       run: |
         export EIGEN5_INCLUDE_DIR=$PWD/eigen-5.0.0/
@@ -50,7 +78,15 @@ jobs:
         export QCSIM_INCLUDE_DIR=$PWD/QCSim/QCSim/
         export JSON_INCLUDE_DIR=$PWD/json/single_include
         export AER_INCLUDE_DIR=$PWD/qiskit-aer/src/
-        cmake .
+
+        # Tell CMake to use ccache as a "launcher" for the compiler
+        cmake . \
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
     - name: Run Make
       run: make
+
+    # Optional: Print ccache stats to see how much time you saved
+    - name: Show ccache stats
+      run: ccache -s
