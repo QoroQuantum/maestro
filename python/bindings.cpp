@@ -4,6 +4,7 @@
 #include <nanobind/stl/unique_ptr.h>
 #include <nanobind/stl/unordered_map.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/optional.h>
 
 #include "Circuit/Circuit.h"
 #include "Interface.h"
@@ -112,7 +113,7 @@ NB_MODULE(maestro, m) {
          std::optional<size_t> max_bond_dimension,
          std::optional<double> singular_value_threshold) -> nb::object {
         // Initialize Maestro instance if needed
-        GetMaestroObject();
+        GetMaestroObjectWithMute();
 
         // Parse the QASM circuit first to determine the number of qubits
         qasm::QasmToCirc<> parser;
