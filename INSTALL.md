@@ -1,89 +1,97 @@
 # Installation Guide
 
-This guide provides instructions on how to build and install the Maestro library.
+## Quick Start
 
-## Prerequisites
+### Python Package (Recommended)
 
-Ensure you have the following tools installed on your system:
-
-- **CMake** (version 3.10 or higher)
-- **C++ Compiler** (supporting C++17, e.g., GCC, Clang, MSVC)
-- **Git**
-- **curl**
-- **tar**
-- **OpenMP** (optional but recommended for parallelization)
-
-## Dependencies
-
-Maestro relies on several external libraries. The provided `build.sh` script attempts to download and build these dependencies automatically if they are not found.
-
-- **Eigen 5** (Linear algebra)
-- **Boost** (version 1.89.0 or compatible, specifically `json`, `container`, `serialization`)
-- **QCSim** (Quantum Circuit Simulator)
-- **nlohmann/json** (JSON for Modern C++)
-- **Qiskit Aer** (Optional, for Aer backend support)
-
-## Building with `build.sh`
-
-The easiest way to build Maestro is using the provided `build.sh` script. This script handles dependency management and invokes CMake.
-
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/QoroQuantum/maestro.git
-    cd maestro
-    ```
-
-2.  **Run the build script:**
-    ```bash
-    chmod +x build.sh
-    ./build.sh
-    ```
-
-    This script will:
-    - Create a `build` directory.
-    - Download and extract Eigen and Boost if not present.
-    - Build Boost libraries.
-    - Clone QCSim.
-    - Clone Qiskit Aer and nlohmann/json (unless `NO_QISKIT_AER` is set).
-    - Set necessary environment variables.
-    - Run `cmake` and `make`.
-
-## Manual Build / Custom Paths
-
-If you prefer to manage dependencies manually or use system-installed libraries, you can run CMake directly. You must set the following environment variables to point to your installations:
-
-- `EIGEN5_INCLUDE_DIR`: Path to Eigen 5 include directory.
-- `BOOST_ROOT`: Root directory of the Boost installation.
-- `QCSIM_INCLUDE_DIR`: Path to QCSim include directory.
-- `JSON_INCLUDE_DIR`: Path to nlohmann/json include directory (required if Aer is enabled).
-- `AER_INCLUDE_DIR`: Path to Qiskit Aer source directory (required if Aer is enabled).
-
-### Example Manual Build
+Install the Python bindings via pip. This automatically handles most dependencies.
 
 ```bash
-mkdir build
-cd build
-cmake ..
-make
+pip install qoro-maestro
 ```
 
-### Build Options
+**Prerequisites:**
 
-- `-DNO_QISKIT_AER=ON`: Disable Qiskit Aer support. This removes the dependency on Qiskit Aer and nlohmann/json.
-  ```bash
-  cmake -DNO_QISKIT_AER=ON ..
-  ```
+- C++ Compiler (GCC/Clang)
+- CMake 3.15+
+- System libraries: `libfftw3-dev`, `libboost-all-dev` (Ubuntu/Debian)
 
-- `-DCMAKE_BUILD_TYPE=Debug`: Build with debug information.
-  ```bash
-  cmake -DCMAKE_BUILD_TYPE=Debug ..
-  ```
+### C++ Library
 
-## Installation
-
-To install the library to your system (default `/usr/local/lib` on Unix):
+To build the C++ library and executable:
 
 ```bash
-cd build
-sudo make install
+git clone https://github.com/QoroQuantum/maestro.git
+cd maestro
+./build.sh
 ```
+
+The `build.sh` script automatically downloads and builds required dependencies (Eigen, QCSim, etc.) locally.
+
+---
+
+## Detailed Instructions
+
+### System Requirements
+
+Install these packages before building from source:
+
+**Ubuntu/Debian:**
+
+```bash
+sudo apt-get install build-essential cmake libfftw3-dev libboost-all-dev libopenblas-dev git curl
+```
+
+**Fedora/RHEL:**
+
+```bash
+sudo dnf install gcc-c++ cmake fftw-devel boost-devel openblas-devel git curl
+```
+
+**macOS:**
+
+```bash
+brew install cmake fftw boost openblas
+```
+
+### Advanced Build Options
+
+#### Enable Qiskit Aer Support
+
+Qiskit Aer support is optional. To enable it:
+
+1. **Install BLAS** (e.g., `libopenblas-dev`).
+2. **Provide Aer Source** and install:
+
+   ```bash
+   export AER_INCLUDE_DIR=/path/to/qiskit-aer/src
+   pip install qoro-maestro
+   ```
+
+   Or using `build.sh`:
+
+   ```bash
+   export AER_INCLUDE_DIR=/path/to/qiskit-aer/src
+   ./build.sh
+   ```
+
+#### Custom Dependency Paths
+
+If you have dependencies installed in non-standard locations, you can override the automatic fetching:
+
+```bash
+export EIGEN5_INCLUDE_DIR=/path/to/eigen
+export BOOST_ROOT=/path/to/boost
+export QCSIM_INCLUDE_DIR=/path/to/QCSim/QCSim
+pip install qoro-maestro
+```
+
+## Troubleshooting
+
+- **`maestro.so` not found**: Add the installation path to your library path:
+
+  ```bash
+  export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+  ```
+
+- **Build fails on dependencies**: Ensure you have the `-dev` or `-devel` packages installed (e.g., `libfftw3-dev`), as the build process requires header files.

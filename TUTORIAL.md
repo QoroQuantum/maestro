@@ -9,12 +9,13 @@ Maestro provides a unified C interface to various quantum simulation backends. Y
 ## Basic Usage
 
 The core workflow involves:
-1.  Initializing the Maestro library.
-2.  Creating a simulator instance.
-3.  Defining a circuit (QASM string).
-4.  Executing the circuit.
-5.  Parsing the results.
-6.  Cleaning up.
+
+1. Initializing the Maestro library.
+2. Creating a simulator instance.
+3. Defining a circuit (QASM string).
+4. Executing the circuit.
+5. Parsing the results.
+6. Cleaning up.
 
 ### Step-by-Step Example
 

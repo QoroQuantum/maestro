@@ -57,10 +57,12 @@ Maestro includes a prediction engine that:
 The model normalizes performance features to reduce hardware dependence and can be recalibrated on installation.
 
 ## Documentation
+
 - [Installation Guide](INSTALL.md): Detailed build and installation instructions.
 - [Tutorial](TUTORIAL.md): Usage examples and API overview.
 
 ### API Documentation
+
 To generate the API documentation using Doxygen:
 
 ```bash
@@ -69,6 +71,7 @@ cd build
 cmake ..
 make doc
 ```
+
 The documentation will be generated in `docs/html/index.html`.
 
 ## Building Maestro
@@ -83,9 +86,10 @@ chmod +x build.sh
 For detailed instructions, see [INSTALL.md](INSTALL.md).
 
 ## Citation
+
 An Article detailing Maestro will be published shorty. This reference can be used for citation.
 
-```
+```latex
 @article{bertomeu2025maestro,
   title={Maestro: Intelligent Execution for Quantum Circuit Simulation},
   author={Bertomeu, Oriol and Ghayas, Hamzah and Roman, Adrian and DiAdamo, Stephen},
@@ -101,4 +105,4 @@ This project is licensed under the GNU General Public License v3.0.
 You may copy, distribute, and modify this software under the terms of the GPL-3.0 license.
 A copy of the license text is available in the LICENSE file and at:
 
-https://www.gnu.org/licenses/gpl-3.0.en.html
+<https://www.gnu.org/licenses/gpl-3.0.en.html>
