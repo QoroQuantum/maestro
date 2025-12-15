@@ -1,0 +1,5 @@
+# Keep your existing BasedOnStyle if you have one (e.g., Google, LLVM)
+BasedOnStyle: Google
+
+# This is the command that stops the reordering
+SortIncludes: false
