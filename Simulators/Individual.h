@@ -1115,7 +1115,7 @@ class IndividualSimulator : public ISimulator {
    * @return True if the simulator is a qcsim simulator, false otherwise.
    */
   bool IsQcsim() const override {
-    return GetType() == Simulators::SimulatorType::kQiskitAer;
+    return GetType() == Simulators::SimulatorType::kQCSim;
   }
 
   /**
@@ -1168,12 +1168,15 @@ class IndividualSimulator : public ISimulator {
       // there the statevector is accessible)
       QCSimSimulator *qcsim = dynamic_cast<QCSimSimulator *>(simulator.get());
       prob = 1. - qcsim->uniformZeroOne(qcsim->rng);
-    } else {
+    }
+#ifndef NO_QISKIT_AER
+    else {
       // qiskit aer - convert 'simulator' to qiskit aer simulator and access
       // 'savedAmplitudes' (assumes destructive saving of the state)
       AerSimulator *aer = dynamic_cast<AerSimulator *>(simulator.get());
       prob = 1 - aer->uniformZeroOne(aer->rng);
     }
+#endif
 
     const size_t measRaw = alias->Sample(prob);
 
@@ -1190,7 +1193,9 @@ class IndividualSimulator : public ISimulator {
 
       alias = std::unique_ptr<Utils::Alias>(
           new Utils::Alias(qcsim->state->getRegisterStorage()));
-    } else {
+    }
+#ifndef NO_QISKIT_AER
+    else {
       // qiskit aer - convert 'simulator' to qiskit aer simulator and access
       // 'savedAmplitudes' (assumes destructive saving of the state)
       AerSimulator *aer = dynamic_cast<AerSimulator *>(simulator.get());
@@ -1198,6 +1203,7 @@ class IndividualSimulator : public ISimulator {
       alias =
           std::unique_ptr<Utils::Alias>(new Utils::Alias(aer->savedAmplitudes));
     }
+#endif
   }
 
   void ClearAlias() { alias = nullptr; }

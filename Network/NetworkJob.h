@@ -85,7 +85,13 @@ class ExecuteJob {
 
     if (optimiseMultipleShots && hasMeasurementsOnlyAtEnd) {
       measurementsOp = dcirc->GetLastMeasurements(
-          executed, optSim->GetType() == Simulators::SimulatorType::kQiskitAer);
+          executed,
+#ifndef NO_QISKIT_AER
+          optSim->GetType() == Simulators::SimulatorType::kQiskitAer
+#else
+          false
+#endif
+      );
 
       const auto &qbits = measurementsOp->GetQubits();
       if (qbits.empty()) {
@@ -220,7 +226,13 @@ class ExecuteJob {
 
     if (optimiseMultipleShots && hasMeasurementsOnlyAtEnd) {
       measurementsOp = dcirc->GetLastMeasurements(
-          executed, optSim->GetType() == Simulators::SimulatorType::kQiskitAer);
+          executed,
+#ifndef NO_QISKIT_AER
+          optSim->GetType() == Simulators::SimulatorType::kQiskitAer
+#else
+          false
+#endif
+      );
 
       const auto &qbits = measurementsOp->GetQubits();
       if (qbits.empty()) {

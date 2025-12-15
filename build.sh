@@ -21,7 +21,7 @@ then
 fi
 cd boost_1_89_0
 ./bootstrap.sh --prefix=.
-./b2 --with-program_options --with-json --with-container --with-serialization --prefix=. install
+./b2 -j$(nproc) --with-program_options --with-json --with-container --with-serialization --prefix=. install
 cd ..
 
 if [ ! -d QCSim ]
@@ -49,5 +49,5 @@ export JSON_INCLUDE_DIR=$PWD/json/single_include
 export AER_INCLUDE_DIR=$PWD/qiskit-aer/src
 
 cmake ..
-make
+make -j$(nproc)
 make doc

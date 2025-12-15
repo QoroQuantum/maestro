@@ -226,7 +226,8 @@ int main(int argc, char** argv) {
 #if defined(_WIN32)
             "maestro.dll"
 #else
-            "maestro.so"
+            "libmaestro.so"
+
 #endif
             )) {
       std::cerr << "Couldn't load maestro library" << std::endl;
