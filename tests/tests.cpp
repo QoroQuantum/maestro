@@ -33,7 +33,7 @@
 #define _TESTS_NO_EXCLUDE 1
 #include "Tests.h"
 
-#include "Simulators/Factory.cpp"
+#include "../Simulators/Factory.cpp"
 
 
 bool checkClose(std::complex<double> a, std::complex<double> b, double dif)
