@@ -90,3 +90,6 @@ jobs:
     # Optional: Print ccache stats to see how much time you saved
     - name: Show ccache stats
       run: ccache -s
+      
+    - name: Run tests
+      run: ./bin/tests --log_level=test_suite     
