@@ -366,6 +366,8 @@ public:
       return {};
 
     distCirc = controller->DistributeCircuit(BaseClass::getptr(), circuit);
+    if (!distCirc) 
+        return {};
 
 #ifdef _DEBUG
     for (auto q : distCirc->AffectedQubits()) {
