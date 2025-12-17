@@ -14,7 +14,7 @@
 #ifndef _CIRCQASM_H_
 #define _CIRCQASM_H_
 
-#include "Circuit/Circuit.h"
+#include "../Circuit/Circuit.h"
 
 namespace qasm {
 
