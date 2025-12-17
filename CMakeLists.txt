@@ -124,7 +124,7 @@ set(TESTSSRC tests/aertests.cpp
 	tests/mpssimtests.cpp
 	tests/qasm.cpp
 	tests/qcsimtests.cpp
-	tests/tensortests.cpp
+	tests/tensorstests.cpp
 	tests/tests.cpp)
 
 set(MAESTROSRC maestrolib/Interface.cpp)
