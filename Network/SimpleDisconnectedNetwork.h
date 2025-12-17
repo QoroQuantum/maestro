@@ -378,7 +378,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     }
 #endif
 
-    if (!simulator || distCirc->empty()) return {};
+    if (!simulator) return {};
 
     auto simType = simulator->GetType();
     if (distCirc->HasOpsAfterMeasurements() &&
@@ -562,7 +562,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         nrQubits, nrCbits, true);
     if (nrCbits == 0) nrCbits = nrQubits;
 
-    if (!simulator || distCirc->empty()) return {};
+    if (!simulator || !distCirc) return {};
 
     auto simType = simulator->GetType();
 
