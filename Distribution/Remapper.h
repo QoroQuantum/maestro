@@ -45,7 +45,7 @@ enum class RemapperType {
  */
 template <typename Time = Types::time_type>
 class IRemapper : public std::enable_shared_from_this<IRemapper<Time>> {
-public:
+ public:
   /**
    * @brief Default virtual destructor.
    *
@@ -64,9 +64,9 @@ public:
    * @sa Network::INetwork
    * @sa Circuits::Circuit
    */
-  virtual std::shared_ptr<Circuits::Circuit<Time>>
-  Remap(const std::shared_ptr<Network::INetwork<Time>> &network,
-        const std::shared_ptr<Circuits::Circuit<Time>> &circuit) = 0;
+  virtual std::shared_ptr<Circuits::Circuit<Time>> Remap(
+      const std::shared_ptr<Network::INetwork<Time>> &network,
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit) = 0;
 
   /**
    * @brief Get the number of operations for distribution.
@@ -120,20 +120,19 @@ public:
    * @sa Network::INetwork
    * @sa Circuits::IOperation
    */
-  static bool
-  IsNonLocalOperation(const std::shared_ptr<Circuits::IOperation<Time>> &op,
-                      const std::shared_ptr<Network::INetwork<Time>> &network) {
+  static bool IsNonLocalOperation(
+      const std::shared_ptr<Circuits::IOperation<Time>> &op,
+      const std::shared_ptr<Network::INetwork<Time>> &network) {
     if (op->NeedsEntanglementForDistribution()) {
       auto qubits = op->AffectedQubits();
 
       if (qubits.size() >=
-          2) // there should be no 3 qubit gates at this point, though
+          2)  // there should be no 3 qubit gates at this point, though
       {
         const size_t ctrlQubit = qubits[0];
         const size_t targetQubit = qubits[1];
 
-        if (!network->AreQubitsOnSameHost(ctrlQubit, targetQubit))
-          return true;
+        if (!network->AreQubitsOnSameHost(ctrlQubit, targetQubit)) return true;
       }
     }
 
@@ -177,100 +176,103 @@ public:
       // involved
 
       switch (op->GetType()) {
-      case Circuits::OperationType::kMeasurement: {
-        std::unordered_map<size_t,
-                           std::vector<std::pair<Types::qubit_t, size_t>>>
-            bits;
-        const auto qbits = op->AffectedQubits();
-        const auto cbits = op->AffectedBits();
+        case Circuits::OperationType::kMeasurement: {
+          std::unordered_map<size_t,
+                             std::vector<std::pair<Types::qubit_t, size_t>>>
+              bits;
+          const auto qbits = op->AffectedQubits();
+          const auto cbits = op->AffectedBits();
 
-        for (size_t q = 0; q < qbits.size(); ++q) {
-          const size_t host = network->GetHostIdForAnyQubit(qbits[q]);
-          bits[host].push_back({qbits[q], cbits[q]});
-        }
+          for (size_t q = 0; q < qbits.size(); ++q) {
+            const size_t host = network->GetHostIdForAnyQubit(qbits[q]);
+            bits[host].push_back({qbits[q], cbits[q]});
+          }
 
-        for (const auto &hostQubits : bits)
-          newDistributedCircuit->AddOperation(
-              std::make_shared<Circuits::MeasurementOperation<Time>>(
-                  hostQubits.second));
-      } break;
-      case Circuits::OperationType::kConditionalMeasurement: {
-        std::unordered_map<size_t,
-                           std::vector<std::pair<Types::qubit_t, size_t>>>
-            bits;
-        auto condOp =
-            std::static_pointer_cast<Circuits::ConditionalMeasurement<Time>>(
-                op);
+          for (const auto &hostQubits : bits)
+            newDistributedCircuit->AddOperation(
+                std::make_shared<Circuits::MeasurementOperation<Time>>(
+                    hostQubits.second));
+        } break;
+        case Circuits::OperationType::kConditionalMeasurement: {
+          std::unordered_map<size_t,
+                             std::vector<std::pair<Types::qubit_t, size_t>>>
+              bits;
+          auto condOp =
+              std::static_pointer_cast<Circuits::ConditionalMeasurement<Time>>(
+                  op);
 
-        const auto qbits = condOp->GetOperation()->AffectedQubits();
-        const auto cbits = condOp->GetOperation()->AffectedBits();
+          const auto qbits = condOp->GetOperation()->AffectedQubits();
+          const auto cbits = condOp->GetOperation()->AffectedBits();
 
-        for (size_t q = 0; q < qbits.size(); ++q) {
-          const size_t host = network->GetHostIdForAnyQubit(qbits[q]);
-          bits[host].push_back({qbits[q], cbits[q]});
-        }
+          for (size_t q = 0; q < qbits.size(); ++q) {
+            const size_t host = network->GetHostIdForAnyQubit(qbits[q]);
+            bits[host].push_back({qbits[q], cbits[q]});
+          }
 
-        for (const auto &hostQubits : bits) {
-          auto measOp = std::make_shared<Circuits::MeasurementOperation<Time>>(
-              hostQubits.second);
-          newDistributedCircuit->AddOperation(
-              std::make_shared<Circuits::ConditionalMeasurement<Time>>(
-                  measOp, condOp->GetCondition())); // condition stays the same
-        }
-      } break;
-      case Circuits::OperationType::kReset: {
-        std::unordered_map<size_t, Types::qubits_vector> bits;
-        const auto qbits = op->AffectedQubits();
+          for (const auto &hostQubits : bits) {
+            auto measOp =
+                std::make_shared<Circuits::MeasurementOperation<Time>>(
+                    hostQubits.second);
+            newDistributedCircuit->AddOperation(
+                std::make_shared<Circuits::ConditionalMeasurement<Time>>(
+                    measOp,
+                    condOp->GetCondition()));  // condition stays the same
+          }
+        } break;
+        case Circuits::OperationType::kReset: {
+          std::unordered_map<size_t, Types::qubits_vector> bits;
+          const auto qbits = op->AffectedQubits();
 
-        for (const auto q : qbits) {
-          const size_t host = network->GetHostIdForAnyQubit(q);
-          bits[host].emplace_back(q);
-        }
+          for (const auto q : qbits) {
+            const size_t host = network->GetHostIdForAnyQubit(q);
+            bits[host].emplace_back(q);
+          }
 
-        for (const auto &hostQubits : bits)
-          newDistributedCircuit->AddOperation(
-              std::make_shared<Circuits::Reset<Time>>(hostQubits.second));
-      } break;
-      case Circuits::OperationType::kRandomGen: {
-        std::unordered_map<size_t, std::vector<size_t>> bits;
-        const std::vector<size_t> cbits = op->AffectedBits();
+          for (const auto &hostQubits : bits)
+            newDistributedCircuit->AddOperation(
+                std::make_shared<Circuits::Reset<Time>>(hostQubits.second));
+        } break;
+        case Circuits::OperationType::kRandomGen: {
+          std::unordered_map<size_t, std::vector<size_t>> bits;
+          const std::vector<size_t> cbits = op->AffectedBits();
 
-        for (const size_t c : cbits) {
-          const size_t host = network->GetHostIdForClassicalBit(c);
-          bits[host].emplace_back(c);
-        }
+          for (const size_t c : cbits) {
+            const size_t host = network->GetHostIdForClassicalBit(c);
+            bits[host].emplace_back(c);
+          }
 
-        for (const auto &hostQubits : bits)
-          newDistributedCircuit->AddOperation(
-              std::make_shared<Circuits::Random<Time>>(hostQubits.second));
-      } break;
-      case Circuits::OperationType::kConditionalRandomGen: {
-        std::unordered_map<size_t, std::vector<size_t>> bits;
-        // split by operation (as in random gen), not by condition, that should
-        // stay whole and be dealt with accordingly if classical network
-        // simulation details are to be done
-        auto condOp =
-            std::static_pointer_cast<Circuits::ConditionalRandomGen<Time>>(op);
-        const std::vector<size_t> cbits =
-            condOp->GetOperation()->AffectedBits();
+          for (const auto &hostQubits : bits)
+            newDistributedCircuit->AddOperation(
+                std::make_shared<Circuits::Random<Time>>(hostQubits.second));
+        } break;
+        case Circuits::OperationType::kConditionalRandomGen: {
+          std::unordered_map<size_t, std::vector<size_t>> bits;
+          // split by operation (as in random gen), not by condition, that
+          // should stay whole and be dealt with accordingly if classical
+          // network simulation details are to be done
+          auto condOp =
+              std::static_pointer_cast<Circuits::ConditionalRandomGen<Time>>(
+                  op);
+          const std::vector<size_t> cbits =
+              condOp->GetOperation()->AffectedBits();
 
-        for (const size_t c : cbits) {
-          const size_t host = network->GetHostIdForClassicalBit(c);
-          bits[host].emplace_back(c);
-        }
+          for (const size_t c : cbits) {
+            const size_t host = network->GetHostIdForClassicalBit(c);
+            bits[host].emplace_back(c);
+          }
 
-        for (const auto &hostQubits : bits) {
-          auto randomOp =
-              std::make_shared<Circuits::Random<Time>>(hostQubits.second);
-          newDistributedCircuit->AddOperation(
-              std::make_shared<Circuits::ConditionalRandomGen<Time>>(
-                  randomOp,
-                  condOp->GetCondition())); // condition stays the same
-        }
-      } break;
-      default:
-        newDistributedCircuit->AddOperation(op);
-        break;
+          for (const auto &hostQubits : bits) {
+            auto randomOp =
+                std::make_shared<Circuits::Random<Time>>(hostQubits.second);
+            newDistributedCircuit->AddOperation(
+                std::make_shared<Circuits::ConditionalRandomGen<Time>>(
+                    randomOp,
+                    condOp->GetCondition()));  // condition stays the same
+          }
+        } break;
+        default:
+          newDistributedCircuit->AddOperation(op);
+          break;
       }
     }
 
@@ -278,6 +280,6 @@ public:
   }
 };
 
-} // namespace Distribution
+}  // namespace Distribution
 
-#endif // !_REMAPPER_H_
+#endif  // !_REMAPPER_H_

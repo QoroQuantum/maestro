@@ -28,8 +28,9 @@ namespace Estimators {
  *
  * @tparam Time The time type used for operation timing.
  */
-template <typename Time = Types::time_type> class SimulatorsEstimatorInterface {
-public:
+template <typename Time = Types::time_type>
+class SimulatorsEstimatorInterface {
+ public:
   virtual ~SimulatorsEstimatorInterface() = default;
 
   virtual std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(
@@ -43,11 +44,11 @@ public:
       size_t maxSimulators, const std::vector<std::string> *paulis,
       bool multithreading = false, bool dontRunCircuitStart = false) const = 0;
 
-  static void
-  ExecuteUpToMeasurements(const std::shared_ptr<Circuits::Circuit<Time>> &dcirc,
-                          size_t nrQubits, size_t nrCbits, size_t nrResultCbits,
-                          const std::shared_ptr<Simulators::ISimulator> &sim,
-                          std::vector<bool> &executed, bool multithreading) {
+  static void ExecuteUpToMeasurements(
+      const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits,
+      size_t nrCbits, size_t nrResultCbits,
+      const std::shared_ptr<Simulators::ISimulator> &sim,
+      std::vector<bool> &executed, bool multithreading) {
     Circuits::OperationState state;
     state.AllocateBits(nrCbits);
 
@@ -70,6 +71,6 @@ public:
   }
 };
 
-} // namespace Estimators
+}  // namespace Estimators
 
-#endif // !__SIMULATORS_ESTIMATOR_INTERFACE_H_
+#endif  // !__SIMULATORS_ESTIMATOR_INTERFACE_H_

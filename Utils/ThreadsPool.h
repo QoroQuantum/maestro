@@ -35,11 +35,12 @@ namespace Utils {
  * @tparam Job The job class/type.
  * @sa WorkerThread
  */
-template <class Job> class ThreadsPool {
+template <class Job>
+class ThreadsPool {
   using JobWorkerThread = WorkerThread<ThreadsPool<Job>, Job>;
   friend class WorkerThread<ThreadsPool<Job>, Job>;
 
-public:
+ public:
   /**
    * @brief Construct a new Thread pool object.
    *
@@ -48,8 +49,7 @@ public:
    * or equal to zero, one thread will be created. Can be resized later.
    */
   explicit ThreadsPool(int nrThreads = 0) {
-    if (nrThreads <= 0)
-      nrThreads = 1;
+    if (nrThreads <= 0) nrThreads = 1;
 
     for (int i = 0; i < nrThreads; ++i)
       Threads.emplace_back(std::make_unique<JobWorkerThread>(this));
@@ -73,14 +73,12 @@ public:
     {
       std::lock_guard lock(Mutex);
 
-      for (auto &worker : Threads)
-        worker->SetStopUnlocked();
+      for (auto &worker : Threads) worker->SetStopUnlocked();
     }
 
     NotifyAll();
 
-    for (auto &worker : Threads)
-      worker->Join();
+    for (auto &worker : Threads) worker->Join();
 
     Threads.clear();
   }
@@ -91,8 +89,7 @@ public:
    * Starts all the threads in the threads pool.
    */
   void Start() {
-    for (auto &worker : Threads)
-      worker->Start();
+    for (auto &worker : Threads) worker->Start();
   }
 
   /**
@@ -139,13 +136,11 @@ public:
     do {
       std::unique_lock lock(FinishMutex);
 
-      if (FinishCount >= FinishLimit)
-        return;
+      if (FinishCount >= FinishLimit) return;
 
       ConditionFinish.wait(lock, [this] { return FinishCount >= FinishLimit; });
 
-      if (FinishCount >= FinishLimit)
-        return;
+      if (FinishCount >= FinishLimit) return;
     } while (true);
   }
 
@@ -160,13 +155,11 @@ public:
    * equal to zero, one thread will be created or remain.
    */
   void Resize(size_t nrThreads) {
-    if (nrThreads <= 0)
-      nrThreads = 1;
+    if (nrThreads <= 0) nrThreads = 1;
 
     size_t oldSize = Threads.size();
 
-    if (oldSize == nrThreads)
-      return;
+    if (oldSize == nrThreads) return;
 
     if (oldSize < nrThreads) {
       for (size_t i = oldSize; i < nrThreads; ++i) {
@@ -182,8 +175,7 @@ public:
 
       NotifyAll();
 
-      for (size_t i = oldSize; i < nrThreads; ++i)
-        Threads[i]->Join();
+      for (size_t i = oldSize; i < nrThreads; ++i) Threads[i]->Join();
       Threads.resize(nrThreads);
     }
   }
@@ -204,7 +196,7 @@ public:
     FinishCount = 0;
   }
 
-private:
+ private:
   /**
    * @brief Notify one thread that there is a new job to execute.
    *
@@ -257,6 +249,6 @@ private:
       Threads; /**< The vector with the worker threads */
 };
 
-} // namespace Utils
+}  // namespace Utils
 
-#endif // __THREADS_POOL_H_
+#endif  // __THREADS_POOL_H_

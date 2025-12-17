@@ -31,15 +31,15 @@ class TensorNetwork;
  * There might be different implementations for different types of contractions.
  */
 class ITensorContractor {
-public:
+ public:
   using TensorsMap =
       std::unordered_map<Eigen::Index, std::shared_ptr<TensorNode>>;
 
-  virtual TensorsMap
-  InitializeTensors(const TensorNetwork &network, Types::qubit_t qubit,
-                    std::vector<Eigen::Index> &keys,
-                    std::unordered_map<Eigen::Index, Eigen::Index> &keysKeys,
-                    bool fillKeys = true, bool contract = true) = 0;
+  virtual TensorsMap InitializeTensors(
+      const TensorNetwork &network, Types::qubit_t qubit,
+      std::vector<Eigen::Index> &keys,
+      std::unordered_map<Eigen::Index, Eigen::Index> &keysKeys,
+      bool fillKeys = true, bool contract = true) = 0;
 
   /**
    * @brief Contract the tensor network.
@@ -79,6 +79,6 @@ public:
   virtual std::shared_ptr<ITensorContractor> Clone() const = 0;
 };
 
-} // namespace TensorNetworks
+}  // namespace TensorNetworks
 
-#endif // __TENSOR_CONTRACTOR_H_
+#endif  // __TENSOR_CONTRACTOR_H_

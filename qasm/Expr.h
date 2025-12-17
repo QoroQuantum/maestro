@@ -15,7 +15,7 @@
 
 #ifdef DEBUG
 #define BOOST_SPIRIT_QI_DEBUG
-#endif // DEBUG
+#endif  // DEBUG
 
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -38,15 +38,15 @@ namespace ascii = boost::spirit::ascii;
 namespace phx = boost::phoenix;
 
 class AbstractSyntaxTree {
-public:
+ public:
   virtual ~AbstractSyntaxTree() = default;
   virtual double Eval() const { return 0; }
-  virtual double
-  Eval(const std::unordered_map<std::string, double> &variables) const {
+  virtual double Eval(
+      const std::unordered_map<std::string, double> &variables) const {
     return 0;
   }
 
-protected:
+ protected:
   AbstractSyntaxTree() = default;
   AbstractSyntaxTree(const AbstractSyntaxTree &) = default;
   AbstractSyntaxTree(AbstractSyntaxTree &&) = default;
@@ -56,7 +56,8 @@ protected:
 
 typedef std::shared_ptr<AbstractSyntaxTree> AbstractSyntaxTreePtr;
 
-template <typename Expr> static AbstractSyntaxTreePtr Clone(Expr const &t) {
+template <typename Expr>
+static AbstractSyntaxTreePtr Clone(Expr const &t) {
   return std::make_shared<Expr>(t);
 }
 
@@ -64,7 +65,7 @@ template <typename Expr> static AbstractSyntaxTreePtr Clone(Expr const &t) {
 // for gates)
 
 class Constant : public AbstractSyntaxTree {
-public:
+ public:
   Constant(double value = 0) : value(value) {}
   Constant(int value) : value(value) {}
 
@@ -83,22 +84,26 @@ public:
     return value;
   }
 
-private:
+ private:
   double value;
 };
 
 struct MakeConstantExpression {
-  template <typename> struct result {
+  template <typename>
+  struct result {
     typedef Constant type;
   };
 
-  template <typename C> Constant operator()(C op) const { return Constant(op); }
+  template <typename C>
+  Constant operator()(C op) const {
+    return Constant(op);
+  }
 };
 
 phx::function<MakeConstantExpression> MakeConstant;
 
 class Variable : public AbstractSyntaxTree {
-public:
+ public:
   Variable(const std::string &value = "") : value(value) {}
 
   Variable &operator=(int value) {
@@ -118,40 +123,44 @@ public:
     return 0;
   }
 
-private:
+ private:
   std::string value;
 };
 
 struct MakeVariableExpression {
-  template <typename> struct result {
+  template <typename>
+  struct result {
     typedef Variable type;
   };
 
-  template <typename V> Variable operator()(V v) const { return Variable(v); }
+  template <typename V>
+  Variable operator()(V v) const {
+    return Variable(v);
+  }
 };
 
 phx::function<MakeVariableExpression> MakeVariable;
 
 class BinaryOperator : public AbstractSyntaxTree {
-public:
+ public:
   template <typename L, typename R>
   BinaryOperator(char op, const L &left, const R &right)
       : op(op), left(Clone(left)), right(Clone(right)) {}
 
   double Eval() const override {
     switch (op) {
-    case '+':
-      return left->Eval() + right->Eval();
-    case '-':
-      return left->Eval() - right->Eval();
-    case '*':
-      return left->Eval() * right->Eval();
-    case '/':
-      return left->Eval() / right->Eval();
-    case '^':
-      return pow(left->Eval(), right->Eval());
-    default:
-      throw std::invalid_argument("Unknown binary operator");
+      case '+':
+        return left->Eval() + right->Eval();
+      case '-':
+        return left->Eval() - right->Eval();
+      case '*':
+        return left->Eval() * right->Eval();
+      case '/':
+        return left->Eval() / right->Eval();
+      case '^':
+        return pow(left->Eval(), right->Eval());
+      default:
+        throw std::invalid_argument("Unknown binary operator");
     }
 
     return 0;
@@ -160,30 +169,31 @@ public:
   double Eval(
       const std::unordered_map<std::string, double> &variables) const override {
     switch (op) {
-    case '+':
-      return left->Eval(variables) + right->Eval(variables);
-    case '-':
-      return left->Eval(variables) - right->Eval(variables);
-    case '*':
-      return left->Eval(variables) * right->Eval(variables);
-    case '/':
-      return left->Eval(variables) / right->Eval(variables);
-    case '^':
-      return pow(left->Eval(variables), right->Eval(variables));
-    default:
-      throw std::invalid_argument("Unknown binary operator");
+      case '+':
+        return left->Eval(variables) + right->Eval(variables);
+      case '-':
+        return left->Eval(variables) - right->Eval(variables);
+      case '*':
+        return left->Eval(variables) * right->Eval(variables);
+      case '/':
+        return left->Eval(variables) / right->Eval(variables);
+      case '^':
+        return pow(left->Eval(variables), right->Eval(variables));
+      default:
+        throw std::invalid_argument("Unknown binary operator");
     }
 
     return 0;
   }
 
-private:
+ private:
   char op;
   AbstractSyntaxTreePtr left, right;
 };
 
 struct MakeBinaryExpression {
-  template <typename, typename, typename> struct result {
+  template <typename, typename, typename>
+  struct result {
     typedef BinaryOperator type;
   };
 
@@ -196,7 +206,7 @@ struct MakeBinaryExpression {
 phx::function<MakeBinaryExpression> MakeBinary;
 
 class UnaryOperator : public AbstractSyntaxTree {
-public:
+ public:
   UnaryOperator() : op('+') {}
 
   template <typename R>
@@ -204,12 +214,12 @@ public:
 
   double Eval() const override {
     switch (op) {
-    case '+':
-      return right->Eval();
-    case '-':
-      return -right->Eval();
-    default:
-      throw std::invalid_argument("Unknown unary operator");
+      case '+':
+        return right->Eval();
+      case '-':
+        return -right->Eval();
+      default:
+        throw std::invalid_argument("Unknown unary operator");
     }
 
     return 0;
@@ -218,23 +228,24 @@ public:
   double Eval(
       const std::unordered_map<std::string, double> &variables) const override {
     switch (op) {
-    case '+':
-      return right->Eval(variables);
-    case '-':
-      return -right->Eval(variables);
-    default:
-      throw std::invalid_argument("Unknown unary operator");
+      case '+':
+        return right->Eval(variables);
+      case '-':
+        return -right->Eval(variables);
+      default:
+        throw std::invalid_argument("Unknown unary operator");
     }
     return 0;
   }
 
-private:
+ private:
   char op;
   AbstractSyntaxTreePtr right;
 };
 
 struct MakeUnaryExpression {
-  template <typename, typename> struct result {
+  template <typename, typename>
+  struct result {
     typedef UnaryOperator type;
   };
 
@@ -247,7 +258,7 @@ struct MakeUnaryExpression {
 phx::function<MakeUnaryExpression> MakeUnary;
 
 class Function : public AbstractSyntaxTree {
-public:
+ public:
   template <typename F>
   Function(const std::string &func, const F &param)
       : func(func), param(Clone(param)) {}
@@ -291,13 +302,14 @@ public:
     return 0;
   }
 
-private:
+ private:
   std::string func;
   AbstractSyntaxTreePtr param;
 };
 
 struct MakeFunctionExpression {
-  template <typename, typename, typename> struct result {
+  template <typename, typename, typename>
+  struct result {
     typedef Function type;
   };
 
@@ -310,11 +322,12 @@ struct MakeFunctionExpression {
 phx::function<MakeFunctionExpression> MakeFunction;
 
 class Expression : public AbstractSyntaxTree {
-public:
+ public:
   Expression() {}
   ~Expression() override {}
 
-  template <typename E> Expression(E const &e) : expr(Clone(e)) {}
+  template <typename E>
+  Expression(E const &e) : expr(Clone(e)) {}
 
   double Eval() const override { return expr->Eval(); }
 
@@ -325,9 +338,9 @@ public:
 
   friend AbstractSyntaxTreePtr Clone(Expression const &e) { return e.expr; }
 
-private:
+ private:
   AbstractSyntaxTreePtr expr;
 };
-} // namespace qasm
+}  // namespace qasm
 
 #endif
