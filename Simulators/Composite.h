@@ -40,7 +40,7 @@ namespace Private {
  * measurements or resets).
  */
 class CompositeSimulator : public ISimulator {
-public:
+ public:
   /**
    * @brief The constructor.
    *
@@ -204,11 +204,9 @@ public:
    */
   void Configure(const char *key, const char *value) override {
     // don't allow chaning the method, it should stay statevector
-    if (std::string("method") == key)
-      return;
+    if (std::string("method") == key) return;
 
-    for (auto &[id, simulator] : simulators)
-      simulator->Configure(key, value);
+    for (auto &[id, simulator] : simulators) simulator->Configure(key, value);
   }
 
   /**
@@ -219,8 +217,7 @@ public:
    * @return The configuration value as a string.
    */
   std::string GetConfiguration(const char *key) const override {
-    if (simulators.empty())
-      return "";
+    if (simulators.empty()) return "";
 
     return simulators.begin()->second->GetConfiguration(key);
   }
@@ -234,8 +231,7 @@ public:
    * @return The index of the first qubit allocated.
    */
   size_t AllocateQubits(size_t num_qubits) override {
-    if (!simulators.empty())
-      return 0;
+    if (!simulators.empty()) return 0;
 
     const size_t oldNrQubits = nrQubits;
     nrQubits += num_qubits;
@@ -316,8 +312,7 @@ public:
     DontNotify();
     for (Types::qubit_t qubit : qubits) {
       const bool outcome = GetSimulator(qubit)->Measure({qubit}) != 0;
-      if (outcome)
-        res |= mask;
+      if (outcome) res |= mask;
       mask <<= 1;
 
       Split(qubit, outcome);
@@ -402,8 +397,8 @@ public:
    * @return A vector with the probabilities for the specified qubit
    * configurations.
    */
-  std::vector<double>
-  Probabilities(const Types::qubits_vector &qubits) override {
+  std::vector<double> Probabilities(
+      const Types::qubits_vector &qubits) override {
     std::vector<double> result;
 
     for (size_t i = 0; i < qubits.size(); ++i)
@@ -425,9 +420,8 @@ public:
    * @return A map with the counts for the otcomes of measurements of the
    * specified qubits.
    */
-  std::unordered_map<Types::qubit_t, Types::qubit_t>
-  SampleCounts(const Types::qubits_vector &qubits,
-               size_t shots = 1000) override {
+  std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
+      const Types::qubits_vector &qubits, size_t shots = 1000) override {
     // TODO: improve it as for the qcsim statevector simulator case!
     std::unordered_map<Types::qubit_t, Types::qubit_t> result;
     DontNotify();
@@ -446,8 +440,7 @@ public:
         size_t mask = 1ULL;
         for (auto q : qubits) {
           const size_t qubitMask = 1ULL << q;
-          if ((measRaw & qubitMask) != 0)
-            meas |= mask;
+          if ((measRaw & qubitMask) != 0) meas |= mask;
           mask <<= 1ULL;
         }
 
@@ -463,8 +456,7 @@ public:
         size_t mask = 1ULL;
         for (auto q : qubits) {
           const size_t qubitMask = 1ULL << q;
-          if ((measRaw & qubitMask) != 0)
-            meas |= mask;
+          if ((measRaw & qubitMask) != 0) meas |= mask;
           mask <<= 1ULL;
         }
 
@@ -495,8 +487,7 @@ public:
 
     for (size_t q = 0; q < pauliString.size(); ++q) {
       const char op = toupper(pauliString[q]);
-      if (op == 'I')
-        continue;
+      if (op == 'I') continue;
 
       const size_t simId = qubitsMap[q];
       const size_t localQubit = simulators[simId]->GetQubitsMap().at(q);
@@ -552,8 +543,7 @@ public:
    * applies them right away, but qiskit aer does not.
    */
   void Flush() override {
-    for (auto &[id, simulator] : simulators)
-      simulator->Flush();
+    for (auto &[id, simulator] : simulators) simulator->Flush();
   }
 
   // YES, all one qubit gates are that easy:
@@ -1105,21 +1095,18 @@ public:
           static_cast<IndividualSimulator *>(isim.release()));
     }
 
-    if (savedState)
-      clone->savedState = savedState->Clone();
+    if (savedState) clone->savedState = savedState->Clone();
 
     return clone;
   }
 
-private:
+ private:
   void InitializeAlias() {
-    for (auto &[id, simulator] : simulators)
-      simulator->InitializeAlias();
+    for (auto &[id, simulator] : simulators) simulator->InitializeAlias();
   }
 
   void ClearAlias() {
-    for (auto &[id, simulator] : simulators)
-      simulator->ClearAlias();
+    for (auto &[id, simulator] : simulators) simulator->ClearAlias();
   }
 
   /**
@@ -1192,12 +1179,12 @@ private:
    */
   inline void Split(size_t qubit, bool qubitOutcome = false) {
     auto &sim = GetSimulator(
-        qubit); // get the simulator for the qubit, this one will be split
+        qubit);  // get the simulator for the qubit, this one will be split
     if (sim->GetNumberOfQubits() ==
-        1) // no need to split it, it's already for a single qubit
+        1)  // no need to split it, it's already for a single qubit
       return;
 
-    qubitsMap[qubit] = nextId; // the qubit will be in the new simulator
+    qubitsMap[qubit] = nextId;  // the qubit will be in the new simulator
     simulators[nextId] = sim->Split(qubit, qubitOutcome, enableMultithreading);
 
     ++nextId;
@@ -1217,8 +1204,8 @@ private:
   std::unique_ptr<ISimulator> savedState; /**< The saved state, if any. */
 };
 
-} // namespace Private
-} // namespace Simulators
+}  // namespace Private
+}  // namespace Simulators
 
 #endif
 #endif

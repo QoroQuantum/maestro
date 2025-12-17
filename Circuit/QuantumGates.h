@@ -69,7 +69,7 @@ enum class QuantumGateType : int {
  */
 template <typename Time = Types::time_type>
 class IQuantumGate : public IGateOperation<Time> {
-public:
+ public:
   /**
    * @brief IQuantumGate constructor.
    *
@@ -110,7 +110,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class SingleQubitGate : public IQuantumGate<Time> {
-public:
+ public:
   /**
    * @brief SingleQubitGate constructor.
    *
@@ -184,9 +184,9 @@ public:
    * @param bitsMap The map of classical bits to remap.
    * @return A shared pointer to the remapped object.
    */
-  std::shared_ptr<IOperation<Time>>
-  Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
-        const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
+  std::shared_ptr<IOperation<Time>> Remap(
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
       const override {
     auto newGate = this->Clone();
 
@@ -200,7 +200,7 @@ public:
     return newGate;
   }
 
-private:
+ private:
   Types::qubit_t qubit; /**< The qubit the quantum gate is applied to. */
 };
 
@@ -215,7 +215,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class TwoQubitsGate : public IQuantumGate<Time> {
-public:
+ public:
   /**
    * @brief TwoQubitsGate constructor.
    *
@@ -301,9 +301,9 @@ public:
    * @param bitsMap The map of classical bits to remap.
    * @return A shared pointer to the remapped object.
    */
-  std::shared_ptr<IOperation<Time>>
-  Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
-        const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
+  std::shared_ptr<IOperation<Time>> Remap(
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
       const override {
     auto newGate = this->Clone();
 
@@ -320,7 +320,7 @@ public:
     return newGate;
   }
 
-private:
+ private:
   Types::qubit_t qubit1; /**< The first qubit the quantum gate is applied to. */
   Types::qubit_t
       qubit2; /**< The second qubit the quantum gate is applied to. */
@@ -337,7 +337,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class ThreeQubitsGate : public IQuantumGate<Time> {
-public:
+ public:
   /**
    * @brief ThreeQubitsGate constructor.
    *
@@ -352,7 +352,9 @@ public:
    */
   ThreeQubitsGate(Types::qubit_t qubit1 = 0, Types::qubit_t qubit2 = 0,
                   Types::qubit_t qubit3 = 0, Time delay = 0)
-      : IQuantumGate<Time>(delay), qubit1(qubit1), qubit2(qubit2),
+      : IQuantumGate<Time>(delay),
+        qubit1(qubit1),
+        qubit2(qubit2),
         qubit3(qubit3) {}
 
   /**
@@ -430,9 +432,9 @@ public:
    * @param bitsMap The map of classical bits to remap.
    * @return A shared pointer to the remapped object.
    */
-  std::shared_ptr<IOperation<Time>>
-  Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
-        const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
+  std::shared_ptr<IOperation<Time>> Remap(
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
       const override {
     auto newGate = this->Clone();
 
@@ -454,7 +456,7 @@ public:
     return newGate;
   }
 
-private:
+ private:
   Types::qubit_t qubit1; /**< The first qubit the quantum gate is applied to. */
   Types::qubit_t
       qubit2; /**< The second qubit the quantum gate is applied to. */
@@ -475,7 +477,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class PhaseGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief PhaseGate constructor.
    *
@@ -561,13 +563,12 @@ public:
    * otherwise.
    */
   bool IsClifford() const override {
-    if (std::abs(lambda - M_PI_2) > 1e-10)
-      return false;
+    if (std::abs(lambda - M_PI_2) > 1e-10) return false;
 
     return true;
   }
 
-private:
+ private:
   double lambda;
 };
 
@@ -581,7 +582,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class XGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief XGate constructor.
    *
@@ -653,7 +654,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class YGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief YGate constructor.
    *
@@ -725,7 +726,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class ZGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief ZGate constructor.
    *
@@ -797,7 +798,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class HadamardGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief HadamardGate constructor.
    *
@@ -869,7 +870,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class SGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief SGate constructor.
    *
@@ -941,7 +942,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class SdgGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief SdgGate constructor.
    *
@@ -1013,7 +1014,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class TGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief TGate constructor.
    *
@@ -1074,7 +1075,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class TdgGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief TdgGate constructor.
    *
@@ -1135,7 +1136,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class SxGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief SxGate constructor.
    *
@@ -1207,7 +1208,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class SxDagGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief SxDagGate constructor.
    *
@@ -1279,7 +1280,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class KGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief KGate constructor.
    *
@@ -1351,7 +1352,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class RotationGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief RotationGate constructor.
    *
@@ -1390,7 +1391,7 @@ public:
    */
   std::vector<double> GetParams() const override { return {theta}; }
 
-private:
+ private:
   double theta; /**< The theta angle for the rotation gate. */
 };
 
@@ -1405,7 +1406,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class RxGate : public RotationGate<Time> {
-public:
+ public:
   /**
    * @brief RxGate constructor.
    *
@@ -1470,7 +1471,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class RyGate : public RotationGate<Time> {
-public:
+ public:
   /**
    * @brief RyGate constructor.
    *
@@ -1535,7 +1536,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class RzGate : public RotationGate<Time> {
-public:
+ public:
   /**
    * @brief RzGate constructor.
    *
@@ -1599,7 +1600,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class UGate : public SingleQubitGate<Time> {
-public:
+ public:
   /**
    * @brief UGate constructor.
    *
@@ -1612,8 +1613,11 @@ public:
    */
   UGate(Types::qubit_t qubit = 0, double theta = 0, double phi = 0,
         double lambda = 0, double gamma = 0, Time delay = 0)
-      : SingleQubitGate<Time>(qubit, delay), theta(theta), phi(phi),
-        lambda(lambda), gamma(gamma) {}
+      : SingleQubitGate<Time>(qubit, delay),
+        theta(theta),
+        phi(phi),
+        lambda(lambda),
+        gamma(gamma) {}
 
   /**
    * @brief Execute the quantum gate.
@@ -1738,7 +1742,7 @@ public:
    */
   bool IsClifford() const override { return false; }
 
-private:
+ private:
   double theta;  /**< The theta parameter for the gate. */
   double phi;    /**< The phi parameter for the gate. */
   double lambda; /**< The lambda parameter for the gate. */
@@ -1762,7 +1766,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class SwapGate : public TwoQubitsGate<Time> {
-public:
+ public:
   /**
    * @brief SwapGate constructor.
    *
@@ -1839,7 +1843,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class CXGate : public TwoQubitsGate<Time> {
-public:
+ public:
   /**
    * @brief CXGate constructor.
    *
@@ -1914,7 +1918,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class CYGate : public TwoQubitsGate<Time> {
-public:
+ public:
   /**
    * @brief CYGate constructor.
    *
@@ -1989,7 +1993,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class CZGate : public TwoQubitsGate<Time> {
-public:
+ public:
   /**
    * @brief CZGate constructor.
    *
@@ -2064,7 +2068,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class CPGate : public TwoQubitsGate<Time> {
-public:
+ public:
   /**
    * @brief CPGate constructor.
    *
@@ -2143,7 +2147,7 @@ public:
    */
   std::vector<double> GetParams() const override { return {lambda}; }
 
-private:
+ private:
   double lambda; /**< The lambda parameter for the controlled phase gate. */
 };
 
@@ -2157,7 +2161,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class ControlledRotationGate : public TwoQubitsGate<Time> {
-public:
+ public:
   /**
    * @brief ControlledRotationGate constructor.
    *
@@ -2198,7 +2202,7 @@ public:
    */
   std::vector<double> GetParams() const override { return {theta}; }
 
-private:
+ private:
   double theta; /**< The theta angle for the controlled rotation gate. */
 };
 
@@ -2212,7 +2216,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class CRxGate : public ControlledRotationGate<Time> {
-public:
+ public:
   /**
    * @brief CRxGate constructor.
    *
@@ -2279,7 +2283,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class CRyGate : public ControlledRotationGate<Time> {
-public:
+ public:
   /**
    * @brief CRyGate constructor.
    *
@@ -2346,7 +2350,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class CRzGate : public ControlledRotationGate<Time> {
-public:
+ public:
   /**
    * @brief CRzGate constructor.
    *
@@ -2413,7 +2417,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class CHGate : public TwoQubitsGate<Time> {
-public:
+ public:
   /**
    * @brief CHGate constructor.
    *
@@ -2477,7 +2481,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class CSxGate : public TwoQubitsGate<Time> {
-public:
+ public:
   /**
    * @brief CSxGate constructor.
    *
@@ -2541,7 +2545,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class CSxDagGate : public TwoQubitsGate<Time> {
-public:
+ public:
   /**
    * @brief CSxDagGate constructor.
    *
@@ -2605,7 +2609,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class CUGate : public TwoQubitsGate<Time> {
-public:
+ public:
   /**
    * @brief CUGate constructor.
    *
@@ -2622,8 +2626,11 @@ public:
    */
   CUGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double theta = 0,
          double phi = 0, double lambda = 0, double gamma = 0, Time delay = 0)
-      : TwoQubitsGate<Time>(ctrl, target, delay), theta(theta), phi(phi),
-        lambda(lambda), gamma(gamma) {}
+      : TwoQubitsGate<Time>(ctrl, target, delay),
+        theta(theta),
+        phi(phi),
+        lambda(lambda),
+        gamma(gamma) {}
 
   /**
    * @brief Execute the quantum gate.
@@ -2740,7 +2747,7 @@ public:
     return {theta, phi, lambda, gamma};
   }
 
-private:
+ private:
   double theta;  /**< The theta parameter for the controlled U gate. */
   double phi;    /**< The phi parameter for the controlled U gate. */
   double lambda; /**< The lambda parameter for the controlled U gate. */
@@ -2763,7 +2770,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class CCXGate : public ThreeQubitsGate<Time> {
-public:
+ public:
   /**
    * @brief CCXGate constructor.
    *
@@ -2830,7 +2837,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class CSwapGate : public ThreeQubitsGate<Time> {
-public:
+ public:
   /**
    * @brief CSwapGate constructor.
    *
@@ -2886,6 +2893,6 @@ public:
         ThreeQubitsGate<Time>::GetQubit(2), IOperation<Time>::GetDelay());
   }
 };
-} // namespace Circuits
+}  // namespace Circuits
 
-#endif // !_QUANTUM_GATES_H_
+#endif  // !_QUANTUM_GATES_H_

@@ -33,8 +33,9 @@ namespace Circuits {
  * important (for example for distribution).
  * @tparam Time The time type used for operations timing.
  */
-template <typename Time = Types::time_type> class CircuitFactory {
-public:
+template <typename Time = Types::time_type>
+class CircuitFactory {
+ public:
   /**
    * @brief Construct a circuit.
    *
@@ -60,9 +61,9 @@ public:
    * @return The reset operation.
    * @sa Reset
    */
-  static std::shared_ptr<IOperation<Time>>
-  CreateReset(const Types::qubits_vector &qubits = {},
-              const std::vector<bool> &resetTgts = {}) {
+  static std::shared_ptr<IOperation<Time>> CreateReset(
+      const Types::qubits_vector &qubits = {},
+      const std::vector<bool> &resetTgts = {}) {
     return std::make_shared<Reset<Time>>(qubits, 0, resetTgts);
   }
 
@@ -76,8 +77,8 @@ public:
    * @return The random operation.
    * @sa Random
    */
-  static std::shared_ptr<IOperation<Time>>
-  CreateRandom(const std::vector<size_t> &bits = {}, size_t seed = 0) {
+  static std::shared_ptr<IOperation<Time>> CreateRandom(
+      const std::vector<size_t> &bits = {}, size_t seed = 0) {
     return std::make_shared<Random<Time>>(bits, seed);
   }
 
@@ -118,10 +119,10 @@ public:
    * @sa IQuantumGate
    * @sa QuantumGateType
    */
-  static const std::shared_ptr<IQuantumGate<Time>>
-  CreateGate(QuantumGateType type, size_t q1, size_t q2 = 0, size_t q3 = 0,
-             double param1 = 0, double param2 = 0, double param3 = 0,
-             double param4 = 0) {
+  static const std::shared_ptr<IQuantumGate<Time>> CreateGate(
+      QuantumGateType type, size_t q1, size_t q2 = 0, size_t q3 = 0,
+      double param1 = 0, double param2 = 0, double param3 = 0,
+      double param4 = 0) {
     // parameters that do not make sense for a gate are ignored, eg if it's a
     // single qubit gate, q2 and q3 are ignored if it doesn't have a parameter,
     // the parameter is ignored if it has only one, the others are ignored
@@ -130,102 +131,103 @@ public:
     std::shared_ptr<IQuantumGate<Time>> gate;
 
     switch (type) {
-      // one qubit gates
-    case QuantumGateType::kPhaseGateType:
-      gate = std::make_shared<PhaseGate<Time>>(q1, param1);
-      break;
-    case QuantumGateType::kXGateType:
-      gate = std::make_shared<XGate<Time>>(q1);
-      break;
-    case QuantumGateType::kYGateType:
-      gate = std::make_shared<YGate<Time>>(q1);
-      break;
-    case QuantumGateType::kZGateType:
-      gate = std::make_shared<ZGate<Time>>(q1);
-      break;
-    case QuantumGateType::kHadamardGateType:
-      gate = std::make_shared<HadamardGate<Time>>(q1);
-      break;
-    case QuantumGateType::kSGateType:
-      gate = std::make_shared<SGate<Time>>(q1);
-      break;
-    case QuantumGateType::kSdgGateType:
-      gate = std::make_shared<SdgGate<Time>>(q1);
-      break;
-    case QuantumGateType::kTGateType:
-      gate = std::make_shared<TGate<Time>>(q1);
-      break;
-    case QuantumGateType::kTdgGateType:
-      gate = std::make_shared<TdgGate<Time>>(q1);
-      break;
-    case QuantumGateType::kSxGateType:
-      gate = std::make_shared<SxGate<Time>>(q1);
-      break;
-    case QuantumGateType::kSxDagGateType:
-      gate = std::make_shared<SxDagGate<Time>>(q1);
-      break;
-    case QuantumGateType::kKGateType:
-      gate = std::make_shared<KGate<Time>>(q1);
-      break;
-    case QuantumGateType::kRxGateType:
-      gate = std::make_shared<RxGate<Time>>(q1, param1);
-      break;
-    case QuantumGateType::kRyGateType:
-      gate = std::make_shared<RyGate<Time>>(q1, param1);
-      break;
-    case QuantumGateType::kRzGateType:
-      gate = std::make_shared<RzGate<Time>>(q1, param1);
-      break;
-    case QuantumGateType::kUGateType:
-      gate = std::make_shared<UGate<Time>>(q1, param1, param2, param3, param4);
-      break;
-      // two qubit gates
-    case QuantumGateType::kSwapGateType:
-      gate = std::make_shared<SwapGate<Time>>(q1, q2);
-      break;
-    case QuantumGateType::kCXGateType:
-      gate = std::make_shared<CXGate<Time>>(q1, q2);
-      break;
-    case QuantumGateType::kCYGateType:
-      gate = std::make_shared<CYGate<Time>>(q1, q2);
-      break;
-    case QuantumGateType::kCZGateType:
-      gate = std::make_shared<CZGate<Time>>(q1, q2);
-      break;
-    case QuantumGateType::kCPGateType:
-      gate = std::make_shared<CPGate<Time>>(q1, q2, param1);
-      break;
-    case QuantumGateType::kCRxGateType:
-      gate = std::make_shared<CRxGate<Time>>(q1, q2, param1);
-      break;
-    case QuantumGateType::kCRyGateType:
-      gate = std::make_shared<CRyGate<Time>>(q1, q2, param1);
-      break;
-    case QuantumGateType::kCRzGateType:
-      gate = std::make_shared<CRzGate<Time>>(q1, q2, param1);
-      break;
-    case QuantumGateType::kCHGateType:
-      gate = std::make_shared<CHGate<Time>>(q1, q2);
-      break;
-    case QuantumGateType::kCSxGateType:
-      gate = std::make_shared<CSxGate<Time>>(q1, q2);
-      break;
-    case QuantumGateType::kCSxDagGateType:
-      gate = std::make_shared<CSxDagGate<Time>>(q1, q2);
-      break;
-    case QuantumGateType::kCUGateType:
-      gate = std::make_shared<CUGate<Time>>(q1, q2, param1, param2, param3,
-                                            param4);
-      break;
-      // three qubit gates
-    case QuantumGateType::kCSwapGateType:
-      gate = std::make_shared<CSwapGate<Time>>(q1, q2, q3);
-      break;
-    case QuantumGateType::kCCXGateType:
-      gate = std::make_shared<CCXGate<Time>>(q1, q2, q3);
-      break;
-    default:
-      break;
+        // one qubit gates
+      case QuantumGateType::kPhaseGateType:
+        gate = std::make_shared<PhaseGate<Time>>(q1, param1);
+        break;
+      case QuantumGateType::kXGateType:
+        gate = std::make_shared<XGate<Time>>(q1);
+        break;
+      case QuantumGateType::kYGateType:
+        gate = std::make_shared<YGate<Time>>(q1);
+        break;
+      case QuantumGateType::kZGateType:
+        gate = std::make_shared<ZGate<Time>>(q1);
+        break;
+      case QuantumGateType::kHadamardGateType:
+        gate = std::make_shared<HadamardGate<Time>>(q1);
+        break;
+      case QuantumGateType::kSGateType:
+        gate = std::make_shared<SGate<Time>>(q1);
+        break;
+      case QuantumGateType::kSdgGateType:
+        gate = std::make_shared<SdgGate<Time>>(q1);
+        break;
+      case QuantumGateType::kTGateType:
+        gate = std::make_shared<TGate<Time>>(q1);
+        break;
+      case QuantumGateType::kTdgGateType:
+        gate = std::make_shared<TdgGate<Time>>(q1);
+        break;
+      case QuantumGateType::kSxGateType:
+        gate = std::make_shared<SxGate<Time>>(q1);
+        break;
+      case QuantumGateType::kSxDagGateType:
+        gate = std::make_shared<SxDagGate<Time>>(q1);
+        break;
+      case QuantumGateType::kKGateType:
+        gate = std::make_shared<KGate<Time>>(q1);
+        break;
+      case QuantumGateType::kRxGateType:
+        gate = std::make_shared<RxGate<Time>>(q1, param1);
+        break;
+      case QuantumGateType::kRyGateType:
+        gate = std::make_shared<RyGate<Time>>(q1, param1);
+        break;
+      case QuantumGateType::kRzGateType:
+        gate = std::make_shared<RzGate<Time>>(q1, param1);
+        break;
+      case QuantumGateType::kUGateType:
+        gate =
+            std::make_shared<UGate<Time>>(q1, param1, param2, param3, param4);
+        break;
+        // two qubit gates
+      case QuantumGateType::kSwapGateType:
+        gate = std::make_shared<SwapGate<Time>>(q1, q2);
+        break;
+      case QuantumGateType::kCXGateType:
+        gate = std::make_shared<CXGate<Time>>(q1, q2);
+        break;
+      case QuantumGateType::kCYGateType:
+        gate = std::make_shared<CYGate<Time>>(q1, q2);
+        break;
+      case QuantumGateType::kCZGateType:
+        gate = std::make_shared<CZGate<Time>>(q1, q2);
+        break;
+      case QuantumGateType::kCPGateType:
+        gate = std::make_shared<CPGate<Time>>(q1, q2, param1);
+        break;
+      case QuantumGateType::kCRxGateType:
+        gate = std::make_shared<CRxGate<Time>>(q1, q2, param1);
+        break;
+      case QuantumGateType::kCRyGateType:
+        gate = std::make_shared<CRyGate<Time>>(q1, q2, param1);
+        break;
+      case QuantumGateType::kCRzGateType:
+        gate = std::make_shared<CRzGate<Time>>(q1, q2, param1);
+        break;
+      case QuantumGateType::kCHGateType:
+        gate = std::make_shared<CHGate<Time>>(q1, q2);
+        break;
+      case QuantumGateType::kCSxGateType:
+        gate = std::make_shared<CSxGate<Time>>(q1, q2);
+        break;
+      case QuantumGateType::kCSxDagGateType:
+        gate = std::make_shared<CSxDagGate<Time>>(q1, q2);
+        break;
+      case QuantumGateType::kCUGateType:
+        gate = std::make_shared<CUGate<Time>>(q1, q2, param1, param2, param3,
+                                              param4);
+        break;
+        // three qubit gates
+      case QuantumGateType::kCSwapGateType:
+        gate = std::make_shared<CSwapGate<Time>>(q1, q2, q3);
+        break;
+      case QuantumGateType::kCCXGateType:
+        gate = std::make_shared<CCXGate<Time>>(q1, q2, q3);
+        break;
+      default:
+        break;
     }
 
     return gate;
@@ -243,10 +245,9 @@ public:
    * @sa IQuantumGate
    * @sa QuantumGateType
    */
-  static const std::shared_ptr<IOperation<Time>>
-  CreateGateWithVectors(QuantumGateType type,
-                        const Types::qubits_vector &qubits,
-                        const std::vector<double> &params = {}) {
+  static const std::shared_ptr<IOperation<Time>> CreateGateWithVectors(
+      QuantumGateType type, const Types::qubits_vector &qubits,
+      const std::vector<double> &params = {}) {
     return CreateGate(type, qubits.empty() ? 0 : qubits[0],
                       (qubits.size() < 2) ? 0 : qubits[1],
                       (qubits.size() < 3) ? 0 : qubits[2],
@@ -270,9 +271,8 @@ public:
    * @return The equality condition.
    * @sa ICondition
    */
-  static std::shared_ptr<ICondition>
-  CreateEqualCondition(const std::vector<size_t> &ind,
-                       const std::vector<bool> &b) {
+  static std::shared_ptr<ICondition> CreateEqualCondition(
+      const std::vector<size_t> &ind, const std::vector<bool> &b) {
     return std::make_shared<EqualCondition>(ind, b);
   }
 
@@ -291,9 +291,9 @@ public:
    * @sa IGateOperation
    * @sa ICondition
    */
-  static std::shared_ptr<IOperation<Time>>
-  CreateConditionalGate(const std::shared_ptr<IGateOperation<Time>> &operation,
-                        const std::shared_ptr<ICondition> &condition) {
+  static std::shared_ptr<IOperation<Time>> CreateConditionalGate(
+      const std::shared_ptr<IGateOperation<Time>> &operation,
+      const std::shared_ptr<ICondition> &condition) {
     return std::make_shared<ConditionalGate<Time>>(operation, condition);
   }
 
@@ -351,9 +351,9 @@ public:
    * @sa Random
    * @sa ICondition
    */
-  static std::shared_ptr<IOperation<Time>>
-  CreateConditionalRandomGen(const std::shared_ptr<Random<Time>> &randomGen,
-                             const std::shared_ptr<ICondition> &condition) {
+  static std::shared_ptr<IOperation<Time>> CreateConditionalRandomGen(
+      const std::shared_ptr<Random<Time>> &randomGen,
+      const std::shared_ptr<ICondition> &condition) {
     return std::make_shared<ConditionalRandomGen<Time>>(randomGen, condition);
   }
 
@@ -381,22 +381,17 @@ public:
    * @return The circuit that prepares the qubit pair in a Bell state.
    * @sa IOperation
    */
-  static std::vector<std::shared_ptr<IOperation<Time>>>
-  CreateBellStateCircuit(size_t qbit1, size_t qbit2, bool qbit1X = false,
-                         bool qbit2X = false) {
+  static std::vector<std::shared_ptr<IOperation<Time>>> CreateBellStateCircuit(
+      size_t qbit1, size_t qbit2, bool qbit1X = false, bool qbit2X = false) {
     size_t s = 2;
-    if (qbit1X)
-      ++s;
-    if (qbit2X)
-      ++s;
+    if (qbit1X) ++s;
+    if (qbit2X) ++s;
 
     std::vector<std::shared_ptr<IOperation<Time>>> ops(s);
 
     s = 0;
-    if (qbit1X)
-      ops[s++] = CreateGate(QuantumGateType::kXGateType, qbit1);
-    if (qbit2X)
-      ops[s++] = CreateGate(QuantumGateType::kXGateType, qbit2);
+    if (qbit1X) ops[s++] = CreateGate(QuantumGateType::kXGateType, qbit1);
+    if (qbit2X) ops[s++] = CreateGate(QuantumGateType::kXGateType, qbit2);
     ops[s++] = CreateGate(QuantumGateType::kHadamardGateType, qbit1);
     ops[s] = CreateGate(QuantumGateType::kCXGateType, qbit1, qbit2);
 
@@ -434,8 +429,8 @@ public:
    * @return The circuit that prepares the qubits in a GHZ state.
    * @sa IOperation
    */
-  static std::vector<std::shared_ptr<IOperation<Time>>>
-  CreateGZHStateCircuit(size_t qbit1, size_t qbit2, size_t qbit3) {
+  static std::vector<std::shared_ptr<IOperation<Time>>> CreateGZHStateCircuit(
+      size_t qbit1, size_t qbit2, size_t qbit3) {
     std::vector<std::shared_ptr<IOperation<Time>>> ops(3);
 
     ops[0] = CreateGate(QuantumGateType::kHadamardGateType, qbit1);
@@ -574,8 +569,8 @@ public:
    * @param qubit The qubit to measure.
    * @param cbit The classical bit to store the measurement result.
    */
-  static std::vector<std::shared_ptr<IOperation<Time>>>
-  CreateMeasureX(size_t qubit, size_t cbit) {
+  static std::vector<std::shared_ptr<IOperation<Time>>> CreateMeasureX(
+      size_t qubit, size_t cbit) {
     std::vector<std::shared_ptr<IOperation<Time>>> ops(2);
     ops[0] = CreateGate(QuantumGateType::kHadamardGateType, qubit);
     ops[1] = CreateMeasurement({{qubit, cbit}});
@@ -591,8 +586,8 @@ public:
    * @param qubit The qubit to measure.
    * @param cbit The classical bit to store the measurement result.
    */
-  static std::vector<std::shared_ptr<IOperation<Time>>>
-  CreateMeasureY(size_t qubit, size_t cbit) {
+  static std::vector<std::shared_ptr<IOperation<Time>>> CreateMeasureY(
+      size_t qubit, size_t cbit) {
     std::vector<std::shared_ptr<IOperation<Time>>> ops(3);
     ops[0] = CreateGate(QuantumGateType::kSdgGateType, qubit);
     ops[1] = CreateGate(QuantumGateType::kHadamardGateType, qubit);
@@ -609,8 +604,8 @@ public:
    * @param qubit The qubit to measure.
    * @param cbit The classical bit to store the measurement result.
    */
-  static std::vector<std::shared_ptr<IOperation<Time>>>
-  CreateMeasureZ(size_t qubit, size_t cbit) {
+  static std::vector<std::shared_ptr<IOperation<Time>>> CreateMeasureZ(
+      size_t qubit, size_t cbit) {
     std::vector<std::shared_ptr<IOperation<Time>>> ops(1);
     ops[0] = CreateMeasurement({{qubit, cbit}});
 
@@ -624,8 +619,8 @@ public:
    *
    * @param qubit The qubit to initialize.
    */
-  static std::vector<std::shared_ptr<IOperation<Time>>>
-  CreateInitZero(size_t qubit) {
+  static std::vector<std::shared_ptr<IOperation<Time>>> CreateInitZero(
+      size_t qubit) {
     std::vector<std::shared_ptr<IOperation<Time>>> ops(1);
     ops[0] = CreateReset({qubit});
 
@@ -639,8 +634,8 @@ public:
    *
    * @param qubit The qubit to initialize.
    */
-  static std::vector<std::shared_ptr<IOperation<Time>>>
-  CreateInitOne(size_t qubit) {
+  static std::vector<std::shared_ptr<IOperation<Time>>> CreateInitOne(
+      size_t qubit) {
     std::vector<std::shared_ptr<IOperation<Time>>> ops(2);
     ops[0] = CreateReset({qubit});
     ops[1] = CreateGate(QuantumGateType::kXGateType, qubit);
@@ -655,8 +650,8 @@ public:
    *
    * @param qubit The qubit to initialize.
    */
-  static std::vector<std::shared_ptr<IOperation<Time>>>
-  CreateInitPlus(size_t qubit) {
+  static std::vector<std::shared_ptr<IOperation<Time>>> CreateInitPlus(
+      size_t qubit) {
     std::vector<std::shared_ptr<IOperation<Time>>> ops(2);
     ops[0] = CreateReset({qubit});
     ops[1] = CreateGate(QuantumGateType::kHadamardGateType, qubit);
@@ -671,8 +666,8 @@ public:
    *
    * @param qubit The qubit to initialize.
    */
-  static std::vector<std::shared_ptr<IOperation<Time>>>
-  CreateInitMinus(size_t qubit) {
+  static std::vector<std::shared_ptr<IOperation<Time>>> CreateInitMinus(
+      size_t qubit) {
     std::vector<std::shared_ptr<IOperation<Time>>> ops(3);
     ops[0] = CreateReset({qubit});
     ops[1] = CreateGate(QuantumGateType::kXGateType, qubit);
@@ -688,8 +683,8 @@ public:
    *
    * @param qubit The qubit to initialize.
    */
-  static std::vector<std::shared_ptr<IOperation<Time>>>
-  CreateInitPlusI(size_t qubit) {
+  static std::vector<std::shared_ptr<IOperation<Time>>> CreateInitPlusI(
+      size_t qubit) {
     std::vector<std::shared_ptr<IOperation<Time>>> ops(3);
     ops[0] = CreateReset({qubit});
     ops[1] = CreateGate(QuantumGateType::kHadamardGateType, qubit);
@@ -705,8 +700,8 @@ public:
    *
    * @param qubit The qubit to initialize.
    */
-  static std::vector<std::shared_ptr<IOperation<Time>>>
-  CreateInitMinusI(size_t qubit) {
+  static std::vector<std::shared_ptr<IOperation<Time>>> CreateInitMinusI(
+      size_t qubit) {
     std::vector<std::shared_ptr<IOperation<Time>>> ops(3);
     ops[0] = CreateReset({qubit});
     ops[1] = CreateGate(QuantumGateType::kHadamardGateType, qubit);
@@ -715,6 +710,6 @@ public:
     return ops;
   }
 };
-} // namespace Circuits
+}  // namespace Circuits
 
-#endif // !_CIRCUIT_FACTORY_H_
+#endif  // !_CIRCUIT_FACTORY_H_

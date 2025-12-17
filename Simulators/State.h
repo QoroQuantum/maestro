@@ -97,7 +97,7 @@ enum class SimulationType : int {
  * @sa ISimulator
  */
 class IState {
-public:
+ public:
   /**
    * @brief Virtual destructor.
    *
@@ -126,9 +126,8 @@ public:
    * @param amplitudes A vector with the amplitudes to initialize the state
    * with.
    */
-  virtual void
-  InitializeState(size_t num_qubits,
-                  std::vector<std::complex<double>> &amplitudes) = 0;
+  virtual void InitializeState(
+      size_t num_qubits, std::vector<std::complex<double>> &amplitudes) = 0;
 
   /**
    * @brief Initializes the state.
@@ -143,9 +142,8 @@ public:
    * with.
    */
 #ifndef NO_QISKIT_AER
-  virtual void
-  InitializeState(size_t num_qubits,
-                  AER::Vector<std::complex<double>> &amplitudes) = 0;
+  virtual void InitializeState(
+      size_t num_qubits, AER::Vector<std::complex<double>> &amplitudes) = 0;
 #endif
 
   /**
@@ -282,8 +280,8 @@ public:
    * @return A vector with the probabilities for the specified qubit
    * configurations.
    */
-  virtual std::vector<double>
-  Probabilities(const Types::qubits_vector &qubits) = 0;
+  virtual std::vector<double> Probabilities(
+      const Types::qubits_vector &qubits) = 0;
 
   /**
    * @brief Returns the counts of the outcomes of measurement of the specified
@@ -298,8 +296,8 @@ public:
    * @return A map with the counts for the otcomes of measurements of the
    * specified qubits.
    */
-  virtual std::unordered_map<Types::qubit_t, Types::qubit_t>
-  SampleCounts(const Types::qubits_vector &qubits, size_t shots = 1000) = 0;
+  virtual std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
+      const Types::qubits_vector &qubits, size_t shots = 1000) = 0;
 
   /**
    * @brief Returns the expected value of a Pauli string.
@@ -469,7 +467,7 @@ public:
    */
   virtual Types::qubit_t MeasureNoCollapse() = 0;
 
-protected:
+ protected:
   /**
    * @brief Stops notifying observers.
    *
@@ -492,21 +490,20 @@ protected:
    * change.
    */
   void NotifyObservers(const Types::qubits_vector &affectedQubits) {
-    if (!notifyObservers)
-      return;
+    if (!notifyObservers) return;
 
     for (auto &observer : observers) {
       observer->Update(affectedQubits);
     }
   }
 
-private:
+ private:
   std::unordered_set<std::shared_ptr<ISimulatorObserver>>
       observers; /**< The registered observers. */
   bool notifyObservers =
       true; /**< A flag to indicate if observers should be notified. */
 };
 
-} // namespace Simulators
+}  // namespace Simulators
 
-#endif // !_SIMULATOR_STATE_H_
+#endif  // !_SIMULATOR_STATE_H_

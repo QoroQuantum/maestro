@@ -39,8 +39,11 @@ struct CircuitInfo : ExecuteCircuit<Time> {
   CircuitInfo(const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
               size_t shots, size_t id, size_t gatesDepth, Time timeDepth,
               size_t qubits)
-      : ExecuteCircuit<Time>(circuit, shots), id(id), gatesDepth(gatesDepth),
-        timeDepth(timeDepth), qubits(qubits) {}
+      : ExecuteCircuit<Time>(circuit, shots),
+        id(id),
+        gatesDepth(gatesDepth),
+        timeDepth(timeDepth),
+        qubits(qubits) {}
 
   bool operator==(const CircuitInfo<Time> &other) const {
     if (ExecuteCircuit<Time>::operator==(other)) {
@@ -77,7 +80,8 @@ struct CircuitInfo : ExecuteCircuit<Time> {
  * @sa Network::INetwork
  * @sa Circuits::Circuit
  */
-template <typename Time = Types::time_type> struct ExecuteJob {
+template <typename Time = Types::time_type>
+struct ExecuteJob {
   using NetworkClass = typename Network::INetwork<Time>;
   using ExecuteResults = typename NetworkClass::ExecuteResults;
 
@@ -88,8 +92,7 @@ template <typename Time = Types::time_type> struct ExecuteJob {
   ExecuteResults results;
 
   void DoWork() {
-    if (!hostNetwork || !circ || nrShots == 0)
-      return;
+    if (!hostNetwork || !circ || nrShots == 0) return;
 
     results = hostNetwork->RepeatedExecuteOnHost(circ, h, nrShots);
   }
@@ -109,7 +112,7 @@ template <typename Time = Types::time_type> struct ExecuteJob {
  */
 template <typename Time = Types::time_type>
 class IScheduler : public std::enable_shared_from_this<IScheduler<Time>> {
-public:
+ public:
   using NetworkClass = typename Network::INetwork<Time>;
   using ExecuteResults = typename NetworkClass::ExecuteResults;
 
@@ -138,24 +141,24 @@ public:
    * @sa ExecuteCircuit
    * @sa Network::INetwork
    */
-  virtual std::vector<ExecuteResults>
-  ExecuteScheduled(const std::vector<ExecuteCircuit<Time>> &circuits) = 0;
+  virtual std::vector<ExecuteResults> ExecuteScheduled(
+      const std::vector<ExecuteCircuit<Time>> &circuits) = 0;
 
-  virtual std::shared_ptr<Circuits::Circuit<Time>>
-  GetScheduledCircuit() const = 0;
+  virtual std::shared_ptr<Circuits::Circuit<Time>> GetScheduledCircuit()
+      const = 0;
 
   virtual std::vector<ExecuteResults> ExecuteScheduledSteps() = 0;
 
-  virtual const std::vector<std::vector<CircuitInfo<Time>>> &
-  GetScheduledSteps() const = 0;
+  virtual const std::vector<std::vector<CircuitInfo<Time>>> &GetScheduledSteps()
+      const = 0;
 
   virtual void SetScheduledSteps(
       const std::vector<std::vector<CircuitInfo<Time>>> &steps) = 0;
 
   virtual bool SetCurrentStep(size_t step) = 0;
 
-  virtual std::shared_ptr<Circuits::Circuit<Time>>
-  GetScheduledCircuitForHost(size_t hostId) const = 0;
+  virtual std::shared_ptr<Circuits::Circuit<Time>> GetScheduledCircuitForHost(
+      size_t hostId) const = 0;
 
   virtual size_t GetCurrentShots() const = 0;
 
@@ -186,10 +189,10 @@ public:
 
   virtual Network::SchedulerType GetType() const = 0;
 
-private:
+ private:
   std::shared_ptr<NetworkClass>
       network; /**< The network to schedule and execute circuits on. */
 };
-} // namespace Schedulers
+}  // namespace Schedulers
 
 #endif

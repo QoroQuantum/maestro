@@ -60,7 +60,7 @@ enum class OperationType {
  * values for conditions) of a quantum circuit execution.
  */
 class OperationState {
-public:
+ public:
   /**
    * @brief Construct a new Operation State object
    *
@@ -183,8 +183,7 @@ public:
    * @return The classical bit value at the specified index.
    */
   bool GetBit(size_t index) const {
-    if (index > bits.size())
-      return false;
+    if (index > bits.size()) return false;
 
     return bits[index];
   }
@@ -200,8 +199,7 @@ public:
     std::vector<bool> results(indices.size(), false);
 
     for (size_t i = 0; i < indices.size(); ++i)
-      if (indices[i] < bits.size())
-        results[i] = bits[indices[i]];
+      if (indices[i] < bits.size()) results[i] = bits[indices[i]];
 
     return results;
   }
@@ -230,8 +228,7 @@ public:
    * @param value The value to set the bit to.
    */
   void SetBit(size_t index, bool value = true) {
-    if (index > bits.size())
-      return;
+    if (index > bits.size()) return;
 
     bits[index] = value;
   }
@@ -269,8 +266,7 @@ public:
    */
   void SetResults(const std::vector<size_t> &indices, size_t results) {
     for (int i = 0; i < static_cast<int>(indices.size()); ++i) {
-      if (indices[i] < bits.size())
-        bits[indices[i]] = results & 1;
+      if (indices[i] < bits.size()) bits[indices[i]] = results & 1;
       results >>= 1;
     }
   }
@@ -344,7 +340,7 @@ public:
     bits.swap(newBits);
   }
 
-private:
+ private:
   std::vector<bool> bits; /**< The classical bits. */
 };
 
@@ -359,7 +355,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class IOperation : public std::enable_shared_from_this<IOperation<Time>> {
-public:
+ public:
   /**
    * @brief Construct a new IOperation object.
    *
@@ -416,9 +412,9 @@ public:
    * @param bitsMap The map of classical bits to remap.
    * @return A shared pointer to the remapped object.
    */
-  virtual std::shared_ptr<IOperation<Time>>
-  Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
-        const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
+  virtual std::shared_ptr<IOperation<Time>> Remap(
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap = {})
       const = 0;
 
   /**
@@ -518,7 +514,7 @@ public:
    */
   virtual bool IsClifford() const { return false; }
 
-private:
+ private:
   Time delay; /**< The delay of the operation. */
 };
 
@@ -532,7 +528,7 @@ private:
  */
 template <typename Time = Types::time_type>
 class NoOperation : public IOperation<Time> {
-public:
+ public:
   /**
    * @brief Construct a new NoOperation object.
    *
@@ -576,9 +572,9 @@ public:
    * @param bitsMap The map of classical bits to remap.
    * @return A shared pointer to the remapped object.
    */
-  std::shared_ptr<IOperation<Time>>
-  Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
-        const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap)
+  std::shared_ptr<IOperation<Time>> Remap(
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubitsMap,
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap)
       const override {
     return this->Clone();
   }
@@ -605,7 +601,7 @@ public:
  */
 template <typename Time = Types::time_type>
 class IGateOperation : public IOperation<Time> {
-public:
+ public:
   /**
    * @brief Construct a new IGateOperation object.
    *
@@ -652,6 +648,6 @@ public:
   virtual Types::qubit_t GetQubit(unsigned int index = 0) const = 0;
 };
 
-} // namespace Circuits
+}  // namespace Circuits
 
-#endif // !_CIRCUIT_OPERATIONS_H_
+#endif  // !_CIRCUIT_OPERATIONS_H_

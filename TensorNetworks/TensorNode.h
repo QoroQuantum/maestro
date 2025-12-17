@@ -25,7 +25,7 @@
 namespace TensorNetworks {
 
 class TensorNode {
-public:
+ public:
   using Index = Eigen::Index;
   using MatrixClass = Eigen::MatrixXcd;
 
@@ -42,12 +42,10 @@ public:
 
     qubits.push_back(q1);
 
-    if (qubitsNumber > 1)
-      qubits.push_back(q2);
+    if (qubitsNumber > 1) qubits.push_back(q2);
 
     qubits.push_back(q1);
-    if (qubitsNumber > 1)
-      qubits.push_back(q2);
+    if (qubitsNumber > 1) qubits.push_back(q2);
 
     tensor = Factory::CreateTensorFromGate(gate);
 
@@ -82,8 +80,7 @@ public:
   }
 
   void SetSuper() {
-    if (tensor)
-      tensor->Conj();
+    if (tensor) tensor->Conj();
   }
 
   void SetId(Index Id) { id = Id; }
@@ -93,8 +90,7 @@ public:
   size_t GetQubitsNumber() const { return qubits.size(); }
 
   size_t GetRank() const {
-    if (!tensor)
-      return 0;
+    if (!tensor) return 0;
 
     return tensor->GetRank();
   }
@@ -157,14 +153,14 @@ public:
   Index id = 0;
 
   std::vector<Types::qubit_t>
-      qubits; // each dimension/index of the tensor corresponds to a qubit
+      qubits;  // each dimension/index of the tensor corresponds to a qubit
   std::vector<Index>
-      connections; // the ids of the connected tensors in the network (equal
-                   // with the index in the tensors vector)
+      connections;  // the ids of the connected tensors in the network (equal
+                    // with the index in the tensors vector)
   std::vector<Index>
-      connectionsIndices; // the indices of the connected indices in the
-                          // connected tensor on that position
-  std::shared_ptr<Utils::Tensor<>> tensor; // the actual tensor
+      connectionsIndices;  // the indices of the connected indices in the
+                           // connected tensor on that position
+  std::shared_ptr<Utils::Tensor<>> tensor;  // the actual tensor
 
   // this is only needed for contraction algorithm
   // it will be set to true only on contraction result nodes, not on the
@@ -172,6 +168,6 @@ public:
   bool contractsTheNeededQubit = false;
 };
 
-} // namespace TensorNetworks
+}  // namespace TensorNetworks
 
-#endif // __TENSOR_NODE_H_
+#endif  // __TENSOR_NODE_H_

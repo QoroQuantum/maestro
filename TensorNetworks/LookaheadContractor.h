@@ -28,7 +28,7 @@ namespace TensorNetworks {
  * Tensor contractions using the Lookahead contraction method.
  */
 class LookaheadContractor : public BaseContractor {
-public:
+ public:
   using TensorPair = std::pair<Eigen::Index, Eigen::Index>;
   using VisitedPairType =
       std::unordered_set<TensorPair, boost::hash<TensorPair>>;
@@ -111,7 +111,7 @@ public:
     return cloned;
   }
 
-private:
+ private:
   void Lookahead(Types::qubit_t qubit, Eigen::Index &tensor1Id,
                  Eigen::Index &tensor2Id, size_t &bestDepth, Eigen::Index curt1,
                  Eigen::Index curt2, DummyTensorsMap &dummyTensors,
@@ -135,8 +135,7 @@ private:
           if (nextTensorId != TensorNode::NotConnected) {
             auto t1 = curTensorId;
             auto t2 = nextTensorId;
-            if (t1 > t2)
-              std::swap(t1, t2);
+            if (t1 > t2) std::swap(t1, t2);
             if (visitedPairs.find(std::make_pair(t1, t2)) != visitedPairs.end())
               continue;
 
@@ -242,6 +241,6 @@ private:
   bool useMaxRankCost = true;
 };
 
-} // namespace TensorNetworks
+}  // namespace TensorNetworks
 
-#endif // __LOOKAHEAD_CONTRACTOR_H_
+#endif  // __LOOKAHEAD_CONTRACTOR_H_

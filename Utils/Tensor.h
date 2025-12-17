@@ -38,7 +38,7 @@ namespace Utils {
 // tensor networks simulator.
 template <class T = std::complex<double>, class Storage = std::valarray<T>>
 class Tensor {
-protected:
+ protected:
   Storage values;
   std::vector<size_t> dims;
   mutable size_t sz;
@@ -50,7 +50,7 @@ protected:
     return QC::QubitRegisterCalculator<>::GetNumberOfThreads();
   }
 
-public:
+ public:
   friend class boost::serialization::access;
 
   Tensor() : sz(0) {}
@@ -101,8 +101,7 @@ public:
 
   template <class Archive>
   void serialize(Archive &ar, const unsigned int /*version*/) {
-    if (typename Archive::is_loading())
-      values.clear();
+    if (typename Archive::is_loading()) values.clear();
 
     ar &dims &sz;
   }
@@ -175,8 +174,7 @@ public:
         ++indices[pos];
         break;
       } else {
-        if (notOnPos)
-          indices[pos] = 0;
+        if (notOnPos) indices[pos] = 0;
         --pos;
       }
     }
@@ -201,8 +199,7 @@ public:
         ++indices[pos];
         break;
       } else {
-        if (notOnPos)
-          indices[pos] = 0;
+        if (notOnPos) indices[pos] = 0;
         --pos;
 
         if (pos < skip) {
@@ -410,8 +407,7 @@ public:
   Tensor<T, Storage> &operator+=(const Tensor<T, Storage> &other) {
     assert(dims == other.dims);
 
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] += other.values[i];
+    for (size_t i = 0; i < GetSize(); ++i) values[i] += other.values[i];
 
     return *this;
   }
@@ -419,8 +415,7 @@ public:
   Tensor<T, Storage> &operator-=(const Tensor<T, Storage> &other) {
     assert(dims == other.dims);
 
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] -= other.values[i];
+    for (size_t i = 0; i < GetSize(); ++i) values[i] -= other.values[i];
 
     return *this;
   }
@@ -428,8 +423,7 @@ public:
   Tensor<T, Storage> &operator*=(const Tensor<T, Storage> &other) {
     assert(dims == other.dims);
 
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] *= other.values[i];
+    for (size_t i = 0; i < GetSize(); ++i) values[i] *= other.values[i];
 
     return *this;
   }
@@ -437,36 +431,31 @@ public:
   Tensor<T, Storage> &operator/=(const Tensor<T, Storage> &other) {
     assert(dims == other.dims);
 
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] /= other.values[i];
+    for (size_t i = 0; i < GetSize(); ++i) values[i] /= other.values[i];
 
     return *this;
   }
 
   Tensor<T, Storage> &operator+=(const T &scalar) {
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] += scalar;
+    for (size_t i = 0; i < GetSize(); ++i) values[i] += scalar;
 
     return *this;
   }
 
   Tensor<T, Storage> &operator-=(const T &scalar) {
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] -= scalar;
+    for (size_t i = 0; i < GetSize(); ++i) values[i] -= scalar;
 
     return *this;
   }
 
   Tensor<T, Storage> &operator*=(const T &scalar) {
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] *= scalar;
+    for (size_t i = 0; i < GetSize(); ++i) values[i] *= scalar;
 
     return *this;
   }
 
   Tensor<T, Storage> &operator/=(const T &scalar) {
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] /= scalar;
+    for (size_t i = 0; i < GetSize(); ++i) values[i] /= scalar;
 
     return *this;
   }
@@ -474,29 +463,25 @@ public:
   // the following four are for the special case then each value is a map of
   // results (for cutting)
   Tensor<T, Storage> &operator+=(const double scalar) {
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] = values[i] + scalar;
+    for (size_t i = 0; i < GetSize(); ++i) values[i] = values[i] + scalar;
 
     return *this;
   }
 
   Tensor<T, Storage> &operator-=(const double scalar) {
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] = values[i] - scalar;
+    for (size_t i = 0; i < GetSize(); ++i) values[i] = values[i] - scalar;
 
     return *this;
   }
 
   Tensor<T, Storage> &operator*=(const double scalar) {
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] = scalar * values[i];
+    for (size_t i = 0; i < GetSize(); ++i) values[i] = scalar * values[i];
 
     return *this;
   }
 
   Tensor<T, Storage> &operator/=(const double scalar) {
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] = values[i] / scalar;
+    for (size_t i = 0; i < GetSize(); ++i) values[i] = values[i] / scalar;
 
     return *this;
   }
@@ -504,22 +489,19 @@ public:
   Tensor<T, Storage> operator-() const {
     Tensor<T, Storage> result(dims);
 
-    for (size_t i = 0; i < GetSize(); ++i)
-      result.values[i] = -values[i];
+    for (size_t i = 0; i < GetSize(); ++i) result.values[i] = -values[i];
 
     return result;
   }
 
   void Conj() {
-    for (size_t i = 0; i < GetSize(); ++i)
-      values[i] = std::conj(values[i]);
+    for (size_t i = 0; i < GetSize(); ++i) values[i] = std::conj(values[i]);
   }
 
   Tensor<T, Storage> TensorProduct(const Tensor<T, Storage> &other) const {
     std::vector<size_t> newdims(dims.size() + other.dims.size());
 
-    for (size_t i = 0; i < dims.size(); ++i)
-      newdims[i] = dims[i];
+    for (size_t i = 0; i < dims.size(); ++i) newdims[i] = dims[i];
 
     for (size_t i = 0; i < other.dims.size(); ++i)
       newdims[dims.size() + i] = other.dims[i];
@@ -548,12 +530,10 @@ public:
       newdims.reserve(newsize);
 
       for (size_t i = 0; i < dims.size(); ++i)
-        if (i != ind1)
-          newdims.push_back(dims[i]);
+        if (i != ind1) newdims.push_back(dims[i]);
 
       for (size_t i = 0; i < other.dims.size(); ++i)
-        if (i != ind2)
-          newdims.push_back(other.dims[i]);
+        if (i != ind2) newdims.push_back(other.dims[i]);
     }
 
     Tensor<T, Storage> result(newdims, IsDummy());
@@ -593,7 +573,7 @@ public:
       } else {
         const auto processor_count = GetNumberOfThreads();
 
-#pragma omp parallel for num_threads(processor_count)                          \
+#pragma omp parallel for num_threads(processor_count) \
     schedule(static, OmpLimit / divSchedule)
         for (long long int offset = 0; offset < static_cast<long long int>(sz);
              ++offset) {
@@ -629,10 +609,10 @@ public:
     return result;
   }
 
-  Tensor<T, Storage>
-  Contract(const Tensor<T, Storage> &other,
-           const std::vector<std::pair<size_t, size_t>> &indices,
-           bool allowMultithreading = true) const {
+  Tensor<T, Storage> Contract(
+      const Tensor<T, Storage> &other,
+      const std::vector<std::pair<size_t, size_t>> &indices,
+      bool allowMultithreading = true) const {
     std::vector<size_t> newdims;
     std::vector<size_t> contractDims;
 
@@ -666,13 +646,13 @@ public:
 
     if (!IsDummy()) {
       const Tensor<T, Storage> dummy(contractDims,
-                                     true); // used for incrementing the index
+                                     true);  // used for incrementing the index
       const size_t sz = result.GetSize();
 
       if (!allowMultithreading || sz < OmpLimit) {
         std::vector<size_t> dummyIndices(
-            contractDims.size(), 0); // the dummy index to be incremented - use
-                                     // the values to complete the real indices
+            contractDims.size(), 0);  // the dummy index to be incremented - use
+                                      // the values to complete the real indices
         std::vector<size_t> indices1(dims.size());
         std::vector<size_t> indices2(other.dims.size());
 
@@ -709,7 +689,7 @@ public:
       } else {
         const auto processor_count = GetNumberOfThreads();
 
-#pragma omp parallel for num_threads(processor_count)                          \
+#pragma omp parallel for num_threads(processor_count) \
     schedule(static, OmpLimit / divSchedule)
         for (long long int offset = 0; offset < static_cast<long long int>(sz);
              ++offset) {
@@ -734,8 +714,8 @@ public:
           // iterate over all the indices that are contracted
           std::vector<size_t> dummyIndices(
               contractDims.size(),
-              0); // the dummy index to be incremented - use the values to
-                  // complete the real indices
+              0);  // the dummy index to be incremented - use the values to
+                   // complete the real indices
 
           do {
             for (size_t i = 0; i < dummyIndices.size(); ++i)
@@ -761,13 +741,11 @@ public:
 
     T result = 0;
 
-    if (values.size() == 0)
-      return result;
+    if (values.size() == 0) return result;
 
     size_t dimMin = dims[0];
     for (size_t i = 1; i < dims.size(); ++i)
-      if (dims[i] < dimMin)
-        dimMin = dims[i];
+      if (dims[i] < dimMin) dimMin = dims[i];
 
     for (size_t i = 0; i < dimMin; ++i) {
       const std::vector<size_t> indices(dims.size(), i);
@@ -792,13 +770,11 @@ public:
       newdims.reserve(newsize);
 
       for (size_t i = 0; i < dims.size(); ++i)
-        if (i != ind1 && i != ind2)
-          newdims.push_back(dims[i]);
+        if (i != ind1 && i != ind2) newdims.push_back(dims[i]);
     }
 
     size_t dimMin = dims[ind1];
-    if (dims[ind2] < dimMin)
-      dimMin = dims[ind2];
+    if (dims[ind2] < dimMin) dimMin = dims[ind2];
 
     Tensor<T, Storage> result(newdims, values.size() == 0);
 
@@ -844,15 +820,13 @@ public:
             break;
           }
 
-        if (!skip)
-          newdims.push_back(dims[i]);
+        if (!skip) newdims.push_back(dims[i]);
       }
     }
 
     size_t dimMin = dims[tindices[0]];
     for (size_t i = 1; i < tindices.size(); ++i)
-      if (dims[tindices[i]] < dimMin)
-        dimMin = dims[tindices[i]];
+      if (dims[tindices[i]] < dimMin) dimMin = dims[tindices[i]];
 
     Tensor<T, Storage> result(newdims, values.size() == 0);
 
@@ -899,8 +873,7 @@ public:
     assert(indices.size() == dims.size());
 
     std::vector<size_t> newdims(dims.size());
-    for (size_t i = 0; i < dims.size(); ++i)
-      newdims[i] = dims[indices[i]];
+    for (size_t i = 0; i < dims.size(); ++i) newdims[i] = dims[indices[i]];
 
     Tensor<T, Storage> result(newdims, values.size() == 0);
 
@@ -956,7 +929,7 @@ public:
     return IndexFromFortranOffset(offset);
   }
 
-private:
+ private:
   // C/C++ layout (row-major order)
 
   inline size_t GetCPPOffset(const std::vector<size_t> &indices) const {
@@ -979,8 +952,7 @@ private:
     for (int i = static_cast<int>(dims.size()) - 1; i >= 0; --i) {
       indices[i] = offset % dims[i];
       offset /= dims[i];
-      if (0 == offset)
-        break;
+      if (0 == offset) break;
     }
 
     return indices;
@@ -1011,14 +983,13 @@ private:
     for (size_t i = 0; i < dims.size(); ++i) {
       indices[i] = offset % dims[i];
       offset /= dims[i];
-      if (0 == offset)
-        break;
+      if (0 == offset) break;
     }
 
     return indices;
   }
 };
 
-} // namespace Utils
+}  // namespace Utils
 
 #endif
