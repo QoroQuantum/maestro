@@ -24,23 +24,23 @@ namespace bdata = boost::unit_test::data;
 #define _USE_MATH_DEFINES
 #include <math.h>
 
-#include "Simulators/Factory.h" 
+#include "../Simulators/Factory.h" 
 
-#include "Circuit/Circuit.h"
+#include "../Circuit/Circuit.h"
 
-#include "Circuit/Conditional.h"
-#include "Circuit/Measurements.h"
-#include "Circuit/QuantumGates.h"
-#include "Circuit/RandomOp.h"
-#include "Circuit/Reset.h"
-#include "Circuit/Factory.h"
+#include "../Circuit/Conditional.h"
+#include "../Circuit/Measurements.h"
+#include "../Circuit/QuantumGates.h"
+#include "../Circuit/RandomOp.h"
+#include "../Circuit/Reset.h"
+#include "../Circuit/Factory.h"
 
-#include "TensorNetworks/TensorNetwork.h"
-#include "TensorNetworks/StochasticContractor.h"
-#include "TensorNetworks/VerticalContractor.h"
-#include "TensorNetworks/ForestContractor.h"
-#include "TensorNetworks/DumbContractor.h"
-#include "TensorNetworks/LookaheadContractor.h"
+#include "../TensorNetworks/TensorNetwork.h"
+#include "../TensorNetworks/StochasticContractor.h"
+#include "../TensorNetworks/VerticalContractor.h"
+#include "../TensorNetworks/ForestContractor.h"
+#include "../TensorNetworks/DumbContractor.h"
+#include "../TensorNetworks/LookaheadContractor.h"
 
 struct TensorsTestFixture 
 {
