@@ -12,6 +12,8 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-array-bounds")
 set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+add_definitions( -D_FAST_TESTS )
+
 # Qiskit Aer is optional - disabled by default for easier builds
 # Enable only if AER_INCLUDE_DIR is explicitly set
 set(QAER False)
@@ -34,6 +36,11 @@ endif()
 
 # Include FetchContent for automatic dependency management
 include(FetchContent)
+
+set(COMPILE_TESTS True)
+if (NOT "$ENV{NO_TESTS}" STREQUAL "")
+	set(COMPILE_TESTS False)
+endif()
 
 # Eigen 5 (header-only, can be fetched automatically)
 if (NOT DEFINED EIGEN5_INCLUDE_DIR)
@@ -107,6 +114,18 @@ if (QAER)
 endif()
 
 # add here common sources
+
+set(TESTSSRC tests/aertests.cpp
+	tests/circtests.cpp
+	tests/cliffordtests.cpp
+	tests/compsimtests.cpp
+	tests/expvals.cpp
+	tests/gputests.cpp
+	tests/mpssimtests.cpp
+	tests/qasm.cpp
+	tests/qcsimtests.cpp
+	tests/tensortests.cpp
+	tests/tests.cpp)
 
 set(MAESTROSRC maestrolib/Interface.cpp)
 if(WIN32)
@@ -214,6 +233,10 @@ endif()
 
 LINK_LIBRARIES()
 
+if (QAER AND COMPILE_TESTS)
+	add_executable(tests ${TESTSSRC})
+endif()
+
 add_executable(maestroexe ${MAESTROEXESRC})
 add_library(maestro SHARED ${MAESTROSRC})
 
@@ -233,6 +256,13 @@ install(TARGETS maestroexe DESTINATION bin)
 
 if(OpenMP_CXX_FOUND)
     message("Setting OpenMP")
+	
+	if (QAER AND COMPILE_TESTS)
+		target_link_libraries(tests PUBLIC OpenMP::OpenMP_CXX)
+		target_link_libraries(tests PRIVATE ${OpenMP_CXX_FLAGS})
+		target_compile_options(tests PRIVATE ${OpenMP_CXX_FLAGS})
+    endif()
+	
     if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         find_program(BREW_CMD brew)
         if(BREW_CMD)
@@ -260,20 +290,36 @@ endif()
 
 IF(QAER AND BLAS_FOUND)
     message("Setting linking blas")
+	
+	if (QAER AND COMPILE_TESTS)
+		target_link_libraries(tests PUBLIC ${BLAS_LIBRARIES})
+	endif()
+	
     target_link_libraries(maestro PUBLIC ${BLAS_LIBRARIES})
 ENDIF()
 
 IF(SIMD_FLAGS)
     message("Setting SIMD flags")
+	
+	if (QAER AND COMPILE_TESTS)
+		target_link_libraries(tests PUBLIC ${BLAS_LIBRARIES})
+	endif()
+	
     target_compile_options(maestro PUBLIC ${SIMD_FLAGS})
 ENDIF()
 
 if (UNIX)
+	if (QAER AND COMPILE_TESTS)
+		target_link_libraries(tests PUBLIC ${BLAS_LIBRARIES})
+	endif()
     target_link_libraries(maestro PRIVATE dl)
     target_link_libraries(maestroexe PRIVATE dl)    
 endif()
 
 IF(Boost_FOUND)
+	if (QAER AND COMPILE_TESTS)
+		target_link_libraries(tests PUBLIC ${BLAS_LIBRARIES})
+	endif()
     target_link_libraries(maestro PRIVATE Boost::serialization)
     target_link_libraries(maestroexe PRIVATE Boost::serialization)
     target_link_libraries(maestroexe PRIVATE Boost::program_options)
