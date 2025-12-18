@@ -423,7 +423,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     // do that only if the optimization for simulator is on and the estimator is
     // available, ortherwise an 'optimal' simulator won't be created
-    if (optimizeSimulator && simulatorsEstimator) {
+    if (optimizeSimulator && simulatorsEstimator && simulatorsEstimator->IsInitialized()) {
       simulator->Clear();
       GetState().Clear();
     }
@@ -458,7 +458,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       // cloned in the threads, otherwise a new one will be created in the
       // threads
       if (!optimizeSimulator ||
-          !simulatorsEstimator)  // otherwise it was already cleared
+          !simulatorsEstimator || !simulatorsEstimator->IsInitialized())  // otherwise it was already cleared
       {
         simulator->Clear();
         GetState().Clear();
@@ -1723,7 +1723,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       bool dontRunCircuitStart = false) const override {
     if (!optimizeSimulator) return nullptr;
 
-    if (!simulatorsEstimator && simulatorsForOptimizations.size() != 1)
+    if ((!simulatorsEstimator || !simulatorsEstimator->IsInitialized()) && simulatorsForOptimizations.size() != 1)
       return nullptr;
 
     // when multithreading is set to true it means it needs a multithreaded
