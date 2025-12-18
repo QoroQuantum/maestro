@@ -77,11 +77,6 @@ class ExecuteJob {
         if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
           optSim->SaveState();
       }
-    } else if (optimiseMultipleShots && executedGates.empty()) {
-      executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
-
-      if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
-        optSim->SaveState();
     }
 
     std::shared_ptr<Circuits::MeasurementOperation<Time>> measurementsOp;
@@ -196,11 +191,6 @@ class ExecuteJob {
           if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
             optSim->SaveState();
         }
-      } else if (optimiseMultipleShots && executedGates.empty()) {
-        executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
-        
-        if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
-          optSim->SaveState();
       }
     } else {
       optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
