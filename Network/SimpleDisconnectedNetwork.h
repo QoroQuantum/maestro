@@ -511,8 +511,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         job->executedGates = executed;
       } else {
         if (simulator && method == saveMethod && simType == saveSimType) {
+          // use the already created simulator
           optSim = simulator;
           job->optSim = optSim;
+          job->executedGates.resize(distCirc->size(), false);  // no gates executed yet
           simulator = nullptr;
         }
       }

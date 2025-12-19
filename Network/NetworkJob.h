@@ -74,7 +74,7 @@ class ExecuteJob {
       if (optimiseMultipleShots) {
         executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
 
-        if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
+        if (!specialOptimizationForStatevector && !specialOptimizationForMPS && curCnt > 1)
           optSim->SaveState();
       }
     }
@@ -131,7 +131,7 @@ class ExecuteJob {
     const auto curCnt1 = curCnt > 0 ? curCnt - 1 : 0;
     for (size_t i = 0; i < curCnt; ++i) {
       if (optimiseMultipleShots) {
-        optSim->RestoreState();
+        if (i > 0) optSim->RestoreState();
         dcirc->ExecuteMeasurements(optSim, state, executed);
       } else {
         dcirc->Execute(optSim, state);
@@ -188,7 +188,27 @@ class ExecuteJob {
         if (optimiseMultipleShots) {
           executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
 
-          if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
+          if (!specialOptimizationForStatevector && !specialOptimizationForMPS && curCnt > 1)
+            optSim->SaveState();
+        }
+      }
+      else if (executedGates.size() == dcirc->size())
+      {
+        // special case for when the simulator is passed from the network
+        // and no gates were executed yet
+        bool needToExecuteGates = true;
+        for (const bool val : executedGates)
+        {
+          if (val)
+          {
+            needToExecuteGates = false;
+            break;
+          }
+        }
+        if (needToExecuteGates && optimiseMultipleShots)
+        {
+          executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
+          if (!specialOptimizationForStatevector && !specialOptimizationForMPS && curCnt > 1)
             optSim->SaveState();
         }
       }
@@ -213,7 +233,7 @@ class ExecuteJob {
       if (optimiseMultipleShots) {
         executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
 
-        if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
+        if (!specialOptimizationForStatevector && !specialOptimizationForMPS && curCnt > 1)
           optSim->SaveState();
       }
     }
@@ -264,7 +284,7 @@ class ExecuteJob {
     const auto curCnt1 = curCnt > 0 ? curCnt - 1 : 0;
     for (size_t i = 0; i < curCnt; ++i) {
       if (optimiseMultipleShots) {
-        optSim->RestoreState();
+        if (i > 0) optSim->RestoreState();
         dcirc->ExecuteMeasurements(optSim, state, executed);
       } else {
         dcirc->Execute(optSim, state);
