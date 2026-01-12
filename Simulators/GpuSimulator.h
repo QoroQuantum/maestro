@@ -61,6 +61,8 @@ class GpuSimulator : public GpuState {
       state->ApplyP(qubit, lambda);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyP(qubit, lambda);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyP(qubit, lambda);
 
     NotifyObservers({qubit});
   }
@@ -76,6 +78,8 @@ class GpuSimulator : public GpuState {
       state->ApplyX(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyX(qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyX(qubit);
 
     NotifyObservers({qubit});
   }
@@ -91,6 +95,8 @@ class GpuSimulator : public GpuState {
       state->ApplyY(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyY(qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyY(qubit);
 
     NotifyObservers({qubit});
   }
@@ -106,6 +112,8 @@ class GpuSimulator : public GpuState {
       state->ApplyZ(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyZ(qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyZ(qubit);
 
     NotifyObservers({qubit});
   }
@@ -121,6 +129,8 @@ class GpuSimulator : public GpuState {
       state->ApplyH(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyH(qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyH(qubit);
 
     NotifyObservers({qubit});
   }
@@ -136,6 +146,8 @@ class GpuSimulator : public GpuState {
       state->ApplyS(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyS(qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyS(qubit);
 
     NotifyObservers({qubit});
   }
@@ -151,6 +163,8 @@ class GpuSimulator : public GpuState {
       state->ApplySDG(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplySDG(qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplySDG(qubit);
 
     NotifyObservers({qubit});
   }
@@ -166,6 +180,8 @@ class GpuSimulator : public GpuState {
       state->ApplyT(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyT(qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyT(qubit);
 
     NotifyObservers({qubit});
   }
@@ -181,6 +197,8 @@ class GpuSimulator : public GpuState {
       state->ApplyTDG(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyTDG(qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyTDG(qubit);
 
     NotifyObservers({qubit});
   }
@@ -196,6 +214,8 @@ class GpuSimulator : public GpuState {
       state->ApplySX(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplySX(qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplySX(qubit);
 
     NotifyObservers({qubit});
   }
@@ -211,6 +231,8 @@ class GpuSimulator : public GpuState {
       state->ApplySXDG(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplySXDG(qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplySXDG(qubit);
 
     NotifyObservers({qubit});
   }
@@ -226,6 +248,8 @@ class GpuSimulator : public GpuState {
       state->ApplyK(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyK(qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyK(qubit);
 
     NotifyObservers({qubit});
   }
@@ -242,6 +266,8 @@ class GpuSimulator : public GpuState {
       state->ApplyRx(qubit, theta);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyRx(qubit, theta);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyRx(qubit, theta);
 
     NotifyObservers({qubit});
   }
@@ -258,6 +284,8 @@ class GpuSimulator : public GpuState {
       state->ApplyRy(qubit, theta);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyRy(qubit, theta);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyRy(qubit, theta);
 
     NotifyObservers({qubit});
   }
@@ -274,6 +302,8 @@ class GpuSimulator : public GpuState {
       state->ApplyRz(qubit, theta);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyRz(qubit, theta);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyRz(qubit, theta);
 
     NotifyObservers({qubit});
   }
@@ -291,6 +321,8 @@ class GpuSimulator : public GpuState {
       state->ApplyU(qubit, theta, phi, lambda, gamma);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyU(qubit, theta, phi, lambda, gamma);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyU(qubit, theta, phi, lambda, gamma);
 
     NotifyObservers({qubit});
   }
@@ -307,6 +339,8 @@ class GpuSimulator : public GpuState {
       state->ApplyCX(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCX(ctrl_qubit, tgt_qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyCX(ctrl_qubit, tgt_qubit);
 
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
@@ -323,6 +357,8 @@ class GpuSimulator : public GpuState {
       state->ApplyCY(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCY(ctrl_qubit, tgt_qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyCY(ctrl_qubit, tgt_qubit);
 
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
@@ -339,6 +375,8 @@ class GpuSimulator : public GpuState {
       state->ApplyCZ(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCZ(ctrl_qubit, tgt_qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyCZ(ctrl_qubit, tgt_qubit);
 
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
@@ -357,6 +395,8 @@ class GpuSimulator : public GpuState {
       state->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
 
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
@@ -375,6 +415,8 @@ class GpuSimulator : public GpuState {
       state->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
 
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
@@ -393,6 +435,8 @@ class GpuSimulator : public GpuState {
       state->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
 
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
@@ -411,6 +455,8 @@ class GpuSimulator : public GpuState {
       state->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
 
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
@@ -427,6 +473,8 @@ class GpuSimulator : public GpuState {
       state->ApplyCH(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCH(ctrl_qubit, tgt_qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyCH(ctrl_qubit, tgt_qubit);
 
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
@@ -443,6 +491,8 @@ class GpuSimulator : public GpuState {
       state->ApplyCSX(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCSX(ctrl_qubit, tgt_qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyCSX(ctrl_qubit, tgt_qubit);
 
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
@@ -460,6 +510,8 @@ class GpuSimulator : public GpuState {
       state->ApplyCSXDG(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCSXDG(ctrl_qubit, tgt_qubit);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyCSXDG(ctrl_qubit, tgt_qubit);
 
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
@@ -476,6 +528,8 @@ class GpuSimulator : public GpuState {
       state->ApplySwap(qubit0, qubit1);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplySwap(qubit0, qubit1);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplySwap(qubit0, qubit1);
 
     NotifyObservers({qubit1, qubit0});
   }
@@ -508,6 +562,8 @@ class GpuSimulator : public GpuState {
                    static_cast<unsigned int>(q2));
       mps->ApplyCSX(static_cast<unsigned int>(q1),
                     static_cast<unsigned int>(q3));
+    } else if (GetSimulationType() == SimulationType::kTensorNetwork) {
+        tn->ApplyCCX(qubit0, qubit1, qubit2);
     }
 
     NotifyObservers({qubit2, qubit1, qubit0});
@@ -553,6 +609,8 @@ class GpuSimulator : public GpuState {
                     static_cast<unsigned int>(q3));
       mps->ApplyCX(static_cast<unsigned int>(q3),
                    static_cast<unsigned int>(q2));
+    } else if (GetSimulationType() == SimulationType::kTensorNetwork) {
+        tn->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
     }
 
     NotifyObservers({qubit1, qubit0, ctrl_qubit});
@@ -575,6 +633,8 @@ class GpuSimulator : public GpuState {
       state->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tn->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
 
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
@@ -601,6 +661,12 @@ class GpuSimulator : public GpuState {
    * @return A unique pointer to the cloned simulator.
    */
   std::unique_ptr<ISimulator> Clone() override {
+    if (GetSimulationType() == SimulationType::kTensorNetwork) {
+      throw std::runtime_error(
+          "GpuSimulator::Clone: Cloning Tensor Network simulation is not "
+          "supported.");
+    }
+
     auto cloned = std::make_unique<GpuSimulator>();
 
     cloned->simulationType = simulationType;

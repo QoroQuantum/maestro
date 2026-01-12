@@ -72,6 +72,8 @@ class GpuLibrary : public Utils::Library {
           fIsDoublePrecision =
               (int (*)(void *))GetFunction("IsDoublePrecision");
           CheckFunction((void *)fIsDoublePrecision, __LINE__);
+          fGetNrQubits = (int (*)(void *))GetFunction("GetNrQubits");
+          CheckFunction((void *)fGetNrQubits, __LINE__);
 
           fMeasureQubitCollapse =
               (int (*)(void *, int))GetFunction("MeasureQubitCollapse");
@@ -351,6 +353,166 @@ class GpuLibrary : public Utils::Library {
               (int (*)(void *, unsigned int, unsigned int, double, double,
                        double, double))GetFunction("MPSApplyCU");
           CheckFunction((void *)fMPSApplyCU, __LINE__);
+
+          // tensor network api functions
+
+          fCreateTensorNet = (void *(*)(void *))GetFunction("CreateTensorNet");
+          CheckFunction((void *)fCreateTensorNet, __LINE__);
+          fDestroyTensorNet = (void (*)(void *))GetFunction("DestroyTensorNet");
+          CheckFunction((void *)fDestroyTensorNet, __LINE__);
+
+          fTNCreate = (int (*)(void *, unsigned int))GetFunction("TNCreate");
+          CheckFunction((void *)fTNCreate, __LINE__);
+          fTNReset = (int (*)(void *))GetFunction("TNReset");
+          CheckFunction((void *)fTNReset, __LINE__);
+
+          fTNIsValid = (int (*)(void *))GetFunction("TNIsValid");
+          CheckFunction((void *)fTNIsValid, __LINE__);
+          fTNIsCreated = (int (*)(void *))GetFunction("TNIsCreated");
+          CheckFunction((void *)fTNIsCreated, __LINE__);
+
+          fTNSetDataType = (int (*)(void *, int))GetFunction("TNSetDataType");
+          CheckFunction((void *)fTNSetDataType, __LINE__);
+          fTNIsDoublePrecision =
+              (int (*)(void *))GetFunction("TNIsDoublePrecision");
+          CheckFunction((void *)fTNIsDoublePrecision, __LINE__);
+          fTNSetCutoff = (int (*)(void *, double))GetFunction("TNSetCutoff");
+          CheckFunction((void *)fTNSetCutoff, __LINE__);
+          fTNGetCutoff = (double (*)(void *))GetFunction("TNGetCutoff");
+          CheckFunction((void *)fTNGetCutoff, __LINE__);
+          fTNSetGesvdJ = (int (*)(void *, int))GetFunction("TNSetGesvdJ");
+          CheckFunction((void *)fTNSetGesvdJ, __LINE__);
+          fTNGetGesvdJ = (int (*)(void *))GetFunction("TNGetGesvdJ");
+          CheckFunction((void *)fTNGetGesvdJ, __LINE__);
+          fTNSetMaxExtent =
+              (int (*)(void *, long int))GetFunction("TNSetMaxExtent");
+          CheckFunction((void *)fTNSetMaxExtent, __LINE__);
+          fTNGetMaxExtent =
+              (long int (*)(void *))GetFunction("TNGetMaxExtent");
+          CheckFunction((void *)fTNGetMaxExtent, __LINE__);
+          fTNGetNrQubits = (int (*)(void *))GetFunction("TNGetNrQubits");
+          CheckFunction((void *)fTNGetNrQubits, __LINE__);
+          fTNAmplitude = (int (*)(void *, long int, long int *, double *,
+                                   double *))GetFunction("TNAmplitude");
+          CheckFunction((void *)fTNAmplitude, __LINE__);
+          fTNProbability0 =
+              (double (*)(void *, unsigned int))GetFunction("TNProbability0");
+          CheckFunction((void *)fTNProbability0, __LINE__);
+          fTNMeasure =
+              (int (*)(void *, unsigned int))GetFunction("TNMeasure");
+          CheckFunction((void *)fTNMeasure, __LINE__);
+          fTNMeasureQubits = (int (*)(void *, long int, unsigned int *,
+                                       int *))GetFunction("TNMeasureQubits");
+          CheckFunction((void *)fTNMeasureQubits, __LINE__);
+
+          fTNGetMapForSample = (void *(*)())GetFunction("TNGetMapForSample");
+          CheckFunction((void *)fTNGetMapForSample, __LINE__);
+          fTNFreeMapForSample =
+              (int (*)(void *))GetFunction("TNFreeMapForSample");
+          CheckFunction((void *)fTNFreeMapForSample, __LINE__);
+          fTNSample = (int (*)(void *, long int, long int, unsigned int *,
+                                void *))GetFunction("TNSample");
+          CheckFunction((void *)fTNSample, __LINE__);
+
+          fTNSaveState = (int (*)(void *))GetFunction("TNSaveState");
+          CheckFunction((void *)fTNSaveState, __LINE__);
+          fTNRestoreState = (int (*)(void *))GetFunction("TNRestoreState");
+          CheckFunction((void *)fTNRestoreState, __LINE__);
+          fTNCleanSavedState =
+              (int (*)(void *))GetFunction("TNCleanSavedState");
+          CheckFunction((void *)fTNCleanSavedState, __LINE__);
+          fTNClone = (void *(*)(void *))GetFunction("TNClone");
+          CheckFunction((void *)fTNClone, __LINE__);
+
+          fTNExpectationValue = (double (*)(
+              void *, const char *, int))GetFunction("TNExpectationValue");
+          CheckFunction((void *)fTNExpectationValue, __LINE__);
+
+          fTNApplyX = (int (*)(void *, unsigned int))GetFunction("TNApplyX");
+          CheckFunction((void *)fTNApplyX, __LINE__);
+          fTNApplyY = (int (*)(void *, unsigned int))GetFunction("TNApplyY");
+          CheckFunction((void *)fTNApplyY, __LINE__);
+          fTNApplyZ = (int (*)(void *, unsigned int))GetFunction("TNApplyZ");
+          CheckFunction((void *)fTNApplyZ, __LINE__);
+          fTNApplyH = (int (*)(void *, unsigned int))GetFunction("TNApplyH");
+          CheckFunction((void *)fTNApplyH, __LINE__);
+          fTNApplyS = (int (*)(void *, unsigned int))GetFunction("TNApplyS");
+          CheckFunction((void *)fTNApplyS, __LINE__);
+          fTNApplySDG =
+              (int (*)(void *, unsigned int))GetFunction("TNApplySDG");
+          CheckFunction((void *)fTNApplySDG, __LINE__);
+          fTNApplyT = (int (*)(void *, unsigned int))GetFunction("TNApplyT");
+          CheckFunction((void *)fTNApplyT, __LINE__);
+          fTNApplyTDG =
+              (int (*)(void *, unsigned int))GetFunction("TNApplyTDG");
+          CheckFunction((void *)fTNApplyTDG, __LINE__);
+          fTNApplySX =
+              (int (*)(void *, unsigned int))GetFunction("TNApplySX");
+          CheckFunction((void *)fTNApplySX, __LINE__);
+          fTNApplySXDG =
+              (int (*)(void *, unsigned int))GetFunction("TNApplySXDG");
+          CheckFunction((void *)fTNApplySXDG, __LINE__);
+          fTNApplyK = (int (*)(void *, unsigned int))GetFunction("TNApplyK");
+          CheckFunction((void *)fTNApplyK, __LINE__);
+          fTNApplyP =
+              (int (*)(void *, unsigned int, double))GetFunction("TNApplyP");
+          CheckFunction((void *)fTNApplyP, __LINE__);
+          fTNApplyRx =
+              (int (*)(void *, unsigned int, double))GetFunction("TNApplyRx");
+          CheckFunction((void *)fTNApplyRx, __LINE__);
+          fTNApplyRy =
+              (int (*)(void *, unsigned int, double))GetFunction("TNApplyRy");
+          CheckFunction((void *)fTNApplyRy, __LINE__);
+          fTNApplyRz =
+              (int (*)(void *, unsigned int, double))GetFunction("TNApplyRz");
+          CheckFunction((void *)fTNApplyRz, __LINE__);
+          fTNApplyU = (int (*)(void *, unsigned int, double, double, double,
+                               double))GetFunction("TNApplyU");
+          CheckFunction((void *)fTNApplyU, __LINE__);
+          fTNApplySwap = (int (*)(void *, unsigned int,
+                                   unsigned int))GetFunction("TNApplySwap");
+          CheckFunction((void *)fTNApplySwap, __LINE__);
+          fTNApplyCX = (int (*)(void *, unsigned int,
+                                 unsigned int))GetFunction("TNApplyCX");
+          CheckFunction((void *)fTNApplyCX, __LINE__);
+          fTNApplyCY = (int (*)(void *, unsigned int,
+                                 unsigned int))GetFunction("TNApplyCY");
+          CheckFunction((void *)fTNApplyCY, __LINE__);
+          fTNApplyCZ = (int (*)(void *, unsigned int,
+                                 unsigned int))GetFunction("TNApplyCZ");
+          CheckFunction((void *)fTNApplyCZ, __LINE__);
+          fTNApplyCH = (int (*)(void *, unsigned int,
+                                 unsigned int))GetFunction("TNApplyCH");
+          CheckFunction((void *)fTNApplyCH, __LINE__);
+          fTNApplyCSX = (int (*)(void *, unsigned int,
+                                  unsigned int))GetFunction("TNApplyCSX");
+          CheckFunction((void *)fTNApplyCSX, __LINE__);
+          fTNApplyCSXDG = (int (*)(void *, unsigned int,
+                                    unsigned int))GetFunction("TNApplyCSXDG");
+          CheckFunction((void *)fTNApplyCSXDG, __LINE__);
+          fTNApplyCP = (int (*)(void *, unsigned int, unsigned int,
+                                 double))GetFunction("TNApplyCP");
+          CheckFunction((void *)fTNApplyCP, __LINE__);
+          fTNApplyCRx = (int (*)(void *, unsigned int, unsigned int,
+                                  double))GetFunction("TNApplyCRx");
+          CheckFunction((void *)fTNApplyCRx, __LINE__);
+          fTNApplyCRy = (int (*)(void *, unsigned int, unsigned int,
+                                  double))GetFunction("TNApplyCRy");
+          CheckFunction((void *)fTNApplyCRy, __LINE__);
+          fTNApplyCRz = (int (*)(void *, unsigned int, unsigned int,
+                                  double))GetFunction("TNApplyCRz");
+          CheckFunction((void *)fTNApplyCRz, __LINE__);
+          fTNApplyCU =
+              (int (*)(void *, unsigned int, unsigned int, double, double,
+                       double, double))GetFunction("TNApplyCU");
+          CheckFunction((void *)fTNApplyCU, __LINE__);
+
+          fTNApplyCCX = (int (*)(void *, unsigned int, unsigned int,
+                                 unsigned int))GetFunction("TNApplyCCX");
+          CheckFunction((void *)fTNApplyCCX, __LINE__);
+          fTNApplyCSwap = (int (*)(void *, unsigned int, unsigned int,
+                                   unsigned int))GetFunction("TNApplyCSwap");
+          CheckFunction((void *)fTNApplyCSwap, __LINE__);
 
           return true;
         } else
@@ -1425,6 +1587,544 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
+  // tensor network functions
+
+  void *CreateTensorNet() {
+    if (LibraryHandle)
+      return fCreateTensorNet(LibraryHandle);
+    else
+      throw std::runtime_error("GpuLibrary: Unable to create tensor network");
+  }
+
+  void DestroyTensorNet(void *obj) {
+    if (LibraryHandle)
+      fDestroyTensorNet(obj);
+    else
+      throw std::runtime_error("GpuLibrary: Unable to destroy tensor network");
+  }
+
+  bool TNCreate(void *obj, unsigned int nrQubits) {
+    if (LibraryHandle)
+      return fTNCreate(obj, nrQubits) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to create tensor network with the "
+          "specified number of qubits");
+
+    return false;
+  }
+
+  bool TNReset(void *obj) {
+    if (LibraryHandle)
+      return fTNReset(obj) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to reset tensor network");
+
+    return false;
+  }
+
+  bool TNIsValid(void *obj) const {
+    if (LibraryHandle)
+      return fTNIsValid(obj) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to check if tensor network is valid");
+
+    return false;
+  }
+
+  bool TNIsCreated(void *obj) const {
+    if (LibraryHandle)
+      return fTNIsCreated(obj) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to check if tensor network is created");
+
+    return false;
+  }
+
+  bool TNSetDataType(void *obj, int useDoublePrecision) {
+    if (LibraryHandle)
+      return fTNSetDataType(obj, useDoublePrecision) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to set precision for tensor network");
+
+    return false;
+  }
+
+  bool TNIsDoublePrecision(void *obj) const {
+    if (LibraryHandle)
+      return fTNIsDoublePrecision(obj) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to get precision for tensor network");
+
+    return false;
+  }
+
+  bool TNSetCutoff(void *obj, double val) {
+    if (LibraryHandle)
+      return fTNSetCutoff(obj, val) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to set cutoff for tensor network");
+
+    return false;
+  }
+
+  double TNGetCutoff(void *obj) const {
+    if (LibraryHandle)
+      return fTNGetCutoff(obj);
+    else
+      throw std::runtime_error("GpuLibrary: Unable to get cutoff for tensor network");
+  }
+
+  bool TNSetGesvdJ(void *obj, int val) {
+    if (LibraryHandle)
+      return fTNSetGesvdJ(obj, val) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to set GesvdJ for tensor network");
+
+    return false;
+  }
+
+  bool TNGetGesvdJ(void *obj) const {
+    if (LibraryHandle)
+      return fTNGetGesvdJ(obj) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to get GesvdJ for tensor network");
+
+    return false;
+  }
+
+  bool TNSetMaxExtent(void *obj, long int val) {
+    if (LibraryHandle)
+      return fTNSetMaxExtent(obj, val) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to set max extent for tensor network");
+
+    return false;
+  }
+
+  long int TNGetMaxExtent(void *obj) {
+    if (LibraryHandle)
+      return fTNGetMaxExtent(obj);
+    else
+      throw std::runtime_error("GpuLibrary: Unable to get max extent for tensor network");
+
+    return 0;
+  }
+
+  int TNGetNrQubits(void *obj) {
+    if (LibraryHandle)
+      return fTNGetNrQubits(obj);
+    else
+      throw std::runtime_error("GpuLibrary: Unable to get nr qubits for tensor network");
+
+    return 0;
+  }
+
+  bool TNAmplitude(void *obj, long int numFixedValues, long int *fixedValues,
+                    double *real, double *imaginary) {
+    if (LibraryHandle)
+      return fTNAmplitude(obj, numFixedValues, fixedValues, real, imaginary) ==
+             1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to get tensor network amplitude");
+
+    return false;
+  }
+
+  double TNProbability0(void *obj, unsigned int qubit) {
+    if (LibraryHandle)
+      return fTNProbability0(obj, qubit);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get probability for 0 for tensor network");
+
+    return 0.0;
+  }
+
+  bool TNMeasure(void *obj, unsigned int qubit) {
+    if (LibraryHandle)
+      return fTNMeasure(obj, qubit) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to measure qubit on tensor network");
+
+    return false;
+  }
+
+  bool TNMeasureQubits(void *obj, long int numQubits, unsigned int *qubits,
+                        int *result) {
+    if (LibraryHandle)
+      return fTNMeasureQubits(obj, numQubits, qubits, result) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to measure qubits on tensor network");
+
+    return false;
+  }
+
+  std::unordered_map<std::vector<bool>, int64_t> *TNGetMapForSample() {
+    if (LibraryHandle)
+      return (std::unordered_map<std::vector<bool>, int64_t> *)
+          fTNGetMapForSample();
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get map for sample for tensor network");
+
+    return nullptr;
+  }
+
+  bool TNFreeMapForSample(
+      std::unordered_map<std::vector<bool>, int64_t> *map) {
+    if (LibraryHandle)
+      return fTNFreeMapForSample((void *)map) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to free map for sample for tensor network");
+
+    return false;
+  }
+
+  bool TNSample(void *obj, long int numShots, long int numQubits,
+                 unsigned int *qubits, void *resultMap) {
+    if (LibraryHandle)
+      return fTNSample(obj, numShots, numQubits, qubits, resultMap) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to sample tensor network");
+
+    return false;
+  }
+
+  bool TNSaveState(void *obj) {
+    if (LibraryHandle)
+      return fTNSaveState(obj) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to save tensor network state");
+
+    return false;
+  }
+
+  bool TNRestoreState(void *obj) {
+    if (LibraryHandle)
+      return fTNRestoreState(obj) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to restore tensor network state");
+
+    return false;
+  }
+
+  bool TNCleanSavedState(void *obj) {
+    if (LibraryHandle)
+      return fTNCleanSavedState(obj) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to clean tensor network saved state");
+
+    return false;
+  }
+
+  void *TNClone(void *obj) {
+    if (LibraryHandle)
+      return fTNClone(obj);
+    else
+      throw std::runtime_error("GpuLibrary: Unable to clone tensor network");
+
+    return nullptr;
+  }
+
+  double TNExpectationValue(void *obj, const char *pauliString,
+                             int len) const {
+    if (LibraryHandle)
+      return fTNExpectationValue(obj, pauliString, len);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get tensor network expectation value");
+
+    return 0;
+  }
+
+  bool TNApplyX(void *obj, unsigned int siteA) {
+    if (LibraryHandle)
+      return fTNApplyX(obj, siteA) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply X gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyY(void *obj, unsigned int siteA) {
+    if (LibraryHandle)
+      return fTNApplyY(obj, siteA) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply Y gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyZ(void *obj, unsigned int siteA) {
+    if (LibraryHandle)
+      return fTNApplyZ(obj, siteA) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply Z gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyH(void *obj, unsigned int siteA) {
+    if (LibraryHandle)
+      return fTNApplyH(obj, siteA) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply H gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyS(void *obj, unsigned int siteA) {
+    if (LibraryHandle)
+      return fTNApplyS(obj, siteA) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply S gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplySDG(void *obj, unsigned int siteA) {
+    if (LibraryHandle)
+      return fTNApplySDG(obj, siteA) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply sdg gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyT(void *obj, unsigned int siteA) {
+    if (LibraryHandle)
+      return fTNApplyT(obj, siteA) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply t gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyTDG(void *obj, unsigned int siteA) {
+    if (LibraryHandle)
+      return fTNApplyTDG(obj, siteA) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply tdg gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplySX(void *obj, unsigned int siteA) {
+    if (LibraryHandle)
+      return fTNApplySX(obj, siteA) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply sx gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplySXDG(void *obj, unsigned int siteA) {
+    if (LibraryHandle)
+      return fTNApplySXDG(obj, siteA) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply sxdg gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyK(void *obj, unsigned int siteA) {
+    if (LibraryHandle)
+      return fTNApplyK(obj, siteA) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply k gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyP(void *obj, unsigned int siteA, double theta) {
+    if (LibraryHandle)
+      return fTNApplyP(obj, siteA, theta) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply p gate on tensor network");
+    return false;
+  }
+
+  bool TNApplyRx(void *obj, unsigned int siteA, double theta) {
+    if (LibraryHandle)
+      return fTNApplyRx(obj, siteA, theta) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply rx gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyRy(void *obj, unsigned int siteA, double theta) {
+    if (LibraryHandle)
+      return fTNApplyRy(obj, siteA, theta) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply ry gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyRz(void *obj, unsigned int siteA, double theta) {
+    if (LibraryHandle)
+      return fTNApplyRz(obj, siteA, theta) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply rz gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyU(void *obj, unsigned int siteA, double theta, double phi,
+                 double lambda, double gamma) {
+    if (LibraryHandle)
+      return fTNApplyU(obj, siteA, theta, phi, lambda, gamma) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply u gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplySwap(void *obj, unsigned int controlQubit,
+                    unsigned int targetQubit) {
+    if (LibraryHandle)
+      return fTNApplySwap(obj, controlQubit, targetQubit) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply swap gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyCX(void *obj, unsigned int controlQubit,
+                  unsigned int targetQubit) {
+    if (LibraryHandle)
+      return fTNApplyCX(obj, controlQubit, targetQubit) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply cx gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyCY(void *obj, unsigned int controlQubit,
+                  unsigned int targetQubit) {
+    if (LibraryHandle)
+      return fTNApplyCY(obj, controlQubit, targetQubit) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply cy gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyCZ(void *obj, unsigned int controlQubit,
+                  unsigned int targetQubit) {
+    if (LibraryHandle)
+      return fTNApplyCZ(obj, controlQubit, targetQubit) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply cz gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyCH(void *obj, unsigned int controlQubit,
+                  unsigned int targetQubit) {
+    if (LibraryHandle)
+      return fTNApplyCH(obj, controlQubit, targetQubit) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply ch gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyCSX(void *obj, unsigned int controlQubit,
+                   unsigned int targetQubit) {
+    if (LibraryHandle)
+      return fTNApplyCSX(obj, controlQubit, targetQubit) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply csx gate on tensor network");
+  }
+
+  bool TNApplyCSXDG(void *obj, unsigned int controlQubit,
+                     unsigned int targetQubit) {
+    if (LibraryHandle)
+      return fTNApplyCSXDG(obj, controlQubit, targetQubit) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply csxdg gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyCP(void *obj, unsigned int controlQubit,
+                  unsigned int targetQubit, double theta) {
+    if (LibraryHandle)
+      return fTNApplyCP(obj, controlQubit, targetQubit, theta) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply cp gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyCRx(void *obj, unsigned int controlQubit,
+                   unsigned int targetQubit, double theta) {
+    if (LibraryHandle)
+      return fTNApplyCRx(obj, controlQubit, targetQubit, theta) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply crx gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyCRy(void *obj, unsigned int controlQubit,
+                   unsigned int targetQubit, double theta) {
+    if (LibraryHandle)
+      return fTNApplyCRy(obj, controlQubit, targetQubit, theta) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply cry gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyCRz(void *obj, unsigned int controlQubit,
+                   unsigned int targetQubit, double theta) {
+    if (LibraryHandle)
+      return fTNApplyCRz(obj, controlQubit, targetQubit, theta) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply crz gate on tensor network");
+
+    return false;
+  }
+
+
+    return false;
+  }
+
+  bool TNApplyCU(void *obj, unsigned int controlQubit,
+                  unsigned int targetQubit, double theta, double phi,
+                  double lambda, double gamma) {
+    if (LibraryHandle)
+      return fTNApplyCU(obj, controlQubit, targetQubit, theta, phi, lambda,
+                         gamma) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply cu gate on tensor network");
+
+    return false;
+  }
+
+  bool TNApplyCCX(void *obj, unsigned int controlQubit1,
+                   unsigned int controlQubit2, unsigned int targetQubit) {
+    if (LibraryHandle)
+      return fTNApplyCCX(obj, controlQubit1, controlQubit2, targetQubit) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply ccx gate on tensor network");
+    return false;
+  }
+
+  bool TNApplyCSwap(void *obj, unsigned int controlQubit,
+                    unsigned int targetQubit1, unsigned int targetQubit2) {
+    if (LibraryHandle)
+      return fTNApplyCSwap(obj, controlQubit, targetQubit1, targetQubit2) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to apply cswap gate on tensor network");
+    return false;
+  }
+
  private:
   void *LibraryHandle = nullptr;
 
@@ -1437,6 +2137,7 @@ class GpuLibrary : public Utils::Library {
   // statevector functions
   int (*fSetDataType)(void *, int);
   int (*fIsDoublePrecision)(void *);
+  int (*fGetNrQubits)(void *);
   int (*fCreate)(void *, unsigned int);
   int (*fReset)(void *);
   int (*fCreateWithState)(void *, unsigned int, const double *);
@@ -1557,6 +2258,73 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSApplyCRz)(void *, unsigned int, unsigned int, double);
   int (*fMPSApplyCU)(void *, unsigned int, unsigned int, double, double, double,
                      double);
+
+  // tensor network functions
+  void *(*fCreateTensorNet)(void *);
+  void (*fDestroyTensorNet)(void *);
+
+  int (*fTNCreate)(void *, unsigned int);
+  int (*fTNReset)(void *);
+
+  int (*fTNIsValid)(void *);
+  int (*fTNIsCreated)(void *);
+
+  int (*fTNSetDataType)(void *, int);
+  int (*fTNIsDoublePrecision)(void *);
+  int (*fTNSetCutoff)(void *, double);
+  double (*fTNGetCutoff)(void *);
+  int (*fTNSetGesvdJ)(void *, int);
+  int (*fTNGetGesvdJ)(void *);
+  int (*fTNSetMaxExtent)(void *, long int);
+  long int (*fTNGetMaxExtent)(void *);
+  int (*fTNGetNrQubits)(void *);
+  int (*fTNAmplitude)(void *, long int, long int *, double *, double *);
+  double (*fTNProbability0)(void *, unsigned int);
+  int (*fTNMeasure)(void *, unsigned int);
+  int (*fTNMeasureQubits)(void *, long int, unsigned int *, int *);
+
+  void *(*fTNGetMapForSample)();
+  int (*fTNFreeMapForSample)(void *);
+  int (*fTNSample)(void *, long int, long int, unsigned int *, void *);
+
+  int (*fTNSaveState)(void *);
+  int (*fTNRestoreState)(void *);
+  int (*fTNCleanSavedState)(void *);
+  void *(*fTNClone)(void *);
+
+  double (*fTNExpectationValue)(void *, const char *, int);
+
+  int (*fTNApplyX)(void *, unsigned int);
+  int (*fTNApplyY)(void *, unsigned int);
+  int (*fTNApplyZ)(void *, unsigned int);
+  int (*fTNApplyH)(void *, unsigned int);
+  int (*fTNApplyS)(void *, unsigned int);
+  int (*fTNApplySDG)(void *, unsigned int);
+  int (*fTNApplyT)(void *, unsigned int);
+  int (*fTNApplyTDG)(void *, unsigned int);
+  int (*fTNApplySX)(void *, unsigned int);
+  int (*fTNApplySXDG)(void *, unsigned int);
+  int (*fTNApplyK)(void *, unsigned int);
+  int (*fTNApplyP)(void *, unsigned int, double);
+  int (*fTNApplyRx)(void *, unsigned int, double);
+  int (*fTNApplyRy)(void *, unsigned int, double);
+  int (*fTNApplyRz)(void *, unsigned int, double);
+  int (*fTNApplyU)(void *, unsigned int, double, double, double, double);
+  int (*fTNApplySwap)(void *, unsigned int, unsigned int);
+  int (*fTNApplyCX)(void *, unsigned int, unsigned int);
+  int (*fTNApplyCY)(void *, unsigned int, unsigned int);
+  int (*fTNApplyCZ)(void *, unsigned int, unsigned int);
+  int (*fTNApplyCH)(void *, unsigned int, unsigned int);
+  int (*fTNApplyCSX)(void *, unsigned int, unsigned int);
+  int (*fTNApplyCSXDG)(void *, unsigned int, unsigned int);
+  int (*fTNApplyCP)(void *, unsigned int, unsigned int, double);
+  int (*fTNApplyCRx)(void *, unsigned int, unsigned int, double);
+  int (*fTNApplyCRy)(void *, unsigned int, unsigned int, double);
+  int (*fTNApplyCRz)(void *, unsigned int, unsigned int, double);
+  int (*fTNApplyCU)(void *, unsigned int, unsigned int, double, double, double,
+                     double);
+  int (*fTNApplyCCX)(void *, unsigned int, unsigned int, unsigned int);
+  int (*fTNApplyCSwap)(void *, unsigned int, unsigned int, unsigned int);
 };
 }  // namespace Simulators
 
