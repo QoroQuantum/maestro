@@ -604,6 +604,14 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
+  int GetNrQubits(void *obj) const {
+    if (LibraryHandle)
+      return fGetNrQubits(obj);
+    else
+      throw std::runtime_error("GpuLibrary: Unable to get number of qubits");
+    return 0;
+  }
+
   bool MeasureQubitCollapse(void *obj, int qubitIndex) {
     if (LibraryHandle)
       return fMeasureQubitCollapse(obj, qubitIndex) == 1;
