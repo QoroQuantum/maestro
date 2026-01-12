@@ -74,6 +74,11 @@ class GpuLibStateVectorSim {
     return false;
   }
 
+  int GetNrQubits() const {
+    if (obj) return lib->GetNrQubits(obj);
+    return 0;
+  }
+
   bool MeasureQubitCollapse(int qubitIndex) {
     if (obj) return lib->MeasureQubitCollapse(obj, qubitIndex);
 
