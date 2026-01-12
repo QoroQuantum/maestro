@@ -2099,10 +2099,6 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-
-    return false;
-  }
-
   bool TNApplyCU(void *obj, unsigned int controlQubit,
                   unsigned int targetQubit, double theta, double phi,
                   double lambda, double gamma) {
