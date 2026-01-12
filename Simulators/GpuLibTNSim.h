@@ -165,13 +165,13 @@ class GpuLibTNSim {
 
   bool Sample(long int numShots, long int numQubits, unsigned int *qubits,
               void *resultMap) {
-    if (obj) return lib->TNNSample(obj, numShots, numQubits, qubits, resultMap);
+    if (obj) return lib->TNSample(obj, numShots, numQubits, qubits, resultMap);
 
     return false;
   }
 
   bool SaveState() {
-    if (obj) return lib->TNNSaveState(obj);
+    if (obj) return lib->TNSaveState(obj);
 
     return false;
   }
