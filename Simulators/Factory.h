@@ -17,9 +17,10 @@
 #ifndef _SIMULATORS_FACTORY_H_
 #define _SIMULATORS_FACTORY_H_
 
-#include "GpuLibMPSSim.h"
 #include "GpuLibStateVectorSim.h"
-#include "GpuLibrary.h"
+#include "GpuLibMPSSim.h"
+#include "GpuLibTNSim.h"
+
 #include "Simulator.h"
 
 namespace Simulators {
@@ -63,6 +64,12 @@ class SimulatorsFactory {
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
 
     return std::make_unique<GpuLibMPSSim>(gpuLibrary);
+  }
+
+  static std::unique_ptr<GpuLibTNSim> CreateGpuLibTensorNetSim() {
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+
+    return std::make_unique<GpuLibTNSim>(gpuLibrary);
   }
 
   static std::shared_ptr<GpuLibrary> GetGpuLibrary() {
