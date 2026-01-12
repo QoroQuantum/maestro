@@ -52,6 +52,14 @@ struct ExpvalTestFixture
 			gpuMPS->AllocateQubits(nrQubits);
 			gpuMPS->Initialize();
 		}
+        gpuTN = Simulators::SimulatorsFactory::CreateSimulator(
+                    Simulators::SimulatorType::kGpuSim,
+                    Simulators::SimulationType::kTensorNetwork);
+        if (gpuTN) 
+		{
+			gpuTN->AllocateQubits(nrQubits);
+            gpuTN->Initialize();
+        }
 #endif
 
 		state.AllocateBits(nrQubits);
@@ -255,6 +263,7 @@ struct ExpvalTestFixture
 #ifdef __linux__
 	std::shared_ptr<Simulators::ISimulator> gpuStatevector;
 	std::shared_ptr<Simulators::ISimulator> gpuMPS;
+        std::shared_ptr<Simulators::ISimulator> gpuTN;
 #endif
 
 	std::shared_ptr<Simulators::ISimulator> aerMPS;
@@ -317,6 +326,7 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest, bdata::xrange(1,
 #ifdef __linux__
 		if (gpuStatevector) randomCirc->Execute(gpuStatevector, state);
 		if (gpuMPS) randomCirc->Execute(gpuMPS, state);
+        if (gpuTN) randomCirc->Execute(gpuTN, state);
 #endif
 	
 		randomCirc->Execute(qcTensor, state);
@@ -358,6 +368,11 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest, bdata::xrange(1,
 				const double gpuMPSVal = gpuMPS->ExpectationValue(pauli);
 				BOOST_REQUIRE_PREDICATE(checkClose, (gpuMPSVal)(qcsimStatevectorVal)(precisionMPS));
 			}
+            if (gpuTN) 
+			{
+                const double gpuTNVal = gpuTN->ExpectationValue(pauli);
+                BOOST_REQUIRE_PREDICATE(checkClose, (gpuTNVal)(qcsimStatevectorVal)(precision));
+            }
 #endif
 		}
 
@@ -373,6 +388,7 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest, bdata::xrange(1,
 #ifdef __linux__
 		if (gpuStatevector) resetRandomCirc->Execute(gpuStatevector, state);
 		if (gpuMPS) resetRandomCirc->Execute(gpuMPS, state);
+        if (gpuTN) resetRandomCirc->Execute(gpuTN, state);
 #endif
 
 		qcTensor->Clear();

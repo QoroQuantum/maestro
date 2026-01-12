@@ -1823,6 +1823,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         simulatorTypes.emplace_back(
             Simulators::SimulatorType::kGpuSim,
             Simulators::SimulationType::kMatrixProductState);
+      if (OptimizationSimulatorExists(Simulators::SimulatorType::kGpuSim,
+              Simulators::SimulationType::kTensorNetwork))
+        simulatorTypes.emplace_back(Simulators::SimulatorType::kGpuSim,
+            Simulators::SimulationType::kTensorNetwork);
     }
 #endif
 
