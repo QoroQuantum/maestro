@@ -41,8 +41,7 @@ class GpuLibTNSim {
   GpuLibTNSim(GpuLibTNSim &&) = default;
   GpuLibTNSim &operator=(GpuLibTNSim &&) = default;
 
-  ~GpuLibTNSim() {}
-  GpuLibTNSim() {
+  ~GpuLibTNSim() {
     if (lib && obj) lib->DestroyTensorNet(obj);
   }
 
