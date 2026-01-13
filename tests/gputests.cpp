@@ -23,6 +23,7 @@ namespace bdata = boost::unit_test::data;
 
 #include "../Simulators/Factory.h"  // project being tested
 #include "../Circuit/Circuit.h"
+#include "../Circuit/Factory.h"
 
 std::shared_ptr<Circuits::Circuit<>> GenerateCircuit(int nrGates,
                                                      int nrQubits) {
