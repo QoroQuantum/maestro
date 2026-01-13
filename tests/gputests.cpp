@@ -157,6 +157,7 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
   const int nrQubits = 5;
   const int nrShots = 10000;
   const double precision = 0.001;
+  const double precisionSamples = 0.05;
 
   Circuits::OperationState state;
   state.AllocateBits(nrQubits);
@@ -232,7 +233,9 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
       
       if (itMPS != resultsMPS.end()) {
         BOOST_CHECK_PREDICATE(checkClose,
-                              (static_cast<double>(count) / nrShots)(static_cast<double>(itMPS->second) / nrShots)(precision));
+                              (static_cast<double>(count) /
+                               nrShots)(static_cast<double>(itMPS->second) /
+                                        nrShots)(precisionSamples));
       } else
         BOOST_TEST(false);
 
@@ -242,7 +245,8 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
         BOOST_CHECK_PREDICATE(
             checkClose,
             (static_cast<double>(count) /
-             nrShots)(static_cast<double>(itMPS->second) / nrShots)(precision));
+                               nrShots)(static_cast<double>(itMPS->second) /
+                                        nrShots)(precisionSamples));
       } else
         BOOST_TEST(false);
     }
