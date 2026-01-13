@@ -39,6 +39,9 @@ namespace bdata = boost::unit_test::data;
 #include "../Circuit/Reset.h"
 #include "../Circuit/Factory.h"
 
+extern bool checkClose(std::complex<double> a, std::complex<double> b,
+                       double dif);
+
 std::shared_ptr<Circuits::Circuit<>> GenerateCircuit(int nrGates,
                                                      int nrQubits) {
   std::shared_ptr<Circuits::Circuit<>> randomCirc = std::make_shared<Circuits::Circuit<>>();
@@ -153,6 +156,7 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
 
   const int nrQubits = 5;
   const int nrShots = 10000;
+  const double precision = 0.001;
 
   Circuits::OperationState state;
   state.AllocateBits(nrQubits);
@@ -203,11 +207,12 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
 
     for (int q = 0; q < nrQubits; ++q) {
       auto probStatevector = gpusimStatevector != nullptr ? gpusimStatevector->Probability(q) : 0.0;
-      if (probStatevector < 0.01) continue;
+
       auto probMPS = gpusimMPS != nullptr ? gpusimMPS->Probability(q) : 0.0;
       auto probTN = gpusimTN != nullptr ? gpusimTN->Probability(q) : 0.0;
-      BOOST_CHECK_CLOSE(probStatevector, probMPS, 1);
-      BOOST_CHECK_CLOSE(probStatevector, probTN, 1);
+
+      BOOST_CHECK_PREDICATE(checkClose, (probStatevector)(probMPS)(precision));
+      BOOST_CHECK_PREDICATE(checkClose, (probStatevector)(probTN)(precision));
     }
 
     auto resultsStatevector =
@@ -223,21 +228,21 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
             : std::unordered_map<Types::qubit_t, Types::qubit_t>();
 
     for (const auto& [outcome, count] : resultsStatevector) {
-      if (static_cast<double>(count) / nrShots < 0.01) continue;
-
       auto itMPS = resultsMPS.find(outcome);
       
       if (itMPS != resultsMPS.end()) {
-        BOOST_CHECK_CLOSE(static_cast<double>(count) / nrShots,
-                          static_cast<double>(itMPS->second) / nrShots, 10);
+        BOOST_CHECK_PREDICATE(checkClose,
+                              (static_cast<double>(count) / nrShots)(static_cast<double>(itMPS->second) / nrShots)(precision));
       } else
         BOOST_TEST(false);
 
       auto itTN = resultsTN.find(outcome);
  
       if (itTN != resultsTN.end()) {
-        BOOST_CHECK_CLOSE(static_cast<double>(count) / nrShots,
-                          static_cast<double>(itTN->second) / nrShots, 10);
+        BOOST_CHECK_PREDICATE(
+            checkClose,
+            (static_cast<double>(count) /
+             nrShots)(static_cast<double>(itMPS->second) / nrShots)(precision));
       } else
         BOOST_TEST(false);
     }
