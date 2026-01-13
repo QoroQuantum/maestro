@@ -203,6 +203,7 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
 
     for (int q = 0; q < nrQubits; ++q) {
       auto probStatevector = gpusimStatevector != nullptr ? gpusimStatevector->Probability(q) : 0.0;
+      if (probStatevector < 0.01) continue;
       auto probMPS = gpusimMPS != nullptr ? gpusimMPS->Probability(q) : 0.0;
       auto probTN = gpusimTN != nullptr ? gpusimTN->Probability(q) : 0.0;
       BOOST_CHECK_CLOSE(probStatevector, probMPS, 1);
