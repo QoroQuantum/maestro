@@ -13,6 +13,10 @@
 #ifdef __linux__
 
 #include <boost/test/unit_test.hpp>
+#include <boost/test/data/test_case.hpp>
+#include <boost/test/data/monomorphic.hpp>
+namespace utf = boost::unit_test;
+namespace bdata = boost::unit_test::data;
 
 #undef min
 #undef max
