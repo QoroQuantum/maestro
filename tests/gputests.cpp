@@ -209,9 +209,17 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
       BOOST_CHECK_CLOSE(probStatevector, probTN, 1);
     }
 
-    auto resultsStatevector = gpusimStatevector != nullptr ? gpusimStatevector->SampleCounts(qubits, nrShots) : std::map<Types::qubit_vector, int>();
-    auto resultsMPS = gpusimMPS != nullptr ? gpusimMPS->SampleCounts(qubits, nrShots) : std::map<Types::qubit_vector, int>();
-    auto resultsTN = gpusimTN != nullptr ? gpusimTN->SampleCounts(qubits, nrShots) : std::map<Types::qubit_vector, int>();
+    auto resultsStatevector =
+        gpusimStatevector != nullptr
+            ? gpusimStatevector->SampleCounts(qubits, nrShots)
+            : std::unordered_map<Types::qubit_t, Types::qubit_t>();
+    auto resultsMPS =
+        gpusimMPS != nullptr
+            ? gpusimMPS->SampleCounts(qubits, nrShots)
+            : std::unordered_map<Types::qubit_t, Types::qubit_t>();
+    auto resultsTN = gpusimTN != nullptr
+            ? gpusimTN->SampleCounts(qubits, nrShots)
+            : std::unordered_map<Types::qubit_t, Types::qubit_t>();
 
     for (const auto& [outcome, count] : resultsStatevector) {
       if (static_cast<double>(count) / nrShots < 0.01) continue;
