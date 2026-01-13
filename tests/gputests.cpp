@@ -21,8 +21,22 @@ namespace bdata = boost::unit_test::data;
 #undef min
 #undef max
 
-#include "../Simulators/Factory.h"  // project being tested
+#include <numeric>	
+#include <algorithm>
+#include <array>
+#include <random>
+#include <chrono>
+#define _USE_MATH_DEFINES
+#include <math.h>
+
+#include "../Simulators/Factory.h" 
+
 #include "../Circuit/Circuit.h"
+#include "../Circuit/Conditional.h"
+#include "../Circuit/Measurements.h"
+#include "../Circuit/QuantumGates.h"
+#include "../Circuit/RandomOp.h"
+#include "../Circuit/Reset.h"
 #include "../Circuit/Factory.h"
 
 std::shared_ptr<Circuits::Circuit<>> GenerateCircuit(int nrGates,
@@ -140,7 +154,7 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
   const int nrQubits = 5;
   const int nrShots = 10000;
 
-  OperationState state;
+  Circuits::OperationState state;
   state.AllocateBits(nrQubits);
 
   Types::qubits_vector qubits(nrQubits);
@@ -197,17 +211,20 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
       if (static_cast<double>(count) / nrShots < 0.01) continue;
 
       auto itMPS = resultsMPS.find(outcome);
-      BOOST_TEST(itMPS != resultsMPS.end());
+      
       if (itMPS != resultsMPS.end()) {
         BOOST_CHECK_CLOSE(static_cast<double>(count) / nrShots,
                           static_cast<double>(itMPS->second) / nrShots, 0.05);
-      }
+      } else
+        BOOST_TEST(false);
+
       auto itTN = resultsTN.find(outcome);
-      BOOST_TEST(itTN != resultsTN.end());
+ 
       if (itTN != resultsTN.end()) {
         BOOST_CHECK_CLOSE(static_cast<double>(count) / nrShots,
                           static_cast<double>(itTN->second) / nrShots, 0.05);
-      }
+      } else
+        BOOST_TEST(false);
     }
   } catch (const std::exception& e) {
     BOOST_TEST_MESSAGE(
