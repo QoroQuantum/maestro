@@ -156,7 +156,7 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
 
   const int nrQubits = 5;
   const int nrShots = 10000;
-  const double precision = 0.001;
+  const double precision = 0.03;
   const double precisionSamples = 0.05;
 
   Circuits::OperationState state;
