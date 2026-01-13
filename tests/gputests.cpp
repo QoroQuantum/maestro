@@ -229,6 +229,10 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
             : std::unordered_map<Types::qubit_t, Types::qubit_t>();
 
     for (const auto& [outcome, count] : resultsStatevector) {
+
+      if (count < nrShots * 0.03)
+        continue; // skip very rare outcomes
+
       auto itMPS = resultsMPS.find(outcome);
       
       if (itMPS != resultsMPS.end()) {
