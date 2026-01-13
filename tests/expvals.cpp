@@ -263,7 +263,7 @@ struct ExpvalTestFixture
 #ifdef __linux__
 	std::shared_ptr<Simulators::ISimulator> gpuStatevector;
 	std::shared_ptr<Simulators::ISimulator> gpuMPS;
-        std::shared_ptr<Simulators::ISimulator> gpuTN;
+    std::shared_ptr<Simulators::ISimulator> gpuTN;
 #endif
 
 	std::shared_ptr<Simulators::ISimulator> aerMPS;
@@ -371,7 +371,7 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest, bdata::xrange(1,
             if (gpuTN) 
 			{
                 const double gpuTNVal = gpuTN->ExpectationValue(pauli);
-                BOOST_REQUIRE_PREDICATE(checkClose, (gpuTNVal)(qcsimStatevectorVal)(precision));
+                BOOST_REQUIRE_PREDICATE(checkClose, (gpuTNVal)(qcsimStatevectorVal)(precisionMPS));
             }
 #endif
 		}

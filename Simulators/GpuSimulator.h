@@ -610,7 +610,7 @@ class GpuSimulator : public GpuState {
       mps->ApplyCX(static_cast<unsigned int>(q3),
                    static_cast<unsigned int>(q2));
     } else if (GetSimulationType() == SimulationType::kTensorNetwork) {
-        tn->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
+      tn->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
     }
 
     NotifyObservers({qubit1, qubit0, ctrl_qubit});
