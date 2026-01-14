@@ -514,6 +514,42 @@ class GpuLibrary : public Utils::Library {
                                    unsigned int))GetFunction("TNApplyCSwap");
           CheckFunction((void *)fTNApplyCSwap, __LINE__);
 
+          fCreateStabilizerSimulator = (void *(*)(long long int, long long int, long long int, long long int))GetFunction("CreateStabilizerSimulator");
+          CheckFunction((void *)fCreateStabilizerSimulator, __LINE__);
+          fDestroyStabilizerSimulator = (void (*)(void *))GetFunction("DestroyStabilizerSimulator");
+          CheckFunction((void *)fDestroyStabilizerSimulator, __LINE__);
+          fExecuteStabilizerCircuit = (int (*)(void *, const char *, int, unsigned long long int))GetFunction("ExecuteStabilizerCircuit");
+          CheckFunction((void *)fExecuteStabilizerCircuit, __LINE__);
+          fGetStabilizerXZTableSize = (long long (*)(void *))GetFunction("GetStabilizerXZTableSize");
+          CheckFunction((void *)fGetStabilizerXZTableSize, __LINE__);
+          fGetStabilizerMTableSize = (long long (*)(void *))GetFunction("GetStabilizerMTableSize");
+          CheckFunction((void *)fGetStabilizerMTableSize, __LINE__);
+          
+          fGetStabilizerTableStrideMajor = (long long (*)(void *))GetFunction("GetStabilizerTableStrideMajor");
+          CheckFunction((void *)fGetStabilizerTableStrideMajor, __LINE__);
+
+          fGetStabilizerNumQubits =
+              (long long (*)(void *))GetFunction("GetStabilizerNumQubits");
+          CheckFunction((void *)fGetStabilizerNumQubits, __LINE__);
+          fGetStabilizerNumShots =
+              (long long (*)(void *))GetFunction("GetStabilizerNumShots");
+          CheckFunction((void *)fGetStabilizerNumShots, __LINE__);
+          fGetStabilizerNumMeasurements = (long long (*)(void *))GetFunction(
+              "GetStabilizerNumMeasurements");
+          CheckFunction((void *)fGetStabilizerNumMeasurements, __LINE__);
+          fGetStabilizerNumDetectors =
+              (long long (*)(void *))GetFunction("GetStabilizerNumDetectors");
+          CheckFunction((void *)fGetStabilizerNumDetectors, __LINE__);
+          fCopyStabilizerXTable = (int (*)(void *, unsigned int *))GetFunction(
+              "CopyStabilizerXTable");
+          CheckFunction((void *)fCopyStabilizerXTable, __LINE__);
+          fCopyStabilizerZTable = (int (*)(void *, unsigned int *))GetFunction(
+              "CopyStabilizerZTable");
+          CheckFunction((void *)fCopyStabilizerZTable, __LINE__);
+          fCopyStabilizerMTable = (int (*)(void *, unsigned int *))GetFunction(
+              "CopyStabilizerMTable");
+          CheckFunction((void *)fCopyStabilizerMTable, __LINE__);
+
           return true;
         } else
           std::cerr << "GpuLibrary: Unable to initialize gpu library"
@@ -2129,6 +2165,157 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
+  // stabilizer functions
+  void* CreateStabilizerSimulator(long long int numQubits,
+      long long int numShots,
+      long long int numMeasurements,
+      long long int numDetectors)
+  {
+    if (LibraryHandle)
+      return fCreateStabilizerSimulator(numQubits, numShots,
+                                       numMeasurements, numDetectors);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to create stabilizer simulator");
+
+    return nullptr;
+  }
+
+  void DestroyStabilizerSimulator(void *obj)
+  {
+    if (!obj) return;
+    if (LibraryHandle)
+      fDestroyStabilizerSimulator(obj);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to destroy stabilizer simulator");
+  }
+
+  bool ExecuteStabilizerCircuit(void* obj, const char* circuitStr,
+      int randomizeMeasurements,
+      unsigned long long int seed)
+  {
+    if (!obj) return false;
+    if (LibraryHandle)
+      return fExecuteStabilizerCircuit(obj, circuitStr,
+                                       randomizeMeasurements, seed) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to execute stabilizer circuit");
+
+    return false;
+  }
+
+  long long GetStabilizerXZTableSize(void *obj)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fGetStabilizerXZTableSize(obj);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get stabilizer XZ table size");
+
+    return 0;
+  }
+
+  long long GetStabilizerMTableSize(void *obj)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fGetStabilizerMTableSize(obj);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get stabilizer M table size");
+
+    return 0;
+  }
+
+  long long GetStabilizerTableStrideMajor(void *obj)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fGetStabilizerTableStrideMajor(obj);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get stabilizer table stride major");
+    return 0;
+  }
+
+  long long GetStabilizerNumQubits(void *obj)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fGetStabilizerNumQubits(obj);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get stabilizer number of qubits");
+
+    return 0;
+  }
+
+  long long GetStabilizerNumShots(void *obj)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fGetStabilizerNumShots(obj);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get stabilizer number of shots");
+
+    return 0;
+  }
+
+  long long GetStabilizerNumMeasurements(void *obj)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fGetStabilizerNumMeasurements(obj);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get stabilizer number of measurements");
+
+    return 0;
+  }
+
+  long long GetStabilizerNumDetectors(void *obj)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fGetStabilizerNumDetectors(obj);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get stabilizer number of detectors");
+
+    return 0;
+  }
+
+  int CopyStabilizerXTable(void *obj, unsigned int *xtable)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fCopyStabilizerXTable(obj, xtable);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to copy stabilizer X table");
+  }
+  int CopyStabilizerZTable(void* obj, unsigned int* ztable)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fCopyStabilizerZTable(obj, ztable);
+    else
+      throw std::runtime_error("GpuLibrary: Unable to copy stabilizer Z table");
+  }
+
+  int CopyStabilizerMTable(void* obj, unsigned int* mtable)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fCopyStabilizerMTable(obj, mtable);
+    else
+      throw std::runtime_error("GpuLibrary: Unable to copy stabilizer M table");
+  }
+
  private:
   void *LibraryHandle = nullptr;
 
@@ -2329,6 +2516,21 @@ class GpuLibrary : public Utils::Library {
                      double);
   int (*fTNApplyCCX)(void *, unsigned int, unsigned int, unsigned int);
   int (*fTNApplyCSwap)(void *, unsigned int, unsigned int, unsigned int);
+
+  // stabilizer functions
+  void *(*fCreateStabilizerSimulator)(long long int, long long int, long long int, long long int);
+  void (*fDestroyStabilizerSimulator)(void *);
+  int (*fExecuteStabilizerCircuit)(void *, const char *, int, unsigned long long int);
+  long long (*fGetStabilizerXZTableSize)(void *);
+  long long (*fGetStabilizerMTableSize)(void *);
+  long long (*fGetStabilizerTableStrideMajor)(void *);
+  long long (*fGetStabilizerNumQubits)(void *);
+  long long (*fGetStabilizerNumShots)(void *);
+  long long (*fGetStabilizerNumMeasurements)(void *);
+  long long (*fGetStabilizerNumDetectors)(void *);
+  int (*fCopyStabilizerXTable)(void *, unsigned int *);
+  int (*fCopyStabilizerZTable)(void *, unsigned int *);
+  int (*fCopyStabilizerMTable)(void *, unsigned int *);
 };
 }  // namespace Simulators
 
