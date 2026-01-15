@@ -38,7 +38,7 @@ class GpuStabilizer {
     if (lib && obj) lib->DestroyStabilizerSimulator(obj);
   }
 
-  bool CreateStabilizerSimulator(long long int numQubits,
+  bool CreateSimulator(long long int numQubits,
                                  long long int numShots,
                                  long long int numMeasurements,
                                  long long int numDetectors) {
@@ -51,7 +51,7 @@ class GpuStabilizer {
     return false;
   }
 
-  bool ExecuteStabilizerCircuit(const std::string& circuitStr,
+  bool ExecuteCircuit(const std::string& circuitStr,
                                 int randomizeMeasurements,
                                 unsigned long long int seed) {
     if (obj)
@@ -72,32 +72,37 @@ class GpuStabilizer {
     return false;
   }
 
-  long long GetStabilizerNumQubits() 
+  long long GetNumQubits() 
   {
     if (obj)
       return lib->GetStabilizerNumQubits(obj);
     return 0;
   }
 
-  long long GetStabilizerNumShots() 
+  long long GetNumShots() 
   {
     if (obj)
       return lib->GetStabilizerNumShots(obj);
     return 0;
   }
 
-  long long GetStabilizerNumMeasurements() 
+  long long GetNumMeasurements() 
   {
     if (obj)
       return lib->GetStabilizerNumMeasurements(obj);
     return 0;
   }
 
-  long long GetStabilizerNumDetectors() 
+  long long GetNumDetectors() 
   {
     if (obj)
       return lib->GetStabilizerNumDetectors(obj);
     return 0;
+  }
+
+  bool IsCreated() const
+  {
+    return obj != nullptr;
   }
 
   std::vector<std::vector<bool>> GetXTable() {

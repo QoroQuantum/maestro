@@ -20,6 +20,7 @@
 #include "GpuLibStateVectorSim.h"
 #include "GpuLibMPSSim.h"
 #include "GpuLibTNSim.h"
+#include "GpuStabilizer.h"
 
 #include "Simulator.h"
 
@@ -75,6 +76,11 @@ class SimulatorsFactory {
   static std::shared_ptr<GpuLibrary> GetGpuLibrary() {
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
     return gpuLibrary;
+  }
+
+  static std::shared_ptr<GpuStabilizer> CreateGpuStabilizerSimulator() {
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+    return std::make_shared<GpuStabilizer>(gpuLibrary);
   }
 
   static bool IsGpuLibraryAvailable() {
