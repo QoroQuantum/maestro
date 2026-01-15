@@ -55,7 +55,7 @@ class GpuStabilizer {
                                 int randomizeMeasurements,
                                 unsigned long long int seed) {
     if (obj)
-      return lib->ExecuteStabilizerCircuit(obj, circuitStr,
+      return lib->ExecuteStabilizerCircuit(obj, circuitStr.c_str(),
                                           randomizeMeasurements, seed);
     return false;
   }
@@ -111,7 +111,7 @@ class GpuStabilizer {
     std::vector<unsigned int> xTableRaw(GetStabilizerXZTableSize());
     lib->CopyStabilizerXTable(obj, xTableRaw.data());
 
-    return ConvertToBoolVectorVector(xTableRaw, GetStabilizerNumQubits(), GetStabilizerNumShots());
+    return ConvertToBoolVectorVector(xTableRaw, GetNumQubits(), GetNumShots());
   }
 
   std::vector<std::vector<bool>> GetZTable()
@@ -119,11 +119,9 @@ class GpuStabilizer {
     if (!obj) return std::vector<std::vector<bool>>();
 
     std::vector<unsigned int> zTableRaw(GetStabilizerXZTableSize());
-
-    std::vector<unsigned int> zTableRaw(GetStabilizerXZTableSize());
     lib->CopyStabilizerZTable(obj, zTableRaw.data());
 
-    return ConvertToBoolVectorVector(zTableRaw, GetStabilizerNumQubits(), GetStabilizerNumShots());
+    return ConvertToBoolVectorVector(zTableRaw, GetNumQubits(), GetNumShots());
   }
 
   std::vector<std::vector<bool>> GetMTable() 
@@ -133,7 +131,7 @@ class GpuStabilizer {
     std::vector<unsigned int> mTableRaw(GetStabilizerMTableSize());
     lib->CopyStabilizerMTable(obj, mTableRaw.data());
 
-    return ConvertToBoolVectorVector(mTableRaw, GetStabilizerNumMeasurements(), GetStabilizerNumShots());
+    return ConvertToBoolVectorVector(mTableRaw, GetNumMeasurements(), GetNumShots());
   }
 
  protected:
