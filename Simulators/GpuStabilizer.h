@@ -134,6 +134,82 @@ class GpuStabilizer {
     return ConvertToBoolVectorVector(mTableRaw, GetNumMeasurements(), GetNumShots());
   }
 
+  bool InitXTable(const std::vector<std::vector<bool>> &xTable) 
+  {
+    if (!obj) return false;
+    const long long shots = GetNumShots();
+    const long long words_per_qubitormeas = (shots + 31) / 32;
+    const long long numQubits = GetNumQubits();
+    std::vector<unsigned int> xTableRaw(numQubits * words_per_qubitormeas, 0);
+    for (long long qubit = 0; qubit < numQubits; ++qubit) {
+      for (long long shot = 0; shot < shots; ++shot) {
+        if (xTable[qubit][shot]) {
+          xTableRaw[qubit * words_per_qubitormeas + (shot / 32)] |=
+              (1U << (shot % 32));
+        }
+      }
+    }
+    return lib->InitStabilizerXTable(obj, xTableRaw.data()) == 1;
+  }
+
+  bool InitXTableRepeat(const std::vector<bool>& xTable)
+  {
+    // repeat xTable for all shots
+    if (!obj) return false;
+    const long long shots = GetNumShots();
+    const long long words_per_qubitormeas = (shots + 31) / 32;
+    const long long numQubits = GetNumQubits();
+    std::vector<unsigned int> xTableRaw(numQubits * words_per_qubitormeas, 0);
+    for (long long qubit = 0; qubit < numQubits; ++qubit) {
+      for (long long shot = 0; shot < shots; ++shot) {
+        if (xTable[qubit]) {
+          xTableRaw[qubit * words_per_qubitormeas + (shot / 32)] |=
+              (1U << (shot % 32));
+        }
+      }
+    }
+
+    return lib->InitStabilizerXTable(obj, xTableRaw.data()) == 1;
+  }
+
+  bool InitZTable(const std::vector<std::vector<bool>> &zTable) 
+  {
+    if (!obj) return false;
+    const long long shots = GetNumShots();
+    const long long words_per_qubitormeas = (shots + 31) / 32;
+    const long long numQubits = GetNumQubits();
+    std::vector<unsigned int> zTableRaw(numQubits * words_per_qubitormeas, 0);
+    for (long long qubit = 0; qubit < numQubits; ++qubit) {
+      for (long long shot = 0; shot < shots; ++shot) {
+        if (zTable[qubit][shot]) {
+          zTableRaw[qubit * words_per_qubitormeas + (shot / 32)] |=
+              (1U << (shot % 32));
+        }
+      }
+    }
+    return lib->InitStabilizerZTable(obj, zTableRaw.data()) == 1;
+  }
+
+  bool InitZTableRepeat(const std::vector<bool> &zTable)
+  {
+    // repeat zTable for all shots
+    if (!obj) return false;
+    const long long shots = GetNumShots();
+    const long long words_per_qubitormeas = (shots + 31) / 32;
+    const long long numQubits = GetNumQubits();
+    std::vector<unsigned int> zTableRaw(numQubits * words_per_qubitormeas, 0);
+    for (long long qubit = 0; qubit < numQubits; ++qubit) {
+      for (long long shot = 0; shot < shots; ++shot) {
+        if (zTable[qubit]) {
+          zTableRaw[qubit * words_per_qubitormeas + (shot / 32)] |=
+              (1U << (shot % 32));
+        }
+      }
+    }
+    return lib->InitStabilizerZTable(obj, zTableRaw.data()) == 1;
+  }
+
+
  protected:
   std::vector<std::vector<bool>> ConvertToBoolVectorVector(
       const std::vector<unsigned int> &tableRaw, long long int num,

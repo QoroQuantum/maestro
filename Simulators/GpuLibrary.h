@@ -550,6 +550,12 @@ class GpuLibrary : public Utils::Library {
               "CopyStabilizerMTable");
           CheckFunction((void *)fCopyStabilizerMTable, __LINE__);
 
+          fInitStabilizerXTable = (int (*)(void *, const unsigned int *))GetFunction("InitStabilizerXTable");
+          CheckFunction((void *)fInitStabilizerXTable, __LINE__);
+          fInitStabilizerZTable = (int (*)(
+              void *, const unsigned int *))GetFunction("InitStabilizerZTable");
+          CheckFunction((void *)fInitStabilizerZTable, __LINE__);
+
           return true;
         } else
           std::cerr << "GpuLibrary: Unable to initialize gpu library"
@@ -2316,6 +2322,26 @@ class GpuLibrary : public Utils::Library {
       throw std::runtime_error("GpuLibrary: Unable to copy stabilizer M table");
   }
 
+  int InitStabilizerXTable(void* obj, const unsigned int* xtable)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fInitStabilizerXTable(obj, xtable);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to initialize stabilizer X table");
+  }
+
+  int InitStabilizerZTable(void* obj, const unsigned int* ztable)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fInitStabilizerZTable(obj, ztable);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to initialize stabilizer Z table");
+  }
+
  private:
   void *LibraryHandle = nullptr;
 
@@ -2531,6 +2557,8 @@ class GpuLibrary : public Utils::Library {
   int (*fCopyStabilizerXTable)(void *, unsigned int *);
   int (*fCopyStabilizerZTable)(void *, unsigned int *);
   int (*fCopyStabilizerMTable)(void *, unsigned int *);
+  int (*fInitStabilizerXTable)(void *, unsigned int *);
+  int (*fInitStabilizerZTable)(void *, unsigned int *);
 };
 }  // namespace Simulators
 
