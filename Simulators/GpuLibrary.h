@@ -2557,8 +2557,8 @@ class GpuLibrary : public Utils::Library {
   int (*fCopyStabilizerXTable)(void *, unsigned int *);
   int (*fCopyStabilizerZTable)(void *, unsigned int *);
   int (*fCopyStabilizerMTable)(void *, unsigned int *);
-  int (*fInitStabilizerXTable)(void *, unsigned int *);
-  int (*fInitStabilizerZTable)(void *, unsigned int *);
+  int (*fInitStabilizerXTable)(void *, const unsigned int *);
+  int (*fInitStabilizerZTable)(void *, const unsigned int *);
 };
 }  // namespace Simulators
 
