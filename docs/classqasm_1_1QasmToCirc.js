@@ -6,7 +6,7 @@ var classqasm_1_1QasmToCirc =
     [ "GetErrorMessage", "classqasm_1_1QasmToCirc.html#a3d0560ca76a985aac8c13fffa47d23bc", null ],
     [ "GetIncludes", "classqasm_1_1QasmToCirc.html#a6466e383650a1f270936af6abb414dcd", null ],
     [ "GetVersion", "classqasm_1_1QasmToCirc.html#a36b22adcf6d78e67590e84cb0353945a", null ],
-    [ "ParseAndTranslate", "classqasm_1_1QasmToCirc.html#a570286f0da2cf6b6d4fb4daf66198c97", null ],
+    [ "ParseAndTranslate", "classqasm_1_1QasmToCirc.html#ab34513bea8f4e5b7bacf94eb30a11407", null ],
     [ "error", "classqasm_1_1QasmToCirc.html#aeaec1289192ed610af75796637eed9b1", null ],
     [ "errorMessage", "classqasm_1_1QasmToCirc.html#a838c6152fc1432bcdfb06cef5dc5bdee", null ],
     [ "grammar", "classqasm_1_1QasmToCirc.html#aeebe68724576cc74c979e95d0f42fe90", null ],

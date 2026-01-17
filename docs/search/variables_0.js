@@ -10,5 +10,14 @@ var searchData=
   ['addmeasure_7',['AddMeasure',['../namespaceqasm.html#ad3d7ea7acea6ba3e9396822cccc98b60',1,'qasm']]],
   ['addopaquedecl_8',['AddOpaqueDecl',['../namespaceqasm.html#aa966ba96c80bf2974f5156e10541efe9',1,'qasm']]],
   ['addqreg_9',['AddQreg',['../namespaceqasm.html#a66ee7ab72385454b26bbb904c36f6d20',1,'qasm']]],
-  ['addreset_10',['AddReset',['../namespaceqasm.html#af7dc541aa560c5e682762452a9fb4551',1,'qasm']]]
+  ['addreset_10',['AddReset',['../namespaceqasm.html#af7dc541aa560c5e682762452a9fb4551',1,'qasm']]],
+  ['aer_11',['aer',['../structSimulatorsTestFixture.html#aa0d48b0689491fcf598cac294c0d6ca5',1,'SimulatorsTestFixture::aer'],['../structCompositeSimulatorsTestFixture.html#a77c41aed4d63858321bea8c7cd3201a8',1,'CompositeSimulatorsTestFixture::aer'],['../structAerSimulatorTestFixture.html#a95b6059cdcc802b250367b0d61d24684',1,'AerSimulatorTestFixture::aer']]],
+  ['aerclifford_12',['aerclifford',['../structExpvalTestFixture.html#ae416f28dc15109c3235a42eec3716237',1,'ExpvalTestFixture::aerClifford'],['../structCliffordSimTestFixture.html#ac647f964e9cd7568b54dbbbe145931f4',1,'CliffordSimTestFixture::aerClifford']]],
+  ['aercomposite_13',['aerComposite',['../structExpvalTestFixture.html#a9517a490c3830bfeb0a0c18e05433e9d',1,'ExpvalTestFixture']]],
+  ['aermps_14',['aermps',['../structMPSSimTestFixture.html#a145f905ca1d2546fc8231f6d287a76de',1,'MPSSimTestFixture::aerMPS'],['../structExpvalTestFixture.html#a4b63f4beb834ddbbb00794a74bedce6f',1,'ExpvalTestFixture::aerMPS']]],
+  ['aermps50_15',['aerMPS50',['../structMPSSimTestFixture.html#a5880cd90b4ae71a6ba798c279aa2d830',1,'MPSSimTestFixture']]],
+  ['aerprobs_16',['aerprobs',['../cliffordtests_8cpp.html#a01408c3c4ace59bf31ad33236a4ed102',1,'aerProbs:&#160;cliffordtests.cpp'],['../mpssimtests_8cpp.html#a01408c3c4ace59bf31ad33236a4ed102',1,'aerProbs:&#160;mpssimtests.cpp']]],
+  ['aerrandom_17',['aerRandom',['../structSimulatorsTestFixture.html#ac161cbc30a186c7fd9df5a96e00ee0e9',1,'SimulatorsTestFixture']]],
+  ['aerstatevector_18',['aerStatevector',['../structExpvalTestFixture.html#ac8da525c9ae38ec5346fe2a70fe43597',1,'ExpvalTestFixture']]],
+  ['aertime_19',['aerTime',['../compsimtests_8cpp.html#ac534de6ff829100a3a7257a749d913a6',1,'compsimtests.cpp']]]
 ];

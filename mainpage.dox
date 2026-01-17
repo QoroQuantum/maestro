@@ -1,0 +1,112 @@
+/**
+ * @mainpage Maestro: Unified Interface for Quantum Circuit Simulation
+ *
+ * @section intro_sec Introduction
+ *
+ * Welcome to the Maestro documentation! Maestro is a unified interface and intelligent orchestration 
+ * layer for quantum circuit simulation. It automates the complexity of selecting and configuring 
+ * simulators, enabling researchers and developers to execute quantum circuits efficiently across 
+ * CPUs, GPUs, and distributed HPC environments without manual tuning.
+ *
+ * @section getting_started Getting Started
+ *
+ * If you're new to Maestro, we recommend starting with:
+ * - @ref md_INSTALL "Installation Guide" - How to build and install Maestro
+ * - @ref md_TUTORIAL "Tutorial" - Usage examples and API overview
+ *
+ * @section key_features Key Features
+ *
+ * Maestro addresses the fragmentation of the current simulator ecosystem by providing a single 
+ * entry point to various simulation methods:
+ *
+ * - **Unified Abstraction Layer**: Write your circuit once (e.g., in Qiskit) and Maestro compiles 
+ *   it to the native format of the target backend
+ * - **Intelligent Prediction Engine**: Automatically analyzes circuit features (gate density, 
+ *   entanglement, locality) to predict and select the fastest simulation backend for your specific workload
+ * - **High-Performance Optimizations**: Transparently applies multi-threading, multi-processing, 
+ *   and optimized state sampling to increase throughput
+ * - **GPU Acceleration**: Integrated support for GPU-accelerated Statevector and custom Matrix 
+ *   Product State (MPS) execution
+ * - **Distributed Quantum Computing (DQC)**: Supports p-block simulation (Composite mode) to 
+ *   simulate distributed quantum networks and break the memory ceiling of monolithic simulations
+ * - **Backend-agnostic**: Allows new simulators to be added easily
+ *
+ * @section arch_overview Architecture Overview
+ *
+ * The Maestro pipeline consists of:
+ * 1. **Circuit Ingestion** - Qiskit/QASM input
+ * 2. **Conversion** - To Maestro's Intermediate Representation
+ * 3. **Feature Extraction** - Gate density, entanglement locality, structure
+ * 4. **Prediction Engine** - Runtime estimation and backend routing
+ * 5. **Execution** - On one of the supported backends:
+ *    - CPU statevector
+ *    - GPU statevector
+ *    - CPU/GPU MPS
+ *    - Tensor networks
+ *    - Clifford/stabilizer
+ *    - Composite p-block distributed simulation
+ *
+ * @section api_overview API Overview
+ *
+ * The documentation is organized into the following main modules:
+ *
+ * - **@ref Circuits** - Circuit representation and quantum gate operations
+ * - **@ref Simulators** - Simulator interfaces and implementations
+ * - **@ref Network** - Distributed quantum computing components
+ * - **@ref TensorNetworks** - Tensor network simulation methods
+ * - **@ref Schedulers** - Job scheduling and execution management
+ * - **@ref Estimators** - Runtime estimation and prediction
+ * - **@ref Utils** - Utility classes and helper functions
+ *
+ * @section backends Simulation Backends
+ *
+ * Maestro integrates or wraps the following simulators:
+ * - CPU statevector (Qiskit Aer, QCSim, custom implementations)
+ * - GPU statevector (NVIDIA cuStateVec)
+ * - CPU MPS (multiple libraries)
+ * - GPU MPS (custom CUDA implementation)
+ * - Tensor network simulators
+ * - Stabilizer/Clifford simulators
+ * - p-block composite simulation for DQC
+ *
+ * Each backend is accessed through a C++ adapter that maps Maestro's IR to the simulator's native API.
+ *
+ * @section auto_selection Automatic Backend Selection
+ *
+ * Maestro includes a prediction engine that:
+ * - Extracts structural features from the circuit
+ * - Uses a regression model trained on benchmark data
+ * - Estimates relative runtimes across all backends
+ * - Selects the backend expected to run fastest on the current hardware
+ *
+ * The model normalizes performance features to reduce hardware dependence and can be recalibrated 
+ * on installation.
+ *
+ * @section quick_start Quick Start
+ *
+ * To build Maestro:
+ * @code
+ * chmod +x build.sh
+ * ./build.sh
+ * @endcode
+ *
+ * For detailed build instructions, see @ref md_INSTALL "INSTALL.md".
+ *
+ * @section citation Citation
+ *
+ * If you use Maestro in your research, please cite:
+ * @code
+ * @article{bertomeu2025maestro,
+ *   title={Maestro: Intelligent Execution for Quantum Circuit Simulation},
+ *   author={Bertomeu, Oriol and Ghayas, Hamzah and Roman, Adrian and DiAdamo, Stephen},
+ *   organization={Qoro Quantum},
+ *   year={2025}
+ * }
+ * @endcode
+ *
+ * @section license License
+ *
+ * This project is licensed under the GNU General Public License v3.0.
+ * You may copy, distribute, and modify this software under the terms of the GPL-3.0 license.
+ * A copy of the license text is available in the LICENSE file.
+ */
