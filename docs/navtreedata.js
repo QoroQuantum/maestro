@@ -25,6 +25,68 @@
 var NAVTREE =
 [
   [ "Maestro", "index.html", [
+    [ "Maestro: Unified Interface for Quantum Circuit Simulation", "index.html", "index" ],
+    [ "Contributor Covenant Code of Conduct", "md_CODE__OF__CONDUCT.html", [
+      [ "Our Pledge", "md_CODE__OF__CONDUCT.html#autotoc_md1", null ],
+      [ "Our Standards", "md_CODE__OF__CONDUCT.html#autotoc_md2", null ],
+      [ "Enforcement Responsibilities", "md_CODE__OF__CONDUCT.html#autotoc_md3", null ],
+      [ "Scope", "md_CODE__OF__CONDUCT.html#autotoc_md4", null ],
+      [ "Enforcement", "md_CODE__OF__CONDUCT.html#autotoc_md5", null ],
+      [ "Enforcement Guidelines", "md_CODE__OF__CONDUCT.html#autotoc_md6", [
+        [ "1. Correction", "md_CODE__OF__CONDUCT.html#autotoc_md7", null ],
+        [ "2. Warning", "md_CODE__OF__CONDUCT.html#autotoc_md8", null ],
+        [ "3. Temporary Ban", "md_CODE__OF__CONDUCT.html#autotoc_md9", null ],
+        [ "4. Permanent Ban", "md_CODE__OF__CONDUCT.html#autotoc_md10", null ]
+      ] ],
+      [ "Attribution", "md_CODE__OF__CONDUCT.html#autotoc_md11", null ]
+    ] ],
+    [ "Contributing to Maestro", "md_CONTRIBUTING.html", [
+      [ "How you can contribute right now", "md_CONTRIBUTING.html#autotoc_md13", [
+        [ "1. Feature requests", "md_CONTRIBUTING.html#autotoc_md14", null ],
+        [ "2. Bug reports", "md_CONTRIBUTING.html#autotoc_md15", null ],
+        [ "3. Performance feedback", "md_CONTRIBUTING.html#autotoc_md16", null ]
+      ] ],
+      [ "About code snippets in issues", "md_CONTRIBUTING.html#autotoc_md18", null ],
+      [ "Why we do not accept pull requests (for now)", "md_CONTRIBUTING.html#autotoc_md20", null ],
+      [ "Contact", "md_CONTRIBUTING.html#autotoc_md22", null ]
+    ] ],
+    [ "Installation Guide", "md_INSTALL.html", [
+      [ "Quick Start", "md_INSTALL.html#autotoc_md24", [
+        [ "Python Package (Recommended)", "md_INSTALL.html#autotoc_md25", null ],
+        [ "C++ Library", "md_INSTALL.html#autotoc_md26", null ]
+      ] ],
+      [ "Detailed Instructions", "md_INSTALL.html#autotoc_md28", [
+        [ "System Requirements", "md_INSTALL.html#autotoc_md29", null ],
+        [ "Advanced Build Options", "md_INSTALL.html#autotoc_md30", [
+          [ "Enable Qiskit Aer Support", "md_INSTALL.html#autotoc_md31", null ],
+          [ "Custom Dependency Paths", "md_INSTALL.html#autotoc_md32", null ]
+        ] ]
+      ] ],
+      [ "Troubleshooting", "md_INSTALL.html#autotoc_md33", null ]
+    ] ],
+    [ "Maestro: The Interface to Quantum Circuit Simulation", "md_README.html", [
+      [ "Key Features", "md_README.html#autotoc_md35", null ],
+      [ "Architecture Overview", "md_README.html#autotoc_md36", null ],
+      [ "Simulation Backends", "md_README.html#autotoc_md37", null ],
+      [ "Automatic Backend Selection", "md_README.html#autotoc_md38", null ],
+      [ "Documentation", "md_README.html#autotoc_md39", [
+        [ "API Documentation", "md_README.html#autotoc_md40", null ]
+      ] ],
+      [ "Building Maestro", "md_README.html#autotoc_md41", null ],
+      [ "Citation", "md_README.html#autotoc_md42", null ],
+      [ "License", "md_README.html#autotoc_md43", null ]
+    ] ],
+    [ "Maestro Tutorial", "md_TUTORIAL.html", [
+      [ "Introduction", "md_TUTORIAL.html#autotoc_md45", null ],
+      [ "Basic Usage", "md_TUTORIAL.html#autotoc_md46", [
+        [ "Step-by-Step Example", "md_TUTORIAL.html#autotoc_md47", null ]
+      ] ],
+      [ "Compiling the Example", "md_TUTORIAL.html#autotoc_md48", null ],
+      [ "Advanced Usage", "md_TUTORIAL.html#autotoc_md49", [
+        [ "Manual Simulator Control", "md_TUTORIAL.html#autotoc_md50", null ],
+        [ "Configuration Options", "md_TUTORIAL.html#autotoc_md51", null ]
+      ] ]
+    ] ],
     [ "Namespaces", "namespaces.html", [
       [ "Namespace List", "namespaces.html", "namespaces_dup" ],
       [ "Namespace Members", "namespacemembers.html", [
@@ -52,7 +114,7 @@ var NAVTREE =
       [ "File List", "files.html", "files_dup" ],
       [ "File Members", "globals.html", [
         [ "All", "globals.html", "globals_dup" ],
-        [ "Functions", "globals_func.html", null ],
+        [ "Functions", "globals_func.html", "globals_func" ],
         [ "Variables", "globals_vars.html", null ],
         [ "Macros", "globals_defs.html", null ]
       ] ]
@@ -63,21 +125,23 @@ var NAVTREE =
 var NAVTREEINDEX =
 [
 "AerSimulator_8h.html",
-"QCSimState_8h.html",
-"classCircuits_1_1CZGate.html#ae9c029dea9bff5c9e1c77ea362337207",
-"classCircuits_1_1ComparableCircuit.html#af94b3b11a1162f8122df868e55039fe5",
-"classCircuits_1_1OperationState.html#a2a9ef24dc20e96711ec6c4be4a5af383",
-"classCircuits_1_1ThreeQubitsGate.html#a70677c5237db6de2e7d5324ece32743b",
-"classNetwork_1_1IHost.html#a314fd58887556ee1144cdcfaf518a6a7",
-"classNetwork_1_1SimpleDisconnectedNetwork.html#a026f0fe48a279022b64bd962c6bef0ea",
-"classSchedulers_1_1IScheduler.html#ac7bb535dae4a8cd091c7433d8c27d84c",
-"classTensorNetworks_1_1ITensorContractor.html#afa6dbdf40edc9739a4e5d28cc62e546d",
-"classUtils_1_1Tensor.html#a5b49575839bb94d48b1ebb7249b2ab3c",
-"classqasm_1_1Expression.html#a322ee51c9aef4339406f8af55e27cbc1",
-"namespaceSimulators.html#a36be947268c6955a4a9f323ee6e7c789a341b8a8f03cf33821c46aa5c3aad4b7a",
-"structqasm_1_1MakeFunctionExpression_1_1result.html#ab786a135bc8ce9e97775c0093dd6618e"
+"NetworkJob_8h.html",
+"circtests_8cpp.html#aecbc89586053649973cc4bacef459c21",
+"classCircuits_1_1Circuit.html#a78a59b649b58e6c62c34a48aabc5eaf0",
+"classCircuits_1_1HadamardGate.html#ab5fa72f5c949230d72a9bb06a5970c10",
+"classCircuits_1_1Reset.html#a11d710f547e046b6c3c280720a65f94d",
+"classCircuits_1_1ZGate.html#abf44952ce8fb648c3b23a053420a4803",
+"classNetwork_1_1IHost.html#a54ad03b909ab2d3a3b362a63ebe3001c",
+"classNetwork_1_1SimpleDisconnectedNetwork.html#a06785803127fbf6c85d43dbc61d2f603",
+"classSchedulers_1_1IScheduler.html#af97ae79035b22d288b4bc00c2e854a1e",
+"classTensorNetworks_1_1BaseContractor.html",
+"classUtils_1_1LogFile.html#a36881031ecd4e570982a4d15f2327945",
+"classqasm_1_1CircToQasm.html#ad24e5ae07ef18a15cc4a9f4a4ef63206a2ae463c89afc1951b7fb2919ab8fa25a",
+"functions_func.html",
+"namespaceSimulators.html#a36be947268c6955a4a9f323ee6e7c789",
+"structSimulatorsTestFixture.html#ab26e33da112ec94eaf2cb2e0de055ace",
+"tensorstests_8cpp.html#a65fb7b4d50f74f4aaf80f13fd17bc2e7"
 ];
 
-var SYNCONMSG = 'click to disable panel synchronization';
-var SYNCOFFMSG = 'click to enable panel synchronization';
-var LISTOFALLMEMBERS = 'List of all members';
+var SYNCONMSG = 'click to disable panel synchronisation';
+var SYNCOFFMSG = 'click to enable panel synchronisation';

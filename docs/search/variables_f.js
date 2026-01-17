@@ -1,13 +1,19 @@
 var searchData=
 [
   ['scheduler_0',['scheduler',['../classNetwork_1_1SimpleController.html#ac81b062e180d1ab24641968e557cb33c',1,'Network::SimpleController']]],
-  ['shots_1',['shots',['../structSchedulers_1_1ExecuteCircuit.html#a0f3e88d36dc7b113f8b49e6b81f6dc62',1,'Schedulers::ExecuteCircuit']]],
-  ['simtype_2',['simType',['../classNetwork_1_1ExecuteJob.html#a27620fbf93efb0b1a195eb3c63d021c3',1,'Network::ExecuteJob']]],
-  ['simulator_3',['simulator',['../classNetwork_1_1SimpleDisconnectedNetwork.html#a06785803127fbf6c85d43dbc61d2f603',1,'Network::SimpleDisconnectedNetwork']]],
-  ['simulatorsestimator_4',['simulatorsEstimator',['../classNetwork_1_1SimpleDisconnectedNetwork.html#a40a5c222e5241b6dcbee325c48ec8acb',1,'Network::SimpleDisconnectedNetwork']]],
-  ['simulatorsforoptimizations_5',['simulatorsForOptimizations',['../classNetwork_1_1SimpleDisconnectedNetwork.html#a7c1824a218d3ec95663bb8642f5f894c',1,'Network::SimpleDisconnectedNetwork']]],
-  ['singularvaluethreshold_6',['singularValueThreshold',['../classNetwork_1_1ExecuteJob.html#ae0c97351d2227b695e22ef5bf3daaef7',1,'Network::ExecuteJob::singularValueThreshold'],['../classNetwork_1_1SimpleDisconnectedNetwork.html#a0a4873717a9c027efeb5be2f680652f8',1,'Network::SimpleDisconnectedNetwork::singularValueThreshold']]],
-  ['startqubits_7',['startQubits',['../structSchedulers_1_1CircuitInfo.html#a282a82da06182d560747a295b2aceee8',1,'Schedulers::CircuitInfo']]],
-  ['statements_8',['statements',['../structqasm_1_1Program.html#a3a38b2054b700ea040cc0dd3363f1f58',1,'qasm::Program']]],
-  ['sz_9',['sz',['../classUtils_1_1Tensor.html#acc5c75ddaf28214d8c9fdb37ca44ecff',1,'Utils::Tensor']]]
+  ['setcirc_1',['setcirc',['../structSimulatorsTestFixture.html#ae1b7ac98ad0427a026542c4951f8afd2',1,'SimulatorsTestFixture::setCirc'],['../structCompositeSimulatorsTestFixture.html#ae1987105e7b9fce69e6290bc4a3c9eac',1,'CompositeSimulatorsTestFixture::setCirc']]],
+  ['setup_2',['setup',['../Tests_8h.html#aad6e69582d051e37ab66a7d18979397c',1,'Tests.h']]],
+  ['shots_3',['shots',['../structSchedulers_1_1ExecuteCircuit.html#a0f3e88d36dc7b113f8b49e6b81f6dc62',1,'Schedulers::ExecuteCircuit']]],
+  ['simtype_4',['simType',['../classNetwork_1_1ExecuteJob.html#a27620fbf93efb0b1a195eb3c63d021c3',1,'Network::ExecuteJob']]],
+  ['simulator_5',['simulator',['../classNetwork_1_1SimpleDisconnectedNetwork.html#a06785803127fbf6c85d43dbc61d2f603',1,'Network::SimpleDisconnectedNetwork']]],
+  ['simulatorsestimator_6',['simulatorsEstimator',['../classNetwork_1_1SimpleDisconnectedNetwork.html#a40a5c222e5241b6dcbee325c48ec8acb',1,'Network::SimpleDisconnectedNetwork']]],
+  ['simulatorsforoptimizations_7',['simulatorsForOptimizations',['../classNetwork_1_1SimpleDisconnectedNetwork.html#a7c1824a218d3ec95663bb8642f5f894c',1,'Network::SimpleDisconnectedNetwork']]],
+  ['singularvaluethreshold_8',['singularvaluethreshold',['../classNetwork_1_1ExecuteJob.html#ae0c97351d2227b695e22ef5bf3daaef7',1,'Network::ExecuteJob::singularValueThreshold'],['../classNetwork_1_1SimpleDisconnectedNetwork.html#a0a4873717a9c027efeb5be2f680652f8',1,'Network::SimpleDisconnectedNetwork::singularValueThreshold']]],
+  ['start_9',['start',['../mpssimtests_8cpp.html#a550769bbd4e7537ff90a656f5b0c23b2',1,'start:&#160;mpssimtests.cpp'],['../compsimtests_8cpp.html#a550769bbd4e7537ff90a656f5b0c23b2',1,'start:&#160;compsimtests.cpp'],['../cliffordtests_8cpp.html#a550769bbd4e7537ff90a656f5b0c23b2',1,'start:&#160;cliffordtests.cpp'],['../circtests_8cpp.html#a7f02a749754f40365411f74cf75d08fa',1,'start:&#160;circtests.cpp']]],
+  ['startqubits_10',['startQubits',['../structSchedulers_1_1CircuitInfo.html#a282a82da06182d560747a295b2aceee8',1,'Schedulers::CircuitInfo']]],
+  ['state_11',['state',['../structCompositeSimulatorsTestFixture.html#ae4be5596b87805a708f81789ea7bc080',1,'CompositeSimulatorsTestFixture::state'],['../structQasmTestFixture.html#a410d07bdb0f42c976390ec5751059bd9',1,'QasmTestFixture::state'],['../structMPSSimTestFixture.html#a3e3ab0ecb8cd8ce222cdd784bc70b89a',1,'MPSSimTestFixture::state'],['../structExpvalTestFixture.html#a4c1caf56fe8bf8c3630b3227146bd593',1,'ExpvalTestFixture::state'],['../structCliffordSimTestFixture.html#ad8504ceb993567c446b74f92e4c50027',1,'CliffordSimTestFixture::state'],['../structSimulatorsTestFixture.html#a99cbf6697f23928721206325fb3e1387',1,'SimulatorsTestFixture::state']]],
+  ['state50_12',['state50',['../structMPSSimTestFixture.html#a0b63d941c686ec2b8001d68bbbecb82a',1,'MPSSimTestFixture']]],
+  ['statedummy_13',['stateDummy',['../tensorstests_8cpp.html#a4aa2ade6b260656079709aa104d6da22',1,'tensorstests.cpp']]],
+  ['statements_14',['statements',['../structqasm_1_1Program.html#a3a38b2054b700ea040cc0dd3363f1f58',1,'qasm::Program']]],
+  ['sz_15',['sz',['../classUtils_1_1Tensor.html#acc5c75ddaf28214d8c9fdb37ca44ecff',1,'Utils::Tensor']]]
 ];

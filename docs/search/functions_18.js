@@ -1,4 +1,4 @@
 var searchData=
 [
-  ['zgate_0',['ZGate',['../classCircuits_1_1ZGate.html#ada24ca792b204532fb0ad2d6eecc55bb',1,'Circuits::ZGate']]]
+  ['xgate_0',['XGate',['../classCircuits_1_1XGate.html#af1a8f9e556756c4cf2ec8ac7785b532b',1,'Circuits::XGate']]]
 ];

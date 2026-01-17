@@ -3,7 +3,7 @@ var classCircuits_1_1ComparableCircuit =
     [ "BaseClass", "classCircuits_1_1ComparableCircuit.html#ab1941abda6df1afc7b84527daeec9a4f", null ],
     [ "Operation", "classCircuits_1_1ComparableCircuit.html#a8610fb7fde4f4f3ba4da97f5da76d251", null ],
     [ "OperationPtr", "classCircuits_1_1ComparableCircuit.html#a0c052264b9d4bdac927aadb7676a39c0", null ],
-    [ "OperationsVector", "classCircuits_1_1ComparableCircuit.html#af94b3b11a1162f8122df868e55039fe5", null ],
+    [ "OperationsVector", "classCircuits_1_1ComparableCircuit.html#a26ead333862c29ec3c9dee50ed5f1a5c", null ],
     [ "ComparableCircuit", "classCircuits_1_1ComparableCircuit.html#ab8b447298616c71186d1e8891c51a91c", null ],
     [ "ComparableCircuit", "classCircuits_1_1ComparableCircuit.html#a77a5cdd37eee623b494ef5ad182522ed", null ],
     [ "GetApproximateParamsCheck", "classCircuits_1_1ComparableCircuit.html#a625efe716dba54d285a2483cf7ccebc1", null ],
