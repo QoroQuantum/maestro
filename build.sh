@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 if [ ! -d build ]
 then
@@ -19,10 +20,16 @@ then
     tar -xzvf boost.tgz
     rm boost.tgz
 fi
-cd boost_1_89_0
-./bootstrap.sh --prefix=.
-./b2 --with-program_options --with-json --with-container --with-serialization --prefix=. install
-cd ..
+# Skip building Boost if it's already present to save time.
+if [ ! -d boost_1_89_0/lib ]
+then
+    cd boost_1_89_0
+    ./bootstrap.sh --prefix=.
+    # Use -j2 to limit parallel jobs, preventing memory exhaustion (OOM) 
+    # during intensive Boost compilation.
+    ./b2 -j2 --with-program_options --with-json --with-container --with-serialization --prefix=. install
+    cd ..
+fi
 
 if [ ! -d QCSim ]
 then
