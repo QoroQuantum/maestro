@@ -11,6 +11,7 @@ var searchData=
   ['maxrejections_8',['MaxRejections',['../classTensorNetworks_1_1StochasticContractor.html#a7890304a85fe0c18a055f31b92b9a82c',1,'TensorNetworks::StochasticContractor']]],
   ['maxsimulators_9',['maxSimulators',['../classNetwork_1_1SimpleDisconnectedNetwork.html#ada9b6cba5dab37d06d39e86f0863b7ce',1,'Network::SimpleDisconnectedNetwork']]],
   ['maxtensorrank_10',['maxTensorRank',['../classTensorNetworks_1_1BaseContractor.html#ad1d67fbc922bd04e84c7eae25fb861ed',1,'TensorNetworks::BaseContractor']]],
-  ['method_11',['method',['../classNetwork_1_1ExecuteJob.html#ade79c988163b4b791b6249c1423c2228',1,'Network::ExecuteJob']]],
-  ['mpssample_12',['mpsSample',['../classNetwork_1_1ExecuteJob.html#ad66ddeafe69f2a5b81a256a2e44e2136',1,'Network::ExecuteJob::mpsSample'],['../classNetwork_1_1SimpleDisconnectedNetwork.html#ab096a7d8b912200b36f81e4c3571aa1c',1,'Network::SimpleDisconnectedNetwork::mpsSample']]]
+  ['measurecirc_11',['measureCirc',['../structSimulatorsTestFixture.html#a91189bddb0e1b0bfc93b3b79f2071a45',1,'SimulatorsTestFixture::measureCirc'],['../structCompositeSimulatorsTestFixture.html#a0bf36bdee67c24500b807309ce437efd',1,'CompositeSimulatorsTestFixture::measureCirc']]],
+  ['method_12',['method',['../classNetwork_1_1ExecuteJob.html#ade79c988163b4b791b6249c1423c2228',1,'Network::ExecuteJob']]],
+  ['mpssample_13',['mpsSample',['../classNetwork_1_1ExecuteJob.html#ad66ddeafe69f2a5b81a256a2e44e2136',1,'Network::ExecuteJob::mpsSample'],['../classNetwork_1_1SimpleDisconnectedNetwork.html#ab096a7d8b912200b36f81e4c3571aa1c',1,'Network::SimpleDisconnectedNetwork::mpsSample']]]
 ];

@@ -6,10 +6,11 @@ var searchData=
   ['simplehost_2eh_3',['SimpleHost.h',['../SimpleHost_8h.html',1,'']]],
   ['simpleops_2eh_4',['SimpleOps.h',['../SimpleOps_8h.html',1,'']]],
   ['simulator_2eh_5',['Simulator.h',['../Simulator_8h.html',1,'']]],
-  ['simulatorobserver_2eh_6',['SimulatorObserver.h',['../SimulatorObserver_8h.html',1,'']]],
-  ['simulators_2ffactory_2eh_7',['Factory.h',['../Simulators_2Factory_8h.html',1,'']]],
-  ['simulatorsestimatorinterface_2eh_8',['SimulatorsEstimatorInterface.h',['../SimulatorsEstimatorInterface_8h.html',1,'']]],
-  ['state_2eh_9',['State.h',['../State_8h.html',1,'']]],
-  ['stochasticcontractor_2eh_10',['StochasticContractor.h',['../StochasticContractor_8h.html',1,'']]],
-  ['syntaxtree_2eh_11',['SyntaxTree.h',['../SyntaxTree_8h.html',1,'']]]
+  ['simulator_2ehpp_6',['Simulator.hpp',['../Simulator_8hpp.html',1,'']]],
+  ['simulatorobserver_2eh_7',['SimulatorObserver.h',['../SimulatorObserver_8h.html',1,'']]],
+  ['simulators_2ffactory_2eh_8',['Factory.h',['../Simulators_2Factory_8h.html',1,'']]],
+  ['simulatorsestimatorinterface_2eh_9',['SimulatorsEstimatorInterface.h',['../SimulatorsEstimatorInterface_8h.html',1,'']]],
+  ['state_2eh_10',['State.h',['../State_8h.html',1,'']]],
+  ['stochasticcontractor_2eh_11',['StochasticContractor.h',['../StochasticContractor_8h.html',1,'']]],
+  ['syntaxtree_2eh_12',['SyntaxTree.h',['../SyntaxTree_8h.html',1,'']]]
 ];

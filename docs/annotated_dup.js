@@ -143,7 +143,20 @@ var annotated_dup =
       [ "ThreadsPool", "classUtils_1_1ThreadsPool.html", "classUtils_1_1ThreadsPool" ],
       [ "WorkerThread", "classUtils_1_1WorkerThread.html", "classUtils_1_1WorkerThread" ]
     ] ],
+    [ "AerSimulatorTestFixture", "structAerSimulatorTestFixture.html", "structAerSimulatorTestFixture" ],
     [ "avoid_init_allocator", "classavoid__init__allocator.html", null ],
+    [ "CliffordSimTestFixture", "structCliffordSimTestFixture.html", "structCliffordSimTestFixture" ],
+    [ "CompositeSimulatorsTestFixture", "structCompositeSimulatorsTestFixture.html", "structCompositeSimulatorsTestFixture" ],
     [ "CRotationGate", "classCRotationGate.html", null ],
-    [ "Maestro", "classMaestro.html", "classMaestro" ]
+    [ "ExpvalTestFixture", "structExpvalTestFixture.html", "structExpvalTestFixture" ],
+    [ "InitSetup", "classInitSetup.html", "classInitSetup" ],
+    [ "Maestro", "classMaestro.html", "classMaestro" ],
+    [ "MaestroLibrary", "classMaestroLibrary.html", "classMaestroLibrary" ],
+    [ "MPSSimTestFixture", "structMPSSimTestFixture.html", "structMPSSimTestFixture" ],
+    [ "MyConfig", "structMyConfig.html", "structMyConfig" ],
+    [ "QasmTestFixture", "structQasmTestFixture.html", "structQasmTestFixture" ],
+    [ "SimpleSimulator", "classSimpleSimulator.html", "classSimpleSimulator" ],
+    [ "Simulator", "classSimulator.html", "classSimulator" ],
+    [ "SimulatorsTestFixture", "structSimulatorsTestFixture.html", "structSimulatorsTestFixture" ],
+    [ "TensorsTestFixture", "structTensorsTestFixture.html", "structTensorsTestFixture" ]
 ];

@@ -12,6 +12,7 @@ var searchData=
   ['addopaquedeclexpr_9',['AddOpaqueDeclExpr',['../structqasm_1_1AddOpaqueDeclExpr.html',1,'qasm']]],
   ['addqregexpr_10',['AddQregExpr',['../structqasm_1_1AddQregExpr.html',1,'qasm']]],
   ['addresetexpr_11',['AddResetExpr',['../structqasm_1_1AddResetExpr.html',1,'qasm']]],
-  ['alias_12',['Alias',['../classUtils_1_1Alias.html',1,'Utils']]],
-  ['avoid_5finit_5fallocator_13',['avoid_init_allocator',['../classavoid__init__allocator.html',1,'']]]
+  ['aersimulatortestfixture_12',['AerSimulatorTestFixture',['../structAerSimulatorTestFixture.html',1,'']]],
+  ['alias_13',['Alias',['../classUtils_1_1Alias.html',1,'Utils']]],
+  ['avoid_5finit_5fallocator_14',['avoid_init_allocator',['../classavoid__init__allocator.html',1,'']]]
 ];
