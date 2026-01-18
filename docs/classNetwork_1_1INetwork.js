@@ -1,8 +1,8 @@
 var classNetwork_1_1INetwork =
 [
     [ "ExecuteResults", "classNetwork_1_1INetwork.html#aa7e4e730dac51e0ae031528ecdfe7378", null ],
-    [ "SimulatorPair", "classNetwork_1_1INetwork.html#aaf5b88782fd2a67abd178223f5865d14", null ],
-    [ "SimulatorsSet", "classNetwork_1_1INetwork.html#a6b7ae59913a3dd4088a08b1d378097ca", null ],
+    [ "SimulatorPair", "classNetwork_1_1INetwork.html#a553107e4963cba9290e0fefed22912e3", null ],
+    [ "SimulatorsSet", "classNetwork_1_1INetwork.html#aa948773ddeeadbf03487095c5ac1da11", null ],
     [ "~INetwork", "classNetwork_1_1INetwork.html#a5ab3268ca8816f31d22c65a7bcdba609", null ],
     [ "AddOptimizationSimulator", "classNetwork_1_1INetwork.html#a752bdbaa3348d82f8362c6ae874e5337", null ],
     [ "AreClassicalBitsOnSameHost", "classNetwork_1_1INetwork.html#ad8bf9a776bba8f30a97f49f80d58eb6d", null ],

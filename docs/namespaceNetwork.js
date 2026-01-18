@@ -1,9 +1,9 @@
 var namespaceNetwork =
 [
-    [ "ExecuteJob", "classNetwork_1_1ExecuteJob.html", "classNetwork_1_1ExecuteJob" ],
+    [ "INetwork", "classNetwork_1_1INetwork.html", "classNetwork_1_1INetwork" ],
     [ "IController", "classNetwork_1_1IController.html", "classNetwork_1_1IController" ],
     [ "IHost", "classNetwork_1_1IHost.html", "classNetwork_1_1IHost" ],
-    [ "INetwork", "classNetwork_1_1INetwork.html", "classNetwork_1_1INetwork" ],
+    [ "ExecuteJob", "classNetwork_1_1ExecuteJob.html", "classNetwork_1_1ExecuteJob" ],
     [ "SimpleController", "classNetwork_1_1SimpleController.html", "classNetwork_1_1SimpleController" ],
     [ "SimpleDisconnectedNetwork", "classNetwork_1_1SimpleDisconnectedNetwork.html", "classNetwork_1_1SimpleDisconnectedNetwork" ],
     [ "SimpleHost", "classNetwork_1_1SimpleHost.html", "classNetwork_1_1SimpleHost" ],

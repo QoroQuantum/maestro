@@ -1,10 +1,10 @@
 var namespaceSimulators =
 [
+    [ "SimulatorsFactory", "classSimulators_1_1SimulatorsFactory.html", "classSimulators_1_1SimulatorsFactory" ],
     [ "ISimulator", "classSimulators_1_1ISimulator.html", "classSimulators_1_1ISimulator" ],
     [ "ISimulatorObserver", "classSimulators_1_1ISimulatorObserver.html", "classSimulators_1_1ISimulatorObserver" ],
-    [ "IState", "classSimulators_1_1IState.html", "classSimulators_1_1IState" ],
     [ "SimulatorObserverProxy", "classSimulators_1_1SimulatorObserverProxy.html", "classSimulators_1_1SimulatorObserverProxy" ],
-    [ "SimulatorsFactory", "classSimulators_1_1SimulatorsFactory.html", "classSimulators_1_1SimulatorsFactory" ],
+    [ "IState", "classSimulators_1_1IState.html", "classSimulators_1_1IState" ],
     [ "SimulationType", "namespaceSimulators.html#a36be947268c6955a4a9f323ee6e7c789", [
       [ "kStatevector", "namespaceSimulators.html#a36be947268c6955a4a9f323ee6e7c789a445db308b141bb2618448cf7c4212359", null ],
       [ "kMatrixProductState", "namespaceSimulators.html#a36be947268c6955a4a9f323ee6e7c789a62f6eb80f4ebe16a28e8405dffac7fea", null ],

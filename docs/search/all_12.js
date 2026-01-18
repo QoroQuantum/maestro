@@ -1,15 +1,15 @@
 var searchData=
 [
   ['nb_5fmodule_0',['NB_MODULE',['../bindings_8cpp.html#ab288a98109e46a62a83c092930fcc3a8',1,'bindings.cpp']]],
-  ['needsentanglementfordistribution_1',['needsentanglementfordistribution',['../classCircuits_1_1IOperation.html#aee63f3f3814ebd70d36b4ec9782ac4df',1,'Circuits::IOperation::NeedsEntanglementForDistribution()'],['../classCircuits_1_1Circuit.html#aa8c405f3b778aa9b3f96a76251c42451',1,'Circuits::Circuit::NeedsEntanglementForDistribution()']]],
+  ['needsentanglementfordistribution_1',['NeedsEntanglementForDistribution',['../classCircuits_1_1Circuit.html#aa8c405f3b778aa9b3f96a76251c42451',1,'Circuits::Circuit::NeedsEntanglementForDistribution()'],['../classCircuits_1_1IOperation.html#aee63f3f3814ebd70d36b4ec9782ac4df',1,'Circuits::IOperation::NeedsEntanglementForDistribution()']]],
   ['network_2',['Network',['../namespaceNetwork.html',1,'']]],
   ['network_2eh_3',['Network.h',['../Network_8h.html',1,'']]],
-  ['networkclass_4',['networkclass',['../structSchedulers_1_1ExecuteJob.html#ac4ff23779dc0ee668b24b51e2546f3b9',1,'Schedulers::ExecuteJob::NetworkClass'],['../classSchedulers_1_1IScheduler.html#a776cb72715086de734da04def62d260a',1,'Schedulers::IScheduler::NetworkClass']]],
+  ['networkclass_4',['NetworkClass',['../structSchedulers_1_1ExecuteJob.html#ac4ff23779dc0ee668b24b51e2546f3b9',1,'Schedulers::ExecuteJob::NetworkClass'],['../classSchedulers_1_1IScheduler.html#a776cb72715086de734da04def62d260a',1,'Schedulers::IScheduler::NetworkClass']]],
   ['networkjob_2eh_5',['NetworkJob.h',['../NetworkJob_8h.html',1,'']]],
   ['networksim1_6',['networkSim1',['../structExpvalTestFixture.html#a00f6ce6f7a383ded78265ba82e3c3f3c',1,'ExpvalTestFixture']]],
   ['networktype_7',['NetworkType',['../namespaceNetwork.html#a33e9851296c0fe8a699eab9c27ec656e',1,'Network']]],
   ['nogate_8',['NoGate',['../classqasm_1_1CircToQasm.html#ad24e5ae07ef18a15cc4a9f4a4ef63206aab5dd5981ea8786754e3d9b563d0d374',1,'qasm::CircToQasm']]],
-  ['nooperation_9',['nooperation',['../classCircuits_1_1NoOperation.html#a99d8aa241dd7b3fc8971798c432ffc12',1,'Circuits::NoOperation::NoOperation()'],['../classCircuits_1_1NoOperation.html',1,'Circuits::NoOperation&lt; Time &gt;']]],
+  ['nooperation_9',['NoOperation',['../classCircuits_1_1NoOperation.html',1,'Circuits::NoOperation&lt; Time &gt;'],['../classCircuits_1_1NoOperation.html#a99d8aa241dd7b3fc8971798c432ffc12',1,'Circuits::NoOperation::NoOperation()']]],
   ['not_20accept_20pull_20requests_20for_20now_10',['Why we do not accept pull requests (for now)',['../md_CONTRIBUTING.html#autotoc_md20',1,'']]],
   ['notconnected_11',['NotConnected',['../classTensorNetworks_1_1TensorNode.html#ab89a1e7df7a2f23227bfe0b2a370ee4f',1,'TensorNetworks::TensorNode']]],
   ['notify_12',['Notify',['../classSimulators_1_1IState.html#a1ca2cd5fd5f4dc509775baf98d180807',1,'Simulators::IState']]],
@@ -18,9 +18,9 @@ var searchData=
   ['nrcbits_15',['nrCbits',['../classNetwork_1_1ExecuteJob.html#a7d271cd3365217023857ab3cffb90320',1,'Network::ExecuteJob']]],
   ['nrcircuitslimit_16',['nrCircuitsLimit',['../structExpvalTestFixture.html#ae96908baf6c2b0d2e801a046d00125ae',1,'ExpvalTestFixture']]],
   ['nrpaulilimit_17',['nrPauliLimit',['../structExpvalTestFixture.html#a32d15afcfa064f02723aff04ffaffefc',1,'ExpvalTestFixture']]],
-  ['nrqubits_18',['nrqubits',['../structTensorsTestFixture.html#af6960f7fda758d3336c257e0c6dd0ff9',1,'TensorsTestFixture::nrQubits'],['../structExpvalTestFixture.html#a10435be84b47de4d2f19bfd5d3355852',1,'ExpvalTestFixture::nrQubits'],['../classNetwork_1_1ExecuteJob.html#ac8466b75b0b50b36f887e528635bfaba',1,'Network::ExecuteJob::nrQubits']]],
+  ['nrqubits_18',['nrQubits',['../classNetwork_1_1ExecuteJob.html#ac8466b75b0b50b36f887e528635bfaba',1,'Network::ExecuteJob::nrQubits'],['../structExpvalTestFixture.html#a10435be84b47de4d2f19bfd5d3355852',1,'ExpvalTestFixture::nrQubits'],['../structTensorsTestFixture.html#af6960f7fda758d3336c257e0c6dd0ff9',1,'TensorsTestFixture::nrQubits']]],
   ['nrqubitsforest_19',['nrQubitsForest',['../structTensorsTestFixture.html#acb29bbbb6548180581721e192b7518a1',1,'TensorsTestFixture']]],
-  ['nrqubitsforrandomcirc_20',['nrqubitsforrandomcirc',['../structSimulatorsTestFixture.html#ac7ccf670cf0c1959c7c9396bba1c6a97',1,'SimulatorsTestFixture::nrQubitsForRandomCirc'],['../structCliffordSimTestFixture.html#a18e5fd561a786c27f8c446f288fab9d6',1,'CliffordSimTestFixture::nrQubitsForRandomCirc'],['../structCompositeSimulatorsTestFixture.html#a602516af1e5d5c47d1f7a1153aea4259',1,'CompositeSimulatorsTestFixture::nrQubitsForRandomCirc'],['../structMPSSimTestFixture.html#a7c502744998f3780edd09548d42db1b2',1,'MPSSimTestFixture::nrQubitsForRandomCirc'],['../structQasmTestFixture.html#ad94bf0cde204a53e62e7d0590d7e5f1f',1,'QasmTestFixture::nrQubitsForRandomCirc']]],
+  ['nrqubitsforrandomcirc_20',['nrQubitsForRandomCirc',['../structSimulatorsTestFixture.html#ac7ccf670cf0c1959c7c9396bba1c6a97',1,'SimulatorsTestFixture::nrQubitsForRandomCirc'],['../structCliffordSimTestFixture.html#a18e5fd561a786c27f8c446f288fab9d6',1,'CliffordSimTestFixture::nrQubitsForRandomCirc'],['../structCompositeSimulatorsTestFixture.html#a602516af1e5d5c47d1f7a1153aea4259',1,'CompositeSimulatorsTestFixture::nrQubitsForRandomCirc'],['../structMPSSimTestFixture.html#a7c502744998f3780edd09548d42db1b2',1,'MPSSimTestFixture::nrQubitsForRandomCirc'],['../structQasmTestFixture.html#ad94bf0cde204a53e62e7d0590d7e5f1f',1,'QasmTestFixture::nrQubitsForRandomCirc']]],
   ['nrresultcbits_21',['nrResultCbits',['../classNetwork_1_1ExecuteJob.html#a7887f73f34fc8661725d880e9f2832f8',1,'Network::ExecuteJob']]],
-  ['nrshots_22',['nrshots',['../structSchedulers_1_1ExecuteJob.html#a3be8af0d3f5c002f18220c98ecc881c3',1,'Schedulers::ExecuteJob::nrShots'],['../structMPSSimTestFixture.html#ae52b49c4ff0f9d452172e923e9fb2eaf',1,'MPSSimTestFixture::nrShots'],['../structTensorsTestFixture.html#a282ff761a42a30a524e1c2643aa8f277',1,'TensorsTestFixture::nrShots']]]
+  ['nrshots_22',['nrShots',['../structSchedulers_1_1ExecuteJob.html#a3be8af0d3f5c002f18220c98ecc881c3',1,'Schedulers::ExecuteJob::nrShots'],['../structMPSSimTestFixture.html#ae52b49c4ff0f9d452172e923e9fb2eaf',1,'MPSSimTestFixture::nrShots'],['../structTensorsTestFixture.html#a282ff761a42a30a524e1c2643aa8f277',1,'TensorsTestFixture::nrShots']]]
 ];
