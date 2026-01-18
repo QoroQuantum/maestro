@@ -20,9 +20,9 @@ var namespaces_dup =
     [ "Simulators", "namespaceSimulators.html", "namespaceSimulators" ],
     [ "TensorNetworks", "namespaceTensorNetworks.html", "namespaceTensorNetworks" ],
     [ "Types", "namespaceTypes.html", [
-      [ "qubit_t", "namespaceTypes.html#a2ca23f598cf9ab8758306254f7988683", null ],
-      [ "qubits_vector", "namespaceTypes.html#abe52ebabee63ccf170502ef072c88a43", null ],
-      [ "time_type", "namespaceTypes.html#a1c66ec65ec1aae1752008c9184bd4147", null ]
+      [ "qubit_t", "namespaceTypes.html#afda27b666a29ff2e858b10ee1a7e4b73", null ],
+      [ "qubits_vector", "namespaceTypes.html#a5080ae0d6da5867bab84fb439990b1cb", null ],
+      [ "time_type", "namespaceTypes.html#a52fa93e2b64e3b6dd139877efb1f536e", null ]
     ] ],
     [ "Utils", "namespaceUtils.html", "namespaceUtils" ]
 ];

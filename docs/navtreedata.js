@@ -114,7 +114,7 @@ var NAVTREE =
       [ "File List", "files.html", "files_dup" ],
       [ "File Members", "globals.html", [
         [ "All", "globals.html", "globals_dup" ],
-        [ "Functions", "globals_func.html", "globals_func" ],
+        [ "Functions", "globals_func.html", null ],
         [ "Variables", "globals_vars.html", null ],
         [ "Macros", "globals_defs.html", null ]
       ] ]
@@ -125,23 +125,23 @@ var NAVTREE =
 var NAVTREEINDEX =
 [
 "AerSimulator_8h.html",
-"NetworkJob_8h.html",
-"circtests_8cpp.html#aecbc89586053649973cc4bacef459c21",
-"classCircuits_1_1Circuit.html#a78a59b649b58e6c62c34a48aabc5eaf0",
-"classCircuits_1_1HadamardGate.html#ab5fa72f5c949230d72a9bb06a5970c10",
-"classCircuits_1_1Reset.html#a11d710f547e046b6c3c280720a65f94d",
-"classCircuits_1_1ZGate.html#abf44952ce8fb648c3b23a053420a4803",
-"classNetwork_1_1IHost.html#a54ad03b909ab2d3a3b362a63ebe3001c",
-"classNetwork_1_1SimpleDisconnectedNetwork.html#a06785803127fbf6c85d43dbc61d2f603",
-"classSchedulers_1_1IScheduler.html#af97ae79035b22d288b4bc00c2e854a1e",
-"classTensorNetworks_1_1BaseContractor.html",
-"classUtils_1_1LogFile.html#a36881031ecd4e570982a4d15f2327945",
-"classqasm_1_1CircToQasm.html#ad24e5ae07ef18a15cc4a9f4a4ef63206a2ae463c89afc1951b7fb2919ab8fa25a",
-"functions_func.html",
-"namespaceSimulators.html#a36be947268c6955a4a9f323ee6e7c789",
-"structSimulatorsTestFixture.html#ab26e33da112ec94eaf2cb2e0de055ace",
-"tensorstests_8cpp.html#a65fb7b4d50f74f4aaf80f13fd17bc2e7"
+"Optimiser_8h.html#a79ed78b0be832d780dcb992709afe339",
+"classCircuits_1_1CXGate.html#a6d769bb6c7b91ca0b4075498dc9dbd68",
+"classCircuits_1_1CircuitFactory.html#ae9968ddf152c29ceb2f6eb64d903c428",
+"classCircuits_1_1MeasurementOperation.html#a74611a2aa02322edad61b6b64668de40",
+"classCircuits_1_1SxGate.html#a8206b11023c1da2e64bab6ba62885cf2",
+"classMaestroLibrary.html#aac9d2db02fb450293e44babeb0324154",
+"classNetwork_1_1INetwork.html#aa7e4e730dac51e0ae031528ecdfe7378",
+"classNetwork_1_1SimpleDisconnectedNetwork.html#ac5c495840beeaa043b4b7ec85cd18bb7",
+"classSimulators_1_1ISimulator.html#aae1ce2b96515040f4cccf48748a8f53a",
+"classTensorNetworks_1_1TensorNetwork.html#a59e340f5bd4558295e2715a3b442b5f5",
+"classUtils_1_1Tensor.html#ac33402a4727a4faf39284348a2e7bf3d",
+"classqasm_1_1QasmToCirc.html#aeebe68724576cc74c979e95d0f42fe90",
+"namespaceCircuits.html#a010951f102cce086ec282aa168b33f03aa6d83090154255f4162e51c8ddcea681",
+"structSchedulers_1_1ExecuteCircuit.html#a9085555d7717a79c238bc0833ffd8c31",
+"structqasm_1_1QoperationStatement.html#a9a5417779b35cbbdef47e9cb4efa4af4a242027fb8fbdb45d3c3035d43c63db5f"
 ];
 
-var SYNCONMSG = 'click to disable panel synchronisation';
-var SYNCOFFMSG = 'click to enable panel synchronisation';
+var SYNCONMSG = 'click to disable panel synchronization';
+var SYNCOFFMSG = 'click to enable panel synchronization';
+var LISTOFALLMEMBERS = 'List of all members';

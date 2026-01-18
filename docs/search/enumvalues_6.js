@@ -34,7 +34,7 @@ var searchData=
   ['knetqasmnetwork_31',['kNetqasmNetwork',['../namespaceNetwork.html#a33e9851296c0fe8a699eab9c27ec656ea8f8a4b799e48d18f6ee927c58baf3f77',1,'Network']]],
   ['knoentanglementqubits_32',['kNoEntanglementQubits',['../namespaceNetwork.html#ac346ddd099c23b278866f1367743cce1a55ee0c958b919d59d258667de3af49a8',1,'Network']]],
   ['knoentanglementqubitsparallel_33',['kNoEntanglementQubitsParallel',['../namespaceNetwork.html#ac346ddd099c23b278866f1367743cce1ab90c9b48118b61527e8d21a4bb699c4b',1,'Network']]],
-  ['knone_34',['knone',['../namespaceCircuits.html#a010951f102cce086ec282aa168b33f03a35c3ace1970663a16e5c65baa5941b13',1,'Circuits::kNone'],['../namespaceGraphs.html#acdb58859f8c4185c1d9ef818cbb04a1ca35c3ace1970663a16e5c65baa5941b13',1,'Graphs::kNone']]],
+  ['knone_34',['kNone',['../namespaceCircuits.html#a010951f102cce086ec282aa168b33f03a35c3ace1970663a16e5c65baa5941b13',1,'Circuits::kNone'],['../namespaceGraphs.html#acdb58859f8c4185c1d9ef818cbb04a1ca35c3ace1970663a16e5c65baa5941b13',1,'Graphs::kNone']]],
   ['knoop_35',['kNoOp',['../namespaceCircuits.html#a05ed1a99c745705523e65a5cb0e99d58a2004a48769badf1bce60018669972647',1,'Circuits']]],
   ['koptimal_36',['kOptimal',['../namespaceGraphs.html#acdb58859f8c4185c1d9ef818cbb04a1ca863253016d36c5dbd9e9f9302b81c5dc',1,'Graphs']]],
   ['kother_37',['kOther',['../namespaceSimulators.html#a36be947268c6955a4a9f323ee6e7c789a341b8a8f03cf33821c46aa5c3aad4b7a',1,'Simulators']]],

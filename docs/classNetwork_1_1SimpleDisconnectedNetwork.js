@@ -1,7 +1,7 @@
 var classNetwork_1_1SimpleDisconnectedNetwork =
 [
     [ "BaseClass", "classNetwork_1_1SimpleDisconnectedNetwork.html#ada086141239589722e9b4753ed4ed73d", null ],
-    [ "ExecuteResults", "classNetwork_1_1SimpleDisconnectedNetwork.html#a6f33b29320d8f761ac1f35878a19b7aa", null ],
+    [ "ExecuteResults", "classNetwork_1_1SimpleDisconnectedNetwork.html#a1537dfd62f404ccfbfd5cebf9e87b5ae", null ],
     [ "SimpleDisconnectedNetwork", "classNetwork_1_1SimpleDisconnectedNetwork.html#af23afa210e1774159a5517151a6ed410", null ],
     [ "AddOptimizationSimulator", "classNetwork_1_1SimpleDisconnectedNetwork.html#a2424468039a56fa0b6d96604db08f828", null ],
     [ "AreClassicalBitsOnSameHost", "classNetwork_1_1SimpleDisconnectedNetwork.html#afd15438f447aea77b9fb2a548fc822a8", null ],
