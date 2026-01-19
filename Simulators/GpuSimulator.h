@@ -563,7 +563,7 @@ class GpuSimulator : public GpuState {
       mps->ApplyCSX(static_cast<unsigned int>(q1),
                     static_cast<unsigned int>(q3));
     } else if (GetSimulationType() == SimulationType::kTensorNetwork) {
-        tn->ApplyCCX(qubit0, qubit1, qubit2);
+      tn->ApplyCCX(qubit0, qubit1, qubit2);
     }
 
     NotifyObservers({qubit2, qubit1, qubit0});

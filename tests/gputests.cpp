@@ -21,7 +21,7 @@ namespace bdata = boost::unit_test::data;
 #undef min
 #undef max
 
-#include <numeric>	
+#include <numeric>
 #include <algorithm>
 #include <array>
 #include <random>
@@ -29,7 +29,7 @@ namespace bdata = boost::unit_test::data;
 #define _USE_MATH_DEFINES
 #include <math.h>
 
-#include "../Simulators/Factory.h" 
+#include "../Simulators/Factory.h"
 
 #include "../Circuit/Circuit.h"
 #include "../Circuit/Conditional.h"
@@ -44,7 +44,8 @@ extern bool checkClose(std::complex<double> a, std::complex<double> b,
 
 std::shared_ptr<Circuits::Circuit<>> GenerateCircuit(int nrGates,
                                                      int nrQubits) {
-  std::shared_ptr<Circuits::Circuit<>> randomCirc = std::make_shared<Circuits::Circuit<>>();
+  std::shared_ptr<Circuits::Circuit<>> randomCirc =
+      std::make_shared<Circuits::Circuit<>>();
   std::random_device rd;
   std::mt19937 g(rd());
 
@@ -148,7 +149,6 @@ BOOST_AUTO_TEST_CASE(simple_test) {
   }
 }
 
-
 constexpr std::array numGates{5, 10, 20, 40};
 
 BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
@@ -199,7 +199,8 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
       circuit->Execute(gpusimTN, state);
     }
 
-    if (gpusimStatevector == nullptr && gpusimMPS == nullptr && gpusimTN == nullptr) {
+    if (gpusimStatevector == nullptr && gpusimMPS == nullptr &&
+        gpusimTN == nullptr) {
       BOOST_TEST_MESSAGE(
           "Could not create any gpu simulator. Please ensure the proper gpu "
           "library is available.");
@@ -207,7 +208,9 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
     }
 
     for (int q = 0; q < nrQubits; ++q) {
-      auto probStatevector = gpusimStatevector != nullptr ? gpusimStatevector->Probability(q) : 0.0;
+      auto probStatevector = gpusimStatevector != nullptr
+                                 ? gpusimStatevector->Probability(q)
+                                 : 0.0;
 
       auto probMPS = gpusimMPS != nullptr ? gpusimMPS->Probability(q) : 0.0;
       auto probTN = gpusimTN != nullptr ? gpusimTN->Probability(q) : 0.0;
@@ -225,16 +228,14 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
             ? gpusimMPS->SampleCounts(qubits, nrShots)
             : std::unordered_map<Types::qubit_t, Types::qubit_t>();
     auto resultsTN = gpusimTN != nullptr
-            ? gpusimTN->SampleCounts(qubits, nrShots)
-            : std::unordered_map<Types::qubit_t, Types::qubit_t>();
+                         ? gpusimTN->SampleCounts(qubits, nrShots)
+                         : std::unordered_map<Types::qubit_t, Types::qubit_t>();
 
     for (const auto& [outcome, count] : resultsStatevector) {
-
-      if (count < nrShots * 0.03)
-        continue; // skip very rare outcomes
+      if (count < nrShots * 0.03) continue;  // skip very rare outcomes
 
       auto itMPS = resultsMPS.find(outcome);
-      
+
       if (itMPS != resultsMPS.end()) {
         BOOST_CHECK_PREDICATE(checkClose,
                               (static_cast<double>(count) /
@@ -244,11 +245,10 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
         BOOST_TEST(false);
 
       auto itTN = resultsTN.find(outcome);
- 
+
       if (itTN != resultsTN.end()) {
-        BOOST_CHECK_PREDICATE(
-            checkClose,
-            (static_cast<double>(count) /
+        BOOST_CHECK_PREDICATE(checkClose,
+                              (static_cast<double>(count) /
                                nrShots)(static_cast<double>(itMPS->second) /
                                         nrShots)(precisionSamples));
       } else
