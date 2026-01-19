@@ -127,7 +127,7 @@ class GpuLibTNSim {
                  double *imaginary) const {
     if (obj)
       return lib->TNAmplitude(obj, numFixedValues, fixedValues, real,
-                               imaginary);
+                              imaginary);
 
     return false;
   }
@@ -189,7 +189,7 @@ class GpuLibTNSim {
   }
 
   std::unique_ptr<GpuLibTNSim> Clone() const {
-    //if (obj) return std::make_unique<GpuLibTNSim>(lib, lib->TNClone(obj));
+    // if (obj) return std::make_unique<GpuLibTNSim>(lib, lib->TNClone(obj));
 
     return nullptr;
   }
@@ -197,7 +197,7 @@ class GpuLibTNSim {
   double ExpectationValue(const std::string &pauliString) const {
     if (obj)
       return lib->TNExpectationValue(obj, pauliString.c_str(),
-                                      pauliString.length());
+                                     pauliString.length());
 
     return 0.0;
   }
@@ -373,13 +373,13 @@ class GpuLibTNSim {
                double theta, double phi, double lambda, double gamma) {
     if (obj)
       return lib->TNApplyCU(obj, controlQubit, targetQubit, theta, phi, lambda,
-                             gamma);
+                            gamma);
 
     return false;
   }
 
   bool ApplyCCX(unsigned int controlQubit1, unsigned int controlQubit2,
-                 unsigned int targetQubit) {
+                unsigned int targetQubit) {
     if (obj)
       return lib->TNApplyCCX(obj, controlQubit1, controlQubit2, targetQubit);
     return false;
@@ -387,8 +387,7 @@ class GpuLibTNSim {
 
   bool ApplyCSwap(unsigned int controlQubit, unsigned int qubit1,
                   unsigned int qubit2) {
-    if (obj)
-      return lib->TNApplyCSwap(obj, controlQubit, qubit1, qubit2);
+    if (obj) return lib->TNApplyCSwap(obj, controlQubit, qubit1, qubit2);
     return false;
   }
 

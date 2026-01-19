@@ -113,7 +113,8 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
     case SimulatorType::kGpuSim:
       if (gpuLibrary && gpuLibrary->IsValid() &&
           (m == SimulationType::kStatevector ||
-           m == SimulationType::kMatrixProductState || m == SimulationType::kTensorNetwork)) {
+           m == SimulationType::kMatrixProductState ||
+           m == SimulationType::kTensorNetwork)) {
         auto sim = std::make_shared<Private::GpuSimulator>();
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");
@@ -173,7 +174,8 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
     case SimulatorType::kGpuSim:
       if (gpuLibrary && gpuLibrary->IsValid() &&
           (m == SimulationType::kStatevector ||
-           m == SimulationType::kMatrixProductState || m == SimulationType::kTensorNetwork)) {
+           m == SimulationType::kMatrixProductState ||
+           m == SimulationType::kTensorNetwork)) {
         auto sim = std::make_unique<Private::GpuSimulator>();
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");

@@ -18,17 +18,18 @@
 namespace nb = nanobind;
 
 NB_MODULE(maestro, m) {
-    m.doc() = "Python bindings for Maestro Quantum Simulator";
+  m.doc() = "Python bindings for Maestro Quantum Simulator";
 
-    // Bind SimulatorType enum
-    nb::enum_<Simulators::SimulatorType>(m, "SimulatorType")
-        .value("QCSim", Simulators::SimulatorType::kQCSim)
+  // Bind SimulatorType enum
+  nb::enum_<Simulators::SimulatorType>(m, "SimulatorType")
+      .value("QCSim", Simulators::SimulatorType::kQCSim)
 #ifndef NO_QISKIT_AER
-        .value("QiskitAer", Simulators::SimulatorType::kQiskitAer)
-        .value("CompositeQiskitAer", Simulators::SimulatorType::kCompositeQiskitAer)
+      .value("QiskitAer", Simulators::SimulatorType::kQiskitAer)
+      .value("CompositeQiskitAer",
+             Simulators::SimulatorType::kCompositeQiskitAer)
 #endif
-        .value("CompositeQCSim", Simulators::SimulatorType::kCompositeQCSim)
-        .export_values();
+      .value("CompositeQCSim", Simulators::SimulatorType::kCompositeQCSim)
+      .export_values();
 
   // Bind SimulationType enum
   nb::enum_<Simulators::SimulationType>(m, "SimulationType")

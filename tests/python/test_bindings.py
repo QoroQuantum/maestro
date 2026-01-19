@@ -48,7 +48,7 @@ class TestMaestroClass:
     def test_multiple_simulators(self):
         """Test creating multiple simulators"""
         m = maestro.Maestro()
-        
+
         sim1 = m.CreateSimulator(
             maestro.SimulatorType.QCSim,
             maestro.SimulationType.Statevector
@@ -57,11 +57,11 @@ class TestMaestroClass:
             maestro.SimulatorType.QCSim,
             maestro.SimulationType.MatrixProductState
         )
-        
+
         assert sim1 > 0
         assert sim2 > 0
         assert sim1 != sim2
-        
+
         m.DestroySimulator(sim1)
         m.DestroySimulator(sim2)
 
@@ -85,7 +85,7 @@ class TestQasmParser:
         cx q[0], q[1];
         measure q -> c;
         """
-        
+
         parser = maestro.QasmToCirc()
         circuit = parser.ParseAndTranslate(qasm)
         assert circuit is not None
@@ -99,7 +99,7 @@ class TestQasmParser:
         creg c[3];
         h q[0];
         """
-        
+
         parser = maestro.QasmToCirc()
         circuit = parser.ParseAndTranslate(qasm)
         num_qubits = circuit.GetMaxQubitIndex() + 1
@@ -117,11 +117,11 @@ class TestSimulatorOperations:
             maestro.SimulationType.Statevector
         )
         sim = m.GetSimulator(sim_handle)
-        
+
         sim.AllocateQubits(2)
         sim.Initialize()
         assert sim.GetNumberOfQubits() == 2
-        
+
         m.DestroySimulator(sim_handle)
 
     def test_single_qubit_gates(self):
@@ -132,16 +132,16 @@ class TestSimulatorOperations:
             maestro.SimulationType.Statevector
         )
         sim = m.GetSimulator(sim_handle)
-        
+
         sim.AllocateQubits(1)
         sim.Initialize()
-        
+
         # These should not raise exceptions
         sim.ApplyH(0)
         sim.ApplyX(0)
         sim.ApplyY(0)
         sim.ApplyZ(0)
-        
+
         m.DestroySimulator(sim_handle)
 
     def test_two_qubit_gates(self):
@@ -152,15 +152,15 @@ class TestSimulatorOperations:
             maestro.SimulationType.Statevector
         )
         sim = m.GetSimulator(sim_handle)
-        
+
         sim.AllocateQubits(2)
         sim.Initialize()
-        
+
         # These should not raise exceptions
         sim.ApplyCX(0, 1)
         sim.ApplyCZ(0, 1)
         sim.ApplySwap(0, 1)
-        
+
         m.DestroySimulator(sim_handle)
 
     def test_measurement(self):
@@ -171,18 +171,18 @@ class TestSimulatorOperations:
             maestro.SimulationType.Statevector
         )
         sim = m.GetSimulator(sim_handle)
-        
+
         sim.AllocateQubits(2)
         sim.Initialize()
         sim.ApplyH(0)
         sim.ApplyCX(0, 1)
-        
+
         results = sim.SampleCounts([0, 1], 1000)
         assert isinstance(results, dict)
         assert len(results) > 0
         total_shots = sum(results.values())
         assert total_shots == 1000
-        
+
         m.DestroySimulator(sim_handle)
 
     def test_bell_state_distribution(self):
@@ -193,20 +193,20 @@ class TestSimulatorOperations:
             maestro.SimulationType.Statevector
         )
         sim = m.GetSimulator(sim_handle)
-        
+
         sim.AllocateQubits(2)
         sim.Initialize()
         sim.ApplyH(0)
         sim.ApplyCX(0, 1)
-        
+
         results = sim.SampleCounts([0, 1], 10000)
-        
+
         # Bell state should produce |00> and |11> with ~50% each
         # Allow for statistical variation
         assert 0 in results or 3 in results  # |00> or |11>
         total = sum(results.values())
         assert total == 10000
-        
+
         m.DestroySimulator(sim_handle)
 
 
@@ -225,7 +225,7 @@ class TestSimpleExecute:
         measure q[0] -> c[0];
         measure q[1] -> c[1];
         """
-        
+
         result = maestro.simple_execute(qasm_bell)
         assert result is not None
         assert 'counts' in result
@@ -244,7 +244,7 @@ class TestSimpleExecute:
         cx q[0], q[1];
         measure q -> c;
         """
-        
+
         result = maestro.simple_execute(qasm_bell, shots=500)
         total = sum(result['counts'].values())
         assert total == 500
@@ -260,7 +260,7 @@ class TestSimpleExecute:
         cx q[0], q[1];
         measure q -> c;
         """
-        
+
         result = maestro.simple_execute(
             qasm_bell,
             simulator_type=maestro.SimulatorType.QCSim,
@@ -283,7 +283,7 @@ class TestSimpleExecute:
         cx q[1], q[2];
         measure q -> c;
         """
-        
+
         result = maestro.simple_execute(qasm_ghz, shots=1000)
         assert result is not None
         assert 'counts' in result
@@ -303,10 +303,10 @@ class TestSimpleExecute:
         cx q[2], q[3];
         measure q -> c;
         """
-        
+
         result = maestro.simple_execute(qasm_4q, shots=1000)
         assert result is not None
-        
+
         # Should produce mostly |0000> and |1111>
         counts = result['counts']
         dominant_states = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:2]
@@ -326,10 +326,10 @@ class TestComplexCircuits:
         h q[0];
         measure q -> c;
         """
-        
+
         result = maestro.simple_execute(qasm, shots=10000)
         counts = result['counts']
-        
+
         # Should be roughly 50/50 between |0> and |1>
         # Allow for statistical variation (40-60%)
         total = sum(counts.values())
@@ -345,7 +345,7 @@ class TestComplexCircuits:
         rx(1.5708) q[0];
         measure q -> c;
         """
-        
+
         result = maestro.simple_execute(qasm, shots=1000)
         assert result is not None
         assert 'counts' in result
