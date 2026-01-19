@@ -552,11 +552,10 @@ class TensorNetwork {
       // need to change, index 0 and 1 remain the same, the input ones and do
       // not change order (so also the connected nodes are not affected)
 
-      lastTensor->tensor = std::make_shared<Utils::Tensor<>>(
-          std::move(lastTensor->tensor->Contract(*(tensorNode->tensor),
-                                                 lastTensorIndexForQubit, 0,
-                                                 enableMultithreading)));
-
+      lastTensor->tensor =
+          std::make_shared<Utils::Tensor<>>(lastTensor->tensor->Contract(
+              *(tensorNode->tensor), lastTensorIndexForQubit, 0,
+              enableMultithreading));
       // TODO: Instead of Shuffle try by swapping qubits and indices... but also
       // take care of connections if on the other qubit there is already a gate
       // added

@@ -1173,8 +1173,12 @@ class IndividualSimulator : public ISimulator {
     else {
       // qiskit aer - convert 'simulator' to qiskit aer simulator and access
       // 'savedAmplitudes' (assumes destructive saving of the state)
+#ifndef NO_QISKIT_AER
       AerSimulator *aer = dynamic_cast<AerSimulator *>(simulator.get());
       prob = 1 - aer->uniformZeroOne(aer->rng);
+#else
+      return 0;
+#endif
     }
 #endif
 
@@ -1198,10 +1202,16 @@ class IndividualSimulator : public ISimulator {
     else {
       // qiskit aer - convert 'simulator' to qiskit aer simulator and access
       // 'savedAmplitudes' (assumes destructive saving of the state)
+#ifndef NO_QISKIT_AER
       AerSimulator *aer = dynamic_cast<AerSimulator *>(simulator.get());
-
-      alias =
-          std::unique_ptr<Utils::Alias>(new Utils::Alias(aer->savedAmplitudes));
+      if (aer) {
+        alias = std::unique_ptr<Utils::Alias>(
+            new Utils::Alias(aer->savedAmplitudes));
+      }
+#else
+      // If we are here, it means it's not QCSim, but Qiskit is disabled.
+      throw std::runtime_error("Qiskit Aer is disabled in this build.");
+#endif
     }
 #endif
   }

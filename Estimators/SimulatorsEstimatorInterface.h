@@ -33,6 +33,8 @@ class SimulatorsEstimatorInterface {
  public:
   virtual ~SimulatorsEstimatorInterface() = default;
 
+  virtual bool IsInitialized() const = 0;
+
   virtual std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(
       const std::vector<std::pair<Simulators::SimulatorType,
                                   Simulators::SimulationType>> &simulatorTypes,
