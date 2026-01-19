@@ -40,6 +40,8 @@ class EstimatorInterface {
   virtual double EstimateExpectationValuesTime(
       Simulators::SimulatorType type, Simulators::SimulationType method,
       const std::vector<std::string> &paulis) = 0;
+
+  virtual bool IsInitialized() const = 0;
 };
 }  // namespace Estimators
 

@@ -364,6 +364,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (!controller || !circuit) return {};
 
     distCirc = controller->DistributeCircuit(BaseClass::getptr(), circuit);
+    if (!distCirc) 
+        return {};
 
 #ifdef _DEBUG
     for (auto q : distCirc->AffectedQubits()) {
@@ -376,7 +378,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     }
 #endif
 
-    if (!simulator || distCirc->empty()) return {};
+    if (!simulator) return {};
 
     auto simType = simulator->GetType();
     if (distCirc->HasOpsAfterMeasurements() &&
@@ -421,7 +423,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     // do that only if the optimization for simulator is on and the estimator is
     // available, ortherwise an 'optimal' simulator won't be created
-    if (optimizeSimulator && simulatorsEstimator) {
+    if (optimizeSimulator && simulatorsEstimator && simulatorsEstimator->IsInitialized()) {
       simulator->Clear();
       GetState().Clear();
     }
@@ -456,7 +458,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       // cloned in the threads, otherwise a new one will be created in the
       // threads
       if (!optimizeSimulator ||
-          !simulatorsEstimator)  // otherwise it was already cleared
+          !simulatorsEstimator || !simulatorsEstimator->IsInitialized())  // otherwise it was already cleared
       {
         simulator->Clear();
         GetState().Clear();
@@ -509,8 +511,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         job->executedGates = executed;
       } else {
         if (simulator && method == saveMethod && simType == saveSimType) {
+          // use the already created simulator
           optSim = simulator;
           job->optSim = optSim;
+          job->executedGates.resize(distCirc->size(), false);  // no gates executed yet
           simulator = nullptr;
         }
       }
@@ -560,7 +564,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         nrQubits, nrCbits, true);
     if (nrCbits == 0) nrCbits = nrQubits;
 
-    if (!simulator || distCirc->empty()) return {};
+    if (!simulator || !distCirc) return {};
 
     auto simType = simulator->GetType();
 
@@ -1721,7 +1725,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       bool dontRunCircuitStart = false) const override {
     if (!optimizeSimulator) return nullptr;
 
-    if (!simulatorsEstimator && simulatorsForOptimizations.size() != 1)
+    if ((!simulatorsEstimator || !simulatorsEstimator->IsInitialized()) && simulatorsForOptimizations.size() != 1)
       return nullptr;
 
     // when multithreading is set to true it means it needs a multithreaded
@@ -1819,6 +1823,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         simulatorTypes.emplace_back(
             Simulators::SimulatorType::kGpuSim,
             Simulators::SimulationType::kMatrixProductState);
+      if (OptimizationSimulatorExists(Simulators::SimulatorType::kGpuSim,
+              Simulators::SimulationType::kTensorNetwork))
+        simulatorTypes.emplace_back(Simulators::SimulatorType::kGpuSim,
+            Simulators::SimulationType::kTensorNetwork);
     }
 #endif
 

@@ -14,7 +14,7 @@
 #ifndef _CIRCQASM_H_
 #define _CIRCQASM_H_
 
-#include "Circuit/Circuit.h"
+#include "../Circuit/Circuit.h"
 
 namespace qasm {
 
@@ -321,6 +321,8 @@ class CircToQasm {
       case Circuits::QuantumGateType::kCCXGateType:
         throw std::runtime_error("Not supported!");
         break;
+      case Circuits::QuantumGateType::kNone:
+        break;
     }
 
     return qasm;
@@ -610,6 +612,8 @@ class CircToQasm {
             [[fallthrough]];
           case Circuits::QuantumGateType::kCCXGateType:
             throw std::runtime_error("Not supported!");
+            break;
+          case Circuits::QuantumGateType::kNone:
             break;
         }
       }

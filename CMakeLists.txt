@@ -12,6 +12,8 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-array-bounds")
 set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+add_definitions( -D_FAST_TESTS )
+
 # Qiskit Aer is optional - disabled by default for easier builds
 # Enable only if AER_INCLUDE_DIR is explicitly set
 set(QAER False)
@@ -35,41 +37,10 @@ endif()
 # Include FetchContent for automatic dependency management
 include(FetchContent)
 
-# Helper function to find FFTW3
-function(find_fftw3)
-    if (NOT DEFINED FFTW3_DIR)
-        SET( FFTW3_DIR "$ENV{FFTW3_DIR}" PARENT_SCOPE)
-        IF( NOT FFTW3_DIR )
-            # Try to find FFTW3 using pkg-config
-            find_package(PkgConfig QUIET)
-            if(PkgConfig_FOUND)
-                pkg_check_modules(FFTW3 QUIET fftw3)
-                if(FFTW3_FOUND)
-                    get_filename_component(FFTW3_DIR "${FFTW3_INCLUDE_DIRS}" DIRECTORY)
-                    set(FFTW3_DIR ${FFTW3_DIR} PARENT_SCOPE)
-                endif()
-            endif()
-            
-            # If still not found, try common locations
-            # Note: QCSim expects FFTW3_DIR to point to the include directory, not the root
-            if( NOT FFTW3_DIR )
-                if(EXISTS "/usr/include/fftw3.h")
-                    set(FFTW3_DIR "/usr/include" PARENT_SCOPE)
-                elseif(EXISTS "/usr/local/include/fftw3.h")
-                    set(FFTW3_DIR "/usr/local/include" PARENT_SCOPE)
-                elseif(EXISTS "/opt/homebrew/include/fftw3.h")
-                    set(FFTW3_DIR "/opt/homebrew/include" PARENT_SCOPE)
-                endif()
-            endif()
-            
-            if( NOT FFTW3_DIR )
-                MESSAGE( WARNING "FFTW3 not found. QCSim requires FFTW3. Please install libfftw3-dev (Ubuntu/Debian) or fftw (macOS) and set FFTW3_DIR environment variable if needed." )
-            else()
-                message(STATUS "Found FFTW3 at: ${FFTW3_DIR}")
-            endif()
-        ENDIF()
-    endif()
-endfunction()
+set(COMPILE_TESTS True)
+if (NOT "$ENV{NO_TESTS}" STREQUAL "")
+	set(COMPILE_TESTS False)
+endif()
 
 # Eigen 5 (header-only, can be fetched automatically)
 if (NOT DEFINED EIGEN5_INCLUDE_DIR)
@@ -92,30 +63,6 @@ ENDIF()
 if (NOT DEFINED QCSIM_INCLUDE_DIR)
     SET( QCSIM_INCLUDE_DIR "$ENV{QCSIM_INCLUDE_DIR}" )
     IF( NOT QCSIM_INCLUDE_DIR )
-        # QCSim requires FFTW3 - find it first
-        find_fftw3()
-        
-        # Set FFTW3_DIR and library paths for QCSim's CMake
-        if( FFTW3_DIR )
-            set(ENV{FFTW3_DIR} ${FFTW3_DIR})
-            # QCSim may need the library directory path
-            # Try to find the actual library location
-            if(EXISTS "${FFTW3_DIR}/lib/x86_64-linux-gnu/libfftw3.a")
-                set(ENV{FFTW3_LIB_DIR} "${FFTW3_DIR}/lib/x86_64-linux-gnu")
-                # Also set CMAKE variables that QCSim might use
-                set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};${FFTW3_DIR}" CACHE STRING "" FORCE)
-                link_directories("${FFTW3_DIR}/lib/x86_64-linux-gnu")
-            elseif(EXISTS "${FFTW3_DIR}/lib/libfftw3.a")
-                set(ENV{FFTW3_LIB_DIR} "${FFTW3_DIR}/lib")
-                set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};${FFTW3_DIR}" CACHE STRING "" FORCE)
-                link_directories("${FFTW3_DIR}/lib")
-            elseif(EXISTS "${FFTW3_DIR}/lib64/libfftw3.a")
-                set(ENV{FFTW3_LIB_DIR} "${FFTW3_DIR}/lib64")
-                set(CMAKE_PREFIX_PATH "${CMAKE_PREFIX_PATH};${FFTW3_DIR}" CACHE STRING "" FORCE)
-                link_directories("${FFTW3_DIR}/lib64")
-            endif()
-        endif()
-        
         # Auto-fetch QCSim if not provided
         message(STATUS "QCSIM_INCLUDE_DIR not set, fetching QCSim...")
         FetchContent_Declare(
@@ -123,13 +70,13 @@ if (NOT DEFINED QCSIM_INCLUDE_DIR)
             GIT_REPOSITORY https://github.com/aromanro/QCSim.git
             GIT_TAG master
         )
-        
+
         # Just populate the source (don't build it with add_subdirectory)
         FetchContent_GetProperties(qcsim)
         if(NOT qcsim_POPULATED)
             FetchContent_Populate(qcsim)
         endif()
-        
+
         set(QCSIM_INCLUDE_DIR ${qcsim_SOURCE_DIR}/QCSim)
         message(STATUS "QCSim fetched to: ${QCSIM_INCLUDE_DIR}")
     ENDIF()
@@ -167,6 +114,18 @@ if (QAER)
 endif()
 
 # add here common sources
+
+set(TESTSSRC tests/aertests.cpp
+	tests/circtests.cpp
+	tests/cliffordtests.cpp
+	tests/compsimtests.cpp
+	tests/expvals.cpp
+	tests/gputests.cpp
+	tests/mpssimtests.cpp
+	tests/qasm.cpp
+	tests/qcsimtests.cpp
+	tests/tensorstests.cpp
+	tests/tests.cpp)
 
 set(MAESTROSRC maestrolib/Interface.cpp)
 if(WIN32)
@@ -274,6 +233,10 @@ endif()
 
 LINK_LIBRARIES()
 
+if (QAER AND COMPILE_TESTS)
+	add_executable(tests ${TESTSSRC})
+endif()
+
 add_executable(maestroexe ${MAESTROEXESRC})
 add_library(maestro SHARED ${MAESTROSRC})
 
@@ -293,6 +256,13 @@ install(TARGETS maestroexe DESTINATION bin)
 
 if(OpenMP_CXX_FOUND)
     message("Setting OpenMP")
+	
+	if (QAER AND COMPILE_TESTS)
+		target_link_libraries(tests PUBLIC OpenMP::OpenMP_CXX)
+		target_link_libraries(tests PRIVATE ${OpenMP_CXX_FLAGS})
+		target_compile_options(tests PRIVATE ${OpenMP_CXX_FLAGS})
+    endif()
+	
     if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         find_program(BREW_CMD brew)
         if(BREW_CMD)
@@ -320,20 +290,36 @@ endif()
 
 IF(QAER AND BLAS_FOUND)
     message("Setting linking blas")
+	
+	if (QAER AND COMPILE_TESTS)
+		target_link_libraries(tests PUBLIC ${BLAS_LIBRARIES})
+	endif()
+	
     target_link_libraries(maestro PUBLIC ${BLAS_LIBRARIES})
 ENDIF()
 
 IF(SIMD_FLAGS)
     message("Setting SIMD flags")
+	
+	if (QAER AND COMPILE_TESTS)	
+		target_compile_options(tests PUBLIC ${SIMD_FLAGS})
+	endif()
+	
     target_compile_options(maestro PUBLIC ${SIMD_FLAGS})
 ENDIF()
 
 if (UNIX)
+	if (COMPILE_TESTS)
+		target_link_libraries(tests PRIVATE dl)
+	endif()
     target_link_libraries(maestro PRIVATE dl)
-    target_link_libraries(maestroexe PRIVATE dl)    
+    target_link_libraries(maestroexe PRIVATE dl)
 endif()
 
 IF(Boost_FOUND)
+    if (COMPILE_TESTS)
+	    target_link_libraries(tests PRIVATE Boost::serialization)	
+    endif()
     target_link_libraries(maestro PRIVATE Boost::serialization)
     target_link_libraries(maestroexe PRIVATE Boost::serialization)
     target_link_libraries(maestroexe PRIVATE Boost::program_options)
@@ -352,6 +338,55 @@ else()
         COMMAND ${CMAKE_COMMAND} -E false
         COMMENT "Check for Doxygen"
         VERBATIM)
+endif()
+
+# Option to build Python bindings
+option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
+
+if(BUILD_PYTHON_BINDINGS)
+    # Find Python 3.8 or higher (matches pyproject.toml requires-python = ">=3.8")
+    find_package(Python 3.8 COMPONENTS Interpreter Development.Module QUIET)
+    if(Python_FOUND)
+        message(STATUS "Found Python ${Python_VERSION} (${Python_EXECUTABLE})")
+        message(STATUS "Python_INCLUDE_DIRS: ${Python_INCLUDE_DIRS}")
+        message(STATUS "Python_LIBRARIES: ${Python_LIBRARIES}")
+
+        include(FetchContent)
+        FetchContent_Declare(
+          nanobind
+          GIT_REPOSITORY https://github.com/wjakob/nanobind.git
+          GIT_TAG        v2.0.0
+        )
+        FetchContent_MakeAvailable(nanobind)
+
+        nanobind_add_module(maestro_py python/bindings.cpp)
+        set_target_properties(maestro_py PROPERTIES OUTPUT_NAME "maestro")
+        target_link_libraries(maestro_py PRIVATE maestro)
+        target_include_directories(maestro_py PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/maestrolib
+            ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+
+        # Set RPATH/RPATH-related properties
+        if(APPLE)
+            set_target_properties(maestro_py PROPERTIES
+                BUILD_RPATH "${CMAKE_BINARY_DIR}"
+                INSTALL_RPATH "@loader_path;@loader_path/../lib"
+            )
+            set_target_properties(maestro PROPERTIES
+                INSTALL_NAME_DIR "@rpath"
+            )
+        elseif(UNIX AND NOT APPLE)
+            set_target_properties(maestro_py PROPERTIES
+                INSTALL_RPATH "$ORIGIN"
+                BUILD_WITH_INSTALL_RPATH TRUE
+            )
+        endif()
+
+        install(TARGETS maestro_py LIBRARY DESTINATION .)
+    else()
+        message(WARNING "Python 3.8+ (with Interpreter and Development.Module) not found. Skipping Python bindings.")
+    endif()
 endif()
 
 # Option to build Python bindings

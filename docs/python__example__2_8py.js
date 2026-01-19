@@ -1,6 +1,7 @@
 var python__example__2_8py =
 [
-    [ "python_example_2.qasm_bell", "namespacepython__example__2.html#a952edb3e150309e8f7db1f18a0652483", null ],
-    [ "python_example_2.qasm_ghz", "namespacepython__example__2.html#a7aee76b55de1f33aa8e785c52843133b", null ],
-    [ "python_example_2.result", "namespacepython__example__2.html#ad5bc41fbc49ac2be21c92f09f260b5d0", null ]
+    [ "python_example_2.main", "namespacepython__example__2.html#a49979e0459c33abbb612ed30e6dad253", null ],
+    [ "python_example_2.print_result", "namespacepython__example__2.html#a51508c0657a208d1e24630088d9b491c", null ],
+    [ "python_example_2.QASM_BELL", "namespacepython__example__2.html#a514208b13e1ed6b1a9e196714c0a49e5", null ],
+    [ "python_example_2.QASM_GHZ", "namespacepython__example__2.html#a8970f16124d3030893e3e4178ff04d91", null ]
 ];
