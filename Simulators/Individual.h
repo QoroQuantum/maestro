@@ -1168,9 +1168,11 @@ class IndividualSimulator : public ISimulator {
       // there the statevector is accessible)
       QCSimSimulator *qcsim = dynamic_cast<QCSimSimulator *>(simulator.get());
       prob = 1. - qcsim->uniformZeroOne(qcsim->rng);
-    } else {
-// qiskit aer - convert 'simulator' to qiskit aer simulator and access
-// 'savedAmplitudes' (assumes destructive saving of the state)
+    }
+#ifndef NO_QISKIT_AER
+    else {
+      // qiskit aer - convert 'simulator' to qiskit aer simulator and access
+      // 'savedAmplitudes' (assumes destructive saving of the state)
 #ifndef NO_QISKIT_AER
       AerSimulator *aer = dynamic_cast<AerSimulator *>(simulator.get());
       prob = 1 - aer->uniformZeroOne(aer->rng);
@@ -1178,6 +1180,7 @@ class IndividualSimulator : public ISimulator {
       return 0;
 #endif
     }
+#endif
 
     const size_t measRaw = alias->Sample(prob);
 
@@ -1194,7 +1197,9 @@ class IndividualSimulator : public ISimulator {
 
       alias = std::unique_ptr<Utils::Alias>(
           new Utils::Alias(qcsim->state->getRegisterStorage()));
-    } else {
+    }
+#ifndef NO_QISKIT_AER
+    else {
       // qiskit aer - convert 'simulator' to qiskit aer simulator and access
       // 'savedAmplitudes' (assumes destructive saving of the state)
 #ifndef NO_QISKIT_AER
@@ -1208,6 +1213,7 @@ class IndividualSimulator : public ISimulator {
       throw std::runtime_error("Qiskit Aer is disabled in this build.");
 #endif
     }
+#endif
   }
 
   void ClearAlias() { alias = nullptr; }
