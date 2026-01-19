@@ -4,8 +4,9 @@
  *
  * @section DESCRIPTION
  *
- * A header file to include to ensure the InitSetup object is properly initialized.
- * Include it in every test file that needs time estimation for execution.
+ * A header file to include to ensure the InitSetup object is properly
+ * initialized. Include it in every test file that needs time estimation for
+ * execution.
  */
 
 #pragma once
@@ -17,17 +18,17 @@
 #endif
 
 class InitSetup {
-public:
-	InitSetup() {
+ public:
+  InitSetup() {
 #ifdef COMPOSER
-		Estimators::ExecutionEstimator<>::InitializeRegressors();
+    Estimators::ExecutionEstimator<>::InitializeRegressors();
 #endif
-	}
+  }
 };
 
 #ifndef _TESTS_NO_EXCLUDE
 extern
 #endif
-InitSetup setup;
+    InitSetup setup;
 
 #endif

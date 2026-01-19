@@ -74,7 +74,8 @@ class ExecuteJob {
       if (optimiseMultipleShots) {
         executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
 
-        if (!specialOptimizationForStatevector && !specialOptimizationForMPS && curCnt > 1)
+        if (!specialOptimizationForStatevector && !specialOptimizationForMPS &&
+            curCnt > 1)
           optSim->SaveState();
       }
     }
@@ -188,27 +189,24 @@ class ExecuteJob {
         if (optimiseMultipleShots) {
           executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
 
-          if (!specialOptimizationForStatevector && !specialOptimizationForMPS && curCnt > 1)
+          if (!specialOptimizationForStatevector &&
+              !specialOptimizationForMPS && curCnt > 1)
             optSim->SaveState();
         }
-      }
-      else if (executedGates.size() == dcirc->size())
-      {
+      } else if (executedGates.size() == dcirc->size()) {
         // special case for when the simulator is passed from the network
         // and no gates were executed yet
         bool needToExecuteGates = true;
-        for (const bool val : executedGates)
-        {
-          if (val)
-          {
+        for (const bool val : executedGates) {
+          if (val) {
             needToExecuteGates = false;
             break;
           }
         }
-        if (needToExecuteGates && optimiseMultipleShots)
-        {
+        if (needToExecuteGates && optimiseMultipleShots) {
           executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
-          if (!specialOptimizationForStatevector && !specialOptimizationForMPS && curCnt > 1)
+          if (!specialOptimizationForStatevector &&
+              !specialOptimizationForMPS && curCnt > 1)
             optSim->SaveState();
         }
       }
@@ -233,7 +231,8 @@ class ExecuteJob {
       if (optimiseMultipleShots) {
         executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
 
-        if (!specialOptimizationForStatevector && !specialOptimizationForMPS && curCnt > 1)
+        if (!specialOptimizationForStatevector && !specialOptimizationForMPS &&
+            curCnt > 1)
           optSim->SaveState();
       }
     }

@@ -256,13 +256,8 @@ install(TARGETS maestroexe DESTINATION bin)
 
 if(OpenMP_CXX_FOUND)
     message("Setting OpenMP")
-	
-	if (QAER AND COMPILE_TESTS)
-		target_link_libraries(tests PUBLIC OpenMP::OpenMP_CXX)
-		target_link_libraries(tests PRIVATE ${OpenMP_CXX_FLAGS})
-		target_compile_options(tests PRIVATE ${OpenMP_CXX_FLAGS})
-    endif()
-	
+
+
     if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         find_program(BREW_CMD brew)
         if(BREW_CMD)
@@ -271,40 +266,59 @@ if(OpenMP_CXX_FOUND)
         endif()
 
         target_compile_options(maestro PUBLIC -Xpreprocessor -fopenmp)
+        if (QAER AND COMPILE_TESTS)
+            target_compile_options(tests PUBLIC -Xpreprocessor -fopenmp)
+        endif()
 
         if(LIBOMP_PREFIX)
             target_include_directories(maestro PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "${LIBOMP_PREFIX}/include")
             target_link_directories(maestro PUBLIC "${LIBOMP_PREFIX}/lib")
+            if (QAER AND COMPILE_TESTS)
+                target_include_directories(tests PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "${LIBOMP_PREFIX}/include")
+                target_link_directories(tests PUBLIC "${LIBOMP_PREFIX}/lib")
+            endif()
         else()
              target_include_directories(maestro PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "$ENV{OpenMP_ROOT}/include")
              target_link_directories(maestro PUBLIC "$ENV{OpenMP_ROOT}/lib")
+             if (QAER AND COMPILE_TESTS)
+                target_include_directories(tests PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "$ENV{OpenMP_ROOT}/include")
+                target_link_directories(tests PUBLIC "$ENV{OpenMP_ROOT}/lib")
+             endif()
         endif()
 
         target_link_libraries(maestro PUBLIC ${OpenMP_CXX_LIBRARIES})
+        if (QAER AND COMPILE_TESTS)
+            target_link_libraries(tests PUBLIC ${OpenMP_CXX_LIBRARIES})
+        endif()
     else()
         target_link_libraries(maestro PUBLIC OpenMP::OpenMP_CXX)
         target_link_libraries(maestro PRIVATE ${OpenMP_CXX_FLAGS})
         target_compile_options(maestro PRIVATE ${OpenMP_CXX_FLAGS})
+        if (QAER AND COMPILE_TESTS)
+            target_link_libraries(tests PUBLIC OpenMP::OpenMP_CXX)
+            target_link_libraries(tests PRIVATE ${OpenMP_CXX_FLAGS})
+            target_compile_options(tests PRIVATE ${OpenMP_CXX_FLAGS})
+        endif()
     endif()
 endif()
 
 IF(QAER AND BLAS_FOUND)
     message("Setting linking blas")
-	
+
 	if (QAER AND COMPILE_TESTS)
 		target_link_libraries(tests PUBLIC ${BLAS_LIBRARIES})
 	endif()
-	
+
     target_link_libraries(maestro PUBLIC ${BLAS_LIBRARIES})
 ENDIF()
 
 IF(SIMD_FLAGS)
     message("Setting SIMD flags")
-	
-	if (QAER AND COMPILE_TESTS)	
+
+	if (QAER AND COMPILE_TESTS)
 		target_compile_options(tests PUBLIC ${SIMD_FLAGS})
 	endif()
-	
+
     target_compile_options(maestro PUBLIC ${SIMD_FLAGS})
 ENDIF()
 
@@ -318,7 +332,7 @@ endif()
 
 IF(Boost_FOUND)
     if (COMPILE_TESTS)
-	    target_link_libraries(tests PRIVATE Boost::serialization)	
+	    target_link_libraries(tests PRIVATE Boost::serialization)
     endif()
     target_link_libraries(maestro PRIVATE Boost::serialization)
     target_link_libraries(maestroexe PRIVATE Boost::serialization)

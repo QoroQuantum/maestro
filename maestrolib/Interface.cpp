@@ -33,7 +33,7 @@ extern "C" {
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    void* GetMaestroObject() {
+    void *GetMaestroObject() {
   if (!isInitialized.exchange(true)) {
 #ifdef __linux__
     Simulators::SimulatorsFactory::InitGpuLibrary();
@@ -46,13 +46,13 @@ __declspec(dllexport)
     maestroInstance = std::make_unique<Maestro>();
   }
 
-  return (void*)maestroInstance.get();
+  return (void *)maestroInstance.get();
 }
 
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    void* GetMaestroObjectWithMute() {
+    void *GetMaestroObjectWithMute() {
   if (!isInitialized.exchange(true)) {
 #ifdef __linux__
     Simulators::SimulatorsFactory::InitGpuLibraryWithMute();
@@ -65,7 +65,7 @@ __declspec(dllexport)
     maestroInstance = std::make_unique<Maestro>();
   }
 
-  return (void*)maestroInstance.get();
+  return (void *)maestroInstance.get();
 }
 
 #ifdef _WIN32
@@ -113,8 +113,8 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    char* SimpleExecute(unsigned long int simpleSim, const char* circuitStr,
-                        const char* jsonConfig) {
+    char *SimpleExecute(unsigned long int simpleSim, const char *circuitStr,
+                        const char *jsonConfig) {
   if (simpleSim == 0 || !circuitStr || !jsonConfig || !maestroInstance)
     return nullptr;
 
@@ -221,7 +221,7 @@ __declspec(dllexport)
   boost::json::object jsonResult;
   jsonResult.reserve(results.size());
 
-  for (auto& result : results) {
+  for (auto &result : results) {
     boost::json::string bits;
     bits.reserve(result.first.size());
     for (const auto bit : result.first) bits.append(bit ? "1" : "0");
@@ -285,9 +285,9 @@ __declspec(dllexport)
 
   const std::string responseStr = boost::json::serialize(response);
   const size_t responseSize = responseStr.length();
-  char* result = new char[responseSize + 1];
+  char *result = new char[responseSize + 1];
 
-  const char* responseData = responseStr.c_str();
+  const char *responseData = responseStr.c_str();
   std::copy(responseData, responseData + responseSize, result);
 
   result[responseSize] = 0;  // ensure null-termination
@@ -298,7 +298,7 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    void FreeResult(char* result) {
+    void FreeResult(char *result) {
   if (result) delete[] result;
 }
 
@@ -316,7 +316,7 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    void* GetSimulator(unsigned long int simHandle) {
+    void *GetSimulator(unsigned long int simHandle) {
   if (!maestroInstance || simHandle == 0) return nullptr;
   return maestroInstance->GetSimulator(simHandle);
 }
@@ -332,10 +332,10 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyX(void* sim, int qubit) {
+    int ApplyX(void *sim, int qubit) {
   if (!sim) return 0;
 
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyX(qubit);
 
   return 1;
@@ -344,9 +344,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyY(void* sim, int qubit) {
+    int ApplyY(void *sim, int qubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyY(qubit);
 
   return 1;
@@ -355,10 +355,10 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyZ(void* sim, int qubit) {
+    int ApplyZ(void *sim, int qubit) {
   if (!sim) return 0;
 
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyZ(qubit);
   return 1;
 }
@@ -366,9 +366,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyH(void* sim, int qubit) {
+    int ApplyH(void *sim, int qubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyH(qubit);
 
   return 1;
@@ -377,9 +377,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyS(void* sim, int qubit) {
+    int ApplyS(void *sim, int qubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyS(qubit);
 
   return 1;
@@ -388,9 +388,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplySDG(void* sim, int qubit) {
+    int ApplySDG(void *sim, int qubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplySDG(qubit);
 
   return 1;
@@ -399,9 +399,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyT(void* sim, int qubit) {
+    int ApplyT(void *sim, int qubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyT(qubit);
 
   return 1;
@@ -410,9 +410,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyTDG(void* sim, int qubit) {
+    int ApplyTDG(void *sim, int qubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyTDG(qubit);
 
   return 1;
@@ -421,9 +421,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplySX(void* sim, int qubit) {
+    int ApplySX(void *sim, int qubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplySx(qubit);
 
   return 1;
@@ -432,9 +432,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplySXDG(void* sim, int qubit) {
+    int ApplySXDG(void *sim, int qubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplySxDAG(qubit);
 
   return 1;
@@ -443,9 +443,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyK(void* sim, int qubit) {
+    int ApplyK(void *sim, int qubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyK(qubit);
 
   return 1;
@@ -454,9 +454,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyP(void* sim, int qubit, double theta) {
+    int ApplyP(void *sim, int qubit, double theta) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyP(qubit, theta);
 
   return 1;
@@ -465,9 +465,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyRx(void* sim, int qubit, double theta) {
+    int ApplyRx(void *sim, int qubit, double theta) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyRx(qubit, theta);
 
   return 1;
@@ -476,9 +476,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyRy(void* sim, int qubit, double theta) {
+    int ApplyRy(void *sim, int qubit, double theta) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyRy(qubit, theta);
 
   return 1;
@@ -487,9 +487,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyRz(void* sim, int qubit, double theta) {
+    int ApplyRz(void *sim, int qubit, double theta) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyRz(qubit, theta);
 
   return 1;
@@ -498,10 +498,10 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyU(void* sim, int qubit, double theta, double phi, double lambda,
+    int ApplyU(void *sim, int qubit, double theta, double phi, double lambda,
                double gamma) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyU(qubit, theta, phi, lambda, gamma);
 
   return 1;
@@ -510,9 +510,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCX(void* sim, int controlQubit, int targetQubit) {
+    int ApplyCX(void *sim, int controlQubit, int targetQubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCX(controlQubit, targetQubit);
 
   return 1;
@@ -521,9 +521,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCY(void* sim, int controlQubit, int targetQubit) {
+    int ApplyCY(void *sim, int controlQubit, int targetQubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCY(controlQubit, targetQubit);
 
   return 1;
@@ -532,9 +532,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCZ(void* sim, int controlQubit, int targetQubit) {
+    int ApplyCZ(void *sim, int controlQubit, int targetQubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCZ(controlQubit, targetQubit);
 
   return 1;
@@ -543,9 +543,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCH(void* sim, int controlQubit, int targetQubit) {
+    int ApplyCH(void *sim, int controlQubit, int targetQubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCH(controlQubit, targetQubit);
 
   return 1;
@@ -554,9 +554,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCSX(void* sim, int controlQubit, int targetQubit) {
+    int ApplyCSX(void *sim, int controlQubit, int targetQubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCSx(controlQubit, targetQubit);
 
   return 1;
@@ -565,9 +565,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCSXDG(void* sim, int controlQubit, int targetQubit) {
+    int ApplyCSXDG(void *sim, int controlQubit, int targetQubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCSxDAG(controlQubit, targetQubit);
 
   return 1;
@@ -576,9 +576,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCP(void* sim, int controlQubit, int targetQubit, double theta) {
+    int ApplyCP(void *sim, int controlQubit, int targetQubit, double theta) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCP(controlQubit, targetQubit, theta);
 
   return 1;
@@ -587,9 +587,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCRx(void* sim, int controlQubit, int targetQubit, double theta) {
+    int ApplyCRx(void *sim, int controlQubit, int targetQubit, double theta) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCRx(controlQubit, targetQubit, theta);
 
   return 1;
@@ -598,9 +598,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCRy(void* sim, int controlQubit, int targetQubit, double theta) {
+    int ApplyCRy(void *sim, int controlQubit, int targetQubit, double theta) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCRy(controlQubit, targetQubit, theta);
 
   return 1;
@@ -609,9 +609,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCRz(void* sim, int controlQubit, int targetQubit, double theta) {
+    int ApplyCRz(void *sim, int controlQubit, int targetQubit, double theta) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCRz(controlQubit, targetQubit, theta);
 
   return 1;
@@ -620,10 +620,10 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCCX(void* sim, int controlQubit1, int controlQubit2,
+    int ApplyCCX(void *sim, int controlQubit1, int controlQubit2,
                  int targetQubit) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCCX(controlQubit1, controlQubit2, targetQubit);
 
   return 1;
@@ -632,9 +632,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplySwap(void* sim, int qubit1, int qubit2) {
+    int ApplySwap(void *sim, int qubit1, int qubit2) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplySwap(qubit1, qubit2);
 
   return 1;
@@ -643,9 +643,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCSwap(void* sim, int controlQubit, int qubit1, int qubit2) {
+    int ApplyCSwap(void *sim, int controlQubit, int qubit1, int qubit2) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCSwap(controlQubit, qubit1, qubit2);
 
   return 1;
@@ -654,10 +654,10 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyCU(void* sim, int controlQubit, int targetQubit, double theta,
+    int ApplyCU(void *sim, int controlQubit, int targetQubit, double theta,
                 double phi, double lambda, double gamma) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->ApplyCU(controlQubit, targetQubit, theta, phi, lambda, gamma);
 
   return 1;
@@ -666,9 +666,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int InitializeSimulator(void* sim) {
+    int InitializeSimulator(void *sim) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->Initialize();
   return 1;
 }
@@ -676,9 +676,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ResetSimulator(void* sim) {
+    int ResetSimulator(void *sim) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->Reset();
   return 1;
 }
@@ -686,9 +686,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ConfigureSimulator(void* sim, const char* key, const char* value) {
+    int ConfigureSimulator(void *sim, const char *key, const char *value) {
   if (!sim || !key || !value) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->Configure(key, value);
   return 1;
 }
@@ -696,15 +696,15 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    char* GetConfiguration(void* sim, const char* key) {
+    char *GetConfiguration(void *sim, const char *key) {
   if (!sim || !key) return nullptr;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   std::string value = simulator->GetConfiguration(key);
   if (value.empty()) return nullptr;
   // allocate memory for the result string and copy the configuration value into
   // it
   const size_t valueSize = value.length();
-  char* result = new char[valueSize + 1];
+  char *result = new char[valueSize + 1];
   std::copy(value.c_str(), value.c_str() + valueSize, result);
   result[valueSize] = 0;  // ensure null-termination
   return result;
@@ -713,9 +713,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    unsigned long int AllocateQubits(void* sim, unsigned long int nrQubits) {
+    unsigned long int AllocateQubits(void *sim, unsigned long int nrQubits) {
   if (!sim || nrQubits == 0) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   const size_t res = simulator->AllocateQubits(nrQubits);
 
   return static_cast<unsigned long int>(res);
@@ -724,9 +724,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    unsigned long int GetNumberOfQubits(void* sim) {
+    unsigned long int GetNumberOfQubits(void *sim) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   const size_t res = simulator->GetNumberOfQubits();
   return static_cast<unsigned long int>(res);
 }
@@ -734,9 +734,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ClearSimulator(void* sim) {
+    int ClearSimulator(void *sim) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->Clear();
   return 1;
 }
@@ -744,10 +744,10 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    unsigned long long int Measure(void* sim, const unsigned long int* qubits,
+    unsigned long long int Measure(void *sim, const unsigned long int *qubits,
                                    unsigned long int nrQubits) {
   if (!sim || !qubits || nrQubits == 0) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
   const size_t res = simulator->Measure(qubitVector);
   return static_cast<unsigned long long int>(res);
@@ -756,10 +756,10 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int ApplyReset(void* sim, const unsigned long int* qubits,
+    int ApplyReset(void *sim, const unsigned long int *qubits,
                    unsigned long int nrQubits) {
   if (!sim || !qubits || nrQubits == 0) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
   simulator->ApplyReset(qubitVector);
   return 1;
@@ -768,9 +768,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    double Probability(void* sim, unsigned long long int outcome) {
+    double Probability(void *sim, unsigned long long int outcome) {
   if (!sim) return 0.0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   const double res = simulator->Probability(outcome);
   return res;
 }
@@ -778,26 +778,26 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    void FreeDoubleVector(double* vec) {
+    void FreeDoubleVector(double *vec) {
   if (vec) delete[] vec;
 }
 
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    void FreeULLIVector(unsigned long long int* vec) {
+    void FreeULLIVector(unsigned long long int *vec) {
   if (vec) delete[] vec;
 }
 
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    double* Amplitude(void* sim, unsigned long long int outcome) {
+    double *Amplitude(void *sim, unsigned long long int outcome) {
   if (!sim) return nullptr;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   const std::complex<double> amp = simulator->Amplitude(outcome);
 
-  double* result = new double[2];
+  double *result = new double[2];
   result[0] = amp.real();
   result[1] = amp.imag();
   return result;
@@ -806,12 +806,12 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    double* AllProbabilities(void* sim) {
+    double *AllProbabilities(void *sim) {
   if (!sim) return nullptr;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   const auto probabilities = simulator->AllProbabilities();
 
-  double* result = new double[probabilities.size()];
+  double *result = new double[probabilities.size()];
   std::copy(probabilities.begin(), probabilities.end(), result);
   return result;
 }
@@ -819,14 +819,14 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    double* Probabilities(void* sim, const unsigned long long int* qubits,
+    double *Probabilities(void *sim, const unsigned long long int *qubits,
                           unsigned long int nrQubits) {
   if (!sim || !qubits || nrQubits == 0) return nullptr;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
   const auto probabilities = simulator->Probabilities(qubitVector);
 
-  double* result = new double[probabilities.size()];
+  double *result = new double[probabilities.size()];
   std::copy(probabilities.begin(), probabilities.end(), result);
   return result;
 }
@@ -834,20 +834,20 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    unsigned long long int* SampleCounts(void* sim,
-                                         const unsigned long long int* qubits,
+    unsigned long long int *SampleCounts(void *sim,
+                                         const unsigned long long int *qubits,
                                          unsigned long int nrQubits,
                                          unsigned long int shots) {
   if (!sim || !qubits || nrQubits == 0 || shots == 0) return nullptr;
 
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
   const auto counts = simulator->SampleCounts(qubitVector, shots);
 
-  unsigned long long int* result =
+  unsigned long long int *result =
       new unsigned long long int[counts.size() * 2];
   size_t index = 0;
-  for (const auto& count : counts) {
+  for (const auto &count : counts) {
     result[index] = count.first;  // outcome
     ++index;
     result[index] = count.second;  // count
@@ -859,27 +859,27 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int GetSimulatorType(void* sim) {
+    int GetSimulatorType(void *sim) {
   if (!sim) return -1;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   return static_cast<int>(simulator->GetType());
 }
 
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int GetSimulationType(void* sim) {
+    int GetSimulationType(void *sim) {
   if (!sim) return -1;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   return static_cast<int>(simulator->GetSimulationType());
 }
 
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int FlushSimulator(void* sim) {
+    int FlushSimulator(void *sim) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->Flush();
   return 1;
 }
@@ -887,9 +887,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int SaveStateToInternalDestructive(void* sim) {
+    int SaveStateToInternalDestructive(void *sim) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->SaveStateToInternalDestructive();
   return 1;
 }
@@ -897,9 +897,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int RestoreInternalDestructiveSavedState(void* sim) {
+    int RestoreInternalDestructiveSavedState(void *sim) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->RestoreInternalDestructiveSavedState();
   return 1;
 }
@@ -907,9 +907,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int SaveState(void* sim) {
+    int SaveState(void *sim) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->SaveState();
   return 1;
 }
@@ -917,9 +917,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int RestoreState(void* sim) {
+    int RestoreState(void *sim) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->RestoreState();
   return 1;
 }
@@ -927,9 +927,9 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int SetMultithreading(void* sim, int multithreading) {
+    int SetMultithreading(void *sim, int multithreading) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   simulator->SetMultithreading(multithreading != 0);
   return 1;
 }
@@ -937,27 +937,27 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int GetMultithreading(void* sim) {
+    int GetMultithreading(void *sim) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   return simulator->GetMultithreading() ? 1 : 0;
 }
 
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    int IsQcsim(void* sim) {
+    int IsQcsim(void *sim) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   return simulator->IsQcsim() ? 1 : 0;
 }
 
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-    unsigned long long int MeasureNoCollapse(void* sim) {
+    unsigned long long int MeasureNoCollapse(void *sim) {
   if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator*>(sim);
+  auto simulator = static_cast<Simulators::ISimulator *>(sim);
   return static_cast<unsigned long long int>(simulator->MeasureNoCollapse());
 }
 }
