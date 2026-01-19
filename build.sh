@@ -1,4 +1,16 @@
 #!/bin/bash
+set -e
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    NPROC=$(sysctl -n hw.logicalcpu)
+else
+    if command -v nproc > /dev/null; then
+        NPROC=$(nproc)
+    else
+        NPROC=1
+    fi
+fi
+echo "Building with ${NPROC} parallel jobs."
 
 if [ ! -d build ]
 then
@@ -21,7 +33,7 @@ then
 fi
 cd boost_1_89_0
 ./bootstrap.sh --prefix=.
-./b2 -j$(nproc) --with-program_options --with-json --with-container --with-serialization --prefix=. install
+./b2 -j${NPROC} --with-program_options --with-json --with-container --with-serialization --prefix=. install
 cd ..
 
 if [ ! -d QCSim ]
@@ -49,5 +61,5 @@ export JSON_INCLUDE_DIR=$PWD/json/single_include
 export AER_INCLUDE_DIR=$PWD/qiskit-aer/src
 
 cmake ..
-make -j$(nproc)
+make -j${NPROC}
 make doc
