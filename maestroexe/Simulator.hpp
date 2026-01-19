@@ -10,7 +10,7 @@ class SimpleSimulator : protected MaestroLibrary {
     if (handle) DestroySimpleSimulator(handle);
   }
 
-  bool Init(const char* libName) noexcept override {
+  bool Init(const char *libName) noexcept override {
     if (MaestroLibrary::Init(libName)) return true;
 
     return false;
@@ -40,11 +40,11 @@ class SimpleSimulator : protected MaestroLibrary {
     return false;
   }
 
-  char* SimpleExecute(const char* jsonCircuit, const char* jsonConfig) {
+  char *SimpleExecute(const char *jsonCircuit, const char *jsonConfig) {
     return MaestroLibrary::SimpleExecute(handle, jsonCircuit, jsonConfig);
   }
 
-  void FreeResult(char* result) override { MaestroLibrary::FreeResult(result); }
+  void FreeResult(char *result) override { MaestroLibrary::FreeResult(result); }
 
  private:
   unsigned long int handle = 0;
@@ -58,7 +58,7 @@ class Simulator : protected MaestroLibrary {
     if (handle) DestroySimulator(handle);
   }
 
-  bool Init(const char* libName) noexcept override {
+  bool Init(const char *libName) noexcept override {
     if (MaestroLibrary::Init(libName)) return true;
 
     return false;
@@ -74,9 +74,9 @@ class Simulator : protected MaestroLibrary {
     return handle;
   }
 
-  void* GetSimulator() { return MaestroLibrary::GetSimulator(handle); }
+  void *GetSimulator() { return MaestroLibrary::GetSimulator(handle); }
 
-  void FreeResult(char* result) { MaestroLibrary::FreeResult(result); }
+  void FreeResult(char *result) { MaestroLibrary::FreeResult(result); }
 
   int InitializeSimulator() {
     if (simulatorPtr) return MaestroLibrary::InitializeSimulator(simulatorPtr);
@@ -88,13 +88,13 @@ class Simulator : protected MaestroLibrary {
     return 0;
   }
 
-  int ConfigureSimulator(const char* key, const char* value) {
+  int ConfigureSimulator(const char *key, const char *value) {
     if (simulatorPtr)
       return MaestroLibrary::ConfigureSimulator(simulatorPtr, key, value);
     return 0;
   }
 
-  char* GetConfiguration(const char* key) {
+  char *GetConfiguration(const char *key) {
     if (simulatorPtr)
       return MaestroLibrary::GetConfiguration(simulatorPtr, key);
     return nullptr;
@@ -116,7 +116,7 @@ class Simulator : protected MaestroLibrary {
     return 0;
   }
 
-  unsigned long long int Measure(const unsigned long int* qubits,
+  unsigned long long int Measure(const unsigned long int *qubits,
                                  unsigned long int nrQubits) {
     if (simulatorPtr)
       return MaestroLibrary::Measure(simulatorPtr, qubits, nrQubits);
@@ -124,7 +124,7 @@ class Simulator : protected MaestroLibrary {
     return 0;
   }
 
-  int ApplyReset(const unsigned long int* qubits, unsigned long int nrQubits) {
+  int ApplyReset(const unsigned long int *qubits, unsigned long int nrQubits) {
     if (simulatorPtr)
       return MaestroLibrary::ApplyReset(simulatorPtr, qubits, nrQubits);
     return 0;
@@ -136,32 +136,32 @@ class Simulator : protected MaestroLibrary {
     return 0.0;
   }
 
-  void FreeDoubleVector(double* vec) override {
+  void FreeDoubleVector(double *vec) override {
     MaestroLibrary::FreeDoubleVector(vec);
   }
 
-  void FreeULLIVector(unsigned long long int* vec) override {
+  void FreeULLIVector(unsigned long long int *vec) override {
     MaestroLibrary::FreeULLIVector(vec);
   }
 
-  double* Amplitude(unsigned long long int outcome) {
+  double *Amplitude(unsigned long long int outcome) {
     if (simulatorPtr) return MaestroLibrary::Amplitude(simulatorPtr, outcome);
     return nullptr;
   }
 
-  double* AllProbabilities() {
+  double *AllProbabilities() {
     if (simulatorPtr) return MaestroLibrary::AllProbabilities(simulatorPtr);
     return nullptr;
   }
 
-  double* Probabilities(const unsigned long long int* qubits,
+  double *Probabilities(const unsigned long long int *qubits,
                         unsigned long int nrQubits) {
     if (simulatorPtr)
       return MaestroLibrary::Probabilities(simulatorPtr, qubits, nrQubits);
     return nullptr;
   }
 
-  unsigned long long int* SampleCounts(const unsigned long long int* qubits,
+  unsigned long long int *SampleCounts(const unsigned long long int *qubits,
                                        unsigned long int nrQubits,
                                        unsigned long int shots) {
     if (simulatorPtr)
@@ -408,5 +408,5 @@ class Simulator : protected MaestroLibrary {
 
  private:
   unsigned long int handle = 0;
-  void* simulatorPtr = nullptr;
+  void *simulatorPtr = nullptr;
 };

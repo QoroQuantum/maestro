@@ -387,22 +387,20 @@ class GpuLibrary : public Utils::Library {
           fTNSetMaxExtent =
               (int (*)(void *, long int))GetFunction("TNSetMaxExtent");
           CheckFunction((void *)fTNSetMaxExtent, __LINE__);
-          fTNGetMaxExtent =
-              (long int (*)(void *))GetFunction("TNGetMaxExtent");
+          fTNGetMaxExtent = (long int (*)(void *))GetFunction("TNGetMaxExtent");
           CheckFunction((void *)fTNGetMaxExtent, __LINE__);
           fTNGetNrQubits = (int (*)(void *))GetFunction("TNGetNrQubits");
           CheckFunction((void *)fTNGetNrQubits, __LINE__);
           fTNAmplitude = (int (*)(void *, long int, long int *, double *,
-                                   double *))GetFunction("TNAmplitude");
+                                  double *))GetFunction("TNAmplitude");
           CheckFunction((void *)fTNAmplitude, __LINE__);
           fTNProbability0 =
               (double (*)(void *, unsigned int))GetFunction("TNProbability0");
           CheckFunction((void *)fTNProbability0, __LINE__);
-          fTNMeasure =
-              (int (*)(void *, unsigned int))GetFunction("TNMeasure");
+          fTNMeasure = (int (*)(void *, unsigned int))GetFunction("TNMeasure");
           CheckFunction((void *)fTNMeasure, __LINE__);
           fTNMeasureQubits = (int (*)(void *, long int, unsigned int *,
-                                       int *))GetFunction("TNMeasureQubits");
+                                      int *))GetFunction("TNMeasureQubits");
           CheckFunction((void *)fTNMeasureQubits, __LINE__);
 
           fTNGetMapForSample = (void *(*)())GetFunction("TNGetMapForSample");
@@ -411,7 +409,7 @@ class GpuLibrary : public Utils::Library {
               (int (*)(void *))GetFunction("TNFreeMapForSample");
           CheckFunction((void *)fTNFreeMapForSample, __LINE__);
           fTNSample = (int (*)(void *, long int, long int, unsigned int *,
-                                void *))GetFunction("TNSample");
+                               void *))GetFunction("TNSample");
           CheckFunction((void *)fTNSample, __LINE__);
 
           fTNSaveState = (int (*)(void *))GetFunction("TNSaveState");
@@ -446,8 +444,7 @@ class GpuLibrary : public Utils::Library {
           fTNApplyTDG =
               (int (*)(void *, unsigned int))GetFunction("TNApplyTDG");
           CheckFunction((void *)fTNApplyTDG, __LINE__);
-          fTNApplySX =
-              (int (*)(void *, unsigned int))GetFunction("TNApplySX");
+          fTNApplySX = (int (*)(void *, unsigned int))GetFunction("TNApplySX");
           CheckFunction((void *)fTNApplySX, __LINE__);
           fTNApplySXDG =
               (int (*)(void *, unsigned int))GetFunction("TNApplySXDG");
@@ -470,37 +467,37 @@ class GpuLibrary : public Utils::Library {
                                double))GetFunction("TNApplyU");
           CheckFunction((void *)fTNApplyU, __LINE__);
           fTNApplySwap = (int (*)(void *, unsigned int,
-                                   unsigned int))GetFunction("TNApplySwap");
+                                  unsigned int))GetFunction("TNApplySwap");
           CheckFunction((void *)fTNApplySwap, __LINE__);
-          fTNApplyCX = (int (*)(void *, unsigned int,
-                                 unsigned int))GetFunction("TNApplyCX");
+          fTNApplyCX = (int (*)(void *, unsigned int, unsigned int))GetFunction(
+              "TNApplyCX");
           CheckFunction((void *)fTNApplyCX, __LINE__);
-          fTNApplyCY = (int (*)(void *, unsigned int,
-                                 unsigned int))GetFunction("TNApplyCY");
+          fTNApplyCY = (int (*)(void *, unsigned int, unsigned int))GetFunction(
+              "TNApplyCY");
           CheckFunction((void *)fTNApplyCY, __LINE__);
-          fTNApplyCZ = (int (*)(void *, unsigned int,
-                                 unsigned int))GetFunction("TNApplyCZ");
+          fTNApplyCZ = (int (*)(void *, unsigned int, unsigned int))GetFunction(
+              "TNApplyCZ");
           CheckFunction((void *)fTNApplyCZ, __LINE__);
-          fTNApplyCH = (int (*)(void *, unsigned int,
-                                 unsigned int))GetFunction("TNApplyCH");
+          fTNApplyCH = (int (*)(void *, unsigned int, unsigned int))GetFunction(
+              "TNApplyCH");
           CheckFunction((void *)fTNApplyCH, __LINE__);
           fTNApplyCSX = (int (*)(void *, unsigned int,
-                                  unsigned int))GetFunction("TNApplyCSX");
+                                 unsigned int))GetFunction("TNApplyCSX");
           CheckFunction((void *)fTNApplyCSX, __LINE__);
           fTNApplyCSXDG = (int (*)(void *, unsigned int,
-                                    unsigned int))GetFunction("TNApplyCSXDG");
+                                   unsigned int))GetFunction("TNApplyCSXDG");
           CheckFunction((void *)fTNApplyCSXDG, __LINE__);
           fTNApplyCP = (int (*)(void *, unsigned int, unsigned int,
-                                 double))GetFunction("TNApplyCP");
+                                double))GetFunction("TNApplyCP");
           CheckFunction((void *)fTNApplyCP, __LINE__);
           fTNApplyCRx = (int (*)(void *, unsigned int, unsigned int,
-                                  double))GetFunction("TNApplyCRx");
+                                 double))GetFunction("TNApplyCRx");
           CheckFunction((void *)fTNApplyCRx, __LINE__);
           fTNApplyCRy = (int (*)(void *, unsigned int, unsigned int,
-                                  double))GetFunction("TNApplyCRy");
+                                 double))GetFunction("TNApplyCRy");
           CheckFunction((void *)fTNApplyCRy, __LINE__);
           fTNApplyCRz = (int (*)(void *, unsigned int, unsigned int,
-                                  double))GetFunction("TNApplyCRz");
+                                 double))GetFunction("TNApplyCRz");
           CheckFunction((void *)fTNApplyCRz, __LINE__);
           fTNApplyCU =
               (int (*)(void *, unsigned int, unsigned int, double, double,
@@ -514,18 +511,26 @@ class GpuLibrary : public Utils::Library {
                                    unsigned int))GetFunction("TNApplyCSwap");
           CheckFunction((void *)fTNApplyCSwap, __LINE__);
 
-          fCreateStabilizerSimulator = (void *(*)(long long int, long long int, long long int, long long int))GetFunction("CreateStabilizerSimulator");
+          fCreateStabilizerSimulator = (void *(*)(long long int, long long int,
+                                                  long long int, long long int))
+              GetFunction("CreateStabilizerSimulator");
           CheckFunction((void *)fCreateStabilizerSimulator, __LINE__);
-          fDestroyStabilizerSimulator = (void (*)(void *))GetFunction("DestroyStabilizerSimulator");
+          fDestroyStabilizerSimulator =
+              (void (*)(void *))GetFunction("DestroyStabilizerSimulator");
           CheckFunction((void *)fDestroyStabilizerSimulator, __LINE__);
-          fExecuteStabilizerCircuit = (int (*)(void *, const char *, int, unsigned long long int))GetFunction("ExecuteStabilizerCircuit");
+          fExecuteStabilizerCircuit = (int (*)(
+              void *, const char *, int,
+              unsigned long long int))GetFunction("ExecuteStabilizerCircuit");
           CheckFunction((void *)fExecuteStabilizerCircuit, __LINE__);
-          fGetStabilizerXZTableSize = (long long (*)(void *))GetFunction("GetStabilizerXZTableSize");
+          fGetStabilizerXZTableSize =
+              (long long (*)(void *))GetFunction("GetStabilizerXZTableSize");
           CheckFunction((void *)fGetStabilizerXZTableSize, __LINE__);
-          fGetStabilizerMTableSize = (long long (*)(void *))GetFunction("GetStabilizerMTableSize");
+          fGetStabilizerMTableSize =
+              (long long (*)(void *))GetFunction("GetStabilizerMTableSize");
           CheckFunction((void *)fGetStabilizerMTableSize, __LINE__);
-          
-          fGetStabilizerTableStrideMajor = (long long (*)(void *))GetFunction("GetStabilizerTableStrideMajor");
+
+          fGetStabilizerTableStrideMajor = (long long (*)(void *))GetFunction(
+              "GetStabilizerTableStrideMajor");
           CheckFunction((void *)fGetStabilizerTableStrideMajor, __LINE__);
 
           fGetStabilizerNumQubits =
@@ -550,7 +555,8 @@ class GpuLibrary : public Utils::Library {
               "CopyStabilizerMTable");
           CheckFunction((void *)fCopyStabilizerMTable, __LINE__);
 
-          fInitStabilizerXTable = (int (*)(void *, const unsigned int *))GetFunction("InitStabilizerXTable");
+          fInitStabilizerXTable = (int (*)(
+              void *, const unsigned int *))GetFunction("InitStabilizerXTable");
           CheckFunction((void *)fInitStabilizerXTable, __LINE__);
           fInitStabilizerZTable = (int (*)(
               void *, const unsigned int *))GetFunction("InitStabilizerZTable");
@@ -1677,7 +1683,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNIsValid(obj) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to check if tensor network is valid");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to check if tensor network is valid");
 
     return false;
   }
@@ -1686,7 +1693,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNIsCreated(obj) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to check if tensor network is created");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to check if tensor network is created");
 
     return false;
   }
@@ -1695,7 +1703,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNSetDataType(obj, useDoublePrecision) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to set precision for tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set precision for tensor network");
 
     return false;
   }
@@ -1704,7 +1713,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNIsDoublePrecision(obj) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to get precision for tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get precision for tensor network");
 
     return false;
   }
@@ -1713,7 +1723,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNSetCutoff(obj, val) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to set cutoff for tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set cutoff for tensor network");
 
     return false;
   }
@@ -1722,14 +1733,16 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNGetCutoff(obj);
     else
-      throw std::runtime_error("GpuLibrary: Unable to get cutoff for tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get cutoff for tensor network");
   }
 
   bool TNSetGesvdJ(void *obj, int val) {
     if (LibraryHandle)
       return fTNSetGesvdJ(obj, val) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to set GesvdJ for tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set GesvdJ for tensor network");
 
     return false;
   }
@@ -1738,7 +1751,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNGetGesvdJ(obj) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to get GesvdJ for tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get GesvdJ for tensor network");
 
     return false;
   }
@@ -1747,7 +1761,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNSetMaxExtent(obj, val) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to set max extent for tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set max extent for tensor network");
 
     return false;
   }
@@ -1756,7 +1771,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNGetMaxExtent(obj);
     else
-      throw std::runtime_error("GpuLibrary: Unable to get max extent for tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get max extent for tensor network");
 
     return 0;
   }
@@ -1765,18 +1781,20 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNGetNrQubits(obj);
     else
-      throw std::runtime_error("GpuLibrary: Unable to get nr qubits for tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get nr qubits for tensor network");
 
     return 0;
   }
 
   bool TNAmplitude(void *obj, long int numFixedValues, long int *fixedValues,
-                    double *real, double *imaginary) {
+                   double *real, double *imaginary) {
     if (LibraryHandle)
       return fTNAmplitude(obj, numFixedValues, fixedValues, real, imaginary) ==
              1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to get tensor network amplitude");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get tensor network amplitude");
 
     return false;
   }
@@ -1795,25 +1813,27 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNMeasure(obj, qubit) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to measure qubit on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to measure qubit on tensor network");
 
     return false;
   }
 
   bool TNMeasureQubits(void *obj, long int numQubits, unsigned int *qubits,
-                        int *result) {
+                       int *result) {
     if (LibraryHandle)
       return fTNMeasureQubits(obj, numQubits, qubits, result) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to measure qubits on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to measure qubits on tensor network");
 
     return false;
   }
 
   std::unordered_map<std::vector<bool>, int64_t> *TNGetMapForSample() {
     if (LibraryHandle)
-      return (std::unordered_map<std::vector<bool>, int64_t> *)
-          fTNGetMapForSample();
+      return (
+          std::unordered_map<std::vector<bool>, int64_t> *)fTNGetMapForSample();
     else
       throw std::runtime_error(
           "GpuLibrary: Unable to get map for sample for tensor network");
@@ -1821,8 +1841,7 @@ class GpuLibrary : public Utils::Library {
     return nullptr;
   }
 
-  bool TNFreeMapForSample(
-      std::unordered_map<std::vector<bool>, int64_t> *map) {
+  bool TNFreeMapForSample(std::unordered_map<std::vector<bool>, int64_t> *map) {
     if (LibraryHandle)
       return fTNFreeMapForSample((void *)map) == 1;
     else
@@ -1833,7 +1852,7 @@ class GpuLibrary : public Utils::Library {
   }
 
   bool TNSample(void *obj, long int numShots, long int numQubits,
-                 unsigned int *qubits, void *resultMap) {
+                unsigned int *qubits, void *resultMap) {
     if (LibraryHandle)
       return fTNSample(obj, numShots, numQubits, qubits, resultMap) == 1;
     else
@@ -1846,7 +1865,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNSaveState(obj) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to save tensor network state");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to save tensor network state");
 
     return false;
   }
@@ -1855,7 +1875,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNRestoreState(obj) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to restore tensor network state");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to restore tensor network state");
 
     return false;
   }
@@ -1864,7 +1885,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNCleanSavedState(obj) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to clean tensor network saved state");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to clean tensor network saved state");
 
     return false;
   }
@@ -1878,8 +1900,7 @@ class GpuLibrary : public Utils::Library {
     return nullptr;
   }
 
-  double TNExpectationValue(void *obj, const char *pauliString,
-                             int len) const {
+  double TNExpectationValue(void *obj, const char *pauliString, int len) const {
     if (LibraryHandle)
       return fTNExpectationValue(obj, pauliString, len);
     else
@@ -1893,7 +1914,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyX(obj, siteA) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply X gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply X gate on tensor network");
 
     return false;
   }
@@ -1902,7 +1924,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyY(obj, siteA) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply Y gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply Y gate on tensor network");
 
     return false;
   }
@@ -1911,7 +1934,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyZ(obj, siteA) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply Z gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply Z gate on tensor network");
 
     return false;
   }
@@ -1920,7 +1944,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyH(obj, siteA) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply H gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply H gate on tensor network");
 
     return false;
   }
@@ -1929,7 +1954,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyS(obj, siteA) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply S gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply S gate on tensor network");
 
     return false;
   }
@@ -1938,7 +1964,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplySDG(obj, siteA) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply sdg gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply sdg gate on tensor network");
 
     return false;
   }
@@ -1947,7 +1974,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyT(obj, siteA) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply t gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply t gate on tensor network");
 
     return false;
   }
@@ -1956,7 +1984,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyTDG(obj, siteA) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply tdg gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply tdg gate on tensor network");
 
     return false;
   }
@@ -1965,7 +1994,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplySX(obj, siteA) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply sx gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply sx gate on tensor network");
 
     return false;
   }
@@ -1974,7 +2004,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplySXDG(obj, siteA) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply sxdg gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply sxdg gate on tensor network");
 
     return false;
   }
@@ -1983,7 +2014,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyK(obj, siteA) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply k gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply k gate on tensor network");
 
     return false;
   }
@@ -1992,7 +2024,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyP(obj, siteA, theta) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply p gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply p gate on tensor network");
     return false;
   }
 
@@ -2000,7 +2033,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyRx(obj, siteA, theta) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply rx gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply rx gate on tensor network");
 
     return false;
   }
@@ -2009,7 +2043,8 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyRy(obj, siteA, theta) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply ry gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply ry gate on tensor network");
 
     return false;
   }
@@ -2018,147 +2053,161 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyRz(obj, siteA, theta) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply rz gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply rz gate on tensor network");
 
     return false;
   }
 
   bool TNApplyU(void *obj, unsigned int siteA, double theta, double phi,
-                 double lambda, double gamma) {
+                double lambda, double gamma) {
     if (LibraryHandle)
       return fTNApplyU(obj, siteA, theta, phi, lambda, gamma) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply u gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply u gate on tensor network");
 
     return false;
   }
 
   bool TNApplySwap(void *obj, unsigned int controlQubit,
-                    unsigned int targetQubit) {
+                   unsigned int targetQubit) {
     if (LibraryHandle)
       return fTNApplySwap(obj, controlQubit, targetQubit) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply swap gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply swap gate on tensor network");
 
     return false;
   }
 
   bool TNApplyCX(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit) {
+                 unsigned int targetQubit) {
     if (LibraryHandle)
       return fTNApplyCX(obj, controlQubit, targetQubit) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply cx gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply cx gate on tensor network");
 
     return false;
   }
 
   bool TNApplyCY(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit) {
+                 unsigned int targetQubit) {
     if (LibraryHandle)
       return fTNApplyCY(obj, controlQubit, targetQubit) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply cy gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply cy gate on tensor network");
 
     return false;
   }
 
   bool TNApplyCZ(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit) {
+                 unsigned int targetQubit) {
     if (LibraryHandle)
       return fTNApplyCZ(obj, controlQubit, targetQubit) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply cz gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply cz gate on tensor network");
 
     return false;
   }
 
   bool TNApplyCH(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit) {
+                 unsigned int targetQubit) {
     if (LibraryHandle)
       return fTNApplyCH(obj, controlQubit, targetQubit) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply ch gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply ch gate on tensor network");
 
     return false;
   }
 
   bool TNApplyCSX(void *obj, unsigned int controlQubit,
-                   unsigned int targetQubit) {
+                  unsigned int targetQubit) {
     if (LibraryHandle)
       return fTNApplyCSX(obj, controlQubit, targetQubit) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply csx gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply csx gate on tensor network");
   }
 
   bool TNApplyCSXDG(void *obj, unsigned int controlQubit,
-                     unsigned int targetQubit) {
+                    unsigned int targetQubit) {
     if (LibraryHandle)
       return fTNApplyCSXDG(obj, controlQubit, targetQubit) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply csxdg gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply csxdg gate on tensor network");
 
     return false;
   }
 
-  bool TNApplyCP(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit, double theta) {
+  bool TNApplyCP(void *obj, unsigned int controlQubit, unsigned int targetQubit,
+                 double theta) {
     if (LibraryHandle)
       return fTNApplyCP(obj, controlQubit, targetQubit, theta) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply cp gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply cp gate on tensor network");
 
     return false;
   }
 
   bool TNApplyCRx(void *obj, unsigned int controlQubit,
-                   unsigned int targetQubit, double theta) {
+                  unsigned int targetQubit, double theta) {
     if (LibraryHandle)
       return fTNApplyCRx(obj, controlQubit, targetQubit, theta) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply crx gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply crx gate on tensor network");
 
     return false;
   }
 
   bool TNApplyCRy(void *obj, unsigned int controlQubit,
-                   unsigned int targetQubit, double theta) {
+                  unsigned int targetQubit, double theta) {
     if (LibraryHandle)
       return fTNApplyCRy(obj, controlQubit, targetQubit, theta) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply cry gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply cry gate on tensor network");
 
     return false;
   }
 
   bool TNApplyCRz(void *obj, unsigned int controlQubit,
-                   unsigned int targetQubit, double theta) {
+                  unsigned int targetQubit, double theta) {
     if (LibraryHandle)
       return fTNApplyCRz(obj, controlQubit, targetQubit, theta) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply crz gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply crz gate on tensor network");
 
     return false;
   }
 
-  bool TNApplyCU(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit, double theta, double phi,
-                  double lambda, double gamma) {
+  bool TNApplyCU(void *obj, unsigned int controlQubit, unsigned int targetQubit,
+                 double theta, double phi, double lambda, double gamma) {
     if (LibraryHandle)
       return fTNApplyCU(obj, controlQubit, targetQubit, theta, phi, lambda,
-                         gamma) == 1;
+                        gamma) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply cu gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply cu gate on tensor network");
 
     return false;
   }
 
   bool TNApplyCCX(void *obj, unsigned int controlQubit1,
-                   unsigned int controlQubit2, unsigned int targetQubit) {
+                  unsigned int controlQubit2, unsigned int targetQubit) {
     if (LibraryHandle)
       return fTNApplyCCX(obj, controlQubit1, controlQubit2, targetQubit) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply ccx gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply ccx gate on tensor network");
     return false;
   }
 
@@ -2167,19 +2216,19 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle)
       return fTNApplyCSwap(obj, controlQubit, targetQubit1, targetQubit2) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to apply cswap gate on tensor network");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply cswap gate on tensor network");
     return false;
   }
 
   // stabilizer functions
-  void* CreateStabilizerSimulator(long long int numQubits,
-      long long int numShots,
-      long long int numMeasurements,
-      long long int numDetectors)
-  {
+  void *CreateStabilizerSimulator(long long int numQubits,
+                                  long long int numShots,
+                                  long long int numMeasurements,
+                                  long long int numDetectors) {
     if (LibraryHandle)
-      return fCreateStabilizerSimulator(numQubits, numShots,
-                                       numMeasurements, numDetectors);
+      return fCreateStabilizerSimulator(numQubits, numShots, numMeasurements,
+                                        numDetectors);
     else
       throw std::runtime_error(
           "GpuLibrary: Unable to create stabilizer simulator");
@@ -2187,8 +2236,7 @@ class GpuLibrary : public Utils::Library {
     return nullptr;
   }
 
-  void DestroyStabilizerSimulator(void *obj)
-  {
+  void DestroyStabilizerSimulator(void *obj) {
     if (!obj) return;
     if (LibraryHandle)
       fDestroyStabilizerSimulator(obj);
@@ -2197,14 +2245,13 @@ class GpuLibrary : public Utils::Library {
           "GpuLibrary: Unable to destroy stabilizer simulator");
   }
 
-  bool ExecuteStabilizerCircuit(void* obj, const char* circuitStr,
-      int randomizeMeasurements,
-      unsigned long long int seed)
-  {
+  bool ExecuteStabilizerCircuit(void *obj, const char *circuitStr,
+                                int randomizeMeasurements,
+                                unsigned long long int seed) {
     if (!obj) return false;
     if (LibraryHandle)
-      return fExecuteStabilizerCircuit(obj, circuitStr,
-                                       randomizeMeasurements, seed) == 1;
+      return fExecuteStabilizerCircuit(obj, circuitStr, randomizeMeasurements,
+                                       seed) == 1;
     else
       throw std::runtime_error(
           "GpuLibrary: Unable to execute stabilizer circuit");
@@ -2212,8 +2259,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  long long GetStabilizerXZTableSize(void *obj)
-  {
+  long long GetStabilizerXZTableSize(void *obj) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fGetStabilizerXZTableSize(obj);
@@ -2224,8 +2270,7 @@ class GpuLibrary : public Utils::Library {
     return 0;
   }
 
-  long long GetStabilizerMTableSize(void *obj)
-  {
+  long long GetStabilizerMTableSize(void *obj) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fGetStabilizerMTableSize(obj);
@@ -2236,8 +2281,7 @@ class GpuLibrary : public Utils::Library {
     return 0;
   }
 
-  long long GetStabilizerTableStrideMajor(void *obj)
-  {
+  long long GetStabilizerTableStrideMajor(void *obj) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fGetStabilizerTableStrideMajor(obj);
@@ -2247,8 +2291,7 @@ class GpuLibrary : public Utils::Library {
     return 0;
   }
 
-  long long GetStabilizerNumQubits(void *obj)
-  {
+  long long GetStabilizerNumQubits(void *obj) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fGetStabilizerNumQubits(obj);
@@ -2259,8 +2302,7 @@ class GpuLibrary : public Utils::Library {
     return 0;
   }
 
-  long long GetStabilizerNumShots(void *obj)
-  {
+  long long GetStabilizerNumShots(void *obj) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fGetStabilizerNumShots(obj);
@@ -2271,8 +2313,7 @@ class GpuLibrary : public Utils::Library {
     return 0;
   }
 
-  long long GetStabilizerNumMeasurements(void *obj)
-  {
+  long long GetStabilizerNumMeasurements(void *obj) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fGetStabilizerNumMeasurements(obj);
@@ -2283,8 +2324,7 @@ class GpuLibrary : public Utils::Library {
     return 0;
   }
 
-  long long GetStabilizerNumDetectors(void *obj)
-  {
+  long long GetStabilizerNumDetectors(void *obj) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fGetStabilizerNumDetectors(obj);
@@ -2295,17 +2335,14 @@ class GpuLibrary : public Utils::Library {
     return 0;
   }
 
-  int CopyStabilizerXTable(void *obj, unsigned int *xtable)
-  {
+  int CopyStabilizerXTable(void *obj, unsigned int *xtable) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fCopyStabilizerXTable(obj, xtable);
     else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to copy stabilizer X table");
+      throw std::runtime_error("GpuLibrary: Unable to copy stabilizer X table");
   }
-  int CopyStabilizerZTable(void* obj, unsigned int* ztable)
-  {
+  int CopyStabilizerZTable(void *obj, unsigned int *ztable) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fCopyStabilizerZTable(obj, ztable);
@@ -2313,8 +2350,7 @@ class GpuLibrary : public Utils::Library {
       throw std::runtime_error("GpuLibrary: Unable to copy stabilizer Z table");
   }
 
-  int CopyStabilizerMTable(void* obj, unsigned int* mtable)
-  {
+  int CopyStabilizerMTable(void *obj, unsigned int *mtable) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fCopyStabilizerMTable(obj, mtable);
@@ -2322,8 +2358,7 @@ class GpuLibrary : public Utils::Library {
       throw std::runtime_error("GpuLibrary: Unable to copy stabilizer M table");
   }
 
-  int InitStabilizerXTable(void* obj, const unsigned int* xtable)
-  {
+  int InitStabilizerXTable(void *obj, const unsigned int *xtable) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fInitStabilizerXTable(obj, xtable);
@@ -2332,8 +2367,7 @@ class GpuLibrary : public Utils::Library {
           "GpuLibrary: Unable to initialize stabilizer X table");
   }
 
-  int InitStabilizerZTable(void* obj, const unsigned int* ztable)
-  {
+  int InitStabilizerZTable(void *obj, const unsigned int *ztable) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fInitStabilizerZTable(obj, ztable);
@@ -2539,14 +2573,16 @@ class GpuLibrary : public Utils::Library {
   int (*fTNApplyCRy)(void *, unsigned int, unsigned int, double);
   int (*fTNApplyCRz)(void *, unsigned int, unsigned int, double);
   int (*fTNApplyCU)(void *, unsigned int, unsigned int, double, double, double,
-                     double);
+                    double);
   int (*fTNApplyCCX)(void *, unsigned int, unsigned int, unsigned int);
   int (*fTNApplyCSwap)(void *, unsigned int, unsigned int, unsigned int);
 
   // stabilizer functions
-  void *(*fCreateStabilizerSimulator)(long long int, long long int, long long int, long long int);
+  void *(*fCreateStabilizerSimulator)(long long int, long long int,
+                                      long long int, long long int);
   void (*fDestroyStabilizerSimulator)(void *);
-  int (*fExecuteStabilizerCircuit)(void *, const char *, int, unsigned long long int);
+  int (*fExecuteStabilizerCircuit)(void *, const char *, int,
+                                   unsigned long long int);
   long long (*fGetStabilizerXZTableSize)(void *);
   long long (*fGetStabilizerMTableSize)(void *);
   long long (*fGetStabilizerTableStrideMajor)(void *);

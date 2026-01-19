@@ -1,4 +1,5 @@
 var searchData=
 [
-  ['utils_0',['Utils',['../namespaceUtils.html',1,'']]]
+  ['tensornetworks_0',['TensorNetworks',['../namespaceTensorNetworks.html',1,'']]],
+  ['types_1',['Types',['../namespaceTypes.html',1,'']]]
 ];

@@ -81,7 +81,8 @@ class GpuState : public ISimulator {
                 "and initialize the tensor network state.");
         } else
           throw std::runtime_error(
-              "GpuState::Initialize: Failed to create the tensor network state.");
+              "GpuState::Initialize: Failed to create the tensor network "
+              "state.");
       } else
         throw std::runtime_error(
             "GpuState::Initialize: Invalid simulation "
@@ -448,7 +449,8 @@ class GpuState : public ISimulator {
 
     if (simulationType == SimulationType::kStatevector)
       state->AllProbabilities(result.data());
-    else if (simulationType == SimulationType::kMatrixProductState || simulationType == SimulationType::kTensorNetwork) {
+    else if (simulationType == SimulationType::kMatrixProductState ||
+             simulationType == SimulationType::kTensorNetwork) {
       // this is very slow, it should be used only for tests!
       for (Types::qubit_t i = 0; i < (Types::qubit_t)numStates; ++i) {
         const auto val = Amplitude(i);
@@ -477,7 +479,8 @@ class GpuState : public ISimulator {
     if (simulationType == SimulationType::kStatevector) {
       for (size_t i = 0; i < qubits.size(); ++i)
         result[i] = state->BasisStateProbability(qubits[i]);
-    } else if (simulationType == SimulationType::kMatrixProductState || simulationType == SimulationType::kTensorNetwork) {
+    } else if (simulationType == SimulationType::kMatrixProductState ||
+               simulationType == SimulationType::kTensorNetwork) {
       for (size_t i = 0; i < qubits.size(); ++i) {
         const auto ampl = Amplitude(qubits[i]);
         result[i] = std::norm(ampl);
@@ -738,7 +741,8 @@ class GpuState : public ISimulator {
   Types::qubit_t MeasureNoCollapse() override {
     if (simulationType == SimulationType::kStatevector)
       return state->MeasureAllQubitsNoCollapse();
-    else if (simulationType == SimulationType::kMatrixProductState || simulationType == SimulationType::kTensorNetwork) {
+    else if (simulationType == SimulationType::kMatrixProductState ||
+             simulationType == SimulationType::kTensorNetwork) {
       Types::qubits_vector fixedValues(nrQubits);
       std::iota(fixedValues.begin(), fixedValues.end(), 0);
       const auto res = SampleCounts(fixedValues, 1);
@@ -761,7 +765,7 @@ class GpuState : public ISimulator {
   std::unique_ptr<GpuLibStateVectorSim>
       state;                         /**< The gpu statevector simulator. */
   std::unique_ptr<GpuLibMPSSim> mps; /**< The gpu MPS simulator. */
-  std::unique_ptr<GpuLibTNSim> tn; /**< The gpu tensor network simulator. */
+  std::unique_ptr<GpuLibTNSim> tn;   /**< The gpu tensor network simulator. */
 
   size_t nrQubits = 0; /**< The number of allocated qubits. */
   bool limitSize = false;
