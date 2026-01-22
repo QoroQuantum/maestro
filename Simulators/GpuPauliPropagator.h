@@ -124,7 +124,7 @@ class GpuPauliPropagator {
     return false;
   }
 
-  bool SetInPauliExpansionUnique(const& std::string& pauliStr)
+  bool SetInPauliExpansionUnique(const std::string& pauliStr)
   {
     if (lib) {
       return lib->PauliPropSetInPauliExpansionUnique(obj, pauliStr.c_str());
