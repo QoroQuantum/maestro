@@ -140,7 +140,7 @@ class GpuPauliPropagator {
         cStrs[i] = const_cast<char *>(pauliStrs[i].c_str());
       }
       return lib->PauliPropSetInPauliExpansionMultiple(
-          obj, cStrs.data(), coefficients.data(), static_cast<int>(pauliStrs.size()));
+          obj, (const char **)cStrs.data(), coefficients.data(), static_cast<int>(pauliStrs.size()));
     }
     return false;
   }
