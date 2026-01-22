@@ -46,7 +46,7 @@ class GpuPauliPropagator {
 
   int GetNrQubits() {
     if (lib) {
-      return lib->PauliPropGetSimulatorNrQubits(obj);
+      return lib->PauliPropGetNrQubits(obj);
     }
     return 0;
   }
