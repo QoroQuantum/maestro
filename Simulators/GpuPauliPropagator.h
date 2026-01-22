@@ -46,7 +46,7 @@ class GpuPauliPropagator {
 
   int GetNrQubits() {
     if (lib) {
-      return lib->GetPauliPropSimulatorNrQubits(obj);
+      return lib->PauliPropGetSimulatorNrQubits(obj);
     }
     return 0;
   }
@@ -132,14 +132,15 @@ class GpuPauliPropagator {
     return false;
   }
 
-  bool SetInPauliExpansionMultiple(const std::vector<std::string> &pauliStrs)
+  bool SetInPauliExpansionMultiple(const std::vector<std::string> &pauliStrs, const std::vector<double> &coefficients)
   {
-    if (lib && !pauliStrs.empty()) {
+    if (lib && !pauliStrs.empty() && pauliStrs.size() == coefficients.size()) {
       std::vector<char *> cStrs(pauliStrs.size());
       for (size_t i = 0; i < pauliStrs.size(); ++i) {
         cStrs[i] = const_cast<char *>(pauliStrs[i].c_str());
       }
-      return lib->PauliPropSetInPauliExpansionMultiple(obj, cStrs.data(), static_cast<int>(pauliStrs.size()));
+      return lib->PauliPropSetInPauliExpansionMultiple(
+          obj, cStrs.data(), coefficients.data(), static_cast<int>(pauliStrs.size()));
     }
     return false;
   }
@@ -341,10 +342,10 @@ class GpuPauliPropagator {
     } 
   }
 
-  void LoadState()
+  void RestoreState()
   {
     if (lib) {
-      lib->PauliPropLoadState(obj);
+      lib->PauliPropRestoreState(obj);
     } 
   }
 
