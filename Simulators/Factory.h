@@ -21,6 +21,7 @@
 #include "GpuLibMPSSim.h"
 #include "GpuLibTNSim.h"
 #include "GpuStabilizer.h"
+#include "GpuPauliPropagator.h"
 
 #include "Simulator.h"
 
@@ -55,6 +56,18 @@ class SimulatorsFactory {
       SimulationType method = SimulationType::kMatrixProductState);
 
 #ifdef __linux__
+  static bool InitGpuLibrary();
+  static bool InitGpuLibraryWithMute();
+
+  static bool IsGpuLibraryAvailable() {
+    return gpuLibrary && gpuLibrary->IsValid();
+  }
+
+  static std::shared_ptr<GpuLibrary> GetGpuLibrary() {
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+    return gpuLibrary;
+  }
+
   static std::unique_ptr<GpuLibStateVectorSim> CreateGpuLibStateVectorSim() {
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
 
@@ -73,22 +86,15 @@ class SimulatorsFactory {
     return std::make_unique<GpuLibTNSim>(gpuLibrary);
   }
 
-  static std::shared_ptr<GpuLibrary> GetGpuLibrary() {
-    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
-    return gpuLibrary;
-  }
-
   static std::shared_ptr<GpuStabilizer> CreateGpuStabilizerSimulator() {
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
     return std::make_shared<GpuStabilizer>(gpuLibrary);
   }
 
-  static bool IsGpuLibraryAvailable() {
-    return gpuLibrary && gpuLibrary->IsValid();
+  static std::shared_ptr<GpuPauliPropagator> CreateGpuPauliPropagatorSimulator() {
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+    return std::make_shared<GpuPauliPropagator>(gpuLibrary);
   }
-
-  static bool InitGpuLibrary();
-  static bool InitGpuLibraryWithMute();
 
  private:
   static std::shared_ptr<GpuLibrary> gpuLibrary;
