@@ -6,7 +6,7 @@
  *
  * The Gpu Stabilizer library class.
  *
- * Just a wrapped aroung c api functions.
+ * Just a wrapper around c api functions.
  */
 
 #pragma once
