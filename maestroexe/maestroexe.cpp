@@ -1,5 +1,6 @@
 #include <iostream>
 #include <boost/program_options.hpp>
+#include <algorithm>
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -67,7 +68,8 @@ int main(int argc, char** argv) {
         "file,f", boost::program_options::value<std::string>(),
         "Provide a qasm file for execution")(
         "output,o", boost::program_options::value<std::string>(),
-        "Specify the json output file");
+        "Specify the json output file")(
+        "expectations,e", "Compute expectation values of observables");
 
     boost::program_options::positional_options_description pos_desc;
     pos_desc.add("file", 1);
@@ -219,6 +221,14 @@ int main(int argc, char** argv) {
       return 6;
     }
 
+    bool computeExpectations = false;
+    if (vars.count("expectations"))
+      computeExpectations = true;
+    else {
+      const std::string estr = _get_env_var("maestro_expectations");
+      if (!estr.empty()) computeExpectations = (std::stoi(estr) != 0);
+    }
+
     // after getting all params and so on, execute:
 
     SimpleSimulator simulator;
@@ -266,10 +276,40 @@ int main(int argc, char** argv) {
 
     std::string result;
     if (!qasmStr.empty()) {
-      char* res = simulator.SimpleExecute(qasmStr.c_str(), configStr.c_str());
-      if (res) {
-        result = res;
-        simulator.FreeResult(res);
+      if (computeExpectations) {
+        std::string obsFileName = qasmFileName;
+        size_t lastDot = obsFileName.find_last_of(".");
+        if (lastDot != std::string::npos) {
+          obsFileName = obsFileName.substr(0, lastDot);
+        }
+        obsFileName += ".obs";
+
+        std::ifstream obsFile(obsFileName);
+        if (obsFile.is_open()) {
+          std::string obsStr((std::istreambuf_iterator<char>(obsFile)),
+                             std::istreambuf_iterator<char>());
+          obsStr.erase(std::remove(obsStr.begin(), obsStr.end(), '\n'), obsStr.end());
+          obsStr.erase(std::remove(obsStr.begin(), obsStr.end(), '\r'), obsStr.end());
+          if (!obsStr.empty()) {
+            char* res = simulator.SimpleEstimate(qasmStr.c_str(), obsStr.c_str(),
+                                                 configStr.c_str());
+            if (res) {
+              result = res;
+              simulator.FreeResult(res);
+            }
+          } else {
+            std::cerr << "Empty .obs file" << std::endl;
+          }
+        } else {
+          std::cerr << "Couldn't read the .obs file: " << obsFileName
+                    << std::endl;
+        }
+      } else {
+        char* res = simulator.SimpleExecute(qasmStr.c_str(), configStr.c_str());
+        if (res) {
+          result = res;
+          simulator.FreeResult(res);
+        }
       }
     }
 

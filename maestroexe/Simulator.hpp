@@ -44,6 +44,12 @@ class SimpleSimulator : protected MaestroLibrary {
     return MaestroLibrary::SimpleExecute(handle, jsonCircuit, jsonConfig);
   }
 
+  char *SimpleEstimate(const char *jsonCircuit, const char *observableStr,
+                       const char *jsonConfig) {
+    return MaestroLibrary::SimpleEstimate(handle, jsonCircuit, observableStr,
+                                          jsonConfig);
+  }
+
   void FreeResult(char *result) override { MaestroLibrary::FreeResult(result); }
 
  private:
