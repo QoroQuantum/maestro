@@ -147,3 +147,27 @@ The `jsonConfig` string in `SimpleExecute` supports various keys:
   "matrix_product_state_max_bond_dimension": "100"
 }
 ```
+### Expectation Values
+
+Maestro allows calculating the expectation values of observables without needing to perform manual sampling. This is particularly useful for Variational Quantum Algorithms.
+
+In C++:
+```cpp
+const char* observables = "ZZ;XX;YY";
+char* result = SimpleEstimate(simHandle, qasmCircuit, observables, config);
+// Result contains "expectation_values" array
+```
+
+In Python:
+```python
+result = maestro.simple_estimate(qasm, "ZZ;XX;YY")
+print(result['expectation_values'])
+```
+
+## Python Bindings
+
+Maestro provides Python bindings for ease of use. You can find several examples in the `examples/` directory:
+
+- `examples/python_example_1.py`: Basic simulation and sampling.
+- `examples/python_example_2.py`: Advanced simulation with manual gate application.
+- `examples/python_example_3.py`: Working with expectation values and observables.

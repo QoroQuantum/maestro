@@ -79,7 +79,9 @@ NB_MODULE(maestro, m) {
       .def("SampleCounts", &Simulators::ISimulator::SampleCounts,
            nb::arg("qubits"), nb::arg("shots") = 1000)
       .def("Initialize", &Simulators::ISimulator::Initialize)
-      .def("Reset", &Simulators::ISimulator::Reset);
+      .def("Reset", &Simulators::ISimulator::Reset)
+      .def("ExpectationValue", &Simulators::ISimulator::ExpectationValue,
+           nb::arg("pauli_string"));
 
   // Bind Maestro class
   nb::class_<Maestro>(m, "Maestro")
@@ -241,5 +243,139 @@ NB_MODULE(maestro, m) {
       "Returns:\n"
       "    Dictionary with keys 'counts', 'simulator', 'method', and "
       "'time_taken',\n"
+      "    or None if execution failed");
+
+  // Bind simple_estimate convenience function
+  m.def(
+      "simple_estimate",
+      [](const std::string &qasm_circuit, const std::string &observables,
+         Simulators::SimulatorType sim_type,
+         Simulators::SimulationType sim_exec_type,
+         std::optional<size_t> max_bond_dimension,
+         std::optional<double> singular_value_threshold) -> nb::object {
+        // Initialize Maestro instance if needed
+        GetMaestroObjectWithMute();
+
+        // Parse the QASM circuit first to determine the number of qubits
+        qasm::QasmToCirc<> parser;
+        auto circuit = parser.ParseAndTranslate(qasm_circuit);
+        if (parser.Failed() || !circuit) {
+          return nb::none();
+        }
+
+        // Get the number of qubits from the circuit
+        int num_qubits = static_cast<int>(circuit->GetMaxQubitIndex()) + 1;
+
+        // Create a simple simulator with the correct number of qubits
+        unsigned long int sim_handle = CreateSimpleSimulator(num_qubits);
+        if (sim_handle == 0) {
+          return nb::none();
+        }
+
+        // Add optimization simulator with the desired types
+        int result = RemoveAllOptimizationSimulatorsAndAdd(
+            sim_handle, static_cast<int>(sim_type),
+            static_cast<int>(sim_exec_type));
+
+        if (result == 0) {
+          DestroySimpleSimulator(sim_handle);
+          return nb::none();
+        }
+
+        // Build JSON configuration
+        boost::json::object config;
+
+        // --- NEW CONFIGURATION VARIABLES ---
+        if (max_bond_dimension.has_value()) {
+          config["matrix_product_state_max_bond_dimension"] =
+              *max_bond_dimension;
+        }
+
+        if (singular_value_threshold.has_value()) {
+          config["matrix_product_state_truncation_threshold"] =
+              *singular_value_threshold;
+        }
+        // -----------------------------------
+
+        std::string json_config = boost::json::serialize(config);
+
+        // Execute the circuit and estimate expectation values
+        char *result_str =
+            SimpleEstimate(sim_handle, qasm_circuit.c_str(),
+                           observables.c_str(), json_config.c_str());
+
+        // Clean up simulator
+        DestroySimpleSimulator(sim_handle);
+
+        if (result_str == nullptr) {
+          return nb::none();
+        }
+
+        // Parse JSON result
+        try {
+          boost::json::value json_result = boost::json::parse(result_str);
+          FreeResult(result_str);
+
+          if (!json_result.is_object()) {
+            return nb::none();
+          }
+
+          auto result_obj = json_result.as_object();
+
+          // Convert to Python dictionary
+          nb::dict py_result;
+
+          // Convert expectation values
+          if (result_obj.contains("expectation_values") &&
+              result_obj.at("expectation_values").is_array()) {
+            nb::list exp_vals;
+            auto exp_arr = result_obj.at("expectation_values").as_array();
+            for (const auto &val : exp_arr) {
+              if (val.is_number()) {
+                exp_vals.append(val.as_double());
+              }
+            }
+            py_result["expectation_values"] = exp_vals;
+          }
+
+          // Add other metadata
+          if (result_obj.contains("simulator")) {
+            py_result["simulator"] =
+                std::string(result_obj.at("simulator").as_string());
+          }
+          if (result_obj.contains("method")) {
+            py_result["method"] =
+                std::string(result_obj.at("method").as_string());
+          }
+          if (result_obj.contains("time_taken")) {
+            auto time_str =
+                std::string(result_obj.at("time_taken").as_string());
+            py_result["time_taken"] = std::stod(time_str);
+          }
+
+          return py_result;
+
+        } catch (const std::exception &e) {
+          FreeResult(result_str);
+          return nb::none();
+        }
+      },
+      nb::arg("qasm_circuit"), nb::arg("observables"),
+      nb::arg("simulator_type") = Simulators::SimulatorType::kQCSim,
+      nb::arg("simulation_type") = Simulators::SimulationType::kStatevector,
+      nb::arg("max_bond_dimension") = 2,
+      nb::arg("singular_value_threshold") = 1e-8,
+      "Execute a QASM circuit and return expectation values for observables.\n\n"
+      "Args:\n"
+      "    qasm_circuit: QASM 2.0 quantum circuit as a string\n"
+      "    observables: Semicolon-separated Pauli strings (e.g., 'XX;YY;ZZ')\n"
+      "    simulator_type: Type of simulator to use (default: QCSim)\n"
+      "    simulation_type: Simulation method to use (default: Statevector)\n"
+      "    max_bond_dimension: Max bond dimension for MPS (default: 2)\n"
+      "    singular_value_threshold: Truncation threshold for MPS (default: "
+      "1e-8)\n\n"
+      "Returns:\n"
+      "    Dictionary with keys 'expectation_values', 'simulator', 'method', "
+      "and 'time_taken',\n"
       "    or None if execution failed");
 }
