@@ -166,7 +166,78 @@ print(result['expectation_values'])
 
 ## Python Bindings
 
-Maestro provides Python bindings for ease of use. You can find several examples in the `examples/` directory:
+Maestro provides Python bindings for ease of use, allowing you to integrate its high-performance simulation capabilities into your Python-based quantum workflows.
+
+### Installation
+
+To install the Python bindings, run the following command from the root of the Maestro repository:
+
+```bash
+pip install .
+```
+
+This will compile the C++ core and install the `maestro` Python package.
+
+### Convenience API
+
+The easiest way to use Maestro in Python is through the `simple_execute` and `simple_estimate` functions.
+
+```python
+import maestro
+
+qasm_circuit = """
+OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[2];
+h q[0];
+cx q[0], q[1];
+"""
+
+# 1. Execute and get counts
+# You can specify simulator_type and simulation_type if needed
+result = maestro.simple_execute(qasm_circuit, shots=1024)
+print(f"Simulator: {result['simulator']}")
+print(f"Method: {result['method']}")
+print(f"Counts: {result['counts']}")
+
+# 2. Estimate expectation values
+observables = "ZZ;XX;YY"
+estimate = maestro.simple_estimate(qasm_circuit, observables)
+print(f"Expectation Values: {estimate['expectation_values']}")
+```
+
+### Manual Control API
+
+For more granular control, you can use the `Maestro` and `ISimulator` classes directly.
+
+```python
+from maestro import Maestro, SimulatorType, SimulationType
+
+# Initialize Maestro
+m = Maestro()
+
+# Create a simulator handle
+# Defaults to QCSim and MatrixProductState
+sim_handle = m.CreateSimulator(SimulatorType.QCSim, SimulationType.Statevector)
+
+# Get the simulator object
+sim = m.GetSimulator(sim_handle)
+
+# Apply gates manually
+sim.ApplyH(0)
+sim.ApplyCX(0, 1)
+
+# Sample counts
+counts = sim.SampleCounts([0, 1], shots=1000)
+print(f"Counts: {counts}")
+
+# Cleanup
+m.DestroySimulator(sim_handle)
+```
+
+### Examples
+
+You can find several complete examples in the `examples/` directory:
 
 - `examples/python_example_1.py`: Basic simulation and sampling.
 - `examples/python_example_2.py`: Advanced simulation with manual gate application.

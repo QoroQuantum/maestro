@@ -58,6 +58,36 @@
  * - **@ref Estimators** - Runtime estimation and prediction
  * - **@ref Utils** - Utility classes and helper functions
  *
+ * @section python_bindings Python Bindings
+ *
+ * Maestro includes high-performance Python bindings built with nanobind. These bindings allow
+ * you to leverage Maestro's orchestration and simulation capabilities directly from Python.
+ *
+ * To install the Python bindings:
+ * @code
+ * pip install .
+ * @endcode
+ *
+ * Basic usage example:
+ * @code{.py}
+ * import maestro
+ *
+ * # Define a QASM circuit
+ * qasm = """
+ * OPENQASM 2.0;
+ * include "qelib1.inc";
+ * qreg q[2];
+ * h q[0];
+ * cx q[0], q[1];
+ * """
+ *
+ * # Execute with 1024 shots
+ * result = maestro.simple_execute(qasm, shots=1024)
+ * print(f"Counts: {result['counts']}")
+ * @endcode
+ *
+ * For more details, see the @ref md_TUTORIAL "Tutorial".
+ *
  * @section backends Simulation Backends
  *
  * Maestro integrates or wraps the following simulators:

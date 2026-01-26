@@ -60,7 +60,8 @@ The model normalizes performance features to reduce hardware dependence and can 
 ## Documentation
 
 - [Installation Guide](INSTALL.md): Detailed build and installation instructions.
-- [Tutorial](TUTORIAL.md): Usage examples and API overview.
+- [Tutorial](TUTORIAL.md): Usage examples and API overview, including Python bindings.
+- [Python Examples](examples/): Python scripts demonstrating usage.
 
 ### API Documentation
 
