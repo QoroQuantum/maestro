@@ -41,6 +41,11 @@ class MaestroLibrary : public Utils::Library {
           fSimpleExecute = (char* (*)(unsigned long int, const char*,
                                       const char*))GetFunction("SimpleExecute");
           CheckFunction((void*)fSimpleExecute, __LINE__);
+
+          fSimpleEstimate = (char* (*)(unsigned long int, const char*, const char*,
+                                       const char*))GetFunction("SimpleEstimate");
+          CheckFunction((void*)fSimpleEstimate, __LINE__);
+
           fFreeResult = (void (*)(char*))GetFunction("FreeResult");
           CheckFunction((void*)fFreeResult, __LINE__);
 
@@ -276,6 +281,18 @@ class MaestroLibrary : public Utils::Library {
     else
       throw std::runtime_error(
           "MaestroLibrary: Unable to execute the simple simulator.");
+
+    return nullptr;
+  }
+
+  char* SimpleEstimate(unsigned long int simpleSim, const char* jsonCircuit,
+                       const char* observableStr, const char* jsonConfig) {
+    if (maestro && fSimpleEstimate)
+      return fSimpleEstimate(simpleSim, jsonCircuit, observableStr, jsonConfig);
+    else
+      throw std::runtime_error(
+          "MaestroLibrary: Unable to execute the simple simulator for "
+          "expectation values.");
 
     return nullptr;
   }
@@ -818,6 +835,8 @@ class MaestroLibrary : public Utils::Library {
   int (*fAddOptimizationSimulator)(unsigned long int, int, int);
 
   char* (*fSimpleExecute)(unsigned long int, const char*, const char*);
+  char* (*fSimpleEstimate)(unsigned long int, const char*, const char*,
+                           const char*);
   void (*fFreeResult)(char*);
 
   unsigned long int (*fCreateSimulator)(int, int);
