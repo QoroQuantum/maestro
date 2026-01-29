@@ -97,7 +97,7 @@ class TestQasmParser:
         include "qelib1.inc";
         qreg q[3];
         creg c[3];
-        h q[0];
+        h q[2];
         """
 
         parser = maestro.QasmToCirc()
@@ -311,6 +311,80 @@ class TestSimpleExecute:
         counts = result['counts']
         dominant_states = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:2]
         assert len(dominant_states) >= 1
+
+
+class TestSimpleEstimate:
+    """Test the simple_estimate convenience function"""
+
+    def test_simple_estimate_basic(self):
+        """Test simple_estimate with default parameters"""
+        qasm_bell = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        h q[0];
+        cx q[0], q[1];
+        """
+
+        # Estimate expectation values for ZZ, XX, and YY
+        observables = "ZZ;XX;YY"
+        result = maestro.simple_estimate(qasm_bell, observables)
+
+        assert result is not None
+        assert 'expectation_values' in result
+        assert 'simulator' in result
+        assert 'method' in result
+        assert 'time_taken' in result
+
+        exp_vals = result['expectation_values']
+        assert len(exp_vals) == 3
+
+        # Bell state (|00> + |11>) / sqrt(2)
+        # <ZZ> = 1.0
+        # <XX> = 1.0 (for this specific Bell state)
+        # <YY> = -1.0
+        assert exp_vals[0] == pytest.approx(1.0, abs=1e-5)
+        assert exp_vals[1] == pytest.approx(1.0, abs=1e-5)
+        assert exp_vals[2] == pytest.approx(-1.0, abs=1e-5)
+
+    def test_simple_estimate_single_qubit(self):
+        """Test simple_estimate for single qubit observables"""
+        qasm_h = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[1];
+        h q[0];
+        """
+
+        # <X> for H|0> is 1.0
+        # <Z> for H|0> is 0.0
+        result = maestro.simple_estimate(qasm_h, "X;Z")
+        assert result is not None
+        exp_vals = result['expectation_values']
+        assert len(exp_vals) == 2
+        assert exp_vals[0] == pytest.approx(1.0, abs=1e-5)
+        assert exp_vals[1] == pytest.approx(0.0, abs=1e-5)
+
+    def test_simple_estimate_mps(self):
+        """Test simple_estimate using MPS method"""
+        qasm_bell = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        h q[0];
+        cx q[0], q[1];
+        """
+
+        result = maestro.simple_estimate(
+            qasm_bell,
+            "ZZ",
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=2
+        )
+        assert result is not None
+        assert result['method'] == 'matrix_product_state'
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
 
 
 class TestComplexCircuits:

@@ -298,6 +298,151 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
+    char *SimpleEstimate(unsigned long int simpleSim, const char *circuitStr,
+                         const char *observableStr, const char *jsonConfig) {
+  if (simpleSim == 0 || !circuitStr || !observableStr || !jsonConfig ||
+      !maestroInstance)
+    return nullptr;
+
+  auto network = maestroInstance->GetSimpleSimulator(simpleSim);
+
+  std::shared_ptr<Circuits::Circuit<>> circuit;
+
+  if (circuitStr[0] == '{' || circuitStr[0] == '[') {
+    Json::JsonParserMaestro<> jsonParser;
+    circuit = jsonParser.ParseCircuit(circuitStr);
+  } else {
+    qasm::QasmToCirc<> parser;
+    std::string qasmInput(circuitStr);
+    circuit = parser.ParseAndTranslate(qasmInput);
+    if (parser.Failed()) return nullptr;
+  }
+
+  const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
+
+  bool configured = false;
+
+  const std::string maxBondDim = Json::JsonParserMaestro<>::GetConfigString(
+      "matrix_product_state_max_bond_dimension", configJson);
+  if (!maxBondDim.empty()) {
+    configured = true;
+    if (network->GetSimulator()) network->GetSimulator()->Clear();
+    network->Configure("matrix_product_state_max_bond_dimension",
+                       maxBondDim.c_str());
+  }
+
+  const std::string singularValueThreshold =
+      Json::JsonParserMaestro<>::GetConfigString(
+          "matrix_product_state_truncation_threshold", configJson);
+  if (!singularValueThreshold.empty()) {
+    configured = true;
+    if (network->GetSimulator()) network->GetSimulator()->Clear();
+    network->Configure("matrix_product_state_truncation_threshold",
+                       singularValueThreshold.c_str());
+  }
+
+  const std::string mpsSample = Json::JsonParserMaestro<>::GetConfigString(
+      "mps_sample_measure_algorithm", configJson);
+  if (!mpsSample.empty()) {
+    configured = true;
+    if (network->GetSimulator()) network->GetSimulator()->Clear();
+    network->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
+  }
+
+  if (configured || !network->GetSimulator()) network->CreateSimulator();
+
+  // Split observableStr by ';'
+  std::vector<std::string> paulis;
+  std::string obsStr(observableStr);
+  std::stringstream ss(obsStr);
+  std::string item;
+  while (std::getline(ss, item, ';')) {
+    if (!item.empty()) paulis.push_back(item);
+  }
+
+  auto start = std::chrono::high_resolution_clock::now();
+  auto expectations = network->ExecuteOnHostExpectations(circuit, 0, paulis);
+  auto end = std::chrono::high_resolution_clock::now();
+
+  std::chrono::duration<double> duration = end - start;
+  double time_taken = duration.count();
+  std::string timeStr = std::to_string(time_taken);
+
+  boost::json::object response;
+  response.reserve(4);
+
+  boost::json::array jsonExpectations;
+  jsonExpectations.reserve(expectations.size());
+  for (double val : expectations) {
+    jsonExpectations.push_back(val);
+  }
+
+  response.emplace("expectation_values", std::move(jsonExpectations));
+  response.emplace("time_taken", timeStr);
+
+  auto simulatorType = network->GetLastSimulatorType();
+
+  switch (simulatorType) {
+#ifndef NO_QISKIT_AER
+    case Simulators::SimulatorType::kQiskitAer:
+      response.emplace("simulator", "aer");
+      break;
+#endif
+    case Simulators::SimulatorType::kQCSim:
+      response.emplace("simulator", "qcsim");
+      break;
+#ifndef NO_QISKIT_AER
+    case Simulators::SimulatorType::kCompositeQiskitAer:
+      response.emplace("simulator", "composite_aer");
+      break;
+#endif
+    case Simulators::SimulatorType::kCompositeQCSim:
+      response.emplace("simulator", "composite_qcsim");
+      break;
+#ifdef __linux__
+    case Simulators::SimulatorType::kGpuSim:
+      response.emplace("simulator", "gpu_simulator");
+      break;
+#endif
+    default:
+      response.emplace("simulator", "unknown");
+      break;
+  }
+
+  auto simulationType = network->GetLastSimulationType();
+  switch (simulationType) {
+    case Simulators::SimulationType::kStatevector:
+      response.emplace("method", "statevector");
+      break;
+    case Simulators::SimulationType::kMatrixProductState:
+      response.emplace("method", "matrix_product_state");
+      break;
+    case Simulators::SimulationType::kStabilizer:
+      response.emplace("method", "stabilizer");
+      break;
+    case Simulators::SimulationType::kTensorNetwork:
+      response.emplace("method", "tensor_network");
+      break;
+    default:
+      response.emplace("method", "unknown");
+      break;
+  }
+
+  const std::string responseStr = boost::json::serialize(response);
+  const size_t responseSize = responseStr.length();
+  char *result = new char[responseSize + 1];
+
+  const char *responseData = responseStr.c_str();
+  std::copy(responseData, responseData + responseSize, result);
+
+  result[responseSize] = 0;  // ensure null-termination
+
+  return result;
+}
+
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
     void FreeResult(char *result) {
   if (result) delete[] result;
 }
