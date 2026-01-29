@@ -639,7 +639,7 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fPauliPropAddNoiseZ, __LINE__);
           fPauliPropAddNoiseXYZ = (int (*)(void *, int, double, double, double))GetFunction("PauliPropAddNoiseXYZ");
           CheckFunction((void *)fPauliPropAddNoiseXYZ, __LINE__);
-          fPauliPropAddAmplitudeDamping = (int (*)(void *, int, double))GetFunction("PauliPropAddAmplitudeDamping");
+          fPauliPropAddAmplitudeDamping = (int (*)(void *, int, double, double))GetFunction("PauliPropAddAmplitudeDamping");
           CheckFunction((void *)fPauliPropAddAmplitudeDamping, __LINE__);
           fPauliPropQubitProbability0 = (double (*)(void *, int))GetFunction("PauliPropQubitProbability0");
           CheckFunction((void *)fPauliPropQubitProbability0, __LINE__);
@@ -2847,8 +2847,7 @@ class GpuLibrary : public Utils::Library {
   {
     if (!obj) return false;
     if (LibraryHandle)
-      return fPauliPropAddAmplitudeDamping(obj, qubit, dampingProb,
-          exciteProb) == 1;
+      return fPauliPropAddAmplitudeDamping(obj, qubit, dampingProb, exciteProb) == 1;
     else
       throw std::runtime_error(
           "GpuLibrary: Unable to add amplitude damping on mps");
