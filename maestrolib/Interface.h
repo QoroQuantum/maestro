@@ -48,6 +48,11 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
+    char *SimpleEstimate(unsigned long int simpleSim, const char *circuitStr,
+                         const char *observableStr, const char *jsonConfig);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
     void FreeResult(char *result);
 
 #ifdef _WIN32

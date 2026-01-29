@@ -11,6 +11,7 @@ Maestro addresses the fragmentation of the current simulator ecosystem by provid
 - Unified Abstraction Layer: Write your circuit once (e.g., in Qiskit) and Maestro compiles it to the native format of the target backend.
 - Intelligent Prediction Engine: Automatically analyzes circuit features (gate density, entanglement, locality) to predict and select the fastest simulation backend for your specific workload.
 - High-Performance Optimizations: Transparently applies multi-threading, multi-processing, and optimized state sampling to increase throughput.
+- Expectation Value Estimation: Direct calculation of observables (e.g., Pauli strings) for VQA workflows.
 - GPU Acceleration: Integrated support for GPU-accelerated Statevector and custom Matrix Product State (MPS) execution.
 - Distributed Quantum Computing (DQC): Supports p-block simulation (Composite mode) to simulate distributed quantum networks and break the memory ceiling of monolithic simulations.
 - Backend-agnostic: Allows new simulators to be added easily
@@ -59,7 +60,8 @@ The model normalizes performance features to reduce hardware dependence and can 
 ## Documentation
 
 - [Installation Guide](INSTALL.md): Detailed build and installation instructions.
-- [Tutorial](TUTORIAL.md): Usage examples and API overview.
+- [Tutorial](TUTORIAL.md): Usage examples and API overview, including Python bindings.
+- [Python Examples](examples/): Python scripts demonstrating usage.
 
 ### API Documentation
 
