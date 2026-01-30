@@ -69,10 +69,7 @@ enum class SimulatorType : int {
   kCompositeQiskitAer, /**< composite qiskit aer simulator type */
 #endif
   kCompositeQCSim /**< composite qcsim simulator type */
-#ifdef __linux__
-  ,
   kGpuSim /**< gpu simulator type */
-#endif
 };
 
 /**
