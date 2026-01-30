@@ -639,8 +639,13 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fPauliPropAddNoiseZ, __LINE__);
           fPauliPropAddNoiseXYZ = (int (*)(void *, int, double, double, double))GetFunction("PauliPropAddNoiseXYZ");
           CheckFunction((void *)fPauliPropAddNoiseXYZ, __LINE__);
+          fPauliPropAddAmplitudeDamping = (int (*)(void *, int, double, double))GetFunction("PauliPropAddAmplitudeDamping");
+          CheckFunction((void *)fPauliPropAddAmplitudeDamping, __LINE__);
           fPauliPropQubitProbability0 = (double (*)(void *, int))GetFunction("PauliPropQubitProbability0");
           CheckFunction((void *)fPauliPropQubitProbability0, __LINE__);
+
+          fPauliPropMeasureQubit = (int (*)(void *, int))GetFunction("PauliPropMeasureQubit");
+          CheckFunction((void *)fPauliPropMeasureQubit, __LINE__);
 
           fPauliPropSampleQubits = (unsigned char *(*)(void *, const int *, int))GetFunction("PauliPropSampleQubits");
           CheckFunction((void *)fPauliPropSampleQubits, __LINE__);
@@ -2430,13 +2435,16 @@ class GpuLibrary : public Utils::Library {
       return fCopyStabilizerXTable(obj, xtable);
     else
       throw std::runtime_error("GpuLibrary: Unable to copy stabilizer X table");
+    return 0;
   }
+
   int CopyStabilizerZTable(void *obj, unsigned int *ztable) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fCopyStabilizerZTable(obj, ztable);
     else
       throw std::runtime_error("GpuLibrary: Unable to copy stabilizer Z table");
+    return 0;
   }
 
   int CopyStabilizerMTable(void *obj, unsigned int *mtable) {
@@ -2445,6 +2453,7 @@ class GpuLibrary : public Utils::Library {
       return fCopyStabilizerMTable(obj, mtable);
     else
       throw std::runtime_error("GpuLibrary: Unable to copy stabilizer M table");
+    return 0;
   }
 
   int InitStabilizerXTable(void *obj, const unsigned int *xtable) {
@@ -2454,6 +2463,7 @@ class GpuLibrary : public Utils::Library {
     else
       throw std::runtime_error(
           "GpuLibrary: Unable to initialize stabilizer X table");
+    return 0;
   }
 
   int InitStabilizerZTable(void *obj, const unsigned int *ztable) {
@@ -2463,6 +2473,7 @@ class GpuLibrary : public Utils::Library {
     else
       throw std::runtime_error(
           "GpuLibrary: Unable to initialize stabilizer Z table");
+    return 0;
   }
 
   // pauli propagation functions
@@ -2647,6 +2658,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplyY(obj, qubit) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply Y gate on mps");
+    return false;
   }
 
   bool PauliPropApplyZ(void *obj, int qubit)
@@ -2656,6 +2668,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplyZ(obj, qubit) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply Z gate on mps");
+    return false;
   }
 
   bool PauliPropApplyH(void *obj, int qubit)
@@ -2665,6 +2678,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplyH(obj, qubit) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply H gate on mps");
+    return false;
   }
 
   bool PauliPropApplyS(void *obj, int qubit)
@@ -2674,6 +2688,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplyS(obj, qubit) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply S gate on mps");
+    return false;
   }
 
   bool PauliPropApplySQRTX(void *obj, int qubit)
@@ -2683,6 +2698,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplySQRTX(obj, qubit) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply SQRTX gate on mps");
+    return false;
   }
 
   bool PauliPropApplySQRTY(void *obj, int qubit)
@@ -2692,6 +2708,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplySQRTY(obj, qubit) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply SQRTY gate on mps");
+    return false;
   }
 
   bool PauliPropApplySQRTZ(void *obj, int qubit)
@@ -2701,6 +2718,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplySQRTZ(obj, qubit) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply SQRTZ gate on mps");
+    return false;
   }
 
   bool PauliPropApplyCX(void *obj, int targetQubit, int controlQubit)
@@ -2710,6 +2728,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplyCX(obj, targetQubit, controlQubit) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply CX gate on mps");
+    return false;
   }
 
   bool PauliPropApplyCY(void *obj, int targetQubit, int controlQubit)
@@ -2719,6 +2738,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplyCY(obj, targetQubit, controlQubit) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply CY gate on mps");
+    return false;
   }
 
   bool PauliPropApplyCZ(void *obj, int targetQubit, int controlQubit)
@@ -2728,6 +2748,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplyCZ(obj, targetQubit, controlQubit) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply CZ gate on mps");
+    return false;
   }
 
   bool PauliPropApplySWAP(void *obj, int qubit1, int qubit2)
@@ -2737,6 +2758,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplySWAP(obj, qubit1, qubit2) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply SWAP gate on mps");
+    return false;
   }
 
   bool PauliPropApplyISWAP(void *obj, int qubit1, int qubit2)
@@ -2746,6 +2768,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplyISWAP(obj, qubit1, qubit2) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply ISWAP gate on mps");
+    return false;
   }
 
   bool PauliPropApplyRX(void *obj, int qubit, double angle)
@@ -2755,6 +2778,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplyRX(obj, qubit, angle) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply RX gate on mps");
+    return false;
   }
 
   bool PauliPropApplyRY(void *obj, int qubit, double angle)
@@ -2764,6 +2788,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplyRY(obj, qubit, angle) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply RY gate on mps");
+    return false;
   }
 
   bool PauliPropApplyRZ(void *obj, int qubit, double angle)
@@ -2773,6 +2798,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropApplyRZ(obj, qubit, angle) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply RZ gate on mps");
+    return false;
   }
 
   bool PauliPropAddNoiseX(void *obj, int qubit, double probability)
@@ -2782,6 +2808,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropAddNoiseX(obj, qubit, probability) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to add X noise on mps");
+    return false;
   }
 
   bool PauliPropAddNoiseY(void *obj, int qubit, double probability)
@@ -2791,6 +2818,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropAddNoiseY(obj, qubit, probability) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to add Y noise on mps");
+    return false;
   }
 
   bool PauliPropAddNoiseZ(void* obj, int qubit, double probability)
@@ -2800,6 +2828,7 @@ class GpuLibrary : public Utils::Library {
       return fPauliPropAddNoiseZ(obj, qubit, probability) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to add Z noise on mps");
+    return false;
   }
 
   bool PauliPropAddNoiseXYZ(void* obj, int qubit, double probabilityX,
@@ -2811,6 +2840,18 @@ class GpuLibrary : public Utils::Library {
           probabilityY, probabilityZ) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to add XYZ noise on mps");
+    return false;
+  }
+
+  bool PauliPropAddAmplitudeDamping(void* obj, int qubit, double dampingProb, double exciteProb)
+  {
+    if (!obj) return false;
+    if (LibraryHandle)
+      return fPauliPropAddAmplitudeDamping(obj, qubit, dampingProb, exciteProb) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to add amplitude damping on mps");
+    return false;
   }
 
   double PauliPropQubitProbability0(void *obj, int qubit)
@@ -2822,6 +2863,17 @@ class GpuLibrary : public Utils::Library {
       throw std::runtime_error(
           "GpuLibrary: Unable to get qubit probability 0 in pauli propagation simulator");
     return 0.0;
+  }
+
+  bool PauliPropMeasureQubit(void* obj, int qubit) 
+  {
+    if (!obj) return false;
+    if (LibraryHandle)
+      return fPauliPropMeasureQubit(obj, qubit) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to measure qubit in pauli propagation simulator");
+    return false;
   }
 
   unsigned char* PauliPropSampleQubits(void* obj, const int* qubits,
@@ -3127,8 +3179,10 @@ class GpuLibrary : public Utils::Library {
   int (*fPauliPropAddNoiseY)(void *, int, double);
   int (*fPauliPropAddNoiseZ)(void *, int, double);
   int (*fPauliPropAddNoiseXYZ)(void *, int, double, double, double);
+  int (*fPauliPropAddAmplitudeDamping)(void *, int, double, double);
   double (*fPauliPropQubitProbability0)(void *, int);
 
+  int (*fPauliPropMeasureQubit)(void *, int);
   unsigned char *(*fPauliPropSampleQubits)(void *, const int *, int);
   void (*fPauliPropFreeSampledQubits)(unsigned char *);
   void (*fPauliPropSaveState)(void *);

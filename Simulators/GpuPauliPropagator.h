@@ -304,12 +304,29 @@ class GpuPauliPropagator {
     return false;
   }
 
+  bool AddAmplitudeDamping(int qubit, double dampingProb, double exciteProb)
+  {
+    if (lib) {
+      return lib->PauliPropAddAmplitudeDamping(
+          obj, qubit, dampingProb, exciteProb);
+    }
+    return false;
+  }
+
   double QubitProbability0(int qubit)
   {
     if (lib) {
       return lib->PauliPropQubitProbability0(obj, qubit);
     }
     return 0.0;
+  }
+
+  bool MeasureQubit(int qubit)
+  {
+    if (lib) {
+      return lib->PauliPropMeasureQubit(obj, qubit);
+    }
+    return false;
   }
 
   std::vector<bool> SampleQubits(const std::vector<int>& qubits)
