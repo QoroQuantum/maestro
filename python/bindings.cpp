@@ -29,6 +29,7 @@ NB_MODULE(maestro, m) {
              Simulators::SimulatorType::kCompositeQiskitAer)
 #endif
       .value("CompositeQCSim", Simulators::SimulatorType::kCompositeQCSim)
+      .value("GpuSim", Simulators::SimulatorType::kGpuSim)
       .export_values();
 
   // Bind SimulationType enum
