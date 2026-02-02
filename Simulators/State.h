@@ -68,7 +68,7 @@ enum class SimulatorType : int {
 #ifndef NO_QISKIT_AER
   kCompositeQiskitAer, /**< composite qiskit aer simulator type */
 #endif
-  kCompositeQCSim /**< composite qcsim simulator type */
+  kCompositeQCSim, /**< composite qcsim simulator type */
   kGpuSim /**< gpu simulator type */
 };
 
