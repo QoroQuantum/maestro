@@ -608,6 +608,7 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fPauliPropApplyH, __LINE__);
           fPauliPropApplyS = (int (*)(void *, int))GetFunction("PauliPropApplyS");
           CheckFunction((void *)fPauliPropApplyS, __LINE__);
+
           fPauliPropApplySQRTX = (int (*)(void *, int))GetFunction("PauliPropApplySQRTX");
           CheckFunction((void *)fPauliPropApplySQRTX, __LINE__);
           fPauliPropApplySQRTY = (int (*)(void *, int))GetFunction("PauliPropApplySQRTY");
