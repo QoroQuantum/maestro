@@ -272,6 +272,68 @@ class GpuPauliPropagator {
     return false;
   }
 
+  bool ApplySDG(int qubit)
+  {
+    if (!ApplyZ(qubit)) return false;
+    if (!ApplyS(qubit)) return false;
+
+    return true;
+  }
+
+  bool ApplyK(int qubit)
+  {
+    if (!ApplyZ(qubit)) return false;
+    if (!ApplyS(qubit)) return false;
+    if (!ApplyH(qubit)) return false;
+    if (!ApplyS(qubit)) return false;
+
+    return true;
+  }
+
+  bool ApplySxDAG(int qubit)
+  {
+    if (!ApplyS(qubit)) return false;
+    if (!ApplH(qubit)) return false;
+    if (!ApplyS(qubit)) return false;
+    return true;
+  }
+
+  bool ApplyP(int qubit, double lambda)
+  {
+    return ApplyRZ(qubit, lambda);
+  }
+
+  bool ApplyT(int qubit)
+  {
+    return ApplyRZ(qubit, M_PI / 4);
+  }
+
+  bool ApplyTDG(int qubit)
+  {
+    return ApplyRZ(qubit, -M_PI / 4); 
+  }
+
+  bool ApplyU(int qubit, double theta, double phi, double lambda)
+  {
+    if (!ApplyRZ(qubit, phi)) return false;
+    if (!ApplyRY(qubit, theta)) return false;
+    if (!ApplyRZ(qubit, lambda)) return false;
+
+    return true;
+  }
+
+
+  // to implement all gates, add:
+  // see qasm paper for some decompositions
+  // for the three qubit gates, see the decompositions already done for mps qcsim
+  /* 
+  kCPGateType,
+  kCRxGateType, kCRyGateType, kCRzGateType, kCHGateType, kCSxGateType,
+  kCSxDagGateType, kCUGateType, 
+
+  kCSwapGateType, kCCXGateType,
+  */
+
   bool AddNoiseX(int qubit, double probability)
   {
     if (lib) {
