@@ -293,7 +293,7 @@ class GpuPauliPropagator {
   bool ApplySxDAG(int qubit)
   {
     if (!ApplyS(qubit)) return false;
-    if (!ApplH(qubit)) return false;
+    if (!ApplyH(qubit)) return false;
     if (!ApplyS(qubit)) return false;
     return true;
   }
