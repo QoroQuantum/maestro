@@ -43,7 +43,7 @@ struct PauliSimTestFixture {
   std::shared_ptr<Simulators::ISimulator> statevectorSim;
   Simulators::QcsimPauliPropagator qcsimPauliSim;
 #ifdef __linux__
-  std::shared_ptr<GpuPauliPropagator> gpuPauliSim;
+  std::shared_ptr<Simulators::GpuPauliPropagator> gpuPauliSim;
 #endif
   Circuits::OperationState state;
 };
