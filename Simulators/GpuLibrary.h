@@ -583,10 +583,16 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fPauliPropGetNumGatesBetweenTruncations, __LINE__);
           fPauliPropSetNumGatesBetweenTruncations = (void (*)(void *, int))GetFunction("PauliPropSetNumGatesBetweenTruncations");
           CheckFunction((void *)fPauliPropSetNumGatesBetweenTruncations, __LINE__);
+          fPauliPropGetNumGatesBetweenDeduplications = (int (*)(void *))GetFunction("PauliPropGetNumGatesBetweenDeduplications");
+          CheckFunction((void *)fPauliPropGetNumGatesBetweenDeduplications, __LINE__);
+          fPauliPropSetNumGatesBetweenDeduplications = (void (*)(void *, int))GetFunction("PauliPropSetNumGatesBetweenDeduplications");
+          CheckFunction((void *)fPauliPropSetNumGatesBetweenDeduplications, __LINE__);
+
+
           fPauliPropClearOperators = (int (*)(void *))GetFunction("PauliPropClearOperators");
           CheckFunction((void *)fPauliPropClearOperators, __LINE__);
-          fPauliPropAllocateMemory =
-              (int (*)(void *, double))GetFunction("PauliPropAllocateMemory");
+          fPauliPropAllocateMemory = (int (*)(void *, double))GetFunction("PauliPropAllocateMemory");
+          CheckFunction((void *)fPauliPropAllocateMemory, __LINE__);
 
           fPauliPropGetExpectationValue = (double (*)(void *))GetFunction("PauliPropGetExpectationValue");
           CheckFunction((void *)fPauliPropGetExpectationValue, __LINE__);
@@ -2575,6 +2581,28 @@ class GpuLibrary : public Utils::Library {
           "propagation simulator");
   }
 
+  int PauliPropGetNumGatesBetweenDeduplications(void* obj)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fPauliPropGetNumGatesBetweenDeduplications(obj);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get number of gates between deduplications in pauli propagation simulator");
+    return 0;
+  }
+
+  void PauliPropSetNumGatesBetweenDeduplications(void* obj, int numGates)
+  {
+    if (!obj) return;
+    if (LibraryHandle)
+      fPauliPropSetNumGatesBetweenDeduplications(obj, numGates);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set number of gates between deduplications in pauli "
+          "propagation simulator");
+  }
+
   bool PauliPropClearOperators(void* obj)
   {
     if (!obj) return false;
@@ -3151,6 +3179,8 @@ class GpuLibrary : public Utils::Library {
   void (*fPauliPropSetWeightTruncationCutoff)(void *, double);
   int (*fPauliPropGetNumGatesBetweenTruncations)(void *);
   void (*fPauliPropSetNumGatesBetweenTruncations)(void *, int);
+  int (*fPauliPropGetNumGatesBetweenDeduplications)(void *);
+  void (*fPauliPropSetNumGatesBetweenDeduplications)(void *, int);
   int (*fPauliPropClearOperators)(void *);
   int (*fPauliPropAllocateMemory)(void *, double);
   double (*fPauliPropGetExpectationValue)(void *);
