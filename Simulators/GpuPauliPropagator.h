@@ -95,6 +95,21 @@ class GpuPauliPropagator {
     }
   }
 
+  int GetNumGatesBetweenDeduplications()
+  {
+    if (lib) {
+      return lib->PauliPropGetNumGatesBetweenDeduplications(obj);
+    }
+    return 0;
+  }
+
+  void SetNumGatesBetweenDeduplications(int numGates)
+  {
+    if (lib) {
+      lib->PauliPropSetNumGatesBetweenDeduplications(obj, numGates);
+    }
+  }
+
   bool ClearOperators()
   {
     if (lib) {
@@ -325,15 +340,94 @@ class GpuPauliPropagator {
     return true;
   }
 
+  bool ApplyCRX(int controlQubit, int targetQubit, double angle)
+  {
+    const double halfAngle = angle * 0.5;
+    if (!ApplyRX(targetQubit, halfAngle)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyRX(targetQubit, -halfAngle)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    return true;
+  }
+
+  bool ApplyCRY(int controlQubit, int targetQubit, double angle)
+  {
+    const double halfAngle = angle * 0.5;
+    if (!ApplyRY(targetQubit, halfAngle)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyRY(targetQubit, -halfAngle)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    return true;
+  }
+
+  bool ApplyCRZ(int controlQubit, int targetQubit, double angle)
+  {
+    const double halfAngle = angle * 0.5;
+    if (!ApplyRZ(targetQubit, halfAngle)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyRZ(targetQubit, -halfAngle)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    return true;
+  }
+
+  bool ApplyCH(int controlQubit, int targetQubit)
+  {
+    if (!ApplyH(targetQubit)) return false;
+    if (!ApplySDG(targetQubit)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyH(targetQubit)) return false;
+    if (!ApplyT(targetQubit)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyT(targetQubit)) return false;
+    if (!ApplyH(targetQubit)) return false;
+    if (!ApplyS(targetQubit)) return false;
+    if (!ApplyX(targetQubit)) return false;
+    if (!ApplyS(controlQubit)) return false;
+
+    return true;
+  }
+
+  bool ApplyCU(int controlQubit, int targetQubit,
+               double theta, double phi, double lambda)
+  {
+    if (!ApplyRZ(targetQubit, (lambda - phi) * 0.5)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+
+    if (!ApplyRY(targetQubit, -theta * 0.5)) return false;
+    if (!ApplyRZ(targetQubit, -(phi + lambda) * 0.5)) return false;
+    
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    
+    if (!ApplyRZ(targetQubit, phi)) return false;
+    if (!ApplyRY(targetQubit, theta * 0.5)) return false;
+
+    return true;
+  }
+
+  bool ApplyCP(int controlQubit, int targetQubit, double lambda)
+  {
+    if (!ApplyCRZ(controlQubit, targetQubit, lambda)) return false;
+
+    return true;
+  }
+
+  bool ApplyCSX(int controlQubit, int targetQubit)
+  {
+    if (!ApplyCRX(controlQubit, targetQubit, M_PI_2)) return false;
+
+    return true;
+  }
+
+  bool ApplyCSXDAG(int controlQubit, int targetQubit)
+  {
+    if (!ApplyCRX(controlQubit, targetQubit, -M_PI_2)) return false;
+    return true;
+  }
 
   // to implement all gates, add:
   // see qasm paper for some decompositions
   // for the three qubit gates, see the decompositions already done for mps qcsim
   /* 
-  kCPGateType,
-  kCRxGateType, kCRyGateType, kCRzGateType, kCHGateType, kCSxGateType,
-  kCSxDagGateType, kCUGateType, 
-
   kCSwapGateType, kCCXGateType,
   */
 
