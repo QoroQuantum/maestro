@@ -36,6 +36,14 @@ struct PauliSimTestFixture {
     statevectorSim->Initialize();
 
     qcsimPauliSim.SetNrQubits(nrQubitsForRandomCirc);
+
+#ifdef __linux__
+    if (Simulators::SimulatorsFactory::IsGpuLibraryAvailable()) {
+      gpuPauliSim =
+          Simulators::SimulatorsFactory::CreateGpuPauliPropagatorSimulator();
+      gpuPauliSim->CreateSimulator(nrQubitsForRandomCirc);
+    }
+#endif
   }
 
   const unsigned int nrQubitsForRandomCirc = 8;
@@ -55,10 +63,6 @@ BOOST_AUTO_TEST_SUITE(pauli_propagation_tests)
 BOOST_FIXTURE_TEST_CASE(PauliInitTests, PauliSimTestFixture) {
   BOOST_TEST(statevectorSim);
   BOOST_TEST(qcsimPauliSim.GetNrQubits() == nrQubitsForRandomCirc);
-
-  #ifdef __linux__
-  BOOST_TEST(gpuPauliSim);
-  #endif
 }
 
 
