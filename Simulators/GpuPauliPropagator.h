@@ -142,6 +142,22 @@ class GpuPauliPropagator {
     return false;
   }
 
+  double ExpectationValue(const std::string& pauliStr)
+  {
+      SetInPauliExpansionUnique(pauliStr);
+      Execute();
+      return GetExpectationValue();
+  }
+
+  double ExpectationValueMultiple(
+      const std::vector<std::string> &pauliStrs,
+      const std::vector<double> &coefficients)
+  {
+      SetInPauliExpansionMultiple(pauliStrs, coefficients);
+      Execute();
+      return GetExpectationValue();
+  }
+
   bool SetInPauliExpansionUnique(const std::string& pauliStr)
   {
     if (lib) {
