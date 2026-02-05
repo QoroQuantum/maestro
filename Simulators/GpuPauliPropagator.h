@@ -333,9 +333,9 @@ class GpuPauliPropagator {
 
   bool ApplyU(int qubit, double theta, double phi, double lambda)
   {
-    if (!ApplyRZ(qubit, phi)) return false;
-    if (!ApplyRY(qubit, theta)) return false;
     if (!ApplyRZ(qubit, lambda)) return false;
+    if (!ApplyRY(qubit, theta)) return false;
+    if (!ApplyRZ(qubit, phi)) return false;
 
     return true;
   }
@@ -421,6 +421,19 @@ class GpuPauliPropagator {
   bool ApplyCSXDAG(int controlQubit, int targetQubit)
   {
     if (!ApplyCRX(controlQubit, targetQubit, -M_PI_2)) return false;
+    return true;
+  }
+
+  bool ApplyCSwap(int controlQubit, int targetQubit1, int targetQubit2)
+  {
+    // TODO: implement this gate
+
+    return true;
+  }
+
+  bool ApplyCCX(int controlQubit1, int controlQubit2, int targetQubit) 
+  {
+    // TODO: implement this gate
     return true;
   }
 
