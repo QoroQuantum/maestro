@@ -374,10 +374,10 @@ struct PauliSimTestFixture {
         break;
 
       case 6:
-        pauliSim.ApplySX(op.qubit1);
+        pauliSim.ApplySQRTX(op.qubit1);
         break;
       case 7:
-        pauliSim.ApplySXDG(op.qubit1);
+        pauliSim.ApplySxDAG(op.qubit1);
         break;
       case 8:
         pauliSim.ApplyK(op.qubit1);
