@@ -565,7 +565,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
   // now the same for gpu sim
 #ifdef __linux__
   if (gpuPauliSim) {
-    std::unordered_map<Types::qubit_t, Types::qubit_t> gpuQcsimRes;
+    std::unordered_map<Types::qubit_t, Types::qubit_t> gpuRes;
     for (int i = 0; i < nrSamples; ++i) {
       std::shuffle(pq.begin(), pq.end(), g);
       auto res = gpuPauliSim->SampleQubits(pq);
@@ -574,14 +574,14 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
         if (res[q])
           result |= (1ULL << pq[q]);
       }
-      ++gpuQcsimRes[result];
+      ++gpuRes[result];
     }
     // compare results
     for (const auto& kv : svRes) {
       const Types::qubit_t key = kv.first;
       const Types::qubit_t svCount = kv.second;
       const Types::qubit_t psCount =
-          gpuQcsimRes.find(key) != gpuQcsimRes.end() ? gpuQcsimRes[key] : 0;
+          gpuRes.find(key) != gpuRes.end() ? gpuRes[key] : 0;
       const double svProb = static_cast<double>(svCount) / nrSamples;
       const double psProb = static_cast<double>(psCount) / nrSamples;
       BOOST_TEST(std::abs(svProb - psProb) < 0.1,
@@ -627,7 +627,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
 
  #ifdef __linux__
   if (gpuPauliSim) {
-    gpuQcsimRes.clear();
+    std::unordered_map<Types::qubit_t, Types::qubit_t> gpuRes;
     gpuPauliSim->SaveState();
     for (int i = 0; i < nrSamples; ++i) {
       gpuPauliSim->RestoreState();
@@ -639,14 +639,14 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
         if (res)
           result |= (1ULL << pq[q]);
       }
-      ++gpuQcsimRes[result];
+      ++gpuRes[result];
     }
     // compare results
     for (const auto& kv : svRes) {
       const Types::qubit_t key = kv.first;
       const Types::qubit_t svCount = kv.second;
       const Types::qubit_t psCount =
-          gpuQcsimRes.find(key) != gpuQcsimRes.end() ? gpuQcsimRes[key] : 0;
+          gpuRes.find(key) != gpuRes.end() ? gpuRes[key] : 0;
       const double svProb = static_cast<double>(svCount) / nrSamples;
       const double psProb = static_cast<double>(psCount) / nrSamples;
       BOOST_TEST(std::abs(svProb - psProb) < 0.1,
@@ -738,7 +738,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
   // now the same for gpu sim
 #ifdef __linux__
   if (gpuPauliSim) {
-    std::unordered_map<Types::qubit_t, Types::qubit_t> gpuQcsimRes;
+    std::unordered_map<Types::qubit_t, Types::qubit_t> gpuRes;
     for (int i = 0; i < nrSamples; ++i) {
       std::shuffle(pq.begin(), pq.end(), g);
       auto res = gpuPauliSim->SampleQubits(pq);
@@ -746,14 +746,14 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
       for (int q = 0; q < pq.size(); ++q) {
         if (res[q]) result |= (1ULL << pq[q]);
       }
-      ++gpuQcsimRes[result];
+      ++gpuRes[result];
     }
     // compare results
     for (const auto& kv : svRes) {
       const Types::qubit_t key = kv.first;
       const Types::qubit_t svCount = kv.second;
       const Types::qubit_t psCount =
-          gpuQcsimRes.find(key) != gpuQcsimRes.end() ? gpuQcsimRes[key] : 0;
+          gpuRes.find(key) != gpuRes.end() ? gpuRes[key] : 0;
       const double svProb = static_cast<double>(svCount) / nrSamples;
       const double psProb = static_cast<double>(psCount) / nrSamples;
       BOOST_TEST(std::abs(svProb - psProb) < 0.1,
@@ -798,24 +798,25 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
 
 #ifdef __linux__
   if (gpuPauliSim) {
-    gpuQcsimRes.clear();
+    std::unordered_map<Types::qubit_t, Types::qubit_t> gpuRes;
     gpuPauliSim->SaveState();
     for (int i = 0; i < nrSamples; ++i) {
       gpuPauliSim->RestoreState();
       std::shuffle(pq.begin(), pq.end(), g);
+
       Types::qubit_t result = 0;
       for (int q = 0; q < pq.size(); ++q) {
         auto res = gpuPauliSim->MeasureQubit(pq[q]);
         if (res) result |= (1ULL << pq[q]);
       }
-      ++gpuQcsimRes[result];
+      ++gpuRes[result];
     }
     // compare results
     for (const auto& kv : svRes) {
       const Types::qubit_t key = kv.first;
       const Types::qubit_t svCount = kv.second;
       const Types::qubit_t psCount =
-          gpuQcsimRes.find(key) != gpuQcsimRes.end() ? gpuQcsimRes[key] : 0;
+          gpuRes.find(key) != gpuRes.end() ? gpuRes[key] : 0;
       const double svProb = static_cast<double>(svCount) / nrSamples;
       const double psProb = static_cast<double>(psCount) / nrSamples;
       BOOST_TEST(std::abs(svProb - psProb) < 0.1,
