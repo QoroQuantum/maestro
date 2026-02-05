@@ -568,7 +568,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
     std::unordered_map<Types::qubit_t, Types::qubit_t> gpuQcsimRes;
     for (int i = 0; i < nrSamples; ++i) {
       std::shuffle(pq.begin(), pq.end(), g);
-      auto res = gpuPauliSim->Sample(pq);
+      auto res = gpuPauliSim->SampleQubits(pq);
       Types::qubit_t result = 0;
       for (int q = 0; q < pq.size(); ++q) {
         if (res[q])
@@ -741,7 +741,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
     std::unordered_map<Types::qubit_t, Types::qubit_t> gpuQcsimRes;
     for (int i = 0; i < nrSamples; ++i) {
       std::shuffle(pq.begin(), pq.end(), g);
-      auto res = gpuPauliSim->Sample(pq);
+      auto res = gpuPauliSim->SampleQubits(pq);
       Types::qubit_t result = 0;
       for (int q = 0; q < pq.size(); ++q) {
         if (res[q]) result |= (1ULL << pq[q]);
