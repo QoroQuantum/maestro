@@ -7,7 +7,6 @@ import time
 def create_rydberg_circuit(num_atoms, omega, delta, interaction_strength, steps, dt):
     """
     Generates a QASM circuit simulating the adiabatic preparation of a Rydberg atom array state.
-    
     Hamiltonian: H = Omega/2 * Sum(X) - Delta * Sum(n) + V * Sum(n_i n_{i+1})
     """
     
@@ -22,59 +21,37 @@ def create_rydberg_circuit(num_atoms, omega, delta, interaction_strength, steps,
     delta_start = -5.0
     
     for s in range(steps):
-        # Linear ramp progress
-        t_frac = (s + 1) / steps
+        t_frac = s / steps # Start exactly at 0 to avoid sudden quench
         
-        # Current parameters
-        # Ramp Delta from delta_start to target 'delta'
-        # Ramp Omega from 0 to target 'omega'
         curr_omega = t_frac * omega
         curr_delta = delta_start + t_frac * (delta - delta_start)
         
-        # Layer 1: ZZ Interactions (Rydberg Blockade)
-        # Term: V * n_i * n_{i+1}
-        # In terms of Pauli Z: V/4 * (I - Z_i) * (I - Z_{i+1})
-        # Ignoring constants/singles for now (handled in Z layer), the Interaction part is V/4 * Z_i * Z_{i+1}
-        # Gate: Rzz(theta) = exp(-i * theta/2 * Z * Z).
-        # We need exp(-i * (V/4 * dt) * Z * Z).
-        # So theta/2 = V*dt/4 => theta = V*dt/2.
-        
+        # 1. ZZ Interactions (Rydberg Blockade)
+        # theta = V * dt / 2
         zz_theta = interaction_strength * dt / 2
         
-        # Even bonds (0-1, 2-3, ...)
+        # Even bonds
         for i in range(0, num_atoms - 1, 2):
             qasm.append(f"cx q[{i}], q[{i+1}];")
             qasm.append(f"rz({zz_theta}) q[{i+1}];")
             qasm.append(f"cx q[{i}], q[{i+1}];")
             
-        # Odd bonds (1-2, 3-4, ...)
+        # Odd bonds
         for i in range(1, num_atoms - 1, 2):
             qasm.append(f"cx q[{i}], q[{i+1}];")
             qasm.append(f"rz({zz_theta}) q[{i+1}];")
             qasm.append(f"cx q[{i}], q[{i+1}];")
             
-        # Layer 2: Single Qubit Gates (Drive and Detuning)
+        # 2. Single Qubit Gates
         for i in range(num_atoms):
-            # Omega Term: Omega/2 * X
-            # Propagator: exp(-i * Omega/2 * dt * X) = Rx(Omega * dt)
+            # Drive: Rx(Omega * dt)
             qasm.append(f"rx({curr_omega * dt}) q[{i}];")
             
-            # Detuning and Z-correction from interaction
-            # Term: -Delta * n_i = -Delta/2 * (I - Z_i)
-            # Propagator: exp(i * Delta * dt / 2 * Z_i) = Rz(-Delta * dt)
-            # Note: Rz(lam) = exp(-i * lam/2 * Z).
-            # We want exp(i * Delta * dt / 2 * Z).
-            # -i * lam/2 = i * Delta * dt / 2  => -lam = Delta * dt => lam = -Delta * dt.
+            # Detuning: This was the bug!
+            # Correct sign is POSITIVE.
+            z_angle = curr_delta * dt
             
-            z_angle = -curr_delta * dt
-            
-            # Corrections from V expansion n_i n_j = (1 - Zi - Zj + ZiZj)/4
-            # Contains terms -V/4 * Z_i and -V/4 * Z_j.
-            # For each neighbor, we get a -V/4 * Z_i term.
-            # Propagator: exp(-i * (-V/4) * dt * Z_i) = exp(i * V * dt / 4 * Z_i)
-            # Match with Rz(lam) = exp(-i * lam/2 * Z)
-            # -i * lam/2 = i * V * dt / 4 => -lam = V * dt / 2 => lam = -V * dt / 2
-            
+            # Interaction Corrections (Single Z terms from V)
             neighbors = 0
             if i > 0: neighbors += 1
             if i < num_atoms - 1: neighbors += 1
