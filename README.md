@@ -37,14 +37,14 @@ Maestro integrates or wraps the following:
 - Statevector (Qiskit Aer, QCSim, custom implementations)
 - MPS (multiple libraries)
 - Pauli propagation
-- Stabilizer/Clifford simulators
+- Clifford/stabilizer simulators
 
 ### GPU Backends
 - Statevector (NVIDIA cuStateVec)
 - MPS (custom CUDA implementation)
 - Tensor network simulation
 - Pauli propagation
-- (Limited) Stabilizer
+- (Limited) stabilizer
 
 ### Distributed Simulation
 - p-block composite simulation for DQC
