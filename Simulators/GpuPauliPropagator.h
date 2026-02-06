@@ -339,15 +339,15 @@ class GpuPauliPropagator {
 
   bool ApplyT(int qubit)
   {
-    return ApplyRZ(qubit, M_PI / 4);
+    return ApplyRZ(qubit, M_PI_4);
   }
 
   bool ApplyTDG(int qubit)
   {
-    return ApplyRZ(qubit, -M_PI / 4); 
+    return ApplyRZ(qubit, -M_PI_4);
   }
 
-  bool ApplyU(int qubit, double theta, double phi, double lambda)
+  bool ApplyU(int qubit, double theta, double phi, double lambda, double gamma = 0.0)
   {
     if (!ApplyRZ(qubit, lambda)) return false;
     if (!ApplyRY(qubit, theta)) return false;
@@ -356,13 +356,49 @@ class GpuPauliPropagator {
     return true;
   }
 
+  bool ApplyCH(int controlQubit, int targetQubit) 
+  {
+    if (!ApplyH(targetQubit)) return false;
+    if (!ApplySDG(targetQubit)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyH(targetQubit)) return false;
+    if (!ApplyT(targetQubit)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyT(targetQubit)) return false;
+    if (!ApplyH(targetQubit)) return false;
+    if (!ApplyS(targetQubit)) return false;
+    if (!ApplyX(targetQubit)) return false;
+    if (!ApplyS(controlQubit)) return false;
+
+    return true;
+  }
+
+  bool ApplyCU(int controlQubit, int targetQubit, double theta, double phi,
+               double lambda, double gamma = 0.0) 
+  {
+    if (gamma != 0.0) {
+      if (!ApplyP(controlQubit, gamma)) return false;
+    }
+    const double lambdaPlusPhiHalf = 0.5 * (lambda + phi);
+    const double halfTheta = 0.5 * theta;
+    if (!ApplyP(targetQubit, 0.5 * (lambda - phi))) return false;
+    if (!ApplyP(controlQubit, lambdaPlusPhiHalf)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyU(targetQubit, -halfTheta, 0, -lambdaPlusPhiHalf)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyU(targetQubit, halfTheta, phi, 0)) return false;
+    return true;
+  }
+
   bool ApplyCRX(int controlQubit, int targetQubit, double angle)
   {
     const double halfAngle = angle * 0.5;
-    if (!ApplyRX(targetQubit, halfAngle)) return false;
+    if (!ApplyH(targetQubit)) return false;
     if (!ApplyCX(controlQubit, targetQubit)) return false;
-    if (!ApplyRX(targetQubit, -halfAngle)) return false;
+    if (!ApplyRZ(targetQubit, -halfAngle)) return false;
     if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyRZ(targetQubit, halfAngle)) return false;
+    if (!ApplyH(targetQubit)) return false;
     return true;
   }
 
@@ -386,70 +422,93 @@ class GpuPauliPropagator {
     return true;
   }
 
-  bool ApplyCH(int controlQubit, int targetQubit)
-  {
-    if (!ApplyH(targetQubit)) return false;
-    if (!ApplySDG(targetQubit)) return false;
-    if (!ApplyCX(controlQubit, targetQubit)) return false;
-    if (!ApplyH(targetQubit)) return false;
-    if (!ApplyT(targetQubit)) return false;
-    if (!ApplyCX(controlQubit, targetQubit)) return false;
-    if (!ApplyT(targetQubit)) return false;
-    if (!ApplyH(targetQubit)) return false;
-    if (!ApplyS(targetQubit)) return false;
-    if (!ApplyX(targetQubit)) return false;
-    if (!ApplyS(controlQubit)) return false;
 
-    return true;
-  }
-
-  bool ApplyCU(int controlQubit, int targetQubit,
-               double theta, double phi, double lambda)
-  {
-    if (!ApplyRZ(targetQubit, (lambda - phi) * 0.5)) return false;
-    if (!ApplyCX(controlQubit, targetQubit)) return false;
-
-    if (!ApplyRY(targetQubit, -theta * 0.5)) return false;
-    if (!ApplyRZ(targetQubit, -(phi + lambda) * 0.5)) return false;
-    
-    if (!ApplyCX(controlQubit, targetQubit)) return false;
-    
-    if (!ApplyRZ(targetQubit, phi)) return false;
-    if (!ApplyRY(targetQubit, theta * 0.5)) return false;
-
-    return true;
-  }
 
   bool ApplyCP(int controlQubit, int targetQubit, double lambda)
   {
-    if (!ApplyCRZ(controlQubit, targetQubit, lambda)) return false;
+    const double halfAngle = lambda * 0.5;
+    if (!ApplyP(controlQubit, halfAngle)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyP(targetQubit, -halfAngle)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyP(targetQubit, halfAngle)) return false;
+
+    return true;
+  }
+
+
+  bool ApplyCS(int controlQubit, int targetQubit) 
+  {
+    if (!ApplyT(controlQubit)) return false;
+    if (!ApplyT(targetQubit)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyTDG(targetQubit)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+
+    return true;
+  }
+
+  bool ApplyCSDAG(int controlQubit, int targetQubit) 
+  {
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyT(targetQubit)) return false;
+    if (!ApplyCX(controlQubit, targetQubit)) return false;
+    if (!ApplyTDG(controlQubit)) return false;
+    if (!ApplyTDG(targetQubit)) return false;
 
     return true;
   }
 
   bool ApplyCSX(int controlQubit, int targetQubit)
   {
-    if (!ApplyCRX(controlQubit, targetQubit, M_PI_2)) return false;
+    if (!ApplyH(targetQubit)) return false;
+    if (!ApplyCS(controlQubit, targetQubit)) return false;
+    if (!ApplyH(targetQubit)) return false;
 
     return true;
   }
 
   bool ApplyCSXDAG(int controlQubit, int targetQubit)
   {
-    if (!ApplyCRX(controlQubit, targetQubit, -M_PI_2)) return false;
+    if (!ApplyH(targetQubit)) return false;
+    if (!ApplyCSDAG(controlQubit, targetQubit)) return false;
+    if (!ApplyH(targetQubit)) return false;
+
     return true;
   }
 
   bool ApplyCSwap(int controlQubit, int targetQubit1, int targetQubit2)
   {
-    // TODO: implement this gate
+    const size_t q1 = controlQubit;  // control
+    const size_t q2 = targetQubit1;
+    const size_t q3 = targetQubit2;
+
+    if (!ApplyCX(q3, q2)) return false;
+    if (!ApplyCSX(q2, q3)) return false;
+    if (!ApplyCX(q1, q2)) return false;
+    if (!ApplyP(q3, M_PI)) return false;
+    if (!ApplyP(q2, -M_PI_2)) return false;
+    if (!ApplyCSX(q2, q3)) return false;
+    if (!ApplyCX(q1, q2)) return false;
+    if (!ApplyP(q3, M_PI)) return false;
+    if (!ApplyCSX(q1, q3)) return false;
+    if (!ApplyCX(q3, q2)) return false;
 
     return true;
   }
 
   bool ApplyCCX(int controlQubit1, int controlQubit2, int targetQubit) 
   {
-    // TODO: implement this gate
+    const size_t q1 = controlQubit1;  // control 1
+    const size_t q2 = controlQubit2;  // control 2
+    const size_t q3 = targetQubit;    // target
+
+    if (!ApplyCSX(q2, q3)) return false;
+    if (!ApplyCX(q1, q2)) return false;
+    if (!ApplyCSXDAG(q2, q3)) return false;
+    if (!ApplyCX(q1, q2)) return false;
+    if (!ApplyCSX(q1, q3)) return false;
+
     return true;
   }
 
