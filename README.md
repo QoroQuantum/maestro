@@ -26,7 +26,7 @@ The Maestro pipeline consists of:
 4. Prediction engine (runtime estimation and backend routing)
 5. Execution on one of the supported backends:
    - CPU: statevector, MPS, Pauli propagation, Clifford/stabilizer
-   - GPU: statevector, MPS, tensor networks, Pauli propagation, (limited) stabilizer
+   - GPU: statevector, MPS, Pauli propagation, tensor network simulation, (limited) Clifford/stabilizer
    - Composite p-block distributed simulation
 
 ## Simulation Backends
@@ -44,7 +44,7 @@ Maestro integrates or wraps the following:
 - MPS (custom CUDA implementation)
 - Tensor network simulation
 - Pauli propagation
-- (Limited) stabilizer
+- (Limited) Clifford/stabilizer
 
 ### Distributed Simulation
 - p-block composite simulation for DQC
