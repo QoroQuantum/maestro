@@ -5,23 +5,28 @@ import matplotlib.pyplot as plt
 import time
 from rydberg_demo import create_rydberg_circuit
 
-# Reuse configuration
-N = 64
-V_interaction = 5.0
-max_bond_dim = 16
+# 50 Atoms is significantly beyond what any Statevector sim can do (max ~40)
+# and pushes the limits of standard tensor network libraries on a laptop.
+N = 15  # Manageable size, easier to anneal
+V_interaction = 10.0
+
+# With N=50, we can afford higher accuracy
+max_bond_dim = 32  # Captures more entanglement at the phase transition
 
 # Deep Z2 Phase Parameters
-target_omega = 2.5
-target_delta = 3.0
-T_total = 3.0
-dt = 0.15
+target_omega = 2.0
+target_delta = 5.0
+
+# Slower ramp to ensure adiabaticity
+T_total = 15.0 
+dt = 0.01      # Smaller steps for better Trotter error
 steps = int(T_total / dt)
 
 def main():
     print("=================================================================")
     print("   MAESTRO Demo Part 2: Quantum Correlations (Sampling Mode)")
     print("   Goal: Measure spatial decay of crystalline order")
-    print(f"   Target: 64 Atoms, Omega={target_omega}, Delta={target_delta}")
+    print(f"   Target: {N} Atoms, Omega={target_omega}, Delta={target_delta}")
     print("=================================================================")
 
     # Generate circuit
@@ -31,10 +36,10 @@ def main():
     try:
         # HERE IS THE KEY: We explicitly need SAMPLING (simple_execute)
         # We need to compute <n_i n_j> which requires joint probability distributions.
-        # Computing this via expectation values would require N*(N-1)/2 separate observables (approx 2000 runs).
+        # Computing this via expectation values would require N*(N-1)/2 separate observables (approx 7000 runs).
         # Sampling does it in ONE run.
         
-        num_shots = 2000
+        num_shots = 2_000
         print(f"Acquiring {num_shots} shots from MPS backend...")
         start_t = time.time()
         
