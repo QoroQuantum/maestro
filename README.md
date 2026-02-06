@@ -25,23 +25,28 @@ The Maestro pipeline consists of:
 3. Feature extraction (gate density, entanglement locality, structure)
 4. Prediction engine (runtime estimation and backend routing)
 5. Execution on one of the supported backends:
-   - CPU statevector
-   - GPU statevector
-   - CPU/GPU MPS
-   - Tensor networks
-   - Clifford/stabilizer
+   - CPU: statevector, MPS, Pauli propagation, Clifford/stabilizer
+   - GPU: statevector, MPS, tensor networks, Pauli propagation, (limited) stabilizer
    - Composite p-block distributed simulation
 
 ## Simulation Backends
 
 Maestro integrates or wraps the following:
 
-- CPU statevector (Qiskit Aer, QCSim, custom implementations)
-- GPU statevector (NVIDIA cuStateVec)
-- CPU MPS (multiple libraries)
-- GPU MPS (custom CUDA implementation)
-- Tensor network simulators
+### CPU Backends
+- Statevector (Qiskit Aer, QCSim, custom implementations)
+- MPS (multiple libraries)
+- Pauli propagation
 - Stabilizer/Clifford simulators
+
+### GPU Backends
+- Statevector (NVIDIA cuStateVec)
+- MPS (custom CUDA implementation)
+- Tensor network simulation
+- Pauli propagation
+- (Limited) Stabilizer
+
+### Distributed Simulation
 - p-block composite simulation for DQC
 
 Each backend is accessed through a C++ adapter that maps Maestro’s IR to the simulator’s native API.
