@@ -29,6 +29,10 @@ install_blas() {
         fi
     elif [ -f /etc/debian_version ]; then
         echo "Installing libopenblas-dev via apt..."
+        # Fix known issue with missing Yarn GPG key which breaks apt-get update
+        if grep -r "yarnpkg" /etc/apt/ > /dev/null 2>&1; then
+             curl -fsSL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/yarn.gpg > /dev/null 2>&1 || true
+        fi
         sudo apt-get update && sudo apt-get install -y libopenblas-dev
     elif [ -f /etc/redhat-release ]; then
         echo "Installing openblas-devel via dnf..."
