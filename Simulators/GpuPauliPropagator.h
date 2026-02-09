@@ -41,7 +41,7 @@ class GpuPauliPropagator {
   bool CreateSimulator(int numQubits) {
     if (lib) {
       obj = lib->CreatePauliPropSimulator(numQubits);
-      
+
       return obj != nullptr;
     }
     return false;
@@ -52,6 +52,13 @@ class GpuPauliPropagator {
       return lib->PauliPropGetNrQubits(obj);
     }
     return 0;
+  }
+
+  bool  SetWillUseSampling(bool willUseSampling) {
+    if (lib) {
+      return lib->PauliPropSetWillUseSampling(obj, willUseSampling) == 1;
+    }
+    return false;
   }
 
   double GetCoefficientTruncationCutoff() {

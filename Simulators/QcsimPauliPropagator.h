@@ -128,9 +128,9 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
   }
 
   void ApplyCSwap(int controlQubit, int targetQubit1, int targetQubit2) {
-    const size_t q1 = controlQubit;  // control
-    const size_t q2 = targetQubit1;
-    const size_t q3 = targetQubit2;
+    const int q1 = controlQubit;  // control
+    const int q2 = targetQubit1;
+    const int q3 = targetQubit2;
 
     ApplyCX(q3, q2);
     ApplyCSX(q2, q3);
@@ -148,9 +148,9 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
   }
 
   void ApplyCCX(int controlQubit1, int controlQubit2, int targetQubit) {
-    const size_t q1 = controlQubit1;  // control 1
-    const size_t q2 = controlQubit2;  // control 2
-    const size_t q3 = targetQubit;  // target
+    const int q1 = controlQubit1;  // control 1
+    const int q2 = controlQubit2;  // control 2
+    const int q3 = targetQubit;  // target
 
     ApplyCSX(q2, q3);
     ApplyCX(q1, q2);

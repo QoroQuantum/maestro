@@ -571,6 +571,9 @@ class GpuLibrary : public Utils::Library {
 
           fPauliPropGetNrQubits = (int (*)(void *))GetFunction("PauliPropGetNrQubits");
           CheckFunction((void *)fPauliPropGetNrQubits, __LINE__);
+          fPauliPropWillUseSampling = (int (*)(void *, int))GetFunction("PauliPropWillUseSampling");
+          CheckFunction((void *)fPauliPropWillUseSampling, __LINE__);
+
           fPauliPropGetCoefficientTruncationCutoff = (double (*)(void *))GetFunction("PauliPropGetCoefficientTruncationCutoff");
           CheckFunction((void *)fPauliPropGetCoefficientTruncationCutoff, __LINE__);
           fPauliPropSetCoefficientTruncationCutoff = (void (*)(void *, double))GetFunction("PauliPropSetCoefficientTruncationCutoff");
@@ -2514,6 +2517,17 @@ class GpuLibrary : public Utils::Library {
           "GpuLibrary: Unable to get number of qubits in pauli propagation simulator");
     return 0;
   }
+
+  int PauliPropSetWillUseSampling(void* obj, int willUseSampling)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fPauliPropSetWillUseSampling(obj, willUseSampling) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set 'will use sampling' in pauli propagation simulator");
+    return 0;
+  }
     
   double PauliPropGetCoefficientTruncationCutoff(void* obj)
   {
@@ -3173,6 +3187,7 @@ class GpuLibrary : public Utils::Library {
   void (*fDestroyPauliPropSimulator)(void *);
 
   int (*fPauliPropGetNrQubits)(void *);
+  int (*fPauliPropSetWillUseSampling)(void *, int);
   double (*fPauliPropGetCoefficientTruncationCutoff)(void *);
   void (*fPauliPropSetCoefficientTruncationCutoff)(void *, double);
   double (*fPauliPropGetWeightTruncationCutoff)(void *);
