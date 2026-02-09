@@ -61,6 +61,13 @@ class GpuPauliPropagator {
     return false;
   }
 
+  bool GetWillUseSampling() {
+    if (lib) {
+      return lib->PauliPropGetWillUseSampling(obj) == 1;
+    }
+    return false;
+  }
+
   double GetCoefficientTruncationCutoff() {
     if (lib) {
       return lib->PauliPropGetCoefficientTruncationCutoff(obj);
@@ -493,10 +500,13 @@ class GpuPauliPropagator {
     if (!ApplyCX(q3, q2)) return false;
     if (!ApplyCSX(q2, q3)) return false;
     if (!ApplyCX(q1, q2)) return false;
+
     if (!ApplyP(q3, M_PI)) return false;
     if (!ApplyP(q2, -M_PI_2)) return false;
+
     if (!ApplyCSX(q2, q3)) return false;
     if (!ApplyCX(q1, q2)) return false;
+
     if (!ApplyP(q3, M_PI)) return false;
     if (!ApplyCSX(q1, q3)) return false;
     if (!ApplyCX(q3, q2)) return false;

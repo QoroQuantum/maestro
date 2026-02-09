@@ -557,10 +557,10 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fCopyStabilizerMTable, __LINE__);
 
           fInitStabilizerXTable = (int (*)(
-              void *, const unsigned int *))GetFunction("InitStabilizerXTable");
+              void *, const unsigned int *))GetFunction("InitXTable");
           CheckFunction((void *)fInitStabilizerXTable, __LINE__);
           fInitStabilizerZTable = (int (*)(
-              void *, const unsigned int *))GetFunction("InitStabilizerZTable");
+              void *, const unsigned int *))GetFunction("InitZTable");
           CheckFunction((void *)fInitStabilizerZTable, __LINE__);
 
           // pauli propagation functions
@@ -573,6 +573,8 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fPauliPropGetNrQubits, __LINE__);
           fPauliPropSetWillUseSampling = (int (*)(void *, int))GetFunction("PauliPropSetWillUseSampling");
           CheckFunction((void *)fPauliPropSetWillUseSampling, __LINE__);
+          fPauliPropGetWillUseSampling = (int (*)(void *))GetFunction("PauliPropGetWillUseSampling");
+          CheckFunction((void *)fPauliPropGetWillUseSampling, __LINE__);
 
           fPauliPropGetCoefficientTruncationCutoff = (double (*)(void *))GetFunction("PauliPropGetCoefficientTruncationCutoff");
           CheckFunction((void *)fPauliPropGetCoefficientTruncationCutoff, __LINE__);
@@ -2528,6 +2530,17 @@ class GpuLibrary : public Utils::Library {
           "GpuLibrary: Unable to set 'will use sampling' in pauli propagation simulator");
     return 0;
   }
+
+  int PauliPropGetWillUseSampling(void* obj)
+  {
+    if (!obj) return 0;
+    if (LibraryHandle)
+      return fPauliPropGetWillUseSampling(obj);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get 'will use sampling' in pauli propagation simulator");
+    return 0;
+  }
     
   double PauliPropGetCoefficientTruncationCutoff(void* obj)
   {
@@ -3188,6 +3201,7 @@ class GpuLibrary : public Utils::Library {
 
   int (*fPauliPropGetNrQubits)(void *);
   int (*fPauliPropSetWillUseSampling)(void *, int);
+  int (*fPauliPropGetWillUseSampling)(void *);
   double (*fPauliPropGetCoefficientTruncationCutoff)(void *);
   void (*fPauliPropSetCoefficientTruncationCutoff)(void *, double);
   double (*fPauliPropGetWeightTruncationCutoff)(void *);
