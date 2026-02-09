@@ -571,8 +571,8 @@ class GpuLibrary : public Utils::Library {
 
           fPauliPropGetNrQubits = (int (*)(void *))GetFunction("PauliPropGetNrQubits");
           CheckFunction((void *)fPauliPropGetNrQubits, __LINE__);
-          fPauliPropWillUseSampling = (int (*)(void *, int))GetFunction("PauliPropWillUseSampling");
-          CheckFunction((void *)fPauliPropWillUseSampling, __LINE__);
+          fPauliPropSetWillUseSampling = (int (*)(void *, int))GetFunction("PauliPropSetWillUseSampling");
+          CheckFunction((void *)fPauliPropSetWillUseSampling, __LINE__);
 
           fPauliPropGetCoefficientTruncationCutoff = (double (*)(void *))GetFunction("PauliPropGetCoefficientTruncationCutoff");
           CheckFunction((void *)fPauliPropGetCoefficientTruncationCutoff, __LINE__);
