@@ -55,6 +55,8 @@ struct PauliSimTestFixture {
       gpuPauliSim =
           Simulators::SimulatorsFactory::CreateGpuPauliPropagatorSimulator();
       gpuPauliSim->CreateSimulator(nrQubitsForRandomCirc);
+      gpuPauliSim->SetWillUseSampling(true);
+      gpuPauliSim->AllocateMemory(0.8);
     }
 #endif
   }
