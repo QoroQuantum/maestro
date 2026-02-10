@@ -83,6 +83,24 @@ class GpuState : public ISimulator {
           throw std::runtime_error(
               "GpuState::Initialize: Failed to create the tensor network "
               "state.");
+      } else if (simulationType == SimulationType::kPauliPropagator) {
+        pp = SimulatorsFactory::CreateGpuPauliPropagatorSimulatorUnique();
+        if (pp) {
+          const bool res = pp->CreateSimulator(nrQubits);
+          if (!res)
+            throw std::runtime_error(
+                "GpuState::Initialize: Failed to create "
+                "and initialize the Pauli propagator state.");
+
+          pp->SetWillUseSampling(true); // TODO: check setting
+          if (!pp->AllocateMemory(0.9))
+            throw std::runtime_error(
+                "GpuState::Initialize: Failed to allocate memory for the "
+                "Pauli propagator state.");
+        } else
+          throw std::runtime_error(
+              "GpuState::Initialize: Failed to create the Pauli propagator "
+              "state.");
       } else
         throw std::runtime_error(
             "GpuState::Initialize: Invalid simulation "
@@ -204,6 +222,8 @@ class GpuState : public ISimulator {
       mps->Reset();
     else if (tn)
       tn->Reset();
+    else if (pp)
+      pp->ClearOperators();
   }
 
   /**
@@ -222,6 +242,8 @@ class GpuState : public ISimulator {
         simulationType = SimulationType::kMatrixProductState;
       else if (std::string("tensor_network") == value)
         simulationType = SimulationType::kTensorNetwork;
+      else if (std::string("pauli_propagator") == value)
+        simulationType = SimulationType::kPauliPropagator;
     } else if (std::string("matrix_product_state_truncation_threshold") ==
                key) {
       singularValueThreshold = std::stod(value);
@@ -240,6 +262,7 @@ class GpuState : public ISimulator {
       } else
         limitSize = false;
     }
+    // TODO: add pauli propagator configuration options
   }
 
   /**
@@ -258,6 +281,8 @@ class GpuState : public ISimulator {
           return "matrix_product_state";
         case SimulationType::kTensorNetwork:
           return "tensor_network";
+        case SimulationType::kPauliPropagator:
+          return "pauli_propagator";
         default:
           return "other";
       }
@@ -268,6 +293,7 @@ class GpuState : public ISimulator {
     } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
       if (limitSize && limitSize > 0) return std::to_string(chi);
     }
+    // TODO: add pauli propagator configuration options
 
     return "";
   }
@@ -308,6 +334,7 @@ class GpuState : public ISimulator {
     state = nullptr;
     mps = nullptr;
     tn = nullptr;
+    pp = nullptr;
     nrQubits = 0;
   }
 
@@ -345,6 +372,12 @@ class GpuState : public ISimulator {
         if (tn->Measure(static_cast<unsigned int>(qubit))) res |= mask;
         mask <<= 1;
       }
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      // TODO: measure all qubits in one shot?
+      for (size_t qubit : qubits) {
+        if (pp->MeasureQubit(static_cast<int>(qubit))) res |= mask;
+        mask <<= 1;
+      }
     }
 
     Notify();
@@ -373,6 +406,10 @@ class GpuState : public ISimulator {
       for (size_t qubit : qubits)
         if (tn->Measure(static_cast<unsigned int>(qubit)))
           tn->ApplyX(static_cast<unsigned int>(qubit));
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      for (size_t qubit : qubits)
+        if (pp->MeasureQubit(static_cast<int>(qubit)))
+          pp->ApplyX(static_cast<int>(qubit));
     }
 
     Notify();
@@ -397,6 +434,8 @@ class GpuState : public ISimulator {
              simulationType == SimulationType::kTensorNetwork) {
       const auto ampl = Amplitude(outcome);
       return std::norm(ampl);
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      return pp->Probability(outcome);
     }
 
     return 0.0;
@@ -456,6 +495,11 @@ class GpuState : public ISimulator {
         const auto val = Amplitude(i);
         result[i] = std::norm(std::complex<double>(val.real(), val.imag()));
       }
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      // this is very slow, it should be used only for tests!
+      for (Types::qubit_t i = 0; i < (Types::qubit_t)numStates; ++i) {
+        result[i] = pp->Probability(i);
+      }
     }
 
     return result;
@@ -485,6 +529,9 @@ class GpuState : public ISimulator {
         const auto ampl = Amplitude(qubits[i]);
         result[i] = std::norm(ampl);
       }
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      for (size_t i = 0; i < qubits.size(); ++i)
+        result[i] = pp->Probability(qubits[i]);
     }
 
     return result;
@@ -553,7 +600,18 @@ class GpuState : public ISimulator {
         result[outcome] += cnt;
       }
       tn->FreeMapForSample(map);
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      std::vector<int> qb(qubits.begin(), qubits.end());
+      for (size_t shot = 0; shot < shots; ++shot) {
+        size_t meas = 0;
+        auto res = pp->SampleQubits(qb);
+        for (size_t i = 0; i < qubits.size(); ++i) {
+          if (res[i]) meas |= (1ULL << i);
+        }
+        ++result[meas];
+      }
     }
+    
 
     Notify();
     NotifyObservers(qubits);
@@ -581,6 +639,8 @@ class GpuState : public ISimulator {
       result = mps->ExpectationValue(pauliString);
     else if (simulationType == SimulationType::kTensorNetwork)
       result = tn->ExpectationValue(pauliString);
+    else if (simulationType == SimulationType::kPauliPropagator)
+      result = pp->ExpectationValue(pauliString);
 
     return result;
   }
@@ -663,6 +723,8 @@ class GpuState : public ISimulator {
       mps->SaveState();
     else if (simulationType == SimulationType::kTensorNetwork)
       tn->SaveState();
+    else if (simulationType == SimulationType::kPauliPropagator)
+      pp->SaveState();
   }
 
   /**
@@ -679,6 +741,8 @@ class GpuState : public ISimulator {
       mps->RestoreState();
     else if (simulationType == SimulationType::kTensorNetwork)
       tn->RestoreState();
+    else if (simulationType == SimulationType::kPauliPropagator)
+      pp->RestoreState();
   }
 
   /**
@@ -742,7 +806,8 @@ class GpuState : public ISimulator {
     if (simulationType == SimulationType::kStatevector)
       return state->MeasureAllQubitsNoCollapse();
     else if (simulationType == SimulationType::kMatrixProductState ||
-             simulationType == SimulationType::kTensorNetwork) {
+             simulationType == SimulationType::kTensorNetwork ||
+             simulationType == SimulationType::kPauliPropagator) {
       Types::qubits_vector fixedValues(nrQubits);
       std::iota(fixedValues.begin(), fixedValues.end(), 0);
       const auto res = SampleCounts(fixedValues, 1);
@@ -766,6 +831,8 @@ class GpuState : public ISimulator {
       state;                         /**< The gpu statevector simulator. */
   std::unique_ptr<GpuLibMPSSim> mps; /**< The gpu MPS simulator. */
   std::unique_ptr<GpuLibTNSim> tn;   /**< The gpu tensor network simulator. */
+  std::unique_ptr<GpuPauliPropagatorSimulator>
+      pp; /**< The gpu Pauli propagator simulator. */
 
   size_t nrQubits = 0; /**< The number of allocated qubits. */
   bool limitSize = false;

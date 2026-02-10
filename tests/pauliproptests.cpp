@@ -37,6 +37,7 @@ struct Operation {
   double theta = 0;
   double phi = 0;
   double lambda = 0;
+  double gamma = 0;
 };
 
 struct PauliSimTestFixture {
@@ -47,6 +48,7 @@ struct PauliSimTestFixture {
     statevectorSim->AllocateQubits(nrQubitsForRandomCirc);
     statevectorSim->Initialize();
 
+    qcsimPauliSim.EnableParallel();
     qcsimPauliSim.SetNrQubits(nrQubitsForRandomCirc);
 
 #ifdef __linux__
@@ -54,6 +56,8 @@ struct PauliSimTestFixture {
       gpuPauliSim =
           Simulators::SimulatorsFactory::CreateGpuPauliPropagatorSimulator();
       gpuPauliSim->CreateSimulator(nrQubitsForRandomCirc);
+      gpuPauliSim->SetWillUseSampling(true);
+      gpuPauliSim->AllocateMemory(0.8);
     }
 #endif
   }
@@ -94,6 +98,7 @@ struct PauliSimTestFixture {
     std::uniform_int_distribution<int> dist(0, maxGate);
 
     std::uniform_real_distribution<double> param_dist(0.0, 2. * M_PI);
+    std::bernoulli_distribution bool_dist(0.8);  // high chance to make clifford gate from a non-clifford one
 
     std::vector<Operation> circuit;
     std::vector<int> qubits(nrQubits);
@@ -104,7 +109,11 @@ struct PauliSimTestFixture {
 
       std::shuffle(qubits.begin(), qubits.end(), g);
 
-      const int gate = dist(g);  // random gate id
+      int gate = dist(g);  // random gate id
+
+      if (gate > 12 && bool_dist(g))
+        gate %= 13;  // make it clifford, to have less non-clifford gates in
+                     // the circuit, which are more expensive to simulate
 
       op.gate = gate;
       op.qubit1 = qubits[0];
@@ -114,6 +123,7 @@ struct PauliSimTestFixture {
       op.theta = param_dist(g);
       op.phi = param_dist(g);
       op.lambda = param_dist(g);
+      op.gamma = param_dist(g);
 
       circuit.push_back(std::move(op));
     }
@@ -183,7 +193,7 @@ struct PauliSimTestFixture {
         state_vector->ApplyRz(op.qubit1, op.theta);
         break;
       case 17:
-        state_vector->ApplyU(op.qubit1, op.theta, op.phi, op.lambda, 0.);
+        state_vector->ApplyU(op.qubit1, op.theta, op.phi, op.lambda, op.gamma);
         break;
 
       case 18:
@@ -198,30 +208,32 @@ struct PauliSimTestFixture {
         state_vector->ApplyCH(op.qubit2, op.qubit1);
         break;
 
+
       case 21:
-        state_vector->ApplyCRx(op.qubit2, op.qubit1, op.theta);
+        state_vector->ApplyCRz(op.qubit2, op.qubit1, op.theta);
         break;
       case 22:
         state_vector->ApplyCRy(op.qubit2, op.qubit1, op.theta);
         break;
       case 23:
-        state_vector->ApplyCRz(op.qubit2, op.qubit1, op.theta);
+        state_vector->ApplyCRx(op.qubit2, op.qubit1, op.theta);
         break;
 
 
       case 24:
-        state_vector->ApplyCSx(op.qubit2, op.qubit1);
-        break;
-      case 25:
-        state_vector->ApplyCSxDAG(op.qubit2, op.qubit1);
-        break;
-      case 26:
         state_vector->ApplyCP(op.qubit2, op.qubit1, op.theta);
         break;
+      case 25:
+        state_vector->ApplyCSx(op.qubit2, op.qubit1);
+        break;
+      case 26:
+        state_vector->ApplyCSxDAG(op.qubit2, op.qubit1);
+        break;
+
 
       case 27:
         state_vector->ApplyCU(op.qubit2, op.qubit1, op.theta, op.phi, op.lambda,
-                             0.);
+                             op.gamma);
         break;
 
       // non-clifford three qubit gates
@@ -298,7 +310,7 @@ struct PauliSimTestFixture {
         pauliSim.ApplyRZ(op.qubit1, op.theta);
         break;
       case 17:
-        pauliSim.ApplyU(op.qubit1, op.theta, op.phi, op.lambda);
+        pauliSim.ApplyU(op.qubit1, op.theta, op.phi, op.lambda, op.gamma);
         break;
 
       case 18:
@@ -315,28 +327,31 @@ struct PauliSimTestFixture {
         break;
 
       case 21:
-        pauliSim.ApplyCRX(op.qubit2, op.qubit1, op.theta);
+        pauliSim.ApplyCRZ(op.qubit2, op.qubit1, op.theta);
         break;
       case 22:
         pauliSim.ApplyCRY(op.qubit2, op.qubit1, op.theta);
         break;
       case 23:
-        pauliSim.ApplyCRZ(op.qubit2, op.qubit1, op.theta);
+        pauliSim.ApplyCRX(op.qubit2, op.qubit1, op.theta);
         break;
+
 
 
       case 24:
-        pauliSim.ApplyCSX(op.qubit2, op.qubit1);
-        break;
-      case 25:
-        pauliSim.ApplyCSXDAG(op.qubit2, op.qubit1);
-        break;
-      case 26:
         pauliSim.ApplyCP(op.qubit2, op.qubit1, op.theta);
         break;
-      case 27:
-        pauliSim.ApplyCU(op.qubit2, op.qubit1, op.theta, op.phi, op.lambda);
+
+      case 25:
+        pauliSim.ApplyCSX(op.qubit2, op.qubit1);
         break;
+      case 26:
+        pauliSim.ApplyCSXDAG(op.qubit2, op.qubit1);
+        break;
+      case 27:
+        pauliSim.ApplyCU(op.qubit2, op.qubit1, op.theta, op.phi, op.lambda, op.gamma);
+        break;
+
 
       // non-clifford three qubit gates
       case 28:
@@ -412,7 +427,7 @@ struct PauliSimTestFixture {
         pauliSim.ApplyRZ(op.qubit1, op.theta);
         break;
       case 17:
-        pauliSim.ApplyU(op.qubit1, op.theta, op.phi, op.lambda);
+        pauliSim.ApplyU(op.qubit1, op.theta, op.phi, op.lambda, op.gamma);
         break;
 
       case 18:
@@ -429,27 +444,30 @@ struct PauliSimTestFixture {
         break;
 
       case 21:
-        pauliSim.ApplyCRX(op.qubit2, op.qubit1, op.theta);
+        pauliSim.ApplyCRZ(op.qubit2, op.qubit1, op.theta);
         break;
       case 22:
         pauliSim.ApplyCRY(op.qubit2, op.qubit1, op.theta);
         break;
+
       case 23:
-        pauliSim.ApplyCRZ(op.qubit2, op.qubit1, op.theta);
+        pauliSim.ApplyCRX(op.qubit2, op.qubit1, op.theta);
         break;
+
 
 
       case 24:
-        pauliSim.ApplyCSX(op.qubit2, op.qubit1);
-        break;
-      case 25:
-        pauliSim.ApplyCSXDAG(op.qubit2, op.qubit1);
-        break;
-      case 26:
         pauliSim.ApplyCP(op.qubit2, op.qubit1, op.theta);
         break;
+      case 25:
+        pauliSim.ApplyCSX(op.qubit2, op.qubit1);
+        break;
+      case 26:
+        pauliSim.ApplyCSXDAG(op.qubit2, op.qubit1);
+        break;
+
       case 27:
-        pauliSim.ApplyCU(op.qubit2, op.qubit1, op.theta, op.phi, op.lambda);
+        pauliSim.ApplyCU(op.qubit2, op.qubit1, op.theta, op.phi, op.lambda, op.gamma);
         break;
 
       // non-clifford three qubit gates
@@ -466,7 +484,7 @@ struct PauliSimTestFixture {
 #endif
 
 
-  const unsigned int nrQubitsForRandomCirc = 8;
+  const unsigned int nrQubitsForRandomCirc = 4;
 
   std::shared_ptr<Simulators::ISimulator> statevectorSim;
   Simulators::QcsimPauliPropagator qcsimPauliSim;
@@ -661,7 +679,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
 
 BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
                        bdata::xrange(1, 20), nrGates) {
-  auto circuit = GenerateCircuit(nrQubitsForRandomCirc, nrGates, 20);
+  auto circuit = GenerateCircuit(nrQubitsForRandomCirc, nrGates, 29);
 
   // execute
   for (const auto& op : circuit) {

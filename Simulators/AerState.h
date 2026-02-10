@@ -180,6 +180,8 @@ class AerState : public ISimulator {
         simulationType = SimulationType::kStabilizer;
       else if (std::string("tensor_network") == value)
         simulationType = SimulationType::kTensorNetwork;
+      else if (std::string("extended_stabilizer") == value)
+        simulationType = SimulationType::kExtendedStabilizer;
       else
         simulationType = SimulationType::kOther;
     } else if (std::string("matrix_product_state_truncation_threshold") ==
@@ -219,6 +221,8 @@ class AerState : public ISimulator {
           return "stabilizer";
         case SimulationType::kTensorNetwork:
           return "tensor_network";
+        case SimulationType::kExtendedStabilizer:
+          return "extended_stabilizer";
         default:
           return "other";
       }
