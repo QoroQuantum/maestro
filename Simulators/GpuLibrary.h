@@ -655,7 +655,7 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fPauliPropAddAmplitudeDamping, __LINE__);
           fPauliPropQubitProbability0 = (double (*)(void *, int))GetFunction("PauliPropQubitProbability0");
           CheckFunction((void *)fPauliPropQubitProbability0, __LINE__);
-          fPauliPropProbability = (double (*)(void *, int, unsigned long long int))GetFunction("PauliPropProbability");
+          fPauliPropProbability = (double (*)(void *, unsigned long long int))GetFunction("PauliPropProbability");
           CheckFunction((void *)fPauliPropProbability, __LINE__);
 
           fPauliPropMeasureQubit = (int (*)(void *, int))GetFunction("PauliPropMeasureQubit");
