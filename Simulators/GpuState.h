@@ -831,8 +831,7 @@ class GpuState : public ISimulator {
       state;                         /**< The gpu statevector simulator. */
   std::unique_ptr<GpuLibMPSSim> mps; /**< The gpu MPS simulator. */
   std::unique_ptr<GpuLibTNSim> tn;   /**< The gpu tensor network simulator. */
-  std::unique_ptr<GpuPauliPropagatorSimulator>
-      pp; /**< The gpu Pauli propagator simulator. */
+  std::unique_ptr<GpuPauliPropagator> pp; /**< The gpu Pauli propagator simulator. */
 
   size_t nrQubits = 0; /**< The number of allocated qubits. */
   bool limitSize = false;
