@@ -235,7 +235,7 @@ class GpuSimulator : public GpuState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tn->ApplySX(qubit);
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
-      pp->ApplySX(qubit);
+      pp->ApplySQRTX(qubit);
 
     NotifyObservers({qubit});
   }
@@ -254,7 +254,7 @@ class GpuSimulator : public GpuState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tn->ApplySXDG(qubit);
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
-      pp->ApplySXDG(qubit);
+      pp->ApplySxDAG(qubit);
 
     NotifyObservers({qubit});
   }
@@ -293,7 +293,7 @@ class GpuSimulator : public GpuState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tn->ApplyRx(qubit, theta);
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
-      pp->ApplyRx(qubit, theta);
+      pp->ApplyRX(qubit, theta);
 
     NotifyObservers({qubit});
   }
@@ -313,7 +313,7 @@ class GpuSimulator : public GpuState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tn->ApplyRy(qubit, theta);
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
-      pp->ApplyRy(qubit, theta);
+      pp->ApplyRY(qubit, theta);
 
     NotifyObservers({qubit});
   }
@@ -333,7 +333,7 @@ class GpuSimulator : public GpuState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tn->ApplyRz(qubit, theta);
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
-      pp->ApplyRz(qubit, theta);
+      pp->ApplyRZ(qubit, theta);
 
     NotifyObservers({qubit});
   }
@@ -563,7 +563,7 @@ class GpuSimulator : public GpuState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tn->ApplyCSXDG(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
-      pp->ApplyCSXDG(ctrl_qubit, tgt_qubit);
+      pp->ApplyCSXDAG(ctrl_qubit, tgt_qubit);
 
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
@@ -583,7 +583,7 @@ class GpuSimulator : public GpuState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tn->ApplySwap(qubit0, qubit1);
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
-      pp->ApplySwap(qubit0, qubit1);
+      pp->ApplySWAP(qubit0, qubit1);
 
     NotifyObservers({qubit1, qubit0});
   }
