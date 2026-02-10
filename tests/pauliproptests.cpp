@@ -98,7 +98,7 @@ struct PauliSimTestFixture {
     std::uniform_int_distribution<int> dist(0, maxGate);
 
     std::uniform_real_distribution<double> param_dist(0.0, 2. * M_PI);
-    std::bernoulli_distribution bool_dist(0.5);  // high chance to make clifford gate from a non-clifford one
+    std::bernoulli_distribution bool_dist(0.8);  // high chance to make clifford gate from a non-clifford one
 
     std::vector<Operation> circuit;
     std::vector<int> qubits(nrQubits);
