@@ -187,7 +187,7 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
           (m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
            m == SimulationType::kTensorNetwork ||
-           m == SimulationType::kPauliPropagator) {
+           m == SimulationType::kPauliPropagator)) {
         auto sim = std::make_unique<Private::GpuSimulator>();
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");

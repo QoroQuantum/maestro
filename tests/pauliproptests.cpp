@@ -559,7 +559,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
     auto res = qcsimPauliSim.Sample(pq);
 
     Types::qubit_t result = 0;
-    for (int q = 0; q < pq.size(); ++q) {
+    for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
       if (res[q])
          result |= (1ULL << pq[q]);
     }
@@ -588,7 +588,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
       std::shuffle(pq.begin(), pq.end(), g);
       auto res = gpuPauliSim->SampleQubits(pq);
       Types::qubit_t result = 0;
-      for (int q = 0; q < pq.size(); ++q) {
+      for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
         if (res[q])
           result |= (1ULL << pq[q]);
       }
@@ -620,7 +620,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
     std::shuffle(pq.begin(), pq.end(), g);
     auto res = qcsimPauliSim.Measure(pq);
     Types::qubit_t result = 0;
-    for (int q = 0; q < pq.size(); ++q) {
+    for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
       if (res[q])
         result |= (1ULL << pq[q]);
     }
@@ -652,7 +652,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
       std::shuffle(pq.begin(), pq.end(), g);
      
       Types::qubit_t result = 0;
-      for (int q = 0; q < pq.size(); ++q) {
+      for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
         auto res = gpuPauliSim->MeasureQubit(pq[q]);
         if (res)
           result |= (1ULL << pq[q]);
@@ -733,7 +733,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
     auto res = qcsimPauliSim.Sample(pq);
 
     Types::qubit_t result = 0;
-    for (int q = 0; q < pq.size(); ++q) {
+    for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
       if (res[q]) result |= (1ULL << pq[q]);
     }
     ++qcsimRes[result];
@@ -761,7 +761,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
       std::shuffle(pq.begin(), pq.end(), g);
       auto res = gpuPauliSim->SampleQubits(pq);
       Types::qubit_t result = 0;
-      for (int q = 0; q < pq.size(); ++q) {
+      for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
         if (res[q]) result |= (1ULL << pq[q]);
       }
       ++gpuRes[result];
@@ -792,7 +792,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
     std::shuffle(pq.begin(), pq.end(), g);
     auto res = qcsimPauliSim.Measure(pq);
     Types::qubit_t result = 0;
-    for (int q = 0; q < pq.size(); ++q) {
+    for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
       if (res[q]) result |= (1ULL << pq[q]);
     }
     ++qcsimRes[result];
@@ -823,7 +823,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
       std::shuffle(pq.begin(), pq.end(), g);
 
       Types::qubit_t result = 0;
-      for (int q = 0; q < pq.size(); ++q) {
+      for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
         auto res = gpuPauliSim->MeasureQubit(pq[q]);
         if (res) result |= (1ULL << pq[q]);
       }
