@@ -73,6 +73,8 @@ class QCSimSimulator : public QCSimState {
       cliffordSimulator->ApplyS(static_cast<unsigned int>(qubit));
     } else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(pgate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyP(static_cast<unsigned int>(qubit), lambda);
     else
       state->ApplyGate(pgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -91,6 +93,8 @@ class QCSimSimulator : public QCSimState {
       cliffordSimulator->ApplyX(static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(xgate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyX(static_cast<unsigned int>(qubit));
     else
       state->ApplyGate(xgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -109,6 +113,8 @@ class QCSimSimulator : public QCSimState {
       cliffordSimulator->ApplyY(static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(ygate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyY(static_cast<unsigned int>(qubit));
     else
       state->ApplyGate(ygate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -127,6 +133,8 @@ class QCSimSimulator : public QCSimState {
       cliffordSimulator->ApplyZ(static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(zgate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyZ(static_cast<unsigned int>(qubit));
     else
       state->ApplyGate(zgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -145,6 +153,8 @@ class QCSimSimulator : public QCSimState {
       cliffordSimulator->ApplyH(static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(h, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyH(static_cast<unsigned int>(qubit));
     else
       state->ApplyGate(h, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -163,6 +173,8 @@ class QCSimSimulator : public QCSimState {
       cliffordSimulator->ApplyS(static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(sgate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyS(static_cast<unsigned int>(qubit));
     else
       state->ApplyGate(sgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -181,6 +193,8 @@ class QCSimSimulator : public QCSimState {
       cliffordSimulator->ApplySdg(static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(sdggate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplySDG(static_cast<unsigned int>(qubit));
     else
       state->ApplyGate(sdggate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -201,6 +215,8 @@ class QCSimSimulator : public QCSimState {
           "non-clifford gates.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(tgate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyT(static_cast<unsigned int>(qubit));
     else
       state->ApplyGate(tgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -221,6 +237,8 @@ class QCSimSimulator : public QCSimState {
           "non-clifford gates.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(tdggate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyTDG(static_cast<unsigned int>(qubit));
     else
       state->ApplyGate(tdggate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -239,6 +257,8 @@ class QCSimSimulator : public QCSimState {
       cliffordSimulator->ApplySx(static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(sxgate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplySX(static_cast<unsigned int>(qubit));
     else
       state->ApplyGate(sxgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -257,6 +277,8 @@ class QCSimSimulator : public QCSimState {
       cliffordSimulator->ApplySxDag(static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(sxdaggate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplySXDG(static_cast<unsigned int>(qubit));
     else
       state->ApplyGate(sxdaggate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -275,6 +297,8 @@ class QCSimSimulator : public QCSimState {
       cliffordSimulator->ApplyK(static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(k, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyK(static_cast<unsigned int>(qubit));
     else
       state->ApplyGate(k, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -297,6 +321,8 @@ class QCSimSimulator : public QCSimState {
           "simulator does not support the Rx gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(rxgate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyRX(static_cast<unsigned int>(qubit), theta);
     else
       state->ApplyGate(rxgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -319,6 +345,8 @@ class QCSimSimulator : public QCSimState {
           "simulator does not support the Ry gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(rygate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyRY(static_cast<unsigned int>(qubit), theta);
     else
       state->ApplyGate(rygate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -341,6 +369,8 @@ class QCSimSimulator : public QCSimState {
           "simulator does not support the Rz gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(rzgate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyRZ(static_cast<unsigned int>(qubit), theta);
     else
       state->ApplyGate(rzgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -367,6 +397,8 @@ class QCSimSimulator : public QCSimState {
           "simulator does not support the U gate.");
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(ugate, static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyU(static_cast<unsigned int>(qubit), theta, phi, lambda, gamma);
     else
       state->ApplyGate(ugate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -389,6 +421,9 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyCX(static_cast<unsigned int>(ctrl_qubit),
+                  static_cast<unsigned int>(tgt_qubit));
     else
       state->ApplyGate(cxgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -412,6 +447,9 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(cygate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+        pp->ApplyCY(static_cast<unsigned int>(ctrl_qubit),
+                  static_cast<unsigned int>(tgt_qubit));
     else
       state->ApplyGate(cygate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -435,6 +473,9 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(czgate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+        pp->ApplyCZ(static_cast<unsigned int>(ctrl_qubit),
+                  static_cast<unsigned int>(tgt_qubit));
     else
       state->ApplyGate(czgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -462,6 +503,9 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(cpgate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyCP(static_cast<unsigned int>(ctrl_qubit),
+                  static_cast<unsigned int>(tgt_qubit), lambda);
     else
       state->ApplyGate(cpgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -489,6 +533,9 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(crxgate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+       pp->ApplyCRX(static_cast<unsigned int>(ctrl_qubit),
+                   static_cast<unsigned int>(tgt_qubit), theta);
     else
       state->ApplyGate(crxgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -516,6 +563,9 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(crygate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyCRY(static_cast<unsigned int>(ctrl_qubit),
+                   static_cast<unsigned int>(tgt_qubit), theta);
     else
       state->ApplyGate(crygate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -543,6 +593,9 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(crzgate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyCRZ(static_cast<unsigned int>(ctrl_qubit),
+                   static_cast<unsigned int>(tgt_qubit), theta);
     else
       state->ApplyGate(crzgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -567,6 +620,9 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(ch, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyCH(static_cast<unsigned int>(ctrl_qubit),
+                  static_cast<unsigned int>(tgt_qubit));
     else
       state->ApplyGate(ch, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -591,6 +647,9 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(csx, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyCSX(static_cast<unsigned int>(ctrl_qubit),
+                   static_cast<unsigned int>(tgt_qubit));
     else
       state->ApplyGate(csx, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -616,6 +675,9 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(csxdag, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyCSXDAG(static_cast<unsigned int>(ctrl_qubit),
+                     static_cast<unsigned int>(tgt_qubit));
     else
       state->ApplyGate(csxdag, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -639,6 +701,9 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(swapgate, static_cast<unsigned int>(qubit0),
                              static_cast<unsigned int>(qubit1));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplySWAP(static_cast<unsigned int>(qubit0),
+                    static_cast<unsigned int>(qubit1));
     else
       state->ApplyGate(swapgate, static_cast<unsigned int>(qubit1),
                        static_cast<unsigned int>(qubit0));
@@ -691,7 +756,11 @@ class QCSimSimulator : public QCSimState {
                              static_cast<unsigned int>(q2));
       tensorNetwork->AddGate(csx, static_cast<unsigned int>(q1),
                              static_cast<unsigned int>(q3));
-    } else
+    } else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      pp->ApplyCCX(static_cast<unsigned int>(qubit0),
+                   static_cast<unsigned int>(qubit1),
+                   static_cast<unsigned int>(qubit2));
+    else
       state->ApplyGate(ccxgate, static_cast<unsigned int>(qubit2),
                        static_cast<unsigned int>(qubit1),
                        static_cast<unsigned int>(qubit0));
@@ -774,6 +843,10 @@ class QCSimSimulator : public QCSimState {
                              static_cast<unsigned int>(q3));
       tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q3),
                              static_cast<unsigned int>(q2));
+    } else if (GetSimulationType() == SimulationType::kPauliPropagator) {
+      pp->ApplyCSwap(static_cast<unsigned int>(ctrl_qubit),
+                     static_cast<unsigned int>(qubit0),
+                     static_cast<unsigned int>(qubit1));
     } else
       state->ApplyGate(cswapgate, static_cast<unsigned int>(qubit1),
                        static_cast<unsigned int>(qubit0),
@@ -805,6 +878,10 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(cugate, static_cast<unsigned int>(ctrl_qubit),
                              static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPauliPropagator)
+        pp->ApplyCU(static_cast<unsigned int>(ctrl_qubit),
+                  static_cast<unsigned int>(tgt_qubit), theta, phi, lambda,
+                  gamma);
     else
       state->ApplyGate(cugate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -861,6 +938,8 @@ class QCSimSimulator : public QCSimState {
       cloned->cliffordSimulator = cliffordSimulator->Clone();
 
     if (tensorNetwork) cloned->tensorNetwork = tensorNetwork->Clone();
+
+    if (pp) cloned->pp = std::move(pp->Clone());
 
     return cloned;
   }

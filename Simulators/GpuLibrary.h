@@ -655,6 +655,8 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fPauliPropAddAmplitudeDamping, __LINE__);
           fPauliPropQubitProbability0 = (double (*)(void *, int))GetFunction("PauliPropQubitProbability0");
           CheckFunction((void *)fPauliPropQubitProbability0, __LINE__);
+          fPauliPropProbability = (double (*)(void *, int, unsigned long long int))GetFunction("PauliPropProbability");
+          CheckFunction((void *)fPauliPropProbability, __LINE__);
 
           fPauliPropMeasureQubit = (int (*)(void *, int))GetFunction("PauliPropMeasureQubit");
           CheckFunction((void *)fPauliPropMeasureQubit, __LINE__);
@@ -2921,6 +2923,17 @@ class GpuLibrary : public Utils::Library {
     return 0.0;
   }
 
+  double PauliPropProbability(void* obj, unsigned long long int outcome)
+  {
+    if (!obj) return 0.0;
+    if (LibraryHandle)
+      return fPauliPropProbability(obj, outcome);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get probability of outcome in pauli propagation simulator");
+    return 0.0;
+  }
+
   bool PauliPropMeasureQubit(void* obj, int qubit) 
   {
     if (!obj) return false;
@@ -3241,6 +3254,7 @@ class GpuLibrary : public Utils::Library {
   int (*fPauliPropAddNoiseXYZ)(void *, int, double, double, double);
   int (*fPauliPropAddAmplitudeDamping)(void *, int, double, double);
   double (*fPauliPropQubitProbability0)(void *, int);
+  double (*fPauliPropProbability)(void *, unsigned long long int);
 
   int (*fPauliPropMeasureQubit)(void *, int);
   unsigned char *(*fPauliPropSampleQubits)(void *, const int *, int);

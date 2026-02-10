@@ -158,6 +158,24 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
     ApplyCX(q1, q2);
     ApplyCSX(q1, q3);
   }
+
+  std::unique_ptr<QcsimPauliPropagator> Clone() const {
+    auto clone = std::make_unique<QcsimPauliPropagator>();
+    clone->SetNrQubits(GetNrQubits());
+    clone->SetPauliWeightThreshold(GetPauliWeightThreshold());
+    clone->SetBatchSize(GetBatchSize());
+    clone->SetBatchSizeForSum(GetBatchSizeForSum());
+    clone->SetCoefficientThreshold(GetCoefficientThreshold());
+    clone->SetParallelThreshold(GetParallelThreshold());
+    clone->SetParallelThresholdForSum(GetParallelThresholdForSum());
+    clone->SetStepsBetweenDeduplication(StepsBetweenDeduplication());
+    clone->SetStepsBetweenTrims(StepsBetweenTrims());
+    clone->SetOperations(std::move(GetOperations()));
+    clone->SetSavePosition(GetSavePosition());
+    if (IsParallelEnabled()) clone->EnableParallel();
+    
+    return clone;
+  }
 };
 
 }  // namespace Simulators

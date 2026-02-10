@@ -585,6 +585,14 @@ class GpuPauliPropagator {
     return 0.0;
   }
 
+  double Probability(unsigned long long int outcome)
+  {
+    if (lib) {
+      return lib->PauliPropProbability(obj, outcome);
+    }
+    return 0.0;
+  }
+
   bool MeasureQubit(int qubit)
   {
     if (lib) {
