@@ -81,9 +81,10 @@ enum class SimulationType : int {
   kMatrixProductState, /**< matrix product state simulation type */
   kStabilizer,         /**< Clifford gates simulation type */
   kTensorNetwork,      /**< Tensor network simulation type */
+  kPauliPropagator,    /**< Pauli propagator simulation type */
+  kExtendedStabilizer, /**< Extended stabilizer simulation type */
   kOther /**< other simulation type, could occur for the aer simulator, which
-            also has density matrix, stabilizer, extended stabilizer, unitary,
-            superop */
+            also has density matrix, stabilizer, unitary, superop */
 };
 
 /**

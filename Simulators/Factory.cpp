@@ -85,6 +85,8 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
         sim->Configure("method", "stabilizer");
       else if (m == SimulationType::kTensorNetwork)
         sim->Configure("method", "tensor_network");
+      else if (m == SimulationType::kPauliPropagator)
+        sim->Configure("method", "pauli_propagator");
 
       return sim;
     }
@@ -97,6 +99,8 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
         sim->Configure("method", "stabilizer");
       else if (m == SimulationType::kTensorNetwork)
         sim->Configure("method", "tensor_network");
+      else if (m == SimulationType::kExtendedStabilizer)
+        sim->Configure("method", "extended_stabilizer");
       else
         sim->Configure("method", "statevector");
 
@@ -114,12 +118,16 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
       if (gpuLibrary && gpuLibrary->IsValid() &&
           (m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
-           m == SimulationType::kTensorNetwork)) {
+           m == SimulationType::kTensorNetwork ||
+           m == SimulationType::kPauliPropagator) {
         auto sim = std::make_shared<Private::GpuSimulator>();
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");
         else if (m == SimulationType::kTensorNetwork)
           sim->Configure("method", "tensor_network");
+        else if (m == SimulationType::kPauliPropagator)
+          sim->Configure("method", "pauli_propagator");
+
 
         return sim;
       }
@@ -146,6 +154,8 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
         sim->Configure("method", "stabilizer");
       else if (m == SimulationType::kTensorNetwork)
         sim->Configure("method", "tensor_network");
+      else if (m == SimulationType::kPauliPropagator)
+        sim->Configure("method", "pauli_propagator");
 
       return sim;
     }
@@ -158,6 +168,8 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
         sim->Configure("method", "stabilizer");
       else if (m == SimulationType::kTensorNetwork)
         sim->Configure("method", "tensor_network");
+      else if (m == SimulationType::kExtendedStabilizer)
+        sim->Configure("method", "extended_stabilizer");
       else
         sim->Configure("method", "statevector");
 
@@ -175,12 +187,15 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
       if (gpuLibrary && gpuLibrary->IsValid() &&
           (m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
-           m == SimulationType::kTensorNetwork)) {
+           m == SimulationType::kTensorNetwork ||
+           m == SimulationType::kPauliPropagator) {
         auto sim = std::make_unique<Private::GpuSimulator>();
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");
         else if (m == SimulationType::kTensorNetwork)
           sim->Configure("method", "tensor_network");
+        else if (m == SimulationType::kPauliPropagator)
+          sim->Configure("method", "pauli_propagator");
 
         return sim;
       }

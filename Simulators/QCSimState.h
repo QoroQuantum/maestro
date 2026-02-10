@@ -24,6 +24,7 @@
 #include "Clifford.h"
 #include "MPSSimulator.h"
 #include "QubitRegister.h"
+#include "QcsimPauliPropagator.h"
 
 #include "../TensorNetworks/ForestContractor.h"
 #include "../TensorNetworks/TensorNetwork.h"
@@ -76,6 +77,9 @@ class QCSimState : public ISimulator {
         const auto tensorContractor =
             std::make_shared<TensorNetworks::ForestContractor>();
         tensorNetwork->SetContractor(tensorContractor);
+      } else if (simulationType == SimulationType::kPauliPropagator) {
+        pp = std::make_unique<Simulators::QcsimPauliPropagator>();
+        pp->SetNrQubits(nrQubits);
       } else
         state = std::make_unique<QC::QubitRegister<>>(nrQubits);
 
@@ -207,6 +211,8 @@ class QCSimState : public ISimulator {
       tensorNetwork->Clear();
     else if (state)
       state->Reset();
+    else if (pp)
+      pp->ClearOperations();
   }
 
   /**
@@ -227,6 +233,8 @@ class QCSimState : public ISimulator {
         simulationType = SimulationType::kStabilizer;
       else if (std::string("tensor_network") == value)
         simulationType = SimulationType::kTensorNetwork;
+      else if (std::string("pauli_propagator") == value)
+        simulationType = SimulationType::kPauliPropagator;
     } else if (std::string("matrix_product_state_truncation_threshold") ==
                key) {
       singularValueThreshold = std::stod(value);
@@ -265,6 +273,8 @@ class QCSimState : public ISimulator {
           return "stabilizer";
         case SimulationType::kTensorNetwork:
           return "tensor_network";
+        case SimulationType::kPauliPropagator:
+          return "pauli_propagator";
         default:
           return "other";
       }
@@ -322,6 +332,7 @@ class QCSimState : public ISimulator {
     mpsSimulator = nullptr;
     cliffordSimulator = nullptr;
     tensorNetwork = nullptr;
+    pp = nullptr;
     nrQubits = 0;
   }
 
@@ -677,6 +688,8 @@ class QCSimState : public ISimulator {
       return cliffordSimulator->ExpectationValue(pauliString);
     else if (simulationType == SimulationType::kTensorNetwork)
       return tensorNetwork->ExpectationValue(pauliString);
+    else if (simulationType == SimulationType::kPauliPropagator)
+      return pp->ExpectationValue(pauliString);
 
     // statevector or mps
     static const QC::Gates::PauliXGate<> xgate;
@@ -782,6 +795,8 @@ class QCSimState : public ISimulator {
       cliffordSimulator->SaveState();
     else if (simulationType == SimulationType::kTensorNetwork)
       tensorNetwork->SaveState();
+    else if (simulationType == SimulationType::kPauliPropagator)
+      pp->SaveState();
     else
       state->SaveState();
   }
@@ -801,6 +816,8 @@ class QCSimState : public ISimulator {
       cliffordSimulator->RestoreState();
     else if (simulationType == SimulationType::kTensorNetwork)
       tensorNetwork->RestoreState();
+    else if (simulationType == SimulationType::kPauliPropagator)
+      pp->RestoreState();
     else
       state->RestoreState();
   }
@@ -829,6 +846,11 @@ class QCSimState : public ISimulator {
     if (state) state->SetMultithreading(multithreading);
     if (cliffordSimulator) cliffordSimulator->SetMultithreading(multithreading);
     if (tensorNetwork) tensorNetwork->SetMultithreading(multithreading);
+    if (pp)
+    {
+        if (multithreading) pp->EnableParallel();
+        else pp->DisableParallel();
+    }
   }
 
   /**
@@ -897,6 +919,8 @@ class QCSimState : public ISimulator {
       cliffordSimulator; /**< The qcsim clifford simulator. */
   std::unique_ptr<TensorNetworks::TensorNetwork>
       tensorNetwork; /**< The qcsim tensor network. */
+  std::unique_ptr<QcsimPauliPropagator>
+      pp; /**< The qcsim pauli propagator. */
 
   size_t nrQubits = 0; /**< The number of allocated qubits. */
   bool limitSize = false;
