@@ -119,7 +119,7 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
           (m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
            m == SimulationType::kTensorNetwork ||
-           m == SimulationType::kPauliPropagator) {
+           m == SimulationType::kPauliPropagator)) {
         auto sim = std::make_shared<Private::GpuSimulator>();
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");
@@ -127,7 +127,6 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
           sim->Configure("method", "tensor_network");
         else if (m == SimulationType::kPauliPropagator)
           sim->Configure("method", "pauli_propagator");
-
 
         return sim;
       }
@@ -188,7 +187,7 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
           (m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
            m == SimulationType::kTensorNetwork ||
-           m == SimulationType::kPauliPropagator) {
+           m == SimulationType::kPauliPropagator)) {
         auto sim = std::make_unique<Private::GpuSimulator>();
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");
