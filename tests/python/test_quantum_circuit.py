@@ -17,7 +17,7 @@ def assert_distribution(counts, expected_probs, shots, tolerance=0.1):
     """
     total_counts = sum(counts.values())
     assert total_counts == shots
-    
+
     for bitstring, prob in expected_probs.items():
         expected_count = prob * shots
         actual_count = counts.get(bitstring, 0)
@@ -56,8 +56,8 @@ class TestQuantumCircuitModel:
         qc.measure([(0, 0)])
         res = qc.execute(shots=100)
         assert res["counts"]["0"] == 100
-        
-        # Test Z gate on |0>: Should usually change phase but not bitflip. 
+
+        # Test Z gate on |0>: Should usually change phase but not bitflip.
         # But in Z-basis measurement, |0> remains |0>
         qc = QuantumCircuit()
         qc.z(0)
@@ -72,7 +72,7 @@ class TestQuantumCircuitModel:
         qc.measure([(0, 0)])
         res = qc.execute(shots=1000)
         counts = res["counts"]
-        
+
         # Should be roughly 50-50
         assert "0" in counts
         assert "1" in counts
@@ -84,7 +84,7 @@ class TestQuantumCircuitModel:
         # Case 1: Control |0> (Target shouldn't flip)
         qc = QuantumCircuit()
         # q0 initialized to 0
-        qc.cx(0, 1) 
+        qc.cx(0, 1)
         qc.measure([(0, 0), (1, 1)])
         res = qc.execute(shots=100)
         assert res["counts"] == {"00": 100}
@@ -92,7 +92,7 @@ class TestQuantumCircuitModel:
         # Maestro often uses standard ordering, but let's be robust or check standard.
         # Assuming "q1q0" or similar? Let's check keys.
         # usually 00 means both 0.
-        
+
         # Case 2: Control |1> (Target should flip)
         qc = QuantumCircuit()
         qc.x(0) # q0 = 1
@@ -112,7 +112,7 @@ class TestQuantumCircuitModel:
         qc.cx(0, 1)
         qc.measure([(0, 0), (1, 1)])
         res = qc.execute(shots=1000)
-        
+
         counts = res["counts"]
         # Should mainly see "00" and "11"
         assert counts.get("00", 0) > 400
@@ -134,26 +134,26 @@ class TestQuantumCircuitModel:
         qc.t(0)
         qc.tdg(0)
         qc.sx(0)
-        
+
         # Single qubit parametric
         qc.p(0, 0.5)
         qc.rx(0, 0.5)
         qc.ry(0, 0.5)
         qc.rz(0, 0.5)
         qc.u(0, 0.1, 0.2, 0.3)
-        
+
         # Two qubit
         qc.cx(0, 1)
         qc.cy(0, 1)
         qc.cz(0, 1)
         qc.swap(0, 1)
-        
+
         # Controlled parametric
         qc.cp(0, 1, 0.5)
         qc.crx(0, 1, 0.5)
         qc.cry(0, 1, 0.5)
         qc.crz(0, 1, 0.5)
-        
+
         # Result should be executable (even if meaningless)
         res = qc.execute(shots=10)
         assert res["counts"] is not None
@@ -164,11 +164,11 @@ class TestExecutionFunctions:
         qc = QuantumCircuit()
         qc.h(0)
         qc.measure([(0, 0)])
-        
+
         # Test shots
         res = qc.execute(shots=10)
         assert sum(res["counts"].values()) == 10
-        
+
         # Test Simulator Type Enum
         res = qc.execute(
             simulator_type=maestro.SimulatorType.QCSim,
@@ -184,7 +184,7 @@ class TestExecutionFunctions:
         qc.h(0)
         qc.cx(0, 1)
         qc.measure([(0, 0), (1, 1)])
-        
+
         res = qc.execute(
             simulator_type=maestro.SimulatorType.QCSim,
             simulation_type=maestro.SimulationType.MatrixProductState,
@@ -200,26 +200,26 @@ class TestExecutionFunctions:
         qc = QuantumCircuit()
         qc.x(0) # q0 = 1
         # q1 = 0
-        
+
         # Measure q0 -> c1, q1 -> c0 (Swap typical order)
         # Expected bitstring: c1c0 = 10? or c1=1, c0=0.
         # Maestro bindings: "std::string bitstring(bool_vec.size())"
         # The bool_vec comes from 'results' which usually respects the number of bits measured.
         # But determining the order in the string depends on the C++ implementation.
         # Usually checking unique outcomes is safer.
-        
-        qc.measure([(0, 1), (1, 0)]) 
+
+        qc.measure([(0, 1), (1, 0)])
         res = qc.execute(shots=10)
         keys = list(res["counts"].keys())
         # We expect a single deterministic outcome if we just prepared |10>
         assert len(keys) == 1
-        
+
         key = keys[0]
-        # key length should be 2 (since max classical index implied is 1 -> size 2?) 
+        # key length should be 2 (since max classical index implied is 1 -> size 2?)
         # Or simply number of measurements?
         # The previous tests passed assuming standard behavior.
         # Let's verify length.
-        assert len(key) >= 2 
+        assert len(key) >= 2
 
     def test_parametric_rotation(self):
         qc = QuantumCircuit()
@@ -235,12 +235,12 @@ class TestEstimateFunctions:
         """Test basic expectation value estimation"""
         qc = QuantumCircuit()
         qc.x(0)
-        
+
         # State is |1>
         # <Z> = -1
         # <X> = 0 (in ideal theory, though statistical or exact?)
         # <I> = 1
-        
+
         # Using string format
         res = qc.estimate(observables="Z;I")
         vals = res["expectation_values"]
@@ -251,11 +251,11 @@ class TestEstimateFunctions:
     def test_estimate_list_observables(self):
         """Test passing list of strings for observables"""
         qc = QuantumCircuit()
-        qc.h(0) 
+        qc.h(0)
         # State |+> = (|0>+|1>)/sqrt(2)
         # <X> = 1
         # <Z> = 0
-        
+
         res = qc.estimate(observables=["X", "Z"])
         vals = res["expectation_values"]
         assert vals[0] == pytest.approx(1.0, abs=1e-5)
@@ -270,7 +270,7 @@ class TestEstimateFunctions:
         # XX = 1
         # ZZ = 1
         # IZ = 0 (marginal)
-        
+
         res = qc.estimate(observables=["XX", "ZZ", "IZ"])
         vals = res["expectation_values"]
         assert vals[0] == pytest.approx(1.0, abs=1e-5)
@@ -283,7 +283,7 @@ class TestEstimateFunctions:
         """Test estimate using MPS backend"""
         qc = QuantumCircuit()
         qc.x(0)
-        
+
         res = qc.estimate(
             observables="Z",
             simulator_type=maestro.SimulatorType.QCSim,
