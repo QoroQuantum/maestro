@@ -17,7 +17,7 @@ cx q[1], q[2];
     # Define observables as a semicolon-separated string of Pauli operators
     # We want to measure parity (ZZZ) and some local observables
     observables = "ZZZ;III;XII;IXI;IIX;XXX"
-    
+
     # Execute the estimation
     # By default it uses QCSim with Statevector simulation
     result = maestro.simple_estimate(ghz_qasm, observables)
@@ -26,10 +26,10 @@ cx q[1], q[2];
         print(f"Simulator: {result['simulator']}")
         print(f"Method:    {result['method']}")
         print(f"Time Taken: {result['time_taken']:.6f} seconds")
-        
+
         obs_list = observables.split(';')
         exp_vals = result['expectation_values']
-        
+
         print("\nExpectation Values:")
         for obs, val in zip(obs_list, exp_vals):
             print(f"  <{obs}> = {val:.4f}")
@@ -40,7 +40,7 @@ cx q[1], q[2];
     # You can also use the object-oriented interface for more control
     m = maestro.Maestro()
     sim_handle = m.CreateSimulator(
-        maestro.SimulatorType.QCSim, 
+        maestro.SimulatorType.QCSim,
         maestro.SimulationType.Statevector
     )
     simulator = m.GetSimulator(sim_handle)
@@ -49,18 +49,18 @@ cx q[1], q[2];
         # Prepare the state manually
         simulator.AllocateQubits(3)
         simulator.Initialize()
-        
+
         simulator.ApplyH(0)
         simulator.ApplyCX(0, 1)
         simulator.ApplyCX(1, 2)
-        
+
         # Measure individual observables
         zzz_val = simulator.ExpectationValue("ZZZ")
         xxx_val = simulator.ExpectationValue("XXX")
-        
+
         print(f"Direct <ZZZ> = {zzz_val:.4f}")
         print(f"Direct <XXX> = {xxx_val:.4f}")
-        
+
         m.DestroySimulator(sim_handle)
     else:
         print("Error: Failed to create simulator.")

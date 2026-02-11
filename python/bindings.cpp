@@ -239,7 +239,10 @@ NB_MODULE(maestro, m) {
 
   nb::class_<Circuits::Circuit<double>>(circuits, "QuantumCircuit")
       .def(nb::init<>())
-      .def("GetMaxQubitIndex", &Circuits::Circuit<double>::GetMaxQubitIndex)
+      .def_prop_ro("num_qubits",
+                   [](const Circuits::Circuit<double> &c) {
+                     return c.GetMaxQubitIndex() + 1;
+                   })
       // Standard Gates
       .def("x",
            [](Circuits::Circuit<double> &s, Types::qubit_t q) {
