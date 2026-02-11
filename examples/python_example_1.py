@@ -29,7 +29,7 @@ def main():
         print("Simulator object obtained successfully")
 
         # Allocate qubits
-        num_qubits = circuit.GetMaxQubitIndex() + 1
+        num_qubits = circuit.num_qubits
         simulator.AllocateQubits(num_qubits)
         simulator.Initialize()
         print(f"Allocated {num_qubits} qubits")

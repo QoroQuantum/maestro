@@ -102,7 +102,7 @@ class TestQasmParser:
 
         parser = maestro.QasmToCirc()
         circuit = parser.ParseAndTranslate(qasm)
-        num_qubits = circuit.GetMaxQubitIndex() + 1
+        num_qubits = circuit.num_qubits
         assert num_qubits == 3
 
 
