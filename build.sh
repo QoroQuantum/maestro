@@ -12,6 +12,42 @@ else
 fi
 echo "Building with ${NPROC} parallel jobs."
 
+check_lblas() {
+    printf "int main() { return 0; }" | cc -x c - -lblas -o /dev/null 2>/dev/null
+}
+
+install_blas() {
+    echo "BLAS not found. Attempting to install..."
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        if command -v brew >/dev/null; then
+            echo "Installing openblas via Homebrew..."
+            brew install openblas
+            export PKG_CONFIG_PATH="$(brew --prefix openblas)/lib/pkgconfig:$PKG_CONFIG_PATH"
+        else
+            echo "Homebrew not found. Please install BLAS manually."
+            return 1
+        fi
+    elif [ -f /etc/debian_version ]; then
+        echo "Installing libopenblas-dev via apt..."
+        if [ "${FIX_APT_KEYS}" = "1" ]; then
+            # Opt-in: fix known issue with missing Yarn GPG key which can break apt-get update
+            if grep -r "yarnpkg" /etc/apt/ > /dev/null 2>&1; then
+                 echo "Attempting to fix missing Yarn GPG key..."
+                 curl -fsSL https://dl.yarnpkg.com/debian/pubkey.gpg | sudo gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/yarn.gpg || echo "Warning: Failed to add Yarn GPG key"
+            fi
+        fi
+        # Try update, but proceed to install even if it fails (e.g. due to broken third-party repos)
+        sudo apt-get update || echo "apt-get update had errors, proceeding with install..."
+        sudo apt-get install -y libopenblas-dev
+    elif [ -f /etc/redhat-release ]; then
+        echo "Installing openblas-devel via dnf..."
+        sudo dnf install -y openblas-devel
+    else
+        echo "Could not detect package manager. Please install BLAS manually."
+        return 1
+    fi
+}
+
 if [ ! -d build ]
 then
     mkdir -p build
@@ -42,6 +78,10 @@ then
 fi
 
 if [ -z "${NO_QISKIT_AER}" ]; then
+    if ! check_lblas; then
+        install_blas
+    fi
+
 	if [ ! -d json ]
 	then
 		git clone https://github.com/nlohmann/json.git
