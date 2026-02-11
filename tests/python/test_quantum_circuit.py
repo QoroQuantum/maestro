@@ -87,7 +87,7 @@ class TestQuantumCircuitModel:
         qc.cx(0, 1) 
         qc.measure([(0, 0), (1, 1)])
         res = qc.execute(shots=100)
-        assert res["counts"].get("00", 0) == 100 or res["counts"].get("00", 0) == 100 
+        assert res["counts"] == {"00": 100}
         # Note: Depending on bitstring ordering (little vs big endian), check logic
         # Maestro often uses standard ordering, but let's be robust or check standard.
         # Assuming "q1q0" or similar? Let's check keys.
@@ -296,15 +296,7 @@ class TestEstimateFunctions:
     def test_empty_circuit_estimate(self):
         """Test estimating on empty circuit (should be |0...0>)"""
         qc = QuantumCircuit()
-        # Implicitly 1 qubit if we ask for Z on qubit 0? 
-        # Or does observable define the size?
-        # Usually circuit needs to know it has qubits.
-        # If we ask for "Z", it implies qubit 0.
-        # If circuit is empty, GetMaxQubitIndex might be low.
-        # Let's ensuring size matches observable.
-        qc.z(0) # Apply identity-like gate to ensure sizing or just rely on dynamic sizing
-        # Actually Z changes phase of 1, but on |0> it does nothing.
-        
+        # Should now work even without explicit gates due to binding fix
         res = qc.estimate(observables="Z")
         assert res["expectation_values"][0] == pytest.approx(1.0, abs=1e-5)
 

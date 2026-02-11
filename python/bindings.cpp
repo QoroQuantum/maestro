@@ -7,6 +7,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 
+#include <algorithm>
 #include <chrono>
 #include <sstream>
 #include <string>
@@ -65,12 +66,13 @@ namespace {
 
         if (!network) return nullptr;
 
-        // Ensure strings live long enough for the Configure call
         if (max_bond) {
-            network->Configure("matrix_product_state_max_bond_dimension", std::to_string(*max_bond).c_str());
+            auto val = std::to_string(*max_bond);
+            network->Configure("matrix_product_state_max_bond_dimension", val.c_str());
         }
         if (sv_threshold) {
-            network->Configure("matrix_product_state_truncation_threshold", std::to_string(*sv_threshold).c_str());
+            auto val = std::to_string(*sv_threshold);
+            network->Configure("matrix_product_state_truncation_threshold", val.c_str());
         }
 
         network->CreateSimulator();
@@ -107,7 +109,8 @@ namespace {
     {
         if (!circuit) throw nb::value_error("Circuit is null.");
 
-        ScopedSimulator sim(static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
+        int num_qubits = std::max(1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
+        ScopedSimulator sim(num_qubits);
         if (sim.handle == 0) throw std::runtime_error("Failed to create simulator handle.");
 
         auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond, sv_threshold);
@@ -154,7 +157,10 @@ namespace {
     {
         if (!circuit) throw nb::value_error("Circuit is null.");
 
-        ScopedSimulator sim(static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
+        int num_qubits = static_cast<int>(circuit->GetMaxQubitIndex()) + 1;
+        for (const auto &p : paulis) num_qubits = std::max(num_qubits, (int)p.length());
+        
+        ScopedSimulator sim(std::max(1, num_qubits));
         if (sim.handle == 0) throw std::runtime_error("Failed to create simulator handle.");
 
         auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond, sv_threshold);
