@@ -223,16 +223,16 @@ NB_MODULE(maestro, m) {
   // --- Maestro Class ---
   nb::class_<Maestro>(m, "Maestro")
       .def(nb::init<>())
-      .def("CreateSimulator", &Maestro::CreateSimulator,
-           "simType"_a = Simulators::SimulatorType::kQCSim,
-           "simExecType"_a = Simulators::SimulationType::kMatrixProductState)
+      .def("create_simulator", &Maestro::CreateSimulator,
+           "sim_type"_a = Simulators::SimulatorType::kQCSim,
+           "sim_exec_type"_a = Simulators::SimulationType::kMatrixProductState)
       .def(
-          "GetSimulator",
+          "get_simulator",
           [](Maestro &self, unsigned long int h) {
             return static_cast<Simulators::ISimulator *>(self.GetSimulator(h));
           },
           nb::rv_policy::reference_internal)
-      .def("DestroySimulator", &Maestro::DestroySimulator);
+      .def("destroy_simulator", &Maestro::DestroySimulator);
 
   // --- Circuits Submodule ---
   auto circuits = m.def_submodule("circuits", "Quantum circuits submodule");
@@ -379,7 +379,7 @@ NB_MODULE(maestro, m) {
   // --- QASM Tools ---
   nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
       .def(nb::init<>())
-      .def("ParseAndTranslate", &qasm::QasmToCirc<double>::ParseAndTranslate);
+      .def("parse_and_translate", &qasm::QasmToCirc<double>::ParseAndTranslate);
 
   // --- Module Level Convenience Functions ---
 

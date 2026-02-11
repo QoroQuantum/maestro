@@ -39,11 +39,11 @@ cx q[1], q[2];
     print("\n--- Testing direct ExpectationValue calls ---")
     # You can also use the object-oriented interface for more control
     m = maestro.Maestro()
-    sim_handle = m.CreateSimulator(
+    sim_handle = m.create_simulator(
         maestro.SimulatorType.QCSim,
         maestro.SimulationType.Statevector
     )
-    simulator = m.GetSimulator(sim_handle)
+    simulator = m.get_simulator(sim_handle)
 
     if simulator:
         # Prepare the state manually
@@ -61,7 +61,7 @@ cx q[1], q[2];
         print(f"Direct <ZZZ> = {zzz_val:.4f}")
         print(f"Direct <XXX> = {xxx_val:.4f}")
 
-        m.DestroySimulator(sim_handle)
+        m.destroy_simulator(sim_handle)
     else:
         print("Error: Failed to create simulator.")
 
