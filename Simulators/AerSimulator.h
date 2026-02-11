@@ -57,10 +57,23 @@ class AerSimulator : public AerState {
    * @param lambda The phase shift angle.
    */
   void ApplyP(Types::qubit_t qubit, double lambda) override {
+    if (GetSimulationType() == SimulationType::kStabilizer)
+      throw std::runtime_error("P gate not supported in stabilizer simulation");
+
     const Types::qubits_vector qubits = {qubit};
 
-    const AER::cvector_t P = {{1, 0}, std::polar(1., lambda)};
-    state->apply_diagonal_matrix(qubits, P);
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      AER::Operations::Op op;
+      op.type = AER::Operations::OpType::gate;
+      op.name = "p";
+      op.qubits = AER::reg_t{qubit};
+      op.params = {lambda};
+
+      state->buffer_op(std::move(op));
+    } else {
+      const AER::cvector_t P = {{1, 0}, std::polar(1., lambda)};
+      state->apply_diagonal_matrix(qubits, P);
+    }
 
     NotifyObservers(qubits);
   }
@@ -122,7 +135,7 @@ class AerSimulator : public AerState {
   void ApplyS(Types::qubit_t qubit) override {
     const Types::qubits_vector qubits = {qubit};
 
-    if (GetSimulationType() == SimulationType::kStabilizer) {
+    if (GetSimulationType() == SimulationType::kStabilizer || GetSimulationType() == SimulationType::kExtendedStabilizer) {
       AER::Operations::Op op;
       op.type = AER::Operations::OpType::gate;
       op.name = "s";
@@ -146,7 +159,8 @@ class AerSimulator : public AerState {
   void ApplySDG(Types::qubit_t qubit) override {
     const Types::qubits_vector qubits = {qubit};
 
-    if (GetSimulationType() == SimulationType::kStabilizer) {
+    if (GetSimulationType() == SimulationType::kStabilizer ||
+        GetSimulationType() == SimulationType::kExtendedStabilizer) {
       AER::Operations::Op op;
       op.type = AER::Operations::OpType::gate;
       op.name = "sdg";
@@ -174,8 +188,16 @@ class AerSimulator : public AerState {
     const Types::qubits_vector qubits = {qubit};
     // state->apply_u(qubit, 0, 0, M_PI / 4.0);
 
-    const AER::cvector_t T = {{1, 0}, std::polar<double>(1, M_PI / 4.)};
-    state->apply_diagonal_matrix(qubits, T);
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      AER::Operations::Op op;
+      op.type = AER::Operations::OpType::gate;
+      op.name = "t";
+      op.qubits = AER::reg_t{qubit};
+      state->buffer_op(std::move(op));
+    } else {
+      const AER::cvector_t T = {{1, 0}, std::polar<double>(1, M_PI / 4.)};
+      state->apply_diagonal_matrix(qubits, T);
+    }
 
     NotifyObservers(qubits);
   }
@@ -194,8 +216,16 @@ class AerSimulator : public AerState {
     const Types::qubits_vector qubits = {qubit};
     // state->apply_u(qubit, 0, 0, -M_PI / 4.0);
 
-    const AER::cvector_t Tdg = {{1, 0}, std::polar<double>(1, -M_PI / 4.)};
-    state->apply_diagonal_matrix(qubits, Tdg);
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      AER::Operations::Op op;
+      op.type = AER::Operations::OpType::gate;
+      op.name = "tdg";
+      op.qubits = AER::reg_t{qubit};
+      state->buffer_op(std::move(op));
+    } else {
+      const AER::cvector_t Tdg = {{1, 0}, std::polar<double>(1, -M_PI / 4.)};
+      state->apply_diagonal_matrix(qubits, Tdg);
+    }
 
     NotifyObservers(qubits);
   }
@@ -209,7 +239,7 @@ class AerSimulator : public AerState {
   void ApplySx(Types::qubit_t qubit) override {
     const Types::qubits_vector qubits = {qubit};
 
-    if (GetSimulationType() == SimulationType::kStabilizer) {
+    if (GetSimulationType() == SimulationType::kStabilizer || GetSimulationType() == SimulationType::kExtendedStabilizer) {
       AER::Operations::Op op;
       op.type = AER::Operations::OpType::gate;
       op.name = "sx";
@@ -236,7 +266,8 @@ class AerSimulator : public AerState {
   void ApplySxDAG(Types::qubit_t qubit) override {
     const Types::qubits_vector qubits = {qubit};
 
-    if (GetSimulationType() == SimulationType::kStabilizer) {
+    if (GetSimulationType() == SimulationType::kStabilizer ||
+        GetSimulationType() == SimulationType::kExtendedStabilizer) {
       AER::Operations::Op op;
       op.type = AER::Operations::OpType::gate;
       op.name = "sxdg";
@@ -258,7 +289,8 @@ class AerSimulator : public AerState {
   void ApplyK(Types::qubit_t qubit) override {
     const Types::qubits_vector qubits = {qubit};
 
-    if (GetSimulationType() == SimulationType::kStabilizer) {
+    if (GetSimulationType() == SimulationType::kStabilizer ||
+        GetSimulationType() == SimulationType::kExtendedStabilizer) {
       ApplyZ(qubit);
       ApplyS(qubit);
       ApplyH(qubit);
@@ -287,9 +319,15 @@ class AerSimulator : public AerState {
           "Rx gate not supported in stabilizer simulation");
 
     const Types::qubits_vector qubits = {qubit};
-    const cmatrix_t rx = AER::Linalg::Matrix::rx(theta);
 
-    state->apply_unitary(qubits, rx);
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      ApplyH(qubit);
+      ApplyRz(qubit, theta);
+      ApplyH(qubit);
+    } else {
+      const cmatrix_t rx = AER::Linalg::Matrix::rx(theta);
+      state->apply_unitary(qubits, rx);
+    }
 
     NotifyObservers(qubits);
   }
@@ -307,9 +345,16 @@ class AerSimulator : public AerState {
           "Ry gate not supported in stabilizer simulation");
 
     const Types::qubits_vector qubits = {qubit};
-    const cmatrix_t ry = AER::Linalg::Matrix::ry(theta);
 
-    state->apply_unitary(qubits, ry);
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      ApplySDG(qubit);
+      ApplyRx(qubit, theta);
+      ApplyS(qubit);
+    } else {
+      const cmatrix_t ry = AER::Linalg::Matrix::ry(theta);
+
+      state->apply_unitary(qubits, ry);
+    }
 
     NotifyObservers(qubits);
   }
@@ -327,9 +372,29 @@ class AerSimulator : public AerState {
           "Rz gate not supported in stabilizer simulation");
 
     const Types::qubits_vector qubits = {qubit};
-    const cmatrix_t rz = AER::Linalg::Matrix::rz(theta);
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      // this does not suffice, as it is implemented only for pi/4 multiples by
+      // qiskit aer... use p instead, which is implemented for any angle...
+      // there is a phase difference, but it is not important for the stabilizer
+      // simulation
 
-    state->apply_unitary(qubits, rz);
+      // it's very important as many other non-clifford gates are implemented based on rotations!
+
+      /*
+      AER::Operations::Op op;
+      op.type = AER::Operations::OpType::gate;
+      op.name = "rz";
+      op.qubits = AER::reg_t{qubit};
+      op.params = {theta};
+
+      state->buffer_op(std::move(op));
+      */
+      ApplyP(qubit, theta);
+    } else {
+      const cmatrix_t rz = AER::Linalg::Matrix::rz(theta);
+
+      state->apply_unitary(qubits, rz);
+    }
 
     NotifyObservers(qubits);
   }
@@ -350,9 +415,16 @@ class AerSimulator : public AerState {
       throw std::runtime_error("U gate not supported in stabilizer simulation");
 
     const Types::qubits_vector qubits = {qubit};
-    const cmatrix_t u = AER::Linalg::Matrix::u4(theta, phi, lambda, gamma);
 
-    state->apply_unitary(qubits, u);
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      ApplyRz(qubit, lambda);
+      ApplyRy(qubit, theta);
+      ApplyRz(qubit, phi);
+    } else {
+      const cmatrix_t u = AER::Linalg::Matrix::u4(theta, phi, lambda, gamma);
+
+      state->apply_unitary(qubits, u);
+    }
 
     NotifyObservers(qubits);
   }
@@ -379,7 +451,14 @@ class AerSimulator : public AerState {
    */
   void ApplyCY(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override {
     const Types::qubits_vector qubits = {ctrl_qubit, tgt_qubit};
-    state->apply_cy(qubits);
+
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      ApplySDG(tgt_qubit);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyS(tgt_qubit);
+    } else {
+      state->apply_cy(qubits);
+    }
     NotifyObservers(qubits);
   }
 
@@ -411,9 +490,19 @@ class AerSimulator : public AerState {
           "CP gate not supported in stabilizer simulation");
 
     const Types::qubits_vector qubits = {ctrl_qubit, tgt_qubit};
-    const cmatrix_t CP = AER::Linalg::Matrix::cphase(lambda);
-    // state->apply_mcphase(qubits, lambda);
-    state->apply_unitary(qubits, CP);
+
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      const double halfAngle = lambda * 0.5;
+      ApplyP(ctrl_qubit, halfAngle);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyP(tgt_qubit, -halfAngle);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyP(tgt_qubit, halfAngle);
+    } else {
+      const cmatrix_t CP = AER::Linalg::Matrix::cphase(lambda);
+      // state->apply_mcphase(qubits, lambda);
+      state->apply_unitary(qubits, CP);
+    }
 
     NotifyObservers(qubits);
   }
@@ -434,20 +523,31 @@ class AerSimulator : public AerState {
 
     const Types::qubits_vector qubits = {ctrl_qubit, tgt_qubit};
 
-    cmatrix_t mat(4, 4);
-    mat(0, 0) = 1;
-    mat(2, 2) = 1;
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      const double halfAngle = theta * 0.5;
 
-    const double t2 = theta * 0.5;
+      ApplyH(tgt_qubit);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyRz(tgt_qubit, -halfAngle);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyRz(tgt_qubit, halfAngle);
+      ApplyH(tgt_qubit);
+    } else {
+      cmatrix_t mat(4, 4);
+      mat(0, 0) = 1;
+      mat(2, 2) = 1;
 
-    const complex_t i(0., 1.);
-    mat(1, 1) = std::cos(t2);
-    mat(1, 3) = -i * std::sin(t2);
-    mat(3, 1) = mat(1, 3);
-    mat(3, 3) = mat(1, 1);
+      const double t2 = theta * 0.5;
 
-    // state->apply_mcrx(qubits, theta);
-    state->apply_unitary(qubits, mat);
+      const complex_t i(0., 1.);
+      mat(1, 1) = std::cos(t2);
+      mat(1, 3) = -i * std::sin(t2);
+      mat(3, 1) = mat(1, 3);
+      mat(3, 3) = mat(1, 1);
+
+      // state->apply_mcrx(qubits, theta);
+      state->apply_unitary(qubits, mat);
+    }
 
     NotifyObservers(qubits);
   }
@@ -468,19 +568,28 @@ class AerSimulator : public AerState {
 
     const Types::qubits_vector qubits = {ctrl_qubit, tgt_qubit};
 
-    cmatrix_t mat(4, 4);
-    mat(0, 0) = 1;
-    mat(2, 2) = 1;
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      const double halfAngle = theta * 0.5;
 
-    const double t2 = theta * 0.5;
+      ApplyRy(tgt_qubit, halfAngle);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyRy(tgt_qubit, -halfAngle);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+    } else {
+      cmatrix_t mat(4, 4);
+      mat(0, 0) = 1;
+      mat(2, 2) = 1;
 
-    mat(1, 1) = std::complex<double>(cos(t2), 0);
-    mat(1, 3) = std::complex<double>(-sin(t2), 0);
-    mat(3, 1) = std::complex<double>(sin(t2), 0);
-    mat(3, 3) = mat(1, 1);
+      const double t2 = theta * 0.5;
 
-    // state->apply_mcry(qubits, theta);
-    state->apply_unitary(qubits, mat);
+      mat(1, 1) = std::complex<double>(cos(t2), 0);
+      mat(1, 3) = std::complex<double>(-sin(t2), 0);
+      mat(3, 1) = std::complex<double>(sin(t2), 0);
+      mat(3, 3) = mat(1, 1);
+
+      // state->apply_mcry(qubits, theta);
+      state->apply_unitary(qubits, mat);
+    }
 
     NotifyObservers(qubits);
   }
@@ -501,12 +610,20 @@ class AerSimulator : public AerState {
 
     const Types::qubits_vector qubits = {ctrl_qubit, tgt_qubit};
 
-    const double t2 = theta * 0.5;
-    AER::cvector_t v = {
-        {1, 0}, std::polar(1., -t2), {1, 0}, std::polar(1., t2)};
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      const double halfAngle = theta * 0.5;
+      ApplyRz(tgt_qubit, halfAngle);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyRz(tgt_qubit, -halfAngle);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+    } else {
+      const double t2 = theta * 0.5;
+      AER::cvector_t v = {
+          {1, 0}, std::polar(1., -t2), {1, 0}, std::polar(1., t2)};
 
-    // state->apply_mcrz(qubits, theta);
-    state->apply_diagonal_matrix(qubits, v);
+      // state->apply_mcrz(qubits, theta);
+      state->apply_diagonal_matrix(qubits, v);
+    }
 
     NotifyObservers(qubits);
   }
@@ -524,10 +641,24 @@ class AerSimulator : public AerState {
           "CH gate not supported in stabilizer simulation");
 
     const Types::qubits_vector qubits = {ctrl_qubit, tgt_qubit};
-    const cmatrix_t CU = AER::Linalg::Matrix::cu(M_PI_2, 0, M_PI, 0);
-    state->apply_unitary(qubits, CU);
-    // state->apply_cu(qubits, M_PI_2, 0, M_PI, 0);
 
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      ApplyH(tgt_qubit);
+      ApplySDG(tgt_qubit);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyH(tgt_qubit);
+      ApplyT(tgt_qubit);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyT(tgt_qubit);
+      ApplyH(tgt_qubit);
+      ApplyS(tgt_qubit);
+      ApplyX(tgt_qubit);
+      ApplyS(ctrl_qubit);
+    } else {
+      const cmatrix_t CU = AER::Linalg::Matrix::cu(M_PI_2, 0, M_PI, 0);
+      state->apply_unitary(qubits, CU);
+      // state->apply_cu(qubits, M_PI_2, 0, M_PI, 0);
+    }
     NotifyObservers(qubits);
   }
 
@@ -543,14 +674,26 @@ class AerSimulator : public AerState {
       throw std::runtime_error(
           "CSx gate not supported in stabilizer simulation");
 
-    static const cmatrix_t CSX = AER::Utils::make_matrix<complex_t>(
-        {{{1, 0}, {0, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {0.5, 0.5}, {0, 0}, {0.5, -0.5}},
-         {{0, 0}, {0, 0}, {1, 0}, {0, 0}},
-         {{0, 0}, {0.5, -0.5}, {0, 0}, {0.5, 0.5}}});
-
     const Types::qubits_vector qubits = {ctrl_qubit, tgt_qubit};
-    state->apply_unitary(qubits, CSX);
+    
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      ApplyH(tgt_qubit);
+      ApplyT(ctrl_qubit);
+      ApplyT(tgt_qubit);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyTDG(tgt_qubit);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyH(tgt_qubit);
+    } else {
+      static const cmatrix_t CSX = AER::Utils::make_matrix<complex_t>(
+          {{{1, 0}, {0, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {0.5, 0.5}, {0, 0}, {0.5, -0.5}},
+           {{0, 0}, {0, 0}, {1, 0}, {0, 0}},
+           {{0, 0}, {0.5, -0.5}, {0, 0}, {0.5, 0.5}}});
+
+
+      state->apply_unitary(qubits, CSX);
+    }
     NotifyObservers(qubits);
   }
 
@@ -567,14 +710,26 @@ class AerSimulator : public AerState {
       throw std::runtime_error(
           "CSxDAG gate not supported in stabilizer simulation");
 
-    static const cmatrix_t CSXDG = AER::Utils::make_matrix<complex_t>(
-        {{{1, 0}, {0, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {0.5, -0.5}, {0, 0}, {0.5, 0.5}},
-         {{0, 0}, {0, 0}, {1, 0}, {0, 0}},
-         {{0, 0}, {0.5, 0.5}, {0, 0}, {0.5, -0.5}}});
-
     const Types::qubits_vector qubits = {ctrl_qubit, tgt_qubit};
-    state->apply_unitary(qubits, CSXDG);
+
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      ApplyH(tgt_qubit);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyT(tgt_qubit);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyTDG(ctrl_qubit);
+      ApplyTDG(tgt_qubit);
+      ApplyH(tgt_qubit);
+    } else {
+      static const cmatrix_t CSXDG = AER::Utils::make_matrix<complex_t>(
+          {{{1, 0}, {0, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {0.5, -0.5}, {0, 0}, {0.5, 0.5}},
+           {{0, 0}, {0, 0}, {1, 0}, {0, 0}},
+           {{0, 0}, {0.5, 0.5}, {0, 0}, {0.5, -0.5}}});
+
+      state->apply_unitary(qubits, CSXDG);
+    }
+
     NotifyObservers(qubits);
   }
 
@@ -588,7 +743,7 @@ class AerSimulator : public AerState {
   void ApplySwap(Types::qubit_t qubit0, Types::qubit_t qubit1) override {
     const Types::qubits_vector qubits = {qubit0, qubit1};
 
-    if (GetSimulationType() == SimulationType::kStabilizer) {
+    if (GetSimulationType() == SimulationType::kStabilizer || GetSimulationType() == SimulationType::kExtendedStabilizer) {
       AER::Operations::Op op;
       op.type = AER::Operations::OpType::gate;
       op.name = "swap";
@@ -618,18 +773,27 @@ class AerSimulator : public AerState {
 
     const Types::qubits_vector qubits = {qubit0, qubit1, qubit2};
 
-    static const cmatrix_t mat = AER::Utils::make_matrix<complex_t>(
-        {{{1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}},
-         {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}},
-         {{0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}}});
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      AER::Operations::Op op;
+      op.type = AER::Operations::OpType::gate;
+      op.name = "ccx";
+      op.qubits = AER::reg_t{qubit0, qubit1, qubit2};
 
-    // state->apply_mcx(qubits);
-    state->apply_unitary(qubits, mat);
+      state->buffer_op(std::move(op));
+    } else {
+      static const cmatrix_t mat = AER::Utils::make_matrix<complex_t>(
+          {{{1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}},
+           {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}},
+           {{0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}}});
+
+      // state->apply_mcx(qubits);
+      state->apply_unitary(qubits, mat);
+    }
 
     NotifyObservers(qubits);
   }
@@ -650,18 +814,38 @@ class AerSimulator : public AerState {
 
     const Types::qubits_vector qubits = {ctrl_qubit, qubit0, qubit1};
 
-    static const cmatrix_t mat = AER::Utils::make_matrix<complex_t>(
-        {{{1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
-         {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}},
-         {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}}});
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      const int q1 = ctrl_qubit;  // control
+      const int q2 = qubit0;
+      const int q3 = qubit1;
 
-    // state->apply_mcswap(qubits);
-    state->apply_unitary(qubits, mat);
+      ApplyCX(q3, q2);
+      ApplyCSx(q2, q3);
+      ApplyCX(q1, q2);
+
+      ApplyP(q3, M_PI);
+      ApplyP(q2, -M_PI_2);
+
+      ApplyCSx(q2, q3);
+      ApplyCX(q1, q2);
+
+      ApplyP(q3, M_PI);
+      ApplyCSx(q1, q3);
+      ApplyCX(q3, q2);
+    } else {
+      static const cmatrix_t mat = AER::Utils::make_matrix<complex_t>(
+          {{{1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}},
+           {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}, {0, 0}},
+           {{0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {1, 0}}});
+
+      // state->apply_mcswap(qubits);
+      state->apply_unitary(qubits, mat);
+    }
 
     NotifyObservers(qubits);
   }
@@ -685,9 +869,22 @@ class AerSimulator : public AerState {
 
     const Types::qubits_vector qubits = {ctrl_qubit, tgt_qubit};
 
-    const cmatrix_t CU = AER::Linalg::Matrix::cu(theta, phi, lambda, gamma);
-    // state->apply_mcu(qubits, theta, phi, lambda, gamma);
-    state->apply_unitary(qubits, CU);
+    if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
+      if (gamma != 0.0) ApplyP(ctrl_qubit, gamma);
+
+      const double lambdaPlusPhiHalf = 0.5 * (lambda + phi);
+      const double halfTheta = 0.5 * theta;
+      ApplyP(tgt_qubit, 0.5 * (lambda - phi));
+      ApplyP(ctrl_qubit, lambdaPlusPhiHalf);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyU(tgt_qubit, -halfTheta, 0, -lambdaPlusPhiHalf, 0);
+      ApplyCX(ctrl_qubit, tgt_qubit);
+      ApplyU(tgt_qubit, halfTheta, phi, 0, 0);
+    } else {
+      const cmatrix_t CU = AER::Linalg::Matrix::cu(theta, phi, lambda, gamma);
+      // state->apply_mcu(qubits, theta, phi, lambda, gamma);
+      state->apply_unitary(qubits, CU);
+    }
 
     NotifyObservers(qubits);
   }
@@ -727,6 +924,8 @@ class AerSimulator : public AerState {
       sim->Configure("method", "stabilizer");
     else if (simulationType == SimulationType::kTensorNetwork)
       sim->Configure("method", "tensor_network");
+    else if (simulationType == SimulationType::kExtendedStabilizer)
+      sim->Configure("method", "extended_stabilizer");
     else
       sim->Configure("method", "statevector");
 
