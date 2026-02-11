@@ -34,26 +34,26 @@ class TestMaestroClass:
     def test_simulator_creation(self):
         """Test simulator creation and retrieval"""
         m = maestro.Maestro()
-        sim_handle = m.CreateSimulator(
+        sim_handle = m.create_simulator(
             maestro.SimulatorType.QCSim,
             maestro.SimulationType.Statevector
         )
         assert sim_handle > 0
 
-        sim = m.GetSimulator(sim_handle)
+        sim = m.get_simulator(sim_handle)
         assert sim is not None
 
-        m.DestroySimulator(sim_handle)
+        m.destroy_simulator(sim_handle)
 
     def test_multiple_simulators(self):
         """Test creating multiple simulators"""
         m = maestro.Maestro()
 
-        sim1 = m.CreateSimulator(
+        sim1 = m.create_simulator(
             maestro.SimulatorType.QCSim,
             maestro.SimulationType.Statevector
         )
-        sim2 = m.CreateSimulator(
+        sim2 = m.create_simulator(
             maestro.SimulatorType.QCSim,
             maestro.SimulationType.MatrixProductState
         )
@@ -62,8 +62,8 @@ class TestMaestroClass:
         assert sim2 > 0
         assert sim1 != sim2
 
-        m.DestroySimulator(sim1)
-        m.DestroySimulator(sim2)
+        m.destroy_simulator(sim1)
+        m.destroy_simulator(sim2)
 
 
 class TestQasmParser:
@@ -87,7 +87,7 @@ class TestQasmParser:
         """
 
         parser = maestro.QasmToCirc()
-        circuit = parser.ParseAndTranslate(qasm)
+        circuit = parser.parse_and_translate(qasm)
         assert circuit is not None
 
     def test_qubit_count_detection(self):
@@ -101,7 +101,7 @@ class TestQasmParser:
         """
 
         parser = maestro.QasmToCirc()
-        circuit = parser.ParseAndTranslate(qasm)
+        circuit = parser.parse_and_translate(qasm)
         num_qubits = circuit.num_qubits
         assert num_qubits == 3
 
@@ -112,26 +112,26 @@ class TestSimulatorOperations:
     def test_qubit_allocation(self):
         """Test qubit allocation and initialization"""
         m = maestro.Maestro()
-        sim_handle = m.CreateSimulator(
+        sim_handle = m.create_simulator(
             maestro.SimulatorType.QCSim,
             maestro.SimulationType.Statevector
         )
-        sim = m.GetSimulator(sim_handle)
+        sim = m.get_simulator(sim_handle)
 
         sim.AllocateQubits(2)
         sim.Initialize()
         assert sim.GetNumberOfQubits() == 2
 
-        m.DestroySimulator(sim_handle)
+        m.destroy_simulator(sim_handle)
 
     def test_single_qubit_gates(self):
         """Test single-qubit gate operations"""
         m = maestro.Maestro()
-        sim_handle = m.CreateSimulator(
+        sim_handle = m.create_simulator(
             maestro.SimulatorType.QCSim,
             maestro.SimulationType.Statevector
         )
-        sim = m.GetSimulator(sim_handle)
+        sim = m.get_simulator(sim_handle)
 
         sim.AllocateQubits(1)
         sim.Initialize()
@@ -142,16 +142,16 @@ class TestSimulatorOperations:
         sim.ApplyY(0)
         sim.ApplyZ(0)
 
-        m.DestroySimulator(sim_handle)
+        m.destroy_simulator(sim_handle)
 
     def test_two_qubit_gates(self):
         """Test two-qubit gate operations"""
         m = maestro.Maestro()
-        sim_handle = m.CreateSimulator(
+        sim_handle = m.create_simulator(
             maestro.SimulatorType.QCSim,
             maestro.SimulationType.Statevector
         )
-        sim = m.GetSimulator(sim_handle)
+        sim = m.get_simulator(sim_handle)
 
         sim.AllocateQubits(2)
         sim.Initialize()
@@ -161,16 +161,16 @@ class TestSimulatorOperations:
         sim.ApplyCZ(0, 1)
         sim.ApplySwap(0, 1)
 
-        m.DestroySimulator(sim_handle)
+        m.destroy_simulator(sim_handle)
 
     def test_measurement(self):
         """Test measurement operations"""
         m = maestro.Maestro()
-        sim_handle = m.CreateSimulator(
+        sim_handle = m.create_simulator(
             maestro.SimulatorType.QCSim,
             maestro.SimulationType.Statevector
         )
-        sim = m.GetSimulator(sim_handle)
+        sim = m.get_simulator(sim_handle)
 
         sim.AllocateQubits(2)
         sim.Initialize()
@@ -183,16 +183,16 @@ class TestSimulatorOperations:
         total_shots = sum(results.values())
         assert total_shots == 1000
 
-        m.DestroySimulator(sim_handle)
+        m.destroy_simulator(sim_handle)
 
     def test_bell_state_distribution(self):
         """Test Bell state produces correct distribution"""
         m = maestro.Maestro()
-        sim_handle = m.CreateSimulator(
+        sim_handle = m.create_simulator(
             maestro.SimulatorType.QCSim,
             maestro.SimulationType.Statevector
         )
-        sim = m.GetSimulator(sim_handle)
+        sim = m.get_simulator(sim_handle)
 
         sim.AllocateQubits(2)
         sim.Initialize()
@@ -207,7 +207,7 @@ class TestSimulatorOperations:
         total = sum(results.values())
         assert total == 10000
 
-        m.DestroySimulator(sim_handle)
+        m.destroy_simulator(sim_handle)
 
 
 class TestSimpleExecute:
