@@ -98,7 +98,7 @@ struct PauliSimTestFixture {
     std::uniform_int_distribution<int> dist(0, maxGate);
 
     std::uniform_real_distribution<double> param_dist(0.0, 2. * M_PI);
-    std::bernoulli_distribution bool_dist(0.8);  // high chance to make clifford gate from a non-clifford one
+    std::bernoulli_distribution bool_dist(0.8);  // high chance to make a clifford gate from a non-clifford one
 
     std::vector<Operation> circuit;
     std::vector<int> qubits(nrQubits);
@@ -127,6 +127,19 @@ struct PauliSimTestFixture {
 
       circuit.push_back(std::move(op));
     }
+
+    // check for 'dangerous' non-clifford gates, which can make the simulation
+    // too expensive, and replace them with clifford ones - except the first one
+    // for now only three qubit non-clifford gates, which are the most
+    // expensive - for example cswap does 12 doublings!
+    bool first = true;
+    for (auto& op : circuit) {
+      if (op.gate >= 28 && op.gate <= 29) {
+        if (first) first = false;
+        else op.gate = 10;  // cx... a clifford gate
+      }
+    }
+
     return circuit;
   }
 
