@@ -552,7 +552,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
       ExecuteGate(op, *gpuPauliSim);
     }
     if (gpuPauliStdSim) {
-      ExecuteGate(op, *gpuPauliStdSim);
+      ExecuteGate(op, gpuPauliStdSim);
     }
 #endif
   }
@@ -830,6 +830,9 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
 #ifdef __linux__
     if (gpuPauliSim) {
       ExecuteGate(op, *gpuPauliSim);
+    }
+    if (gpuPauliStdSim) {
+      ExecuteGate(op, gpuPauliStdSim);
     }
 #endif
   }
