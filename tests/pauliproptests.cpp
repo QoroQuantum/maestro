@@ -51,6 +51,12 @@ struct PauliSimTestFixture {
     qcsimPauliSim.EnableParallel();
     qcsimPauliSim.SetNrQubits(nrQubitsForRandomCirc);
 
+    qcsimPauliStdSim = Simulators::SimulatorsFactory::CreateSimulator(
+        Simulators::SimulatorType::kQCSim,
+        Simulators::SimulationType::kPauliPropagator);
+    qcsimPauliStdSim->AllocateQubits(nrQubitsForRandomCirc);
+    qcsimPauliStdSim->Initialize();
+
 #ifdef __linux__
     if (Simulators::SimulatorsFactory::IsGpuLibraryAvailable()) {
       gpuPauliSim =
@@ -58,6 +64,12 @@ struct PauliSimTestFixture {
       gpuPauliSim->CreateSimulator(nrQubitsForRandomCirc);
       gpuPauliSim->SetWillUseSampling(true);
       gpuPauliSim->AllocateMemory(0.8);
+
+      gpuPauliStdSim = Simulators::SimulatorsFactory::CreateSimulator(
+          Simulators::SimulatorType::kGpu,
+          Simulators::SimulationType::kPauliPropagator);
+      gpuPauliStdSim->AllocateQubits(nrQubitsForRandomCirc);
+      gpuPauliStdSim->Initialize();
     }
 #endif
   }
@@ -501,8 +513,12 @@ struct PauliSimTestFixture {
 
   std::shared_ptr<Simulators::ISimulator> statevectorSim;
   Simulators::QcsimPauliPropagator qcsimPauliSim;
+
+  std::shared_ptr<Simulators::ISimulator> qcsimPauliStdSim;
+
 #ifdef __linux__
   std::shared_ptr<Simulators::GpuPauliPropagator> gpuPauliSim;
+  std::shared_ptr<Simulators::ISimulator> gpuPauliStdSim;
 #endif
   Circuits::OperationState state;
 };
@@ -514,6 +530,12 @@ BOOST_AUTO_TEST_SUITE(pauli_propagation_tests)
 BOOST_FIXTURE_TEST_CASE(PauliInitTests, PauliSimTestFixture) {
   BOOST_TEST(statevectorSim);
   BOOST_TEST(qcsimPauliSim.GetNrQubits() == nrQubitsForRandomCirc);
+#ifdef __linux__
+  if (gpuPauliSim) {
+    BOOST_TEST(gpuPauliSim->GetNrQubits() == nrQubitsForRandomCirc);
+  }
+#endif
+  BOOST_TEST(qcsimPauliStdSim);
 }
 
 
@@ -524,9 +546,13 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
   for (const auto& op : circuit) {
     ExecuteGate(op, statevectorSim);
     ExecuteGate(op, qcsimPauliSim);
+    ExecuteGate(op, qcsimPauliStdSim);
 #ifdef __linux__
     if (gpuPauliSim) {
       ExecuteGate(op, *gpuPauliSim);
+    }
+    if (gpuPauliStdSim) {
+      ExecuteGate(op, *gpuPauliStdSim);
     }
 #endif
   }
@@ -541,6 +567,13 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
                "Expectation value mismatch for pauli string "
                    << pauliStr << ": statevector " << expValStateVec
                    << ", pauli sim " << expValPauliSim);
+
+    const double expValPauliStdSim =
+        qcsimPauliStdSim->ExpectationValue(pauliStr);
+    BOOST_TEST(std::abs(expValStateVec - expValPauliStdSim) < 1e-7,
+               "Expectation value mismatch for pauli string "
+                   << pauliStr << ": statevector " << expValStateVec
+                   << ", pauli std sim " << expValPauliStdSim);
 #ifdef __linux__
     if (gpuPauliSim) {
       const double expValGpuPauliSim = gpuPauliSim->ExpectationValue(pauliStr);
@@ -548,6 +581,14 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
                  "Expectation value mismatch for pauli string "
                      << pauliStr << ": statevector " << expValStateVec
                      << ", gpu pauli sim " << expValGpuPauliSim);
+    }
+    if (gpuPauliStdSim) {
+      const double expValGpuPauliStdSim =
+          gpuPauliStdSim->ExpectationValue(pauliStr);
+      BOOST_TEST(std::abs(expValStateVec - expValGpuPauliStdSim) < 1e-7,
+                 "Expectation value mismatch for pauli string "
+                     << pauliStr << ": statevector " << expValStateVec
+                     << ", gpu pauli std sim " << expValGpuPauliStdSim);
     }
 #endif
   }
@@ -593,6 +634,20 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
                    << ", pauli sim " << psProb);
   }
 
+  auto stdSvRes = qcsimPauliStdSim->SampleCounts(qubitsToMeasure, nrSamples);
+  for (const auto& kv : svRes) {
+    const Types::qubit_t key = kv.first;
+    const Types::qubit_t svCount = kv.second;
+    const Types::qubit_t psCount =
+        stdSvRes.find(key) != stdSvRes.end() ? stdSvRes[key] : 0;
+    const double svProb = static_cast<double>(svCount) / nrSamples;
+    const double psProb = static_cast<double>(psCount) / nrSamples;
+    BOOST_TEST(std::abs(svProb - psProb) < 0.1,
+               "Sampling probability mismatch for outcome "
+                   << key << ": statevector " << svProb
+                   << ", pauli std sim " << psProb);
+  }
+
   // now the same for gpu sim
 #ifdef __linux__
   if (gpuPauliSim) {
@@ -619,6 +674,21 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
                  "Sampling probability mismatch for outcome "
                      << key << ": statevector " << svProb
                      << ", gpu pauli sim " << psProb);
+    }
+  }
+  if (gpuPauliStdSim) {
+    auto gpuStdSvRes = gpuPauliStdSim->SampleCounts(qubitsToMeasure, nrSamples);
+    for (const auto& kv : svRes) {
+      const Types::qubit_t key = kv.first;
+      const Types::qubit_t svCount = kv.second;
+      const Types::qubit_t psCount =
+          gpuStdSvRes.find(key) != gpuStdSvRes.end() ? gpuStdSvRes[key] : 0;
+      const double svProb = static_cast<double>(svCount) / nrSamples;
+      const double psProb = static_cast<double>(psCount) / nrSamples;
+      BOOST_TEST(std::abs(svProb - psProb) < 0.1,
+                 "Sampling probability mismatch for outcome "
+                     << key << ": statevector " << svProb
+                     << ", gpu pauli std sim " << psProb);
     }
   }
 #endif
@@ -654,6 +724,36 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
                    << ", pauli sim " << psProb);
   }
 
+  qcsimRes.clear();
+  qcsimPauliStdSim->SaveState();
+
+  Types::qubits_vector pqq(qubitsToMeasure.begin(), qubitsToMeasure.end());
+  
+  for (int i = 0; i < nrSamples; ++i) {
+    std::shuffle(pqq.begin(), pqq.end(), g);
+    auto res = qcsimPauliStdSim->Measure(pqq);
+    Types::qubit_t result = 0;
+    for (int q = 0; q < static_cast<int>(pqq.size()); ++q) {
+      if (((res >> q) & 1) == 1) result |= (1ULL << pqq[q]);
+    }
+    ++qcsimRes[result];
+    qcsimPauliStdSim->RestoreState();
+  }
+
+  // compare results
+  for (const auto& kv : svRes) {
+    const Types::qubit_t key = kv.first;
+    const Types::qubit_t svCount = kv.second;
+    const Types::qubit_t psCount =
+        qcsimRes.find(key) != qcsimRes.end() ? qcsimRes[key] : 0;
+    const double svProb = static_cast<double>(svCount) / nrSamples;
+    const double psProb = static_cast<double>(psCount) / nrSamples;
+    BOOST_TEST(std::abs(svProb - psProb) < 0.1,
+               "Measurement probability mismatch for outcome "
+                   << key << ": statevector " << svProb
+                   << ", pauli std sim " << psProb);
+  }
+
   // the same for gpu pauli sim  
 
  #ifdef __linux__
@@ -686,6 +786,35 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
                      << ", gpu pauli sim " << psProb);
     }
   }
+
+  if (gpuPauliStdSim) {
+    std::unordered_map<Types::qubit_t, Types::qubit_t> gpuRes;
+    gpuPauliStdSim->SaveState();
+    for (int i = 0; i < nrSamples; ++i) {
+      std::shuffle(pqq.begin(), pqq.end(), g);
+      Types::qubit_t result = 0;
+      for (int q = 0; q < static_cast<int>(pqq.size()); ++q) {
+        auto res = gpuPauliStdSim->MeasureQubit(pqq[q]);
+        if (res)
+          result |= (1ULL << pqq[q]);
+      }
+      ++gpuRes[result];
+      gpuPauliStdSim->RestoreState();
+    }
+    // compare results
+    for (const auto& kv : svRes) {
+      const Types::qubit_t key = kv.first;
+      const Types::qubit_t svCount = kv.second;
+      const Types::qubit_t psCount =
+          gpuRes.find(key) != gpuRes.end() ? gpuRes[key] : 0;
+      const double svProb = static_cast<double>(svCount) / nrSamples;
+      const double psProb = static_cast<double>(psCount) / nrSamples;
+      BOOST_TEST(std::abs(svProb - psProb) < 0.1,
+                 "Measurement probability mismatch for outcome "
+                     << key << ": statevector " << svProb
+                     << ", gpu pauli std sim " << psProb);
+    }
+   }
 #endif
 }
 
@@ -698,6 +827,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
   for (const auto& op : circuit) {
     ExecuteGate(op, statevectorSim);
     ExecuteGate(op, qcsimPauliSim);
+    ExecuteGate(op, qcsimPauliStdSim);
 #ifdef __linux__
     if (gpuPauliSim) {
       ExecuteGate(op, *gpuPauliSim);
@@ -715,6 +845,12 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
                "Expectation value mismatch for pauli string "
                    << pauliStr << ": statevector " << expValStateVec
                    << ", pauli sim " << expValPauliSim);
+    const double expValPauliStdSim =
+        qcsimPauliStdSim->ExpectationValue(pauliStr);
+    BOOST_TEST(std::abs(expValStateVec - expValPauliStdSim) < 1e-7,
+               "Expectation value mismatch for pauli string "
+                   << pauliStr << ": statevector " << expValStateVec
+                   << ", pauli std sim " << expValPauliStdSim);
 #ifdef __linux__
     if (gpuPauliSim) {
       const double expValGpuPauliSim = gpuPauliSim->ExpectationValue(pauliStr);
@@ -722,6 +858,14 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
                  "Expectation value mismatch for pauli string "
                      << pauliStr << ": statevector " << expValStateVec
                      << ", gpu pauli sim " << expValGpuPauliSim);
+    }
+    if (gpuPauliStdSim) {
+      const double expValGpuPauliStdSim =
+          gpuPauliStdSim->ExpectationValue(pauliStr);
+      BOOST_TEST(std::abs(expValStateVec - expValGpuPauliStdSim) < 1e-7,
+                 "Expectation value mismatch for pauli string "
+                     << pauliStr << ": statevector " << expValStateVec
+                     << ", gpu pauli std sim " << expValGpuPauliStdSim);
     }
 #endif
   }
@@ -766,6 +910,20 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
                    << psProb);
   }
 
+  auto stdSvRes = qcsimPauliStdSim->SampleCounts(qubitsToMeasure, nrSamples);
+  for (const auto& kv : svRes) {
+    const Types::qubit_t key = kv.first;
+    const Types::qubit_t svCount = kv.second;
+    const Types::qubit_t psCount =
+        stdSvRes.find(key) != stdSvRes.end() ? stdSvRes[key] : 0;
+    const double svProb = static_cast<double>(svCount) / nrSamples;
+    const double psProb = static_cast<double>(psCount) / nrSamples;
+    BOOST_TEST(std::abs(svProb - psProb) < 0.1,
+               "Sampling probability mismatch for outcome "
+                   << key << ": statevector " << svProb << ", pauli std sim "
+                   << psProb);
+  }
+
   // now the same for gpu sim
 #ifdef __linux__
   if (gpuPauliSim) {
@@ -791,6 +949,21 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
                  "Sampling probability mismatch for outcome "
                      << key << ": statevector " << svProb << ", gpu pauli sim "
                      << psProb);
+    }
+  }
+  if (gpuPauliStdSim) {
+    auto gpuStdSvRes = gpuPauliStdSim->SampleCounts(qubitsToMeasure, nrSamples);
+    for (const auto& kv : svRes) {
+      const Types::qubit_t key = kv.first;
+      const Types::qubit_t svCount = kv.second;
+      const Types::qubit_t psCount =
+          gpuStdSvRes.find(key) != gpuStdSvRes.end() ? gpuStdSvRes[key] : 0;
+      const double svProb = static_cast<double>(svCount) / nrSamples;
+      const double psProb = static_cast<double>(psCount) / nrSamples;
+      BOOST_TEST(std::abs(svProb - psProb) < 0.1,
+                 "Sampling probability mismatch for outcome "
+                     << key << ": statevector " << svProb
+                     << ", gpu pauli std sim " << psProb);
     }
   }
 #endif
@@ -825,6 +998,34 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
                    << psProb);
   }
 
+  qcsimRes.clear();
+  qcsimPauliStdSim->SaveState();
+  Types::qubits_vector pqq(qubitsToMeasure.begin(), qubitsToMeasure.end());
+  for (int i = 0; i < nrSamples; ++i) {
+    std::shuffle(pqq.begin(), pqq.end(), g);
+    auto res = qcsimPauliStdSim->Measure(pqq);
+    Types::qubit_t result = 0;
+    for (int q = 0; q < static_cast<int>(pqq.size()); ++q) {
+      if (((res >> q) & 1) == 1) result |= (1ULL << pqq[q]);
+    }
+    ++qcsimRes[result];
+    qcsimPauliStdSim->RestoreState();
+  }
+
+  // compare results
+  for (const auto& kv : svRes) {
+    const Types::qubit_t key = kv.first;
+    const Types::qubit_t svCount = kv.second;
+    const Types::qubit_t psCount =
+        qcsimRes.find(key) != qcsimRes.end() ? qcsimRes[key] : 0;
+    const double svProb = static_cast<double>(svCount) / nrSamples;
+    const double psProb = static_cast<double>(psCount) / nrSamples;
+    BOOST_TEST(std::abs(svProb - psProb) < 0.1,
+               "Measurement probability mismatch for outcome "
+                   << key << ": statevector " << svProb
+                   << ", pauli std sim " << psProb);
+  }
+
   // the same for gpu pauli sim
 
 #ifdef __linux__
@@ -854,6 +1055,34 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
                  "Measurement probability mismatch for outcome "
                      << key << ": statevector " << svProb << ", gpu pauli sim "
                      << psProb);
+    }
+  }
+
+  if (gpuPauliStdSim) {
+    std::unordered_map<Types::qubit_t, Types::qubit_t> gpuRes;
+    gpuPauliStdSim->SaveState();
+    for (int i = 0; i < nrSamples; ++i) {
+      std::shuffle(pqq.begin(), pqq.end(), g);
+      Types::qubit_t result = 0;
+      for (int q = 0; q < static_cast<int>(pqq.size()); ++q) {
+        auto res = gpuPauliStdSim->MeasureQubit(pqq[q]);
+        if (res) result |= (1ULL << pqq[q]);
+      }
+      ++gpuRes[result];
+      gpuPauliStdSim->RestoreState();
+    }
+    // compare results
+    for (const auto& kv : svRes) {
+      const Types::qubit_t key = kv.first;
+      const Types::qubit_t svCount = kv.second;
+      const Types::qubit_t psCount =
+          gpuRes.find(key) != gpuRes.end() ? gpuRes[key] : 0;
+      const double svProb = static_cast<double>(svCount) / nrSamples;
+      const double psProb = static_cast<double>(psCount) / nrSamples;
+      BOOST_TEST(std::abs(svProb - psProb) < 0.1,
+                 "Measurement probability mismatch for outcome "
+                     << key << ": statevector " << svProb
+                     << ", gpu pauli std sim " << psProb);
     }
   }
 #endif
