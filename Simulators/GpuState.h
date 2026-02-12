@@ -307,11 +307,13 @@ class GpuState : public ISimulator {
    */
   size_t AllocateQubits(size_t num_qubits) override {
     if ((simulationType == SimulationType::kStatevector && state) ||
-        (simulationType == SimulationType::kMatrixProductState && mps))
+        (simulationType == SimulationType::kMatrixProductState && mps) ||
+        (simulationType == SimulationType::kPauliPropagator && pp))
       return 0;
 
     const size_t oldNrQubits = nrQubits;
     nrQubits += num_qubits;
+
     return oldNrQubits;
   }
 
@@ -466,6 +468,10 @@ class GpuState : public ISimulator {
         mps->Amplitude(nrQubits, fixedValues.data(), &real, &imag);
       else if (simulationType == SimulationType::kTensorNetwork)
         tn->Amplitude(nrQubits, fixedValues.data(), &real, &imag);
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      // Pauli propagator does not support amplitude calculation
+      throw std::runtime_error(
+          "GpuState::Amplitude: Invalid simulation type for amplitude calculation.");
     }
 
     return std::complex<double>(real, imag);
@@ -641,6 +647,10 @@ class GpuState : public ISimulator {
       result = tn->ExpectationValue(pauliString);
     else if (simulationType == SimulationType::kPauliPropagator)
       result = pp->ExpectationValue(pauliString);
+    else 
+      throw std::runtime_error(
+          "GpuState::ExpectationValue: Invalid simulation type for expectation "
+          "value calculation.");
 
     return result;
   }

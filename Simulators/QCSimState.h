@@ -309,6 +309,9 @@ class QCSimState : public ISimulator {
 
     const size_t oldNrQubits = nrQubits;
     nrQubits += num_qubits;
+    if (simulationType == SimulationType::kPauliPropagator)
+      if (pp)pp->SetNrQubits(nrQubits);
+
     return oldNrQubits;
   }
 
@@ -369,6 +372,15 @@ class QCSimState : public ISimulator {
           res |= mask;
         mask <<= 1;
       }
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      std::vector<int> qubitsInt(qubits.begin(), qubits.end());
+      const auto res = pp->Measure(qubitsInt);
+      Types::qubit_t result = 0;
+      for (size_t i = 0; i < res.size(); ++i) {
+        if (res[i]) result |= mask;
+        mask <<= 1;
+      }
+      return result;
     } else {
       /*
       for (size_t qubit : qubits)
@@ -414,6 +426,12 @@ class QCSimState : public ISimulator {
       for (size_t qubit : qubits)
         if (tensorNetwork->Measure(static_cast<unsigned int>(qubit)))
           tensorNetwork->AddGate(xGate, static_cast<unsigned int>(qubit));
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      std::vector<int> qubitsInt(qubits.begin(), qubits.end());
+      const auto res = pp->Measure(qubitsInt);
+      for (size_t i = 0; i < res.size(); ++i) {
+        if (res[i]) pp->ApplyX(qubitsInt[i]);
+      }
     } else {
       for (size_t qubit : qubits)
         if (mpsSimulator->MeasureQubit(static_cast<unsigned int>(qubit)))
@@ -444,6 +462,8 @@ class QCSimState : public ISimulator {
           static_cast<unsigned int>(outcome));
     else if (simulationType == SimulationType::kTensorNetwork)
       return tensorNetwork->getBasisStateProbability(outcome);
+    else if (simulationType == SimulationType::kPauliPropagator)
+      return pp->Probability(outcome);
 
     return state->getBasisStateProbability(static_cast<unsigned int>(outcome));
   }
@@ -470,6 +490,10 @@ class QCSimState : public ISimulator {
       throw std::runtime_error(
           "QCSimState::Amplitude: Not supported for the "
           "tensor network simulator.");
+    else if (simulationType == SimulationType::kPauliPropagator)
+      throw std::runtime_error(
+          "QCSimState::Amplitude: Invalid simulation type for obtaining the "
+          "amplitude of the specified outcome.");
 
     return state->getBasisStateAmplitude(static_cast<unsigned int>(outcome));
   }
@@ -492,6 +516,13 @@ class QCSimState : public ISimulator {
           "simulation type for obtaining probabilities.");
     else if (simulationType == SimulationType::kStabilizer)
       return cliffordSimulator->AllProbabilities();
+    else if (simulationType == SimulationType::kPauliPropagator) {
+      const size_t nrBasisStates = 1ULL << GetNumberOfQubits();
+      std::vector<double> result(nrBasisStates);
+      for (size_t i = 0; i < nrBasisStates; ++i)
+        result[i] = pp->Probability(i);
+      return result;
+    }
 
     const Eigen::VectorXcd probs =
         simulationType == SimulationType::kMatrixProductState
@@ -534,6 +565,9 @@ class QCSimState : public ISimulator {
     if (simulationType == SimulationType::kMatrixProductState) {
       for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
         result[i] = mpsSimulator->getBasisStateProbability(qubits[i]);
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
+        result[i] = pp->Probability(qubits[i]);
     } else {
       const Eigen::VectorXcd &reg = state->getRegisterStorage();
 
@@ -617,6 +651,18 @@ class QCSimState : public ISimulator {
         tensorNetwork->RestoreState();
       }
       tensorNetwork->ClearSavedState();
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      std::vector<int> qubitsInt(qubits.begin(), qubits.end());
+      for (size_t shot = 0; shot < shots; ++shot) {
+        const auto res = pp->Sample(qubitsInt);
+
+        size_t meas = 0;
+        for (size_t i = 0; i < qubits.size(); ++i) {
+          if (res[i]) meas |= (1ULL << i);
+        }
+
+        ++result[meas];
+      }
     } else {
       if (shots > 1) {
         const auto &statev = state->getRegisterStorage();
@@ -897,6 +943,15 @@ class QCSimState : public ISimulator {
       for (const auto &meas : measured) {
         if (meas) result |= mask;
         mask <<= 1;
+      }
+      return result;
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      std::vector<int> qubitsInt(GetNumberOfQubits());
+      std::iota(qubitsInt.begin(), qubitsInt.end(), 0);
+      const auto res = pp->Sample(qubitsInt);
+      Types::qubit_t result = 0;
+      for (size_t i = 0; i < res.size(); ++i) {
+        if (res[i]) result |= (1ULL << i);
       }
       return result;
     }
