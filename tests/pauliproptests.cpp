@@ -66,7 +66,7 @@ struct PauliSimTestFixture {
       gpuPauliSim->AllocateMemory(0.8);
 
       gpuPauliStdSim = Simulators::SimulatorsFactory::CreateSimulator(
-          Simulators::SimulatorType::kGpu,
+          Simulators::SimulatorType::kGpuSim,
           Simulators::SimulationType::kPauliPropagator);
       gpuPauliStdSim->AllocateQubits(nrQubitsForRandomCirc);
       gpuPauliStdSim->Initialize();
@@ -792,11 +792,10 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
     gpuPauliStdSim->SaveState();
     for (int i = 0; i < nrSamples; ++i) {
       std::shuffle(pqq.begin(), pqq.end(), g);
+      Types::qubit_t res = gpuPauliStdSim->Measure(pqq);
       Types::qubit_t result = 0;
       for (int q = 0; q < static_cast<int>(pqq.size()); ++q) {
-        auto res = gpuPauliStdSim->MeasureQubit(pqq[q]);
-        if (res)
-          result |= (1ULL << pqq[q]);
+        if (((res >> q) & 1) == 1) result |= (1ULL << pqq[q]);
       }
       ++gpuRes[result];
       gpuPauliStdSim->RestoreState();
@@ -1063,10 +1062,10 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
     gpuPauliStdSim->SaveState();
     for (int i = 0; i < nrSamples; ++i) {
       std::shuffle(pqq.begin(), pqq.end(), g);
+      Types::qubit_t res = gpuPauliStdSim->Measure(pqq);
       Types::qubit_t result = 0;
       for (int q = 0; q < static_cast<int>(pqq.size()); ++q) {
-        auto res = gpuPauliStdSim->MeasureQubit(pqq[q]);
-        if (res) result |= (1ULL << pqq[q]);
+        if (((res >> q) & 1) == 1) result |= (1ULL << pqq[q]);
       }
       ++gpuRes[result];
       gpuPauliStdSim->RestoreState();
