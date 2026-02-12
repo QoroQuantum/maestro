@@ -21,6 +21,8 @@ class TestEnums:
         assert hasattr(maestro.SimulationType, 'MatrixProductState')
         assert hasattr(maestro.SimulationType, 'Stabilizer')
         assert hasattr(maestro.SimulationType, 'TensorNetwork')
+        assert hasattr(maestro.SimulationType, 'PauliPropagator')
+        assert hasattr(maestro.SimulationType, 'ExtendedStabilizer')
 
 
 class TestMaestroClass:
@@ -425,3 +427,148 @@ class TestComplexCircuits:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# --- Clifford-only QASM for Stabilizer tests ---
+# Stabilizer only supports Clifford gates (H, S, CX, X, Y, Z)
+CLIFFORD_BELL_QASM = """
+OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[2];
+creg c[2];
+h q[0];
+cx q[0], q[1];
+measure q -> c;
+"""
+
+CLIFFORD_BELL_NO_MEASURE_QASM = """
+OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[2];
+h q[0];
+cx q[0], q[1];
+"""
+
+# General QASM (with non-Clifford gates) for PauliProp / ExtStab
+GENERAL_QASM = """
+OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[2];
+creg c[2];
+h q[0];
+cx q[0], q[1];
+measure q -> c;
+"""
+
+GENERAL_NO_MEASURE_QASM = """
+OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[2];
+h q[0];
+cx q[0], q[1];
+"""
+
+
+class TestStabilizerSimulation:
+    """Test the Stabilizer simulation backend (Clifford-only circuits)"""
+
+    def test_stabilizer_execute(self):
+        """Test execute with Stabilizer backend on a Clifford circuit"""
+        result = maestro.simple_execute(
+            CLIFFORD_BELL_QASM,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Stabilizer,
+            shots=1000
+        )
+        assert result is not None
+        assert 'counts' in result
+        total = sum(result['counts'].values())
+        assert total == 1000
+
+    def test_stabilizer_estimate(self):
+        """Test estimate with Stabilizer backend on a Bell state"""
+        result = maestro.simple_estimate(
+            CLIFFORD_BELL_NO_MEASURE_QASM,
+            "ZZ",
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Stabilizer
+        )
+        assert result is not None
+        assert 'expectation_values' in result
+        # Bell state: <ZZ> = 1.0
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
+
+    def test_stabilizer_bell_distribution(self):
+        """Test Stabilizer produces correct Bell state distribution"""
+        result = maestro.simple_execute(
+            CLIFFORD_BELL_QASM,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Stabilizer,
+            shots=10000
+        )
+        counts = result['counts']
+        total = sum(counts.values())
+        assert total == 10000
+
+
+class TestPauliPropagatorSimulation:
+    """Test the Pauli Propagator simulation backend"""
+
+    def test_pauli_propagator_execute(self):
+        """Test execute with Pauli Propagator backend"""
+        result = maestro.simple_execute(
+            GENERAL_QASM,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.PauliPropagator,
+            shots=1000
+        )
+        assert result is not None
+        assert 'counts' in result
+        total = sum(result['counts'].values())
+        assert total == 1000
+
+    def test_pauli_propagator_estimate(self):
+        """Test estimate with Pauli Propagator backend"""
+        result = maestro.simple_estimate(
+            GENERAL_NO_MEASURE_QASM,
+            "ZZ;XX",
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.PauliPropagator
+        )
+        assert result is not None
+        assert 'expectation_values' in result
+        exp_vals = result['expectation_values']
+        assert len(exp_vals) == 2
+        # Bell state: <ZZ> = 1.0, <XX> = 1.0
+        assert exp_vals[0] == pytest.approx(1.0, abs=1e-5)
+        assert exp_vals[1] == pytest.approx(1.0, abs=1e-5)
+
+
+class TestExtendedStabilizerSimulation:
+    """Test the Extended Stabilizer simulation backend"""
+
+    def test_extended_stabilizer_execute(self):
+        """Test execute with Extended Stabilizer backend"""
+        result = maestro.simple_execute(
+            GENERAL_QASM,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.ExtendedStabilizer,
+            shots=1000
+        )
+        assert result is not None
+        assert 'counts' in result
+        total = sum(result['counts'].values())
+        assert total == 1000
+
+    def test_extended_stabilizer_estimate(self):
+        """Test estimate with Extended Stabilizer backend"""
+        result = maestro.simple_estimate(
+            GENERAL_NO_MEASURE_QASM,
+            "ZZ",
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.ExtendedStabilizer
+        )
+        assert result is not None
+        assert 'expectation_values' in result
+        # Bell state: <ZZ> = 1.0
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)

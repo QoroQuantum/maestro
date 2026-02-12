@@ -218,6 +218,9 @@ NB_MODULE(maestro, m) {
              Simulators::SimulationType::kMatrixProductState)
       .value("Stabilizer", Simulators::SimulationType::kStabilizer)
       .value("TensorNetwork", Simulators::SimulationType::kTensorNetwork)
+      .value("PauliPropagator", Simulators::SimulationType::kPauliPropagator)
+      .value("ExtendedStabilizer",
+             Simulators::SimulationType::kExtendedStabilizer)
       .export_values();
 
   // --- Maestro Class ---
@@ -355,6 +358,16 @@ NB_MODULE(maestro, m) {
               const std::vector<std::pair<Types::qubit_t, size_t>> &q) {
              s.AddOperation(
                  std::make_shared<Circuits::MeasurementOperation<>>(q));
+           })
+      .def("measure_all",
+           [](Circuits::Circuit<double> &s) {
+             size_t n = s.GetMaxQubitIndex() + 1;
+             std::vector<std::pair<Types::qubit_t, size_t>> pairs;
+             pairs.reserve(n);
+             for (size_t i = 0; i < n; ++i)
+               pairs.emplace_back(static_cast<Types::qubit_t>(i), i);
+             s.AddOperation(
+                 std::make_shared<Circuits::MeasurementOperation<>>(pairs));
            })
       // Bound Methods for Direct Execution
       .def("execute", &execute_core,
