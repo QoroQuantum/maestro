@@ -403,21 +403,21 @@ m = Maestro()
 
 # Create a simulator handle
 # Defaults to QCSim and MatrixProductState
-sim_handle = m.CreateSimulator(SimulatorType.QCSim, SimulationType.Statevector)
+sim_handle = m.create_simulator(SimulatorType.QCSim, SimulationType.Statevector)
 
 # Get the simulator object
-sim = m.GetSimulator(sim_handle)
+sim = m.get_simulator(sim_handle)
 
 # Apply gates manually
-sim.ApplyH(0)
-sim.ApplyCX(0, 1)
+sim.apply_h(0)
+sim.apply_cx(0, 1)
 
 # Sample counts
-counts = sim.SampleCounts([0, 1], shots=1000)
+counts = sim.sample_counts([0, 1], shots=1000)
 print(f"Counts: {counts}")
 
 # Cleanup
-m.DestroySimulator(sim_handle)
+m.destroy_simulator(sim_handle)
 ```
 
 ### Examples
