@@ -456,6 +456,7 @@ include "qelib1.inc";
 qreg q[2];
 creg c[2];
 h q[0];
+t q[0];
 cx q[0], q[1];
 measure q -> c;
 """
@@ -465,6 +466,7 @@ OPENQASM 2.0;
 include "qelib1.inc";
 qreg q[2];
 h q[0];
+t q[0];
 cx q[0], q[1];
 """
 
@@ -539,9 +541,10 @@ class TestPauliPropagatorSimulation:
         assert 'expectation_values' in result
         exp_vals = result['expectation_values']
         assert len(exp_vals) == 2
-        # Bell state: <ZZ> = 1.0, <XX> = 1.0
+        # State is (|00> + e^{i*pi/4}|11>) / sqrt(2)
+        # <ZZ> = 1.0, <XX> = cos(pi/4) = 1/sqrt(2)
         assert exp_vals[0] == pytest.approx(1.0, abs=1e-5)
-        assert exp_vals[1] == pytest.approx(1.0, abs=1e-5)
+        assert exp_vals[1] == pytest.approx(0.7071, abs=1e-3)
 
 
 class TestExtendedStabilizerSimulation:
@@ -570,5 +573,5 @@ class TestExtendedStabilizerSimulation:
         )
         assert result is not None
         assert 'expectation_values' in result
-        # Bell state: <ZZ> = 1.0
+        # (|00> + e^{i*pi/4}|11>) / sqrt(2): <ZZ> = 1.0
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
