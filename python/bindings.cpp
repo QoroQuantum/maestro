@@ -218,28 +218,34 @@ NB_MODULE(maestro, m) {
              Simulators::SimulationType::kMatrixProductState)
       .value("Stabilizer", Simulators::SimulationType::kStabilizer)
       .value("TensorNetwork", Simulators::SimulationType::kTensorNetwork)
+      .value("PauliPropagator", Simulators::SimulationType::kPauliPropagator)
+      .value("ExtendedStabilizer",
+             Simulators::SimulationType::kExtendedStabilizer)
       .export_values();
 
   // --- Maestro Class ---
   nb::class_<Maestro>(m, "Maestro")
       .def(nb::init<>())
-      .def("CreateSimulator", &Maestro::CreateSimulator,
-           "simType"_a = Simulators::SimulatorType::kQCSim,
-           "simExecType"_a = Simulators::SimulationType::kMatrixProductState)
+      .def("create_simulator", &Maestro::CreateSimulator,
+           "sim_type"_a = Simulators::SimulatorType::kQCSim,
+           "sim_exec_type"_a = Simulators::SimulationType::kMatrixProductState)
       .def(
-          "GetSimulator",
+          "get_simulator",
           [](Maestro &self, unsigned long int h) {
             return static_cast<Simulators::ISimulator *>(self.GetSimulator(h));
           },
           nb::rv_policy::reference_internal)
-      .def("DestroySimulator", &Maestro::DestroySimulator);
+      .def("destroy_simulator", &Maestro::DestroySimulator);
 
   // --- Circuits Submodule ---
   auto circuits = m.def_submodule("circuits", "Quantum circuits submodule");
 
   nb::class_<Circuits::Circuit<double>>(circuits, "QuantumCircuit")
       .def(nb::init<>())
-      .def("GetMaxQubitIndex", &Circuits::Circuit<double>::GetMaxQubitIndex)
+      .def_prop_ro("num_qubits",
+                   [](const Circuits::Circuit<double> &c) {
+                     return c.GetMaxQubitIndex() + 1;
+                   })
       // Standard Gates
       .def("x",
            [](Circuits::Circuit<double> &s, Types::qubit_t q) {
@@ -353,6 +359,16 @@ NB_MODULE(maestro, m) {
              s.AddOperation(
                  std::make_shared<Circuits::MeasurementOperation<>>(q));
            })
+      .def("measure_all",
+           [](Circuits::Circuit<double> &s) {
+             size_t n = s.GetMaxQubitIndex() + 1;
+             std::vector<std::pair<Types::qubit_t, size_t>> pairs;
+             pairs.reserve(n);
+             for (size_t i = 0; i < n; ++i)
+               pairs.emplace_back(static_cast<Types::qubit_t>(i), i);
+             s.AddOperation(
+                 std::make_shared<Circuits::MeasurementOperation<>>(pairs));
+           })
       // Bound Methods for Direct Execution
       .def("execute", &execute_core,
            "simulator_type"_a = Simulators::SimulatorType::kQCSim,
@@ -376,7 +392,7 @@ NB_MODULE(maestro, m) {
   // --- QASM Tools ---
   nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
       .def(nb::init<>())
-      .def("ParseAndTranslate", &qasm::QasmToCirc<double>::ParseAndTranslate);
+      .def("parse_and_translate", &qasm::QasmToCirc<double>::ParseAndTranslate);
 
   // --- Module Level Convenience Functions ---
 

@@ -8,10 +8,10 @@ def main():
     m = maestro.Maestro()
 
     # Create a simulator
-    sim_handler = m.CreateSimulator(
+    sim_handler = m.create_simulator(
         maestro.SimulatorType.QCSim, maestro.SimulationType.Statevector
     )
-    simulator = m.GetSimulator(sim_handler)
+    simulator = m.get_simulator(sim_handler)
 
     circ = (
         "OPENQASM 2.0;\n"
@@ -24,12 +24,12 @@ def main():
     )
 
     circuit_parser = maestro.QasmToCirc()
-    circuit = circuit_parser.ParseAndTranslate(circ)
+    circuit = circuit_parser.parse_and_translate(circ)
     if simulator:
         print("Simulator object obtained successfully")
 
         # Allocate qubits
-        num_qubits = circuit.GetMaxQubitIndex() + 1
+        num_qubits = circuit.num_qubits
         simulator.AllocateQubits(num_qubits)
         simulator.Initialize()
         print(f"Allocated {num_qubits} qubits")
@@ -47,7 +47,7 @@ def main():
         print("Failed to get simulator object")
 
     # Clean up
-    m.DestroySimulator(sim_handler)
+    m.destroy_simulator(sim_handler)
     print("Simulator destroyed")
 
 
