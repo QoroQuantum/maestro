@@ -342,6 +342,9 @@ class GpuState : public ISimulator {
 
   /**
    * @brief Performs a measurement on the specified qubits.
+   * 
+   * Don't use it if the number of qubits is larger than the number of bits in
+   * the size_t type (usually 64), as the outcome will be undefined
    *
    * @param qubits A vector with the qubits to be measured.
    * @return The outcome of the measurements, the first qubit result is the
@@ -382,6 +385,35 @@ class GpuState : public ISimulator {
       }
     }
 
+    Notify();
+    NotifyObservers(qubits);
+
+    return res;
+  }
+
+  /**
+   * @brief Performs a measurement on the specified qubits.
+   *
+   * @param qubits A vector with the qubits to be measured.
+   * @return The outcome of the measurements
+   */
+  std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override {
+    std::vector<bool> res(qubits.size(), false);
+  
+    DontNotify();
+    if (simulationType == SimulationType::kStatevector) {
+      for (size_t i = 0; i < qubits.size(); ++i)
+        res[i] = state->MeasureQubitCollapse(static_cast<int>(qubits[i]));
+    } else if (simulationType == SimulationType::kMatrixProductState) {
+      for (size_t i = 0; i < qubits.size(); ++i)
+        res[i] = mps->Measure(static_cast<unsigned int>(qubits[i]));
+    } else if (simulationType == SimulationType::kTensorNetwork) {
+      for (size_t i = 0; i < qubits.size(); ++i)
+        res[i] = tn->Measure(static_cast<unsigned int>(qubits[i]));
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      for (size_t i = 0; i < qubits.size(); ++i)
+        res[i] = pp->MeasureQubit(static_cast<int>(qubits[i]));
+    }
     Notify();
     NotifyObservers(qubits);
 
@@ -550,6 +582,9 @@ class GpuState : public ISimulator {
    * Use it to obtain the counts of the outcomes of the specified qubits
    * measurements. The state is not collapsed, so the measurement can be
    * repeated 'shots' times.
+   * 
+   * Don't use it if the number of qubits is larger than the number of bits in
+   * the Types::qubit_t type (usually 64), as the outcome will be undefined.
    *
    * @param qubits A vector with the qubits to be measured.
    * @param shots The number of shots to perform.
@@ -568,7 +603,17 @@ class GpuState : public ISimulator {
       std::vector<long int> samples(shots);
       state->SampleAll(shots, samples.data());
 
-      for (auto outcome : samples) ++result[outcome];
+      for (auto outcome : samples) {
+        // qubits might not be in order, translate the outcome to the correct
+        // order
+        Types::qubit_t translatedOutcome = 0;
+        Types::qubit_t mask = 1ULL;
+        for (size_t i = 0; i < qubits.size(); ++i) {
+           if (outcome & (1ULL << qubits[i])) translatedOutcome |= mask;
+           mask <<= 1; 
+        }
+        ++result[translatedOutcome];
+      }
     } else if (simulationType == SimulationType::kMatrixProductState) {
       std::unordered_map<std::vector<bool>, int64_t> *map =
           mps->GetMapForSample();
@@ -618,6 +663,69 @@ class GpuState : public ISimulator {
       }
     }
     
+    Notify();
+    NotifyObservers(qubits);
+
+    return result;
+  }
+
+  /**
+   * @brief Returns the counts of the outcomes of measurement of the specified
+   * qubits, for repeated measurements.
+   *
+   * Use it to obtain the counts of the outcomes of the specified qubits
+   * measurements. The state is not collapsed, so the measurement can be
+   * repeated 'shots' times.
+   *
+   * @param qubits A vector with the qubits to be measured.
+   * @param shots The number of shots to perform.
+   * @return A map with the counts for the otcomes of measurements of the
+   * specified qubits.
+   */
+  std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(
+      const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    if (qubits.empty() || shots == 0) return {};
+
+    std::unordered_map<std::vector<bool>, Types::qubit_t> result;
+
+    DontNotify();
+
+    if (simulationType == SimulationType::kStatevector) {
+      std::vector<long int> samples(shots);
+      state->SampleAll(shots, samples.data());
+
+      std::vector<bool> outcomeVec(qubits.size());
+      for (auto outcome : samples) {
+         for (size_t i = 0; i < qubits.size(); ++i)
+           outcomeVec[i] = (outcome & (1ULL << qubits[i])) != 0;
+         ++result[outcomeVec];
+      }
+    } else if (simulationType == SimulationType::kMatrixProductState) {
+      std::unordered_map<std::vector<bool>, int64_t> *map = mps->GetMapForSample();
+
+      std::vector<unsigned int> qubitsIndices(qubits.begin(), qubits.end());
+      mps->Sample(shots, qubitsIndices.size(), qubitsIndices.data(), map);
+
+      // put the results in the result map
+      for (const auto &[meas, cnt] : *map)
+        result[meas] += cnt;
+
+      mps->FreeMapForSample(map);
+    } else if (simulationType == SimulationType::kTensorNetwork) {
+      std::unordered_map<std::vector<bool>, int64_t> *map = tn->GetMapForSample();
+      std::vector<unsigned int> qubitsIndices(qubits.begin(), qubits.end());
+      tn->Sample(shots, qubitsIndices.size(), qubitsIndices.data(), map);
+      // put the results in the result map
+      for (const auto &[meas, cnt] : *map)
+        result[meas] += cnt;
+      tn->FreeMapForSample(map);
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      std::vector<int> qb(qubits.begin(), qubits.end());
+      for (size_t shot = 0; shot < shots; ++shot) {
+        auto res = pp->SampleQubits(qb);
+        ++result[res];
+      }
+    }
 
     Notify();
     NotifyObservers(qubits);
@@ -808,6 +916,9 @@ class GpuState : public ISimulator {
    * the qiskit aer case, SaveStateToInternalDestructive is needed to be called
    * before this. If one wants to use the simulator after such measurement(s),
    * RestoreInternalDestructiveSavedState should be called at the end.
+   * 
+   * Don't use this for more qubits than the size of Types::qubit_t, as the
+   * result is packed in a limited number of bits (e.g. 64 bits for uint64_t)
    *
    * @return The result of the measurements, the first qubit result is the least
    * significant bit.
@@ -831,6 +942,46 @@ class GpuState : public ISimulator {
         "all the qubits without collapsing the state.");
 
     return 0;
+  }
+
+  /**
+   * @brief Measures all the qubits without collapsing the state.
+   *
+   * Measures all the qubits without collapsing the state, allowing to perform
+   * multiple shots. This is to be used only internally, only for the
+   * statevector simulators (or those based on them, as the composite ones). For
+   * the qiskit aer case, SaveStateToInternalDestructive is needed to be called
+   * before this. If one wants to use the simulator after such measurement(s),
+   * RestoreInternalDestructiveSavedState should be called at the end.
+   *
+   * Use this for more qubits than the size of Types::qubit_t
+   *
+   * @return The result of the measurements
+   */
+  std::vector<bool> MeasureNoCollapseMany() override {
+    if (simulationType == SimulationType::kStatevector) {
+      const auto meas = state->MeasureAllQubitsNoCollapse();
+      std::vector<bool> result(nrQubits, false);
+      for (size_t i = 0; i < nrQubits; ++i)
+        result[i] = (meas & (1ULL << i)) != 0;
+      return result;
+    } else if (simulationType == SimulationType::kMatrixProductState ||
+               simulationType == SimulationType::kTensorNetwork ||
+               simulationType == SimulationType::kPauliPropagator) {
+      Types::qubits_vector fixedValues(nrQubits);
+      std::iota(fixedValues.begin(), fixedValues.end(), 0);
+      const auto res = SampleCountsMany(fixedValues, 1);
+      if (res.empty()) return std::vector<bool>(nrQubits, false);
+      return res.begin()
+          ->first;  // return the first outcome, as it is the only one
+    }
+
+    throw std::runtime_error(
+        "QCSimState::MeasureNoCollapseMany: Invalid simulation type for "
+        "measuring "
+        "all the qubits without collapsing the state.");
+
+    return std::vector<bool>(nrQubits, false);
   }
 
  protected:

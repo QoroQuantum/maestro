@@ -116,6 +116,7 @@ class MeasurementOperation : public IOperation<Time> {
    * @brief Executes the measurement on the given simulator.
    *
    * Executes the measurement on the given simulator.
+   * 
    * @param sim The simulator to execute the measurement on.
    * @param state The classical state for the simulator.
    * @sa ISimulator
@@ -125,12 +126,9 @@ class MeasurementOperation : public IOperation<Time> {
                OperationState &state) const override {
     if (qubits.empty()) return;
 
-    size_t res = sim->Measure(qubits);
+    auto res = sim->MeasureMany(qubits);
 
-    for (size_t i = 0; i < qubits.size(); ++i) {
-      state.SetBit(bits[i], (res & 1) != 0);
-      res >>= 1;
-    }
+    SetStateFromSample(res, state);
   }
 
   /**
@@ -148,35 +146,17 @@ class MeasurementOperation : public IOperation<Time> {
               OperationState &state) const {
     if (qubits.empty()) return;
 
-    size_t res = sim->SampleCounts(qubits, 1).begin()->first;
+    const auto res = sim->SampleCountsMany(qubits, 1).begin()->first;
 
-    for (auto bit : bits) {
-      state.SetBit(bit, (res & 1) != 0);
-      res >>= 1;
-    }
+    SetStateFromSample(res, state);
   }
 
-  void SetStateFromSample(size_t measurements, OperationState &state) const {
+  void SetStateFromSample(const std::vector<bool> &measurements, OperationState &state) const {
     if (qubits.empty()) return;
 
     for (size_t index = 0; index < qubits.size(); ++index) {
       const auto cbit = bits[index];
-      const size_t qubitMask = 1ULL << index;
-      state.SetBit(cbit, (measurements & qubitMask) != 0);
-    }
-  }
-
-  void SetStateFromAllMeasurements(size_t allMeasurements,
-                                   OperationState &state) const {
-    if (qubits.empty()) return;
-
-    for (size_t index = 0; index < qubits.size(); ++index) {
-      const auto q = qubits[index];
-      const auto cbit = bits[index];
-
-      const size_t qubitMask = 1ULL << q;
-
-      state.SetBit(cbit, (allMeasurements & qubitMask) != 0);
+      state.SetBit(cbit, index < measurements.size() && measurements[index]);
     }
   }
 

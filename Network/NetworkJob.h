@@ -110,7 +110,7 @@ class ExecuteJob {
         (specialOptimizationForStatevector || hasMeasurementsOnlyAtEnd)) {
       const auto &qbits = measurementsOp->GetQubits();
 
-      const auto sampleres = optSim->SampleCounts(qbits, curCnt);
+      const auto sampleres = optSim->SampleCountsMany(qbits, curCnt);
 
       for (const auto &[mstate, cnt] : sampleres) {
         measurementsOp->SetStateFromSample(mstate, state);
@@ -264,7 +264,7 @@ class ExecuteJob {
         (specialOptimizationForStatevector || hasMeasurementsOnlyAtEnd)) {
       const auto &qbits = measurementsOp->GetQubits();
 
-      const auto sampleres = optSim->SampleCounts(qbits, curCnt);
+      const auto sampleres = optSim->SampleCountsMany(qbits, curCnt);
 
       for (const auto &[mstate, cnt] : sampleres) {
         measurementsOp->SetStateFromSample(mstate, state);

@@ -56,16 +56,14 @@ class Reset : public IOperation<Time> {
    */
   void Execute(const std::shared_ptr<Simulators::ISimulator> &sim,
                OperationState &state) const override {
-    size_t res = sim->Measure(qubits);
+    auto res = sim->MeasureMany(qubits);
 
-    for (size_t qi = 0; res && qi < qubits.size(); ++qi) {
-      if ((res & 1) ==
-          (resetTargets.size() <= qi ? 1 : (resetTargets[qi] ? 0 : 1))) {
+    for (size_t qi = 0; qi < qubits.size(); ++qi) {
+      if (res[qi] ==
+          (resetTargets.size() <= qi ? true : !resetTargets[qi])) {
         xgate.SetQubit(qubits[qi]);
         xgate.Execute(sim, state);
       }
-
-      res >>= 1;
     }
   }
 
