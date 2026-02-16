@@ -341,6 +341,9 @@ class QCSimState : public ISimulator {
 
   /**
    * @brief Performs a measurement on the specified qubits.
+   * 
+   * Don't use it if the number of qubits is larger than the number of bits in
+   * the size_t type (usually 64), as the outcome will be undefined
    *
    * @param qubits A vector with the qubits to be measured.
    * @return The outcome of the measurements, the first qubit result is the
@@ -399,6 +402,47 @@ class QCSimState : public ISimulator {
     }
     Notify();
 
+    NotifyObservers(qubits);
+
+    return res;
+  }
+
+  /**
+   * @brief Performs a measurement on the specified qubits.
+   *
+   * @param qubits A vector with the qubits to be measured.
+   * @return The outcome of the measurements
+   */
+  std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override {
+    std::vector<bool> res(qubits.size(), false);
+    DontNotify();
+
+    if (simulationType == SimulationType::kStatevector) {
+      for (size_t q = 0; q < qubits.size(); ++q) {
+        if (state->MeasureQubit(static_cast<unsigned int>(qubits[q])))
+          res[q] = true;
+      }
+    } else if (simulationType == SimulationType::kStabilizer) {
+        for (size_t q = 0; q < qubits.size(); ++q) {
+        if (cliffordSimulator->MeasureQubit(static_cast<unsigned int>(qubits[q])))
+          res[q] = true;
+      }
+    } else if (simulationType == SimulationType::kTensorNetwork) {
+      for (size_t q = 0; q < qubits.size(); ++q) {
+        if (tensorNetwork->Measure(static_cast<unsigned int>(qubits[q])))
+          res[q] = true;
+      }
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      std::vector<int> qubitsInt(qubits.begin(), qubits.end());
+      res = std::move(pp->Measure(qubitsInt));
+    } else {
+      const std::set<Eigen::Index> qubitsSet(qubits.begin(), qubits.end());
+      auto measured = mpsSimulator->MeasureQubits(qubitsSet);
+      for (size_t q = 0; q < qubits.size(); ++q) {
+        if (measured[qubits[q]]) res[q] = true;
+      }
+    }
+    Notify();
     NotifyObservers(qubits);
 
     return res;
@@ -585,6 +629,9 @@ class QCSimState : public ISimulator {
    * Use it to obtain the counts of the outcomes of the specified qubits
    * measurements. The state is not collapsed, so the measurement can be
    * repeated 'shots' times.
+   * 
+   * Don't use it if the number of qubits is larger than the number of bits in
+   * the Types::qubit_t type (usually 64), as the outcome will be undefined.
    *
    * @param qubits A vector with the qubits to be measured.
    * @param shots The number of shots to perform.
@@ -695,6 +742,118 @@ class QCSimState : public ISimulator {
             mask <<= 1ULL;
           }
 
+          ++result[meas];
+        }
+      }
+    }
+
+    Notify();
+    NotifyObservers(qubits);
+
+    return result;
+  }
+
+  /**
+   * @brief Returns the counts of the outcomes of measurement of the specified
+   * qubits, for repeated measurements.
+   *
+   * Use it to obtain the counts of the outcomes of the specified qubits
+   * measurements. The state is not collapsed, so the measurement can be
+   * repeated 'shots' times.
+   *
+   * @param qubits A vector with the qubits to be measured.
+   * @param shots The number of shots to perform.
+   * @return A map with the counts for the otcomes of measurements of the
+   * specified qubits.
+   */
+  std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(
+      const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    if (qubits.empty() || shots == 0) return {};
+    
+    std::unordered_map<std::vector<bool>, Types::qubit_t> result;
+
+    DontNotify();
+
+    if (simulationType == SimulationType::kMatrixProductState) {
+      bool normal = true;
+      if (useMPSMeasureNoCollapse) {
+        // check to see if it can be used
+        std::unordered_set qset(qubits.begin(), qubits.end());
+        if (qset.size() == GetNumberOfQubits()) {
+          // it can!
+          normal = false;
+          for (size_t shot = 0; shot < shots; ++shot) {
+            const auto meas = MeasureNoCollapseMany();
+
+            // might not be in order
+            // translate the measurement
+            std::vector<bool> measVec(qubits.size(), false);
+            for (size_t i = 0; i < qubits.size(); ++i)
+              measVec[i] = meas[qubits[i]];
+
+            ++result[measVec];
+          }
+        }
+      }
+
+      if (normal) {
+        auto savedState = mpsSimulator->getState();
+        for (size_t shot = 0; shot < shots; ++shot) {
+          const auto meas = MeasureMany(qubits);
+
+          ++result[meas];
+          mpsSimulator->setState(savedState);
+        }
+      }
+    } else if (simulationType == SimulationType::kStabilizer) {
+      cliffordSimulator->SaveState();
+      for (size_t shot = 0; shot < shots; ++shot) {
+        const auto meas = MeasureMany(qubits);
+        ++result[meas];
+        cliffordSimulator->RestoreState();
+      }
+      cliffordSimulator->ClearSavedState();
+    } else if (simulationType == SimulationType::kTensorNetwork) {
+      tensorNetwork->SaveState();
+      for (size_t shot = 0; shot < shots; ++shot) {
+        const auto meas = MeasureMany(qubits);
+        ++result[meas];
+        tensorNetwork->RestoreState();
+      }
+      tensorNetwork->ClearSavedState();
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      std::vector<int> qubitsInt(qubits.begin(), qubits.end());
+      for (size_t shot = 0; shot < shots; ++shot) {
+        const auto meas = pp->Sample(qubitsInt);
+        ++result[meas];
+      }
+    } else {
+      if (shots > 1) {
+        const auto &statev = state->getRegisterStorage();
+
+        const Utils::Alias alias(statev);
+
+        for (size_t shot = 0; shot < shots; ++shot) {
+          const double prob = 1. - uniformZeroOne(rng);
+          const size_t measRaw = alias.Sample(prob);
+
+          std::vector<bool> meas(qubits.size(), false);
+
+          for (size_t i = 0; i < qubits.size(); ++i) {
+            const size_t qubitMask = 1ULL << qubits[i];
+            if ((measRaw & qubitMask) != 0) meas[i] = true;
+          }
+
+          ++result[meas];
+        }
+      } else {
+        for (size_t shot = 0; shot < shots; ++shot) {
+          const auto measRaw = MeasureNoCollapseMany();
+          std::vector<bool> meas(qubits.size(), false);
+
+          for (size_t i = 0; i < qubits.size(); ++i) {
+            if (measRaw[qubits[i]]) meas[i] = true;
+          }
           ++result[meas];
         }
       }
@@ -929,7 +1088,10 @@ class QCSimState : public ISimulator {
    * the qiskit aer case, SaveStateToInternalDestructive is needed to be called
    * before this. If one wants to use the simulator after such measurement(s),
    * RestoreInternalDestructiveSavedState should be called at the end.
-   *
+   * 
+   * Don't use this for more qubits than the size of Types::qubit_t, as the
+   * result is packed in a limited number of bits (e.g. 64 bits for uint64_t)
+   * 
    * @return The result of the measurements, the first qubit result is the least
    * significant bit.
    */
@@ -961,6 +1123,44 @@ class QCSimState : public ISimulator {
         "all the qubits without collapsing the state.");
 
     return 0;
+  }
+
+  /**
+   * @brief Measures all the qubits without collapsing the state.
+   *
+   * Measures all the qubits without collapsing the state, allowing to perform
+   * multiple shots. This is to be used only internally, only for the
+   * statevector simulators (or those based on them, as the composite ones). For
+   * the qiskit aer case, SaveStateToInternalDestructive is needed to be called
+   * before this. If one wants to use the simulator after such measurement(s),
+   * RestoreInternalDestructiveSavedState should be called at the end.
+   *
+   * Use this for more qubits than the size of Types::qubit_t
+   *
+   * @return The result of the measurements
+   */
+  std::vector<bool> MeasureNoCollapseMany() override {
+    if (simulationType == SimulationType::kStatevector) {
+      auto state = MeasureNoCollapse();
+      std::vector<bool> res(nrQubits); 
+      for (size_t i = 0; i < nrQubits; ++i) {
+        res[i] = (state & 1) == 1;
+        state >>= 1;
+      }
+      return res;
+    } else if (simulationType == SimulationType::kMatrixProductState) {
+      return mpsSimulator->MeasureNoCollapse();
+    } else if (simulationType == SimulationType::kPauliPropagator) {
+      std::vector<int> qubitsInt(GetNumberOfQubits());
+      std::iota(qubitsInt.begin(), qubitsInt.end(), 0);
+      return pp->Sample(qubitsInt);
+    }
+
+    throw std::runtime_error(
+        "QCSimState::MeasureNoCollapseMany: Invalid simulation type for "
+        "measuring all the qubits without collapsing the state.");
+
+    return {};
   }
 
  protected:

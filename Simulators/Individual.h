@@ -378,6 +378,49 @@ class IndividualSimulator : public ISimulator {
     return res;
   }
 
+
+  /**
+   * @brief Convert the outcome from the local qubit ids to the global qubit ids
+   *
+   * Converts the outcome from the local qubit ids to the global qubit ids.
+   *
+   * @param outcome The outcome to convert.
+   * @return The converted outcome.
+   */
+  inline std::vector<bool> ConvertOutcomeFromLocal(
+      const std::vector<bool> &outcome) const {
+    std::vector<bool> res;
+
+    size_t maxQubit = 0;
+    for (auto [origQubit, localQubit] : qubitsMap)
+      if (origQubit > maxQubit) maxQubit = origQubit;
+    res.resize(maxQubit + 1, false);
+
+    for (auto [origQubit, localQubit] : qubitsMap)
+      if (outcome[localQubit]) res[origQubit] = true;
+
+    return res;
+  }
+
+  /**
+   * @brief Convert the outcome from the global qubit ids to the local qubit ids
+   *
+   * Converts the outcome from the global qubit ids to the local qubit ids.
+   *
+   * @param outcome The outcome to convert.
+   * @return The converted outcome.
+   */
+  inline std::vector<bool> ConvertOutcomeFromGlobal(
+      const std::vector<bool>& outcome) const {
+    const size_t nrQubits = simulator->GetNumberOfQubits();
+    std::vector<bool> res(nrQubits, false);
+
+    for (auto [origQubit, localQubit] : qubitsMap)
+      if (outcome[origQubit]) res[localQubit] = true;
+
+    return res;
+  }
+
   /**
    * @brief Save the state.
    *
@@ -578,6 +621,8 @@ class IndividualSimulator : public ISimulator {
    * @brief Performs a measurement on the specified qubits.
    *
    * WARNING: Use it with care, might not do what you expect.
+   * Don't use it if the number of qubits is larger than the number of bits in
+   * the size_t type (usually 64), as the outcome will be undefined
    *
    * @param qubits A vector with the qubits to be measured.
    * @return The outcome of the measurements, the first qubit result is the
@@ -585,6 +630,18 @@ class IndividualSimulator : public ISimulator {
    */
   size_t Measure(const Types::qubits_vector &qubits) override {
     return ConvertOutcomeFromLocal(simulator->Measure(ConvertQubits(qubits)));
+  }
+
+  /**
+   * @brief Performs a measurement on the specified qubits.
+   *
+   * WARNING: Use it with care, might not do what you expect.
+   * 
+   * @param qubits A vector with the qubits to be measured.
+   * @return The outcome of the measurements
+   */
+  std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override {
+    return ConvertOutcomeFromLocal(simulator->MeasureMany(ConvertQubits(qubits)));
   }
 
   /**
@@ -664,6 +721,8 @@ class IndividualSimulator : public ISimulator {
    * repeated 'shots' times.
    *
    * WARNING: Use it with care, might not do what you expect.
+   * Don't use it if the number of qubits is larger than the number of bits in
+   * the Types::qubit_t type (usually 64), as the outcome will be undefined.
    *
    * @param qubits A vector with the qubits to be measured.
    * @param shots The number of shots to perform.
@@ -675,6 +734,31 @@ class IndividualSimulator : public ISimulator {
     std::unordered_map<Types::qubit_t, Types::qubit_t> res;
 
     const auto sc = simulator->SampleCounts(ConvertQubits(qubits), shots);
+
+    for (auto [outcome, count] : sc)
+      res[ConvertOutcomeFromLocal(outcome)] = count;
+
+    return res;
+  }
+
+  /**
+   * @brief Returns the counts of the outcomes of measurement of the specified
+   * qubits, for repeated measurements.
+   *
+   * Use it to obtain the counts of the outcomes of the specified qubits
+   * measurements. The state is not collapsed, so the measurement can be
+   * repeated 'shots' times.
+   *
+   * @param qubits A vector with the qubits to be measured.
+   * @param shots The number of shots to perform.
+   * @return A map with the counts for the otcomes of measurements of the
+   * specified qubits.
+   */
+  std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(
+      const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    std::unordered_map<std::vector<bool>, Types::qubit_t> res;
+
+    const auto sc = simulator->SampleCountsMany(ConvertQubits(qubits), shots);
 
     for (auto [outcome, count] : sc)
       res[ConvertOutcomeFromLocal(outcome)] = count;
@@ -1128,11 +1212,33 @@ class IndividualSimulator : public ISimulator {
    * before this. If one wants to use the simulator after such measurement(s),
    * RestoreInternalDestructiveSavedState should be called at the end.
    *
+   * Don't use this for more qubits than the size of Types::qubit_t, as the
+   * result is packed in a limited number of bits (e.g. 64 bits for uint64_t)
+   *
    * @return The result of the measurements, the first qubit result is the least
    * significant bit.
    */
   Types::qubit_t MeasureNoCollapse() override {
     return ConvertOutcomeFromLocal(simulator->MeasureNoCollapse());
+  }
+
+  /**
+   * @brief Measures all the qubits without collapsing the state.
+   *
+   * Measures all the qubits without collapsing the state, allowing to perform
+   * multiple shots. This is to be used only internally, only for the
+   * statevector simulators (or those based on them, as the composite ones). For
+   * the qiskit aer case, SaveStateToInternalDestructive is needed to be called
+   * before this. If one wants to use the simulator after such measurement(s),
+   * RestoreInternalDestructiveSavedState should be called at the end.
+   *
+   * Use this for more qubits than the size of Types::qubit_t
+   *
+   * @return The result of the measurements
+   */
+  std::vector<bool> MeasureNoCollapseMany() override {
+    auto res = simulator->MeasureNoCollapseMany();
+    return ConvertOutcomeFromLocal(res);
   }
 
   /**
