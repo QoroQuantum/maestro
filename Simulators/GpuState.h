@@ -354,6 +354,11 @@ class GpuState : public ISimulator {
     // TODO: this is inefficient, maybe implement it better in gpu sim
     // for now it has the possibility of measuring a qubits interval, but not a
     // list of qubits
+    if (qubits.size() > sizeof(size_t) * 8)
+      std::cerr
+          << "Warning: The number of qubits to measure is larger than the "
+             "number of bits in the size_t type, the outcome will be undefined"
+          << std::endl;
 
     size_t res = 0;
     size_t mask = 1ULL;
@@ -594,6 +599,12 @@ class GpuState : public ISimulator {
   std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
     if (qubits.empty() || shots == 0) return {};
+
+    if (qubits.size() > sizeof(Types::qubit_t) * 8)
+      std::cerr
+          << "Warning: The number of qubits to measure is larger than the "
+             "number of bits in the Types::qubit_t type, the outcome will be undefined"
+          << std::endl;
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> result;
 
@@ -929,6 +940,12 @@ class GpuState : public ISimulator {
     else if (simulationType == SimulationType::kMatrixProductState ||
              simulationType == SimulationType::kTensorNetwork ||
              simulationType == SimulationType::kPauliPropagator) {
+      if (nrQubits > sizeof(Types::qubit_t) * 8)
+        std::cerr
+            << "Warning: The number of qubits to measure is larger than the "
+               "number of bits in the Types::qubit_t type, the outcome will be undefined"
+            << std::endl;
+
       Types::qubits_vector fixedValues(nrQubits);
       std::iota(fixedValues.begin(), fixedValues.end(), 0);
       const auto res = SampleCounts(fixedValues, 1);

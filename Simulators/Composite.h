@@ -309,6 +309,12 @@ class CompositeSimulator : public ISimulator {
    * least significant bit.
    */
   size_t Measure(const Types::qubits_vector &qubits) override {
+    if (qubits.size() > sizeof(size_t) * 8)
+      std::cerr
+          << "Warning: The number of qubits to measure is larger than the "
+             "number of bits in the size_t type, the outcome will be undefined"
+          << std::endl;
+
     size_t res = 0;
     size_t mask = 1ULL;
 
@@ -452,6 +458,11 @@ class CompositeSimulator : public ISimulator {
    */
   std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    if (GetNumberOfQubits() > sizeof(Types::qubit_t) * 8)
+      std::cerr
+          << "Warning: The number of qubits to measure is larger than the "
+             "number of bits in the Types::qubit_t type, the outcome will be undefined"
+          << std::endl;
     // TODO: improve it as for the qcsim statevector simulator case!
     std::unordered_map<Types::qubit_t, Types::qubit_t> result;
     DontNotify();
@@ -1142,6 +1153,12 @@ class CompositeSimulator : public ISimulator {
    */
   Types::qubit_t MeasureNoCollapse() override {
     Types::qubit_t res = 0;
+
+    if (GetNumberOfQubits() > sizeof(Types::qubit_t) * 8)
+      std::cerr
+          << "Warning: The number of qubits to measure is larger than the "
+             "number of bits in the Types::qubit_t type, the outcome will be undefined"
+          << std::endl;
 
     for (auto &[id, simulator] : simulators) {
       const Types::qubit_t meas = simulator->MeasureNoCollapse();

@@ -353,6 +353,11 @@ class QCSimState : public ISimulator {
     // TODO: this is inefficient, maybe implement it better in qcsim
     // for now it has the possibility of measuring a qubits interval, but not a
     // list of qubits
+    if (qubits.size() > sizeof(size_t) * 8)
+      std::cerr
+          << "Warning: The number of qubits to measure is larger than the "
+             "number of bits in the size_t type, the outcome will be undefined"
+          << std::endl;
 
     size_t res = 0;
     size_t mask = 1ULL;
@@ -637,6 +642,12 @@ class QCSimState : public ISimulator {
   std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
     if (qubits.empty() || shots == 0) return {};
+
+    if (qubits.size() > sizeof(size_t) * 8)
+      std::cerr
+          << "Warning: The number of qubits to measure is larger than the "
+             "number of bits in the size_t type, the outcome will be undefined"
+          << std::endl;
 
     // TODO: this is inefficient, maybe implement it better in qcsim
     // for now it has the possibility of measuring a qubits interval, but not a
@@ -1090,6 +1101,12 @@ class QCSimState : public ISimulator {
    * significant bit.
    */
   Types::qubit_t MeasureNoCollapse() override {
+    if (GetNumberOfQubits() > sizeof(Types::qubit_t) * 8)
+      std::cerr
+          << "Warning: The number of qubits to measure is larger than the "
+             "number of bits in the Types::qubit_t type, the outcome will be undefined"
+          << std::endl;
+
     if (simulationType == SimulationType::kStatevector)
       return state->MeasureNoCollapse();
     else if (simulationType == SimulationType::kMatrixProductState) {
