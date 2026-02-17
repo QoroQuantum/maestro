@@ -736,7 +736,7 @@ class IndividualSimulator : public ISimulator {
     const auto sc = simulator->SampleCounts(ConvertQubits(qubits), shots);
 
     for (auto [outcome, count] : sc)
-      res[ConvertOutcomeFromLocal(outcome)] = count;
+      res[ConvertOutcomeFromLocal(outcome)] += count;
 
     return res;
   }

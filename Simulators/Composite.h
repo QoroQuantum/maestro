@@ -529,10 +529,8 @@ class CompositeSimulator : public ISimulator {
         for (auto &[id, simulator] : simulators)
           measRaw |= simulator->SampleFromAlias();
 
-        for (size_t i = 0; i < qubits.size(); ++i) {
-          const size_t qubitMask = 1ULL << qubits[i];
-          meas[i] = (measRaw & qubitMask) != 0;
-        }
+        for (size_t i = 0; i < qubits.size(); ++i)
+          meas[i] = ((measRaw >> qubits[i]) & 1) == 1;
 
         ++result[meas];
       }

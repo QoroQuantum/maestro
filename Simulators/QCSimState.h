@@ -418,29 +418,25 @@ class QCSimState : public ISimulator {
     DontNotify();
 
     if (simulationType == SimulationType::kStatevector) {
-      for (size_t q = 0; q < qubits.size(); ++q) {
+      for (size_t q = 0; q < qubits.size(); ++q)
         if (state->MeasureQubit(static_cast<unsigned int>(qubits[q])))
           res[q] = true;
-      }
     } else if (simulationType == SimulationType::kStabilizer) {
-        for (size_t q = 0; q < qubits.size(); ++q) {
+      for (size_t q = 0; q < qubits.size(); ++q)
         if (cliffordSimulator->MeasureQubit(static_cast<unsigned int>(qubits[q])))
           res[q] = true;
-      }
     } else if (simulationType == SimulationType::kTensorNetwork) {
-      for (size_t q = 0; q < qubits.size(); ++q) {
+      for (size_t q = 0; q < qubits.size(); ++q)
         if (tensorNetwork->Measure(static_cast<unsigned int>(qubits[q])))
           res[q] = true;
-      }
     } else if (simulationType == SimulationType::kPauliPropagator) {
       std::vector<int> qubitsInt(qubits.begin(), qubits.end());
       res = std::move(pp->Measure(qubitsInt));
     } else {
       const std::set<Eigen::Index> qubitsSet(qubits.begin(), qubits.end());
       auto measured = mpsSimulator->MeasureQubits(qubitsSet);
-      for (size_t q = 0; q < qubits.size(); ++q) {
+      for (size_t q = 0; q < qubits.size(); ++q)
         if (measured[qubits[q]]) res[q] = true;
-      }
     }
     Notify();
     NotifyObservers(qubits);
@@ -785,7 +781,7 @@ class QCSimState : public ISimulator {
           for (size_t shot = 0; shot < shots; ++shot) {
             const auto meas = MeasureNoCollapseMany();
 
-            // might not be in order
+            // might not be in the requested order
             // translate the measurement
             std::vector<bool> measVec(qubits.size(), false);
             for (size_t i = 0; i < qubits.size(); ++i)
@@ -839,10 +835,8 @@ class QCSimState : public ISimulator {
 
           std::vector<bool> meas(qubits.size(), false);
 
-          for (size_t i = 0; i < qubits.size(); ++i) {
-            const size_t qubitMask = 1ULL << qubits[i];
-            if ((measRaw & qubitMask) != 0) meas[i] = true;
-          }
+          for (size_t i = 0; i < qubits.size(); ++i)
+            if (((measRaw >> qubits[i]) & 1) == 1) meas[i] = true;
 
           ++result[meas];
         }
@@ -851,9 +845,9 @@ class QCSimState : public ISimulator {
           const auto measRaw = MeasureNoCollapseMany();
           std::vector<bool> meas(qubits.size(), false);
 
-          for (size_t i = 0; i < qubits.size(); ++i) {
+          for (size_t i = 0; i < qubits.size(); ++i)
             if (measRaw[qubits[i]]) meas[i] = true;
-          }
+ 
           ++result[meas];
         }
       }
@@ -1143,10 +1137,8 @@ class QCSimState : public ISimulator {
     if (simulationType == SimulationType::kStatevector) {
       auto state = MeasureNoCollapse();
       std::vector<bool> res(nrQubits); 
-      for (size_t i = 0; i < nrQubits; ++i) {
-        res[i] = (state & 1) == 1;
-        state >>= 1;
-      }
+      for (size_t i = 0; i < nrQubits; ++i)
+        res[i] = ((state >> i) & 1) == 1;
       return res;
     } else if (simulationType == SimulationType::kMatrixProductState) {
       return mpsSimulator->MeasureNoCollapse();
