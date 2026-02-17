@@ -154,10 +154,8 @@ class MeasurementOperation : public IOperation<Time> {
   void SetStateFromSample(const std::vector<bool> &measurements, OperationState &state) const {
     if (qubits.empty()) return;
 
-    for (size_t index = 0; index < qubits.size(); ++index) {
-      const auto cbit = bits[index];
-      state.SetBit(cbit, index < measurements.size() && measurements[index]);
-    }
+    for (size_t index = 0; index < qubits.size(); ++index)
+      state.SetBit(bits[index], index < measurements.size() && measurements[index]);
   }
 
   /**

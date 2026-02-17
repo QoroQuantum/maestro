@@ -697,7 +697,7 @@ class GpuState : public ISimulator {
       std::vector<bool> outcomeVec(qubits.size());
       for (auto outcome : samples) {
          for (size_t i = 0; i < qubits.size(); ++i)
-           outcomeVec[i] = (outcome & (1ULL << qubits[i])) != 0;
+           outcomeVec[i] = ((outcome >> qubits[i]) & 1) == 1;
          ++result[outcomeVec];
       }
     } else if (simulationType == SimulationType::kMatrixProductState) {
@@ -722,7 +722,7 @@ class GpuState : public ISimulator {
     } else if (simulationType == SimulationType::kPauliPropagator) {
       std::vector<int> qb(qubits.begin(), qubits.end());
       for (size_t shot = 0; shot < shots; ++shot) {
-        auto res = pp->SampleQubits(qb);
+        const auto res = pp->SampleQubits(qb);
         ++result[res];
       }
     }
@@ -933,8 +933,7 @@ class GpuState : public ISimulator {
       std::iota(fixedValues.begin(), fixedValues.end(), 0);
       const auto res = SampleCounts(fixedValues, 1);
       if (res.empty()) return 0;
-      return res.begin()
-          ->first;  // return the first outcome, as it is the only one
+      return res.begin()->first;  // return the first outcome, as it is the only one
     }
 
     throw std::runtime_error(
@@ -963,7 +962,7 @@ class GpuState : public ISimulator {
       const auto meas = state->MeasureAllQubitsNoCollapse();
       std::vector<bool> result(nrQubits, false);
       for (size_t i = 0; i < nrQubits; ++i)
-        result[i] = (meas & (1ULL << i)) != 0;
+        result[i] = ((meas >> i) & 1) == 1;
       return result;
     } else if (simulationType == SimulationType::kMatrixProductState ||
                simulationType == SimulationType::kTensorNetwork ||
@@ -972,8 +971,7 @@ class GpuState : public ISimulator {
       std::iota(fixedValues.begin(), fixedValues.end(), 0);
       const auto res = SampleCountsMany(fixedValues, 1);
       if (res.empty()) return std::vector<bool>(nrQubits, false);
-      return res.begin()
-          ->first;  // return the first outcome, as it is the only one
+      return res.begin()->first;  // return the first outcome, as it is the only one
     }
 
     throw std::runtime_error(
