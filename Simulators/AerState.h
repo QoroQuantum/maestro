@@ -292,6 +292,9 @@ class AerState : public ISimulator {
    * least significant bit.
    */
   size_t Measure(const Types::qubits_vector &qubits) override {
+    if (qubits.size() > sizeof(size_t) * 8)
+      std::cerr << "Warning: The number of qubits to measure is larger than the number of bits in the size_t type, the outcome will be undefined" << std::endl;
+
     const size_t res = state->apply_measure(qubits);
 
     NotifyObservers(qubits);
@@ -404,6 +407,12 @@ class AerState : public ISimulator {
   std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
     if (qubits.empty() || shots == 0) return {};
+
+    if (qubits.size() > sizeof(Types::qubit_t) * 8)
+      std::cerr
+          << "Warning: The number of qubits to measure is larger than the "
+             "number of bits in the Types::qubit_t type, the outcome will be undefined"
+          << std::endl;
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> res =
         state->sample_counts(qubits, shots);
