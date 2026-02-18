@@ -575,3 +575,117 @@ class TestExtendedStabilizerSimulation:
         assert 'expectation_values' in result
         # (|00> + e^{i*pi/4}|11>) / sqrt(2): <ZZ> = 1.0
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
+
+
+class TestSimulatorTypeIsHonored:
+    """Regression tests: verify the requested simulator/method is actually used.
+
+    These tests ensure we don't silently fall back to defaults (e.g., kQCSim)
+    when a specific simulator_type or simulation_type is requested.
+    GPU tests are skipped here (requires Linux + CUDA) but the pattern applies.
+    """
+
+    def test_execute_statevector_type_honored(self):
+        """Execute with Statevector reports correct simulator and method."""
+        result = maestro.simple_execute(
+            CLIFFORD_BELL_QASM,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Statevector,
+            shots=10
+        )
+        assert result['simulator'] == maestro.SimulatorType.QCSim.value
+        assert result['method'] == maestro.SimulationType.Statevector.value
+
+    def test_execute_mps_type_honored(self):
+        """Execute with MPS reports correct simulator and method."""
+        result = maestro.simple_execute(
+            CLIFFORD_BELL_QASM,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            shots=10
+        )
+        assert result['simulator'] == maestro.SimulatorType.QCSim.value
+        assert result['method'] == maestro.SimulationType.MatrixProductState.value
+
+    def test_execute_pauli_propagator_type_honored(self):
+        """Execute with PauliPropagator reports correct simulator type.
+
+        Note: the internal optimizer may legitimately switch the simulation
+        method, so we only assert the simulator type here.
+        """
+        result = maestro.simple_execute(
+            GENERAL_QASM,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.PauliPropagator,
+            shots=10
+        )
+        assert result['simulator'] == maestro.SimulatorType.QCSim.value
+
+    def test_estimate_statevector_type_honored(self):
+        """Estimate with Statevector reports correct simulator and method."""
+        result = maestro.simple_estimate(
+            CLIFFORD_BELL_NO_MEASURE_QASM,
+            "ZZ",
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Statevector,
+        )
+        assert result['simulator'] == maestro.SimulatorType.QCSim.value
+        assert result['method'] == maestro.SimulationType.Statevector.value
+
+    def test_estimate_mps_type_honored(self):
+        """Estimate with MPS reports correct simulator and method."""
+        result = maestro.simple_estimate(
+            CLIFFORD_BELL_NO_MEASURE_QASM,
+            "ZZ",
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+        )
+        assert result['simulator'] == maestro.SimulatorType.QCSim.value
+        assert result['method'] == maestro.SimulationType.MatrixProductState.value
+
+    def test_estimate_pauli_propagator_type_honored(self):
+        """Estimate with PauliPropagator reports correct simulator type.
+
+        Note: the internal optimizer may legitimately switch the simulation
+        method, so we only assert the simulator type here.
+        """
+        result = maestro.simple_estimate(
+            GENERAL_NO_MEASURE_QASM,
+            "ZZ",
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.PauliPropagator,
+        )
+        assert result['simulator'] == maestro.SimulatorType.QCSim.value
+
+    def test_circuit_execute_type_honored(self):
+        """Circuit.execute() reports correct simulator and method."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        result = qc.execute(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            shots=10,
+            max_bond_dimension=4,
+        )
+        assert result['simulator'] == maestro.SimulatorType.QCSim.value
+        assert result['method'] == maestro.SimulationType.MatrixProductState.value
+
+    def test_circuit_estimate_type_honored(self):
+        """Circuit.estimate() reports correct simulator and method."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        result = qc.estimate(
+            observables=["ZZ"],
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=4,
+        )
+        assert result['simulator'] == maestro.SimulatorType.QCSim.value
+        assert result['method'] == maestro.SimulationType.MatrixProductState.value
