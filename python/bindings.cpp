@@ -74,7 +74,7 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
                        val.c_str());
   }
 
-  network->CreateSimulator();
+  network->CreateSimulator(sim_type, sim_exec_type);
   return network;
 }
 
