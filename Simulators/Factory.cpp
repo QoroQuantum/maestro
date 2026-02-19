@@ -87,6 +87,8 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
         sim->Configure("method", "tensor_network");
       else if (m == SimulationType::kPauliPropagator)
         sim->Configure("method", "pauli_propagator");
+      else if (m != SimulationType::kStatevector)
+        throw std::invalid_argument("Simulation Type not supported for QCSim");
 
       return sim;
     }
@@ -101,8 +103,11 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
         sim->Configure("method", "tensor_network");
       else if (m == SimulationType::kExtendedStabilizer)
         sim->Configure("method", "extended_stabilizer");
-      else
+      else if (m == SimulationType::kStatevector)
         sim->Configure("method", "statevector");
+      else
+        throw std::invalid_argument(
+            "Simulation Type not supported for Qiskit Aer");
 
       return sim;
     }
@@ -127,6 +132,8 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
           sim->Configure("method", "tensor_network");
         else if (m == SimulationType::kPauliPropagator)
           sim->Configure("method", "pauli_propagator");
+        else if (m == SimulationType::kStatevector)
+          sim->Configure("method", "statevector");
 
         return sim;
       }
@@ -155,6 +162,8 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
         sim->Configure("method", "tensor_network");
       else if (m == SimulationType::kPauliPropagator)
         sim->Configure("method", "pauli_propagator");
+      else if (m != SimulationType::kStatevector)
+        throw std::invalid_argument("Simulation Type not supported for QCSim");
 
       return sim;
     }
@@ -169,8 +178,10 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
         sim->Configure("method", "tensor_network");
       else if (m == SimulationType::kExtendedStabilizer)
         sim->Configure("method", "extended_stabilizer");
-      else
+      else if (m == SimulationType::kStatevector)
         sim->Configure("method", "statevector");
+      else throw std::invalid_argument(
+            "Simulation Type not supported for Qiskit Aer");
 
       return sim;
     }
@@ -195,6 +206,8 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
           sim->Configure("method", "tensor_network");
         else if (m == SimulationType::kPauliPropagator)
           sim->Configure("method", "pauli_propagator");
+        else if (m == SimulationType::kStatevector)
+          sim->Configure("method", "statevector");
 
         return sim;
       }
