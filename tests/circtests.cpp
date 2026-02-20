@@ -44,6 +44,7 @@ struct SimulatorsTestFixture {
 #ifdef __linux__
     Simulators::SimulatorsFactory::InitGpuLibrary();
 #endif
+    Simulators::SimulatorsFactory::InitQuestLibrary();
 
     state.AllocateBits(3);
 
@@ -94,6 +95,22 @@ struct SimulatorsTestFixture {
       gpuRandom->Initialize();
     }
 #endif
+
+    questsim = Simulators::SimulatorsFactory::CreateSimulator(
+        Simulators::SimulatorType::kQuestSim,
+        Simulators::SimulationType::kStatevector);
+    if (questsim) {
+      questsim->AllocateQubits(3);
+      questsim->Initialize();
+    }
+
+    questRandom = Simulators::SimulatorsFactory::CreateSimulator(
+        Simulators::SimulatorType::kQuestSim,
+        Simulators::SimulationType::kStatevector);
+    if (questRandom) {
+      questRandom->AllocateQubits(nrQubitsForRandomCirc);
+      questRandom->Initialize();
+    }
 
     resetRandomCirc = std::make_shared<Circuits::Circuit<>>();
     Types::qubits_vector qubits(nrQubitsForRandomCirc);
@@ -225,6 +242,9 @@ struct SimulatorsTestFixture {
   std::shared_ptr<Simulators::ISimulator> gpuRandom;
 #endif
 
+  std::shared_ptr<Simulators::ISimulator> questsim;
+  std::shared_ptr<Simulators::ISimulator> questRandom;
+
   std::shared_ptr<Circuits::Circuit<>> setCirc;
   std::shared_ptr<Circuits::Circuit<>> resetCirc;
   std::shared_ptr<Circuits::Circuit<>> measureCirc;
@@ -311,6 +331,19 @@ BOOST_FIXTURE_TEST_CASE(SimpleCircuitGpuTests, SimulatorsTestFixture) {
 
 #endif
 
+BOOST_FIXTURE_TEST_CASE(SimpleCircuitQuestTests, SimulatorsTestFixture) {
+  if (questsim) {
+    setCirc->Execute(questsim, state);
+    measureCirc->Execute(questsim, state);
+
+    BOOST_TEST(state.GetAllBits() == std::vector<bool>({true, false, false}));
+
+    resetCirc->Execute(questsim, state);
+    measureCirc->Execute(questsim, state);
+    BOOST_TEST(state.GetAllBits() == std::vector<bool>({false, false, false}));
+  }
+}
+
 // BOOST_FIXTURE_TEST_CASE(TeleportationAerTest, SimulatorsTestFixture)
 BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, TeleportationAerTest,
                        bdata::xrange(5), ind) {
@@ -372,6 +405,24 @@ BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, TeleportationGpuTest,
 }
 
 #endif
+
+BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, TeleportationQuestTest,
+                       bdata::xrange(5), ind) {
+  if (questsim) {
+    if (ind % 2) {
+      // start with a different state to teleport (the teleportation circuit
+      // applies a not on the first qubit in the beginning)
+      questsim->ApplyX(0);
+    }
+    teleportationCirc->Execute(questsim, state);
+    BOOST_TEST(state.GetAllBits()[2] == ((ind % 2) ? false : true));
+
+    // leave it in the 0 state
+    resetCirc->Execute(questsim, state);
+    measureCirc->Execute(questsim, state);
+    BOOST_TEST(state.GetAllBits() == std::vector<bool>({false, false, false}));
+  }
+}
 
 // methods:
 // bdata::make({ 0., 0.2, 0.4, 0.6, 0.8, 1. })
@@ -473,6 +524,32 @@ BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, GenTeleportGpuTest,
 
 #endif
 
+BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, GenTeleportQuestTest,
+                       (bdata::random() ^ bdata::xrange(5)) * bdata::xrange(5),
+                       theta, index1, index2) {
+  if (questsim) {
+    questsim->ApplyRx(0, theta);
+    // now get the values to be compared with the teleported one
+    std::complex<double> a = questsim->Amplitude(0);
+    std::complex<double> b = questsim->Amplitude(1);
+    genTeleportationCirc->Execute(questsim, state);
+    bool b1 = state.GetAllBits()[0];
+    bool b2 = state.GetAllBits()[1];
+    size_t outcome = 0;
+    if (b1) outcome |= 1;
+    if (b2) outcome |= 2;
+    std::complex<double> ta = questsim->Amplitude(outcome);
+    std::complex<double> tb = questsim->Amplitude(outcome | 4);
+    // check the teleported state
+    BOOST_CHECK_PREDICATE(checkClose, (a)(ta)(0.000001));
+    BOOST_CHECK_PREDICATE(checkClose, (b)(tb)(0.000001));
+    // leave it in the 0 state
+    resetCirc->Execute(questsim, state);
+    measureCirc->Execute(questsim, state);
+    BOOST_TEST(state.GetAllBits() == std::vector<bool>({false, false, false}));
+  }
+}
+
 BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsTest,
                        bdata::xrange(1, 20), nrGates) {
   size_t nrStates = 1ULL << nrQubitsForRandomCirc;
@@ -509,6 +586,19 @@ BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsTest,
   }
 #endif
 
+  if (questRandom) {
+    start = std::chrono::system_clock::now();
+    randomCirc->Execute(questRandom, state);
+    end = std::chrono::system_clock::now();
+    double questTime =
+        std::chrono::duration<double>(end - start).count() * 1000.;
+
+    BOOST_TEST_MESSAGE("Time for qiskit aer: "
+                       << qiskitTime << " ms, time for quest sim: " << questTime
+                       << " ms, quest sim is " << qiskitTime / questTime
+                       << " faster");
+  }
+
   // now check the results, they should be the same!
   for (size_t state = 0; state < nrStates; ++state) {
     std::complex<double> aaer = aerRandom->Amplitude(state);
@@ -526,6 +616,11 @@ BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsTest,
       BOOST_CHECK_PREDICATE(checkClose, (aaer)(agpu)(0.000001));
     }
 #endif
+
+    if (questRandom) {
+      std::complex<double> aquest = questRandom->Amplitude(state);
+      BOOST_CHECK_PREDICATE(checkClose, (aaer)(aquest)(0.000001));
+    }
   }
 
   resetRandomCirc->Execute(aerRandom, state);
@@ -559,6 +654,16 @@ BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsTest,
     }
   }
 #endif
+
+  if (questRandom) {
+    resetRandomCirc->Execute(questRandom, state);
+    // check if reset is ok
+    BOOST_TEST(questRandom->Probability(0), 1.);
+    for (size_t state = 1; state < nrStates; ++state) {
+      std::complex<double> aquest = questRandom->Amplitude(state);
+      BOOST_CHECK_PREDICATE(checkClose, (aquest)(0.)(0.000001));
+    }
+  }
 
   randomCirc->Clear();
 }
@@ -600,6 +705,19 @@ BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsOptimizationTest,
   }
 #endif
 
+  if (questsim) {
+    start = std::chrono::system_clock::now();
+    randomCirc->Optimize();
+    randomCirc->Execute(questsim, state);
+    end = std::chrono::system_clock::now();
+    double questTime =
+        std::chrono::duration<double>(end - start).count() * 1000.;
+    BOOST_TEST_MESSAGE("Time for qiskit aer: "
+                       << qiskitTime << " ms, time for quest sim: " << questTime
+                       << " ms, quest sim is " << qiskitTime / questTime
+                       << " faster");
+  }
+
   // now check the results, they should be the same!
   for (size_t state = 0; state < nrStates; ++state) {
     std::complex<double> aaer = aer->Amplitude(state);
@@ -617,6 +735,11 @@ BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsOptimizationTest,
       BOOST_CHECK_PREDICATE(checkClose, (aaer)(agpu)(0.000001));
     }
 #endif
+
+    if (questsim) {
+      std::complex<double> aquest = questsim->Amplitude(state);
+      BOOST_CHECK_PREDICATE(checkClose, (aaer)(aquest)(0.000001));
+    }
   }
 
   resetCirc->Execute(aer, state);
@@ -650,6 +773,16 @@ BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsOptimizationTest,
     }
   }
 #endif
+
+  if (questsim) {
+    resetCirc->Execute(questsim, state);
+    // check if reset is ok
+    BOOST_TEST(questsim->Probability(0), 1.);
+    for (size_t state = 1; state < nrStates; ++state) {
+      std::complex<double> aquest = questsim->Amplitude(state);
+      BOOST_CHECK_PREDICATE(checkClose, (aquest)(0.)(0.000001));
+    }
+  }
 
   randomCirc->Clear();
 }

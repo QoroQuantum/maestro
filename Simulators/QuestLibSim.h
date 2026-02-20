@@ -17,7 +17,6 @@
 #include "../Utils/Library.h"
 #include <complex>
 #include <vector>
-#include <stdexcept>
 
 namespace Simulators {
 
@@ -160,9 +159,12 @@ class QuestLibSim : public Utils::Library {
       fApplyCSxDg = (void (*)(void *, int, int))GetFunction("ApplyCSxDg");
       CheckFunction((void *)fApplyCSxDg, __LINE__);
 
-      fGetAmplitudes =
-          (int (*)(void *, void *, size_t))GetFunction("GetAmplitudes");
+      fGetAmplitudes = (int (*)(void *, void *, unsigned long long int))GetFunction("GetAmplitudes");
       CheckFunction((void *)fGetAmplitudes, __LINE__);
+      fGetAmplitude = (int (*)(void *, long long int, void *, unsigned long long int))GetFunction("GetAmplitude");
+      CheckFunction((void *)fGetAmplitude, __LINE__);
+      fIsDoublePrecision = (int (*)())GetFunction("IsDoublePrecision");
+      CheckFunction((void *)fIsDoublePrecision, __LINE__);
 
       if (fInitialize) {
         fInitialize();
@@ -536,11 +538,50 @@ class QuestLibSim : public Utils::Library {
   // amplitude functions
 
   bool GetAmplitudes(void *sim, std::vector<std::complex<double>>& amplitudes) const {
-    if (initialized)
-      return fGetAmplitudes(sim, amplitudes.data(), amplitudes.size() * sizeof(std::complex<double>)) == 1;
+    if (initialized) {
+      if (IsDoublePrecision())
+        return fGetAmplitudes(sim, amplitudes.data(), amplitudes.size() * sizeof(std::complex<double>)) == 1;
+      else
+      {
+        std::vector<std::complex<float>> amplitudesSingle(amplitudes.size());
+        if (fGetAmplitudes(sim, amplitudesSingle.data(), amplitudesSingle.size() * sizeof(std::complex<float>)) == 1) {
+          for (size_t i = 0; i < amplitudes.size(); ++i)
+            amplitudes[i] = std::complex<double>(static_cast<double>(amplitudesSingle[i].real()), static_cast<double>(amplitudesSingle[i].imag()));
+          
+          return true;
+        }
+      }
+    }
     else
       throw std::runtime_error("QuestLibSim: Unable to get amplitudes");
 
+    return false;
+  }
+
+  bool GetAmplitude(void *sim, long long int index, std::complex<double>& amplitude) const {
+    if (initialized) {
+      if (IsDoublePrecision())
+        return fGetAmplitude(sim, index, &amplitude, sizeof(std::complex<double>)) == 1;
+      else
+      {
+        std::complex<float> ampSingle;
+        if (fGetAmplitude(sim, index, &ampSingle, sizeof(std::complex<float>)) == 1) {
+          amplitude = std::complex<double>(static_cast<double>(ampSingle.real()),
+                                          static_cast<double>(ampSingle.imag()));
+          return true;
+        }
+      }
+    }
+    else
+      throw std::runtime_error("QuestLibSim: Unable to get amplitude");
+    return false;
+  }
+
+  bool IsDoublePrecision() const {
+    if (initialized)
+      return fIsDoublePrecision() == 1;
+    else
+      throw std::runtime_error("QuestLibSim: Unable to check double precision");
     return false;
   }
 
@@ -600,7 +641,9 @@ class QuestLibSim : public Utils::Library {
   void (*fApplyCP)(void *, int, int, double) = nullptr;
   void (*fApplyCSx)(void *, int, int) = nullptr;
   void (*fApplyCSxDg)(void *, int, int) = nullptr;
-  int (*fGetAmplitudes)(void *, void *, size_t) = nullptr;
+  int (*fGetAmplitudes)(void *, void *, unsigned long long int) = nullptr;
+  int (*fGetAmplitude)(void *, long long int, void *, unsigned long long int) = nullptr;
+  int (*fIsDoublePrecision)() = nullptr;
 };
 
 }

@@ -61,6 +61,16 @@ struct ExpvalTestFixture {
     }
 #endif
 
+    Simulators::SimulatorsFactory::InitQuestLibrary();
+
+    questStatevector = Simulators::SimulatorsFactory::CreateSimulator(
+        Simulators::SimulatorType::kQuestSim,
+        Simulators::SimulationType::kStatevector);
+    if (questStatevector) {
+      questStatevector->AllocateQubits(nrQubits);
+      questStatevector->Initialize();
+    }
+
     state.AllocateBits(nrQubits);
 
     aerStatevector = Simulators::SimulatorsFactory::CreateSimulator(
@@ -292,6 +302,8 @@ struct ExpvalTestFixture {
   std::shared_ptr<Simulators::ISimulator> gpuTN;
 #endif
 
+  std::shared_ptr<Simulators::ISimulator> questStatevector;
+
   std::shared_ptr<Simulators::ISimulator> aerMPS;
   std::shared_ptr<Simulators::ISimulator> qcsimMPS;
 
@@ -352,6 +364,8 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest,
     if (gpuTN) randomCirc->Execute(gpuTN, state);
 #endif
 
+    if (questStatevector) randomCirc->Execute(questStatevector, state);
+
     randomCirc->Execute(qcTensor, state);
 
     for (int j = 0; j < nrPauliLimit; ++j) {
@@ -403,6 +417,14 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest,
                                 (gpuTNVal)(qcsimStatevectorVal)(precisionMPS));
       }
 #endif
+
+      if (questStatevector) {
+        const double questStatevectorVal =
+            questStatevector->ExpectationValue(pauli);
+        BOOST_CHECK_PREDICATE(
+            checkClose,
+            (questStatevectorVal)(qcsimStatevectorVal)(precision));
+      }
     }
 
     resetRandomCirc->Execute(aerStatevector, state);
@@ -419,6 +441,8 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest,
     if (gpuMPS) resetRandomCirc->Execute(gpuMPS, state);
     if (gpuTN) resetRandomCirc->Execute(gpuTN, state);
 #endif
+
+    if (questStatevector) resetRandomCirc->Execute(questStatevector, state);
 
     qcTensor->Clear();
     qcTensor->AllocateQubits(nrQubits);
