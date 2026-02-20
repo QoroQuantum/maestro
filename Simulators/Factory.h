@@ -105,12 +105,13 @@ class SimulatorsFactory {
  private:
   static std::shared_ptr<GpuLibrary> gpuLibrary;
   static std::atomic_bool firstTime;
+
+ public:
 #else
   static bool IsGpuLibraryAvailable() { return false; }
 
   static bool InitGpuLibrary() { return false; }
 #endif
-
   static bool InitQuestLibrary();
   static bool IsQuestLibraryAvailable() {
     return questLibrary && questLibrary->IsValid();
@@ -121,6 +122,7 @@ class SimulatorsFactory {
     return questLibrary;
   }
 
+ private:
   static std::shared_ptr<QuestLibSim> questLibrary;
   static std::atomic_bool firstTimeQuest;
 };
