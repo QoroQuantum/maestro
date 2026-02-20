@@ -22,6 +22,7 @@
 #include "GpuLibTNSim.h"
 #include "GpuStabilizer.h"
 #include "GpuPauliPropagator.h"
+#include "QuestLibSim.h"
 
 #include "Simulator.h"
 
@@ -109,6 +110,19 @@ class SimulatorsFactory {
 
   static bool InitGpuLibrary() { return false; }
 #endif
+
+  static bool InitQuestLibrary();
+  static bool IsQuestLibraryAvailable() {
+    return questLibrary && questLibrary->IsValid();
+  }
+
+  static std::shared_ptr<QuestLibSim> GetQuestLibrary() {
+    if (!questLibrary || !questLibrary->IsValid()) return nullptr;
+    return questLibrary;
+  }
+
+  static std::shared_ptr<QuestLibSim> questLibrary;
+  static std::atomic_bool firstTimeQuest;
 };
 
 }  // namespace Simulators

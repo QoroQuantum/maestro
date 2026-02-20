@@ -36,6 +36,7 @@
 #include "QCSimSimulator.h"
 #include "Composite.h"
 #include "GpuSimulator.h"
+#include "QuestSimulator.h"
 
 namespace Simulators {
 
@@ -73,6 +74,28 @@ bool SimulatorsFactory::InitGpuLibraryWithMute() {
 }
 
 #endif
+
+
+std::shared_ptr<QuestLibSim> SimulatorsFactory::questLibrary = nullptr;
+std::atomic_bool SimulatorsFactory::firstTimeQuest = true;
+
+bool SimulatorsFactory::InitQuestLibrary() {
+  if (!questLibrary) {
+    questLibrary = std::make_shared<QuestLibSim>();
+    if (!firstTimeQuest.exchange(false)) questLibrary->SetMute(true);
+    if (questLibrary->Init(
+#ifdef _WIN32
+        "maestroquest.dll"
+#else
+        "maestroquest.so"
+#endif
+    ))
+      return true;
+    else
+      questLibrary = nullptr;
+  }
+  return false;
+}
 
 std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
     SimulatorType t, SimulationType m) {
@@ -140,6 +163,14 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
 
       return nullptr;
 #endif
+    case SimulatorType::kQuestSim:
+      if (m != SimulationType::kStatevector)
+          throw std::invalid_argument(
+            "Simulation Type not supported for Quest Simulator");
+      else if (questLibrary && questLibrary->IsValid()) {
+        return std::make_shared<Private::QuestSimulator>();
+      }
+      return nullptr;
     default:
       break;
   }
@@ -214,6 +245,14 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
 
       return nullptr;
 #endif
+    case SimulatorType::kQuestSim:
+      if (m != SimulationType::kStatevector)
+        throw std::invalid_argument(
+            "Simulation Type not supported for Quest Simulator");
+      else if (questLibrary && questLibrary->IsValid()) {
+        return std::make_unique<Private::QuestSimulator>();
+      }
+      return nullptr;
     default:
       break;
   }

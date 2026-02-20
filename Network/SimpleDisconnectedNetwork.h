@@ -440,10 +440,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
 #ifdef __linux__
     if (simType == Simulators::SimulatorType::kGpuSim) nrThreads = 1;
+    else
 #endif
-    if (method == Simulators::SimulationType::kStatevector &&
-        !distCirc->HasOpsAfterMeasurements())
-      nrThreads = 1;
+        if ((method == Simulators::SimulationType::kStatevector && !distCirc->HasOpsAfterMeasurements()) || simType == Simulators::SimulatorType::kQuestSim)
+            nrThreads = 1;
 
     nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
 
@@ -627,9 +627,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       nrThreads = 1;
     else
 #endif
-        if (method == Simulators::SimulationType::kStatevector &&
-            !distCirc->HasOpsAfterMeasurements())
-      nrThreads = 1;
+        if ((method == Simulators::SimulationType::kStatevector && !distCirc->HasOpsAfterMeasurements()) || simType == Simulators::SimulatorType::kQuestSim)
+            nrThreads = 1;
 
     nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
 
