@@ -44,6 +44,7 @@ jobs:
           CIBW_ARCHS_WINDOWS: "AMD64"
           CIBW_BUILD: "cp310-* cp311-* cp312-*"
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
+          CIBW_ENVIRONMENT_MACOS: MACOSX_DEPLOYMENT_TARGET=15.0
 
       - uses: actions/upload-artifact@v4
         with:
