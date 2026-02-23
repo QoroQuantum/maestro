@@ -1,0 +1,69 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build_sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build sdist
+        run: pipx run build --sdist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maestro-sdist
+          path: dist/*.tar.gz
+
+  build_wheels:
+    name: Build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Install Boost and OpenBLAS on macOS runner to ensure cibuildwheel can pick them up
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install boost openblas
+          echo "PKG_CONFIG_PATH=$(brew --prefix openblas)/lib/pkgconfig" >> $GITHUB_ENV
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.16.5
+        env:
+          # manylinux uses CentOS-based images, so we install Boost and OpenBLAS using yum
+          CIBW_BEFORE_ALL_LINUX: "yum install -y epel-release && yum install -y boost-devel openblas-devel"
+          CIBW_BUILD: "cp310-* cp311-* cp312-*"
+          CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maestro-wheels-${{ matrix.os }}
+          path: ./wheelhouse/*.whl
+
+  upload_pypi:
+    name: Upload to PyPI
+    needs: [build_sdist, build_wheels]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/qoro-maestro
+    permissions:
+      id-token: write # Required for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: maestro-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish package distribution to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
