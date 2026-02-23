@@ -37,10 +37,11 @@ jobs:
           echo "PKG_CONFIG_PATH=$(brew --prefix openblas)/lib/pkgconfig" >> $GITHUB_ENV
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.16.5
+        uses: pypa/cibuildwheel@v2.22.0
         env:
-          # manylinux uses CentOS-based images, so we install Boost and OpenBLAS using yum
-          CIBW_BEFORE_ALL_LINUX: "yum install -y epel-release && yum install -y boost-devel openblas-devel"
+          # Compile Boost locally since manylinux package managers have very old Boost versions missing Boost.JSON
+          CIBW_BEFORE_ALL_LINUX: "curl -L https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz -o boost.tgz && tar -xzf boost.tgz && cd boost_1_89_0 && ./bootstrap.sh && ./b2 -j4 --with-program_options --with-json --with-container --with-serialization install"
+          CIBW_ARCHS_WINDOWS: "AMD64"
           CIBW_BUILD: "cp310-* cp311-* cp312-*"
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
 
