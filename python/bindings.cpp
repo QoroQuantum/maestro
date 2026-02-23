@@ -54,6 +54,13 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     unsigned long int handle, Simulators::SimulatorType sim_type,
     Simulators::SimulationType sim_exec_type, std::optional<size_t> max_bond,
     std::optional<double> sv_threshold, bool use_double_precision = false) {
+  // QuEST only supports statevector simulation
+  if (sim_type == Simulators::SimulatorType::kQuestSim &&
+      sim_exec_type != Simulators::SimulationType::kStatevector) {
+    throw std::invalid_argument(
+        "QuestSim only supports Statevector simulation type.");
+  }
+
   if (RemoveAllOptimizationSimulatorsAndAdd(handle, (int)sim_type,
                                             (int)sim_exec_type) == 0) {
     return nullptr;
@@ -224,6 +231,7 @@ NB_MODULE(maestro, m) {
 #endif
       .value("CompositeQCSim", Simulators::SimulatorType::kCompositeQCSim)
       .value("Gpu", Simulators::SimulatorType::kGpuSim)
+      .value("QuestSim", Simulators::SimulatorType::kQuestSim)
       .export_values();
 
   nb::enum_<Simulators::SimulationType>(m, "SimulationType")
@@ -475,4 +483,13 @@ NB_MODULE(maestro, m) {
       "simulation_type"_a = Simulators::SimulationType::kStatevector,
       "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
       "use_double_precision"_a = false);
+
+  // --- QuEST Library Management ---
+  m.def("init_quest", []() {
+    return Simulators::SimulatorsFactory::InitQuestLibrary();
+  }, "Initialize the QuEST simulation library. Returns True on success.");
+
+  m.def("is_quest_available", []() {
+    return Simulators::SimulatorsFactory::IsQuestLibraryAvailable();
+  }, "Check whether the QuEST simulation library is loaded and available.");
 }

@@ -1,5 +1,6 @@
 /**
  * @file Conditional.h
+ * @ingroup circuits
  * @version 1.0
  *
  * @section DESCRIPTION
