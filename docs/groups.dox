@@ -1,0 +1,248 @@
+/**
+ * @defgroup core Core API
+ * @brief Core types, configuration, and the main Maestro orchestration entry point.
+ *
+ * This module contains the foundational types and the high-level orchestration
+ * API that ties all of Maestro's subsystems together. Start here if you want
+ * a quick overview of how to use the library.
+ *
+ * | Component | Header | Description |
+ * |-----------|--------|-------------|
+ * | Types     | Types.h | Portable integer and vector type aliases |
+ * | Maestro   | maestrolib/Maestro.h | Top-level orchestration class |
+ * | Interface | maestrolib/Interface.h | C-compatible library interface |
+ * | JSON      | maestrolib/Json.h | JSON configuration parser |
+ */
+
+/**
+ * @defgroup circuits Circuit Representation
+ * @brief Quantum circuit IR — gates, operations, measurements, and conversion utilities.
+ *
+ * The Circuits module provides Maestro's intermediate representation (IR)
+ * for quantum circuits. A Circuit is a sequence of operations that can be
+ * executed on any simulator backend. The module includes:
+ *
+ * - **Quantum gates** — single-qubit, two-qubit, three-qubit, controlled, and
+ *   parametric rotation gates (see @ref Circuits::IQuantumGate)
+ * - **Measurements** — individual and multi-qubit measurement operations
+ * - **Conditional operations** — classically-controlled gates and measurements
+ * - **Circuit utilities** — cloning, remapping, optimisation, and conversion
+ *   for distributed computing
+ * - **Circuit factory** — programmatic circuit construction (see
+ *   @ref Circuits::CircuitFactory)
+ * - **QASM interop** — parsing and emitting OpenQASM 2.0 (see @ref qasm)
+ *
+ * ### Quick example
+ * @code{.cpp}
+ * auto factory = std::make_shared<Circuits::CircuitFactory<>>();
+ * factory->H(0);
+ * factory->CX(0, 1);
+ * factory->Measure({0, 1}, {0, 1});
+ * auto circuit = factory->GetCircuit();
+ * @endcode
+ */
+
+/**
+ * @defgroup simulators Simulation Backends
+ * @brief Simulator interfaces, state management, and backend implementations.
+ *
+ * The Simulators module provides a uniform interface to multiple quantum
+ * simulation backends. All simulators implement the @ref Simulators::ISimulator
+ * interface and can be obtained through the @ref Simulators::SimulatorsFactory.
+ *
+ * ### Supported backends
+ *
+ * | Backend | SimulatorType | SimulationType | Accelerator |
+ * |---------|---------------|----------------|-------------|
+ * | QCSim Statevector | kQCSim | kStatevector | CPU |
+ * | QCSim MPS | kQCSim | kMatrixProductState | CPU |
+ * | Qiskit Aer | kQiskitAer | various | CPU |
+ * | NVIDIA cuStateVec | kGpuSim | kStatevector | GPU |
+ * | Custom GPU MPS | kGpuSim | kMatrixProductState | GPU |
+ * | GPU Tensor Network | kGpuSim | kTensorNetwork | GPU |
+ * | Clifford / Stabilizer | kGpuSim | kStabilizer | GPU |
+ * | Pauli Propagator | kGpuSim | kPauliPropagator | GPU |
+ * | QuEST | kQuestSim | various | CPU |
+ * | Composite (p-block) | kCompositeQCSim | kStatevector | CPU |
+ *
+ * ### Key classes
+ * - @ref Simulators::IState — quantum state management (allocation, measurement, probabilities)
+ * - @ref Simulators::ISimulator — gate application interface
+ * - @ref Simulators::SimulatorsFactory — factory for creating simulator instances
+ * - @ref Simulators::ISimulatorObserver — observer pattern for state changes
+ */
+
+/**
+ * @defgroup simulators_cpu CPU Backends
+ * @ingroup simulators
+ * @brief CPU-based simulation backends.
+ *
+ * These backends run entirely on the CPU and include the QCSim statevector
+ * and MPS simulators as well as the Qiskit Aer integration.
+ */
+
+/**
+ * @defgroup simulators_gpu GPU Backends
+ * @ingroup simulators
+ * @brief GPU-accelerated simulation backends.
+ *
+ * These backends leverage NVIDIA GPUs through cuStateVec and custom CUDA
+ * kernels. They include statevector, MPS, tensor network, stabilizer,
+ * and Pauli propagator implementations.
+ */
+
+/**
+ * @defgroup simulators_composite Composite / Distributed Backends
+ * @ingroup simulators
+ * @brief P-block composite simulation for distributed quantum computing.
+ *
+ * The composite simulators split a large quantum state across multiple
+ * sub-simulators using the p-block decomposition technique. This enables
+ * simulation of circuits that exceed the memory of a single machine.
+ */
+
+/**
+ * @defgroup network Distributed Quantum Computing
+ * @brief Network topology, hosts, controllers, and distributed circuit execution.
+ *
+ * The Network module provides the infrastructure for distributed quantum
+ * computing (DQC). It models a network of quantum hosts, each with their
+ * own qubits, connected through entanglement links.
+ *
+ * ### Architecture
+ * - **INetwork** — the network abstraction (topology, qubit allocation, execution)
+ * - **IHost** — a single quantum processing node
+ * - **IController** — coordinates circuit distribution across hosts
+ * - **NetworkJob** — encapsulates a unit of distributed work
+ *
+ * The network layer automatically handles:
+ * - Circuit partitioning and gate decomposition for DQC
+ * - Entanglement management between hosts
+ * - Classical communication for conditional operations
+ * - Result aggregation and bit remapping
+ *
+ * @sa @ref circuits for circuit representation
+ * @sa @ref schedulers for job scheduling
+ */
+
+/**
+ * @defgroup tensor_networks Tensor Network Simulation
+ * @brief Tensor network representation and contraction strategies.
+ *
+ * The TensorNetworks module provides tensor network-based quantum simulation.
+ * It models quantum circuits as networks of tensors and supports multiple
+ * contraction strategies.
+ *
+ * ### Contraction Strategies
+ * | Strategy | Class | Description |
+ * |----------|-------|-------------|
+ * | Vertical | VerticalContractor | Column-by-column contraction |
+ * | Forest | ForestContractor | Tree-based contraction |
+ * | Lookahead | LookaheadContractor | Cost-aware lookahead optimisation |
+ * | Stochastic | StochasticContractor | Randomised contraction ordering |
+ * | Dumb | DumbContractor | Naïve sequential contraction (baseline) |
+ *
+ * @sa TensorNetworks::ITensorContractor for the contraction interface
+ * @sa TensorNetworks::TensorNetwork for the network data structure
+ * @sa TensorNetworks::TensorNode for individual tensor nodes
+ */
+
+/**
+ * @defgroup schedulers Job Scheduling
+ * @brief Circuit scheduling and parallel execution management.
+ *
+ * The Schedulers module provides job scheduling for executing multiple
+ * circuits on a network. It handles circuit partitioning, resource
+ * allocation, and parallel execution.
+ *
+ * ### Key classes
+ * - @ref Schedulers::IScheduler — scheduler interface
+ * - @ref Schedulers::ExecuteCircuit — circuit + shots bundle
+ * - @ref Schedulers::CircuitInfo — extended circuit metadata for scheduling
+ * - @ref Schedulers::ExecuteJob — a concrete job to be executed on a host
+ */
+
+/**
+ * @defgroup estimators Runtime Estimation
+ * @brief Prediction engine for automatic backend selection.
+ *
+ * The Estimators module provides runtime estimation for different simulation
+ * backends. The prediction engine extracts structural features from a circuit
+ * and uses a regression model to estimate relative runtimes, enabling
+ * automatic backend selection.
+ *
+ * @sa Estimators::EstimatorInterface
+ * @sa Estimators::SimulatorsEstimatorInterface
+ */
+
+/**
+ * @defgroup qasm OpenQASM Interop
+ * @brief OpenQASM 2.0 parsing, AST, and circuit conversion.
+ *
+ * The QASM module provides bi-directional conversion between OpenQASM 2.0
+ * and Maestro's circuit IR.
+ *
+ * - **QasmToCirc** — parses an OpenQASM string into a Maestro Circuit
+ * - **CircToQasm** — serialises a Maestro Circuit back to OpenQASM
+ * - **AbstractSyntaxTree** — the intermediate AST representation
+ *
+ * ### Quick example
+ * @code{.cpp}
+ * std::string qasm = R"(
+ *   OPENQASM 2.0;
+ *   include "qelib1.inc";
+ *   qreg q[2];
+ *   h q[0];
+ *   cx q[0], q[1];
+ * )";
+ * qasm::QasmToCirc converter;
+ * auto circuit = converter.Convert(qasm);
+ * @endcode
+ */
+
+/**
+ * @defgroup utils Utilities
+ * @brief Helper classes — tensors, thread pool, logging, and dynamic library loading.
+ *
+ * The Utils module provides supporting infrastructure used across the
+ * library:
+ *
+ * - @ref Utils::Tensor — N-dimensional tensor class built on Eigen
+ * - @ref Utils::ThreadsPool / @ref Utils::WorkerThread — lightweight thread pool
+ * - @ref Utils::LogFile — simple file-based logging
+ * - @ref Utils::Library — cross-platform dynamic library loader
+ * - @ref Utils::Alias — type aliasing utilities
+ * - @ref Utils::PairHash — hash functor for `std::pair` keys
+ */
+
+/**
+ * @defgroup python Python Bindings
+ * @brief High-performance Python bindings via nanobind.
+ *
+ * Maestro provides Python bindings that expose the core orchestration and
+ * simulation capabilities to Python. The bindings are built with
+ * [nanobind](https://github.com/wjakob/nanobind) for minimal overhead.
+ *
+ * ### Installation
+ * @code{.sh}
+ * pip install .
+ * @endcode
+ *
+ * ### Quick example
+ * @code{.py}
+ * import maestro
+ *
+ * qasm = """
+ * OPENQASM 2.0;
+ * include "qelib1.inc";
+ * qreg q[2];
+ * h q[0];
+ * cx q[0], q[1];
+ * """
+ *
+ * result = maestro.simple_execute(qasm, shots=1024)
+ * print(f"Counts: {result['counts']}")
+ * @endcode
+ *
+ * @sa @ref md_TUTORIAL "Tutorial" for more examples
+ */

@@ -1,0 +1,412 @@
+/**
+ * @page python_guide Python Guide
+ *
+ * @tableofcontents
+ *
+ * @section py_overview Overview
+ *
+ * Maestro ships high-performance Python bindings built with
+ * [nanobind](https://github.com/wjakob/nanobind). The bindings expose
+ * the full simulation pipeline — circuit construction, backend selection,
+ * execution, and expectation-value estimation — in a Pythonic API.
+ *
+ * @subsection py_install Installation
+ *
+ * @code{.sh}
+ * # From the repository root
+ * pip install .
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_quick Quick Start — One-Line Execution
+ *
+ * The fastest way to run a circuit is `maestro.simple_execute`.
+ * Pass an OpenQASM 2.0 string and get measurement counts back immediately.
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * qasm = """
+ * OPENQASM 2.0;
+ * include "qelib1.inc";
+ * qreg q[2];
+ * creg c[2];
+ * h q[0];
+ * cx q[0], q[1];
+ * measure q -> c;
+ * """
+ *
+ * result = maestro.simple_execute(qasm, shots=1024)
+ *
+ * print(result["counts"])      # e.g. {"00": 512, "11": 512}
+ * print(result["simulator"])   # e.g. "QCSim"
+ * print(result["method"])      # e.g. "Statevector"
+ * print(f"{result['time_taken']:.4f}s")
+ * @endcode
+ *
+ * **What's in the result dict?**
+ *
+ * | Key | Type | Description |
+ * |-----|------|-------------|
+ * | `counts` | `dict[str, int]` | Measurement outcome → count |
+ * | `simulator` | `str` | Backend that was used |
+ * | `method` | `str` | Simulation method |
+ * | `time_taken` | `float` | Wall-clock time in seconds |
+ *
+ * ---
+ *
+ * @section py_backends Choosing a Simulation Backend
+ *
+ * You can explicitly select the simulator type and simulation method.
+ * Maestro supports several backends; the most common CPU options are shown here.
+ *
+ * @subsection py_statevector Statevector Simulation
+ *
+ * @code{.py}
+ * result = maestro.simple_execute(
+ *     qasm,
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.Statevector,
+ *     shots=2000
+ * )
+ * @endcode
+ *
+ * @subsection py_mps Matrix Product State (MPS)
+ *
+ * MPS enables simulation of circuits with hundreds of qubits
+ * when entanglement is bounded.
+ *
+ * @code{.py}
+ * result = maestro.simple_execute(
+ *     qasm,
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=64,
+ *     singular_value_threshold=1e-10,
+ *     shots=1000
+ * )
+ *
+ * print(result["method"])  # "MatrixProductState"
+ * @endcode
+ *
+ * @subsection py_stabilizer Stabilizer (Clifford-only)
+ *
+ * Ultra-fast simulation for circuits that only use Clifford gates
+ * (H, S, CX, X, Y, Z).
+ *
+ * @code{.py}
+ * clifford_qasm = """
+ * OPENQASM 2.0;
+ * include "qelib1.inc";
+ * qreg q[100];
+ * creg c[100];
+ * h q[0];
+ * cx q[0], q[1];
+ * cx q[1], q[2];
+ * measure q -> c;
+ * """
+ *
+ * result = maestro.simple_execute(
+ *     clifford_qasm,
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.Stabilizer,
+ *     shots=10000
+ * )
+ * @endcode
+ *
+ * @subsection py_backend_table Available Backends
+ *
+ * | SimulationType | Best For | Gate Support |
+ * |---------------|----------|--------------|
+ * | `Statevector` | Exact simulation up to ~30 qubits | All gates |
+ * | `MatrixProductState` | Low-entanglement circuits, 100+ qubits | All gates |
+ * | `Stabilizer` | Clifford-only circuits, 1000+ qubits | H, S, CX, X, Y, Z |
+ * | `PauliPropagator` | Near-Clifford circuits | All gates (approximate) |
+ * | `ExtendedStabilizer` | Near-Clifford circuits | All gates (approximate) |
+ * | `TensorNetwork` | GPU tensor contraction | All gates |
+ *
+ * ---
+ *
+ * @section py_expectation Expectation Values
+ *
+ * Use `maestro.simple_estimate` to compute expectation values of
+ * Pauli observables without measurements in the circuit.
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * # Prepare a GHZ state
+ * ghz = """
+ * OPENQASM 2.0;
+ * include "qelib1.inc";
+ * qreg q[3];
+ * h q[0];
+ * cx q[0], q[1];
+ * cx q[1], q[2];
+ * """
+ *
+ * # Estimate multiple Pauli observables at once (semicolon-separated)
+ * result = maestro.simple_estimate(ghz, "ZZZ;XXX;IZI")
+ *
+ * obs = result["expectation_values"]
+ * print(f"<ZZZ> = {obs[0]:.4f}")  # 1.0 (parity conserved)
+ * print(f"<XXX> = {obs[1]:.4f}")  # 1.0
+ * print(f"<IZI> = {obs[2]:.4f}")  # 0.0 (maximally mixed marginal)
+ * @endcode
+ *
+ * You can also use a specific backend:
+ *
+ * @code{.py}
+ * result = maestro.simple_estimate(
+ *     ghz, "ZZ;XX",
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=8
+ * )
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_circuit QuantumCircuit Builder
+ *
+ * For a more Pythonic workflow (similar to Qiskit), use the
+ * `QuantumCircuit` class to build circuits programmatically
+ * without writing QASM strings.
+ *
+ * @subsection py_circuit_basic Building and Running a Circuit
+ *
+ * @code{.py}
+ * from maestro.circuits import QuantumCircuit
+ *
+ * qc = QuantumCircuit()
+ *
+ * # Build a Bell state
+ * qc.h(0)
+ * qc.cx(0, 1)
+ * qc.measure([(0, 0), (1, 1)])  # (qubit, classical_bit) pairs
+ *
+ * # Execute with defaults
+ * result = qc.execute(shots=1000)
+ * print(result["counts"])  # {"00": ~500, "11": ~500}
+ * @endcode
+ *
+ * @subsection py_circuit_gates Available Gates
+ *
+ * | Gate | Method | Parameters |
+ * |------|--------|------------|
+ * | Pauli-X | `qc.x(qubit)` | — |
+ * | Pauli-Y | `qc.y(qubit)` | — |
+ * | Pauli-Z | `qc.z(qubit)` | — |
+ * | Hadamard | `qc.h(qubit)` | — |
+ * | S | `qc.s(qubit)` | — |
+ * | S† | `qc.sdg(qubit)` | — |
+ * | T | `qc.t(qubit)` | — |
+ * | T† | `qc.tdg(qubit)` | — |
+ * | √X | `qc.sx(qubit)` | — |
+ * | Phase | `qc.p(qubit, λ)` | λ (radians) |
+ * | Rx | `qc.rx(qubit, θ)` | θ (radians) |
+ * | Ry | `qc.ry(qubit, θ)` | θ (radians) |
+ * | Rz | `qc.rz(qubit, θ)` | θ (radians) |
+ * | U | `qc.u(qubit, θ, φ, λ)` | 3 angles |
+ * | CNOT | `qc.cx(ctrl, tgt)` | — |
+ * | CY | `qc.cy(ctrl, tgt)` | — |
+ * | CZ | `qc.cz(ctrl, tgt)` | — |
+ * | SWAP | `qc.swap(q1, q2)` | — |
+ * | CP | `qc.cp(ctrl, tgt, λ)` | λ |
+ * | CRx | `qc.crx(ctrl, tgt, θ)` | θ |
+ * | CRy | `qc.cry(ctrl, tgt, θ)` | θ |
+ * | CRz | `qc.crz(ctrl, tgt, θ)` | θ |
+ *
+ * @subsection py_circuit_measure Measurements
+ *
+ * @code{.py}
+ * # Measure specific qubits to specific classical bits
+ * qc.measure([(0, 0), (1, 1), (2, 2)])
+ *
+ * # Or measure all qubits at once
+ * qc.measure_all()
+ * @endcode
+ *
+ * @subsection py_circuit_estimate Expectation Values with QuantumCircuit
+ *
+ * @code{.py}
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ *
+ * # No measurements needed for estimation
+ * result = qc.estimate(
+ *     observables=["ZZ", "XX", "YY"],
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.Statevector
+ * )
+ *
+ * vals = result["expectation_values"]
+ * print(f"<ZZ> = {vals[0]:.4f}")  #  1.0
+ * print(f"<XX> = {vals[1]:.4f}")  #  1.0
+ * print(f"<YY> = {vals[2]:.4f}")  # -1.0
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_advanced Advanced: Object-Oriented Simulator Control
+ *
+ * For full control over the simulation lifecycle, use the `Maestro`
+ * class directly to create, configure, and destroy simulators.
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * m = maestro.Maestro()
+ *
+ * # Create a simulator
+ * handle = m.create_simulator(
+ *     maestro.SimulatorType.QCSim,
+ *     maestro.SimulationType.Statevector
+ * )
+ * sim = m.get_simulator(handle)
+ *
+ * # Allocate qubits and initialise the state
+ * sim.AllocateQubits(3)
+ * sim.Initialize()
+ *
+ * # Apply gates manually
+ * sim.ApplyH(0)
+ * sim.ApplyCX(0, 1)
+ * sim.ApplyCX(1, 2)
+ *
+ * # Measure expectation values
+ * zzz = sim.ExpectationValue("ZZZ")
+ * print(f"<ZZZ> = {zzz:.4f}")  # 1.0
+ *
+ * # Sample measurement outcomes
+ * counts = sim.SampleCounts([0, 1, 2], 1000)
+ * print(f"Counts: {counts}")
+ *
+ * # Clean up
+ * m.destroy_simulator(handle)
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_quest QuEST Backend
+ *
+ * Maestro supports the [QuEST](https://quest.qtechtheory.org/) simulator
+ * as an alternative CPU backend. QuEST is loaded dynamically as a shared
+ * library (`libmaestroquest`), so it is available only when the library
+ * has been built and installed.
+ *
+ * @subsection py_quest_avail Checking Availability
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * # Check if the QuEST library is installed
+ * if maestro.is_quest_available():
+ *     print("QuEST is available")
+ * else:
+ *     print("QuEST not found — install libmaestroquest")
+ *
+ * # Explicitly initialise QuEST (optional — done automatically on first use)
+ * maestro.init_quest()
+ * @endcode
+ *
+ * @subsection py_quest_exec Running a Circuit on QuEST
+ *
+ * QuEST only supports **Statevector** simulation. Requesting any other
+ * simulation type (MPS, Stabilizer, etc.) will raise an error.
+ *
+ * @code{.py}
+ * qasm = """
+ * OPENQASM 2.0;
+ * include "qelib1.inc";
+ * qreg q[2];
+ * creg c[2];
+ * h q[0];
+ * cx q[0], q[1];
+ * measure q -> c;
+ * """
+ *
+ * result = maestro.simple_execute(
+ *     qasm,
+ *     simulator_type=maestro.SimulatorType.QuestSim,
+ *     simulation_type=maestro.SimulationType.Statevector,
+ *     shots=1000
+ * )
+ *
+ * print(result["counts"])  # {"00": ~500, "11": ~500}
+ * @endcode
+ *
+ * @subsection py_quest_estimate Expectation Values with QuEST
+ *
+ * @code{.py}
+ * bell = """
+ * OPENQASM 2.0;
+ * include "qelib1.inc";
+ * qreg q[2];
+ * h q[0];
+ * cx q[0], q[1];
+ * """
+ *
+ * result = maestro.simple_estimate(
+ *     bell, "ZZ;XX;YY",
+ *     simulator_type=maestro.SimulatorType.QuestSim,
+ *     simulation_type=maestro.SimulationType.Statevector
+ * )
+ *
+ * vals = result["expectation_values"]
+ * print(f"<ZZ> = {vals[0]:.4f}")  #  1.0
+ * print(f"<XX> = {vals[1]:.4f}")  #  1.0
+ * print(f"<YY> = {vals[2]:.4f}")  # -1.0
+ * @endcode
+ *
+ * @subsection py_quest_circuit QuantumCircuit with QuEST
+ *
+ * The programmatic `QuantumCircuit` API works with QuEST too:
+ *
+ * @code{.py}
+ * from maestro.circuits import QuantumCircuit
+ *
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ * qc.measure_all()
+ *
+ * result = qc.execute(
+ *     simulator_type=maestro.SimulatorType.QuestSim,
+ *     simulation_type=maestro.SimulationType.Statevector,
+ *     shots=100
+ * )
+ * print(result["counts"])
+ * @endcode
+ *
+ * @note QuEST only supports `SimulationType.Statevector`.
+ * Passing `MatrixProductState`, `Stabilizer`, `TensorNetwork`,
+ * or `PauliPropagator` will raise an exception:
+ * `"QuestSim only supports Statevector"`.
+ *
+ *
+ * @section py_enums Enumerations Reference
+ *
+ * @subsection py_enum_simtype SimulatorType
+ *
+ * | Value | Description |
+ * |-------|-------------|
+ * | `SimulatorType.QCSim` | QCSim CPU simulator |
+ * | `SimulatorType.CompositeQCSim` | Composite (distributed) CPU simulator |
+ * | `SimulatorType.QuestSim` | QuEST simulator |
+ * | `SimulatorType.GpuSim` | GPU-accelerated simulator (requires CUDA) |
+ *
+ * @subsection py_enum_simmethod SimulationType
+ *
+ * | Value | Description |
+ * |-------|-------------|
+ * | `SimulationType.Statevector` | Full statevector simulation |
+ * | `SimulationType.MatrixProductState` | MPS / tensor-train simulation |
+ * | `SimulationType.Stabilizer` | Clifford stabiliser simulation |
+ * | `SimulationType.TensorNetwork` | Tensor network contraction |
+ * | `SimulationType.PauliPropagator` | Pauli frame propagation |
+ * | `SimulationType.ExtendedStabilizer` | Extended stabiliser decomposition |
+ *
+ */
