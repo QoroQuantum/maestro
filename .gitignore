@@ -64,7 +64,8 @@ _deps/
 
 venv/*
 
-docs/
+# Doxygen generated output (source .dox/.css files are tracked)
+docs/html/
 
 # Python packaging
 dist/
@@ -74,3 +75,5 @@ dist/
 __pycache__/
 *.pyc
 *.pyo
+
+/examples

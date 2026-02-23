@@ -1,0 +1,495 @@
+/* ===================================================================
+ *  Maestro — Doxygen Custom Theme
+ *  Brand-matched to the Qoro website (qoroquantum.de)
+ *  Deep black  ·  Purple/magenta accents  ·  Teal glow  ·  Clean type
+ * =================================================================== */
+
+/* ── Fonts ────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ── CSS Variables (Qoro palette) ─────────────────────────────────── */
+:root {
+  --qoro-bg-deep:      #0b0b12;
+  --qoro-bg-surface:   #111119;
+  --qoro-bg-card:      #16161f;
+  --qoro-bg-elevated:  #1c1c28;
+  --qoro-border:       #2a2a3a;
+  --qoro-border-hover: #3d3d55;
+  --qoro-text:         #e4e4ed;
+  --qoro-text-dim:     #9898ab;
+  --qoro-text-muted:   #6b6b80;
+  --qoro-purple:       #c678dd;
+  --qoro-purple-dim:   #a855c7;
+  --qoro-purple-glow:  rgba(198, 120, 221, 0.15);
+  --qoro-teal:         #56b6c2;
+  --qoro-teal-dim:     #3d9daa;
+  --qoro-blue:         #5d8ce6;
+  --qoro-green:        #98c379;
+  --qoro-orange:       #d19a66;
+  --qoro-red:          #e06c75;
+  --qoro-link:         #c678dd;
+  --qoro-link-hover:   #d9a3e8;
+  --qoro-code-bg:      #0d0d16;
+  --qoro-radius:       8px;
+  --qoro-radius-sm:    4px;
+  --qoro-shadow:       0 4px 24px rgba(0, 0, 0, 0.5);
+  --qoro-shadow-sm:    0 2px 8px rgba(0, 0, 0, 0.3);
+  --qoro-transition:   0.2s ease;
+}
+
+/* ── Global reset & typography ────────────────────────────────────── */
+html, body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  background-color: var(--qoro-bg-deep) !important;
+  color: var(--qoro-text) !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Top navigation bar ───────────────────────────────────────────── */
+#top, .tabs, .tabs2, .tabs3,
+.sm-dox, .sm-dox ul {
+  background: var(--qoro-bg-surface) !important;
+  border-bottom: 1px solid var(--qoro-border) !important;
+}
+
+#titlearea {
+  background: var(--qoro-bg-surface) !important;
+  border-bottom: 1px solid var(--qoro-border) !important;
+  padding: 8px 16px !important;
+}
+
+#projectname {
+  font-weight: 700 !important;
+  color: #fff !important;
+  letter-spacing: -0.02em;
+}
+
+#projectbrief {
+  color: var(--qoro-text-dim) !important;
+  font-weight: 400;
+}
+
+#projectnumber {
+  color: var(--qoro-purple) !important;
+  font-weight: 500;
+}
+
+/* Tab links */
+.tablist a,
+.tabs li a,
+.tabs2 li a,
+.tabs3 li a {
+  color: var(--qoro-text-dim) !important;
+  font-weight: 500 !important;
+  font-size: 0.875rem !important;
+  transition: color var(--qoro-transition) !important;
+  text-decoration: none !important;
+}
+
+.tablist a:hover,
+.tabs li a:hover,
+.tabs2 li a:hover,
+.tabs3 li a:hover {
+  color: var(--qoro-purple) !important;
+}
+
+.tablist li.current a,
+.tabs li.current a,
+.tabs2 li.current a {
+  color: var(--qoro-purple) !important;
+  border-bottom: 2px solid var(--qoro-purple) !important;
+}
+
+/* Dropdown menus */
+.sm-dox a,
+.sm-dox a:hover,
+.sm-dox li a {
+  background: var(--qoro-bg-card) !important;
+  color: var(--qoro-text) !important;
+}
+
+.sm-dox li a:hover {
+  background: var(--qoro-bg-elevated) !important;
+  color: var(--qoro-purple) !important;
+}
+
+.sm-dox ul {
+  border: 1px solid var(--qoro-border) !important;
+  border-radius: var(--qoro-radius-sm) !important;
+  box-shadow: var(--qoro-shadow) !important;
+}
+
+/* ── Side navigation / treeview ───────────────────────────────────── */
+#side-nav, #nav-tree, .ui-resizable-e {
+  background: var(--qoro-bg-surface) !important;
+  border-right: 1px solid var(--qoro-border) !important;
+}
+
+#nav-tree .item {
+  color: var(--qoro-text-dim) !important;
+}
+
+#nav-tree .selected {
+  background: var(--qoro-purple-glow) !important;
+  color: var(--qoro-purple) !important;
+  border-left: 3px solid var(--qoro-purple) !important;
+}
+
+#nav-tree a {
+  color: var(--qoro-text-dim) !important;
+  transition: color var(--qoro-transition);
+}
+
+#nav-tree a:hover {
+  color: var(--qoro-purple) !important;
+}
+
+/* ── Main content area ────────────────────────────────────────────── */
+div.contents,
+.PageDoc,
+div.header {
+  background: var(--qoro-bg-deep) !important;
+}
+
+div.header {
+  border-bottom: 1px solid var(--qoro-border) !important;
+  background: linear-gradient(180deg, var(--qoro-bg-surface), var(--qoro-bg-deep)) !important;
+  padding: 16px 24px !important;
+}
+
+div.headertitle .title {
+  font-weight: 700 !important;
+  color: #fff !important;
+  font-size: 1.6rem !important;
+  letter-spacing: -0.02em;
+}
+
+.title small {
+  color: var(--qoro-text-dim) !important;
+}
+
+/* ── Headings ─────────────────────────────────────────────────────── */
+h1, h2, h3, h4, h5, h6 {
+  color: #fff !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em;
+}
+
+h1 { font-size: 1.75rem !important; }
+h2 { font-size: 1.35rem !important; }
+h3 { font-size: 1.15rem !important; }
+
+.groupheader {
+  color: var(--qoro-purple) !important;
+  border-bottom: 1px solid var(--qoro-border) !important;
+  font-weight: 600 !important;
+}
+
+/* ── Links ────────────────────────────────────────────────────────── */
+a, a.el, a.elRef {
+  color: var(--qoro-link) !important;
+  text-decoration: none !important;
+  transition: color var(--qoro-transition) !important;
+}
+
+a:hover, a.el:hover, a.elRef:hover {
+  color: var(--qoro-link-hover) !important;
+  text-decoration: underline !important;
+}
+
+/* Breadcrumbs */
+li.navelem a {
+  color: var(--qoro-text-dim) !important;
+}
+
+li.navelem a:hover {
+  color: var(--qoro-purple) !important;
+}
+
+/* ── Tables ───────────────────────────────────────────────────────── */
+table.markdownTable,
+table.memberdecls,
+table.fieldtable,
+table.directory {
+  border-collapse: collapse !important;
+  width: 100% !important;
+}
+
+table.markdownTable th,
+table.fieldtable th {
+  background: var(--qoro-bg-elevated) !important;
+  color: var(--qoro-purple) !important;
+  font-weight: 600 !important;
+  padding: 10px 14px !important;
+  border: 1px solid var(--qoro-border) !important;
+  text-align: left;
+}
+
+table.markdownTable td,
+table.fieldtable td {
+  background: var(--qoro-bg-card) !important;
+  color: var(--qoro-text) !important;
+  padding: 8px 14px !important;
+  border: 1px solid var(--qoro-border) !important;
+}
+
+table.markdownTable tr:hover td {
+  background: var(--qoro-bg-elevated) !important;
+}
+
+/* Member declaration tables */
+.memItemLeft, .memItemRight,
+.memTemplItemLeft, .memTemplItemRight,
+.memTemplParams {
+  background: var(--qoro-bg-card) !important;
+  border-top: 1px solid var(--qoro-border) !important;
+  color: var(--qoro-text) !important;
+}
+
+.memSeparator {
+  border-bottom: 1px solid var(--qoro-border) !important;
+}
+
+/* ── Member documentation blocks ──────────────────────────────────── */
+.memtitle {
+  background: var(--qoro-bg-elevated) !important;
+  border: 1px solid var(--qoro-border) !important;
+  border-bottom: none !important;
+  border-radius: var(--qoro-radius) var(--qoro-radius) 0 0 !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+
+.memitem {
+  background: var(--qoro-bg-card) !important;
+  border: 1px solid var(--qoro-border) !important;
+  border-radius: 0 0 var(--qoro-radius) var(--qoro-radius) !important;
+  box-shadow: var(--qoro-shadow-sm) !important;
+  margin-bottom: 16px !important;
+  transition: border-color var(--qoro-transition);
+}
+
+.memitem:hover {
+  border-color: var(--qoro-border-hover) !important;
+}
+
+.memproto {
+  background: var(--qoro-bg-elevated) !important;
+  border-bottom: 1px solid var(--qoro-border) !important;
+  color: var(--qoro-text) !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 0.85rem !important;
+}
+
+.memdoc {
+  background: var(--qoro-bg-card) !important;
+  color: var(--qoro-text) !important;
+  padding: 16px !important;
+}
+
+.paramname {
+  color: var(--qoro-orange) !important;
+  font-style: normal !important;
+  font-weight: 500;
+}
+
+.paramtype {
+  color: var(--qoro-teal) !important;
+}
+
+/* ── Code blocks ──────────────────────────────────────────────────── */
+pre, code, .fragment,
+div.fragment, div.line {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace !important;
+  font-size: 0.82rem !important;
+  line-height: 1.6 !important;
+}
+
+div.fragment, pre.fragment {
+  background: var(--qoro-code-bg) !important;
+  border: 1px solid var(--qoro-border) !important;
+  border-radius: var(--qoro-radius) !important;
+  padding: 16px !important;
+  overflow-x: auto;
+  box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+code {
+  background: var(--qoro-bg-elevated) !important;
+  color: var(--qoro-purple) !important;
+  padding: 2px 6px !important;
+  border-radius: var(--qoro-radius-sm) !important;
+  font-size: 0.85em !important;
+}
+
+/* Syntax highlighting */
+.lineno a   { color: var(--qoro-text-muted) !important; }
+.keyword    { color: var(--qoro-purple) !important; font-weight: 500; }
+.keywordtype{ color: var(--qoro-teal) !important; }
+.keywordflow{ color: var(--qoro-purple) !important; }
+.stringliteral { color: var(--qoro-green) !important; }
+.charliteral   { color: var(--qoro-green) !important; }
+.comment    { color: var(--qoro-text-muted) !important; font-style: italic; }
+.preprocessor  { color: var(--qoro-orange) !important; }
+.vhdllogic  { color: var(--qoro-purple) !important; }
+
+/* ── Search bar ───────────────────────────────────────────────────── */
+#MSearchBox {
+  background: var(--qoro-bg-card) !important;
+  border: 1px solid var(--qoro-border) !important;
+  border-radius: 20px !important;
+  padding: 4px 12px !important;
+  transition: border-color var(--qoro-transition);
+}
+
+#MSearchBox:focus-within {
+  border-color: var(--qoro-purple) !important;
+  box-shadow: 0 0 0 3px var(--qoro-purple-glow) !important;
+}
+
+#MSearchField {
+  color: var(--qoro-text) !important;
+  background: transparent !important;
+  font-family: 'Inter', sans-serif !important;
+}
+
+#MSearchResultsWindow {
+  background: var(--qoro-bg-card) !important;
+  border: 1px solid var(--qoro-border) !important;
+  border-radius: var(--qoro-radius) !important;
+  box-shadow: var(--qoro-shadow) !important;
+}
+
+/* ── Directory listing ────────────────────────────────────────────── */
+.directory td.entry {
+  color: var(--qoro-text) !important;
+}
+
+.directory tr.even {
+  background: var(--qoro-bg-card) !important;
+}
+
+.directory tr.odd {
+  background: var(--qoro-bg-surface) !important;
+}
+
+.icona {
+  background: var(--qoro-bg-elevated) !important;
+  border-radius: var(--qoro-radius-sm) !important;
+}
+
+/* Module/group icons */
+.icon {
+  background: var(--qoro-bg-elevated) !important;
+}
+
+/* ── Footer ───────────────────────────────────────────────────────── */
+.footer, #nav-path, .navpath {
+  background: var(--qoro-bg-surface) !important;
+  border-top: 1px solid var(--qoro-border) !important;
+  color: var(--qoro-text-muted) !important;
+}
+
+/* ── Dot diagrams / graphs ────────────────────────────────────────── */
+.dotgraph, .center {
+  overflow-x: auto;
+}
+
+/* SVG diagram styling */
+.node text, .edge text {
+  fill: var(--qoro-text) !important;
+}
+
+/* ── Info / note / warning boxes ──────────────────────────────────── */
+dl.note {
+  background: rgba(86, 182, 194, 0.08) !important;
+  border-left: 4px solid var(--qoro-teal) !important;
+  border-radius: 0 var(--qoro-radius) var(--qoro-radius) 0 !important;
+  padding: 12px 16px !important;
+}
+
+dl.warning {
+  background: rgba(224, 108, 117, 0.08) !important;
+  border-left: 4px solid var(--qoro-red) !important;
+  border-radius: 0 var(--qoro-radius) var(--qoro-radius) 0 !important;
+  padding: 12px 16px !important;
+}
+
+dl.deprecated {
+  background: rgba(209, 154, 102, 0.08) !important;
+  border-left: 4px solid var(--qoro-orange) !important;
+  border-radius: 0 var(--qoro-radius) var(--qoro-radius) 0 !important;
+  padding: 12px 16px !important;
+}
+
+dl.section dd {
+  color: var(--qoro-text) !important;
+}
+
+/* ── Textual overview boxes ───────────────────────────────────────── */
+.textblock {
+  color: var(--qoro-text) !important;
+  line-height: 1.7;
+}
+
+.textblock p {
+  margin-bottom: 0.8em;
+}
+
+/* ── Lists ────────────────────────────────────────────────────────── */
+ul, ol {
+  color: var(--qoro-text) !important;
+}
+
+li {
+  margin-bottom: 4px;
+}
+
+/* ── Horizontal rules ─────────────────────────────────────────────── */
+hr {
+  border: none !important;
+  border-top: 1px solid var(--qoro-border) !important;
+  margin: 24px 0 !important;
+}
+
+/* ── Responsive scrolling ─────────────────────────────────────────── */
+.contents {
+  overflow-x: auto;
+}
+
+/* ── Selection highlight ──────────────────────────────────────────── */
+::selection {
+  background: var(--qoro-purple) !important;
+  color: #fff !important;
+}
+
+/* ── Scrollbar styling (webkit) ───────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--qoro-bg-deep);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--qoro-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--qoro-border-hover);
+}
+
+/* ── Print styles ─────────────────────────────────────────────────── */
+@media print {
+  html, body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+  a { color: #333 !important; }
+  div.fragment, pre { border: 1px solid #ccc !important; }
+  #side-nav, #nav-tree { display: none !important; }
+}
