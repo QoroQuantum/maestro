@@ -60,10 +60,7 @@ class GpuState : public ISimulator {
       } else if (simulationType == SimulationType::kMatrixProductState) {
         mps = SimulatorsFactory::CreateGpuLibMPSSim();
         if (mps) {
-          // Use double precision to match CPU MPS behavior and avoid
-          // silent numerical failures from float32 accumulation errors
-          // in deep circuits (e.g. Trotter evolution).
-          mps->SetDataType(true);
+          if (useDoublePrecision) mps->SetDataType(true);
           if (limitEntanglement && singularValueThreshold > 0.)
             mps->SetCutoff(singularValueThreshold);
           if (limitSize && chi > 0) mps->SetMaxExtent(chi);
@@ -265,6 +262,8 @@ class GpuState : public ISimulator {
         if (tn) tn->SetMaxExtent(chi);
       } else
         limitSize = false;
+    } else if (std::string("use_double_precision") == key) {
+      useDoublePrecision = (std::string("1") == value || std::string("true") == value);
     }
     // TODO: add pauli propagator configuration options
   }
@@ -1018,6 +1017,7 @@ class GpuState : public ISimulator {
   bool limitEntanglement = false;
   Eigen::Index chi = 10;               // if limitSize is true
   double singularValueThreshold = 0.;  // if limitEntanglement is true
+  bool useDoublePrecision = false;     // if true, GPU MPS uses float64
 };
 
 }  // namespace Private

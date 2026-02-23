@@ -689,3 +689,131 @@ class TestSimulatorTypeIsHonored:
         )
         assert result['simulator'] == maestro.SimulatorType.QCSim.value
         assert result['method'] == maestro.SimulationType.MatrixProductState.value
+
+
+class TestDoublePrecision:
+    """Test the use_double_precision parameter.
+
+    On CPU (QCSim), this flag has no effect (CPU already uses float64).
+    These tests verify the parameter is accepted without errors and results
+    remain correct. GPU-specific precision tests require Linux + CUDA.
+    """
+
+    def test_simple_execute_accepts_double_precision(self):
+        """simple_execute accepts use_double_precision without error."""
+        result = maestro.simple_execute(
+            CLIFFORD_BELL_QASM,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Statevector,
+            shots=100,
+            use_double_precision=True
+        )
+        assert result is not None
+        assert 'counts' in result
+        total = sum(result['counts'].values())
+        assert total == 100
+
+    def test_simple_execute_double_precision_false(self):
+        """simple_execute with use_double_precision=False (default) works."""
+        result = maestro.simple_execute(
+            CLIFFORD_BELL_QASM,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Statevector,
+            shots=100,
+            use_double_precision=False
+        )
+        assert result is not None
+        assert 'counts' in result
+
+    def test_simple_estimate_accepts_double_precision(self):
+        """simple_estimate accepts use_double_precision without error."""
+        result = maestro.simple_estimate(
+            CLIFFORD_BELL_NO_MEASURE_QASM,
+            "ZZ",
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Statevector,
+            use_double_precision=True
+        )
+        assert result is not None
+        assert 'expectation_values' in result
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
+
+    def test_simple_estimate_mps_double_precision(self):
+        """simple_estimate with MPS + use_double_precision produces correct results."""
+        result = maestro.simple_estimate(
+            CLIFFORD_BELL_NO_MEASURE_QASM,
+            "ZZ;XX;YY",
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=4,
+            use_double_precision=True
+        )
+        assert result is not None
+        exp_vals = result['expectation_values']
+        assert len(exp_vals) == 3
+        # Bell state: <ZZ> = 1.0, <XX> = 1.0, <YY> = -1.0
+        assert exp_vals[0] == pytest.approx(1.0, abs=1e-5)
+        assert exp_vals[1] == pytest.approx(1.0, abs=1e-5)
+        assert exp_vals[2] == pytest.approx(-1.0, abs=1e-5)
+
+    def test_circuit_execute_accepts_double_precision(self):
+        """Circuit.execute() accepts use_double_precision parameter."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        result = qc.execute(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            shots=100,
+            max_bond_dimension=4,
+            use_double_precision=True
+        )
+        assert result is not None
+        assert 'counts' in result
+
+    def test_circuit_estimate_accepts_double_precision(self):
+        """Circuit.estimate() accepts use_double_precision parameter."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        result = qc.estimate(
+            observables=["ZZ"],
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=4,
+            use_double_precision=True
+        )
+        assert result is not None
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
+
+    def test_qasm_execute_accepts_double_precision(self):
+        """QASM-based simple_execute accepts use_double_precision."""
+        result = maestro.simple_execute(
+            GENERAL_QASM,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Statevector,
+            shots=100,
+            use_double_precision=True
+        )
+        assert result is not None
+        assert 'counts' in result
+
+    def test_qasm_estimate_accepts_double_precision(self):
+        """QASM-based simple_estimate accepts use_double_precision."""
+        result = maestro.simple_estimate(
+            GENERAL_NO_MEASURE_QASM,
+            "ZZ",
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Statevector,
+            use_double_precision=True
+        )
+        assert result is not None
+        assert 'expectation_values' in result
+        # (|00> + e^{i*pi/4}|11>) / sqrt(2): <ZZ> = 1.0
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
+

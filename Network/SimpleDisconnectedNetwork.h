@@ -793,6 +793,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
                              singularValueThreshold.c_str());
       if (!mpsSample.empty())
         simulator->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
+      if (useDoublePrecision)
+        simulator->Configure("use_double_precision", "1");
 
       simulator->AllocateQubits(
           nrQubits == 0 ? GetNumQubits() + GetNumNetworkEntangledQubits()
@@ -819,6 +821,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       singularValueThreshold = value;
     else if (std::string("mps_sample_measure_algorithm") == key)
       mpsSample = value;
+    else if (std::string("use_double_precision") == key)
+      useDoublePrecision = (std::string("1") == value || std::string("true") == value);
     else if (std::string("max_simulators") == key)
       maxSimulators = std::stoull(value);
 
@@ -2069,6 +2073,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   std::string maxBondDim;
   std::string singularValueThreshold;
   std::string mpsSample;
+  bool useDoublePrecision = false;
 
   size_t maxSimulators = QC::QubitRegisterCalculator<>::
       GetNumberOfThreads(); /**< The maximum number of simulators that can be
