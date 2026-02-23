@@ -53,7 +53,7 @@ struct ScopedSimulator {
 std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     unsigned long int handle, Simulators::SimulatorType sim_type,
     Simulators::SimulationType sim_exec_type, std::optional<size_t> max_bond,
-    std::optional<double> sv_threshold) {
+    std::optional<double> sv_threshold, bool use_double_precision = false) {
   if (RemoveAllOptimizationSimulatorsAndAdd(handle, (int)sim_type,
                                             (int)sim_exec_type) == 0) {
     return nullptr;
@@ -72,6 +72,9 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     auto val = std::to_string(*sv_threshold);
     network->Configure("matrix_product_state_truncation_threshold",
                        val.c_str());
+  }
+  if (use_double_precision) {
+    network->Configure("use_double_precision", "1");
   }
 
   network->CreateSimulator(sim_type, sim_exec_type);
@@ -110,7 +113,8 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
                       Simulators::SimulatorType sim_type,
                       Simulators::SimulationType sim_exec_type, int shots,
                       std::optional<size_t> max_bond,
-                      std::optional<double> sv_threshold) {
+                      std::optional<double> sv_threshold,
+                      bool use_double_precision = false) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   int num_qubits =
@@ -120,7 +124,7 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
     throw std::runtime_error("Failed to create simulator handle.");
 
   auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond,
-                                  sv_threshold);
+                                  sv_threshold, use_double_precision);
   if (!network) throw std::runtime_error("Failed to configure network.");
 
   Network::INetwork<double>::ExecuteResults raw_results;
@@ -160,7 +164,8 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
                        Simulators::SimulatorType sim_type,
                        Simulators::SimulationType sim_exec_type,
                        std::optional<size_t> max_bond,
-                       std::optional<double> sv_threshold) {
+                       std::optional<double> sv_threshold,
+                       bool use_double_precision = false) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   int num_qubits = static_cast<int>(circuit->GetMaxQubitIndex()) + 1;
@@ -172,7 +177,7 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
     throw std::runtime_error("Failed to create simulator handle.");
 
   auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond,
-                                  sv_threshold);
+                                  sv_threshold, use_double_precision);
   if (!network) throw std::runtime_error("Failed to configure network.");
 
   std::vector<double> expectations;
@@ -380,20 +385,22 @@ NB_MODULE(maestro, m) {
            "simulator_type"_a = Simulators::SimulatorType::kQCSim,
            "simulation_type"_a = Simulators::SimulationType::kStatevector,
            "shots"_a = 1024, "max_bond_dimension"_a = 2,
-           "singular_value_threshold"_a = 1e-8)
+           "singular_value_threshold"_a = 1e-8,
+           "use_double_precision"_a = false)
       .def(
           "estimate",
           [](std::shared_ptr<Circuits::Circuit<double>> self,
              const nb::object &observables, Simulators::SimulatorType st,
              Simulators::SimulationType set, std::optional<size_t> mb,
-             std::optional<double> sv) {
+             std::optional<double> sv, bool use_dp) {
             return estimate_core(self, ParseObservables(observables), st, set,
-                                 mb, sv);
+                                 mb, sv, use_dp);
           },
           "observables"_a,
           "simulator_type"_a = Simulators::SimulatorType::kQCSim,
           "simulation_type"_a = Simulators::SimulationType::kStatevector,
-          "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8);
+          "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
+          "use_double_precision"_a = false);
 
   // --- QASM Tools ---
   nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
@@ -408,26 +415,28 @@ NB_MODULE(maestro, m) {
         "simulator_type"_a = Simulators::SimulatorType::kQCSim,
         "simulation_type"_a = Simulators::SimulationType::kStatevector,
         "shots"_a = 1024, "max_bond_dimension"_a = 2,
-        "singular_value_threshold"_a = 1e-8);
+        "singular_value_threshold"_a = 1e-8,
+        "use_double_precision"_a = false);
 
   // Variant B: QASM String
   m.def(
       "simple_execute",
       [](const std::string &qasm, Simulators::SimulatorType st,
          Simulators::SimulationType set, int shots, std::optional<size_t> mb,
-         std::optional<double> sv) {
+         std::optional<double> sv, bool use_dp) {
         qasm::QasmToCirc<> parser;
         auto circuit = parser.ParseAndTranslate(qasm);
         if (parser.Failed() || !circuit) {
           // IMPROVEMENT: Throw error instead of silent failure
           throw nb::value_error("Failed to parse QASM string.");
         }
-        return execute_core(circuit, st, set, shots, mb, sv);
+        return execute_core(circuit, st, set, shots, mb, sv, use_dp);
       },
       "qasm_circuit"_a, "simulator_type"_a = Simulators::SimulatorType::kQCSim,
       "simulation_type"_a = Simulators::SimulationType::kStatevector,
       "shots"_a = 1024, "max_bond_dimension"_a = 2,
-      "singular_value_threshold"_a = 1e-8);
+      "singular_value_threshold"_a = 1e-8,
+      "use_double_precision"_a = false);
 
   // 2. simple_estimate (Overloaded)
   // Variant A: Circuit Object
@@ -436,29 +445,31 @@ NB_MODULE(maestro, m) {
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
          const nb::object &obs, Simulators::SimulatorType st,
          Simulators::SimulationType set, std::optional<size_t> mb,
-         std::optional<double> sv) {
-        return estimate_core(circuit, ParseObservables(obs), st, set, mb, sv);
+         std::optional<double> sv, bool use_dp) {
+        return estimate_core(circuit, ParseObservables(obs), st, set, mb, sv, use_dp);
       },
       "circuit"_a, "observables"_a,
       "simulator_type"_a = Simulators::SimulatorType::kQCSim,
       "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8);
+      "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
+      "use_double_precision"_a = false);
 
   // Variant B: QASM String
   m.def(
       "simple_estimate",
       [](const std::string &qasm, const nb::object &obs,
          Simulators::SimulatorType st, Simulators::SimulationType set,
-         std::optional<size_t> mb, std::optional<double> sv) {
+         std::optional<size_t> mb, std::optional<double> sv, bool use_dp) {
         qasm::QasmToCirc<> parser;
         auto circuit = parser.ParseAndTranslate(qasm);
         if (parser.Failed() || !circuit) {
           throw nb::value_error("Failed to parse QASM string.");
         }
-        return estimate_core(circuit, ParseObservables(obs), st, set, mb, sv);
+        return estimate_core(circuit, ParseObservables(obs), st, set, mb, sv, use_dp);
       },
       "qasm_circuit"_a, "observables"_a,
       "simulator_type"_a = Simulators::SimulatorType::kQCSim,
       "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8);
+      "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
+      "use_double_precision"_a = false);
 }
