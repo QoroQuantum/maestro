@@ -1787,6 +1787,13 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           Simulators::SimulatorType::kQCSim,
           Simulators::SimulationType::kMatrixProductState);
 
+    if (OptimizationSimulatorExists(
+            Simulators::SimulatorType::kQCSim,
+            Simulators::SimulationType::kPauliPropagator))
+      simulatorTypes.emplace_back(
+          Simulators::SimulatorType::kQCSim,
+          Simulators::SimulationType::kPauliPropagator);
+
 #ifndef NO_QISKIT_AER
     // tensor networks are out of the picture for now for qiskit aer, since they
     // are available with cuda library, and work only on linux (obviously when
@@ -1830,8 +1837,18 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
               Simulators::SimulationType::kTensorNetwork))
         simulatorTypes.emplace_back(Simulators::SimulatorType::kGpuSim,
                                     Simulators::SimulationType::kTensorNetwork);
+      if (OptimizationSimulatorExists(
+              Simulators::SimulatorType::kGpuSim,
+              Simulators::SimulationType::kPauliPropagator)
+        simulatorTypes.emplace_back(Simulators::SimulatorType::kGpuSim,
+                                    Simulators::SimulationType::kPauliPropagator);
     }
 #endif
+
+    if (OptimizationSimulatorExists(Simulators::SimulatorType::kQuestSim,
+                                    Simulators::SimulationType::kStatevector))
+      simulatorTypes.emplace_back(Simulators::SimulatorType::kQuestSim,
+                                  Simulators::SimulationType::kStatevector);
 
     if (simulatorTypes.empty())
       return nullptr;

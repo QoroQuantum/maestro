@@ -87,7 +87,7 @@ bool SimulatorsFactory::InitQuestLibrary() {
 #ifdef _WIN32
         "maestroquest.dll"
 #else
-        "maestroquest.so"
+        "libmaestroquest.so"
 #endif
     ))
       return true;
