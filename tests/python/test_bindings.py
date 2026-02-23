@@ -817,3 +817,97 @@ class TestDoublePrecision:
         # (|00> + e^{i*pi/4}|11>) / sqrt(2): <ZZ> = 1.0
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
 
+
+class TestGpuSimulator:
+    """Test GPU simulator bindings.
+
+    GPU simulation registers GPU via RemoveAllOptimizationSimulatorsAndAdd,
+    but CreateSimulator creates a cheap QCSim MPS placeholder (not a GPU
+    simulator) to avoid wasting GPU memory. The network creates the actual
+    GPU simulator on-demand during execution.
+
+    On macOS (no GPU library), these tests verify that the binding path
+    still works using the QCSim MPS fallback.
+    """
+
+    def test_gpu_enum_exists(self):
+        """SimulatorType.Gpu enum value is exposed."""
+        assert hasattr(maestro.SimulatorType, 'Gpu')
+
+    def test_gpu_execute_returns_result(self):
+        """simple_execute with GPU type returns a valid result dict."""
+        result = maestro.simple_execute(
+            CLIFFORD_BELL_QASM,
+            simulator_type=maestro.SimulatorType.Gpu,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            shots=100
+        )
+        assert result is not None
+        assert 'counts' in result
+        assert 'time_taken' in result
+        total = sum(result['counts'].values())
+        assert total == 100
+
+    def test_gpu_estimate_returns_result(self):
+        """simple_estimate with GPU type returns valid expectation values."""
+        result = maestro.simple_estimate(
+            CLIFFORD_BELL_NO_MEASURE_QASM,
+            "ZZ",
+            simulator_type=maestro.SimulatorType.Gpu,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=4
+        )
+        assert result is not None
+        assert 'expectation_values' in result
+        # Bell state <ZZ> = 1.0
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
+
+    def test_circuit_gpu_execute(self):
+        """Circuit.execute() with GPU type works through the network."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        result = qc.execute(
+            simulator_type=maestro.SimulatorType.Gpu,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            shots=100,
+            max_bond_dimension=4
+        )
+        assert result is not None
+        assert 'counts' in result
+
+    def test_circuit_gpu_estimate(self):
+        """Circuit.estimate() with GPU type works through the network."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        result = qc.estimate(
+            observables=["ZZ"],
+            simulator_type=maestro.SimulatorType.Gpu,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=4
+        )
+        assert result is not None
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
+
+    def test_gpu_with_double_precision(self):
+        """GPU + use_double_precision flag is accepted."""
+        result = maestro.simple_estimate(
+            CLIFFORD_BELL_NO_MEASURE_QASM,
+            "ZZ;XX",
+            simulator_type=maestro.SimulatorType.Gpu,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=4,
+            use_double_precision=True
+        )
+        assert result is not None
+        exp_vals = result['expectation_values']
+        assert len(exp_vals) == 2
+        assert exp_vals[0] == pytest.approx(1.0, abs=1e-5)
+        assert exp_vals[1] == pytest.approx(1.0, abs=1e-5)
+
