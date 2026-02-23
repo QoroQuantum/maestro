@@ -13,6 +13,7 @@ class TestEnums:
         assert hasattr(maestro, 'SimulatorType')
         assert hasattr(maestro.SimulatorType, 'QCSim')
         assert hasattr(maestro.SimulatorType, 'CompositeQCSim')
+        assert hasattr(maestro.SimulatorType, 'QuestSim')
 
     def test_simulation_type_enum(self):
         """Test SimulationType enum accessibility"""
@@ -910,4 +911,164 @@ class TestGpuSimulator:
         assert len(exp_vals) == 2
         assert exp_vals[0] == pytest.approx(1.0, abs=1e-5)
         assert exp_vals[1] == pytest.approx(1.0, abs=1e-5)
+
+
+class TestQuestSimulator:
+    """Test QuEST simulator bindings.
+
+    QuEST is loaded as an external shared library (libmaestroquest).
+    These tests verify:
+    - The QuestSim enum value is exposed
+    - init_quest() / is_quest_available() helpers work
+    - Non-statevector simulation types are rejected with a clear error
+    - When the library is available, execute and estimate produce correct results
+    """
+
+    def test_quest_enum_exists(self):
+        """SimulatorType.QuestSim enum value is exposed."""
+        assert hasattr(maestro.SimulatorType, 'QuestSim')
+
+    def test_init_quest_function_exists(self):
+        """init_quest() module function is exposed."""
+        assert hasattr(maestro, 'init_quest')
+        assert callable(maestro.init_quest)
+
+    def test_is_quest_available_function_exists(self):
+        """is_quest_available() module function is exposed."""
+        assert hasattr(maestro, 'is_quest_available')
+        assert callable(maestro.is_quest_available)
+
+    def test_is_quest_available_returns_bool(self):
+        """is_quest_available() returns a boolean."""
+        result = maestro.is_quest_available()
+        assert isinstance(result, bool)
+
+    def test_quest_rejects_mps(self):
+        """QuestSim with MatrixProductState raises an error."""
+        with pytest.raises(Exception, match="QuestSim only supports Statevector"):
+            maestro.simple_execute(
+                CLIFFORD_BELL_QASM,
+                simulator_type=maestro.SimulatorType.QuestSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                shots=10
+            )
+
+    def test_quest_rejects_stabilizer(self):
+        """QuestSim with Stabilizer raises an error."""
+        with pytest.raises(Exception, match="QuestSim only supports Statevector"):
+            maestro.simple_execute(
+                CLIFFORD_BELL_QASM,
+                simulator_type=maestro.SimulatorType.QuestSim,
+                simulation_type=maestro.SimulationType.Stabilizer,
+                shots=10
+            )
+
+    def test_quest_rejects_tensor_network(self):
+        """QuestSim with TensorNetwork raises an error."""
+        with pytest.raises(Exception, match="QuestSim only supports Statevector"):
+            maestro.simple_execute(
+                CLIFFORD_BELL_QASM,
+                simulator_type=maestro.SimulatorType.QuestSim,
+                simulation_type=maestro.SimulationType.TensorNetwork,
+                shots=10
+            )
+
+    def test_quest_rejects_pauli_propagator(self):
+        """QuestSim with PauliPropagator raises an error."""
+        with pytest.raises(Exception, match="QuestSim only supports Statevector"):
+            maestro.simple_execute(
+                GENERAL_QASM,
+                simulator_type=maestro.SimulatorType.QuestSim,
+                simulation_type=maestro.SimulationType.PauliPropagator,
+                shots=10
+            )
+
+    def test_quest_rejects_mps_estimate(self):
+        """QuestSim with MPS on simple_estimate raises an error."""
+        with pytest.raises(Exception, match="QuestSim only supports Statevector"):
+            maestro.simple_estimate(
+                CLIFFORD_BELL_NO_MEASURE_QASM,
+                "ZZ",
+                simulator_type=maestro.SimulatorType.QuestSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+            )
+
+    @pytest.mark.skipif(
+        not maestro.is_quest_available(),
+        reason="QuEST library (libmaestroquest) not available"
+    )
+    def test_quest_execute_bell_state(self):
+        """QuestSim executes a Bell state circuit correctly."""
+        result = maestro.simple_execute(
+            CLIFFORD_BELL_QASM,
+            simulator_type=maestro.SimulatorType.QuestSim,
+            simulation_type=maestro.SimulationType.Statevector,
+            shots=1000
+        )
+        assert result is not None
+        assert 'counts' in result
+        total = sum(result['counts'].values())
+        assert total == 1000
+
+    @pytest.mark.skipif(
+        not maestro.is_quest_available(),
+        reason="QuEST library (libmaestroquest) not available"
+    )
+    def test_quest_estimate_bell_state(self):
+        """QuestSim estimates expectation values correctly."""
+        result = maestro.simple_estimate(
+            CLIFFORD_BELL_NO_MEASURE_QASM,
+            "ZZ;XX;YY",
+            simulator_type=maestro.SimulatorType.QuestSim,
+            simulation_type=maestro.SimulationType.Statevector,
+        )
+        assert result is not None
+        assert 'expectation_values' in result
+        exp_vals = result['expectation_values']
+        assert len(exp_vals) == 3
+        # Bell state: <ZZ> = 1.0, <XX> = 1.0, <YY> = -1.0
+        assert exp_vals[0] == pytest.approx(1.0, abs=1e-5)
+        assert exp_vals[1] == pytest.approx(1.0, abs=1e-5)
+        assert exp_vals[2] == pytest.approx(-1.0, abs=1e-5)
+
+    @pytest.mark.skipif(
+        not maestro.is_quest_available(),
+        reason="QuEST library (libmaestroquest) not available"
+    )
+    def test_quest_circuit_execute(self):
+        """Circuit.execute() with QuestSim works through the network."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        result = qc.execute(
+            simulator_type=maestro.SimulatorType.QuestSim,
+            simulation_type=maestro.SimulationType.Statevector,
+            shots=100
+        )
+        assert result is not None
+        assert 'counts' in result
+        total = sum(result['counts'].values())
+        assert total == 100
+
+    @pytest.mark.skipif(
+        not maestro.is_quest_available(),
+        reason="QuEST library (libmaestroquest) not available"
+    )
+    def test_quest_circuit_estimate(self):
+        """Circuit.estimate() with QuestSim produces correct results."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        result = qc.estimate(
+            observables=["ZZ"],
+            simulator_type=maestro.SimulatorType.QuestSim,
+            simulation_type=maestro.SimulationType.Statevector,
+        )
+        assert result is not None
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
 

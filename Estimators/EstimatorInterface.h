@@ -1,5 +1,6 @@
 /**
  * @file EstimatorInterface.h
+ * @ingroup estimators
  * @version 1.0
  *
  * @section DESCRIPTION

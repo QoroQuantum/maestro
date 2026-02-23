@@ -1,5 +1,6 @@
 /**
  * @file TensorContractor.h
+ * @ingroup tensor_networks
  * @version 1.0
  *
  * @section DESCRIPTION

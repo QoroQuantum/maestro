@@ -1,5 +1,6 @@
 /**
  * @file qasm.h
+ * @ingroup qasm
  * @version 1.0
  *
  * @section DESCRIPTION

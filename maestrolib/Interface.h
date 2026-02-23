@@ -1,5 +1,6 @@
 /**
  * @file interface.h
+ * @ingroup core
  * @version 1.0
  *
  * @section DESCRIPTION
