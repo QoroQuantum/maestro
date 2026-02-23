@@ -24,22 +24,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-13, macos-14, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
 
-      # Install Boost and OpenBLAS on macOS runner to ensure cibuildwheel can pick them up
+      # Install Boost, OpenBLAS, and libomp on macOS
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install boost openblas
+          brew install boost openblas libomp
           echo "PKG_CONFIG_PATH=$(brew --prefix openblas)/lib/pkgconfig" >> $GITHUB_ENV
+          echo "CMAKE_ARGS=-DOpenMP_ROOT=$(brew --prefix libomp)" >> $GITHUB_ENV
+          # Set the fallback library path so delocate-wheel can find the dylibs during repair
+          echo "DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix)/lib:$(brew --prefix openblas)/lib:$(brew --prefix libomp)/lib" >> $GITHUB_ENV
+
+      # Install Boost and OpenBLAS on Windows via vcpkg
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.22.0
         env:
-          # Compile Boost locally since manylinux package managers have very old Boost versions missing Boost.JSON
           CIBW_BEFORE_ALL_LINUX: "curl -L https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz -o boost.tgz && tar -xzf boost.tgz && cd boost_1_89_0 && ./bootstrap.sh && ./b2 -j4 --with-program_options --with-json --with-container --with-serialization install"
           CIBW_ARCHS_WINDOWS: "AMD64"
           CIBW_BUILD: "cp310-* cp311-* cp312-*"
@@ -58,7 +67,7 @@ jobs:
       name: pypi
       url: https://pypi.org/p/qoro-maestro
     permissions:
-      id-token: write # Required for trusted publishing
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -68,3 +77,5 @@ jobs:
 
       - name: Publish package distribution to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
