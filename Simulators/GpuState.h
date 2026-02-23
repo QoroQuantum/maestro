@@ -60,6 +60,10 @@ class GpuState : public ISimulator {
       } else if (simulationType == SimulationType::kMatrixProductState) {
         mps = SimulatorsFactory::CreateGpuLibMPSSim();
         if (mps) {
+          // Use double precision to match CPU MPS behavior and avoid
+          // silent numerical failures from float32 accumulation errors
+          // in deep circuits (e.g. Trotter evolution).
+          mps->SetDataType(true);
           if (limitEntanglement && singularValueThreshold > 0.)
             mps->SetCutoff(singularValueThreshold);
           if (limitSize && chi > 0) mps->SetMaxExtent(chi);
