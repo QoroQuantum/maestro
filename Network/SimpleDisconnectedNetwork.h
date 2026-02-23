@@ -335,6 +335,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
         expectations[i] = simulator->ExpectationValue(translated);
       }
+    } else {
+      std::cerr << "WARNING: ExecuteOnHostExpectations - simulator is null "
+                   "after circuit execution. Returning default values (1.0). "
+                   "This likely indicates the simulator backend (e.g. GPU) "
+                   "failed to initialize." << std::endl;
     }
 
     if (recreate && (!simulator || simType != simulator->GetType() ||
