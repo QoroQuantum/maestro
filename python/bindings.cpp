@@ -77,17 +77,10 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("use_double_precision", "1");
   }
 
-  // For GPU: do NOT create a GPU simulator for the network (it uses too much
-  // GPU memory). Instead create a small QCSim MPS as the placeholder.
-  // The network will create the actual GPU simulator on-demand during
-  // execution via the optimization path (RemoveAllOptimizationSimulatorsAndAdd
-  // already registered GPU above).
-  if (sim_type == Simulators::SimulatorType::kGpuSim) {
-    network->CreateSimulator(Simulators::SimulatorType::kQCSim,
-                             Simulators::SimulationType::kMatrixProductState);
-  } else {
-    network->CreateSimulator(sim_type, sim_exec_type);
-  }
+  // Always create the default simulator (no parameters = QCSim MPS).
+  // The desired simulator type is specified via
+  // RemoveAllOptimizationSimulatorsAndAdd above.
+  network->CreateSimulator();
 
   // Verify the simulator was actually created (e.g. GPU library may fail)
   if (!network->GetSimulator()) {
