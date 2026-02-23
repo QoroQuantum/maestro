@@ -75,6 +75,12 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
   }
 
   network->CreateSimulator(sim_type, sim_exec_type);
+
+  // Verify the simulator was actually created (e.g. GPU library may fail)
+  if (!network->GetSimulator()) {
+    return nullptr;
+  }
+
   return network;
 }
 
