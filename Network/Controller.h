@@ -13,6 +13,7 @@ express permission of 2639731 ONTARIO INC.
 
 /**
  * @file Controller.h
+ * @ingroup network
  * @version 1.0
  *
  * @section DESCRIPTION

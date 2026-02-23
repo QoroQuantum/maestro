@@ -41,6 +41,7 @@ aer = []  # Optional: install if you want Qiskit Aer support
 [tool.scikit-build]
 cmake.version = ">=3.15"
 cmake.build-type = "Release"
+build-dir = "build/{wheel_tag}"
 
 # Use rpath to handle library paths automatically
 cmake.args = [

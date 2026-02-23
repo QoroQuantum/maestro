@@ -1,5 +1,6 @@
 /**
  * @file Scheduler.h
+ * @ingroup schedulers
  * @version 1.0
  *
  * @section DESCRIPTION

@@ -1,5 +1,6 @@
 /**
  * @file Simulator.h
+ * @ingroup simulators
  * @version 1.0
  *
  * @section DESCRIPTION

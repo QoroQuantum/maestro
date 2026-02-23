@@ -1,5 +1,6 @@
 /**
  * @file Network.h
+ * @ingroup network
  * @version 1.0
  *
  * @section DESCRIPTION
