@@ -1847,7 +1847,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
                                     Simulators::SimulationType::kTensorNetwork);
       if (OptimizationSimulatorExists(
               Simulators::SimulatorType::kGpuSim,
-              Simulators::SimulationType::kPauliPropagator)
+              Simulators::SimulationType::kPauliPropagator))
         simulatorTypes.emplace_back(Simulators::SimulatorType::kGpuSim,
                                     Simulators::SimulationType::kPauliPropagator);
     }
