@@ -1,15 +1,28 @@
+# =============================================================================
+#  Maestro — Doxyfile
+#  Professional documentation configuration for the Maestro C++ library.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+#  Project metadata
+# ---------------------------------------------------------------------------
 PROJECT_NAME           = "Maestro"
 PROJECT_NUMBER         = "0.1.0"
 PROJECT_BRIEF          = "Unified interface for quantum circuit simulation"
+PROJECT_LOGO           =
 
 OUTPUT_DIRECTORY       = docs
-CREATE_SUBDIRS         = NO
+CREATE_SUBDIRS         = YES
+CREATE_SUBDIRS_LEVEL   = 2
 OUTPUT_LANGUAGE        = English
 
+# ---------------------------------------------------------------------------
+#  Build-related settings
+# ---------------------------------------------------------------------------
 BRIEF_MEMBER_DESC      = YES
 REPEAT_BRIEF           = YES
-ALWAYS_DETAILED_SEC    = NO
-INLINE_INHERITED_MEMB  = NO
+ALWAYS_DETAILED_SEC    = YES
+INLINE_INHERITED_MEMB  = YES
 FULL_PATH_NAMES        = NO
 STRIP_FROM_PATH        =
 STRIP_FROM_INC_PATH    =
@@ -26,18 +39,23 @@ OPTIMIZE_FOR_FORTRAN   = NO
 OPTIMIZE_OUTPUT_VHDL   = NO
 EXTENSION_MAPPING      =
 MARKDOWN_SUPPORT       = YES
+TOC_INCLUDE_HEADINGS   = 3
 AUTOLINK_SUPPORT       = YES
 BUILTIN_STL_SUPPORT    = YES
 CPP_CLI_SUPPORT        = NO
 SIP_SUPPORT            = NO
 IDL_PROPERTY_SUPPORT   = YES
-DISTRIBUTE_GROUP_DOC   = NO
+DISTRIBUTE_GROUP_DOC   = YES
+GROUP_NESTED_COMPOUNDS = YES
 SUBGROUPING            = YES
-INLINE_GROUPED_CLASSES = NO
-INLINE_SIMPLE_STRUCTS  = NO
+INLINE_GROUPED_CLASSES = YES
+INLINE_SIMPLE_STRUCTS  = YES
 TYPEDEF_HIDES_STRUCT   = NO
-LOOKUP_CACHE_SIZE      = 0
+LOOKUP_CACHE_SIZE      = 2
 
+# ---------------------------------------------------------------------------
+#  Extraction & visibility
+# ---------------------------------------------------------------------------
 EXTRACT_ALL            = YES
 EXTRACT_PRIVATE        = NO
 EXTRACT_PACKAGE        = NO
@@ -52,14 +70,15 @@ HIDE_IN_BODY_DOCS      = NO
 INTERNAL_DOCS          = NO
 CASE_SENSE_NAMES       = YES
 HIDE_SCOPE_NAMES       = NO
+HIDE_COMPOUND_REFERENCE= NO
 SHOW_INCLUDE_FILES     = YES
-SHOW_GROUPED_MEMB_INC  = NO
+SHOW_GROUPED_MEMB_INC  = YES
 FORCE_LOCAL_INCLUDES   = NO
 INLINE_INFO            = YES
 SORT_MEMBER_DOCS       = YES
-SORT_BRIEF_DOCS        = NO
-SORT_MEMBERS_CTORS_1ST = NO
-SORT_GROUP_NAMES       = NO
+SORT_BRIEF_DOCS        = YES
+SORT_MEMBERS_CTORS_1ST = YES
+SORT_GROUP_NAMES       = YES
 SORT_BY_SCOPE_NAME     = NO
 STRICT_PROTO_MATCHING  = NO
 GENERATE_TODOLIST      = YES
@@ -67,6 +86,9 @@ GENERATE_TESTLIST      = YES
 GENERATE_BUGLIST       = YES
 GENERATE_DEPRECATEDLIST= YES
 
+# ---------------------------------------------------------------------------
+#  Input
+# ---------------------------------------------------------------------------
 INPUT                  = Circuit \
                          Distribution \
                          Estimators \
@@ -77,45 +99,27 @@ INPUT                  = Circuit \
                          Utils \
                          maestroexe \
                          maestrolib \
-                         README.md \
-                         TUTORIAL.md \
-                         INSTALL.md \
-                         mainpage.dox
+                         qasm \
+                         docs/groups.dox \
+                         docs/python.dox \
+                         mainpage.dox \
+                         Types.h
+
 INPUT_ENCODING         = UTF-8
+
 FILE_PATTERNS          = *.c \
                          *.cc \
-                         *.cxx \
                          *.cpp \
-                         *.c++ \
-                         *.d \
-                         *.java \
-                         *.ii \
-                         *.ixx \
-                         *.ipp \
-                         *.i++ \
-                         *.inl \
                          *.h \
                          *.hh \
-                         *.hxx \
                          *.hpp \
                          *.h++ \
-                         *.idl \
-                         *.odl \
-                         *.cs \
-                         *.php \
-                         *.php3 \
-                         *.inc \
-                         *.m \
-                         *.mm \
                          *.dox \
                          *.py \
-                         *.f90 \
-                         *.f \
-                         *.for \
-                         *.vhd \
-                         *.vhdl \
                          *.md
+
 RECURSIVE              = YES
+
 EXCLUDE                = build \
                          venv \
                          .git \
@@ -124,15 +128,20 @@ EXCLUDE                = build \
                          build/eigen \
                          build/json \
                          build/qiskit-aer
+
 EXCLUDE_SYMLINKS       = NO
+
 EXCLUDE_PATTERNS       = */build/* \
                          */venv/* \
-                         */.git/*
+                         */.git/* \
+                         *_test.cpp \
+                         */tests/*
+
 EXCLUDE_SYMBOLS        =
 
 EXAMPLE_PATH           = examples
 EXAMPLE_PATTERNS       = *
-EXAMPLE_RECURSIVE      = NO
+EXAMPLE_RECURSIVE      = YES
 IMAGE_PATH             =
 INPUT_FILTER           =
 FILTER_PATTERNS        =
@@ -140,27 +149,34 @@ FILTER_SOURCE_FILES    = NO
 FILTER_SOURCE_PATTERNS =
 USE_MDFILE_AS_MAINPAGE =
 
+# ---------------------------------------------------------------------------
+#  Source browsing
+# ---------------------------------------------------------------------------
 SOURCE_BROWSER         = YES
 INLINE_SOURCES         = NO
 STRIP_CODE_COMMENTS    = YES
-REFERENCED_BY_RELATION = NO
-REFERENCES_RELATION    = NO
+REFERENCED_BY_RELATION = YES
+REFERENCES_RELATION    = YES
 REFERENCES_LINK_SOURCE = YES
 SOURCE_TOOLTIPS        = YES
 USE_HTAGS              = NO
 VERBATIM_HEADERS       = YES
 
+# ---------------------------------------------------------------------------
+#  HTML output
+# ---------------------------------------------------------------------------
 GENERATE_HTML          = YES
-HTML_OUTPUT            = .
+HTML_OUTPUT            = html
 HTML_FILE_EXTENSION    = .html
 HTML_HEADER            =
 HTML_FOOTER            =
 HTML_STYLESHEET        =
-HTML_EXTRA_STYLESHEET  =
+HTML_EXTRA_STYLESHEET  = docs/custom.css
 HTML_EXTRA_FILES       =
-HTML_COLORSTYLE_HUE    = 220
-HTML_COLORSTYLE_SAT    = 100
-HTML_COLORSTYLE_GAMMA  = 80
+HTML_COLORSTYLE        = DARK
+HTML_COLORSTYLE_HUE    = 270
+HTML_COLORSTYLE_SAT    = 80
+HTML_COLORSTYLE_GAMMA  = 100
 HTML_TIMESTAMP         = YES
 HTML_DYNAMIC_SECTIONS  = YES
 HTML_INDEX_NUM_ENTRIES = 100
@@ -168,89 +184,64 @@ HTML_INDEX_NUM_ENTRIES = 100
 SEARCHENGINE           = YES
 SERVER_BASED_SEARCH    = NO
 EXTERNAL_SEARCH        = NO
-SEARCHENGINE_URL       =
 SEARCHDATA_FILE        = searchdata.js
-SEARCHOUTLINE_PROPHET  = NO
 
-GENERATE_DOCSET        = NO
-DOCSET_FEEDNAME        = "Doxygen generated docs"
-DOCSET_BUNDLE_ID       = org.doxygen.Project
-DOCSET_PUBLISHER_ID    = org.doxygen.Publisher
-DOCSET_PUBLISHER_NAME  = Publisher
-
-GENERATE_HTMLHELP      = NO
-CHM_FILE               =
-HHC_LOCATION           =
-GENERATE_CHI           = NO
-CHM_INDEX_ENCODING     =
-BINARY_TOC             = NO
-TOC_EXPAND             = NO
-
-GENERATE_QHP           = NO
-QCH_FILE               =
-QHP_NAMESPACE          = org.doxygen.Project
-QHP_VIRTUAL_FOLDER     = doc
-QHP_CUST_FILTER_NAME   =
-QHP_CUST_FILTER_ATTRS  =
-QHP_SECT_FILTER_ATTRS  =
-QHG_LOCATION           =
-
-GENERATE_ECLIPSEHELP   = NO
-ECLIPSE_DOC_ID         = org.doxygen.Project
-DISABLE_INDEX          = NO
+# Navigation sidebar
 GENERATE_TREEVIEW      = YES
-ENUM_VALUES_PER_LINE   = 4
-TREEVIEW_WIDTH         = 250
-EXT_LINKS_IN_WINDOW    = NO
-FORMULA_FONTSIZE       = 10
-FORMULA_TRANSPARENT    = YES
-USE_MATHJAX            = NO
+TREEVIEW_WIDTH         = 300
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+ENUM_VALUES_PER_LINE   = 1
+EXT_LINKS_IN_WINDOW    = YES
+
+# MathJax for formulae
+USE_MATHJAX            = YES
+MATHJAX_VERSION        = MathJax_3
 MATHJAX_FORMAT         = HTML-CSS
-MATHJAX_RELPATH        = http://cdn.mathjax.org/mathjax/latest
+MATHJAX_RELPATH        = https://cdn.jsdelivr.net/npm/mathjax@3
 MATHJAX_EXTENSIONS     =
 MATHJAX_CODEFILE       =
+FORMULA_FONTSIZE       = 12
+FORMULA_TRANSPARENT    = YES
 
+# ---------------------------------------------------------------------------
+#  Other output formats (disabled)
+# ---------------------------------------------------------------------------
 GENERATE_LATEX         = NO
-LATEX_OUTPUT           = latex
-LATEX_CMD_NAME         = latex
-MAKEINDEX_CMD_NAME     = makeindex
-COMPACT_LATEX          = NO
-PAPER_TYPE             = a4
-EXTRA_PACKAGES         =
-LATEX_HEADER           =
-LATEX_FOOTER           =
-LATEX_EXTRA_STYLESHEET =
-LATEX_EXTRA_FILES      =
-PDF_HYPERLINKS         = YES
-USE_PDFLATEX           = YES
-LATEX_BATCHMODE        = NO
-LATEX_HIDE_INDICES     = NO
-LATEX_SOURCE_CODE      = NO
-LATEX_BIB_STYLE        = plain
-
 GENERATE_RTF           = NO
-RTF_OUTPUT             = rtf
-COMPACT_RTF            = NO
-RTF_HYPERLINKS         = NO
-RTF_STYLESHEET_FILE    =
-RTF_EXTENSIONS_FILE    =
-
 GENERATE_MAN           = NO
-MAN_OUTPUT             = man
-MAN_EXTENSION          = .3
-MAN_LINKS              = NO
-
 GENERATE_XML           = NO
-XML_OUTPUT             = xml
-XML_PROGRAMLISTING     = YES
-
 GENERATE_DOCBOOK       = NO
-DOCBOOK_OUTPUT         = docbook
-DOCBOOK_PROGRAMLISTING = NO
-
 GENERATE_AUTOGEN_DEF   = NO
-
 GENERATE_PERLMOD       = NO
-PERLMOD_LATEX          = NO
-PERLMOD_PRETTY         = YES
-PERLMOD_MAKEVAR_PREFIX =
+
+# ---------------------------------------------------------------------------
+#  Graphs and diagrams (Graphviz)
+# ---------------------------------------------------------------------------
+HAVE_DOT               = YES
+
+CLASS_DIAGRAMS         = YES
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = YES
+GROUP_GRAPHS           = YES
+UML_LOOK               = YES
+UML_LIMIT_NUM_FIELDS   = 10
+DOT_UML_DETAILS        = YES
+DOT_WRAP_THRESHOLD     = 17
+
+TEMPLATE_RELATIONS     = YES
+INCLUDE_GRAPH          = YES
+INCLUDED_BY_GRAPH      = YES
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+GRAPHICAL_HIERARCHY    = YES
+DIRECTORY_GRAPH        = YES
+
+DOT_IMAGE_FORMAT       = svg
+INTERACTIVE_SVG        = YES
+DOT_GRAPH_MAX_NODES    = 100
+MAX_DOT_GRAPH_DEPTH    = 0
+DOT_TRANSPARENT        = YES
+DOT_MULTI_TARGETS      = YES
+GENERATE_LEGEND        = YES
+DOT_CLEANUP            = YES
