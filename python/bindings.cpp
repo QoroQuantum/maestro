@@ -306,6 +306,14 @@ NB_MODULE(maestro, m) {
            [](Circuits::Circuit<double> &s, Types::qubit_t q) {
              s.AddOperation(std::make_shared<Circuits::SxGate<>>(q));
            })
+      .def("sxdg",
+           [](Circuits::Circuit<double> &s, Types::qubit_t q) {
+             s.AddOperation(std::make_shared<Circuits::SxDagGate<>>(q));
+           })
+      .def("k",
+           [](Circuits::Circuit<double> &s, Types::qubit_t q) {
+             s.AddOperation(std::make_shared<Circuits::KGate<>>(q));
+           })
 
       // Single Qubit Gates (Parametric)
       .def("p",
@@ -348,6 +356,21 @@ NB_MODULE(maestro, m) {
             s.AddOperation(std::make_shared<Circuits::CZGate<>>(c, t));
           })
       .def(
+          "ch",
+          [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t t) {
+            s.AddOperation(std::make_shared<Circuits::CHGate<>>(c, t));
+          })
+      .def(
+          "csx",
+          [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t t) {
+            s.AddOperation(std::make_shared<Circuits::CSxGate<>>(c, t));
+          })
+      .def(
+          "csxdg",
+          [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t t) {
+            s.AddOperation(std::make_shared<Circuits::CSxDagGate<>>(c, t));
+          })
+      .def(
           "swap",
           [](Circuits::Circuit<double> &s, Types::qubit_t a, Types::qubit_t b) {
             s.AddOperation(std::make_shared<Circuits::SwapGate<>>(a, b));
@@ -374,6 +397,26 @@ NB_MODULE(maestro, m) {
               double theta) {
              s.AddOperation(std::make_shared<Circuits::CRzGate<>>(c, t, theta));
            })
+      .def("cu",
+           [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t t,
+              double theta, double phi, double lambda, double gamma) {
+             s.AddOperation(
+                 std::make_shared<Circuits::CUGate<>>(c, t, theta, phi, lambda, gamma));
+           })
+
+      // Three Qubit Gates
+      .def(
+          "ccx",
+          [](Circuits::Circuit<double> &s, Types::qubit_t c1,
+             Types::qubit_t c2, Types::qubit_t t) {
+            s.AddOperation(std::make_shared<Circuits::CCXGate<>>(c1, c2, t));
+          })
+      .def(
+          "cswap",
+          [](Circuits::Circuit<double> &s, Types::qubit_t c,
+             Types::qubit_t a, Types::qubit_t b) {
+            s.AddOperation(std::make_shared<Circuits::CSwapGate<>>(c, a, b));
+          })
       // Measurement
       .def("measure",
            [](Circuits::Circuit<double> &s,
@@ -492,4 +535,57 @@ NB_MODULE(maestro, m) {
   m.def("is_quest_available", []() {
     return Simulators::SimulatorsFactory::IsQuestLibraryAvailable();
   }, "Check whether the QuEST simulation library is loaded and available.");
+
+  // --- GPU Library Management ---
+  m.def("init_gpu", []() {
+    return Simulators::SimulatorsFactory::InitGpuLibrary();
+  }, "Initialize the GPU simulation library. Returns True on success.");
+
+  m.def("is_gpu_available", []() {
+    return Simulators::SimulatorsFactory::IsGpuLibraryAvailable();
+  }, "Check whether the GPU simulation library is loaded and available.");
+
+  // --- Probability / Amplitude Access ---
+  m.def(
+      "get_probabilities",
+      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
+         Simulators::SimulatorType sim_type,
+         Simulators::SimulationType sim_exec_type,
+         std::optional<size_t> max_bond,
+         std::optional<double> sv_threshold,
+         bool use_double_precision) -> nb::list {
+        if (!circuit) throw nb::value_error("Circuit is null.");
+
+        int num_qubits =
+            std::max(1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
+        ScopedSimulator sim(num_qubits);
+        if (sim.handle == 0)
+          throw std::runtime_error("Failed to create simulator handle.");
+
+        auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type,
+                                        max_bond, sv_threshold, use_double_precision);
+        if (!network) throw std::runtime_error("Failed to configure network.");
+
+        {
+          nb::gil_scoped_release release;
+          network->ExecuteOnHost(circuit, 0);
+        }
+
+        auto *simulator = network->GetSimulator();
+        if (!simulator) throw std::runtime_error("Simulator not available.");
+
+        size_t n = simulator->GetNumberOfQubits();
+        nb::list probs;
+        for (unsigned long long i = 0; i < (1ULL << n); ++i) {
+          probs.append(simulator->Probability(i));
+        }
+        return probs;
+      },
+      "circuit"_a,
+      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+      "simulation_type"_a = Simulators::SimulationType::kStatevector,
+      "max_bond_dimension"_a = nb::none(),
+      "singular_value_threshold"_a = nb::none(),
+      "use_double_precision"_a = false,
+      "Get the full probability distribution after executing a circuit.");
 }
