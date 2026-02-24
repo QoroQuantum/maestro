@@ -61,10 +61,10 @@ int main(int argc, char** argv) {
         "mbd,m", boost::program_options::value<int>(),
         "Specify the max bond dimension for the MPS simulator")(
         "simulator,r", boost::program_options::value<std::string>(),
-        "Simulator type, either aer, qcsim, composite_aer, composite_qcsim or "
-        "gpu")(
+        "Simulator type, either aer, qcsim, composite_aer, composite_qcsim, gpu "
+        "or quest")(
         "type,t", boost::program_options::value<std::string>(),
-        "Simulation type, either statevector, mps, stabilizer or tensor")(
+        "Simulation type, either statevector, mps, stabilizer, tensor or pauli_propagation")(
         "file,f", boost::program_options::value<std::string>(),
         "Provide a qasm file for execution")(
         "output,o", boost::program_options::value<std::string>(),
@@ -167,6 +167,8 @@ int main(int argc, char** argv) {
         simulatorType = 3;
       else if (stype == "gpu")
         simulatorType = 4;
+      else if (stype == "quest")
+        simulatorType = 5;
       else
         simulatorType = 1000;  // something big, so it won't be set
     }
@@ -191,6 +193,9 @@ int main(int argc, char** argv) {
         else if (stype == "tensor" || stype == "tensor_network" ||
                  stype == "tn")
           simulationType = 3;
+        else if (stype == "pauli_propagation" || stype == "pauli" ||
+                 stype == "pprop")
+          simulationType = 4;
         else
           simulationType = 1000;
       }
@@ -248,7 +253,7 @@ int main(int argc, char** argv) {
 
     if (simulatorType < 2)  // qcsim or aer
     {
-      if (simulationType < 4)
+      if (simulationType < 4 || (simulatorType == 1 && simulationType == 4)) // qcsim also supports pauli propagation
         simulator.RemoveAllOptimizationSimulatorsAndAdd(
             static_cast<int>(simulatorType), static_cast<int>(simulationType));
       else {
@@ -264,7 +269,7 @@ int main(int argc, char** argv) {
           static_cast<int>(simulatorType), 0);
     } else if (simulatorType == 4)  // gpu
     {
-      if (simulationType < 2)  // statevector or mps
+      if (simulationType < 2 || simulationType == 3 || simulationType == 4)  // statevector or mps, or tensor or pauli propagation
         simulator.RemoveAllOptimizationSimulatorsAndAdd(
             static_cast<int>(simulatorType), static_cast<int>(simulationType));
       else  // other types are not supported yet on gpu, set statevector
