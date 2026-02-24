@@ -56,13 +56,15 @@
  * |---------|---------------|----------------|-------------|
  * | QCSim Statevector | kQCSim | kStatevector | CPU |
  * | QCSim MPS | kQCSim | kMatrixProductState | CPU |
- * | Qiskit Aer | kQiskitAer | various | CPU |
- * | NVIDIA cuStateVec | kGpuSim | kStatevector | GPU |
- * | Custom GPU MPS | kGpuSim | kMatrixProductState | GPU |
+ * | QCSim Stabilizer | kQCSim | kStabilizer | CPU |
+ * | QCSim Tensor Network | kQCSim | kTensorNetwork | CPU |
+ * | QCSim Pauli Propagator | kQCSim | kPauliPropagator | CPU |
+ * | Qiskit Aer | kQiskitAer | SV, MPS, Stabilizer, TN, ExtStab | CPU |
+ * | GPU Statevector | kGpuSim | kStatevector | GPU |
+ * | GPU MPS | kGpuSim | kMatrixProductState | GPU |
  * | GPU Tensor Network | kGpuSim | kTensorNetwork | GPU |
- * | Clifford / Stabilizer | kGpuSim | kStabilizer | GPU |
- * | Pauli Propagator | kGpuSim | kPauliPropagator | GPU |
- * | QuEST | kQuestSim | various | CPU |
+ * | GPU Pauli Propagator | kGpuSim | kPauliPropagator | GPU |
+ * | QuEST | kQuestSim | kStatevector | CPU |
  * | Composite (p-block) | kCompositeQCSim | kStatevector | CPU |
  *
  * ### Key classes
@@ -244,5 +246,6 @@
  * print(f"Counts: {result['counts']}")
  * @endcode
  *
+ * @sa @ref python_guide "Python Guide" for the full API reference
  * @sa @ref md_TUTORIAL "Tutorial" for more examples
  */
