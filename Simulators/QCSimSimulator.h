@@ -939,7 +939,7 @@ class QCSimSimulator : public QCSimState {
 
     if (tensorNetwork) cloned->tensorNetwork = tensorNetwork->Clone();
 
-    if (pp) cloned->pp = std::move(pp->Clone());
+    if (pp) cloned->pp = pp->Clone();
 
     return cloned;
   }

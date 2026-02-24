@@ -170,7 +170,7 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
     clone->SetParallelThresholdForSum(GetParallelThresholdForSum());
     clone->SetStepsBetweenDeduplication(StepsBetweenDeduplication());
     clone->SetStepsBetweenTrims(StepsBetweenTrims());
-    clone->SetOperations(std::move(GetOperations()));
+    clone->SetOperations(GetOperations());
     clone->SetSavePosition(GetSavePosition());
     if (IsParallelEnabled()) clone->EnableParallel();
 

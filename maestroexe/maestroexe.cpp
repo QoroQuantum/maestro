@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
 
     boost::program_options::variables_map vars;
     try {
-      boost::program_options::basic_command_line_parser parser(argc, argv);
+      boost::program_options::basic_command_line_parser<char> parser(argc, argv);
       parser.positional(pos_desc);
       parser.options(desc);
 

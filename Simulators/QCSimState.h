@@ -436,7 +436,7 @@ class QCSimState : public ISimulator {
           res[q] = true;
     } else if (simulationType == SimulationType::kPauliPropagator) {
       std::vector<int> qubitsInt(qubits.begin(), qubits.end());
-      res = std::move(pp->Measure(qubitsInt));
+      res = pp->Measure(qubitsInt);
     } else {
       const std::set<Eigen::Index> qubitsSet(qubits.begin(), qubits.end());
       auto measured = mpsSimulator->MeasureQubits(qubitsSet);

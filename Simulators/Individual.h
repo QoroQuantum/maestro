@@ -426,7 +426,7 @@ class IndividualSimulator : public ISimulator {
    *
    * Saves the state.
    */
-  void SaveState() {
+  void SaveState() override {
     if (!simulator) return;
     const size_t nrBasisStates = 1ULL << simulator->GetNumberOfQubits();
     savedState.reserve(nrBasisStates);
@@ -447,7 +447,7 @@ class IndividualSimulator : public ISimulator {
    *
    * Restores the state.
    */
-  void RestoreState() {
+  void RestoreState() override {
     if (!simulator) return;
     const size_t nrQubits = simulator->GetNumberOfQubits();
 
