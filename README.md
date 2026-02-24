@@ -64,9 +64,9 @@ The model normalizes performance features to reduce hardware dependence and can 
 
 ## Documentation
 
-- [Installation Guide](INSTALL.md): Detailed build and installation instructions.
-- [Tutorial](TUTORIAL.md): Usage examples and API overview, including Python bindings.
-- [Python Examples](examples/): Python scripts demonstrating usage.
+- [Installation Guide](https://github.com/QoroQuantum/maestro/blob/main/INSTALL.md): Detailed build and installation instructions.
+- [Tutorial](https://github.com/QoroQuantum/maestro/blob/main/TUTORIAL.md): Usage examples and API overview, including Python bindings.
+- [Python Examples](https://github.com/QoroQuantum/maestro/tree/main/examples): Python scripts demonstrating usage.
 
 ### API Documentation
 
@@ -90,7 +90,7 @@ chmod +x build.sh
 ./build.sh
 ```
 
-For detailed instructions, see [INSTALL.md](INSTALL.md).
+For detailed instructions, see [INSTALL.md](https://github.com/QoroQuantum/maestro/blob/main/INSTALL.md).
 
 ## Citation
 

@@ -571,7 +571,7 @@ NB_MODULE(maestro, m) {
           network->ExecuteOnHost(circuit, 0);
         }
 
-        auto *simulator = network->GetSimulator();
+        auto simulator = network->GetSimulator();
         if (!simulator) throw std::runtime_error("Simulator not available.");
 
         size_t n = simulator->GetNumberOfQubits();
