@@ -596,9 +596,9 @@ class TensorNetwork {
       lastTensorIndexForQubit = lastTensorIndicesSuper[q];
 
       lastTensorSuper->tensor = std::make_shared<Utils::Tensor<>>(
-          std::move(lastTensorSuper->tensor->Contract(
+          lastTensorSuper->tensor->Contract(
               *(tensorNode->tensor), lastTensorIndexForQubit, 0,
-              enableMultithreading)));
+              enableMultithreading));
 
       if (lastTensorIndexForQubit == 2) {
         // lastTensorSuper->tensor =

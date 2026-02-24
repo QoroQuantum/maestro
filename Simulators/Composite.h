@@ -1037,7 +1037,7 @@ class CompositeSimulator : public ISimulator {
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
 
-  void ApplyNop() { GetSimulator(0)->ApplyNop(); }
+  void ApplyNop() override { GetSimulator(0)->ApplyNop(); }
 
   /**
    * @brief Enable/disable multithreading.

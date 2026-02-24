@@ -18,7 +18,7 @@ else()
     message(STATUS "ccache not found, install it for faster recompilation: brew install ccache")
 endif()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-array-bounds -Wno-delete-non-abstract-non-virtual-dtor -Wno-error")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-array-bounds -Wno-delete-non-abstract-non-virtual-dtor")
 set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
@@ -233,14 +233,14 @@ IF(NOT Boost_FOUND)
 ENDIF()
 
 if (QAER)
-    INCLUDE_DIRECTORIES ( ${EIGEN5_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${QCSIM_INCLUDE_DIR} ${JSON_INCLUDE_DIR} ${AER_INCLUDE_DIR})
+    INCLUDE_DIRECTORIES ( SYSTEM ${EIGEN5_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${QCSIM_INCLUDE_DIR} ${JSON_INCLUDE_DIR} ${AER_INCLUDE_DIR})
 
     find_package(BLAS REQUIRED)
     IF(NOT BLAS_FOUND)
         MESSAGE( FATAL_ERROR "Couldn't find blas libs")
     ENDIF()
 else()
-    INCLUDE_DIRECTORIES ( ${EIGEN5_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${QCSIM_INCLUDE_DIR})
+    INCLUDE_DIRECTORIES ( SYSTEM ${EIGEN5_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${QCSIM_INCLUDE_DIR})
 endif()
 
 LINK_LIBRARIES()

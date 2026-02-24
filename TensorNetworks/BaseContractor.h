@@ -137,8 +137,8 @@ class BaseContractor : public ITensorContractor {
 
     const auto resultNode = std::make_shared<TensorNode>();
     resultNode->tensor =
-        std::make_shared<Utils::Tensor<>>(std::move(tensor1->tensor->Contract(
-            *(tensor2->tensor), indices, enableMultithreading)));
+        std::make_shared<Utils::Tensor<>>(tensor1->tensor->Contract(
+            *(tensor2->tensor), indices, enableMultithreading));
     resultNode->SetId(tensor1Id);
 
     const auto newRank = resultNode->GetRank();

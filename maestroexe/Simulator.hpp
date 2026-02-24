@@ -82,7 +82,7 @@ class Simulator : protected MaestroLibrary {
 
   void *GetSimulator() { return MaestroLibrary::GetSimulator(handle); }
 
-  void FreeResult(char *result) { MaestroLibrary::FreeResult(result); }
+  void FreeResult(char *result) override { MaestroLibrary::FreeResult(result); }
 
   int InitializeSimulator() {
     if (simulatorPtr) return MaestroLibrary::InitializeSimulator(simulatorPtr);
