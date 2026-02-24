@@ -50,8 +50,8 @@
  * | Key | Type | Description |
  * |-----|------|-------------|
  * | `counts` | `dict[str, int]` | Measurement outcome → count |
- * | `simulator` | `str` | Backend that was used |
- * | `method` | `str` | Simulation method |
+ * | `simulator` | `int` | Backend enum value (see `SimulatorType`) |
+ * | `method` | `int` | Simulation method enum value (see `SimulationType`) |
  * | `time_taken` | `float` | Wall-clock time in seconds |
  *
  * ---
@@ -117,14 +117,20 @@
  *
  * @subsection py_backend_table Available Backends
  *
- * | SimulationType | Best For | Gate Support |
- * |---------------|----------|--------------|
- * | `Statevector` | Exact simulation up to ~30 qubits | All gates |
- * | `MatrixProductState` | Low-entanglement circuits, 100+ qubits | All gates |
- * | `Stabilizer` | Clifford-only circuits, 1000+ qubits | H, S, CX, X, Y, Z |
- * | `PauliPropagator` | Near-Clifford circuits | All gates (approximate) |
- * | `ExtendedStabilizer` | Near-Clifford circuits | All gates (approximate) |
- * | `TensorNetwork` | GPU tensor contraction | All gates |
+ * The table below shows which simulation types are supported by each backend.
+ *
+ * | SimulationType | QCSim | Qiskit Aer | GPU | QuEST |
+ * |----------------|-------|------------|-----|-------|
+ * | `Statevector` | ✅ | ✅ | ✅ | ✅ |
+ * | `MatrixProductState` | ✅ | ✅ | ✅ | ❌ |
+ * | `Stabilizer` | ✅ | ✅ | ❌ | ❌ |
+ * | `TensorNetwork` | ✅ | ✅ | ✅ | ❌ |
+ * | `PauliPropagator` | ✅ | ❌ | ✅ | ❌ |
+ * | `ExtendedStabilizer` | ❌ | ✅ | ❌ | ❌ |
+ * | Distributed | p-block | p-block | ❌ | MPI statevector |
+ *
+ * @note Qiskit Aer support is optional and requires building with `AER_INCLUDE_DIR`.
+ * GPU and QuEST are dynamically-loaded libraries — see the dedicated sections below.
  *
  * ---
  *
@@ -204,6 +210,8 @@
  * | T | `qc.t(qubit)` | — |
  * | T† | `qc.tdg(qubit)` | — |
  * | √X | `qc.sx(qubit)` | — |
+ * | √X† | `qc.sxdg(qubit)` | — |
+ * | K | `qc.k(qubit)` | — |
  * | Phase | `qc.p(qubit, λ)` | λ (radians) |
  * | Rx | `qc.rx(qubit, θ)` | θ (radians) |
  * | Ry | `qc.ry(qubit, θ)` | θ (radians) |
@@ -212,11 +220,17 @@
  * | CNOT | `qc.cx(ctrl, tgt)` | — |
  * | CY | `qc.cy(ctrl, tgt)` | — |
  * | CZ | `qc.cz(ctrl, tgt)` | — |
+ * | CH | `qc.ch(ctrl, tgt)` | — |
+ * | CSX | `qc.csx(ctrl, tgt)` | — |
+ * | CSX† | `qc.csxdg(ctrl, tgt)` | — |
  * | SWAP | `qc.swap(q1, q2)` | — |
  * | CP | `qc.cp(ctrl, tgt, λ)` | λ |
  * | CRx | `qc.crx(ctrl, tgt, θ)` | θ |
  * | CRy | `qc.cry(ctrl, tgt, θ)` | θ |
  * | CRz | `qc.crz(ctrl, tgt, θ)` | θ |
+ * | CU | `qc.cu(ctrl, tgt, θ, φ, λ, γ)` | 4 angles |
+ * | Toffoli | `qc.ccx(c1, c2, tgt)` | — |
+ * | Fredkin | `qc.cswap(ctrl, q1, q2)` | — |
  *
  * @subsection py_circuit_measure Measurements
  *
@@ -260,33 +274,23 @@
  *
  * m = maestro.Maestro()
  *
- * # Create a simulator
+ * # Create a simulator handle
+ * # Defaults to QCSim + MatrixProductState
  * handle = m.create_simulator(
  *     maestro.SimulatorType.QCSim,
  *     maestro.SimulationType.Statevector
  * )
+ *
+ * # Get the raw simulator object
  * sim = m.get_simulator(handle)
  *
- * # Allocate qubits and initialise the state
- * sim.AllocateQubits(3)
- * sim.Initialize()
- *
- * # Apply gates manually
- * sim.ApplyH(0)
- * sim.ApplyCX(0, 1)
- * sim.ApplyCX(1, 2)
- *
- * # Measure expectation values
- * zzz = sim.ExpectationValue("ZZZ")
- * print(f"<ZZZ> = {zzz:.4f}")  # 1.0
- *
- * # Sample measurement outcomes
- * counts = sim.SampleCounts([0, 1, 2], 1000)
- * print(f"Counts: {counts}")
- *
- * # Clean up
+ * # Clean up when done
  * m.destroy_simulator(handle)
  * @endcode
+ *
+ * @note The `Maestro` class is primarily used for handle-based lifecycle
+ * management. For most Python workflows, the `QuantumCircuit` API or the
+ * `simple_execute` / `simple_estimate` convenience functions are recommended.
  *
  * ---
  *
@@ -296,6 +300,9 @@
  * as an alternative CPU backend. QuEST is loaded dynamically as a shared
  * library (`libmaestroquest`), so it is available only when the library
  * has been built and installed.
+ *
+ * QuEST natively supports **MPI-distributed statevector** simulation,
+ * enabling execution across multiple nodes for larger qubit counts.
  *
  * @subsection py_quest_avail Checking Availability
  *
@@ -386,27 +393,170 @@
  * or `PauliPropagator` will raise an exception:
  * `"QuestSim only supports Statevector"`.
  *
+ * ---
+ *
+ * @section py_gpu GPU Backend
+ *
+ * Maestro supports GPU-accelerated simulation via a dynamically-loaded
+ * CUDA library (`libcomposer_gpu_simulators`). Like QuEST, the GPU backend
+ * is optional and loaded at runtime only when requested.
+ *
+ * @note The GPU backend is **not included** in the open-source version of
+ * Maestro. Contact [Qoro Quantum](https://qoroquantum.de) for access.
+ *
+ * Unlike QuEST, the GPU backend supports **multiple simulation types**
+ * including Statevector, MPS, Tensor Network, and Pauli Propagation.
+ *
+ * @subsection py_gpu_avail Checking Availability
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * # Check if the GPU library is installed
+ * if maestro.is_gpu_available():
+ *     print("GPU backend is available")
+ * else:
+ *     print("GPU not found — install libcomposer_gpu_simulators")
+ *
+ * # Explicitly initialise GPU (optional — done automatically on first use)
+ * maestro.init_gpu()
+ * @endcode
+ *
+ * @subsection py_gpu_exec Running a Circuit on GPU
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * maestro.init_gpu()
+ *
+ * qasm = """
+ * OPENQASM 2.0;
+ * include "qelib1.inc";
+ * qreg q[2];
+ * creg c[2];
+ * h q[0];
+ * cx q[0], q[1];
+ * measure q -> c;
+ * """
+ *
+ * # GPU Statevector
+ * result = maestro.simple_execute(
+ *     qasm,
+ *     simulator_type=maestro.SimulatorType.Gpu,
+ *     simulation_type=maestro.SimulationType.Statevector,
+ *     shots=1000
+ * )
+ * print(result["counts"])
+ *
+ * # GPU MPS
+ * result_mps = maestro.simple_execute(
+ *     qasm,
+ *     simulator_type=maestro.SimulatorType.Gpu,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=64,
+ *     shots=1000
+ * )
+ * print(result_mps["counts"])
+ * @endcode
+ *
+ * @subsection py_gpu_estimate Expectation Values on GPU
+ *
+ * @code{.py}
+ * bell = """
+ * OPENQASM 2.0;
+ * include "qelib1.inc";
+ * qreg q[2];
+ * h q[0];
+ * cx q[0], q[1];
+ * """
+ *
+ * result = maestro.simple_estimate(
+ *     bell, "ZZ;XX;YY",
+ *     simulator_type=maestro.SimulatorType.Gpu,
+ *     simulation_type=maestro.SimulationType.Statevector
+ * )
+ *
+ * vals = result["expectation_values"]
+ * print(f"<ZZ> = {vals[0]:.4f}")  #  1.0
+ * print(f"<XX> = {vals[1]:.4f}")  #  1.0
+ * print(f"<YY> = {vals[2]:.4f}")  # -1.0
+ * @endcode
+ *
+ * @subsection py_gpu_circuit QuantumCircuit with GPU
+ *
+ * @code{.py}
+ * from maestro.circuits import QuantumCircuit
+ *
+ * maestro.init_gpu()
+ *
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ * qc.measure_all()
+ *
+ * result = qc.execute(
+ *     simulator_type=maestro.SimulatorType.Gpu,
+ *     simulation_type=maestro.SimulationType.Statevector,
+ *     shots=2048
+ * )
+ * print(result["counts"])
+ * @endcode
+ *
+ * @subsection py_gpu_simtypes Supported Simulation Types
+ *
+ * | SimulationType | GPU Support |
+ * |----------------|-------------|
+ * | `Statevector` | ✅ |
+ * | `MatrixProductState` | ✅ |
+ * | `TensorNetwork` | ✅ |
+ * | `PauliPropagator` | ✅ |
+ * | `Stabilizer` | ❌ |
+ * | `ExtendedStabilizer` | ❌ |
+ *
+ * @subsection py_gpu_fallback Fallback Pattern
+ *
+ * For portable scripts that should work with or without GPU:
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * # Pick the best available backend
+ * if maestro.init_gpu():
+ *     sim_type = maestro.SimulatorType.Gpu
+ *     print("Using GPU")
+ * elif maestro.init_quest():
+ *     sim_type = maestro.SimulatorType.QuestSim
+ *     print("Using QuEST")
+ * else:
+ *     sim_type = maestro.SimulatorType.QCSim
+ *     print("Using CPU (QCSim)")
+ *
+ * result = maestro.simple_execute(qasm, simulator_type=sim_type, shots=1000)
+ * print(result["counts"])
+ * @endcode
+ *
+ * ---
  *
  * @section py_enums Enumerations Reference
  *
  * @subsection py_enum_simtype SimulatorType
  *
- * | Value | Description |
- * |-------|-------------|
- * | `SimulatorType.QCSim` | QCSim CPU simulator |
- * | `SimulatorType.CompositeQCSim` | Composite (distributed) CPU simulator |
- * | `SimulatorType.QuestSim` | QuEST simulator |
- * | `SimulatorType.GpuSim` | GPU-accelerated simulator (requires CUDA) |
+ * | Value | Description | Dynamic? |
+ * |-------|-------------|----------|
+ * | `SimulatorType.QCSim` | QCSim CPU simulator | No (built-in) |
+ * | `SimulatorType.CompositeQCSim` | Composite (distributed) CPU simulator | No (built-in) |
+ * | `SimulatorType.QuestSim` | QuEST simulator | Yes (`libcomposer_quest`) |
+ * | `SimulatorType.Gpu` | GPU-accelerated simulator (requires CUDA) | Yes (`libcomposer_gpu_simulators`) |
  *
  * @subsection py_enum_simmethod SimulationType
  *
- * | Value | Description |
- * |-------|-------------|
- * | `SimulationType.Statevector` | Full statevector simulation |
- * | `SimulationType.MatrixProductState` | MPS / tensor-train simulation |
- * | `SimulationType.Stabilizer` | Clifford stabiliser simulation |
- * | `SimulationType.TensorNetwork` | Tensor network contraction |
- * | `SimulationType.PauliPropagator` | Pauli frame propagation |
- * | `SimulationType.ExtendedStabilizer` | Extended stabiliser decomposition |
+ * | Value | Description | Supported By |
+ * |-------|-------------|-------------|
+ * | `SimulationType.Statevector` | Full statevector simulation | QCSim, Aer, GPU, QuEST |
+ * | `SimulationType.MatrixProductState` | MPS / tensor-train simulation | QCSim, Aer, GPU |
+ * | `SimulationType.Stabilizer` | Clifford stabiliser simulation | QCSim, Aer |
+ * | `SimulationType.TensorNetwork` | Tensor network contraction | QCSim, Aer, GPU |
+ * | `SimulationType.PauliPropagator` | Pauli frame propagation | QCSim, GPU |
+ * | `SimulationType.ExtendedStabilizer` | Extended stabiliser decomposition | Aer only |
  *
  */

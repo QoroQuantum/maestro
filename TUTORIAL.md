@@ -195,8 +195,8 @@ cx q[0], q[1];
 # 1. Execute and get counts
 # You can specify simulator_type and simulation_type if needed
 result = maestro.simple_execute(qasm_circuit, shots=1024)
-print(f"Simulator: {result['simulator']}")
-print(f"Method: {result['method']}")
+print(f"Simulator: {result['simulator']}")  # int (SimulatorType enum value)
+print(f"Method: {result['method']}")          # int (SimulationType enum value)
 print(f"Counts: {result['counts']}")
 
 # 2. Estimate expectation values
@@ -412,7 +412,7 @@ print("⟨IZ⟩ =", est["expectation_values"][3])  # 0.0
 
 ### Manual Control API
 
-For more granular control, you can use the `Maestro` and `ISimulator` classes directly.
+For more granular control over the simulation lifecycle, you can use the `Maestro` class directly.
 
 ```python
 from maestro import Maestro, SimulatorType, SimulationType
@@ -424,20 +424,16 @@ m = Maestro()
 # Defaults to QCSim and MatrixProductState
 sim_handle = m.create_simulator(SimulatorType.QCSim, SimulationType.Statevector)
 
-# Get the simulator object
+# Get the raw simulator object
 sim = m.get_simulator(sim_handle)
-
-# Apply gates manually
-sim.apply_h(0)
-sim.apply_cx(0, 1)
-
-# Sample counts
-counts = sim.sample_counts([0, 1], shots=1000)
-print(f"Counts: {counts}")
 
 # Cleanup
 m.destroy_simulator(sim_handle)
 ```
+
+> **Note:** The `Maestro` class provides handle-based lifecycle management.
+> For most Python workflows, the `QuantumCircuit` API or the `simple_execute` /
+> `simple_estimate` convenience functions are the recommended approach.
 
 ### Probability Access
 
@@ -509,7 +505,7 @@ These return `False` if `init_quest()` or `init_gpu()` has not been called, or i
 
 ### Running Circuits with QuEST
 
-QuEST provides an alternative statevector simulation engine. Once initialized, you can select it via `SimulatorType.QuestSim`.
+QuEST provides an alternative statevector simulation engine. Once initialized, you can select it via `SimulatorType.QuestSim`. QuEST also natively supports **MPI-distributed statevector** simulation, enabling execution across multiple nodes for larger qubit counts.
 
 > **Limitation:** QuEST only supports the **Statevector** simulation type. Attempting to use it with MPS, Stabilizer, or other simulation types will raise an error.
 
@@ -577,6 +573,8 @@ print(f"Expectation values: {estimate['expectation_values']}")
 
 The GPU backend provides CUDA-accelerated simulation. Once initialized, select it via `SimulatorType.Gpu`.
 
+> **Note:** The GPU backend is **not included** in the open-source version of Maestro. Contact [Qoro Quantum](https://qoroquantum.de) for access.
+
 The GPU backend supports multiple simulation types:
 
 | Simulation Type     | GPU Support |
@@ -585,7 +583,8 @@ The GPU backend supports multiple simulation types:
 | MatrixProductState  | ✅          |
 | TensorNetwork       | ✅          |
 | PauliPropagator     | ✅          |
-| Stabilizer          | ⚠️ Limited  |
+| Stabilizer          | ❌          |
+| ExtendedStabilizer  | ❌          |
 
 ```python
 import maestro
@@ -668,6 +667,6 @@ print(f"Counts: {result['counts']}")
 The QuEST and GPU shared libraries are **not** part of the default `pip install qoro-maestro` package. To use them:
 
 - **QuEST:** Build the QuEST integration library and ensure `libcomposer_quest.so` (or `.dylib` on macOS) is on your library path.
-- **GPU:** Build the GPU integration library with CUDA support and ensure `libcomposer_gpu_simulators.so` is on your library path.
+- **GPU:** The GPU backend is not included in the open-source release. Contact [Qoro Quantum](https://qoroquantum.de) for access to the GPU libraries.
 
 See `INSTALL.md` for detailed build instructions.
