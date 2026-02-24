@@ -11,7 +11,7 @@
  * researchers and developers to execute quantum circuits efficiently across
  * CPUs, GPUs, and distributed HPC environments — without manual tuning.
  *
- * - **Version:** 0.1.0
+ * - **Version:** 0.2.0
  * - **License:** GPL-3.0
  * - **Organisation:** [Qoro Quantum](https://qoroquantum.de)
  *
@@ -151,13 +151,15 @@
  * | Category | Technology | Notes |
  * |----------|------------|-------|
  * | CPU Statevector | QCSim, Qiskit Aer | Full state-vector simulation |
- * | CPU MPS | QCSim | Matrix Product State with configurable bond dimension |
+ * | CPU MPS | QCSim, Qiskit Aer | Matrix Product State with configurable bond dimension |
+ * | CPU Stabilizer | QCSim, Qiskit Aer | Efficient Clifford-only simulation |
+ * | CPU Tensor Network | QCSim, Qiskit Aer | Tensor network contraction |
+ * | CPU Pauli Propagator | QCSim | Pauli propagation simulation |
  * | GPU Statevector | NVIDIA cuStateVec | Via dynamic GPU library loading |
  * | GPU MPS | Custom CUDA | Custom GPU MPS implementation |
  * | GPU Tensor %Network | Custom CUDA | Tensor network simulation on GPU |
- * | Stabiliser / Clifford | Custom CUDA | Efficient Clifford-only simulation |
- * | Pauli Propagator | Custom CUDA | Pauli propagation simulation |
- * | QuEST | QuEST library | Alternative CPU simulator |
+ * | GPU Pauli Propagator | Custom CUDA | Pauli propagation simulation on GPU |
+ * | QuEST | QuEST library | Alternative CPU statevector simulator (MPI-capable) |
  * | Composite | p-block | Distributed state across sub-simulators |
  *
  * Each backend is accessed through a C++ adapter implementing the
@@ -185,6 +187,7 @@
  *
  * | Page | Description |
  * |------|-------------|
+ * | @ref python_guide "Python Guide" | Comprehensive Python API reference and examples |
  * | @ref md_INSTALL "Installation" | Build instructions and optional dependency setup |
  * | @ref md_TUTORIAL "Tutorial" | Step-by-step API usage guide |
  * | @ref md_CONTRIBUTING "Contributing" | How to contribute to Maestro |
