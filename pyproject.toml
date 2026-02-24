@@ -4,10 +4,10 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "qoro-maestro"
-version = "0.2.0"
+version = "0.2.0.post0"
 description = "Python bindings for Maestro - A unified interface for quantum circuit simulation"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = {text = "GPL-3.0"}
 authors = [
   { name = "Qoro Quantum", email = "team@qoroquantum.de" },
@@ -15,8 +15,6 @@ authors = [
 classifiers = [
   "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",

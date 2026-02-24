@@ -279,7 +279,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
    */
   std::vector<double> ExecuteOnHostExpectations(
       const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId,
-      const std::vector<std::string> &paulis) {
+      const std::vector<std::string> &paulis) override {
     const auto recreate = recreateIfNeeded;
 
     auto simType = Simulators::SimulatorType::kQCSim;

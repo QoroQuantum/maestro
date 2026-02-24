@@ -24,33 +24,38 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-13, macos-14, windows-latest]
+        os: [ubuntu-latest, macos-14]
 
     steps:
       - uses: actions/checkout@v4
 
-      # Install Boost, OpenBLAS, and libomp on macOS
-      - name: Install dependencies (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          brew install boost openblas libomp
-          echo "PKG_CONFIG_PATH=$(brew --prefix openblas)/lib/pkgconfig" >> $GITHUB_ENV
-          echo "CMAKE_ARGS=-DOpenMP_ROOT=$(brew --prefix libomp)" >> $GITHUB_ENV
-          # Set the fallback library path so delocate-wheel can find the dylibs during repair
-          echo "DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix)/lib:$(brew --prefix openblas)/lib:$(brew --prefix libomp)/lib" >> $GITHUB_ENV
-
-      # Install Boost and OpenBLAS on Windows via vcpkg
-      - name: Install dependencies (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
-
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.22.0
         env:
-          CIBW_BEFORE_ALL_LINUX: "curl -L https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz -o boost.tgz && tar -xzf boost.tgz && cd boost_1_89_0 && ./bootstrap.sh && ./b2 -j4 --with-program_options --with-json --with-container --with-serialization install"
-          CIBW_ARCHS_WINDOWS: "AMD64"
+          # ---- Linux ----
+          CIBW_BEFORE_ALL_LINUX: >-
+            curl -L https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz -o /tmp/boost.tgz &&
+            tar -xzf /tmp/boost.tgz -C /tmp &&
+            cd /tmp/boost_1_89_0 &&
+            ./bootstrap.sh --prefix=/usr/local &&
+            ./b2 -j$(nproc) --with-program_options --with-json --with-container --with-serialization install
+
+          # ---- macOS ----
+          CIBW_BEFORE_ALL_MACOS: >-
+            brew install boost openblas libomp
+
+          CIBW_ENVIRONMENT_MACOS: >-
+            MACOSX_DEPLOYMENT_TARGET=14.0
+            CMAKE_ARGS="-DOpenMP_ROOT=$(brew --prefix libomp)"
+            DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix)/lib:$(brew --prefix openblas)/lib:$(brew --prefix libomp)/lib
+
+          CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-
+            DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix)/lib:$(brew --prefix openblas)/lib:$(brew --prefix libomp)/lib
+            delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}
+
+          CIBW_ARCHS_MACOS: auto
+
+          # ---- Common ----
           CIBW_BUILD: "cp310-* cp311-* cp312-*"
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
 

@@ -163,7 +163,13 @@ Maestro provides Python bindings for ease of use, allowing you to integrate its 
 
 ### Installation
 
-To install the Python bindings, run the following command from the root of the Maestro repository:
+Install directly from PyPI (pre-built wheels for Linux and macOS):
+
+```bash
+pip install qoro-maestro
+```
+
+Or build from source from the root of the Maestro repository:
 
 ```bash
 pip install .
@@ -223,17 +229,19 @@ by integer index (0-based) and are automatically allocated as needed.
 
 **Single-Qubit Gates (Non-Parametric)**
 
-| Method     | Gate             | Description                  |
-|------------|------------------|------------------------------|
-| `qc.x(q)`  | Pauli-X          | Bit flip                     |
-| `qc.y(q)`  | Pauli-Y          | Bit + phase flip             |
-| `qc.z(q)`  | Pauli-Z          | Phase flip                   |
-| `qc.h(q)`  | Hadamard         | Creates superposition        |
-| `qc.s(q)`  | S Gate           | π/2 phase                    |
-| `qc.sdg(q)` | S† Gate         | −π/2 phase                   |
-| `qc.t(q)`  | T Gate           | π/4 phase                    |
-| `qc.tdg(q)` | T† Gate         | −π/4 phase                   |
-| `qc.sx(q)` | √X Gate          | Square root of X             |
+| Method       | Gate             | Description                  |
+|--------------|------------------|------------------------------|
+| `qc.x(q)`    | Pauli-X          | Bit flip                     |
+| `qc.y(q)`    | Pauli-Y          | Bit + phase flip             |
+| `qc.z(q)`    | Pauli-Z          | Phase flip                   |
+| `qc.h(q)`    | Hadamard         | Creates superposition        |
+| `qc.s(q)`    | S Gate           | π/2 phase                    |
+| `qc.sdg(q)`  | S† Gate          | −π/2 phase                   |
+| `qc.t(q)`    | T Gate           | π/4 phase                    |
+| `qc.tdg(q)`  | T† Gate          | −π/4 phase                   |
+| `qc.sx(q)`   | √X Gate          | Square root of X             |
+| `qc.sxdg(q)` | √X† Gate        | Adjoint of √X                |
+| `qc.k(q)`    | K Gate           | K gate                       |
 
 **Single-Qubit Gates (Parametric)**
 
@@ -252,16 +260,27 @@ by integer index (0-based) and are automatically allocated as needed.
 | `qc.cx(c, t)`      | CNOT    | Controlled-X (control, target)   |
 | `qc.cy(c, t)`      | CY      | Controlled-Y                     |
 | `qc.cz(c, t)`      | CZ      | Controlled-Z                     |
+| `qc.ch(c, t)`      | CH      | Controlled-Hadamard              |
+| `qc.csx(c, t)`     | CSX     | Controlled-√X                    |
+| `qc.csxdg(c, t)`   | CSX†    | Controlled-√X†                   |
 | `qc.swap(a, b)`    | SWAP    | Swaps two qubits                 |
 
 **Controlled Parametric Gates**
 
-| Method                  | Gate | Parameters          |
-|-------------------------|------|---------------------|
-| `qc.cp(c, t, λ)`       | CP   | `λ` (lambda)        |
-| `qc.crx(c, t, θ)`      | CRx  | `θ` (theta)         |
-| `qc.cry(c, t, θ)`      | CRy  | `θ` (theta)         |
-| `qc.crz(c, t, θ)`      | CRz  | `θ` (theta)         |
+| Method                          | Gate | Parameters                    |
+|---------------------------------|------|-------------------------------|
+| `qc.cp(c, t, λ)`               | CP   | `λ` (lambda)                  |
+| `qc.crx(c, t, θ)`              | CRx  | `θ` (theta)                   |
+| `qc.cry(c, t, θ)`              | CRy  | `θ` (theta)                   |
+| `qc.crz(c, t, θ)`              | CRz  | `θ` (theta)                   |
+| `qc.cu(c, t, θ, φ, λ, γ)`     | CU   | `θ`, `φ`, `λ`, `γ`            |
+
+**Three-Qubit Gates**
+
+| Method                    | Gate     | Description                              |
+|---------------------------|----------|------------------------------------------|
+| `qc.ccx(c1, c2, t)`      | Toffoli  | Controlled-Controlled-X (CCX)            |
+| `qc.cswap(c, a, b)`      | Fredkin  | Controlled-SWAP                          |
 
 #### Measurements
 
@@ -418,6 +437,50 @@ print(f"Counts: {counts}")
 
 # Cleanup
 m.destroy_simulator(sim_handle)
+```
+
+### Probability Access
+
+Get the full probability distribution after executing a circuit (without sampling):
+
+```python
+import maestro
+
+QuantumCircuit = maestro.circuits.QuantumCircuit
+
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+
+probs = maestro.get_probabilities(qc)
+print(probs)  # [0.5, 0.0, 0.0, 0.5] for a Bell state
+```
+
+### GPU and QuEST Library Management
+
+Maestro supports optional GPU and QuEST simulation backends that are loaded dynamically.
+Use these functions to initialize and check availability:
+
+```python
+import maestro
+
+# GPU backend
+if maestro.init_gpu():
+    print("GPU library loaded successfully")
+    result = qc.execute(simulator_type=maestro.SimulatorType.Gpu)
+else:
+    print("GPU library not available")
+
+print(f"GPU available: {maestro.is_gpu_available()}")
+
+# QuEST backend
+if maestro.init_quest():
+    print("QuEST library loaded successfully")
+    result = qc.execute(simulator_type=maestro.SimulatorType.QuestSim)
+else:
+    print("QuEST library not available")
+
+print(f"QuEST available: {maestro.is_quest_available()}")
 ```
 
 ### Examples
