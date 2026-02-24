@@ -275,6 +275,10 @@ int main(int argc, char** argv) {
       else  // other types are not supported yet on gpu, set statevector
         simulator.RemoveAllOptimizationSimulatorsAndAdd(
             static_cast<int>(simulatorType), 0);
+    } else if (simulatorType == 5)  // quest, only supports statevector for now
+    {
+      simulator.RemoveAllOptimizationSimulatorsAndAdd(
+          static_cast<int>(simulatorType), 0);
     }
 
     static std::string configStr = GetConfigJson(nrShots, maxBondDim);
