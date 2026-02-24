@@ -11,7 +11,7 @@
  * researchers and developers to execute quantum circuits efficiently across
  * CPUs, GPUs, and distributed HPC environments — without manual tuning.
  *
- * - **Version:** 0.1.0
+ * - **Version:** 0.2.0
  * - **License:** GPL-3.0
  * - **Organisation:** [Qoro Quantum](https://qoroquantum.de)
  *
@@ -33,33 +33,51 @@
  *
  * @section arch Architecture Overview
  *
- * @verbatim
- *  ┌─────────────────────────────────────────────────────────────────┐
- *  │                        User Application                        │
- *  │               (C++ API  ·  Python bindings  ·  CLI)            │
- *  ├─────────────────────────────────────────────────────────────────┤
- *  │                                                                 │
- *  │   ┌──────────┐    ┌──────────────┐    ┌───────────────────┐    │
- *  │   │  QASM /  │───▶│   Circuit    │───▶│   Prediction      │    │
- *  │   │  Qiskit  │    │   IR         │    │   Engine           │    │
- *  │   └──────────┘    └──────────────┘    └───────┬───────────┘    │
- *  │                                               │                 │
- *  │                        ┌──────────────────────┘                 │
- *  │                        ▼                                        │
- *  │   ┌────────────────────────────────────────────────────────┐   │
- *  │   │              Simulation Backends                        │   │
- *  │   │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │   │
- *  │   │  │   CPU    │ │   GPU    │ │  Tensor  │ │Composite │  │   │
- *  │   │  │  SV/MPS  │ │  SV/MPS  │ │  %Network │ │ (p-block)│  │   │
- *  │   │  └──────────┘ └──────────┘ └──────────┘ └──────────┘  │   │
- *  │   └────────────────────────────────────────────────────────┘   │
- *  │                                                                 │
- *  │   ┌──────────┐    ┌──────────┐    ┌──────────┐                 │
- *  │   │ Scheduler│    │ %Network  │    │Estimators│                 │
- *  │   │          │    │  (DQC)   │    │          │                 │
- *  │   └──────────┘    └──────────┘    └──────────┘                 │
- *  └─────────────────────────────────────────────────────────────────┘
- * @endverbatim
+ * @htmlonly
+ * <div class="mermaid">
+ * graph TD
+ *     subgraph User["User Application"]
+ *         API["C++ API · Python Bindings · CLI"]
+ *     end
+ *
+ *     subgraph Frontend["Circuit Frontend"]
+ *         QASM["QASM / Qiskit"]
+ *         IR["Circuit IR"]
+ *         PE["Prediction Engine"]
+ *     end
+ *
+ *     subgraph Backends["Simulation Backends"]
+ *         CPU["CPU — SV · MPS · Stabilizer · TN · Pauli Prop"]
+ *         GPU["GPU — SV · MPS · TN · Pauli Prop"]
+ *         QUEST["QuEST — Statevector · MPI"]
+ *         COMP["Composite — p-block"]
+ *     end
+ *
+ *     subgraph Infra["Infrastructure"]
+ *         SCHED["Scheduler"]
+ *         NET["Network — DQC"]
+ *         EST["Estimators"]
+ *     end
+ *
+ *     API --> QASM
+ *     QASM --> IR
+ *     IR --> PE
+ *     PE --> CPU
+ *     PE --> GPU
+ *     PE --> QUEST
+ *     PE --> COMP
+ *     IR --> SCHED
+ *     SCHED --> NET
+ *     IR --> EST
+ *
+ *     style User fill:#1a1a2e,stroke:#7c3aed,color:#e0e0e0
+ *     style Frontend fill:#16213e,stroke:#7c3aed,color:#e0e0e0
+ *     style Backends fill:#0f3460,stroke:#7c3aed,color:#e0e0e0
+ *     style Infra fill:#1a1a2e,stroke:#7c3aed,color:#e0e0e0
+ *     style GPU fill:#533483,stroke:#e94560,color:#fff
+ *     style QUEST fill:#1e5631,stroke:#4ecca3,color:#fff
+ * </div>
+ * @endhtmlonly
  *
  * ---
  *
@@ -81,6 +99,8 @@
  * | @ref qasm | OpenQASM 2.0 parsing and serialisation |
  * | @ref utils | Thread pool, tensors, logging, and other utilities |
  * | @ref python | High-performance Python bindings |
+ * | @ref quest_backend "QuEST Backend" | Dynamic QuEST CPU simulator with MPI support |
+ * | @ref gpu_backend "GPU Backend" | CUDA-accelerated simulation (closed-source) |
  *
  * ---
  *
@@ -151,13 +171,16 @@
  * | Category | Technology | Notes |
  * |----------|------------|-------|
  * | CPU Statevector | QCSim, Qiskit Aer | Full state-vector simulation |
- * | CPU MPS | QCSim | Matrix Product State with configurable bond dimension |
+ * | CPU MPS | QCSim, Qiskit Aer | Matrix Product State with configurable bond dimension |
+ * | CPU Stabilizer | QCSim, Qiskit Aer | Efficient Clifford-only simulation |
+ * | CPU Tensor Network | QCSim, Qiskit Aer | Tensor network contraction |
+ * | CPU Pauli Propagator | QCSim | Pauli propagation simulation |
+ * | CPU Extended Stabilizer | Qiskit Aer | Near-Clifford decomposition |
  * | GPU Statevector | NVIDIA cuStateVec | Via dynamic GPU library loading |
  * | GPU MPS | Custom CUDA | Custom GPU MPS implementation |
  * | GPU Tensor %Network | Custom CUDA | Tensor network simulation on GPU |
- * | Stabiliser / Clifford | Custom CUDA | Efficient Clifford-only simulation |
- * | Pauli Propagator | Custom CUDA | Pauli propagation simulation |
- * | QuEST | QuEST library | Alternative CPU simulator |
+ * | GPU Pauli Propagator | Custom CUDA | Pauli propagation simulation on GPU |
+ * | QuEST | QuEST library | CPU statevector with MPI distribution |
  * | Composite | p-block | Distributed state across sub-simulators |
  *
  * Each backend is accessed through a C++ adapter implementing the
@@ -165,7 +188,158 @@
  *
  * ---
  *
+ * @section quest_backend QuEST Backend
+ *
+ * Maestro supports the [QuEST](https://quest.qtechtheory.org/) simulator
+ * as an alternative CPU backend. QuEST is loaded dynamically as a shared
+ * library (`libmaestroquest`), so it is available only when the library
+ * has been built and installed.
+ *
+ * QuEST natively supports **MPI-distributed statevector** simulation,
+ * enabling execution across multiple nodes for larger qubit counts.
+ *
+ * QuEST only supports **Statevector** simulation. Attempting to use it
+ * with MPS, Stabilizer, or other simulation types will raise an error.
+ *
+ * @subsection quest_init Initialisation
+ *
+ * @code{.cpp}
+ * #include "Simulators/Factory.h"
+ *
+ * // Initialise QuEST (all platforms)
+ * bool questReady = Simulators::SimulatorsFactory::InitQuestLibrary();
+ * if (questReady)
+ *     std::cout << "QuEST loaded successfully" << std::endl;
+ * @endcode
+ *
+ * @subsection quest_exec Running a Circuit with QuEST
+ *
+ * @code{.cpp}
+ * #include "maestrolib/Interface.h"
+ * #include "Simulators/Factory.h"
+ * #include "Simulators/State.h"
+ *
+ * void* maestro = GetMaestroObject();
+ * Simulators::SimulatorsFactory::InitQuestLibrary();
+ *
+ * unsigned long int simHandle = CreateSimpleSimulator(2);
+ *
+ * // Switch to QuEST Statevector
+ * RemoveAllOptimizationSimulatorsAndAdd(
+ *     simHandle,
+ *     static_cast<int>(Simulators::SimulatorType::kQuestSim),
+ *     static_cast<int>(Simulators::SimulationType::kStatevector)
+ * );
+ *
+ * const char* qasm =
+ *     "OPENQASM 2.0;\n"
+ *     "include \"qelib1.inc\";\n"
+ *     "qreg q[2]; creg c[2];\n"
+ *     "h q[0]; cx q[0], q[1];\n"
+ *     "measure q -> c;\n";
+ *
+ * char* result = SimpleExecute(simHandle, qasm, "{\"shots\": 1024}");
+ * // result JSON: {"counts": {"00": ~512, "11": ~512}, "simulator": "quest", ...}
+ *
+ * FreeResult(result);
+ * DestroySimpleSimulator(simHandle);
+ * @endcode
+ *
+ * @subsection quest_python QuEST in Python
+ *
+ * See the @ref python_guide "Python Guide" for QuEST usage from Python,
+ * including `maestro.init_quest()` and `maestro.is_quest_available()`.
+ *
+ * ---
+ *
+ * @section gpu_backend GPU Backend
+ *
+ * @note The GPU backend is **not included** in the open-source version of
+ * Maestro. Contact [Qoro Quantum](https://qoroquantum.de) for access.
+ *
+ * Maestro supports GPU-accelerated simulation via a dynamically-loaded
+ * CUDA library (`libcomposer_gpu_simulators`). The GPU backend is
+ * optional and loaded at runtime only when requested.
+ *
+ * Unlike QuEST, the GPU backend supports **multiple simulation types**:
+ *
+ * | SimulationType | GPU Support |
+ * |----------------|-------------|
+ * | `kStatevector` | ✅ |
+ * | `kMatrixProductState` | ✅ |
+ * | `kTensorNetwork` | ✅ |
+ * | `kPauliPropagator` | ✅ |
+ * | `kStabilizer` | ❌ |
+ * | `kExtendedStabilizer` | ❌ |
+ *
+ * @subsection gpu_init Initialisation
+ *
+ * On Linux, `GetMaestroObject()` automatically attempts to load the GPU
+ * library. You can also initialise it explicitly:
+ *
+ * @code{.cpp}
+ * #include "Simulators/Factory.h"
+ *
+ * #ifdef __linux__
+ * bool gpuReady = Simulators::SimulatorsFactory::InitGpuLibrary();
+ * if (gpuReady)
+ *     std::cout << "GPU library loaded" << std::endl;
+ * #endif
+ * @endcode
+ *
+ * @subsection gpu_exec Running a Circuit on GPU
+ *
+ * @code{.cpp}
+ * #include "maestrolib/Interface.h"
+ * #include "Simulators/State.h"
+ *
+ * void* maestro = GetMaestroObject();
+ * unsigned long int simHandle = CreateSimpleSimulator(2);
+ *
+ * // Switch to GPU + Statevector
+ * RemoveAllOptimizationSimulatorsAndAdd(
+ *     simHandle,
+ *     static_cast<int>(Simulators::SimulatorType::kGpuSim),
+ *     static_cast<int>(Simulators::SimulationType::kStatevector)
+ * );
+ *
+ * const char* qasm =
+ *     "OPENQASM 2.0;\n"
+ *     "include \"qelib1.inc\";\n"
+ *     "qreg q[2]; creg c[2];\n"
+ *     "h q[0]; cx q[0], q[1];\n"
+ *     "measure q -> c;\n";
+ *
+ * char* result = SimpleExecute(simHandle, qasm, "{\"shots\": 1024}");
+ * // result JSON: {"counts": {...}, "simulator": "gpu_simulator", ...}
+ *
+ * FreeResult(result);
+ * DestroySimpleSimulator(simHandle);
+ * @endcode
+ *
+ * @subsection gpu_mps GPU MPS Example
+ *
+ * @code{.cpp}
+ * // Switch to GPU + MPS
+ * RemoveAllOptimizationSimulatorsAndAdd(
+ *     simHandle,
+ *     static_cast<int>(Simulators::SimulatorType::kGpuSim),
+ *     static_cast<int>(Simulators::SimulationType::kMatrixProductState)
+ * );
+ *
+ * char* result = SimpleExecute(simHandle, qasm, "{\"shots\": 1024}");
+ * @endcode
+ *
+ * @subsection gpu_python GPU in Python
+ *
+ * See the @ref python_guide "Python Guide" for GPU usage from Python,
+ * including `maestro.init_gpu()` and `maestro.is_gpu_available()`.
+ *
  * @section auto_backend Automatic Backend Selection
+ *
+ * @note Automatic Backend Selection is a **closed-source** feature and is
+ * not included in the open-source release of Maestro. Contact
+ * [Qoro Quantum](https://qoroquantum.de) for access.
  *
  * Maestro's prediction engine:
  * 1. Extracts structural features from the circuit (gate density, entanglement
@@ -185,6 +359,7 @@
  *
  * | Page | Description |
  * |------|-------------|
+ * | @ref python_guide "Python Guide" | Comprehensive Python API reference and examples |
  * | @ref md_INSTALL "Installation" | Build instructions and optional dependency setup |
  * | @ref md_TUTORIAL "Tutorial" | Step-by-step API usage guide |
  * | @ref md_CONTRIBUTING "Contributing" | How to contribute to Maestro |

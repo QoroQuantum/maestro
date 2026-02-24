@@ -7,7 +7,7 @@
 #  Project metadata
 # ---------------------------------------------------------------------------
 PROJECT_NAME           = "Maestro"
-PROJECT_NUMBER         = "0.1.0"
+PROJECT_NUMBER         = "0.2.0"
 PROJECT_BRIEF          = "Unified interface for quantum circuit simulation"
 PROJECT_LOGO           =
 
@@ -52,6 +52,7 @@ INLINE_GROUPED_CLASSES = YES
 INLINE_SIMPLE_STRUCTS  = YES
 TYPEDEF_HIDES_STRUCT   = NO
 LOOKUP_CACHE_SIZE      = 2
+ALIASES               += "mermaid{1}=@htmlonly <div class=\"mermaid\"> @endhtmlonly @htmlinclude \1 @htmlonly </div> @endhtmlonly"
 
 # ---------------------------------------------------------------------------
 #  Extraction & visibility
@@ -169,7 +170,7 @@ GENERATE_HTML          = YES
 HTML_OUTPUT            = html
 HTML_FILE_EXTENSION    = .html
 HTML_HEADER            =
-HTML_FOOTER            =
+HTML_FOOTER            = docs/footer.html
 HTML_STYLESHEET        =
 HTML_EXTRA_STYLESHEET  = docs/custom.css
 HTML_EXTRA_FILES       =
