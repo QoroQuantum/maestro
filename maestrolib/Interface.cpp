@@ -254,6 +254,9 @@ __declspec(dllexport)
     case Simulators::SimulatorType::kCompositeQCSim:
       response.emplace("simulator", "composite_qcsim");
       break;
+    case Simulators::SimulatorType::kQuestSim:
+      response.emplace("simulator", "quest");
+      break;
 #ifdef __linux__
     case Simulators::SimulatorType::kGpuSim:
       response.emplace("simulator", "gpu_simulator");
@@ -277,6 +280,9 @@ __declspec(dllexport)
       break;
     case Simulators::SimulationType::kTensorNetwork:
       response.emplace("method", "tensor_network");
+      break;
+    case Simulators::SimulationType::kPauliPropagator:
+      response.emplace("method", "pauli_propagation");
       break;
     default:
       response.emplace("method", "unknown");
@@ -391,6 +397,9 @@ __declspec(dllexport)
     case Simulators::SimulatorType::kQCSim:
       response.emplace("simulator", "qcsim");
       break;
+    case Simulators::SimulatorType::kQuestSim:
+      response.emplace("simulator", "quest");
+      break;
 #ifndef NO_QISKIT_AER
     case Simulators::SimulatorType::kCompositeQiskitAer:
       response.emplace("simulator", "composite_aer");
@@ -422,6 +431,9 @@ __declspec(dllexport)
       break;
     case Simulators::SimulationType::kTensorNetwork:
       response.emplace("method", "tensor_network");
+      break;
+    case Simulators::SimulationType::kPauliPropagator:
+      response.emplace("method", "pauli_propagation");
       break;
     default:
       response.emplace("method", "unknown");
