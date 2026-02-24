@@ -157,6 +157,108 @@ char* result = SimpleEstimate(simHandle, qasmCircuit, observables, config);
 // Result contains "expectation_values" array
 ```
 
+### GPU and QuEST Backends (C++)
+
+Maestro supports **GPU** and **QuEST** as dynamically-loaded simulation backends. On Linux, `GetMaestroObject()` automatically attempts to load the GPU library. You can also initialise these backends explicitly via the `SimulatorsFactory`.
+
+> **Note:** The GPU backend is **not included** in the open-source version of Maestro. Contact [Qoro Quantum](https://qoroquantum.de) for access.
+
+#### Initialisation
+
+```cpp
+#include "Simulators/Factory.h"
+
+// GPU (Linux only) — automatically called by GetMaestroObject()
+#ifdef __linux__
+bool gpuReady = Simulators::SimulatorsFactory::InitGpuLibrary();
+#endif
+
+// QuEST (all platforms)
+bool questReady = Simulators::SimulatorsFactory::InitQuestLibrary();
+```
+
+#### Using GPU via the C Interface
+
+The `SimulatorType` and `SimulationType` enums are mapped to `int` values in the C interface. Use `RemoveAllOptimizationSimulatorsAndAdd` to switch the backend of an existing `SimpleSimulator` handle:
+
+```cpp
+#include "maestrolib/Interface.h"
+#include "Simulators/State.h"  // for enum definitions
+
+void* maestro = GetMaestroObject();
+unsigned long int simHandle = CreateSimpleSimulator(2);
+
+// Switch to GPU + Statevector
+RemoveAllOptimizationSimulatorsAndAdd(
+    simHandle,
+    static_cast<int>(Simulators::SimulatorType::kGpuSim),
+    static_cast<int>(Simulators::SimulationType::kStatevector)
+);
+
+const char* qasm =
+    "OPENQASM 2.0;\n"
+    "include \"qelib1.inc\";\n"
+    "qreg q[2];\n"
+    "creg c[2];\n"
+    "h q[0];\n"
+    "cx q[0], q[1];\n"
+    "measure q -> c;\n";
+
+char* result = SimpleExecute(simHandle, qasm, "{\"shots\": 1024}");
+PrintResults(result);
+
+FreeResult(result);
+DestroySimpleSimulator(simHandle);
+```
+
+#### Using QuEST via the C Interface
+
+```cpp
+#include "maestrolib/Interface.h"
+#include "Simulators/Factory.h"
+#include "Simulators/State.h"
+
+void* maestro = GetMaestroObject();
+
+// Initialise QuEST (required before first use)
+Simulators::SimulatorsFactory::InitQuestLibrary();
+
+unsigned long int simHandle = CreateSimpleSimulator(2);
+
+// Switch to QuEST + Statevector (QuEST only supports Statevector)
+RemoveAllOptimizationSimulatorsAndAdd(
+    simHandle,
+    static_cast<int>(Simulators::SimulatorType::kQuestSim),
+    static_cast<int>(Simulators::SimulationType::kStatevector)
+);
+
+const char* qasm =
+    "OPENQASM 2.0;\n"
+    "include \"qelib1.inc\";\n"
+    "qreg q[2];\n"
+    "creg c[2];\n"
+    "h q[0];\n"
+    "cx q[0], q[1];\n"
+    "measure q -> c;\n";
+
+char* result = SimpleExecute(simHandle, qasm, "{\"shots\": 1024}");
+PrintResults(result);
+
+FreeResult(result);
+DestroySimpleSimulator(simHandle);
+```
+
+#### Supported Simulation Types
+
+| SimulationType | GPU | QuEST |
+|----------------|-----|-------|
+| `kStatevector` | ✅ | ✅ |
+| `kMatrixProductState` | ✅ | ❌ |
+| `kTensorNetwork` | ✅ | ❌ |
+| `kPauliPropagator` | ✅ | ❌ |
+| `kStabilizer` | ❌ | ❌ |
+| `kExtendedStabilizer` | ❌ | ❌ |
+
 ## Python
 
 Maestro provides Python bindings for ease of use, allowing you to integrate its high-performance simulation capabilities into your Python-based quantum workflows.

@@ -1,0 +1,41 @@
+graph TD
+    subgraph User["User Application"]
+        API["C++ API · Python Bindings · CLI"]
+    end
+
+    subgraph Frontend["Circuit Frontend"]
+        QASM["QASM / Qiskit"]
+        IR["Circuit IR"]
+        PE["Prediction Engine"]
+    end
+
+    subgraph Backends["Simulation Backends"]
+        CPU["CPU<br/>SV · MPS · Stabilizer<br/>TN · Pauli Prop"]
+        GPU["GPU<br/>SV · MPS · TN<br/>Pauli Prop"]
+        QUEST["QuEST<br/>SV · MPI"]
+        COMP["Composite<br/>p-block"]
+    end
+
+    subgraph Infra["Infrastructure"]
+        SCHED["Scheduler"]
+        NET["Network<br/>(DQC)"]
+        EST["Estimators"]
+    end
+
+    API --> QASM
+    QASM --> IR
+    IR --> PE
+    PE --> CPU
+    PE --> GPU
+    PE --> QUEST
+    PE --> COMP
+    IR --> SCHED
+    SCHED --> NET
+    IR --> EST
+
+    style User fill:#1a1a2e,stroke:#7c3aed,color:#e0e0e0
+    style Frontend fill:#16213e,stroke:#7c3aed,color:#e0e0e0
+    style Backends fill:#0f3460,stroke:#7c3aed,color:#e0e0e0
+    style Infra fill:#1a1a2e,stroke:#7c3aed,color:#e0e0e0
+    style GPU fill:#533483,stroke:#e94560,color:#fff
+    style QUEST fill:#1e5631,stroke:#4ecca3,color:#fff

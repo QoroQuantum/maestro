@@ -127,7 +127,10 @@
  * | `TensorNetwork` | ✅ | ✅ | ✅ | ❌ |
  * | `PauliPropagator` | ✅ | ❌ | ✅ | ❌ |
  * | `ExtendedStabilizer` | ❌ | ✅ | ❌ | ❌ |
- * | Distributed | p-block | p-block | ❌ | MPI statevector |
+ *
+ * **Distributed execution:** QCSim and Qiskit Aer support p-block composite
+ * simulation via `CompositeQCSim` / `CompositeQiskitAer`. QuEST natively
+ * supports MPI-distributed statevector simulation.
  *
  * @note Qiskit Aer support is optional and requires building with `AER_INCLUDE_DIR`.
  * GPU and QuEST are dynamically-loaded libraries — see the dedicated sections below.
