@@ -86,6 +86,8 @@ bool SimulatorsFactory::InitQuestLibrary() {
     if (questLibrary->Init(
 #ifdef _WIN32
         "maestroquest.dll"
+#elif defined(__APPLE__)
+        "libmaestroquest.dylib"
 #else
         "libmaestroquest.so"
 #endif
