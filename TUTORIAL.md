@@ -456,33 +456,6 @@ probs = maestro.get_probabilities(qc)
 print(probs)  # [0.5, 0.0, 0.0, 0.5] for a Bell state
 ```
 
-### GPU and QuEST Library Management
-
-Maestro supports optional GPU and QuEST simulation backends that are loaded dynamically.
-Use these functions to initialize and check availability:
-
-```python
-import maestro
-
-# GPU backend
-if maestro.init_gpu():
-    print("GPU library loaded successfully")
-    result = qc.execute(simulator_type=maestro.SimulatorType.Gpu)
-else:
-    print("GPU library not available")
-
-print(f"GPU available: {maestro.is_gpu_available()}")
-
-# QuEST backend
-if maestro.init_quest():
-    print("QuEST library loaded successfully")
-    result = qc.execute(simulator_type=maestro.SimulatorType.QuestSim)
-else:
-    print("QuEST library not available")
-
-print(f"QuEST available: {maestro.is_quest_available()}")
-```
-
 ### Examples
 
 You can find several complete examples in the `examples/` directory:
@@ -490,3 +463,211 @@ You can find several complete examples in the `examples/` directory:
 - `examples/python_example_1.py`: Basic simulation and sampling.
 - `examples/python_example_2.py`: Advanced simulation with manual gate application.
 - `examples/python_example_3.py`: Working with expectation values and observables.
+
+---
+
+## QuEST and GPU Execution (Dynamic Backends)
+
+Maestro supports **QuEST** and **GPU** simulation backends as **optional, dynamically-loaded libraries**. Unlike the built-in CPU backends (QCSim, MPS, etc.) which are always available, these backends are packaged as separate shared libraries (`libcomposer_quest.so`, `libcomposer_gpu_simulators.so`) and loaded at runtime only when explicitly requested.
+
+This design means:
+
+- The core `maestro` package works without QuEST or GPU support installed.
+- You must **initialize** a dynamic backend before using it.
+- If the shared library is not found on the system, initialization will gracefully return `False` rather than crashing.
+
+### Initializing Dynamic Backends
+
+Before using QuEST or GPU simulators, you **must** call the corresponding initialization function. This loads the shared library into memory and registers the backend with Maestro's simulator factory.
+
+```python
+import maestro
+
+# --- QuEST Backend ---
+quest_ok = maestro.init_quest()
+print(f"QuEST initialized: {quest_ok}")  # True if library found and loaded
+
+# --- GPU Backend ---
+gpu_ok = maestro.init_gpu()
+print(f"GPU initialized: {gpu_ok}")  # True if library found and loaded
+```
+
+> **Note:** Initialization only needs to be done **once** per process. Subsequent calls are safe but redundant.
+
+### Checking Availability
+
+You can check whether a dynamic backend has been successfully loaded at any point:
+
+```python
+import maestro
+
+print(f"QuEST available: {maestro.is_quest_available()}")
+print(f"GPU available:   {maestro.is_gpu_available()}")
+```
+
+These return `False` if `init_quest()` or `init_gpu()` has not been called, or if the initialization failed (e.g., shared library not found).
+
+### Running Circuits with QuEST
+
+QuEST provides an alternative statevector simulation engine. Once initialized, you can select it via `SimulatorType.QuestSim`.
+
+> **Limitation:** QuEST only supports the **Statevector** simulation type. Attempting to use it with MPS, Stabilizer, or other simulation types will raise an error.
+
+#### Using the QuantumCircuit API
+
+```python
+import maestro
+
+# Initialize QuEST (required before first use)
+if not maestro.init_quest():
+    raise RuntimeError("QuEST library not available")
+
+QuantumCircuit = maestro.circuits.QuantumCircuit
+
+# Build a circuit
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+qc.measure([(0, 0), (1, 1)])
+
+# Execute on QuEST
+result = qc.execute(
+    simulator_type=maestro.SimulatorType.QuestSim,
+    simulation_type=maestro.SimulationType.Statevector,
+    shots=1024
+)
+
+print(f"Counts: {result['counts']}")
+print(f"Time:   {result['time_taken']:.4f}s")
+```
+
+#### Using the Convenience API
+
+```python
+import maestro
+
+maestro.init_quest()
+
+qasm_circuit = """
+OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[2];
+h q[0];
+cx q[0], q[1];
+"""
+
+# Execute
+result = maestro.simple_execute(
+    qasm_circuit,
+    simulator_type=maestro.SimulatorType.QuestSim,
+    shots=1024
+)
+print(f"Counts: {result['counts']}")
+
+# Estimate expectation values
+estimate = maestro.simple_estimate(
+    qasm_circuit,
+    observables="ZZ;XX",
+    simulator_type=maestro.SimulatorType.QuestSim
+)
+print(f"Expectation values: {estimate['expectation_values']}")
+```
+
+### Running Circuits on GPU
+
+The GPU backend provides CUDA-accelerated simulation. Once initialized, select it via `SimulatorType.Gpu`.
+
+The GPU backend supports multiple simulation types:
+
+| Simulation Type     | GPU Support |
+|---------------------|-------------|
+| Statevector         | ✅          |
+| MatrixProductState  | ✅          |
+| TensorNetwork       | ✅          |
+| PauliPropagator     | ✅          |
+| Stabilizer          | ⚠️ Limited  |
+
+```python
+import maestro
+
+# Initialize GPU (required before first use)
+if not maestro.init_gpu():
+    raise RuntimeError("GPU library not available — is CUDA installed?")
+
+QuantumCircuit = maestro.circuits.QuantumCircuit
+
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+qc.measure([(0, 0), (1, 1)])
+
+# Execute on GPU with statevector
+result = qc.execute(
+    simulator_type=maestro.SimulatorType.Gpu,
+    simulation_type=maestro.SimulationType.Statevector,
+    shots=2048
+)
+print(f"GPU Counts: {result['counts']}")
+
+# Execute on GPU with MPS
+result_mps = qc.execute(
+    simulator_type=maestro.SimulatorType.Gpu,
+    simulation_type=maestro.SimulationType.MatrixProductState,
+    max_bond_dimension=64,
+    shots=2048
+)
+print(f"GPU MPS Counts: {result_mps['counts']}")
+```
+
+### Defensive Initialization Pattern
+
+For scripts that should work regardless of backend availability, use a guard pattern:
+
+```python
+import maestro
+
+QuantumCircuit = maestro.circuits.QuantumCircuit
+
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+qc.measure([(0, 0), (1, 1)])
+
+# Try QuEST, fall back to default CPU
+if maestro.init_quest():
+    result = qc.execute(simulator_type=maestro.SimulatorType.QuestSim)
+    print("Ran on QuEST")
+elif maestro.init_gpu():
+    result = qc.execute(simulator_type=maestro.SimulatorType.Gpu)
+    print("Ran on GPU")
+else:
+    result = qc.execute()  # Default: QCSim Statevector
+    print("Ran on CPU (QCSim)")
+
+print(f"Counts: {result['counts']}")
+```
+
+### API Reference
+
+| Function                    | Returns | Description                                                  |
+|-----------------------------|---------|--------------------------------------------------------------|
+| `maestro.init_quest()`      | `bool`  | Load the QuEST shared library. Returns `True` on success.    |
+| `maestro.is_quest_available()` | `bool` | Check if QuEST has been loaded and is ready to use.         |
+| `maestro.init_gpu()`        | `bool`  | Load the GPU shared library. Returns `True` on success.      |
+| `maestro.is_gpu_available()`| `bool`  | Check if the GPU backend has been loaded and is ready.        |
+
+| Simulator Type               | Enum Value                        | Dynamic? | Backend Library                   |
+|-------------------------------|-----------------------------------|----------|-----------------------------------|
+| QCSim (default CPU)           | `SimulatorType.QCSim`             | No       | Built-in                          |
+| Composite QCSim               | `SimulatorType.CompositeQCSim`    | No       | Built-in                          |
+| QuEST                         | `SimulatorType.QuestSim`          | **Yes**  | `libcomposer_quest.so`            |
+| GPU                           | `SimulatorType.Gpu`               | **Yes**  | `libcomposer_gpu_simulators.so`   |
+
+### Building with Dynamic Backend Support
+
+The QuEST and GPU shared libraries are **not** part of the default `pip install qoro-maestro` package. To use them:
+
+- **QuEST:** Build the QuEST integration library and ensure `libcomposer_quest.so` (or `.dylib` on macOS) is on your library path.
+- **GPU:** Build the GPU integration library with CUDA support and ensure `libcomposer_gpu_simulators.so` is on your library path.
+
+See `INSTALL.md` for detailed build instructions.
