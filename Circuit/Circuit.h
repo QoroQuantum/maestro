@@ -1633,7 +1633,8 @@ class Circuit : public IOperation<Time> {
         // resets in the middle of the circuit are treated as measurements
         for (const auto qbit : qubits) {
           // if there is already a gate applied on the qubit but no measurement
-          // yet, it's considered in the middle if there is no gate applied,
+          // yet, it's considered in the middle 
+          // if there is no gate applied,
           // then it's the first operation on the qubit
           if (affectedQubits.find(qbit) != affectedQubits.end() ||
               measuredQubits.find(qbit) != measuredQubits.end())
