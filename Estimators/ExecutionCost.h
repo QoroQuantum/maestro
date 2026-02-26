@@ -19,16 +19,38 @@
 #define __EXECUTION_COST_H_
 
 #include "../Simulators/QcsimPauliPropagator.h"
+#include "../Simulators/Factory.h"
 
 namespace Estimators {
 
-// this is not for time estimation, it can be used for something very, very, VERY rough, to decide just if it would execute in a reasonable time or not
-// it cannot be used to compare runtime for two simulators of the same circuit, but it sort of can be used to compare two circuits in the same simulator (especially if the same number of samples is used for both circuits)
-// for something better we have the estimators which got the constants from benchmarking and
-// rely on implementation details of the simulators, so they are more accurate,
-// but also less general
+// this is not for time estimation, it can be used for something very, very,
+// VERY rough, to decide just if it would execute in a reasonable time or not it
+// cannot be used to compare runtime for two simulators of the same circuit, but
+// it sort of can be used to compare two circuits in the same simulator
+// (especially if the same number of samples is used for both circuits) for
+// something better we have the estimators which got the constants from
+// benchmarking and rely on implementation details of the simulators, so they
+// are more accurate, but also less general
+
+// Except for pauli propagation, where the operation cost depends on the
+// position in the circuit (if the circuit is non-clifford), using a neural
+// network (or even a simpler regressor) to learn the relation between the
+// estimated cost and the actual execution time (single threaded, multithreading
+// rises some other issues) would be probably possible
 class ExecutionCost {
  public:
+  struct CircuitInfo {
+    size_t nrQubits = 0;
+    size_t nrOneQubitOps = 0;
+    size_t nrTwoQubitOps = 0;
+    size_t nrThreeQubitOps = 0;
+    size_t nrMiddleMeasurementOps = 0;
+    size_t nrEndMeasurementOps = 0;
+    size_t nrOneQubitOpsExecutedOnce = 0;
+    size_t nrTwoQubitOpsExecutedOnce = 0;
+    size_t nrThreeQubitOpsExecutedOnce = 0;
+  };
+
   static double EstimateExecutionCost(
       Simulators::SimulationType method, size_t nrQubits,
       const std::shared_ptr<Circuits::Circuit<>>& circuit, size_t maxBondDim) {
@@ -40,18 +62,19 @@ class ExecutionCost {
       double cost = 0;
       for (const auto& op : *circuit) {
         const auto affectedQubits = op->AffectedQubits();
-        if (op->GetType() == Circuits::OperationType::kMeasurement || op->GetType() == Circuits::OperationType::kConditionalMeasurement)
+        if (op->GetType() == Circuits::OperationType::kMeasurement ||
+            op->GetType() == Circuits::OperationType::kConditionalMeasurement)
           cost += opOrder * affectedQubits.size();
         if (op->GetType() == Circuits::OperationType::kReset)
           cost += 2. * opOrder * affectedQubits.size();
         else if (op->GetType() == Circuits::OperationType::kGate ||
-          op->GetType() == Circuits::OperationType::kConditionalGate) {
-            if (affectedQubits.size() == 1)
-                cost += opOrder;
-            else if (affectedQubits.size() == 2)
-                cost += 4 * opOrder;
-            else if (affectedQubits.size() == 3)
-                cost += 16 * opOrder;
+                 op->GetType() == Circuits::OperationType::kConditionalGate) {
+          if (affectedQubits.size() == 1)
+            cost += opOrder;
+          else if (affectedQubits.size() == 2)
+            cost += 4 * opOrder;
+          else if (affectedQubits.size() == 3)
+            cost += 16 * opOrder;
         }
       }
       return cost;
@@ -66,11 +89,13 @@ class ExecutionCost {
             op->GetType() == Circuits::OperationType::kConditionalMeasurement ||
             op->GetType() == Circuits::OperationType::kReset)
           // it's not that simple at all
-          // a qubit measurement works by applying a projector on the qubit tensor, which would cost as a one quibit gate but then we need to
-          // propagate the effect of the measurement along the chain, left and right,
-          // which is like applying a two qubit gate (SVD is the costlier operation there) on all the qubits that are
-          // entangled with the measured one, and in the worst case this can be
-          // all the other qubits if more than one qubits are measured at the same time, then
+          // a qubit measurement works by applying a projector on the qubit
+          // tensor, which would cost as a one quibit gate but then we need to
+          // propagate the effect of the measurement along the chain, left and
+          // right, which is like applying a two qubit gate (SVD is the costlier
+          // operation there) on all the qubits that are entangled with the
+          // measured one, and in the worst case this can be all the other
+          // qubits if more than one qubits are measured at the same time, then
           // we can have some optimizations, but let's just say that it's like
           // measuring them one by one, so the cost is multiplied by the number
           // of measured qubits
@@ -86,7 +111,7 @@ class ExecutionCost {
           else if (affectedQubits.size() == 3)
             // qiskit aer has three qubit ops, qcsim has not, they are
             // decomposed into one and two qubit gates
-            cost += twoQubitOpOrder * nrQubits * 2; // very rough estimation
+            cost += twoQubitOpOrder * nrQubits * 2;  // very rough estimation
         }
       }
       return cost;
@@ -117,23 +142,22 @@ class ExecutionCost {
       Simulators::SimulationType method, size_t nrQubits,
       size_t nrQubitsSampled, size_t samples,
       const std::shared_ptr<Circuits::Circuit<>>& circuit, size_t maxBondDim) {
-    if (method == Simulators::SimulationType::kPauliPropagator)
-      return Simulators::QcsimPauliPropagator::GetSamplingCost(
-          circuit, nrQubitsSampled, samples);
-
     // sampling works very differenty for such circuits
     Circuits::OperationState dummyState;
     const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurements();
     const std::vector<bool> executedOps =
         circuit->ExecuteNonMeasurements(nullptr, dummyState);
 
+    if (method == Simulators::SimulationType::kPauliPropagator)
+      return Simulators::QcsimPauliPropagator::GetSamplingCost(
+          circuit, nrQubitsSampled, samples);
+
     if (method == Simulators::SimulationType::kStatevector) {
       const double opOrder = exp2(nrQubits);
 
       double cost = 0;
       for (size_t i = 0; i < executedOps.size(); ++i) {
-        if (!executedOps[i])
-          continue;  
+        if (!executedOps[i]) continue;
         const auto& op = (*circuit)[i];
         const auto affectedQubits = op->AffectedQubits();
         if (op->GetType() == Circuits::OperationType::kMeasurement ||
@@ -153,7 +177,37 @@ class ExecutionCost {
       }
 
       // the sampling cost depends on the simulator
-      // qiskit aer constucts an index gowing over the statevector, qcsim does something similar to have the samples then O(nrQubits), but in maestro for qcsim (and quest) this is replaced by alias sampling with O(1) for each sample
+      // qiskit aer constucts an index gowing over the statevector, qcsim does
+      // something similar to have the samples then O(nrQubits), but in maestro
+      // for qcsim (and quest) this is replaced by alias sampling with O(1) for
+      // each sample
+
+      if (hasMeasurementsInTheMiddle) {
+        double samplingCost = 0;
+        for (size_t i = 0; i < executedOps.size(); ++i) {
+          if (executedOps[i]) continue;
+          const auto& op = (*circuit)[i];
+          const auto affectedQubits = op->AffectedQubits();
+          if (op->GetType() == Circuits::OperationType::kMeasurement ||
+              op->GetType() == Circuits::OperationType::kConditionalMeasurement)
+            samplingCost += opOrder * affectedQubits.size();
+          if (op->GetType() == Circuits::OperationType::kReset)
+            samplingCost += 2. * opOrder * affectedQubits.size();
+          else if (op->GetType() == Circuits::OperationType::kGate ||
+                   op->GetType() == Circuits::OperationType::kConditionalGate) {
+            if (affectedQubits.size() == 1)
+              samplingCost += opOrder;
+            else if (affectedQubits.size() == 2)
+              samplingCost += 4 * opOrder;
+            else if (affectedQubits.size() == 3)
+              samplingCost += 16 * opOrder;
+          }
+        }
+
+        samplingCost += opOrder * nrQubitsSampled;
+
+        return cost + samplingCost * samples;
+      }
 
       // some dummy cost, it's not going to fit all anyways
       return cost + 30 * opOrder + samples * nrQubits;
@@ -196,8 +250,44 @@ class ExecutionCost {
         }
       }
 
-      // sampling can be done here (and for other simulator types as well) either by saving the state, measuring then restoring the state
-      // or simply going along the chain, computing probabilities, throwing biased coins and doing matrix multiplications (qcsim does this if all qubits are sampled, otherwise the measurement method is used)
+      if (hasMeasurementsInTheMiddle) {
+        double samplingCost = 0;
+        for (size_t i = 0; i < executedOps.size(); ++i) {
+          if (executedOps[i]) continue;
+          const auto& op = (*circuit)[i];
+          const auto affectedQubits = op->AffectedQubits();
+          if (op->GetType() == Circuits::OperationType::kMeasurement ||
+              op->GetType() ==
+                  Circuits::OperationType::kConditionalMeasurement ||
+              op->GetType() == Circuits::OperationType::kReset)
+            samplingCost +=
+                twoQubitOpOrder * affectedQubits.size() * nrQubits / 2.;
+          else if (op->GetType() == Circuits::OperationType::kGate ||
+                   op->GetType() == Circuits::OperationType::kConditionalGate) {
+            if (affectedQubits.size() == 1)
+              samplingCost += oneQubitOpOrder;
+            else if (affectedQubits.size() == 2)
+              // I wish it were simple, but applying a gate involves swapping
+              // the qubits next to each other, then applying the gate
+              samplingCost += twoQubitOpOrder * nrQubits / 3.;
+            else if (affectedQubits.size() == 3)
+              // qiskit aer has three qubit ops, qcsim has not, they are
+              // decomposed into one and two qubit gates
+              samplingCost +=
+                  twoQubitOpOrder * nrQubits * 2;  // very rough estimation
+          }
+        }
+
+        samplingCost += twoQubitOpOrder * nrQubits * nrQubits;
+
+        return cost + samplingCost * samples;
+      }
+
+      // sampling can be done here (and for other simulator types as well)
+      // either by saving the state, measuring then restoring the state or
+      // simply going along the chain, computing probabilities, throwing biased
+      // coins and doing matrix multiplications (qcsim does this if all qubits
+      // are sampled, otherwise the measurement method is used)
 
       // some dummy cost, it's not going to fit all anyways
       return cost + samples * twoQubitOpOrder * nrQubits * nrQubits;
@@ -219,14 +309,258 @@ class ExecutionCost {
           cost += opOrder * affectedQubits.size();
       }
 
+      if (hasMeasurementsInTheMiddle) {
+        double samplingCost = 0;
+        for (size_t i = 0; i < executedOps.size(); ++i) {
+          if (executedOps[i]) continue;
+          const auto& op = (*circuit)[i];
+          const auto affectedQubits = op->AffectedQubits();
+          if (op->GetType() == Circuits::OperationType::kMeasurement ||
+              op->GetType() ==
+                  Circuits::OperationType::kConditionalMeasurement ||
+              op->GetType() == Circuits::OperationType::kReset)
+            samplingCost += measOrder * affectedQubits.size();
+          else if (op->GetType() == Circuits::OperationType::kGate ||
+                   op->GetType() == Circuits::OperationType::kConditionalGate)
+            samplingCost += opOrder * affectedQubits.size();
+        }
+
+        samplingCost += measOrder * nrQubitsSampled;
+
+        return cost + samplingCost * samples;
+      }
+
       // sampling is done with saving state, measuring and restoring state
-      // the overhead for saving / restoring is not here (it's of the same order as measuring), but measurements are not all O(n^2) anyways
+      // the overhead for saving / restoring is not here (it's of the same order
+      // as measuring), but measurements are not all O(n^2) anyways
       return cost + samples * measOrder * nrQubitsSampled;
     }
 
     // for tensor network is hard to guess, it depends on contraction path
 
     return std::numeric_limits<double>::infinity();
+  }
+
+  static double EstimatePauliExpectationCost(
+      const std::string& pauliString, Simulators::SimulationType method,
+      size_t nrQubits, const std::shared_ptr<Circuits::Circuit<>>& circuit,
+      size_t maxBondDim) {
+    // a pauli string propagated
+    if (method == Simulators::SimulationType::kPauliPropagator)
+      return Simulators::QcsimPauliPropagator::GetCost(circuit);
+
+    size_t pauliCnt = 0;
+    for (char c : pauliString) {
+      if (c == 'X' || c == 'x' || c == 'Y' || c == 'y' || c == 'Z' || c == 'z')
+        ++pauliCnt;
+    }
+    double cost = EstimateExecutionCost(method, nrQubits, circuit, maxBondDim);
+
+    if (method == Simulators::SimulationType::kStatevector) {
+      const double opOrder = exp2(nrQubits);
+
+      // each pauli matrix is applied to the statevector, then the product with
+      // the original is computed
+      cost += opOrder * (pauliCnt + 1);
+
+      return cost;
+    } else if (method == Simulators::SimulationType::kMatrixProductState) {
+      const double twoQubitOpOrder = pow(maxBondDim, 3);
+      const double oneQubitOpOrder = pow(maxBondDim, 2);
+
+      // each pauli is applied to the chain then the resulted chain is
+      // contracted with the original one
+      cost += oneQubitOpOrder * pauliCnt + nrQubits * twoQubitOpOrder;
+
+      return cost;
+    } else if (method == Simulators::SimulationType::kStabilizer) {
+      cost += nrQubits * nrQubits;
+      return cost;
+    }
+
+    return std::numeric_limits<double>::infinity();
+  }
+
+  std::shared_ptr<Circuits::Circuit<>> GenerateRandomCircuit(
+      size_t nrQubits, size_t depth, double measureInsideProbability = 0.,
+      size_t nrMeasAtEnd = 0, bool isClifford = false,
+      size_t nrThreeQubitGates = 0) {
+    auto circuit = std::make_shared<Circuits::Circuit<>>();
+    std::random_device rdev;
+    std::mt19937 rng(rdev());
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    std::uniform_real_distribution<double> paramDist(-2 * M_PI, 2 * M_PI);
+    std::uniform_int_distribution<Types::qubit_t> qubitDist(0, nrQubits - 1);
+    std::uniform_int_distribution<int> gateDist(
+        0, static_cast<int>(Circuits::QuantumGateType::kCZGateType));
+
+    std::vector<Types::qubit_t> qubits(nrQubits);
+    std::iota(qubits.begin(), qubits.end(), 0);
+
+    for (size_t i = 0; i < depth; ++i) {
+      if (dist(rng) < measureInsideProbability) {
+        Types::qubit_t q = qubitDist(rng);
+        std::vector<std::pair<Types::qubit_t, size_t>> qs = {{q, q}};
+        circuit->AddOperation(
+            std::make_shared<Circuits::MeasurementOperation<>>(qs));
+        continue;
+      }
+
+      std::shuffle(qubits.begin(), qubits.end(), rng);
+      const auto q1 = qubits[0];
+      const auto q2 = qubits[1];
+      const auto q3 = qubits[2];
+
+      auto gateType = static_cast<Circuits::QuantumGateType>(gateDist(rng));
+      auto param1 = paramDist(rng);
+      auto param2 = paramDist(rng);
+      auto param3 = paramDist(rng);
+      auto param4 = paramDist(rng);
+
+      auto theGate = Circuits::CircuitFactory<>::CreateGate(
+          gateType, q1, q2, q3, param1, param2, param3, param4);
+      if (isClifford) {
+        while (!theGate->IsClifford()) {
+          gateType = static_cast<Circuits::QuantumGateType>(gateDist(rng));
+          theGate = Circuits::CircuitFactory<>::CreateGate(
+              gateType, q1, q2, q3, param1, param2, param3, param4);
+        }
+      }
+      circuit->AddOperation(theGate);
+    }
+
+    // count and limit the number of three qubit gates
+    size_t threeQubitGateCount = 0;
+    size_t i = 0;
+    for (const auto& op : *circuit) {
+      if (op->GetType() == Circuits::OperationType::kGate ||
+          op->GetType() == Circuits::OperationType::kConditionalGate) {
+        if (op->AffectedQubits().size() == 3) ++threeQubitGateCount;
+
+        if (threeQubitGateCount > nrThreeQubitGates) {
+          // replace the three qubit gate with a two qubit gate
+          auto twoQubitGate = Circuits::CircuitFactory<>::CreateGate(
+              Circuits::QuantumGateType::kCZGateType, op->AffectedQubits()[0],
+              op->AffectedQubits()[1]);
+          circuit->ReplaceOperation(i, twoQubitGate);
+          --threeQubitGateCount;
+        }
+      }
+      ++i;
+    }
+
+    if (nrMeasAtEnd > 0) {
+      if (nrMeasAtEnd > nrQubits) nrMeasAtEnd = nrQubits;
+      std::shuffle(qubits.begin(), qubits.end(), rng);
+
+      for (size_t i = 0; i < nrMeasAtEnd; ++i) {
+        std::vector<std::pair<Types::qubit_t, size_t>> qs = {{qubits[i], i}};
+        circuit->AddOperation(
+            std::make_shared<Circuits::MeasurementOperation<>>(qs));
+      }
+    }
+
+    return circuit;
+  }
+
+  static double MeasureExecutionTime(
+      Simulators::SimulatorType simType, Simulators::SimulationType method,
+      size_t nrQubits, const std::shared_ptr<Circuits::Circuit<>>& circuit,
+      size_t nrReps, size_t maxBondDim) {
+    auto sim = GetSimulator(simType, method, nrQubits, maxBondDim);
+
+    Circuits::OperationState dummyState(nrQubits);
+    auto start = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < nrReps; ++i) circuit->Execute(sim, dummyState);
+    auto end = std::chrono::high_resolution_clock::now();
+    return std::chrono::duration<double>(end - start).count();
+  }
+
+  static double MeasureSamplingTime(
+      Simulators::SimulatorType simType, Simulators::SimulationType method,
+      size_t nrQubits, const std::shared_ptr<Circuits::Circuit<>>& circuit,
+      size_t nrQubitsSampled, size_t nrSamples, size_t nrReps,
+      size_t maxBondDim) {
+    auto sim = GetSimulator(simType, method, nrQubits, maxBondDim);
+    Circuits::OperationState dummyState(nrQubits);
+
+    if (nrQubitsSampled > nrQubits) nrQubitsSampled = nrQubits;
+    Types::qubits_vector qubitsSampled(nrQubitsSampled);
+    std::iota(qubitsSampled.begin(), qubitsSampled.end(), 0);
+
+    auto start = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < nrReps; ++i) {
+      circuit->Execute(sim, dummyState);  // execute the circuit first
+      sim->SampleCountsMany(qubitsSampled, nrSamples);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    return std::chrono::duration<double>(end - start).count();
+  }
+
+  static double MeasurePauliExpectationTime(
+      Simulators::SimulatorType simType, Simulators::SimulationType method,
+      size_t nrQubits, const std::shared_ptr<Circuits::Circuit<>>& circuit,
+      const std::string& pauliString, size_t nrReps, size_t maxBondDim) {
+    auto sim = GetSimulator(simType, method, nrQubits, maxBondDim);
+    Circuits::OperationState dummyState(nrQubits);
+    auto start = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < nrReps; ++i) {
+      circuit->Execute(sim, dummyState);  // execute the circuit first
+      sim->ExpectationValue(pauliString);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    return std::chrono::duration<double>(end - start).count();
+  }
+
+  static std::shared_ptr<Simulators::ISimulator> GetSimulator(
+      Simulators::SimulatorType simType, Simulators::SimulationType method,
+      size_t nrQubits, size_t maxBondDim) {
+    auto sim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
+    if (method == Simulators::SimulationType::kMatrixProductState) {
+      const auto strVal = std::to_string(maxBondDim);
+      sim->Configure("matrix_product_state_max_bond_dimension", strVal.c_str());
+    }
+    sim->AllocateQubits(nrQubits);
+    sim->Initialize();
+    return sim;
+  }
+
+  static CircuitInfo GetCircuitInfo(
+      const std::shared_ptr<Circuits::Circuit<>>& circuit) {
+    CircuitInfo info;
+
+    info.nrQubits = circuit->GetMaxQubitIndex() + 1;
+    Circuits::OperationState dummyState(info.nrQubits);
+    const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurements();
+    const std::vector<bool> executedOps =
+        circuit->ExecuteNonMeasurements(nullptr, dummyState);
+
+    size_t i = 0;
+    for (const auto& op : *circuit) {
+      const auto affectedQubits = op->AffectedQubits();
+      if (op->GetType() == Circuits::OperationType::kMeasurement ||
+          op->GetType() == Circuits::OperationType::kConditionalMeasurement) {
+        if (hasMeasurementsInTheMiddle)
+          ++info.nrMiddleMeasurementOps;
+        else
+          ++info.nrEndMeasurementOps;
+      } else if (op->GetType() == Circuits::OperationType::kGate ||
+                 op->GetType() == Circuits::OperationType::kConditionalGate) {
+        if (affectedQubits.size() == 1) {
+          ++info.nrOneQubitOps;
+          if (executedOps[i]) ++info.nrOneQubitOpsExecutedOnce;
+        } else if (affectedQubits.size() == 2) {
+          ++info.nrTwoQubitOps;
+          if (executedOps[i]) ++info.nrTwoQubitOpsExecutedOnce;
+        } else if (affectedQubits.size() == 3) {
+          ++info.nrThreeQubitOps;
+          if (executedOps[i]) ++info.nrThreeQubitOpsExecutedOnce;
+        }
+      }
+      ++i;
+    }
+
+    return info;
   }
 };
 
