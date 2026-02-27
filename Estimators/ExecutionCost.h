@@ -20,6 +20,7 @@
 
 #include "../Simulators/QcsimPauliPropagator.h"
 #include "../Simulators/Factory.h"
+#include "../Utils/LogFile.h"
 
 namespace Estimators {
 
@@ -49,6 +50,15 @@ class ExecutionCost {
     size_t nrOneQubitOpsExecutedOnce = 0;
     size_t nrTwoQubitOpsExecutedOnce = 0;
     size_t nrThreeQubitOpsExecutedOnce = 0;
+  };
+
+  struct ExecutionInfo : public CircuitInfo {
+    size_t nrSamples = 0;
+    size_t nrQubitsSampled = 0;
+    size_t maxBondDim = 0;
+    size_t nrPauliOps = 0;
+    double executionCost = 0;
+    double samplingCost = 0;
   };
 
   static double EstimateExecutionCost(
@@ -561,6 +571,304 @@ class ExecutionCost {
     }
 
     return info;
+  }
+
+  std::vector<ExecutionInfo> ReadLog(const std::string& logFilePath) {
+    std::vector<ExecutionInfo> executionInfos;
+
+    std::ifstream logFile(logFilePath);
+    if (!logFile.is_open()) {
+      std::cerr << "Failed to open log file: " << logFilePath << std::endl;
+      return executionInfos;
+    }
+
+    std::string line;
+
+    while (std::getline(logFile, line)) {
+      std::stringstream ss(line);
+      std::string value;
+      ExecutionInfo info;
+      std::getline(ss, value, ',');
+      info.nrQubits = std::stoul(value);
+      std::getline(ss, value, ',');
+      info.nrOneQubitOps = std::stoul(value);
+      std::getline(ss, value, ',');
+      info.nrTwoQubitOps = std::stoul(value);
+      std::getline(ss, value, ',');
+      info.nrThreeQubitOps = std::stoul(value);
+      std::getline(ss, value, ',');
+      info.nrMiddleMeasurementOps = std::stoul(value);
+      std::getline(ss, value, ',');
+      info.nrEndMeasurementOps = std::stoul(value);
+      std::getline(ss, value, ',');
+      info.nrOneQubitOpsExecutedOnce = std::stoul(value);
+      std::getline(ss, value, ',');
+      info.nrTwoQubitOpsExecutedOnce = std::stoul(value);
+      std::getline(ss, value, ',');
+      info.nrThreeQubitOpsExecutedOnce = std::stoul(value);
+
+      std::getline(ss, value, ',');
+      info.nrSamples = std::stoul(value);
+      std::getline(ss, value, ',');
+      info.nrQubitsSampled = std::stoul(value);
+      std::getline(ss, value, ',');
+      info.maxBondDim = std::stoul(value);
+      std::getline(ss, value, ',');
+      info.nrPauliOps = std::stoul(value);
+
+      std::getline(ss, value, ',');
+      info.executionCost = std::stod(value);
+      std::getline(ss, value, ',');
+      info.samplingCost = std::stod(value);
+      executionInfos.push_back(std::move(info));
+    }
+
+    return executionInfos;
+  }
+
+  void BenchmarkAndLogExecution(
+      Simulators::SimulatorType simType, Simulators::SimulationType method,
+      size_t nrReps, size_t nrMinQubits, size_t nrMaxQubits, size_t stepQubits,
+      size_t depthMin, size_t depthMax, size_t stepDepth,
+      double measureInsideProbability, size_t nrMeasAtEndMin,
+      size_t nrMeasAtEndMax, size_t stepMeasAtEnd,
+      size_t nrRandomCircuitsPerConfig, size_t maxBondDim,
+      const std::string& logFilePath) {
+    bool isClifford = (method == Simulators::SimulationType::kStabilizer);
+    int nrThreeQubitGates = depthMax;  // a limit
+    // but if it's pauli...
+    if (method == Simulators::SimulationType::kPauliPropagator) {
+      nrThreeQubitGates = 1;
+    } else if (method == Simulators::SimulationType::kStabilizer) {
+      nrThreeQubitGates = 0;
+    }
+
+    std::cout << "Benchmarking execution for simType: " << static_cast<int>(simType)
+              << ", method: " << static_cast<int>(method) << std::endl;
+
+    Utils::LogFile log(logFilePath);
+
+    for (size_t nrQubits = nrMinQubits; nrQubits <= nrMaxQubits;
+         nrQubits += stepQubits) {
+      std::cout << "  Qubits: " << nrQubits << std::endl;
+      for (size_t depth = depthMin; depth <= depthMax; depth += stepDepth) {
+        std::cout << "    Depth: " << depth << std::endl;
+        for (size_t nrMeasAtEnd = nrMeasAtEndMin;
+             nrMeasAtEnd <= std::min(nrMeasAtEndMax, nrQubits);
+             nrMeasAtEnd += stepMeasAtEnd) {
+          std::cout << "      Measurements at end: " << nrMeasAtEnd << std::endl;
+          for (size_t i = 0; i < nrRandomCircuitsPerConfig; ++i) {
+              std::cout << "        Random circuit: " << i + 1 << "/" << nrRandomCircuitsPerConfig << std::endl;
+            if (method == Simulators::SimulationType::kPauliPropagator)
+              isClifford = !isClifford;
+
+            const auto circuit = GenerateRandomCircuit(
+                nrQubits, depth, measureInsideProbability, nrMeasAtEnd,
+                isClifford, nrThreeQubitGates);
+            BenchmarkAndLogExecution(simType, method, circuit, nrReps,
+                                     maxBondDim, log);
+          }
+        }
+      }
+    }
+  }
+
+  static std::string GeneratePauliString(size_t nrQubits) {
+    std::string pauli;
+    pauli.resize(nrQubits);
+    std::random_device rd;
+    std::mt19937 g(rd());
+    std::uniform_int_distribution<int> dist(0, 3);
+
+    for (int i = 0; i < nrQubits; ++i) {
+      const int v = dist(g);
+      switch (v) {
+        case 0:
+          pauli[i] = 'I';
+          break;
+        case 1:
+          pauli[i] = 'X';
+          break;
+        case 2:
+          pauli[i] = 'Y';
+          break;
+        case 3:
+          pauli[i] = 'Z';
+          break;
+      }
+    }
+
+    return pauli;
+  }
+
+  void BenchmarkAndLogPauliExpectation(
+      Simulators::SimulatorType simType, Simulators::SimulationType method,
+      size_t nrReps, size_t nrMinQubits, size_t nrMaxQubits, size_t stepQubits,
+      size_t depthMin, size_t depthMax, size_t stepDepth,
+      size_t nrRandomCircuitsPerConfig, size_t maxBondDim,
+      const std::string& logFilePath) {
+    bool isClifford = (method == Simulators::SimulationType::kStabilizer);
+    int nrThreeQubitGates = depthMax;  // a limit
+    // but if it's pauli...
+    if (method == Simulators::SimulationType::kPauliPropagator) {
+      nrThreeQubitGates = 1;
+    } else if (method == Simulators::SimulationType::kStabilizer) {
+      nrThreeQubitGates = 0;
+    }
+    Utils::LogFile log(logFilePath);
+
+    std::cout << "Benchmarking Pauli expectation for simType: " << static_cast<int>(simType)
+              << ", method: " << static_cast<int>(method) << std::endl;
+
+    for (size_t nrQubits = nrMinQubits; nrQubits <= nrMaxQubits;
+         nrQubits += stepQubits) {
+      std::cout << "  Qubits: " << nrQubits << std::endl;
+      for (size_t depth = depthMin; depth <= depthMax; depth += stepDepth) {
+        std::cout << "    Depth: " << depth << std::endl;
+        for (size_t i = 0; i < nrRandomCircuitsPerConfig; ++i) {
+          if (method == Simulators::SimulationType::kPauliPropagator)
+            isClifford = !isClifford;
+
+          const auto circuit = GenerateRandomCircuit(
+              nrQubits, depth, 0., 0, isClifford, nrThreeQubitGates);
+          const std::string pauliString = GeneratePauliString(nrQubits);
+
+          std::cout << "      Random circuit: " << i + 1 << "/"
+                    << nrRandomCircuitsPerConfig << " Pauli string: " << pauliString << std::endl;
+          BenchmarkAndLogPauliExpectation(simType, method, circuit, pauliString,
+                                          nrReps, maxBondDim, log);
+        }
+      }
+    }
+  }
+
+  void BenchmarkAndLogSampling(
+      Simulators::SimulatorType simType, Simulators::SimulationType method,
+      size_t nrReps, size_t nrMinQubits, size_t nrMaxQubits, size_t stepQubits,
+      size_t depthMin, size_t depthMax, size_t stepDepth, size_t nrMeasAtEndMin,
+      size_t nrMeasAtEndMax, size_t stepMeasAtEnd, size_t nrSamplesMin,
+      size_t nrSamplesMax, size_t multiplierSamples,
+      size_t nrRandomCircuitsPerConfig, size_t maxBondDim,
+      const std::string& logFilePath) {
+    bool isClifford = (method == Simulators::SimulationType::kStabilizer);
+    int nrThreeQubitGates = depthMax;  // a limit
+    // but if it's pauli...
+    if (method == Simulators::SimulationType::kPauliPropagator) {
+      nrThreeQubitGates = 1;
+    } else if (method == Simulators::SimulationType::kStabilizer) {
+      nrThreeQubitGates = 0;
+    }
+    Utils::LogFile log(logFilePath);
+
+    std::cout << "Benchmarking sampling for simType: " << static_cast<int>(simType)
+              << ", method: " << static_cast<int>(method) << std::endl;
+
+    for (size_t nrQubits = nrMinQubits; nrQubits <= nrMaxQubits;
+         nrQubits += stepQubits) {
+      std::cout << "  Qubits: " << nrQubits << std::endl;
+      for (size_t depth = depthMin; depth <= depthMax; depth += stepDepth) {
+        std::cout << "    Depth: " << depth << std::endl;
+        for (size_t nrSamples = nrSamplesMin; nrSamples <= nrSamplesMax;
+             nrSamples *= multiplierSamples) {
+          std::cout << "      Samples: " << nrSamples << std::endl;
+          for (size_t i = 0; i < nrRandomCircuitsPerConfig; ++i) {
+            if (method == Simulators::SimulationType::kPauliPropagator)
+              isClifford = !isClifford;
+            const auto circuit = GenerateRandomCircuit(
+                nrQubits, depth, 0., 0, isClifford, nrThreeQubitGates); 
+            for (size_t nrQubitsSampled = nrQubits; nrQubitsSampled >= 1;
+                 nrQubitsSampled /= 2) {
+              std::cout << "        Random circuit: " << i + 1 << "/"
+                        << nrRandomCircuitsPerConfig
+                        << " Qubits sampled: " << nrQubitsSampled << std::endl;
+              BenchmarkAndLogSampling(simType, method, circuit, nrQubitsSampled,
+                                      nrSamples, nrReps, maxBondDim, log);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  void BenchmarkAndLogExecution(
+      Simulators::SimulatorType simType, Simulators::SimulationType method,
+      const std::shared_ptr<Circuits::Circuit<>>& circuit, size_t nrReps,
+      size_t maxBondDim, Utils::LogFile& log) {
+    const auto info = GetCircuitInfo(circuit);
+    const double estimatedCost =
+        EstimateExecutionCost(method, info.nrQubits, circuit, maxBondDim);
+    const double executionTime =
+        MeasureExecutionTime(simType, method, info.nrQubits, circuit, nrReps,
+                             maxBondDim) /
+        nrReps;
+
+    std::stringstream ss;
+
+    ss << info.nrQubits << "," << info.nrOneQubitOps << ","
+       << info.nrTwoQubitOps << "," << info.nrThreeQubitOps << ","
+       << info.nrMiddleMeasurementOps << "," << info.nrEndMeasurementOps << ","
+       << info.nrOneQubitOpsExecutedOnce << ","
+       << info.nrTwoQubitOpsExecutedOnce << ","
+       << info.nrThreeQubitOpsExecutedOnce << ","
+       << "0,0," << maxBondDim << "," << "0," << estimatedCost << ","
+       << executionTime;
+
+    log.Log(ss.str());
+  }
+
+  void BenchmarkAndLogSampling(
+      Simulators::SimulatorType simType, Simulators::SimulationType method,
+      const std::shared_ptr<Circuits::Circuit<>>& circuit,
+      size_t nrQubitsSampled, size_t nrSamples, size_t nrReps,
+      size_t maxBondDim, Utils::LogFile& log) {
+    const auto info = GetCircuitInfo(circuit);
+    const double estimatedCost = EstimateSamplingCost(
+        method, info.nrQubits, nrQubitsSampled, nrSamples, circuit, maxBondDim);
+    const double samplingTime =
+        MeasureSamplingTime(simType, method, info.nrQubits, circuit,
+                            nrQubitsSampled, nrSamples, nrReps, maxBondDim) /
+        nrReps;
+    std::stringstream ss;
+    ss << info.nrQubits << "," << info.nrOneQubitOps << ","
+       << info.nrTwoQubitOps << "," << info.nrThreeQubitOps << ","
+       << info.nrMiddleMeasurementOps << "," << info.nrEndMeasurementOps << ","
+       << info.nrOneQubitOpsExecutedOnce << ","
+       << info.nrTwoQubitOpsExecutedOnce << ","
+       << info.nrThreeQubitOpsExecutedOnce << "," << nrSamples << ","
+       << nrQubitsSampled << "," << maxBondDim << "," << "0," << estimatedCost
+       << "," << samplingTime;
+    log.Log(ss.str());
+  }
+
+  void BenchmarkAndLogPauliExpectation(
+      Simulators::SimulatorType simType, Simulators::SimulationType method,
+      const std::shared_ptr<Circuits::Circuit<>>& circuit,
+      const std::string& pauliString, size_t nrReps, size_t maxBondDim,
+      Utils::LogFile& log) {
+    const auto info = GetCircuitInfo(circuit);
+    const double estimatedCost = EstimatePauliExpectationCost(
+        pauliString, method, info.nrQubits, circuit, maxBondDim);
+    const double expectationTime =
+        MeasurePauliExpectationTime(simType, method, info.nrQubits, circuit,
+                                    pauliString, nrReps, maxBondDim) /
+        nrReps;
+
+    size_t cntPauli = 0;
+    for (char c : pauliString) {
+      if (c == 'X' || c == 'x' || c == 'Y' || c == 'y' || c == 'Z' || c == 'z')
+        ++cntPauli;
+    }
+
+    std::stringstream ss;
+    ss << info.nrQubits << "," << info.nrOneQubitOps << ","
+       << info.nrTwoQubitOps << "," << info.nrThreeQubitOps << ","
+       << info.nrMiddleMeasurementOps << "," << info.nrEndMeasurementOps << ","
+       << info.nrOneQubitOpsExecutedOnce << ","
+       << info.nrTwoQubitOpsExecutedOnce << ","
+       << info.nrThreeQubitOpsExecutedOnce << ","
+       << "0,0," << maxBondDim << "," << cntPauli << "," << estimatedCost << ","
+       << expectationTime;
+    log.Log(ss.str());
   }
 };
 
