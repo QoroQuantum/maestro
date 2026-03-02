@@ -38,6 +38,7 @@ __declspec(dllexport)
 #ifdef __linux__
     Simulators::SimulatorsFactory::InitGpuLibrary();
 #endif
+    Simulators::SimulatorsFactory::InitQuestLibrary();
 
 #ifdef COMPOSER
     Estimators::ExecutionEstimator<>::InitializeRegressors();

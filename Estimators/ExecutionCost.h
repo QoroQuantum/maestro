@@ -22,6 +22,8 @@
 #include "../Simulators/Factory.h"
 #include "../Utils/LogFile.h"
 
+#include <cstddef>
+
 namespace Estimators {
 
 // this is not for time estimation, it can be used for something very, very,
@@ -391,7 +393,7 @@ class ExecutionCost {
     return std::numeric_limits<double>::infinity();
   }
 
-  std::shared_ptr<Circuits::Circuit<>> GenerateRandomCircuit(
+  static std::shared_ptr<Circuits::Circuit<>> GenerateRandomCircuit(
       size_t nrQubits, size_t depth, double measureInsideProbability = 0.,
       size_t nrMeasAtEnd = 0, bool isClifford = false,
       size_t nrThreeQubitGates = 0) {
@@ -402,7 +404,7 @@ class ExecutionCost {
     std::uniform_real_distribution<double> paramDist(-2 * M_PI, 2 * M_PI);
     std::uniform_int_distribution<Types::qubit_t> qubitDist(0, nrQubits - 1);
     std::uniform_int_distribution<int> gateDist(
-        0, static_cast<int>(Circuits::QuantumGateType::kCZGateType));
+        0, static_cast<int>(Circuits::QuantumGateType::kCCXGateType));
 
     std::vector<Types::qubit_t> qubits(nrQubits);
     std::iota(qubits.begin(), qubits.end(), 0);
@@ -531,6 +533,7 @@ class ExecutionCost {
       sim->Configure("matrix_product_state_max_bond_dimension", strVal.c_str());
     }
     sim->AllocateQubits(nrQubits);
+    sim->SetMultithreading(false);
     sim->Initialize();
     return sim;
   }
@@ -558,13 +561,13 @@ class ExecutionCost {
                  op->GetType() == Circuits::OperationType::kConditionalGate) {
         if (affectedQubits.size() == 1) {
           ++info.nrOneQubitOps;
-          if (executedOps[i]) ++info.nrOneQubitOpsExecutedOnce;
+          if (i < executedOps.size() && executedOps[i]) ++info.nrOneQubitOpsExecutedOnce;
         } else if (affectedQubits.size() == 2) {
           ++info.nrTwoQubitOps;
-          if (executedOps[i]) ++info.nrTwoQubitOpsExecutedOnce;
+          if (i < executedOps.size() && executedOps[i]) ++info.nrTwoQubitOpsExecutedOnce;
         } else if (affectedQubits.size() == 3) {
           ++info.nrThreeQubitOps;
-          if (executedOps[i]) ++info.nrThreeQubitOpsExecutedOnce;
+          if (i < executedOps.size() && executedOps[i]) ++info.nrThreeQubitOpsExecutedOnce;
         }
       }
       ++i;
@@ -573,7 +576,7 @@ class ExecutionCost {
     return info;
   }
 
-  std::vector<ExecutionInfo> ReadLog(const std::string& logFilePath) {
+  static std::vector<ExecutionInfo> ReadLog(const std::string& logFilePath) {
     std::vector<ExecutionInfo> executionInfos;
 
     std::ifstream logFile(logFilePath);
@@ -620,13 +623,16 @@ class ExecutionCost {
       info.executionCost = std::stod(value);
       std::getline(ss, value, ',');
       info.samplingCost = std::stod(value);
+
+      if (info.nrSamples < 1) info.nrSamples = 1;
+
       executionInfos.push_back(std::move(info));
     }
 
     return executionInfos;
   }
 
-  void BenchmarkAndLogExecution(
+  static void BenchmarkAndLogExecution(
       Simulators::SimulatorType simType, Simulators::SimulationType method,
       size_t nrReps, size_t nrMinQubits, size_t nrMaxQubits, size_t stepQubits,
       size_t depthMin, size_t depthMax, size_t stepDepth,
@@ -701,7 +707,7 @@ class ExecutionCost {
     return pauli;
   }
 
-  void BenchmarkAndLogPauliExpectation(
+  static void BenchmarkAndLogPauliExpectation(
       Simulators::SimulatorType simType, Simulators::SimulationType method,
       size_t nrReps, size_t nrMinQubits, size_t nrMaxQubits, size_t stepQubits,
       size_t depthMin, size_t depthMax, size_t stepDepth,
@@ -742,7 +748,7 @@ class ExecutionCost {
     }
   }
 
-  void BenchmarkAndLogSampling(
+  static void BenchmarkAndLogSampling(
       Simulators::SimulatorType simType, Simulators::SimulationType method,
       size_t nrReps, size_t nrMinQubits, size_t nrMaxQubits, size_t stepQubits,
       size_t depthMin, size_t depthMax, size_t stepDepth, size_t nrMeasAtEndMin,
@@ -790,7 +796,7 @@ class ExecutionCost {
     }
   }
 
-  void BenchmarkAndLogExecution(
+  static void BenchmarkAndLogExecution(
       Simulators::SimulatorType simType, Simulators::SimulationType method,
       const std::shared_ptr<Circuits::Circuit<>>& circuit, size_t nrReps,
       size_t maxBondDim, Utils::LogFile& log) {
@@ -816,7 +822,7 @@ class ExecutionCost {
     log.Log(ss.str());
   }
 
-  void BenchmarkAndLogSampling(
+  static void BenchmarkAndLogSampling(
       Simulators::SimulatorType simType, Simulators::SimulationType method,
       const std::shared_ptr<Circuits::Circuit<>>& circuit,
       size_t nrQubitsSampled, size_t nrSamples, size_t nrReps,
@@ -840,7 +846,7 @@ class ExecutionCost {
     log.Log(ss.str());
   }
 
-  void BenchmarkAndLogPauliExpectation(
+  static void BenchmarkAndLogPauliExpectation(
       Simulators::SimulatorType simType, Simulators::SimulationType method,
       const std::shared_ptr<Circuits::Circuit<>>& circuit,
       const std::string& pauliString, size_t nrReps, size_t maxBondDim,

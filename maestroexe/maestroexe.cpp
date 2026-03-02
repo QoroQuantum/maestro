@@ -47,7 +47,7 @@ static std::string GetConfigJson(int num_shots, int maxBondDim) {
 }
 
 int main(int argc, char** argv) {
-  try {
+   try {
     std::ios_base::sync_with_stdio(false);
     std::cin.tie(nullptr);
 
