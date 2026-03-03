@@ -160,6 +160,8 @@ class ExecutionCost {
     const std::vector<bool> executedOps =
         circuit->ExecuteNonMeasurements(nullptr, dummyState);
 
+    const size_t dif = circuit->size() - executedOps.size();
+
     if (method == Simulators::SimulationType::kPauliPropagator)
       return Simulators::QcsimPauliPropagator::GetSamplingCost(
           circuit, nrQubitsSampled, samples);
@@ -168,8 +170,9 @@ class ExecutionCost {
       const double opOrder = exp2(nrQubits);
 
       double cost = 0;
-      for (size_t i = 0; i < executedOps.size(); ++i) {
-        if (!executedOps[i]) continue;
+      for (size_t i = 0; i < circuit->size(); ++i) {
+        if (i >= dif && !executedOps[i - dif]) continue;
+
         const auto& op = (*circuit)[i];
         const auto affectedQubits = op->AffectedQubits();
         if (op->GetType() == Circuits::OperationType::kMeasurement ||
@@ -196,8 +199,9 @@ class ExecutionCost {
 
       if (hasMeasurementsInTheMiddle) {
         double samplingCost = 0;
-        for (size_t i = 0; i < executedOps.size(); ++i) {
-          if (executedOps[i]) continue;
+        for (size_t i = dif; i < circuit->size(); ++i) {
+          if (executedOps[i - dif]) continue;
+
           const auto& op = (*circuit)[i];
           const auto affectedQubits = op->AffectedQubits();
           if (op->GetType() == Circuits::OperationType::kMeasurement ||
@@ -228,8 +232,9 @@ class ExecutionCost {
       const double oneQubitOpOrder = pow(maxBondDim, 2);
 
       double cost = 0;
-      for (size_t i = 0; i < executedOps.size(); ++i) {
-        if (!executedOps[i]) continue;
+      for (size_t i = 0; i < circuit->size(); ++i) {
+        if (i >= dif && !executedOps[i - dif]) continue;
+
         const auto& op = (*circuit)[i];
         const auto affectedQubits = op->AffectedQubits();
         if (op->GetType() == Circuits::OperationType::kMeasurement ||
@@ -264,8 +269,9 @@ class ExecutionCost {
 
       if (hasMeasurementsInTheMiddle) {
         double samplingCost = 0;
-        for (size_t i = 0; i < executedOps.size(); ++i) {
-          if (executedOps[i]) continue;
+        for (size_t i = dif; i < circuit->size(); ++i) {
+          if (executedOps[i - dif]) continue;
+
           const auto& op = (*circuit)[i];
           const auto affectedQubits = op->AffectedQubits();
           if (op->GetType() == Circuits::OperationType::kMeasurement ||
@@ -308,8 +314,9 @@ class ExecutionCost {
       const double opOrder = nrQubits;
 
       double cost = 0;
-      for (size_t i = 0; i < executedOps.size(); ++i) {
-        if (!executedOps[i]) continue;
+      for (size_t i = 0; i < circuit->size(); ++i) {
+        if (i >= dif && !executedOps[i - dif]) continue;
+
         const auto& op = (*circuit)[i];
         const auto affectedQubits = op->AffectedQubits();
         if (op->GetType() == Circuits::OperationType::kMeasurement ||
@@ -323,8 +330,9 @@ class ExecutionCost {
 
       if (hasMeasurementsInTheMiddle) {
         double samplingCost = 0;
-        for (size_t i = 0; i < executedOps.size(); ++i) {
-          if (executedOps[i]) continue;
+        for (size_t i = dif; i < circuit->size(); ++i) {
+          if (executedOps[i - dif]) continue;
+
           const auto& op = (*circuit)[i];
           const auto affectedQubits = op->AffectedQubits();
           if (op->GetType() == Circuits::OperationType::kMeasurement ||
@@ -406,6 +414,13 @@ class ExecutionCost {
     std::uniform_int_distribution<int> gateDist(
         0, static_cast<int>(Circuits::QuantumGateType::kCCXGateType));
 
+    std::uniform_int_distribution<int> gateDistTwoQubits(
+        0, static_cast<int>(Circuits::QuantumGateType::kCUGateType));
+
+    std::uniform_int_distribution<int> gateDistOneQubit(
+        0, static_cast<int>(Circuits::QuantumGateType::kUGateType));
+
+
     std::vector<Types::qubit_t> qubits(nrQubits);
     std::iota(qubits.begin(), qubits.end(), 0);
 
@@ -443,19 +458,54 @@ class ExecutionCost {
 
     // count and limit the number of three qubit gates
     size_t threeQubitGateCount = 0;
+    size_t twoQubitGateCount = 0;
+    size_t oneQubitGateCount = 0;
+
+    size_t twoQubitGateLimit =
+        nrThreeQubitGates == 1 ? 1 : depth;
+    size_t oneQubitGateLimit = nrThreeQubitGates == 1 ? 1 : depth;
+
     size_t i = 0;
     for (const auto& op : *circuit) {
       if (op->GetType() == Circuits::OperationType::kGate ||
           op->GetType() == Circuits::OperationType::kConditionalGate) {
         if (op->AffectedQubits().size() == 3) ++threeQubitGateCount;
+        else if (!op->IsClifford() && op->AffectedQubits().size() == 2)
+          ++twoQubitGateCount;
+        else if (!op->IsClifford() && op->AffectedQubits().size() == 1)
+          ++oneQubitGateCount;
 
-        if (threeQubitGateCount > nrThreeQubitGates) {
-          // replace the three qubit gate with a two qubit gate
-          auto twoQubitGate = Circuits::CircuitFactory<>::CreateGate(
-              Circuits::QuantumGateType::kCZGateType, op->AffectedQubits()[0],
-              op->AffectedQubits()[1]);
-          circuit->ReplaceOperation(i, twoQubitGate);
-          --threeQubitGateCount;
+        if (threeQubitGateCount > nrThreeQubitGates ||
+            twoQubitGateCount > twoQubitGateLimit || oneQubitGateCount > oneQubitGateLimit) {
+          // replace the three qubit gate with a two qubit clifford gate
+          auto gateType =
+              static_cast<Circuits::QuantumGateType>(gateDistTwoQubits(rng));
+
+          std::shuffle(qubits.begin(), qubits.end(), rng);
+          const auto q1 = qubits[0];
+          const auto q2 = qubits[0];
+          auto param1 = paramDist(rng);
+          auto param2 = paramDist(rng);
+          auto param3 = paramDist(rng);
+          auto param4 = paramDist(rng);
+
+          auto theGate = Circuits::CircuitFactory<>::CreateGate(
+              gateType, q1, q2, 0, param1, param2, param3, param4);
+          while (!theGate->IsClifford()) {
+            gateType =
+                static_cast<Circuits::QuantumGateType>(gateDistTwoQubits(rng));
+            theGate = Circuits::CircuitFactory<>::CreateGate(
+                gateType, q1, q2, 0, param1, param2, param3, param4);
+          }
+
+          circuit->ReplaceOperation(i, theGate);
+
+          if (threeQubitGateCount > nrThreeQubitGates)
+            --threeQubitGateCount;
+          else if (twoQubitGateCount > twoQubitGateLimit)
+            --twoQubitGateCount;
+          else
+            --oneQubitGateCount;
         }
       }
       ++i;
@@ -500,12 +550,28 @@ class ExecutionCost {
     Types::qubits_vector qubitsSampled(nrQubitsSampled);
     std::iota(qubitsSampled.begin(), qubitsSampled.end(), 0);
 
+    const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurements();
+
     auto start = std::chrono::high_resolution_clock::now();
-    for (size_t i = 0; i < nrReps; ++i) {
-      circuit->Execute(sim, dummyState);  // execute the circuit first
-      sim->SampleCountsMany(qubitsSampled, nrSamples);
+
+    if (hasMeasurementsInTheMiddle) {
+      for (size_t i = 0; i < nrReps; ++i) {
+        const auto executedOps = circuit->ExecuteNonMeasurements(sim, dummyState);  // execute the circuit up to measurements
+
+        // now sample
+        for (size_t sample = 0; sample < nrSamples; ++sample) {
+          circuit->ExecuteMeasurements(sim,
+                                       dummyState, executedOps);  // execute the measurements
+        }
+      }
+    } else {
+      for (size_t i = 0; i < nrReps; ++i) {
+        circuit->Execute(sim, dummyState);  // execute the circuit first
+        sim->SampleCountsMany(qubitsSampled, nrSamples);
+      }
     }
     auto end = std::chrono::high_resolution_clock::now();
+
     return std::chrono::duration<double>(end - start).count();
   }
 
@@ -548,6 +614,8 @@ class ExecutionCost {
     const std::vector<bool> executedOps =
         circuit->ExecuteNonMeasurements(nullptr, dummyState);
 
+    const size_t dif = circuit->size() - executedOps.size();
+
     size_t i = 0;
     for (const auto& op : *circuit) {
       const auto affectedQubits = op->AffectedQubits();
@@ -561,13 +629,14 @@ class ExecutionCost {
                  op->GetType() == Circuits::OperationType::kConditionalGate) {
         if (affectedQubits.size() == 1) {
           ++info.nrOneQubitOps;
-          if (i < executedOps.size() && executedOps[i]) ++info.nrOneQubitOpsExecutedOnce;
+          if (i < dif || executedOps[i - dif]) ++info.nrOneQubitOpsExecutedOnce;
         } else if (affectedQubits.size() == 2) {
           ++info.nrTwoQubitOps;
-          if (i < executedOps.size() && executedOps[i]) ++info.nrTwoQubitOpsExecutedOnce;
+          if (i < dif || executedOps[i - dif]) ++info.nrTwoQubitOpsExecutedOnce;
         } else if (affectedQubits.size() == 3) {
           ++info.nrThreeQubitOps;
-          if (i < executedOps.size() && executedOps[i]) ++info.nrThreeQubitOpsExecutedOnce;
+          if (i < dif || executedOps[i - dif])
+            ++info.nrThreeQubitOpsExecutedOnce;
         }
       }
       ++i;
