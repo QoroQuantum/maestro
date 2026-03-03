@@ -4,9 +4,36 @@
  *
  * @section DESCRIPTION
  *
- * The Gpu library class.
+ * The GPU library class.
  *
- * Allows loading the gpu library dynamically and exposes the c api functions.
+ * Allows loading GPU simulator plugin libraries (e.g.,
+ * libcomposer_gpu_simulators.so) dynamically at runtime and exposes their C API
+ * functions. This file defines part of Maestro's plugin interface boundary.
+ *
+ * @section LICENSE
+ *
+ * Copyright (C) 2025 Qoro Quantum Ltd
+ *
+ * This file is part of Maestro.
+ *
+ * Maestro is free software: you can redistribute it and/or modify it under the
+ * terms of the GNU General Public License as published by the Free Software
+ * Foundation, either version 3 of the License, or (at your option) any later
+ * version.
+ *
+ * Maestro is distributed in the hope that it will be useful, but WITHOUT ANY
+ * WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+ * A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * Maestro. If not, see <https://www.gnu.org/licenses/>.
+ *
+ * As an additional permission under GNU GPL version 3 section 7, independent
+ * plugin modules that communicate with Maestro solely through the C-language
+ * dynamic loading interface defined in this file may be distributed under terms
+ * of your choice, without requiring those modules to be licensed under the GPL.
+ * See the "Maestro Plugin Linking Exception" in the LICENSE file for full
+ * details.
  */
 
 #pragma once
