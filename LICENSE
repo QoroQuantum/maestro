@@ -672,3 +672,41 @@ may consider it more useful to permit linking proprietary applications with
 the library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.  But first, please read
 <https://www.gnu.org/licenses/why-not-lgpl.html>.
+
+----------------------------------------------------------------------
+
+   ADDITIONAL PERMISSION UNDER GNU GPL VERSION 3 SECTION 7
+   (Maestro Plugin Linking Exception)
+
+   Copyright (C) 2025 Qoro Quantum Ltd
+
+   As a special exception to the terms of the GNU General Public License
+   version 3, you are granted additional permission to link and distribute
+   independent plugin modules ("Plugins") with Maestro, where such Plugins
+   communicate with Maestro solely through Maestro's defined plugin
+   interface — specifically, through the C-language dynamic loading API
+   (i.e., functions loaded at runtime via dlopen/dlsym on POSIX systems or
+   LoadLibrary/GetProcAddress on Windows) — and to distribute the resulting
+   combined work under terms of your choice, provided that:
+
+   1. You also meet, for each linked independent Plugin, the terms and
+      conditions of the license of that Plugin.
+
+   2. The Plugin is an independent and separate work that:
+      (a) is not derived from or based on Maestro's source code (beyond
+          implementing the C plugin interface); and
+      (b) communicates with Maestro only through the defined plugin
+          interface at runtime, via dynamic linking.
+
+   3. If you modify Maestro itself, or any file that is part of Maestro,
+      your modifications remain subject to the GNU General Public License
+      version 3 in its entirety, without this exception.
+
+   This exception does not invalidate any other reasons why a work based on
+   Maestro might be covered by the GNU General Public License.
+
+   If you modify this file, you may extend this exception to your version
+   of the file, but you are not obligated to do so. If you do not wish to
+   provide this exception without modification, you must delete this
+   exception statement from your version and license your modifications
+   under the unmodified GNU General Public License version 3.
