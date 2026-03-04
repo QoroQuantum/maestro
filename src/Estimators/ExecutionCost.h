@@ -404,7 +404,7 @@ class ExecutionCost {
   static std::shared_ptr<Circuits::Circuit<>> GenerateRandomCircuit(
       size_t nrQubits, size_t depth, double measureInsideProbability = 0.,
       size_t nrMeasAtEnd = 0, bool isClifford = false,
-      size_t nrThreeQubitGates = 0) {
+      size_t nrNonCliffordGatesLimit = 0) {
     auto circuit = std::make_shared<Circuits::Circuit<>>();
     std::random_device rdev;
     std::mt19937 rng(rdev());
@@ -414,14 +414,16 @@ class ExecutionCost {
     std::uniform_int_distribution<int> gateDist(
         0, static_cast<int>(Circuits::QuantumGateType::kCCXGateType));
 
-    std::uniform_int_distribution<int> gateDistTwoQubits(
-        0, static_cast<int>(Circuits::QuantumGateType::kCUGateType));
-
     std::uniform_int_distribution<int> gateDistOneQubit(
         0, static_cast<int>(Circuits::QuantumGateType::kUGateType));
 
+
+
     std::vector<Types::qubit_t> qubits(nrQubits);
     std::iota(qubits.begin(), qubits.end(), 0);
+
+    size_t nrNonCliffordGates = 0;
+    if (nrNonCliffordGatesLimit == 0 && !isClifford) nrNonCliffordGatesLimit = depth;
 
     for (size_t i = 0; i < depth; ++i) {
       if (dist(rng) < measureInsideProbability) {
@@ -437,7 +439,9 @@ class ExecutionCost {
       const auto q2 = qubits[1];
       const auto q3 = qubits[2];
 
-      auto gateType = static_cast<Circuits::QuantumGateType>(gateDist(rng));
+      auto gateType = static_cast<Circuits::QuantumGateType>(
+          nrNonCliffordGatesLimit < depth ? gateDistOneQubit(rng) // avoid three qubit gates, they are non-clifford and they cost a lot
+                                          : gateDist(rng));
       auto param1 = paramDist(rng);
       auto param2 = paramDist(rng);
       auto param3 = paramDist(rng);
@@ -452,63 +456,25 @@ class ExecutionCost {
               gateType, q1, q2, q3, param1, param2, param3, param4);
         }
       }
-      circuit->AddOperation(theGate);
-    }
 
-    // count and limit the number of three qubit gates
-    size_t threeQubitGateCount = 0;
-    size_t twoQubitGateCount = 0;
-    size_t oneQubitGateCount = 0;
+      if (!theGate->IsClifford()) ++nrNonCliffordGates;
 
-    size_t twoQubitGateLimit = nrThreeQubitGates == 1 ? 1 : depth;
-    size_t oneQubitGateLimit = nrThreeQubitGates == 1 ? 1 : depth;
-
-    size_t i = 0;
-    for (const auto& op : *circuit) {
-      if (op->GetType() == Circuits::OperationType::kGate ||
-          op->GetType() == Circuits::OperationType::kConditionalGate) {
-        if (op->AffectedQubits().size() == 3)
-          ++threeQubitGateCount;
-        else if (!op->IsClifford() && op->AffectedQubits().size() == 2)
-          ++twoQubitGateCount;
-        else if (!op->IsClifford() && op->AffectedQubits().size() == 1)
-          ++oneQubitGateCount;
-
-        if (threeQubitGateCount > nrThreeQubitGates ||
-            twoQubitGateCount > twoQubitGateLimit ||
-            oneQubitGateCount > oneQubitGateLimit) {
-          // replace the three qubit gate with a two qubit clifford gate
-          auto gateType =
-              static_cast<Circuits::QuantumGateType>(gateDistTwoQubits(rng));
-
-          std::shuffle(qubits.begin(), qubits.end(), rng);
-          const auto q1 = qubits[0];
-          const auto q2 = qubits[0];
-          auto param1 = paramDist(rng);
-          auto param2 = paramDist(rng);
-          auto param3 = paramDist(rng);
-          auto param4 = paramDist(rng);
-
-          auto theGate = Circuits::CircuitFactory<>::CreateGate(
-              gateType, q1, q2, 0, param1, param2, param3, param4);
-          while (!theGate->IsClifford()) {
-            gateType =
-                static_cast<Circuits::QuantumGateType>(gateDistTwoQubits(rng));
-            theGate = Circuits::CircuitFactory<>::CreateGate(
-                gateType, q1, q2, 0, param1, param2, param3, param4);
-          }
-
-          circuit->ReplaceOperation(i, theGate);
-
-          if (threeQubitGateCount > nrThreeQubitGates)
-            --threeQubitGateCount;
-          else if (twoQubitGateCount > twoQubitGateLimit)
-            --twoQubitGateCount;
-          else
-            --oneQubitGateCount;
+      if (nrNonCliffordGates > nrNonCliffordGatesLimit) {
+        // replace the non clifford gate with a clifford one
+        gateType =
+            static_cast<Circuits::QuantumGateType>(gateDistOneQubit(rng));
+        theGate = Circuits::CircuitFactory<>::CreateGate(
+            gateType, q1, q2, q3, param1, param2, param3, param4);
+        while (!theGate->IsClifford()) {
+          gateType =
+              static_cast<Circuits::QuantumGateType>(gateDistOneQubit(rng));
+          theGate = Circuits::CircuitFactory<>::CreateGate(
+              gateType, q1, q2, q3, param1, param2, param3, param4);
         }
+        --nrNonCliffordGates;
       }
-      ++i;
+
+      circuit->AddOperation(theGate);
     }
 
     if (nrMeasAtEnd > 0) {
@@ -711,12 +677,12 @@ class ExecutionCost {
       size_t nrRandomCircuitsPerConfig, size_t maxBondDim,
       const std::string& logFilePath) {
     bool isClifford = (method == Simulators::SimulationType::kStabilizer);
-    int nrThreeQubitGates = depthMax;  // a limit
+    int nrNonCliffordGates = depthMax;  // a limit
     // but if it's pauli...
     if (method == Simulators::SimulationType::kPauliPropagator) {
-      nrThreeQubitGates = 1;
+      nrNonCliffordGates = 1;
     } else if (method == Simulators::SimulationType::kStabilizer) {
-      nrThreeQubitGates = 0;
+      nrNonCliffordGates = 0;
     }
 
     std::cout << "Benchmarking execution for simType: "
@@ -743,7 +709,7 @@ class ExecutionCost {
 
             const auto circuit = GenerateRandomCircuit(
                 nrQubits, depth, measureInsideProbability, nrMeasAtEnd,
-                isClifford, nrThreeQubitGates);
+                isClifford, nrNonCliffordGates);
             BenchmarkAndLogExecution(simType, method, circuit, nrReps,
                                      maxBondDim, log);
           }
@@ -787,12 +753,12 @@ class ExecutionCost {
       size_t nrRandomCircuitsPerConfig, size_t maxBondDim,
       const std::string& logFilePath) {
     bool isClifford = (method == Simulators::SimulationType::kStabilizer);
-    int nrThreeQubitGates = depthMax;  // a limit
+    int nrNonCliffordGates = depthMax;  // a limit
     // but if it's pauli...
     if (method == Simulators::SimulationType::kPauliPropagator) {
-      nrThreeQubitGates = 1;
+      nrNonCliffordGates = 1;
     } else if (method == Simulators::SimulationType::kStabilizer) {
-      nrThreeQubitGates = 0;
+      nrNonCliffordGates = 0;
     }
     Utils::LogFile log(logFilePath);
 
@@ -810,7 +776,7 @@ class ExecutionCost {
             isClifford = !isClifford;
 
           const auto circuit = GenerateRandomCircuit(
-              nrQubits, depth, 0., 0, isClifford, nrThreeQubitGates);
+              nrQubits, depth, 0., 0, isClifford, nrNonCliffordGates);
           const std::string pauliString = GeneratePauliString(nrQubits);
 
           std::cout << "      Random circuit: " << i + 1 << "/"
@@ -832,12 +798,12 @@ class ExecutionCost {
       size_t nrRandomCircuitsPerConfig, size_t maxBondDim,
       const std::string& logFilePath) {
     bool isClifford = (method == Simulators::SimulationType::kStabilizer);
-    int nrThreeQubitGates = depthMax;  // a limit
+    int nrNonCliffordGates = depthMax;  // a limit
     // but if it's pauli...
     if (method == Simulators::SimulationType::kPauliPropagator) {
-      nrThreeQubitGates = 1;
+      nrNonCliffordGates = 1;
     } else if (method == Simulators::SimulationType::kStabilizer) {
-      nrThreeQubitGates = 0;
+      nrNonCliffordGates = 0;
     }
     Utils::LogFile log(logFilePath);
 
@@ -857,7 +823,7 @@ class ExecutionCost {
             if (method == Simulators::SimulationType::kPauliPropagator)
               isClifford = !isClifford;
             const auto circuit = GenerateRandomCircuit(
-                nrQubits, depth, 0., 0, isClifford, nrThreeQubitGates);
+                nrQubits, depth, 0., 0, isClifford, nrNonCliffordGates);
             for (size_t nrQubitsSampled = nrQubits; nrQubitsSampled >= 1;
                  nrQubitsSampled /= 2) {
               std::cout << "        Random circuit: " << i + 1 << "/"
@@ -927,7 +893,8 @@ class ExecutionCost {
       const std::shared_ptr<Circuits::Circuit<>>& circuit,
       const std::string& pauliString, size_t nrReps, size_t maxBondDim,
       Utils::LogFile& log) {
-    const auto info = GetCircuitInfo(circuit);
+    auto info = GetCircuitInfo(circuit);
+    info.nrQubits = std::max(info.nrQubits, pauliString.size());
     const double estimatedCost = EstimatePauliExpectationCost(
         pauliString, method, info.nrQubits, circuit, maxBondDim);
     const double expectationTime =
