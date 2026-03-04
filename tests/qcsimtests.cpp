@@ -15,7 +15,7 @@
 #undef min
 #undef max
 
-#include "../Simulators/Factory.h"  // project being tested
+#include "Simulators/Factory.h"  // project being tested
 
 BOOST_AUTO_TEST_SUITE(qcsim_simulator_tests)
 

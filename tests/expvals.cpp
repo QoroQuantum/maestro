@@ -26,11 +26,11 @@ namespace bdata = boost::unit_test::data;
 #define _USE_MATH_DEFINES
 #include <math.h>
 
-#include "../Circuit/Circuit.h"
-#include "../Circuit/Factory.h"
-#include "../Simulators/Factory.h"  // project being tested
+#include "Circuit/Circuit.h"
+#include "Circuit/Factory.h"
+#include "Simulators/Factory.h"  // project being tested
 
-#include "../Network/SimpleDisconnectedNetwork.h"
+#include "Network/SimpleDisconnectedNetwork.h"
 
 struct ExpvalTestFixture {
   ExpvalTestFixture() {
@@ -422,8 +422,7 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest,
         const double questStatevectorVal =
             questStatevector->ExpectationValue(pauli);
         BOOST_CHECK_PREDICATE(
-            checkClose,
-            (questStatevectorVal)(qcsimStatevectorVal)(precision));
+            checkClose, (questStatevectorVal)(qcsimStatevectorVal)(precision));
       }
     }
 

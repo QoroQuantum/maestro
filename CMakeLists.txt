@@ -139,14 +139,14 @@ set(TESTSSRC tests/aertests.cpp
 	tests/extstabtests.cpp
 	tests/tests.cpp)
 
-set(MAESTROSRC maestrolib/Interface.cpp)
+set(MAESTROSRC src/maestrolib/Interface.cpp)
 if(WIN32)
-    list(APPEND MAESTROSRC maestrolib/dllmain.cpp)
+    list(APPEND MAESTROSRC src/maestrolib/dllmain.cpp)
 else()
-    list(APPEND MAESTROSRC Simulators/Factory.cpp)
+    list(APPEND MAESTROSRC src/Simulators/Factory.cpp)
 endif()
 
-set(MAESTROEXESRC maestroexe/maestroexe.cpp)
+set(MAESTROEXESRC src/maestroexe/maestroexe.cpp)
 
 
 if(APPLE)
@@ -231,6 +231,9 @@ IF(NOT Boost_FOUND)
         "See INSTALL.md for more details.\n"
     )
 ENDIF()
+
+# Add src/ to include path so existing #include directives work unchanged
+INCLUDE_DIRECTORIES(${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 if (QAER)
     INCLUDE_DIRECTORIES ( SYSTEM ${EIGEN5_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${QCSIM_INCLUDE_DIR} ${JSON_INCLUDE_DIR} ${AER_INCLUDE_DIR})
@@ -389,7 +392,8 @@ if(BUILD_PYTHON_BINDINGS)
         set_target_properties(maestro_py PROPERTIES OUTPUT_NAME "maestro")
         target_link_libraries(maestro_py PRIVATE maestro)
         target_include_directories(maestro_py PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/maestrolib
+            ${CMAKE_CURRENT_SOURCE_DIR}/src/maestrolib
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
             ${CMAKE_CURRENT_SOURCE_DIR}
         )
 

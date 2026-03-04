@@ -29,15 +29,15 @@ namespace bdata = boost::unit_test::data;
 #include <math.h>
 
 // project being tested
-#include "../Simulators/Factory.h"
+#include "Simulators/Factory.h"
 
-#include "../Circuit/Circuit.h"
-#include "../Circuit/Conditional.h"
-#include "../Circuit/Measurements.h"
-#include "../Circuit/QuantumGates.h"
-#include "../Circuit/RandomOp.h"
-#include "../Circuit/Reset.h"
-#include "../Circuit/Factory.h"
+#include "Circuit/Circuit.h"
+#include "Circuit/Conditional.h"
+#include "Circuit/Measurements.h"
+#include "Circuit/QuantumGates.h"
+#include "Circuit/RandomOp.h"
+#include "Circuit/Reset.h"
+#include "Circuit/Factory.h"
 
 struct SimulatorsTestFixture {
   SimulatorsTestFixture() {

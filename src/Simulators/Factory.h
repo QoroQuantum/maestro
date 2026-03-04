@@ -1,0 +1,135 @@
+/**
+ * @file Factory.h
+ * @ingroup simulators
+ * @version 1.0
+ *
+ * @section DESCRIPTION
+ *
+ * Factory for simulators.
+ *
+ * Currently only two simulators are supported: qiskit aer and qcsim.
+ * Can be esily extended to support more simulators.
+ * Call CreateSimulator with the desired simulator type to create a simulator
+ * returned as a shared pointer.
+ */
+
+#pragma once
+
+#ifndef _SIMULATORS_FACTORY_H_
+#define _SIMULATORS_FACTORY_H_
+
+#include "GpuLibStateVectorSim.h"
+#include "GpuLibMPSSim.h"
+#include "GpuLibTNSim.h"
+#include "GpuStabilizer.h"
+#include "GpuPauliPropagator.h"
+#include "QuestLibSim.h"
+
+#include "Simulator.h"
+
+namespace Simulators {
+
+/**
+ * @class SimulatorsFactory
+ * @brief Factory for simulators.
+ *
+ * Create either a qiskit aer or qcsim simulator.
+ */
+class SimulatorsFactory {
+ public:
+  /**
+   * @brief Create a quantum computing simulator.
+   *
+   * @param t The type of simulator to create.
+   * @return The simulator wrapped in a shared pointer.
+   */
+  static std::shared_ptr<ISimulator> CreateSimulator(
+      SimulatorType t = SimulatorType::kQCSim,
+      SimulationType method = SimulationType::kMatrixProductState);
+
+  /**
+   * @brief Create a quantum computing simulator.
+   *
+   * @param t The type of simulator to create.
+   * @return The simulator wrapped in a unique pointer.
+   */
+  static std::unique_ptr<ISimulator> CreateSimulatorUnique(
+      SimulatorType t = SimulatorType::kQCSim,
+      SimulationType method = SimulationType::kMatrixProductState);
+
+#ifdef __linux__
+  static bool InitGpuLibrary();
+  static bool InitGpuLibraryWithMute();
+
+  static bool IsGpuLibraryAvailable() {
+    return gpuLibrary && gpuLibrary->IsValid();
+  }
+
+  static std::shared_ptr<GpuLibrary> GetGpuLibrary() {
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+    return gpuLibrary;
+  }
+
+  static std::unique_ptr<GpuLibStateVectorSim> CreateGpuLibStateVectorSim() {
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+
+    return std::make_unique<GpuLibStateVectorSim>(gpuLibrary);
+  }
+
+  static std::unique_ptr<GpuLibMPSSim> CreateGpuLibMPSSim() {
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+
+    return std::make_unique<GpuLibMPSSim>(gpuLibrary);
+  }
+
+  static std::unique_ptr<GpuLibTNSim> CreateGpuLibTensorNetSim() {
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+
+    return std::make_unique<GpuLibTNSim>(gpuLibrary);
+  }
+
+  static std::shared_ptr<GpuStabilizer> CreateGpuStabilizerSimulator() {
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+    return std::make_shared<GpuStabilizer>(gpuLibrary);
+  }
+
+  static std::shared_ptr<GpuPauliPropagator>
+  CreateGpuPauliPropagatorSimulator() {
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+    return std::make_shared<GpuPauliPropagator>(gpuLibrary);
+  }
+
+  static std::unique_ptr<GpuPauliPropagator>
+  CreateGpuPauliPropagatorSimulatorUnique() {
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+    return std::make_unique<GpuPauliPropagator>(gpuLibrary);
+  }
+
+ private:
+  static std::shared_ptr<GpuLibrary> gpuLibrary;
+  static std::atomic_bool firstTime;
+
+ public:
+#else
+  static bool IsGpuLibraryAvailable() { return false; }
+
+  static bool InitGpuLibrary() { return false; }
+#endif
+  static bool InitQuestLibrary();
+  static bool IsQuestLibraryAvailable() {
+    return questLibrary && questLibrary->IsValid();
+  }
+
+  static std::shared_ptr<QuestLibSim> GetQuestLibrary() {
+    if (!questLibrary || !questLibrary->IsValid()) return nullptr;
+    return questLibrary;
+  }
+
+ private:
+  static std::shared_ptr<QuestLibSim> questLibrary;
+  static std::atomic_bool firstTimeQuest;
+};
+
+}  // namespace Simulators
+
+#endif  // !_SIMULATORS_FACTORY_H_

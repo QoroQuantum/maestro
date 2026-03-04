@@ -18,7 +18,7 @@ namespace utf = boost::unit_test;
 #undef min
 #undef max
 
-#include "../Simulators/Factory.h"  // project being tested
+#include "Simulators/Factory.h"  // project being tested
 
 struct AerSimulatorTestFixture {
   AerSimulatorTestFixture() {

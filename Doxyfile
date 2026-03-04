@@ -90,21 +90,22 @@ GENERATE_DEPRECATEDLIST= YES
 # ---------------------------------------------------------------------------
 #  Input
 # ---------------------------------------------------------------------------
-INPUT                  = Circuit \
-                         Distribution \
-                         Estimators \
-                         Network \
-                         Scheduler \
-                         Simulators \
-                         TensorNetworks \
-                         Utils \
-                         maestroexe \
-                         maestrolib \
-                         qasm \
+INPUT                  = src/Circuit \
+                         src/Distribution \
+                         src/Estimators \
+                         src/Network \
+                         src/Scheduler \
+                         src/Simulators \
+                         src/TensorNetworks \
+                         src/Utils \
+                         src/maestroexe \
+                         src/maestrolib \
+                         src/qasm \
+                         src/graph \
                          docs/groups.dox \
                          docs/python.dox \
                          mainpage.dox \
-                         Types.h
+                         src/Types.h
 
 INPUT_ENCODING         = UTF-8
 

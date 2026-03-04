@@ -23,8 +23,8 @@ namespace bdata = boost::unit_test::data;
 #define _USE_MATH_DEFINES
 #include <math.h>
 
-#include "../Simulators/Factory.h"
-#include "../Circuit/Factory.h"
+#include "Simulators/Factory.h"
+#include "Circuit/Factory.h"
 
 struct MPSSimTestFixture {
   MPSSimTestFixture() {

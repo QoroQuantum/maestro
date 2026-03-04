@@ -29,15 +29,15 @@ namespace bdata = boost::unit_test::data;
 #define _USE_MATH_DEFINES
 #include <math.h>
 
-#include "../Simulators/Factory.h"
+#include "Simulators/Factory.h"
 
-#include "../Circuit/Circuit.h"
-#include "../Circuit/Conditional.h"
-#include "../Circuit/Measurements.h"
-#include "../Circuit/QuantumGates.h"
-#include "../Circuit/RandomOp.h"
-#include "../Circuit/Reset.h"
-#include "../Circuit/Factory.h"
+#include "Circuit/Circuit.h"
+#include "Circuit/Conditional.h"
+#include "Circuit/Measurements.h"
+#include "Circuit/QuantumGates.h"
+#include "Circuit/RandomOp.h"
+#include "Circuit/Reset.h"
+#include "Circuit/Factory.h"
 
 extern bool checkClose(std::complex<double> a, std::complex<double> b,
                        double dif);
