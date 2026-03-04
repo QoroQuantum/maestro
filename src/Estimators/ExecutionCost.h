@@ -417,13 +417,12 @@ class ExecutionCost {
     std::uniform_int_distribution<int> gateDistOneQubit(
         0, static_cast<int>(Circuits::QuantumGateType::kUGateType));
 
-
-
     std::vector<Types::qubit_t> qubits(nrQubits);
     std::iota(qubits.begin(), qubits.end(), 0);
 
     size_t nrNonCliffordGates = 0;
-    if (nrNonCliffordGatesLimit == 0 && !isClifford) nrNonCliffordGatesLimit = depth;
+    if (nrNonCliffordGatesLimit == 0 && !isClifford)
+      nrNonCliffordGatesLimit = depth;
 
     for (size_t i = 0; i < depth; ++i) {
       if (dist(rng) < measureInsideProbability) {
@@ -440,8 +439,10 @@ class ExecutionCost {
       const auto q3 = qubits[2];
 
       auto gateType = static_cast<Circuits::QuantumGateType>(
-          nrNonCliffordGatesLimit < depth ? gateDistOneQubit(rng) // avoid three qubit gates, they are non-clifford and they cost a lot
-                                          : gateDist(rng));
+          nrNonCliffordGatesLimit < depth
+              ? gateDistOneQubit(rng)  // avoid three qubit gates, they are
+                                       // non-clifford and they cost a lot
+              : gateDist(rng));
       auto param1 = paramDist(rng);
       auto param2 = paramDist(rng);
       auto param3 = paramDist(rng);
