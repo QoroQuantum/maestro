@@ -6,8 +6,14 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Run CI tests first — must pass before any publishing happens
+  ci:
+    name: Run CI tests
+    uses: ./.github/workflows/cmake-multi-platform.yml
+
   build_sdist:
     name: Build source distribution
+    needs: [ci]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,6 +26,7 @@ jobs:
 
   build_wheels:
     name: Build wheels on ${{ matrix.os }}
+    needs: [ci]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
