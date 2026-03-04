@@ -72,23 +72,18 @@ class GpuLibrary : public Utils::Library {
       // Validate license before initializing the library.
       // The license key is read from the MAESTRO_LICENSE_KEY env var.
       // If not set, nullptr is passed to attempt cached/offline validation.
-      fValidateLicense =
-          (int (*)(const char *))GetFunction("ValidateLicense");
+      fValidateLicense = (int (*)(const char *))GetFunction("ValidateLicense");
       if (fValidateLicense) {
         const char *licenseKey = std::getenv("MAESTRO_LICENSE_KEY");
         int licenseStatus = fValidateLicense(licenseKey);
         if (licenseStatus != 1) {
-          std::cerr
-              << "GpuLibrary: License validation failed. ";
+          std::cerr << "GpuLibrary: License validation failed. ";
           if (!licenseKey)
-            std::cerr
-                << "Set MAESTRO_LICENSE_KEY environment variable "
-                   "or activate the license first."
-                << std::endl;
+            std::cerr << "Set MAESTRO_LICENSE_KEY environment variable "
+                         "or activate the license first."
+                      << std::endl;
           else
-            std::cerr
-                << "Check that your license key is correct."
-                << std::endl;
+            std::cerr << "Check that your license key is correct." << std::endl;
           return false;
         }
       }
