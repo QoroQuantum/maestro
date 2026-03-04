@@ -45,6 +45,7 @@
 
 #include "../Utils/Library.h"
 
+#include <cstdlib>
 #include <stdint.h>
 #include <unordered_map>
 #include <vector>
@@ -68,6 +69,30 @@ class GpuLibrary : public Utils::Library {
 
   bool Init(const char *libName) noexcept override {
     if (Utils::Library::Init(libName)) {
+      // Validate license before initializing the library.
+      // The license key is read from the MAESTRO_LICENSE_KEY env var.
+      // If not set, nullptr is passed to attempt cached/offline validation.
+      fValidateLicense =
+          (int (*)(const char *))GetFunction("ValidateLicense");
+      if (fValidateLicense) {
+        const char *licenseKey = std::getenv("MAESTRO_LICENSE_KEY");
+        int licenseStatus = fValidateLicense(licenseKey);
+        if (licenseStatus != 1) {
+          std::cerr
+              << "GpuLibrary: License validation failed. ";
+          if (!licenseKey)
+            std::cerr
+                << "Set MAESTRO_LICENSE_KEY environment variable "
+                   "or activate the license first."
+                << std::endl;
+          else
+            std::cerr
+                << "Check that your license key is correct."
+                << std::endl;
+          return false;
+        }
+      }
+
       InitLib = (void *(*)())GetFunction("InitLib");
       CheckFunction((void *)InitLib, __LINE__);
       if (InitLib) {
@@ -3018,6 +3043,7 @@ class GpuLibrary : public Utils::Library {
  private:
   void *LibraryHandle = nullptr;
 
+  int (*fValidateLicense)(const char *) = nullptr;
   void *(*InitLib)() = nullptr;
   void (*FreeLib)() = nullptr;
 
