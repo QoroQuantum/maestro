@@ -443,11 +443,14 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     size_t nrThreads = GetMaxSimulators();
 
 #ifdef __linux__
-    if (simType == Simulators::SimulatorType::kGpuSim) nrThreads = 1;
+    if (simType == Simulators::SimulatorType::kGpuSim)
+      nrThreads = 1;
     else
 #endif
-        if ((method == Simulators::SimulationType::kStatevector && !distCirc->HasOpsAfterMeasurements()) || simType == Simulators::SimulatorType::kQuestSim)
-            nrThreads = 1;
+        if ((method == Simulators::SimulationType::kStatevector &&
+             !distCirc->HasOpsAfterMeasurements()) ||
+            simType == Simulators::SimulatorType::kQuestSim)
+      nrThreads = 1;
 
     nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
 
@@ -631,8 +634,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       nrThreads = 1;
     else
 #endif
-        if ((method == Simulators::SimulationType::kStatevector && !distCirc->HasOpsAfterMeasurements()) || simType == Simulators::SimulatorType::kQuestSim)
-            nrThreads = 1;
+        if ((method == Simulators::SimulationType::kStatevector &&
+             !distCirc->HasOpsAfterMeasurements()) ||
+            simType == Simulators::SimulatorType::kQuestSim)
+      nrThreads = 1;
 
     nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
 
@@ -792,8 +797,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
                              singularValueThreshold.c_str());
       if (!mpsSample.empty())
         simulator->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
-      if (useDoublePrecision)
-        simulator->Configure("use_double_precision", "1");
+      if (useDoublePrecision) simulator->Configure("use_double_precision", "1");
 
       simulator->AllocateQubits(
           nrQubits == 0 ? GetNumQubits() + GetNumNetworkEntangledQubits()
@@ -821,7 +825,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     else if (std::string("mps_sample_measure_algorithm") == key)
       mpsSample = value;
     else if (std::string("use_double_precision") == key)
-      useDoublePrecision = (std::string("1") == value || std::string("true") == value);
+      useDoublePrecision =
+          (std::string("1") == value || std::string("true") == value);
     else if (std::string("max_simulators") == key)
       maxSimulators = std::stoull(value);
 
@@ -1798,9 +1803,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (OptimizationSimulatorExists(
             Simulators::SimulatorType::kQCSim,
             Simulators::SimulationType::kPauliPropagator))
-      simulatorTypes.emplace_back(
-          Simulators::SimulatorType::kQCSim,
-          Simulators::SimulationType::kPauliPropagator);
+      simulatorTypes.emplace_back(Simulators::SimulatorType::kQCSim,
+                                  Simulators::SimulationType::kPauliPropagator);
 
 #ifndef NO_QISKIT_AER
     // tensor networks are out of the picture for now for qiskit aer, since they
@@ -1848,8 +1852,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       if (OptimizationSimulatorExists(
               Simulators::SimulatorType::kGpuSim,
               Simulators::SimulationType::kPauliPropagator))
-        simulatorTypes.emplace_back(Simulators::SimulatorType::kGpuSim,
-                                    Simulators::SimulationType::kPauliPropagator);
+        simulatorTypes.emplace_back(
+            Simulators::SimulatorType::kGpuSim,
+            Simulators::SimulationType::kPauliPropagator);
     }
 #endif
 

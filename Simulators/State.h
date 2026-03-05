@@ -70,8 +70,8 @@ enum class SimulatorType : int {
   kCompositeQiskitAer, /**< composite qiskit aer simulator type */
 #endif
   kCompositeQCSim, /**< composite qcsim simulator type */
-  kGpuSim, /**< gpu simulator type */
-  kQuestSim       /**< quest simulator type */
+  kGpuSim,         /**< gpu simulator type */
+  kQuestSim        /**< quest simulator type */
 };
 
 /**
@@ -217,7 +217,7 @@ class IState {
 
   /**
    * @brief Performs a measurement on the specified qubits.
-   * 
+   *
    * Don't use it if the number of qubits is larger than the number of bits in
    * the size_t type (usually 64), as the outcome will be undefined
    *
@@ -301,7 +301,7 @@ class IState {
    * Use it to obtain the counts of the outcomes of the specified qubits
    * measurements. The state is not collapsed, so the measurement can be
    * repeated 'shots' times.
-   * 
+   *
    * Don't use it if the number of qubits is larger than the number of bits in
    * the Types::qubit_t type (usually 64), as the outcome will be undefined.
    *
@@ -312,7 +312,6 @@ class IState {
    */
   virtual std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
       const Types::qubits_vector &qubits, size_t shots = 1000) = 0;
-
 
   /**
    * @brief Returns the counts of the outcomes of measurement of the specified
@@ -327,8 +326,8 @@ class IState {
    * @return A map with the counts for the otcomes of measurements of the
    * specified qubits.
    */
-  virtual std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(
-      const Types::qubits_vector &qubits, size_t shots = 1000) = 0;
+  virtual std::unordered_map<std::vector<bool>, Types::qubit_t>
+  SampleCountsMany(const Types::qubits_vector &qubits, size_t shots = 1000) = 0;
 
   /**
    * @brief Returns the expected value of a Pauli string.
@@ -492,7 +491,7 @@ class IState {
    * the qiskit aer case, SaveStateToInternalDestructive is needed to be called
    * before this. If one wants to use the simulator after such measurement(s),
    * RestoreInternalDestructiveSavedState should be called at the end.
-   * 
+   *
    * Don't use this for more qubits than the size of Types::qubit_t, as the
    * result is packed in a limited number of bits (e.g. 64 bits for uint64_t)
    *
@@ -501,7 +500,7 @@ class IState {
    */
   virtual Types::qubit_t MeasureNoCollapse() = 0;
 
-   /**
+  /**
    * @brief Measures all the qubits without collapsing the state.
    *
    * Measures all the qubits without collapsing the state, allowing to perform

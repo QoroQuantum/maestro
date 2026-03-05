@@ -70,8 +70,7 @@ class QiskitAerState : public AER::AerState {
     return state->expval_pauli(qubits, pauli);
   }
 
-  std::vector<bool> apply_measure_many(const reg_t &qubits)
-  {
+  std::vector<bool> apply_measure_many(const reg_t &qubits) {
     const auto &state = get_state();
     if (!state) return {};
 
@@ -112,8 +111,7 @@ class QiskitAerState : public AER::AerState {
     std::unordered_map<std::vector<bool>, uint_t> ret;
     std::vector<bool> sample_vec(qubits.size());
     for (const auto &sample : samples) {
-      for (size_t q = 0; q < qubits.size(); ++q)
-        sample_vec[q] = sample[q] == 1;
+      for (size_t q = 0; q < qubits.size(); ++q) sample_vec[q] = sample[q] == 1;
 
       ++ret[sample_vec];
     }
