@@ -719,9 +719,11 @@ class GpuSimulator : public GpuState {
    * @return A unique pointer to the cloned simulator.
    */
   std::unique_ptr<ISimulator> Clone() override {
-    if (GetSimulationType() == SimulationType::kTensorNetwork || GetSimulationType() == SimulationType::kPauliPropagator) {
+    if (GetSimulationType() == SimulationType::kTensorNetwork ||
+        GetSimulationType() == SimulationType::kPauliPropagator) {
       throw std::runtime_error(
-          "GpuSimulator::Clone: Cloning Tensor Network or Pauli Propagator simulation is not "
+          "GpuSimulator::Clone: Cloning Tensor Network or Pauli Propagator "
+          "simulation is not "
           "supported.");
     }
 

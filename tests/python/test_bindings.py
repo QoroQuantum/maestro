@@ -1071,4 +1071,3 @@ class TestQuestSimulator:
         )
         assert result is not None
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
-

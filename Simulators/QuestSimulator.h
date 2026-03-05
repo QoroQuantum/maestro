@@ -392,8 +392,8 @@ class QuestSimulator : public QuestState {
    */
   void ApplyCCX(Types::qubit_t qubit0, Types::qubit_t qubit1,
                 Types::qubit_t qubit2) override {
-    questLib->ApplyCCX(sim, static_cast<int>(qubit0),
-                       static_cast<int>(qubit1), static_cast<int>(qubit2));
+    questLib->ApplyCCX(sim, static_cast<int>(qubit0), static_cast<int>(qubit1),
+                       static_cast<int>(qubit2));
     NotifyObservers({qubit0, qubit1, qubit2});
   }
 

@@ -54,8 +54,7 @@ class QuestLibSim : public Utils::Library {
       fCloneSimulator =
           (unsigned long int (*)(void *))GetFunction("CloneSimulator");
       CheckFunction((void *)fCloneSimulator, __LINE__);
-      fGetSimulator =
-          (void *(*)(unsigned long int))GetFunction("GetSimulator");
+      fGetSimulator = (void *(*)(unsigned long int))GetFunction("GetSimulator");
       CheckFunction((void *)fGetSimulator, __LINE__);
 
       fGetNumQubits = (int (*)(void *))GetFunction("GetNumQubits");
@@ -66,9 +65,8 @@ class QuestLibSim : public Utils::Library {
       fGetQubitProbability1 =
           (double (*)(void *, int))GetFunction("GetQubitProbability1");
       CheckFunction((void *)fGetQubitProbability1, __LINE__);
-      fGetOutcomeProbability =
-          (double (*)(void *, long long int))GetFunction(
-              "GetOutcomeProbability");
+      fGetOutcomeProbability = (double (*)(void *, long long int))GetFunction(
+          "GetOutcomeProbability");
       CheckFunction((void *)fGetOutcomeProbability, __LINE__);
       fGetExpectationValue =
           (double (*)(void *, const char *))GetFunction("GetExpectationValue");
@@ -117,21 +115,16 @@ class QuestLibSim : public Utils::Library {
       fApplyCZ = (void (*)(void *, int, int))GetFunction("ApplyCZ");
       CheckFunction((void *)fApplyCZ, __LINE__);
 
-      fApplyCRx =
-          (void (*)(void *, int, int, double))GetFunction("ApplyCRx");
+      fApplyCRx = (void (*)(void *, int, int, double))GetFunction("ApplyCRx");
       CheckFunction((void *)fApplyCRx, __LINE__);
-      fApplyCRy =
-          (void (*)(void *, int, int, double))GetFunction("ApplyCRy");
+      fApplyCRy = (void (*)(void *, int, int, double))GetFunction("ApplyCRy");
       CheckFunction((void *)fApplyCRy, __LINE__);
-      fApplyCRz =
-          (void (*)(void *, int, int, double))GetFunction("ApplyCRz");
+      fApplyCRz = (void (*)(void *, int, int, double))GetFunction("ApplyCRz");
       CheckFunction((void *)fApplyCRz, __LINE__);
 
-      fApplyCSwap =
-          (void (*)(void *, int, int, int))GetFunction("ApplyCSwap");
+      fApplyCSwap = (void (*)(void *, int, int, int))GetFunction("ApplyCSwap");
       CheckFunction((void *)fApplyCSwap, __LINE__);
-      fApplyCCX =
-          (void (*)(void *, int, int, int))GetFunction("ApplyCCX");
+      fApplyCCX = (void (*)(void *, int, int, int))GetFunction("ApplyCCX");
       CheckFunction((void *)fApplyCCX, __LINE__);
 
       fApplySdg = (void (*)(void *, int))GetFunction("ApplySdg");
@@ -151,17 +144,19 @@ class QuestLibSim : public Utils::Library {
       fApplyCU = (void (*)(void *, int, int, double, double, double,
                            double))GetFunction("ApplyCU");
       CheckFunction((void *)fApplyCU, __LINE__);
-      fApplyCP =
-          (void (*)(void *, int, int, double))GetFunction("ApplyCP");
+      fApplyCP = (void (*)(void *, int, int, double))GetFunction("ApplyCP");
       CheckFunction((void *)fApplyCP, __LINE__);
       fApplyCSx = (void (*)(void *, int, int))GetFunction("ApplyCSx");
       CheckFunction((void *)fApplyCSx, __LINE__);
       fApplyCSxDg = (void (*)(void *, int, int))GetFunction("ApplyCSxDg");
       CheckFunction((void *)fApplyCSxDg, __LINE__);
 
-      fGetAmplitudes = (int (*)(void *, void *, unsigned long long int))GetFunction("GetAmplitudes");
+      fGetAmplitudes = (int (*)(
+          void *, void *, unsigned long long int))GetFunction("GetAmplitudes");
       CheckFunction((void *)fGetAmplitudes, __LINE__);
-      fGetAmplitude = (int (*)(void *, long long int, void *, unsigned long long int))GetFunction("GetAmplitude");
+      fGetAmplitude =
+          (int (*)(void *, long long int, void *,
+                   unsigned long long int))GetFunction("GetAmplitude");
       CheckFunction((void *)fGetAmplitude, __LINE__);
       fIsDoublePrecision = (int (*)())GetFunction("IsDoublePrecision");
       CheckFunction((void *)fIsDoublePrecision, __LINE__);
@@ -275,8 +270,7 @@ class QuestLibSim : public Utils::Library {
     if (initialized)
       return fGetExpectationValue(sim, pauliStr);
     else
-      throw std::runtime_error(
-          "QuestLibSim: Unable to get expectation value");
+      throw std::runtime_error("QuestLibSim: Unable to get expectation value");
 
     return 0;
   }
@@ -537,42 +531,49 @@ class QuestLibSim : public Utils::Library {
 
   // amplitude functions
 
-  bool GetAmplitudes(void *sim, std::vector<std::complex<double>>& amplitudes) const {
+  bool GetAmplitudes(void *sim,
+                     std::vector<std::complex<double>> &amplitudes) const {
     if (initialized) {
       if (IsDoublePrecision())
-        return fGetAmplitudes(sim, amplitudes.data(), amplitudes.size() * sizeof(std::complex<double>)) == 1;
-      else
-      {
+        return fGetAmplitudes(
+                   sim, amplitudes.data(),
+                   amplitudes.size() * sizeof(std::complex<double>)) == 1;
+      else {
         std::vector<std::complex<float>> amplitudesSingle(amplitudes.size());
-        if (fGetAmplitudes(sim, amplitudesSingle.data(), amplitudesSingle.size() * sizeof(std::complex<float>)) == 1) {
+        if (fGetAmplitudes(
+                sim, amplitudesSingle.data(),
+                amplitudesSingle.size() * sizeof(std::complex<float>)) == 1) {
           for (size_t i = 0; i < amplitudes.size(); ++i)
-            amplitudes[i] = std::complex<double>(static_cast<double>(amplitudesSingle[i].real()), static_cast<double>(amplitudesSingle[i].imag()));
-          
+            amplitudes[i] = std::complex<double>(
+                static_cast<double>(amplitudesSingle[i].real()),
+                static_cast<double>(amplitudesSingle[i].imag()));
+
           return true;
         }
       }
-    }
-    else
+    } else
       throw std::runtime_error("QuestLibSim: Unable to get amplitudes");
 
     return false;
   }
 
-  bool GetAmplitude(void *sim, long long int index, std::complex<double>& amplitude) const {
+  bool GetAmplitude(void *sim, long long int index,
+                    std::complex<double> &amplitude) const {
     if (initialized) {
       if (IsDoublePrecision())
-        return fGetAmplitude(sim, index, &amplitude, sizeof(std::complex<double>)) == 1;
-      else
-      {
+        return fGetAmplitude(sim, index, &amplitude,
+                             sizeof(std::complex<double>)) == 1;
+      else {
         std::complex<float> ampSingle;
-        if (fGetAmplitude(sim, index, &ampSingle, sizeof(std::complex<float>)) == 1) {
-          amplitude = std::complex<double>(static_cast<double>(ampSingle.real()),
-                                          static_cast<double>(ampSingle.imag()));
+        if (fGetAmplitude(sim, index, &ampSingle,
+                          sizeof(std::complex<float>)) == 1) {
+          amplitude =
+              std::complex<double>(static_cast<double>(ampSingle.real()),
+                                   static_cast<double>(ampSingle.imag()));
           return true;
         }
       }
-    }
-    else
+    } else
       throw std::runtime_error("QuestLibSim: Unable to get amplitude");
     return false;
   }
@@ -642,10 +643,11 @@ class QuestLibSim : public Utils::Library {
   void (*fApplyCSx)(void *, int, int) = nullptr;
   void (*fApplyCSxDg)(void *, int, int) = nullptr;
   int (*fGetAmplitudes)(void *, void *, unsigned long long int) = nullptr;
-  int (*fGetAmplitude)(void *, long long int, void *, unsigned long long int) = nullptr;
+  int (*fGetAmplitude)(void *, long long int, void *,
+                       unsigned long long int) = nullptr;
   int (*fIsDoublePrecision)() = nullptr;
 };
 
-}
+}  // namespace Simulators
 
-#endif // _QUEST_LIB_SIM_H_
+#endif  // _QUEST_LIB_SIM_H_

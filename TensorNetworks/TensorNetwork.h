@@ -595,8 +595,8 @@ class TensorNetwork {
       const auto &lastTensorSuper = tensors[lastTensorId];
       lastTensorIndexForQubit = lastTensorIndicesSuper[q];
 
-      lastTensorSuper->tensor = std::make_shared<Utils::Tensor<>>(
-          lastTensorSuper->tensor->Contract(
+      lastTensorSuper->tensor =
+          std::make_shared<Utils::Tensor<>>(lastTensorSuper->tensor->Contract(
               *(tensorNode->tensor), lastTensorIndexForQubit, 0,
               enableMultithreading));
 

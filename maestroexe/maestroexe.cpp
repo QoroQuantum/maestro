@@ -47,7 +47,7 @@ static std::string GetConfigJson(int num_shots, int maxBondDim) {
 }
 
 int main(int argc, char** argv) {
-   try {
+  try {
     std::ios_base::sync_with_stdio(false);
     std::cin.tie(nullptr);
 
@@ -61,10 +61,11 @@ int main(int argc, char** argv) {
         "mbd,m", boost::program_options::value<int>(),
         "Specify the max bond dimension for the MPS simulator")(
         "simulator,r", boost::program_options::value<std::string>(),
-        "Simulator type, either aer, qcsim, composite_aer, composite_qcsim, gpu "
-        "or quest")(
-        "type,t", boost::program_options::value<std::string>(),
-        "Simulation type, either statevector, mps, stabilizer, tensor or pauli_propagation")(
+        "Simulator type, either aer, qcsim, composite_aer, composite_qcsim, "
+        "gpu "
+        "or quest")("type,t", boost::program_options::value<std::string>(),
+                    "Simulation type, either statevector, mps, stabilizer, "
+                    "tensor or pauli_propagation")(
         "file,f", boost::program_options::value<std::string>(),
         "Provide a qasm file for execution")(
         "output,o", boost::program_options::value<std::string>(),
@@ -77,7 +78,8 @@ int main(int argc, char** argv) {
 
     boost::program_options::variables_map vars;
     try {
-      boost::program_options::basic_command_line_parser<char> parser(argc, argv);
+      boost::program_options::basic_command_line_parser<char> parser(argc,
+                                                                     argv);
       parser.positional(pos_desc);
       parser.options(desc);
 
@@ -253,7 +255,9 @@ int main(int argc, char** argv) {
 
     if (simulatorType < 2)  // qcsim or aer
     {
-      if (simulationType < 4 || (simulatorType == 1 && simulationType == 4)) // qcsim also supports pauli propagation
+      if (simulationType < 4 ||
+          (simulatorType == 1 &&
+           simulationType == 4))  // qcsim also supports pauli propagation
         simulator.RemoveAllOptimizationSimulatorsAndAdd(
             static_cast<int>(simulatorType), static_cast<int>(simulationType));
       else {
@@ -269,7 +273,9 @@ int main(int argc, char** argv) {
           static_cast<int>(simulatorType), 0);
     } else if (simulatorType == 4)  // gpu
     {
-      if (simulationType < 2 || simulationType == 3 || simulationType == 4)  // statevector or mps, or tensor or pauli propagation
+      if (simulationType < 2 || simulationType == 3 ||
+          simulationType ==
+              4)  // statevector or mps, or tensor or pauli propagation
         simulator.RemoveAllOptimizationSimulatorsAndAdd(
             static_cast<int>(simulatorType), static_cast<int>(simulationType));
       else  // other types are not supported yet on gpu, set statevector
@@ -297,11 +303,13 @@ int main(int argc, char** argv) {
         if (obsFile.is_open()) {
           std::string obsStr((std::istreambuf_iterator<char>(obsFile)),
                              std::istreambuf_iterator<char>());
-          obsStr.erase(std::remove(obsStr.begin(), obsStr.end(), '\n'), obsStr.end());
-          obsStr.erase(std::remove(obsStr.begin(), obsStr.end(), '\r'), obsStr.end());
+          obsStr.erase(std::remove(obsStr.begin(), obsStr.end(), '\n'),
+                       obsStr.end());
+          obsStr.erase(std::remove(obsStr.begin(), obsStr.end(), '\r'),
+                       obsStr.end());
           if (!obsStr.empty()) {
-            char* res = simulator.SimpleEstimate(qasmStr.c_str(), obsStr.c_str(),
-                                                 configStr.c_str());
+            char* res = simulator.SimpleEstimate(
+                qasmStr.c_str(), obsStr.c_str(), configStr.c_str());
             if (res) {
               result = res;
               simulator.FreeResult(res);
