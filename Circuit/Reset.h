@@ -60,8 +60,7 @@ class Reset : public IOperation<Time> {
     auto res = sim->MeasureMany(qubits);
 
     for (size_t qi = 0; qi < qubits.size(); ++qi) {
-      if (res[qi] ==
-          (resetTargets.size() <= qi ? true : !resetTargets[qi])) {
+      if (res[qi] == (resetTargets.size() <= qi ? true : !resetTargets[qi])) {
         xgate.SetQubit(qubits[qi]);
         xgate.Execute(sim, state);
       }

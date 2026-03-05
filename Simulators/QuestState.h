@@ -215,7 +215,8 @@ class QuestState : public ISimulator {
     DontNotify();
 
     std::vector<int> qb(qubits.begin(), qubits.end());
-    const size_t res = static_cast<size_t>(questLib->MeasureQubits(sim, qb.data(), static_cast<int>(qubits.size())));
+    const size_t res = static_cast<size_t>(questLib->MeasureQubits(
+        sim, qb.data(), static_cast<int>(qubits.size())));
 
     Notify();
     NotifyObservers(qubits);
@@ -235,7 +236,8 @@ class QuestState : public ISimulator {
     DontNotify();
 
     std::vector<int> qb(qubits.begin(), qubits.end());
-    const size_t resm = static_cast<size_t>(questLib->MeasureQubits(sim, qb.data(), static_cast<int>(qubits.size())));
+    const size_t resm = static_cast<size_t>(questLib->MeasureQubits(
+        sim, qb.data(), static_cast<int>(qubits.size())));
 
     size_t mask = 1ULL;
     for (size_t i = 0; i < qubits.size(); ++i) {
@@ -258,7 +260,8 @@ class QuestState : public ISimulator {
   void ApplyReset(const Types::qubits_vector &qubits) override {
     DontNotify();
     std::vector<int> qb(qubits.begin(), qubits.end());
-    const size_t res = static_cast<size_t>(questLib->MeasureQubits(sim, qb.data(), static_cast<int>(qubits.size())));
+    const size_t res = static_cast<size_t>(questLib->MeasureQubits(
+        sim, qb.data(), static_cast<int>(qubits.size())));
     size_t mask = 1ULL;
     for (size_t i = 0; i < qubits.size(); ++i) {
       if (res & mask) questLib->ApplyX(sim, static_cast<int>(qubits[i]));
@@ -281,7 +284,8 @@ class QuestState : public ISimulator {
    * @return The probability of the specified outcome.
    */
   double Probability(Types::qubit_t outcome) override {
-    return questLib->GetOutcomeProbability(sim, static_cast<long long int>(outcome));
+    return questLib->GetOutcomeProbability(sim,
+                                           static_cast<long long int>(outcome));
   }
 
   /**
@@ -296,7 +300,8 @@ class QuestState : public ISimulator {
    */
   std::complex<double> Amplitude(Types::qubit_t outcome) override {
     std::complex<double> amplitude;
-    if (questLib->GetAmplitude(sim, static_cast<long long int>(outcome), amplitude)) {
+    if (questLib->GetAmplitude(sim, static_cast<long long int>(outcome),
+                               amplitude)) {
       return amplitude;
     }
     return std::complex<double>(0.0, 0.0);
@@ -319,8 +324,7 @@ class QuestState : public ISimulator {
     questLib->GetAmplitudes(sim, amplitudes);
 
     std::vector<double> result(numStates);
-    for (size_t i = 0; i < numStates; ++i)
-      result[i] = std::norm(amplitudes[i]);
+    for (size_t i = 0; i < numStates; ++i) result[i] = std::norm(amplitudes[i]);
     return result;
   }
 
@@ -339,7 +343,8 @@ class QuestState : public ISimulator {
       const Types::qubits_vector &qubits) override {
     std::vector<double> result(qubits.size());
     for (size_t i = 0; i < qubits.size(); ++i)
-      result[i] = questLib->GetOutcomeProbability(sim, static_cast<long long int>(qubits[i]));
+      result[i] = questLib->GetOutcomeProbability(
+          sim, static_cast<long long int>(qubits[i]));
     return result;
   }
 
@@ -644,8 +649,7 @@ class QuestState : public ISimulator {
     questLib->GetAmplitudes(sim, amplitudes);
 
     std::vector<double> probs(numStates);
-    for (size_t i = 0; i < numStates; ++i)
-      probs[i] = std::norm(amplitudes[i]);
+    for (size_t i = 0; i < numStates; ++i) probs[i] = std::norm(amplitudes[i]);
 
     std::discrete_distribution<Types::qubit_t> dist(probs.begin(), probs.end());
 
@@ -666,8 +670,7 @@ class QuestState : public ISimulator {
   std::vector<bool> MeasureNoCollapseMany() override {
     const auto meas = MeasureNoCollapse();
     std::vector<bool> result(nrQubits, false);
-    for (size_t i = 0; i < nrQubits; ++i)
-      result[i] = ((meas >> i) & 1) == 1;
+    for (size_t i = 0; i < nrQubits; ++i) result[i] = ((meas >> i) & 1) == 1;
     return result;
   }
 
@@ -675,7 +678,7 @@ class QuestState : public ISimulator {
   std::shared_ptr<QuestLibSim> questLib; /**< The quest library. */
   unsigned long int simHandle = 0;       /**< The simulator handle. */
   void *sim = nullptr;                   /**< The simulator pointer. */
-  size_t nrQubits = 0;  /**< The number of allocated qubits. */
+  size_t nrQubits = 0;                   /**< The number of allocated qubits. */
   unsigned long int savedSimHandle = 0;  /**< The saved simulator handle. */
   void *savedSim = nullptr;              /**< The saved simulator pointer. */
   std::mt19937_64 rng;

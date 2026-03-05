@@ -378,7 +378,6 @@ class IndividualSimulator : public ISimulator {
     return res;
   }
 
-
   /**
    * @brief Convert the outcome from the local qubit ids to the global qubit ids
    *
@@ -411,7 +410,7 @@ class IndividualSimulator : public ISimulator {
    * @return The converted outcome.
    */
   inline std::vector<bool> ConvertOutcomeFromGlobal(
-      const std::vector<bool>& outcome) const {
+      const std::vector<bool> &outcome) const {
     const size_t nrQubits = simulator->GetNumberOfQubits();
     std::vector<bool> res(nrQubits, false);
 
@@ -636,12 +635,13 @@ class IndividualSimulator : public ISimulator {
    * @brief Performs a measurement on the specified qubits.
    *
    * WARNING: Use it with care, might not do what you expect.
-   * 
+   *
    * @param qubits A vector with the qubits to be measured.
    * @return The outcome of the measurements
    */
   std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override {
-    return ConvertOutcomeFromLocal(simulator->MeasureMany(ConvertQubits(qubits)));
+    return ConvertOutcomeFromLocal(
+        simulator->MeasureMany(ConvertQubits(qubits)));
   }
 
   /**

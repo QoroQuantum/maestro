@@ -42,8 +42,9 @@ class MaestroLibrary : public Utils::Library {
                                       const char*))GetFunction("SimpleExecute");
           CheckFunction((void*)fSimpleExecute, __LINE__);
 
-          fSimpleEstimate = (char* (*)(unsigned long int, const char*, const char*,
-                                       const char*))GetFunction("SimpleEstimate");
+          fSimpleEstimate =
+              (char* (*)(unsigned long int, const char*, const char*,
+                         const char*))GetFunction("SimpleEstimate");
           CheckFunction((void*)fSimpleEstimate, __LINE__);
 
           fFreeResult = (void (*)(char*))GetFunction("FreeResult");

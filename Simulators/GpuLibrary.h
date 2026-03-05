@@ -45,6 +45,7 @@
 
 #include "../Utils/Library.h"
 
+#include <cstdlib>
 #include <stdint.h>
 #include <unordered_map>
 #include <vector>
@@ -68,6 +69,29 @@ class GpuLibrary : public Utils::Library {
 
   bool Init(const char *libName) noexcept override {
     if (Utils::Library::Init(libName)) {
+      // Validate license before initializing the library.
+      // The license key is read from the MAESTRO_LICENSE_KEY env var.
+      // If not set, nullptr is passed to attempt cached/offline validation.
+      fValidateLicense = (int (*)(const char *))GetFunction("ValidateLicense");
+      if (!fValidateLicense) {
+        std::cerr << "GpuLibrary: License validation symbol not found. "
+                     "The GPU library must export ValidateLicense."
+                  << std::endl;
+        return false;
+      }
+      const char *licenseKey = std::getenv("MAESTRO_LICENSE_KEY");
+      int licenseStatus = fValidateLicense(licenseKey);
+      if (licenseStatus != 1) {
+        std::cerr << "GpuLibrary: License validation failed. ";
+        if (!licenseKey)
+          std::cerr << "Set MAESTRO_LICENSE_KEY environment variable "
+                       "or activate the license first."
+                    << std::endl;
+        else
+          std::cerr << "Check that your license key is correct." << std::endl;
+        return false;
+      }
+
       InitLib = (void *(*)())GetFunction("InitLib");
       CheckFunction((void *)InitLib, __LINE__);
       if (InitLib) {
@@ -583,118 +607,178 @@ class GpuLibrary : public Utils::Library {
               "CopyStabilizerMTable");
           CheckFunction((void *)fCopyStabilizerMTable, __LINE__);
 
-          fInitStabilizerXTable = (int (*)(
-              void *, const unsigned int *))GetFunction("InitXTable");
+          fInitStabilizerXTable =
+              (int (*)(void *, const unsigned int *))GetFunction("InitXTable");
           CheckFunction((void *)fInitStabilizerXTable, __LINE__);
-          fInitStabilizerZTable = (int (*)(
-              void *, const unsigned int *))GetFunction("InitZTable");
+          fInitStabilizerZTable =
+              (int (*)(void *, const unsigned int *))GetFunction("InitZTable");
           CheckFunction((void *)fInitStabilizerZTable, __LINE__);
 
           // pauli propagation functions
-          fCreatePauliPropSimulator = (void *(*)(int))GetFunction("CreatePauliPropSimulator");
+          fCreatePauliPropSimulator =
+              (void *(*)(int))GetFunction("CreatePauliPropSimulator");
           CheckFunction((void *)fCreatePauliPropSimulator, __LINE__);
-          fDestroyPauliPropSimulator = (void (*)(void *))GetFunction("DestroyPauliPropSimulator");
+          fDestroyPauliPropSimulator =
+              (void (*)(void *))GetFunction("DestroyPauliPropSimulator");
           CheckFunction((void *)fDestroyPauliPropSimulator, __LINE__);
 
-          fPauliPropGetNrQubits = (int (*)(void *))GetFunction("PauliPropGetNrQubits");
+          fPauliPropGetNrQubits =
+              (int (*)(void *))GetFunction("PauliPropGetNrQubits");
           CheckFunction((void *)fPauliPropGetNrQubits, __LINE__);
-          fPauliPropSetWillUseSampling = (int (*)(void *, int))GetFunction("PauliPropSetWillUseSampling");
+          fPauliPropSetWillUseSampling =
+              (int (*)(void *, int))GetFunction("PauliPropSetWillUseSampling");
           CheckFunction((void *)fPauliPropSetWillUseSampling, __LINE__);
-          fPauliPropGetWillUseSampling = (int (*)(void *))GetFunction("PauliPropGetWillUseSampling");
+          fPauliPropGetWillUseSampling =
+              (int (*)(void *))GetFunction("PauliPropGetWillUseSampling");
           CheckFunction((void *)fPauliPropGetWillUseSampling, __LINE__);
 
-          fPauliPropGetCoefficientTruncationCutoff = (double (*)(void *))GetFunction("PauliPropGetCoefficientTruncationCutoff");
-          CheckFunction((void *)fPauliPropGetCoefficientTruncationCutoff, __LINE__);
-          fPauliPropSetCoefficientTruncationCutoff = (void (*)(void *, double))GetFunction("PauliPropSetCoefficientTruncationCutoff");
-          CheckFunction((void *)fPauliPropSetCoefficientTruncationCutoff, __LINE__);
-          fPauliPropGetWeightTruncationCutoff = (double (*)(void *))GetFunction("PauliPropGetWeightTruncationCutoff");
+          fPauliPropGetCoefficientTruncationCutoff = (double (*)(
+              void *))GetFunction("PauliPropGetCoefficientTruncationCutoff");
+          CheckFunction((void *)fPauliPropGetCoefficientTruncationCutoff,
+                        __LINE__);
+          fPauliPropSetCoefficientTruncationCutoff =
+              (void (*)(void *, double))GetFunction(
+                  "PauliPropSetCoefficientTruncationCutoff");
+          CheckFunction((void *)fPauliPropSetCoefficientTruncationCutoff,
+                        __LINE__);
+          fPauliPropGetWeightTruncationCutoff = (double (*)(void *))GetFunction(
+              "PauliPropGetWeightTruncationCutoff");
           CheckFunction((void *)fPauliPropGetWeightTruncationCutoff, __LINE__);
-          fPauliPropSetWeightTruncationCutoff = (void (*)(void *, double))GetFunction("PauliPropSetWeightTruncationCutoff");
+          fPauliPropSetWeightTruncationCutoff = (void (*)(
+              void *, double))GetFunction("PauliPropSetWeightTruncationCutoff");
           CheckFunction((void *)fPauliPropSetWeightTruncationCutoff, __LINE__);
-          fPauliPropGetNumGatesBetweenTruncations = (int (*)(void *))GetFunction("PauliPropGetNumGatesBetweenTruncations");
-          CheckFunction((void *)fPauliPropGetNumGatesBetweenTruncations, __LINE__);
-          fPauliPropSetNumGatesBetweenTruncations = (void (*)(void *, int))GetFunction("PauliPropSetNumGatesBetweenTruncations");
-          CheckFunction((void *)fPauliPropSetNumGatesBetweenTruncations, __LINE__);
-          fPauliPropGetNumGatesBetweenDeduplications = (int (*)(void *))GetFunction("PauliPropGetNumGatesBetweenDeduplications");
-          CheckFunction((void *)fPauliPropGetNumGatesBetweenDeduplications, __LINE__);
-          fPauliPropSetNumGatesBetweenDeduplications = (void (*)(void *, int))GetFunction("PauliPropSetNumGatesBetweenDeduplications");
-          CheckFunction((void *)fPauliPropSetNumGatesBetweenDeduplications, __LINE__);
+          fPauliPropGetNumGatesBetweenTruncations = (int (*)(
+              void *))GetFunction("PauliPropGetNumGatesBetweenTruncations");
+          CheckFunction((void *)fPauliPropGetNumGatesBetweenTruncations,
+                        __LINE__);
+          fPauliPropSetNumGatesBetweenTruncations =
+              (void (*)(void *, int))GetFunction(
+                  "PauliPropSetNumGatesBetweenTruncations");
+          CheckFunction((void *)fPauliPropSetNumGatesBetweenTruncations,
+                        __LINE__);
+          fPauliPropGetNumGatesBetweenDeduplications = (int (*)(
+              void *))GetFunction("PauliPropGetNumGatesBetweenDeduplications");
+          CheckFunction((void *)fPauliPropGetNumGatesBetweenDeduplications,
+                        __LINE__);
+          fPauliPropSetNumGatesBetweenDeduplications =
+              (void (*)(void *, int))GetFunction(
+                  "PauliPropSetNumGatesBetweenDeduplications");
+          CheckFunction((void *)fPauliPropSetNumGatesBetweenDeduplications,
+                        __LINE__);
 
-
-          fPauliPropClearOperators = (int (*)(void *))GetFunction("PauliPropClearOperators");
+          fPauliPropClearOperators =
+              (int (*)(void *))GetFunction("PauliPropClearOperators");
           CheckFunction((void *)fPauliPropClearOperators, __LINE__);
-          fPauliPropAllocateMemory = (int (*)(void *, double))GetFunction("PauliPropAllocateMemory");
+          fPauliPropAllocateMemory =
+              (int (*)(void *, double))GetFunction("PauliPropAllocateMemory");
           CheckFunction((void *)fPauliPropAllocateMemory, __LINE__);
 
-          fPauliPropGetExpectationValue = (double (*)(void *))GetFunction("PauliPropGetExpectationValue");
+          fPauliPropGetExpectationValue =
+              (double (*)(void *))GetFunction("PauliPropGetExpectationValue");
           CheckFunction((void *)fPauliPropGetExpectationValue, __LINE__);
           fPauliPropExecute = (int (*)(void *))GetFunction("PauliPropExecute");
           CheckFunction((void *)fPauliPropExecute, __LINE__);
-          fPauliPropSetInPauliExpansionUnique = (int (*)(void *, const char *))GetFunction("PauliPropSetInPauliExpansionUnique");
+          fPauliPropSetInPauliExpansionUnique =
+              (int (*)(void *, const char *))GetFunction(
+                  "PauliPropSetInPauliExpansionUnique");
           CheckFunction((void *)fPauliPropSetInPauliExpansionUnique, __LINE__);
-          fPauliPropSetInPauliExpansionMultiple = (int (*)(void *, const char **,
-                                                       const double *, int))GetFunction("PauliPropSetInPauliExpansionMultiple");
-          CheckFunction((void *)fPauliPropSetInPauliExpansionMultiple, __LINE__);
+          fPauliPropSetInPauliExpansionMultiple =
+              (int (*)(void *, const char **, const double *, int))GetFunction(
+                  "PauliPropSetInPauliExpansionMultiple");
+          CheckFunction((void *)fPauliPropSetInPauliExpansionMultiple,
+                        __LINE__);
 
-          fPauliPropApplyX = (int (*)(void *, int))GetFunction("PauliPropApplyX");
+          fPauliPropApplyX =
+              (int (*)(void *, int))GetFunction("PauliPropApplyX");
           CheckFunction((void *)fPauliPropApplyX, __LINE__);
-          fPauliPropApplyY = (int (*)(void *, int))GetFunction("PauliPropApplyY");
+          fPauliPropApplyY =
+              (int (*)(void *, int))GetFunction("PauliPropApplyY");
           CheckFunction((void *)fPauliPropApplyY, __LINE__);
-          fPauliPropApplyZ = (int (*)(void *, int))GetFunction("PauliPropApplyZ");
+          fPauliPropApplyZ =
+              (int (*)(void *, int))GetFunction("PauliPropApplyZ");
           CheckFunction((void *)fPauliPropApplyZ, __LINE__);
-          fPauliPropApplyH = (int (*)(void *, int))GetFunction("PauliPropApplyH");
+          fPauliPropApplyH =
+              (int (*)(void *, int))GetFunction("PauliPropApplyH");
           CheckFunction((void *)fPauliPropApplyH, __LINE__);
-          fPauliPropApplyS = (int (*)(void *, int))GetFunction("PauliPropApplyS");
+          fPauliPropApplyS =
+              (int (*)(void *, int))GetFunction("PauliPropApplyS");
           CheckFunction((void *)fPauliPropApplyS, __LINE__);
 
-          fPauliPropApplySQRTX = (int (*)(void *, int))GetFunction("PauliPropApplySQRTX");
+          fPauliPropApplySQRTX =
+              (int (*)(void *, int))GetFunction("PauliPropApplySQRTX");
           CheckFunction((void *)fPauliPropApplySQRTX, __LINE__);
-          fPauliPropApplySQRTY = (int (*)(void *, int))GetFunction("PauliPropApplySQRTY");
+          fPauliPropApplySQRTY =
+              (int (*)(void *, int))GetFunction("PauliPropApplySQRTY");
           CheckFunction((void *)fPauliPropApplySQRTY, __LINE__);
-          fPauliPropApplySQRTZ = (int (*)(void *, int))GetFunction("PauliPropApplySQRTZ");
+          fPauliPropApplySQRTZ =
+              (int (*)(void *, int))GetFunction("PauliPropApplySQRTZ");
           CheckFunction((void *)fPauliPropApplySQRTZ, __LINE__);
-          fPauliPropApplyCX = (int (*)(void *, int, int))GetFunction("PauliPropApplyCX");
+          fPauliPropApplyCX =
+              (int (*)(void *, int, int))GetFunction("PauliPropApplyCX");
           CheckFunction((void *)fPauliPropApplyCX, __LINE__);
-          fPauliPropApplyCY = (int (*)(void *, int, int))GetFunction("PauliPropApplyCY");
+          fPauliPropApplyCY =
+              (int (*)(void *, int, int))GetFunction("PauliPropApplyCY");
           CheckFunction((void *)fPauliPropApplyCY, __LINE__);
-          fPauliPropApplyCZ = (int (*)(void *, int, int))GetFunction("PauliPropApplyCZ");
+          fPauliPropApplyCZ =
+              (int (*)(void *, int, int))GetFunction("PauliPropApplyCZ");
           CheckFunction((void *)fPauliPropApplyCZ, __LINE__);
-          fPauliPropApplySWAP = (int (*)(void *, int, int))GetFunction("PauliPropApplySWAP");
+          fPauliPropApplySWAP =
+              (int (*)(void *, int, int))GetFunction("PauliPropApplySWAP");
           CheckFunction((void *)fPauliPropApplySWAP, __LINE__);
-          fPauliPropApplyISWAP = (int (*)(void *, int, int))GetFunction("PauliPropApplyISWAP");
+          fPauliPropApplyISWAP =
+              (int (*)(void *, int, int))GetFunction("PauliPropApplyISWAP");
           CheckFunction((void *)fPauliPropApplyISWAP, __LINE__);
-          fPauliPropApplyRX = (int (*)(void *, int, double))GetFunction("PauliPropApplyRX");
+          fPauliPropApplyRX =
+              (int (*)(void *, int, double))GetFunction("PauliPropApplyRX");
           CheckFunction((void *)fPauliPropApplyRX, __LINE__);
-          fPauliPropApplyRY = (int (*)(void *, int, double))GetFunction("PauliPropApplyRY");
+          fPauliPropApplyRY =
+              (int (*)(void *, int, double))GetFunction("PauliPropApplyRY");
           CheckFunction((void *)fPauliPropApplyRY, __LINE__);
-          fPauliPropApplyRZ = (int (*)(void *, int, double))GetFunction("PauliPropApplyRZ");
+          fPauliPropApplyRZ =
+              (int (*)(void *, int, double))GetFunction("PauliPropApplyRZ");
           CheckFunction((void *)fPauliPropApplyRZ, __LINE__);
 
-          fPauliPropAddNoiseX = (int (*)(void *, int, double))GetFunction("PauliPropAddNoiseX");
+          fPauliPropAddNoiseX =
+              (int (*)(void *, int, double))GetFunction("PauliPropAddNoiseX");
           CheckFunction((void *)fPauliPropAddNoiseX, __LINE__);
-          fPauliPropAddNoiseY = (int (*)(void *, int, double))GetFunction("PauliPropAddNoiseY");
+          fPauliPropAddNoiseY =
+              (int (*)(void *, int, double))GetFunction("PauliPropAddNoiseY");
           CheckFunction((void *)fPauliPropAddNoiseY, __LINE__);
-          fPauliPropAddNoiseZ = (int (*)(void *, int, double))GetFunction("PauliPropAddNoiseZ");
+          fPauliPropAddNoiseZ =
+              (int (*)(void *, int, double))GetFunction("PauliPropAddNoiseZ");
           CheckFunction((void *)fPauliPropAddNoiseZ, __LINE__);
-          fPauliPropAddNoiseXYZ = (int (*)(void *, int, double, double, double))GetFunction("PauliPropAddNoiseXYZ");
+          fPauliPropAddNoiseXYZ =
+              (int (*)(void *, int, double, double, double))GetFunction(
+                  "PauliPropAddNoiseXYZ");
           CheckFunction((void *)fPauliPropAddNoiseXYZ, __LINE__);
-          fPauliPropAddAmplitudeDamping = (int (*)(void *, int, double, double))GetFunction("PauliPropAddAmplitudeDamping");
+          fPauliPropAddAmplitudeDamping =
+              (int (*)(void *, int, double, double))GetFunction(
+                  "PauliPropAddAmplitudeDamping");
           CheckFunction((void *)fPauliPropAddAmplitudeDamping, __LINE__);
-          fPauliPropQubitProbability0 = (double (*)(void *, int))GetFunction("PauliPropQubitProbability0");
+          fPauliPropQubitProbability0 = (double (*)(void *, int))GetFunction(
+              "PauliPropQubitProbability0");
           CheckFunction((void *)fPauliPropQubitProbability0, __LINE__);
-          fPauliPropProbability = (double (*)(void *, unsigned long long int))GetFunction("PauliPropProbability");
+          fPauliPropProbability =
+              (double (*)(void *, unsigned long long int))GetFunction(
+                  "PauliPropProbability");
           CheckFunction((void *)fPauliPropProbability, __LINE__);
 
-          fPauliPropMeasureQubit = (int (*)(void *, int))GetFunction("PauliPropMeasureQubit");
+          fPauliPropMeasureQubit =
+              (int (*)(void *, int))GetFunction("PauliPropMeasureQubit");
           CheckFunction((void *)fPauliPropMeasureQubit, __LINE__);
 
-          fPauliPropSampleQubits = (unsigned char *(*)(void *, const int *, int))GetFunction("PauliPropSampleQubits");
+          fPauliPropSampleQubits =
+              (unsigned char *(*)(void *, const int *, int))GetFunction(
+                  "PauliPropSampleQubits");
           CheckFunction((void *)fPauliPropSampleQubits, __LINE__);
-          fPauliPropFreeSampledQubits = (void (*)(unsigned char *))GetFunction("PauliPropFreeSampledQubits");
+          fPauliPropFreeSampledQubits = (void (*)(unsigned char *))GetFunction(
+              "PauliPropFreeSampledQubits");
           CheckFunction((void *)fPauliPropFreeSampledQubits, __LINE__);
-          fPauliPropSaveState = (void (*)(void *))GetFunction("PauliPropSaveState");
+          fPauliPropSaveState =
+              (void (*)(void *))GetFunction("PauliPropSaveState");
           CheckFunction((void *)fPauliPropSaveState, __LINE__);
-          fPauliPropRestoreState = (void (*)(void *))GetFunction("PauliPropRestoreState");
+          fPauliPropRestoreState =
+              (void (*)(void *))GetFunction("PauliPropRestoreState");
           CheckFunction((void *)fPauliPropRestoreState, __LINE__);
 
           return true;
@@ -2518,8 +2602,7 @@ class GpuLibrary : public Utils::Library {
   }
 
   // pauli propagation functions
-  void* CreatePauliPropSimulator(int nrQubits)
-  {
+  void *CreatePauliPropSimulator(int nrQubits) {
     if (LibraryHandle)
       return fCreatePauliPropSimulator(nrQubits);
     else
@@ -2528,8 +2611,7 @@ class GpuLibrary : public Utils::Library {
     return nullptr;
   }
 
-  void DestroyPauliPropSimulator(void* obj)
-  {
+  void DestroyPauliPropSimulator(void *obj) {
     if (!obj) return;
     if (LibraryHandle)
       fDestroyPauliPropSimulator(obj);
@@ -2538,52 +2620,51 @@ class GpuLibrary : public Utils::Library {
           "GpuLibrary: Unable to destroy pauli propagation simulator");
   }
 
-  int PauliPropGetNrQubits(void *obj) 
-  {
+  int PauliPropGetNrQubits(void *obj) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fPauliPropGetNrQubits(obj);
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to get number of qubits in pauli propagation simulator");
+          "GpuLibrary: Unable to get number of qubits in pauli propagation "
+          "simulator");
     return 0;
   }
 
-  int PauliPropSetWillUseSampling(void* obj, int willUseSampling)
-  {
+  int PauliPropSetWillUseSampling(void *obj, int willUseSampling) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fPauliPropSetWillUseSampling(obj, willUseSampling) == 1;
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to set 'will use sampling' in pauli propagation simulator");
+          "GpuLibrary: Unable to set 'will use sampling' in pauli propagation "
+          "simulator");
     return 0;
   }
 
-  int PauliPropGetWillUseSampling(void* obj)
-  {
+  int PauliPropGetWillUseSampling(void *obj) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fPauliPropGetWillUseSampling(obj);
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to get 'will use sampling' in pauli propagation simulator");
+          "GpuLibrary: Unable to get 'will use sampling' in pauli propagation "
+          "simulator");
     return 0;
   }
-    
-  double PauliPropGetCoefficientTruncationCutoff(void* obj)
-  {
+
+  double PauliPropGetCoefficientTruncationCutoff(void *obj) {
     if (!obj) return 0.0;
     if (LibraryHandle)
       return fPauliPropGetCoefficientTruncationCutoff(obj);
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to get coefficient truncation cutoff in pauli propagation simulator");
+          "GpuLibrary: Unable to get coefficient truncation cutoff in pauli "
+          "propagation simulator");
     return 0.0;
   }
 
-  void PauliPropSetCoefficientTruncationCutoff(void* obj, double cutoff)
-  {
+  void PauliPropSetCoefficientTruncationCutoff(void *obj, double cutoff) {
     if (!obj) return;
     if (LibraryHandle)
       fPauliPropSetCoefficientTruncationCutoff(obj, cutoff);
@@ -2593,19 +2674,18 @@ class GpuLibrary : public Utils::Library {
           "propagation simulator");
   }
 
-  double PauliPropGetWeightTruncationCutoff(void* obj)
-  {
+  double PauliPropGetWeightTruncationCutoff(void *obj) {
     if (!obj) return 0.0;
     if (LibraryHandle)
       return fPauliPropGetWeightTruncationCutoff(obj);
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to get weight truncation cutoff in pauli propagation simulator");
+          "GpuLibrary: Unable to get weight truncation cutoff in pauli "
+          "propagation simulator");
     return 0.0;
   }
 
-  void PauliPropSetWeightTruncationCutoff(void* obj, double cutoff)
-  {
+  void PauliPropSetWeightTruncationCutoff(void *obj, double cutoff) {
     if (!obj) return;
     if (LibraryHandle)
       fPauliPropSetWeightTruncationCutoff(obj, cutoff);
@@ -2615,85 +2695,84 @@ class GpuLibrary : public Utils::Library {
           "propagation simulator");
   }
 
-  int PauliPropGetNumGatesBetweenTruncations(void* obj)
-  {
+  int PauliPropGetNumGatesBetweenTruncations(void *obj) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fPauliPropGetNumGatesBetweenTruncations(obj);
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to get number of gates between truncations in pauli propagation simulator");
+          "GpuLibrary: Unable to get number of gates between truncations in "
+          "pauli propagation simulator");
     return 0;
   }
 
-  void PauliPropSetNumGatesBetweenTruncations(void* obj, int numGates)
-  {
+  void PauliPropSetNumGatesBetweenTruncations(void *obj, int numGates) {
     if (!obj) return;
     if (LibraryHandle)
       fPauliPropSetNumGatesBetweenTruncations(obj, numGates);
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to set number of gates between truncations in pauli "
+          "GpuLibrary: Unable to set number of gates between truncations in "
+          "pauli "
           "propagation simulator");
   }
 
-  int PauliPropGetNumGatesBetweenDeduplications(void* obj)
-  {
+  int PauliPropGetNumGatesBetweenDeduplications(void *obj) {
     if (!obj) return 0;
     if (LibraryHandle)
       return fPauliPropGetNumGatesBetweenDeduplications(obj);
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to get number of gates between deduplications in pauli propagation simulator");
+          "GpuLibrary: Unable to get number of gates between deduplications in "
+          "pauli propagation simulator");
     return 0;
   }
 
-  void PauliPropSetNumGatesBetweenDeduplications(void* obj, int numGates)
-  {
+  void PauliPropSetNumGatesBetweenDeduplications(void *obj, int numGates) {
     if (!obj) return;
     if (LibraryHandle)
       fPauliPropSetNumGatesBetweenDeduplications(obj, numGates);
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to set number of gates between deduplications in pauli "
+          "GpuLibrary: Unable to set number of gates between deduplications in "
+          "pauli "
           "propagation simulator");
   }
 
-  bool PauliPropClearOperators(void* obj)
-  {
+  bool PauliPropClearOperators(void *obj) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropClearOperators(obj) == 1;
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to clear operators in pauli propagation simulator");
+          "GpuLibrary: Unable to clear operators in pauli propagation "
+          "simulator");
     return false;
   }
 
-  bool PauliPropAllocateMemory(void* obj, double percentage)
-  {
+  bool PauliPropAllocateMemory(void *obj, double percentage) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropAllocateMemory(obj, percentage) == 1;
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to allocate memory in pauli propagation simulator");
+          "GpuLibrary: Unable to allocate memory in pauli propagation "
+          "simulator");
     return false;
   }
 
-  double PauliPropGetExpectationValue(void* obj)
-  {
+  double PauliPropGetExpectationValue(void *obj) {
     if (!obj) return 0.0;
     if (LibraryHandle)
       return fPauliPropGetExpectationValue(obj);
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to get expectation value in pauli propagation simulator");
+          "GpuLibrary: Unable to get expectation value in pauli propagation "
+          "simulator");
     return 0.0;
   }
 
-  bool PauliPropExecute(void* obj)
-  {
+  bool PauliPropExecute(void *obj) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropExecute(obj) == 1;
@@ -2703,32 +2782,33 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropSetInPauliExpansionUnique(void* obj, const char* pauliString)
-  {
+  bool PauliPropSetInPauliExpansionUnique(void *obj, const char *pauliString) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropSetInPauliExpansionUnique(obj, pauliString) == 1;
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to set unique pauli in pauli propagation simulator");
+          "GpuLibrary: Unable to set unique pauli in pauli propagation "
+          "simulator");
     return false;
   }
 
-  bool PauliPropSetInPauliExpansionMultiple(void* obj, const char** pauliStrings,
-      const double* coefficients,
-      int nrPaulis)
-  {
+  bool PauliPropSetInPauliExpansionMultiple(void *obj,
+                                            const char **pauliStrings,
+                                            const double *coefficients,
+                                            int nrPaulis) {
     if (!obj) return false;
     if (LibraryHandle)
-      return fPauliPropSetInPauliExpansionMultiple(obj, pauliStrings, coefficients, nrPaulis) == 1;
+      return fPauliPropSetInPauliExpansionMultiple(obj, pauliStrings,
+                                                   coefficients, nrPaulis) == 1;
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to set multiple pauli in pauli propagation simulator");
+          "GpuLibrary: Unable to set multiple pauli in pauli propagation "
+          "simulator");
     return false;
   }
 
-  bool PauliPropApplyX(void* obj, int qubit)
-  {
+  bool PauliPropApplyX(void *obj, int qubit) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplyX(obj, qubit) == 1;
@@ -2737,7 +2817,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplyY(void* obj, int qubit) {
+  bool PauliPropApplyY(void *obj, int qubit) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplyY(obj, qubit) == 1;
@@ -2746,8 +2826,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplyZ(void *obj, int qubit)
-  {
+  bool PauliPropApplyZ(void *obj, int qubit) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplyZ(obj, qubit) == 1;
@@ -2756,8 +2835,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplyH(void *obj, int qubit)
-  {
+  bool PauliPropApplyH(void *obj, int qubit) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplyH(obj, qubit) == 1;
@@ -2766,8 +2844,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplyS(void *obj, int qubit)
-  {
+  bool PauliPropApplyS(void *obj, int qubit) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplyS(obj, qubit) == 1;
@@ -2776,8 +2853,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplySQRTX(void *obj, int qubit)
-  {
+  bool PauliPropApplySQRTX(void *obj, int qubit) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplySQRTX(obj, qubit) == 1;
@@ -2786,8 +2862,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplySQRTY(void *obj, int qubit)
-  {
+  bool PauliPropApplySQRTY(void *obj, int qubit) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplySQRTY(obj, qubit) == 1;
@@ -2796,8 +2871,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplySQRTZ(void *obj, int qubit)
-  {
+  bool PauliPropApplySQRTZ(void *obj, int qubit) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplySQRTZ(obj, qubit) == 1;
@@ -2806,8 +2880,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplyCX(void *obj, int targetQubit, int controlQubit)
-  {
+  bool PauliPropApplyCX(void *obj, int targetQubit, int controlQubit) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplyCX(obj, targetQubit, controlQubit) == 1;
@@ -2816,8 +2889,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplyCY(void *obj, int targetQubit, int controlQubit)
-  {
+  bool PauliPropApplyCY(void *obj, int targetQubit, int controlQubit) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplyCY(obj, targetQubit, controlQubit) == 1;
@@ -2826,8 +2898,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplyCZ(void *obj, int targetQubit, int controlQubit)
-  {
+  bool PauliPropApplyCZ(void *obj, int targetQubit, int controlQubit) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplyCZ(obj, targetQubit, controlQubit) == 1;
@@ -2836,8 +2907,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplySWAP(void *obj, int qubit1, int qubit2)
-  {
+  bool PauliPropApplySWAP(void *obj, int qubit1, int qubit2) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplySWAP(obj, qubit1, qubit2) == 1;
@@ -2846,8 +2916,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplyISWAP(void *obj, int qubit1, int qubit2)
-  {
+  bool PauliPropApplyISWAP(void *obj, int qubit1, int qubit2) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplyISWAP(obj, qubit1, qubit2) == 1;
@@ -2856,8 +2925,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplyRX(void *obj, int qubit, double angle)
-  {	
+  bool PauliPropApplyRX(void *obj, int qubit, double angle) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplyRX(obj, qubit, angle) == 1;
@@ -2866,8 +2934,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplyRY(void *obj, int qubit, double angle)
-  {
+  bool PauliPropApplyRY(void *obj, int qubit, double angle) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplyRY(obj, qubit, angle) == 1;
@@ -2876,8 +2943,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropApplyRZ(void *obj, int qubit, double angle)
-  {
+  bool PauliPropApplyRZ(void *obj, int qubit, double angle) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropApplyRZ(obj, qubit, angle) == 1;
@@ -2886,8 +2952,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropAddNoiseX(void *obj, int qubit, double probability)
-  {
+  bool PauliPropAddNoiseX(void *obj, int qubit, double probability) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropAddNoiseX(obj, qubit, probability) == 1;
@@ -2896,8 +2961,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropAddNoiseY(void *obj, int qubit, double probability)
-  {
+  bool PauliPropAddNoiseY(void *obj, int qubit, double probability) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropAddNoiseY(obj, qubit, probability) == 1;
@@ -2906,8 +2970,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropAddNoiseZ(void* obj, int qubit, double probability)
-  {
+  bool PauliPropAddNoiseZ(void *obj, int qubit, double probability) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropAddNoiseZ(obj, qubit, probability) == 1;
@@ -2916,53 +2979,52 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool PauliPropAddNoiseXYZ(void* obj, int qubit, double probabilityX,
-      double probabilityY, double probabilityZ)
-  {
+  bool PauliPropAddNoiseXYZ(void *obj, int qubit, double probabilityX,
+                            double probabilityY, double probabilityZ) {
     if (!obj) return false;
     if (LibraryHandle)
-      return fPauliPropAddNoiseXYZ(obj, qubit, probabilityX,
-          probabilityY, probabilityZ) == 1;
+      return fPauliPropAddNoiseXYZ(obj, qubit, probabilityX, probabilityY,
+                                   probabilityZ) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to add XYZ noise on mps");
     return false;
   }
 
-  bool PauliPropAddAmplitudeDamping(void* obj, int qubit, double dampingProb, double exciteProb)
-  {
+  bool PauliPropAddAmplitudeDamping(void *obj, int qubit, double dampingProb,
+                                    double exciteProb) {
     if (!obj) return false;
     if (LibraryHandle)
-      return fPauliPropAddAmplitudeDamping(obj, qubit, dampingProb, exciteProb) == 1;
+      return fPauliPropAddAmplitudeDamping(obj, qubit, dampingProb,
+                                           exciteProb) == 1;
     else
       throw std::runtime_error(
           "GpuLibrary: Unable to add amplitude damping on mps");
     return false;
   }
 
-  double PauliPropQubitProbability0(void *obj, int qubit)
-  {
+  double PauliPropQubitProbability0(void *obj, int qubit) {
     if (!obj) return 0.0;
     if (LibraryHandle)
       return fPauliPropQubitProbability0(obj, qubit);
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to get qubit probability 0 in pauli propagation simulator");
+          "GpuLibrary: Unable to get qubit probability 0 in pauli propagation "
+          "simulator");
     return 0.0;
   }
 
-  double PauliPropProbability(void* obj, unsigned long long int outcome)
-  {
+  double PauliPropProbability(void *obj, unsigned long long int outcome) {
     if (!obj) return 0.0;
     if (LibraryHandle)
       return fPauliPropProbability(obj, outcome);
     else
       throw std::runtime_error(
-          "GpuLibrary: Unable to get probability of outcome in pauli propagation simulator");
+          "GpuLibrary: Unable to get probability of outcome in pauli "
+          "propagation simulator");
     return 0.0;
   }
 
-  bool PauliPropMeasureQubit(void* obj, int qubit) 
-  {
+  bool PauliPropMeasureQubit(void *obj, int qubit) {
     if (!obj) return false;
     if (LibraryHandle)
       return fPauliPropMeasureQubit(obj, qubit) == 1;
@@ -2972,9 +3034,8 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  unsigned char* PauliPropSampleQubits(void* obj, const int* qubits,
-      int nrQubits)
-  {
+  unsigned char *PauliPropSampleQubits(void *obj, const int *qubits,
+                                       int nrQubits) {
     if (!obj) return nullptr;
     if (LibraryHandle)
       return fPauliPropSampleQubits(obj, qubits, nrQubits);
@@ -2984,8 +3045,7 @@ class GpuLibrary : public Utils::Library {
     return nullptr;
   }
 
-  void PauliPropFreeSampledQubits(unsigned char* samples)
-  {
+  void PauliPropFreeSampledQubits(unsigned char *samples) {
     if (!samples) return;
     if (LibraryHandle)
       fPauliPropFreeSampledQubits(samples);
@@ -2995,8 +3055,7 @@ class GpuLibrary : public Utils::Library {
           "simulator");
   }
 
-  void PauliPropSaveState(void *obj)
-  {
+  void PauliPropSaveState(void *obj) {
     if (!obj) return;
     if (LibraryHandle)
       fPauliPropSaveState(obj);
@@ -3005,8 +3064,7 @@ class GpuLibrary : public Utils::Library {
           "GpuLibrary: Unable to save state in pauli propagation simulator");
   }
 
-  void PauliPropRestoreState(void *obj)
-  {
+  void PauliPropRestoreState(void *obj) {
     if (!obj) return;
     if (LibraryHandle)
       fPauliPropRestoreState(obj);
@@ -3018,6 +3076,7 @@ class GpuLibrary : public Utils::Library {
  private:
   void *LibraryHandle = nullptr;
 
+  int (*fValidateLicense)(const char *) = nullptr;
   void *(*InitLib)() = nullptr;
   void (*FreeLib)() = nullptr;
 
@@ -3044,7 +3103,8 @@ class GpuLibrary : public Utils::Library {
   int (*fRestoreStateNoFreeSaved)(void *) = nullptr;
   void (*fFreeSavedState)(void *obj) = nullptr;
   void *(*fClone)(void *) = nullptr;
-  int (*fSample)(void *, unsigned int, long int *, unsigned int, int *) = nullptr;
+  int (*fSample)(void *, unsigned int, long int *, unsigned int,
+                 int *) = nullptr;
   int (*fSampleAll)(void *, unsigned int, long int *) = nullptr;
   int (*fAmplitude)(void *, long long int, double *, double *) = nullptr;
   double (*fProbability)(void *, int *, int *, int) = nullptr;
@@ -3101,13 +3161,15 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSSetMaxExtent)(void *, long int) = nullptr;
   long int (*fMPSGetMaxExtent)(void *) = nullptr;
   int (*fMPSGetNrQubits)(void *) = nullptr;
-  int (*fMPSAmplitude)(void *, long int, long int *, double *, double *) = nullptr;
+  int (*fMPSAmplitude)(void *, long int, long int *, double *,
+                       double *) = nullptr;
   double (*fMPSProbability0)(void *, unsigned int) = nullptr;
   int (*fMPSMeasure)(void *, unsigned int) = nullptr;
   int (*fMPSMeasureQubits)(void *, long int, unsigned int *, int *) = nullptr;
   void *(*fMPSGetMapForSample)() = nullptr;
   int (*fMPSFreeMapForSample)(void *) = nullptr;
-  int (*fMPSSample)(void *, long int, long int, unsigned int *, void *) = nullptr;
+  int (*fMPSSample)(void *, long int, long int, unsigned int *,
+                    void *) = nullptr;
 
   int (*fMPSSaveState)(void *) = nullptr;
   int (*fMPSRestoreState)(void *) = nullptr;
@@ -3131,7 +3193,8 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSApplyRx)(void *, unsigned int, double) = nullptr;
   int (*fMPSApplyRy)(void *, unsigned int, double) = nullptr;
   int (*fMPSApplyRz)(void *, unsigned int, double) = nullptr;
-  int (*fMPSApplyU)(void *, unsigned int, double, double, double, double) = nullptr;
+  int (*fMPSApplyU)(void *, unsigned int, double, double, double,
+                    double) = nullptr;
   int (*fMPSApplySwap)(void *, unsigned int, unsigned int) = nullptr;
   int (*fMPSApplyCX)(void *, unsigned int, unsigned int) = nullptr;
   int (*fMPSApplyCY)(void *, unsigned int, unsigned int) = nullptr;
@@ -3164,13 +3227,15 @@ class GpuLibrary : public Utils::Library {
   int (*fTNSetMaxExtent)(void *, long int) = nullptr;
   long int (*fTNGetMaxExtent)(void *) = nullptr;
   int (*fTNGetNrQubits)(void *) = nullptr;
-  int (*fTNAmplitude)(void *, long int, long int *, double *, double *) = nullptr;
+  int (*fTNAmplitude)(void *, long int, long int *, double *,
+                      double *) = nullptr;
   double (*fTNProbability0)(void *, unsigned int) = nullptr;
   int (*fTNMeasure)(void *, unsigned int) = nullptr;
   int (*fTNMeasureQubits)(void *, long int, unsigned int *, int *) = nullptr;
   void *(*fTNGetMapForSample)() = nullptr;
   int (*fTNFreeMapForSample)(void *) = nullptr;
-  int (*fTNSample)(void *, long int, long int, unsigned int *, void *) = nullptr;
+  int (*fTNSample)(void *, long int, long int, unsigned int *,
+                   void *) = nullptr;
 
   int (*fTNSaveState)(void *) = nullptr;
   int (*fTNRestoreState)(void *) = nullptr;
@@ -3194,7 +3259,8 @@ class GpuLibrary : public Utils::Library {
   int (*fTNApplyRx)(void *, unsigned int, double) = nullptr;
   int (*fTNApplyRy)(void *, unsigned int, double) = nullptr;
   int (*fTNApplyRz)(void *, unsigned int, double) = nullptr;
-  int (*fTNApplyU)(void *, unsigned int, double, double, double, double) = nullptr;
+  int (*fTNApplyU)(void *, unsigned int, double, double, double,
+                   double) = nullptr;
   int (*fTNApplySwap)(void *, unsigned int, unsigned int) = nullptr;
   int (*fTNApplyCX)(void *, unsigned int, unsigned int) = nullptr;
   int (*fTNApplyCY)(void *, unsigned int, unsigned int) = nullptr;
@@ -3208,8 +3274,10 @@ class GpuLibrary : public Utils::Library {
   int (*fTNApplyCRz)(void *, unsigned int, unsigned int, double) = nullptr;
   int (*fTNApplyCU)(void *, unsigned int, unsigned int, double, double, double,
                     double) = nullptr;
-  int (*fTNApplyCCX)(void *, unsigned int, unsigned int, unsigned int) = nullptr;
-  int (*fTNApplyCSwap)(void *, unsigned int, unsigned int, unsigned int) = nullptr;
+  int (*fTNApplyCCX)(void *, unsigned int, unsigned int,
+                     unsigned int) = nullptr;
+  int (*fTNApplyCSwap)(void *, unsigned int, unsigned int,
+                       unsigned int) = nullptr;
   // stabilizer functions
   void *(*fCreateStabilizerSimulator)(long long int, long long int,
                                       long long int, long long int) = nullptr;
@@ -3249,7 +3317,7 @@ class GpuLibrary : public Utils::Library {
   int (*fPauliPropExecute)(void *) = nullptr;
   int (*fPauliPropSetInPauliExpansionUnique)(void *, const char *) = nullptr;
   int (*fPauliPropSetInPauliExpansionMultiple)(void *, const char **,
-                                           const double *, int) = nullptr;
+                                               const double *, int) = nullptr;
 
   int (*fPauliPropApplyX)(void *, int) = nullptr;
   int (*fPauliPropApplyY)(void *, int) = nullptr;

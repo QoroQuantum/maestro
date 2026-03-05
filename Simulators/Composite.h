@@ -303,7 +303,7 @@ class CompositeSimulator : public ISimulator {
    *
    * Don't use it if the number of qubits is larger than the number of bits in
    * the size_t type (usually 64), as the outcome will be undefined
-   * 
+   *
    * @param qubits A vector with the qubits to be measured.
    * @return The outcome of the measurements, the first qubit result is the
    * least significant bit.
@@ -341,7 +341,7 @@ class CompositeSimulator : public ISimulator {
    */
   std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override {
     std::vector<bool> res(qubits.size(), false);
-    
+
     DontNotify();
     for (size_t q = 0; q < qubits.size(); ++q) {
       Types::qubit_t qubit = qubits[q];
@@ -447,7 +447,7 @@ class CompositeSimulator : public ISimulator {
    * Use it to obtain the counts of the outcomes of the specified qubits
    * measurements. The state is not collapsed, so the measurement can be
    * repeated 'shots' times.
-   * 
+   *
    * Don't use it if the number of qubits is larger than the number of bits in
    * the Types::qubit_t type (usually 64), as the outcome will be undefined.
    *
@@ -461,7 +461,8 @@ class CompositeSimulator : public ISimulator {
     if (GetNumberOfQubits() > sizeof(Types::qubit_t) * 8)
       std::cerr
           << "Warning: The number of qubits to measure is larger than the "
-             "number of bits in the Types::qubit_t type, the outcome will be undefined"
+             "number of bits in the Types::qubit_t type, the outcome will be "
+             "undefined"
           << std::endl;
     // TODO: improve it as for the qcsim statevector simulator case!
     std::unordered_map<Types::qubit_t, Types::qubit_t> result;
@@ -551,8 +552,7 @@ class CompositeSimulator : public ISimulator {
       for (size_t shot = 0; shot < shots; ++shot) {
         const auto measRaw = MeasureNoCollapseMany();
 
-        for (size_t i = 0; i < qubits.size(); ++i) 
-            meas[i] = measRaw[qubits[i]];
+        for (size_t i = 0; i < qubits.size(); ++i) meas[i] = measRaw[qubits[i]];
 
         ++result[meas];
       }
@@ -1147,7 +1147,7 @@ class CompositeSimulator : public ISimulator {
    *
    * Don't use this for more qubits than the size of Types::qubit_t, as the
    * result is packed in a limited number of bits (e.g. 64 bits for uint64_t)
-   * 
+   *
    * @return The result of the measurements, the first qubit result is the least
    * significant bit.
    */
@@ -1157,7 +1157,8 @@ class CompositeSimulator : public ISimulator {
     if (GetNumberOfQubits() > sizeof(Types::qubit_t) * 8)
       std::cerr
           << "Warning: The number of qubits to measure is larger than the "
-             "number of bits in the Types::qubit_t type, the outcome will be undefined"
+             "number of bits in the Types::qubit_t type, the outcome will be "
+             "undefined"
           << std::endl;
 
     for (auto &[id, simulator] : simulators) {

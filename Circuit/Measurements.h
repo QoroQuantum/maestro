@@ -117,7 +117,7 @@ class MeasurementOperation : public IOperation<Time> {
    * @brief Executes the measurement on the given simulator.
    *
    * Executes the measurement on the given simulator.
-   * 
+   *
    * @param sim The simulator to execute the measurement on.
    * @param state The classical state for the simulator.
    * @sa ISimulator
@@ -152,11 +152,13 @@ class MeasurementOperation : public IOperation<Time> {
     SetStateFromSample(res, state);
   }
 
-  void SetStateFromSample(const std::vector<bool> &measurements, OperationState &state) const {
+  void SetStateFromSample(const std::vector<bool> &measurements,
+                          OperationState &state) const {
     if (qubits.empty()) return;
 
     for (size_t index = 0; index < qubits.size(); ++index)
-      state.SetBit(bits[index], index < measurements.size() && measurements[index]);
+      state.SetBit(bits[index],
+                   index < measurements.size() && measurements[index]);
   }
 
   /**

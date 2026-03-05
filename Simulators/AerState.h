@@ -283,17 +283,20 @@ class AerState : public ISimulator {
 
   /**
    * @brief Performs a measurement on the specified qubits.
-   * 
+   *
    * Don't use it if the number of qubits is larger than the number of bits in
    * the size_t type (usually 64), as the outcome will be undefined
-   * 
+   *
    * @param qubits A vector with the qubits to be measured.
    * @return The outcome of the measurements, the first qubit result is the
    * least significant bit.
    */
   size_t Measure(const Types::qubits_vector &qubits) override {
     if (qubits.size() > sizeof(size_t) * 8)
-      std::cerr << "Warning: The number of qubits to measure is larger than the number of bits in the size_t type, the outcome will be undefined" << std::endl;
+      std::cerr
+          << "Warning: The number of qubits to measure is larger than the "
+             "number of bits in the size_t type, the outcome will be undefined"
+          << std::endl;
 
     const size_t res = state->apply_measure(qubits);
 
@@ -308,12 +311,11 @@ class AerState : public ISimulator {
    * @param qubits A vector with the qubits to be measured.
    * @return The outcome of the measurements
    */
-  std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override 
-  {
+  std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override {
     auto res = state->apply_measure_many(qubits);
 
     NotifyObservers(qubits);
-    
+
     return res;
   }
 
@@ -411,7 +413,8 @@ class AerState : public ISimulator {
     if (qubits.size() > sizeof(Types::qubit_t) * 8)
       std::cerr
           << "Warning: The number of qubits to measure is larger than the "
-             "number of bits in the Types::qubit_t type, the outcome will be undefined"
+             "number of bits in the Types::qubit_t type, the outcome will be "
+             "undefined"
           << std::endl;
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> res =
@@ -435,7 +438,8 @@ class AerState : public ISimulator {
    * @return A map with the counts for the otcomes of measurements of the
    * specified qubits.
    */
-  std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(const Types::qubits_vector &qubits, size_t shots = 1000) override {
+  std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(
+      const Types::qubits_vector &qubits, size_t shots = 1000) override {
     if (qubits.empty() || shots == 0) return {};
     std::unordered_map<std::vector<bool>, Types::qubit_t> res =
         state->sample_counts_many(qubits, shots);
@@ -769,10 +773,10 @@ class AerState : public ISimulator {
    * the qiskit aer case, SaveStateToInternalDestructive is needed to be called
    * before this. If one wants to use the simulator after such measurement(s),
    * RestoreInternalDestructiveSavedState should be called at the end.
-   * 
+   *
    * Don't use this for more qubits than the size of Types::qubit_t, as the
    * result is packed in a limited number of bits (e.g. 64 bits for uint64_t)
-   * 
+   *
    * @return The result of the measurements, the first qubit result is the least
    * significant bit.
    */
@@ -814,10 +818,10 @@ class AerState : public ISimulator {
    *
    * @return The result of the measurements
    */
-  std::vector<bool> MeasureNoCollapseMany() override
-  {
-     if (simulationType == SimulationType::kStatevector) {
-      const size_t numQubits = static_cast<size_t>(log2(savedAmplitudes.size()));
+  std::vector<bool> MeasureNoCollapseMany() override {
+    if (simulationType == SimulationType::kStatevector) {
+      const size_t numQubits =
+          static_cast<size_t>(log2(savedAmplitudes.size()));
       std::vector<bool> res(numQubits, false);
 
       Types::qubit_t state = MeasureNoCollapse();
@@ -825,12 +829,13 @@ class AerState : public ISimulator {
       for (size_t i = 0; i < numQubits; ++i) {
         if ((state & 1) == 1) res[i] = true;
         state >>= 1;
-      } 
+      }
 
       return res;
     }
     throw std::runtime_error(
-        "AerState::MeasureNoCollapseMany: Invalid simulation type for measuring "
+        "AerState::MeasureNoCollapseMany: Invalid simulation type for "
+        "measuring "
         "all the qubits without collapsing the state.");
 
     return {};

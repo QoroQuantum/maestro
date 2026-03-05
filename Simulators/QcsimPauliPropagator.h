@@ -133,10 +133,10 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
     const int q3 = targetQubit2;
 
     ApplyCX(q3, q2);
-    ApplyCSX(q2, q3); // 3 rotaations
+    ApplyCSX(q2, q3);  // 3 rotaations
     ApplyCX(q1, q2);
 
-    ApplyP(q3, M_PI);  // 1 rotation
+    ApplyP(q3, M_PI);     // 1 rotation
     ApplyP(q2, -M_PI_2);  // 1 rotation
 
     ApplyCSX(q2, q3);  // 3 rotations
@@ -177,7 +177,9 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
     return clone;
   }
 
-  static double GetSamplingCost(const std::shared_ptr<Circuits::Circuit<>>& circuit, size_t nrQubitsSampled, size_t samples) {
+  static double GetSamplingCost(
+      const std::shared_ptr<Circuits::Circuit<>>& circuit,
+      size_t nrQubitsSampled, size_t samples) {
     return samples * GetCost(circuit) * exp2(nrQubitsSampled - 1);
   }
 
@@ -204,21 +206,24 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
 
  private:
   static double GetOpCost(const std::shared_ptr<Circuits::Circuit<>>& circuit,
-                          const std::shared_ptr<Circuits::IOperation<>>& op, int
-                              pos) {
+                          const std::shared_ptr<Circuits::IOperation<>>& op,
+                          int pos) {
     if (!circuit || !op || pos < 0 || pos >= static_cast<int>(circuit->size()))
-        return 0.;
+      return 0.;
 
     if (op->GetType() != Circuits::OperationType::kGate) {
       if (op->GetType() == Circuits::OperationType::kMeasurement) {
-          // measurement costs a pauli string propagated down the circuit from the point of measurement...
-          // but then it adds a projector in the circuit in its place, which means a doubling at that point for subsequent propagations
+        // measurement costs a pauli string propagated down the circuit from the
+        // point of measurement... but then it adds a projector in the circuit
+        // in its place, which means a doubling at that point for subsequent
+        // propagations
         if (pos == 0) return 1.;
 
         const auto& prevOp = (*circuit)[pos - 1];
         return 1. + GetOpCost(circuit, prevOp, pos - 1);
       } else if (op->GetType() == Circuits::OperationType::kReset) {
-        // a measurement followed by a conditional X gate, assume X half of the times
+        // a measurement followed by a conditional X gate, assume X half of the
+        // times
         if (pos == 0) return 1.5;
         const auto& prevOp = (*circuit)[pos - 1];
         return 1.5 + GetOpCost(circuit, prevOp, pos - 1);
@@ -226,11 +231,12 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
         const auto conditionalGate =
             std::static_pointer_cast<Circuits::ConditionalGate<>>(op);
         return GetOpCost(circuit, conditionalGate->GetOperation(), pos);
-      } else if (op->GetType() == Circuits::OperationType::kConditionalMeasurement) {
+      } else if (op->GetType() ==
+                 Circuits::OperationType::kConditionalMeasurement) {
         const auto conditionalMeasurement =
             std::static_pointer_cast<Circuits::ConditionalMeasurement<>>(op);
         return GetOpCost(circuit, conditionalMeasurement->GetOperation(), pos);
-      } 
+      }
       return 0.;
     }
 
@@ -243,7 +249,7 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
       case Circuits::QuantumGateType::kYGateType:
         [[fallthrough]];
       case Circuits::QuantumGateType::kZGateType:
-        return 0.5; // just a sign flip
+        return 0.5;  // just a sign flip
       case Circuits::QuantumGateType::kHadamardGateType:
         return 1.;
       case Circuits::QuantumGateType::kKGateType:
@@ -294,7 +300,7 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
       case Circuits::QuantumGateType::kCRzGateType:
         return 12;
       case Circuits::QuantumGateType::kCHGateType:
-        return 26.5; 
+        return 26.5;
       case Circuits::QuantumGateType::kCSxGateType:
         return 35;
       case Circuits::QuantumGateType::kCSxDagGateType:
@@ -317,8 +323,7 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
 
   static double GetOpMultiplication(
       const std::shared_ptr<Circuits::IOperation<>>& op) {
-    if (!op)
-      return 1.;
+    if (!op) return 1.;
 
     if (op->GetType() != Circuits::OperationType::kGate) {
       if (op->GetType() == Circuits::OperationType::kMeasurement) {
@@ -379,10 +384,11 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
         [[fallthrough]];
       case Circuits::QuantumGateType::kRzGateType:
         return 2.;  // just duplication of the pauli string... I guess this
-                    // would be proportional with the number of qubits, but let's just put a constant for now
+                    // would be proportional with the number of qubits, but
+                    // let's just put a constant for now
 
       case Circuits::QuantumGateType::kUGateType:
-        return 8.; // implemented with three rotations
+        return 8.;  // implemented with three rotations
 
       case Circuits::QuantumGateType::kCPGateType:
         [[fallthrough]];
@@ -414,7 +420,7 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
     }
     return 1.;
   }
-  };
+};
 
 }  // namespace Simulators
 
