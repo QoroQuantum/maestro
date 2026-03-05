@@ -93,7 +93,7 @@ class GpuState : public ISimulator {
                 "GpuState::Initialize: Failed to create "
                 "and initialize the Pauli propagator state.");
 
-          pp->SetWillUseSampling(true); // TODO: check setting
+          pp->SetWillUseSampling(true);  // TODO: check setting
           if (!pp->AllocateMemory(0.9))
             throw std::runtime_error(
                 "GpuState::Initialize: Failed to allocate memory for the "
@@ -263,7 +263,8 @@ class GpuState : public ISimulator {
       } else
         limitSize = false;
     } else if (std::string("use_double_precision") == key) {
-      useDoublePrecision = (std::string("1") == value || std::string("true") == value);
+      useDoublePrecision =
+          (std::string("1") == value || std::string("true") == value);
     }
     // TODO: add pauli propagator configuration options
   }
@@ -345,7 +346,7 @@ class GpuState : public ISimulator {
 
   /**
    * @brief Performs a measurement on the specified qubits.
-   * 
+   *
    * Don't use it if the number of qubits is larger than the number of bits in
    * the size_t type (usually 64), as the outcome will be undefined
    *
@@ -407,7 +408,7 @@ class GpuState : public ISimulator {
    */
   std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override {
     std::vector<bool> res(qubits.size(), false);
-  
+
     DontNotify();
     if (simulationType == SimulationType::kStatevector) {
       for (size_t i = 0; i < qubits.size(); ++i)
@@ -511,7 +512,8 @@ class GpuState : public ISimulator {
     } else if (simulationType == SimulationType::kPauliPropagator) {
       // Pauli propagator does not support amplitude calculation
       throw std::runtime_error(
-          "GpuState::Amplitude: Invalid simulation type for amplitude calculation.");
+          "GpuState::Amplitude: Invalid simulation type for amplitude "
+          "calculation.");
     }
 
     return std::complex<double>(real, imag);
@@ -590,7 +592,7 @@ class GpuState : public ISimulator {
    * Use it to obtain the counts of the outcomes of the specified qubits
    * measurements. The state is not collapsed, so the measurement can be
    * repeated 'shots' times.
-   * 
+   *
    * Don't use it if the number of qubits is larger than the number of bits in
    * the Types::qubit_t type (usually 64), as the outcome will be undefined.
    *
@@ -606,7 +608,8 @@ class GpuState : public ISimulator {
     if (qubits.size() > sizeof(Types::qubit_t) * 8)
       std::cerr
           << "Warning: The number of qubits to measure is larger than the "
-             "number of bits in the Types::qubit_t type, the outcome will be undefined"
+             "number of bits in the Types::qubit_t type, the outcome will be "
+             "undefined"
           << std::endl;
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> result;
@@ -623,8 +626,8 @@ class GpuState : public ISimulator {
         Types::qubit_t translatedOutcome = 0;
         Types::qubit_t mask = 1ULL;
         for (size_t i = 0; i < qubits.size(); ++i) {
-           if (outcome & (1ULL << qubits[i])) translatedOutcome |= mask;
-           mask <<= 1; 
+          if (outcome & (1ULL << qubits[i])) translatedOutcome |= mask;
+          mask <<= 1;
         }
         ++result[translatedOutcome];
       }
@@ -676,7 +679,7 @@ class GpuState : public ISimulator {
         ++result[meas];
       }
     }
-    
+
     Notify();
     NotifyObservers(qubits);
 
@@ -710,28 +713,28 @@ class GpuState : public ISimulator {
 
       std::vector<bool> outcomeVec(qubits.size());
       for (auto outcome : samples) {
-         for (size_t i = 0; i < qubits.size(); ++i)
-           outcomeVec[i] = ((outcome >> qubits[i]) & 1) == 1;
-         ++result[outcomeVec];
+        for (size_t i = 0; i < qubits.size(); ++i)
+          outcomeVec[i] = ((outcome >> qubits[i]) & 1) == 1;
+        ++result[outcomeVec];
       }
     } else if (simulationType == SimulationType::kMatrixProductState) {
-      std::unordered_map<std::vector<bool>, int64_t> *map = mps->GetMapForSample();
+      std::unordered_map<std::vector<bool>, int64_t> *map =
+          mps->GetMapForSample();
 
       std::vector<unsigned int> qubitsIndices(qubits.begin(), qubits.end());
       mps->Sample(shots, qubitsIndices.size(), qubitsIndices.data(), map);
 
       // put the results in the result map
-      for (const auto &[meas, cnt] : *map)
-        result[meas] += cnt;
+      for (const auto &[meas, cnt] : *map) result[meas] += cnt;
 
       mps->FreeMapForSample(map);
     } else if (simulationType == SimulationType::kTensorNetwork) {
-      std::unordered_map<std::vector<bool>, int64_t> *map = tn->GetMapForSample();
+      std::unordered_map<std::vector<bool>, int64_t> *map =
+          tn->GetMapForSample();
       std::vector<unsigned int> qubitsIndices(qubits.begin(), qubits.end());
       tn->Sample(shots, qubitsIndices.size(), qubitsIndices.data(), map);
       // put the results in the result map
-      for (const auto &[meas, cnt] : *map)
-        result[meas] += cnt;
+      for (const auto &[meas, cnt] : *map) result[meas] += cnt;
       tn->FreeMapForSample(map);
     } else if (simulationType == SimulationType::kPauliPropagator) {
       std::vector<int> qb(qubits.begin(), qubits.end());
@@ -769,7 +772,7 @@ class GpuState : public ISimulator {
       result = tn->ExpectationValue(pauliString);
     else if (simulationType == SimulationType::kPauliPropagator)
       result = pp->ExpectationValue(pauliString);
-    else 
+    else
       throw std::runtime_error(
           "GpuState::ExpectationValue: Invalid simulation type for expectation "
           "value calculation.");
@@ -930,7 +933,7 @@ class GpuState : public ISimulator {
    * the qiskit aer case, SaveStateToInternalDestructive is needed to be called
    * before this. If one wants to use the simulator after such measurement(s),
    * RestoreInternalDestructiveSavedState should be called at the end.
-   * 
+   *
    * Don't use this for more qubits than the size of Types::qubit_t, as the
    * result is packed in a limited number of bits (e.g. 64 bits for uint64_t)
    *
@@ -946,14 +949,16 @@ class GpuState : public ISimulator {
       if (nrQubits > sizeof(Types::qubit_t) * 8)
         std::cerr
             << "Warning: The number of qubits to measure is larger than the "
-               "number of bits in the Types::qubit_t type, the outcome will be undefined"
+               "number of bits in the Types::qubit_t type, the outcome will be "
+               "undefined"
             << std::endl;
 
       Types::qubits_vector fixedValues(nrQubits);
       std::iota(fixedValues.begin(), fixedValues.end(), 0);
       const auto res = SampleCounts(fixedValues, 1);
       if (res.empty()) return 0;
-      return res.begin()->first;  // return the first outcome, as it is the only one
+      return res.begin()
+          ->first;  // return the first outcome, as it is the only one
     }
 
     throw std::runtime_error(
@@ -981,8 +986,7 @@ class GpuState : public ISimulator {
     if (simulationType == SimulationType::kStatevector) {
       const auto meas = state->MeasureAllQubitsNoCollapse();
       std::vector<bool> result(nrQubits, false);
-      for (size_t i = 0; i < nrQubits; ++i)
-        result[i] = ((meas >> i) & 1) == 1;
+      for (size_t i = 0; i < nrQubits; ++i) result[i] = ((meas >> i) & 1) == 1;
       return result;
     } else if (simulationType == SimulationType::kMatrixProductState ||
                simulationType == SimulationType::kTensorNetwork ||
@@ -991,7 +995,8 @@ class GpuState : public ISimulator {
       std::iota(fixedValues.begin(), fixedValues.end(), 0);
       const auto res = SampleCountsMany(fixedValues, 1);
       if (res.empty()) return std::vector<bool>(nrQubits, false);
-      return res.begin()->first;  // return the first outcome, as it is the only one
+      return res.begin()
+          ->first;  // return the first outcome, as it is the only one
     }
 
     throw std::runtime_error(
@@ -1010,7 +1015,8 @@ class GpuState : public ISimulator {
       state;                         /**< The gpu statevector simulator. */
   std::unique_ptr<GpuLibMPSSim> mps; /**< The gpu MPS simulator. */
   std::unique_ptr<GpuLibTNSim> tn;   /**< The gpu tensor network simulator. */
-  std::unique_ptr<GpuPauliPropagator> pp; /**< The gpu Pauli propagator simulator. */
+  std::unique_ptr<GpuPauliPropagator>
+      pp; /**< The gpu Pauli propagator simulator. */
 
   size_t nrQubits = 0; /**< The number of allocated qubits. */
   bool limitSize = false;

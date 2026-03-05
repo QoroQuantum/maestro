@@ -422,8 +422,7 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest,
         const double questStatevectorVal =
             questStatevector->ExpectationValue(pauli);
         BOOST_CHECK_PREDICATE(
-            checkClose,
-            (questStatevectorVal)(qcsimStatevectorVal)(precision));
+            checkClose, (questStatevectorVal)(qcsimStatevectorVal)(precision));
       }
     }
 

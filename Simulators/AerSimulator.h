@@ -135,7 +135,8 @@ class AerSimulator : public AerState {
   void ApplyS(Types::qubit_t qubit) override {
     const Types::qubits_vector qubits = {qubit};
 
-    if (GetSimulationType() == SimulationType::kStabilizer || GetSimulationType() == SimulationType::kExtendedStabilizer) {
+    if (GetSimulationType() == SimulationType::kStabilizer ||
+        GetSimulationType() == SimulationType::kExtendedStabilizer) {
       AER::Operations::Op op;
       op.type = AER::Operations::OpType::gate;
       op.name = "s";
@@ -239,7 +240,8 @@ class AerSimulator : public AerState {
   void ApplySx(Types::qubit_t qubit) override {
     const Types::qubits_vector qubits = {qubit};
 
-    if (GetSimulationType() == SimulationType::kStabilizer || GetSimulationType() == SimulationType::kExtendedStabilizer) {
+    if (GetSimulationType() == SimulationType::kStabilizer ||
+        GetSimulationType() == SimulationType::kExtendedStabilizer) {
       AER::Operations::Op op;
       op.type = AER::Operations::OpType::gate;
       op.name = "sx";
@@ -378,7 +380,8 @@ class AerSimulator : public AerState {
       // there is a phase difference, but it is not important for the stabilizer
       // simulation
 
-      // it's very important as many other non-clifford gates are implemented based on rotations!
+      // it's very important as many other non-clifford gates are implemented
+      // based on rotations!
 
       /*
       AER::Operations::Op op;
@@ -675,7 +678,7 @@ class AerSimulator : public AerState {
           "CSx gate not supported in stabilizer simulation");
 
     const Types::qubits_vector qubits = {ctrl_qubit, tgt_qubit};
-    
+
     if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
       ApplyH(tgt_qubit);
       ApplyT(ctrl_qubit);
@@ -690,7 +693,6 @@ class AerSimulator : public AerState {
            {{0, 0}, {0.5, 0.5}, {0, 0}, {0.5, -0.5}},
            {{0, 0}, {0, 0}, {1, 0}, {0, 0}},
            {{0, 0}, {0.5, -0.5}, {0, 0}, {0.5, 0.5}}});
-
 
       state->apply_unitary(qubits, CSX);
     }
@@ -743,7 +745,8 @@ class AerSimulator : public AerState {
   void ApplySwap(Types::qubit_t qubit0, Types::qubit_t qubit1) override {
     const Types::qubits_vector qubits = {qubit0, qubit1};
 
-    if (GetSimulationType() == SimulationType::kStabilizer || GetSimulationType() == SimulationType::kExtendedStabilizer) {
+    if (GetSimulationType() == SimulationType::kStabilizer ||
+        GetSimulationType() == SimulationType::kExtendedStabilizer) {
       AER::Operations::Op op;
       op.type = AER::Operations::OpType::gate;
       op.name = "swap";

@@ -400,23 +400,21 @@ NB_MODULE(maestro, m) {
       .def("cu",
            [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t t,
               double theta, double phi, double lambda, double gamma) {
-             s.AddOperation(
-                 std::make_shared<Circuits::CUGate<>>(c, t, theta, phi, lambda, gamma));
+             s.AddOperation(std::make_shared<Circuits::CUGate<>>(
+                 c, t, theta, phi, lambda, gamma));
            })
 
       // Three Qubit Gates
-      .def(
-          "ccx",
-          [](Circuits::Circuit<double> &s, Types::qubit_t c1,
-             Types::qubit_t c2, Types::qubit_t t) {
-            s.AddOperation(std::make_shared<Circuits::CCXGate<>>(c1, c2, t));
-          })
-      .def(
-          "cswap",
-          [](Circuits::Circuit<double> &s, Types::qubit_t c,
-             Types::qubit_t a, Types::qubit_t b) {
-            s.AddOperation(std::make_shared<Circuits::CSwapGate<>>(c, a, b));
-          })
+      .def("ccx",
+           [](Circuits::Circuit<double> &s, Types::qubit_t c1,
+              Types::qubit_t c2, Types::qubit_t t) {
+             s.AddOperation(std::make_shared<Circuits::CCXGate<>>(c1, c2, t));
+           })
+      .def("cswap",
+           [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t a,
+              Types::qubit_t b) {
+             s.AddOperation(std::make_shared<Circuits::CSwapGate<>>(c, a, b));
+           })
       // Measurement
       .def("measure",
            [](Circuits::Circuit<double> &s,
@@ -469,8 +467,7 @@ NB_MODULE(maestro, m) {
         "simulator_type"_a = Simulators::SimulatorType::kQCSim,
         "simulation_type"_a = Simulators::SimulationType::kStatevector,
         "shots"_a = 1024, "max_bond_dimension"_a = 2,
-        "singular_value_threshold"_a = 1e-8,
-        "use_double_precision"_a = false);
+        "singular_value_threshold"_a = 1e-8, "use_double_precision"_a = false);
 
   // Variant B: QASM String
   m.def(
@@ -489,8 +486,7 @@ NB_MODULE(maestro, m) {
       "qasm_circuit"_a, "simulator_type"_a = Simulators::SimulatorType::kQCSim,
       "simulation_type"_a = Simulators::SimulationType::kStatevector,
       "shots"_a = 1024, "max_bond_dimension"_a = 2,
-      "singular_value_threshold"_a = 1e-8,
-      "use_double_precision"_a = false);
+      "singular_value_threshold"_a = 1e-8, "use_double_precision"_a = false);
 
   // 2. simple_estimate (Overloaded)
   // Variant A: Circuit Object
@@ -500,7 +496,8 @@ NB_MODULE(maestro, m) {
          const nb::object &obs, Simulators::SimulatorType st,
          Simulators::SimulationType set, std::optional<size_t> mb,
          std::optional<double> sv, bool use_dp) {
-        return estimate_core(circuit, ParseObservables(obs), st, set, mb, sv, use_dp);
+        return estimate_core(circuit, ParseObservables(obs), st, set, mb, sv,
+                             use_dp);
       },
       "circuit"_a, "observables"_a,
       "simulator_type"_a = Simulators::SimulatorType::kQCSim,
@@ -519,7 +516,8 @@ NB_MODULE(maestro, m) {
         if (parser.Failed() || !circuit) {
           throw nb::value_error("Failed to parse QASM string.");
         }
-        return estimate_core(circuit, ParseObservables(obs), st, set, mb, sv, use_dp);
+        return estimate_core(circuit, ParseObservables(obs), st, set, mb, sv,
+                             use_dp);
       },
       "qasm_circuit"_a, "observables"_a,
       "simulator_type"_a = Simulators::SimulatorType::kQCSim,
@@ -528,22 +526,26 @@ NB_MODULE(maestro, m) {
       "use_double_precision"_a = false);
 
   // --- QuEST Library Management ---
-  m.def("init_quest", []() {
-    return Simulators::SimulatorsFactory::InitQuestLibrary();
-  }, "Initialize the QuEST simulation library. Returns True on success.");
+  m.def(
+      "init_quest",
+      []() { return Simulators::SimulatorsFactory::InitQuestLibrary(); },
+      "Initialize the QuEST simulation library. Returns True on success.");
 
-  m.def("is_quest_available", []() {
-    return Simulators::SimulatorsFactory::IsQuestLibraryAvailable();
-  }, "Check whether the QuEST simulation library is loaded and available.");
+  m.def(
+      "is_quest_available",
+      []() { return Simulators::SimulatorsFactory::IsQuestLibraryAvailable(); },
+      "Check whether the QuEST simulation library is loaded and available.");
 
   // --- GPU Library Management ---
-  m.def("init_gpu", []() {
-    return Simulators::SimulatorsFactory::InitGpuLibrary();
-  }, "Initialize the GPU simulation library. Returns True on success.");
+  m.def(
+      "init_gpu",
+      []() { return Simulators::SimulatorsFactory::InitGpuLibrary(); },
+      "Initialize the GPU simulation library. Returns True on success.");
 
-  m.def("is_gpu_available", []() {
-    return Simulators::SimulatorsFactory::IsGpuLibraryAvailable();
-  }, "Check whether the GPU simulation library is loaded and available.");
+  m.def(
+      "is_gpu_available",
+      []() { return Simulators::SimulatorsFactory::IsGpuLibraryAvailable(); },
+      "Check whether the GPU simulation library is loaded and available.");
 
   // --- Probability / Amplitude Access ---
   m.def(
@@ -551,8 +553,7 @@ NB_MODULE(maestro, m) {
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
          Simulators::SimulatorType sim_type,
          Simulators::SimulationType sim_exec_type,
-         std::optional<size_t> max_bond,
-         std::optional<double> sv_threshold,
+         std::optional<size_t> max_bond, std::optional<double> sv_threshold,
          bool use_double_precision) -> nb::list {
         if (!circuit) throw nb::value_error("Circuit is null.");
 
@@ -562,8 +563,9 @@ NB_MODULE(maestro, m) {
         if (sim.handle == 0)
           throw std::runtime_error("Failed to create simulator handle.");
 
-        auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type,
-                                        max_bond, sv_threshold, use_double_precision);
+        auto network =
+            ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond,
+                             sv_threshold, use_double_precision);
         if (!network) throw std::runtime_error("Failed to configure network.");
 
         {
@@ -581,8 +583,7 @@ NB_MODULE(maestro, m) {
         }
         return probs;
       },
-      "circuit"_a,
-      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+      "circuit"_a, "simulator_type"_a = Simulators::SimulatorType::kQCSim,
       "simulation_type"_a = Simulators::SimulationType::kStatevector,
       "max_bond_dimension"_a = nb::none(),
       "singular_value_threshold"_a = nb::none(),

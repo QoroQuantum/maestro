@@ -29,7 +29,7 @@ namespace bdata = boost::unit_test::data;
 
 struct Operation {
   int gate = 0;  // gate id, first codes for clifford gates, then for
-          // non-clifford gates, ordered by number of qubits
+                 // non-clifford gates, ordered by number of qubits
   int qubit1 = 0;
   int qubit2 = 0;  // unused for single qubit operations
   int qubit3 = 0;  // unused for single and two qubit operations
@@ -102,15 +102,16 @@ struct PauliSimTestFixture {
     return pauli;
   }
 
-  std::vector<Operation> GenerateCircuit(int nrQubits, int nrGates, int maxGate = 12)
-  {
+  std::vector<Operation> GenerateCircuit(int nrQubits, int nrGates,
+                                         int maxGate = 12) {
     std::random_device rd;
     std::mt19937 g(rd());
 
     std::uniform_int_distribution<int> dist(0, maxGate);
 
     std::uniform_real_distribution<double> param_dist(0.0, 2. * M_PI);
-    std::bernoulli_distribution bool_dist(0.8);  // high chance to make a clifford gate from a non-clifford one
+    std::bernoulli_distribution bool_dist(
+        0.8);  // high chance to make a clifford gate from a non-clifford one
 
     std::vector<Operation> circuit;
     std::vector<int> qubits(nrQubits);
@@ -147,15 +148,15 @@ struct PauliSimTestFixture {
     bool first = true;
     for (auto& op : circuit) {
       if (op.gate >= 28 && op.gate <= 29) {
-        if (first) first = false;
-        else op.gate = 10;  // cx... a clifford gate
+        if (first)
+          first = false;
+        else
+          op.gate = 10;  // cx... a clifford gate
       }
     }
 
     return circuit;
   }
-
-
 
   void ExecuteGate(const Operation& op,
                    std::shared_ptr<Simulators::ISimulator>& state_vector) {
@@ -203,7 +204,7 @@ struct PauliSimTestFixture {
         state_vector->ApplyCZ(op.qubit2, op.qubit1);
         break;
 
-// non-clifford single qubit gates
+        // non-clifford single qubit gates
 
       case 13:
         state_vector->ApplyP(op.qubit1, op.theta);
@@ -228,11 +229,10 @@ struct PauliSimTestFixture {
         state_vector->ApplyTDG(op.qubit1);
         break;
 
-// non-clifford two qubit gates
+        // non-clifford two qubit gates
       case 20:
         state_vector->ApplyCH(op.qubit2, op.qubit1);
         break;
-
 
       case 21:
         state_vector->ApplyCRz(op.qubit2, op.qubit1, op.theta);
@@ -244,7 +244,6 @@ struct PauliSimTestFixture {
         state_vector->ApplyCRx(op.qubit2, op.qubit1, op.theta);
         break;
 
-
       case 24:
         state_vector->ApplyCP(op.qubit2, op.qubit1, op.theta);
         break;
@@ -255,10 +254,9 @@ struct PauliSimTestFixture {
         state_vector->ApplyCSxDAG(op.qubit2, op.qubit1);
         break;
 
-
       case 27:
         state_vector->ApplyCU(op.qubit2, op.qubit1, op.theta, op.phi, op.lambda,
-                             op.gamma);
+                              op.gamma);
         break;
 
       // non-clifford three qubit gates
@@ -273,8 +271,7 @@ struct PauliSimTestFixture {
     }
   }
 
-
-   void ExecuteGate(const Operation& op,
+  void ExecuteGate(const Operation& op,
                    Simulators::QcsimPauliPropagator& pauliSim) {
     switch (op.gate) {
       case 0:
@@ -361,8 +358,6 @@ struct PauliSimTestFixture {
         pauliSim.ApplyCRX(op.qubit2, op.qubit1, op.theta);
         break;
 
-
-
       case 24:
         pauliSim.ApplyCP(op.qubit2, op.qubit1, op.theta);
         break;
@@ -374,9 +369,9 @@ struct PauliSimTestFixture {
         pauliSim.ApplyCSXDAG(op.qubit2, op.qubit1);
         break;
       case 27:
-        pauliSim.ApplyCU(op.qubit2, op.qubit1, op.theta, op.phi, op.lambda, op.gamma);
+        pauliSim.ApplyCU(op.qubit2, op.qubit1, op.theta, op.phi, op.lambda,
+                         op.gamma);
         break;
-
 
       // non-clifford three qubit gates
       case 28:
@@ -391,7 +386,7 @@ struct PauliSimTestFixture {
   }
 
 #ifdef __linux__
-   void ExecuteGate(const Operation& op,
+  void ExecuteGate(const Operation& op,
                    Simulators::GpuPauliPropagator& pauliSim) {
     switch (op.gate) {
       case 0:
@@ -479,8 +474,6 @@ struct PauliSimTestFixture {
         pauliSim.ApplyCRX(op.qubit2, op.qubit1, op.theta);
         break;
 
-
-
       case 24:
         pauliSim.ApplyCP(op.qubit2, op.qubit1, op.theta);
         break;
@@ -492,7 +485,8 @@ struct PauliSimTestFixture {
         break;
 
       case 27:
-        pauliSim.ApplyCU(op.qubit2, op.qubit1, op.theta, op.phi, op.lambda, op.gamma);
+        pauliSim.ApplyCU(op.qubit2, op.qubit1, op.theta, op.phi, op.lambda,
+                         op.gamma);
         break;
 
       // non-clifford three qubit gates
@@ -505,9 +499,8 @@ struct PauliSimTestFixture {
       default:
         std::cerr << "Unknown gate id: " << op.gate << std::endl;
     }
-   }
+  }
 #endif
-
 
   const unsigned int nrQubitsForRandomCirc = 4;
 
@@ -523,7 +516,8 @@ struct PauliSimTestFixture {
   Circuits::OperationState state;
 };
 
-extern bool checkClose(std::complex<double> a, std::complex<double> b, double dif);
+extern bool checkClose(std::complex<double> a, std::complex<double> b,
+                       double dif);
 
 BOOST_AUTO_TEST_SUITE(pauli_propagation_tests)
 
@@ -538,8 +532,8 @@ BOOST_FIXTURE_TEST_CASE(PauliInitTests, PauliSimTestFixture) {
   BOOST_TEST(qcsimPauliStdSim);
 }
 
-
-BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::xrange(1, 20), nrGates) {
+BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest,
+                       bdata::xrange(1, 20), nrGates) {
   auto circuit = GenerateCircuit(nrQubitsForRandomCirc, nrGates);
 
   // execute
@@ -614,8 +608,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
 
     Types::qubit_t result = 0;
     for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
-      if (res[q])
-         result |= (1ULL << pq[q]);
+      if (res[q]) result |= (1ULL << pq[q]);
     }
     ++qcsimRes[result];
   }
@@ -630,8 +623,8 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
     const double psProb = static_cast<double>(psCount) / nrSamples;
     BOOST_TEST(std::abs(svProb - psProb) < 0.1,
                "Sampling probability mismatch for outcome "
-                   << key << ": statevector " << svProb
-                   << ", pauli sim " << psProb);
+                   << key << ": statevector " << svProb << ", pauli sim "
+                   << psProb);
   }
 
   auto stdSvRes = qcsimPauliStdSim->SampleCounts(qubitsToMeasure, nrSamples);
@@ -644,8 +637,8 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
     const double psProb = static_cast<double>(psCount) / nrSamples;
     BOOST_TEST(std::abs(svProb - psProb) < 0.1,
                "Sampling probability mismatch for outcome "
-                   << key << ": statevector " << svProb
-                   << ", pauli std sim " << psProb);
+                   << key << ": statevector " << svProb << ", pauli std sim "
+                   << psProb);
   }
 
   // now the same for gpu sim
@@ -657,8 +650,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
       auto res = gpuPauliSim->SampleQubits(pq);
       Types::qubit_t result = 0;
       for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
-        if (res[q])
-          result |= (1ULL << pq[q]);
+        if (res[q]) result |= (1ULL << pq[q]);
       }
       ++gpuRes[result];
     }
@@ -672,8 +664,8 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
       const double psProb = static_cast<double>(psCount) / nrSamples;
       BOOST_TEST(std::abs(svProb - psProb) < 0.1,
                  "Sampling probability mismatch for outcome "
-                     << key << ": statevector " << svProb
-                     << ", gpu pauli sim " << psProb);
+                     << key << ": statevector " << svProb << ", gpu pauli sim "
+                     << psProb);
     }
   }
   if (gpuPauliStdSim) {
@@ -704,8 +696,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
     auto res = qcsimPauliSim.Measure(pq);
     Types::qubit_t result = 0;
     for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
-      if (res[q])
-        result |= (1ULL << pq[q]);
+      if (res[q]) result |= (1ULL << pq[q]);
     }
     ++qcsimRes[result];
   }
@@ -720,15 +711,15 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
     const double psProb = static_cast<double>(psCount) / nrSamples;
     BOOST_TEST(std::abs(svProb - psProb) < 0.1,
                "Measurement probability mismatch for outcome "
-                   << key << ": statevector " << svProb
-                   << ", pauli sim " << psProb);
+                   << key << ": statevector " << svProb << ", pauli sim "
+                   << psProb);
   }
 
   qcsimRes.clear();
   qcsimPauliStdSim->SaveState();
 
   Types::qubits_vector pqq(qubitsToMeasure.begin(), qubitsToMeasure.end());
-  
+
   for (int i = 0; i < nrSamples; ++i) {
     std::shuffle(pqq.begin(), pqq.end(), g);
     auto res = qcsimPauliStdSim->Measure(pqq);
@@ -750,25 +741,24 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
     const double psProb = static_cast<double>(psCount) / nrSamples;
     BOOST_TEST(std::abs(svProb - psProb) < 0.1,
                "Measurement probability mismatch for outcome "
-                   << key << ": statevector " << svProb
-                   << ", pauli std sim " << psProb);
+                   << key << ": statevector " << svProb << ", pauli std sim "
+                   << psProb);
   }
 
-  // the same for gpu pauli sim  
+  // the same for gpu pauli sim
 
- #ifdef __linux__
+#ifdef __linux__
   if (gpuPauliSim) {
     std::unordered_map<Types::qubit_t, Types::qubit_t> gpuRes;
     gpuPauliSim->SaveState();
     for (int i = 0; i < nrSamples; ++i) {
       gpuPauliSim->RestoreState();
       std::shuffle(pq.begin(), pq.end(), g);
-     
+
       Types::qubit_t result = 0;
       for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
         auto res = gpuPauliSim->MeasureQubit(pq[q]);
-        if (res)
-          result |= (1ULL << pq[q]);
+        if (res) result |= (1ULL << pq[q]);
       }
       ++gpuRes[result];
     }
@@ -782,8 +772,8 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
       const double psProb = static_cast<double>(psCount) / nrSamples;
       BOOST_TEST(std::abs(svProb - psProb) < 0.1,
                  "Measurement probability mismatch for outcome "
-                     << key << ": statevector " << svProb
-                     << ", gpu pauli sim " << psProb);
+                     << key << ": statevector " << svProb << ", gpu pauli sim "
+                     << psProb);
     }
   }
 
@@ -813,10 +803,9 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest, bdata::x
                      << key << ": statevector " << svProb
                      << ", gpu pauli std sim " << psProb);
     }
-   }
+  }
 #endif
 }
-
 
 BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
                        bdata::xrange(1, 20), nrGates) {
@@ -1024,8 +1013,8 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
     const double psProb = static_cast<double>(psCount) / nrSamples;
     BOOST_TEST(std::abs(svProb - psProb) < 0.1,
                "Measurement probability mismatch for outcome "
-                   << key << ": statevector " << svProb
-                   << ", pauli std sim " << psProb);
+                   << key << ": statevector " << svProb << ", pauli std sim "
+                   << psProb);
   }
 
   // the same for gpu pauli sim
@@ -1089,6 +1078,5 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
   }
 #endif
 }
-
 
 BOOST_AUTO_TEST_SUITE_END()

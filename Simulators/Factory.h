@@ -93,12 +93,14 @@ class SimulatorsFactory {
     return std::make_shared<GpuStabilizer>(gpuLibrary);
   }
 
-  static std::shared_ptr<GpuPauliPropagator> CreateGpuPauliPropagatorSimulator() {
+  static std::shared_ptr<GpuPauliPropagator>
+  CreateGpuPauliPropagatorSimulator() {
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
     return std::make_shared<GpuPauliPropagator>(gpuLibrary);
   }
 
-  static std::unique_ptr<GpuPauliPropagator> CreateGpuPauliPropagatorSimulatorUnique() {
+  static std::unique_ptr<GpuPauliPropagator>
+  CreateGpuPauliPropagatorSimulatorUnique() {
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
     return std::make_unique<GpuPauliPropagator>(gpuLibrary);
   }

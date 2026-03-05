@@ -523,12 +523,13 @@ class ExecutionCost {
 
     if (hasMeasurementsInTheMiddle) {
       for (size_t i = 0; i < nrReps; ++i) {
-        const auto executedOps = circuit->ExecuteNonMeasurements(sim, dummyState);  // execute the circuit up to measurements
+        const auto executedOps = circuit->ExecuteNonMeasurements(
+            sim, dummyState);  // execute the circuit up to measurements
 
         // now sample
         for (size_t sample = 0; sample < nrSamples; ++sample) {
-          circuit->ExecuteMeasurements(sim,
-                                       dummyState, executedOps);  // execute the measurements
+          circuit->ExecuteMeasurements(
+              sim, dummyState, executedOps);  // execute the measurements
         }
       }
     } else {
@@ -685,7 +686,8 @@ class ExecutionCost {
       nrNonCliffordGates = 0;
     }
 
-    std::cout << "Benchmarking execution for simType: " << static_cast<int>(simType)
+    std::cout << "Benchmarking execution for simType: "
+              << static_cast<int>(simType)
               << ", method: " << static_cast<int>(method) << std::endl;
 
     Utils::LogFile log(logFilePath);
@@ -698,9 +700,11 @@ class ExecutionCost {
         for (size_t nrMeasAtEnd = nrMeasAtEndMin;
              nrMeasAtEnd <= std::min(nrMeasAtEndMax, nrQubits);
              nrMeasAtEnd += stepMeasAtEnd) {
-          std::cout << "      Measurements at end: " << nrMeasAtEnd << std::endl;
+          std::cout << "      Measurements at end: " << nrMeasAtEnd
+                    << std::endl;
           for (size_t i = 0; i < nrRandomCircuitsPerConfig; ++i) {
-              std::cout << "        Random circuit: " << i + 1 << "/" << nrRandomCircuitsPerConfig << std::endl;
+            std::cout << "        Random circuit: " << i + 1 << "/"
+                      << nrRandomCircuitsPerConfig << std::endl;
             if (method == Simulators::SimulationType::kPauliPropagator)
               isClifford = !isClifford;
 
@@ -759,7 +763,8 @@ class ExecutionCost {
     }
     Utils::LogFile log(logFilePath);
 
-    std::cout << "Benchmarking Pauli expectation for simType: " << static_cast<int>(simType)
+    std::cout << "Benchmarking Pauli expectation for simType: "
+              << static_cast<int>(simType)
               << ", method: " << static_cast<int>(method) << std::endl;
 
     for (size_t nrQubits = nrMinQubits; nrQubits <= nrMaxQubits;
@@ -776,7 +781,8 @@ class ExecutionCost {
           const std::string pauliString = GeneratePauliString(nrQubits);
 
           std::cout << "      Random circuit: " << i + 1 << "/"
-                    << nrRandomCircuitsPerConfig << " Pauli string: " << pauliString << std::endl;
+                    << nrRandomCircuitsPerConfig
+                    << " Pauli string: " << pauliString << std::endl;
           BenchmarkAndLogPauliExpectation(simType, method, circuit, pauliString,
                                           nrReps, maxBondDim, log);
         }
@@ -802,7 +808,8 @@ class ExecutionCost {
     }
     Utils::LogFile log(logFilePath);
 
-    std::cout << "Benchmarking sampling for simType: " << static_cast<int>(simType)
+    std::cout << "Benchmarking sampling for simType: "
+              << static_cast<int>(simType)
               << ", method: " << static_cast<int>(method) << std::endl;
 
     for (size_t nrQubits = nrMinQubits; nrQubits <= nrMaxQubits;
@@ -817,7 +824,7 @@ class ExecutionCost {
             if (method == Simulators::SimulationType::kPauliPropagator)
               isClifford = !isClifford;
             const auto circuit = GenerateRandomCircuit(
-                nrQubits, depth, 0., 0, isClifford, nrNonCliffordGates); 
+                nrQubits, depth, 0., 0, isClifford, nrNonCliffordGates);
             for (size_t nrQubitsSampled = nrQubits; nrQubitsSampled >= 1;
                  nrQubitsSampled /= 2) {
               std::cout << "        Random circuit: " << i + 1 << "/"
@@ -852,8 +859,8 @@ class ExecutionCost {
        << info.nrOneQubitOpsExecutedOnce << ","
        << info.nrTwoQubitOpsExecutedOnce << ","
        << info.nrThreeQubitOpsExecutedOnce << ","
-       << "0,0," << maxBondDim << "," << "0," << estimatedCost << ","
-       << executionTime;
+       << "0,0," << maxBondDim << ","
+       << "0," << estimatedCost << "," << executionTime;
 
     log.Log(ss.str());
   }
@@ -877,8 +884,8 @@ class ExecutionCost {
        << info.nrOneQubitOpsExecutedOnce << ","
        << info.nrTwoQubitOpsExecutedOnce << ","
        << info.nrThreeQubitOpsExecutedOnce << "," << nrSamples << ","
-       << nrQubitsSampled << "," << maxBondDim << "," << "0," << estimatedCost
-       << "," << samplingTime;
+       << nrQubitsSampled << "," << maxBondDim << ","
+       << "0," << estimatedCost << "," << samplingTime;
     log.Log(ss.str());
   }
 

@@ -46,8 +46,10 @@ struct ExtStabTestFixture {
         Simulators::SimulationType::kExtendedStabilizer);
 
     // default value is 0.05, too bad for the tests
-    simExtStabilizer->Configure("extended_stabilizer_approximation_error", "0.01");
-    //simExtStabilizer->Configure("extended_stabilizer_sampling_method", "norm_estimation");
+    simExtStabilizer->Configure("extended_stabilizer_approximation_error",
+                                "0.01");
+    // simExtStabilizer->Configure("extended_stabilizer_sampling_method",
+    // "norm_estimation");
     simExtStabilizer->AllocateQubits(nrQubitsForRandomCirc);
     simExtStabilizer->Initialize();
 
@@ -86,7 +88,7 @@ struct ExtStabTestFixture {
     return pauli;
   }
 
-    std::vector<Operation> GenerateCircuit(int nrQubits, int nrGates,
+  std::vector<Operation> GenerateCircuit(int nrQubits, int nrGates,
                                          int maxGate = 12) {
     std::random_device rd;
     std::mt19937 g(rd());
@@ -94,7 +96,8 @@ struct ExtStabTestFixture {
     std::uniform_int_distribution<int> dist(0, maxGate);
 
     std::uniform_real_distribution<double> param_dist(0.0, 2. * M_PI);
-    std::bernoulli_distribution bool_dist(0.9);  // high chance to make a clifford gate from a non-clifford one
+    std::bernoulli_distribution bool_dist(
+        0.9);  // high chance to make a clifford gate from a non-clifford one
 
     std::vector<Operation> circuit;
     std::vector<int> qubits(nrQubits);
@@ -141,7 +144,7 @@ struct ExtStabTestFixture {
     return circuit;
   }
 
-void ExecuteGate(const Operation& op,
+  void ExecuteGate(const Operation& op,
                    std::shared_ptr<Simulators::ISimulator>& state_vector) {
     switch (op.gate) {
       case 0:
@@ -266,7 +269,6 @@ BOOST_FIXTURE_TEST_CASE(ExtStabilizerSimInitializationTest,
   BOOST_TEST(simExtStabilizer);
   BOOST_TEST(simStatevector);
 }
-
 
 BOOST_DATA_TEST_CASE_F(ExtStabTestFixture, RandomCliffordCircuitsTest,
                        bdata::xrange(1, 20), nrGates) {
@@ -416,7 +418,7 @@ BOOST_DATA_TEST_CASE_F(ExtStabTestFixture, RandomNonCliffordCircuitsTest,
 
   // until the saving/restoring state is implemented for the extended stabilizer
   // simulator in qiskit aer, this check does not work
-  
+
   simExtStabilizer->SaveState();
 
   Types::qubits_vector pqq(qubitsToMeasure.begin(), qubitsToMeasure.end());
@@ -442,10 +444,11 @@ BOOST_DATA_TEST_CASE_F(ExtStabTestFixture, RandomNonCliffordCircuitsTest,
     const double esProb = static_cast<double>(esCount) / nrSamples;
     BOOST_TEST(std::abs(svProb - esProb) < 0.1,
                "Measurement probability mismatch for outcome "
-                   << key << ": statevector " << svProb << ", ext stabilizer sim"
+                   << key << ": statevector " << svProb << ", ext stabilizer
+sim"
                    << esProb);
   }
-  
+
   simExtStabilizer->Reset();
 }
 */
