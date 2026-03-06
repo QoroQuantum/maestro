@@ -74,21 +74,25 @@ class GpuLibrary : public Utils::Library {
       // If not set, nullptr is passed to attempt cached/offline validation.
       fValidateLicense = (int (*)(const char *))GetFunction("ValidateLicense");
       if (!fValidateLicense) {
-        std::cerr << "GpuLibrary: License validation symbol not found. "
-                     "The GPU library must export ValidateLicense."
-                  << std::endl;
+        if (!IsMuted())
+          std::cerr << "GpuLibrary: License validation symbol not found. "
+                       "The GPU library must export ValidateLicense."
+                    << std::endl;
         return false;
       }
       const char *licenseKey = std::getenv("MAESTRO_LICENSE_KEY");
       int licenseStatus = fValidateLicense(licenseKey);
       if (licenseStatus != 1) {
-        std::cerr << "GpuLibrary: License validation failed. ";
-        if (!licenseKey)
-          std::cerr << "Set MAESTRO_LICENSE_KEY environment variable "
-                       "or activate the license first."
-                    << std::endl;
-        else
-          std::cerr << "Check that your license key is correct." << std::endl;
+        if (!IsMuted()) {
+          std::cerr << "GpuLibrary: License validation failed. ";
+          if (!licenseKey)
+            std::cerr << "Set MAESTRO_LICENSE_KEY environment variable "
+                         "or activate the license first."
+                      << std::endl;
+          else
+            std::cerr << "Check that your license key is correct."
+                      << std::endl;
+        }
         return false;
       }
 
