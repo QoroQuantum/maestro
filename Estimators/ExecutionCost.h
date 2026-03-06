@@ -726,7 +726,7 @@ class ExecutionCost {
     std::mt19937 g(rd());
     std::uniform_int_distribution<int> dist(0, 3);
 
-    for (int i = 0; i < nrQubits; ++i) {
+    for (size_t i = 0; i < nrQubits; ++i) {
       const int v = dist(g);
       switch (v) {
         case 0:
