@@ -2083,6 +2083,97 @@ class Circuit : public IOperation<Time> {
     return circuits;
   }
 
+
+   /**
+   * @brief Converts the circuit to layers.
+   *
+   * The circuit is split in layers, each layer being a separate circuit.
+   * Operations are cloned.
+   * @return The layers.
+   */
+   std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToLayers() const {
+    std::vector<std::shared_ptr<Circuits::Circuit<Time>>> layers;
+    layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
+
+    std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
+
+    for (const auto &op : GetOperations()) {
+      // check the instruction, see if a new layer is needed
+
+      // only qubits matter here, the others can be classicaly sent if they are
+      // needed, even if they are shared... but that should be handled
+      // somewhere, when not done implicitely (as for the 'simple network' case)
+      if (op->CanAffectQuantumState()) {
+        const auto qubits = op->AffectedQubits();
+        size_t maxLevel = 0;
+
+        for (Types::qubit_t qbit : qubits) {
+          ++qubitsUsed[qbit];
+          maxLevel = std::max(maxLevel, qubitsUsed[qbit]);
+
+          if (layers.size() < qubitsUsed[qbit]) {
+            auto circ = std::make_shared<Circuits::Circuit<Time>>();
+            layers.push_back(std::move(circ));
+          }
+        }
+
+        // now set all the qubits in the instruction to the max level
+        for (Types::qubit_t qbit : qubits) qubitsUsed[qbit] = maxLevel;
+
+        layers[maxLevel - 1]->AddOperation(op->Clone());
+      } else
+        // add the instruction to the last layer
+        layers.back()->AddOperation(op->Clone());
+    }
+
+    return layers;
+  }
+
+   /**
+   * @brief Converts the circuit to layers.
+   *
+   * The circuit is split in layers, each layer being a separate circuit.
+   * Operations are not cloned, the shared pointers point to the same operations as the ones from the circuit.
+   * @return The layers.
+   */
+  std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToLayersNoClone() const {
+    std::vector<std::shared_ptr<Circuits::Circuit<Time>>> layers;
+    layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
+
+    std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
+
+    for (const auto &op : GetOperations()) {
+      // check the instruction, see if a new layer is needed
+
+      // only qubits matter here, the others can be classicaly sent if they are
+      // needed, even if they are shared... but that should be handled
+      // somewhere, when not done implicitely (as for the 'simple network' case)
+      if (op->CanAffectQuantumState()) {
+        const auto qubits = op->AffectedQubits();
+        size_t maxLevel = 0;
+
+        for (Types::qubit_t qbit : qubits) {
+          ++qubitsUsed[qbit];
+          maxLevel = std::max(maxLevel, qubitsUsed[qbit]);
+
+          if (layers.size() < qubitsUsed[qbit]) {
+            auto circ = std::make_shared<Circuits::Circuit<Time>>();
+            layers.push_back(std::move(circ));
+          }
+        }
+
+        // now set all the qubits in the instruction to the max level
+        for (Types::qubit_t qbit : qubits) qubitsUsed[qbit] = maxLevel;
+
+        layers[maxLevel - 1]->AddOperation(op);
+      } else
+        // add the instruction to the last layer
+        layers.back()->AddOperation(op);
+    }
+
+    return layers;
+  }
+
   /**
    * @brief Get the begin iterator for the operations.
    *
