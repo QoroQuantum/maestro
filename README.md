@@ -63,7 +63,7 @@ Each backend is accessed through a C++ adapter that maps Maestro's IR to the sim
 |----------|------|
 | Installation | [INSTALL.md](https://github.com/QoroQuantum/maestro/blob/main/markdown/INSTALL.md) |
 | Tutorial & API | [TUTORIAL.md](https://github.com/QoroQuantum/maestro/blob/main/markdown/TUTORIAL.md) |
-| Python examples | [examples/](https://github.com/QoroQuantum/maestro/tree/main/examples) |
+| Python examples | [maestro-examples](https://github.com/QoroQuantum/maestro-examples) |
 
 To generate API docs with Doxygen:
 
