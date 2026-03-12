@@ -1,100 +1,80 @@
-# Maestro: The Interface to Quantum Circuit Simulation
+# Maestro
 
 [![Built and tested on Ubuntu](https://github.com/QoroQuantum/maestro/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/QoroQuantum/maestro/actions/workflows/cmake-multi-platform.yml)
 
-Maestro is a unified interface and intelligent orchestration layer for quantum circuit simulation. It automates the complexity of selecting and configuring simulators, enabling researchers and developers to execute quantum circuits efficiently across CPUs, GPUs, and distributed HPC environments without manual tuning.
+A unified interface for quantum circuit simulation. Write your circuit once — Maestro picks the best backend and runs it on CPU, GPU, or distributed HPC.
 
-## Key Features
+## Features
 
-Maestro addresses the fragmentation of the current simulator ecosystem by providing a single entry point to various simulation methods.
+- **One API, many backends** — compile from Qiskit / QASM to any supported simulator
+- **Automatic backend selection** — a prediction engine analyzes your circuit and routes it to the fastest backend
+- **CPU simulation** — statevector, MPS, Pauli propagation, Clifford/stabilizer
+- **GPU acceleration** — statevector (cuStateVec), MPS (custom CUDA), tensor network, Pauli propagation
+- **Distributed simulation** — p-block composite mode for distributed quantum computing
+- **Expectation values** — direct observable estimation (Pauli strings) for VQA workflows
+- **Performance optimizations** — automatic multi-threading, multi-processing, and optimized sampling
 
-- Unified Abstraction Layer: Write your circuit once (e.g., in Qiskit) and Maestro compiles it to the native format of the target backend.
-- Intelligent Prediction Engine: Automatically analyzes circuit features (gate density, entanglement, locality) to predict and select the fastest simulation backend for your specific workload.
-- High-Performance Optimizations: Transparently applies multi-threading, multi-processing, and optimized state sampling to increase throughput.
-- Expectation Value Estimation: Direct calculation of observables (e.g., Pauli strings) for VQA workflows.
-- GPU Acceleration: Integrated support for GPU-accelerated Statevector and custom Matrix Product State (MPS) execution.
-- Distributed Quantum Computing (DQC): Supports p-block simulation (Composite mode) to simulate distributed quantum networks and break the memory ceiling of monolithic simulations.
-- Backend-agnostic: Allows new simulators to be added easily
-
-## Architecture Overview
-
-The Maestro pipeline consists of:
-
-1. Circuit ingestion (Qiskit/QASM)
-2. Conversion to Maestro’s Intermediate Representation
-3. Feature extraction (gate density, entanglement locality, structure)
-4. Prediction engine (runtime estimation and backend routing)
-5. Execution on one of the supported backends:
-   - CPU: statevector, MPS, Pauli propagation, Clifford/stabilizer
-   - GPU: statevector, MPS, Pauli propagation, tensor network simulation, (limited) Clifford/stabilizer
-   - Composite p-block distributed simulation
-
-## Simulation Backends
-
-Maestro integrates or wraps the following:
-
-### CPU Backends
-- Statevector (Qiskit Aer, QCSim, custom implementations)
-- MPS (multiple libraries)
-- Pauli propagation
-- Clifford/stabilizer simulators
-
-### GPU Backends
-- Statevector (NVIDIA cuStateVec)
-- MPS (custom CUDA implementation)
-- Tensor network simulation
-- Pauli propagation
-- (Limited) Clifford/stabilizer
-
-### Distributed Simulation
-- p-block composite simulation for DQC
-
-Each backend is accessed through a C++ adapter that maps Maestro’s IR to the simulator’s native API.
-
-## Automatic Backend Selection
-
-Maestro includes a prediction engine that:
-
-- extracts structural features from the circuit
-- uses a regression model trained on benchmark data
-- estimates relative runtimes across all backends
-- selects the backend expected to run fastest on the current hardware
-
-The model normalizes performance features to reduce hardware dependence and can be recalibrated on installation.
-
-## Documentation
-
-- [Installation Guide](https://github.com/QoroQuantum/maestro/blob/main/INSTALL.md): Detailed build and installation instructions.
-- [Tutorial](https://github.com/QoroQuantum/maestro/blob/main/TUTORIAL.md): Usage examples and API overview, including Python bindings.
-- [Python Examples](https://github.com/QoroQuantum/maestro/tree/main/examples): Python scripts demonstrating usage.
-
-### API Documentation
-
-To generate the API documentation using Doxygen:
+## Quick Start
 
 ```bash
-# Ensure Doxygen is installed
-cd build
-cmake ..
-make doc
+pip install qoro-maestro  # Linux & macOS
 ```
 
-The documentation will be generated in `docs/html/index.html`.
-
-## Building Maestro
-
-Quick start:
+Or build from source:
 
 ```bash
 chmod +x build.sh
 ./build.sh
 ```
 
-For detailed instructions, see [INSTALL.md](https://github.com/QoroQuantum/maestro/blob/main/INSTALL.md).
+For detailed build instructions, see [INSTALL.md](https://github.com/QoroQuantum/maestro/blob/main/markdown/INSTALL.md).
+
+## How It Works
+
+```
+Qiskit / QASM circuit
+        ↓
+Maestro Intermediate Representation
+        ↓
+Feature extraction  →  Prediction engine  →  Backend selection
+        ↓
+Execution (CPU / GPU / Distributed)
+```
+
+1. **Ingest** — accepts circuits from Qiskit or QASM
+2. **Convert** — compiles to Maestro's intermediate representation
+3. **Analyze** — extracts features (gate density, entanglement, locality)
+4. **Route** — prediction engine estimates runtimes and selects the fastest backend
+5. **Execute** — runs on the chosen backend with automatic performance tuning
+
+## Backends
+
+| Type | Backends |
+|------|----------|
+| CPU | Statevector (Aer, QCSim), MPS, Pauli propagation, Clifford/stabilizer |
+| GPU | Statevector (cuStateVec), MPS (CUDA), tensor network, Pauli propagation |
+| Distributed | p-block composite simulation |
+
+Each backend is accessed through a C++ adapter that maps Maestro's IR to the simulator's native API.
+
+## Documentation
+
+| Resource | Link |
+|----------|------|
+| Installation | [INSTALL.md](https://github.com/QoroQuantum/maestro/blob/main/markdown/INSTALL.md) |
+| Tutorial & API | [TUTORIAL.md](https://github.com/QoroQuantum/maestro/blob/main/markdown/TUTORIAL.md) |
+| Python examples | [maestro-examples](https://github.com/QoroQuantum/maestro-examples) |
+
+To generate API docs with Doxygen:
+
+```bash
+cd build
+cmake ..
+make doc
+# Opens at docs/html/index.html
+```
 
 ## Citation
-
-An Article detailing Maestro will be published shorty. This reference can be used for citation.
 
 ```latex
 @article{bertomeu2025maestro,
@@ -107,9 +87,4 @@ An Article detailing Maestro will be published shorty. This reference can be use
 
 ## License
 
-This project is licensed under the GNU General Public License v3.0.
-
-You may copy, distribute, and modify this software under the terms of the GPL-3.0 license.
-A copy of the license text is available in the LICENSE file and at:
-
-<https://www.gnu.org/licenses/gpl-3.0.en.html>
+GPL-3.0 — see [LICENSE](./LICENSE) or <https://www.gnu.org/licenses/gpl-3.0.en.html>.
