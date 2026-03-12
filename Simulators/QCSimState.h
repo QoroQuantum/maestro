@@ -678,6 +678,20 @@ class QCSimState : public ISimulator {
 
             ++result[meas];
           }
+        } else if (qset.size() == 1) {
+          // if only one qubit is measured, we can use the probability
+          normal = false;
+          const auto prob0 = mpsSimulator->GetProbability(qubits[0]);
+          for (size_t shot = 0; shot < shots; ++shot) {
+            const size_t meas = uniformZeroOne(rng) < prob0 ? 0ULL : 1ULL;
+            size_t m = meas;
+            // why would somebody set more than one time?
+            for (size_t i = 1; i < qubits.size(); ++i) {
+              m <<= 1ULL;
+              m |= meas;
+            }
+            ++result[m];
+          }
         }
       }
 
@@ -799,6 +813,15 @@ class QCSimState : public ISimulator {
               measVec[i] = meas[qubits[i]];
 
             ++result[measVec];
+          }
+        } else if (qset.size() == 1) {
+          // if only one qubit is measured, we can use the probability
+          normal = false;
+          const auto prob0 = mpsSimulator->GetProbability(qubits[0]);
+          for (size_t shot = 0; shot < shots; ++shot) {
+            const size_t meas = uniformZeroOne(rng) < prob0 ? 0ULL : 1ULL;
+            const std::vector<bool> m(qubits.size(), meas);
+            ++result[m];
           }
         }
       }

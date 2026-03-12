@@ -787,4 +787,64 @@ BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsOptimizationTest,
   randomCirc->Clear();
 }
 
+BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsToLayersTest,
+                       bdata::xrange(30, 50), nrGates) {
+  size_t nrStates = 1ULL << nrQubitsForRandomCirc;
+
+  GenerateCircuit(nrGates, nrQubitsForRandomCirc);
+
+  // execute the original circuit on aer
+  randomCirc->Execute(aerRandom, state);
+
+  // convert to layers and back to a circuit
+  auto layers = randomCirc->ToLayers();
+  auto convertedCirc = Circuits::Circuit<>::LayersToCircuit(layers);
+
+  // execute the converted circuit on qcsim
+  convertedCirc->Execute(qcRandom, state);
+
+  // now check the results, they should be the same!
+  for (size_t state = 0; state < nrStates; ++state) {
+    std::complex<double> aaer = aerRandom->Amplitude(state);
+    std::complex<double> aqc = qcRandom->Amplitude(state);
+
+    BOOST_CHECK_PREDICATE(checkClose, (aaer)(aqc)(0.000001));
+  }
+
+  resetRandomCirc->Execute(aerRandom, state);
+  resetRandomCirc->Execute(qcRandom, state);
+
+  randomCirc->Clear();
+}
+
+BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsToMultipleQubitsLayersTest,
+                       bdata::xrange(30, 50), nrGates) {
+  size_t nrStates = 1ULL << nrQubitsForRandomCirc;
+
+  GenerateCircuit(nrGates, nrQubitsForRandomCirc);
+
+  // execute the original circuit on aer
+  randomCirc->Execute(aerRandom, state);
+
+  // convert to multiple qubits layers and back to a circuit
+  auto layers = randomCirc->ToMultipleQubitsLayers();
+  auto convertedCirc = Circuits::Circuit<>::LayersToCircuit(layers);
+
+  // execute the converted circuit on qcsim
+  convertedCirc->Execute(qcRandom, state);
+
+  // now check the results, they should be the same!
+  for (size_t state = 0; state < nrStates; ++state) {
+    std::complex<double> aaer = aerRandom->Amplitude(state);
+    std::complex<double> aqc = qcRandom->Amplitude(state);
+
+    BOOST_CHECK_PREDICATE(checkClose, (aaer)(aqc)(0.000001));
+  }
+
+  resetRandomCirc->Execute(aerRandom, state);
+  resetRandomCirc->Execute(qcRandom, state);
+
+  randomCirc->Clear();
+}
+
 BOOST_AUTO_TEST_SUITE_END()
