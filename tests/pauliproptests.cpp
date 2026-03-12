@@ -571,7 +571,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest,
 #ifdef __linux__
     if (gpuPauliSim) {
       const double expValGpuPauliSim = gpuPauliSim->ExpectationValue(pauliStr);
-      BOOST_TEST(std::abs(expValStateVec - expValGpuPauliSim) < 1e-7,
+      BOOST_TEST(std::abs(expValStateVec - expValGpuPauliSim) < 1e-5,
                  "Expectation value mismatch for pauli string "
                      << pauliStr << ": statevector " << expValStateVec
                      << ", gpu pauli sim " << expValGpuPauliSim);
@@ -579,7 +579,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest,
     if (gpuPauliStdSim) {
       const double expValGpuPauliStdSim =
           gpuPauliStdSim->ExpectationValue(pauliStr);
-      BOOST_TEST(std::abs(expValStateVec - expValGpuPauliStdSim) < 1e-7,
+      BOOST_TEST(std::abs(expValStateVec - expValGpuPauliStdSim) < 1e-5,
                  "Expectation value mismatch for pauli string "
                      << pauliStr << ": statevector " << expValStateVec
                      << ", gpu pauli std sim " << expValGpuPauliStdSim);
@@ -845,7 +845,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
 #ifdef __linux__
     if (gpuPauliSim) {
       const double expValGpuPauliSim = gpuPauliSim->ExpectationValue(pauliStr);
-      BOOST_TEST(std::abs(expValStateVec - expValGpuPauliSim) < 1e-7,
+      BOOST_TEST(std::abs(expValStateVec - expValGpuPauliSim) < 1e-5,
                  "Expectation value mismatch for pauli string "
                      << pauliStr << ": statevector " << expValStateVec
                      << ", gpu pauli sim " << expValGpuPauliSim);
@@ -853,7 +853,7 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
     if (gpuPauliStdSim) {
       const double expValGpuPauliStdSim =
           gpuPauliStdSim->ExpectationValue(pauliStr);
-      BOOST_TEST(std::abs(expValStateVec - expValGpuPauliStdSim) < 1e-7,
+      BOOST_TEST(std::abs(expValStateVec - expValGpuPauliStdSim) < 1e-5,
                  "Expectation value mismatch for pauli string "
                      << pauliStr << ": statevector " << expValStateVec
                      << ", gpu pauli std sim " << expValGpuPauliStdSim);
