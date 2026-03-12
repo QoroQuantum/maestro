@@ -27,7 +27,7 @@ chmod +x build.sh
 ./build.sh
 ```
 
-For detailed build instructions, see [INSTALL.md](https://github.com/QoroQuantum/maestro/blob/main/INSTALL.md).
+For detailed build instructions, see [INSTALL.md](https://github.com/QoroQuantum/maestro/blob/main/markdown/INSTALL.md).
 
 ## How It Works
 
@@ -61,8 +61,8 @@ Each backend is accessed through a C++ adapter that maps Maestro's IR to the sim
 
 | Resource | Link |
 |----------|------|
-| Installation | [INSTALL.md](https://github.com/QoroQuantum/maestro/blob/main/INSTALL.md) |
-| Tutorial & API | [TUTORIAL.md](https://github.com/QoroQuantum/maestro/blob/main/TUTORIAL.md) |
+| Installation | [INSTALL.md](https://github.com/QoroQuantum/maestro/blob/main/markdown/INSTALL.md) |
+| Tutorial & API | [TUTORIAL.md](https://github.com/QoroQuantum/maestro/blob/main/markdown/TUTORIAL.md) |
 | Python examples | [examples/](https://github.com/QoroQuantum/maestro/tree/main/examples) |
 
 To generate API docs with Doxygen:
