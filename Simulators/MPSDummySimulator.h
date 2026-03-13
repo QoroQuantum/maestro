@@ -19,6 +19,8 @@
 
 #include "MPSSimulator.h"
 
+#include <Eigen/Eigen>
+
 namespace Simulators {
 
 class MPSDummySimulator {
@@ -106,12 +108,18 @@ class MPSDummySimulator {
     }
   }
 
-  size_t getSwappingCost(IndexType q1, IndexType q2) const
+  IndexType getSwappingCost(IndexType q1, IndexType q2) const
   {
     const IndexType realq1 = qubitsMap[q1];
     const IndexType realq2 = qubitsMap[q2];
 
     return abs(realq1 - realq2) - 1;
+  }
+
+  // returns true even for passing the same qubit twice
+  bool AreQubitsAdjacent(IndexType q1, IndexType q2) const
+  {
+    return getSwappingCost(q1, q2) <= 0;
   }
 
   void SetInitialQubitsMap(const std::vector<IndexType>& initialMap) {
@@ -125,6 +133,41 @@ class MPSDummySimulator {
   IndexType getTotalSwappingCost() const
   {
     return totalSwappingCost; 
+  }
+
+  Eigen::MatrixXi getDistancesMatrix() const
+  {
+    // floyd-warshall algorithm to compute the distances matrix
+    Eigen::MatrixXi distances(qubitsMap.size(), qubitsMap.size());
+
+    for (IndexType i = 0; i < qubitsMap.size(); ++i)
+      for (IndexType j = 0; j < qubitsMap.size(); ++j) {
+        const IndexType dist = getSwappingCost(i, j);
+        distances(i, j) = dist <= 0 ? 0 : dist;
+      }
+
+    for (IndexType k = 0; k < qubitsMap.size(); ++k)
+      for (IndexType i = 0; i < qubitsMap.size(); ++i)
+        for (IndexType j = 0; j < qubitsMap.size(); ++j) {
+          const IndexType newDist = distances(i, k) + distances(k, j);
+          if (distances(i, j) > newDist)
+                distances(i, j) = newDist;
+        }
+              
+    return distances;
+  }
+
+  Eigen::MatrixXi getCouplingsMatrix() const
+  {
+    Eigen::MatrixXi couplings =
+        Eigen::MatrixXi::Eye(qubitsMap.size(), qubitsMap.size());
+
+    for (IndexType i = 0; i < qubitsMap.size() - 1; ++i) {
+      couplings(qubitsMapInv[i], qubitsMapInv[i + 1]) = 1;
+      couplings(qubitsMapInv[i + 1], qubitsMapInv[i]) = 1;
+    }
+
+    return couplings;
   }
 
  private:
