@@ -36,6 +36,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache cibuildwheel virtualenv
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/cibuildwheel
+            ~/.cache/cibuildwheel
+          key: cibw-virtualenv-20.27.1
+
+      - name: Pre-download virtualenv
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            CACHE_DIR=~/Library/Caches/cibuildwheel
+          else
+            CACHE_DIR=~/.cache/cibuildwheel
+          fi
+          mkdir -p "$CACHE_DIR"
+          if [ ! -f "$CACHE_DIR/virtualenv-20.27.1.pyz" ]; then
+            curl -L --retry 5 --retry-delay 10 --retry-all-errors \
+              -o "$CACHE_DIR/virtualenv-20.27.1.pyz" \
+              "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true"
+          fi
+
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.22.0
         env:
