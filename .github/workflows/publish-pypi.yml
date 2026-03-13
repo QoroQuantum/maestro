@@ -47,6 +47,9 @@ jobs:
             ./bootstrap.sh --prefix=/usr/local &&
             ./b2 -j$(nproc) --with-program_options --with-json --with-container --with-serialization install
 
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
+            auditwheel repair --exclude libmaestro.so -w {dest_dir} {wheel}
+
           # ---- macOS ----
           CIBW_BEFORE_ALL_MACOS: >-
             brew install boost openblas libomp
