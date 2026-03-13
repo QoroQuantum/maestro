@@ -2050,7 +2050,8 @@ class Circuit : public IOperation<Time> {
     }
 
     size_t circSize = 1ULL;
-    circSize = std::max(circSize, circuitsMap.size());
+    // static cast added to prevent compiler error on MacOS
+    circSize = std::max(circSize, static_cast<size_t>(circuitsMap.size()));
     circuits.resize(circSize);
 
     for (size_t i = 0; i < circuits.size(); ++i)
@@ -2109,7 +2110,7 @@ class Circuit : public IOperation<Time> {
 
         for (Types::qubit_t qbit : qubits) {
           ++qubitsUsed[qbit];
-          maxLevel = std::max(maxLevel, qubitsUsed[qbit]);
+          maxLevel = std::max(maxLevel, static_cast<size_t>(qubitsUsed[qbit]));
 
           if (layers.size() < qubitsUsed[qbit]) {
             auto circ = std::make_shared<Circuits::Circuit<Time>>();
@@ -2154,7 +2155,7 @@ class Circuit : public IOperation<Time> {
 
         for (Types::qubit_t qbit : qubits) {
           ++qubitsUsed[qbit];
-          maxLevel = std::max(maxLevel, qubitsUsed[qbit]);
+          maxLevel = std::max(maxLevel, static_cast<size_t>(qubitsUsed[qbit]));
 
           if (layers.size() < qubitsUsed[qbit]) {
             auto circ = std::make_shared<Circuits::Circuit<Time>>();
@@ -2201,7 +2202,7 @@ class Circuit : public IOperation<Time> {
 
         for (Types::qubit_t qbit : qubits) {
           if (qubits.size() > 1) ++qubitsUsed[qbit];
-          maxLevel = std::max(maxLevel, qubitsUsed[qbit]);
+          maxLevel = std::max(maxLevel, static_cast<size_t>(qubitsUsed[qbit]));
 
           if (layers.size() < qubitsUsed[qbit]) {
             auto circ = std::make_shared<Circuits::Circuit<Time>>();
@@ -2249,7 +2250,7 @@ class Circuit : public IOperation<Time> {
 
         for (Types::qubit_t qbit : qubits) {
           if (qubits.size() > 1) ++qubitsUsed[qbit];
-          maxLevel = std::max(maxLevel, qubitsUsed[qbit]);
+          maxLevel = std::max(maxLevel, static_cast<size_t>(qubitsUsed[qbit]));
 
           if (layers.size() < qubitsUsed[qbit]) {
             auto circ = std::make_shared<Circuits::Circuit<Time>>();
