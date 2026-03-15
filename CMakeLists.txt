@@ -258,6 +258,7 @@ set_target_properties(maestroexe PROPERTIES OUTPUT_NAME "maestro")
 # Set rpath for library linking (helps with PyPI distribution)
 if(UNIX AND NOT APPLE)
     set_target_properties(maestro PROPERTIES
+        INSTALL_RPATH "$ORIGIN"
         INSTALL_RPATH_USE_LINK_PATH TRUE
         BUILD_WITH_INSTALL_RPATH TRUE
     )
