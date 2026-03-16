@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "qoro-maestro"
-version = "0.2.2"
+version = "0.2.3"
 description = "Python bindings for Maestro - A unified interface for quantum circuit simulation"
 readme = "README.md"
 requires-python = ">=3.10"
