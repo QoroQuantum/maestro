@@ -17,9 +17,14 @@
 #ifndef _MPSDUMMYSIMULATOR_H_
 #define _MPSDUMMYSIMULATOR_H_
 
-#include "MPSSimulator.h"
 
 #include <Eigen/Eigen>
+#include <unsupported/Eigen/CXX11/Tensor>
+
+#include "QuantumGate.h"
+#include "MPSSimulatorInterface.h"
+
+
 
 namespace Simulators {
 
@@ -56,9 +61,9 @@ class MPSDummySimulator {
     ApplyGate(gate, gate.getQubit1(), gate.getQubit2());
   }
 
-  void ApplyGate(std::shared_ptr<Circuits::IOperation<>> gate) {
-    std::shared_ptr<Circuits::IGateOperation<MatrixClass>> gateOp =
-        std::dynamic_pointer_cast<Circuits::IGateOperation<MatrixClass>>(gate);
+  void ApplyGate(const std::shared_ptr<Circuits::IOperation<>>& gate) {
+    std::shared_ptr<Circuits::IGateOperation<>> gateOp =
+        std::dynamic_pointer_cast<Circuits::IGateOperation<>>(gate);
     if (!gateOp)
       throw std::invalid_argument("Invalid gate type");
 
