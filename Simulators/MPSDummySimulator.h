@@ -18,6 +18,10 @@
 #define _MPSDUMMYSIMULATOR_H_
 
 
+#include <algorithm>
+#include <deque>
+#include <random>
+
 #include <Eigen/Eigen>
 #include <unsupported/Eigen/CXX11/Tensor>
 
@@ -62,21 +66,18 @@ class MPSDummySimulator {
   }
 
   void ApplyGate(const std::shared_ptr<Circuits::IOperation<>>& gate) {
-    std::shared_ptr<Circuits::IGateOperation<>> gateOp =
-        std::dynamic_pointer_cast<Circuits::IGateOperation<>>(gate);
-    if (!gateOp)
-      throw std::invalid_argument("Invalid gate type");
+    const auto qbits = gate->AffectedQubits();
 
     std::shared_ptr<QC::Gates::AppliedGate<MatrixClass>> appliedGate;
 
-    if (gateOp->GetNumQubits() == 1) {
+    if (qbits.size() == 1) {
       appliedGate = std::make_shared<QC::Gates::AppliedGate<MatrixClass>>(
           MatrixClass::Identity(2, 2),  // this is a dummy gate, the actual matrix is not important
-          gateOp->GetQubit(0));
-    } else if (gateOp->GetNumQubits() == 2) {
+          qbits[0]);
+    } else if (qbits.size() == 2) {
       appliedGate = std::make_shared<QC::Gates::AppliedGate<MatrixClass>>(
           MatrixClass::Identity(4, 4),  // this is a dummy gate, the actual matrix is not important
-          gateOp->GetQubit(0), gateOp->GetQubit(1));
+          qbits[0], qbits[1]);
     } else {
       throw std::invalid_argument("Unsupported number of qubits for the gate");
     }
@@ -202,14 +203,15 @@ class MPSDummySimulator {
     return couplings;
   }
 
-  static std::vector<IndexType> ComputeOptimalQubitsMap(IndexType nrQubits, const std::vector<std::shared_ptr<Circuits::Circuit<>>>& layers)
+  std::vector<IndexType> ComputeOptimalQubitsMap(
+      const std::vector<std::shared_ptr<Circuits::Circuit<>>>& layers,
+      int nrShuffles = 25)
   {
+    const IndexType nrQubits = getNrQubits();
     std::vector<IndexType> qubitsMap(nrQubits);
-    for (IndexType i = 0; i < nrQubits; ++i)
-      qubitsMap[i] = i;
+    std::iota(qubitsMap.begin(), qubitsMap.end(), 0);
 
     if (layers.empty() || nrQubits <= 2) return qubitsMap;
-
 
     std::vector<std::vector<IndexType>> adj(nrQubits);
     const size_t layersToConsider = layers.size() < 2 ? layers.size() : 2;
@@ -276,12 +278,191 @@ class MPSDummySimulator {
       }
     }
 
-    // Place isolated vertices
+    // Place isolated vertices, using information from subsequent layers
+    // to keep pairs that appear together in two-qubit gates adjacent
+    std::vector<IndexType> isolated;
+    for (IndexType q = 0; q < nrQubits; ++q)
+      if (!visited[q])
+        isolated.push_back(q);
+
+    if (!isolated.empty() && layers.size() > layersToConsider) {
+      std::unordered_set<IndexType> isolatedSet(isolated.begin(), isolated.end());
+      std::vector<std::vector<IndexType>> adjIso(nrQubits);
+
+      for (size_t l = layersToConsider; l < layers.size(); ++l) {
+        const auto& ops = layers[l]->GetOperations();
+        for (const auto& op : ops) {
+          const auto qubits = op->AffectedQubits();
+          if (qubits.size() < 2) continue;
+
+          const IndexType q1 = static_cast<IndexType>(qubits[0]);
+          const IndexType q2 = static_cast<IndexType>(qubits[1]);
+          if (q1 < 0 || q1 >= nrQubits || q2 < 0 || q2 >= nrQubits) continue;
+          if (isolatedSet.find(q1) == isolatedSet.end() || isolatedSet.find(q2) == isolatedSet.end()) continue;
+
+          adjIso[q1].push_back(q2);
+          adjIso[q2].push_back(q1);
+
+          isolatedSet.erase(q1);
+          isolatedSet.erase(q2);
+        }
+      }
+
+      // Traverse connected components among isolated vertices the same way
+      for (IndexType i = 0; i < static_cast<IndexType>(isolated.size()); ++i) {
+        const IndexType start = isolated[i];
+        if (visited[start] || adjIso[start].empty()) continue;
+
+        IndexType endpoint = start;
+        if (adjIso[start].size() == 2) {
+          IndexType cur = adjIso[start][0];
+          IndexType prev = start;
+          while (adjIso[cur].size() == 2) {
+            const IndexType next = (adjIso[cur][0] == prev) ? adjIso[cur][1] : adjIso[cur][0];
+            if (next == start) break;
+            prev = cur;
+            cur = next;
+          }
+          if (adjIso[cur].size() == 1)
+            endpoint = cur;
+        }
+
+        IndexType cur = endpoint;
+        IndexType prev = -1;
+        while (!visited[cur]) {
+          visited[cur] = true;
+          qubitsMap[cur] = pos++;
+
+          IndexType next = -1;
+          for (auto neighbor : adjIso[cur])
+            if (neighbor != prev && !visited[neighbor]) { next = neighbor; break; }
+
+          if (next < 0) break;
+          prev = cur;
+          cur = next;
+        }
+      }
+    }
+
+    // Place remaining truly isolated vertices
     for (IndexType q = 0; q < nrQubits; ++q)
       if (!visited[q])
         qubitsMap[q] = pos++;
 
-    return qubitsMap;
+    // this, despite making the swap cost zero for the first two layers, may not
+    // be the best solution for the entire circuit, so we can try some shuffles
+    // and pick the best one, also check the origial map to at least have it at
+    // the same cost as the original one, that is, ensure we don't get a worse
+    // solution
+
+    // now check execution against the original map (0, 1, ...) and also shuffle the qubits several times and pick the order that minimizes the swapping cost
+    auto evaluateCost = [&, this](const std::vector<IndexType>& candidateMap) -> IndexType {
+      SetInitialQubitsMap(candidateMap);
+      for (const auto& layer : layers)
+        ApplyGates(layer->GetOperations());
+      return getTotalSwappingCost();
+    };
+
+    auto bestMap = qubitsMap;
+    auto bestCost = evaluateCost(bestMap);
+
+    // Try the identity map
+    std::vector<IndexType> tryMap(nrQubits);
+    std::iota(tryMap.begin(), tryMap.end(), 0);
+
+    auto identityCost = evaluateCost(tryMap);
+    if (identityCost < bestCost) {
+      bestMap = tryMap;
+      bestCost = identityCost;
+
+      //std::cout << "Identity was better than the initial optimization, cost: " << identityCost << std::endl;
+    }
+
+    // Try a greedy layout: prioritize adjacency for qubit pairs with the most two-qubit gates
+    {
+      Eigen::MatrixXi weights = Eigen::MatrixXi::Zero(nrQubits, nrQubits);
+      for (const auto& layer : layers) {
+        const auto& ops = layer->GetOperations();
+        for (const auto& op : ops) {
+          const auto qubits = op->AffectedQubits();
+          if (qubits.size() < 2) continue;
+          const IndexType q1 = static_cast<IndexType>(qubits[0]);
+          const IndexType q2 = static_cast<IndexType>(qubits[1]);
+          if (q1 < 0 || q1 >= nrQubits || q2 < 0 || q2 >= nrQubits) continue;
+          ++weights(q1, q2);
+          ++weights(q2, q1);
+        }
+      }
+
+      IndexType seedQ1 = 0, seedQ2 = 1;
+      IndexType maxW = -1;
+      for (IndexType i = 0; i < nrQubits; ++i)
+        for (IndexType j = i + 1; j < nrQubits; ++j)
+          if (weights(i, j) > maxW) {
+            maxW = weights(i, j);
+            seedQ1 = i;
+            seedQ2 = j;
+          }
+
+      std::deque<IndexType> chain;
+      chain.push_back(seedQ1);
+      chain.push_back(seedQ2);
+      std::vector<bool> placed(nrQubits, false);
+      placed[seedQ1] = true;
+      placed[seedQ2] = true;
+
+      while (static_cast<IndexType>(chain.size()) < nrQubits) {
+        IndexType bestCandidate = -1;
+        IndexType bestConn = -1;
+
+        for (IndexType q = 0; q < nrQubits; ++q) {
+          if (placed[q]) continue;
+          IndexType maxConn = 0;
+          for (const auto p : chain)
+            if (weights(q, p) > maxConn)
+              maxConn = weights(q, p);
+          if (maxConn > bestConn) {
+            bestConn = maxConn;
+            bestCandidate = q;
+          }
+        }
+
+        if (bestCandidate < 0) break;
+        placed[bestCandidate] = true;
+
+        if (weights(bestCandidate, chain.front()) >= weights(bestCandidate, chain.back()))
+          chain.push_front(bestCandidate);
+        else
+          chain.push_back(bestCandidate);
+      }
+
+      std::vector<IndexType> greedyMap(nrQubits);
+      for (IndexType i = 0; i < static_cast<IndexType>(chain.size()); ++i)
+        greedyMap[chain[i]] = i;
+
+      auto greedyCost = evaluateCost(greedyMap);
+      if (greedyCost < bestCost) {
+        bestMap = greedyMap;
+        bestCost = greedyCost;
+
+        //std::cout << "Greedy layout was better than the previous optimization, cost: " << greedyCost << std::endl;
+      }
+    }
+
+    // Try several random shuffles
+    std::mt19937 rng(42);
+    for (int s = 0; s < nrShuffles; ++s) {
+      std::shuffle(tryMap.begin(), tryMap.end(), rng);
+      auto cost = evaluateCost(tryMap);
+      if (cost < bestCost) {
+        bestMap = tryMap;
+        bestCost = cost;
+
+        //std::cout << "Shuffle " << s << " was better than the previous best, cost: " << cost << std::endl;
+      }
+    }
+
+    return bestMap;
   }
 
  private:
@@ -295,7 +476,7 @@ class MPSDummySimulator {
     totalSwappingCost = 0;
   }
 
-  void SwapQubits(IndexType qubit1, IndexType qubit2) {
+  void SwapQubits(IndexType qubit1, IndexType qubit2, bool towardsMiddle = true, size_t stepsUp = 0) {
     // if the qubits are not adjacent, apply swap gates until they are
     // don't forget to update the qubitsMap
     IndexType realq1 = qubitsMap[qubit1];
@@ -307,16 +488,17 @@ class MPSDummySimulator {
 
     if (realq2 - realq1 <= 1) return;
 
-    const IndexType mid = (qubitsMap.size() - 1) >> 1;
-    if (realq1 < mid && realq2 > mid)  // is the middle between the two qubits?
-    {
-      const IndexType mappedMid = qubitsMapInv[mid];
-      SwapQubits(qubit1, mappedMid);  // this brings qubit1 near the middle
-      realq1 = qubitsMap[qubit1];
-      // the other qubit is above the middle, so it won't be affected by the
-      // swap the code that follows will bring qubit2 in the middle
-    }  // otherwise the qubit that's near an end of the chain will be moved
-       // towards the other qubit
+      const IndexType mid = towardsMiddle ? (qubitsMap.size() - 1) >> 1 : realq1 + stepsUp;
+      if (realq1 < mid &&
+          realq2 > mid)  // is the middle between the two qubits?
+      {
+        const IndexType mappedMid = qubitsMapInv[mid];
+        SwapQubits(qubit1, mappedMid);  // this brings qubit1 near the middle
+        realq1 = qubitsMap[qubit1];
+        // the other qubit is above the middle, so it won't be affected by the
+        // swap the code that follows will bring qubit2 in the middle
+      }  // otherwise the qubit that's near an end of the chain will be moved
+         // towards the other qubit
 
     // this is just a heuristic, better solutions that minimize the number of
     // swaps would be possible

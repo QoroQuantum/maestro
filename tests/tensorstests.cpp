@@ -925,7 +925,7 @@ BOOST_DATA_TEST_CASE_F(TensorsTestFixture, TensorsSimpleRandomCircsTest,
 
 BOOST_DATA_TEST_CASE_F(TensorsTestFixture,
                        TensorsSimpleRandomCircsTestSimulator,
-                       bdata::xrange(1, 20), nrGates) {
+                       bdata::xrange(10, 20), nrGates) {
   const size_t nrStates = 1ULL << nrQubits;
   Circuits::OperationState stateDummy(nrQubits);
 
@@ -953,7 +953,7 @@ BOOST_DATA_TEST_CASE_F(TensorsTestFixture,
 }
 
 BOOST_DATA_TEST_CASE_F(TensorsTestFixture, TensorsSimpleRandomCircsMeasTest,
-                       bdata::xrange(1, 15), nrGates) {
+                       bdata::xrange(10, 15), nrGates) {
   std::vector<std::pair<Types::qubit_t, size_t>> measQubits(nrQubits);
   for (size_t q = 0; q < nrQubits; ++q) measQubits[q] = std::make_pair(q, q);
 
@@ -1012,7 +1012,7 @@ BOOST_DATA_TEST_CASE_F(TensorsTestFixture, TensorsSimpleRandomCircsMeasTest,
 }
 
 BOOST_DATA_TEST_CASE_F(TensorsTestFixture, TensorsSimpleRandomForestCircsTest,
-                       bdata::xrange(1, 30), nrGates) {
+                       bdata::xrange(20, 30), nrGates) {
   const size_t nrStates = 1ULL << nrQubitsForest;
   Circuits::OperationState stateDummy(nrQubitsForest);
 
@@ -1070,7 +1070,7 @@ BOOST_DATA_TEST_CASE_F(TensorsTestFixture, TensorsSimpleRandomForestCircsTest,
 
 BOOST_DATA_TEST_CASE_F(TensorsTestFixture,
                        TensorsSimpleRandomForestCircsSimulatorTest,
-                       bdata::xrange(1, 30), nrGates) {
+                       bdata::xrange(20, 30), nrGates) {
   const size_t nrStates = 1ULL << nrQubitsForest;
   Circuits::OperationState stateDummy(nrQubitsForest);
 

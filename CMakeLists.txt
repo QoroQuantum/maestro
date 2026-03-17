@@ -137,6 +137,7 @@ set(TESTSSRC tests/aertests.cpp
 	tests/tensorstests.cpp
 	tests/pauliproptests.cpp
 	tests/extstabtests.cpp
+	tests/mpsswapsopttests.cpp
 	tests/tests.cpp)
 
 set(MAESTROSRC maestrolib/Interface.cpp)

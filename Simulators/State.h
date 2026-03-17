@@ -170,6 +170,18 @@ class IState {
   virtual void Reset() = 0;
 
   /**
+   * @brief Sets the initial qubits map, if possible.
+   *
+   * This will do nothing for most simulators, but for the MPS simulator it will
+   * set the initial qubits if it supports it - that is, for qcsim and the gpu
+   * simulator it can set the mapping of the qubits to the positions in the
+   * chain, which can be used to optimize the swapping cost.
+   */
+  virtual void SetInitialQubitsMap(const std::vector<Eigen::Index>& initialMap)
+  {
+  }
+
+  /**
    * @brief Configures the state.
    *
    * This function is called to configure the simulator.
