@@ -34,7 +34,7 @@ namespace Simulators {
 
 class MPSDummySimulator {
  public:
-  using IndexType = QC::TensorNetworks::MPSSimulatorInterface::IndexType;
+  using IndexType = long long int;
   using MatrixClass = QC::TensorNetworks::MPSSimulatorInterface::MatrixClass;
   using GateClass = QC::TensorNetworks::MPSSimulatorInterface::GateClass;
 
