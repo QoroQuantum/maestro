@@ -203,12 +203,12 @@ class MPSDummySimulator {
     return couplings;
   }
 
-  std::vector<IndexType> ComputeOptimalQubitsMap(
+  std::vector<long long int> ComputeOptimalQubitsMap(
       const std::vector<std::shared_ptr<Circuits::Circuit<>>>& layers,
       int nrShuffles = 25)
   {
     const IndexType nrQubits = getNrQubits();
-    std::vector<IndexType> qubitsMap(nrQubits);
+    std::vector<long long int> qubitsMap(nrQubits);
     std::iota(qubitsMap.begin(), qubitsMap.end(), 0);
 
     if (layers.empty() || nrQubits <= 2) return qubitsMap;
@@ -367,7 +367,7 @@ class MPSDummySimulator {
     auto bestCost = evaluateCost(bestMap);
 
     // Try the identity map
-    std::vector<IndexType> tryMap(nrQubits);
+    std::vector<long long int> tryMap(nrQubits);
     std::iota(tryMap.begin(), tryMap.end(), 0);
 
     auto identityCost = evaluateCost(tryMap);
@@ -436,7 +436,7 @@ class MPSDummySimulator {
           chain.push_back(bestCandidate);
       }
 
-      std::vector<IndexType> greedyMap(nrQubits);
+      std::vector<long long int> greedyMap(nrQubits);
       for (IndexType i = 0; i < static_cast<IndexType>(chain.size()); ++i)
         greedyMap[chain[i]] = i;
 
