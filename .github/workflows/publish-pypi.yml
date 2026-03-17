@@ -37,15 +37,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Cache cibuildwheel virtualenv
-        if: runner.os != 'Windows'
         uses: actions/cache@v4
         with:
           path: |
             ~/Library/Caches/cibuildwheel
             ~/.cache/cibuildwheel
+            ~\AppData\Local\pypa\cibuildwheel\Cache
           key: cibw-virtualenv-20.27.1
 
-      - name: Pre-download virtualenv
+      - name: Pre-download virtualenv (Unix)
         if: runner.os != 'Windows'
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then
@@ -59,6 +59,25 @@ jobs:
               -o "$CACHE_DIR/virtualenv-20.27.1.pyz" \
               "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true"
           fi
+
+      - name: Pre-download virtualenv (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          $CacheDir = "$env:USERPROFILE\AppData\Local\pypa\cibuildwheel\Cache"
+          New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
+          $VenvPath = "$CacheDir\virtualenv-20.27.1.pyz"
+          if (-not (Test-Path $VenvPath)) {
+            $retries = 5
+            for ($i = 0; $i -lt $retries; $i++) {
+              try {
+                Invoke-WebRequest -Uri "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true" -OutFile $VenvPath
+                break
+              } catch {
+                if ($i -lt $retries - 1) { Start-Sleep -Seconds 10 }
+                else { throw }
+              }
+            }
+          }
 
       - name: Cache vcpkg packages (Windows)
         if: runner.os == 'Windows'
