@@ -177,7 +177,7 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
     // compute swapping costs with the dummy simulator
     const auto optCirc = randomCirc->LayersToCircuit(layers);
 
-    std::vector<long long int> origqubits(nrQubits);
+    std::vector<Eigen::Index> origqubits(nrQubits);
     std::iota(origqubits.begin(), origqubits.end(), 0);
     dummySim.SetInitialQubitsMap(origqubits);
     dummySim.ApplyGates(optCirc->GetOperations());
