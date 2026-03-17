@@ -3164,7 +3164,7 @@ class GpuLibrary : public Utils::Library {
 
   int (*fMPSCreate)(void *, unsigned int) = nullptr;
   int (*fMPSReset)(void *) = nullptr;
-  int (*fMPSSetInitialQubitsMap)(void*, long long int *, unsigned int) = nullptr;
+  int (*fMPSSetInitialQubitsMap)(void*, const long long int *, unsigned int) = nullptr;
 
   int (*fMPSIsValid)(void *) = nullptr;
   int (*fMPSIsCreated)(void *) = nullptr;
