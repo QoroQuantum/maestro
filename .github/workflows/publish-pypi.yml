@@ -31,12 +31,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-14, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Cache cibuildwheel virtualenv
+        if: runner.os != 'Windows'
         uses: actions/cache@v4
         with:
           path: |
@@ -45,6 +46,7 @@ jobs:
           key: cibw-virtualenv-20.27.1
 
       - name: Pre-download virtualenv
+        if: runner.os != 'Windows'
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then
             CACHE_DIR=~/Library/Caches/cibuildwheel
@@ -57,6 +59,12 @@ jobs:
               -o "$CACHE_DIR/virtualenv-20.27.1.pyz" \
               "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true"
           fi
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.22.0
@@ -94,6 +102,9 @@ jobs:
             delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}
 
           CIBW_ARCHS_MACOS: auto
+
+          # ---- Windows ----
+          CIBW_ARCHS_WINDOWS: "AMD64"
 
           # ---- Common ----
           CIBW_BUILD: "cp310-* cp311-* cp312-*"
