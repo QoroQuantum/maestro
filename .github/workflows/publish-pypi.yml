@@ -31,12 +31,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14]
+        os: [ubuntu-latest, macos-14, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Cache cibuildwheel virtualenv
+        if: runner.os != 'Windows'
         uses: actions/cache@v4
         with:
           path: |
@@ -45,6 +46,7 @@ jobs:
           key: cibw-virtualenv-20.27.1
 
       - name: Pre-download virtualenv
+        if: runner.os != 'Windows'
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then
             CACHE_DIR=~/Library/Caches/cibuildwheel
@@ -58,6 +60,19 @@ jobs:
               "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true"
           fi
 
+      - name: Cache vcpkg packages (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg/installed
+          key: vcpkg-windows-boost-${{ hashFiles('.github/workflows/publish-pypi.yml') }}
+
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.22.0
         env:
@@ -70,7 +85,15 @@ jobs:
             ./b2 -j$(nproc) --with-program_options --with-json --with-container --with-serialization install
 
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
-            auditwheel repair -w {dest_dir} {wheel}
+            auditwheel repair -w {dest_dir} {wheel} &&
+            pip install wheel patchelf &&
+            for whl in {dest_dir}/*.whl; do
+              wheel unpack -d /tmp/whl_fix "$whl" &&
+              patchelf --add-rpath '$ORIGIN' /tmp/whl_fix/*/maestro.cpython-*.so &&
+              rm "$whl" &&
+              wheel pack -d {dest_dir} /tmp/whl_fix/* &&
+              rm -rf /tmp/whl_fix;
+            done
 
           # ---- macOS ----
           CIBW_BEFORE_ALL_MACOS: >-
@@ -86,6 +109,9 @@ jobs:
             delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}
 
           CIBW_ARCHS_MACOS: auto
+
+          # ---- Windows ----
+          CIBW_ARCHS_WINDOWS: "AMD64"
 
           # ---- Common ----
           CIBW_BUILD: "cp310-* cp311-* cp312-*"
