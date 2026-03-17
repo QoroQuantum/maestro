@@ -60,6 +60,13 @@ jobs:
               "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true"
           fi
 
+      - name: Cache vcpkg packages (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:/vcpkg/installed
+          key: vcpkg-windows-boost-${{ hashFiles('.github/workflows/publish-pypi.yml') }}
+
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
