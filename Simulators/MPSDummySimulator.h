@@ -173,15 +173,15 @@ class MPSDummySimulator {
     // floyd-warshall algorithm to compute the distances matrix
     Eigen::MatrixXi distances(qubitsMap.size(), qubitsMap.size());
 
-    for (IndexType i = 0; i < qubitsMap.size(); ++i)
-      for (IndexType j = 0; j < qubitsMap.size(); ++j) {
+    for (size_t i = 0; i < qubitsMap.size(); ++i)
+      for (size_t j = 0; j < qubitsMap.size(); ++j) {
         const IndexType dist = getSwappingCost(i, j);
         distances(i, j) = dist <= 0 ? 0 : dist;
       }
 
-    for (IndexType k = 0; k < qubitsMap.size(); ++k)
-      for (IndexType i = 0; i < qubitsMap.size(); ++i)
-        for (IndexType j = 0; j < qubitsMap.size(); ++j) {
+    for (size_t k = 0; k < qubitsMap.size(); ++k)
+      for (size_t i = 0; i < qubitsMap.size(); ++i)
+        for (size_t j = 0; j < qubitsMap.size(); ++j) {
           const IndexType newDist = distances(i, k) + distances(k, j);
           if (distances(i, j) > newDist)
                 distances(i, j) = newDist;
@@ -195,7 +195,7 @@ class MPSDummySimulator {
     Eigen::MatrixXi couplings =
         Eigen::MatrixXi::Identity(qubitsMap.size(), qubitsMap.size());
 
-    for (IndexType i = 0; i < qubitsMap.size() - 1; ++i) {
+    for (size_t i = 0; i < qubitsMap.size() - 1; ++i) {
       couplings(qubitsMapInv[i], qubitsMapInv[i + 1]) = 1;
       couplings(qubitsMapInv[i + 1], qubitsMapInv[i]) = 1;
     }
@@ -502,7 +502,7 @@ class MPSDummySimulator {
 
     // this is just a heuristic, better solutions that minimize the number of
     // swaps would be possible
-    const bool swapDown = qubitsMap.size() - realq2 <= realq1;
+    const bool swapDown = static_cast<IndexType>(qubitsMap.size()) - realq2 <= realq1;
 
     const IndexType targetQubitReal = swapDown ? realq1 + 1 : realq2 - 1;
     IndexType movingQubitReal = swapDown ? realq2 : realq1;
