@@ -155,7 +155,7 @@ class MPSDummySimulator {
     return getSwappingCost(q1, q2) <= 0;
   }
 
-  void SetInitialQubitsMap(const std::vector<IndexType>& initialMap) {
+  void SetInitialQubitsMap(const std::vector<long long int>& initialMap) {
     qubitsMap = initialMap;
     for (size_t i = 0; i < initialMap.size(); ++i)
       qubitsMapInv[initialMap[i]] = i;
