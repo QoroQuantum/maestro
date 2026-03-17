@@ -67,10 +67,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
           $VenvPath = "$CacheDir\virtualenv-20.27.1.pyz"
           if (-not (Test-Path $VenvPath)) {
+            $headers = @{ Authorization = "token $env:GITHUB_TOKEN" }
             $retries = 5
             for ($i = 0; $i -lt $retries; $i++) {
               try {
-                Invoke-WebRequest -Uri "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true" -OutFile $VenvPath
+                Invoke-WebRequest -Uri "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true" -Headers $headers -OutFile $VenvPath
                 break
               } catch {
                 if ($i -lt $retries - 1) { Start-Sleep -Seconds 10 }
@@ -78,19 +79,30 @@ jobs:
               }
             }
           }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache vcpkg packages (Windows)
         if: runner.os == 'Windows'
         uses: actions/cache@v4
         with:
-          path: C:/vcpkg/installed
+          path: |
+            C:/vcpkg/installed
+            C:/vcpkg/binary-cache
           key: vcpkg-windows-boost-${{ hashFiles('.github/workflows/publish-pypi.yml') }}
+
+      - name: Configure git auth for vcpkg (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          git config --global credential.https://github.com.helper '!f() { echo "username=x-access-token"; echo "password=${{ secrets.GITHUB_TOKEN }}"; }; f'
 
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
           vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_ENABLE_OPENMP=OFF" >> $env:GITHUB_ENV
+        env:
+          VCPKG_BINARY_SOURCES: "clear;files,C:/vcpkg/binary-cache,readwrite"
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.22.0
