@@ -223,7 +223,8 @@ class QCSimState : public ISimulator {
    * simulator it can set the mapping of the qubits to the positions in the
    * chain, which can be used to optimize the swapping cost.
    */
-  void SetInitialQubitsMap(const std::vector<Eigen::Index> &initialMap) override
+  void SetInitialQubitsMap(
+      const std::vector<long long int> &initialMap) override
   {
     if (mpsSimulator) mpsSimulator->SetInitialQubitsMap(initialMap);
   }

@@ -160,7 +160,7 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
     qcsimOpt->Configure("matrix_product_state_max_bond_dimension", "64");
     qcsimOpt->Initialize();
     qcsimOpt->SetInitialQubitsMap(
-        std::vector<Eigen::Index>(optimalMap.begin(), optimalMap.end()));
+        std::vector<long long int>(optimalMap.begin(), optimalMap.end()));
 
     Circuits::OperationState stateOpt;
     stateOpt.AllocateBits(nrQubits);
@@ -177,7 +177,7 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
     // compute swapping costs with the dummy simulator
     const auto optCirc = randomCirc->LayersToCircuit(layers);
 
-    std::vector<Eigen::Index> origqubits(nrQubits);
+    std::vector<long long int> origqubits(nrQubits);
     std::iota(origqubits.begin(), origqubits.end(), 0);
     dummySim.SetInitialQubitsMap(origqubits);
     dummySim.ApplyGates(optCirc->GetOperations());
