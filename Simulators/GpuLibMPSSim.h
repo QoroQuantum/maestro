@@ -57,6 +57,12 @@ class GpuLibMPSSim {
     return false;
   }
 
+  bool SetInitialQubitsMap(const std::vector<long long int> &initialMap) {
+    if (obj) return lib->MPSSetInitialQubitsMap(obj, initialMap);
+
+    return false;
+  }
+
   bool IsValid() const {
     if (obj) return lib->MPSIsValid(obj);
 
