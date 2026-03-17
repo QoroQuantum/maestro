@@ -46,7 +46,6 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapZeroSwapCost, numGates, nrGates) {
     std::random_device rd;
     std::mt19937 g(rd());
 
-    auto dblGen = bdata::random(-2. * M_PI, 2. * M_PI);
     auto gateGen = bdata::random(0, static_cast<int>(Circuits::QuantumGateType::kCUGateType));
     auto gateGenIter = gateGen.begin();
 
