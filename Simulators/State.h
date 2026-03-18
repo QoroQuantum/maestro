@@ -178,9 +178,7 @@ class IState {
    * chain, which can be used to optimize the swapping cost.
    */
   virtual void SetInitialQubitsMap(
-      const std::vector<long long int> &initialMap)
-  {
-  }
+      const std::vector<long long int> &initialMap) {}
 
   /**
    * @brief Configures the state.
