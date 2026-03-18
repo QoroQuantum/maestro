@@ -156,6 +156,12 @@ endif()
 set(MAESTROEXESRC maestroexe/maestroexe.cpp)
 
 
+if(MSVC)
+    set(OpenMP_CXX "${CMAKE_CXX_COMPILER}")
+    set(OpenMP_CXX_FLAGS "/openmp")
+    set(OpenMP_CXX_LIB_NAMES "")
+endif()
+
 if(APPLE)
     if(CMAKE_C_COMPILER_ID MATCHES "Clang")
       set(OpenMP_C "${CMAKE_C_COMPILER}")
