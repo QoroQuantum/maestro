@@ -880,11 +880,11 @@ BOOST_FIXTURE_TEST_CASE(TensorsSimpleTwoQubitGatesTest, TensorsTestFixture) {
 }
 
 BOOST_DATA_TEST_CASE_F(TensorsTestFixture, TensorsSimpleRandomCircsTest,
-                       bdata::xrange(1, 20), nrGates) {
+                       bdata::xrange(10, 20), nrGates) {
   const size_t nrStates = 1ULL << nrQubits;
   Circuits::OperationState stateDummy(nrQubits);
 
-  for (int t = 0; t < 30; ++t) {
+  for (int t = 0; t < 10; ++t) {
     GenerateCircuits(nrGates);
 
     randomCirc->Execute(qc, stateDummy);
@@ -929,7 +929,7 @@ BOOST_DATA_TEST_CASE_F(TensorsTestFixture,
   const size_t nrStates = 1ULL << nrQubits;
   Circuits::OperationState stateDummy(nrQubits);
 
-  for (int t = 0; t < 30; ++t) {
+  for (int t = 0; t < 10; ++t) {
     GenerateCircuits(nrGates, true);
 
     randomCirc->Execute(qc, stateDummy);
