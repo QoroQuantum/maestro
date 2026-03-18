@@ -69,6 +69,7 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapZeroSwapCost, numGates, nrGates) {
     const auto layers = randomCirc->ToMultipleQubitsLayers();
 
     Simulators::MPSDummySimulator dummySim(nrQubits);
+    dummySim.SetMaxBondDimension(64); 
     const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
 
 
@@ -133,6 +134,7 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
     const auto layers = randomCirc->ToMultipleQubitsLayers();
 
     Simulators::MPSDummySimulator dummySim(nrQubits);
+    dummySim.SetMaxBondDimension(64); 
     const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
 
     // execute the original circuit with the identity (original) qubits map
