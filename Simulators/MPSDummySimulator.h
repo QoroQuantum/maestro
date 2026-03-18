@@ -38,13 +38,66 @@ class MPSDummySimulator {
 
   MPSDummySimulator() = delete;
 
-  MPSDummySimulator(size_t N) : nrQubits(N) { InitQubitsMap(); }
+  MPSDummySimulator(size_t N) : nrQubits(N), maxVirtualExtent(0) {
+    InitQubitsMap();
+
+    SetMaxBondDimension(0); 
+  }
 
   size_t getNrQubits() const { return nrQubits; }
 
   void Clear() { InitQubitsMap(); }
 
-  void InitOnesState() { InitQubitsMap(); }
+  void SetMaxBondDimension(int64_t val) {
+    maxVirtualExtent = val;
+
+    if (nrQubits == 0) return;
+
+    const double untruncatedMaxExtent = std::pow(physExtent, nrQubits / 2);
+    int64_t maxVirtualExtentLimit = static_cast<int64_t>(untruncatedMaxExtent);
+
+    if (untruncatedMaxExtent >= std::numeric_limits<int64_t>::max() ||
+        std::isnan(untruncatedMaxExtent) || std::isinf(untruncatedMaxExtent))
+      maxVirtualExtentLimit = std::numeric_limits<int64_t>::max() - 1;
+    else if (untruncatedMaxExtent < 2)
+      maxVirtualExtentLimit = 2;
+
+    maxVirtualExtent = maxVirtualExtent == 0
+                           ? maxVirtualExtentLimit
+                           : std::min(maxVirtualExtent, maxVirtualExtentLimit);
+
+
+    bondCost.resize(nrQubits - 1);
+
+    // the checks here are overkill, but better safe than sorry
+    // we're dealing with large values here, overflows are to be expected
+    for (uint64_t i = 0; i < nrQubits; ++i) {
+      double maxExtent1 = std::pow((double)physExtent, (double)i + 1.);
+      double maxExtent2 = std::pow((double)physExtent, (double)nrQubits - i - 1.);
+
+      if (maxExtent1 >= (double)std::numeric_limits<size_t>::max() ||
+          std::isnan(maxExtent1) || std::isinf(maxExtent1))
+        maxExtent1 = (double)std::numeric_limits<size_t>::max() - 1;
+      else if (maxExtent1 < 1)
+        maxExtent1 = 1;
+
+      if (maxExtent2 > (double)std::numeric_limits<size_t>::max() ||
+          std::isnan(maxExtent2) || std::isinf(maxExtent2))
+        maxExtent2 = (double)std::numeric_limits<size_t>::max() - 1;
+      else if (maxExtent2 < 1)
+        maxExtent2 = 1;
+
+      size_t maxRightExtent = (size_t)std::min<double>(
+          {maxExtent1, maxExtent2, (double)maxVirtualExtent});
+      if (maxRightExtent < 2) maxRightExtent = 2;
+
+      if (i < nrQubits - 1) bondCost[i] = std::pow(maxRightExtent, 3.);
+    }
+  }
+
+  void InitOnesState() {
+    InitQubitsMap();
+  }
 
   void print() const {
     std::cout << "Qubits map: ";
@@ -96,7 +149,11 @@ class MPSDummySimulator {
     // if the qubits are not adjacent, apply swap gates until they are
     // don't forget to update the qubitsMap
     if (gate.getQubitsNumber() > 1 && abs(qubit1 - qubit2) > 1) {
-      totalSwappingCost += abs(qubit1 - qubit2) - 1;
+
+      totalSwappingCost += getSwappingCost(qubit, controllingQubit1);
+
+      if (swapAmplifyingFactor < 1.5 * maxVirtualExtent)
+        swapAmplifyingFactor *= swapAmplifyingFactor;
 
       SwapQubits(qubit, controllingQubit1);
       qubit1 = qubitsMap[qubit];
@@ -136,16 +193,26 @@ class MPSDummySimulator {
     }
   }
 
-  IndexType getSwappingCost(IndexType q1, IndexType q2) const {
+  double getSwappingCost(IndexType q1, IndexType q2) const
+  {
     const IndexType realq1 = qubitsMap[q1];
     const IndexType realq2 = qubitsMap[q2];
 
-    return abs(realq1 - realq2) - 1;
+    //return abs(realq1 - realq2) - 1;
+    double swappingCost = 0;
+    for (IndexType i = std::min(realq1, realq2); i < std::max(realq1, realq2); ++i)
+      swappingCost += bondCost[i];
+
+    return swappingCost * swapAmplifyingFactor;
   }
 
   // returns true even for passing the same qubit twice
-  bool AreQubitsAdjacent(IndexType q1, IndexType q2) const {
-    return getSwappingCost(q1, q2) <= 0;
+  bool AreQubitsAdjacent(IndexType q1, IndexType q2) const
+  {
+    const IndexType realq1 = qubitsMap[q1];
+    const IndexType realq2 = qubitsMap[q2];
+
+    return abs(realq1 - realq2) < 2;
   }
 
   void SetInitialQubitsMap(const std::vector<long long int>& initialMap) {
@@ -154,25 +221,31 @@ class MPSDummySimulator {
       qubitsMapInv[initialMap[i]] = i;
 
     totalSwappingCost = 0;
+    swapAmplifyingFactor = initialSwapAmplifyingFactor;
   }
 
-  IndexType getTotalSwappingCost() const { return totalSwappingCost; }
+  double getTotalSwappingCost() const
+  {
+    return totalSwappingCost; 
+  }
 
-  Eigen::MatrixXi getDistancesMatrix() const {
+  Eigen::MatrixXd getDistancesMatrix() const
+  {
     // floyd-warshall algorithm to compute the distances matrix
-    Eigen::MatrixXi distances(qubitsMap.size(), qubitsMap.size());
+    Eigen::MatrixXd distances(qubitsMap.size(), qubitsMap.size());
 
     for (size_t i = 0; i < qubitsMap.size(); ++i)
       for (size_t j = 0; j < qubitsMap.size(); ++j) {
-        const IndexType dist = getSwappingCost(i, j);
+        const double dist = getSwappingCost(i, j);
         distances(i, j) = dist <= 0 ? 0 : dist;
       }
 
     for (size_t k = 0; k < qubitsMap.size(); ++k)
       for (size_t i = 0; i < qubitsMap.size(); ++i)
         for (size_t j = 0; j < qubitsMap.size(); ++j) {
-          const IndexType newDist = distances(i, k) + distances(k, j);
-          if (distances(i, j) > newDist) distances(i, j) = newDist;
+          const double newDist = distances(i, k) + distances(k, j);
+          if (distances(i, j) > newDist)
+                distances(i, j) = newDist;
         }
 
     return distances;
@@ -351,11 +424,8 @@ class MPSDummySimulator {
     // the same cost as the original one, that is, ensure we don't get a worse
     // solution
 
-    // now check execution against the original map (0, 1, ...) and also shuffle
-    // the qubits several times and pick the order that minimizes the swapping
-    // cost
-    auto evaluateCost =
-        [&, this](const std::vector<IndexType>& candidateMap) -> IndexType {
+    // now check execution against the original map (0, 1, ...) and also shuffle the qubits several times and pick the order that minimizes the swapping cost
+    auto evaluateCost = [&, this](const std::vector<IndexType>& candidateMap) -> double {
       SetInitialQubitsMap(candidateMap);
       for (const auto& layer : layers) ApplyGates(layer->GetOperations());
       return getTotalSwappingCost();
@@ -476,6 +546,7 @@ class MPSDummySimulator {
       qubitsMapInv[i] = qubitsMap[i] = i;
 
     totalSwappingCost = 0;
+    swapAmplifyingFactor = initialSwapAmplifyingFactor;
   }
 
   void SwapQubits(IndexType qubit1, IndexType qubit2, bool towardsMiddle = true,
@@ -531,7 +602,13 @@ class MPSDummySimulator {
   std::vector<IndexType> qubitsMap;
   std::vector<IndexType> qubitsMapInv;
 
-  IndexType totalSwappingCost = 0;
+  static constexpr size_t physExtent = 2;
+  IndexType maxVirtualExtent;
+  std::vector<double> bondCost;
+
+  double totalSwappingCost = 0;
+  static constexpr double initialSwapAmplifyingFactor = 1.7;
+  double swapAmplifyingFactor = initialSwapAmplifyingFactor;
 };
 
 }  // namespace Simulators
