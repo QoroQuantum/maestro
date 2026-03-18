@@ -75,7 +75,7 @@ class MPSDummySimulator {
 
     // the checks here are overkill, but better safe than sorry
     // we're dealing with large values here, overflows are to be expected
-    for (uIndexType i = 0; i < nrQubits; ++i) {
+    for (IndexType i = 0; i < nrQubits; ++i) {
       double maxExtent1 = std::pow((double)physExtent, (double)i + 1.);
       double maxExtent2 = std::pow((double)physExtent, (double)nrQubits - i - 1.);
 
