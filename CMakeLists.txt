@@ -282,8 +282,21 @@ if(UNIX AND NOT APPLE)
     )
 endif()
 
-install(TARGETS maestro DESTINATION .)
-install(TARGETS maestroexe DESTINATION bin)
+if(WIN32)
+    install(TARGETS maestro
+        RUNTIME DESTINATION .
+        LIBRARY DESTINATION .
+        ARCHIVE DESTINATION .
+    )
+    install(TARGETS maestroexe
+        RUNTIME DESTINATION bin
+        LIBRARY DESTINATION bin
+        ARCHIVE DESTINATION bin
+    )
+else()
+    install(TARGETS maestro DESTINATION .)
+    install(TARGETS maestroexe DESTINATION bin)
+endif()
 
 if(OpenMP_CXX_FOUND)
     message("Setting OpenMP")
@@ -438,7 +451,15 @@ if(BUILD_PYTHON_BINDINGS)
             )
         endif()
 
-        install(TARGETS maestro_py LIBRARY DESTINATION .)
+        if(WIN32)
+            install(TARGETS maestro_py
+                RUNTIME DESTINATION .
+                LIBRARY DESTINATION .
+                ARCHIVE DESTINATION .
+            )
+        else()
+            install(TARGETS maestro_py LIBRARY DESTINATION .)
+        endif()
     else()
         message(WARNING "Python 3.8+ (with Interpreter and Development.Module) not found. Skipping Python bindings.")
     endif()
