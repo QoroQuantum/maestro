@@ -181,6 +181,7 @@ if(MAESTRO_ENABLE_OPENMP)
     find_package(OpenMP REQUIRED)
 else()
     message(STATUS "OpenMP support disabled via MAESTRO_ENABLE_OPENMP")
+    set(OpenMP_CXX_FOUND FALSE CACHE BOOL "OpenMP disabled" FORCE)
 endif()
 
 include(CheckCXXCompilerFlag)

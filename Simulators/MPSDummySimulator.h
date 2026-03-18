@@ -9,14 +9,14 @@
  * The purpose of this class is to be able to follow the internal mapping of the
  * qubits and the operations that are applied to them, without actually
  * simulating anything.
- * The swapping cost of the MPS simulator is not important, this will be used to evaluate it.
+ * The swapping cost of the MPS simulator is not important, this will be used to
+ * evaluate it.
  */
 
 #pragma once
 
 #ifndef _MPSDUMMYSIMULATOR_H_
 #define _MPSDUMMYSIMULATOR_H_
-
 
 #include <algorithm>
 #include <deque>
@@ -28,8 +28,6 @@
 #include "QuantumGate.h"
 #include "MPSSimulatorInterface.h"
 
-
-
 namespace Simulators {
 
 class MPSDummySimulator {
@@ -40,19 +38,13 @@ class MPSDummySimulator {
 
   MPSDummySimulator() = delete;
 
-  MPSDummySimulator(size_t N) : nrQubits(N) {
-    InitQubitsMap();
-  }
+  MPSDummySimulator(size_t N) : nrQubits(N) { InitQubitsMap(); }
 
   size_t getNrQubits() const { return nrQubits; }
 
-  void Clear() {
-    InitQubitsMap();
-  }
+  void Clear() { InitQubitsMap(); }
 
-  void InitOnesState() {
-    InitQubitsMap();
-  }
+  void InitOnesState() { InitQubitsMap(); }
 
   void print() const {
     std::cout << "Qubits map: ";
@@ -72,16 +64,20 @@ class MPSDummySimulator {
 
     if (qbits.size() == 1) {
       appliedGate = std::make_shared<QC::Gates::AppliedGate<MatrixClass>>(
-          MatrixClass::Identity(2, 2),  // this is a dummy gate, the actual matrix is not important
+          MatrixClass::Identity(
+              2,
+              2),  // this is a dummy gate, the actual matrix is not important
           qbits[0]);
     } else if (qbits.size() == 2) {
       appliedGate = std::make_shared<QC::Gates::AppliedGate<MatrixClass>>(
-          MatrixClass::Identity(4, 4),  // this is a dummy gate, the actual matrix is not important
+          MatrixClass::Identity(
+              4,
+              4),  // this is a dummy gate, the actual matrix is not important
           qbits[0], qbits[1]);
     } else {
       throw std::invalid_argument("Unsupported number of qubits for the gate");
     }
-        
+
     ApplyGate(*appliedGate);
   }
 
@@ -100,7 +96,6 @@ class MPSDummySimulator {
     // if the qubits are not adjacent, apply swap gates until they are
     // don't forget to update the qubitsMap
     if (gate.getQubitsNumber() > 1 && abs(qubit1 - qubit2) > 1) {
-
       totalSwappingCost += abs(qubit1 - qubit2) - 1;
 
       SwapQubits(qubit, controllingQubit1);
@@ -141,8 +136,7 @@ class MPSDummySimulator {
     }
   }
 
-  IndexType getSwappingCost(IndexType q1, IndexType q2) const
-  {
+  IndexType getSwappingCost(IndexType q1, IndexType q2) const {
     const IndexType realq1 = qubitsMap[q1];
     const IndexType realq2 = qubitsMap[q2];
 
@@ -150,8 +144,7 @@ class MPSDummySimulator {
   }
 
   // returns true even for passing the same qubit twice
-  bool AreQubitsAdjacent(IndexType q1, IndexType q2) const
-  {
+  bool AreQubitsAdjacent(IndexType q1, IndexType q2) const {
     return getSwappingCost(q1, q2) <= 0;
   }
 
@@ -163,13 +156,9 @@ class MPSDummySimulator {
     totalSwappingCost = 0;
   }
 
-  IndexType getTotalSwappingCost() const
-  {
-    return totalSwappingCost; 
-  }
+  IndexType getTotalSwappingCost() const { return totalSwappingCost; }
 
-  Eigen::MatrixXi getDistancesMatrix() const
-  {
+  Eigen::MatrixXi getDistancesMatrix() const {
     // floyd-warshall algorithm to compute the distances matrix
     Eigen::MatrixXi distances(qubitsMap.size(), qubitsMap.size());
 
@@ -183,15 +172,13 @@ class MPSDummySimulator {
       for (size_t i = 0; i < qubitsMap.size(); ++i)
         for (size_t j = 0; j < qubitsMap.size(); ++j) {
           const IndexType newDist = distances(i, k) + distances(k, j);
-          if (distances(i, j) > newDist)
-                distances(i, j) = newDist;
+          if (distances(i, j) > newDist) distances(i, j) = newDist;
         }
-              
+
     return distances;
   }
 
-  Eigen::MatrixXi getCouplingsMatrix() const
-  {
+  Eigen::MatrixXi getCouplingsMatrix() const {
     Eigen::MatrixXi couplings =
         Eigen::MatrixXi::Identity(qubitsMap.size(), qubitsMap.size());
 
@@ -205,8 +192,7 @@ class MPSDummySimulator {
 
   std::vector<long long int> ComputeOptimalQubitsMap(
       const std::vector<std::shared_ptr<Circuits::Circuit<>>>& layers,
-      int nrShuffles = 25)
-  {
+      int nrShuffles = 25) {
     const IndexType nrQubits = getNrQubits();
     std::vector<long long int> qubitsMap(nrQubits);
     std::iota(qubitsMap.begin(), qubitsMap.end(), 0);
@@ -228,8 +214,11 @@ class MPSDummySimulator {
 
         bool exists = false;
         for (auto n : adj[q1])
-          if (n == q2) { exists = true; break; }
-        
+          if (n == q2) {
+            exists = true;
+            break;
+          }
+
         if (!exists) {
           adj[q1].push_back(q2);
           adj[q2].push_back(q1);
@@ -252,13 +241,13 @@ class MPSDummySimulator {
         IndexType cur = adj[start][0];
         IndexType prev = start;
         while (adj[cur].size() == 2) {
-          const IndexType next = (adj[cur][0] == prev) ? adj[cur][1] : adj[cur][0];
-          if (next == start) break; // cycle
+          const IndexType next =
+              (adj[cur][0] == prev) ? adj[cur][1] : adj[cur][0];
+          if (next == start) break;  // cycle
           prev = cur;
           cur = next;
         }
-        if (adj[cur].size() == 1)
-          endpoint = cur;
+        if (adj[cur].size() == 1) endpoint = cur;
       }
 
       // Lay out the path/cycle starting from the endpoint
@@ -270,7 +259,10 @@ class MPSDummySimulator {
 
         IndexType next = -1;
         for (auto neighbor : adj[cur])
-          if (neighbor != prev && !visited[neighbor]) { next = neighbor; break; }
+          if (neighbor != prev && !visited[neighbor]) {
+            next = neighbor;
+            break;
+          }
 
         if (next < 0) break;
         prev = cur;
@@ -282,11 +274,11 @@ class MPSDummySimulator {
     // to keep pairs that appear together in two-qubit gates adjacent
     std::vector<IndexType> isolated;
     for (IndexType q = 0; q < nrQubits; ++q)
-      if (!visited[q])
-        isolated.push_back(q);
+      if (!visited[q]) isolated.push_back(q);
 
     if (!isolated.empty() && layers.size() > layersToConsider) {
-      std::unordered_set<IndexType> isolatedSet(isolated.begin(), isolated.end());
+      std::unordered_set<IndexType> isolatedSet(isolated.begin(),
+                                                isolated.end());
       std::vector<std::vector<IndexType>> adjIso(nrQubits);
 
       for (size_t l = layersToConsider; l < layers.size(); ++l) {
@@ -298,7 +290,9 @@ class MPSDummySimulator {
           const IndexType q1 = static_cast<IndexType>(qubits[0]);
           const IndexType q2 = static_cast<IndexType>(qubits[1]);
           if (q1 < 0 || q1 >= nrQubits || q2 < 0 || q2 >= nrQubits) continue;
-          if (isolatedSet.find(q1) == isolatedSet.end() || isolatedSet.find(q2) == isolatedSet.end()) continue;
+          if (isolatedSet.find(q1) == isolatedSet.end() ||
+              isolatedSet.find(q2) == isolatedSet.end())
+            continue;
 
           adjIso[q1].push_back(q2);
           adjIso[q2].push_back(q1);
@@ -318,13 +312,13 @@ class MPSDummySimulator {
           IndexType cur = adjIso[start][0];
           IndexType prev = start;
           while (adjIso[cur].size() == 2) {
-            const IndexType next = (adjIso[cur][0] == prev) ? adjIso[cur][1] : adjIso[cur][0];
+            const IndexType next =
+                (adjIso[cur][0] == prev) ? adjIso[cur][1] : adjIso[cur][0];
             if (next == start) break;
             prev = cur;
             cur = next;
           }
-          if (adjIso[cur].size() == 1)
-            endpoint = cur;
+          if (adjIso[cur].size() == 1) endpoint = cur;
         }
 
         IndexType cur = endpoint;
@@ -335,7 +329,10 @@ class MPSDummySimulator {
 
           IndexType next = -1;
           for (auto neighbor : adjIso[cur])
-            if (neighbor != prev && !visited[neighbor]) { next = neighbor; break; }
+            if (neighbor != prev && !visited[neighbor]) {
+              next = neighbor;
+              break;
+            }
 
           if (next < 0) break;
           prev = cur;
@@ -346,8 +343,7 @@ class MPSDummySimulator {
 
     // Place remaining truly isolated vertices
     for (IndexType q = 0; q < nrQubits; ++q)
-      if (!visited[q])
-        qubitsMap[q] = pos++;
+      if (!visited[q]) qubitsMap[q] = pos++;
 
     // this, despite making the swap cost zero for the first two layers, may not
     // be the best solution for the entire circuit, so we can try some shuffles
@@ -355,11 +351,13 @@ class MPSDummySimulator {
     // the same cost as the original one, that is, ensure we don't get a worse
     // solution
 
-    // now check execution against the original map (0, 1, ...) and also shuffle the qubits several times and pick the order that minimizes the swapping cost
-    auto evaluateCost = [&, this](const std::vector<IndexType>& candidateMap) -> IndexType {
+    // now check execution against the original map (0, 1, ...) and also shuffle
+    // the qubits several times and pick the order that minimizes the swapping
+    // cost
+    auto evaluateCost =
+        [&, this](const std::vector<IndexType>& candidateMap) -> IndexType {
       SetInitialQubitsMap(candidateMap);
-      for (const auto& layer : layers)
-        ApplyGates(layer->GetOperations());
+      for (const auto& layer : layers) ApplyGates(layer->GetOperations());
       return getTotalSwappingCost();
     };
 
@@ -375,10 +373,12 @@ class MPSDummySimulator {
       bestMap = tryMap;
       bestCost = identityCost;
 
-      //std::cout << "Identity was better than the initial optimization, cost: " << identityCost << std::endl;
+      // std::cout << "Identity was better than the initial optimization, cost:
+      // " << identityCost << std::endl;
     }
 
-    // Try a greedy layout: prioritize adjacency for qubit pairs with the most two-qubit gates
+    // Try a greedy layout: prioritize adjacency for qubit pairs with the most
+    // two-qubit gates
     {
       Eigen::MatrixXi weights = Eigen::MatrixXi::Zero(nrQubits, nrQubits);
       for (const auto& layer : layers) {
@@ -419,8 +419,7 @@ class MPSDummySimulator {
           if (placed[q]) continue;
           IndexType maxConn = 0;
           for (const auto p : chain)
-            if (weights(q, p) > maxConn)
-              maxConn = weights(q, p);
+            if (weights(q, p) > maxConn) maxConn = weights(q, p);
           if (maxConn > bestConn) {
             bestConn = maxConn;
             bestCandidate = q;
@@ -430,7 +429,8 @@ class MPSDummySimulator {
         if (bestCandidate < 0) break;
         placed[bestCandidate] = true;
 
-        if (weights(bestCandidate, chain.front()) >= weights(bestCandidate, chain.back()))
+        if (weights(bestCandidate, chain.front()) >=
+            weights(bestCandidate, chain.back()))
           chain.push_front(bestCandidate);
         else
           chain.push_back(bestCandidate);
@@ -445,7 +445,8 @@ class MPSDummySimulator {
         bestMap = greedyMap;
         bestCost = greedyCost;
 
-        //std::cout << "Greedy layout was better than the previous optimization, cost: " << greedyCost << std::endl;
+        // std::cout << "Greedy layout was better than the previous
+        // optimization, cost: " << greedyCost << std::endl;
       }
     }
 
@@ -458,7 +459,8 @@ class MPSDummySimulator {
         bestMap = tryMap;
         bestCost = cost;
 
-        //std::cout << "Shuffle " << s << " was better than the previous best, cost: " << cost << std::endl;
+        // std::cout << "Shuffle " << s << " was better than the previous best,
+        // cost: " << cost << std::endl;
       }
     }
 
@@ -476,7 +478,8 @@ class MPSDummySimulator {
     totalSwappingCost = 0;
   }
 
-  void SwapQubits(IndexType qubit1, IndexType qubit2, bool towardsMiddle = true, size_t stepsUp = 0) {
+  void SwapQubits(IndexType qubit1, IndexType qubit2, bool towardsMiddle = true,
+                  size_t stepsUp = 0) {
     // if the qubits are not adjacent, apply swap gates until they are
     // don't forget to update the qubitsMap
     IndexType realq1 = qubitsMap[qubit1];
@@ -488,21 +491,22 @@ class MPSDummySimulator {
 
     if (realq2 - realq1 <= 1) return;
 
-      const IndexType mid = towardsMiddle ? (qubitsMap.size() - 1) >> 1 : realq1 + stepsUp;
-      if (realq1 < mid &&
-          realq2 > mid)  // is the middle between the two qubits?
-      {
-        const IndexType mappedMid = qubitsMapInv[mid];
-        SwapQubits(qubit1, mappedMid);  // this brings qubit1 near the middle
-        realq1 = qubitsMap[qubit1];
-        // the other qubit is above the middle, so it won't be affected by the
-        // swap the code that follows will bring qubit2 in the middle
-      }  // otherwise the qubit that's near an end of the chain will be moved
-         // towards the other qubit
+    const IndexType mid =
+        towardsMiddle ? (qubitsMap.size() - 1) >> 1 : realq1 + stepsUp;
+    if (realq1 < mid && realq2 > mid)  // is the middle between the two qubits?
+    {
+      const IndexType mappedMid = qubitsMapInv[mid];
+      SwapQubits(qubit1, mappedMid);  // this brings qubit1 near the middle
+      realq1 = qubitsMap[qubit1];
+      // the other qubit is above the middle, so it won't be affected by the
+      // swap the code that follows will bring qubit2 in the middle
+    }  // otherwise the qubit that's near an end of the chain will be moved
+       // towards the other qubit
 
     // this is just a heuristic, better solutions that minimize the number of
     // swaps would be possible
-    const bool swapDown = static_cast<IndexType>(qubitsMap.size()) - realq2 <= realq1;
+    const bool swapDown =
+        static_cast<IndexType>(qubitsMap.size()) - realq2 <= realq1;
 
     const IndexType targetQubitReal = swapDown ? realq1 + 1 : realq2 - 1;
     IndexType movingQubitReal = swapDown ? realq2 : realq1;
@@ -530,7 +534,6 @@ class MPSDummySimulator {
   IndexType totalSwappingCost = 0;
 };
 
-}
+}  // namespace Simulators
 
 #endif
-

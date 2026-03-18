@@ -2084,15 +2084,14 @@ class Circuit : public IOperation<Time> {
     return circuits;
   }
 
-
-   /**
+  /**
    * @brief Converts the circuit to layers.
    *
    * The circuit is split in layers, each layer being a separate circuit.
    * Operations are cloned.
    * @return The layers.
    */
-   std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToLayers() const {
+  std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToLayers() const {
     std::vector<std::shared_ptr<Circuits::Circuit<Time>>> layers;
     layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
 
@@ -2130,14 +2129,16 @@ class Circuit : public IOperation<Time> {
     return layers;
   }
 
-   /**
+  /**
    * @brief Converts the circuit to layers.
    *
    * The circuit is split in layers, each layer being a separate circuit.
-   * Operations are not cloned, the shared pointers point to the same operations as the ones from the circuit.
+   * Operations are not cloned, the shared pointers point to the same operations
+   * as the ones from the circuit.
    * @return The layers.
    */
-  std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToLayersNoClone() const {
+  std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToLayersNoClone()
+      const {
     std::vector<std::shared_ptr<Circuits::Circuit<Time>>> layers;
     layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
 
@@ -2181,10 +2182,12 @@ class Circuit : public IOperation<Time> {
    * The circuit is split in layers, each layer being a separate circuit.
    * Operations are cloned.
    * It's not as ToLayers above, the order of the operations in a layer matters.
-   * If the one qubit gates would be contracted into the ones on more than one qubit, then it would be the situation of normal layers.
+   * If the one qubit gates would be contracted into the ones on more than one
+   * qubit, then it would be the situation of normal layers.
    * @return The layers.
    */
-  std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToMultipleQubitsLayers() const {
+  std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToMultipleQubitsLayers()
+      const {
     std::vector<std::shared_ptr<Circuits::Circuit<Time>>> layers;
     layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
 
@@ -2228,11 +2231,12 @@ class Circuit : public IOperation<Time> {
    * The circuit is split in layers, each layer being a separate circuit.
    * Operations are not cloned.
    * It's not as ToLayers above, the order of the operations in a layer matters.
-   * If the one qubit gates would be contracted into the ones on more than one qubit, then it would be the situation of normal layers.
+   * If the one qubit gates would be contracted into the ones on more than one
+   * qubit, then it would be the situation of normal layers.
    * @return The layers.
    */
-  std::vector<std::shared_ptr<Circuits::Circuit<Time>>> ToMultipleQubitsLayersNoClone()
-      const {
+  std::vector<std::shared_ptr<Circuits::Circuit<Time>>>
+  ToMultipleQubitsLayersNoClone() const {
     std::vector<std::shared_ptr<Circuits::Circuit<Time>>> layers;
     layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
 
