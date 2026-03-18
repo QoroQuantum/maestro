@@ -25,13 +25,23 @@ jobs:
           path: dist/*.tar.gz
 
   build_wheels:
-    name: Build wheels on ${{ matrix.os }}
+    name: Build wheels (${{ matrix.os }}, ${{ matrix.cibw_build }})
     needs: [ci]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14, windows-latest]
+        include:
+          - os: ubuntu-latest
+            cibw_build: "cp310-* cp311-* cp312-*"
+          - os: macos-14
+            cibw_build: "cp310-* cp311-* cp312-*"
+          - os: windows-latest
+            cibw_build: "cp310-*"
+          - os: windows-latest
+            cibw_build: "cp311-*"
+          - os: windows-latest
+            cibw_build: "cp312-*"
 
     steps:
       - uses: actions/checkout@v4
@@ -147,12 +157,12 @@ jobs:
           CIBW_ARCHS_WINDOWS: "AMD64"
 
           # ---- Common ----
-          CIBW_BUILD: "cp310-* cp311-* cp312-*"
+          CIBW_BUILD: "${{ matrix.cibw_build }}"
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: maestro-wheels-${{ matrix.os }}
+          name: maestro-wheels-${{ matrix.os }}-${{ strategy.job-index }}
           path: ./wheelhouse/*.whl
 
   upload_pypi:
