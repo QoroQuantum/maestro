@@ -25,13 +25,23 @@ jobs:
           path: dist/*.tar.gz
 
   build_wheels:
-    name: Build wheels on ${{ matrix.os }}
+    name: Build wheels (${{ matrix.os }}, ${{ matrix.cibw_build }})
     needs: [ci]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-14, windows-latest]
+        include:
+          - os: ubuntu-latest
+            cibw_build: "cp310-* cp311-* cp312-*"
+          - os: macos-14
+            cibw_build: "cp310-* cp311-* cp312-*"
+          - os: windows-latest
+            cibw_build: "cp310-*"
+          - os: windows-latest
+            cibw_build: "cp311-*"
+          - os: windows-latest
+            cibw_build: "cp312-*"
 
     steps:
       - uses: actions/checkout@v4
@@ -67,10 +77,11 @@ jobs:
           New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
           $VenvPath = "$CacheDir\virtualenv-20.27.1.pyz"
           if (-not (Test-Path $VenvPath)) {
+            $headers = @{ Authorization = "token $env:GITHUB_TOKEN" }
             $retries = 5
             for ($i = 0; $i -lt $retries; $i++) {
               try {
-                Invoke-WebRequest -Uri "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true" -OutFile $VenvPath
+                Invoke-WebRequest -Uri "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true" -Headers $headers -OutFile $VenvPath
                 break
               } catch {
                 if ($i -lt $retries - 1) { Start-Sleep -Seconds 10 }
@@ -78,19 +89,32 @@ jobs:
               }
             }
           }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache vcpkg packages (Windows)
         if: runner.os == 'Windows'
         uses: actions/cache@v4
         with:
-          path: C:/vcpkg/installed
+          path: |
+            C:/vcpkg/installed
+            C:/vcpkg/binary-cache
           key: vcpkg-windows-boost-${{ hashFiles('.github/workflows/publish-pypi.yml') }}
+
+      - name: Configure git auth for vcpkg (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          git config --global credential.https://github.com.helper '!f() { echo "username=x-access-token"; echo "password=$GITHUB_TOKEN"; }; f'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
           vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
           echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+        env:
+          VCPKG_BINARY_SOURCES: "clear;files,C:/vcpkg/binary-cache,readwrite"
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.22.0
@@ -133,12 +157,12 @@ jobs:
           CIBW_ARCHS_WINDOWS: "AMD64"
 
           # ---- Common ----
-          CIBW_BUILD: "cp310-* cp311-* cp312-*"
+          CIBW_BUILD: "${{ matrix.cibw_build }}"
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: maestro-wheels-${{ matrix.os }}
+          name: maestro-wheels-${{ matrix.os }}-${{ strategy.job-index }}
           path: ./wheelhouse/*.whl
 
   upload_pypi:

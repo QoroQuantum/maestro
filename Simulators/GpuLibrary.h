@@ -90,8 +90,7 @@ class GpuLibrary : public Utils::Library {
                          "or activate the license first."
                       << std::endl;
           else
-            std::cerr << "Check that your license key is correct."
-                      << std::endl;
+            std::cerr << "Check that your license key is correct." << std::endl;
         }
         return false;
       }
@@ -267,7 +266,9 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fMPSCreate, __LINE__);
           fMPSReset = (int (*)(void *))GetFunction("MPSReset");
           CheckFunction((void *)fMPSReset, __LINE__);
-          fMPSSetInitialQubitsMap = (int (*)(void *, const long long int *, unsigned int))GetFunction("MPSSetInitialQubitsMap");
+          fMPSSetInitialQubitsMap =
+              (int (*)(void *, const long long int *, unsigned int))GetFunction(
+                  "MPSSetInitialQubitsMap");
           CheckFunction((void *)fMPSSetInitialQubitsMap, __LINE__);
 
           fMPSIsValid = (int (*)(void *))GetFunction("MPSIsValid");
@@ -1388,12 +1389,14 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool MPSSetInitialQubitsMap(void *obj, const std::vector<long long int> &initialMap)
-  {
+  bool MPSSetInitialQubitsMap(void *obj,
+                              const std::vector<long long int> &initialMap) {
     if (LibraryHandle)
-      return fMPSSetInitialQubitsMap(obj, initialMap.data(), initialMap.size()) == 1;
+      return fMPSSetInitialQubitsMap(obj, initialMap.data(),
+                                     initialMap.size()) == 1;
     else
-      throw std::runtime_error("GpuLibrary: Unable to set initial qubits map for mps");
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set initial qubits map for mps");
 
     return false;
   }
@@ -3164,7 +3167,8 @@ class GpuLibrary : public Utils::Library {
 
   int (*fMPSCreate)(void *, unsigned int) = nullptr;
   int (*fMPSReset)(void *) = nullptr;
-  int (*fMPSSetInitialQubitsMap)(void*, const long long int *, unsigned int) = nullptr;
+  int (*fMPSSetInitialQubitsMap)(void *, const long long int *,
+                                 unsigned int) = nullptr;
 
   int (*fMPSIsValid)(void *) = nullptr;
   int (*fMPSIsCreated)(void *) = nullptr;
