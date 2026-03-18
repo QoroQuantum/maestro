@@ -155,6 +155,9 @@ jobs:
 
           # ---- Windows ----
           CIBW_ARCHS_WINDOWS: "AMD64"
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
+            pip install delvewheel &&
+            delvewheel repair -w {dest_dir} --add-path "C:\vcpkg\installed\x64-windows\bin" {wheel}
 
           # ---- Common ----
           CIBW_BUILD: "${{ matrix.cibw_build }}"
