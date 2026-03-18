@@ -52,17 +52,17 @@ class MPSDummySimulator {
     InitQubitsMap();
   }
 
-  void SetMaxBondDimension(int64_t val) {
+  void SetMaxBondDimension(IndexType val) {
     maxVirtualExtent = val;
 
     if (nrQubits == 0) return;
 
     const double untruncatedMaxExtent = std::pow(physExtent, nrQubits / 2);
-    int64_t maxVirtualExtentLimit = static_cast<int64_t>(untruncatedMaxExtent);
+    IndexType maxVirtualExtentLimit = static_cast<IndexType>(untruncatedMaxExtent);
 
-    if (untruncatedMaxExtent >= std::numeric_limits<int64_t>::max() ||
+    if (untruncatedMaxExtent >= std::numeric_limits<IndexType>::max() ||
         std::isnan(untruncatedMaxExtent) || std::isinf(untruncatedMaxExtent))
-      maxVirtualExtentLimit = std::numeric_limits<int64_t>::max() - 1;
+      maxVirtualExtentLimit = std::numeric_limits<IndexType>::max() - 1;
     else if (untruncatedMaxExtent < 2)
       maxVirtualExtentLimit = 2;
 
@@ -75,7 +75,7 @@ class MPSDummySimulator {
 
     // the checks here are overkill, but better safe than sorry
     // we're dealing with large values here, overflows are to be expected
-    for (uint64_t i = 0; i < nrQubits; ++i) {
+    for (uIndexType i = 0; i < nrQubits; ++i) {
       double maxExtent1 = std::pow((double)physExtent, (double)i + 1.);
       double maxExtent2 = std::pow((double)physExtent, (double)nrQubits - i - 1.);
 
