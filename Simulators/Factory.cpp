@@ -49,7 +49,7 @@ bool SimulatorsFactory::InitGpuLibrary() {
     gpuLibrary = std::make_shared<GpuLibrary>();
     if (!firstTime.exchange(false)) gpuLibrary->SetMute(true);
 
-    if (gpuLibrary->Init("libcomposer_gpu_simulators.so"))
+    if (gpuLibrary->Init("libmaestro_gpu_simulators.so"))
       return true;
     else
       gpuLibrary = nullptr;
@@ -64,7 +64,7 @@ bool SimulatorsFactory::InitGpuLibraryWithMute() {
     firstTime = false;
     gpuLibrary->SetMute(true);
 
-    if (gpuLibrary->Init("libcomposer_gpu_simulators.so"))
+    if (gpuLibrary->Init("libmaestro_gpu_simulators.so"))
       return true;
     else
       gpuLibrary = nullptr;

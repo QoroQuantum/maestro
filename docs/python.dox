@@ -12,10 +12,27 @@
  *
  * @subsection py_install Installation
  *
+ * Install pre-built wheels from PyPI (Linux, macOS, Windows):
+ *
  * @code{.sh}
- * # From the repository root
+ * pip install qoro-maestro
+ * @endcode
+ *
+ * Or build from source from the repository root:
+ *
+ * @code{.sh}
  * pip install .
  * @endcode
+ *
+ * **Supported platforms (pre-built wheels):**
+ *
+ * | Platform | Architecture | Python |
+ * |----------|-------------|--------|
+ * | Linux | x86_64 | 3.10, 3.11, 3.12 |
+ * | macOS | arm64 (Apple Silicon) | 3.10, 3.11, 3.12 |
+ * | Windows | AMD64 | 3.10, 3.11, 3.12 |
+ *
+ * That's it — you're ready to `import maestro` and run quantum simulations.
  *
  * ---
  *
@@ -401,7 +418,7 @@
  * @section py_gpu GPU Backend
  *
  * Maestro supports GPU-accelerated simulation via a dynamically-loaded
- * CUDA library (`libcomposer_gpu_simulators`). Like QuEST, the GPU backend
+ * CUDA library (`libmaestro_gpu_simulators`). Like QuEST, the GPU backend
  * is optional and loaded at runtime only when requested.
  *
  * @note The GPU backend is **not included** in the open-source version of
@@ -419,7 +436,7 @@
  * if maestro.is_gpu_available():
  *     print("GPU backend is available")
  * else:
- *     print("GPU not found — install libcomposer_gpu_simulators")
+ *     print("GPU not found — install libmaestro_gpu_simulators")
  *
  * # Explicitly initialise GPU (optional — done automatically on first use)
  * maestro.init_gpu()
@@ -548,8 +565,8 @@
  * |-------|-------------|----------|
  * | `SimulatorType.QCSim` | QCSim CPU simulator | No (built-in) |
  * | `SimulatorType.CompositeQCSim` | Composite (distributed) CPU simulator | No (built-in) |
- * | `SimulatorType.QuestSim` | QuEST simulator | Yes (`libcomposer_quest`) |
- * | `SimulatorType.Gpu` | GPU-accelerated simulator (requires CUDA) | Yes (`libcomposer_gpu_simulators`) |
+ * | `SimulatorType.QuestSim` | QuEST simulator | Yes (`libmaestroquest`) |
+ * | `SimulatorType.Gpu` | GPU-accelerated simulator (requires CUDA) | Yes (`libmaestro_gpu_simulators`) |
  *
  * @subsection py_enum_simmethod SimulationType
  *

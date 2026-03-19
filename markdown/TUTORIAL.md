@@ -265,7 +265,7 @@ Maestro provides Python bindings for ease of use, allowing you to integrate its 
 
 ### Installation
 
-Install directly from PyPI (pre-built wheels for Linux and macOS):
+Install directly from PyPI (pre-built wheels for Linux, macOS, and Windows):
 
 ```bash
 pip install qoro-maestro
@@ -566,7 +566,7 @@ You can find several complete examples in the `examples/` directory:
 
 ## QuEST and GPU Execution (Dynamic Backends)
 
-Maestro supports **QuEST** and **GPU** simulation backends as **optional, dynamically-loaded libraries**. Unlike the built-in CPU backends (QCSim, MPS, etc.) which are always available, these backends are packaged as separate shared libraries (`libcomposer_quest.so`, `libcomposer_gpu_simulators.so`) and loaded at runtime only when explicitly requested.
+Maestro supports **QuEST** and **GPU** simulation backends as **optional, dynamically-loaded libraries**. Unlike the built-in CPU backends (QCSim, MPS, etc.) which are always available, these backends are packaged as separate shared libraries (`libmaestroquest.so`, `libmaestro_gpu_simulators.so`) and loaded at runtime only when explicitly requested.
 
 This design means:
 
@@ -761,14 +761,14 @@ print(f"Counts: {result['counts']}")
 |-------------------------------|-----------------------------------|----------|-----------------------------------|
 | QCSim (default CPU)           | `SimulatorType.QCSim`             | No       | Built-in                          |
 | Composite QCSim               | `SimulatorType.CompositeQCSim`    | No       | Built-in                          |
-| QuEST                         | `SimulatorType.QuestSim`          | **Yes**  | `libcomposer_quest.so`            |
-| GPU                           | `SimulatorType.Gpu`               | **Yes**  | `libcomposer_gpu_simulators.so`   |
+| QuEST                         | `SimulatorType.QuestSim`          | **Yes**  | `libmaestroquest.so` / `.dylib`   |
+| GPU                           | `SimulatorType.Gpu`               | **Yes**  | `libmaestro_gpu_simulators.so`   |
 
 ### Building with Dynamic Backend Support
 
 The QuEST and GPU shared libraries are **not** part of the default `pip install qoro-maestro` package. To use them:
 
-- **QuEST:** Build the QuEST integration library and ensure `libcomposer_quest.so` (or `.dylib` on macOS) is on your library path.
+- **QuEST:** Build the QuEST integration library and ensure `libmaestroquest.so` (or `.dylib` on macOS) is on your library path.
 - **GPU:** The GPU backend is not included in the open-source release. Contact [Qoro Quantum](https://qoroquantum.de) for access to the GPU libraries.
 
 See `INSTALL.md` for detailed build instructions.

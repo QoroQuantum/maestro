@@ -39,30 +39,66 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache vcpkg packages
+        id: cache-vcpkg
         uses: actions/cache@v4
         with:
           path: |
             C:/vcpkg/installed
             C:/vcpkg/binary-cache
-          key: vcpkg-windows-boost-${{ hashFiles('.github/workflows/publish-pypi.yml') }}
+          key: vcpkg-windows-x64-deps1
+          restore-keys: |
+            vcpkg-windows-x64-
+
+      - name: Unset VCPKG env
+        run: |
+          echo "VCPKG_ROOT=" >> $env:GITHUB_ENV
+          echo "VCPKG_INSTALLATION_ROOT=" >> $env:GITHUB_ENV
+        # Suppresses "ignoring mismatched VCPKG_ROOT" when runner has VS vcpkg path set
 
       - name: Configure git auth for vcpkg
+        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
         run: |
-          git config --global credential.https://github.com.helper '!f() { echo "username=x-access-token"; echo "password=${{ secrets.GITHUB_TOKEN }}"; }; f'
+          git config --global credential.https://github.com.helper '!f() { echo "username=x-access-token"; echo "password=$GITHUB_TOKEN"; }; f'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
+        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
         run: |
+          Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
+          Remove-Item Env:VCPKG_INSTALLATION_ROOT -ErrorAction SilentlyContinue
           vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
           echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
         env:
           VCPKG_BINARY_SOURCES: "clear;files,C:/vcpkg/binary-cache,readwrite"
 
+      - name: Set CMake env (cache hit)
+        if: steps.cache-vcpkg.outputs.cache-hit == 'true'
+        run: |
+          if (-not (Test-Path "C:\vcpkg\scripts\buildsystems\vcpkg.cmake")) {
+            Write-Error "Cache hit but vcpkg toolchain not found at C:\vcpkg. Ensure vcpkg is at C:\vcpkg on this runner."
+          }
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.22.0
         env:
           CIBW_ARCHS_WINDOWS: "AMD64"
+          CIBW_ENVIRONMENT_WINDOWS: "CMAKE_BUILD_PARALLEL_LEVEL=8"
+          CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
+            pip install delvewheel &&
+            delvewheel repair -w {dest_dir} --add-path "C:\vcpkg\installed\x64-windows\bin;build\cp310-cp310-win_amd64\bin;build\cp311-cp311-win_amd64\bin;build\cp312-cp312-win_amd64\bin" {wheel}
           CIBW_BUILD: "cp312-*"
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
+
+      - name: Save vcpkg cache (even on failure)
+        if: always() && steps.cache-vcpkg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            C:/vcpkg/installed
+            C:/vcpkg/binary-cache
+          key: vcpkg-windows-x64-deps1
 
       - name: List built wheels
         run: dir wheelhouse\

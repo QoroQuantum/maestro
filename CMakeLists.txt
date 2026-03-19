@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
 project(maestro)
 
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/bin)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(default_build_type "Release")
@@ -18,7 +22,11 @@ else()
     message(STATUS "ccache not found, install it for faster recompilation: brew install ccache")
 endif()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-array-bounds -Wno-delete-non-abstract-non-virtual-dtor")
+if(MSVC)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3")
+else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-array-bounds -Wno-delete-non-abstract-non-virtual-dtor")
+endif()
 set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
@@ -51,6 +59,8 @@ set(COMPILE_TESTS True)
 if (NOT "$ENV{NO_TESTS}" STREQUAL "")
 	set(COMPILE_TESTS False)
 endif()
+
+option(MAESTRO_ENABLE_OPENMP "Enable OpenMP acceleration" ON)
 
 # Eigen 5 (header-only, can be fetched automatically)
 if (NOT DEFINED EIGEN5_INCLUDE_DIR)
@@ -150,6 +160,12 @@ endif()
 set(MAESTROEXESRC maestroexe/maestroexe.cpp)
 
 
+if(MSVC)
+    set(OpenMP_CXX "${CMAKE_CXX_COMPILER}")
+    set(OpenMP_CXX_FLAGS "/openmp")
+    set(OpenMP_CXX_LIB_NAMES "")
+endif()
+
 if(APPLE)
     if(CMAKE_C_COMPILER_ID MATCHES "Clang")
       set(OpenMP_C "${CMAKE_C_COMPILER}")
@@ -165,7 +181,12 @@ if(APPLE)
     endif()
 endif()
 
-find_package(OpenMP REQUIRED)
+if(MAESTRO_ENABLE_OPENMP)
+    find_package(OpenMP REQUIRED)
+else()
+    message(STATUS "OpenMP support disabled via MAESTRO_ENABLE_OPENMP")
+    set(OpenMP_CXX_FOUND FALSE CACHE BOOL "OpenMP disabled" FORCE)
+endif()
 
 include(CheckCXXCompilerFlag)
 function(enable_cxx_flag flag)
@@ -265,8 +286,21 @@ if(UNIX AND NOT APPLE)
     )
 endif()
 
-install(TARGETS maestro DESTINATION .)
-install(TARGETS maestroexe DESTINATION bin)
+if(WIN32)
+    install(TARGETS maestro
+        RUNTIME DESTINATION .
+        LIBRARY DESTINATION .
+        ARCHIVE DESTINATION .
+    )
+    install(TARGETS maestroexe
+        RUNTIME DESTINATION bin
+        LIBRARY DESTINATION bin
+        ARCHIVE DESTINATION bin
+    )
+else()
+    install(TARGETS maestro DESTINATION .)
+    install(TARGETS maestroexe DESTINATION bin)
+endif()
 
 if(OpenMP_CXX_FOUND)
     message("Setting OpenMP")
@@ -306,11 +340,15 @@ if(OpenMP_CXX_FOUND)
         endif()
     else()
         target_link_libraries(maestro PUBLIC OpenMP::OpenMP_CXX)
-        target_link_libraries(maestro PRIVATE ${OpenMP_CXX_FLAGS})
+        if(NOT MSVC)
+            target_link_libraries(maestro PRIVATE ${OpenMP_CXX_FLAGS})
+        endif()
         target_compile_options(maestro PRIVATE ${OpenMP_CXX_FLAGS})
         if (TARGET tests)
             target_link_libraries(tests PUBLIC OpenMP::OpenMP_CXX)
-            target_link_libraries(tests PRIVATE ${OpenMP_CXX_FLAGS})
+            if(NOT MSVC)
+                target_link_libraries(tests PRIVATE ${OpenMP_CXX_FLAGS})
+            endif()
             target_compile_options(tests PRIVATE ${OpenMP_CXX_FLAGS})
         endif()
     endif()
@@ -348,6 +386,7 @@ IF(Boost_FOUND)
     if (TARGET tests)
 	    target_link_libraries(tests PRIVATE Boost::serialization)
     endif()
+    target_link_libraries(maestro PRIVATE Boost::json)
     target_link_libraries(maestro PRIVATE Boost::serialization)
     target_link_libraries(maestroexe PRIVATE Boost::serialization)
     target_link_libraries(maestroexe PRIVATE Boost::program_options)
@@ -389,6 +428,11 @@ if(BUILD_PYTHON_BINDINGS)
 
         nanobind_add_module(maestro_py python/bindings.cpp)
         set_target_properties(maestro_py PROPERTIES OUTPUT_NAME "maestro")
+        if(WIN32)
+            set_target_properties(maestro_py PROPERTIES ARCHIVE_OUTPUT_NAME "maestro_py")
+            target_sources(maestro_py PRIVATE Simulators/Factory.cpp)
+            target_link_libraries(maestro_py PRIVATE Boost::serialization)
+        endif()
         target_link_libraries(maestro_py PRIVATE maestro)
         target_include_directories(maestro_py PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/maestrolib
@@ -411,7 +455,15 @@ if(BUILD_PYTHON_BINDINGS)
             )
         endif()
 
-        install(TARGETS maestro_py LIBRARY DESTINATION .)
+        if(WIN32)
+            install(TARGETS maestro_py
+                RUNTIME DESTINATION .
+                LIBRARY DESTINATION .
+                ARCHIVE DESTINATION .
+            )
+        else()
+            install(TARGETS maestro_py LIBRARY DESTINATION .)
+        endif()
     else()
         message(WARNING "Python 3.8+ (with Interpreter and Development.Module) not found. Skipping Python bindings.")
     endif()

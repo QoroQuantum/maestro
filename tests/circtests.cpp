@@ -817,7 +817,8 @@ BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsToLayersTest,
   randomCirc->Clear();
 }
 
-BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsToMultipleQubitsLayersTest,
+BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture,
+                       RandomCircuitsToMultipleQubitsLayersTest,
                        bdata::xrange(30, 50), nrGates) {
   size_t nrStates = 1ULL << nrQubitsForRandomCirc;
 
