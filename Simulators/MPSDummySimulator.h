@@ -75,7 +75,7 @@ class MPSDummySimulator {
 
     // the checks here are overkill, but better safe than sorry
     // we're dealing with large values here, overflows are to be expected
-    for (IndexType i = 0; i < nrQubits; ++i) {
+    for (IndexType i = 0; i < static_cast<IndexType>(nrQubits); ++i) {
       double maxExtent1 = std::pow((double)physExtent, (double)i + 1.);
       double maxExtent2 = std::pow((double)physExtent, (double)nrQubits - i - 1.);
 
@@ -95,7 +95,7 @@ class MPSDummySimulator {
           {maxExtent1, maxExtent2, (double)maxVirtualExtent});
       if (maxRightExtent < 2) maxRightExtent = 2;
 
-      if (i < nrQubits - 1) bondCost[i] = std::pow(maxRightExtent, 3.);
+      if (i < static_cast<IndexType>(nrQubits) - 1) bondCost[i] = std::pow(maxRightExtent, 3.);
     }
   }
 
@@ -152,7 +152,7 @@ class MPSDummySimulator {
 
       totalSwappingCost += getSwappingCost(qubit, controllingQubit1);
 
-      if (swapAmplifyingFactor < 1.5 * maxVirtualExtent)
+      if (swapAmplifyingFactor < maxVirtualExtent)
         swapAmplifyingFactor *= swapAmplifyingFactor;
 
       SwapQubits(qubit, controllingQubit1);
@@ -594,7 +594,7 @@ class MPSDummySimulator {
   std::vector<double> bondCost;
 
   double totalSwappingCost = 0;
-  static constexpr double initialSwapAmplifyingFactor = 1.7;
+  static constexpr double initialSwapAmplifyingFactor = 1.05;
   double swapAmplifyingFactor = initialSwapAmplifyingFactor;
 };
 
