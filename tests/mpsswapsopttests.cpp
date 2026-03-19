@@ -136,12 +136,20 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
     randomCirc->AddOperation(theGate);
   }
 
+  auto startOpt = std::chrono::system_clock::now();
+
   // compute the optimal qubits map using the dummy simulator
   const auto layers = randomCirc->ToMultipleQubitsLayers();
 
   Simulators::MPSDummySimulator dummySim(nrQubits);
   dummySim.SetMaxBondDimension(64);
+
+  
   const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
+  auto endOpt = std::chrono::system_clock::now();
+  double optMapTime =
+      std::chrono::duration<double>(endOpt - startOpt).count() * 1000.;
+  BOOST_TEST_MESSAGE("Optimization time: " << optMapTime << " ms");
 
   // execute the original circuit with the identity (original) qubits map
   auto qcsimOrig = Simulators::SimulatorsFactory::CreateSimulator(
@@ -173,11 +181,11 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
   Circuits::OperationState stateOpt;
   stateOpt.AllocateBits(nrQubits);
 
-  auto startOpt = std::chrono::system_clock::now();
+  auto startExecOpt = std::chrono::system_clock::now();
   randomCirc->Execute(qcsimOpt, stateOpt);
-  auto endOpt = std::chrono::system_clock::now();
+  auto endExecOpt = std::chrono::system_clock::now();
   double optTime =
-      std::chrono::duration<double>(endOpt - startOpt).count() * 1000.;
+      std::chrono::duration<double>(endExecOpt - startExecOpt).count() * 1000.;
 
   BOOST_TEST_MESSAGE("Original mapping execution time: " << origTime << " ms");
   BOOST_TEST_MESSAGE("Optimized mapping execution time: " << optTime << " ms");
