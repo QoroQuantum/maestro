@@ -17,7 +17,7 @@ A unified interface for quantum circuit simulation. Write your circuit once — 
 ## Quick Start
 
 ```bash
-pip install qoro-maestro  # Linux & macOS
+pip install qoro-maestro  # Linux, macOS & Windows
 ```
 
 Or build from source:

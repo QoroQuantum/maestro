@@ -258,7 +258,7 @@
  * Maestro. Contact [Qoro Quantum](https://qoroquantum.de) for access.
  *
  * Maestro supports GPU-accelerated simulation via a dynamically-loaded
- * CUDA library (`libcomposer_gpu_simulators`). The GPU backend is
+ * CUDA library (`libmaestro_gpu_simulators`). The GPU backend is
  * optional and loaded at runtime only when requested.
  *
  * Unlike QuEST, the GPU backend supports **multiple simulation types**:

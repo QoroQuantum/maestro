@@ -7,7 +7,7 @@
  * The GPU library class.
  *
  * Allows loading GPU simulator plugin libraries (e.g.,
- * libcomposer_gpu_simulators.so) dynamically at runtime and exposes their C API
+ * libmaestro_gpu_simulators.so) dynamically at runtime and exposes their C API
  * functions. This file defines part of Maestro's plugin interface boundary.
  *
  * @section LICENSE
