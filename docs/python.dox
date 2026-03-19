@@ -12,10 +12,27 @@
  *
  * @subsection py_install Installation
  *
+ * Install pre-built wheels from PyPI (Linux, macOS, Windows):
+ *
  * @code{.sh}
- * # From the repository root
+ * pip install qoro-maestro
+ * @endcode
+ *
+ * Or build from source from the repository root:
+ *
+ * @code{.sh}
  * pip install .
  * @endcode
+ *
+ * **Supported platforms (pre-built wheels):**
+ *
+ * | Platform | Architecture | Python |
+ * |----------|-------------|--------|
+ * | Linux | x86_64 | 3.10, 3.11, 3.12 |
+ * | macOS | arm64 (Apple Silicon) | 3.10, 3.11, 3.12 |
+ * | Windows | AMD64 | 3.10, 3.11, 3.12 |
+ *
+ * That's it — you're ready to `import maestro` and run quantum simulations.
  *
  * ---
  *
