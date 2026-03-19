@@ -16,7 +16,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation restructured and updated
 - Improvements to cost class for sampling circuits with mid-circuit measurements
 
-## [0.2.0] - 2026-02-23
+## [0.2.5] - 2026-03-18
+
+### Added
+- **Windows wheel support** — pre-built wheels for Windows AMD64 (Python 3.10, 3.11, 3.12) published to PyPI
+- vcpkg-based dependency management for Windows CI builds
+- Dry-run Windows CI workflow
+
+### Fixed
+- Eigen type mismatch between Windows and Linux (`Eigen::Index` → `long long int`)
+- OpenMP configuration on Windows
+- Compile warnings in MPS simulator and QCSim
+
+## [0.2.4] - 2026-03-12
+
+### Changed
+- Split Python version builds into separate CI matrix elements for faster Windows builds
+- Code styling and minor CI workflow improvements
+
+## [0.2.3] - 2026-03-07
+
+### Added
+- Exposed setting the initial qubits map from the Python API
+- MPS swap cost optimization with improved heuristics
+
+### Fixed
+- Linux wheel repair (`auditwheel`) patching for `libmaestro` linkage
+- rpath configuration (`$ORIGIN`) for reliable library resolution in wheels
+
+## [0.2.2] - 2026-03-01
+
+### Fixed
+- Bundled excluded `libmaestro` shared library with Python wheel
+- macOS build issues
+
+## [0.2.1] - 2026-02-25
+
+### Fixed
+- PyPI package metadata issue
+- Version bump for initial stable release
 
 ### Added
 - **Python bindings** via nanobind with `QuantumCircuit` model and GPU support
@@ -62,6 +100,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/QoroQuantum/maestro/compare/v0.2.4...v0.2.5
+[0.2.4]: https://github.com/QoroQuantum/maestro/compare/v0.2.3...v0.2.4
+[0.2.3]: https://github.com/QoroQuantum/maestro/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/QoroQuantum/maestro/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/QoroQuantum/maestro/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/QoroQuantum/maestro/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/QoroQuantum/maestro/releases/tag/v0.1.0
