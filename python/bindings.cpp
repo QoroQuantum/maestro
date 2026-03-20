@@ -367,29 +367,25 @@ double mirror_fidelity_core(
     if (adj) mirror->AddOperation(adj);
   }
 
-  if (full_amplitude) {
-    // Exact: use full statevector (only feasible for small qubit counts)
-    const auto amplitudes = statevector_core(mirror, sim_type, sim_exec_type,
-                                             max_bond, sv_threshold,
-                                             use_double_precision);
-    if (amplitudes.empty())
-      throw std::runtime_error("Simulation returned empty statevector.");
+  // Helper lambda for the shot-based path
+  auto run_shot_based = [&]() -> double {
+    // Need a fresh mirror circuit since measurements mutate it
+    auto mirror_copy = std::make_shared<Circuits::Circuit<double>>();
+    for (const auto &op : mirror->GetOperations()) {
+      mirror_copy->AddOperation(op->Clone());
+    }
 
-    return std::norm(amplitudes[0]);
-  } else {
-    // Shot-based (default): add measure_all, sample, count all-zeros fraction
-    size_t n = std::max(1, static_cast<int>(mirror->GetMaxQubitIndex()) + 1);
+    size_t n = std::max(1, static_cast<int>(mirror_copy->GetMaxQubitIndex()) + 1);
     std::vector<std::pair<Types::qubit_t, size_t>> pairs;
     pairs.reserve(n);
     for (size_t i = 0; i < n; ++i)
       pairs.emplace_back(static_cast<Types::qubit_t>(i), i);
-    mirror->AddOperation(
+    mirror_copy->AddOperation(
         std::make_shared<Circuits::MeasurementOperation<>>(pairs));
 
-    nb::dict result = execute_core(mirror, sim_type, sim_exec_type, shots,
+    nb::dict result = execute_core(mirror_copy, sim_type, sim_exec_type, shots,
                                    max_bond, sv_threshold, use_double_precision);
 
-    // Extract counts dict and look up all-zeros outcome
     nb::dict counts = nb::cast<nb::dict>(result["counts"]);
     std::string zeros(n, '0');
     size_t zero_count = 0;
@@ -397,6 +393,25 @@ double mirror_fidelity_core(
       zero_count = nb::cast<size_t>(counts[zeros.c_str()]);
     }
     return static_cast<double>(zero_count) / static_cast<double>(shots);
+  };
+
+  if (full_amplitude) {
+    // Try exact statevector; fall back to shots if unsupported
+    try {
+      const auto amplitudes = statevector_core(mirror, sim_type, sim_exec_type,
+                                               max_bond, sv_threshold,
+                                               use_double_precision);
+      if (!amplitudes.empty()) return std::norm(amplitudes[0]);
+    } catch (...) {
+      // Statevector not available for this backend — fall back to shots
+    }
+    // Issue a Python warning so the user knows we fell back
+    PyErr_WarnEx(PyExc_RuntimeWarning,
+        "full_amplitude mode not supported by this simulator/simulation "
+        "type. Falling back to shot-based sampling.", 1);
+    return run_shot_based();
+  } else {
+    return run_shot_based();
   }
 }
 }  // namespace
