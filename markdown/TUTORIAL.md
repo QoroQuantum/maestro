@@ -620,6 +620,7 @@ This extracts the full statevector, so it only works for small qubit counts:
 ```python
 fidelity = qc.mirror_fidelity(full_amplitude=True)
 print(f"Mirror fidelity: {fidelity:.10f}")  # 1.0000000000
+```
 
 #### Mirror Fidelity Parameters
 
