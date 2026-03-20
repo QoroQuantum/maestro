@@ -36,12 +36,23 @@ class MPSDummySimulator {
   using MatrixClass = QC::TensorNetworks::MPSSimulatorInterface::MatrixClass;
   using GateClass = QC::TensorNetworks::MPSSimulatorInterface::GateClass;
 
-  MPSDummySimulator() = delete;
-
   MPSDummySimulator(size_t N) : nrQubits(N), maxVirtualExtent(0) {
     InitQubitsMap();
 
     SetMaxBondDimension(0); 
+  }
+
+  std::unique_ptr<MPSDummySimulator> Clone() const {
+    auto clone = std::make_unique<MPSDummySimulator>(nrQubits);
+    clone->qubitsMap = qubitsMap;
+    clone->maxVirtualExtent = maxVirtualExtent;
+    clone->bondCost = bondCost;
+    clone->maxBondDim = maxBondDim;
+    clone->currentBondDim = currentBondDim;
+
+    clone->totalSwappingCost = totalSwappingCost;
+
+    return clone;
   }
 
   size_t getNrQubits() const { return nrQubits; }
@@ -68,6 +79,8 @@ class MPSDummySimulator {
 
 
     bondCost.resize(nrQubits - 1);
+    maxBondDim.resize(nrQubits - 1);
+    currentBondDim.assign(nrQubits - 1, 1.0);
 
     // the checks here are overkill, but better safe than sorry
     // we're dealing with large values here, overflows are to be expected
@@ -91,7 +104,10 @@ class MPSDummySimulator {
           {maxExtent1, maxExtent2, (double)maxVirtualExtent});
       if (maxRightExtent < 2) maxRightExtent = 2;
 
-      if (i < static_cast<IndexType>(nrQubits) - 1) bondCost[i] = std::pow(maxRightExtent, 3.);
+      if (i < static_cast<IndexType>(nrQubits) - 1) {
+        maxBondDim[i] = static_cast<double>(maxRightExtent);
+        bondCost[i] = std::pow(maxRightExtent, 3.);
+      }
     }
   }
 
@@ -152,13 +168,17 @@ class MPSDummySimulator {
 
       totalSwappingCost += getSwappingCost(qubit, controllingQubit1);
 
-      if (swapAmplifyingFactor < maxVirtualExtent)
-        swapAmplifyingFactor *= initialSwapAmplifyingFactor;
-
       SwapQubits(qubit, controllingQubit1);
       qubit1 = qubitsMap[qubit];
       qubit2 = qubitsMap[controllingQubit1];
       assert(abs(qubit1 - qubit2) == 1);
+    }
+
+    // any 2-qubit gate (whether swaps were needed or not) grows the
+    // bond dimension at the bond between the two adjacent qubits
+    if (gate.getQubitsNumber() > 1) {
+      const IndexType bond = std::min(qubit1, qubit2);
+      growBondDimension(bond);
     }
   }
 
@@ -171,39 +191,16 @@ class MPSDummySimulator {
     for (const auto& gate : gates) ApplyGate(gate);
   }
 
-  void MoveAtBeginningOfChain(const std::set<IndexType>& qubits) {
-    IndexType qubitPos = 0;
-
-    for (const auto qubit : qubits) {
-      IndexType realQubit = qubitsMap[qubit];
-      while (realQubit != qubitPos) {
-        const IndexType toQubitReal = realQubit - 1;
-        const IndexType toQubitInv = qubitsMapInv[toQubitReal];
-
-        qubitsMap[toQubitInv] = realQubit;
-        qubitsMapInv[realQubit] = toQubitInv;
-
-        qubitsMap[qubit] = toQubitReal;
-        qubitsMapInv[toQubitReal] = qubit;
-
-        realQubit = toQubitReal;
-      }
-
-      ++qubitPos;
-    }
-  }
-
   double getSwappingCost(IndexType q1, IndexType q2) const
   {
     const IndexType realq1 = qubitsMap[q1];
     const IndexType realq2 = qubitsMap[q2];
 
-    //return abs(realq1 - realq2) - 1;
     double swappingCost = 0;
     for (IndexType i = std::min(realq1, realq2); i < std::max(realq1, realq2); ++i)
       swappingCost += bondCost[i];
 
-    return swappingCost * swapAmplifyingFactor;
+    return swappingCost;
   }
 
   // returns true even for passing the same qubit twice
@@ -221,7 +218,33 @@ class MPSDummySimulator {
       qubitsMapInv[initialMap[i]] = i;
 
     totalSwappingCost = 0;
-    swapAmplifyingFactor = initialSwapAmplifyingFactor;
+    std::fill(currentBondDim.begin(), currentBondDim.end(), 1.0);
+  }
+
+  void SetCurrentBondDimensions(const std::vector<double>& dims) {
+    assert(dims.size() == currentBondDim.size());
+    for (size_t i = 0; i < dims.size(); ++i)
+      currentBondDim[i] = std::min(dims[i], maxBondDim[i]);
+
+    // update bondCost as well, since it depends on the current bond dimensions
+    for (size_t i = 0; i < currentBondDim.size(); ++i)
+      bondCost[i] = std::pow(currentBondDim[i], 3.);
+  }
+
+  const std::vector<double>& getCurrentBondDimensions() const {
+    return currentBondDim;
+  }
+
+  const std::vector<double>& getMaxBondDimensions() const {
+    return maxBondDim;
+  }
+
+  const std::vector<IndexType>& getQubitsMap() const {
+    return qubitsMap;
+  }
+
+  const std::vector<IndexType>& getQubitsMapInv() const {
+    return qubitsMapInv;
   }
 
   double getTotalSwappingCost() const
@@ -263,6 +286,138 @@ class MPSDummySimulator {
     return couplings;
   }
 
+  // Swap two logical qubits so they meet at a specified bond position.
+  // meetPosition is the bond index (in real/chain coordinates) where
+  // the two qubits will end up adjacent: one at meetPosition, the other
+  // at meetPosition+1.
+  // meetPosition must be in [min(realq1,realq2), max(realq1,realq2)-1].
+  void SwapQubitsToPosition(IndexType qubit1, IndexType qubit2,
+                            IndexType meetPosition) {
+    IndexType realq1 = qubitsMap[qubit1];
+    IndexType realq2 = qubitsMap[qubit2];
+    if (realq1 > realq2) {
+      std::swap(realq1, realq2);
+      std::swap(qubit1, qubit2);
+    }
+
+    if (realq2 - realq1 <= 1) return;
+
+    assert(meetPosition >= realq1 && meetPosition < realq2);
+
+    // Move lower qubit (qubit1) rightward from realq1 to meetPosition
+    {
+      IndexType movingReal = realq1;
+      while (movingReal < meetPosition) {
+        const IndexType toReal = movingReal + 1;
+        const IndexType toInv = qubitsMapInv[toReal];
+
+        qubitsMap[toInv] = movingReal;
+        qubitsMapInv[movingReal] = toInv;
+
+        qubitsMap[qubit1] = toReal;
+        qubitsMapInv[toReal] = qubit1;
+
+        growBondDimension(movingReal);
+        movingReal = toReal;
+      }
+    }
+
+    // Move upper qubit (qubit2) leftward from realq2 to meetPosition+1
+    {
+      IndexType movingReal = realq2;
+      while (movingReal > meetPosition + 1) {
+        const IndexType toReal = movingReal - 1;
+        const IndexType toInv = qubitsMapInv[toReal];
+
+        qubitsMap[toInv] = movingReal;
+        qubitsMapInv[movingReal] = toInv;
+
+        qubitsMap[qubit2] = toReal;
+        qubitsMapInv[toReal] = qubit2;
+
+        growBondDimension(toReal);
+        movingReal = toReal;
+      }
+    }
+
+    assert(abs(qubitsMap[qubit1] - qubitsMap[qubit2]) == 1);
+  }
+
+
+
+  // Evaluate the total cost of swapping qubit1 and qubit2 to a given meeting
+  // position, applying the current 2-qubit gate, and then simulating the
+  // next lookaheadDepth 2-qubit gates from upcomingGates.
+  // The state is saved and restored, so this is non-destructive.
+  // upcomingGates should NOT include the current gate being applied.
+  double EvaluateMeetingPositionCost(
+      IndexType qubit1, IndexType qubit2, IndexType meetPosition,
+      const std::vector<std::shared_ptr<Circuits::IOperation<>>>& upcomingGates,
+      int lookaheadDepth) {
+    // Save current state
+    const auto savedMap = qubitsMap;
+    const auto savedMapInv = qubitsMapInv;
+    const auto savedBondDim = currentBondDim;
+    const double savedCost = totalSwappingCost;
+
+    totalSwappingCost = getSwappingCost(qubit1, qubit2);
+
+    // Perform the swap to the meeting position
+    SwapQubitsToPosition(qubit1, qubit2, meetPosition);
+
+    // Grow bond dimension for the actual gate at the meeting bond
+    const IndexType bond = std::min(qubitsMap[qubit1], qubitsMap[qubit2]);
+    growBondDimension(bond);
+
+    // Simulate up to lookaheadDepth upcoming 2-qubit gates
+    int twoQubitGatesSeen = 0;
+    for (const auto& op : upcomingGates) {
+      if (twoQubitGatesSeen >= lookaheadDepth) break;
+
+      ApplyGate(op);
+
+      const auto qbits = op->AffectedQubits();
+      if (qbits.size() >= 2) ++twoQubitGatesSeen;
+    }
+
+    const double resultCost = totalSwappingCost;
+
+    // Restore state
+    qubitsMap = savedMap;
+    qubitsMapInv = savedMapInv;
+    currentBondDim = savedBondDim;
+    totalSwappingCost = savedCost;
+
+    return resultCost;
+  }
+
+  // Find the meeting position that minimizes the combined cost of the
+  // current swap + lookahead gates.  Returns the optimal bond index.
+  IndexType FindBestMeetingPosition(
+      IndexType qubit1, IndexType qubit2,
+      const std::vector<std::shared_ptr<Circuits::IOperation<>>>& upcomingGates,
+      int lookaheadDepth) {
+    IndexType realq1 = qubitsMap[qubit1];
+    IndexType realq2 = qubitsMap[qubit2];
+    if (realq1 > realq2) std::swap(realq1, realq2);
+
+    if (realq2 - realq1 <= 1) return realq1;
+
+    IndexType bestPosition = realq1;
+    double bestCost = std::numeric_limits<double>::infinity();
+
+    for (IndexType m = realq1; m < realq2; ++m) {
+      const double cost = EvaluateMeetingPositionCost(
+          qubit1, qubit2, m, upcomingGates, lookaheadDepth);
+      if (cost < bestCost) {
+        bestCost = cost;
+        bestPosition = m;
+      }
+    }
+
+    return bestPosition;
+  }
+
   std::vector<long long int> ComputeOptimalQubitsMap(
       const std::vector<std::shared_ptr<Circuits::Circuit<>>>& layers,
       int nrShuffles = 25) {
@@ -272,30 +427,72 @@ class MPSDummySimulator {
 
     if (layers.empty() || nrQubits <= 2) return qubitsMap;
 
-    std::vector<std::vector<IndexType>> adj(nrQubits);
-    const size_t layersToConsider = layers.size() < 2 ? layers.size() : 2;
+    // Build a bond-saturation-aware weight matrix from ALL layers.
+    // Each two-qubit gate can at most double the bond dimension of the
+    // bond it acts on.  With gates spread across ~(nrQubits-1) bonds,
+    // the average bond dimension grows as
+    //   chi ~ 2^(cumulative_2q_gates / (nrQubits-1))
+    // clamped at maxVirtualExtent.  Swap cost scales as chi^3, so we
+    // weight each layer's interactions by the estimated cube of the
+    // current effective bond dimension.  This gives late (saturated)
+    // layers orders-of-magnitude higher weight than the initial ones,
+    // correctly focusing the optimizer on the expensive phase.
+    Eigen::MatrixXd weights = Eigen::MatrixXd::Zero(nrQubits, nrQubits);
+    {
+      const double bondsCount = std::max(1., static_cast<double>(nrQubits) - 1.);
+      const double maxBondDimD = static_cast<double>(maxVirtualExtent);
+      int cumulativeTwoQubitGates = 0;
 
-    for (size_t l = 0; l < layersToConsider; ++l) {
-      const auto& ops = layers[l]->GetOperations();
-      for (const auto& op : ops) {
-        const auto qubits = op->AffectedQubits();
-        if (qubits.size() < 2) continue;
+      for (const auto& layer : layers) {
+        const auto& ops = layer->GetOperations();
+        int twoQubitGateCount = 0;
 
-        const IndexType q1 = static_cast<IndexType>(qubits[0]);
-        const IndexType q2 = static_cast<IndexType>(qubits[1]);
-        if (q1 < 0 || q1 >= nrQubits || q2 < 0 || q2 >= nrQubits) continue;
+        const double effectiveDepthPerBond =
+            static_cast<double>(cumulativeTwoQubitGates) / bondsCount;
+        const double rawBondDim =
+            std::pow(static_cast<double>(physExtent), effectiveDepthPerBond);
+        const double effectiveBondDim =
+            std::min(rawBondDim, maxBondDimD);
+        const double factor = std::max(1., std::pow(effectiveBondDim, 3.));
 
-        bool exists = false;
-        for (auto n : adj[q1])
-          if (n == q2) {
-            exists = true;
-            break;
-          }
-
-        if (!exists) {
-          adj[q1].push_back(q2);
-          adj[q2].push_back(q1);
+        for (const auto& op : ops) {
+          const auto qubits = op->AffectedQubits();
+          if (qubits.size() < 2) continue;
+          const IndexType q1 = static_cast<IndexType>(qubits[0]);
+          const IndexType q2 = static_cast<IndexType>(qubits[1]);
+          if (q1 < 0 || q1 >= nrQubits || q2 < 0 || q2 >= nrQubits) continue;
+          weights(q1, q2) += factor;
+          weights(q2, q1) += factor;
+          ++twoQubitGateCount;
         }
+
+        cumulativeTwoQubitGates += twoQubitGateCount;
+      }
+    }
+
+    // Build an adjacency list (max degree 2) from the weight matrix by
+    // greedily selecting the highest-weight edges.  This preserves
+    // the path/cycle structure required by the traversal below while
+    // incorporating interaction data from ALL layers.
+    std::vector<std::vector<IndexType>> adj(nrQubits);
+    {
+      struct WeightedEdge {
+        double w;
+        IndexType q1, q2;
+        bool operator<(const WeightedEdge& o) const { return w > o.w; }
+      };
+      std::vector<WeightedEdge> edges;
+      edges.reserve(nrQubits * (nrQubits - 1) / 2);
+      for (IndexType i = 0; i < nrQubits; ++i)
+        for (IndexType j = i + 1; j < nrQubits; ++j)
+          if (weights(i, j) > 0)
+            edges.push_back({weights(i, j), i, j});
+      std::sort(edges.begin(), edges.end());
+
+      for (const auto& e : edges) {
+        if (adj[e.q1].size() >= 2 || adj[e.q2].size() >= 2) continue;
+        adj[e.q1].push_back(e.q2);
+        adj[e.q2].push_back(e.q1);
       }
     }
 
@@ -343,82 +540,11 @@ class MPSDummySimulator {
       }
     }
 
-    // Place isolated vertices, using information from subsequent layers
-    // to keep pairs that appear together in two-qubit gates adjacent
-    std::vector<IndexType> isolated;
-    for (IndexType q = 0; q < nrQubits; ++q)
-      if (!visited[q]) isolated.push_back(q);
-
-    if (!isolated.empty() && layers.size() > layersToConsider) {
-      std::unordered_set<IndexType> isolatedSet(isolated.begin(),
-                                                isolated.end());
-      std::vector<std::vector<IndexType>> adjIso(nrQubits);
-
-      for (size_t l = layersToConsider; l < layers.size(); ++l) {
-        const auto& ops = layers[l]->GetOperations();
-        for (const auto& op : ops) {
-          const auto qubits = op->AffectedQubits();
-          if (qubits.size() < 2) continue;
-
-          const IndexType q1 = static_cast<IndexType>(qubits[0]);
-          const IndexType q2 = static_cast<IndexType>(qubits[1]);
-          if (q1 < 0 || q1 >= nrQubits || q2 < 0 || q2 >= nrQubits) continue;
-          if (isolatedSet.find(q1) == isolatedSet.end() ||
-              isolatedSet.find(q2) == isolatedSet.end())
-            continue;
-
-          adjIso[q1].push_back(q2);
-          adjIso[q2].push_back(q1);
-
-          isolatedSet.erase(q1);
-          isolatedSet.erase(q2);
-        }
-      }
-
-      // Traverse connected components among isolated vertices the same way
-      for (IndexType i = 0; i < static_cast<IndexType>(isolated.size()); ++i) {
-        const IndexType start = isolated[i];
-        if (visited[start] || adjIso[start].empty()) continue;
-
-        IndexType endpoint = start;
-        if (adjIso[start].size() == 2) {
-          IndexType cur = adjIso[start][0];
-          IndexType prev = start;
-          while (adjIso[cur].size() == 2) {
-            const IndexType next =
-                (adjIso[cur][0] == prev) ? adjIso[cur][1] : adjIso[cur][0];
-            if (next == start) break;
-            prev = cur;
-            cur = next;
-          }
-          if (adjIso[cur].size() == 1) endpoint = cur;
-        }
-
-        IndexType cur = endpoint;
-        IndexType prev = -1;
-        while (!visited[cur]) {
-          visited[cur] = true;
-          qubitsMap[cur] = pos++;
-
-          IndexType next = -1;
-          for (auto neighbor : adjIso[cur])
-            if (neighbor != prev && !visited[neighbor]) {
-              next = neighbor;
-              break;
-            }
-
-          if (next < 0) break;
-          prev = cur;
-          cur = next;
-        }
-      }
-    }
-
     // Place remaining truly isolated vertices
     for (IndexType q = 0; q < nrQubits; ++q)
       if (!visited[q]) qubitsMap[q] = pos++;
 
-    // this, despite making the swap cost zero for the first two layers, may not
+    // this, despite minimizing swap cost for the weighted adjacency, may not
     // be the best solution for the entire circuit, so we can try some shuffles
     // and pick the best one, also check the origial map to at least have it at
     // the same cost as the original one, that is, ensure we don't get a worse
@@ -426,22 +552,50 @@ class MPSDummySimulator {
 
     // now check execution against the original map (0, 1, ...) and also shuffle the qubits several times and pick the order that minimizes the swapping cost
     auto evaluateCost = [&, this](const std::vector<IndexType>& candidateMap) -> double {
+      auto saveQubitsMap = qubitsMap;
+      auto saveQubitsMapInv = qubitsMapInv;
+      auto saveCurrentBondDim = currentBondDim;
+      auto saveTotalSwappingCost = totalSwappingCost;
+      auto saveBondCost = bondCost;
+
       SetInitialQubitsMap(candidateMap);
       for (const auto& layer : layers) ApplyGates(layer->GetOperations());
-      return getTotalSwappingCost();
+      auto res =  getTotalSwappingCost();
+      // restore state
+      qubitsMap = std::move(saveQubitsMap);
+      qubitsMapInv = std::move(saveQubitsMapInv);
+      currentBondDim = std::move(saveCurrentBondDim);
+      totalSwappingCost = saveTotalSwappingCost;
+      bondCost = std::move(saveBondCost);
+
+      return res;
     };
 
     // Bounded variant: exits early when accumulated cost already exceeds
     // the known best, avoiding full re-simulation for losing candidates.
     // Most impactful in the O(n^2) 2-opt inner loop.
     auto evaluateCostBounded = [&, this](const std::vector<IndexType>& candidateMap, double bound) -> double {
+      auto saveQubitsMap = qubitsMap;
+      auto saveQubitsMapInv = qubitsMapInv;
+      auto saveCurrentBondDim = currentBondDim;
+      auto saveTotalSwappingCost = totalSwappingCost;
+      auto saveBondCost = bondCost;
+
       SetInitialQubitsMap(candidateMap);
       for (const auto& layer : layers) {
         ApplyGates(layer->GetOperations());
         if (getTotalSwappingCost() >= bound)
           return getTotalSwappingCost();
       }
-      return getTotalSwappingCost();
+      auto res = getTotalSwappingCost();
+      // restore state
+      qubitsMap = std::move(saveQubitsMap);
+      qubitsMapInv = std::move(saveQubitsMapInv);
+      currentBondDim = std::move(saveCurrentBondDim);
+      totalSwappingCost = saveTotalSwappingCost;
+      bondCost = std::move(saveBondCost);
+
+      return res;
     };
 
     auto bestMap = qubitsMap;
@@ -451,51 +605,13 @@ class MPSDummySimulator {
     std::vector<long long int> tryMap(nrQubits);
     std::iota(tryMap.begin(), tryMap.end(), 0);
 
-    auto identityCost = evaluateCost(tryMap);
+    auto identityCost = evaluateCostBounded(tryMap, bestCost);
     if (identityCost < bestCost) {
       bestMap = tryMap;
       bestCost = identityCost;
 
       // std::cout << "Identity was better than the initial optimization, cost:
       // " << identityCost << std::endl;
-    }
-
-    // Interaction weights matrix: weight each qubit pair by how often they
-    // appear together in two-qubit gates, scaled by estimated swap cost at
-    // that circuit depth.  Used by both the greedy layout and 2-opt delta
-    // evaluation.
-    Eigen::MatrixXd weights = Eigen::MatrixXd::Zero(nrQubits, nrQubits);
-    {
-      // Model bond saturation
-      const double bondsCount = std::max(1., static_cast<double>(nrQubits) - 1.);
-      const double maxBondDimD = static_cast<double>(maxVirtualExtent);
-      int cumulativeTwoQubitGates = 0;
-
-      for (const auto& layer : layers) {
-        const auto& ops = layer->GetOperations();
-        int twoQubitGateCount = 0;
-
-        const double effectiveDepthPerBond =
-            static_cast<double>(cumulativeTwoQubitGates) / bondsCount;
-        const double rawBondDim =
-            std::pow(static_cast<double>(physExtent), effectiveDepthPerBond);
-        const double effectiveBondDim =
-            std::min(rawBondDim, maxBondDimD);
-        const double factor = std::max(1., std::pow(effectiveBondDim, 3.));
-
-        for (const auto& op : ops) {
-          const auto qubits = op->AffectedQubits();
-          if (qubits.size() < 2) continue;
-          const IndexType q1 = static_cast<IndexType>(qubits[0]);
-          const IndexType q2 = static_cast<IndexType>(qubits[1]);
-          if (q1 < 0 || q1 >= nrQubits || q2 < 0 || q2 >= nrQubits) continue;
-          weights(q1, q2) += factor;
-          weights(q2, q1) += factor;
-          ++twoQubitGateCount;
-        }
-
-        cumulativeTwoQubitGates += twoQubitGateCount;
-      }
     }
 
     // Try a greedy layout: prioritize adjacency for qubit pairs with the most
@@ -524,11 +640,11 @@ class MPSDummySimulator {
 
         for (IndexType q = 0; q < nrQubits; ++q) {
           if (placed[q]) continue;
-          double totalConn = 0;
+          double maxConn = 0;
           for (const auto p : chain)
-            totalConn += weights(q, p);
-          if (totalConn > bestConn) {
-            bestConn = totalConn;
+            if (weights(q, p) > maxConn) maxConn = weights(q, p);
+          if (maxConn > bestConn) {
+            bestConn = maxConn;
             bestCandidate = q;
           }
         }
@@ -545,17 +661,26 @@ class MPSDummySimulator {
 
         // Precompute prefix sums of bond costs so distance between any
         // two chain positions is a constant-time lookup.
-        // prefixBondCost[i] = sum of bondCost[0..i-1], with [0] = 0.
-        // After inserting at position p the final chain has chainLen+1
-        // elements, so we need up to chainLen bonds.
+        // prefixBondCost[i] = sum of bondCost[offset..offset+i-1],
+        // with [0] = 0.  After inserting at position p the final chain
+        // has chainLen+1 elements, so we need up to chainLen bonds.
+        //
+        // Center the partial chain within the full N-qubit bond cost
+        // array so that costs reflect realistic final positions rather
+        // than always using the cheapest end-of-chain costs.
+        const size_t nrBondsNeeded = chainLen;
+        const size_t bcOffset = (bondCost.size() > nrBondsNeeded)
+            ? (bondCost.size() - nrBondsNeeded) / 2
+            : 0;
+
         std::vector<double> prefixBondCost(chainLen + 2, 0.);
-        for (size_t b = 0; b < chainLen + 1 && b < bondCost.size(); ++b)
-          prefixBondCost[b + 1] = prefixBondCost[b] + bondCost[b];
-        // Clamp: if chain grows beyond bondCost.size(), extend with
-        // the last known bond cost (the maximum, at the chain center)
-        for (size_t b = bondCost.size() + 1; b < chainLen + 2; ++b)
-          prefixBondCost[b] = prefixBondCost[b - 1] +
-                              (bondCost.empty() ? 1. : bondCost.back());
+        for (size_t b = 0; b < chainLen + 1; ++b) {
+          const size_t bondIdx = bcOffset + b;
+          const double bc = (bondIdx < bondCost.size())
+              ? bondCost[bondIdx]
+              : (bondCost.empty() ? 1. : bondCost[bondCost.size() - 1]);
+          prefixBondCost[b + 1] = prefixBondCost[b] + bc;
+        }
 
         double bestInsertCost = std::numeric_limits<double>::infinity();
         size_t bestInsertPos = 0;
@@ -596,7 +721,7 @@ class MPSDummySimulator {
       for (IndexType i = 0; i < static_cast<IndexType>(chain.size()); ++i)
         greedyMap[chain[i]] = i;
 
-      auto greedyCost = evaluateCost(greedyMap);
+      auto greedyCost = evaluateCostBounded(greedyMap, bestCost);
       if (greedyCost < bestCost) {
         bestMap = greedyMap;
         bestCost = greedyCost;
@@ -634,11 +759,11 @@ class MPSDummySimulator {
           double bestC = -1;
           for (IndexType q = 0; q < nrQubits; ++q) {
             if (placed[q]) continue;
-            double totalC = 0;
+            double maxC = 0;
             for (const auto p : endChain)
-              totalC += weights(q, p);
-            if (totalC > bestC) {
-              bestC = totalC;
+              if (weights(q, p) > maxC) maxC = weights(q, p);
+            if (maxC > bestC) {
+              bestC = maxC;
               bestCand = q;
             }
           }
@@ -657,7 +782,7 @@ class MPSDummySimulator {
         for (IndexType i = 0; i < static_cast<IndexType>(endChain.size()); ++i)
           endMap[endChain[i]] = i;
 
-        auto endCost = evaluateCost(endMap);
+        auto endCost = evaluateCostBounded(endMap, bestCost);
         if (endCost < bestCost) {
           bestMap = endMap;
           bestCost = endCost;
@@ -687,7 +812,7 @@ class MPSDummySimulator {
           for (IndexType i = 0; i < nrQubits; ++i)
             spectralMap[order[i]] = i;
 
-          auto spectralCost = evaluateCost(spectralMap);
+          auto spectralCost = evaluateCostBounded(spectralMap, bestCost);
           if (spectralCost < bestCost) {
             bestMap = spectralMap;
             bestCost = spectralCost;
@@ -700,7 +825,7 @@ class MPSDummySimulator {
             for (IndexType i = 0; i < nrQubits; ++i)
               revSpectralMap[order[i]] = nrQubits - 1 - i;
 
-            auto revSpectralCost = evaluateCost(revSpectralMap);
+            auto revSpectralCost = evaluateCostBounded(revSpectralMap, bestCost);
             if (revSpectralCost < bestCost) {
               bestMap = revSpectralMap;
               bestCost = revSpectralCost;
@@ -746,64 +871,28 @@ class MPSDummySimulator {
       }
     }
 
-    // 2-opt local search with delta evaluation: use the interaction weights
-    // matrix as a proxy for the full simulation cost.  For a given map,
-    //   proxy_cost = sum_{(a,b)} weights(a,b) * bondDist(map[a], map[b]).
-    // When swapping map positions of qubits i and j, only interactions
-    // involving i or j change, making each evaluation O(n) instead of O(G).
-    // After convergence, verify with full simulation.
+    // 2-opt local search: iteratively swap pairs of positions in the best map
+    // and keep improvements, until no single swap can reduce the cost
     {
-      // Precompute prefix sums of bond costs for O(1) distance lookup
-      std::vector<double> prefixBond(nrQubits, 0.);
-      for (IndexType k = 1; k < nrQubits; ++k)
-        prefixBond[k] = prefixBond[k - 1] + bondCost[k - 1];
-
-      auto bondDist = [&prefixBond](IndexType a, IndexType b) -> double {
-        return a <= b ? prefixBond[b] - prefixBond[a]
-                      : prefixBond[a] - prefixBond[b];
-      };
-
-      // Compute the delta in proxy cost when swapping map[i] <-> map[j].
-      // Only interactions involving qubit i or j are affected.
-      // The (i,j) pair itself has symmetric distance so it cancels out.
-      auto computeDelta = [&](const std::vector<IndexType>& m,
-                              IndexType i, IndexType j) -> double {
-        double delta = 0;
-        const IndexType posI = m[i];
-        const IndexType posJ = m[j];
-        for (IndexType k = 0; k < nrQubits; ++k) {
-          if (k == i || k == j) continue;
-          const IndexType posK = m[k];
-          const double wik = weights(i, k);
-          if (wik > 0)
-            delta += wik * (bondDist(posJ, posK) - bondDist(posI, posK));
-          const double wjk = weights(j, k);
-          if (wjk > 0)
-            delta += wjk * (bondDist(posI, posK) - bondDist(posJ, posK));
-        }
-        return delta;
-      };
-
       auto candidate = bestMap;
       bool improved = true;
       while (improved) {
         improved = false;
         for (IndexType i = 0; i < nrQubits; ++i) {
           for (IndexType j = i + 1; j < nrQubits; ++j) {
-            const double delta = computeDelta(candidate, i, j);
-            if (delta < -1e-10) {
-              std::swap(candidate[i], candidate[j]);
+            // swap the mapped positions of qubits i and j
+            std::swap(candidate[i], candidate[j]);
+            auto cost = evaluateCostBounded(candidate, bestCost);
+            if (cost < bestCost) {
+              bestMap = candidate;
+              bestCost = cost;
               improved = true;
+            } else {
+              // revert
+              std::swap(candidate[i], candidate[j]);
             }
           }
         }
-      }
-
-      // Verify the proxy-optimized map with full simulation
-      auto fullCost = evaluateCost(candidate);
-      if (fullCost < bestCost) {
-        bestMap = candidate;
-        bestCost = fullCost;
       }
     }
 
@@ -819,42 +908,42 @@ class MPSDummySimulator {
       qubitsMapInv[i] = qubitsMap[i] = i;
 
     totalSwappingCost = 0;
-    swapAmplifyingFactor = initialSwapAmplifyingFactor;
+    if (!currentBondDim.empty())
+      std::fill(currentBondDim.begin(), currentBondDim.end(), 1.0);
   }
 
   void SwapQubits(IndexType qubit1, IndexType qubit2) {
-    // if the qubits are not adjacent, apply swap gates until they are
-    // don't forget to update the qubitsMap
-    IndexType realq1 = qubitsMap[qubit1];
-    IndexType realq2 = qubitsMap[qubit2];
-    if (realq1 > realq2) {
-      std::swap(realq1, realq2);
-      std::swap(qubit1, qubit2);
-    }
+	IndexType realq1 = qubitsMap[qubit1];
+	IndexType realq2 = qubitsMap[qubit2];
+	if (realq1 > realq2) {
+	  std::swap(realq1, realq2);
+	  std::swap(qubit1, qubit2);
+	}
 
-    if (realq2 - realq1 <= 1) return;
+	if (realq2 - realq1 <= 1) return;
 
-    // Move the pair towards the closest end of the chain:
-    // end bonds have smaller dimensions and therefore cheaper swap costs
-    const bool swapDown =
-        realq1 + realq2 <= static_cast<IndexType>(qubitsMap.size()) - 1;
+	const IndexType meetPos = ComputeHeuristicMeetPosition(realq1, realq2);
+	SwapQubitsToPosition(qubit1, qubit2, meetPos);
+  }
 
-    const IndexType targetQubitReal = swapDown ? realq1 + 1 : realq2 - 1;
-    IndexType movingQubitReal = swapDown ? realq2 : realq1;
-    const IndexType movingQubitInv = swapDown ? qubit2 : qubit1;
+  // Compute the meeting position using the existing heuristic:
+  // move toward the nearest chain end, splitting at the middle if
+  // the two qubits straddle it.
+  IndexType ComputeHeuristicMeetPosition(IndexType realq1,
+										 IndexType realq2) const {
+	assert(realq1 < realq2);
+	const IndexType chainSize = static_cast<IndexType>(qubitsMap.size());
+	const IndexType mid = (chainSize - 1) >> 1;
 
-    do {
-      const IndexType toQubitReal = movingQubitReal + (swapDown ? -1 : 1);
-      const IndexType toQubitInv = qubitsMapInv[toQubitReal];
+	// If the qubits straddle the middle, the heuristic brings the
+	// lower qubit to the middle first, then moves the upper qubit
+	// down.  This is equivalent to meeting at the middle.
+	if (realq1 < mid && realq2 > mid) return mid;
 
-      qubitsMap[toQubitInv] = movingQubitReal;
-      qubitsMapInv[movingQubitReal] = toQubitInv;
-
-      qubitsMap[movingQubitInv] = toQubitReal;
-      qubitsMapInv[toQubitReal] = movingQubitInv;
-
-      movingQubitReal = toQubitReal;
-    } while (movingQubitReal != targetQubitReal);
+	// Otherwise move the more distant qubit toward the other one,
+	// choosing the direction closer to a chain end
+	const bool swapDown = chainSize - realq2 <= realq1;
+	return swapDown ? realq1 : realq2 - 1;
   }
 
   size_t nrQubits;
@@ -865,10 +954,18 @@ class MPSDummySimulator {
   static constexpr size_t physExtent = 2;
   IndexType maxVirtualExtent;
   std::vector<double> bondCost;
+  std::vector<double> maxBondDim;
+  std::vector<double> currentBondDim;
 
   double totalSwappingCost = 0;
-  static constexpr double initialSwapAmplifyingFactor = 1.005;
-  double swapAmplifyingFactor = initialSwapAmplifyingFactor;
+
+  void growBondDimension(IndexType bond) {
+    currentBondDim[bond] = std::min(
+        currentBondDim[bond] * static_cast<double>(physExtent),
+        maxBondDim[bond]);
+
+    bondCost[bond] = std::pow(currentBondDim[bond], 3.);
+  }
 };
 
 }  // namespace Simulators

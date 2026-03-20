@@ -33,6 +33,10 @@
 
 #include "SimulatorObserver.h"
 
+namespace Circuits {
+template <typename Time> class IOperation;
+}
+
 namespace Simulators {
 
 /**
@@ -179,6 +183,36 @@ class IState {
    */
   virtual void SetInitialQubitsMap(
       const std::vector<long long int> &initialMap) {}
+
+  /**
+   * @brief Enables or disables optimal meeting position for MPS swaps.
+   *
+   * When enabled, the MPS simulator uses actual bond dimensions to find
+   * the cheapest meeting position for non-adjacent qubit swaps instead
+   * of the default heuristic.
+   * Does nothing for non-MPS simulators.
+   */
+  virtual void SetUseOptimalMeetingPosition(bool /*enable*/) {}
+
+  /**
+   * @brief Sets the lookahead depth for swap optimization.
+   *
+   * Controls how many upcoming 2-qubit gates are considered when
+   * choosing the swap meeting position.  0 means no lookahead
+   * (immediate cost only).  Only effective for MPS simulators.
+   * Requires upcoming gates to be supplied via SetUpcomingGates.
+   */
+  virtual void SetLookaheadDepth(int /*depth*/) {}
+
+  /**
+   * @brief Supplies upcoming gates for lookahead swap optimization.
+   *
+   * The simulator uses these to evaluate swap costs for future gates
+   * when choosing where to meet.  Only effective for MPS simulators
+   * with lookahead depth > 0.
+   */
+  virtual void SetUpcomingGates(
+      const std::vector<std::shared_ptr<Circuits::IOperation<double>>> & /*gates*/) {}
 
   /**
    * @brief Configures the state.
