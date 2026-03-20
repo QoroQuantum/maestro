@@ -554,6 +554,88 @@ probs = maestro.get_probabilities(qc)
 print(probs)  # [0.5, 0.0, 0.0, 0.5] for a Bell state
 ```
 
+### Mirror Fidelity
+
+Mirror fidelity measures how well a circuit "undoes itself". It works by
+running the circuit forward, then appending the adjoint (inverse) of every gate
+in reverse order, and computing the probability of returning to the all-zeros
+state P(|0…0⟩). A value of 1.0 means the circuit perfectly undoes itself.
+
+This is useful for benchmarking simulator accuracy and for characterising
+noise when using approximate simulation methods (e.g. MPS with low bond
+dimension).
+
+By default, `mirror_fidelity` uses shot-based sampling (1024 shots).
+For exact results on small circuits, pass `full_amplitude=True` to use
+the full statevector instead:
+
+#### Module-Level Function
+
+```python
+import maestro
+from maestro.circuits import QuantumCircuit
+
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+qc.rx(0, 3.14159 / 4)
+
+fidelity = maestro.mirror_fidelity(qc)
+print(f"Mirror fidelity: {fidelity:.4f}")  # ~1.0
+```
+
+#### Circuit Method
+
+```python
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+qc.s(0)
+
+fidelity = qc.mirror_fidelity()
+print(f"Mirror fidelity: {fidelity:.4f}")  # ~1.0
+```
+
+#### With a Specific Backend
+
+```python
+fidelity = qc.mirror_fidelity(
+    simulator_type=maestro.SimulatorType.QCSim,
+    simulation_type=maestro.SimulationType.MatrixProductState,
+    max_bond_dimension=16,
+)
+```
+
+#### With More Shots
+
+```python
+fidelity = qc.mirror_fidelity(shots=10000)  # tighter estimate
+```
+
+#### Exact Mode (Small Circuits Only)
+
+For exact results without statistical noise, use `full_amplitude=True`.
+This extracts the full statevector, so it only works for small qubit counts:
+
+```python
+fidelity = qc.mirror_fidelity(full_amplitude=True)
+print(f"Mirror fidelity: {fidelity:.10f}")  # 1.0000000000
+
+#### Mirror Fidelity Parameters
+
+| Parameter                    | Type   | Default                              | Description                            |
+|------------------------------|--------|--------------------------------------|----------------------------------------|
+| `simulator_type`             | enum   | `SimulatorType.QCSim`                | Simulator backend                      |
+| `simulation_type`            | enum   | `SimulationType.Statevector`         | Simulation method                      |
+| `shots`                      | int    | `1024`                               | Number of measurement shots            |
+| `max_bond_dimension`         | int    | `None`                               | Max bond dimension (MPS only)          |
+| `singular_value_threshold`   | float  | `None`                               | Truncation threshold (MPS only)        |
+| `use_double_precision`       | bool   | `False`                              | Use 64-bit precision (GPU only)        |
+| `full_amplitude`             | bool   | `False`                              | Use exact statevector (small circuits) |
+
+> **Note:** Measurements in the original circuit are automatically skipped
+> when building the mirror circuit — only unitary gate operations are mirrored.
+
 ### Examples
 
 You can find several complete examples in the `examples/` directory:
