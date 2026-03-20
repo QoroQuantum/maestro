@@ -932,6 +932,12 @@ class QCSimSimulator : public QCSimState {
         cloned->mpsSimulator->setLimitEntanglement(singularValueThreshold);
       if (limitSize && chi > 0)
         cloned->mpsSimulator->setLimitBondDimension(chi);
+
+      cloned->lookaheadDepth = lookaheadDepth;
+      cloned->useOptimalMeetingPositionOnly = useOptimalMeetingPositionOnly;
+      cloned->upcomingGates = upcomingGates;
+      cloned->upcomingGateIndex = upcomingGateIndex;
+      cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
     }
 
     if (cliffordSimulator)

@@ -31,6 +31,8 @@
 
 #include "../Utils/Alias.h"
 
+#include "MPSDummySimulator.h"
+
 namespace Simulators {
 // TODO: Maybe use the pimpl idiom
 // https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation
@@ -226,6 +228,70 @@ class QCSimState : public ISimulator {
   void SetInitialQubitsMap(
       const std::vector<long long int> &initialMap) override {
     if (mpsSimulator) mpsSimulator->SetInitialQubitsMap(initialMap);
+  }
+
+  void SetUseOptimalMeetingPosition(bool enable) override {
+    useOptimalMeetingPositionOnly = enable;
+    if (mpsSimulator) mpsSimulator->SetUseOptimalMeetingPosition(enable);
+  }
+
+  void SetLookaheadDepth(int depth) override {
+    lookaheadDepth = depth;
+    if (mpsSimulator && depth > 0 && !useOptimalMeetingPositionOnly)
+      mpsSimulator->SetUseOptimalMeetingPosition(true);
+  }
+
+  void SetUpcomingGates(
+      const std::vector<std::shared_ptr<Circuits::IOperation<double>>> &gates) override {
+    upcomingGates = gates;
+    upcomingGateIndex = 0;
+
+    if (!mpsSimulator || lookaheadDepth <= 0) return;
+
+    // Register an observer that advances the gate index
+    gateCounterObserver = std::make_shared<GateCounterObserver>(
+        upcomingGateIndex);
+    RegisterObserver(gateCounterObserver);
+
+    // Set up a meeting position callback that uses MPSDummySimulator
+    // for lookahead evaluation with actual bond dimensions
+    mpsSimulator->SetMeetingPositionCallback(
+        [this](auto logicalQ1, auto logicalQ2,
+               const auto &qMap, const auto &qMapInv,
+               const auto &bondDims)
+            -> QC::TensorNetworks::MPSSimulatorInterface::IndexType {
+          using IndexType = QC::TensorNetworks::MPSSimulatorInterface::IndexType;
+          const size_t nQ = qMap.size();
+
+          if (!dummySim || dummySim->getNrQubits() != nQ) {
+            dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
+            dummySim->SetMaxBondDimension(
+                limitSize ? static_cast<long long int>(chi) : 0);
+          }
+
+          // Seed dummy with current real simulator state
+          std::vector<long long int> map64(qMap.begin(), qMap.end());
+          dummySim->SetInitialQubitsMap(map64);
+
+          // Convert actual bond dims to doubles
+          std::vector<double> bondDimsD(bondDims.begin(), bondDims.end());
+          dummySim->SetCurrentBondDimensions(bondDimsD);
+
+          // Gather upcoming gates from current index
+          // (upcomingGateIndex points to the gate AFTER the current one)
+          std::vector<std::shared_ptr<Circuits::IOperation<>>> window;
+          window.reserve(lookaheadDepth);
+
+          for (size_t i = upcomingGateIndex;
+               i < upcomingGates.size() &&
+               static_cast<int>(window.size()) < lookaheadDepth;
+               ++i) {
+            window.push_back(upcomingGates[i]);
+          }
+
+          return dummySim->FindBestMeetingPosition(
+              logicalQ1, logicalQ2, window, lookaheadDepth);
+        });
   }
 
   /**
@@ -1230,6 +1296,22 @@ class QCSimState : public ISimulator {
   bool enableMultithreading = true;    /**< The multithreading flag. */
   bool useMPSMeasureNoCollapse =
       true; /**< The flag to use the mps measure no collapse algorithm. */
+
+  int lookaheadDepth = 0;
+  bool useOptimalMeetingPositionOnly = false;
+  std::vector<std::shared_ptr<Circuits::IOperation<>>> upcomingGates;
+  size_t upcomingGateIndex = 0;
+  std::unique_ptr<Simulators::MPSDummySimulator> dummySim;
+
+  // Observer that counts applied gates to track position in upcomingGates
+  class GateCounterObserver : public ISimulatorObserver {
+   public:
+    GateCounterObserver(size_t &indexRef) : index(indexRef) {}
+    void Update(const Types::qubits_vector &) override { ++index; }
+   private:
+    size_t &index;
+  };
+  std::shared_ptr<GateCounterObserver> gateCounterObserver;
 
   std::mt19937_64 rng;
   std::uniform_real_distribution<double> uniformZeroOne;
