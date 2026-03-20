@@ -284,6 +284,74 @@
  *
  * ---
  *
+ * @section py_mirror Mirror Fidelity
+ *
+ * Mirror fidelity measures how well a circuit "undoes itself". Maestro
+ * constructs the **mirror circuit** by appending the adjoint (inverse)
+ * of every gate in reverse order and returns P(|0…0⟩) — the probability
+ * of returning to the initial state. A value of 1.0 indicates a perfect
+ * simulation.
+ *
+ * This is useful for benchmarking simulator accuracy, characterising noise
+ * from approximate methods (e.g. MPS with low bond dimension), and for
+ * circuit validation.
+ *
+ * By default, mirror fidelity uses shot-based sampling (1024 shots).
+ * For exact results on small circuits, pass `full_amplitude=True`.
+ *
+ * @subsection py_mirror_module Module-Level Function
+ *
+ * @code{.py}
+ * import maestro
+ * from maestro.circuits import QuantumCircuit
+ *
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ * qc.rx(0, 3.14159 / 4)
+ *
+ * # Default: shot-based (1024 shots)
+ * fidelity = maestro.mirror_fidelity(qc)
+ * print(f"Mirror fidelity: {fidelity:.4f}")  # ~1.0
+ *
+ * # More shots for tighter estimate
+ * fidelity = maestro.mirror_fidelity(qc, shots=10000)
+ *
+ * # Exact (small circuits only)
+ * fidelity = maestro.mirror_fidelity(qc, full_amplitude=True)
+ * @endcode
+ *
+ * @subsection py_mirror_circuit Circuit Method
+ *
+ * @code{.py}
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ * qc.s(0)
+ *
+ * fidelity = qc.mirror_fidelity()
+ * print(f"Mirror fidelity: {fidelity:.4f}")  # ~1.0
+ *
+ * # With MPS (scales to 50+ qubits)
+ * fidelity = qc.mirror_fidelity(
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     shots=10000,
+ *     max_bond_dimension=64,
+ * )
+ *
+ * # Exact mode (small circuits only)
+ * fidelity = qc.mirror_fidelity(full_amplitude=True)
+ * @endcode
+ *
+ * @note Measurements in the original circuit are automatically skipped
+ * when building the mirror circuit — only unitary gate operations are
+ * mirrored. All gate types are supported: self-inverse gates (H, X, CX,
+ * etc.), paired gates (S↔S†, T↔T†, √X↔√X†), and parametric gates
+ * (Rx, Ry, Rz, U, CP, CRx, CRy, CRz, CU).
+ *
+ * ---
+ *
  * @section py_advanced Advanced: Object-Oriented Simulator Control
  *
  * For full control over the simulation lifecycle, use the `Maestro`

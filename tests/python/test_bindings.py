@@ -1160,3 +1160,143 @@ class TestGetStatevector:
         )
         for amp, prob in zip(sv, probs):
             assert abs(amp) ** 2 == pytest.approx(prob, abs=1e-10)
+
+
+class TestMirrorFidelity:
+    """Test the mirror_fidelity function and circuit method.
+
+    Mirror fidelity runs a circuit forward, then appends the adjoint in
+    reverse, and measures P(|0...0>).  For a perfect simulator this should
+    always be ~1.0.
+
+    Default mode is shot-based (1024 shots). Set full_amplitude=True for
+    exact statevector computation.
+    """
+
+    # --- Default (shot-based) tests ---
+
+    def test_identity_circuit(self):
+        """H -> H† (= H) should give fidelity ≈ 1.0 (default shot-based)."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+
+        fid = maestro.mirror_fidelity(qc)
+        assert fid == pytest.approx(1.0, abs=0.05)
+
+    def test_bell_state_circuit(self):
+        """Bell state (H, CX) should give fidelity ≈ 1.0 (default shot-based)."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        fid = maestro.mirror_fidelity(qc)
+        assert fid == pytest.approx(1.0, abs=0.05)
+
+    def test_parametric_gates(self):
+        """Circuit with Rx, Ry, Rz parametric gates (default shot-based)."""
+        from maestro.circuits import QuantumCircuit
+        import math
+        qc = QuantumCircuit()
+        qc.rx(0, math.pi / 4)
+        qc.ry(0, math.pi / 3)
+        qc.rz(0, math.pi / 6)
+
+        fid = maestro.mirror_fidelity(qc)
+        assert fid == pytest.approx(1.0, abs=0.05)
+
+    def test_s_and_t_gates(self):
+        """Circuit with S, T (non-self-inverse) gates (default shot-based)."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.s(0)
+        qc.t(0)
+        qc.cx(0, 1)
+
+        fid = maestro.mirror_fidelity(qc)
+        assert fid == pytest.approx(1.0, abs=0.05)
+
+    def test_circuit_method(self):
+        """QuantumCircuit.mirror_fidelity() method (default shot-based)."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.s(0)
+
+        fid = qc.mirror_fidelity()
+        assert fid == pytest.approx(1.0, abs=0.05)
+
+    def test_measurements_are_skipped(self):
+        """Measurements in the original circuit should be skipped in mirroring."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        fid = maestro.mirror_fidelity(qc)
+        assert fid == pytest.approx(1.0, abs=0.05)
+
+    def test_custom_shots(self):
+        """Mirror fidelity with explicit high shot count for tighter estimate."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.s(0)
+
+        fid = maestro.mirror_fidelity(qc, shots=10000)
+        assert fid == pytest.approx(1.0, abs=0.05)
+
+    def test_mps_backend(self):
+        """Mirror fidelity with MPS backend (shot-based, scalable)."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        fid = qc.mirror_fidelity(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            shots=10000,
+            max_bond_dimension=4,
+        )
+        assert fid == pytest.approx(1.0, abs=0.05)
+
+    # --- Exact (full_amplitude) tests ---
+
+    def test_full_amplitude_identity(self):
+        """Exact statevector mode with full_amplitude=True."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+
+        fid = maestro.mirror_fidelity(qc, full_amplitude=True)
+        assert fid == pytest.approx(1.0, abs=1e-10)
+
+    def test_full_amplitude_bell(self):
+        """Exact statevector mode for Bell state."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        fid = qc.mirror_fidelity(full_amplitude=True)
+        assert fid == pytest.approx(1.0, abs=1e-10)
+
+    def test_full_amplitude_parametric(self):
+        """Exact statevector mode with parametric and controlled gates."""
+        from maestro.circuits import QuantumCircuit
+        import math
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.crx(0, 1, math.pi / 4)
+        qc.u(0, math.pi / 4, math.pi / 3, math.pi / 6)
+
+        fid = maestro.mirror_fidelity(qc, full_amplitude=True)
+        assert fid == pytest.approx(1.0, abs=1e-10)
+
+
