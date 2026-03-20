@@ -1071,3 +1071,89 @@ class TestQuestSimulator:
         )
         assert result is not None
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
+
+
+class TestGetStatevector:
+    """Test the get_statevector function for extracting full complex amplitudes."""
+
+    INV_SQRT2 = 1.0 / (2.0 ** 0.5)
+
+    def test_get_statevector_bell_state(self):
+        """Bell state (|00> + |11>)/sqrt(2) should have correct amplitudes."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        sv = maestro.get_statevector(qc)
+        assert len(sv) == 4
+        assert sv[0] == pytest.approx(self.INV_SQRT2, abs=1e-10)
+        assert sv[1] == pytest.approx(0.0, abs=1e-10)
+        assert sv[2] == pytest.approx(0.0, abs=1e-10)
+        assert sv[3] == pytest.approx(self.INV_SQRT2, abs=1e-10)
+
+    def test_get_statevector_single_qubit_h(self):
+        """H|0> should give (1/sqrt(2), 1/sqrt(2))."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+
+        sv = maestro.get_statevector(qc)
+        assert len(sv) == 2
+        assert sv[0] == pytest.approx(self.INV_SQRT2, abs=1e-10)
+        assert sv[1] == pytest.approx(self.INV_SQRT2, abs=1e-10)
+
+    def test_get_statevector_x_gate(self):
+        """X|0> should give (0, 1)."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+
+        sv = maestro.get_statevector(qc)
+        assert len(sv) == 2
+        assert sv[0] == pytest.approx(0.0, abs=1e-10)
+        assert sv[1] == pytest.approx(1.0, abs=1e-10)
+
+    def test_get_statevector_mps(self):
+        """get_statevector works with MPS backend."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        sv = maestro.get_statevector(
+            qc,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=4
+        )
+        assert len(sv) == 4
+        assert sv[0] == pytest.approx(self.INV_SQRT2, abs=1e-10)
+        assert sv[1] == pytest.approx(0.0, abs=1e-10)
+        assert sv[2] == pytest.approx(0.0, abs=1e-10)
+        assert sv[3] == pytest.approx(self.INV_SQRT2, abs=1e-10)
+
+    def test_get_statevector_circuit_method(self):
+        """QuantumCircuit.get_statevector() method works."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        sv = qc.get_statevector()
+        assert len(sv) == 4
+        assert sv[0] == pytest.approx(self.INV_SQRT2, abs=1e-10)
+        assert sv[3] == pytest.approx(self.INV_SQRT2, abs=1e-10)
+
+    def test_get_statevector_probabilities_consistency(self):
+        """Statevector amplitudes squared should match get_probabilities."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        sv = maestro.get_statevector(qc)
+        probs = maestro.get_probabilities(qc)
+
+        for amp, prob in zip(sv, probs):
+            assert abs(amp) ** 2 == pytest.approx(prob, abs=1e-10)

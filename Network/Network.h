@@ -16,6 +16,7 @@
 #define _NETWORK_INTERFACE_H_
 
 #include <boost/container_hash/hash.hpp>
+#include <complex>
 #include <memory>
 #include <unordered_set>
 #include <vector>
@@ -148,6 +149,25 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
   virtual std::vector<double> ExecuteOnHostExpectations(
       const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t hostId,
       const std::vector<std::string> &paulis) = 0;
+
+  /**
+   * @brief Execute the circuit on the specified host and return the full
+   * statevector (complex amplitudes for each basis state).
+   *
+   * Execute the circuit on the specified host and return the complex amplitudes
+   * of the resulting quantum state. The circuit must fit on the host, otherwise
+   * an exception is thrown. The circuit will be mapped on the specified host, if
+   * its qubits start with indexing from 0 (if already mapped, the qubits won't
+   * be altered).
+   *
+   * @param circuit The circuit to execute.
+   * @param hostId The id of the host to execute the circuit on.
+   * @return A vector of complex amplitudes, one per basis state.
+   * @sa Circuits::Circuit
+   */
+  virtual std::vector<std::complex<double>> ExecuteOnHostAmplitudes(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      size_t hostId) = 0;
 
   /**
    * @brief Execute the circuit on the network, repeatedly.
