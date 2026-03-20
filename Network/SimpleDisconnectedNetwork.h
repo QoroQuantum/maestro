@@ -350,6 +350,56 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   }
 
   /**
+   * @brief Execute circuit on host and return full statevector amplitudes.
+   *
+   * Execute the circuit on the specified host and return the complex amplitudes
+   * of the resulting quantum state (one per basis state 0..2^n-1).
+   * Supported for Statevector and MPS simulation types.
+   *
+   * @param circuit The circuit to execute.
+   * @param hostId The id of the host to execute the circuit on.
+   * @return A vector of complex<double> amplitudes of length 2^n.
+   */
+  std::vector<std::complex<double>> ExecuteOnHostAmplitudes(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      size_t hostId) override {
+    const auto recreate = recreateIfNeeded;
+
+    auto simType = Simulators::SimulatorType::kQCSim;
+    auto method = Simulators::SimulationType::kMatrixProductState;
+    size_t numQubits = 2;
+    if (simulator) {
+      simType = simulator->GetType();
+      method = simulator->GetSimulationType();
+      numQubits = simulator->GetNumberOfQubits();
+    }
+
+    recreateIfNeeded = false;
+    const auto res = RepeatedExecuteOnHost(circuit, hostId, 1);
+    recreateIfNeeded = recreate;
+
+    if (!res.empty()) {
+      const auto &first = *res.begin();
+      GetState().SetResultsInOrder(first.first);
+    }
+
+    std::vector<std::complex<double>> amplitudes;
+    if (simulator) {
+      const size_t n = simulator->GetNumberOfQubits();
+      const size_t dim = 1ULL << n;
+      amplitudes.resize(dim);
+      for (size_t i = 0; i < dim; ++i) amplitudes[i] = simulator->Amplitude(i);
+    }
+
+    if (recreate && (!simulator || simType != simulator->GetType() ||
+                     method != simulator->GetSimulationType() ||
+                     simulator->GetNumberOfQubits() != numQubits))
+      CreateSimulator(simType, method);
+
+    return amplitudes;
+  }
+
+  /**
    * @brief Execute the circuit on the network, repeatedly.
    *
    * Execute the circuit on the network, distributing the operations to the

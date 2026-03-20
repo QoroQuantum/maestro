@@ -1,4 +1,5 @@
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/complex.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
@@ -452,7 +453,44 @@ NB_MODULE(maestro, m) {
           "simulator_type"_a = Simulators::SimulatorType::kQCSim,
           "simulation_type"_a = Simulators::SimulationType::kStatevector,
           "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
-          "use_double_precision"_a = false);
+          "use_double_precision"_a = false)
+      .def(
+          "get_statevector",
+          [](std::shared_ptr<Circuits::Circuit<double>> circuit,
+             Simulators::SimulatorType sim_type,
+             Simulators::SimulationType sim_exec_type,
+             std::optional<size_t> max_bond,
+             std::optional<double> sv_threshold,
+             bool use_double_precision)
+              -> std::vector<std::complex<double>> {
+            if (!circuit) throw nb::value_error("Circuit is null.");
+
+            int num_qubits = std::max(
+                1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
+            ScopedSimulator sim(num_qubits);
+            if (sim.handle == 0)
+              throw std::runtime_error("Failed to create simulator handle.");
+
+            auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type,
+                                            max_bond, sv_threshold,
+                                            use_double_precision);
+            if (!network)
+              throw std::runtime_error("Failed to configure network.");
+
+            std::vector<std::complex<double>> amplitudes;
+            {
+              nb::gil_scoped_release release;
+              amplitudes = network->ExecuteOnHostAmplitudes(circuit, 0);
+            }
+            return amplitudes;
+          },
+          "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+          "simulation_type"_a = Simulators::SimulationType::kStatevector,
+          "max_bond_dimension"_a = nb::none(),
+          "singular_value_threshold"_a = nb::none(),
+          "use_double_precision"_a = false,
+          "Get the full statevector (complex amplitudes) after executing the "
+          "circuit.");
 
   // --- QASM Tools ---
   nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
@@ -568,18 +606,14 @@ NB_MODULE(maestro, m) {
                              sv_threshold, use_double_precision);
         if (!network) throw std::runtime_error("Failed to configure network.");
 
+        std::vector<std::complex<double>> amplitudes;
         {
           nb::gil_scoped_release release;
-          network->ExecuteOnHost(circuit, 0);
+          amplitudes = network->ExecuteOnHostAmplitudes(circuit, 0);
         }
-
-        auto simulator = network->GetSimulator();
-        if (!simulator) throw std::runtime_error("Simulator not available.");
-
-        size_t n = simulator->GetNumberOfQubits();
         nb::list probs;
-        for (unsigned long long i = 0; i < (1ULL << n); ++i) {
-          probs.append(simulator->Probability(i));
+        for (const auto &amp : amplitudes) {
+          probs.append(std::norm(amp));
         }
         return probs;
       },
@@ -589,4 +623,41 @@ NB_MODULE(maestro, m) {
       "singular_value_threshold"_a = nb::none(),
       "use_double_precision"_a = false,
       "Get the full probability distribution after executing a circuit.");
+
+  m.def(
+      "get_statevector",
+      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
+         Simulators::SimulatorType sim_type,
+         Simulators::SimulationType sim_exec_type,
+         std::optional<size_t> max_bond, std::optional<double> sv_threshold,
+         bool use_double_precision)
+          -> std::vector<std::complex<double>> {
+        if (!circuit) throw nb::value_error("Circuit is null.");
+
+        int num_qubits =
+            std::max(1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
+        ScopedSimulator sim(num_qubits);
+        if (sim.handle == 0)
+          throw std::runtime_error("Failed to create simulator handle.");
+
+        auto network =
+            ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond,
+                             sv_threshold, use_double_precision);
+        if (!network) throw std::runtime_error("Failed to configure network.");
+
+        std::vector<std::complex<double>> amplitudes;
+        {
+          nb::gil_scoped_release release;
+          amplitudes = network->ExecuteOnHostAmplitudes(circuit, 0);
+        }
+        return amplitudes;
+      },
+      "circuit"_a,
+      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+      "simulation_type"_a = Simulators::SimulationType::kStatevector,
+      "max_bond_dimension"_a = nb::none(),
+      "singular_value_threshold"_a = nb::none(),
+      "use_double_precision"_a = false,
+      "Get the full statevector (complex amplitudes) after executing a "
+      "circuit.");
 }
