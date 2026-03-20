@@ -1,4 +1,5 @@
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/complex.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
@@ -211,6 +212,207 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
   py_result["method"] = (int)network->GetLastSimulationType();
 
   return py_result;
+}
+// Core Statevector Logic
+std::vector<std::complex<double>> statevector_core(
+    std::shared_ptr<Circuits::Circuit<double>> circuit,
+    Simulators::SimulatorType sim_type,
+    Simulators::SimulationType sim_exec_type, std::optional<size_t> max_bond,
+    std::optional<double> sv_threshold, bool use_double_precision = false) {
+  if (!circuit) throw nb::value_error("Circuit is null.");
+
+  int num_qubits =
+      std::max(1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
+  ScopedSimulator sim(num_qubits);
+  if (sim.handle == 0)
+    throw std::runtime_error("Failed to create simulator handle.");
+
+  auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond,
+                                  sv_threshold, use_double_precision);
+  if (!network) throw std::runtime_error("Failed to configure network.");
+
+  std::vector<std::complex<double>> amplitudes;
+  {
+    nb::gil_scoped_release release;
+    amplitudes = network->ExecuteOnHostAmplitudes(circuit, 0);
+  }
+  return amplitudes;
+}
+
+// Helper: Create the adjoint (inverse) of a single quantum gate operation.
+// Non-gate operations (measurements, resets, etc.) return nullptr and are
+// skipped when building the mirror circuit.
+using OperationPtr = std::shared_ptr<Circuits::IOperation<double>>;
+
+OperationPtr adjoint_gate(const OperationPtr &op) {
+  if (op->GetType() != Circuits::OperationType::kGate) return nullptr;
+
+  auto gate =
+      std::dynamic_pointer_cast<Circuits::IQuantumGate<double>>(op);
+  if (!gate) return nullptr;
+
+  const auto gt = gate->GetGateType();
+  const auto params = gate->GetParams();
+
+  switch (gt) {
+    // ---- Self-inverse (Hermitian) gates ----
+    case Circuits::QuantumGateType::kXGateType:
+    case Circuits::QuantumGateType::kYGateType:
+    case Circuits::QuantumGateType::kZGateType:
+    case Circuits::QuantumGateType::kHadamardGateType:
+    case Circuits::QuantumGateType::kKGateType:
+    case Circuits::QuantumGateType::kCXGateType:
+    case Circuits::QuantumGateType::kCYGateType:
+    case Circuits::QuantumGateType::kCZGateType:
+    case Circuits::QuantumGateType::kCHGateType:
+    case Circuits::QuantumGateType::kSwapGateType:
+    case Circuits::QuantumGateType::kCCXGateType:
+    case Circuits::QuantumGateType::kCSwapGateType:
+      return op->Clone();
+
+    // ---- Paired gates ----
+    case Circuits::QuantumGateType::kSGateType:
+      return std::make_shared<Circuits::SdgGate<>>(gate->GetQubit());
+    case Circuits::QuantumGateType::kSdgGateType:
+      return std::make_shared<Circuits::SGate<>>(gate->GetQubit());
+    case Circuits::QuantumGateType::kTGateType:
+      return std::make_shared<Circuits::TdgGate<>>(gate->GetQubit());
+    case Circuits::QuantumGateType::kTdgGateType:
+      return std::make_shared<Circuits::TGate<>>(gate->GetQubit());
+    case Circuits::QuantumGateType::kSxGateType:
+      return std::make_shared<Circuits::SxDagGate<>>(gate->GetQubit());
+    case Circuits::QuantumGateType::kSxDagGateType:
+      return std::make_shared<Circuits::SxGate<>>(gate->GetQubit());
+    case Circuits::QuantumGateType::kCSxGateType:
+      return std::make_shared<Circuits::CSxDagGate<>>(gate->GetQubit(0),
+                                                       gate->GetQubit(1));
+    case Circuits::QuantumGateType::kCSxDagGateType:
+      return std::make_shared<Circuits::CSxGate<>>(gate->GetQubit(0),
+                                                    gate->GetQubit(1));
+
+    // ---- Parametric single-qubit: negate angle ----
+    case Circuits::QuantumGateType::kPhaseGateType:
+      return std::make_shared<Circuits::PhaseGate<>>(gate->GetQubit(),
+                                                      -params[0]);
+    case Circuits::QuantumGateType::kRxGateType:
+      return std::make_shared<Circuits::RxGate<>>(gate->GetQubit(),
+                                                   -params[0]);
+    case Circuits::QuantumGateType::kRyGateType:
+      return std::make_shared<Circuits::RyGate<>>(gate->GetQubit(),
+                                                   -params[0]);
+    case Circuits::QuantumGateType::kRzGateType:
+      return std::make_shared<Circuits::RzGate<>>(gate->GetQubit(),
+                                                   -params[0]);
+
+    // ---- U gate: U†(θ,φ,λ,γ) = U(-θ, -λ, -φ, -γ) ----
+    case Circuits::QuantumGateType::kUGateType:
+      return std::make_shared<Circuits::UGate<>>(
+          gate->GetQubit(), -params[0], -params[2], -params[1], -params[3]);
+
+    // ---- Controlled parametric: negate angle ----
+    case Circuits::QuantumGateType::kCPGateType:
+      return std::make_shared<Circuits::CPGate<>>(gate->GetQubit(0),
+                                                   gate->GetQubit(1),
+                                                   -params[0]);
+    case Circuits::QuantumGateType::kCRxGateType:
+      return std::make_shared<Circuits::CRxGate<>>(gate->GetQubit(0),
+                                                    gate->GetQubit(1),
+                                                    -params[0]);
+    case Circuits::QuantumGateType::kCRyGateType:
+      return std::make_shared<Circuits::CRyGate<>>(gate->GetQubit(0),
+                                                    gate->GetQubit(1),
+                                                    -params[0]);
+    case Circuits::QuantumGateType::kCRzGateType:
+      return std::make_shared<Circuits::CRzGate<>>(gate->GetQubit(0),
+                                                    gate->GetQubit(1),
+                                                    -params[0]);
+
+    // ---- CU gate: CU†(θ,φ,λ,γ) = CU(-θ, -λ, -φ, -γ) ----
+    case Circuits::QuantumGateType::kCUGateType:
+      return std::make_shared<Circuits::CUGate<>>(
+          gate->GetQubit(0), gate->GetQubit(1), -params[0], -params[2],
+          -params[1], -params[3]);
+
+    default:
+      return op->Clone();  // Fallback: clone as-is
+  }
+}
+
+// Core Mirror Fidelity Logic
+// Builds circuit + adjoint(circuit) in reverse, returns P(|0...0>).
+// By default uses shot-based sampling. Set full_amplitude=true for exact
+// statevector computation (only feasible for small qubit counts).
+double mirror_fidelity_core(
+    std::shared_ptr<Circuits::Circuit<double>> circuit,
+    Simulators::SimulatorType sim_type,
+    Simulators::SimulationType sim_exec_type, int shots,
+    std::optional<size_t> max_bond, std::optional<double> sv_threshold,
+    bool use_double_precision = false, bool full_amplitude = false) {
+  if (!circuit) throw nb::value_error("Circuit is null.");
+
+  // Build the mirror circuit: forward gates + adjoint gates in reverse
+  auto mirror = std::make_shared<Circuits::Circuit<double>>();
+  const auto &ops = circuit->GetOperations();
+
+  // Forward pass: add only gate operations (skip measurements)
+  for (const auto &op : ops) {
+    if (op->GetType() == Circuits::OperationType::kGate) {
+      mirror->AddOperation(op->Clone());
+    }
+  }
+
+  // Reverse pass: iterate backward and add adjoint of each gate
+  for (auto it = ops.rbegin(); it != ops.rend(); ++it) {
+    auto adj = adjoint_gate(*it);
+    if (adj) mirror->AddOperation(adj);
+  }
+
+  // Helper lambda for the shot-based path
+  auto run_shot_based = [&]() -> double {
+    // Need a fresh mirror circuit since measurements mutate it
+    auto mirror_copy = std::make_shared<Circuits::Circuit<double>>();
+    for (const auto &op : mirror->GetOperations()) {
+      mirror_copy->AddOperation(op->Clone());
+    }
+
+    size_t n = std::max(1, static_cast<int>(mirror_copy->GetMaxQubitIndex()) + 1);
+    std::vector<std::pair<Types::qubit_t, size_t>> pairs;
+    pairs.reserve(n);
+    for (size_t i = 0; i < n; ++i)
+      pairs.emplace_back(static_cast<Types::qubit_t>(i), i);
+    mirror_copy->AddOperation(
+        std::make_shared<Circuits::MeasurementOperation<>>(pairs));
+
+    nb::dict result = execute_core(mirror_copy, sim_type, sim_exec_type, shots,
+                                   max_bond, sv_threshold, use_double_precision);
+
+    nb::dict counts = nb::cast<nb::dict>(result["counts"]);
+    std::string zeros(n, '0');
+    size_t zero_count = 0;
+    if (counts.contains(zeros.c_str())) {
+      zero_count = nb::cast<size_t>(counts[zeros.c_str()]);
+    }
+    return static_cast<double>(zero_count) / static_cast<double>(shots);
+  };
+
+  if (full_amplitude) {
+    // Try exact statevector; fall back to shots if unsupported
+    try {
+      const auto amplitudes = statevector_core(mirror, sim_type, sim_exec_type,
+                                               max_bond, sv_threshold,
+                                               use_double_precision);
+      if (!amplitudes.empty()) return std::norm(amplitudes[0]);
+    } catch (...) {
+      // Statevector not available for this backend — fall back to shots
+    }
+    // Issue a Python warning so the user knows we fell back
+    PyErr_WarnEx(PyExc_RuntimeWarning,
+        "full_amplitude mode not supported by this simulator/simulation "
+        "type. Falling back to shot-based sampling.", 1);
+    return run_shot_based();
+  } else {
+    return run_shot_based();
+  }
 }
 }  // namespace
 
@@ -452,7 +654,27 @@ NB_MODULE(maestro, m) {
           "simulator_type"_a = Simulators::SimulatorType::kQCSim,
           "simulation_type"_a = Simulators::SimulationType::kStatevector,
           "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
-          "use_double_precision"_a = false);
+          "use_double_precision"_a = false)
+      .def("get_statevector", &statevector_core,
+          "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+          "simulation_type"_a = Simulators::SimulationType::kStatevector,
+          "max_bond_dimension"_a = nb::none(),
+          "singular_value_threshold"_a = nb::none(),
+          "use_double_precision"_a = false,
+          "Get the full statevector (complex amplitudes) after executing the "
+          "circuit.")
+      .def("mirror_fidelity", &mirror_fidelity_core,
+          "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+          "simulation_type"_a = Simulators::SimulationType::kStatevector,
+          "shots"_a = 1024,
+          "max_bond_dimension"_a = nb::none(),
+          "singular_value_threshold"_a = nb::none(),
+          "use_double_precision"_a = false,
+          "full_amplitude"_a = false,
+          "Compute mirror fidelity: run circuit forward then its adjoint in "
+          "reverse, returning P(|0...0>). Uses shot-based sampling by "
+          "default. Set full_amplitude=True for exact statevector "
+          "computation (small circuits only).");
 
   // --- QASM Tools ---
   nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
@@ -555,32 +777,12 @@ NB_MODULE(maestro, m) {
          Simulators::SimulationType sim_exec_type,
          std::optional<size_t> max_bond, std::optional<double> sv_threshold,
          bool use_double_precision) -> nb::list {
-        if (!circuit) throw nb::value_error("Circuit is null.");
-
-        int num_qubits =
-            std::max(1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
-        ScopedSimulator sim(num_qubits);
-        if (sim.handle == 0)
-          throw std::runtime_error("Failed to create simulator handle.");
-
-        auto network =
-            ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond,
-                             sv_threshold, use_double_precision);
-        if (!network) throw std::runtime_error("Failed to configure network.");
-
-        {
-          nb::gil_scoped_release release;
-          network->ExecuteOnHost(circuit, 0);
-        }
-
-        auto simulator = network->GetSimulator();
-        if (!simulator) throw std::runtime_error("Simulator not available.");
-
-        size_t n = simulator->GetNumberOfQubits();
+        const auto amplitudes = statevector_core(circuit, sim_type,
+                                                 sim_exec_type, max_bond,
+                                                 sv_threshold,
+                                                 use_double_precision);
         nb::list probs;
-        for (unsigned long long i = 0; i < (1ULL << n); ++i) {
-          probs.append(simulator->Probability(i));
-        }
+        for (const auto &amp : amplitudes) probs.append(std::norm(amp));
         return probs;
       },
       "circuit"_a, "simulator_type"_a = Simulators::SimulatorType::kQCSim,
@@ -589,4 +791,26 @@ NB_MODULE(maestro, m) {
       "singular_value_threshold"_a = nb::none(),
       "use_double_precision"_a = false,
       "Get the full probability distribution after executing a circuit.");
+
+  m.def("get_statevector", &statevector_core, "circuit"_a,
+      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+      "simulation_type"_a = Simulators::SimulationType::kStatevector,
+      "max_bond_dimension"_a = nb::none(),
+      "singular_value_threshold"_a = nb::none(),
+      "use_double_precision"_a = false,
+      "Get the full statevector (complex amplitudes) after executing a "
+      "circuit.");
+
+  m.def("mirror_fidelity", &mirror_fidelity_core, "circuit"_a,
+      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+      "simulation_type"_a = Simulators::SimulationType::kStatevector,
+      "shots"_a = 1024,
+      "max_bond_dimension"_a = nb::none(),
+      "singular_value_threshold"_a = nb::none(),
+      "use_double_precision"_a = false,
+      "full_amplitude"_a = false,
+      "Compute mirror fidelity: run a circuit forward then its adjoint in "
+      "reverse, returning P(|0...0>). Uses shot-based sampling by "
+      "default. Set full_amplitude=True for exact statevector "
+      "computation (small circuits only).");
 }

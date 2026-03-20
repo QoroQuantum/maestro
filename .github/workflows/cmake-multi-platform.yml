@@ -36,7 +36,7 @@ jobs:
           QCSim
           json
           qiskit-aer
-        key: ${{ runner.os }}-git-deps-v1
+        key: ${{ runner.os }}-git-deps-v2
 
     # 3. SETUP CCACHE
     - name: Cache ccache
@@ -72,7 +72,7 @@ jobs:
     # 5. DOWNLOAD DYNAMIC DEPENDENCIES (shallow clones, only if not cached)
     - name: Download Dependencies (QCSim, JSON, AER)
       run: |
-        [ -d QCSim ] || git clone --depth 1 https://github.com/aromanro/QCSim.git
+        if [ -d QCSim ]; then cd QCSim && git pull && cd ..; else git clone --depth 1 https://github.com/aromanro/QCSim.git; fi
         [ -d json ] || git clone --depth 1 --branch v3.11.2 https://github.com/nlohmann/json.git
         [ -d qiskit-aer ] || git clone --depth 1 https://github.com/InvictusWingsSRL/qiskit-aer.git
 
