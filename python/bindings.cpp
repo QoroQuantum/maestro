@@ -213,6 +213,31 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
 
   return py_result;
 }
+// Core Statevector Logic
+std::vector<std::complex<double>> statevector_core(
+    std::shared_ptr<Circuits::Circuit<double>> circuit,
+    Simulators::SimulatorType sim_type,
+    Simulators::SimulationType sim_exec_type, std::optional<size_t> max_bond,
+    std::optional<double> sv_threshold, bool use_double_precision = false) {
+  if (!circuit) throw nb::value_error("Circuit is null.");
+
+  int num_qubits =
+      std::max(1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
+  ScopedSimulator sim(num_qubits);
+  if (sim.handle == 0)
+    throw std::runtime_error("Failed to create simulator handle.");
+
+  auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond,
+                                  sv_threshold, use_double_precision);
+  if (!network) throw std::runtime_error("Failed to configure network.");
+
+  std::vector<std::complex<double>> amplitudes;
+  {
+    nb::gil_scoped_release release;
+    amplitudes = network->ExecuteOnHostAmplitudes(circuit, 0);
+  }
+  return amplitudes;
+}
 }  // namespace
 
 // ============================================================================
@@ -454,36 +479,7 @@ NB_MODULE(maestro, m) {
           "simulation_type"_a = Simulators::SimulationType::kStatevector,
           "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
           "use_double_precision"_a = false)
-      .def(
-          "get_statevector",
-          [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-             Simulators::SimulatorType sim_type,
-             Simulators::SimulationType sim_exec_type,
-             std::optional<size_t> max_bond,
-             std::optional<double> sv_threshold,
-             bool use_double_precision)
-              -> std::vector<std::complex<double>> {
-            if (!circuit) throw nb::value_error("Circuit is null.");
-
-            int num_qubits = std::max(
-                1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
-            ScopedSimulator sim(num_qubits);
-            if (sim.handle == 0)
-              throw std::runtime_error("Failed to create simulator handle.");
-
-            auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type,
-                                            max_bond, sv_threshold,
-                                            use_double_precision);
-            if (!network)
-              throw std::runtime_error("Failed to configure network.");
-
-            std::vector<std::complex<double>> amplitudes;
-            {
-              nb::gil_scoped_release release;
-              amplitudes = network->ExecuteOnHostAmplitudes(circuit, 0);
-            }
-            return amplitudes;
-          },
+      .def("get_statevector", &statevector_core,
           "simulator_type"_a = Simulators::SimulatorType::kQCSim,
           "simulation_type"_a = Simulators::SimulationType::kStatevector,
           "max_bond_dimension"_a = nb::none(),
@@ -593,28 +589,12 @@ NB_MODULE(maestro, m) {
          Simulators::SimulationType sim_exec_type,
          std::optional<size_t> max_bond, std::optional<double> sv_threshold,
          bool use_double_precision) -> nb::list {
-        if (!circuit) throw nb::value_error("Circuit is null.");
-
-        int num_qubits =
-            std::max(1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
-        ScopedSimulator sim(num_qubits);
-        if (sim.handle == 0)
-          throw std::runtime_error("Failed to create simulator handle.");
-
-        auto network =
-            ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond,
-                             sv_threshold, use_double_precision);
-        if (!network) throw std::runtime_error("Failed to configure network.");
-
-        std::vector<std::complex<double>> amplitudes;
-        {
-          nb::gil_scoped_release release;
-          amplitudes = network->ExecuteOnHostAmplitudes(circuit, 0);
-        }
+        const auto amplitudes = statevector_core(circuit, sim_type,
+                                                 sim_exec_type, max_bond,
+                                                 sv_threshold,
+                                                 use_double_precision);
         nb::list probs;
-        for (const auto &amp : amplitudes) {
-          probs.append(std::norm(amp));
-        }
+        for (const auto &amp : amplitudes) probs.append(std::norm(amp));
         return probs;
       },
       "circuit"_a, "simulator_type"_a = Simulators::SimulatorType::kQCSim,
@@ -624,35 +604,7 @@ NB_MODULE(maestro, m) {
       "use_double_precision"_a = false,
       "Get the full probability distribution after executing a circuit.");
 
-  m.def(
-      "get_statevector",
-      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         Simulators::SimulatorType sim_type,
-         Simulators::SimulationType sim_exec_type,
-         std::optional<size_t> max_bond, std::optional<double> sv_threshold,
-         bool use_double_precision)
-          -> std::vector<std::complex<double>> {
-        if (!circuit) throw nb::value_error("Circuit is null.");
-
-        int num_qubits =
-            std::max(1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
-        ScopedSimulator sim(num_qubits);
-        if (sim.handle == 0)
-          throw std::runtime_error("Failed to create simulator handle.");
-
-        auto network =
-            ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond,
-                             sv_threshold, use_double_precision);
-        if (!network) throw std::runtime_error("Failed to configure network.");
-
-        std::vector<std::complex<double>> amplitudes;
-        {
-          nb::gil_scoped_release release;
-          amplitudes = network->ExecuteOnHostAmplitudes(circuit, 0);
-        }
-        return amplitudes;
-      },
-      "circuit"_a,
+  m.def("get_statevector", &statevector_core, "circuit"_a,
       "simulator_type"_a = Simulators::SimulatorType::kQCSim,
       "simulation_type"_a = Simulators::SimulationType::kStatevector,
       "max_bond_dimension"_a = nb::none(),

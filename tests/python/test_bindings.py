@@ -1155,5 +1155,8 @@ class TestGetStatevector:
         sv = maestro.get_statevector(qc)
         probs = maestro.get_probabilities(qc)
 
+        assert len(sv) == len(probs), (
+            f"Statevector length {len(sv)} != probabilities length {len(probs)}"
+        )
         for amp, prob in zip(sv, probs):
             assert abs(amp) ** 2 == pytest.approx(prob, abs=1e-10)

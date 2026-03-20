@@ -291,12 +291,22 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       numQubits = simulator->GetNumberOfQubits();
     }
 
-    recreateIfNeeded = false;
+    // RAII: restore recreateIfNeeded and clear pauliStrings on any exit path.
+    struct ScopedRestore {
+      bool &flag, saved;
+      const std::vector<std::string> **ps;
+      ScopedRestore(bool &f, const std::vector<std::string> **p)
+          : flag(f), saved(f), ps(p) {
+        flag = false;
+      }
+      ~ScopedRestore() {
+        flag = saved;
+        *ps = nullptr;
+      }
+    } restoreGuard(recreateIfNeeded, &pauliStrings);
+
     pauliStrings = &paulis;
     const auto res = RepeatedExecuteOnHost(circuit, hostId, 1);
-    pauliStrings = nullptr;
-
-    recreateIfNeeded = recreate;
 
     // put the results in the state
     if (!res.empty()) {
@@ -336,9 +346,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         expectations[i] = simulator->ExpectationValue(translated);
       }
     } else {
-      std::cerr << "WARNING: ExecuteOnHostExpectations - no simulator was "
-                   "created for the network. Returning default values (1.0)."
-                << std::endl;
+      throw std::runtime_error(
+          "ExecuteOnHostExpectations: no simulator available after execution.");
     }
 
     if (recreate && (!simulator || simType != simulator->GetType() ||
@@ -374,22 +383,29 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       numQubits = simulator->GetNumberOfQubits();
     }
 
-    recreateIfNeeded = false;
+    // RAII: restore recreateIfNeeded on any exit path (including exceptions).
+    struct ScopedRestoreFlag {
+      bool &flag, saved;
+      ScopedRestoreFlag(bool &f) : flag(f), saved(f) { flag = false; }
+      ~ScopedRestoreFlag() { flag = saved; }
+    } restoreGuard(recreateIfNeeded);
+
     const auto res = RepeatedExecuteOnHost(circuit, hostId, 1);
-    recreateIfNeeded = recreate;
 
     if (!res.empty()) {
       const auto &first = *res.begin();
       GetState().SetResultsInOrder(first.first);
     }
 
+    if (!simulator)
+      throw std::runtime_error(
+          "ExecuteOnHostAmplitudes: no simulator available after execution.");
+
     std::vector<std::complex<double>> amplitudes;
-    if (simulator) {
-      const size_t n = simulator->GetNumberOfQubits();
-      const size_t dim = 1ULL << n;
-      amplitudes.resize(dim);
-      for (size_t i = 0; i < dim; ++i) amplitudes[i] = simulator->Amplitude(i);
-    }
+    const size_t n = simulator->GetNumberOfQubits();
+    const size_t dim = 1ULL << n;
+    amplitudes.resize(dim);
+    for (size_t i = 0; i < dim; ++i) amplitudes[i] = simulator->Amplitude(i);
 
     if (recreate && (!simulator || simType != simulator->GetType() ||
                      method != simulator->GetSimulationType() ||
