@@ -402,6 +402,7 @@ BOOST_DATA_TEST_CASE(OptimalMeetingPositionSimulationMatch, numGates, nrGates) {
 }
 
 BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
+#define MAX_BOND_DIMENSION 64
   constexpr int nrQubits = 12;
   const size_t nrStates = 1ULL << nrQubits;
 
@@ -439,7 +440,7 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
       Simulators::SimulatorType::kQCSim,
       Simulators::SimulationType::kMatrixProductState);
   qcsimOrig->AllocateQubits(nrQubits);
-  qcsimOrig->Configure("matrix_product_state_max_bond_dimension", "64");
+  qcsimOrig->Configure("matrix_product_state_max_bond_dimension", std::to_string(MAX_BOND_DIMENSION).c_str());
   qcsimOrig->Initialize();
 
   Circuits::OperationState stateOrig;
@@ -457,7 +458,7 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
   const auto layers = randomCirc->ToMultipleQubitsLayers();
 
   Simulators::MPSDummySimulator dummySim(nrQubits);
-  dummySim.SetMaxBondDimension(64);
+  dummySim.SetMaxBondDimension(MAX_BOND_DIMENSION);
   const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
 
   const auto optCirc = randomCirc->LayersToCircuit(layers);
@@ -483,14 +484,21 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
   BOOST_TEST_MESSAGE("Number of 2-qubit gate layers: " << layers.size());
 
   // Create the optimized simulator with optimal map + meeting position + lookahead
-  const int lookaheadDepth =          layers.size() <= 5 ? 0 : layers.size() < 20 ? 3 : layers.size() < 35 ? 10 : 30;
-  const int lookaheadHeuristicDepth = layers.size() <= 5 ? 0 : layers.size() < 20 ? 2 : layers.size() < 35 ? 8 : 27; 
+  const int lookaheadDepth =          layers.size()   <= 8 ? 0 
+                                      : layers.size() < 15 ? 2 
+                                      : layers.size() < 20 ? 4 
+                                      : layers.size() < 35 ? 6 : 20;
+  const int lookaheadHeuristicDepth = layers.size()   <= 8 ? 0
+                                      : layers.size() < 15 ? 1
+                                      : layers.size() < 20 ? 2
+                                      : layers.size() < 35 ? 4 : 18; 
 
   auto qcsimOpt = Simulators::SimulatorsFactory::CreateSimulator(
       Simulators::SimulatorType::kQCSim,
       Simulators::SimulationType::kMatrixProductState);
   qcsimOpt->AllocateQubits(nrQubits);
-  qcsimOpt->Configure("matrix_product_state_max_bond_dimension", "64");
+  qcsimOpt->Configure("matrix_product_state_max_bond_dimension",
+                      std::to_string(MAX_BOND_DIMENSION).c_str());
   qcsimOpt->Initialize();
 
   qcsimOpt->SetInitialQubitsMap(
