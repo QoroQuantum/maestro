@@ -21,7 +21,6 @@
 #include <algorithm>
 #include <deque>
 #include <random>
-#include "Types.h"
 
 #include <Eigen/Eigen>
 #include <unsupported/Eigen/CXX11/Tensor>
