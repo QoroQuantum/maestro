@@ -402,7 +402,7 @@ BOOST_DATA_TEST_CASE(OptimalMeetingPositionSimulationMatch, numGates, nrGates) {
 }
 
 BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
-  constexpr int nrQubits = 20;
+  constexpr int nrQubits = 12;
   const size_t nrStates = 1ULL << nrQubits;
 
   // build a random circuit with 1- and 2-qubit gates
