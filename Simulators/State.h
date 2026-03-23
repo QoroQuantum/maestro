@@ -205,6 +205,17 @@ class IState {
   virtual void SetLookaheadDepth(int /*depth*/) {}
 
   /**
+   * @brief Sets the lookahead depth for swap optimization.
+   *
+   * Controls how many upcoming 2-qubit gates are considered when
+   * choosing the swap meeting position.  0 means no lookahead
+   * (immediate cost only).  Only effective for MPS simulators.
+   * Requires upcoming gates to be supplied via SetUpcomingGates.
+   * This value sets a number of gates to lookahead without much cost increase.
+   */
+  virtual void SetLookaheadDepthWithHeuristic(int /*depth*/) {}
+
+  /**
    * @brief Supplies upcoming gates for lookahead swap optimization.
    *
    * The simulator uses these to evaluate swap costs for future gates
