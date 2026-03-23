@@ -241,6 +241,12 @@ class QCSimState : public ISimulator {
       mpsSimulator->SetUseOptimalMeetingPosition(true);
   }
 
+  void SetLookaheadDepthWithHeuristic(int depth) override 
+  {
+    lookaheadDepthWithHeuristic = depth;
+    if (lookaheadDepth < depth) SetLookaheadDepth(depth);
+  }
+
   void SetUpcomingGates(
       const std::vector<std::shared_ptr<Circuits::IOperation<double>>> &gates) override {
     upcomingGates = gates;
@@ -249,24 +255,22 @@ class QCSimState : public ISimulator {
     if (!mpsSimulator || lookaheadDepth <= 0) return;
 
     // Register an observer that advances the gate index
-    gateCounterObserver = std::make_shared<GateCounterObserver>(
-        upcomingGateIndex);
+    ClearObservers(); // for now we only have this observer, so this should be fine
+    gateCounterObserver = std::make_shared<GateCounterObserver>(upcomingGateIndex);
     RegisterObserver(gateCounterObserver);
 
     // Set up a meeting position callback that uses MPSDummySimulator
     // for lookahead evaluation with actual bond dimensions
+    // the callback is called only for two qubits gates and only if executing them would require a swap
     mpsSimulator->SetMeetingPositionCallback(
-        [this](auto logicalQ1, auto logicalQ2,
-               const auto &qMap, const auto &qMapInv,
-               const auto &bondDims)
+        [this](const auto &qMap, const auto &bondDims)
             -> QC::TensorNetworks::MPSSimulatorInterface::IndexType {
           using IndexType = QC::TensorNetworks::MPSSimulatorInterface::IndexType;
           const size_t nQ = qMap.size();
 
           if (!dummySim || dummySim->getNrQubits() != nQ) {
             dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
-            dummySim->SetMaxBondDimension(
-                limitSize ? static_cast<long long int>(chi) : 0);
+            dummySim->SetMaxBondDimension(limitSize ? static_cast<long long int>(chi) : 0);
           }
 
           // Seed dummy with current real simulator state
@@ -277,20 +281,33 @@ class QCSimState : public ISimulator {
           std::vector<double> bondDimsD(bondDims.begin(), bondDims.end());
           dummySim->SetCurrentBondDimensions(bondDimsD);
 
-          // Gather upcoming gates from current index
-          // (upcomingGateIndex points to the gate AFTER the current one)
-          std::vector<std::shared_ptr<Circuits::IOperation<>>> window;
-          window.reserve(lookaheadDepth);
+          /*
+          std::cout << "Finding best meeting position for upcoming gates starting at index "
+                    << upcomingGateIndex << " with lookahead depth " << lookaheadDepth << " and heuristic depth "
+                    << lookaheadDepthWithHeuristic << std::endl;
 
-          for (size_t i = upcomingGateIndex;
-               i < upcomingGates.size() &&
-               static_cast<int>(window.size()) < lookaheadDepth;
-               ++i) {
-            window.push_back(upcomingGates[i]);
-          }
+          const auto &op = upcomingGates[upcomingGateIndex];
+          const auto qbits = op->AffectedQubits();
 
-          return dummySim->FindBestMeetingPosition(
-              logicalQ1, logicalQ2, window, lookaheadDepth);
+          std::cout << "Affected qubits: ";
+          for (const auto &q : qbits) std::cout << q << " ";
+          std::cout << std::endl;
+
+          std::cout << "Current qubits map: ";
+          for (size_t i = 0; i < qMap.size(); ++i) std::cout << qMap[i] << " ";
+          std::cout << std::endl;
+
+          std::cout << "Current inverse qubits map: ";
+          for (size_t i = 0; i < qMapInv.size(); ++i) std::cout << qMapInv[i] << " ";
+          std::cout << std::endl;
+          */
+          double bestCost = std::numeric_limits<double>::infinity();
+          auto res = dummySim->FindBestMeetingPosition(upcomingGates, upcomingGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, 0, bestCost);
+
+          //std::cout << "Best meeting position: " << res
+          //          << " with estimated cost: " << bestCost << std::endl;
+
+          return res;
         });
   }
 
@@ -328,8 +345,12 @@ class QCSimState : public ISimulator {
       if (chi > 0) {
         limitSize = true;
         if (mpsSimulator) mpsSimulator->setLimitBondDimension(chi);
-      } else
+        if (dummySim) dummySim->SetMaxBondDimension(static_cast<long long int>(chi));
+      } else {
         limitSize = false;
+        if (mpsSimulator) mpsSimulator->setLimitBondDimension(0);
+        if (dummySim) dummySim->SetMaxBondDimension(0);
+      }
     } else if (std::string("mps_sample_measure_algorithm") == key)
       useMPSMeasureNoCollapse = std::string("mps_probabilities") == value;
   }
@@ -1298,6 +1319,7 @@ class QCSimState : public ISimulator {
       true; /**< The flag to use the mps measure no collapse algorithm. */
 
   int lookaheadDepth = 0;
+  int lookaheadDepthWithHeuristic = 0;
   bool useOptimalMeetingPositionOnly = false;
   std::vector<std::shared_ptr<Circuits::IOperation<>>> upcomingGates;
   size_t upcomingGateIndex = 0;
@@ -1307,7 +1329,9 @@ class QCSimState : public ISimulator {
   class GateCounterObserver : public ISimulatorObserver {
    public:
     GateCounterObserver(size_t &indexRef) : index(indexRef) {}
-    void Update(const Types::qubits_vector &) override { ++index; }
+    void Update(const Types::qubits_vector &) override { 
+        ++index;
+    }
    private:
     size_t &index;
   };

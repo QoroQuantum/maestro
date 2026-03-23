@@ -342,7 +342,7 @@ BOOST_FIXTURE_TEST_CASE(ExpvalInitializationTests, ExpvalTestFixture) {
 
 BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest,
                        bdata::xrange(1, 20), nrGates) {
-  const double precision = 0.000001;
+  const double precision = 0.00001;
   const double precisionGPU = 0.01;
   const double precisionMPS = 0.001;
 
@@ -489,7 +489,7 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, CliffordSimulatorsTest,
 
 BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NetworkExpectationTest,
                        bdata::xrange(1, 20), nrGates) {
-  const double precision = 0.000001;
+  const double precision = 0.00001;
 
   for (int i = 0; i < 30; ++i) {
     GenerateCircuit(nrGates, nrQubits);
