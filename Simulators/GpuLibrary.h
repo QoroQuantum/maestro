@@ -270,6 +270,9 @@ class GpuLibrary : public Utils::Library {
               (int (*)(void *, const long long int *, unsigned int))GetFunction(
                   "MPSSetInitialQubitsMap");
           CheckFunction((void *)fMPSSetInitialQubitsMap, __LINE__);
+          fMPSSetUseOptimalMeetingPosition = (int (*)(void *, int))GetFunction(
+              "MPSSetUseOptimalMeetingPosition");
+          CheckFunction((void *)fMPSSetUseOptimalMeetingPosition, __LINE__);
 
           fMPSIsValid = (int (*)(void *))GetFunction("MPSIsValid");
           CheckFunction((void *)fMPSIsValid, __LINE__);
@@ -332,6 +335,9 @@ class GpuLibrary : public Utils::Library {
           fMPSExpectationValue = (double (*)(
               void *, const char *, int))GetFunction("MPSExpectationValue");
           CheckFunction((void *)fMPSExpectationValue, __LINE__);
+          fMPSProjectOnZero =
+              (int (*)(void *, double *, double *))GetFunction("MPSProjectOnZero");
+          CheckFunction((void *)fMPSProjectOnZero, __LINE__);
 
           fMPSApplyX = (int (*)(void *, unsigned int))GetFunction("MPSApplyX");
           CheckFunction((void *)fMPSApplyX, __LINE__);
@@ -1401,6 +1407,15 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
+  bool MPSSetUseOptimalMeetingPosition(void *obj, int val) {
+    if (LibraryHandle)
+      return fMPSSetUseOptimalMeetingPosition(obj, val) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set use optimal meeting position for mps");
+    return false;
+  }
+
   bool MPSIsValid(void *obj) const {
     if (LibraryHandle)
       return fMPSIsValid(obj) == 1;
@@ -1615,6 +1630,22 @@ class GpuLibrary : public Utils::Library {
           "GpuLibrary: Unable to get mps expectation value");
 
     return 0;
+  }
+
+  std::complex<double> MPSProjectOnZero(void* obj)
+  {
+    if (LibraryHandle) {
+      double real, imag;
+      if (fMPSProjectOnZero(obj, &real, &imag) == 1)
+        return std::complex<double>(real, imag);
+      else 
+        throw std::runtime_error(
+            "GpuLibrary: Unable to project on zero for mps");
+    } else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to project on zero for mps, library handle is null");
+
+    return std::complex<double>(0, 0);
   }
 
   bool MPSApplyX(void *obj, unsigned int siteA) {
@@ -3169,6 +3200,7 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSReset)(void *) = nullptr;
   int (*fMPSSetInitialQubitsMap)(void *, const long long int *,
                                  unsigned int) = nullptr;
+  int (*fMPSSetUseOptimalMeetingPosition)(void *, int) = nullptr;
 
   int (*fMPSIsValid)(void *) = nullptr;
   int (*fMPSIsCreated)(void *) = nullptr;
@@ -3198,6 +3230,7 @@ class GpuLibrary : public Utils::Library {
   void *(*fMPSClone)(void *) = nullptr;
 
   double (*fMPSExpectationValue)(void *, const char *, int) = nullptr;
+  int (*fMPSProjectOnZero)(void *, double *, double *) = nullptr;
 
   int (*fMPSApplyX)(void *, unsigned int) = nullptr;
   int (*fMPSApplyY)(void *, unsigned int) = nullptr;

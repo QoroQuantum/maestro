@@ -325,6 +325,21 @@ class IState {
   virtual std::complex<double> Amplitude(Types::qubit_t outcome) = 0;
 
   /**
+   * @brief Projects the state onto the zero state.
+   *
+   * Use it to project the state onto the zero state.
+   * For most simulator is the same as calling Amplitude(0), but for some
+   * simulators it can be optimized to be faster than calling Amplitude(0).
+   * This for now is done for qcsim mps and gpu mps.
+   * 
+   * @sa IState::Amplitude
+   * @sa IState::Probability
+   *
+   * @return The inner product result as a complex number.
+   */
+  virtual std::complex<double> ProjectOnZero() = 0;
+
+  /**
    * @brief Returns the probabilities of all possible outcomes.
    *
    * Use it to obtain the probabilities of all possible outcomes.
