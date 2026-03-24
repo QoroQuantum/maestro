@@ -170,6 +170,24 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
       size_t hostId) = 0;
 
   /**
+   * @brief Execute circuit on host and return the projection onto the zero
+   * state.
+   *
+   * Execute the circuit on the specified host and return <0|Psi>, the inner
+   * product of the resulting quantum state with the all-zeros basis state.
+   * This is equivalent to Amplitude(0) but can be faster for certain simulator
+   * back-ends (e.g. MPS).
+   *
+   * @param circuit The circuit to execute.
+   * @param hostId The id of the host to execute the circuit on.
+   * @return The complex amplitude <0|Psi>.
+   * @sa Circuits::Circuit
+   */
+  virtual std::complex<double> ExecuteOnHostProjectOnZero(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      size_t hostId) = 0;
+
+  /**
    * @brief Execute the circuit on the network, repeatedly.
    *
    * Execute the circuit on the network, distributing the operations to the

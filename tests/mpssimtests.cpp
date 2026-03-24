@@ -44,6 +44,12 @@ struct MPSSimTestFixture {
     qcsimMPS->AllocateQubits(nrQubitsForRandomCirc);
     qcsimMPS->Initialize();
 
+    qcsimSV = Simulators::SimulatorsFactory::CreateSimulator(
+        Simulators::SimulatorType::kQCSim,
+        Simulators::SimulationType::kStatevector);
+    qcsimSV->AllocateQubits(nrQubitsForRandomCirc);
+    qcsimSV->Initialize();
+
     aerMPS50 = Simulators::SimulatorsFactory::CreateSimulator(
         Simulators::SimulatorType::kQiskitAer,
         Simulators::SimulationType::kMatrixProductState);
@@ -202,6 +208,7 @@ struct MPSSimTestFixture {
   const unsigned int nrQubitsForRandomCirc = 5;
   std::shared_ptr<Simulators::ISimulator> aerMPS;
   std::shared_ptr<Simulators::ISimulator> qcsimMPS;
+  std::shared_ptr<Simulators::ISimulator> qcsimSV;
   std::shared_ptr<Simulators::ISimulator> aerMPS50;
   std::shared_ptr<Simulators::ISimulator> qcsimMPS50;
 
@@ -471,6 +478,47 @@ BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, RandomCircuitsTest50,
 #endif
 
   circ50->Clear();
+}
+
+BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, ProjectOnZeroTest,
+                       bdata::xrange(1, 20), nrGates) {
+  GenerateCircuit(nrGates);
+
+  circ->Execute(qcsimSV, state);
+  circ->Execute(aerMPS, state);
+  circ->Execute(qcsimMPS, state);
+
+#ifdef __linux__
+  if (gpusimMPS) circ->Execute(gpusimMPS, state);
+#endif
+
+  const auto svProjectOnZero = qcsimSV->ProjectOnZero();
+  const auto svAmplitude0 = qcsimSV->Amplitude(0);
+  BOOST_CHECK_PREDICATE(checkClose, (svProjectOnZero)(svAmplitude0)(1e-10));
+
+  const auto aerProjectOnZero = aerMPS->ProjectOnZero();
+  BOOST_CHECK_PREDICATE(checkClose, (svProjectOnZero)(aerProjectOnZero)(0.0001));
+
+  const auto qcsimProjectOnZero = qcsimMPS->ProjectOnZero();
+  BOOST_CHECK_PREDICATE(checkClose, (svProjectOnZero)(qcsimProjectOnZero)(0.0001));
+
+#ifdef __linux__
+  if (gpusimMPS) {
+    const auto gpuProjectOnZero = gpusimMPS->ProjectOnZero();
+    BOOST_CHECK_PREDICATE(checkClose, (svProjectOnZero)(gpuProjectOnZero)(0.0001));
+  }
+#endif
+
+  resetRandomCirc->Execute(aerMPS, state);
+  resetRandomCirc->Execute(qcsimMPS, state);
+  resetRandomCirc->Execute(qcsimSV, state);
+
+#ifdef __linux__
+  if (gpusimMPS) resetRandomCirc->Execute(gpusimMPS, state);
+#endif
+
+  circ->Clear();
+  state.Reset();
 }
 
 BOOST_AUTO_TEST_SUITE_END()

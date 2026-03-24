@@ -405,7 +405,39 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     const size_t n = simulator->GetNumberOfQubits();
     const size_t dim = 1ULL << n;
     amplitudes.resize(dim);
-    for (size_t i = 0; i < dim; ++i) amplitudes[i] = simulator->Amplitude(i);
+    for (size_t state = 0; state < dim; ++state) amplitudes[state] = simulator->Amplitude(state);
+
+    // Remap amplitudes back to the original qubit ordering if qubits were
+    // remapped during execution on the host.
+    if (!qubitsMapOnHost.empty()) {
+      const size_t offsetBase = qubitsMapOnHost.size();
+
+      // Build reverse mapping: simulator qubit position -> original qubit
+      // position.
+      std::vector<size_t> simToOrig(n);
+      size_t offset = offsetBase;
+
+      for (size_t qbit = 0; qbit < n; ++qbit)
+      {
+        auto pos = qubitsMapOnHost.find(qbit);
+        if (pos != qubitsMapOnHost.end())
+          simToOrig[pos->second] = pos->first;
+        else
+          simToOrig[qbit] = offset++;
+      }
+
+      std::vector<std::complex<double>> remapped(dim);
+
+      for (size_t sim_state = 0; sim_state < dim; ++sim_state) {
+        size_t orig_state = 0;
+        for (size_t qbit = 0; qbit < n; ++qbit) {
+          if (sim_state & (1ULL << qbit))
+            orig_state |= (1ULL << simToOrig[qbit]);
+        }
+        if (orig_state < dim) remapped[orig_state] = amplitudes[sim_state];
+      }
+      amplitudes.swap(remapped);
+    }
 
     if (recreate && (!simulator || simType != simulator->GetType() ||
                      method != simulator->GetSimulationType() ||
@@ -413,6 +445,62 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       CreateSimulator(simType, method);
 
     return amplitudes;
+  }
+
+  /**
+   * @brief Execute circuit on host and return the projection onto the zero
+   * state.
+   *
+   * Execute the circuit on the specified host and return <0|Psi>, the inner
+   * product of the resulting quantum state with the all-zeros basis state.
+   * This is equivalent to Amplitude(0) but can be faster for certain simulator
+   * back-ends (e.g. MPS).
+   *
+   * @param circuit The circuit to execute.
+   * @param hostId The id of the host to execute the circuit on.
+   * @return The complex amplitude <0|Psi>.
+   */
+  std::complex<double> ExecuteOnHostProjectOnZero(
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      size_t hostId) override {
+    const auto recreate = recreateIfNeeded;
+
+    auto simType = Simulators::SimulatorType::kQCSim;
+    auto method = Simulators::SimulationType::kMatrixProductState;
+    size_t numQubits = 2;
+    if (simulator) {
+      simType = simulator->GetType();
+      method = simulator->GetSimulationType();
+      numQubits = simulator->GetNumberOfQubits();
+    }
+
+    // RAII: restore recreateIfNeeded on any exit path (including exceptions).
+    struct ScopedRestoreFlag {
+      bool &flag, saved;
+      ScopedRestoreFlag(bool &f) : flag(f), saved(f) { flag = false; }
+      ~ScopedRestoreFlag() { flag = saved; }
+    } restoreGuard(recreateIfNeeded);
+
+    const auto res = RepeatedExecuteOnHost(circuit, hostId, 1);
+
+    if (!res.empty()) {
+      const auto &first = *res.begin();
+      GetState().SetResultsInOrder(first.first);
+    }
+
+    if (!simulator)
+      throw std::runtime_error(
+          "ExecuteOnHostProjectOnZero: no simulator available after "
+          "execution.");
+
+    const std::complex<double> result = simulator->ProjectOnZero();
+
+    if (recreate && (!simulator || simType != simulator->GetType() ||
+                     method != simulator->GetSimulationType() ||
+                     simulator->GetNumberOfQubits() != numQubits))
+      CreateSimulator(simType, method);
+
+    return result;
   }
 
   /**
