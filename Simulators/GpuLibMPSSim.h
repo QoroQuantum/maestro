@@ -63,6 +63,11 @@ class GpuLibMPSSim {
     return false;
   }
 
+  bool SetUseOptimalMeetingPosition(bool useOptimalMeetingPosition) {
+    if (obj) return lib->MPSSetUseOptimalMeetingPosition(obj, useOptimalMeetingPosition);
+    return false;
+  }
+
   bool IsValid() const {
     if (obj) return lib->MPSIsValid(obj);
 
@@ -200,12 +205,18 @@ class GpuLibMPSSim {
     return nullptr;
   }
 
-  double ExpectationValue(const std::string &pauliString) const {
+  double ExpectationValue(const std::string &pauliString) {
     if (obj)
       return lib->MPSExpectationValue(obj, pauliString.c_str(),
                                       pauliString.length());
 
     return 0.0;
+  }
+
+  std::complex<double> ProjectOnZero() {
+    if (obj) return lib->MPSProjectOnZero(obj);
+    
+    return std::complex<double>(0., 0.);
   }
 
   bool ApplyX(unsigned int siteA) {
