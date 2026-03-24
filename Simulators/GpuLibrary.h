@@ -49,6 +49,7 @@
 #include <stdint.h>
 #include <unordered_map>
 #include <vector>
+#include <complex>
 
 namespace Simulators {
 
