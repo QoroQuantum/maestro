@@ -87,7 +87,7 @@ class Alias {
         1. - std::numeric_limits<double>::epsilon();
 
     const double vadj = v * aliasTable.size();
-    const size_t offset = std::min<size_t>(vadj, aliasTable.size() - 1);
+    const size_t offset = std::min<size_t>(static_cast<size_t>(vadj), aliasTable.size() - 1);
     const double up = std::min<double>(vadj - offset, oneMinusEps);
 
     return up < aliasTable[offset].probability ? offset

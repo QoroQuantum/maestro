@@ -521,4 +521,65 @@ BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, ProjectOnZeroTest,
   state.Reset();
 }
 
+BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, SampleCountsManyTest,
+                       bdata::xrange(80, 100), nrGates) {
+  GenerateCircuit(nrGates);
+
+  circ->Execute(qcsimSV, state);
+  circ->Execute(qcsimMPS, state);
+
+  // pick a random subset of qubits (between 1 and nrQubitsForRandomCirc - 1)
+  // to exercise partial-qubit sampling where bugs are more likely
+  std::random_device rd;
+  std::mt19937 g(rd());
+
+  Types::qubits_vector allQubits(nrQubitsForRandomCirc);
+  std::iota(allQubits.begin(), allQubits.end(), 0);
+  std::shuffle(allQubits.begin(), allQubits.end(), g);
+
+  std::uniform_int_distribution<unsigned int> subsetSizeDist(
+      1, nrQubitsForRandomCirc - 1);
+  const unsigned int subsetSize = subsetSizeDist(g);
+
+  Types::qubits_vector sampledQubits(allQubits.begin(),
+                                     allQubits.begin() + subsetSize);
+
+  const size_t shots = 10000;
+
+  auto svCounts = qcsimSV->SampleCountsMany(sampledQubits, shots);
+  auto mpsCounts = qcsimMPS->SampleCountsMany(sampledQubits, shots);
+
+  // compare distributions: every outcome that appears with non-negligible
+  // probability in one should appear close in the other
+  for (const auto& [outcome, cnt] : svCounts) {
+    double svProb = static_cast<double>(cnt) / static_cast<double>(shots);
+    if (svProb < 0.02) continue;
+
+    double mpsProb = 0;
+    if (mpsCounts.find(outcome) != mpsCounts.end())
+      mpsProb = static_cast<double>(mpsCounts[outcome]) /
+                static_cast<double>(shots);
+
+    BOOST_CHECK_CLOSE(svProb, mpsProb, mpsProb < 0.1 ? 66 : 33);
+  }
+
+  for (const auto& [outcome, cnt] : mpsCounts) {
+    double mpsProb = static_cast<double>(cnt) / static_cast<double>(shots);
+    if (mpsProb < 0.02) continue;
+
+    double svProb = 0;
+    if (svCounts.find(outcome) != svCounts.end())
+      svProb = static_cast<double>(svCounts[outcome]) /
+               static_cast<double>(shots);
+
+    BOOST_CHECK_CLOSE(mpsProb, svProb, svProb < 0.1 ? 66 : 33);
+  }
+
+  resetRandomCirc->Execute(qcsimMPS, state);
+  resetRandomCirc->Execute(qcsimSV, state);
+
+  circ->Clear();
+  state.Reset();
+}
+
 BOOST_AUTO_TEST_SUITE_END()

@@ -249,7 +249,10 @@ class IConditionalOperation : public IOperation<Time> {
                OperationState &state) const override {
     if (!condition || !operation) return;
 
-    if (condition->IsConditionMet(state)) operation->Execute(sim, state);
+    if (condition->IsConditionMet(state))
+      operation->Execute(sim, state);
+    else if (sim)
+      sim->IncrementGatesCounter();
   }
 
   /**

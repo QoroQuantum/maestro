@@ -192,7 +192,7 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
     // go backwards, the same way as the propagator does, to get the cost of the
     // operations in the circuit
 
-    for (int pos = circuit->size() - 1; pos >= 0; --pos) {
+    for (int pos = static_cast<int>(circuit->size()) - 1; pos >= 0; --pos) {
       const std::shared_ptr<Circuits::IOperation<>>& op = (*circuit)[pos];
       cost += GetOpCost(circuit, op, pos) * doublingCost;
       doublingCost *= GetOpMultiplication(op);

@@ -81,7 +81,7 @@ class QCSimState : public ISimulator {
         tensorNetwork->SetContractor(tensorContractor);
       } else if (simulationType == SimulationType::kPauliPropagator) {
         pp = std::make_unique<Simulators::QcsimPauliPropagator>();
-        pp->SetNrQubits(nrQubits);
+        pp->SetNrQubits(static_cast<int>(nrQubits));
       } else
         state = std::make_unique<QC::QubitRegister<>>(nrQubits);
 
@@ -312,6 +312,41 @@ class QCSimState : public ISimulator {
   }
 
   /**
+   * @brief Returns the gates counter.
+   *
+   * Usually does nothing, except for MPS simulators that support swap
+   * optimization.
+   *
+   * @return The number of gates executed in the circuit.
+   */
+  long long int GetGatesCounter() const override { return upcomingGateIndex; }
+
+  /**
+   * @brief Sets the gates counter.
+   *
+   * Usually does nothing, except for MPS simulators that support swap
+   * optimization.
+   *
+   * @param counter The position in the circuit from where the execution should
+   * continue.
+   */
+  void SetGatesCounter(long long int counter) override { 
+      upcomingGateIndex = counter;
+  }
+
+  /**
+   * @brief Increments the gates counter.
+   *
+   * Usually does nothing, except for MPS simulators that support swap
+   * optimization. Increments the position in the circuit from where the
+   * execution should continue. Useful for classically controlled gates, for the
+   * case when the controlled gate is not executed.
+   */
+  void IncrementGatesCounter() override {
+      ++upcomingGateIndex;
+  }
+
+  /**
    * @brief Configures the state.
    *
    * This function is called to configure the simulator.
@@ -383,7 +418,7 @@ class QCSimState : public ISimulator {
       if (limitEntanglement && singularValueThreshold > 0.)
         return std::to_string(singularValueThreshold);
     } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
-      if (limitSize && limitSize > 0) return std::to_string(chi);
+      if (limitSize && chi > 0) return std::to_string(chi);
     } else if (std::string("mps_sample_measure_algorithm") == key) {
       return useMPSMeasureNoCollapse ? "mps_probabilities"
                                      : "mps_apply_measure";
@@ -410,7 +445,7 @@ class QCSimState : public ISimulator {
     const size_t oldNrQubits = nrQubits;
     nrQubits += num_qubits;
     if (simulationType == SimulationType::kPauliPropagator)
-      if (pp) pp->SetNrQubits(nrQubits);
+      if (pp) pp->SetNrQubits(static_cast<int>(nrQubits));
 
     return oldNrQubits;
   }
@@ -779,7 +814,7 @@ class QCSimState : public ISimulator {
       bool normal = true;
       if (useMPSMeasureNoCollapse) {
         // check to see if it can be used
-        std::unordered_set qset(qubits.begin(), qubits.end());
+        const std::set<Eigen::Index> qset(qubits.begin(), qubits.end());
         if (qset.size() == GetNumberOfQubits()) {
           // it can!
           normal = false;
@@ -797,6 +832,26 @@ class QCSimState : public ISimulator {
 
             ++result[meas];
           }
+        } else if (qset.size() > 1) {
+          mpsSimulator->MoveAtBeginningOfChain(qset);
+          // now sample
+          normal = false;
+          for (size_t shot = 0; shot < shots; ++shot) {
+            const auto measRaw = mpsSimulator->MeasureNoCollapse(qset);
+            size_t meas = 0;
+            size_t mask = 1ULL;
+
+            // might not be in the requested order
+            // translate the measurement            
+            for (auto q : qubits) {
+              const size_t qubitMask = 1ULL << q;
+              if (measRaw.at(q)) meas |= mask;
+              mask <<= 1ULL;
+            }
+
+            ++result[meas];
+          }
+
         } else if (qset.size() == 1) {
           // if only one qubit is measured, we can use the probability
           normal = false;
@@ -918,7 +973,7 @@ class QCSimState : public ISimulator {
       bool normal = true;
       if (useMPSMeasureNoCollapse) {
         // check to see if it can be used
-        std::unordered_set qset(qubits.begin(), qubits.end());
+        const std::set<Eigen::Index> qset(qubits.begin(), qubits.end());
         if (qset.size() == GetNumberOfQubits()) {
           // it can!
           normal = false;
@@ -927,9 +982,24 @@ class QCSimState : public ISimulator {
 
             // might not be in the requested order
             // translate the measurement
-            std::vector<bool> measVec(qubits.size(), false);
+            std::vector<bool> measVec(qubits.size());
             for (size_t i = 0; i < qubits.size(); ++i)
               measVec[i] = meas[qubits[i]];
+
+            ++result[measVec];
+          }
+        } else if (qset.size() > 1) {
+          mpsSimulator->MoveAtBeginningOfChain(qset);
+          // now sample
+          normal = false;
+          for (size_t shot = 0; shot < shots; ++shot) {
+            const auto meas = mpsSimulator->MeasureNoCollapse(qset);
+            
+            // might not be in the requested order
+            // translate the measurement            
+            std::vector<bool> measVec(qubits.size());
+            for (size_t i = 0; i < qubits.size(); ++i)
+              measVec[i] = meas.at(qubits[i]);
 
             ++result[measVec];
           }
@@ -1257,8 +1327,8 @@ class QCSimState : public ISimulator {
       const auto measured = mpsSimulator->MeasureNoCollapse();
       Types::qubit_t result = 0;
       Types::qubit_t mask = 1;
-      for (const auto &meas : measured) {
-        if (meas) result |= mask;
+      for (Types::qubit_t q = 0; q < measured.size(); ++q) {
+        if (measured.at(q)) result |= mask;
         mask <<= 1;
       }
       return result;
@@ -1301,7 +1371,10 @@ class QCSimState : public ISimulator {
       for (size_t i = 0; i < nrQubits; ++i) res[i] = ((state >> i) & 1) == 1;
       return res;
     } else if (simulationType == SimulationType::kMatrixProductState) {
-      return mpsSimulator->MeasureNoCollapse();
+      const auto measured = mpsSimulator->MeasureNoCollapse();
+      std::vector<bool> res(nrQubits);
+      for (size_t i = 0; i < nrQubits; ++i) res[i] = measured.at(i);
+      return res;
     } else if (simulationType == SimulationType::kPauliPropagator) {
       std::vector<int> qubitsInt(GetNumberOfQubits());
       std::iota(qubitsInt.begin(), qubitsInt.end(), 0);
@@ -1341,18 +1414,18 @@ class QCSimState : public ISimulator {
   int lookaheadDepthWithHeuristic = 0;
   bool useOptimalMeetingPositionOnly = false;
   std::vector<std::shared_ptr<Circuits::IOperation<>>> upcomingGates;
-  size_t upcomingGateIndex = 0;
+  long long int upcomingGateIndex = 0;
   std::unique_ptr<Simulators::MPSDummySimulator> dummySim;
 
   // Observer that counts applied gates to track position in upcomingGates
   class GateCounterObserver : public ISimulatorObserver {
    public:
-    GateCounterObserver(size_t &indexRef) : index(indexRef) {}
+    GateCounterObserver(long long int &indexRef) : index(indexRef) {}
     void Update(const Types::qubits_vector &) override { 
         ++index;
     }
    private:
-    size_t &index;
+    long long int &index;
   };
   std::shared_ptr<GateCounterObserver> gateCounterObserver;
 
