@@ -290,20 +290,20 @@ class MPSDummySimulator {
   // The state is saved and restored, so this is non-destructive.
   void EvaluateMeetingPositionCost(IndexType meetPosition,
       const std::vector<std::shared_ptr<Circuits::IOperation<>>>& upcomingGates,
-      size_t currentGateIndex, int lookaheadDepth,
+      long long int currentGateIndex, int lookaheadDepth,
       int lookaheadDepthWithHeuristic, double currentCost, double& bestCost, bool useSameDummy = false) 
   {
-    if (currentGateIndex >= upcomingGates.size()) 
+    if (currentGateIndex >= static_cast<long long int>(upcomingGates.size())) 
     {
       if (currentCost < bestCost) bestCost = currentCost;
       return;
     }
 
     // skip the 1 qubit gates, advance to the next 2-qubit gate
-    while (currentGateIndex < upcomingGates.size() && upcomingGates[currentGateIndex]->AffectedQubits().size() < 2)
+    while (currentGateIndex < static_cast<long long int>(upcomingGates.size()) && upcomingGates[currentGateIndex]->AffectedQubits().size() < 2)
       ++currentGateIndex;
 
-    if (currentGateIndex >= upcomingGates.size()) 
+    if (currentGateIndex >= static_cast<long long int>(upcomingGates.size())) 
     {
       if (currentCost < bestCost) bestCost = currentCost;
       return;
@@ -346,11 +346,11 @@ class MPSDummySimulator {
       // skip the 1 qubit gates, advance over the current gate on the next
       // 2-qubit gate
       ++currentGateIndex;
-      while (currentGateIndex < upcomingGates.size() &&
+      while (currentGateIndex < static_cast<long long int>(upcomingGates.size()) &&
              upcomingGates[currentGateIndex]->AffectedQubits().size() < 2)
         ++currentGateIndex;
 
-      if (currentGateIndex >= upcomingGates.size()) {
+      if (currentGateIndex >= static_cast<long long int>(upcomingGates.size())) {
         if (currentCost < bestCost) bestCost = currentCost;
         return;
       }
@@ -388,11 +388,11 @@ class MPSDummySimulator {
       // skip the 1 qubit gates, advance over the current gate on the next
       // 2-qubit gate
       ++currentGateIndex;
-      while (currentGateIndex < upcomingGates.size() &&
+      while (currentGateIndex < static_cast<long long int>(upcomingGates.size()) &&
              upcomingGates[currentGateIndex]->AffectedQubits().size() < 2)
         ++currentGateIndex;
 
-      if (currentGateIndex >= upcomingGates.size()) {
+      if (currentGateIndex >= static_cast<long long int>(upcomingGates.size())) {
         if (currentCost < bestCost) bestCost = currentCost;
         return;
       }
@@ -407,7 +407,7 @@ class MPSDummySimulator {
   // current swap + lookahead gates.  Returns the optimal bond index.
   // outBestCost receives the total accumulated cost for the best position.
   IndexType FindBestMeetingPosition(
-      const std::vector<std::shared_ptr<Circuits::IOperation<>>>& upcomingGates, size_t currentGateIndex,
+      const std::vector<std::shared_ptr<Circuits::IOperation<>>>& upcomingGates, long long int currentGateIndex,
       int lookaheadDepth, int lookaheadDepthWithHeuristic, double currentCost, double& bestCost) 
     {
     const auto& op = upcomingGates[currentGateIndex];

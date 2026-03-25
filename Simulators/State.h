@@ -226,6 +226,32 @@ class IState {
       const std::vector<std::shared_ptr<Circuits::IOperation<double>>> & /*gates*/) {}
 
   /**
+   * @brief Returns the gates counter.
+   *
+   * Usually does nothing, except for MPS simulators that support swap optimization.
+   * 
+   * @return The number of gates executed in the circuit.
+   */
+  virtual long long int GetGatesCounter() const { return 0; }
+
+  /**
+   * @brief Sets the gates counter.
+   *
+   * Usually does nothing, except for MPS simulators that support swap optimization.
+   * 
+   * @param counter The position in the circuit from where the execution should continue.
+   */
+  virtual void SetGatesCounter(long long int /*counter*/) {}
+
+  /**
+   * @brief Increments the gates counter.
+   *
+   * Usually does nothing, except for MPS simulators that support swap optimization. Increments the position in the circuit from where the
+   * execution should continue. Useful for classically controlled gates, for the case when the controlled gate is not executed.
+   */
+  virtual void IncrementGatesCounter() {}
+
+  /**
    * @brief Configures the state.
    *
    * This function is called to configure the simulator.
