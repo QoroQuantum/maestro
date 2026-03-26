@@ -573,7 +573,7 @@ class MPSDummySimulator {
     auto buildChain = [&](const std::vector<std::vector<QubitPair>>& orderedLP)
         -> std::vector<long long int> {
       std::vector<IndexType> chain;
-      std::unordered_set<IndexType> placed;
+      std::vector<bool> placed(nrQubits, false);
 
       std::unordered_set<IndexType> above;
       std::unordered_set<IndexType> below;
@@ -583,15 +583,15 @@ class MPSDummySimulator {
         if (placed.size() == static_cast<size_t>(nrQubits)) break;
         for (const auto& p : lp) {
           if (placed.size() == static_cast<size_t>(nrQubits)) break;
-          const bool q1In = placed.count(p.q1) > 0;
-          const bool q2In = placed.count(p.q2) > 0;
+          const bool q1In = placed[p.q1];
+          const bool q2In = placed[p.q2];
 
           if (!q1In && !q2In) {
             // Neither placed: add both adjacent at the end
             chain.push_back(p.q1);
             chain.push_back(p.q2);
-            placed.insert(p.q1);
-            placed.insert(p.q2);
+            placed[p.q1] = true;    
+            placed[p.q2] = true;
 
             below.insert(p.q1);
             above.insert(p.q2);
@@ -599,10 +599,13 @@ class MPSDummySimulator {
           else if (q1In && !q2In && gateCount < secondLayerLimit) {
             // q1 placed, q2 not: insert q2 next to q1
             auto it = std::find(chain.begin(), chain.end(), p.q1);
-            if (it == chain.begin())
+            if (it == chain.begin()) {
               chain.insert(it, p.q2);
-            else if (it + 1 == chain.end())
+              below.insert(p.q2);
+            } else if (it + 1 == chain.end()) {
               chain.push_back(p.q2);
+              above.insert(p.q2);
+            }
             else {
                 if (below.count(p.q1) > 0) {
                     chain.insert(it, p.q2);
@@ -612,14 +615,17 @@ class MPSDummySimulator {
                     above.insert(p.q2);
                 }
             }
-            placed.insert(p.q2);
+            placed[p.q2] = true;
           } else if (!q1In && q2In && gateCount < secondLayerLimit) {
             // q2 placed, q1 not: insert q1 next to q2
             auto it = std::find(chain.begin(), chain.end(), p.q2);
-            if (it == chain.begin())
+            if (it == chain.begin()) {
               chain.insert(it, p.q1);
-            else if (it + 1 == chain.end())
+              below.insert(p.q1);
+            } else if (it + 1 == chain.end()) {
               chain.push_back(p.q1);
+              above.insert(p.q1);
+            }
             else
             {
                 if (below.count(p.q2) > 0) {
@@ -630,7 +636,7 @@ class MPSDummySimulator {
                     above.insert(p.q1);
                 }
             }
-            placed.insert(p.q1);
+            placed[p.q1] = true;
           }
           // Both placed: nothing to do
           ++gateCount;
@@ -639,7 +645,7 @@ class MPSDummySimulator {
 
       // Append any remaining unplaced qubits
       for (IndexType q = 0; q < nrQubits; ++q)
-        if (placed.count(q) == 0) chain.push_back(q);
+        if (!placed[q]) chain.push_back(q);
 
       assert(chain.size() == nrQubits);
 
