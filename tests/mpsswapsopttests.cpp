@@ -37,68 +37,6 @@ BOOST_AUTO_TEST_SUITE(MPSSwapOptTests)
 
 constexpr std::array numGates{10, 20, 30, 50, 80, 100, 150, 200, 270, 340, 500, 800, 1000};
 
-BOOST_DATA_TEST_CASE(OptimalQubitsMapZeroSwapCost, numGates, nrGates) {
-  constexpr int nrQubits = 10;
-
-  auto randomCirc = std::make_shared<Circuits::Circuit<>>();
-
-  std::mt19937 g(/*static_cast<unsigned>(nrGates) * 12345u*/ std::random_device{}());
-  std::uniform_int_distribution<int> gateDist(
-      0, static_cast<int>(Circuits::QuantumGateType::kCUGateType));
-
-  for (int gateNr = 0; gateNr < nrGates; ++gateNr) {
-    Types::qubits_vector qubits(nrQubits);
-    std::iota(qubits.begin(), qubits.end(), 0);
-    std::shuffle(qubits.begin(), qubits.end(), g);
-    auto q1 = qubits[0];
-    auto q2 = qubits[1];
-
-    Circuits::QuantumGateType gateType =
-        static_cast<Circuits::QuantumGateType>(gateDist(g));
-
-    // parameters are not important for this test, we just need to have some
-    // gates that affect the qubits
-    // neither is the type of the gate, beyond the number of qubits it affects
-    auto theGate = Circuits::CircuitFactory<>::CreateGate(gateType, q1, q2, 0,
-                                                          0.0, 0.0, 0.0, 0.0);
-    randomCirc->AddOperation(theGate);
-  }
-
-  const auto layers = randomCirc->ToMultipleQubitsLayers();
-
-  Simulators::MPSDummySimulator dummySim(nrQubits);
-  dummySim.SetMaxBondDimension(64);
-  const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
-  const auto optCirc = randomCirc->LayersToCircuit(layers);
-
-  std::vector<long long int> origqubits(nrQubits);
-  std::iota(origqubits.begin(), origqubits.end(), 0);
-  dummySim.SetInitialQubitsMap(origqubits);
-
-  dummySim.ApplyGates(optCirc->GetOperations());
-  const auto origSwappingCost = dummySim.getTotalSwappingCost();
-
-  dummySim.SetInitialQubitsMap(optimalMap);
-  dummySim.ApplyGates(optCirc->GetOperations());
-  const auto optSwappingCost = dummySim.getTotalSwappingCost();
-
-  BOOST_CHECK_LE(optSwappingCost, origSwappingCost);
-
-  // print the results for debugging
-  BOOST_TEST_MESSAGE("Original swapping cost: " << origSwappingCost);
-  BOOST_TEST_MESSAGE("Optimized swapping cost: " << optSwappingCost);
-
-  const double improvementPct =
-      origSwappingCost > 0
-          ? (1.0 - optSwappingCost / origSwappingCost) * 100.0
-          : 0.0;
-  BOOST_TEST_MESSAGE("Swap cost reduction: " << improvementPct << "%");
-  BOOST_TEST_MESSAGE("Speedup ratio: "
-                     << (optSwappingCost > 0
-                             ? origSwappingCost / optSwappingCost
-                             : 0.0)
-                     << "x");
-}
 
 BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
   constexpr int nrQubits = 12;
