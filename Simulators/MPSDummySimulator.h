@@ -409,12 +409,10 @@ class MPSDummySimulator {
                             : layers.end());
 
     const IndexType nrQubits = getNrQubits();
-    std::vector<long long int> qubitsMap(nrQubits);
-    std::iota(qubitsMap.begin(), qubitsMap.end(), 0);
 
     if (layers.empty() || nrQubits <= 2) return qubitsMap;
 
-    /*
+    
     auto evaluateCost =
         [&, this](const std::vector<IndexType>& candidateMap) -> double {
       auto saveQubitsMap = qubitsMap;
@@ -468,7 +466,7 @@ class MPSDummySimulator {
 
       return res;
     };
-    */
+    
 
     // Collect 2-qubit pairs from each layer, preserving layer boundaries
     struct QubitPair {
@@ -613,7 +611,31 @@ class MPSDummySimulator {
       return result;
     };
 
-    return buildChain(layerPairs);
+    auto optMap = buildChain(layerPairs);
+    if (layersPassed.size() <= 2) return optMap;
+    auto optCost = evaluateCost(optMap);
+
+    std::vector<long long int> qubitsMap(nrQubits);
+    std::iota(qubitsMap.begin(), qubitsMap.end(), 0);
+    double tryCost = evaluateCostBounded(qubitsMap, optCost);
+    if (tryCost < optCost) {
+      optCost = tryCost;
+      optMap = qubitsMap;
+    }
+
+    // try some random shuffles as well, in case the heuristic ordering is not
+    // optimal
+    std::mt19937 rng(42);
+    for (int i = 0; i < nrShuffles; ++i) {
+      std::shuffle(qubitsMap.begin(), qubitsMap.end(), rng);
+      tryCost = evaluateCostBounded(qubitsMap, optCost);
+      if (tryCost < optCost) {
+        optCost = tryCost;
+        optMap = qubitsMap;
+      }
+    }
+
+    return optMap;
   }
 
  private:
