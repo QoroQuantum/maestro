@@ -167,7 +167,7 @@ class MPSDummySimulator {
       // any 2-qubit gate (whether swaps were needed or not) grows the
       // bond dimension at the bond between the two adjacent qubits
       const IndexType bond = std::min(qubit1, qubit2);
-      growBondDimension(bond);
+      growBondDimension(bond, false);
       totalSwappingCost += bondCost[bond];
     }
   }
@@ -287,7 +287,6 @@ class MPSDummySimulator {
   // Evaluate the total cost of swapping qubit1 and qubit2 to a given meeting
   // position, applying the current 2-qubit gate, and then simulating the
   // next lookaheadDepth 2-qubit gates from upcomingGates.
-  // The state is saved and restored, so this is non-destructive.
   void EvaluateMeetingPositionCost(IndexType meetPosition,
       const std::vector<std::shared_ptr<Circuits::IOperation<>>>& upcomingGates,
       long long int currentGateIndex, int lookaheadDepth,
@@ -335,7 +334,10 @@ class MPSDummySimulator {
 
       ApplyGate(op);
 
-      currentCost += getTotalSwappingCost() - ccost;
+      //const double importanceFactor =
+      //    pow(dimFactor, (lookaheadDepthWithHeuristic - lookaheadDepth - 1));
+      currentCost += (getTotalSwappingCost() - ccost) /** importanceFactor*/;
+
       if (currentCost >= bestCost) return;
       // No more lookahead depth: return without further recursion
       if (lookaheadDepth <= 0) {
@@ -429,14 +431,14 @@ class MPSDummySimulator {
                           : realq1;
       EvaluateMeetingPositionCost(pos, upcomingGates, currentGateIndex, 0,
                                   lookaheadDepthWithHeuristic, currentCost,
-                                  bestCost);
+                                  bestCost, false);
       return pos;
     }
 
     if (realq2 - realq1 <= 1) {
       EvaluateMeetingPositionCost(realq1, upcomingGates, currentGateIndex,
-                                  lookaheadDepth, lookaheadDepthWithHeuristic,
-                                  currentCost, bestCost);
+                                  lookaheadDepth, lookaheadDepthWithHeuristic, currentCost, bestCost,
+          lookaheadDepth <= lookaheadDepthWithHeuristic);
 
       return realq1;
     }
@@ -649,6 +651,8 @@ class MPSDummySimulator {
     };
 
     auto bestMap = buildChain(layerPairs);
+    if (layersPassed.size() <= 2) return bestMap;
+
     auto bestCost = evaluateCost(bestMap);
 
     // Build a bond-saturation-aware weight matrix from ALL layers.
@@ -1151,12 +1155,11 @@ class MPSDummySimulator {
   std::vector<double> currentBondDim;
 
   double totalSwappingCost = 0;
+  //double dimFactor = 0.95;
 
   void growBondDimension(IndexType bond, bool swap = true) {
-    constexpr double growthFactorSwap = 1.5; 
-    // some average growth factor per 2-qubit gate, can be tuned for
-    // better correlation with actual MPS behavior
-    constexpr double growthFactorGate = 1.8;
+    constexpr double growthFactorSwap = 1.5;
+    constexpr double growthFactorGate = 1.3;
 
     if (swap) {
       const double neighborDim =
@@ -1165,11 +1168,11 @@ class MPSDummySimulator {
               : currentBondDim[bond];
       currentBondDim[bond] =
           std::min(std::max(currentBondDim[bond], neighborDim) * growthFactorSwap,
-                   maxBondDim[bond]);
-    } else
-        currentBondDim[bond] = std::min(
-            currentBondDim[bond] * growthFactorGate,
-            maxBondDim[bond]);
+                    maxBondDim[bond]);
+    } else {
+      currentBondDim[bond] = std::min(currentBondDim[bond] * growthFactorGate,
+          maxBondDim[bond]);
+    }
 
     bondCost[bond] = currentBondDim[bond] * currentBondDim[bond] * currentBondDim[bond];
   }
