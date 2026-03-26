@@ -580,9 +580,9 @@ class MPSDummySimulator {
 
       size_t gateCount = 0;
       for (const auto& lp : orderedLP) {
-        if (placed.size() == static_cast<size_t>(nrQubits)) break;
+        if (chain.size() == static_cast<size_t>(nrQubits)) break;
         for (const auto& p : lp) {
-          if (placed.size() == static_cast<size_t>(nrQubits)) break;
+          if (chain.size() == static_cast<size_t>(nrQubits)) break;
           const bool q1In = placed[p.q1];
           const bool q2In = placed[p.q2];
 
