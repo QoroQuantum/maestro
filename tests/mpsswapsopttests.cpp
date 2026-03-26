@@ -485,13 +485,14 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
 
   // Create the optimized simulator with optimal map + meeting position + lookahead
   const int lookaheadDepth =          layers.size()   <= 8 ? 0 
-                                      : layers.size() < 15 ? 2 
-                                      : layers.size() < 20 ? 4 
-                                      : layers.size() < 35 ? 6 : 20;
+                                      //: layers.size() < 15 ? 4 
+                                      : layers.size() < 20 ? 5 
+                                      : layers.size() < 35 ? 10 : 20;
+
   const int lookaheadHeuristicDepth = layers.size()   <= 8 ? 0
-                                      : layers.size() < 15 ? 1
-                                      : layers.size() < 20 ? 2
-                                      : layers.size() < 35 ? 4 : 18; 
+                                      //: layers.size() < 15 ? 3
+                                      : layers.size() < 20 ? 4
+                                      : layers.size() < 35 ? 8 : 18; 
 
   auto qcsimOpt = Simulators::SimulatorsFactory::CreateSimulator(
       Simulators::SimulatorType::kQCSim,
@@ -501,8 +502,8 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
                       std::to_string(MAX_BOND_DIMENSION).c_str());
   qcsimOpt->Initialize();
 
-  qcsimOpt->SetInitialQubitsMap(
-      std::vector<long long int>(optimalMap.begin(), optimalMap.end()));
+  qcsimOpt->SetInitialQubitsMap(std::vector<long long int>(optimalMap.begin(), optimalMap.end()));
+
   qcsimOpt->SetUseOptimalMeetingPosition(true);
   qcsimOpt->SetLookaheadDepth(lookaheadDepth);
   qcsimOpt->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepth);
