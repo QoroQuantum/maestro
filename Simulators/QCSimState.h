@@ -227,12 +227,21 @@ class QCSimState : public ISimulator {
    */
   void SetInitialQubitsMap(
       const std::vector<long long int> &initialMap) override {
-    if (mpsSimulator) mpsSimulator->SetInitialQubitsMap(initialMap);
+    if (mpsSimulator) {
+      mpsSimulator->SetInitialQubitsMap(initialMap);
+      if (!dummySim || dummySim->getNrQubits() != initialMap.size()) {
+        dummySim = std::make_unique<Simulators::MPSDummySimulator>(initialMap.size());
+        dummySim->SetMaxBondDimension(
+            limitSize ? static_cast<long long int>(chi) : 0);
+      }
+      dummySim->SetInitialQubitsMap(initialMap);
+    }
   }
 
   void SetUseOptimalMeetingPosition(bool enable) override {
     useOptimalMeetingPositionOnly = enable;
-    if (mpsSimulator) mpsSimulator->SetUseOptimalMeetingPosition(enable);
+    if (mpsSimulator)
+        mpsSimulator->SetUseOptimalMeetingPosition(enable);
   }
 
   void SetLookaheadDepth(int depth) override {
@@ -265,7 +274,6 @@ class QCSimState : public ISimulator {
     mpsSimulator->SetMeetingPositionCallback(
         [this](const auto &qMap, const auto &bondDims)
             -> QC::TensorNetworks::MPSSimulatorInterface::IndexType {
-          using IndexType = QC::TensorNetworks::MPSSimulatorInterface::IndexType;
           const size_t nQ = qMap.size();
 
           if (!dummySim || dummySim->getNrQubits() != nQ) {
@@ -274,20 +282,49 @@ class QCSimState : public ISimulator {
           }
 
           // Seed dummy with current real simulator state
-          std::vector<long long int> map64(qMap.begin(), qMap.end());
-          dummySim->SetInitialQubitsMap(map64);
+          //std::vector<long long int> map64(qMap.begin(), qMap.end());
+          //dummySim->SetInitialQubitsMap(map64);
+          dummySim->setTotalSwappingCost(0);
+
+
+          // check qubits map:
+          /*
+          auto qbitmMap = dummySim->getQubitsMap();
+          for (size_t i = 0; i < nQ; ++i) {
+            if (qbitmMap[i] != qMap[i]) {
+              std::cerr << "Error: qubits map mismatch at index " << i
+                        << ": dummySim has " << qbitmMap[i]
+                        << " but real sim has " << qMap[i] << std::endl;
+              exit(0);
+            }
+          }
+          */
+
+          // check them, they should be the same, otherwise something is wrong
+
 
           // Convert actual bond dims to doubles
           std::vector<double> bondDimsD(bondDims.begin(), bondDims.end());
           dummySim->SetCurrentBondDimensions(bondDimsD);
+
+          // display bond dimensions for debugging
+          /*
+          for (size_t i = 0; i < bondDims.size(); ++i) {
+            std::cout << "Bond dimension between qubits " << i << " and " << i + 1
+                      << ": " << bondDims[i] << std::endl;
+          }
+          std::cout << std::endl;
+          */
+
+          const auto &op = upcomingGates[upcomingGateIndex];
+          const auto qbits = op->AffectedQubits();
 
           /*
           std::cout << "Finding best meeting position for upcoming gates starting at index "
                     << upcomingGateIndex << " with lookahead depth " << lookaheadDepth << " and heuristic depth "
                     << lookaheadDepthWithHeuristic << std::endl;
 
-          const auto &op = upcomingGates[upcomingGateIndex];
-          const auto qbits = op->AffectedQubits();
+
 
           std::cout << "Affected qubits: ";
           for (const auto &q : qbits) std::cout << q << " ";
@@ -301,8 +338,21 @@ class QCSimState : public ISimulator {
           for (size_t i = 0; i < qMapInv.size(); ++i) std::cout << qMapInv[i] << " ";
           std::cout << std::endl;
           */
+
           double bestCost = std::numeric_limits<double>::infinity();
           auto res = dummySim->FindBestMeetingPosition(upcomingGates, upcomingGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, 0, bestCost);
+          dummySim->SwapQubitsToPosition(qbits[0], qbits[1], res);
+          dummySim->ApplyGate(op);
+
+          // display the expected bond dimensions after applying the gate for
+          // debugging
+          /*
+          const auto &expectedBondDims = dummySim->getCurrentBondDimensions();
+          for (size_t i = 0; i < expectedBondDims.size(); ++i) {
+            std::cout << "Expected bond dimension between qubits " << i << " and " << i + 1
+                      << ": " << expectedBondDims[i] << std::endl;
+          }
+          */
 
           //std::cout << "Best meeting position: " << res
           //          << " with estimated cost: " << bestCost << std::endl;
