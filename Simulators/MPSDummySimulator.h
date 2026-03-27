@@ -213,6 +213,7 @@ class MPSDummySimulator {
 
   const std::vector<IndexType>& getQubitsMapInv() const { return qubitsMapInv; }
 
+  void setTotalSwappingCost(double cost) { totalSwappingCost = cost; }
   double getTotalSwappingCost() const { return totalSwappingCost; }
 
   // Evaluate the total cost
@@ -422,15 +423,17 @@ class MPSDummySimulator {
       auto saveBondCost = bondCost;
 
       SetInitialQubitsMap(candidateMap);
-      for (const auto& layer : layersPassed) ApplyGates(layer->GetOperations());
-      auto res = getTotalSwappingCost();
+
+      for (const auto& layer : layersPassed) 
+          ApplyGates(layer->GetOperations());
+      auto cost = getTotalSwappingCost();
       qubitsMap = std::move(saveQubitsMap);
       qubitsMapInv = std::move(saveQubitsMapInv);
       currentBondDim = std::move(saveCurrentBondDim);
       totalSwappingCost = saveTotalSwappingCost;
       bondCost = std::move(saveBondCost);
 
-      return res;
+      return cost;
     };
 
     auto evaluateCostBounded = [&, this](
@@ -443,20 +446,21 @@ class MPSDummySimulator {
       auto saveBondCost = bondCost;
 
       SetInitialQubitsMap(candidateMap);
+
       for (const auto& layer : layersPassed) {
         ApplyGates(layer->GetOperations());
-        if (getTotalSwappingCost() >= bound) {
-          auto res = getTotalSwappingCost();
+        auto cost = getTotalSwappingCost();
+        if (cost >= bound) {
           // restore state
           qubitsMap = std::move(saveQubitsMap);
           qubitsMapInv = std::move(saveQubitsMapInv);
           currentBondDim = std::move(saveCurrentBondDim);
           totalSwappingCost = saveTotalSwappingCost;
           bondCost = std::move(saveBondCost);
-          return res;
+          return cost;
         }
       }
-      auto res = getTotalSwappingCost();
+      auto cost = getTotalSwappingCost();
       // restore state
       qubitsMap = std::move(saveQubitsMap);
       qubitsMapInv = std::move(saveQubitsMapInv);
@@ -464,7 +468,7 @@ class MPSDummySimulator {
       totalSwappingCost = saveTotalSwappingCost;
       bondCost = std::move(saveBondCost);
 
-      return res;
+      return cost;
     };
     
 
@@ -635,6 +639,60 @@ class MPSDummySimulator {
       }
     }
 
+
+    std::uniform_int_distribution<IndexType> qubitDist(0, nrQubits - 1);
+    std::uniform_int_distribution<int> nrSwapsDist(
+        1, std::min<int>(3, static_cast<int>(nrQubits) / 2));
+
+    const int maxNoImprove = std::max(nrShuffles, static_cast<int>(nrQubits));
+    const int maxTotalShuffles = maxNoImprove * 3;
+    int noImproveCount = 0;
+
+    for (int s = 0; s < maxTotalShuffles && noImproveCount < maxNoImprove; ++s) {
+      auto tryMap = optMap;
+      const int nrSwaps = nrSwapsDist(rng);
+      for (int sw = 0; sw < nrSwaps; ++sw) {
+        const IndexType a = qubitDist(rng);
+        IndexType b = qubitDist(rng);
+        while (b == a) b = qubitDist(rng);
+        std::swap(tryMap[a], tryMap[b]);
+      }
+
+      auto cost = evaluateCostBounded(tryMap, optCost);
+      if (cost < optCost) {
+        optMap = tryMap;
+        optCost = cost;
+        noImproveCount = 0;
+      } else {
+        ++noImproveCount;
+      }
+    }
+
+    // 2-opt local search: iteratively swap pairs of positions in the best map
+    // and keep improvements, until no single swap can reduce the cost
+    {
+      auto candidate = optMap;
+      bool improved = true;
+      while (improved) {
+        improved = false;
+        for (IndexType i = 0; i < nrQubits; ++i) {
+          for (IndexType j = i + 1; j < nrQubits; ++j) {
+            // swap the mapped positions of qubits i and j
+            std::swap(candidate[i], candidate[j]);
+            auto cost = evaluateCostBounded(candidate, optCost);
+            if (cost < optCost) {
+              optMap = candidate;
+              optCost = cost;
+              improved = true;
+            } else {
+              // revert
+              std::swap(candidate[i], candidate[j]);
+            }
+          }
+        }
+      }
+    }
+
     return optMap;
   }
 
@@ -770,21 +828,23 @@ class MPSDummySimulator {
   // double dimFactor = 0.95;
 
   void growBondDimension(IndexType bond, bool swap = true) {
-    constexpr double growthFactorSwap = 1.5;
-    constexpr double growthFactorGate = 1.3;
+    constexpr double growthFactorSwap = 1.;  // 1.5;
+    constexpr double growthFactorGate = 1.5;  // 1.3;
 
-    if (swap) {
-      const double neighborDim =
-          (bond + 1 < static_cast<IndexType>(currentBondDim.size()))
-              ? currentBondDim[bond + 1]
-              : currentBondDim[bond];
-      currentBondDim[bond] = std::min(
-          std::max(currentBondDim[bond], neighborDim) * growthFactorSwap,
-          maxBondDim[bond]);
-    } else {
-      currentBondDim[bond] =
-          std::min(currentBondDim[bond] * growthFactorGate, maxBondDim[bond]);
-    }
+    const IndexType leftBond = bond - 1;
+    const IndexType rightNeigborBond = bond + 1;
+    const double betweenDim = currentBondDim[bond];
+
+    const double leftDim =
+        (leftBond >= 0) ? currentBondDim[leftBond] : currentBondDim[bond];
+
+    const double rightNeighborDim =
+        (rightNeigborBond < static_cast<IndexType>(currentBondDim.size()))
+            ? currentBondDim[rightNeigborBond] : betweenDim;
+
+    const double newDim =
+        swap ? std::max({leftDim, betweenDim, rightNeighborDim}) : betweenDim;
+    currentBondDim[bond] = std::min(newDim * (swap ? growthFactorSwap : growthFactorGate), maxBondDim[bond]);
 
     bondCost[bond] =
         currentBondDim[bond] * currentBondDim[bond] * currentBondDim[bond];
