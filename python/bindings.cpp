@@ -414,6 +414,58 @@ double mirror_fidelity_core(
     return run_shot_based();
   }
 }
+
+// Core Inner Product Logic
+// Computes <psi_1|psi_2> = <0|U1† U2|0> via ProjectOnZero.
+std::complex<double> inner_product_core(
+    const std::shared_ptr<Circuits::Circuit<double>> &circuit_1,
+    const std::shared_ptr<Circuits::Circuit<double>> &circuit_2,
+    Simulators::SimulatorType sim_type,
+    Simulators::SimulationType sim_exec_type,
+    std::optional<size_t> max_bond,
+    std::optional<double> sv_threshold,
+    bool use_double_precision = false) {
+  if (!circuit_1) throw nb::value_error("circuit_1 is null.");
+  if (!circuit_2) throw nb::value_error("circuit_2 is null.");
+
+  // Build combined circuit for <0| U1† U2 |0>.
+  // Circuit gates are applied left-to-right, so we place U2's gates first
+  // (they act on |0> first), then U1†'s gates (applied last = leftmost in
+  // the matrix product).
+  auto combined = std::make_shared<Circuits::Circuit<double>>();
+  const auto &ops1 = circuit_1->GetOperations();
+  const auto &ops2 = circuit_2->GetOperations();
+
+  // Forward pass of circuit_2: gate operations only
+  for (const auto &op : ops2) {
+    if (op->GetType() == Circuits::OperationType::kGate) {
+      combined->AddOperation(op->Clone());
+    }
+  }
+
+  // Adjoint of circuit_1: reverse order, each gate adjointed
+  for (auto it = ops1.rbegin(); it != ops1.rend(); ++it) {
+    auto adj = adjoint_gate(*it);
+    if (adj) combined->AddOperation(adj);
+  }
+
+  int num_qubits = std::max(
+      1, static_cast<int>(combined->GetMaxQubitIndex()) + 1);
+  ScopedSimulator sim(num_qubits);
+  if (sim.handle == 0)
+    throw std::runtime_error("Failed to create simulator handle.");
+
+  auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type,
+                                  max_bond, sv_threshold, use_double_precision);
+  if (!network) throw std::runtime_error("Failed to configure network.");
+
+  std::complex<double> result;
+  {
+    nb::gil_scoped_release release;
+    result = network->ExecuteOnHostProjectOnZero(combined, 0);
+  }
+  return result;
+}
 }  // namespace
 
 // ============================================================================
@@ -674,7 +726,25 @@ NB_MODULE(maestro, m) {
           "Compute mirror fidelity: run circuit forward then its adjoint in "
           "reverse, returning P(|0...0>). Uses shot-based sampling by "
           "default. Set full_amplitude=True for exact statevector "
-          "computation (small circuits only).");
+          "computation (small circuits only).")
+      .def("inner_product",
+          [](std::shared_ptr<Circuits::Circuit<double>> self,
+             std::shared_ptr<Circuits::Circuit<double>> other,
+             Simulators::SimulatorType st,
+             Simulators::SimulationType set,
+             std::optional<size_t> mb,
+             std::optional<double> sv, bool use_dp) {
+            return inner_product_core(self, other, st, set, mb, sv, use_dp);
+          },
+          "other"_a,
+          "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+          "simulation_type"_a = Simulators::SimulationType::kStatevector,
+          "max_bond_dimension"_a = nb::none(),
+          "singular_value_threshold"_a = nb::none(),
+          "use_double_precision"_a = false,
+          "Compute the inner product <psi_self|psi_other> = <0|U_self^dag "
+          "U_other|0> between this circuit's state and another circuit's "
+          "state, using ProjectOnZero.");
 
   // --- QASM Tools ---
   nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
@@ -812,5 +882,14 @@ NB_MODULE(maestro, m) {
       "Compute mirror fidelity: run a circuit forward then its adjoint in "
       "reverse, returning P(|0...0>). Uses shot-based sampling by "
       "default. Set full_amplitude=True for exact statevector "
-      "computation (small circuits only).");
+       "computation (small circuits only).");
+
+  m.def("inner_product", &inner_product_core, "circuit_1"_a, "circuit_2"_a,
+      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+      "simulation_type"_a = Simulators::SimulationType::kStatevector,
+      "max_bond_dimension"_a = nb::none(),
+      "singular_value_threshold"_a = nb::none(),
+      "use_double_precision"_a = false,
+      "Compute the inner product <psi_1|psi_2> = <0|U1^dag U2|0> between "
+      "two circuits' output states, using ProjectOnZero.");
 }
