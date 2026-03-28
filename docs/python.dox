@@ -352,6 +352,93 @@
  *
  * ---
  *
+ * @section py_inner_product Inner Product
+ *
+ * The inner product computes ⟨ψ₁|ψ₂⟩ between two circuits' output
+ * states, where |ψᵢ⟩ = Uᵢ|0⟩. Internally, Maestro builds the combined
+ * circuit U₂ followed by U₁† and evaluates ⟨0|U₁†U₂|0⟩ via the
+ * efficient `ProjectOnZero` operation — this is particularly fast with
+ * the MPS backend as it avoids constructing the full statevector.
+ *
+ * The result is a **complex number**: magnitude gives the overlap
+ * (fidelity when squared), and phase captures relative phase information.
+ *
+ * @subsection py_inner_module Module-Level Function
+ *
+ * @code{.py}
+ * import maestro
+ * from maestro.circuits import QuantumCircuit
+ *
+ * # Two identical circuits → overlap = 1.0
+ * qc1 = QuantumCircuit()
+ * qc1.h(0)
+ * qc1.cx(0, 1)
+ *
+ * qc2 = QuantumCircuit()
+ * qc2.h(0)
+ * qc2.cx(0, 1)
+ *
+ * overlap = maestro.inner_product(qc1, qc2)
+ * print(f"<psi1|psi2> = {overlap}")       # (1+0j)
+ * print(f"|<psi1|psi2>| = {abs(overlap)}")  # 1.0
+ * @endcode
+ *
+ * @subsection py_inner_orthogonal Orthogonal States
+ *
+ * @code{.py}
+ * # |+> and |-> are orthogonal
+ * qc_plus = QuantumCircuit()
+ * qc_plus.h(0)
+ *
+ * qc_minus = QuantumCircuit()
+ * qc_minus.x(0)
+ * qc_minus.h(0)
+ *
+ * overlap = maestro.inner_product(qc_plus, qc_minus)
+ * print(f"|<+|->| = {abs(overlap):.10f}")  # 0.0
+ * @endcode
+ *
+ * @subsection py_inner_circuit Circuit Method
+ *
+ * @code{.py}
+ * qc1 = QuantumCircuit()
+ * qc1.h(0)
+ * qc1.cx(0, 1)
+ *
+ * qc2 = QuantumCircuit()
+ * qc2.h(0)
+ * qc2.cx(0, 1)
+ *
+ * # Equivalent to maestro.inner_product(qc1, qc2)
+ * overlap = qc1.inner_product(qc2)
+ * print(f"|overlap| = {abs(overlap):.4f}")  # 1.0
+ *
+ * # With MPS backend (scales to large qubit counts)
+ * overlap = qc1.inner_product(
+ *     qc2,
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=64,
+ * )
+ * @endcode
+ *
+ * @subsection py_inner_params Parameters
+ *
+ * | Parameter | Type | Default | Description |
+ * |-----------|------|---------|-------------|
+ * | `circuit_1` / `self` | `QuantumCircuit` | — | First circuit (bra state) |
+ * | `circuit_2` / `other` | `QuantumCircuit` | — | Second circuit (ket state) |
+ * | `simulator_type` | `SimulatorType` | `QCSim` | Simulation backend |
+ * | `simulation_type` | `SimulationType` | `Statevector` | Simulation method |
+ * | `max_bond_dimension` | `int` or `None` | `None` | MPS bond dimension limit |
+ * | `singular_value_threshold` | `float` or `None` | `None` | MPS truncation threshold |
+ * | `use_double_precision` | `bool` | `False` | GPU double precision flag |
+ *
+ * @note Measurements in either circuit are automatically skipped —
+ * only unitary gate operations contribute to the inner product.
+ *
+ * ---
+ *
  * @section py_advanced Advanced: Object-Oriented Simulator Control
  *
  * For full control over the simulation lifecycle, use the `Maestro`

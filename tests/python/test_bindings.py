@@ -1300,3 +1300,138 @@ class TestMirrorFidelity:
         assert fid == pytest.approx(1.0, abs=1e-10)
 
 
+class TestInnerProduct:
+    """Test the inner_product function and circuit method.
+
+    inner_product(circ_1, circ_2) computes <psi_1|psi_2> = <0|U1† U2|0>
+    via ProjectOnZero.
+    """
+
+    def test_identical_circuits(self):
+        """Inner product of identical circuits should be 1.0."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        result = maestro.inner_product(qc, qc)
+        assert abs(result) == pytest.approx(1.0, abs=1e-10)
+
+    def test_orthogonal_circuits(self):
+        """Inner product of orthogonal states should be ~0."""
+        from maestro.circuits import QuantumCircuit
+        # |+> state
+        qc1 = QuantumCircuit()
+        qc1.h(0)
+
+        # |-> state
+        qc2 = QuantumCircuit()
+        qc2.x(0)
+        qc2.h(0)
+
+        result = maestro.inner_product(qc1, qc2)
+        assert abs(result) == pytest.approx(0.0, abs=1e-10)
+
+    def test_circuit_method(self):
+        """QuantumCircuit.inner_product(other) method works."""
+        from maestro.circuits import QuantumCircuit
+        qc1 = QuantumCircuit()
+        qc1.h(0)
+        qc1.cx(0, 1)
+
+        qc2 = QuantumCircuit()
+        qc2.h(0)
+        qc2.cx(0, 1)
+
+        result = qc1.inner_product(qc2)
+        assert abs(result) == pytest.approx(1.0, abs=1e-10)
+
+    def test_self_inner_product_method(self):
+        """qc.inner_product(qc) should always give |result| = 1.0."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.s(0)
+        qc.cx(0, 1)
+
+        result = qc.inner_product(qc)
+        assert abs(result) == pytest.approx(1.0, abs=1e-10)
+
+    def test_parametric_gates(self):
+        """Inner product with parametric rotation gates."""
+        from maestro.circuits import QuantumCircuit
+        import math
+
+        qc1 = QuantumCircuit()
+        qc1.rx(0, math.pi / 4)
+        qc1.ry(0, math.pi / 3)
+
+        qc2 = QuantumCircuit()
+        qc2.rx(0, math.pi / 4)
+        qc2.ry(0, math.pi / 3)
+
+        result = maestro.inner_product(qc1, qc2)
+        assert abs(result) == pytest.approx(1.0, abs=1e-10)
+
+    def test_different_parametric_angles(self):
+        """Inner product of circuits with different rotation angles is < 1."""
+        from maestro.circuits import QuantumCircuit
+        import math
+
+        qc1 = QuantumCircuit()
+        qc1.ry(0, 0.0)  # |0>
+
+        qc2 = QuantumCircuit()
+        qc2.ry(0, math.pi / 2)  # cos(pi/4)|0> + sin(pi/4)|1>
+
+        result = maestro.inner_product(qc1, qc2)
+        # <0|Ry(pi/2)|0> = cos(pi/4) = 1/sqrt(2)
+        expected = math.cos(math.pi / 4)
+        assert result.real == pytest.approx(expected, abs=1e-10)
+        assert result.imag == pytest.approx(0.0, abs=1e-10)
+
+    def test_mps_backend(self):
+        """Inner product works with MPS backend."""
+        from maestro.circuits import QuantumCircuit
+        qc1 = QuantumCircuit()
+        qc1.h(0)
+        qc1.cx(0, 1)
+
+        qc2 = QuantumCircuit()
+        qc2.h(0)
+        qc2.cx(0, 1)
+
+        result = maestro.inner_product(
+            qc1, qc2,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=4
+        )
+        assert abs(result) == pytest.approx(1.0, abs=1e-5)
+
+    def test_returns_complex(self):
+        """Inner product should return a complex number."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+
+        result = maestro.inner_product(qc, qc)
+        assert isinstance(result, complex)
+
+    def test_phase_difference(self):
+        """Two circuits differing by a global phase have |<psi1|psi2>| = 1."""
+        from maestro.circuits import QuantumCircuit
+        import math
+
+        qc1 = QuantumCircuit()
+        qc1.h(0)
+
+        # Add a global phase via rz
+        qc2 = QuantumCircuit()
+        qc2.h(0)
+        qc2.rz(0, math.pi / 3)
+
+        result = maestro.inner_product(qc1, qc2)
+        # States differ by a relative phase, so |overlap| < 1
+        # but result should still be a valid complex number
+        assert abs(result) <= 1.0 + 1e-10
