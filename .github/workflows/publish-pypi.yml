@@ -16,10 +16,10 @@ jobs:
     needs: [ci]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build sdist
         run: pipx run build --sdist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: maestro-sdist
           path: dist/*.tar.gz
@@ -44,10 +44,10 @@ jobs:
             cibw_build: "cp312-*"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Cache cibuildwheel virtualenv
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/Library/Caches/cibuildwheel
@@ -95,7 +95,7 @@ jobs:
       - name: Cache vcpkg packages (Windows)
         if: runner.os == 'Windows'
         id: cache-vcpkg
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             C:/vcpkg/installed
@@ -186,14 +186,14 @@ jobs:
 
       - name: Save vcpkg cache (Windows, even on failure)
         if: runner.os == 'Windows' && always() && steps.cache-vcpkg.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             C:/vcpkg/installed
             C:/vcpkg/binary-cache
           key: vcpkg-windows-x64-deps1
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: maestro-wheels-${{ matrix.os }}-${{ strategy.job-index }}
           path: ./wheelhouse/*.whl
@@ -208,7 +208,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: maestro-*
           path: dist
