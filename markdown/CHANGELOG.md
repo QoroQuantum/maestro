@@ -16,6 +16,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documentation restructured and updated
 - Improvements to cost class for sampling circuits with mid-circuit measurements
 
+## [0.2.7] - 2026-03-27
+
+### Added
+- **Inner product** — compute ⟨ψ₁|ψ₂⟩ between two circuits via `ProjectOnZero` (`maestro.inner_product(circ_1, circ_2)` and `qc.inner_product(other)`)
+- Python documentation for `inner_product` in `python.dox`
+- Comprehensive test suite for inner product (9 tests covering identical, orthogonal, parametric, MPS, and phase-difference cases)
+
+## [0.2.6] - 2026-03-25
+
+### Added
+- **`ProjectOnZero`** — efficient ⟨0|ψ⟩ projection for all simulator backends (QCSim MPS, GPU MPS, statevector, composite)
+- `ExecuteOnHostProjectOnZero` network-level method with qubit remapping support
+- `ExecuteOnHostAmplitudes` with proper qubit remapping for statevector extraction
+- **Mirror fidelity** — `maestro.mirror_fidelity()` and `qc.mirror_fidelity()` with shot-based and exact statevector modes
+- **Statevector access** — `maestro.get_statevector()` and `qc.get_statevector()` Python bindings
+- **Probability access** — `maestro.get_probabilities()` Python binding
+- MPS swap optimization with lookahead heuristics and initial qubit mapping
+- Classically controlled gate support for MPS lookahead swap optimization
+- Improved QCSim MPS sampling for partial qubit measurements
+- ProjectOnZero C++ tests across all simulator backends
+
+### Fixed
+- Linux GPU library compilation (missing include)
+- MPS optimization test adjusted from 20 to 12 qubits for stability
+
 ## [0.2.5] - 2026-03-18
 
 ### Added
@@ -100,7 +125,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/QoroQuantum/maestro/compare/v0.2.6...v0.2.7
+[0.2.6]: https://github.com/QoroQuantum/maestro/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/QoroQuantum/maestro/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/QoroQuantum/maestro/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/QoroQuantum/maestro/compare/v0.2.2...v0.2.3
