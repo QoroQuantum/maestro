@@ -401,14 +401,8 @@ class MPSDummySimulator {
   }
 
   std::vector<long long int> ComputeOptimalQubitsMap(
-      const std::vector<std::shared_ptr<Circuits::Circuit<>>>& layersPassed,
-      int nrShuffles = 25, int nrLayersToConsider = 30) {
-    std::vector<std::shared_ptr<Circuits::Circuit<>>> layers = layersPassed;
-    layers = std::vector<std::shared_ptr<Circuits::Circuit<>>>(
-        layers.begin(), layers.size() > static_cast<size_t>(nrLayersToConsider)
-                            ? layers.begin() + nrLayersToConsider
-                            : layers.end());
-
+      const std::vector<std::shared_ptr<Circuits::Circuit<>>>& layers,
+      int nrShuffles = 25) {
     const IndexType nrQubits = getNrQubits();
 
     if (layers.empty() || nrQubits <= 2) return qubitsMap;
@@ -424,7 +418,7 @@ class MPSDummySimulator {
 
       SetInitialQubitsMap(candidateMap);
 
-      for (const auto& layer : layersPassed) 
+      for (const auto& layer : layers) 
           ApplyGates(layer->GetOperations());
       auto cost = getTotalSwappingCost();
       qubitsMap = std::move(saveQubitsMap);
@@ -447,7 +441,7 @@ class MPSDummySimulator {
 
       SetInitialQubitsMap(candidateMap);
 
-      for (const auto& layer : layersPassed) {
+      for (const auto& layer : layers) {
         ApplyGates(layer->GetOperations());
         auto cost = getTotalSwappingCost();
         if (cost >= bound) {
@@ -616,7 +610,7 @@ class MPSDummySimulator {
     };
 
     auto optMap = buildChain(layerPairs);
-    if (layersPassed.size() <= 2) return optMap;
+    if (layers.size() <= 2) return optMap;
     auto optCost = evaluateCost(optMap);
 
     std::vector<long long int> qubitsMap(nrQubits);
@@ -828,23 +822,23 @@ class MPSDummySimulator {
   // double dimFactor = 0.95;
 
   void growBondDimension(IndexType bond, bool swap = true) {
-    constexpr double growthFactorSwap = 1.;  // 1.5;
-    constexpr double growthFactorGate = 1.5;  // 1.3;
+    constexpr double growthFactorSwap = 1.;
+    constexpr double growthFactorGate = 0.7; 
 
     const IndexType leftBond = bond - 1;
     const IndexType rightNeigborBond = bond + 1;
     const double betweenDim = currentBondDim[bond];
 
-    const double leftDim =
-        (leftBond >= 0) ? currentBondDim[leftBond] : currentBondDim[bond];
+    const double leftDim = leftBond >= 0 ? currentBondDim[leftBond] : 1;
+    const double rightNeighborDim = rightNeigborBond < static_cast<IndexType>(currentBondDim.size()) ? currentBondDim[rightNeigborBond] : 1;
+    
+    const double newMaxDim = (swap && leftDim == rightNeighborDim) ? betweenDim : 2. * std::min(leftDim, rightNeighborDim);
 
-    const double rightNeighborDim =
-        (rightNeigborBond < static_cast<IndexType>(currentBondDim.size()))
-            ? currentBondDim[rightNeigborBond] : betweenDim;
+    const double growthFactor = swap ? growthFactorSwap : growthFactorGate;
 
-    const double newDim =
-        swap ? std::max({leftDim, betweenDim, rightNeighborDim}) : betweenDim;
-    currentBondDim[bond] = std::min(newDim * (swap ? growthFactorSwap : growthFactorGate), maxBondDim[bond]);
+    currentBondDim[bond] = std::min(newMaxDim * growthFactor, maxBondDim[bond]);
+
+    currentBondDim[bond] = std::max(currentBondDim[bond], 1.);
 
     bondCost[bond] =
         currentBondDim[bond] * currentBondDim[bond] * currentBondDim[bond];

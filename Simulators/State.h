@@ -174,6 +174,15 @@ class IState {
   virtual void Reset() = 0;
 
   /**
+   * @brief Returns if the simulator supports MPS swap optimization.
+   *
+   * Used to check if the simulator supports MPS swap optimization.
+   * @return True if the simulator supports MPS swap optimization, false
+   * otherwise.
+   */
+  virtual bool SupportsMPSSwapOptimization() const { return false; }
+
+  /**
    * @brief Sets the initial qubits map, if possible.
    *
    * This will do nothing for most simulators, but for the MPS simulator it will
