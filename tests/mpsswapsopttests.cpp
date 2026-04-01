@@ -35,7 +35,7 @@ extern bool checkClose(std::complex<double> a, std::complex<double> b,
 
 BOOST_AUTO_TEST_SUITE(MPSSwapOptTests)
 
-constexpr std::array numGates{10,  20,  30,  50, 80,  100, 150,
+constexpr std::array numGates{10,  20,  30,  50,  80,  100, 150,
                               200, 270, 340, 500,     800, 1000};
 
 
@@ -140,6 +140,22 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
 
   // compute the optimal qubits map using the dummy simulator
   const auto layers = randomCirc->ToMultipleQubitsLayers();
+
+  // display some stats
+  BOOST_TEST_MESSAGE("Number of 2-qubit gate layers: " << layers.size());
+  double avgTwoQubitGatesPerLayer = 0.0;
+  for (const auto& layer : layers) {
+    int twoQubitGates = 0;
+    for (const auto& op : layer->GetOperations()) {
+      if (op->AffectedQubits().size() >= 2) {
+        ++twoQubitGates;
+      }
+    }
+    avgTwoQubitGatesPerLayer += twoQubitGates;
+  }
+  avgTwoQubitGatesPerLayer /= layers.size();
+  BOOST_TEST_MESSAGE("Average number of 2-qubit gates per layer: "
+                     << avgTwoQubitGatesPerLayer);
 
   Simulators::MPSDummySimulator dummySim(nrQubits);
   dummySim.SetMaxBondDimension(64);
@@ -461,6 +477,22 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
   auto startOptMap = std::chrono::system_clock::now();
   const auto layers = randomCirc->ToMultipleQubitsLayers();
 
+  // display some stats
+  BOOST_TEST_MESSAGE("Number of 2-qubit gate layers: " << layers.size());
+
+  double avgTwoQubitGatesPerLayer = 0.0;
+  for (const auto& layer : layers) {
+    int twoQubitGates = 0;
+    for (const auto& op : layer->GetOperations()) {
+      if (op->AffectedQubits().size() >= 2) {
+        ++twoQubitGates;
+      }
+    }
+    avgTwoQubitGatesPerLayer += twoQubitGates;
+  }
+  avgTwoQubitGatesPerLayer /= layers.size();
+  BOOST_TEST_MESSAGE("Average number of 2-qubit gates per layer: " << avgTwoQubitGatesPerLayer);
+
   Simulators::MPSDummySimulator dummySim(nrQubits);
   dummySim.SetMaxBondDimension(MAX_BOND_DIMENSION);
   const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
@@ -484,19 +516,25 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
     std::cout << std::endl;
   }
   */
-  
-  BOOST_TEST_MESSAGE("Number of 2-qubit gate layers: " << layers.size());
+ 
 
   // Create the optimized simulator with optimal map + meeting position + lookahead
-  const int lookaheadDepth =          layers.size()   < 8 ? 0 
-                                      : layers.size() < 15 ? 10 
-                                      : layers.size() < 20 ? 15 
-                                      : layers.size() < 35 ? 15 : 20;
+  int lookaheadVal = nrQubits;
+  if (nrQubits > 15) lookaheadVal = 15;
 
-  const int lookaheadHeuristicDepth = layers.size()   < 8 ? 0
-                                      : layers.size() < 15 ? 9
-                                      : layers.size() < 20 ? 14
-                                      : layers.size() < 35 ? 13 : 18; 
+  int lookaheadDepth =          layers.size()   < 10  ? 0 
+                                      : layers.size() < 20 ? static_cast<int>(lookaheadVal) 
+                                      : layers.size() < 35 ? 1.5 * lookaheadVal
+                                      : 2 * lookaheadVal;
+
+  int lookaheadHeuristicDepth = layers.size()   < 10 ? 0
+                                      : layers.size() < 20 ? lookaheadDepth - 1
+                                      : lookaheadDepth - 2; 
+
+  if (nrQubits < 10 || MAX_BOND_DIMENSION < 32) {
+    lookaheadDepth = 0;
+    lookaheadHeuristicDepth = 0;
+  }
 
   auto qcsimOpt = Simulators::SimulatorsFactory::CreateSimulator(
       Simulators::SimulatorType::kQCSim,

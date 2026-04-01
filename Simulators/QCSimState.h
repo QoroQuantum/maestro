@@ -218,6 +218,15 @@ class QCSimState : public ISimulator {
   }
 
   /**
+   * @brief Returns if the simulator supports MPS swap optimization.
+   *
+   * Used to check if the simulator supports MPS swap optimization.
+   * @return True if the simulator supports MPS swap optimization, false
+   * otherwise.
+   */
+  bool SupportsMPSSwapOptimization() const override { return true; }
+
+  /**
    * @brief Sets the initial qubits map, if possible.
    *
    * This will do nothing for most simulators, but for the MPS simulator it will
@@ -272,9 +281,9 @@ class QCSimState : public ISimulator {
     // for lookahead evaluation with actual bond dimensions
     // the callback is called only for two qubits gates and only if executing them would require a swap
     mpsSimulator->SetMeetingPositionCallback(
-        [this](const auto &qMap, const auto &bondDims)
+        [this](/*const auto &qMap,*/ const auto &bondDims)
             -> QC::TensorNetworks::MPSSimulatorInterface::IndexType {
-          const size_t nQ = qMap.size();
+          const size_t nQ = bondDims.size() + 1;
 
           if (!dummySim || dummySim->getNrQubits() != nQ) {
             dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
@@ -309,16 +318,23 @@ class QCSimState : public ISimulator {
 
           // display bond dimensions for debugging
           /*
+          std::cout << "Bond dimensions before swapping and applying the gate: ";
           for (size_t i = 0; i < bondDims.size(); ++i) {
-            std::cout << "Bond dimension between qubits " << i << " and " << i + 1
-                      << ": " << bondDims[i] << std::endl;
+            std::cout << bondDims[i] << " ";
           }
           std::cout << std::endl;
           */
 
           const auto &op = upcomingGates[upcomingGateIndex];
           const auto qbits = op->AffectedQubits();
+          
+          /*
+          const auto &qmap = dummySim->getQubitsMap();
 
+          std::cout << "Applying 2-qubit gate on physical qubits " << qmap[qbits[0]] << " and "
+                    << qmap[qbits[1]]
+                    << std::endl;
+          */
           /*
           std::cout << "Finding best meeting position for upcoming gates starting at index "
                     << upcomingGateIndex << " with lookahead depth " << lookaheadDepth << " and heuristic depth "
@@ -341,19 +357,25 @@ class QCSimState : public ISimulator {
 
           double bestCost = std::numeric_limits<double>::infinity();
           auto res = dummySim->FindBestMeetingPosition(upcomingGates, upcomingGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, 0, bestCost);
+
+          //std::cout << "Swapping the two qubits on position: " << res << " and " << (res + 1) << std::endl;
+
           dummySim->SwapQubitsToPosition(qbits[0], qbits[1], res);
           dummySim->ApplyGate(op);
 
           // display the expected bond dimensions after applying the gate for
           // debugging
+          
           /*
           const auto &expectedBondDims = dummySim->getCurrentBondDimensions();
+          std::cout << "Expected bond dimensions after swapping and applying "
+                       "the gate: ";
           for (size_t i = 0; i < expectedBondDims.size(); ++i) {
-            std::cout << "Expected bond dimension between qubits " << i << " and " << i + 1
-                      << ": " << expectedBondDims[i] << std::endl;
+            std::cout << expectedBondDims[i] << " ";
           }
+          std::cout << std::endl;
           */
-
+          
           //std::cout << "Best meeting position: " << res
           //          << " with estimated cost: " << bestCost << std::endl;
 
