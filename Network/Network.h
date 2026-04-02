@@ -947,6 +947,8 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
    * Choose the best simulator for the given circuit, based on the number of
    * qubits, number of classical bits, number of result classical bits and
    * number of shots. The choice is made from the optimization simulators set.
+   * 
+   * WARNING: the circuit might be modified, depending on the chosen simulator and some optimization settings
    *
    * @param dcirc The distributed circuit to choose the simulator for.
    * @param counts The number of shots to be executed.
@@ -964,11 +966,24 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
    * @return A shared pointer to the chosen simulator.
    */
   virtual std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(
-      const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t &counts,
+      std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t &counts,
       size_t nrQubits, size_t nrCbits, size_t nrResultCbits,
       Simulators::SimulatorType &simType, Simulators::SimulationType &method,
       std::vector<bool> &executed, bool multithreading = false,
       bool dontRunCircuitStart = false) const = 0;
+
+
+  virtual void SetInitialQubitsMapOptimization(bool optimize = true) = 0;
+
+  virtual bool GetInitialQubitsMapOptimization() const = 0;
+
+  virtual void SetMPSOptimizationBondDimensionThreshold(size_t threshold) = 0;
+
+  virtual size_t GetMPSOptimizationBondDimensionThreshold() const = 0;
+
+  virtual void SetMPSOptimizationQubitsNumberThreshold(size_t threshold) = 0;
+
+  virtual size_t GetMPSOptimizationQubitsNumberThreshold() const = 0;
 };
 
 }  // namespace Network

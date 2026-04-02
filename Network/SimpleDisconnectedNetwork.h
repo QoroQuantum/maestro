@@ -1886,7 +1886,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   }
 
   std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(
-      const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t &counts,
+      std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t &counts,
       size_t nrQubits, size_t nrCbits, size_t nrResultCbits,
       Simulators::SimulatorType &simType, Simulators::SimulationType &method,
       std::vector<bool> &executed, bool multithreading = false,
@@ -2052,6 +2052,31 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         simType, method, executed, maxBondDim, singularValueThreshold,
         mpsSample, GetMaxSimulators(), pauliStrings, multithreading,
         dontRunCircuitStart);
+  }
+
+
+  void SetInitialQubitsMapOptimization(bool optimize = true) override {
+    optimizeInitialQubitsMap = optimize;
+  }
+
+  bool GetInitialQubitsMapOptimization() const override {
+    return optimizeInitialQubitsMap;
+  }
+
+  void SetMPSOptimizationBondDimensionThreshold(size_t threshold) override {
+    mpsOptimizationBondDimensionThreshold = threshold;
+  }
+
+  size_t GetMPSOptimizationBondDimensionThreshold() const override {
+    return mpsOptimizationBondDimensionThreshold;
+  }
+
+  void SetMPSOptimizationQubitsNumberThreshold(size_t threshold) override {
+    mpsOptimizationQubitsNumberThreshold = threshold;
+  }
+
+  size_t GetMPSOptimizationQubitsNumberThreshold() const override {
+    return mpsOptimizationQubitsNumberThreshold;
   }
 
  protected:
@@ -2285,6 +2310,13 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   const std::vector<std::string> *pauliStrings =
       nullptr; /**< Set to the vector of pauli strings if computing the
                   expectation values. */
+
+  bool optimizeInitialQubitsMap = true; /**< The flag to optimize the initial
+                                            qubits mapping. */
+  size_t mpsOptimizationBondDimensionThreshold =
+      32; /**< The bond dimension threshold for using MPS optimization. */
+  size_t mpsOptimizationQubitsNumberThreshold =
+      12; /**< The qubits number threshold for using MPS optimization. */
 };
 
 }  // namespace Network
