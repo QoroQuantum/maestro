@@ -141,9 +141,9 @@ jobs:
         env:
           # ---- Linux ----
           CIBW_BEFORE_ALL_LINUX: >-
-            curl -L https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz -o /tmp/boost.tgz &&
+            curl -L https://archives.boost.io/release/1.90.0/source/boost_1_90_0.tar.gz -o /tmp/boost.tgz &&
             tar -xzf /tmp/boost.tgz -C /tmp &&
-            cd /tmp/boost_1_89_0 &&
+            cd /tmp/boost_1_90_0 &&
             ./bootstrap.sh --prefix=/usr/local &&
             ./b2 -j$(nproc) --with-program_options --with-json --with-container --with-serialization install
 
