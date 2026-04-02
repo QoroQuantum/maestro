@@ -38,7 +38,7 @@ class SimulatorsEstimatorInterface {
   virtual std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(
       const std::vector<std::pair<Simulators::SimulatorType,
                                   Simulators::SimulationType>> &simulatorTypes,
-      const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t &counts,
+      std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t &counts,
       size_t nrQubits, size_t nrCbits, size_t nrResultCbits,
       Simulators::SimulatorType &simType, Simulators::SimulationType &method,
       std::vector<bool> &executed, const std::string &maxBondDim,

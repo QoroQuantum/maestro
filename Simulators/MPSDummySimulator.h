@@ -300,8 +300,11 @@ class MPSDummySimulator {
       dummySim.currentBondDim = currentBondDim;
       dummySim.bondCost = bondCost;
       dummySim.qubitsMap = qubitsMap;
+      dummySim.qubitsMapInv.resize(qubitsMap.size());
       for (size_t i = 0; i < qubitsMap.size(); ++i)
         dummySim.qubitsMapInv[qubitsMap[i]] = static_cast<IndexType>(i);
+
+      dummySim.setTotalSwappingCost(0);
 
       if (realq2 - realq1 > 1)
         dummySim.SwapQubitsToPosition(qubit1, qubit2, meetPosition);
@@ -708,8 +711,7 @@ class MPSDummySimulator {
   // Lightweight constructor: sets up qubit maps but skips the expensive
   // SetMaxBondDimension computation.  Caller must populate bond arrays.
   MPSDummySimulator(size_t N, LightweightInitTag)
-      : nrQubits(N), maxVirtualExtent(0) {
-    InitQubitsMap();
+      : nrQubits(N) {
   }
 
   void SwapQubits(IndexType qubit1, IndexType qubit2) {
@@ -824,6 +826,33 @@ class MPSDummySimulator {
   void growBondDimension(IndexType bond, bool swap = true) {
     constexpr double growthFactorSwap = 1.;
     constexpr double growthFactorGate = 0.7; 
+    
+    // the left and right bond dimensions are relevant because:
+    // the initial configuration before applying the swap or other gate is:
+
+    // - O - O -
+    //   |   |
+
+    // The two physical legs have dimension 2
+    // this is contracted into:
+
+    //    ---
+    //  -|   |-
+    //    ---
+    //    | |
+
+    // the left and right dimensions stay the same and also the physical legs have dimension 2
+
+    // then the swap or the other gate is applied, getting a result that looks graphically as above, but of course with different values inside the tensor
+    // swap is special, just swaps the values for (0, 1) and (1, 0) in
+    // the physical legs, while other gates can change all values in the tensor
+    
+    // then the tensor is reshaped into a matrix, having dimensions 2 * leftDim x 2 * rightNeighborDim on this matrix SVD is applied, to separate out the
+    // qubits tensors again, and the bond dimension is the number of singular
+    // values kept after truncation (if done), or the number of non-zero
+    // singular values if no truncation is done. The bond dimension can be at
+    // most min(2 * min(leftDim, rightNeighborDim), maxBondDim[bond]) and the minimum is obviously 1
+
 
     const IndexType leftBond = bond - 1;
     const IndexType rightNeigborBond = bond + 1;
