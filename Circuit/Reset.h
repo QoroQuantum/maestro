@@ -57,10 +57,14 @@ class Reset : public IOperation<Time> {
    */
   void Execute(const std::shared_ptr<Simulators::ISimulator> &sim,
                OperationState &state) const override {
-    auto res = sim->MeasureMany(qubits);
+    // Use the simulator's native ApplyReset which correctly handles
+    // per-backend measurement+flip (critical for MPS re-canonicalization).
+    sim->ApplyReset(qubits);
 
-    for (size_t qi = 0; qi < qubits.size(); ++qi) {
-      if (res[qi] == (resetTargets.size() <= qi ? true : !resetTargets[qi])) {
+    // If any reset targets specify |1⟩ instead of the default |0⟩,
+    // apply X to flip those qubits.
+    for (size_t qi = 0; qi < resetTargets.size() && qi < qubits.size(); ++qi) {
+      if (resetTargets[qi]) {
         xgate.SetQubit(qubits[qi]);
         xgate.Execute(sim, state);
       }

@@ -426,6 +426,82 @@ class TestComplexCircuits:
         assert 'counts' in result
 
 
+class TestReset:
+    """Test qubit reset functionality."""
+
+    def test_reset_returns_zero(self):
+        """Resetting a qubit in |1> should return it to |0>."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)       # Put qubit in |1>
+        qc.reset(0)   # Reset to |0>
+        qc.measure_all()
+
+        result = qc.execute(shots=100)
+        counts = result['counts']
+        # After reset, qubit should always be |0>
+        assert '0' in counts
+        assert counts.get('0', 0) == 100
+
+    def test_reset_multi_qubit(self):
+        """reset_qubits should reset multiple qubits at once."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.x(1)
+        qc.reset_qubits([0, 1])
+        qc.measure_all()
+
+        result = qc.execute(shots=100)
+        counts = result['counts']
+        assert counts.get('00', 0) == 100
+
+    def test_mid_circuit_reset(self):
+        """Mid-circuit reset: flip, reset, then flip again should give |1>."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)       # |1>
+        qc.reset(0)   # |0>
+        qc.x(0)       # |1> again
+        qc.measure_all()
+
+        result = qc.execute(shots=100)
+        counts = result['counts']
+        assert counts.get('1', 0) == 100
+
+    def test_reset_after_entanglement(self):
+        """Reset one qubit of an entangled pair."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.reset(0)    # Reset qubit 0 to |0>
+        qc.measure_all()
+
+        result = qc.execute(shots=1000)
+        counts = result['counts']
+        # Qubit 0 is always 0 after reset, qubit 1 is random
+        for bitstring in counts:
+            assert bitstring[0] == '0'  # qubit 0 is always |0>
+
+    def test_reset_mps(self):
+        """Reset should work with MPS simulation."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.reset(0)
+        qc.measure_all()
+
+        result = qc.execute(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            shots=100,
+            max_bond_dimension=4,
+        )
+        counts = result['counts']
+        assert counts.get('0', 0) == 100
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

@@ -25,8 +25,8 @@ jobs:
       with:
         path: |
           eigen-5.0.0
-          boost_1_89_0
-        key: ${{ runner.os }}-libs-boost1.89.0-eigen5.0.0
+          boost_1_90_0
+        key: ${{ runner.os }}-libs-boost1.90.0-eigen5.0.0
 
     - name: Cache Git Dependencies
       id: cache-git-deps
@@ -63,9 +63,9 @@ jobs:
     - name: Install and Compile Boost
       if: steps.cache-libs.outputs.cache-hit != 'true'
       run: |
-        curl -L https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz --output boost.tgz
+        curl -L https://archives.boost.io/release/1.90.0/source/boost_1_90_0.tar.gz --output boost.tgz
         tar -xzvf boost.tgz && rm boost.tgz
-        cd boost_1_89_0
+        cd boost_1_90_0
         ./bootstrap.sh --prefix=.
         ./b2 -j$(nproc) --with-program_options --with-url --with-container --with-json --with-serialization install
 
@@ -80,7 +80,7 @@ jobs:
     - name: Run CMake
       run: |
         export EIGEN5_INCLUDE_DIR=$PWD/eigen-5.0.0/
-        export BOOST_ROOT=$PWD/boost_1_89_0
+        export BOOST_ROOT=$PWD/boost_1_90_0
         export QCSIM_INCLUDE_DIR=$PWD/QCSim/QCSim/
         export JSON_INCLUDE_DIR=$PWD/json/single_include
         export AER_INCLUDE_DIR=$PWD/qiskit-aer/src/
