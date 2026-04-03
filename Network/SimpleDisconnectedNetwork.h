@@ -18,9 +18,11 @@
 #include "QubitRegister.h"
 #include "SimpleController.h"
 #include "SimpleHost.h"
-
 #include "../Estimators/SimulatorsEstimatorInterface.h"
 #include "NetworkJob.h"
+
+#include "../Simulators/MPSDummySimulator.h"
+
 
 namespace Network {
 
@@ -648,7 +650,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         if (optSim) {
           job->optSim = optSim->Clone();
           job->executedGates = executed;
-        }
+        } 
 
         threadsPool.AddRunJob(std::move(job));
       }
@@ -674,8 +676,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       } else {
         if (simulator && method == saveMethod && simType == saveSimType) {
           // use the already created simulator
+                      
           optSim = simulator;
           job->optSim = optSim;
+          OptimizeMPSInitialQubitsMap(optSim, distCirc,
+                                      optSim->GetNumberOfQubits());
           job->executedGates.resize(distCirc->size(),
                                     false);  // no gates executed yet
           simulator = nullptr;
@@ -2035,23 +2040,49 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
                            singularValueThreshold.c_str());
           if (!mpsSample.empty())
             sim->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
+        
+          sim->AllocateQubits(nrQubits);
+          sim->Initialize();
+
+          OptimizeMPSInitialQubitsMap(sim, dcirc, nrQubits);
+        } else {
+          sim->AllocateQubits(nrQubits);
+          sim->Initialize();        
         }
-        sim->SetMultithreading(true);
-        if (!dontRunCircuitStart)
+
+        if (!dontRunCircuitStart) {
+          sim->SetMultithreading(true);
           Estimators::SimulatorsEstimatorInterface<
               Time>::ExecuteUpToMeasurements(dcirc, nrQubits, nrCbits,
-                                             nrResultCbits, sim, executed,
-                                             multithreading);
+                                             nrResultCbits, sim, executed);
+        }
+        sim->SetMultithreading(multithreading || GetMaxSimulators() == 1);
 
         return sim;
       }
     }
 
-    return simulatorsEstimator->ChooseBestSimulator(
+    std::shared_ptr<Simulators::ISimulator> sim =
+        simulatorsEstimator->ChooseBestSimulator(
         simulatorTypes, dcirc, counts, nrQubits, nrCbits, nrResultCbits,
         simType, method, executed, maxBondDim, singularValueThreshold,
-        mpsSample, GetMaxSimulators(), pauliStrings, multithreading,
-        dontRunCircuitStart);
+        mpsSample, GetMaxSimulators(), pauliStrings, multithreading);
+
+    if (sim) {
+      sim->AllocateQubits(nrQubits);
+      sim->Initialize();
+
+      OptimizeMPSInitialQubitsMap(sim, dcirc, nrQubits);
+
+      if (!dontRunCircuitStart) {
+        sim->SetMultithreading(true);
+        Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(
+            dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed);
+      }
+      sim->SetMultithreading(multithreading || GetMaxSimulators() == 1);
+    }
+
+    return sim;
   }
 
 
@@ -2062,6 +2093,12 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   bool GetInitialQubitsMapOptimization() const override {
     return optimizeInitialQubitsMap;
   }
+
+  void SetMPSOptimizeSwaps(bool optimize = true) override {
+    mpsOptimizeSwaps = optimize;
+  }
+
+  bool GetMPSOptimizeSwaps() const override { return mpsOptimizeSwaps; }
 
   void SetMPSOptimizationBondDimensionThreshold(size_t threshold) override {
     mpsOptimizationBondDimensionThreshold = threshold;
@@ -2080,6 +2117,39 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   }
 
  protected:
+  void OptimizeMPSInitialQubitsMap(
+      std::shared_ptr<Simulators::ISimulator> &sim,
+      std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits) const {
+    if (sim->GetSimulationType() ==
+            Simulators::SimulationType::kMatrixProductState &&
+        (optimizeInitialQubitsMap || mpsOptimizeSwaps) &&
+        sim->SupportsMPSSwapOptimization()) {
+      if (GetMPSOptimizationQubitsNumberThreshold() <= nrQubits) {
+        const auto bondDimThreshold =
+            GetMPSOptimizationBondDimensionThreshold();
+        const auto maxBondDimValue =
+            maxBondDim.empty() ? 0 : std::stoi(maxBondDim);
+
+        if (maxBondDim.empty() || bondDimThreshold <= maxBondDimValue) {
+          // need to be sure the circuit is correctly converted
+          dcirc->ConvertForCutting();  // convert the three qubit gates
+          auto layers = dcirc->ToMultipleQubitsLayersNoClone();
+
+          Simulators::MPSDummySimulator dummySim(nrQubits);
+          if (!maxBondDim.empty())
+            dummySim.SetMaxBondDimension(maxBondDimValue);
+          const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
+
+          if (optimizeInitialQubitsMap) sim->SetInitialQubitsMap(optimalMap);
+
+          // TODO: this breaks scheduling, needs to be done before scheduling, but at that point we don't know it mps swaps optimization is going to be used or not
+          //auto optCirc = Circuits::Circuit<Time>::LayersToCircuit(layers);
+          //dcirc->SetOperations(optCirc->GetOperations());
+        }
+      }
+    }
+  }
+
   /**
    * @brief Converts back the state from the optimized network distribution
    * mapping
@@ -2313,6 +2383,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
   bool optimizeInitialQubitsMap = true; /**< The flag to optimize the initial
                                             qubits mapping. */
+  bool mpsOptimizeSwaps = true; /**< The flag to optimize the swaps in MPS */
   size_t mpsOptimizationBondDimensionThreshold =
       32; /**< The bond dimension threshold for using MPS optimization. */
   size_t mpsOptimizationQubitsNumberThreshold =

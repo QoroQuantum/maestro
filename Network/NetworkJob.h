@@ -16,6 +16,8 @@
 #include "../Types.h"
 #include "../Utils/ThreadsPool.h"
 
+#include "../Simulators/MPSDummySimulator.h"
+
 namespace Network {
 
 template <typename Time = Types::time_type>
@@ -307,6 +309,7 @@ class ExecuteJob {
   }
 
   size_t GetJobCount() const { return curCnt; }
+
 
   const std::shared_ptr<Circuits::Circuit<Time>> dcirc;
   ExecuteResults &res;
