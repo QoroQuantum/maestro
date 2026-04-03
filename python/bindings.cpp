@@ -686,6 +686,21 @@ NB_MODULE(maestro, m) {
              s.AddOperation(
                  std::make_shared<Circuits::MeasurementOperation<>>(pairs));
            })
+      // Reset
+      .def("reset",
+           [](Circuits::Circuit<double> &s, Types::qubit_t q) {
+             s.AddOperation(
+                 std::make_shared<Circuits::Reset<>>(Types::qubits_vector{q}));
+           },
+           "qubit"_a,
+           "Reset a qubit to |0>.")
+      .def("reset_qubits",
+           [](Circuits::Circuit<double> &s,
+              const std::vector<Types::qubit_t> &qubits) {
+             s.AddOperation(std::make_shared<Circuits::Reset<>>(qubits));
+           },
+           "qubits"_a,
+           "Reset multiple qubits to |0>.")
       // Bound Methods for Direct Execution
       .def("execute", &execute_core,
            "simulator_type"_a = Simulators::SimulatorType::kQCSim,
