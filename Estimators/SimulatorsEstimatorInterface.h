@@ -43,14 +43,13 @@ class SimulatorsEstimatorInterface {
       Simulators::SimulatorType &simType, Simulators::SimulationType &method,
       std::vector<bool> &executed, const std::string &maxBondDim,
       const std::string &singularValueThreshold, const std::string &mpsSample,
-      size_t maxSimulators, const std::vector<std::string> *paulis,
-      bool multithreading = false, bool dontRunCircuitStart = false) const = 0;
+      size_t maxSimulators, const std::vector<std::string> *paulis, bool multithreading = false) const = 0;
 
   static void ExecuteUpToMeasurements(
       const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits,
       size_t nrCbits, size_t nrResultCbits,
       const std::shared_ptr<Simulators::ISimulator> &sim,
-      std::vector<bool> &executed, bool multithreading) {
+      std::vector<bool> &executed) {
     Circuits::OperationState state;
     state.AllocateBits(nrCbits);
 
@@ -62,9 +61,6 @@ class SimulatorsEstimatorInterface {
         sim->GetSimulationType() ==
             Simulators::SimulationType::kMatrixProductState &&
         hasMeasurementsOnlyAtEnd;
-
-    sim->AllocateQubits(nrQubits);
-    sim->Initialize();
 
     executed = dcirc->ExecuteNonMeasurements(sim, state);
 

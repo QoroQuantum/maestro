@@ -977,6 +977,10 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
 
   virtual bool GetInitialQubitsMapOptimization() const = 0;
 
+  virtual void SetMPSOptimizeSwaps(bool optimize = true) = 0;
+
+  virtual bool GetMPSOptimizeSwaps() const = 0;
+
   virtual void SetMPSOptimizationBondDimensionThreshold(size_t threshold) = 0;
 
   virtual size_t GetMPSOptimizationBondDimensionThreshold() const = 0;

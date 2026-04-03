@@ -815,7 +815,7 @@ class MPSDummySimulator {
   std::vector<IndexType> qubitsMapInv;
 
   static constexpr size_t physExtent = 2;
-  IndexType maxVirtualExtent;
+  IndexType maxVirtualExtent = 0;
   std::vector<double> bondCost;
   std::vector<double> maxBondDim;
   std::vector<double> currentBondDim;
