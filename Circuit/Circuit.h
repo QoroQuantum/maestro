@@ -2192,6 +2192,7 @@ class Circuit : public IOperation<Time> {
     layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
+    std::unordered_map<size_t, size_t> classicalBitLayer;
 
     for (const auto &op : GetOperations()) {
       // check the instruction, see if a new layer is needed
@@ -2213,10 +2214,30 @@ class Circuit : public IOperation<Time> {
           }
         }
 
+        if (op->IsConditional()) {
+          const auto bits = op->AffectedBits();
+          for (const auto bit : bits)
+            maxLevel = std::max(maxLevel, classicalBitLayer[bit]);
+        }
+
         // now set all the qubits in the instruction to the max level
         for (Types::qubit_t qbit : qubits) qubitsUsed[qbit] = maxLevel;
 
-        layers[maxLevel > 0 ? maxLevel - 1 : 0]->AddOperation(op->Clone());
+        const size_t layerIdx = maxLevel > 0 ? maxLevel - 1 : 0;
+
+        // ensure enough layers exist for the computed level
+        while (layers.size() <= layerIdx)
+          layers.push_back(std::make_shared<Circuits::Circuit<Time>>());
+
+        layers[layerIdx]->AddOperation(op->Clone());
+
+        const auto writtenBits = op->AffectedBits();
+        if (!writtenBits.empty() && !op->IsConditional()) {
+          const size_t writtenLevel = maxLevel > 0 ? maxLevel : 1;
+          for (const auto bit : writtenBits)
+            classicalBitLayer[bit] =
+                std::max(classicalBitLayer[bit], writtenLevel);
+        }
       } else
         // add the instruction to the last layer
         layers.back()->AddOperation(op->Clone());
@@ -2242,6 +2263,11 @@ class Circuit : public IOperation<Time> {
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
 
+    // Track which layer (1-based, like qubitsUsed) each classical bit was last
+    // written to, so that conditional operations reading those bits are placed
+    // in the same layer or later.
+    std::unordered_map<size_t, size_t> classicalBitLayer;
+
     for (const auto &op : GetOperations()) {
       // check the instruction, see if a new layer is needed
 
@@ -2262,10 +2288,34 @@ class Circuit : public IOperation<Time> {
           }
         }
 
+        // For conditional operations, ensure this op is placed no earlier than
+        // the layer where the classical bits it depends on were written.
+        if (op->IsConditional()) {
+          const auto bits = op->AffectedBits();
+          for (const auto bit : bits)
+            maxLevel = std::max(maxLevel, classicalBitLayer[bit]);
+        }
+
         // now set all the qubits in the instruction to the max level
         for (Types::qubit_t qbit : qubits) qubitsUsed[qbit] = maxLevel;
 
-        layers[maxLevel > 0 ? maxLevel - 1 : 0]->AddOperation(op);
+        const size_t layerIdx = maxLevel > 0 ? maxLevel - 1 : 0;
+
+        // ensure enough layers exist for the computed level
+        while (layers.size() <= layerIdx)
+          layers.push_back(std::make_shared<Circuits::Circuit<Time>>());
+
+        layers[layerIdx]->AddOperation(op);
+
+        // Record the layer for classical bits written by measurements / resets
+        // so that later conditional ops respect the dependency.
+        const auto writtenBits = op->AffectedBits();
+        if (!writtenBits.empty() && !op->IsConditional()) {
+          const size_t writtenLevel = maxLevel > 0 ? maxLevel : 1;
+          for (const auto bit : writtenBits)
+            classicalBitLayer[bit] =
+                std::max(classicalBitLayer[bit], writtenLevel);
+        }
       } else
         // add the instruction to the last layer
         layers.back()->AddOperation(op);
