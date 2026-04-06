@@ -18,6 +18,8 @@
 
 #include "../Simulators/MPSDummySimulator.h"
 
+#include "Network.h"
+
 namespace Network {
 
 template <typename Time = Types::time_type>
@@ -330,6 +332,8 @@ class ExecuteJob {
   std::string maxBondDim;
   std::string singularValueThreshold;
   std::string mpsSample;
+
+  std::shared_ptr<Network::INetwork<Time>> network;
 };
 
 }  // namespace Network

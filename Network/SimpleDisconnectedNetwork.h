@@ -647,6 +647,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         job->mpsSample = mpsSample;
         job->singularValueThreshold = singularValueThreshold;
 
+        job->network = BaseClass::getptr();
+
         if (optSim) {
           job->optSim = optSim->Clone();
           job->executedGates = executed;
@@ -668,6 +670,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       job->maxBondDim = maxBondDim;
       job->mpsSample = mpsSample;
       job->singularValueThreshold = singularValueThreshold;
+
+      job->network = BaseClass::getptr();
 
       if (optSim) {
         optSim->SetMultithreading(true);
@@ -829,6 +833,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         job->mpsSample = mpsSample;
         job->singularValueThreshold = singularValueThreshold;
 
+        job->network = BaseClass::getptr();
+
         if (optSim) {
           job->optSim = optSim->Clone();
           job->executedGates = executed;
@@ -850,6 +856,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       job->maxBondDim = maxBondDim;
       job->mpsSample = mpsSample;
       job->singularValueThreshold = singularValueThreshold;
+
+      job->network = BaseClass::getptr();
 
       if (optSim) {
         optSim->SetMultithreading(true);
@@ -2142,9 +2150,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
           if (optimizeInitialQubitsMap) sim->SetInitialQubitsMap(optimalMap);
 
-          // TODO: this breaks scheduling, needs to be done before scheduling, but at that point we don't know it mps swaps optimization is going to be used or not
-          //auto optCirc = Circuits::Circuit<Time>::LayersToCircuit(layers);
-          //dcirc->SetOperations(optCirc->GetOperations());
+          auto optCirc = Circuits::Circuit<Time>::LayersToCircuit(layers);
+          dcirc->SetOperations(optCirc->GetOperations());
         }
       }
     }

@@ -39,6 +39,83 @@ constexpr std::array numGates{10,  20,  30,  50,  80,  100, 150,
                               200, 270, 340, 500,     800, 1000};
 
 
+
+BOOST_DATA_TEST_CASE(ConvertForCuttingLayersRoundtripMatchesStatevector,
+                     numGates, nrGates) {
+  constexpr int nrQubits = 10;
+  const size_t nrStates = 1ULL << nrQubits;
+
+  // build a random circuit with 1- and 2-qubit gates
+  auto randomCirc = std::make_shared<Circuits::Circuit<>>();
+
+  std::mt19937 g(std::random_device{}());
+  std::uniform_real_distribution<double> dblDist(-2. * M_PI, 2. * M_PI);
+  std::uniform_int_distribution<int> gateDist(
+      0, static_cast<int>(Circuits::QuantumGateType::kCUGateType));
+
+  for (int gateNr = 0; gateNr < nrGates; ++gateNr) {
+    Types::qubits_vector qubits(nrQubits);
+    std::iota(qubits.begin(), qubits.end(), 0);
+    std::shuffle(qubits.begin(), qubits.end(), g);
+    auto q1 = qubits[0];
+    auto q2 = qubits[1];
+
+    const double param1 = dblDist(g);
+    const double param2 = dblDist(g);
+    const double param3 = dblDist(g);
+    const double param4 = dblDist(g);
+
+    Circuits::QuantumGateType gateType =
+        static_cast<Circuits::QuantumGateType>(gateDist(g));
+
+    auto theGate = Circuits::CircuitFactory<>::CreateGate(
+        gateType, q1, q2, 0, param1, param2, param3, param4);
+    randomCirc->AddOperation(theGate);
+  }
+
+  // --- Reference: execute the original circuit on a statevector simulator ---
+  auto svSim = Simulators::SimulatorsFactory::CreateSimulator(
+      Simulators::SimulatorType::kQCSim,
+      Simulators::SimulationType::kStatevector);
+  svSim->AllocateQubits(nrQubits);
+  svSim->Initialize();
+
+  Circuits::OperationState stateSV;
+  stateSV.AllocateBits(nrQubits);
+  randomCirc->Execute(svSim, stateSV);
+
+  // --- Convert the circuit the same way OptimizeMPSInitialQubitsMap does ---
+  auto convertedCirc = std::make_shared<Circuits::Circuit<>>(*randomCirc);
+  convertedCirc->ConvertForCutting();
+  auto layers = convertedCirc->ToMultipleQubitsLayersNoClone();
+  auto finalCirc = Circuits::Circuit<>::LayersToCircuit(layers);
+
+  // BOOST_TEST_MESSAGE("Original gate count: " << randomCirc->size());
+  // BOOST_TEST_MESSAGE("Converted gate count: " << finalCirc->size());
+  // BOOST_TEST_MESSAGE("Number of layers: " << layers.size());
+
+  // --- Execute the converted circuit on an MPS simulator (no bond dim cap) ---
+  auto mpsSim = Simulators::SimulatorsFactory::CreateSimulator(
+      Simulators::SimulatorType::kQCSim,
+      Simulators::SimulationType::kMatrixProductState);
+  mpsSim->AllocateQubits(nrQubits);
+  mpsSim->Initialize();
+
+  Circuits::OperationState stateMPS;
+  stateMPS.AllocateBits(nrQubits);
+  finalCirc->Execute(mpsSim, stateMPS);
+
+  // --- Compare amplitudes ---
+  for (size_t s = 0; s < nrStates; ++s) {
+    const auto aSV = svSim->Amplitude(s);
+    const auto aMPS = mpsSim->Amplitude(s);
+    BOOST_CHECK_PREDICATE(
+        checkClose,
+        (aSV)(aMPS)(1e-6));  // no bond dim limit, expect close match
+  }
+}
+
+
 BOOST_DATA_TEST_CASE(OptimalQubitsMapZeroSwapCost, numGates, nrGates) {
   constexpr int nrQubits = 10;
 
