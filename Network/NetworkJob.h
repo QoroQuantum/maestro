@@ -60,6 +60,8 @@ class ExecuteJob {
         method == Simulators::SimulationType::kMatrixProductState &&
         hasMeasurementsOnlyAtEnd;
 
+    dcirc = dcirc->RemoveExecutedOperations(executedGates);
+
     if (!optSim) {
       optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
       if (!optSim) return;
@@ -76,12 +78,18 @@ class ExecuteJob {
       optSim->AllocateQubits(nrQubits);
       optSim->Initialize();
 
+      OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
+      optSim->SetUpcomingGates(dcirc->GetOperations());
+
       if (optimiseMultipleShots) {
         executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
 
         if (!specialOptimizationForStatevector && !specialOptimizationForMPS &&
             curCnt > 1)
           optSim->SaveState();
+
+        dcirc = dcirc->RemoveExecutedOperations(executedGates);
+        optSim->SetUpcomingGates(dcirc->GetOperations());
       }
     }
 
@@ -137,11 +145,17 @@ class ExecuteJob {
     const auto curCnt1 = curCnt > 0 ? curCnt - 1 : 0;
     for (size_t i = 0; i < curCnt; ++i) {
       if (optimiseMultipleShots) {
-        if (i > 0) optSim->RestoreState();
+        if (i > 0) {
+          optSim->RestoreState();
+          optSim->SetGatesCounter(0);
+        }
         dcirc->ExecuteMeasurements(optSim, state, executed);
       } else {
         dcirc->Execute(optSim, state);
-        if (i < curCnt1) optSim->Reset();
+        if (i < curCnt1) {
+          optSim->Reset();
+          optSim->SetGatesCounter(0);
+        }
       }
 
       auto bits = state.GetAllBits();
@@ -173,6 +187,7 @@ class ExecuteJob {
         method == Simulators::SimulationType::kMatrixProductState &&
         hasMeasurementsOnlyAtEnd;
 
+    
     if (optSim) {
       optSim->SetMultithreading(true);
 
@@ -191,12 +206,17 @@ class ExecuteJob {
         optSim->AllocateQubits(nrQubits);
         optSim->Initialize();
 
+        OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
+        optSim->SetUpcomingGates(dcirc->GetOperations());
+
         if (optimiseMultipleShots) {
           executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
 
           if (!specialOptimizationForStatevector &&
               !specialOptimizationForMPS && curCnt > 1)
             optSim->SaveState();
+          dcirc = dcirc->RemoveExecutedOperations(executedGates);
+          optSim->SetUpcomingGates(dcirc->GetOperations());
         }
       } else if (executedGates.size() == dcirc->size()) {
         // special case for when the simulator is passed from the network
@@ -213,7 +233,15 @@ class ExecuteJob {
           if (!specialOptimizationForStatevector &&
               !specialOptimizationForMPS && curCnt > 1)
             optSim->SaveState();
+          dcirc = dcirc->RemoveExecutedOperations(executedGates);
+          optSim->SetUpcomingGates(dcirc->GetOperations());
+        } else {
+          dcirc = dcirc->RemoveExecutedOperations(executedGates);
+          optSim->SetUpcomingGates(dcirc->GetOperations());
         }
+      } else {
+        dcirc = dcirc->RemoveExecutedOperations(executedGates);
+        optSim->SetUpcomingGates(dcirc->GetOperations());
       }
     } else {
       optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
@@ -233,12 +261,18 @@ class ExecuteJob {
       optSim->AllocateQubits(nrQubits);
       optSim->Initialize();
 
+      OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
+      optSim->SetUpcomingGates(dcirc->GetOperations());
+
       if (optimiseMultipleShots) {
         executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
 
         if (!specialOptimizationForStatevector && !specialOptimizationForMPS &&
             curCnt > 1)
           optSim->SaveState();
+
+        dcirc = dcirc->RemoveExecutedOperations(executedGates);
+        optSim->SetUpcomingGates(dcirc->GetOperations());
       }
     }
 
@@ -288,12 +322,17 @@ class ExecuteJob {
     const auto curCnt1 = curCnt > 0 ? curCnt - 1 : 0;
     for (size_t i = 0; i < curCnt; ++i) {
       if (optimiseMultipleShots) {
-        if (i > 0) optSim->RestoreState();
+        if (i > 0) {
+          optSim->RestoreState();
+          optSim->SetGatesCounter(0);
+        }
         dcirc->ExecuteMeasurements(optSim, state, executed);
       } else {
         dcirc->Execute(optSim, state);
-        if (i < curCnt1)
+        if (i < curCnt1) {
           optSim->Reset();  // leave the simulator state for the last iteration
+          optSim->SetGatesCounter(0);
+        }
       }
 
       auto bits = state.GetAllBits();
@@ -312,8 +351,42 @@ class ExecuteJob {
 
   size_t GetJobCount() const { return curCnt; }
 
+private:
+  void OptimizeMPSInitialQubitsMap(
+      std::shared_ptr<Simulators::ISimulator> &sim,
+      std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits) const {
+    if (sim->GetSimulationType() ==
+            Simulators::SimulationType::kMatrixProductState &&
+        (network->GetInitialQubitsMapOptimization() ||
+         network->GetMPSOptimizeSwaps()) &&
+        sim->SupportsMPSSwapOptimization()) {
+      if (network->GetMPSOptimizationQubitsNumberThreshold() <= nrQubits) {
+        const auto bondDimThreshold =
+            network->GetMPSOptimizationBondDimensionThreshold();
+        const auto maxBondDimValue =
+            maxBondDim.empty() ? 0 : std::stoi(maxBondDim);
 
-  const std::shared_ptr<Circuits::Circuit<Time>> dcirc;
+        if (maxBondDim.empty() || bondDimThreshold <= maxBondDimValue) {
+          // need to be sure the circuit is correctly converted
+          dcirc->ConvertForCutting();  // convert the three qubit gates
+          auto layers = dcirc->ToMultipleQubitsLayersNoClone();
+
+          Simulators::MPSDummySimulator dummySim(nrQubits);
+          if (!maxBondDim.empty())
+            dummySim.SetMaxBondDimension(maxBondDimValue);
+          const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
+
+          if (network->GetInitialQubitsMapOptimization())
+            sim->SetInitialQubitsMap(optimalMap);
+
+          dcirc = Circuits::Circuit<Time>::LayersToCircuit(layers);
+        }
+      }
+    }
+  }
+
+public:
+  std::shared_ptr<Circuits::Circuit<Time>> dcirc;
   ExecuteResults &res;
   const size_t curCnt;
   const size_t nrQubits;

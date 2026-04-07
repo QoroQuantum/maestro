@@ -1751,7 +1751,14 @@ class Circuit : public IOperation<Time> {
 
       affectedQubits.insert(qubits.begin(), qubits.end());
 
-      if (!executed) executionStopped = true;
+      if (!executed) {
+        executionStopped = true;
+        if (sim && sim->GetSimulationType() ==
+                       Simulators::SimulationType::kMatrixProductState && sim->SupportsMPSSwapOptimization() && 
+            op->GetType() != OperationType::kRandomGen &&
+            op->GetType() != OperationType::kConditionalRandomGen && op->GetType() != OperationType::kNoOp)
+          sim->SetGatesCounter(sim->GetGatesCounter() + 1);
+      }
       if (executionStopped) executedOps.emplace_back(executed);
     }
 
@@ -1787,6 +1794,38 @@ class Circuit : public IOperation<Time> {
 
     // sim->Flush();
   }
+
+
+  /**
+   * @brief Returns a new circuit with the operations that were not yet executed.
+   * 
+   * The parameter is modified to reflect the newly created circuit, which
+   * contains only the operations that were not yet executed.
+   * 
+   * @param executedOps A vector of bools indicating which operations were executed.
+   * @return A new circuit with the operations that were not yet executed.
+   */
+  std::shared_ptr<Circuits::Circuit<Time>> RemoveExecutedOperations(
+      std::vector<bool> &executedOps) const {
+    if (executedOps.empty()) {
+      executedOps.resize(size(), false);
+      return std::make_shared<Circuit<Time>>(operations);
+    }
+
+    OperationsVector newops;
+    newops.reserve(operations.size());
+
+    const size_t dif = operations.size() - executedOps.size();
+    for (size_t i = dif; i < operations.size(); ++i)
+      if (!executedOps[i - dif]) newops.emplace_back(operations[i]);
+
+    std::vector<bool> newExecutedOps(newops.size(), false);
+    executedOps.swap(newExecutedOps);
+
+    return std::make_shared<Circuit<Time>>(newops);
+  }
+
+
 
   // used internally to optimize measurements in the case of having measurements
   // only at the end of the circuit
@@ -2096,6 +2135,7 @@ class Circuit : public IOperation<Time> {
     layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
+    std::unordered_map<size_t, size_t> classicalBitLayer;
 
     for (const auto &op : GetOperations()) {
       // check the instruction, see if a new layer is needed
@@ -2117,10 +2157,30 @@ class Circuit : public IOperation<Time> {
           }
         }
 
+        if (op->IsConditional()) {
+          const auto bits = op->AffectedBits();
+          for (const auto bit : bits)
+            maxLevel = std::max(maxLevel, classicalBitLayer[bit]);
+        }
+
         // now set all the qubits in the instruction to the max level
         for (Types::qubit_t qbit : qubits) qubitsUsed[qbit] = maxLevel;
 
-        layers[maxLevel - 1]->AddOperation(op->Clone());
+        const size_t layerIdx = maxLevel > 0 ? maxLevel - 1 : 0;
+
+        // ensure enough layers exist for the computed level
+        while (layers.size() <= layerIdx)
+          layers.push_back(std::make_shared<Circuits::Circuit<Time>>());
+
+        layers[layerIdx]->AddOperation(op->Clone());
+
+        const auto writtenBits = op->AffectedBits();
+        if (!writtenBits.empty() && !op->IsConditional()) {
+          const size_t writtenLevel = maxLevel > 0 ? maxLevel : 1;
+          for (const auto bit : writtenBits)
+            classicalBitLayer[bit] =
+                std::max(classicalBitLayer[bit], writtenLevel);
+        }
       } else
         // add the instruction to the last layer
         layers.back()->AddOperation(op->Clone());
@@ -2143,6 +2203,7 @@ class Circuit : public IOperation<Time> {
     layers.emplace_back(std::make_shared<Circuits::Circuit<Time>>());
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
+    std::unordered_map<size_t, size_t> classicalBitLayer;
 
     for (const auto &op : GetOperations()) {
       // check the instruction, see if a new layer is needed
@@ -2164,10 +2225,30 @@ class Circuit : public IOperation<Time> {
           }
         }
 
+        if (op->IsConditional()) {
+          const auto bits = op->AffectedBits();
+          for (const auto bit : bits)
+            maxLevel = std::max(maxLevel, classicalBitLayer[bit]);
+        }
+
         // now set all the qubits in the instruction to the max level
         for (Types::qubit_t qbit : qubits) qubitsUsed[qbit] = maxLevel;
 
-        layers[maxLevel - 1]->AddOperation(op);
+        const size_t layerIdx = maxLevel > 0 ? maxLevel - 1 : 0;
+
+        // ensure enough layers exist for the computed level
+        while (layers.size() <= layerIdx)
+          layers.push_back(std::make_shared<Circuits::Circuit<Time>>());
+
+        layers[layerIdx]->AddOperation(op);
+
+        const auto writtenBits = op->AffectedBits();
+        if (!writtenBits.empty() && !op->IsConditional()) {
+          const size_t writtenLevel = maxLevel > 0 ? maxLevel : 1;
+          for (const auto bit : writtenBits)
+            classicalBitLayer[bit] =
+                std::max(classicalBitLayer[bit], writtenLevel);
+        }
       } else
         // add the instruction to the last layer
         layers.back()->AddOperation(op);
