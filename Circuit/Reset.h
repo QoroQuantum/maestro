@@ -67,6 +67,12 @@ class Reset : public IOperation<Time> {
       if (resetTargets[qi]) {
         xgate.SetQubit(qubits[qi]);
         xgate.Execute(sim, state);
+
+        if (sim->SupportsMPSSwapOptimization()) {
+          const auto counter = sim->GetGatesCounter();
+          if (counter > 0)
+            sim->SetGatesCounter(counter - 1);
+        }
       }
     }
   }

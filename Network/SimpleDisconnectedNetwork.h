@@ -2132,9 +2132,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             Simulators::SimulationType::kMatrixProductState &&
         (optimizeInitialQubitsMap || mpsOptimizeSwaps) &&
         sim->SupportsMPSSwapOptimization()) {
-      if (GetMPSOptimizationQubitsNumberThreshold() <= nrQubits) {
-        const auto bondDimThreshold =
-            GetMPSOptimizationBondDimensionThreshold();
+      if (mpsOptimizationQubitsNumberThreshold <= nrQubits) {
+        const auto bondDimThreshold = mpsOptimizationBondDimensionThreshold;
         const auto maxBondDimValue =
             maxBondDim.empty() ? 0 : std::stoi(maxBondDim);
 
