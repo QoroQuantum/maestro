@@ -1523,7 +1523,7 @@ class GpuLibrary : public Utils::Library {
     return 0;
   }
 
-  bool MPSSetCallbackContext(void *context) {
+  bool MPSSetCallbackContext(void *obj, void *context) {
     if (LibraryHandle)
       return fMPSSetCallbackContext(obj, context) == 1;
     else
@@ -1532,7 +1532,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool MPSSetMeetingPositionCallback(int64_t(*callback)(void*, int64_t*)) {
+  bool MPSSetMeetingPositionCallback(void *obj, int64_t(*callback)(void*, int64_t*)) {
       if (LibraryHandle)
       return fMPSSetMeetingPositionCallback(obj, callback) == 1;
     else
