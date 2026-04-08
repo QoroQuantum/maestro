@@ -737,10 +737,22 @@ class GpuSimulator : public GpuState {
     cloned->chi = chi;
     cloned->singularValueThreshold = singularValueThreshold;
 
+    cloned->lookaheadDepth = lookaheadDepth;
+    cloned->useOptimalMeetingPositionOnly = useOptimalMeetingPositionOnly;
+    cloned->upcomingGates = upcomingGates;
+    cloned->upcomingGateIndex = upcomingGateIndex;
+
     if (state)
       cloned->state = state->Clone();
-    else if (mps)
+    else if (mps) {
       cloned->mps = mps->Clone();
+
+      cloned->gateCounterObserver =
+          std::make_shared<GateCounterObserver>(upcomingGateIndex);
+      cloned->RegisterObserver(cloned->gateCounterObserver);
+
+      cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
+    }
 
     return cloned;
   }

@@ -301,6 +301,15 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fMPSGetMaxExtent, __LINE__);
           fMPSGetNrQubits = (int (*)(void *))GetFunction("MPSGetNrQubits");
           CheckFunction((void *)fMPSGetNrQubits, __LINE__);
+          fMPSSetCallbackContext =
+              (int (*)(void *, void *))GetFunction("MPSSetCallbackContext");
+          CheckFunction((void *)fMPSSetCallbackContext, __LINE__);
+
+          fMPSSetMeetingPositionCallback =
+              (int (*)(void *, int64_t (*)(void *, int64_t *)))
+                  GetFunction("MPSSetMeetingPositionCallback");
+          CheckFunction((void *)fMPSSetMeetingPositionCallback, __LINE__);
+
           fMPSAmplitude = (int (*)(void *, long int, long int *, double *,
                                    double *))GetFunction("MPSAmplitude");
           CheckFunction((void *)fMPSAmplitude, __LINE__);
@@ -1512,6 +1521,24 @@ class GpuLibrary : public Utils::Library {
       throw std::runtime_error("GpuLibrary: Unable to get nr qubits for mps");
 
     return 0;
+  }
+
+  bool MPSSetCallbackContext(void *context) {
+    if (LibraryHandle)
+      return fMPSSetCallbackContext(obj, context) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set callback context for mps");
+    return false;
+  }
+
+  bool MPSSetMeetingPositionCallback(int64_t(*callback)(void*, int64_t*)) {
+      if (LibraryHandle)
+      return fMPSSetMeetingPositionCallback(obj, callback) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set meeting position callback for mps");
+    return false;
   }
 
   bool MPSAmplitude(void *obj, long int numFixedValues, long int *fixedValues,
@@ -3215,6 +3242,9 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSSetMaxExtent)(void *, long int) = nullptr;
   long int (*fMPSGetMaxExtent)(void *) = nullptr;
   int (*fMPSGetNrQubits)(void *) = nullptr;
+  int (*fMPSSetCallbackContext)(void *, void *) = nullptr;
+  int (*fMPSSetMeetingPositionCallback)(void *, int64_t (*)(void *, int64_t *)) = nullptr;
+
   int (*fMPSAmplitude)(void *, long int, long int *, double *,
                        double *) = nullptr;
   double (*fMPSProbability0)(void *, unsigned int) = nullptr;
