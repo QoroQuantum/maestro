@@ -139,7 +139,7 @@ class GpuLibMPSSim {
     return false;
   }
 
-  bool SetMeetingPositionCallback(int64_t (*callback)(void *, int64_t *)) {
+  bool SetMeetingPositionCallback(int64_t (*callback)(void *, const int64_t *)) {
     if (obj) return lib->MPSSetMeetingPositionCallback(obj, callback);
     return false;
   }
