@@ -1156,7 +1156,7 @@ class GpuState : public ISimulator {
           limitSize ? static_cast<long long int>(chi) : 0);
     }
 
-    self->dummySim->setTotalSwappingCost(0);
+    dummySim->setTotalSwappingCost(0);
     // Convert actual bond dims to doubles
     std::vector<double> bondDimsD(bondDims, bondDims + nrQubits - 1);
     dummySim->SetCurrentBondDimensions(bondDimsD);
