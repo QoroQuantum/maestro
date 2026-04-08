@@ -215,6 +215,8 @@ class QCSimState : public ISimulator {
       state->Reset();
     else if (pp)
       pp->ClearOperations();
+
+    upcomingGateIndex = 0;
   }
 
   /**
@@ -327,6 +329,12 @@ class QCSimState : public ISimulator {
 
           const auto &op = upcomingGates[upcomingGateIndex];
           const auto qbits = op->AffectedQubits();
+
+          if (qbits.size() != 2) {
+            std::cerr << "Error: Meeting position callback called for a gate that does not have exactly 2 qubits." << std::endl;
+
+            return -1; // will fallback 
+          }
           
           /*
           const auto &qmap = dummySim->getQubitsMap();
@@ -543,7 +551,10 @@ class QCSimState : public ISimulator {
     cliffordSimulator = nullptr;
     tensorNetwork = nullptr;
     pp = nullptr;
+    dummySim = nullptr;
     nrQubits = 0;
+    upcomingGateIndex = 0;
+    upcomingGates.clear();
   }
 
   /**

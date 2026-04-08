@@ -923,6 +923,11 @@ class QCSimSimulator : public QCSimState {
     cloned->enableMultithreading = enableMultithreading;
     cloned->useMPSMeasureNoCollapse = useMPSMeasureNoCollapse;
 
+    cloned->lookaheadDepth = lookaheadDepth;
+    cloned->useOptimalMeetingPositionOnly = useOptimalMeetingPositionOnly;
+    cloned->upcomingGates = upcomingGates;
+    cloned->upcomingGateIndex = upcomingGateIndex;
+
     if (state) cloned->state = state->Clone();
 
     if (mpsSimulator) {
@@ -933,11 +938,11 @@ class QCSimSimulator : public QCSimState {
       if (limitSize && chi > 0)
         cloned->mpsSimulator->setLimitBondDimension(chi);
 
-      cloned->lookaheadDepth = lookaheadDepth;
-      cloned->useOptimalMeetingPositionOnly = useOptimalMeetingPositionOnly;
-      cloned->upcomingGates = upcomingGates;
-      cloned->upcomingGateIndex = upcomingGateIndex;
       cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
+
+      cloned->gateCounterObserver =
+          std::make_shared<GateCounterObserver>(upcomingGateIndex);
+      cloned->RegisterObserver(cloned->gateCounterObserver);
     }
 
     if (cliffordSimulator)

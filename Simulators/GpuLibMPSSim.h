@@ -134,6 +134,16 @@ class GpuLibMPSSim {
     return 0;
   }
 
+  bool SetCallbackContext(void *context) {
+    if (obj) return lib->MPSSetCallbackContext(obj, context);
+    return false;
+  }
+
+  bool SetMeetingPositionCallback(int64_t (*callback)(void *, int64_t *)) {
+    if (obj) return lib->MPSSetMeetingPositionCallback(obj, callback);
+    return false;
+  }
+
   bool Amplitude(long int numFixedValues, long int *fixedValues, double *real,
                  double *imaginary) const {
     if (obj)

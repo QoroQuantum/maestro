@@ -19,6 +19,10 @@
 
 #ifdef INCLUDED_BY_FACTORY
 
+#include "MPSDummySimulator.h"
+
+#include <cstdint>
+
 namespace Simulators {
 // TODO: Maybe use the pimpl idiom
 // https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation
@@ -225,7 +229,18 @@ class GpuState : public ISimulator {
       tn->Reset();
     else if (pp)
       pp->ClearOperators();
+
+    upcomingGateIndex = 0;
   }
+
+  /**
+   * @brief Returns if the simulator supports MPS swap optimization.
+   *
+   * Used to check if the simulator supports MPS swap optimization.
+   * @return True if the simulator supports MPS swap optimization, false
+   * otherwise.
+   */
+  bool SupportsMPSSwapOptimization() const override { return true; }
 
   /**
    * @brief Sets the initial qubits map, if possible.
@@ -237,8 +252,89 @@ class GpuState : public ISimulator {
    */
   void SetInitialQubitsMap(
       const std::vector<long long int> &initialMap) override {
-    if (mps) mps->SetInitialQubitsMap(initialMap);
+    if (mps) {
+      mps->SetInitialQubitsMap(initialMap);
+      if (!dummySim || dummySim->getNrQubits() != initialMap.size()) {
+        dummySim =
+            std::make_unique<Simulators::MPSDummySimulator>(initialMap.size());
+        dummySim->SetMaxBondDimension(
+            limitSize ? static_cast<long long int>(chi) : 0);
+      }
+      dummySim->SetInitialQubitsMap(initialMap);
+    }
   }
+
+  void SetUseOptimalMeetingPosition(bool enable) override {
+    useOptimalMeetingPositionOnly = enable;
+    if (mps) mps->SetUseOptimalMeetingPosition(enable);
+  }
+
+  void SetLookaheadDepth(int depth) override {
+    lookaheadDepth = depth;
+    if (mps && depth > 0 && !useOptimalMeetingPositionOnly)
+      mps->SetUseOptimalMeetingPosition(true);
+  }
+
+  void SetLookaheadDepthWithHeuristic(int depth) override {
+    lookaheadDepthWithHeuristic = depth;
+    if (lookaheadDepth < depth) SetLookaheadDepth(depth);
+  }
+
+  void SetUpcomingGates(
+      const std::vector<std::shared_ptr<Circuits::IOperation<double>>> &gates)
+      override {
+    upcomingGates = gates;
+    upcomingGateIndex = 0;
+
+    if (!mps || lookaheadDepth <= 0) return;
+
+    // Register an observer that advances the gate index
+    ClearObservers();  // for now we only have this observer, so this should be
+                       // fine
+    gateCounterObserver =
+        std::make_shared<GateCounterObserver>(upcomingGateIndex);
+    RegisterObserver(gateCounterObserver);
+
+    // Set up a meeting position callback that uses MPSDummySimulator
+    // for lookahead evaluation with actual bond dimensions
+    // the callback is called only for two qubits gates and only if executing
+    // them would require a swap
+    mps->SetCallbackContext((void*)this);
+    mps->SetMeetingPositionCallback(FindBestMeetingPosition);
+  }
+
+  /**
+   * @brief Returns the gates counter.
+   *
+   * Usually does nothing, except for MPS simulators that support swap
+   * optimization.
+   *
+   * @return The number of gates executed in the circuit.
+   */
+  long long int GetGatesCounter() const override { return upcomingGateIndex; }
+
+  /**
+   * @brief Sets the gates counter.
+   *
+   * Usually does nothing, except for MPS simulators that support swap
+   * optimization.
+   *
+   * @param counter The position in the circuit from where the execution should
+   * continue.
+   */
+  void SetGatesCounter(long long int counter) override {
+    upcomingGateIndex = counter;
+  }
+
+  /**
+   * @brief Increments the gates counter.
+   *
+   * Usually does nothing, except for MPS simulators that support swap
+   * optimization. Increments the position in the circuit from where the
+   * execution should continue. Useful for classically controlled gates, for the
+   * case when the controlled gate is not executed.
+   */
+  void IncrementGatesCounter() override { ++upcomingGateIndex; }
 
   /**
    * @brief Configures the state.
@@ -355,6 +451,9 @@ class GpuState : public ISimulator {
     tn = nullptr;
     pp = nullptr;
     nrQubits = 0;
+    dummySim = nullptr;
+    upcomingGateIndex = 0;
+    upcomingGates.clear();
   }
 
   /**
@@ -1041,6 +1140,42 @@ class GpuState : public ISimulator {
   }
 
  protected:
+  static int64_t FindBestMeetingPosition(void* thisPtr, int64_t* bondDims) {
+    QCSimState* self = static_cast<QCSimState*>(thisPtr);
+    const size_t nQ = self->nrQubits;
+
+    if (!self->dummySim || self->dummySim->getNrQubits() != nQ) {
+      self->dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
+      self->dummySim->SetMaxBondDimension(self->limitSize ? static_cast<long long int>(self->chi)
+                                              : 0);
+    }
+
+    self->dummySim->setTotalSwappingCost(0);
+    // Convert actual bond dims to doubles
+    std::vector<double> bondDimsD(bondDims, bondDims + self->nrQubits - 1);
+    self->dummySim->SetCurrentBondDimensions(bondDimsD);
+
+    const auto &op = self->upcomingGates[self->upcomingGateIndex];
+    const auto qbits = op->AffectedQubits();
+
+    if (qbits.size() != 2) {
+      std::cerr << "Error: Meeting position callback called for a gate "
+                   "that does not have exactly 2 qubits."
+                << std::endl;
+
+      return -1;  // will fallback
+    }
+
+    double bestCost = std::numeric_limits<double>::infinity();
+    int64_t res = self->dummySim->FindBestMeetingPosition(
+        self->upcomingGates, self->upcomingGateIndex, self->lookaheadDepth,
+        self->lookaheadDepthWithHeuristic, 0, bestCost);
+
+    self->dummySim->SwapQubitsToPosition(qbits[0], qbits[1], res);
+    self->dummySim->ApplyGate(op);
+    return res;
+  };
+
   SimulationType simulationType =
       SimulationType::kStatevector; /**< The simulation type. */
 
@@ -1057,6 +1192,24 @@ class GpuState : public ISimulator {
   Eigen::Index chi = 10;               // if limitSize is true
   double singularValueThreshold = 0.;  // if limitEntanglement is true
   bool useDoublePrecision = false;     // if true, GPU MPS uses float64
+
+  int lookaheadDepth = 0;
+  int lookaheadDepthWithHeuristic = 0;
+  bool useOptimalMeetingPositionOnly = false;
+  std::vector<std::shared_ptr<Circuits::IOperation<>>> upcomingGates;
+  long long int upcomingGateIndex = 0;
+  std::unique_ptr<Simulators::MPSDummySimulator> dummySim;
+
+  // Observer that counts applied gates to track position in upcomingGates
+  class GateCounterObserver : public ISimulatorObserver {
+   public:
+    GateCounterObserver(long long int &indexRef) : index(indexRef) {}
+    void Update(const Types::qubits_vector &) override { ++index; }
+
+   private:
+    long long int &index;
+  };
+  std::shared_ptr<GateCounterObserver> gateCounterObserver;
 };
 
 }  // namespace Private
