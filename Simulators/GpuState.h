@@ -1140,22 +1140,28 @@ class GpuState : public ISimulator {
   }
 
  protected:
-  static int64_t FindBestMeetingPosition(void* thisPtr, int64_t* bondDims) {
-    QCSimState* self = static_cast<QCSimState*>(thisPtr);
-    const size_t nQ = self->nrQubits;
+  static int64_t FindBestMeetingPosition(void* thisPtr, const int64_t* bondDims) {
+    GpuState* self = static_cast<GpuState*>(thisPtr);
 
-    if (!self->dummySim || self->dummySim->getNrQubits() != nQ) {
-      self->dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
-      self->dummySim->SetMaxBondDimension(self->limitSize ? static_cast<long long int>(self->chi)
-                                              : 0);
+    return self->FindBestMeetingPosition(bondDims);
+  };
+
+  int64_t FindBestMeetingPosition(const int64_t* bondDims)
+  {
+    const size_t nQ = GetNumberOfQubits();
+
+    if (!dummySim || dummySim->getNrQubits() != nQ) {
+      dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
+      dummySim->SetMaxBondDimension(
+          limitSize ? static_cast<long long int>(chi) : 0);
     }
 
     self->dummySim->setTotalSwappingCost(0);
     // Convert actual bond dims to doubles
-    std::vector<double> bondDimsD(bondDims, bondDims + self->nrQubits - 1);
-    self->dummySim->SetCurrentBondDimensions(bondDimsD);
+    std::vector<double> bondDimsD(bondDims, bondDims + nrQubits - 1);
+    dummySim->SetCurrentBondDimensions(bondDimsD);
 
-    const auto &op = self->upcomingGates[self->upcomingGateIndex];
+    const auto &op = upcomingGates[upcomingGateIndex];
     const auto qbits = op->AffectedQubits();
 
     if (qbits.size() != 2) {
@@ -1167,14 +1173,15 @@ class GpuState : public ISimulator {
     }
 
     double bestCost = std::numeric_limits<double>::infinity();
-    int64_t res = self->dummySim->FindBestMeetingPosition(
-        self->upcomingGates, self->upcomingGateIndex, self->lookaheadDepth,
-        self->lookaheadDepthWithHeuristic, 0, bestCost);
+    int64_t res = dummySim->FindBestMeetingPosition(
+        upcomingGates, upcomingGateIndex, lookaheadDepth,
+        lookaheadDepthWithHeuristic, 0, bestCost);
 
-    self->dummySim->SwapQubitsToPosition(qbits[0], qbits[1], res);
-    self->dummySim->ApplyGate(op);
+    dummySim->SwapQubitsToPosition(qbits[0], qbits[1], res);
+    dummySim->ApplyGate(op);
+
     return res;
-  };
+  }
 
   SimulationType simulationType =
       SimulationType::kStatevector; /**< The simulation type. */

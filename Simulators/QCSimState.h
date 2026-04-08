@@ -927,7 +927,6 @@ class QCSimState : public ISimulator {
             // might not be in the requested order
             // translate the measurement            
             for (auto q : qubits) {
-              const size_t qubitMask = 1ULL << q;
               if (measRaw.at(q)) meas |= mask;
               mask <<= 1ULL;
             }
