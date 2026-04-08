@@ -306,7 +306,7 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fMPSSetCallbackContext, __LINE__);
 
           fMPSSetMeetingPositionCallback =
-              (int (*)(void *, int64_t (*)(void *, int64_t *)))
+              (int (*)(void *, int64_t (*)(void *, const int64_t *)))
                   GetFunction("MPSSetMeetingPositionCallback");
           CheckFunction((void *)fMPSSetMeetingPositionCallback, __LINE__);
 
@@ -1532,7 +1532,7 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool MPSSetMeetingPositionCallback(void *obj, int64_t(*callback)(void*, int64_t*)) {
+  bool MPSSetMeetingPositionCallback(void *obj, int64_t(*callback)(void*, const int64_t*)) {
       if (LibraryHandle)
       return fMPSSetMeetingPositionCallback(obj, callback) == 1;
     else
@@ -3243,7 +3243,7 @@ class GpuLibrary : public Utils::Library {
   long int (*fMPSGetMaxExtent)(void *) = nullptr;
   int (*fMPSGetNrQubits)(void *) = nullptr;
   int (*fMPSSetCallbackContext)(void *, void *) = nullptr;
-  int (*fMPSSetMeetingPositionCallback)(void *, int64_t (*)(void *, int64_t *)) = nullptr;
+  int (*fMPSSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
 
   int (*fMPSAmplitude)(void *, long int, long int *, double *,
                        double *) = nullptr;

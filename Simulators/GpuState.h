@@ -300,7 +300,7 @@ class GpuState : public ISimulator {
     // the callback is called only for two qubits gates and only if executing
     // them would require a swap
     mps->SetCallbackContext((void*)this);
-    mps->SetMeetingPositionCallback(FindBestMeetingPosition);
+    mps->SetMeetingPositionCallback(&GpuState::FindBestMeetingPosition);
   }
 
   /**
@@ -1143,10 +1143,10 @@ class GpuState : public ISimulator {
   static int64_t FindBestMeetingPosition(void* thisPtr, const int64_t* bondDims) {
     GpuState* self = static_cast<GpuState*>(thisPtr);
 
-    return self->FindBestMeetingPosition(bondDims);
+    return self->FindBestMeetingPositionFunc(bondDims);
   };
 
-  int64_t FindBestMeetingPosition(const int64_t* bondDims)
+  int64_t FindBestMeetingPositionFunc(const int64_t* bondDims)
   {
     const size_t nQ = GetNumberOfQubits();
 
