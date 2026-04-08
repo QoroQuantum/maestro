@@ -380,6 +380,28 @@ private:
             sim->SetInitialQubitsMap(optimalMap);
 
           dcirc = Circuits::Circuit<Time>::LayersToCircuit(layers);
+
+          if (network->GetMPSOptimizeSwaps()) {
+            sim->SetUpcomingGates(dcirc->GetOperations());
+
+            // TODO: come up with something better!
+            int lookaheadVal = nrQubits;
+            if (nrQubits > 15) lookaheadVal = 15;
+
+            const int lookaheadDepth = layers.size() < 10 ? 5
+                                       : layers.size() < 20
+                                           ? static_cast<int>(lookaheadVal)
+                                       : layers.size() < 35 ? 1.5 * lookaheadVal
+                                                            : 2 * lookaheadVal;
+
+            const int lookaheadHeuristicDepth = layers.size() < 10 ? 4
+                                                : layers.size() < 20
+                                                    ? lookaheadDepth - 1
+                                                    : lookaheadDepth - 2;
+
+            sim->SetLookaheadDepth(lookaheadDepth);
+            sim->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepth);
+          }
         }
       }
     }
