@@ -79,7 +79,6 @@ class ExecuteJob {
       optSim->Initialize();
 
       OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
-      optSim->SetUpcomingGates(dcirc->GetOperations());
 
       if (optimiseMultipleShots) {
         executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
@@ -89,7 +88,8 @@ class ExecuteJob {
           optSim->SaveState();
 
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
-        optSim->SetUpcomingGates(dcirc->GetOperations());
+        if (network->GetMPSOptimizeSwaps())
+            optSim->SetUpcomingGates(dcirc->GetOperations());
       }
     }
 
@@ -207,7 +207,6 @@ class ExecuteJob {
         optSim->Initialize();
 
         OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
-        optSim->SetUpcomingGates(dcirc->GetOperations());
 
         if (optimiseMultipleShots) {
           executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
@@ -216,7 +215,8 @@ class ExecuteJob {
               !specialOptimizationForMPS && curCnt > 1)
             optSim->SaveState();
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
-          optSim->SetUpcomingGates(dcirc->GetOperations());
+          if (network->GetMPSOptimizeSwaps())
+            optSim->SetUpcomingGates(dcirc->GetOperations());
         }
       } else if (executedGates.size() == dcirc->size()) {
         // special case for when the simulator is passed from the network
@@ -262,7 +262,6 @@ class ExecuteJob {
       optSim->Initialize();
 
       OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
-      optSim->SetUpcomingGates(dcirc->GetOperations());
 
       if (optimiseMultipleShots) {
         executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
@@ -272,7 +271,8 @@ class ExecuteJob {
           optSim->SaveState();
 
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
-        optSim->SetUpcomingGates(dcirc->GetOperations());
+        if (network->GetMPSOptimizeSwaps())
+            optSim->SetUpcomingGates(dcirc->GetOperations());
       }
     }
 
@@ -374,16 +374,15 @@ private:
           Simulators::MPSDummySimulator dummySim(nrQubits);
           if (!maxBondDim.empty())
             dummySim.SetMaxBondDimension(maxBondDimValue);
-          const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
-
-          if (network->GetInitialQubitsMapOptimization())
+          
+          if (network->GetInitialQubitsMapOptimization()) {
+            const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
             sim->SetInitialQubitsMap(optimalMap);
+          }
 
           dcirc = Circuits::Circuit<Time>::LayersToCircuit(layers);
 
           if (network->GetMPSOptimizeSwaps()) {
-            sim->SetUpcomingGates(dcirc->GetOperations());
-
             // TODO: come up with something better!
             int lookaheadVal = nrQubits;
             if (nrQubits > 15) lookaheadVal = 15;
@@ -399,8 +398,11 @@ private:
                                                     ? lookaheadDepth - 1
                                                     : lookaheadDepth - 2;
 
+            sim->SetUseOptimalMeetingPosition(true);
             sim->SetLookaheadDepth(lookaheadDepth);
             sim->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepth);
+
+            sim->SetUpcomingGates(dcirc->GetOperations());
           }
         }
       }
