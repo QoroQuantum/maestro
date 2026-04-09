@@ -2133,45 +2133,60 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         (optimizeInitialQubitsMap || mpsOptimizeSwaps) &&
         sim->SupportsMPSSwapOptimization()) {
       if (mpsOptimizationQubitsNumberThreshold <= nrQubits) {
-        const auto bondDimThreshold = mpsOptimizationBondDimensionThreshold;
         const auto maxBondDimValue =
             maxBondDim.empty() ? 0 : std::stoi(maxBondDim);
 
-        if (maxBondDim.empty() || bondDimThreshold <= maxBondDimValue) {
+        if (maxBondDim.empty() ||
+            mpsOptimizationBondDimensionThreshold <= maxBondDimValue) {
           // need to be sure the circuit is correctly converted
           dcirc->ConvertForCutting();  // convert the three qubit gates
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();
 
+          double avgTwoQubitGatesPerLayer = 0.0;
+          for (const auto &layer : layers) {
+            int twoQubitGates = 0;
+            for (const auto &op : layer->GetOperations()) {
+              if (op->AffectedQubits().size() >= 2) {
+                ++twoQubitGates;
+              }
+            }
+            avgTwoQubitGatesPerLayer += twoQubitGates;
+          }
+          avgTwoQubitGatesPerLayer /= layers.size();
+
           Simulators::MPSDummySimulator dummySim(nrQubits);
           if (!maxBondDim.empty())
             dummySim.SetMaxBondDimension(maxBondDimValue);
-          const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
 
-          if (optimizeInitialQubitsMap) sim->SetInitialQubitsMap(optimalMap);
+          if (optimizeInitialQubitsMap) {
+            const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
+            sim->SetInitialQubitsMap(optimalMap);
+          }
 
           auto optCirc = Circuits::Circuit<Time>::LayersToCircuit(layers);
           dcirc->SetOperations(optCirc->GetOperations());
 
           if (mpsOptimizeSwaps) {
-            sim->SetUpcomingGates(dcirc->GetOperations());
-
             // TODO: come up with something better!
-            int lookaheadVal = nrQubits;
-            if (nrQubits > 15) lookaheadVal = 15;
+            int lookaheadVal = static_cast<int>(4. * avgTwoQubitGatesPerLayer);
+            if (lookaheadVal > 15) lookaheadVal = 15;
 
-            const int lookaheadDepth = layers.size() < 10 ? 5
+            const int lookaheadDepth = layers.size() < 10 ? 0
                                  : layers.size() < 20
                                      ? static_cast<int>(lookaheadVal)
                                  : layers.size() < 35 ? 1.5 * lookaheadVal
                                                       : 2 * lookaheadVal;
 
-            const int lookaheadHeuristicDepth = layers.size() < 10 ? 4
+            const int lookaheadHeuristicDepth = layers.size() < 10 ? 0
                                           : layers.size() < 20
                                               ? lookaheadDepth - 1
-                                              : lookaheadDepth - 2;
+                                              : lookaheadDepth - 2; 
 
+            sim->SetUseOptimalMeetingPosition(true);
             sim->SetLookaheadDepth(lookaheadDepth);
             sim->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepth);
+
+            sim->SetUpcomingGates(dcirc->GetOperations());
           }
         }
       }
