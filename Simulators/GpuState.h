@@ -76,6 +76,9 @@ class GpuState : public ISimulator {
         } else
           throw std::runtime_error(
               "GpuState::Initialize: Failed to create the MPS state.");
+        // default is true
+        if (!useOptimalMeetingPosition)
+          mps->SetUseOptimalMeetingPosition(false);
       } else if (simulationType == SimulationType::kTensorNetwork) {
         tn = SimulatorsFactory::CreateGpuLibTensorNetSim();
         if (tn) {
@@ -265,13 +268,13 @@ class GpuState : public ISimulator {
   }
 
   void SetUseOptimalMeetingPosition(bool enable) override {
-    useOptimalMeetingPositionOnly = enable;
+    useOptimalMeetingPosition = enable;
     if (mps) mps->SetUseOptimalMeetingPosition(enable);
   }
 
   void SetLookaheadDepth(int depth) override {
     lookaheadDepth = depth;
-    if (mps && depth > 0 && !useOptimalMeetingPositionOnly)
+    if (mps && depth > 0 && !useOptimalMeetingPosition)
       mps->SetUseOptimalMeetingPosition(true);
   }
 
@@ -1202,7 +1205,7 @@ class GpuState : public ISimulator {
 
   int lookaheadDepth = 0;
   int lookaheadDepthWithHeuristic = 0;
-  bool useOptimalMeetingPositionOnly = false;
+  bool useOptimalMeetingPosition = true;
   std::vector<std::shared_ptr<Circuits::IOperation<>>> upcomingGates;
   long long int upcomingGateIndex = 0;
   std::unique_ptr<Simulators::MPSDummySimulator> dummySim;

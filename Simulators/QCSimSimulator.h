@@ -924,7 +924,7 @@ class QCSimSimulator : public QCSimState {
     cloned->useMPSMeasureNoCollapse = useMPSMeasureNoCollapse;
 
     cloned->lookaheadDepth = lookaheadDepth;
-    cloned->useOptimalMeetingPositionOnly = useOptimalMeetingPositionOnly;
+    cloned->useOptimalMeetingPosition = useOptimalMeetingPosition;
     cloned->upcomingGates = upcomingGates;
     cloned->upcomingGateIndex = upcomingGateIndex;
 

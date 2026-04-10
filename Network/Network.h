@@ -988,6 +988,14 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
   virtual void SetMPSOptimizationQubitsNumberThreshold(size_t threshold) = 0;
 
   virtual size_t GetMPSOptimizationQubitsNumberThreshold() const = 0;
+
+  virtual void SetLookaheadDepth(int depth) = 0;
+
+  virtual int GetLookaheadDepth() const = 0;
+
+  virtual void SetLookaheadDepthWithHeuristic(int depth) = 0;
+
+  virtual int GetLookaheadDepthWithHeuristic() const = 0;
 };
 
 }  // namespace Network
