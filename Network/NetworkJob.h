@@ -384,24 +384,45 @@ private:
 
           if (network->GetMPSOptimizeSwaps()) {
             // TODO: come up with something better!
-            int lookaheadVal = nrQubits;
-            if (nrQubits > 15) lookaheadVal = 15;
+            int lookaheadDepthLocal = network->GetLookaheadDepth();
 
-            const int lookaheadDepth = layers.size() < 10 ? 5
-                                       : layers.size() < 20
-                                           ? static_cast<int>(lookaheadVal)
-                                       : layers.size() < 35 ? 1.5 * lookaheadVal
-                                                            : 2 * lookaheadVal;
+            if (lookaheadDepthLocal == std::numeric_limits<int>::max()) {
+              double avgTwoQubitGatesPerLayer = 0.0;
+              for (const auto &layer : layers) {
+                int twoQubitGates = 0;
+                for (const auto &op : layer->GetOperations()) {
+                  if (op->AffectedQubits().size() >= 2) {
+                    ++twoQubitGates;
+                  }
+                }
+                avgTwoQubitGatesPerLayer += twoQubitGates;
+              }
+              avgTwoQubitGatesPerLayer /= layers.size();
 
-            const int lookaheadHeuristicDepth = layers.size() < 10 ? 4
-                                                : layers.size() < 20
-                                                    ? lookaheadDepth - 1
-                                                    : lookaheadDepth - 2;
+              int lookaheadVal =
+                  static_cast<int>(4. * avgTwoQubitGatesPerLayer);
+              if (lookaheadVal > 15) lookaheadVal = 15;
+
+              lookaheadDepthLocal = layers.size() < 10 || nrQubits <= 10 ? 0
+                                    : layers.size() < 20
+                                        ? static_cast<int>(lookaheadVal)
+                                    : layers.size() < 35 ? 1.5 * lookaheadVal
+                                                         : 2 * lookaheadVal;
+            }
+
+            int lookaheadHeuristicDepthLocal =
+                network->GetLookaheadDepthWithHeuristic();
+
+            if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
+              lookaheadHeuristicDepthLocal =
+                  layers.size() < 10 || nrQubits <= 10 ? 0
+                                             : layers.size() < 20
+                                                 ? lookaheadDepthLocal - 1
+                                                 : lookaheadDepthLocal - 2;
 
             sim->SetUseOptimalMeetingPosition(true);
-            sim->SetLookaheadDepth(lookaheadDepth);
-            sim->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepth);
-
+            sim->SetLookaheadDepth(lookaheadDepthLocal);
+            sim->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepthLocal);
             sim->SetUpcomingGates(dcirc->GetOperations());
           }
         }

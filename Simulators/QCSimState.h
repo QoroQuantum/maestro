@@ -68,6 +68,8 @@ class QCSimState : public ISimulator {
         if (limitEntanglement && singularValueThreshold > 0.)
           mpsSimulator->setLimitEntanglement(singularValueThreshold);
         if (limitSize && chi > 0) mpsSimulator->setLimitBondDimension(chi);
+        // default is true
+        if (!useOptimalMeetingPosition) mpsSimulator->SetUseOptimalMeetingPosition(false);
       } else if (simulationType == SimulationType::kStabilizer)
         cliffordSimulator =
             std::make_unique<QC::Clifford::StabilizerSimulator>(nrQubits);
@@ -250,14 +252,14 @@ class QCSimState : public ISimulator {
   }
 
   void SetUseOptimalMeetingPosition(bool enable) override {
-    useOptimalMeetingPositionOnly = enable;
+    useOptimalMeetingPosition = enable;
     if (mpsSimulator)
         mpsSimulator->SetUseOptimalMeetingPosition(enable);
   }
 
   void SetLookaheadDepth(int depth) override {
     lookaheadDepth = depth;
-    if (mpsSimulator && depth > 0 && !useOptimalMeetingPositionOnly)
+    if (mpsSimulator && depth > 0 && !useOptimalMeetingPosition)
       mpsSimulator->SetUseOptimalMeetingPosition(true);
   }
 
@@ -1494,7 +1496,7 @@ class QCSimState : public ISimulator {
 
   int lookaheadDepth = 0;
   int lookaheadDepthWithHeuristic = 0;
-  bool useOptimalMeetingPositionOnly = false;
+  bool useOptimalMeetingPosition = true;
   std::vector<std::shared_ptr<Circuits::IOperation<>>> upcomingGates;
   long long int upcomingGateIndex = 0;
   std::unique_ptr<Simulators::MPSDummySimulator> dummySim;

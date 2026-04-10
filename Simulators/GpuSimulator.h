@@ -738,7 +738,7 @@ class GpuSimulator : public GpuState {
     cloned->singularValueThreshold = singularValueThreshold;
 
     cloned->lookaheadDepth = lookaheadDepth;
-    cloned->useOptimalMeetingPositionOnly = useOptimalMeetingPositionOnly;
+    cloned->useOptimalMeetingPosition = useOptimalMeetingPosition;
     cloned->upcomingGates = upcomingGates;
     cloned->upcomingGateIndex = upcomingGateIndex;
 

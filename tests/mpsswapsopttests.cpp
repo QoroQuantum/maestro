@@ -29,6 +29,7 @@ namespace bdata = boost::unit_test::data;
 #include "../Circuit/Factory.h"
 #include "../Simulators/MPSDummySimulator.h"
 #include "../Simulators/Factory.h"
+#include "../Network/SimpleDisconnectedNetwork.h"
 
 extern bool checkClose(std::complex<double> a, std::complex<double> b,
                        double dif);
@@ -651,8 +652,146 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
         checkClose, (aOrig)(aOpt)(0.05));  // max bond dimension is set,
                                            // tolerance needed
   }
+}
 
-  //exit(0);
+
+constexpr std::array numGatesForNetworkExecution{10,  20,  30,  50,  80,  100 };
+
+BOOST_DATA_TEST_CASE(NetworkOptimizedSwapsVsUnoptimizedOnHost,
+                     numGatesForNetworkExecution, nrGates) {
+  constexpr int nrQubits = 8;
+  constexpr size_t shots = 3000;
+
+  // build a random circuit with 1- and 2-qubit gates and mid-circuit
+  // measurements followed by conditional gates
+  auto randomCirc = std::make_shared<Circuits::Circuit<>>();
+
+  std::mt19937 g(std::random_device{}());
+  std::uniform_real_distribution<double> dblDist(-2. * M_PI, 2. * M_PI);
+  std::uniform_int_distribution<int> gateDist(
+      0, static_cast<int>(Circuits::QuantumGateType::kCCXGateType));
+  std::uniform_int_distribution<int> qubitDist(0, nrQubits - 1);
+  std::bernoulli_distribution measureCoin(0.05);
+
+  for (int gateNr = 0; gateNr < nrGates; ++gateNr) {
+    // occasionally insert a mid-circuit measurement + conditional X
+    if (gateNr > 0 && measureCoin(g)) {
+      const int mq = qubitDist(g);
+      const size_t cbit = static_cast<size_t>(mq);
+      randomCirc->AddOperation(
+          Circuits::CircuitFactory<>::CreateMeasurement(
+              std::vector<std::pair<Types::qubit_t, size_t>>{{
+                  static_cast<Types::qubit_t>(mq), cbit}}));
+
+      // conditional X on a different qubit driven by the measurement result
+      int tgt = (mq + 1) % nrQubits;
+      randomCirc->AddOperation(
+          Circuits::CircuitFactory<>::CreateConditionalGate(
+              Circuits::CircuitFactory<>::CreateGate(
+                  Circuits::QuantumGateType::kXGateType, tgt),
+              Circuits::CircuitFactory<>::CreateEqualCondition(
+                  std::vector<size_t>{cbit}, std::vector<bool>{true})));
+
+      continue;
+    }
+
+    // regular gate
+    Types::qubits_vector qubits(nrQubits);
+    std::iota(qubits.begin(), qubits.end(), 0);
+    std::shuffle(qubits.begin(), qubits.end(), g);
+    auto q1 = qubits[0];
+    auto q2 = qubits[1];
+    auto q3 = qubits[2];
+
+    const double param1 = dblDist(g);
+    const double param2 = dblDist(g);
+    const double param3 = dblDist(g);
+    const double param4 = dblDist(g);
+
+    Circuits::QuantumGateType gateType =
+        static_cast<Circuits::QuantumGateType>(gateDist(g));
+
+    auto theGate = Circuits::CircuitFactory<>::CreateGate(
+        gateType, q1, q2, q3, param1, param2, param3, param4);
+    randomCirc->AddOperation(theGate);
+  }
+
+  // final measurements on all qubits
+  std::vector<std::pair<Types::qubit_t, size_t>> finalMeas;
+  for (int q = 0; q < nrQubits; ++q)
+    finalMeas.emplace_back(static_cast<Types::qubit_t>(q),
+                           static_cast<size_t>(q));
+  randomCirc->AddOperation(
+      Circuits::CircuitFactory<>::CreateMeasurement(finalMeas));
+
+  // Unoptimized network (swaps optimization disabled)
+  auto netUnopt = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
+      std::vector<Types::qubit_t>{static_cast<Types::qubit_t>(nrQubits)},
+      std::vector<size_t>{static_cast<size_t>(nrQubits)});
+  netUnopt->RemoveAllOptimizationSimulatorsAndAdd(Simulators::SimulatorType::kQCSim,
+      Simulators::SimulationType::kMatrixProductState);
+  netUnopt->CreateSimulator();
+  netUnopt->Configure("matrix_product_state_max_bond_dimension", "64");
+  netUnopt->SetInitialQubitsMapOptimization(false);
+  netUnopt->SetMPSOptimizeSwaps(false);
+
+  auto startUnopt = std::chrono::system_clock::now();
+  const auto resUnopt = netUnopt->RepeatedExecuteOnHost(randomCirc, 0, shots);
+  auto endUnopt = std::chrono::system_clock::now();
+  double unoptTime =
+      std::chrono::duration<double>(endUnopt - startUnopt).count() * 1000.;
+
+  // Optimized network (swaps optimization enabled, the default)
+  auto netOpt = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
+      std::vector<Types::qubit_t>{static_cast<Types::qubit_t>(nrQubits)},
+      std::vector<size_t>{static_cast<size_t>(nrQubits)});
+  netOpt->RemoveAllOptimizationSimulatorsAndAdd(Simulators::SimulatorType::kQCSim,
+      Simulators::SimulationType::kMatrixProductState);
+  netOpt->CreateSimulator();
+  netOpt->Configure("matrix_product_state_max_bond_dimension", "64");
+  netOpt->SetInitialQubitsMapOptimization(true);
+  netOpt->SetMPSOptimizeSwaps(true);
+
+  auto startOpt = std::chrono::system_clock::now();
+  const auto resOpt = netOpt->RepeatedExecuteOnHost(randomCirc, 0, shots);
+  auto endOpt = std::chrono::system_clock::now();
+  double optTime =
+      std::chrono::duration<double>(endOpt - startOpt).count() * 1000.;
+
+  BOOST_TEST_MESSAGE("Unoptimized execution time: " << unoptTime << " ms");
+  BOOST_TEST_MESSAGE("Optimized execution time: " << optTime << " ms");
+  if (optTime > 0.)
+    BOOST_TEST_MESSAGE("Speedup: " << unoptTime / optTime << "x");
+
+  // Both networks must produce non-empty results
+  BOOST_CHECK(!resUnopt.empty());
+  BOOST_CHECK(!resOpt.empty());
+
+  // Compare measurement distributions.
+  std::set<std::vector<bool>> allKeys;
+  for (const auto& kv : resUnopt) allKeys.insert(kv.first);
+  for (const auto& kv : resOpt) allKeys.insert(kv.first);
+
+  double totalVariation = 0.0;
+  for (const auto& key : allKeys) {
+    const double pUnopt =
+        (resUnopt.count(key) ? resUnopt.at(key) : 0) /
+        static_cast<double>(shots);
+    const double pOpt =
+        (resOpt.count(key) ? resOpt.at(key) : 0) /
+        static_cast<double>(shots);
+    totalVariation += std::abs(pUnopt - pOpt);
+
+    if (pUnopt > 1E-2 && pOpt > 1E-2) {
+      BOOST_CHECK_CLOSE(pUnopt, pOpt, pUnopt < 0.05 ? 100. : pUnopt < 0.1 ? 50. : 30.);
+    }
+  }
+  totalVariation *= 0.5;
+
+  BOOST_TEST_MESSAGE("Total variation distance: " << totalVariation);
+
+  // With a bond dimension cap, some divergence is expected
+  BOOST_CHECK_LT(totalVariation, 0.5);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

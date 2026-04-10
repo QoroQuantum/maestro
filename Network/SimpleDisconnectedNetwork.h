@@ -23,7 +23,6 @@
 
 #include "../Simulators/MPSDummySimulator.h"
 
-
 namespace Network {
 
 /**
@@ -407,7 +406,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     const size_t n = simulator->GetNumberOfQubits();
     const size_t dim = 1ULL << n;
     amplitudes.resize(dim);
-    for (size_t state = 0; state < dim; ++state) amplitudes[state] = simulator->Amplitude(state);
+    for (size_t state = 0; state < dim; ++state)
+      amplitudes[state] = simulator->Amplitude(state);
 
     // Remap amplitudes back to the original qubit ordering if qubits were
     // remapped during execution on the host.
@@ -419,8 +419,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       std::vector<size_t> simToOrig(n);
       size_t offset = offsetBase;
 
-      for (size_t qbit = 0; qbit < n; ++qbit)
-      {
+      for (size_t qbit = 0; qbit < n; ++qbit) {
         auto pos = qubitsMapOnHost.find(qbit);
         if (pos != qubitsMapOnHost.end())
           simToOrig[pos->second] = pos->first;
@@ -652,7 +651,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         if (optSim) {
           job->optSim = optSim->Clone();
           job->executedGates = executed;
-        } 
+        }
 
         threadsPool.AddRunJob(std::move(job));
       }
@@ -680,7 +679,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       } else {
         if (simulator && method == saveMethod && simType == saveSimType) {
           // use the already created simulator
-                      
+
           optSim = simulator;
           job->optSim = optSim;
           OptimizeMPSInitialQubitsMap(optSim, distCirc,
@@ -2048,14 +2047,14 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
                            singularValueThreshold.c_str());
           if (!mpsSample.empty())
             sim->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
-        
+
           sim->AllocateQubits(nrQubits);
           sim->Initialize();
 
           OptimizeMPSInitialQubitsMap(sim, dcirc, nrQubits);
         } else {
           sim->AllocateQubits(nrQubits);
-          sim->Initialize();        
+          sim->Initialize();
         }
 
         if (!dontRunCircuitStart) {
@@ -2072,9 +2071,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     std::shared_ptr<Simulators::ISimulator> sim =
         simulatorsEstimator->ChooseBestSimulator(
-        simulatorTypes, dcirc, counts, nrQubits, nrCbits, nrResultCbits,
-        simType, method, executed, maxBondDim, singularValueThreshold,
-        mpsSample, GetMaxSimulators(), pauliStrings, multithreading);
+            simulatorTypes, dcirc, counts, nrQubits, nrCbits, nrResultCbits,
+            simType, method, executed, maxBondDim, singularValueThreshold,
+            mpsSample, GetMaxSimulators(), pauliStrings, multithreading);
 
     if (sim) {
       sim->AllocateQubits(nrQubits);
@@ -2092,7 +2091,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     return sim;
   }
-
 
   void SetInitialQubitsMapOptimization(bool optimize = true) override {
     optimizeInitialQubitsMap = optimize;
@@ -2124,6 +2122,26 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     return mpsOptimizationQubitsNumberThreshold;
   }
 
+  void SetLookaheadDepth(int depth) override {
+    if (depth < 0) depth = std::numeric_limits<int>::max();
+
+    lookaheadDepth = depth;
+  }
+
+  int GetLookaheadDepth() const override { return lookaheadDepth; }
+
+  void SetLookaheadDepthWithHeuristic(int depth) override {
+    if (depth < 0) depth = std::numeric_limits<int>::max();
+
+    if (depth > lookaheadDepth) depth = lookaheadDepth;
+
+    lookaheadDepthWithHeuristic = depth;
+  }
+
+  int GetLookaheadDepthWithHeuristic() const override {
+    return lookaheadDepthWithHeuristic;
+  }
+
  protected:
   void OptimizeMPSInitialQubitsMap(
       std::shared_ptr<Simulators::ISimulator> &sim,
@@ -2142,18 +2160,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           dcirc->ConvertForCutting();  // convert the three qubit gates
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();
 
-          double avgTwoQubitGatesPerLayer = 0.0;
-          for (const auto &layer : layers) {
-            int twoQubitGates = 0;
-            for (const auto &op : layer->GetOperations()) {
-              if (op->AffectedQubits().size() >= 2) {
-                ++twoQubitGates;
-              }
-            }
-            avgTwoQubitGatesPerLayer += twoQubitGates;
-          }
-          avgTwoQubitGatesPerLayer /= layers.size();
-
           Simulators::MPSDummySimulator dummySim(nrQubits);
           if (!maxBondDim.empty())
             dummySim.SetMaxBondDimension(maxBondDimValue);
@@ -2168,24 +2174,43 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
           if (mpsOptimizeSwaps) {
             // TODO: come up with something better!
-            int lookaheadVal = static_cast<int>(4. * avgTwoQubitGatesPerLayer);
-            if (lookaheadVal > 15) lookaheadVal = 15;
+            int lookaheadDepthLocal = lookaheadDepth;
 
-            const int lookaheadDepth = layers.size() < 10 ? 0
-                                 : layers.size() < 20
-                                     ? static_cast<int>(lookaheadVal)
-                                 : layers.size() < 35 ? 1.5 * lookaheadVal
-                                                      : 2 * lookaheadVal;
+            if (lookaheadDepthLocal == std::numeric_limits<int>::max()) {
+              double avgTwoQubitGatesPerLayer = 0.0;
+              for (const auto &layer : layers) {
+                int twoQubitGates = 0;
+                for (const auto &op : layer->GetOperations()) {
+                  if (op->AffectedQubits().size() >= 2) {
+                    ++twoQubitGates;
+                  }
+                }
+                avgTwoQubitGatesPerLayer += twoQubitGates;
+              }
+              avgTwoQubitGatesPerLayer /= layers.size();
 
-            const int lookaheadHeuristicDepth = layers.size() < 10 ? 0
-                                          : layers.size() < 20
-                                              ? lookaheadDepth - 1
-                                              : lookaheadDepth - 2; 
+              int lookaheadVal = static_cast<int>(4. * avgTwoQubitGatesPerLayer);
+              if (lookaheadVal > 15) lookaheadVal = 15;
+
+              lookaheadDepthLocal = layers.size() < 10 || nrQubits <= 10 ? 0
+                                    : layers.size() < 20
+                                        ? static_cast<int>(lookaheadVal)
+                                    : layers.size() < 35 ? 1.5 * lookaheadVal
+                                                         : 2 * lookaheadVal;
+            }
+
+            int lookaheadHeuristicDepthLocal = lookaheadDepthWithHeuristic;
+
+            if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
+              lookaheadHeuristicDepthLocal =
+                  layers.size() < 10 || nrQubits <= 10 ? 0
+                                                : layers.size() < 20
+                                                    ? lookaheadDepthLocal - 1
+                                                    : lookaheadDepthLocal - 2;
 
             sim->SetUseOptimalMeetingPosition(true);
-            sim->SetLookaheadDepth(lookaheadDepth);
-            sim->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepth);
-
+            sim->SetLookaheadDepth(lookaheadDepthLocal);
+            sim->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepthLocal);
             sim->SetUpcomingGates(dcirc->GetOperations());
           }
         }
@@ -2431,6 +2456,12 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       32; /**< The bond dimension threshold for using MPS optimization. */
   size_t mpsOptimizationQubitsNumberThreshold =
       12; /**< The qubits number threshold for using MPS optimization. */
+
+  int lookaheadDepth =
+      std::numeric_limits<int>::max(); /**< The lookahead depth for MPS swap
+                                          optimization. */
+  int lookaheadDepthWithHeuristic = std::numeric_limits<int>::max(); /**< The
+            lookahead depth with heuristic for MPS swap optimization. */
 };
 
 }  // namespace Network

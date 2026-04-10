@@ -405,7 +405,7 @@ class MPSDummySimulator {
 
   std::vector<long long int> ComputeOptimalQubitsMap(
       const std::vector<std::shared_ptr<Circuits::Circuit<>>>& layers,
-      int nrShuffles = 25) {
+      int nrShuffles = 10) {
     const IndexType nrQubits = getNrQubits();
 
     if (layers.empty() || nrQubits <= 2) return qubitsMap;
