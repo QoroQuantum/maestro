@@ -2142,6 +2142,17 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     return lookaheadDepthWithHeuristic;
   }
 
+  double getGrowthFactorSwap() const override { return growthFactorSwap; }
+  double getGrowthFactorGate() const override { return growthFactorGate; }
+
+  void setGrowthFactorSwap(double factor) override {
+    growthFactorSwap = factor;
+  }
+
+  void setGrowthFactorGate(double factor) override {
+    growthFactorGate = factor;
+  }
+
  protected:
   void OptimizeMPSInitialQubitsMap(
       std::shared_ptr<Simulators::ISimulator> &sim,
@@ -2161,6 +2172,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();
 
           Simulators::MPSDummySimulator dummySim(nrQubits);
+          dummySim.setGrowthFactorGate(growthFactorGate);
+          dummySim.setGrowthFactorSwap(growthFactorSwap);
+
           if (!maxBondDim.empty())
             dummySim.SetMaxBondDimension(maxBondDimValue);
 
@@ -2208,6 +2222,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
                                                     ? lookaheadDepthLocal - 1
                                                     : lookaheadDepthLocal - 2;
 
+            sim->setGrowthFactorGate(growthFactorGate);
+            sim->setGrowthFactorSwap(growthFactorSwap);
             sim->SetUseOptimalMeetingPosition(true);
             sim->SetLookaheadDepth(lookaheadDepthLocal);
             sim->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepthLocal);
@@ -2462,6 +2478,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
                                           optimization. */
   int lookaheadDepthWithHeuristic = std::numeric_limits<int>::max(); /**< The
             lookahead depth with heuristic for MPS swap optimization. */
+
+  double growthFactorSwap = 1.;
+  double growthFactorGate = 0.7;
 };
 
 }  // namespace Network

@@ -260,6 +260,14 @@ class IState {
    */
   virtual void IncrementGatesCounter() {}
 
+  // the following four functions are also for MPS swaps optimizations, might be removed in the future
+
+  virtual double getGrowthFactorSwap() const { return 0.; }
+  virtual double getGrowthFactorGate() const { return 0.; }
+
+  virtual void setGrowthFactorSwap(double factor) { }
+  virtual void setGrowthFactorGate(double factor) { }
+
   /**
    * @brief Configures the state.
    *

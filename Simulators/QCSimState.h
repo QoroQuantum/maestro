@@ -247,6 +247,8 @@ class QCSimState : public ISimulator {
         dummySim->SetMaxBondDimension(
             limitSize ? static_cast<long long int>(chi) : 0);
       }
+      dummySim->setGrowthFactorGate(growthFactorGate);
+      dummySim->setGrowthFactorSwap(growthFactorSwap);
       dummySim->SetInitialQubitsMap(initialMap);
     }
   }
@@ -292,6 +294,8 @@ class QCSimState : public ISimulator {
           if (!dummySim || dummySim->getNrQubits() != nQ) {
             dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
             dummySim->SetMaxBondDimension(limitSize ? static_cast<long long int>(chi) : 0);
+            dummySim->setGrowthFactorGate(growthFactorGate);
+            dummySim->setGrowthFactorSwap(growthFactorSwap);
           }
 
           // Seed dummy with current real simulator state
@@ -426,6 +430,19 @@ class QCSimState : public ISimulator {
    */
   void IncrementGatesCounter() override {
       ++upcomingGateIndex;
+  }
+
+  double getGrowthFactorSwap() const override { return growthFactorSwap; }
+  double getGrowthFactorGate() const override { return growthFactorGate; }
+
+  void setGrowthFactorSwap(double factor) override {
+    growthFactorSwap = factor;
+    if (dummySim) dummySim->setGrowthFactorSwap(factor);
+  }
+
+  void setGrowthFactorGate(double factor) override {
+    growthFactorGate = factor;
+    if (dummySim) dummySim->setGrowthFactorGate(factor);
   }
 
   /**
@@ -1499,6 +1516,9 @@ class QCSimState : public ISimulator {
   bool useOptimalMeetingPosition = true;
   std::vector<std::shared_ptr<Circuits::IOperation<>>> upcomingGates;
   long long int upcomingGateIndex = 0;
+  double growthFactorSwap = 1.;
+  double growthFactorGate = 0.7; 
+
   std::unique_ptr<Simulators::MPSDummySimulator> dummySim;
 
   // Observer that counts applied gates to track position in upcomingGates

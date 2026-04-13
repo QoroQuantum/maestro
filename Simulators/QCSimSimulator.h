@@ -927,6 +927,8 @@ class QCSimSimulator : public QCSimState {
     cloned->useOptimalMeetingPosition = useOptimalMeetingPosition;
     cloned->upcomingGates = upcomingGates;
     cloned->upcomingGateIndex = upcomingGateIndex;
+    cloned->growthFactorGate = growthFactorGate;
+    cloned->growthFactorSwap = growthFactorSwap;
 
     if (state) cloned->state = state->Clone();
 
