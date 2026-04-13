@@ -54,10 +54,19 @@ class MPSDummySimulator {
 
     clone->totalSwappingCost = totalSwappingCost;
 
+    clone->growthFactorSwap = growthFactorSwap;
+    clone->growthFactorGate = growthFactorGate;
+
     return clone;
   }
 
   size_t getNrQubits() const { return nrQubits; }
+
+  double getGrowthFactorSwap() const { return growthFactorSwap; }
+  double getGrowthFactorGate() const { return growthFactorGate; }
+
+  void setGrowthFactorSwap(double factor) { growthFactorSwap = factor; }
+  void setGrowthFactorGate(double factor) { growthFactorGate = factor; }
 
   void Clear() { InitQubitsMap(); }
 
@@ -405,7 +414,7 @@ class MPSDummySimulator {
 
   std::vector<long long int> ComputeOptimalQubitsMap(
       const std::vector<std::shared_ptr<Circuits::Circuit<>>>& layers,
-      int nrShuffles = 10) {
+      int nrShuffles = 25) {
     const IndexType nrQubits = getNrQubits();
 
     if (layers.empty() || nrQubits <= 2) return qubitsMap;
@@ -821,12 +830,11 @@ class MPSDummySimulator {
   std::vector<double> currentBondDim;
 
   double totalSwappingCost = 0;
-  // double dimFactor = 0.95;
+
+  double growthFactorSwap = 1.;
+  double growthFactorGate = 0.7; 
 
   void growBondDimension(IndexType bond, bool swap = true) {
-    constexpr double growthFactorSwap = 1.;
-    constexpr double growthFactorGate = 0.7; 
-    
     // the left and right bond dimensions are relevant because:
     // the initial configuration before applying the swap or other gate is:
 

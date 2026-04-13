@@ -372,6 +372,8 @@ private:
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();
 
           Simulators::MPSDummySimulator dummySim(nrQubits);
+          dummySim.setGrowthFactorGate(network->getGrowthFactorGate());
+          dummySim.setGrowthFactorSwap(network->getGrowthFactorSwap());
           if (!maxBondDim.empty())
             dummySim.SetMaxBondDimension(maxBondDimValue);
           
@@ -423,6 +425,8 @@ private:
             sim->SetUseOptimalMeetingPosition(true);
             sim->SetLookaheadDepth(lookaheadDepthLocal);
             sim->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepthLocal);
+            sim->setGrowthFactorGate(network->getGrowthFactorGate());
+            sim->setGrowthFactorSwap(network->getGrowthFactorSwap());
             sim->SetUpcomingGates(dcirc->GetOperations());
           }
         }

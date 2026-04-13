@@ -996,6 +996,12 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
   virtual void SetLookaheadDepthWithHeuristic(int depth) = 0;
 
   virtual int GetLookaheadDepthWithHeuristic() const = 0;
+
+  virtual double getGrowthFactorSwap() const { return 0.; }
+  virtual double getGrowthFactorGate() const { return 0.; }
+
+  virtual void setGrowthFactorSwap(double factor) {}
+  virtual void setGrowthFactorGate(double factor) {}
 };
 
 }  // namespace Network
