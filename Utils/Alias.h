@@ -17,6 +17,8 @@
 
 #include <Eigen/Eigen>
 
+#include "PathIntegral.h"
+
 namespace Utils {
 
 class Alias {
@@ -26,6 +28,7 @@ class Alias {
   template <class T = Eigen::VectorXcd>
   Alias(const T &statevector) {
     std::vector<double> probabilities(statevector.size());
+
     double accum = 0.;
     for (Eigen::Index i = 0; i < static_cast<Eigen::Index>(statevector.size());
          ++i) {
@@ -37,49 +40,34 @@ class Alias {
       }
     }
 
-    aliasTable.resize(probabilities.size());
+    SetAliasTable(probabilities);
+  }
 
+  Alias(const std::unordered_map<QC::PathIntegral::FastVectorBool, std::complex<double>,
+        QC::PathIntegral::FastVectorBoolHash> &amplitudesMap) {
     std::vector<AliasEntry> under;
     std::vector<AliasEntry> over;
 
     // this uses four times the memory of the sampling with the binary search
-    under.reserve(probabilities.size());
-    over.reserve(probabilities.size());
+    under.reserve(amplitudesMap.size());
+    over.reserve(amplitudesMap.size());
 
-    for (Eigen::Index i = 0;
-         i < static_cast<Eigen::Index>(probabilities.size()); ++i) {
-      const double prob = probabilities[i] * probabilities.size();
+    size_t maxState = 0;
+    for (const auto &valPair : amplitudesMap) {
+      const double prob = std::norm(valPair.second) * amplitudesMap.size();
+      const size_t state = valPair.first.getWords()[0];
       if (prob < 1.)
-        under.emplace_back(prob, i);
+        under.emplace_back(prob, state);
       else
-        over.emplace_back(prob, i);
+        over.emplace_back(prob, state);
+
+      if (state > maxState) maxState = state;
     }
 
-    while (!under.empty() && !over.empty()) {
-      const AliasEntry &u = under.back();
-      const AliasEntry &o = over.back();
+    aliasTable.resize(maxState + 1);
+    std::fill(aliasTable.begin(), aliasTable.end(), AliasEntry(1., -1));
 
-      const size_t index = o.alias;
-
-      aliasTable[u.alias] = AliasEntry(u.probability, index);
-
-      const double rem = o.probability + u.probability - 1.;
-
-      under.pop_back();
-      over.pop_back();
-
-      if (rem < 1.)
-        under.emplace_back(rem, index);
-      else
-        over.emplace_back(rem, index);
-    }
-
-    const AliasEntry one(1., -1);
-
-    for (; !under.empty(); under.pop_back())
-      aliasTable[under.back().alias] = one;
-
-    for (; !over.empty(); over.pop_back()) aliasTable[over.back().alias] = one;
+    SetAliasTable(under, over);
   }
 
   size_t Sample(double v) const {
@@ -104,6 +92,60 @@ class Alias {
     double probability;
     long long int alias;
   };
+
+  void SetAliasTable(std::vector<double>& probabilities)
+  {
+    aliasTable.resize(probabilities.size());
+
+    std::vector<AliasEntry> under;
+    std::vector<AliasEntry> over;
+
+    // this uses four times the memory of the sampling with the binary search
+    under.reserve(probabilities.size());
+    over.reserve(probabilities.size());
+
+    for (Eigen::Index i = 0;
+         i < static_cast<Eigen::Index>(probabilities.size()); ++i) {
+      const double prob = probabilities[i] * probabilities.size();
+      if (prob < 1.)
+        under.emplace_back(prob, i);
+      else
+        over.emplace_back(prob, i);
+    }
+
+    SetAliasTable(under, over);
+  }
+
+  void SetAliasTable(std::vector<AliasEntry>& under,
+                     std::vector<AliasEntry>& over)
+  {
+    while (!under.empty() && !over.empty()) {
+      const AliasEntry &u = under.back();
+      const AliasEntry &o = over.back();
+
+      const size_t index = o.alias;
+
+      aliasTable[u.alias] = AliasEntry(u.probability, index);
+
+      const double rem = o.probability + u.probability - 1.;
+
+      under.pop_back();
+      over.pop_back();
+
+      if (rem < 1.)
+        under.emplace_back(rem, index);
+      else
+        over.emplace_back(rem, index);
+    }
+
+    const AliasEntry one(1., -1);
+
+    for (; !under.empty(); under.pop_back())
+      aliasTable[under.back().alias] = one;
+
+    for (; !over.empty(); over.pop_back()) 
+      aliasTable[over.back().alias] = one;
+  }
 
   std::vector<AliasEntry> aliasTable;
 };
