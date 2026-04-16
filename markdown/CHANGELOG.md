@@ -7,14 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.10] - 2026-04-16
+
 ### Added
-- Cost estimation class with benchmarking and logging for ML-based predictions
-- GPLv3 plugin linking exception for proprietary plugin support
-- QuEST simulator initialization in maestro lib/exe
+- **Noise simulation API** — `NoiseModel` class for per-qubit Pauli noise channels (depolarizing, dephasing, bit-flip, custom)
+- **`noisy_estimate`** — analytical Pauli channel damping with zero simulation overhead for fast ansatz noise screening
+- **`noisy_estimate_montecarlo`** — gate-by-gate Monte Carlo noisy estimation for accurate depth-dependent noise simulation
+- **`noisy_execute`** — Monte Carlo shot-based noisy circuit execution with batched noise realizations
+- Noise model helpers: `set_depolarizing`, `set_dephasing`, `set_bit_flip`, `set_pauli_channel`, `set_all_depolarizing`
+- Comprehensive noise test suite (25 tests covering NoiseModel, analytical damping, Monte Carlo estimation, and execution)
+- Noise simulation section in TUTORIAL.md with usage examples and parameter reference
 
 ### Changed
-- Documentation restructured and updated
-- Improvements to cost class for sampling circuits with mid-circuit measurements
+- Default `lookahead_depth` changed from `20` to `-1` (auto-tuning) to prevent hangs on larger MPS circuits
+
+### Fixed
+- MPS swap optimization hang on larger circuits caused by hardcoded `lookahead_depth=20` bypassing the C++ auto-tuning heuristic
 
 ## [0.2.7] - 2026-03-27
 
@@ -125,7 +133,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.2.10...HEAD
+[0.2.10]: https://github.com/QoroQuantum/maestro/compare/v0.2.7...v0.2.10
 [0.2.7]: https://github.com/QoroQuantum/maestro/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/QoroQuantum/maestro/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/QoroQuantum/maestro/compare/v0.2.4...v0.2.5

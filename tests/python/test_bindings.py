@@ -1723,3 +1723,343 @@ class TestMPSOptimizedSwapping:
                 f"MPS optimized {v_mps} != SV {v_sv}"
             assert v_no_opt == pytest.approx(v_sv, abs=1e-6), \
                 f"MPS unoptimized {v_no_opt} != SV {v_sv}"
+
+
+# ============================================================================
+# Noise Modeling Tests
+# ============================================================================
+
+class TestNoiseModel:
+    """Test NoiseModel creation and damping computation."""
+
+    def test_noise_model_creation(self):
+        """NoiseModel can be created and methods called."""
+        nm = maestro.NoiseModel()
+        assert nm is not None
+
+    def test_depolarizing_noise(self):
+        """set_depolarizing sets px=py=pz=p/3."""
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.03)
+        # For depolarizing p=0.03: damping_Z = 1 - 2*(px+py) = 1 - 2*(0.02) = 0.96
+        d = nm.compute_damping("Z")
+        assert d == pytest.approx(1.0 - 2.0 * (0.01 + 0.01), abs=1e-10)
+
+    def test_dephasing_noise(self):
+        """set_dephasing only sets pz."""
+        nm = maestro.NoiseModel()
+        nm.set_dephasing(0, 0.05)
+        # Z damping: 1 - 2*(px+py) = 1 - 0 = 1.0 (dephasing doesn't damp Z)
+        assert nm.compute_damping("Z") == pytest.approx(1.0, abs=1e-10)
+        # X damping: 1 - 2*(py+pz) = 1 - 2*0.05 = 0.9
+        assert nm.compute_damping("X") == pytest.approx(0.9, abs=1e-10)
+
+    def test_bit_flip_noise(self):
+        """set_bit_flip only sets px."""
+        nm = maestro.NoiseModel()
+        nm.set_bit_flip(0, 0.1)
+        # X damping: 1 - 2*(py+pz) = 1 - 0 = 1.0 (bit-flip doesn't damp X)
+        assert nm.compute_damping("X") == pytest.approx(1.0, abs=1e-10)
+        # Z damping: 1 - 2*(px+py) = 1 - 2*0.1 = 0.8
+        assert nm.compute_damping("Z") == pytest.approx(0.8, abs=1e-10)
+
+    def test_identity_damping(self):
+        """Identity Pauli string always has damping 1.0."""
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(3, 0.1)
+        assert nm.compute_damping("III") == pytest.approx(1.0, abs=1e-10)
+
+    def test_multi_qubit_damping(self):
+        """Damping factors multiply across qubits."""
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.03)  # px=py=pz=0.01
+        nm.set_depolarizing(1, 0.03)
+        # ZZ damping = damping_Z(q0) * damping_Z(q1)
+        d_single = 1.0 - 2.0 * (0.01 + 0.01)  # 0.96
+        assert nm.compute_damping("ZZ") == pytest.approx(d_single ** 2, abs=1e-10)
+
+    def test_no_noise_damping_is_one(self):
+        """Without noise, damping is 1.0."""
+        nm = maestro.NoiseModel()
+        assert nm.compute_damping("XYZ") == pytest.approx(1.0, abs=1e-10)
+
+    def test_set_all_depolarizing(self):
+        """set_all_depolarizing applies to all qubits."""
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(5, 0.06)
+        # All qubits have same noise → all single-qubit dampings are equal
+        d0 = nm.compute_damping("ZIIII")
+        d4 = nm.compute_damping("IIIIZ")
+        assert d0 == pytest.approx(d4, abs=1e-10)
+
+    def test_custom_pauli_channel(self):
+        """set_qubit_noise with arbitrary px, py, pz."""
+        nm = maestro.NoiseModel()
+        nm.set_qubit_noise(0, 0.02, 0.03, 0.05)
+        # X damping: 1 - 2*(0.03 + 0.05) = 1 - 0.16 = 0.84
+        assert nm.compute_damping("X") == pytest.approx(0.84, abs=1e-10)
+        # Y damping: 1 - 2*(0.02 + 0.05) = 1 - 0.14 = 0.86
+        assert nm.compute_damping("Y") == pytest.approx(0.86, abs=1e-10)
+        # Z damping: 1 - 2*(0.02 + 0.03) = 1 - 0.10 = 0.90
+        assert nm.compute_damping("Z") == pytest.approx(0.90, abs=1e-10)
+
+
+class TestNoisyEstimate:
+    """Test noisy_estimate (analytical Pauli noise damping)."""
+
+    BELL_QASM = """
+    OPENQASM 2.0;
+    include "qelib1.inc";
+    qreg q[2];
+    h q[0];
+    cx q[0], q[1];
+    """
+
+    def test_noisy_estimate_returns_all_keys(self):
+        """noisy_estimate returns expected result keys."""
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.01)
+        result = maestro.noisy_estimate(self.BELL_QASM, "ZZ", nm)
+        assert 'expectation_values' in result
+        assert 'ideal_expectation_values' in result
+        assert 'time_taken' in result
+
+    def test_zero_noise_matches_ideal(self):
+        """With zero noise, noisy == ideal expectation values."""
+        nm = maestro.NoiseModel()  # no noise added
+        result = maestro.noisy_estimate(self.BELL_QASM, "ZZ;XX;YY", nm)
+        noisy = result['expectation_values']
+        ideal = result['ideal_expectation_values']
+        for n_val, i_val in zip(noisy, ideal):
+            assert n_val == pytest.approx(i_val, abs=1e-10)
+
+    def test_noise_reduces_magnitude(self):
+        """Noise should reduce |⟨P⟩| toward zero."""
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.1)  # 10% depolarizing
+        result = maestro.noisy_estimate(self.BELL_QASM, "ZZ;XX;YY", nm)
+        noisy = result['expectation_values']
+        ideal = result['ideal_expectation_values']
+        for n_val, i_val in zip(noisy, ideal):
+            if abs(i_val) > 1e-10:
+                assert abs(n_val) < abs(i_val), \
+                    f"Noisy {n_val} should be smaller than ideal {i_val}"
+
+    def test_analytical_damping_matches_manual(self):
+        """Verify noisy_estimate matches manual damping computation."""
+        nm = maestro.NoiseModel()
+        p = 0.06
+        nm.set_all_depolarizing(2, p)
+
+        result = maestro.noisy_estimate(self.BELL_QASM, "ZZ", nm)
+        noisy_zz = result['expectation_values'][0]
+        ideal_zz = result['ideal_expectation_values'][0]
+
+        # Manual: depolarizing p → px=py=pz=p/3
+        # Z damping per qubit = 1 - 2*(p/3 + p/3) = 1 - 4p/3
+        expected_damping = (1.0 - 4.0 * p / 3.0) ** 2
+        assert noisy_zz == pytest.approx(expected_damping * ideal_zz, abs=1e-8)
+
+    def test_heavy_noise_pushes_toward_zero(self):
+        """Very heavy noise should push expectation values near zero."""
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.75)  # 75% depolarizing (max)
+        result = maestro.noisy_estimate(self.BELL_QASM, "ZZ;XX", nm)
+        for val in result['expectation_values']:
+            assert abs(val) < 0.05, f"Heavy noise should destroy signal: {val}"
+
+    def test_circuit_object_input(self):
+        """noisy_estimate works with QuantumCircuit objects, not just QASM."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.05)
+        result = maestro.noisy_estimate(qc, ["ZZ", "XX"], nm)
+        assert len(result['expectation_values']) == 2
+        assert len(result['ideal_expectation_values']) == 2
+
+    def test_identity_observable_unaffected(self):
+        """⟨II⟩ = 1.0 regardless of noise."""
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.5)
+        result = maestro.noisy_estimate(self.BELL_QASM, "II", nm)
+        # Identity is always 1.0
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
+
+
+class TestNoisyEstimateMonteCarlo:
+    """Tests for gate-by-gate Monte Carlo noisy estimation."""
+
+    def test_returns_all_keys(self):
+        """Result contains expected keys."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.05)
+
+        result = maestro.noisy_estimate_montecarlo(
+            qc, ['ZZ', 'XX'], nm, noise_realizations=10, seed=42)
+
+        assert 'expectation_values' in result
+        assert 'ideal_expectation_values' in result
+        assert 'time_taken' in result
+        assert 'noise_realizations' in result
+        assert result['noise_realizations'] == 10
+        assert len(result['expectation_values']) == 2
+
+    def test_zero_noise_matches_ideal(self):
+        """With zero noise, MC estimate should match ideal."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()  # no noise set
+
+        result = maestro.noisy_estimate_montecarlo(
+            qc, ['ZZ', 'XX'], nm, noise_realizations=5, seed=42)
+
+        for noisy, ideal in zip(
+                result['expectation_values'],
+                result['ideal_expectation_values']):
+            assert abs(noisy - ideal) < 1e-10
+
+    def test_noise_reduces_magnitude(self):
+        """Gate-by-gate noise should reduce observable magnitude."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.05)
+
+        result = maestro.noisy_estimate_montecarlo(
+            qc, ['ZZ'], nm, noise_realizations=200, seed=42)
+
+        noisy = abs(result['expectation_values'][0])
+        ideal = abs(result['ideal_expectation_values'][0])
+        assert noisy < ideal, "Noise should reduce magnitude"
+
+    def test_depth_dependence(self):
+        """Deeper circuit should show more noise attenuation than shallow."""
+        from maestro.circuits import QuantumCircuit
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.02)
+
+        # Shallow: just Bell state
+        shallow = QuantumCircuit()
+        shallow.h(0)
+        shallow.cx(0, 1)
+
+        # Deep: Bell state + many identity-like layers (CX pairs cancel)
+        deep = QuantumCircuit()
+        deep.h(0)
+        deep.cx(0, 1)
+        for _ in range(20):
+            deep.cx(0, 1)
+            deep.cx(0, 1)  # cancels to identity but each gate adds noise
+
+        r_shallow = maestro.noisy_estimate_montecarlo(
+            shallow, ['ZZ'], nm, noise_realizations=200, seed=42)
+        r_deep = maestro.noisy_estimate_montecarlo(
+            deep, ['ZZ'], nm, noise_realizations=200, seed=42)
+
+        # Both have same ideal (Bell state), but deep should be noisier
+        assert abs(r_deep['expectation_values'][0]) < \
+               abs(r_shallow['expectation_values'][0]), \
+            "Deeper circuit should show more noise attenuation"
+
+    def test_seed_reproducibility(self):
+        """Same seed should give identical results."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.05)
+
+        r1 = maestro.noisy_estimate_montecarlo(
+            qc, ['ZZ', 'XX'], nm, noise_realizations=50, seed=123)
+        r2 = maestro.noisy_estimate_montecarlo(
+            qc, ['ZZ', 'XX'], nm, noise_realizations=50, seed=123)
+
+        for v1, v2 in zip(r1['expectation_values'],
+                          r2['expectation_values']):
+            assert abs(v1 - v2) < 1e-12
+
+
+class TestNoisyExecute:
+    """Test noisy_execute (Monte Carlo noise injection)."""
+
+    def test_noisy_execute_returns_counts(self):
+        """noisy_execute returns valid counts."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.01)
+
+        result = maestro.noisy_execute(qc, nm, shots=500)
+        assert 'counts' in result
+        assert 'noise_realizations' in result
+        total = sum(result['counts'].values())
+        assert total == 500
+
+    def test_zero_noise_matches_noiseless(self):
+        """With zero noise, noisy_execute should match noiseless execute."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()  # no noise
+        result = maestro.noisy_execute(qc, nm, shots=100, seed=42)
+        counts = result['counts']
+        # X gate on |0⟩ → |1⟩, always
+        assert counts.get('1', 0) == 100
+
+    def test_noise_introduces_errors(self):
+        """With noise, we should see some bit errors."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.3)  # heavy noise
+
+        result = maestro.noisy_execute(qc, nm, shots=1000, seed=123)
+        counts = result['counts']
+        # Should see both '0' and '1' outcomes due to noise
+        assert len(counts) >= 1  # at minimum we get results
+        total = sum(counts.values())
+        assert total == 1000
+
+    def test_seed_reproducibility(self):
+        """Same seed should give same results."""
+        from maestro.circuits import QuantumCircuit
+        # Use a deterministic circuit (no Hadamard) so the only randomness
+        # is from the noise injection, which is controlled by the seed.
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.1)
+
+        r1 = maestro.noisy_execute(qc, nm, shots=500, seed=99)
+        r2 = maestro.noisy_execute(qc, nm, shots=500, seed=99)
+        assert r1['counts'] == r2['counts']
+

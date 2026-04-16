@@ -645,6 +645,147 @@ You can find several complete examples in the `examples/` directory:
 - `examples/python_example_2.py`: Advanced simulation with manual gate application.
 - `examples/python_example_3.py`: Working with expectation values and observables.
 
+### Noise Simulation
+
+Maestro provides three approaches to noisy simulation, each targeting a
+different trade-off between speed and accuracy:
+
+| Function | Overhead | Accuracy | Best for |
+|----------|----------|----------|----------|
+| `noisy_estimate` | Zero | Per-qubit Pauli damping | Fast ansatz screening |
+| `noisy_estimate_montecarlo` | N × noiseless | Gate-by-gate accurate | Training with realistic noise |
+| `noisy_execute` | N × noiseless | Gate-by-gate + shot noise | Shot-based workflows |
+
+#### Creating a Noise Model
+
+The `NoiseModel` class defines per-qubit Pauli noise channels. Each qubit can
+have independent X, Y, and Z error probabilities:
+
+```python
+import maestro
+
+nm = maestro.NoiseModel()
+
+# Depolarizing noise: equal probability of X, Y, Z errors
+# p is the total error probability, split equally as p/3 for each Pauli
+nm.set_depolarizing(qubit=0, p=0.01)
+
+# Set the same depolarizing rate on all qubits at once
+nm.set_all_depolarizing(num_qubits=5, p=0.005)
+
+# Dephasing noise: only Z errors (T2 relaxation)
+nm.set_dephasing(qubit=1, p=0.02)
+
+# Bit-flip noise: only X errors (T1 relaxation)
+nm.set_bit_flip(qubit=2, p=0.01)
+
+# Custom Pauli channel: specify px, py, pz independently
+nm.set_pauli_channel(qubit=3, px=0.005, py=0.002, pz=0.01)
+```
+
+#### Analytical Noisy Estimation (Zero Overhead)
+
+`noisy_estimate` runs a single noiseless simulation and analytically damps
+each expectation value based on the noise model. This is exact for a
+single-layer Pauli channel and provides a fast first-order approximation:
+
+```python
+from maestro.circuits import QuantumCircuit
+
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+
+nm = maestro.NoiseModel()
+nm.set_all_depolarizing(2, 0.05)
+
+result = maestro.noisy_estimate(qc, ['ZZ', 'XX', 'YY'], nm)
+
+print(result['expectation_values'])        # Noise-attenuated values
+print(result['ideal_expectation_values'])  # Noiseless reference
+print(result['time_taken'])                # Same as noiseless
+```
+
+This approach is ideal for quickly screening which ansatze are noise-resilient.
+It runs at exactly the same speed as noiseless estimation.
+
+> **Note:** The analytical approach applies a uniform per-qubit damping factor
+> to the observable. It does not capture depth-dependent noise accumulation —
+> a 100-layer circuit and a 1-layer circuit with the same qubits get the same
+> damping. For depth-accurate noise, use `noisy_estimate_montecarlo`.
+
+#### Gate-by-gate Monte Carlo Estimation (Accurate)
+
+`noisy_estimate_montecarlo` injects random Pauli errors after every gate,
+runs noiseless estimation on each noisy circuit, and averages the results.
+This captures how noise compounds through the circuit depth:
+
+```python
+result = maestro.noisy_estimate_montecarlo(
+    qc, ['ZZ', 'XX'], nm,
+    noise_realizations=200,  # More samples → less variance
+    seed=42                  # For reproducibility
+)
+
+print(result['expectation_values'])        # Gate-by-gate accurate
+print(result['ideal_expectation_values'])  # Noiseless reference
+print(result['noise_realizations'])        # 200
+```
+
+This is the recommended approach for QML training with realistic noise.
+The cost is `noise_realizations × noiseless_time`, which is typically much
+faster than density-matrix simulation (e.g., Qiskit fake backends).
+
+Works with any backend — statevector, MPS, or Pauli propagation:
+
+```python
+result = maestro.noisy_estimate_montecarlo(
+    qc, ['ZZ'], nm,
+    noise_realizations=100,
+    simulation_type=maestro.SimulationType.MatrixProductState,
+    max_bond_dimension=64,
+    seed=42
+)
+```
+
+#### Monte Carlo Noisy Execution (Shot-based)
+
+`noisy_execute` is the shot-based counterpart: it injects gate-by-gate noise
+and returns measurement counts rather than expectation values:
+
+```python
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+qc.measure_all()
+
+nm = maestro.NoiseModel()
+nm.set_all_depolarizing(2, 0.05)
+
+result = maestro.noisy_execute(
+    qc, nm,
+    shots=1024,
+    noise_realizations=64,  # Independent noise samples
+    seed=42
+)
+print(result['counts'])  # Aggregated counts across all realizations
+```
+
+#### Noise Simulation Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `noise_realizations` | int | `100` (MC estimate) / `64` (execute) | Independent noise samples |
+| `seed` | int | `None` (random) | RNG seed for reproducibility |
+| `simulator_type` | enum | `QCSim` | Backend to use |
+| `simulation_type` | enum | `Statevector` | Simulation method |
+| `max_bond_dimension` | int | `2` | MPS bond dimension |
+| `singular_value_threshold` | float | `1e-8` | MPS truncation threshold |
+
+> **Tip:** For QML training workflows where you need noise-aware gradients,
+> `noisy_estimate_montecarlo` with 50–200 realizations gives a good
+> speed-accuracy trade-off. Use `noisy_estimate` for rapid screening.
+
 ---
 
 ## QuEST and GPU Execution (Dynamic Backends)
@@ -839,6 +980,10 @@ print(f"Counts: {result['counts']}")
 | `maestro.is_quest_available()` | `bool` | Check if QuEST has been loaded and is ready to use.         |
 | `maestro.init_gpu()`        | `bool`  | Load the GPU shared library. Returns `True` on success.      |
 | `maestro.is_gpu_available()`| `bool`  | Check if the GPU backend has been loaded and is ready.        |
+| `maestro.NoiseModel()`      | object  | Create a noise model for configuring per-qubit Pauli channels. |
+| `maestro.noisy_estimate()`  | `dict`  | Analytical noisy estimation (zero overhead, per-qubit damping). |
+| `maestro.noisy_estimate_montecarlo()` | `dict` | Gate-by-gate Monte Carlo noisy estimation (accurate). |
+| `maestro.noisy_execute()`   | `dict`  | Monte Carlo noisy execution with shot-based sampling.        |
 
 | Simulator Type               | Enum Value                        | Dynamic? | Backend Library                   |
 |-------------------------------|-----------------------------------|----------|-----------------------------------|
