@@ -1511,3 +1511,215 @@ class TestInnerProduct:
         # States differ by a relative phase, so |overlap| < 1
         # but result should still be a valid complex number
         assert abs(result) <= 1.0 + 1e-10
+
+
+class TestMPSOptimizedSwapping:
+    """Test the MPS optimized swapping parameters (disable_optimized_swapping, lookahead_depth)."""
+
+    MPS_PARAMS = dict(
+        simulator_type=maestro.SimulatorType.QCSim,
+        simulation_type=maestro.SimulationType.MatrixProductState,
+        max_bond_dimension=16,
+    )
+
+    def _make_non_nearest_neighbor_circuit(self):
+        """Build a circuit with long-range 2-qubit gates that trigger swap insertion.
+
+        This creates a pattern where qubits 0 and 4 interact, forcing the MPS
+        simulator to insert SWAPs to bring them adjacent. The optimized swap
+        routine should handle this more efficiently than naive swapping.
+        """
+        from maestro.circuits import QuantumCircuit
+        n_qubits = 8
+        qc = QuantumCircuit()
+        # Create entanglement across non-adjacent qubits
+        for i in range(n_qubits):
+            qc.h(i)
+        # Long-range CX gates
+        qc.cx(0, 4)
+        qc.cx(1, 5)
+        qc.cx(2, 6)
+        qc.cx(3, 7)
+        # Another layer crossing in the opposite direction
+        qc.cx(0, 7)
+        qc.cx(1, 6)
+        qc.cx(2, 5)
+        qc.cx(3, 4)
+        return qc
+
+    # ---- Execute tests ---------------------------------------------------
+
+    def test_execute_with_optimized_swapping_default(self):
+        """Execute with optimized swapping enabled (default) produces valid results."""
+        qc = self._make_non_nearest_neighbor_circuit()
+        qc.measure_all()
+        result = qc.execute(shots=1024, **self.MPS_PARAMS)
+        assert result is not None
+        assert 'counts' in result
+        assert sum(result['counts'].values()) == 1024
+
+    def test_execute_with_optimized_swapping_disabled(self):
+        """Execute with optimized swapping explicitly disabled produces valid results."""
+        qc = self._make_non_nearest_neighbor_circuit()
+        qc.measure_all()
+        result = qc.execute(
+            shots=1024,
+            disable_optimized_swapping=True,
+            **self.MPS_PARAMS
+        )
+        assert result is not None
+        assert 'counts' in result
+        assert sum(result['counts'].values()) == 1024
+
+    def test_execute_custom_lookahead_depth(self):
+        """Execute with a custom lookahead_depth produces valid results."""
+        qc = self._make_non_nearest_neighbor_circuit()
+        qc.measure_all()
+        for depth in [0, 5, 10, 30]:
+            result = qc.execute(
+                shots=256,
+                lookahead_depth=depth,
+                **self.MPS_PARAMS
+            )
+            assert result is not None
+            assert sum(result['counts'].values()) == 256
+
+    # ---- Estimate tests --------------------------------------------------
+
+    def test_estimate_with_optimized_swapping(self):
+        """Estimate with optimized swapping produces correct expectation values."""
+        qc = self._make_non_nearest_neighbor_circuit()
+
+        result_opt = qc.estimate(
+            observables=["ZIIIIIII", "IZIIIIII"],
+            **self.MPS_PARAMS
+        )
+        assert result_opt is not None
+        exp_vals = result_opt['expectation_values']
+        assert len(exp_vals) == 2
+        # Expectation values should be valid (between -1 and 1)
+        for val in exp_vals:
+            assert -1.0 - 1e-6 <= val <= 1.0 + 1e-6
+
+    def test_estimate_disabled_vs_enabled_agree(self):
+        """Optimized and unoptimized paths should produce matching expectation values."""
+        qc = self._make_non_nearest_neighbor_circuit()
+        obs = ["ZIIIIIII", "IZIIIIII", "ZZIIIIII"]
+
+        result_opt = qc.estimate(observables=obs, **self.MPS_PARAMS)
+        result_no_opt = qc.estimate(
+            observables=obs,
+            disable_optimized_swapping=True,
+            **self.MPS_PARAMS
+        )
+        assert result_opt is not None
+        assert result_no_opt is not None
+
+        for v_opt, v_no in zip(
+            result_opt['expectation_values'],
+            result_no_opt['expectation_values']
+        ):
+            assert v_opt == pytest.approx(v_no, abs=1e-4)
+
+    def test_estimate_custom_lookahead(self):
+        """Estimate with custom lookahead_depth produces valid results."""
+        qc = self._make_non_nearest_neighbor_circuit()
+        result = qc.estimate(
+            observables=["ZIIIIIII"],
+            lookahead_depth=5,
+            **self.MPS_PARAMS
+        )
+        assert result is not None
+        assert len(result['expectation_values']) == 1
+
+    # ---- simple_execute / simple_estimate module-level tests -------------
+
+    def test_simple_execute_disable_optimized_swapping(self):
+        """Module-level simple_execute accepts disable_optimized_swapping."""
+        qasm = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[6];
+        creg c[6];
+        h q[0];
+        cx q[0], q[5];
+        cx q[1], q[4];
+        measure q -> c;
+        """
+        result = maestro.simple_execute(
+            qasm,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            shots=100,
+            max_bond_dimension=8,
+            disable_optimized_swapping=True,
+            lookahead_depth=10
+        )
+        assert result is not None
+        assert sum(result['counts'].values()) == 100
+
+    def test_simple_estimate_disable_optimized_swapping(self):
+        """Module-level simple_estimate accepts disable_optimized_swapping."""
+        qasm = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[6];
+        h q[0];
+        cx q[0], q[5];
+        """
+        result = maestro.simple_estimate(
+            qasm,
+            "ZIIIII",
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=8,
+            disable_optimized_swapping=False,
+            lookahead_depth=20
+        )
+        assert result is not None
+        assert len(result['expectation_values']) == 1
+
+    # ---- Correctness: compare against Statevector reference --------------
+
+    def test_optimized_mps_matches_statevector(self):
+        """MPS with optimized swapping should match statevector for small circuits."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 3)
+        qc.cx(1, 4)
+        qc.rz(2, 0.5)
+        qc.cx(0, 4)
+
+        obs = ["ZIIII", "IZIII", "ZZIII", "IIIIZ"]
+
+        result_sv = qc.estimate(
+            observables=obs,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Statevector,
+        )
+        result_mps = qc.estimate(
+            observables=obs,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=32,
+            lookahead_depth=20,
+        )
+        result_mps_no_opt = qc.estimate(
+            observables=obs,
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=32,
+            disable_optimized_swapping=True,
+        )
+
+        for v_sv, v_mps, v_no_opt in zip(
+            result_sv['expectation_values'],
+            result_mps['expectation_values'],
+            result_mps_no_opt['expectation_values']
+        ):
+            assert v_mps == pytest.approx(v_sv, abs=1e-6), \
+                f"MPS optimized {v_mps} != SV {v_sv}"
+            assert v_no_opt == pytest.approx(v_sv, abs=1e-6), \
+                f"MPS unoptimized {v_no_opt} != SV {v_sv}"
