@@ -27,6 +27,7 @@ class Alias {
 
   template <class T = Eigen::VectorXcd>
   Alias(const T &statevector) {
+    /*
     std::vector<double> probabilities(statevector.size());
 
     double accum = 0.;
@@ -34,13 +35,59 @@ class Alias {
          ++i) {
       probabilities[i] = std::norm(statevector[i]);
       accum += probabilities[i];
-      if (accum > 1. - std::numeric_limits<double>::epsilon()) {
+      if (accum > oneMinusEps) {
         probabilities.resize(i + 1);
         break;
       }
     }
 
     SetAliasTable(probabilities);
+    */
+
+    long long int numNonZeroStates = 0;
+    double accum = 0.;
+    for (Eigen::Index state = 0;
+         state < static_cast<Eigen::Index>(statevector.size()); ++state) {
+      const double stateProb = std::norm(statevector[state]);
+      if (stateProb < std::numeric_limits<double>::epsilon()) continue;
+
+      ++numNonZeroStates;
+      
+      accum += stateProb;
+      if (accum > oneMinusEps) break;
+    }
+
+    std::vector<AliasEntry> under;
+    std::vector<AliasEntry> over;
+    under.reserve(numNonZeroStates);
+    over.reserve(numNonZeroStates);
+
+    statesTable.reserve(numNonZeroStates);
+
+    long long int i = 0;
+    accum = 0.;
+    for (Eigen::Index state = 0; state < static_cast<Eigen::Index>(statevector.size());
+         ++state) {
+      const double stateProb = std::norm(statevector[state]);
+      if (stateProb < std::numeric_limits<double>::epsilon()) continue;
+
+      const double prob = stateProb * numNonZeroStates;
+      if (prob < 1.)
+        under.emplace_back(prob, i);
+      else
+        over.emplace_back(prob, i);
+
+      statesTable.push_back(state);
+
+      accum += stateProb;
+      if (accum > oneMinusEps) break;
+
+      ++i;
+    }
+
+    aliasTable.resize(under.size() + over.size());
+
+    SetAliasTable(under, over);
   }
 
   Alias(const std::unordered_map<QC::PathIntegral::FastVectorBool, std::complex<double>,
@@ -52,34 +99,37 @@ class Alias {
     under.reserve(amplitudesMap.size());
     over.reserve(amplitudesMap.size());
 
-    size_t maxState = 0;
+    statesTable.reserve(amplitudesMap.size());
+
+    //size_t maxState = 0;
+    long long int i = 0;
     for (const auto &valPair : amplitudesMap) {
       const double prob = std::norm(valPair.second) * amplitudesMap.size();
       const size_t state = valPair.first.getWords()[0];
       if (prob < 1.)
-        under.emplace_back(prob, state);
+        under.emplace_back(prob, i);
       else
-        over.emplace_back(prob, state);
+        over.emplace_back(prob, i);
 
-      if (state > maxState) maxState = state;
+      //if (state > maxState) maxState = state;
+      statesTable.push_back(state);
+      ++i;
     }
 
-    aliasTable.resize(maxState + 1);
-    std::fill(aliasTable.begin(), aliasTable.end(), AliasEntry(1., -1));
+    //aliasTable.resize(maxState + 1);
+    //std::fill(aliasTable.begin(), aliasTable.end(), AliasEntry(1., -1));
+    aliasTable.resize(under.size() + over.size());
 
     SetAliasTable(under, over);
   }
 
-  size_t Sample(double v) const {
-    static const double oneMinusEps =
-        1. - std::numeric_limits<double>::epsilon();
-
+  inline size_t Sample(double v) const {
     const double vadj = v * aliasTable.size();
     const size_t offset = std::min<size_t>(static_cast<size_t>(vadj), aliasTable.size() - 1);
     const double up = std::min<double>(vadj - offset, oneMinusEps);
 
-    return up < aliasTable[offset].probability ? offset
-                                               : aliasTable[offset].alias;
+    return statesTable[up < aliasTable[offset].probability ? offset
+                                               : aliasTable[offset].alias];
   }
 
  private:
@@ -93,6 +143,7 @@ class Alias {
     long long int alias;
   };
 
+  /*
   void SetAliasTable(std::vector<double>& probabilities)
   {
     aliasTable.resize(probabilities.size());
@@ -115,6 +166,7 @@ class Alias {
 
     SetAliasTable(under, over);
   }
+  */
 
   void SetAliasTable(std::vector<AliasEntry>& under,
                      std::vector<AliasEntry>& over)
@@ -148,6 +200,9 @@ class Alias {
   }
 
   std::vector<AliasEntry> aliasTable;
+  std::vector<long long int> statesTable;
+  static constexpr double oneMinusEps =
+      1. - std::numeric_limits<double>::epsilon();
 };
 
 }  // namespace Utils
