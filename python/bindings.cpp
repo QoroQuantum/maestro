@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#include "noise.h"
+
 // Domain Headers
 #include "Circuit/Circuit.h"
 #include "Interface.h"
@@ -55,7 +57,7 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     unsigned long int handle, Simulators::SimulatorType sim_type,
     Simulators::SimulationType sim_exec_type, std::optional<size_t> max_bond,
     std::optional<double> sv_threshold, bool use_double_precision = false,
-    bool disable_optimized_swapping = false, int lookahead_depth = 20) {
+    bool disable_optimized_swapping = false, int lookahead_depth = -1) {
   // QuEST only supports statevector simulation
   if (sim_type == Simulators::SimulatorType::kQuestSim &&
       sim_exec_type != Simulators::SimulationType::kStatevector) {
@@ -137,7 +139,7 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
                       std::optional<double> sv_threshold,
                       bool use_double_precision = false,
                       bool disable_optimized_swapping = false,
-                      int lookahead_depth = 20) {
+                      int lookahead_depth = -1) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   int num_qubits =
@@ -191,7 +193,7 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
                        std::optional<double> sv_threshold,
                        bool use_double_precision = false,
                        bool disable_optimized_swapping = false,
-                       int lookahead_depth = 20) {
+                       int lookahead_depth = -1) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   int num_qubits = static_cast<int>(circuit->GetMaxQubitIndex()) + 1;
@@ -235,7 +237,7 @@ std::vector<std::complex<double>> statevector_core(
     Simulators::SimulatorType sim_type,
     Simulators::SimulationType sim_exec_type, std::optional<size_t> max_bond,
     std::optional<double> sv_threshold, bool use_double_precision = false,
-    bool disable_optimized_swapping = false, int lookahead_depth = 20) {
+    bool disable_optimized_swapping = false, int lookahead_depth = -1) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   int num_qubits =
@@ -366,7 +368,7 @@ double mirror_fidelity_core(
     Simulators::SimulationType sim_exec_type, int shots,
     std::optional<size_t> max_bond, std::optional<double> sv_threshold,
     bool use_double_precision = false, bool full_amplitude = false,
-    bool disable_optimized_swapping = false, int lookahead_depth = 20) {
+    bool disable_optimized_swapping = false, int lookahead_depth = -1) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   // Build the mirror circuit: forward gates + adjoint gates in reverse
@@ -448,7 +450,7 @@ std::complex<double> inner_product_core(
     std::optional<double> sv_threshold,
     bool use_double_precision = false,
     bool disable_optimized_swapping = false,
-    int lookahead_depth = 20) {
+    int lookahead_depth = -1) {
   if (!circuit_1) throw nb::value_error("circuit_1 is null.");
   if (!circuit_2) throw nb::value_error("circuit_2 is null.");
 
@@ -734,7 +736,7 @@ NB_MODULE(maestro, m) {
            "singular_value_threshold"_a = 1e-8,
            "use_double_precision"_a = false,
            "disable_optimized_swapping"_a = false,
-           "lookahead_depth"_a = 20)
+           "lookahead_depth"_a = -1)
       .def(
           "estimate",
           [](std::shared_ptr<Circuits::Circuit<double>> self,
@@ -751,7 +753,7 @@ NB_MODULE(maestro, m) {
           "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
           "use_double_precision"_a = false,
           "disable_optimized_swapping"_a = false,
-          "lookahead_depth"_a = 20)
+          "lookahead_depth"_a = -1)
       .def("get_statevector", &statevector_core,
           "simulator_type"_a = Simulators::SimulatorType::kQCSim,
           "simulation_type"_a = Simulators::SimulationType::kStatevector,
@@ -759,7 +761,7 @@ NB_MODULE(maestro, m) {
           "singular_value_threshold"_a = nb::none(),
           "use_double_precision"_a = false,
           "disable_optimized_swapping"_a = false,
-          "lookahead_depth"_a = 20,
+          "lookahead_depth"_a = -1,
           "Get the full statevector (complex amplitudes) after executing the "
           "circuit.")
       .def("mirror_fidelity", &mirror_fidelity_core,
@@ -771,7 +773,7 @@ NB_MODULE(maestro, m) {
           "use_double_precision"_a = false,
           "full_amplitude"_a = false,
           "disable_optimized_swapping"_a = false,
-          "lookahead_depth"_a = 20,
+          "lookahead_depth"_a = -1,
           "Compute mirror fidelity: run circuit forward then its adjoint in "
           "reverse, returning P(|0...0>). Uses shot-based sampling by "
           "default. Set full_amplitude=True for exact statevector "
@@ -794,7 +796,7 @@ NB_MODULE(maestro, m) {
           "singular_value_threshold"_a = nb::none(),
           "use_double_precision"_a = false,
           "disable_optimized_swapping"_a = false,
-          "lookahead_depth"_a = 20,
+          "lookahead_depth"_a = -1,
           "Compute the inner product <psi_self|psi_other> = <0|U_self^dag "
           "U_other|0> between this circuit's state and another circuit's "
           "state, using ProjectOnZero.");
@@ -813,7 +815,7 @@ NB_MODULE(maestro, m) {
         "simulation_type"_a = Simulators::SimulationType::kStatevector,
         "shots"_a = 1024, "max_bond_dimension"_a = 2,
         "singular_value_threshold"_a = 1e-8, "use_double_precision"_a = false,
-        "disable_optimized_swapping"_a = false, "lookahead_depth"_a = 20);
+        "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1);
 
   // Variant B: QASM String
   m.def(
@@ -835,7 +837,7 @@ NB_MODULE(maestro, m) {
       "simulation_type"_a = Simulators::SimulationType::kStatevector,
       "shots"_a = 1024, "max_bond_dimension"_a = 2,
       "singular_value_threshold"_a = 1e-8, "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = 20);
+      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1);
 
   // 2. simple_estimate (Overloaded)
   // Variant A: Circuit Object
@@ -854,7 +856,7 @@ NB_MODULE(maestro, m) {
       "simulation_type"_a = Simulators::SimulationType::kStatevector,
       "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
       "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = 20);
+      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1);
 
   // Variant B: QASM String
   m.def(
@@ -876,7 +878,7 @@ NB_MODULE(maestro, m) {
       "simulation_type"_a = Simulators::SimulationType::kStatevector,
       "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
       "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = 20);
+      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1);
 
   // --- QuEST Library Management ---
   m.def(
@@ -922,7 +924,7 @@ NB_MODULE(maestro, m) {
       "max_bond_dimension"_a = nb::none(),
       "singular_value_threshold"_a = nb::none(),
       "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = 20,
+      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
       "Get the full probability distribution after executing a circuit.");
 
   m.def("get_statevector", &statevector_core, "circuit"_a,
@@ -931,7 +933,7 @@ NB_MODULE(maestro, m) {
       "max_bond_dimension"_a = nb::none(),
       "singular_value_threshold"_a = nb::none(),
       "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = 20,
+      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
       "Get the full statevector (complex amplitudes) after executing a "
       "circuit.");
 
@@ -943,7 +945,7 @@ NB_MODULE(maestro, m) {
       "singular_value_threshold"_a = nb::none(),
       "use_double_precision"_a = false,
       "full_amplitude"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = 20,
+      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
       "Compute mirror fidelity: run a circuit forward then its adjoint in "
       "reverse, returning P(|0...0>). Uses shot-based sampling by "
       "default. Set full_amplitude=True for exact statevector "
@@ -955,7 +957,236 @@ NB_MODULE(maestro, m) {
       "max_bond_dimension"_a = nb::none(),
       "singular_value_threshold"_a = nb::none(),
       "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = 20,
+      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
       "Compute the inner product <psi_1|psi_2> = <0|U1^dag U2|0> between "
       "two circuits' output states, using ProjectOnZero.");
+
+  // =========================================================================
+  // Noise Modeling
+  // =========================================================================
+
+  nb::class_<noise::NoiseModel>(m, "NoiseModel")
+      .def(nb::init<>(), "Create an empty noise model.")
+      .def("set_qubit_noise", &noise::NoiseModel::set_qubit_noise,
+           "qubit"_a, "px"_a, "py"_a, "pz"_a,
+           "Add Pauli channel: Λ(ρ) = (1-px-py-pz)ρ + px·XρX + py·YρY + "
+           "pz·ZρZ")
+      .def("set_depolarizing", &noise::NoiseModel::set_depolarizing,
+           "qubit"_a, "p"_a,
+           "Add symmetric depolarizing noise (px=py=pz=p/3).")
+      .def("set_dephasing", &noise::NoiseModel::set_dephasing,
+           "qubit"_a, "p"_a, "Add pure dephasing (Z) noise.")
+      .def("set_bit_flip", &noise::NoiseModel::set_bit_flip,
+           "qubit"_a, "p"_a, "Add bit-flip (X) noise.")
+      .def("set_all_depolarizing", &noise::NoiseModel::set_all_depolarizing,
+           "num_qubits"_a, "p"_a,
+           "Add uniform depolarizing noise to all qubits [0, num_qubits).")
+      .def("set_all_dephasing", &noise::NoiseModel::set_all_dephasing,
+           "num_qubits"_a, "p"_a,
+           "Add uniform dephasing noise to all qubits [0, num_qubits).")
+      .def("compute_damping", &noise::NoiseModel::compute_damping,
+           "pauli_string"_a,
+           "Compute the noise damping factor for a Pauli string observable.");
+
+  // --- Noisy Estimation (analytical — zero simulation overhead) ---
+  m.def(
+      "noisy_estimate",
+      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
+         const nb::object &observables,
+         const noise::NoiseModel &noise_model, Simulators::SimulatorType st,
+         Simulators::SimulationType set, std::optional<size_t> mb,
+         std::optional<double> sv, bool dp, bool dis_swap, int la_depth) {
+        auto paulis = ParseObservables(observables);
+        nb::dict result =
+            estimate_core(circuit, paulis, st, set, mb, sv, dp, dis_swap,
+                          la_depth);
+
+        // Apply analytical Pauli noise damping
+        nb::list ideal = nb::cast<nb::list>(result["expectation_values"]);
+        nb::list noisy_vals;
+        for (size_t i = 0; i < paulis.size(); ++i) {
+          double damping = noise_model.compute_damping(paulis[i]);
+          noisy_vals.append(damping * nb::cast<double>(ideal[i]));
+        }
+
+        nb::dict out;
+        out["expectation_values"] = noisy_vals;
+        out["ideal_expectation_values"] = ideal;
+        out["time_taken"] = result["time_taken"];
+        out["simulator"] = result["simulator"];
+        out["method"] = result["method"];
+        return out;
+      },
+      "circuit"_a, "observables"_a, "noise_model"_a,
+      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+      "simulation_type"_a = Simulators::SimulationType::kStatevector,
+      "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
+      "use_double_precision"_a = false,
+      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
+      "Compute expectation values with analytical Pauli noise damping. "
+      "Runs noiseless simulation then applies exact noise attenuation — "
+      "zero simulation overhead compared to noiseless.");
+
+  // --- QASM variant ---
+  m.def(
+      "noisy_estimate",
+      [](const std::string &qasm, const nb::object &observables,
+         const noise::NoiseModel &noise_model, Simulators::SimulatorType st,
+         Simulators::SimulationType set, std::optional<size_t> mb,
+         std::optional<double> sv, bool dp, bool dis_swap, int la_depth) {
+        qasm::QasmToCirc<> parser;
+        auto circuit = parser.ParseAndTranslate(qasm);
+        if (parser.Failed() || !circuit)
+          throw nb::value_error("Failed to parse QASM string.");
+
+        auto paulis = ParseObservables(observables);
+        nb::dict result =
+            estimate_core(circuit, paulis, st, set, mb, sv, dp, dis_swap,
+                          la_depth);
+
+        nb::list ideal = nb::cast<nb::list>(result["expectation_values"]);
+        nb::list noisy_vals;
+        for (size_t i = 0; i < paulis.size(); ++i) {
+          double damping = noise_model.compute_damping(paulis[i]);
+          noisy_vals.append(damping * nb::cast<double>(ideal[i]));
+        }
+
+        nb::dict out;
+        out["expectation_values"] = noisy_vals;
+        out["ideal_expectation_values"] = ideal;
+        out["time_taken"] = result["time_taken"];
+        out["simulator"] = result["simulator"];
+        out["method"] = result["method"];
+        return out;
+      },
+      "qasm_circuit"_a, "observables"_a, "noise_model"_a,
+      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+      "simulation_type"_a = Simulators::SimulationType::kStatevector,
+      "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
+      "use_double_precision"_a = false,
+      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
+      "Compute expectation values from a QASM circuit with analytical Pauli "
+      "noise. Zero simulation overhead.");
+
+  // --- Gate-by-gate Monte Carlo Noisy Estimation ---
+  m.def(
+      "noisy_estimate_montecarlo",
+      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
+         const nb::object &observables,
+         const noise::NoiseModel &noise_model, int noise_realizations,
+         Simulators::SimulatorType st, Simulators::SimulationType set,
+         std::optional<size_t> mb, std::optional<double> sv, bool dp,
+         bool dis_swap, int la_depth,
+         std::optional<unsigned int> seed) {
+        if (!circuit) throw nb::value_error("Circuit is null.");
+        auto paulis = ParseObservables(observables);
+
+        std::mt19937 rng(seed.value_or(std::random_device{}()));
+        const size_t n_obs = paulis.size();
+
+        // Accumulate expectation values across realizations
+        std::vector<double> sum_vals(n_obs, 0.0);
+
+        auto start = std::chrono::high_resolution_clock::now();
+        for (int r = 0; r < noise_realizations; ++r) {
+          auto noisy = noise::inject_noise(circuit, noise_model, rng);
+          nb::dict result =
+              estimate_core(noisy, paulis, st, set, mb, sv, dp, dis_swap,
+                            la_depth);
+          nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
+          for (size_t i = 0; i < n_obs; ++i)
+            sum_vals[i] += nb::cast<double>(ev[i]);
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+
+        // Also run noiseless for reference
+        nb::dict ideal_result =
+            estimate_core(circuit, paulis, st, set, mb, sv, dp, dis_swap,
+                          la_depth);
+
+        nb::list noisy_vals, ideal_vals;
+        nb::list ideal_ev =
+            nb::cast<nb::list>(ideal_result["expectation_values"]);
+        for (size_t i = 0; i < n_obs; ++i) {
+          noisy_vals.append(sum_vals[i] / noise_realizations);
+          ideal_vals.append(nb::cast<double>(ideal_ev[i]));
+        }
+
+        nb::dict out;
+        out["expectation_values"] = noisy_vals;
+        out["ideal_expectation_values"] = ideal_vals;
+        out["time_taken"] =
+            std::chrono::duration<double>(end - start).count();
+        out["simulator"] = ideal_result["simulator"];
+        out["method"] = ideal_result["method"];
+        out["noise_realizations"] = noise_realizations;
+        return out;
+      },
+      "circuit"_a, "observables"_a, "noise_model"_a,
+      "noise_realizations"_a = 100,
+      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+      "simulation_type"_a = Simulators::SimulationType::kStatevector,
+      "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
+      "use_double_precision"_a = false,
+      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
+      "seed"_a = nb::none(),
+      "Gate-by-gate Monte Carlo noisy estimation. Injects random Pauli "
+      "errors after every gate and averages expectation values over "
+      "noise_realizations independent samples. More accurate than "
+      "analytical noisy_estimate for deep circuits.");
+
+
+  m.def(
+      "noisy_execute",
+      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
+         const noise::NoiseModel &noise_model, Simulators::SimulatorType st,
+         Simulators::SimulationType set, int shots, std::optional<size_t> mb,
+         std::optional<double> sv, bool dp, bool dis_swap, int la_depth,
+         int noise_realizations, std::optional<unsigned int> seed) {
+        if (!circuit) throw nb::value_error("Circuit is null.");
+
+        std::mt19937 rng(seed.value_or(std::random_device{}()));
+        const int batches = std::min(shots, std::max(1, noise_realizations));
+        const int base_batch = shots / batches;
+        int leftover = shots % batches;
+
+        std::unordered_map<std::string, size_t> combined;
+
+        auto start = std::chrono::high_resolution_clock::now();
+        for (int b = 0; b < batches; ++b) {
+          int batch_shots = base_batch + (b < leftover ? 1 : 0);
+          if (batch_shots <= 0) continue;
+
+          auto noisy = noise::inject_noise(circuit, noise_model, rng);
+          nb::dict r = execute_core(noisy, st, set, batch_shots, mb, sv, dp,
+                                    dis_swap, la_depth);
+          nb::dict counts = nb::cast<nb::dict>(r["counts"]);
+          for (auto item : counts)
+            combined[nb::cast<std::string>(nb::str(item.first))] +=
+                nb::cast<size_t>(item.second);
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+
+        nb::dict py_counts;
+        for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
+
+        nb::dict out;
+        out["counts"] = py_counts;
+        out["time_taken"] =
+            std::chrono::duration<double>(end - start).count();
+        out["simulator"] = (int)st;
+        out["method"] = (int)set;
+        out["noise_realizations"] = batches;
+        return out;
+      },
+      "circuit"_a, "noise_model"_a,
+      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+      "simulation_type"_a = Simulators::SimulationType::kStatevector,
+      "shots"_a = 1024, "max_bond_dimension"_a = 2,
+      "singular_value_threshold"_a = 1e-8, "use_double_precision"_a = false,
+      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
+      "noise_realizations"_a = 64, "seed"_a = nb::none(),
+      "Execute a circuit with Monte Carlo Pauli noise. "
+      "Each of 'noise_realizations' batches uses a different random noise "
+      "pattern, with shots distributed evenly across batches.");
 }
