@@ -18,6 +18,9 @@
 #ifdef INCLUDED_BY_FACTORY
 
 #include <algorithm>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 
 #include "Simulator.h"
 
@@ -514,8 +517,12 @@ class QCSimState : public ISimulator {
       }
     } else if (std::string("matrix_product_state_truncation_threshold") ==
                key) {
-      if (limitEntanglement && singularValueThreshold > 0.)
-        return std::to_string(singularValueThreshold);
+      if (limitEntanglement && singularValueThreshold > 0.) {
+        std::ostringstream oss;
+        oss << std::setprecision(std::numeric_limits<double>::max_digits10)
+            << singularValueThreshold;
+        return oss.str();
+      }
     } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
       if (limitSize && chi > 0) return std::to_string(chi);
     } else if (std::string("mps_sample_measure_algorithm") == key) {
