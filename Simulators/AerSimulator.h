@@ -936,9 +936,13 @@ class AerSimulator : public AerState {
       if (limitSize)
         sim->Configure("matrix_product_state_max_bond_dimension",
                        std::to_string(chi).c_str());
-      if (limitEntanglement)
+      if (limitEntanglement) {
+        std::ostringstream oss;
+        oss << std::setprecision(std::numeric_limits<double>::max_digits10)
+            << singularValueThreshold;
         sim->Configure("matrix_product_state_truncation_threshold",
-                       std::to_string(singularValueThreshold).c_str());
+                       oss.str().c_str());
+      }
       sim->Configure("mps_sample_measure_algorithm", useMPSMeasureNoCollapse
                                                          ? "mps_probabilities"
                                                          : "mps_apply_measure");

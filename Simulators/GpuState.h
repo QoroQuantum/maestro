@@ -22,6 +22,9 @@
 #include "MPSDummySimulator.h"
 
 #include <cstdint>
+#include <iomanip>
+#include <limits>
+#include <sstream>
 
 namespace Simulators {
 // TODO: Maybe use the pimpl idiom
@@ -419,8 +422,12 @@ class GpuState : public ISimulator {
       }
     } else if (std::string("matrix_product_state_truncation_threshold") ==
                key) {
-      if (limitEntanglement && singularValueThreshold > 0.)
-        return std::to_string(singularValueThreshold);
+      if (limitEntanglement && singularValueThreshold > 0.) {
+        std::ostringstream oss;
+        oss << std::setprecision(std::numeric_limits<double>::max_digits10)
+            << singularValueThreshold;
+        return oss.str();
+      }
     } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
       if (limitSize && limitSize > 0) return std::to_string(chi);
     }

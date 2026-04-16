@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -80,7 +82,10 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("matrix_product_state_max_bond_dimension", val.c_str());
   }
   if (sv_threshold) {
-    auto val = std::to_string(*sv_threshold);
+    std::ostringstream oss;
+    oss << std::setprecision(std::numeric_limits<double>::max_digits10)
+        << *sv_threshold;
+    auto val = oss.str();
     network->Configure("matrix_product_state_truncation_threshold",
                        val.c_str());
   }
