@@ -2480,7 +2480,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             lookahead depth with heuristic for MPS swap optimization. */
 
   double growthFactorSwap = 1.;
-  double growthFactorGate = 0.7;
+  double growthFactorGate = 0.65;
 };
 
 }  // namespace Network
