@@ -1524,7 +1524,7 @@ class QCSimState : public ISimulator {
   std::vector<std::shared_ptr<Circuits::IOperation<>>> upcomingGates;
   long long int upcomingGateIndex = 0;
   double growthFactorSwap = 1.;
-  double growthFactorGate = 0.7; 
+  double growthFactorGate = 0.65; 
 
   std::unique_ptr<Simulators::MPSDummySimulator> dummySim;
 
