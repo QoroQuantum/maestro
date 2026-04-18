@@ -106,14 +106,30 @@ class QiskitAerState : public AER::AerState {
 
     AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
 
-    std::vector<AER::SampleVector> samples =
-        state->sample_measure(qubits, shots, fakeState->rng_);
-    std::unordered_map<std::vector<bool>, uint_t> ret;
-    std::vector<bool> sample_vec(qubits.size());
-    for (const auto &sample : samples) {
-      for (size_t q = 0; q < qubits.size(); ++q) sample_vec[q] = sample[q] == 1;
+    // Aer's MPS backend returns samples sorted by ascending qubit index
+    // regardless of the order of `qubits` (see sort_measured_values in
+    // matrix_product_state_internal.cpp), while the statevector backend
+    // returns them in the order of `qubits`. To get consistent behavior
+    // across backends we sort the qubits ourselves and then remap the
+    // bits back to the caller-requested order.
+    reg_t sorted_qubits = qubits;
+    std::vector<size_t> order(qubits.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(),
+              [&qubits](size_t a, size_t b) { return qubits[a] < qubits[b]; });
+    for (size_t i = 0; i < qubits.size(); ++i)
+      sorted_qubits[i] = qubits[order[i]];
 
-      ++ret[sample_vec];
+    std::vector<AER::SampleVector> samples =
+        state->sample_measure(sorted_qubits, shots, fakeState->rng_);
+    std::unordered_map<std::vector<bool>, uint_t> ret;
+
+    std::vector<bool> bitstring(qubits.size());
+    for (const auto &sample : samples) {
+      for (size_t i = 0; i < qubits.size(); ++i)
+        bitstring[order[i]] = sample[i] == 1;
+
+      ++ret[bitstring];
     }
     return ret;
   }
