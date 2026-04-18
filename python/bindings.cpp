@@ -405,8 +405,10 @@ double mirror_fidelity_core(
     }
   }
 
-  // Reverse pass: iterate backward and add adjoint of each gate
+  // Reverse pass: iterate backward and add adjoint of each gate operation only
+  // (skip measurements and other non-gate ops — they have no adjoint)
   for (auto it = ops.rbegin(); it != ops.rend(); ++it) {
+    if ((*it)->GetType() != Circuits::OperationType::kGate) continue;
     auto adj = adjoint_gate(*it);
     if (adj) mirror->AddOperation(adj);
   }
@@ -427,22 +429,66 @@ double mirror_fidelity_core(
     mirror_copy->AddOperation(
         std::make_shared<Circuits::MeasurementOperation<>>(pairs));
 
-    nb::dict result = execute_core(mirror_copy, config, shots);
+    // Build network directly (like execute_core) but with circuit optimization
+    // disabled. The mirror circuit's paired gate/adjoint sequences must not be
+    // cancelled by the optimizer: e.g. ry(-θ) + ry(θ) → ry(0), followed by
+    // s + ry(0) + sdg, which the optimizer would incorrectly simplify further.
+    int num_qubits =
+        std::max(1, static_cast<int>(mirror_copy->GetMaxQubitIndex()) + 1);
+    ScopedSimulator sim(num_qubits);
+    if (sim.handle == 0)
+      throw std::runtime_error("mirror_fidelity: failed to create simulator.");
+    auto network = ConfigureNetwork(sim.handle, config);
+    if (!network)
+      throw std::runtime_error("mirror_fidelity: failed to configure network.");
+    // Disable circuit optimization: the mirror's gate/adjoint pairs must not
+    // be cancelled or merged by the optimizer.
+    network->GetController()->SetOptimizeCircuit(false);
+    // Disable MPS swap optimization: MPSDummySimulator used for swap-cost
+    // estimation throws on multi-qubit measurement operations.
+    network->SetInitialQubitsMapOptimization(false);
+    network->SetMPSOptimizeSwaps(false);
 
-    nb::dict counts = nb::cast<nb::dict>(result["counts"]);
+    Network::INetwork<double>::ExecuteResults raw_results;
+    {
+      nb::gil_scoped_release release;
+      raw_results =
+          network->RepeatedExecuteOnHost(mirror_copy, 0, (size_t)shots);
+    }
+
+    // Convert results to counts dict and look up all-zeros bitstring
     std::string zeros(n, '0');
     size_t zero_count = 0;
-    if (counts.contains(zeros.c_str())) {
-      zero_count = nb::cast<size_t>(counts[zeros.c_str()]);
+    for (const auto &pair : raw_results) {
+      const auto &bool_vec = pair.first;
+      std::string bitstring(bool_vec.size(), '0');
+      for (size_t i = 0; i < bool_vec.size(); ++i)
+        if (bool_vec[i]) bitstring[i] = '1';
+      if (bitstring == zeros) zero_count += pair.second;
     }
     return static_cast<double>(zero_count) / static_cast<double>(shots);
   };
 
   if (full_amplitude) {
-    // Try exact statevector; fall back to shots if unsupported
+    // Try exact statevector with circuit optimization disabled
     try {
-      const auto amplitudes = statevector_core(mirror, config);
-      if (!amplitudes.empty()) return std::norm(amplitudes[0]);
+      int num_qubits =
+          std::max(1, static_cast<int>(mirror->GetMaxQubitIndex()) + 1);
+      ScopedSimulator sim(num_qubits);
+      if (sim.handle != 0) {
+        auto network = ConfigureNetwork(sim.handle, config);
+        if (network) {
+          network->GetController()->SetOptimizeCircuit(false);
+          network->SetInitialQubitsMapOptimization(false);
+          network->SetMPSOptimizeSwaps(false);
+          std::vector<std::complex<double>> amplitudes;
+          {
+            nb::gil_scoped_release release;
+            amplitudes = network->ExecuteOnHostAmplitudes(mirror, 0);
+          }
+          if (!amplitudes.empty()) return std::norm(amplitudes[0]);
+        }
+      }
     } catch (...) {
       // Statevector not available for this backend — fall back to shots
     }
@@ -835,7 +881,18 @@ NB_MODULE(maestro, m) {
   // --- QASM Tools ---
   nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
       .def(nb::init<>())
-      .def("parse_and_translate", &qasm::QasmToCirc<double>::ParseAndTranslate);
+      .def("parse_and_translate",
+           [](qasm::QasmToCirc<double> &self, const std::string &qasm_str) {
+             auto circuit = self.ParseAndTranslate(qasm_str);
+             if (self.Failed() || !circuit) {
+               throw nb::value_error(
+                   ("Failed to parse QASM string: " + self.GetErrorMessage())
+                       .c_str());
+             }
+             return circuit;
+           })
+      .def("failed", &qasm::QasmToCirc<double>::Failed)
+      .def("get_error_message", &qasm::QasmToCirc<double>::GetErrorMessage);
 
   // --- Module Level Convenience Functions ---
 
