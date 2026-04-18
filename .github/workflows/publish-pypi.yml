@@ -33,15 +33,19 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            cibw_build: "cp310-* cp311-* cp312-*"
+            cibw_build: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           - os: macos-14
-            cibw_build: "cp310-* cp311-* cp312-*"
+            cibw_build: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           - os: windows-latest
             cibw_build: "cp310-*"
           - os: windows-latest
             cibw_build: "cp311-*"
           - os: windows-latest
             cibw_build: "cp312-*"
+          - os: windows-latest
+            cibw_build: "cp313-*"
+          - os: windows-latest
+            cibw_build: "cp314-*"
 
     steps:
       - uses: actions/checkout@v5
@@ -178,7 +182,7 @@ jobs:
           CIBW_ENVIRONMENT_WINDOWS: "CMAKE_BUILD_PARALLEL_LEVEL=8"
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
             pip install delvewheel &&
-            delvewheel repair -w {dest_dir} --add-path "C:\vcpkg\installed\x64-windows\bin;build\cp310-cp310-win_amd64\bin;build\cp311-cp311-win_amd64\bin;build\cp312-cp312-win_amd64\bin" {wheel}
+            delvewheel repair -w {dest_dir} --add-path "C:\vcpkg\installed\x64-windows\bin;build\cp310-cp310-win_amd64\bin;build\cp311-cp311-win_amd64\bin;build\cp312-cp312-win_amd64\bin;build\cp313-cp313-win_amd64\bin;build\cp314-cp314-win_amd64\bin" {wheel}
 
           # ---- Common ----
           CIBW_BUILD: "${{ matrix.cibw_build }}"
