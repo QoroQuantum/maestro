@@ -615,6 +615,11 @@ struct Program {
       } break;
 
       case QoperationStatement::OperationType::Uop: {
+        if (stmt.gateType == Circuits::QuantumGateType::kNone &&
+            stmt.qubitsDecl.empty()) {
+          // Identity gate ("id") or unrecognised no-op — skip silently.
+          break;
+        }
         if (stmt.gateType != Circuits::QuantumGateType::kNone) {
           // can add more than one gate here depending on what's in qubits
           double param1 = stmt.parameters.size() > 0 ? stmt.parameters[0] : 0;
