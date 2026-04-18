@@ -31,6 +31,44 @@ namespace nb = nanobind;
 using namespace nb::literals;
 
 // ============================================================================
+// Simulator Configuration (shared across all executor paths)
+// ============================================================================
+
+/// Bundles every knob that controls *how* the simulator runs a circuit.
+/// Adding a new simulator parameter requires only:
+///   1. Add the field here (with a default).
+///   2. Wire it in ConfigureNetwork().
+///   3. Expose it in the nanobind class binding below.
+struct SimulatorConfig {
+  Simulators::SimulatorType simulator_type =
+      Simulators::SimulatorType::kQCSim;
+  Simulators::SimulationType simulation_type =
+      Simulators::SimulationType::kStatevector;
+  std::optional<size_t> max_bond_dimension = std::nullopt;
+  std::optional<double> singular_value_threshold = std::nullopt;
+  bool use_double_precision = false;
+  bool disable_optimized_swapping = false;
+  int lookahead_depth = -1;
+  bool mps_measure_no_collapse = true;
+
+  SimulatorConfig() = default;
+
+  SimulatorConfig(Simulators::SimulatorType st,
+                  Simulators::SimulationType set,
+                  std::optional<size_t> mb,
+                  std::optional<double> sv,
+                  bool dp, bool ds, int la, bool mnc)
+      : simulator_type(st),
+        simulation_type(set),
+        max_bond_dimension(mb),
+        singular_value_threshold(sv),
+        use_double_precision(dp),
+        disable_optimized_swapping(ds),
+        lookahead_depth(la),
+        mps_measure_no_collapse(mnc) {}
+};
+
+// ============================================================================
 // Internal Implementation Helpers (Hidden from Python)
 // ============================================================================
 
@@ -56,19 +94,17 @@ struct ScopedSimulator {
 
 // Helper to configure the simulation network
 std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
-    unsigned long int handle, Simulators::SimulatorType sim_type,
-    Simulators::SimulationType sim_exec_type, std::optional<size_t> max_bond,
-    std::optional<double> sv_threshold, bool use_double_precision = false,
-    bool disable_optimized_swapping = false, int lookahead_depth = -1) {
+    unsigned long int handle, const SimulatorConfig &config) {
   // QuEST only supports statevector simulation
-  if (sim_type == Simulators::SimulatorType::kQuestSim &&
-      sim_exec_type != Simulators::SimulationType::kStatevector) {
+  if (config.simulator_type == Simulators::SimulatorType::kQuestSim &&
+      config.simulation_type != Simulators::SimulationType::kStatevector) {
     throw std::invalid_argument(
         "QuestSim only supports Statevector simulation type.");
   }
 
-  if (RemoveAllOptimizationSimulatorsAndAdd(handle, (int)sim_type,
-                                            (int)sim_exec_type) == 0) {
+  if (RemoveAllOptimizationSimulatorsAndAdd(
+          handle, (int)config.simulator_type,
+          (int)config.simulation_type) == 0) {
     return nullptr;
   }
 
@@ -77,30 +113,36 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
 
   if (!network) return nullptr;
 
-  if (max_bond) {
-    auto val = std::to_string(*max_bond);
+  if (config.max_bond_dimension) {
+    auto val = std::to_string(*config.max_bond_dimension);
     network->Configure("matrix_product_state_max_bond_dimension", val.c_str());
   }
-  if (sv_threshold) {
+  if (config.singular_value_threshold) {
     std::ostringstream oss;
     oss << std::setprecision(std::numeric_limits<double>::max_digits10)
-        << *sv_threshold;
+        << *config.singular_value_threshold;
     auto val = oss.str();
     network->Configure("matrix_product_state_truncation_threshold",
                        val.c_str());
   }
-  if (use_double_precision) {
+  if (config.use_double_precision) {
     network->Configure("use_double_precision", "1");
   }
 
   // Disable MPS swap optimization if requested
-  if (disable_optimized_swapping) {
+  if (config.disable_optimized_swapping) {
     network->SetInitialQubitsMapOptimization(false);
     network->SetMPSOptimizeSwaps(false);
   }
 
   // Set the lookahead depth for swap optimization
-  network->SetLookaheadDepth(lookahead_depth);
+  network->SetLookaheadDepth(config.lookahead_depth);
+
+  if (!config.mps_measure_no_collapse) {
+    network->Configure("mps_sample_measure_algorithm", "mps_apply_measure");
+  } else {
+    network->Configure("mps_sample_measure_algorithm", "mps_probabilities");
+  }
 
   // Always create the default simulator (no parameters = QCSim MPS).
   // The desired simulator type is specified via
@@ -138,13 +180,7 @@ std::vector<std::string> ParseObservables(const nb::object &observables) {
 
 // Core Execution Logic
 nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
-                      Simulators::SimulatorType sim_type,
-                      Simulators::SimulationType sim_exec_type, int shots,
-                      std::optional<size_t> max_bond,
-                      std::optional<double> sv_threshold,
-                      bool use_double_precision = false,
-                      bool disable_optimized_swapping = false,
-                      int lookahead_depth = -1) {
+                      const SimulatorConfig &config, int shots) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   int num_qubits =
@@ -153,9 +189,7 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
   if (sim.handle == 0)
     throw std::runtime_error("Failed to create simulator handle.");
 
-  auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond,
-                                  sv_threshold, use_double_precision,
-                                  disable_optimized_swapping, lookahead_depth);
+  auto network = ConfigureNetwork(sim.handle, config);
   if (!network) throw std::runtime_error("Failed to configure network.");
 
   Network::INetwork<double>::ExecuteResults raw_results;
@@ -192,13 +226,7 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
 // Core Estimation Logic
 nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
                        const std::vector<std::string> &paulis,
-                       Simulators::SimulatorType sim_type,
-                       Simulators::SimulationType sim_exec_type,
-                       std::optional<size_t> max_bond,
-                       std::optional<double> sv_threshold,
-                       bool use_double_precision = false,
-                       bool disable_optimized_swapping = false,
-                       int lookahead_depth = -1) {
+                       const SimulatorConfig &config) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   int num_qubits = static_cast<int>(circuit->GetMaxQubitIndex()) + 1;
@@ -209,9 +237,7 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
   if (sim.handle == 0)
     throw std::runtime_error("Failed to create simulator handle.");
 
-  auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond,
-                                  sv_threshold, use_double_precision,
-                                  disable_optimized_swapping, lookahead_depth);
+  auto network = ConfigureNetwork(sim.handle, config);
   if (!network) throw std::runtime_error("Failed to configure network.");
 
   std::vector<double> expectations;
@@ -236,13 +262,11 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
 
   return py_result;
 }
+
 // Core Statevector Logic
 std::vector<std::complex<double>> statevector_core(
     std::shared_ptr<Circuits::Circuit<double>> circuit,
-    Simulators::SimulatorType sim_type,
-    Simulators::SimulationType sim_exec_type, std::optional<size_t> max_bond,
-    std::optional<double> sv_threshold, bool use_double_precision = false,
-    bool disable_optimized_swapping = false, int lookahead_depth = -1) {
+    const SimulatorConfig &config) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   int num_qubits =
@@ -251,9 +275,7 @@ std::vector<std::complex<double>> statevector_core(
   if (sim.handle == 0)
     throw std::runtime_error("Failed to create simulator handle.");
 
-  auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type, max_bond,
-                                  sv_threshold, use_double_precision,
-                                  disable_optimized_swapping, lookahead_depth);
+  auto network = ConfigureNetwork(sim.handle, config);
   if (!network) throw std::runtime_error("Failed to configure network.");
 
   std::vector<std::complex<double>> amplitudes;
@@ -369,11 +391,7 @@ OperationPtr adjoint_gate(const OperationPtr &op) {
 // statevector computation (only feasible for small qubit counts).
 double mirror_fidelity_core(
     std::shared_ptr<Circuits::Circuit<double>> circuit,
-    Simulators::SimulatorType sim_type,
-    Simulators::SimulationType sim_exec_type, int shots,
-    std::optional<size_t> max_bond, std::optional<double> sv_threshold,
-    bool use_double_precision = false, bool full_amplitude = false,
-    bool disable_optimized_swapping = false, int lookahead_depth = -1) {
+    const SimulatorConfig &config, int shots, bool full_amplitude) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   // Build the mirror circuit: forward gates + adjoint gates in reverse
@@ -409,9 +427,7 @@ double mirror_fidelity_core(
     mirror_copy->AddOperation(
         std::make_shared<Circuits::MeasurementOperation<>>(pairs));
 
-    nb::dict result = execute_core(mirror_copy, sim_type, sim_exec_type, shots,
-                                   max_bond, sv_threshold, use_double_precision,
-                                   disable_optimized_swapping, lookahead_depth);
+    nb::dict result = execute_core(mirror_copy, config, shots);
 
     nb::dict counts = nb::cast<nb::dict>(result["counts"]);
     std::string zeros(n, '0');
@@ -425,11 +441,7 @@ double mirror_fidelity_core(
   if (full_amplitude) {
     // Try exact statevector; fall back to shots if unsupported
     try {
-      const auto amplitudes = statevector_core(mirror, sim_type, sim_exec_type,
-                                               max_bond, sv_threshold,
-                                               use_double_precision,
-                                               disable_optimized_swapping,
-                                               lookahead_depth);
+      const auto amplitudes = statevector_core(mirror, config);
       if (!amplitudes.empty()) return std::norm(amplitudes[0]);
     } catch (...) {
       // Statevector not available for this backend — fall back to shots
@@ -449,13 +461,7 @@ double mirror_fidelity_core(
 std::complex<double> inner_product_core(
     const std::shared_ptr<Circuits::Circuit<double>> &circuit_1,
     const std::shared_ptr<Circuits::Circuit<double>> &circuit_2,
-    Simulators::SimulatorType sim_type,
-    Simulators::SimulationType sim_exec_type,
-    std::optional<size_t> max_bond,
-    std::optional<double> sv_threshold,
-    bool use_double_precision = false,
-    bool disable_optimized_swapping = false,
-    int lookahead_depth = -1) {
+    const SimulatorConfig &config) {
   if (!circuit_1) throw nb::value_error("circuit_1 is null.");
   if (!circuit_2) throw nb::value_error("circuit_2 is null.");
 
@@ -486,9 +492,7 @@ std::complex<double> inner_product_core(
   if (sim.handle == 0)
     throw std::runtime_error("Failed to create simulator handle.");
 
-  auto network = ConfigureNetwork(sim.handle, sim_type, sim_exec_type,
-                                  max_bond, sv_threshold, use_double_precision,
-                                  disable_optimized_swapping, lookahead_depth);
+  auto network = ConfigureNetwork(sim.handle, config);
   if (!network) throw std::runtime_error("Failed to configure network.");
 
   std::complex<double> result;
@@ -507,7 +511,7 @@ std::complex<double> inner_product_core(
 NB_MODULE(maestro, m) {
   m.doc() = "Python bindings for Maestro Quantum Simulator";
 
-  // --- Enums ---
+  // --- Enums (must be registered before SimulatorConfig) ---
   nb::enum_<Simulators::SimulatorType>(m, "SimulatorType")
       .value("QCSim", Simulators::SimulatorType::kQCSim)
 #ifndef NO_QISKIT_AER
@@ -530,6 +534,55 @@ NB_MODULE(maestro, m) {
       .value("ExtendedStabilizer",
              Simulators::SimulationType::kExtendedStabilizer)
       .export_values();
+
+  // --- SimulatorConfig ---
+  nb::class_<SimulatorConfig>(m, "SimulatorConfig",
+      "Configuration for the quantum simulator backend. Create once and "
+      "reuse across execute/estimate/statevector calls.")
+      .def(nb::init<Simulators::SimulatorType, Simulators::SimulationType,
+                    std::optional<size_t>, std::optional<double>,
+                    bool, bool, int, bool>(),
+           "simulator_type"_a = Simulators::SimulatorType::kQCSim,
+           "simulation_type"_a = Simulators::SimulationType::kStatevector,
+           "max_bond_dimension"_a = nb::none(),
+           "singular_value_threshold"_a = nb::none(),
+           "use_double_precision"_a = false,
+           "disable_optimized_swapping"_a = false,
+           "lookahead_depth"_a = -1,
+           "mps_measure_no_collapse"_a = true)
+      .def_rw("simulator_type", &SimulatorConfig::simulator_type)
+      .def_rw("simulation_type", &SimulatorConfig::simulation_type)
+      .def_rw("max_bond_dimension", &SimulatorConfig::max_bond_dimension)
+      .def_rw("singular_value_threshold",
+              &SimulatorConfig::singular_value_threshold)
+      .def_rw("use_double_precision", &SimulatorConfig::use_double_precision)
+      .def_rw("disable_optimized_swapping",
+              &SimulatorConfig::disable_optimized_swapping)
+      .def_rw("lookahead_depth", &SimulatorConfig::lookahead_depth)
+      .def_rw("mps_measure_no_collapse",
+              &SimulatorConfig::mps_measure_no_collapse)
+      .def("__repr__", [](const SimulatorConfig &c) {
+        std::ostringstream oss;
+        oss << "SimulatorConfig("
+            << "simulator_type=" << (int)c.simulator_type
+            << ", simulation_type=" << (int)c.simulation_type
+            << ", max_bond_dimension="
+            << (c.max_bond_dimension
+                    ? std::to_string(*c.max_bond_dimension)
+                    : "None")
+            << ", singular_value_threshold="
+            << (c.singular_value_threshold
+                    ? std::to_string(*c.singular_value_threshold)
+                    : "None")
+            << ", use_double_precision="
+            << (c.use_double_precision ? "True" : "False")
+            << ", disable_optimized_swapping="
+            << (c.disable_optimized_swapping ? "True" : "False")
+            << ", lookahead_depth=" << c.lookahead_depth
+            << ", mps_measure_no_collapse="
+            << (c.mps_measure_no_collapse ? "True" : "False") << ")";
+        return oss.str();
+      });
 
   // --- Maestro Class ---
   nb::class_<Maestro>(m, "Maestro")
@@ -733,75 +786,48 @@ NB_MODULE(maestro, m) {
            },
            "qubits"_a,
            "Reset multiple qubits to |0>.")
-      // Bound Methods for Direct Execution
+
+      // ---- Bound Methods for Direct Execution ----
       .def("execute", &execute_core,
-           "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-           "simulation_type"_a = Simulators::SimulationType::kStatevector,
-           "shots"_a = 1024, "max_bond_dimension"_a = 2,
-           "singular_value_threshold"_a = 1e-8,
-           "use_double_precision"_a = false,
-           "disable_optimized_swapping"_a = false,
-           "lookahead_depth"_a = -1)
+           "config"_a = SimulatorConfig{}, "shots"_a = 1024)
       .def(
           "estimate",
           [](std::shared_ptr<Circuits::Circuit<double>> self,
-             const nb::object &observables, Simulators::SimulatorType st,
-             Simulators::SimulationType set, std::optional<size_t> mb,
-             std::optional<double> sv, bool use_dp, bool dis_swap,
-             int la_depth) {
-            return estimate_core(self, ParseObservables(observables), st, set,
-                                 mb, sv, use_dp, dis_swap, la_depth);
+             const nb::object &observables,
+             const SimulatorConfig &config) {
+            return estimate_core(self, ParseObservables(observables), config);
           },
-          "observables"_a,
-          "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-          "simulation_type"_a = Simulators::SimulationType::kStatevector,
-          "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
-          "use_double_precision"_a = false,
-          "disable_optimized_swapping"_a = false,
-          "lookahead_depth"_a = -1)
-      .def("get_statevector", &statevector_core,
-          "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-          "simulation_type"_a = Simulators::SimulationType::kStatevector,
-          "max_bond_dimension"_a = nb::none(),
-          "singular_value_threshold"_a = nb::none(),
-          "use_double_precision"_a = false,
-          "disable_optimized_swapping"_a = false,
-          "lookahead_depth"_a = -1,
+          "observables"_a, "config"_a = SimulatorConfig{})
+      .def(
+          "get_statevector",
+          [](std::shared_ptr<Circuits::Circuit<double>> self,
+             const SimulatorConfig &config) {
+            return statevector_core(self, config);
+          },
+          "config"_a = SimulatorConfig{},
           "Get the full statevector (complex amplitudes) after executing the "
           "circuit.")
-      .def("mirror_fidelity", &mirror_fidelity_core,
-          "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-          "simulation_type"_a = Simulators::SimulationType::kStatevector,
+      .def(
+          "mirror_fidelity",
+          [](std::shared_ptr<Circuits::Circuit<double>> self,
+             const SimulatorConfig &config, int shots, bool full_amplitude) {
+            return mirror_fidelity_core(self, config, shots, full_amplitude);
+          },
+          "config"_a = SimulatorConfig{},
           "shots"_a = 1024,
-          "max_bond_dimension"_a = nb::none(),
-          "singular_value_threshold"_a = nb::none(),
-          "use_double_precision"_a = false,
           "full_amplitude"_a = false,
-          "disable_optimized_swapping"_a = false,
-          "lookahead_depth"_a = -1,
           "Compute mirror fidelity: run circuit forward then its adjoint in "
           "reverse, returning P(|0...0>). Uses shot-based sampling by "
           "default. Set full_amplitude=True for exact statevector "
           "computation (small circuits only).")
-      .def("inner_product",
+      .def(
+          "inner_product",
           [](std::shared_ptr<Circuits::Circuit<double>> self,
              std::shared_ptr<Circuits::Circuit<double>> other,
-             Simulators::SimulatorType st,
-             Simulators::SimulationType set,
-             std::optional<size_t> mb,
-             std::optional<double> sv, bool use_dp, bool dis_swap,
-             int la_depth) {
-            return inner_product_core(self, other, st, set, mb, sv, use_dp,
-                                     dis_swap, la_depth);
+             const SimulatorConfig &config) {
+            return inner_product_core(self, other, config);
           },
-          "other"_a,
-          "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-          "simulation_type"_a = Simulators::SimulationType::kStatevector,
-          "max_bond_dimension"_a = nb::none(),
-          "singular_value_threshold"_a = nb::none(),
-          "use_double_precision"_a = false,
-          "disable_optimized_swapping"_a = false,
-          "lookahead_depth"_a = -1,
+          "other"_a, "config"_a = SimulatorConfig{},
           "Compute the inner product <psi_self|psi_other> = <0|U_self^dag "
           "U_other|0> between this circuit's state and another circuit's "
           "state, using ProjectOnZero.");
@@ -816,74 +842,45 @@ NB_MODULE(maestro, m) {
   // 1. simple_execute (Overloaded)
   // Variant A: Circuit Object
   m.def("simple_execute", &execute_core, "circuit"_a,
-        "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-        "simulation_type"_a = Simulators::SimulationType::kStatevector,
-        "shots"_a = 1024, "max_bond_dimension"_a = 2,
-        "singular_value_threshold"_a = 1e-8, "use_double_precision"_a = false,
-        "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1);
+        "config"_a = SimulatorConfig{}, "shots"_a = 1024);
 
   // Variant B: QASM String
   m.def(
       "simple_execute",
-      [](const std::string &qasm, Simulators::SimulatorType st,
-         Simulators::SimulationType set, int shots, std::optional<size_t> mb,
-         std::optional<double> sv, bool use_dp, bool dis_swap,
-         int la_depth) {
+      [](const std::string &qasm, const SimulatorConfig &config, int shots) {
         qasm::QasmToCirc<> parser;
         auto circuit = parser.ParseAndTranslate(qasm);
         if (parser.Failed() || !circuit) {
           // IMPROVEMENT: Throw error instead of silent failure
           throw nb::value_error("Failed to parse QASM string.");
         }
-        return execute_core(circuit, st, set, shots, mb, sv, use_dp, dis_swap,
-                            la_depth);
+        return execute_core(circuit, config, shots);
       },
-      "qasm_circuit"_a, "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-      "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "shots"_a = 1024, "max_bond_dimension"_a = 2,
-      "singular_value_threshold"_a = 1e-8, "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1);
+      "qasm_circuit"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024);
 
   // 2. simple_estimate (Overloaded)
   // Variant A: Circuit Object
   m.def(
       "simple_estimate",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const nb::object &obs, Simulators::SimulatorType st,
-         Simulators::SimulationType set, std::optional<size_t> mb,
-         std::optional<double> sv, bool use_dp, bool dis_swap,
-         int la_depth) {
-        return estimate_core(circuit, ParseObservables(obs), st, set, mb, sv,
-                             use_dp, dis_swap, la_depth);
+         const nb::object &obs, const SimulatorConfig &config) {
+        return estimate_core(circuit, ParseObservables(obs), config);
       },
-      "circuit"_a, "observables"_a,
-      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-      "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
-      "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1);
+      "circuit"_a, "observables"_a, "config"_a = SimulatorConfig{});
 
   // Variant B: QASM String
   m.def(
       "simple_estimate",
       [](const std::string &qasm, const nb::object &obs,
-         Simulators::SimulatorType st, Simulators::SimulationType set,
-         std::optional<size_t> mb, std::optional<double> sv, bool use_dp,
-         bool dis_swap, int la_depth) {
+         const SimulatorConfig &config) {
         qasm::QasmToCirc<> parser;
         auto circuit = parser.ParseAndTranslate(qasm);
         if (parser.Failed() || !circuit) {
           throw nb::value_error("Failed to parse QASM string.");
         }
-        return estimate_core(circuit, ParseObservables(obs), st, set, mb, sv,
-                             use_dp, dis_swap, la_depth);
+        return estimate_core(circuit, ParseObservables(obs), config);
       },
-      "qasm_circuit"_a, "observables"_a,
-      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-      "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
-      "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1);
+      "qasm_circuit"_a, "observables"_a, "config"_a = SimulatorConfig{});
 
   // --- QuEST Library Management ---
   m.def(
@@ -911,58 +908,46 @@ NB_MODULE(maestro, m) {
   m.def(
       "get_probabilities",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         Simulators::SimulatorType sim_type,
-         Simulators::SimulationType sim_exec_type,
-         std::optional<size_t> max_bond, std::optional<double> sv_threshold,
-         bool use_double_precision, bool dis_swap, int la_depth) -> nb::list {
-        const auto amplitudes = statevector_core(circuit, sim_type,
-                                                 sim_exec_type, max_bond,
-                                                 sv_threshold,
-                                                 use_double_precision,
-                                                 dis_swap, la_depth);
+         const SimulatorConfig &config) -> nb::list {
+        const auto amplitudes = statevector_core(circuit, config);
         nb::list probs;
         for (const auto &amp : amplitudes) probs.append(std::norm(amp));
         return probs;
       },
-      "circuit"_a, "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-      "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "max_bond_dimension"_a = nb::none(),
-      "singular_value_threshold"_a = nb::none(),
-      "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
+      "circuit"_a, "config"_a = SimulatorConfig{},
       "Get the full probability distribution after executing a circuit.");
 
-  m.def("get_statevector", &statevector_core, "circuit"_a,
-      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-      "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "max_bond_dimension"_a = nb::none(),
-      "singular_value_threshold"_a = nb::none(),
-      "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
+  m.def(
+      "get_statevector",
+      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
+         const SimulatorConfig &config) {
+        return statevector_core(circuit, config);
+      },
+      "circuit"_a, "config"_a = SimulatorConfig{},
       "Get the full statevector (complex amplitudes) after executing a "
       "circuit.");
 
-  m.def("mirror_fidelity", &mirror_fidelity_core, "circuit"_a,
-      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-      "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "shots"_a = 1024,
-      "max_bond_dimension"_a = nb::none(),
-      "singular_value_threshold"_a = nb::none(),
-      "use_double_precision"_a = false,
-      "full_amplitude"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
+  m.def(
+      "mirror_fidelity",
+      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
+         const SimulatorConfig &config, int shots, bool full_amplitude) {
+        return mirror_fidelity_core(circuit, config, shots, full_amplitude);
+      },
+      "circuit"_a, "config"_a = SimulatorConfig{},
+      "shots"_a = 1024, "full_amplitude"_a = false,
       "Compute mirror fidelity: run a circuit forward then its adjoint in "
       "reverse, returning P(|0...0>). Uses shot-based sampling by "
       "default. Set full_amplitude=True for exact statevector "
        "computation (small circuits only).");
 
-  m.def("inner_product", &inner_product_core, "circuit_1"_a, "circuit_2"_a,
-      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-      "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "max_bond_dimension"_a = nb::none(),
-      "singular_value_threshold"_a = nb::none(),
-      "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
+  m.def(
+      "inner_product",
+      [](const std::shared_ptr<Circuits::Circuit<double>> &circuit_1,
+         const std::shared_ptr<Circuits::Circuit<double>> &circuit_2,
+         const SimulatorConfig &config) {
+        return inner_product_core(circuit_1, circuit_2, config);
+      },
+      "circuit_1"_a, "circuit_2"_a, "config"_a = SimulatorConfig{},
       "Compute the inner product <psi_1|psi_2> = <0|U1^dag U2|0> between "
       "two circuits' output states, using ProjectOnZero.");
 
@@ -998,13 +983,10 @@ NB_MODULE(maestro, m) {
       "noisy_estimate",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
          const nb::object &observables,
-         const noise::NoiseModel &noise_model, Simulators::SimulatorType st,
-         Simulators::SimulationType set, std::optional<size_t> mb,
-         std::optional<double> sv, bool dp, bool dis_swap, int la_depth) {
+         const noise::NoiseModel &noise_model,
+         const SimulatorConfig &config) {
         auto paulis = ParseObservables(observables);
-        nb::dict result =
-            estimate_core(circuit, paulis, st, set, mb, sv, dp, dis_swap,
-                          la_depth);
+        nb::dict result = estimate_core(circuit, paulis, config);
 
         // Apply analytical Pauli noise damping
         nb::list ideal = nb::cast<nb::list>(result["expectation_values"]);
@@ -1023,11 +1005,7 @@ NB_MODULE(maestro, m) {
         return out;
       },
       "circuit"_a, "observables"_a, "noise_model"_a,
-      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-      "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
-      "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
+      "config"_a = SimulatorConfig{},
       "Compute expectation values with analytical Pauli noise damping. "
       "Runs noiseless simulation then applies exact noise attenuation — "
       "zero simulation overhead compared to noiseless.");
@@ -1036,18 +1014,15 @@ NB_MODULE(maestro, m) {
   m.def(
       "noisy_estimate",
       [](const std::string &qasm, const nb::object &observables,
-         const noise::NoiseModel &noise_model, Simulators::SimulatorType st,
-         Simulators::SimulationType set, std::optional<size_t> mb,
-         std::optional<double> sv, bool dp, bool dis_swap, int la_depth) {
+         const noise::NoiseModel &noise_model,
+         const SimulatorConfig &config) {
         qasm::QasmToCirc<> parser;
         auto circuit = parser.ParseAndTranslate(qasm);
         if (parser.Failed() || !circuit)
           throw nb::value_error("Failed to parse QASM string.");
 
         auto paulis = ParseObservables(observables);
-        nb::dict result =
-            estimate_core(circuit, paulis, st, set, mb, sv, dp, dis_swap,
-                          la_depth);
+        nb::dict result = estimate_core(circuit, paulis, config);
 
         nb::list ideal = nb::cast<nb::list>(result["expectation_values"]);
         nb::list noisy_vals;
@@ -1065,11 +1040,7 @@ NB_MODULE(maestro, m) {
         return out;
       },
       "qasm_circuit"_a, "observables"_a, "noise_model"_a,
-      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-      "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
-      "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
+      "config"_a = SimulatorConfig{},
       "Compute expectation values from a QASM circuit with analytical Pauli "
       "noise. Zero simulation overhead.");
 
@@ -1079,9 +1050,7 @@ NB_MODULE(maestro, m) {
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
          const nb::object &observables,
          const noise::NoiseModel &noise_model, int noise_realizations,
-         Simulators::SimulatorType st, Simulators::SimulationType set,
-         std::optional<size_t> mb, std::optional<double> sv, bool dp,
-         bool dis_swap, int la_depth,
+         const SimulatorConfig &config,
          std::optional<unsigned int> seed) {
         if (!circuit) throw nb::value_error("Circuit is null.");
         auto paulis = ParseObservables(observables);
@@ -1095,9 +1064,7 @@ NB_MODULE(maestro, m) {
         auto start = std::chrono::high_resolution_clock::now();
         for (int r = 0; r < noise_realizations; ++r) {
           auto noisy = noise::inject_noise(circuit, noise_model, rng);
-          nb::dict result =
-              estimate_core(noisy, paulis, st, set, mb, sv, dp, dis_swap,
-                            la_depth);
+          nb::dict result = estimate_core(noisy, paulis, config);
           nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
           for (size_t i = 0; i < n_obs; ++i)
             sum_vals[i] += nb::cast<double>(ev[i]);
@@ -1105,9 +1072,7 @@ NB_MODULE(maestro, m) {
         auto end = std::chrono::high_resolution_clock::now();
 
         // Also run noiseless for reference
-        nb::dict ideal_result =
-            estimate_core(circuit, paulis, st, set, mb, sv, dp, dis_swap,
-                          la_depth);
+        nb::dict ideal_result = estimate_core(circuit, paulis, config);
 
         nb::list noisy_vals, ideal_vals;
         nb::list ideal_ev =
@@ -1129,11 +1094,7 @@ NB_MODULE(maestro, m) {
       },
       "circuit"_a, "observables"_a, "noise_model"_a,
       "noise_realizations"_a = 100,
-      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-      "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "max_bond_dimension"_a = 2, "singular_value_threshold"_a = 1e-8,
-      "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
+      "config"_a = SimulatorConfig{},
       "seed"_a = nb::none(),
       "Gate-by-gate Monte Carlo noisy estimation. Injects random Pauli "
       "errors after every gate and averages expectation values over "
@@ -1144,10 +1105,10 @@ NB_MODULE(maestro, m) {
   m.def(
       "noisy_execute",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const noise::NoiseModel &noise_model, Simulators::SimulatorType st,
-         Simulators::SimulationType set, int shots, std::optional<size_t> mb,
-         std::optional<double> sv, bool dp, bool dis_swap, int la_depth,
-         int noise_realizations, std::optional<unsigned int> seed) {
+         const noise::NoiseModel &noise_model,
+         const SimulatorConfig &config,
+         int shots, int noise_realizations,
+         std::optional<unsigned int> seed) {
         if (!circuit) throw nb::value_error("Circuit is null.");
 
         std::mt19937 rng(seed.value_or(std::random_device{}()));
@@ -1163,8 +1124,7 @@ NB_MODULE(maestro, m) {
           if (batch_shots <= 0) continue;
 
           auto noisy = noise::inject_noise(circuit, noise_model, rng);
-          nb::dict r = execute_core(noisy, st, set, batch_shots, mb, sv, dp,
-                                    dis_swap, la_depth);
+          nb::dict r = execute_core(noisy, config, batch_shots);
           nb::dict counts = nb::cast<nb::dict>(r["counts"]);
           for (auto item : counts)
             combined[nb::cast<std::string>(nb::str(item.first))] +=
@@ -1179,17 +1139,14 @@ NB_MODULE(maestro, m) {
         out["counts"] = py_counts;
         out["time_taken"] =
             std::chrono::duration<double>(end - start).count();
-        out["simulator"] = (int)st;
-        out["method"] = (int)set;
+        out["simulator"] = (int)config.simulator_type;
+        out["method"] = (int)config.simulation_type;
         out["noise_realizations"] = batches;
         return out;
       },
       "circuit"_a, "noise_model"_a,
-      "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-      "simulation_type"_a = Simulators::SimulationType::kStatevector,
-      "shots"_a = 1024, "max_bond_dimension"_a = 2,
-      "singular_value_threshold"_a = 1e-8, "use_double_precision"_a = false,
-      "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
+      "config"_a = SimulatorConfig{},
+      "shots"_a = 1024,
       "noise_realizations"_a = 64, "seed"_a = nb::none(),
       "Execute a circuit with Monte Carlo Pauli noise. "
       "Each of 'noise_realizations' batches uses a different random noise "

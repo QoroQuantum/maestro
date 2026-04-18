@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`SimulatorConfig` struct** — all execution, estimation, and fidelity functions now accept a single `config=maestro.SimulatorConfig(...)` parameter instead of repeating `simulator_type`, `simulation_type`, `max_bond_dimension`, `singular_value_threshold`, `use_double_precision`, `disable_optimized_swapping`, `lookahead_depth`, and `mps_measure_no_collapse` as individual keyword arguments. Create a config once and reuse it across calls.
+- Updated all Python examples to use the new `SimulatorConfig` API
+- Updated `python.dox` and `TUTORIAL.md` documentation with `SimulatorConfig` usage
+
+### Fixed
+- `simple_execute` (QASM variant) was not forwarding `mps_measure_no_collapse` to the simulator
+- `noisy_estimate_montecarlo` was not forwarding `mps_measure_no_collapse` to noisy runs
+
 ## [0.2.10] - 2026-04-16
 
 ### Added
