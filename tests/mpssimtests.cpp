@@ -50,6 +50,12 @@ struct MPSSimTestFixture {
     qcsimSV->AllocateQubits(nrQubitsForRandomCirc);
     qcsimSV->Initialize();
 
+    aerSV = Simulators::SimulatorsFactory::CreateSimulator(
+        Simulators::SimulatorType::kQiskitAer,
+        Simulators::SimulationType::kStatevector);
+    aerSV->AllocateQubits(nrQubitsForRandomCirc);
+    aerSV->Initialize();
+
     aerMPS50 = Simulators::SimulatorsFactory::CreateSimulator(
         Simulators::SimulatorType::kQiskitAer,
         Simulators::SimulationType::kMatrixProductState);
@@ -209,6 +215,7 @@ struct MPSSimTestFixture {
   std::shared_ptr<Simulators::ISimulator> aerMPS;
   std::shared_ptr<Simulators::ISimulator> qcsimMPS;
   std::shared_ptr<Simulators::ISimulator> qcsimSV;
+  std::shared_ptr<Simulators::ISimulator> aerSV;
   std::shared_ptr<Simulators::ISimulator> aerMPS50;
   std::shared_ptr<Simulators::ISimulator> qcsimMPS50;
 
@@ -233,6 +240,8 @@ extern bool checkClose(std::complex<double> a, std::complex<double> b,
 BOOST_AUTO_TEST_SUITE(mps_tests)
 
 BOOST_FIXTURE_TEST_CASE(MPSSimInitializationTest, MPSSimTestFixture) {
+  BOOST_TEST(qcsimSV);
+  BOOST_TEST(aerSV);
   BOOST_TEST(aerMPS);
   BOOST_TEST(qcsimMPS);
   BOOST_TEST(aerMPS50);
@@ -527,6 +536,8 @@ BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, SampleCountsManyTest,
 
   circ->Execute(qcsimSV, state);
   circ->Execute(qcsimMPS, state);
+  circ->Execute(aerMPS, state);
+  circ->Execute(aerSV, state);
 
   // pick a random subset of qubits (between 1 and nrQubitsForRandomCirc - 1)
   // to exercise partial-qubit sampling where bugs are more likely
@@ -547,7 +558,9 @@ BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, SampleCountsManyTest,
   const size_t shots = 10000;
 
   auto svCounts = qcsimSV->SampleCountsMany(sampledQubits, shots);
+  auto aerSvCounts = aerSV->SampleCountsMany(sampledQubits, shots);
   auto mpsCounts = qcsimMPS->SampleCountsMany(sampledQubits, shots);
+  auto mpsAerCounts = aerMPS->SampleCountsMany(sampledQubits, shots);
 
   // compare distributions: every outcome that appears with non-negligible
   // probability in one should appear close in the other
@@ -559,8 +572,20 @@ BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, SampleCountsManyTest,
     if (mpsCounts.find(outcome) != mpsCounts.end())
       mpsProb = static_cast<double>(mpsCounts[outcome]) /
                 static_cast<double>(shots);
+    
+    double mpsAerProb = 0;
+    if (mpsAerCounts.find(outcome) != mpsAerCounts.end())
+      mpsAerProb = static_cast<double>(mpsAerCounts[outcome]) /
+                   static_cast<double>(shots);
+
+    double aerSvProb = 0;
+    if (aerSvCounts.find(outcome) != aerSvCounts.end())
+      aerSvProb = static_cast<double>(aerSvCounts[outcome]) /
+                  static_cast<double>(shots);
 
     BOOST_CHECK_CLOSE(svProb, mpsProb, mpsProb < 0.1 ? 66 : 33);
+    BOOST_CHECK_CLOSE(svProb, mpsAerProb, mpsAerProb < 0.1 ? 66 : 33);
+    BOOST_CHECK_CLOSE(svProb, aerSvProb, aerSvProb < 0.1 ? 66 : 33);
   }
 
   for (const auto& [outcome, cnt] : mpsCounts) {
@@ -572,11 +597,24 @@ BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, SampleCountsManyTest,
       svProb = static_cast<double>(svCounts[outcome]) /
                static_cast<double>(shots);
 
+    double mpsAerProb = 0;
+    if (mpsAerCounts.find(outcome) != mpsAerCounts.end())
+      mpsAerProb = static_cast<double>(mpsAerCounts[outcome]) /
+                   static_cast<double>(shots);
+
+    double aerSvProb = 0;
+    if (aerSvCounts.find(outcome) != aerSvCounts.end())
+      aerSvProb = static_cast<double>(aerSvCounts[outcome]) /
+                  static_cast<double>(shots);
+
     BOOST_CHECK_CLOSE(mpsProb, svProb, svProb < 0.1 ? 66 : 33);
+    BOOST_CHECK_CLOSE(mpsAerProb, svProb, svProb < 0.1 ? 66 : 33);
+    BOOST_CHECK_CLOSE(svProb, aerSvProb, aerSvProb < 0.1 ? 66 : 33);
   }
 
   resetRandomCirc->Execute(qcsimMPS, state);
   resetRandomCirc->Execute(qcsimSV, state);
+  resetRandomCirc->Execute(aerMPS, state);
 
   circ->Clear();
   state.Reset();
