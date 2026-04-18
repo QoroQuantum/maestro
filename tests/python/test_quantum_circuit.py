@@ -171,9 +171,12 @@ class TestExecutionFunctions:
 
         # Test Simulator Type Enum
         res = qc.execute(
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.Statevector,
             shots=10
+        ,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Statevector
+            ),
         )
         assert res["simulator"] == maestro.SimulatorType.QCSim.value
         assert res["method"] == maestro.SimulationType.Statevector.value
@@ -186,11 +189,14 @@ class TestExecutionFunctions:
         qc.measure([(0, 0), (1, 1)])
 
         res = qc.execute(
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=10,
-            singular_value_threshold=1e-6,
             shots=100
+        ,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=10,
+                singular_value_threshold=1e-6
+            ),
         )
         assert res["method"] == maestro.SimulationType.MatrixProductState.value
         assert sum(res["counts"].values()) == 100
@@ -286,9 +292,11 @@ class TestEstimateFunctions:
 
         res = qc.estimate(
             observables="Z",
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=4
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4
+            ),
         )
         assert res["method"] == maestro.SimulationType.MatrixProductState.value
         assert res["expectation_values"][0] == pytest.approx(-1.0, abs=1e-5)

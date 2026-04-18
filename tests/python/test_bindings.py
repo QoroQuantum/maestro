@@ -264,10 +264,12 @@ class TestSimpleExecute:
 
         result = maestro.simple_execute(
             qasm_bell,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=4,
-            singular_value_threshold=1e-10
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4,
+                singular_value_threshold=1e-10
+            ),
         )
         assert result is not None
         assert result['method'] == maestro.SimulationType.MatrixProductState.value
@@ -379,9 +381,11 @@ class TestSimpleEstimate:
         result = maestro.simple_estimate(
             qasm_bell,
             "ZZ",
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=2
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=2
+            ),
         )
         assert result is not None
         assert result['method'] == maestro.SimulationType.MatrixProductState.value
@@ -493,10 +497,12 @@ class TestReset:
         qc.measure_all()
 
         result = qc.execute(
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
             shots=100,
-            max_bond_dimension=4,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4
+            ),
         )
         counts = result['counts']
         assert counts.get('0', 0) == 100
@@ -555,9 +561,12 @@ class TestStabilizerSimulation:
         """Test execute with Stabilizer backend on a Clifford circuit"""
         result = maestro.simple_execute(
             CLIFFORD_BELL_QASM,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.Stabilizer,
             shots=1000
+        ,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Stabilizer
+            ),
         )
         assert result is not None
         assert 'counts' in result
@@ -569,8 +578,10 @@ class TestStabilizerSimulation:
         result = maestro.simple_estimate(
             CLIFFORD_BELL_NO_MEASURE_QASM,
             "ZZ",
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.Stabilizer
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Stabilizer
+            ),
         )
         assert result is not None
         assert 'expectation_values' in result
@@ -581,9 +592,12 @@ class TestStabilizerSimulation:
         """Test Stabilizer produces correct Bell state distribution"""
         result = maestro.simple_execute(
             CLIFFORD_BELL_QASM,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.Stabilizer,
             shots=10000
+        ,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Stabilizer
+            ),
         )
         counts = result['counts']
         total = sum(counts.values())
@@ -597,9 +611,12 @@ class TestPauliPropagatorSimulation:
         """Test execute with Pauli Propagator backend"""
         result = maestro.simple_execute(
             GENERAL_QASM,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.PauliPropagator,
             shots=1000
+        ,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.PauliPropagator
+            ),
         )
         assert result is not None
         assert 'counts' in result
@@ -611,8 +628,10 @@ class TestPauliPropagatorSimulation:
         result = maestro.simple_estimate(
             GENERAL_NO_MEASURE_QASM,
             "ZZ;XX",
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.PauliPropagator
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.PauliPropagator
+            ),
         )
         assert result is not None
         assert 'expectation_values' in result
@@ -631,9 +650,12 @@ class TestExtendedStabilizerSimulation:
         """Test execute with Extended Stabilizer backend"""
         result = maestro.simple_execute(
             GENERAL_QASM,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.ExtendedStabilizer,
             shots=1000
+        ,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.ExtendedStabilizer
+            ),
         )
         assert result is not None
         assert 'counts' in result
@@ -645,8 +667,10 @@ class TestExtendedStabilizerSimulation:
         result = maestro.simple_estimate(
             GENERAL_NO_MEASURE_QASM,
             "ZZ",
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.ExtendedStabilizer
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.ExtendedStabilizer
+            ),
         )
         assert result is not None
         assert 'expectation_values' in result
@@ -666,9 +690,12 @@ class TestSimulatorTypeIsHonored:
         """Execute with Statevector reports correct simulator and method."""
         result = maestro.simple_execute(
             CLIFFORD_BELL_QASM,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.Statevector,
             shots=10
+        ,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Statevector
+            ),
         )
         assert result['simulator'] == maestro.SimulatorType.QCSim.value
         assert result['method'] == maestro.SimulationType.Statevector.value
@@ -677,9 +704,12 @@ class TestSimulatorTypeIsHonored:
         """Execute with MPS reports correct simulator and method."""
         result = maestro.simple_execute(
             CLIFFORD_BELL_QASM,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
             shots=10
+        ,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState
+            ),
         )
         assert result['simulator'] == maestro.SimulatorType.QCSim.value
         assert result['method'] == maestro.SimulationType.MatrixProductState.value
@@ -692,9 +722,12 @@ class TestSimulatorTypeIsHonored:
         """
         result = maestro.simple_execute(
             GENERAL_QASM,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.PauliPropagator,
             shots=10
+        ,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.PauliPropagator
+            ),
         )
         assert result['simulator'] == maestro.SimulatorType.QCSim.value
 
@@ -703,8 +736,10 @@ class TestSimulatorTypeIsHonored:
         result = maestro.simple_estimate(
             CLIFFORD_BELL_NO_MEASURE_QASM,
             "ZZ",
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.Statevector,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Statevector
+            ),
         )
         assert result['simulator'] == maestro.SimulatorType.QCSim.value
         assert result['method'] == maestro.SimulationType.Statevector.value
@@ -714,8 +749,10 @@ class TestSimulatorTypeIsHonored:
         result = maestro.simple_estimate(
             CLIFFORD_BELL_NO_MEASURE_QASM,
             "ZZ",
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState
+            ),
         )
         assert result['simulator'] == maestro.SimulatorType.QCSim.value
         assert result['method'] == maestro.SimulationType.MatrixProductState.value
@@ -729,8 +766,10 @@ class TestSimulatorTypeIsHonored:
         result = maestro.simple_estimate(
             GENERAL_NO_MEASURE_QASM,
             "ZZ",
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.PauliPropagator,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.PauliPropagator
+            ),
         )
         assert result['simulator'] == maestro.SimulatorType.QCSim.value
 
@@ -743,10 +782,12 @@ class TestSimulatorTypeIsHonored:
         qc.measure_all()
 
         result = qc.execute(
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
             shots=10,
-            max_bond_dimension=4,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4
+            ),
         )
         assert result['simulator'] == maestro.SimulatorType.QCSim.value
         assert result['method'] == maestro.SimulationType.MatrixProductState.value
@@ -760,9 +801,11 @@ class TestSimulatorTypeIsHonored:
 
         result = qc.estimate(
             observables=["ZZ"],
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=4,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4
+            ),
         )
         assert result['simulator'] == maestro.SimulatorType.QCSim.value
         assert result['method'] == maestro.SimulationType.MatrixProductState.value
@@ -780,10 +823,12 @@ class TestDoublePrecision:
         """simple_execute accepts use_double_precision without error."""
         result = maestro.simple_execute(
             CLIFFORD_BELL_QASM,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.Statevector,
             shots=100,
-            use_double_precision=True
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Statevector,
+                use_double_precision=True
+            ),
         )
         assert result is not None
         assert 'counts' in result
@@ -794,10 +839,12 @@ class TestDoublePrecision:
         """simple_execute with use_double_precision=False (default) works."""
         result = maestro.simple_execute(
             CLIFFORD_BELL_QASM,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.Statevector,
             shots=100,
-            use_double_precision=False
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Statevector,
+                use_double_precision=False
+            ),
         )
         assert result is not None
         assert 'counts' in result
@@ -807,9 +854,11 @@ class TestDoublePrecision:
         result = maestro.simple_estimate(
             CLIFFORD_BELL_NO_MEASURE_QASM,
             "ZZ",
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.Statevector,
-            use_double_precision=True
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Statevector,
+                use_double_precision=True
+            ),
         )
         assert result is not None
         assert 'expectation_values' in result
@@ -820,10 +869,12 @@ class TestDoublePrecision:
         result = maestro.simple_estimate(
             CLIFFORD_BELL_NO_MEASURE_QASM,
             "ZZ;XX;YY",
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=4,
-            use_double_precision=True
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4,
+                use_double_precision=True
+            ),
         )
         assert result is not None
         exp_vals = result['expectation_values']
@@ -842,11 +893,13 @@ class TestDoublePrecision:
         qc.measure_all()
 
         result = qc.execute(
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
             shots=100,
-            max_bond_dimension=4,
-            use_double_precision=True
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4,
+                use_double_precision=True
+            ),
         )
         assert result is not None
         assert 'counts' in result
@@ -860,10 +913,12 @@ class TestDoublePrecision:
 
         result = qc.estimate(
             observables=["ZZ"],
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=4,
-            use_double_precision=True
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4,
+                use_double_precision=True
+            ),
         )
         assert result is not None
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
@@ -872,10 +927,12 @@ class TestDoublePrecision:
         """QASM-based simple_execute accepts use_double_precision."""
         result = maestro.simple_execute(
             GENERAL_QASM,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.Statevector,
             shots=100,
-            use_double_precision=True
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Statevector,
+                use_double_precision=True
+            ),
         )
         assert result is not None
         assert 'counts' in result
@@ -885,9 +942,11 @@ class TestDoublePrecision:
         result = maestro.simple_estimate(
             GENERAL_NO_MEASURE_QASM,
             "ZZ",
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.Statevector,
-            use_double_precision=True
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Statevector,
+                use_double_precision=True
+            ),
         )
         assert result is not None
         assert 'expectation_values' in result
@@ -915,9 +974,12 @@ class TestGpuSimulator:
         """simple_execute with GPU type returns a valid result dict."""
         result = maestro.simple_execute(
             CLIFFORD_BELL_QASM,
-            simulator_type=maestro.SimulatorType.Gpu,
-            simulation_type=maestro.SimulationType.MatrixProductState,
             shots=100
+        ,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.Gpu,
+                simulation_type=maestro.SimulationType.MatrixProductState
+            ),
         )
         assert result is not None
         assert 'counts' in result
@@ -930,9 +992,11 @@ class TestGpuSimulator:
         result = maestro.simple_estimate(
             CLIFFORD_BELL_NO_MEASURE_QASM,
             "ZZ",
-            simulator_type=maestro.SimulatorType.Gpu,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=4
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.Gpu,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4
+            ),
         )
         assert result is not None
         assert 'expectation_values' in result
@@ -948,10 +1012,12 @@ class TestGpuSimulator:
         qc.measure_all()
 
         result = qc.execute(
-            simulator_type=maestro.SimulatorType.Gpu,
-            simulation_type=maestro.SimulationType.MatrixProductState,
             shots=100,
-            max_bond_dimension=4
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.Gpu,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4
+            ),
         )
         assert result is not None
         assert 'counts' in result
@@ -965,9 +1031,11 @@ class TestGpuSimulator:
 
         result = qc.estimate(
             observables=["ZZ"],
-            simulator_type=maestro.SimulatorType.Gpu,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=4
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.Gpu,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4
+            ),
         )
         assert result is not None
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
@@ -977,10 +1045,12 @@ class TestGpuSimulator:
         result = maestro.simple_estimate(
             CLIFFORD_BELL_NO_MEASURE_QASM,
             "ZZ;XX",
-            simulator_type=maestro.SimulatorType.Gpu,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=4,
-            use_double_precision=True
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.Gpu,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4,
+                use_double_precision=True
+            ),
         )
         assert result is not None
         exp_vals = result['expectation_values']
@@ -1024,9 +1094,12 @@ class TestQuestSimulator:
         with pytest.raises(Exception, match="QuestSim only supports Statevector"):
             maestro.simple_execute(
                 CLIFFORD_BELL_QASM,
-                simulator_type=maestro.SimulatorType.QuestSim,
-                simulation_type=maestro.SimulationType.MatrixProductState,
                 shots=10
+            ,
+                config=maestro.SimulatorConfig(
+                    simulator_type=maestro.SimulatorType.QuestSim,
+                    simulation_type=maestro.SimulationType.MatrixProductState
+                ),
             )
 
     def test_quest_rejects_stabilizer(self):
@@ -1034,9 +1107,12 @@ class TestQuestSimulator:
         with pytest.raises(Exception, match="QuestSim only supports Statevector"):
             maestro.simple_execute(
                 CLIFFORD_BELL_QASM,
-                simulator_type=maestro.SimulatorType.QuestSim,
-                simulation_type=maestro.SimulationType.Stabilizer,
                 shots=10
+            ,
+                config=maestro.SimulatorConfig(
+                    simulator_type=maestro.SimulatorType.QuestSim,
+                    simulation_type=maestro.SimulationType.Stabilizer
+                ),
             )
 
     def test_quest_rejects_tensor_network(self):
@@ -1044,9 +1120,12 @@ class TestQuestSimulator:
         with pytest.raises(Exception, match="QuestSim only supports Statevector"):
             maestro.simple_execute(
                 CLIFFORD_BELL_QASM,
-                simulator_type=maestro.SimulatorType.QuestSim,
-                simulation_type=maestro.SimulationType.TensorNetwork,
                 shots=10
+            ,
+                config=maestro.SimulatorConfig(
+                    simulator_type=maestro.SimulatorType.QuestSim,
+                    simulation_type=maestro.SimulationType.TensorNetwork
+                ),
             )
 
     def test_quest_rejects_pauli_propagator(self):
@@ -1054,9 +1133,12 @@ class TestQuestSimulator:
         with pytest.raises(Exception, match="QuestSim only supports Statevector"):
             maestro.simple_execute(
                 GENERAL_QASM,
-                simulator_type=maestro.SimulatorType.QuestSim,
-                simulation_type=maestro.SimulationType.PauliPropagator,
                 shots=10
+            ,
+                config=maestro.SimulatorConfig(
+                    simulator_type=maestro.SimulatorType.QuestSim,
+                    simulation_type=maestro.SimulationType.PauliPropagator
+                ),
             )
 
     def test_quest_rejects_mps_estimate(self):
@@ -1065,8 +1147,10 @@ class TestQuestSimulator:
             maestro.simple_estimate(
                 CLIFFORD_BELL_NO_MEASURE_QASM,
                 "ZZ",
-                simulator_type=maestro.SimulatorType.QuestSim,
-                simulation_type=maestro.SimulationType.MatrixProductState,
+                config=maestro.SimulatorConfig(
+                    simulator_type=maestro.SimulatorType.QuestSim,
+                    simulation_type=maestro.SimulationType.MatrixProductState
+                ),
             )
 
     @pytest.mark.skipif(
@@ -1077,9 +1161,12 @@ class TestQuestSimulator:
         """QuestSim executes a Bell state circuit correctly."""
         result = maestro.simple_execute(
             CLIFFORD_BELL_QASM,
-            simulator_type=maestro.SimulatorType.QuestSim,
-            simulation_type=maestro.SimulationType.Statevector,
             shots=1000
+        ,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QuestSim,
+                simulation_type=maestro.SimulationType.Statevector
+            ),
         )
         assert result is not None
         assert 'counts' in result
@@ -1095,8 +1182,10 @@ class TestQuestSimulator:
         result = maestro.simple_estimate(
             CLIFFORD_BELL_NO_MEASURE_QASM,
             "ZZ;XX;YY",
-            simulator_type=maestro.SimulatorType.QuestSim,
-            simulation_type=maestro.SimulationType.Statevector,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QuestSim,
+                simulation_type=maestro.SimulationType.Statevector
+            ),
         )
         assert result is not None
         assert 'expectation_values' in result
@@ -1120,9 +1209,12 @@ class TestQuestSimulator:
         qc.measure_all()
 
         result = qc.execute(
-            simulator_type=maestro.SimulatorType.QuestSim,
-            simulation_type=maestro.SimulationType.Statevector,
             shots=100
+        ,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QuestSim,
+                simulation_type=maestro.SimulationType.Statevector
+            ),
         )
         assert result is not None
         assert 'counts' in result
@@ -1142,8 +1234,10 @@ class TestQuestSimulator:
 
         result = qc.estimate(
             observables=["ZZ"],
-            simulator_type=maestro.SimulatorType.QuestSim,
-            simulation_type=maestro.SimulationType.Statevector,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QuestSim,
+                simulation_type=maestro.SimulationType.Statevector
+            ),
         )
         assert result is not None
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
@@ -1199,9 +1293,11 @@ class TestGetStatevector:
 
         sv = maestro.get_statevector(
             qc,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=4
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4
+            ),
         )
         assert len(sv) == 4
         assert sv[0] == pytest.approx(self.INV_SQRT2, abs=1e-10)
@@ -1335,10 +1431,12 @@ class TestMirrorFidelity:
         qc.cx(0, 1)
 
         fid = qc.mirror_fidelity(
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
             shots=10000,
-            max_bond_dimension=4,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4
+            ),
         )
         assert fid == pytest.approx(1.0, abs=0.05)
 
@@ -1478,10 +1576,13 @@ class TestInnerProduct:
         qc2.cx(0, 1)
 
         result = maestro.inner_product(
-            qc1, qc2,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=4
+            qc1,
+            qc2,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=4
+            ),
         )
         assert abs(result) == pytest.approx(1.0, abs=1e-5)
 
@@ -1516,7 +1617,7 @@ class TestInnerProduct:
 class TestMPSOptimizedSwapping:
     """Test the MPS optimized swapping parameters (disable_optimized_swapping, lookahead_depth)."""
 
-    MPS_PARAMS = dict(
+    MPS_CONFIG = maestro.SimulatorConfig(
         simulator_type=maestro.SimulatorType.QCSim,
         simulation_type=maestro.SimulationType.MatrixProductState,
         max_bond_dimension=16,
@@ -1553,7 +1654,8 @@ class TestMPSOptimizedSwapping:
         """Execute with optimized swapping enabled (default) produces valid results."""
         qc = self._make_non_nearest_neighbor_circuit()
         qc.measure_all()
-        result = qc.execute(shots=1024, **self.MPS_PARAMS)
+        result = qc.execute(shots=1024,
+            config=self.MPS_CONFIG)
         assert result is not None
         assert 'counts' in result
         assert sum(result['counts'].values()) == 1024
@@ -1564,8 +1666,12 @@ class TestMPSOptimizedSwapping:
         qc.measure_all()
         result = qc.execute(
             shots=1024,
-            disable_optimized_swapping=True,
-            **self.MPS_PARAMS
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=16,
+                disable_optimized_swapping=True
+            ),
         )
         assert result is not None
         assert 'counts' in result
@@ -1578,8 +1684,12 @@ class TestMPSOptimizedSwapping:
         for depth in [0, 5, 10, 30]:
             result = qc.execute(
                 shots=256,
-                lookahead_depth=depth,
-                **self.MPS_PARAMS
+                config=maestro.SimulatorConfig(
+                    simulator_type=maestro.SimulatorType.QCSim,
+                    simulation_type=maestro.SimulationType.MatrixProductState,
+                    max_bond_dimension=16,
+                    lookahead_depth=depth
+                ),
             )
             assert result is not None
             assert sum(result['counts'].values()) == 256
@@ -1592,7 +1702,7 @@ class TestMPSOptimizedSwapping:
 
         result_opt = qc.estimate(
             observables=["ZIIIIIII", "IZIIIIII"],
-            **self.MPS_PARAMS
+            config=self.MPS_CONFIG
         )
         assert result_opt is not None
         exp_vals = result_opt['expectation_values']
@@ -1606,11 +1716,16 @@ class TestMPSOptimizedSwapping:
         qc = self._make_non_nearest_neighbor_circuit()
         obs = ["ZIIIIIII", "IZIIIIII", "ZZIIIIII"]
 
-        result_opt = qc.estimate(observables=obs, **self.MPS_PARAMS)
+        result_opt = qc.estimate(observables=obs,
+            config=self.MPS_CONFIG)
         result_no_opt = qc.estimate(
             observables=obs,
-            disable_optimized_swapping=True,
-            **self.MPS_PARAMS
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=16,
+                disable_optimized_swapping=True
+            ),
         )
         assert result_opt is not None
         assert result_no_opt is not None
@@ -1626,8 +1741,12 @@ class TestMPSOptimizedSwapping:
         qc = self._make_non_nearest_neighbor_circuit()
         result = qc.estimate(
             observables=["ZIIIIIII"],
-            lookahead_depth=5,
-            **self.MPS_PARAMS
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=16,
+                lookahead_depth=5
+            ),
         )
         assert result is not None
         assert len(result['expectation_values']) == 1
@@ -1648,12 +1767,14 @@ class TestMPSOptimizedSwapping:
         """
         result = maestro.simple_execute(
             qasm,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
             shots=100,
-            max_bond_dimension=8,
-            disable_optimized_swapping=True,
-            lookahead_depth=10
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=8,
+                disable_optimized_swapping=True,
+                lookahead_depth=10
+            ),
         )
         assert result is not None
         assert sum(result['counts'].values()) == 100
@@ -1670,11 +1791,13 @@ class TestMPSOptimizedSwapping:
         result = maestro.simple_estimate(
             qasm,
             "ZIIIII",
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=8,
-            disable_optimized_swapping=False,
-            lookahead_depth=20
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=8,
+                disable_optimized_swapping=False,
+                lookahead_depth=20
+            ),
         )
         assert result is not None
         assert len(result['expectation_values']) == 1
@@ -1696,22 +1819,28 @@ class TestMPSOptimizedSwapping:
 
         result_sv = qc.estimate(
             observables=obs,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.Statevector,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Statevector
+            ),
         )
         result_mps = qc.estimate(
             observables=obs,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=32,
-            lookahead_depth=20,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=32,
+                lookahead_depth=20
+            ),
         )
         result_mps_no_opt = qc.estimate(
             observables=obs,
-            simulator_type=maestro.SimulatorType.QCSim,
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            max_bond_dimension=32,
-            disable_optimized_swapping=True,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                max_bond_dimension=32,
+                disable_optimized_swapping=True
+            ),
         )
 
         for v_sv, v_mps, v_no_opt in zip(
