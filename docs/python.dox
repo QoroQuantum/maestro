@@ -36,6 +36,54 @@
  *
  * ---
  *
+ * @section py_config SimulatorConfig — Shared Configuration
+ *
+ * All execution and estimation functions accept a `SimulatorConfig` object
+ * that bundles every simulator knob into a single, reusable value.
+ * Create one config and pass it to every call — no need to repeat
+ * `simulator_type`, `simulation_type`, `max_bond_dimension`, etc.
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * # Create once, reuse everywhere
+ * config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=64,
+ *     singular_value_threshold=1e-10,
+ * )
+ *
+ * result = maestro.simple_execute(qasm, config=config, shots=1024)
+ * estimate = maestro.simple_estimate(qasm, "ZZ;XX", config=config)
+ * fidelity = maestro.mirror_fidelity(qc, config=config, shots=10000)
+ * @endcode
+ *
+ * @subsection py_config_params SimulatorConfig Parameters
+ *
+ * | Parameter | Type | Default | Description |
+ * |-----------|------|---------|-------------|
+ * | `simulator_type` | `SimulatorType` | `QCSim` | Simulation backend |
+ * | `simulation_type` | `SimulationType` | `Statevector` | Simulation method |
+ * | `max_bond_dimension` | `int` or `None` | `None` | MPS bond dimension limit |
+ * | `singular_value_threshold` | `float` or `None` | `None` | MPS truncation threshold |
+ * | `use_double_precision` | `bool` | `False` | GPU double precision flag |
+ * | `disable_optimized_swapping` | `bool` | `False` | Disable MPS swap optimization |
+ * | `lookahead_depth` | `int` | `-1` | Swap optimization lookahead depth |
+ * | `mps_measure_no_collapse` | `bool` | `True` | Use probability-based MPS sampling |
+ *
+ * @note When no `config` is passed, a default `SimulatorConfig()` is used
+ * (QCSim + Statevector with all defaults). You can also modify fields
+ * after construction:
+ *
+ * @code{.py}
+ * config = maestro.SimulatorConfig()
+ * config.simulation_type = maestro.SimulationType.MatrixProductState
+ * config.max_bond_dimension = 128
+ * @endcode
+ *
+ * ---
+ *
  * @section py_quick Quick Start — One-Line Execution
  *
  * The fastest way to run a circuit is `maestro.simple_execute`.
@@ -75,18 +123,17 @@
  *
  * @section py_backends Choosing a Simulation Backend
  *
- * You can explicitly select the simulator type and simulation method.
- * Maestro supports several backends; the most common CPU options are shown here.
+ * You can explicitly select the simulator type and simulation method
+ * via a `SimulatorConfig`.
  *
  * @subsection py_statevector Statevector Simulation
  *
  * @code{.py}
- * result = maestro.simple_execute(
- *     qasm,
+ * config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.QCSim,
  *     simulation_type=maestro.SimulationType.Statevector,
- *     shots=2000
  * )
+ * result = maestro.simple_execute(qasm, config=config, shots=2000)
  * @endcode
  *
  * @subsection py_mps Matrix Product State (MPS)
@@ -95,15 +142,14 @@
  * when entanglement is bounded.
  *
  * @code{.py}
- * result = maestro.simple_execute(
- *     qasm,
+ * mps_config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.QCSim,
  *     simulation_type=maestro.SimulationType.MatrixProductState,
  *     max_bond_dimension=64,
  *     singular_value_threshold=1e-10,
- *     shots=1000
  * )
  *
+ * result = maestro.simple_execute(qasm, config=mps_config, shots=1000)
  * print(result["method"])  # "MatrixProductState"
  * @endcode
  *
@@ -124,12 +170,11 @@
  * measure q -> c;
  * """
  *
- * result = maestro.simple_execute(
- *     clifford_qasm,
+ * stab_config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.QCSim,
  *     simulation_type=maestro.SimulationType.Stabilizer,
- *     shots=10000
  * )
+ * result = maestro.simple_execute(clifford_qasm, config=stab_config, shots=10000)
  * @endcode
  *
  * @subsection py_backend_table Available Backends
@@ -181,15 +226,15 @@
  * print(f"<IZI> = {obs[2]:.4f}")  # 0.0 (maximally mixed marginal)
  * @endcode
  *
- * You can also use a specific backend:
+ * You can also use a specific backend via config:
  *
  * @code{.py}
- * result = maestro.simple_estimate(
- *     ghz, "ZZ;XX",
+ * mps_config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.QCSim,
  *     simulation_type=maestro.SimulationType.MatrixProductState,
- *     max_bond_dimension=8
+ *     max_bond_dimension=8,
  * )
+ * result = maestro.simple_estimate(ghz, "ZZ;XX", config=mps_config)
  * @endcode
  *
  * ---
@@ -270,16 +315,19 @@
  * qc.cx(0, 1)
  *
  * # No measurements needed for estimation
- * result = qc.estimate(
- *     observables=["ZZ", "XX", "YY"],
- *     simulator_type=maestro.SimulatorType.QCSim,
- *     simulation_type=maestro.SimulationType.Statevector
- * )
+ * result = qc.estimate(observables=["ZZ", "XX", "YY"])
  *
  * vals = result["expectation_values"]
  * print(f"<ZZ> = {vals[0]:.4f}")  #  1.0
  * print(f"<XX> = {vals[1]:.4f}")  #  1.0
  * print(f"<YY> = {vals[2]:.4f}")  # -1.0
+ *
+ * # With a specific backend config
+ * mps_config = maestro.SimulatorConfig(
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=16,
+ * )
+ * result = qc.estimate(observables=["ZZ", "XX"], config=mps_config)
  * @endcode
  *
  * ---
@@ -333,12 +381,12 @@
  * print(f"Mirror fidelity: {fidelity:.4f}")  # ~1.0
  *
  * # With MPS (scales to 50+ qubits)
- * fidelity = qc.mirror_fidelity(
+ * mps_config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.QCSim,
  *     simulation_type=maestro.SimulationType.MatrixProductState,
- *     shots=10000,
  *     max_bond_dimension=64,
  * )
+ * fidelity = qc.mirror_fidelity(config=mps_config, shots=10000)
  *
  * # Exact mode (small circuits only)
  * fidelity = qc.mirror_fidelity(full_amplitude=True)
@@ -414,25 +462,13 @@
  * print(f"|overlap| = {abs(overlap):.4f}")  # 1.0
  *
  * # With MPS backend (scales to large qubit counts)
- * overlap = qc1.inner_product(
- *     qc2,
+ * mps_config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.QCSim,
  *     simulation_type=maestro.SimulationType.MatrixProductState,
  *     max_bond_dimension=64,
  * )
+ * overlap = qc1.inner_product(qc2, config=mps_config)
  * @endcode
- *
- * @subsection py_inner_params Parameters
- *
- * | Parameter | Type | Default | Description |
- * |-----------|------|---------|-------------|
- * | `circuit_1` / `self` | `QuantumCircuit` | — | First circuit (bra state) |
- * | `circuit_2` / `other` | `QuantumCircuit` | — | Second circuit (ket state) |
- * | `simulator_type` | `SimulatorType` | `QCSim` | Simulation backend |
- * | `simulation_type` | `SimulationType` | `Statevector` | Simulation method |
- * | `max_bond_dimension` | `int` or `None` | `None` | MPS bond dimension limit |
- * | `singular_value_threshold` | `float` or `None` | `None` | MPS truncation threshold |
- * | `use_double_precision` | `bool` | `False` | GPU double precision flag |
  *
  * @note Measurements in either circuit are automatically skipped —
  * only unitary gate operations contribute to the inner product.
@@ -449,6 +485,8 @@
  * | `noisy_estimate` | Zero | Per-qubit Pauli damping | Fast ansatz screening |
  * | `noisy_estimate_montecarlo` | N × noiseless | Gate-by-gate accurate | Training with realistic noise |
  * | `noisy_execute` | N × noiseless | Gate-by-gate + shot noise | Shot-based workflows |
+ *
+ * All noise functions accept a `config` parameter for backend selection.
  *
  * @subsection py_noise_model Creating a Noise Model
  *
@@ -526,11 +564,14 @@
  * The cost is `noise_realizations * noiseless_time`. Works with any backend:
  *
  * @code{.py}
+ * mps_config = maestro.SimulatorConfig(
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=64,
+ * )
  * result = maestro.noisy_estimate_montecarlo(
  *     qc, ['ZZ'], nm,
  *     noise_realizations=100,
- *     simulation_type=maestro.SimulationType.MatrixProductState,
- *     max_bond_dimension=64,
+ *     config=mps_config,
  *     seed=42
  * )
  * @endcode
@@ -564,10 +605,7 @@
  * |-----------|------|---------|-------------|
  * | `noise_realizations` | `int` | 100 / 64 | Independent noise samples |
  * | `seed` | `int` or `None` | `None` | RNG seed for reproducibility |
- * | `simulator_type` | `SimulatorType` | `QCSim` | Simulation backend |
- * | `simulation_type` | `SimulationType` | `Statevector` | Simulation method |
- * | `max_bond_dimension` | `int` | `2` | MPS bond dimension |
- * | `singular_value_threshold` | `float` | `1e-8` | MPS truncation threshold |
+ * | `config` | `SimulatorConfig` | `SimulatorConfig()` | Simulator configuration |
  *
  * ---
  *
@@ -642,13 +680,11 @@
  * measure q -> c;
  * """
  *
- * result = maestro.simple_execute(
- *     qasm,
+ * quest_config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.QuestSim,
  *     simulation_type=maestro.SimulationType.Statevector,
- *     shots=1000
  * )
- *
+ * result = maestro.simple_execute(qasm, config=quest_config, shots=1000)
  * print(result["counts"])  # {"00": ~500, "11": ~500}
  * @endcode
  *
@@ -663,11 +699,10 @@
  * cx q[0], q[1];
  * """
  *
- * result = maestro.simple_estimate(
- *     bell, "ZZ;XX;YY",
+ * quest_config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.QuestSim,
- *     simulation_type=maestro.SimulationType.Statevector
  * )
+ * result = maestro.simple_estimate(bell, "ZZ;XX;YY", config=quest_config)
  *
  * vals = result["expectation_values"]
  * print(f"<ZZ> = {vals[0]:.4f}")  #  1.0
@@ -687,11 +722,10 @@
  * qc.cx(0, 1)
  * qc.measure_all()
  *
- * result = qc.execute(
+ * quest_config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.QuestSim,
- *     simulation_type=maestro.SimulationType.Statevector,
- *     shots=100
  * )
+ * result = qc.execute(config=quest_config, shots=100)
  * print(result["counts"])
  * @endcode
  *
@@ -747,22 +781,20 @@
  * """
  *
  * # GPU Statevector
- * result = maestro.simple_execute(
- *     qasm,
+ * gpu_sv_config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.Gpu,
  *     simulation_type=maestro.SimulationType.Statevector,
- *     shots=1000
  * )
+ * result = maestro.simple_execute(qasm, config=gpu_sv_config, shots=1000)
  * print(result["counts"])
  *
  * # GPU MPS
- * result_mps = maestro.simple_execute(
- *     qasm,
+ * gpu_mps_config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.Gpu,
  *     simulation_type=maestro.SimulationType.MatrixProductState,
  *     max_bond_dimension=64,
- *     shots=1000
  * )
+ * result_mps = maestro.simple_execute(qasm, config=gpu_mps_config, shots=1000)
  * print(result_mps["counts"])
  * @endcode
  *
@@ -777,11 +809,10 @@
  * cx q[0], q[1];
  * """
  *
- * result = maestro.simple_estimate(
- *     bell, "ZZ;XX;YY",
+ * gpu_config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.Gpu,
- *     simulation_type=maestro.SimulationType.Statevector
  * )
+ * result = maestro.simple_estimate(bell, "ZZ;XX;YY", config=gpu_config)
  *
  * vals = result["expectation_values"]
  * print(f"<ZZ> = {vals[0]:.4f}")  #  1.0
@@ -801,11 +832,10 @@
  * qc.cx(0, 1)
  * qc.measure_all()
  *
- * result = qc.execute(
+ * gpu_config = maestro.SimulatorConfig(
  *     simulator_type=maestro.SimulatorType.Gpu,
- *     simulation_type=maestro.SimulationType.Statevector,
- *     shots=2048
  * )
+ * result = qc.execute(config=gpu_config, shots=2048)
  * print(result["counts"])
  * @endcode
  *
@@ -838,7 +868,8 @@
  *     sim_type = maestro.SimulatorType.QCSim
  *     print("Using CPU (QCSim)")
  *
- * result = maestro.simple_execute(qasm, simulator_type=sim_type, shots=1000)
+ * config = maestro.SimulatorConfig(simulator_type=sim_type)
+ * result = maestro.simple_execute(qasm, config=config, shots=1000)
  * print(result["counts"])
  * @endcode
  *

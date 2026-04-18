@@ -404,6 +404,48 @@ result of qubit 0 in classical bit 1 and vice versa:
 qc.measure([(0, 1), (1, 0)])
 ```
 
+#### SimulatorConfig
+
+All execution and estimation methods accept a `SimulatorConfig` object
+that bundles every simulator parameter into one reusable value. Create
+a config once and pass it to every call:
+
+```python
+import maestro
+
+config = maestro.SimulatorConfig(
+    simulator_type=maestro.SimulatorType.QCSim,
+    simulation_type=maestro.SimulationType.MatrixProductState,
+    max_bond_dimension=64,
+)
+
+result = qc.execute(config=config, shots=1024)
+fidelity = qc.mirror_fidelity(config=config)
+```
+
+**SimulatorConfig Parameters:**
+
+| Parameter                    | Type           | Default                       | Description                            |
+|------------------------------|----------------|-------------------------------|----------------------------------------|
+| `simulator_type`             | `SimulatorType`| `QCSim`                       | Simulator backend                      |
+| `simulation_type`            | `SimulationType`| `Statevector`                | Simulation method                      |
+| `max_bond_dimension`         | int or None    | `None`                        | Max bond dimension (MPS only)          |
+| `singular_value_threshold`   | float or None  | `None`                        | Truncation threshold (MPS only)        |
+| `use_double_precision`       | bool           | `False`                       | Use 64-bit precision (GPU only)        |
+| `disable_optimized_swapping` | bool           | `False`                       | Disable MPS swap optimization          |
+| `lookahead_depth`            | int            | `-1`                          | Swap optimization lookahead depth      |
+| `mps_measure_no_collapse`    | bool           | `True`                        | Use probability-based MPS sampling     |
+
+When no config is passed, a default `SimulatorConfig()` is used
+(QCSim + Statevector with all defaults). Config fields can also be
+modified after construction:
+
+```python
+config = maestro.SimulatorConfig()
+config.simulation_type = maestro.SimulationType.MatrixProductState
+config.max_bond_dimension = 128
+```
+
 #### Executing a Circuit
 
 The `execute` method runs the circuit for a given number of shots and returns
@@ -425,24 +467,21 @@ print(result["method"])        # Simulation method used (int)
 
 **Execution Parameters:**
 
-| Parameter                    | Type   | Default                              | Description                            |
-|------------------------------|--------|--------------------------------------|----------------------------------------|
-| `simulator_type`             | enum   | `SimulatorType.QCSim`                | Simulator backend                      |
-| `simulation_type`            | enum   | `SimulationType.Statevector`         | Simulation method                      |
-| `shots`                      | int    | `1024`                               | Number of measurement shots            |
-| `max_bond_dimension`         | int    | `2`                                  | Max bond dimension (MPS only)          |
-| `singular_value_threshold`   | float  | `1e-8`                               | Truncation threshold (MPS only)        |
+| Parameter | Type             | Default              | Description                    |
+|-----------|------------------|----------------------|--------------------------------|
+| `config`  | `SimulatorConfig`| `SimulatorConfig()`  | Simulator configuration        |
+| `shots`   | int              | `1024`               | Number of measurement shots    |
 
 **Example with MPS backend:**
 
 ```python
-result = qc.execute(
+mps_config = maestro.SimulatorConfig(
     simulator_type=maestro.SimulatorType.QCSim,
     simulation_type=maestro.SimulationType.MatrixProductState,
     max_bond_dimension=64,
     singular_value_threshold=1e-6,
-    shots=2048
 )
+result = qc.execute(config=mps_config, shots=2048)
 ```
 
 #### Estimating Expectation Values
@@ -470,13 +509,10 @@ print(result["expectation_values"])  # [1.0, 1.0, 0.0]
 
 **Estimation Parameters:**
 
-| Parameter                    | Type          | Default                              | Description                            |
-|------------------------------|---------------|--------------------------------------|----------------------------------------|
-| `observables`                | str or list   | *(required)*                         | Pauli observables to measure           |
-| `simulator_type`             | enum          | `SimulatorType.QCSim`                | Simulator backend                      |
-| `simulation_type`            | enum          | `SimulationType.Statevector`         | Simulation method                      |
-| `max_bond_dimension`         | int           | `2`                                  | Max bond dimension (MPS only)          |
-| `singular_value_threshold`   | float         | `1e-8`                               | Truncation threshold (MPS only)        |
+| Parameter     | Type              | Default              | Description                      |
+|---------------|-------------------|----------------------|----------------------------------|
+| `observables` | str or list       | *(required)*         | Pauli observables to measure     |
+| `config`      | `SimulatorConfig` | `SimulatorConfig()`  | Simulator configuration          |
 
 > **Note:** The `estimate` method does not require measurements to be added to
 > the circuit. The number of qubits is automatically inferred from the circuit
@@ -599,11 +635,12 @@ print(f"Mirror fidelity: {fidelity:.4f}")  # ~1.0
 #### With a Specific Backend
 
 ```python
-fidelity = qc.mirror_fidelity(
+mps_config = maestro.SimulatorConfig(
     simulator_type=maestro.SimulatorType.QCSim,
     simulation_type=maestro.SimulationType.MatrixProductState,
     max_bond_dimension=16,
 )
+fidelity = qc.mirror_fidelity(config=mps_config)
 ```
 
 #### With More Shots
@@ -624,15 +661,11 @@ print(f"Mirror fidelity: {fidelity:.10f}")  # 1.0000000000
 
 #### Mirror Fidelity Parameters
 
-| Parameter                    | Type   | Default                              | Description                            |
-|------------------------------|--------|--------------------------------------|----------------------------------------|
-| `simulator_type`             | enum   | `SimulatorType.QCSim`                | Simulator backend                      |
-| `simulation_type`            | enum   | `SimulationType.Statevector`         | Simulation method                      |
-| `shots`                      | int    | `1024`                               | Number of measurement shots            |
-| `max_bond_dimension`         | int    | `None`                               | Max bond dimension (MPS only)          |
-| `singular_value_threshold`   | float  | `None`                               | Truncation threshold (MPS only)        |
-| `use_double_precision`       | bool   | `False`                              | Use 64-bit precision (GPU only)        |
-| `full_amplitude`             | bool   | `False`                              | Use exact statevector (small circuits) |
+| Parameter        | Type              | Default             | Description                            |
+|------------------|-------------------|---------------------|----------------------------------------|
+| `config`         | `SimulatorConfig` | `SimulatorConfig()` | Simulator configuration                |
+| `shots`          | int               | `1024`              | Number of measurement shots            |
+| `full_amplitude` | bool              | `False`             | Use exact statevector (small circuits) |
 
 > **Note:** Measurements in the original circuit are automatically skipped
 > when building the mirror circuit — only unitary gate operations are mirrored.
@@ -739,11 +772,14 @@ faster than density-matrix simulation (e.g., Qiskit fake backends).
 Works with any backend — statevector, MPS, or Pauli propagation:
 
 ```python
+mps_config = maestro.SimulatorConfig(
+    simulation_type=maestro.SimulationType.MatrixProductState,
+    max_bond_dimension=64,
+)
 result = maestro.noisy_estimate_montecarlo(
     qc, ['ZZ'], nm,
     noise_realizations=100,
-    simulation_type=maestro.SimulationType.MatrixProductState,
-    max_bond_dimension=64,
+    config=mps_config,
     seed=42
 )
 ```
@@ -777,10 +813,7 @@ print(result['counts'])  # Aggregated counts across all realizations
 |-----------|------|---------|-------------|
 | `noise_realizations` | int | `100` (MC estimate) / `64` (execute) | Independent noise samples |
 | `seed` | int | `None` (random) | RNG seed for reproducibility |
-| `simulator_type` | enum | `QCSim` | Backend to use |
-| `simulation_type` | enum | `Statevector` | Simulation method |
-| `max_bond_dimension` | int | `2` | MPS bond dimension |
-| `singular_value_threshold` | float | `1e-8` | MPS truncation threshold |
+| `config` | `SimulatorConfig` | `SimulatorConfig()` | Simulator configuration |
 
 > **Tip:** For QML training workflows where you need noise-aware gradients,
 > `noisy_estimate_montecarlo` with 50–200 realizations gives a good
@@ -853,11 +886,10 @@ qc.cx(0, 1)
 qc.measure([(0, 0), (1, 1)])
 
 # Execute on QuEST
-result = qc.execute(
+quest_config = maestro.SimulatorConfig(
     simulator_type=maestro.SimulatorType.QuestSim,
-    simulation_type=maestro.SimulationType.Statevector,
-    shots=1024
 )
+result = qc.execute(config=quest_config, shots=1024)
 
 print(f"Counts: {result['counts']}")
 print(f"Time:   {result['time_taken']:.4f}s")
@@ -878,19 +910,17 @@ h q[0];
 cx q[0], q[1];
 """
 
-# Execute
-result = maestro.simple_execute(
-    qasm_circuit,
+quest_config = maestro.SimulatorConfig(
     simulator_type=maestro.SimulatorType.QuestSim,
-    shots=1024
 )
+
+# Execute
+result = maestro.simple_execute(qasm_circuit, config=quest_config, shots=1024)
 print(f"Counts: {result['counts']}")
 
 # Estimate expectation values
 estimate = maestro.simple_estimate(
-    qasm_circuit,
-    observables="ZZ;XX",
-    simulator_type=maestro.SimulatorType.QuestSim
+    qasm_circuit, observables="ZZ;XX", config=quest_config
 )
 print(f"Expectation values: {estimate['expectation_values']}")
 ```
@@ -927,20 +957,19 @@ qc.cx(0, 1)
 qc.measure([(0, 0), (1, 1)])
 
 # Execute on GPU with statevector
-result = qc.execute(
+gpu_sv = maestro.SimulatorConfig(
     simulator_type=maestro.SimulatorType.Gpu,
-    simulation_type=maestro.SimulationType.Statevector,
-    shots=2048
 )
+result = qc.execute(config=gpu_sv, shots=2048)
 print(f"GPU Counts: {result['counts']}")
 
 # Execute on GPU with MPS
-result_mps = qc.execute(
+gpu_mps = maestro.SimulatorConfig(
     simulator_type=maestro.SimulatorType.Gpu,
     simulation_type=maestro.SimulationType.MatrixProductState,
     max_bond_dimension=64,
-    shots=2048
 )
+result_mps = qc.execute(config=gpu_mps, shots=2048)
 print(f"GPU MPS Counts: {result_mps['counts']}")
 ```
 
@@ -960,15 +989,16 @@ qc.measure([(0, 0), (1, 1)])
 
 # Try QuEST, fall back to default CPU
 if maestro.init_quest():
-    result = qc.execute(simulator_type=maestro.SimulatorType.QuestSim)
+    config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QuestSim)
     print("Ran on QuEST")
 elif maestro.init_gpu():
-    result = qc.execute(simulator_type=maestro.SimulatorType.Gpu)
+    config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.Gpu)
     print("Ran on GPU")
 else:
-    result = qc.execute()  # Default: QCSim Statevector
+    config = maestro.SimulatorConfig()  # Default: QCSim Statevector
     print("Ran on CPU (QCSim)")
 
+result = qc.execute(config=config)
 print(f"Counts: {result['counts']}")
 ```
 

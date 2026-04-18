@@ -63,11 +63,11 @@ def main():
     print_result("Test 2: Bell state with 2000 shots", result2)
 
     # Test 3: Using MatrixProductState simulation type
-    result3 = maestro.simple_execute(
-        QASM_BELL,
+    mps_config = maestro.SimulatorConfig(
         simulator_type=maestro.SimulatorType.QCSim,
         simulation_type=maestro.SimulationType.MatrixProductState,
     )
+    result3 = maestro.simple_execute(QASM_BELL, config=mps_config)
     print_result("Test 3: Bell state with Matrix Product State", result3)
 
     # Test 4: GHZ state
