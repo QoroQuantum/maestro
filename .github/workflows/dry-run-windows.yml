@@ -81,14 +81,14 @@ jobs:
           echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
+        uses: pypa/cibuildwheel@v3.4.1
         env:
           CIBW_ARCHS_WINDOWS: "AMD64"
           CIBW_ENVIRONMENT_WINDOWS: "CMAKE_BUILD_PARALLEL_LEVEL=8"
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
             pip install delvewheel &&
-            delvewheel repair -w {dest_dir} --add-path "C:\vcpkg\installed\x64-windows\bin;build\cp310-cp310-win_amd64\bin;build\cp311-cp311-win_amd64\bin;build\cp312-cp312-win_amd64\bin" {wheel}
-          CIBW_BUILD: "cp312-*"
+            delvewheel repair -w {dest_dir} --add-path "C:\vcpkg\installed\x64-windows\bin;build\cp312-cp312-win_amd64\bin;build\cp314-cp314-win_amd64\bin" {wheel}
+          CIBW_BUILD: "cp312-* cp314-*"
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
 
       - name: Save vcpkg cache (even on failure)
