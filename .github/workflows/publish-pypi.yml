@@ -141,7 +141,7 @@ jobs:
           echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.0
+        uses: pypa/cibuildwheel@v3.4.1
         env:
           # ---- Linux ----
           CIBW_BEFORE_ALL_LINUX: >-
