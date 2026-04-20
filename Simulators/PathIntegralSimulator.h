@@ -12,14 +12,16 @@
 #ifndef _PATH_INTEGRAL_SIMULATOR_H_
 #define _PATH_INTEGRAL_SIMULATOR_H_
 
+#include <optional>
+
 #include "PathIntegral.h"
 #include "../Circuit/Circuit.h"
 
 namespace Simulators {
 
 	class PathIntegralSimulator {
-
-          void SetTrimValue(double val) { simulator.SetTrimValue(val); }
+		public:
+		  void SetTrimValue(double val) { simulator.SetTrimValue(val); }
 
           double GetTrimValue() const { return simulator.GetTrimValue(); }
 
@@ -28,6 +30,141 @@ namespace Simulators {
           }
 
           size_t GetMaxDoublingsForBackwardPaths() const { return simulator.GetMaxDoublingsForBackwardPaths(); }
+
+          bool SetCircuit(const std::shared_ptr<Circuits::Circuit<>>& circuit)
+          {
+            const auto convertedCircuit = ConvertCircuit(circuit);
+            if (convertedCircuit.empty()) return false;
+            simulator.SetCircuit(convertedCircuit);
+            return true;
+          }
+
+          std::complex<double> AmplitudeFromZero(const std::vector<bool>& endState)
+          {
+            return simulator.Propagate(endState);
+          }
+
+          std::complex<double> Amplitude(const std::vector<bool>& startState, const std::vector<bool>& endState)
+          {
+            return simulator.Propagate(startState, endState);
+          }
+
+          std::optional<QC::Gates::AppliedGate<>> ConvertGate(const std::shared_ptr<Circuits::IQuantumGate<>>& gate)
+          {
+            if (!gate) return std::nullopt;
+
+            switch (gate->GetGateType())
+            {
+              // single qubit gates
+            case Circuits::QuantumGateType::kPhaseGateType:
+            {
+              const auto g = std::static_pointer_cast<Circuits::PhaseGate<>>(gate);
+              pgate.SetPhaseShift(g->GetLambda());
+              return QC::Gates::AppliedGate<>(pgate.getRawOperatorMatrix(), gate->GetQubit(0));
+            }
+            case Circuits::QuantumGateType::kXGateType:
+              return QC::Gates::AppliedGate<>(xgate.getRawOperatorMatrix(), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kYGateType:
+              return QC::Gates::AppliedGate<>(ygate.getRawOperatorMatrix(), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kZGateType:
+              return QC::Gates::AppliedGate<>(zgate.getRawOperatorMatrix(), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kHadamardGateType:
+              return QC::Gates::AppliedGate<>(h.getRawOperatorMatrix(), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kSGateType:
+              return QC::Gates::AppliedGate<>(sgate.getRawOperatorMatrix(), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kSdgGateType:
+              return QC::Gates::AppliedGate<>(sdggate.getRawOperatorMatrix(), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kTGateType:
+              return QC::Gates::AppliedGate<>(tgate.getRawOperatorMatrix(), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kTdgGateType:
+              return QC::Gates::AppliedGate<>(tdggate.getRawOperatorMatrix(), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kSxGateType:
+              return QC::Gates::AppliedGate<>(sxgate.getRawOperatorMatrix(), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kSxDagGateType:
+              return QC::Gates::AppliedGate<>(sxdaggate.getRawOperatorMatrix(), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kKGateType:
+              return QC::Gates::AppliedGate<>(k.getRawOperatorMatrix(), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kRxGateType:
+            {
+              const auto g = std::static_pointer_cast<Circuits::RxGate<>>(gate);
+              rxgate.SetTheta(g->GetTheta());
+              return QC::Gates::AppliedGate<>(rxgate.getRawOperatorMatrix(), gate->GetQubit(0));
+            }
+            case Circuits::QuantumGateType::kRyGateType:
+            {
+              const auto g = std::static_pointer_cast<Circuits::RyGate<>>(gate);
+              rygate.SetTheta(g->GetTheta());
+              return QC::Gates::AppliedGate<>(rygate.getRawOperatorMatrix(), gate->GetQubit(0));
+            }
+            case Circuits::QuantumGateType::kRzGateType:
+            {
+              const auto g = std::static_pointer_cast<Circuits::RzGate<>>(gate);
+              rzgate.SetTheta(g->GetTheta());
+              return QC::Gates::AppliedGate<>(rzgate.getRawOperatorMatrix(), gate->GetQubit(0));
+            }
+            case Circuits::QuantumGateType::kUGateType:
+            {
+              const auto g = std::static_pointer_cast<Circuits::UGate<>>(gate);
+              ugate.SetParams(g->GetTheta(), g->GetPhi(), g->GetLambda(), g->GetGamma());
+              return QC::Gates::AppliedGate<>(ugate.getRawOperatorMatrix(), gate->GetQubit(0));
+            }
+
+            // two qubit gates
+            case Circuits::QuantumGateType::kSwapGateType:
+              return QC::Gates::AppliedGate<>(swapgate.getRawOperatorMatrix(), gate->GetQubit(0), gate->GetQubit(1));
+            case Circuits::QuantumGateType::kCXGateType:
+              return QC::Gates::AppliedGate<>(cxgate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kCYGateType:
+              return QC::Gates::AppliedGate<>(cygate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kCZGateType:
+              return QC::Gates::AppliedGate<>(czgate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kCPGateType:
+            {
+              const auto g = std::static_pointer_cast<Circuits::CPGate<>>(gate);
+              cpgate.SetPhaseShift(g->GetLambda());
+              return QC::Gates::AppliedGate<>(cpgate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
+            }
+            case Circuits::QuantumGateType::kCRxGateType:
+            {
+              const auto g = std::static_pointer_cast<Circuits::CRxGate<>>(gate);
+              crxgate.SetTheta(g->GetTheta());
+              return QC::Gates::AppliedGate<>(crxgate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
+            }
+            case Circuits::QuantumGateType::kCRyGateType:
+            {
+              const auto g = std::static_pointer_cast<Circuits::CRyGate<>>(gate);
+              crygate.SetTheta(g->GetTheta());
+              return QC::Gates::AppliedGate<>(crygate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
+            }
+            case Circuits::QuantumGateType::kCRzGateType:
+            {
+              const auto g = std::static_pointer_cast<Circuits::CRzGate<>>(gate);
+              crzgate.SetTheta(g->GetTheta());
+              return QC::Gates::AppliedGate<>(crzgate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
+            }
+            case Circuits::QuantumGateType::kCHGateType:
+              return QC::Gates::AppliedGate<>(ch.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kCSxGateType:
+              return QC::Gates::AppliedGate<>(csx.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kCSxDagGateType:
+              return QC::Gates::AppliedGate<>(csxdag.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kCUGateType:
+            {
+              const auto g = std::static_pointer_cast<Circuits::CUGate<>>(gate);
+              cugate.SetParams(g->GetTheta(), g->GetPhi(), g->GetLambda(), g->GetGamma());
+              return QC::Gates::AppliedGate<>(cugate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
+            }
+
+            // three qubit gates
+            case Circuits::QuantumGateType::kCCXGateType:
+              return QC::Gates::AppliedGate<>(ccxgate.getRawOperatorMatrix(), gate->GetQubit(2), gate->GetQubit(1), gate->GetQubit(0));
+            case Circuits::QuantumGateType::kCSwapGateType:
+              return QC::Gates::AppliedGate<>(cswapgate.getRawOperatorMatrix(), gate->GetQubit(2), gate->GetQubit(1), gate->GetQubit(0));
+
+            default:
+              return std::nullopt;
+            }
+          }
 
           std::vector<QC::Gates::AppliedGate<>> ConvertCircuit(const std::shared_ptr<Circuits::Circuit<>>& circuit)
           {
@@ -43,159 +180,29 @@ namespace Simulators {
                 continue;
 
               const auto gate = std::static_pointer_cast<Circuits::IQuantumGate<>>(op);
-
-              switch (gate->GetGateType())
-              {
-                // single qubit gates
-              case Circuits::QuantumGateType::kPhaseGateType:
-              {
-                const auto g = std::static_pointer_cast<Circuits::PhaseGate<>>(gate);
-                pgate.SetPhaseShift(g->GetLambda());
-                result.emplace_back(pgate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              }
-              case Circuits::QuantumGateType::kXGateType:
-                result.emplace_back(xgate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kYGateType:
-                result.emplace_back(ygate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kZGateType:
-                result.emplace_back(zgate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kHadamardGateType:
-                result.emplace_back(h.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kSGateType:
-                result.emplace_back(sgate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kSdgGateType:
-                result.emplace_back(sdggate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kTGateType:
-                result.emplace_back(tgate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kTdgGateType:
-                result.emplace_back(tdggate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kSxGateType:
-                result.emplace_back(sxgate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kSxDagGateType:
-                result.emplace_back(sxdaggate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kKGateType:
-                result.emplace_back(k.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kRxGateType:
-              {
-                const auto g = std::static_pointer_cast<Circuits::RxGate<>>(gate);
-                rxgate.SetTheta(g->GetTheta());
-                result.emplace_back(rxgate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              }
-              case Circuits::QuantumGateType::kRyGateType:
-              {
-                const auto g = std::static_pointer_cast<Circuits::RyGate<>>(gate);
-                rygate.SetTheta(g->GetTheta());
-                result.emplace_back(rygate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              }
-              case Circuits::QuantumGateType::kRzGateType:
-              {
-                const auto g = std::static_pointer_cast<Circuits::RzGate<>>(gate);
-                rzgate.SetTheta(g->GetTheta());
-                result.emplace_back(rzgate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              }
-              case Circuits::QuantumGateType::kUGateType:
-              {
-                const auto g = std::static_pointer_cast<Circuits::UGate<>>(gate);
-                ugate.SetParams(g->GetTheta(), g->GetPhi(), g->GetLambda(), g->GetGamma());
-                result.emplace_back(ugate.getRawOperatorMatrix(), gate->GetQubit(0));
-                break;
-              }
-
-              // two qubit gates
-              case Circuits::QuantumGateType::kSwapGateType:
-                result.emplace_back(swapgate.getRawOperatorMatrix(), gate->GetQubit(0), gate->GetQubit(1));
-                break;
-              case Circuits::QuantumGateType::kCXGateType:
-                result.emplace_back(cxgate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kCYGateType:
-                result.emplace_back(cygate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kCZGateType:
-                result.emplace_back(czgate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kCPGateType:
-              {
-                const auto g = std::static_pointer_cast<Circuits::CPGate<>>(gate);
-                cpgate.SetPhaseShift(g->GetLambda());
-                result.emplace_back(cpgate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-              }
-              case Circuits::QuantumGateType::kCRxGateType:
-              {
-                const auto g = std::static_pointer_cast<Circuits::CRxGate<>>(gate);
-                crxgate.SetTheta(g->GetTheta());
-                result.emplace_back(crxgate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-              }
-              case Circuits::QuantumGateType::kCRyGateType:
-              {
-                const auto g = std::static_pointer_cast<Circuits::CRyGate<>>(gate);
-                crygate.SetTheta(g->GetTheta());
-                result.emplace_back(crygate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-              }
-              case Circuits::QuantumGateType::kCRzGateType:
-              {
-                const auto g = std::static_pointer_cast<Circuits::CRzGate<>>(gate);
-                crzgate.SetTheta(g->GetTheta());
-                result.emplace_back(crzgate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-              }
-              case Circuits::QuantumGateType::kCHGateType:
-                result.emplace_back(ch.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kCSxGateType:
-                result.emplace_back(csx.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kCSxDagGateType:
-                result.emplace_back(csxdag.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kCUGateType:
-              {
-                const auto g = std::static_pointer_cast<Circuits::CUGate<>>(gate);
-                cugate.SetParams(g->GetTheta(), g->GetPhi(), g->GetLambda(), g->GetGamma());
-                result.emplace_back(cugate.getRawOperatorMatrix(), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-              }
-
-              // three qubit gates
-              case Circuits::QuantumGateType::kCCXGateType:
-                result.emplace_back(ccxgate.getRawOperatorMatrix(), gate->GetQubit(2), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-              case Circuits::QuantumGateType::kCSwapGateType:
-                result.emplace_back(cswapgate.getRawOperatorMatrix(), gate->GetQubit(2), gate->GetQubit(1), gate->GetQubit(0));
-                break;
-
-              default:
-                break;
-              }
+              if (auto applied = ConvertGate(gate))
+                result.emplace_back(std::move(*applied));
             }
 
             return result;
           }
 
-          static size_t GetBranching(const std::vector<QC::Gates::AppliedGate<>>& circuit) {
+          static size_t GetBranchingForQcsimCircuit(const std::vector<QC::Gates::AppliedGate<>>& circuit) {
             size_t doublings = 0;
             for (const auto& gate : circuit) 
               if (gate.isBranching()) ++doublings;
 
             return doublings;
+          }
+
+          size_t GetBranchingForMaestroCircuit(const std::shared_ptr<Circuits::Circuit<>>& circuit) {
+            const auto circ = ConvertCircuit(circuit);
+
+            return GetBranchingForQcsimCircuit(circ);
+          }
+
+          double QubitProbability(size_t qubit, bool value = true) {
+            return simulator.QubitProbability(qubit, value);
           }
 
 		private:

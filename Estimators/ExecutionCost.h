@@ -129,7 +129,7 @@ class ExecutionCost {
       return cost;
     } else if (method == Simulators::SimulationType::kStabilizer) {
       const double measOrder = pow(nrQubits, 2);
-      const double opOrder = nrQubits;
+      const double opOrder = static_cast<double>(nrQubits);
 
       double cost = 0;
       for (const auto& op : *circuit) {
@@ -311,7 +311,7 @@ class ExecutionCost {
       return cost + samples * twoQubitOpOrder * nrQubits * nrQubits;
     } else if (method == Simulators::SimulationType::kStabilizer) {
       const double measOrder = pow(nrQubits, 2);
-      const double opOrder = nrQubits;
+      const double opOrder = static_cast<double>(nrQubits);
 
       double cost = 0;
       for (size_t i = 0; i < circuit->size(); ++i) {
@@ -678,7 +678,7 @@ class ExecutionCost {
       size_t nrRandomCircuitsPerConfig, size_t maxBondDim,
       const std::string& logFilePath) {
     bool isClifford = (method == Simulators::SimulationType::kStabilizer);
-    int nrNonCliffordGates = depthMax;  // a limit
+    int nrNonCliffordGates = static_cast<int>(depthMax);  // a limit
     // but if it's pauli...
     if (method == Simulators::SimulationType::kPauliPropagator) {
       nrNonCliffordGates = 1;
@@ -754,7 +754,7 @@ class ExecutionCost {
       size_t nrRandomCircuitsPerConfig, size_t maxBondDim,
       const std::string& logFilePath) {
     bool isClifford = (method == Simulators::SimulationType::kStabilizer);
-    int nrNonCliffordGates = depthMax;  // a limit
+    int nrNonCliffordGates = static_cast<int>(depthMax);  // a limit
     // but if it's pauli...
     if (method == Simulators::SimulationType::kPauliPropagator) {
       nrNonCliffordGates = 1;
@@ -799,7 +799,7 @@ class ExecutionCost {
       size_t nrRandomCircuitsPerConfig, size_t maxBondDim,
       const std::string& logFilePath) {
     bool isClifford = (method == Simulators::SimulationType::kStabilizer);
-    int nrNonCliffordGates = depthMax;  // a limit
+    int nrNonCliffordGates = static_cast<int>(depthMax);  // a limit
     // but if it's pauli...
     if (method == Simulators::SimulationType::kPauliPropagator) {
       nrNonCliffordGates = 1;
