@@ -24,6 +24,7 @@
 #include "GpuStabilizer.h"
 #include "GpuPauliPropagator.h"
 #include "QuestLibSim.h"
+#include "PathIntegralSimulator.h"
 
 #include "Simulator.h"
 
@@ -123,6 +124,10 @@ class SimulatorsFactory {
   static std::shared_ptr<QuestLibSim> GetQuestLibrary() {
     if (!questLibrary || !questLibrary->IsValid()) return nullptr;
     return questLibrary;
+  }
+
+  static std::shared_ptr<PathIntegralSimulator> CreatePathIntegralSimulator() {
+    return std::make_shared<PathIntegralSimulator>();
   }
 
  private:

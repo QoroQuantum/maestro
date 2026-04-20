@@ -818,9 +818,9 @@ class AerSimulator : public AerState {
     const Types::qubits_vector qubits = {ctrl_qubit, qubit0, qubit1};
 
     if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
-      const int q1 = ctrl_qubit;  // control
-      const int q2 = qubit0;
-      const int q3 = qubit1;
+      const int q1 = static_cast<int>(ctrl_qubit);  // control
+      const int q2 = static_cast<int>(qubit0);
+      const int q3 = static_cast<int>(qubit1);
 
       ApplyCX(q3, q2);
       ApplyCSx(q2, q3);
