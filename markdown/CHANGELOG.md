@@ -7,14 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.11] - 2026-04-20
+
+### Added
+- **Python 3.13 and 3.14 wheels** published to PyPI for Linux, macOS, and Windows
+- `QasmToCirc.failed()` and `QasmToCirc.get_error_message()` Python bindings for inspecting parser state after a failed parse
+- QASM parser: `id` gates and unrecognised no-op instructions are now silently skipped instead of raising
+
 ### Changed
 - **`SimulatorConfig` struct** — all execution, estimation, and fidelity functions now accept a single `config=maestro.SimulatorConfig(...)` parameter instead of repeating `simulator_type`, `simulation_type`, `max_bond_dimension`, `singular_value_threshold`, `use_double_precision`, `disable_optimized_swapping`, `lookahead_depth`, and `mps_measure_no_collapse` as individual keyword arguments. Create a config once and reuse it across calls.
 - Updated all Python examples to use the new `SimulatorConfig` API
 - Updated `python.dox` and `TUTORIAL.md` documentation with `SimulatorConfig` usage
+- `QasmToCirc.parse_and_translate` now raises `ValueError` carrying the parser error message when QASM input is invalid, instead of returning a bad circuit silently
+- Build toolchain: `cibuildwheel` upgraded from `v2.22.0` to `v3.4.1`; default Linux manylinux image moved from `manylinux2014` to `manylinux_2_28` (wheels now require glibc 2.28+, i.e. RHEL 8 / Ubuntu 20.04 / Debian 10 or newer)
+- MPS swap optimization: `growthFactorGate` heuristic tuned from `0.7` to `0.65` across QCSim, GPU, MPSDummy, and SimpleDisconnectedNetwork — may shift swap-vs-gate planning decisions on large circuits
 
 ### Fixed
 - `simple_execute` (QASM variant) was not forwarding `mps_measure_no_collapse` to the simulator
 - `noisy_estimate_montecarlo` was not forwarding `mps_measure_no_collapse` to noisy runs
+- `mirror_fidelity` returned incorrect values because the circuit optimizer cancelled the mirror's paired gate/adjoint operations before execution. Circuit optimization and MPS swap optimization are now disabled for the mirror run, and non-gate operations (e.g. measurements) are skipped during the adjoint reverse pass
+- `SampleCountsMany` on the Qiskit Aer MPS backend returned bits in ascending-qubit-index order rather than the caller-requested qubit order, silently misaligning outcomes. Bits are now remapped to match the caller order (consistent with the statevector backend)
+- `singular_value_threshold` values below ~1e-4 were truncated to `0` when serialized to the MPS backend (via `std::to_string`'s default 6-digit precision), effectively disabling entanglement truncation. Serialization now uses `max_digits10` (17 significant digits)
 
 ## [0.2.10] - 2026-04-16
 
