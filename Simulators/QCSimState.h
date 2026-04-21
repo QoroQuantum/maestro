@@ -21,6 +21,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <random>
 
 #include "Simulator.h"
 
@@ -28,6 +29,7 @@
 #include "MPSSimulator.h"
 #include "QubitRegister.h"
 #include "QcsimPauliPropagator.h"
+#include "PathIntegralSimulator.h"
 
 #include "../TensorNetworks/ForestContractor.h"
 #include "../TensorNetworks/TensorNetwork.h"
@@ -87,6 +89,10 @@ class QCSimState : public ISimulator {
       } else if (simulationType == SimulationType::kPauliPropagator) {
         pp = std::make_unique<Simulators::QcsimPauliPropagator>();
         pp->SetNrQubits(static_cast<int>(nrQubits));
+      } else if (simulationType == SimulationType::kPathIntegral) {
+        pathIntegralSimulator =
+            std::make_unique<PathIntegralSimulator>();
+        pathIntegralSimulator->SetStartZeroState(nrQubits);
       } else
         state = std::make_unique<QC::QubitRegister<>>(nrQubits);
 
@@ -220,6 +226,8 @@ class QCSimState : public ISimulator {
       state->Reset();
     else if (pp)
       pp->ClearOperations();
+    else if (pathIntegralSimulator)
+      pathIntegralSimulator->Reset();
 
     upcomingGateIndex = 0;
   }
@@ -468,6 +476,8 @@ class QCSimState : public ISimulator {
         simulationType = SimulationType::kTensorNetwork;
       else if (std::string("pauli_propagator") == value)
         simulationType = SimulationType::kPauliPropagator;
+      else if (std::string("path_integral") == value)
+        simulationType = SimulationType::kPathIntegral;
     } else if (std::string("matrix_product_state_truncation_threshold") ==
                key) {
       singularValueThreshold = std::stod(value);
@@ -512,6 +522,8 @@ class QCSimState : public ISimulator {
           return "tensor_network";
         case SimulationType::kPauliPropagator:
           return "pauli_propagator";
+        case SimulationType::kPathIntegral:
+          return "path_integral";
         default:
           return "other";
       }
@@ -577,6 +589,7 @@ class QCSimState : public ISimulator {
     cliffordSimulator = nullptr;
     tensorNetwork = nullptr;
     pp = nullptr;
+    pathIntegralSimulator = nullptr;
     dummySim = nullptr;
     nrQubits = 0;
     upcomingGateIndex = 0;
@@ -633,6 +646,11 @@ class QCSimState : public ISimulator {
         mask <<= 1;
       }
       return result;
+    } else if (simulationType == SimulationType::kPathIntegral) {
+      for (size_t qubit : qubits) {
+        if (pathIntegralSimulator->MeasureQubit(qubit)) res |= mask;
+        mask <<= 1;
+      }
     } else {
       /*
       for (size_t qubit : qubits)
@@ -682,6 +700,9 @@ class QCSimState : public ISimulator {
     } else if (simulationType == SimulationType::kPauliPropagator) {
       std::vector<int> qubitsInt(qubits.begin(), qubits.end());
       res = pp->Measure(qubitsInt);
+    } else if (simulationType == SimulationType::kPathIntegral) {
+      for (size_t q = 0; q < qubits.size(); ++q)
+        if (pathIntegralSimulator->MeasureQubit(qubits[q])) res[q] = true;
     } else {
       const std::set<Eigen::Index> qubitsSet(qubits.begin(), qubits.end());
       auto measured = mpsSimulator->MeasureQubits(qubitsSet);
@@ -722,6 +743,12 @@ class QCSimState : public ISimulator {
       for (size_t i = 0; i < res.size(); ++i) {
         if (res[i]) pp->ApplyX(qubitsInt[i]);
       }
+    } else if (simulationType == SimulationType::kPathIntegral) {
+      for (size_t qubit : qubits)
+        if (pathIntegralSimulator->MeasureQubit(qubit)) {
+            QC::Gates::AppliedGate<> gate(xGate.getRawOperatorMatrix(), qubit);
+            pathIntegralSimulator->PropagateStep(gate, pathIntegralSimulator->Amplitudes());
+        }
     } else {
       for (size_t qubit : qubits)
         if (mpsSimulator->MeasureQubit(static_cast<unsigned int>(qubit)))
@@ -754,6 +781,8 @@ class QCSimState : public ISimulator {
       return tensorNetwork->getBasisStateProbability(outcome);
     else if (simulationType == SimulationType::kPauliPropagator)
       return pp->Probability(outcome);
+    else if (simulationType == SimulationType::kPathIntegral)
+      return pathIntegralSimulator->Probability(outcome);
 
     return state->getBasisStateProbability(static_cast<unsigned int>(outcome));
   }
@@ -772,6 +801,8 @@ class QCSimState : public ISimulator {
     if (simulationType == SimulationType::kMatrixProductState)
       return mpsSimulator->getBasisStateAmplitude(
           static_cast<unsigned int>(outcome));
+    else if (simulationType == SimulationType::kPathIntegral)
+      return pathIntegralSimulator->AmplitudeForOutcome(outcome);
     else if (simulationType == SimulationType::kStabilizer)
       throw std::runtime_error(
           "QCSimState::Amplitude: Invalid simulation type for obtaining the "
@@ -804,6 +835,7 @@ class QCSimState : public ISimulator {
   std::complex<double> ProjectOnZero() override { 
       if (simulationType == SimulationType::kMatrixProductState)
         return mpsSimulator->ProjectOnZero();
+
       return Amplitude(0); 
   }
 
@@ -829,6 +861,12 @@ class QCSimState : public ISimulator {
       const size_t nrBasisStates = 1ULL << GetNumberOfQubits();
       std::vector<double> result(nrBasisStates);
       for (size_t i = 0; i < nrBasisStates; ++i) result[i] = pp->Probability(i);
+      return result;
+    } else if (simulationType == SimulationType::kPathIntegral) {
+      const size_t nrBasisStates = 1ULL << GetNumberOfQubits();
+      std::vector<double> result(nrBasisStates);
+      for (size_t i = 0; i < nrBasisStates; ++i)
+        result[i] = pathIntegralSimulator->Probability(i);
       return result;
     }
 
@@ -876,6 +914,9 @@ class QCSimState : public ISimulator {
     } else if (simulationType == SimulationType::kPauliPropagator) {
       for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
         result[i] = pp->Probability(qubits[i]);
+    } else if (simulationType == SimulationType::kPathIntegral) {
+      for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
+        result[i] = pathIntegralSimulator->Probability(qubits[i]);
     } else {
       const Eigen::VectorXcd &reg = state->getRegisterStorage();
 
@@ -1508,6 +1549,8 @@ class QCSimState : public ISimulator {
   std::unique_ptr<TensorNetworks::TensorNetwork>
       tensorNetwork;                        /**< The qcsim tensor network. */
   std::unique_ptr<QcsimPauliPropagator> pp; /**< The qcsim pauli propagator. */
+  std::unique_ptr<PathIntegralSimulator>
+      pathIntegralSimulator; /**< The qcsim path integral simulator. */
 
   size_t nrQubits = 0; /**< The number of allocated qubits. */
   bool limitSize = false;

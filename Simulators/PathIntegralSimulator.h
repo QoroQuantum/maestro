@@ -31,6 +31,8 @@ namespace Simulators {
 
           size_t GetMaxDoublingsForBackwardPaths() const { return simulator.GetMaxDoublingsForBackwardPaths(); }
 
+          void Reset() { simulator.Reset(); }
+
           bool SetCircuit(const std::shared_ptr<Circuits::Circuit<>>& circuit)
           {
             const auto convertedCircuit = ConvertCircuit(circuit);
@@ -179,12 +181,20 @@ namespace Simulators {
               if (!op || op->GetType() != Circuits::OperationType::kGate)
                 continue;
 
-              const auto gate = std::static_pointer_cast<Circuits::IQuantumGate<>>(op);
+              const auto& gate = std::static_pointer_cast<Circuits::IQuantumGate<>>(op);
               if (auto applied = ConvertGate(gate))
                 result.emplace_back(std::move(*applied));
             }
 
             return result;
+          }
+
+          void PropagateStep(
+              const QC::Gates::AppliedGate<>& gate,
+              std::unordered_map<QC::PathIntegral::FastVectorBool, std::complex<double>,
+              QC::PathIntegral::FastVectorBoolHash>& currentAmplitudes)
+          {
+            simulator.PropagateStep(gate, currentAmplitudes);
           }
 
           static size_t GetBranchingForQcsimCircuit(const std::vector<QC::Gates::AppliedGate<>>& circuit) {
@@ -203,6 +213,52 @@ namespace Simulators {
 
           double QubitProbability(size_t qubit, bool value = true) {
             return simulator.QubitProbability(qubit, value);
+          }
+
+          std::complex<double> AmplitudeForOutcome(size_t outcome) {
+            const auto& amplitudes = simulator.GetAmplitudes();
+            if (amplitudes.empty()) return 0.0;
+
+            QC::PathIntegral::FastVectorBool state(
+                amplitudes.begin()->first.size());
+            for (size_t q = 0; q < state.size(); ++q)
+              state.set(q, (outcome >> q) & 1);
+            if (auto it = amplitudes.find(state); it != amplitudes.end())
+              return it->second;
+            return 0.0;
+          }
+
+          double Probability(size_t outcome) {
+            return std::norm(AmplitudeForOutcome(outcome));
+          }
+
+          QC::PathIntegral::FastVectorBool MeasureNoCollapse() {
+            return simulator.MeasureNoCollapse();
+          }
+
+          bool MeasureQubit(size_t qubit) {
+            return simulator.MeasureQubit(qubit);
+          }
+
+          std::unique_ptr<PathIntegralSimulator> Clone() const {
+            auto clone = std::make_unique<PathIntegralSimulator>();
+            clone->simulator = simulator.Clone();
+            return clone;
+          }
+
+          std::unordered_map<QC::PathIntegral::FastVectorBool, std::complex<double>,
+                             QC::PathIntegral::FastVectorBoolHash>&
+              Amplitudes()
+          {
+            return simulator.GetAmplitudes();
+          }
+
+          void SetStartZeroState(size_t numQubits) {
+            auto& amplitudes = simulator.GetAmplitudes();
+
+            amplitudes.clear();
+            QC::PathIntegral::FastVectorBool zeroState(numQubits);
+            amplitudes[zeroState] = 1.0;
           }
 
 		private:

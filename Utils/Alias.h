@@ -21,7 +21,80 @@
 
 namespace Utils {
 
-class Alias {
+
+class AliasEntry {
+ public:
+  AliasEntry() : probability(1.), alias(-1) {}
+  AliasEntry(double prob, long long int ali) : probability(prob), alias(ali) {}
+
+  double probability;
+  long long int alias;
+};
+
+class AliasBase {
+ protected:
+  /*
+  void SetAliasTable(std::vector<double>& probabilities)
+  {
+    aliasTable.resize(probabilities.size());
+
+    std::vector<AliasEntry> under;
+    std::vector<AliasEntry> over;
+
+    // this uses four times the memory of the sampling with the binary search
+    under.reserve(probabilities.size());
+    over.reserve(probabilities.size());
+
+    for (Eigen::Index i = 0;
+         i < static_cast<Eigen::Index>(probabilities.size()); ++i) {
+      const double prob = probabilities[i] * probabilities.size();
+      if (prob < 1.)
+        under.emplace_back(prob, i);
+      else
+        over.emplace_back(prob, i);
+    }
+
+    SetAliasTable(under, over);
+  }
+  */
+
+  void SetAliasTable(std::vector<AliasEntry> &under,
+                     std::vector<AliasEntry> &over) {
+    while (!under.empty() && !over.empty()) {
+      const AliasEntry &u = under.back();
+      const AliasEntry &o = over.back();
+
+      const size_t index = o.alias;
+
+      aliasTable[u.alias] = AliasEntry(u.probability, index);
+
+      const double rem = o.probability + u.probability - 1.;
+
+      under.pop_back();
+      over.pop_back();
+
+      if (rem < 1.)
+        under.emplace_back(rem, index);
+      else
+        over.emplace_back(rem, index);
+    }
+
+    const AliasEntry one(1., -1);
+
+    for (; !under.empty(); under.pop_back())
+      aliasTable[under.back().alias] = one;
+
+    for (; !over.empty(); over.pop_back()) aliasTable[over.back().alias] = one;
+  }
+
+  std::vector<AliasEntry> aliasTable;
+  std::vector<long long int> statesTable;
+  static constexpr double oneMinusEps =
+      1. - std::numeric_limits<double>::epsilon();
+};
+
+
+class Alias : public AliasBase {
  public:
   Alias() = delete;
 
@@ -133,76 +206,58 @@ class Alias {
   }
 
  private:
-  class AliasEntry {
-   public:
-    AliasEntry() : probability(1.), alias(-1) {}
-    AliasEntry(double prob, long long int ali)
-        : probability(prob), alias(ali) {}
+  std::vector<long long int> statesTable;
+};
 
-    double probability;
-    long long int alias;
-  };
 
-  /*
-  void SetAliasTable(std::vector<double>& probabilities)
-  {
-    aliasTable.resize(probabilities.size());
 
+class AliasBig : public AliasBase {
+ public:
+  AliasBig() = delete;
+
+  AliasBig(const std::unordered_map<
+        QC::PathIntegral::FastVectorBool, std::complex<double>,
+        QC::PathIntegral::FastVectorBoolHash> &amplitudesMap) {
     std::vector<AliasEntry> under;
     std::vector<AliasEntry> over;
 
     // this uses four times the memory of the sampling with the binary search
-    under.reserve(probabilities.size());
-    over.reserve(probabilities.size());
+    under.reserve(amplitudesMap.size());
+    over.reserve(amplitudesMap.size());
 
-    for (Eigen::Index i = 0;
-         i < static_cast<Eigen::Index>(probabilities.size()); ++i) {
-      const double prob = probabilities[i] * probabilities.size();
+    statesTable.reserve(amplitudesMap.size());
+
+    // size_t maxState = 0;
+    long long int i = 0;
+    for (const auto &valPair : amplitudesMap) {
+      const double prob = std::norm(valPair.second) * amplitudesMap.size();
       if (prob < 1.)
         under.emplace_back(prob, i);
       else
         over.emplace_back(prob, i);
+
+      statesTable.emplace_back(std::move(valPair.first.toVector()));
+      ++i;
     }
+
+    aliasTable.resize(under.size() + over.size());
 
     SetAliasTable(under, over);
   }
-  */
 
-  void SetAliasTable(std::vector<AliasEntry>& under,
-                     std::vector<AliasEntry>& over)
-  {
-    while (!under.empty() && !over.empty()) {
-      const AliasEntry &u = under.back();
-      const AliasEntry &o = over.back();
+  inline QC::PathIntegral::FastVectorBool Sample(double v) const {
+    const double vadj = v * aliasTable.size();
+    const size_t offset =
+        std::min<size_t>(static_cast<size_t>(vadj), aliasTable.size() - 1);
+    const double up = std::min<double>(vadj - offset, oneMinusEps);
 
-      const size_t index = o.alias;
-
-      aliasTable[u.alias] = AliasEntry(u.probability, index);
-
-      const double rem = o.probability + u.probability - 1.;
-
-      under.pop_back();
-      over.pop_back();
-
-      if (rem < 1.)
-        under.emplace_back(rem, index);
-      else
-        over.emplace_back(rem, index);
-    }
-
-    const AliasEntry one(1., -1);
-
-    for (; !under.empty(); under.pop_back())
-      aliasTable[under.back().alias] = one;
-
-    for (; !over.empty(); over.pop_back()) 
-      aliasTable[over.back().alias] = one;
+    return statesTable[up < aliasTable[offset].probability
+                           ? offset
+                           : aliasTable[offset].alias];
   }
 
-  std::vector<AliasEntry> aliasTable;
-  std::vector<long long int> statesTable;
-  static constexpr double oneMinusEps =
-      1. - std::numeric_limits<double>::epsilon();
+ private:
+  std::vector<QC::PathIntegral::FastVectorBool> statesTable;
 };
 
 }  // namespace Utils
