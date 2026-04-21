@@ -130,6 +130,8 @@ BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
 
     BOOST_CHECK_SMALL(std::abs(aerAmp - piAmp), 1e-7);
   }
+
+  
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -89,6 +89,7 @@ enum class SimulationType : int {
   kTensorNetwork,      /**< Tensor network simulation type */
   kPauliPropagator,    /**< Pauli propagator simulation type */
   kExtendedStabilizer, /**< Extended stabilizer simulation type */
+  kPathIntegral,       /**< Path integral simulation type */
   kOther /**< other simulation type, could occur for the aer simulator, which
             also has density matrix, stabilizer, unitary, superop */
 };
