@@ -261,6 +261,60 @@ namespace Simulators {
             amplitudes[zeroState] = 1.0;
           }
 
+          double ExpectationValue(const std::string& pauliStringOrig) {
+            // save current amplitudes
+            const auto& currentAmplitudes = simulator.GetAmplitudes();
+            auto amplitudes = currentAmplitudes;
+
+            // now apply the pauli string as gates
+            for (size_t i = 0; i < pauliStringOrig.size(); ++i)
+            {
+              const char c = pauliStringOrig[i];
+              switch (c)
+              {
+              case 'X':
+                  [[fallthrough]];
+              case 'x':
+                PropagateStep(QC::Gates::AppliedGate<>(xgate.getRawOperatorMatrix(), i), amplitudes);
+                break;
+              case 'Y':
+                  [[fallthrough]];
+              case 'y':
+                PropagateStep(QC::Gates::AppliedGate<>(ygate.getRawOperatorMatrix(), i), amplitudes);
+                break;
+              case 'Z':
+                  [[fallthrough]];
+              case 'z':
+                PropagateStep(QC::Gates::AppliedGate<>(zgate.getRawOperatorMatrix(), i), amplitudes);
+                break;
+              default:
+                break;
+              }
+            }
+
+            // use the new amplitudes to calculate the expectation value
+            double expectation = 0.0;
+
+            for (const auto& [state, amplitude] : amplitudes)
+            {
+              if (currentAmplitudes.find(state) == currentAmplitudes.end())
+                continue;
+
+              const auto& oldAmplitude = currentAmplitudes.at(state);
+              expectation += std::real(std::conj(oldAmplitude) * amplitude);
+            }
+
+            return expectation;
+          }
+
+          void ApplyGate(const QC::Gates::AppliedGate<>& gate) {
+            simulator.PropagateStep(gate, simulator.GetAmplitudes());
+          }
+
+          void SaveState() { simulator.SaveAmplitudes(); }
+
+          void RestoreState() { simulator.RestoreAmplitudes(); }
+
 		private:
           QC::PathIntegral::PathIntegralSimulator simulator;
 

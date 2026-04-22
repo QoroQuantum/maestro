@@ -74,7 +74,8 @@ class QCSimState : public ISimulator {
           mpsSimulator->setLimitEntanglement(singularValueThreshold);
         if (limitSize && chi > 0) mpsSimulator->setLimitBondDimension(chi);
         // default is true
-        if (!useOptimalMeetingPosition) mpsSimulator->SetUseOptimalMeetingPosition(false);
+        if (!useOptimalMeetingPosition)
+          mpsSimulator->SetUseOptimalMeetingPosition(false);
       } else if (simulationType == SimulationType::kStabilizer)
         cliffordSimulator =
             std::make_unique<QC::Clifford::StabilizerSimulator>(nrQubits);
@@ -90,8 +91,7 @@ class QCSimState : public ISimulator {
         pp = std::make_unique<Simulators::QcsimPauliPropagator>();
         pp->SetNrQubits(static_cast<int>(nrQubits));
       } else if (simulationType == SimulationType::kPathIntegral) {
-        pathIntegralSimulator =
-            std::make_unique<PathIntegralSimulator>();
+        pathIntegralSimulator = std::make_unique<PathIntegralSimulator>();
         pathIntegralSimulator->SetStartZeroState(nrQubits);
       } else
         state = std::make_unique<QC::QubitRegister<>>(nrQubits);
@@ -226,8 +226,10 @@ class QCSimState : public ISimulator {
       state->Reset();
     else if (pp)
       pp->ClearOperations();
-    else if (pathIntegralSimulator)
+    else if (pathIntegralSimulator) {
       pathIntegralSimulator->Reset();
+      pathIntegralSimulator->SetStartZeroState(nrQubits);
+    }
 
     upcomingGateIndex = 0;
   }
@@ -254,7 +256,8 @@ class QCSimState : public ISimulator {
     if (mpsSimulator) {
       mpsSimulator->SetInitialQubitsMap(initialMap);
       if (!dummySim || dummySim->getNrQubits() != initialMap.size()) {
-        dummySim = std::make_unique<Simulators::MPSDummySimulator>(initialMap.size());
+        dummySim =
+            std::make_unique<Simulators::MPSDummySimulator>(initialMap.size());
         dummySim->SetMaxBondDimension(
             limitSize ? static_cast<long long int>(chi) : 0);
       }
@@ -266,8 +269,7 @@ class QCSimState : public ISimulator {
 
   void SetUseOptimalMeetingPosition(bool enable) override {
     useOptimalMeetingPosition = enable;
-    if (mpsSimulator)
-        mpsSimulator->SetUseOptimalMeetingPosition(enable);
+    if (mpsSimulator) mpsSimulator->SetUseOptimalMeetingPosition(enable);
   }
 
   void SetLookaheadDepth(int depth) override {
@@ -276,27 +278,30 @@ class QCSimState : public ISimulator {
       mpsSimulator->SetUseOptimalMeetingPosition(true);
   }
 
-  void SetLookaheadDepthWithHeuristic(int depth) override 
-  {
+  void SetLookaheadDepthWithHeuristic(int depth) override {
     lookaheadDepthWithHeuristic = depth;
     if (lookaheadDepth < depth) SetLookaheadDepth(depth);
   }
 
   void SetUpcomingGates(
-      const std::vector<std::shared_ptr<Circuits::IOperation<double>>> &gates) override {
+      const std::vector<std::shared_ptr<Circuits::IOperation<double>>> &gates)
+      override {
     upcomingGates = gates;
     upcomingGateIndex = 0;
 
     if (!mpsSimulator || lookaheadDepth <= 0) return;
 
     // Register an observer that advances the gate index
-    ClearObservers(); // for now we only have this observer, so this should be fine
-    gateCounterObserver = std::make_shared<GateCounterObserver>(upcomingGateIndex);
+    ClearObservers();  // for now we only have this observer, so this should be
+                       // fine
+    gateCounterObserver =
+        std::make_shared<GateCounterObserver>(upcomingGateIndex);
     RegisterObserver(gateCounterObserver);
 
     // Set up a meeting position callback that uses MPSDummySimulator
     // for lookahead evaluation with actual bond dimensions
-    // the callback is called only for two qubits gates and only if executing them would require a swap
+    // the callback is called only for two qubits gates and only if executing
+    // them would require a swap
     mpsSimulator->SetMeetingPositionCallback(
         [this](/*const auto &qMap,*/ const auto &bondDims)
             -> QC::TensorNetworks::MPSSimulatorInterface::IndexType {
@@ -304,16 +309,16 @@ class QCSimState : public ISimulator {
 
           if (!dummySim || dummySim->getNrQubits() != nQ) {
             dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
-            dummySim->SetMaxBondDimension(limitSize ? static_cast<long long int>(chi) : 0);
+            dummySim->SetMaxBondDimension(
+                limitSize ? static_cast<long long int>(chi) : 0);
             dummySim->setGrowthFactorGate(growthFactorGate);
             dummySim->setGrowthFactorSwap(growthFactorSwap);
           }
 
           // Seed dummy with current real simulator state
-          //std::vector<long long int> map64(qMap.begin(), qMap.end());
-          //dummySim->SetInitialQubitsMap(map64);
+          // std::vector<long long int> map64(qMap.begin(), qMap.end());
+          // dummySim->SetInitialQubitsMap(map64);
           dummySim->setTotalSwappingCost(0);
-
 
           // check qubits map:
           /*
@@ -330,16 +335,15 @@ class QCSimState : public ISimulator {
 
           // check them, they should be the same, otherwise something is wrong
 
-
           // Convert actual bond dims to doubles
           std::vector<double> bondDimsD(bondDims.begin(), bondDims.end());
           dummySim->SetCurrentBondDimensions(bondDimsD);
 
           // display bond dimensions for debugging
           /*
-          std::cout << "Bond dimensions before swapping and applying the gate: ";
-          for (size_t i = 0; i < bondDims.size(); ++i) {
-            std::cout << bondDims[i] << " ";
+          std::cout << "Bond dimensions before swapping and applying the gate:
+          "; for (size_t i = 0; i < bondDims.size(); ++i) { std::cout <<
+          bondDims[i] << " ";
           }
           std::cout << std::endl;
           */
@@ -348,21 +352,26 @@ class QCSimState : public ISimulator {
           const auto qbits = op->AffectedQubits();
 
           if (qbits.size() != 2) {
-            std::cerr << "Error: Meeting position callback called for a gate that does not have exactly 2 qubits." << std::endl;
+            std::cerr << "Error: Meeting position callback called for a gate "
+                         "that does not have exactly 2 qubits."
+                      << std::endl;
 
-            return -1; // will fallback 
+            return -1;  // will fallback
           }
-          
+
           /*
           const auto &qmap = dummySim->getQubitsMap();
 
-          std::cout << "Applying 2-qubit gate on physical qubits " << qmap[qbits[0]] << " and "
+          std::cout << "Applying 2-qubit gate on physical qubits " <<
+          qmap[qbits[0]] << " and "
                     << qmap[qbits[1]]
                     << std::endl;
           */
           /*
-          std::cout << "Finding best meeting position for upcoming gates starting at index "
-                    << upcomingGateIndex << " with lookahead depth " << lookaheadDepth << " and heuristic depth "
+          std::cout << "Finding best meeting position for upcoming gates
+          starting at index "
+                    << upcomingGateIndex << " with lookahead depth " <<
+          lookaheadDepth << " and heuristic depth "
                     << lookaheadDepthWithHeuristic << std::endl;
 
 
@@ -376,21 +385,24 @@ class QCSimState : public ISimulator {
           std::cout << std::endl;
 
           std::cout << "Current inverse qubits map: ";
-          for (size_t i = 0; i < qMapInv.size(); ++i) std::cout << qMapInv[i] << " ";
-          std::cout << std::endl;
+          for (size_t i = 0; i < qMapInv.size(); ++i) std::cout << qMapInv[i] <<
+          " "; std::cout << std::endl;
           */
 
           double bestCost = std::numeric_limits<double>::infinity();
-          auto res = dummySim->FindBestMeetingPosition(upcomingGates, upcomingGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, 0, bestCost);
+          auto res = dummySim->FindBestMeetingPosition(
+              upcomingGates, upcomingGateIndex, lookaheadDepth,
+              lookaheadDepthWithHeuristic, 0, bestCost);
 
-          //std::cout << "Swapping the two qubits on position: " << res << " and " << (res + 1) << std::endl;
+          // std::cout << "Swapping the two qubits on position: " << res << "
+          // and " << (res + 1) << std::endl;
 
           dummySim->SwapQubitsToPosition(qbits[0], qbits[1], res);
           dummySim->ApplyGate(op);
 
           // display the expected bond dimensions after applying the gate for
           // debugging
-          
+
           /*
           const auto &expectedBondDims = dummySim->getCurrentBondDimensions();
           std::cout << "Expected bond dimensions after swapping and applying "
@@ -400,9 +412,9 @@ class QCSimState : public ISimulator {
           }
           std::cout << std::endl;
           */
-          
-          //std::cout << "Best meeting position: " << res
-          //          << " with estimated cost: " << bestCost << std::endl;
+
+          // std::cout << "Best meeting position: " << res
+          //           << " with estimated cost: " << bestCost << std::endl;
 
           return res;
         });
@@ -427,8 +439,8 @@ class QCSimState : public ISimulator {
    * @param counter The position in the circuit from where the execution should
    * continue.
    */
-  void SetGatesCounter(long long int counter) override { 
-      upcomingGateIndex = counter;
+  void SetGatesCounter(long long int counter) override {
+    upcomingGateIndex = counter;
   }
 
   /**
@@ -439,9 +451,7 @@ class QCSimState : public ISimulator {
    * execution should continue. Useful for classically controlled gates, for the
    * case when the controlled gate is not executed.
    */
-  void IncrementGatesCounter() override {
-      ++upcomingGateIndex;
-  }
+  void IncrementGatesCounter() override { ++upcomingGateIndex; }
 
   double getGrowthFactorSwap() const override { return growthFactorSwap; }
   double getGrowthFactorGate() const override { return growthFactorGate; }
@@ -492,7 +502,8 @@ class QCSimState : public ISimulator {
       if (chi > 0) {
         limitSize = true;
         if (mpsSimulator) mpsSimulator->setLimitBondDimension(chi);
-        if (dummySim) dummySim->SetMaxBondDimension(static_cast<long long int>(chi));
+        if (dummySim)
+          dummySim->SetMaxBondDimension(static_cast<long long int>(chi));
       } else {
         limitSize = false;
         if (mpsSimulator) mpsSimulator->setLimitBondDimension(0);
@@ -746,8 +757,9 @@ class QCSimState : public ISimulator {
     } else if (simulationType == SimulationType::kPathIntegral) {
       for (size_t qubit : qubits)
         if (pathIntegralSimulator->MeasureQubit(qubit)) {
-            QC::Gates::AppliedGate<> gate(xGate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->PropagateStep(gate, pathIntegralSimulator->Amplitudes());
+          QC::Gates::AppliedGate<> gate(xGate.getRawOperatorMatrix(), qubit);
+          pathIntegralSimulator->PropagateStep(
+              gate, pathIntegralSimulator->Amplitudes());
         }
     } else {
       for (size_t qubit : qubits)
@@ -832,11 +844,11 @@ class QCSimState : public ISimulator {
    *
    * @return The inner product result as a complex number.
    */
-  std::complex<double> ProjectOnZero() override { 
-      if (simulationType == SimulationType::kMatrixProductState)
-        return mpsSimulator->ProjectOnZero();
+  std::complex<double> ProjectOnZero() override {
+    if (simulationType == SimulationType::kMatrixProductState)
+      return mpsSimulator->ProjectOnZero();
 
-      return Amplitude(0); 
+    return Amplitude(0);
   }
 
   /**
@@ -992,7 +1004,7 @@ class QCSimState : public ISimulator {
             size_t mask = 1ULL;
 
             // might not be in the requested order
-            // translate the measurement            
+            // translate the measurement
             for (auto q : qubits) {
               if (measRaw.at(q)) meas |= mask;
               mask <<= 1ULL;
@@ -1053,6 +1065,42 @@ class QCSimState : public ISimulator {
         }
 
         ++result[meas];
+      }
+    } else if (simulationType == SimulationType::kPathIntegral) {
+      if (nrQubits < 64) {
+        if (shots > 1) {
+          const auto &amplitudes = pathIntegralSimulator->Amplitudes();
+          const Utils::Alias alias(amplitudes);
+
+          for (size_t shot = 0; shot < shots; ++shot) {
+            const double prob = 1. - uniformZeroOne(rng);
+            const size_t measRaw = alias.Sample(prob);
+
+            size_t meas = 0;
+            size_t mask = 1ULL;
+            for (auto q : qubits) {
+              const size_t qubitMask = 1ULL << q;
+              if ((measRaw & qubitMask) != 0) meas |= mask;
+              mask <<= 1ULL;
+            }
+
+            ++result[meas];
+          }
+        } else {
+          const size_t measRaw = MeasureNoCollapse();
+          size_t meas = 0;
+          size_t mask = 1ULL;
+          for (auto q : qubits) {
+            const size_t qubitMask = 1ULL << q;
+            if ((measRaw & qubitMask) != 0) meas |= mask;
+            mask <<= 1ULL;
+          }
+          ++result[meas];
+        }
+      } else {
+        throw std::runtime_error(
+            "QCSimState::SampleCounts: The path integral simulator does not "
+            "support sampling for more than 63 qubits into 64 bits integers.");
       }
     } else {
       if (shots > 1) {
@@ -1143,9 +1191,9 @@ class QCSimState : public ISimulator {
           normal = false;
           for (size_t shot = 0; shot < shots; ++shot) {
             const auto meas = mpsSimulator->MeasureNoCollapse(qset);
-            
+
             // might not be in the requested order
-            // translate the measurement            
+            // translate the measurement
             std::vector<bool> measVec(qubits.size());
             for (size_t i = 0; i < qubits.size(); ++i)
               measVec[i] = meas.at(qubits[i]);
@@ -1195,6 +1243,55 @@ class QCSimState : public ISimulator {
         const auto meas = pp->Sample(qubitsInt);
         ++result[meas];
       }
+    } else if (simulationType == SimulationType::kPathIntegral) {
+      if (nrQubits < 64) {
+        if (shots > 1) {
+          const auto &amplitudes = pathIntegralSimulator->Amplitudes();
+          const Utils::Alias alias(amplitudes);
+          for (size_t shot = 0; shot < shots; ++shot) {
+            const double prob = 1. - uniformZeroOne(rng);
+            const size_t measRaw = alias.Sample(prob);
+            std::vector<bool> meas(qubits.size(), false);
+            for (size_t i = 0; i < qubits.size(); ++i)
+              if (((measRaw >> qubits[i]) & 1) == 1) meas[i] = true;
+            ++result[meas];
+          }
+        } else {
+          for (size_t shot = 0; shot < shots; ++shot) {
+            const auto measRaw = MeasureNoCollapseMany();
+            std::vector<bool> meas(qubits.size(), false);
+
+            for (size_t i = 0; i < qubits.size(); ++i)
+              if (measRaw[qubits[i]]) meas[i] = true;
+
+            ++result[meas];
+          }
+        }
+      } else {
+        if (shots > 1) {
+          const auto &amplitudes = pathIntegralSimulator->Amplitudes();
+          const Utils::AliasBig alias(amplitudes);
+
+          for (size_t shot = 0; shot < shots; ++shot) {
+            const double prob = 1. - uniformZeroOne(rng);
+            const auto measRaw = alias.Sample(prob);
+            std::vector<bool> meas(qubits.size(), false);
+            for (size_t i = 0; i < qubits.size(); ++i)
+              if (measRaw.get(qubits[i])) meas[i] = true;
+            ++result[meas];
+          }
+        } else {
+          for (size_t shot = 0; shot < shots; ++shot) {
+            const auto measRaw = MeasureNoCollapseMany();
+            std::vector<bool> meas(qubits.size(), false);
+
+            for (size_t i = 0; i < qubits.size(); ++i)
+              if (measRaw[qubits[i]]) meas[i] = true;
+
+            ++result[meas];
+          }
+        }
+      }
     } else {
       if (shots > 1) {
         const auto &statev = state->getRegisterStorage();
@@ -1236,8 +1333,8 @@ class QCSimState : public ISimulator {
    *
    * Use it to obtain the expected value of a Pauli string.
    * The Pauli string is a string of characters representing the Pauli
-   * operators, e.g. "XIZY". The length of the string should be less or equal to
-   * the number of qubits (if it's less, it's completed with I).
+   * operators, e.g. "XIZY". The length of the string should be less or equal
+   * to the number of qubits (if it's less, it's completed with I).
    *
    * @param pauliString The Pauli string to obtain the expected value for.
    * @return The expected value of the specified Pauli string.
@@ -1261,6 +1358,8 @@ class QCSimState : public ISimulator {
       return tensorNetwork->ExpectationValue(pauliString);
     else if (simulationType == SimulationType::kPauliPropagator)
       return pp->ExpectationValue(pauliString);
+    else if (simulationType == SimulationType::kPathIntegral)
+      return pathIntegralSimulator->ExpectationValue(pauliString);
 
     // statevector or mps
     static const QC::Gates::PauliXGate<> xgate;
@@ -1326,8 +1425,8 @@ class QCSimState : public ISimulator {
    *
    * This function is called to flush the applied operations.
    * It is used to flush the operations that were applied to the state.
-   * qcsim applies them right away, so this has no effect on it, but qiskit aer
-   * does not.
+   * qcsim applies them right away, so this has no effect on it, but qiskit
+   * aer does not.
    */
   void Flush() override {}
 
@@ -1354,10 +1453,10 @@ class QCSimState : public ISimulator {
    * @brief Saves the state to internal storage.
    *
    * Saves the state to internal storage, if needed.
-   * Calling this will not destroy the internal state, unlike the 'Destructive'
-   * variant. To be used in order to recover the state after doing measurements,
-   * for multiple shots executions. In the first phase, only qcsim will
-   * implement this.
+   * Calling this will not destroy the internal state, unlike the
+   * 'Destructive' variant. To be used in order to recover the state after
+   * doing measurements, for multiple shots executions. In the first phase,
+   * only qcsim will implement this.
    */
   void SaveState() override {
     if (simulationType == SimulationType::kMatrixProductState)
@@ -1368,6 +1467,8 @@ class QCSimState : public ISimulator {
       tensorNetwork->SaveState();
     else if (simulationType == SimulationType::kPauliPropagator)
       pp->SaveState();
+    else if (simulationType == SimulationType::kPathIntegral)
+      pathIntegralSimulator->SaveState();
     else
       state->SaveState();
   }
@@ -1389,6 +1490,8 @@ class QCSimState : public ISimulator {
       tensorNetwork->RestoreState();
     else if (simulationType == SimulationType::kPauliPropagator)
       pp->RestoreState();
+    else if (simulationType == SimulationType::kPathIntegral)
+      pathIntegralSimulator->RestoreState();
     else
       state->RestoreState();
   }
@@ -1423,6 +1526,9 @@ class QCSimState : public ISimulator {
       else
         pp->DisableParallel();
     }
+    if (pathIntegralSimulator) {
+      enableMultithreading = false;  // not supported for now
+    }
   }
 
   /**
@@ -1439,8 +1545,8 @@ class QCSimState : public ISimulator {
    *
    * Returns if the simulator is a qcsim simulator.
    * This is just a helper function to ease things up: qcsim has different
-   * functionality exposed sometimes so it's good to know if we deal with qcsim
-   * or with qiskit aer.
+   * functionality exposed sometimes so it's good to know if we deal with
+   * qcsim or with qiskit aer.
    *
    * @return True if the simulator is a qcsim simulator, false otherwise.
    */
@@ -1451,16 +1557,17 @@ class QCSimState : public ISimulator {
    *
    * Measures all the qubits without collapsing the state, allowing to perform
    * multiple shots. This is to be used only internally, only for the
-   * statevector simulators (or those based on them, as the composite ones). For
-   * the qiskit aer case, SaveStateToInternalDestructive is needed to be called
-   * before this. If one wants to use the simulator after such measurement(s),
-   * RestoreInternalDestructiveSavedState should be called at the end.
+   * statevector simulators (or those based on them, as the composite ones).
+   * For the qiskit aer case, SaveStateToInternalDestructive is needed to be
+   * called before this. If one wants to use the simulator after such
+   * measurement(s), RestoreInternalDestructiveSavedState should be called at
+   * the end.
    *
    * Don't use this for more qubits than the size of Types::qubit_t, as the
    * result is packed in a limited number of bits (e.g. 64 bits for uint64_t)
    *
-   * @return The result of the measurements, the first qubit result is the least
-   * significant bit.
+   * @return The result of the measurements, the first qubit result is the
+   * least significant bit.
    */
   Types::qubit_t MeasureNoCollapse() override {
     if (GetNumberOfQubits() > sizeof(Types::qubit_t) * 8)
@@ -1490,10 +1597,26 @@ class QCSimState : public ISimulator {
         if (res[i]) result |= (1ULL << i);
       }
       return result;
+    } else if (simulationType == SimulationType::kPathIntegral) {
+      if (nrQubits < 64) {
+        const auto measured = pathIntegralSimulator->MeasureNoCollapse();
+        Types::qubit_t result = 0;
+        Types::qubit_t mask = 1;
+        for (Types::qubit_t q = 0; q < measured.size(); ++q) {
+          if (measured.get(q)) result |= mask;
+          mask <<= 1;
+        }
+        return result;
+      } else {
+        throw std::runtime_error(
+            "QCSimState::MeasureNoCollapse: The path integral simulator does not "
+            "support measuring more than 63 qubits into 64 bits integers.");
+      }
     }
 
     throw std::runtime_error(
-        "QCSimState::MeasureNoCollapse: Invalid simulation type for measuring "
+        "QCSimState::MeasureNoCollapse: Invalid simulation type for "
+        "measuring "
         "all the qubits without collapsing the state.");
 
     return 0;
@@ -1504,10 +1627,11 @@ class QCSimState : public ISimulator {
    *
    * Measures all the qubits without collapsing the state, allowing to perform
    * multiple shots. This is to be used only internally, only for the
-   * statevector simulators (or those based on them, as the composite ones). For
-   * the qiskit aer case, SaveStateToInternalDestructive is needed to be called
-   * before this. If one wants to use the simulator after such measurement(s),
-   * RestoreInternalDestructiveSavedState should be called at the end.
+   * statevector simulators (or those based on them, as the composite ones).
+   * For the qiskit aer case, SaveStateToInternalDestructive is needed to be
+   * called before this. If one wants to use the simulator after such
+   * measurement(s), RestoreInternalDestructiveSavedState should be called at
+   * the end.
    *
    * Use this for more qubits than the size of Types::qubit_t
    *
@@ -1528,6 +1652,11 @@ class QCSimState : public ISimulator {
       std::vector<int> qubitsInt(GetNumberOfQubits());
       std::iota(qubitsInt.begin(), qubitsInt.end(), 0);
       return pp->Sample(qubitsInt);
+    } else if (simulationType == SimulationType::kPathIntegral) {
+      const auto measured = pathIntegralSimulator->MeasureNoCollapse();
+      std::vector<bool> res(nrQubits);
+      for (size_t i = 0; i < nrQubits; ++i) res[i] = measured.get(i);
+      return res;
     }
 
     throw std::runtime_error(
@@ -1567,7 +1696,7 @@ class QCSimState : public ISimulator {
   std::vector<std::shared_ptr<Circuits::IOperation<>>> upcomingGates;
   long long int upcomingGateIndex = 0;
   double growthFactorSwap = 1.;
-  double growthFactorGate = 0.65; 
+  double growthFactorGate = 0.65;
 
   std::unique_ptr<Simulators::MPSDummySimulator> dummySim;
 
@@ -1575,9 +1704,8 @@ class QCSimState : public ISimulator {
   class GateCounterObserver : public ISimulatorObserver {
    public:
     GateCounterObserver(long long int &indexRef) : index(indexRef) {}
-    void Update(const Types::qubits_vector &) override { 
-        ++index;
-    }
+    void Update(const Types::qubits_vector &) override { ++index; }
+
    private:
     long long int &index;
   };
