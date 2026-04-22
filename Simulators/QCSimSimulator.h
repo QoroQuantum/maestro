@@ -75,6 +75,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(pgate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyP(static_cast<unsigned int>(qubit), lambda);
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(pgate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(pgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -95,6 +99,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(xgate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyX(static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(xgate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(xgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -115,6 +123,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(ygate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyY(static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(ygate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(ygate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -135,6 +147,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(zgate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyZ(static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(zgate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(zgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -155,6 +171,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(h, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyH(static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(h.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(h, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -175,6 +195,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(sgate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyS(static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(sgate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(sgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -195,6 +219,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(sdggate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplySDG(static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(sdggate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(sdggate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -217,6 +245,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(tgate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyT(static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(tgate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(tgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -239,6 +271,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(tdggate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyTDG(static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(tdggate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(tdggate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -259,6 +295,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(sxgate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplySX(static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(sxgate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(sxgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -279,6 +319,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(sxdaggate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplySXDG(static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(sxdaggate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(sxdaggate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -299,6 +343,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(k, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyK(static_cast<unsigned int>(qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(k.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(k, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -323,6 +371,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(rxgate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyRX(static_cast<unsigned int>(qubit), theta);
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(rxgate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(rxgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -347,6 +399,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(rygate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyRY(static_cast<unsigned int>(qubit), theta);
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(rygate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(rygate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -371,6 +427,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(rzgate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyRZ(static_cast<unsigned int>(qubit), theta);
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(rzgate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(rzgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -399,6 +459,10 @@ class QCSimSimulator : public QCSimState {
       tensorNetwork->AddGate(ugate, static_cast<unsigned int>(qubit));
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyU(static_cast<unsigned int>(qubit), theta, phi, lambda, gamma);
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(ugate.getRawOperatorMatrix(), qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(ugate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
@@ -424,6 +488,11 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyCX(static_cast<unsigned int>(ctrl_qubit),
                   static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(cxgate.getRawOperatorMatrix(),
+                                     tgt_qubit, ctrl_qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(cxgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -450,6 +519,11 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyCY(static_cast<unsigned int>(ctrl_qubit),
                   static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(cygate.getRawOperatorMatrix(),
+                                     tgt_qubit, ctrl_qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(cygate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -476,6 +550,11 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyCZ(static_cast<unsigned int>(ctrl_qubit),
                   static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(czgate.getRawOperatorMatrix(),
+                                     tgt_qubit, ctrl_qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(czgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -506,6 +585,11 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyCP(static_cast<unsigned int>(ctrl_qubit),
                   static_cast<unsigned int>(tgt_qubit), lambda);
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(cpgate.getRawOperatorMatrix(),
+                                     tgt_qubit, ctrl_qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(cpgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -536,6 +620,11 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyCRX(static_cast<unsigned int>(ctrl_qubit),
                    static_cast<unsigned int>(tgt_qubit), theta);
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(crxgate.getRawOperatorMatrix(),
+                                     tgt_qubit, ctrl_qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(crxgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -566,6 +655,11 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyCRY(static_cast<unsigned int>(ctrl_qubit),
                    static_cast<unsigned int>(tgt_qubit), theta);
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(crygate.getRawOperatorMatrix(),
+                                     tgt_qubit, ctrl_qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(crygate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -596,6 +690,11 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyCRZ(static_cast<unsigned int>(ctrl_qubit),
                    static_cast<unsigned int>(tgt_qubit), theta);
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(crzgate.getRawOperatorMatrix(), tgt_qubit,
+                                     ctrl_qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(crzgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -623,6 +722,11 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyCH(static_cast<unsigned int>(ctrl_qubit),
                   static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(ch.getRawOperatorMatrix(), tgt_qubit,
+                                     ctrl_qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(ch, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -650,6 +754,11 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyCSX(static_cast<unsigned int>(ctrl_qubit),
                    static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(csx.getRawOperatorMatrix(), tgt_qubit,
+                                     ctrl_qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(csx, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -678,6 +787,11 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplyCSXDAG(static_cast<unsigned int>(ctrl_qubit),
                       static_cast<unsigned int>(tgt_qubit));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(csxdag.getRawOperatorMatrix(), tgt_qubit,
+                                     ctrl_qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(csxdag, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -704,6 +818,11 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPauliPropagator)
       pp->ApplySWAP(static_cast<unsigned int>(qubit0),
                     static_cast<unsigned int>(qubit1));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(swapgate.getRawOperatorMatrix(), qubit1,
+                                                               qubit0);
+      pathIntegralSimulator->ApplyGate(agate);                
+    }
     else
       state->ApplyGate(swapgate, static_cast<unsigned int>(qubit1),
                        static_cast<unsigned int>(qubit0));
@@ -760,6 +879,11 @@ class QCSimSimulator : public QCSimState {
       pp->ApplyCCX(static_cast<unsigned int>(qubit0),
                    static_cast<unsigned int>(qubit1),
                    static_cast<unsigned int>(qubit2));
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(ccxgate.getRawOperatorMatrix(), qubit2,
+                                     qubit1, qubit0);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(ccxgate, static_cast<unsigned int>(qubit2),
                        static_cast<unsigned int>(qubit1),
@@ -847,6 +971,10 @@ class QCSimSimulator : public QCSimState {
       pp->ApplyCSwap(static_cast<unsigned int>(ctrl_qubit),
                      static_cast<unsigned int>(qubit0),
                      static_cast<unsigned int>(qubit1));
+    } else if (GetSimulationType() == SimulationType::kPathIntegral) {
+        QC::Gates::AppliedGate<> agate(cswapgate.getRawOperatorMatrix(),
+                                       qubit1, qubit0, ctrl_qubit);
+        pathIntegralSimulator->ApplyGate(agate);
     } else
       state->ApplyGate(cswapgate, static_cast<unsigned int>(qubit1),
                        static_cast<unsigned int>(qubit0),
@@ -882,6 +1010,11 @@ class QCSimSimulator : public QCSimState {
       pp->ApplyCU(static_cast<unsigned int>(ctrl_qubit),
                   static_cast<unsigned int>(tgt_qubit), theta, phi, lambda,
                   gamma);
+    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      QC::Gates::AppliedGate<> agate(cugate.getRawOperatorMatrix(), tgt_qubit,
+                                     ctrl_qubit);
+      pathIntegralSimulator->ApplyGate(agate);
+    }
     else
       state->ApplyGate(cugate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
@@ -953,6 +1086,9 @@ class QCSimSimulator : public QCSimState {
     if (tensorNetwork) cloned->tensorNetwork = tensorNetwork->Clone();
 
     if (pp) cloned->pp = pp->Clone();
+
+    if (pathIntegralSimulator)
+      cloned->pathIntegralSimulator = pathIntegralSimulator->Clone();
 
     return cloned;
   }
