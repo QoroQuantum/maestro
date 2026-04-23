@@ -283,6 +283,12 @@ __declspec(dllexport)
     case Simulators::SimulationType::kPauliPropagator:
       response.emplace("method", "pauli_propagation");
       break;
+    case Simulators::SimulationType::kExtendedStabilizer:
+      response.emplace("method", "extended_stabilizer");
+      break;
+    case Simulators::SimulationType::kPathIntegral:
+      response.emplace("method", "path_integral");
+      break;
     default:
       response.emplace("method", "unknown");
       break;
@@ -433,6 +439,12 @@ __declspec(dllexport)
       break;
     case Simulators::SimulationType::kPauliPropagator:
       response.emplace("method", "pauli_propagation");
+      break;
+    case Simulators::SimulationType::kExtendedStabilizer:
+      response.emplace("method", "extended_stabilizer");
+      break;
+    case Simulators::SimulationType::kPathIntegral:
+      response.emplace("method", "path_integral");
       break;
     default:
       response.emplace("method", "unknown");
