@@ -366,7 +366,7 @@ private:
         const auto maxBondDimValue =
             maxBondDim.empty() ? 0 : std::stoi(maxBondDim);
 
-        if (maxBondDim.empty() || bondDimThreshold <= maxBondDimValue) {
+        if (maxBondDim.empty() || static_cast<int>(bondDimThreshold) <= maxBondDimValue) {
           // need to be sure the circuit is correctly converted
           dcirc->ConvertForCutting();  // convert the three qubit gates
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();

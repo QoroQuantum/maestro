@@ -103,8 +103,6 @@ void CheckCountsAgainstStatevector(
   BOOST_TEST(totalCounts == shots);
   BOOST_REQUIRE(!counts.empty());
 
-  const size_t nrBits = counts.begin()->first.size();
-
   for (const auto& meas : counts) {
     const auto it = statevectorCounts.find(meas.first);
     const double observedProbability =
