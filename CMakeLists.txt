@@ -149,6 +149,7 @@ set(TESTSSRC tests/aertests.cpp
 	tests/extstabtests.cpp
 	tests/mpsswapsopttests.cpp
 	tests/PathIntegralTests.cpp
+	tests/netwsimtests.cpp
 	tests/tests.cpp)
 
 set(MAESTROSRC maestrolib/Interface.cpp)

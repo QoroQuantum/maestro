@@ -1972,6 +1972,12 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       simulatorTypes.emplace_back(Simulators::SimulatorType::kQCSim,
                                   Simulators::SimulationType::kPauliPropagator);
 
+    if (OptimizationSimulatorExists(
+            Simulators::SimulatorType::kQCSim,
+            Simulators::SimulationType::kPathIntegral))
+      simulatorTypes.emplace_back(Simulators::SimulatorType::kQCSim,
+                                  Simulators::SimulationType::kPathIntegral);
+
 #ifndef NO_QISKIT_AER
     // tensor networks are out of the picture for now for qiskit aer, since they
     // are available with cuda library, and work only on linux (obviously when
