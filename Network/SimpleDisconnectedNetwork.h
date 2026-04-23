@@ -2172,7 +2172,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             maxBondDim.empty() ? 0 : std::stoi(maxBondDim);
 
         if (maxBondDim.empty() ||
-            mpsOptimizationBondDimensionThreshold <= maxBondDimValue) {
+            static_cast<int>(mpsOptimizationBondDimensionThreshold) <= maxBondDimValue) {
           // need to be sure the circuit is correctly converted
           dcirc->ConvertForCutting();  // convert the three qubit gates
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();
