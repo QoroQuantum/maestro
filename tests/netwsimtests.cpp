@@ -28,9 +28,8 @@ namespace bdata = boost::unit_test::data;
 #define _USE_MATH_DEFINES
 #include <math.h>
 
-#include "Circuit/Circuit.h"
-#include "Circuit/Factory.h"
-#include "Simulators/Factory.h"
+#include "../Circuit/Circuit.h"
+#include "../Circuit/Factory.h"
 
 #include "../Network/SimpleDisconnectedNetwork.h"
 
