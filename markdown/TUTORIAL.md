@@ -258,6 +258,7 @@ DestroySimpleSimulator(simHandle);
 | `kPauliPropagator` | ✅ | ❌ |
 | `kStabilizer` | ❌ | ❌ |
 | `kExtendedStabilizer` | ❌ | ❌ |
+| `kPathIntegral` | ❌ | ❌ |
 
 ## Python
 
@@ -819,6 +820,241 @@ print(result['counts'])  # Aggregated counts across all realizations
 > `noisy_estimate_montecarlo` with 50–200 realizations gives a good
 > speed-accuracy trade-off. Use `noisy_estimate` for rapid screening.
 
+#### Coherent Noise Simulation
+
+Coherent noise models systematic calibration errors — e.g. over/under-rotation
+of gates — rather than stochastic Pauli errors. Instead of randomly inserting
+X, Y, Z gates, coherent noise injects **deterministic rotation gates**
+(Rx, Ry, Rz) after every gate in the circuit.
+
+The key difference from Pauli noise:
+- **Pauli noise** averages out over shots (each shot sees a different random error)
+- **Coherent noise** is deterministic within a single noise realization — all
+  shots from one circuit see the same systematic error. The ± sign of the
+  rotation is sampled per-realization.
+
+This is important for QEC research where coherent errors behave
+fundamentally differently from stochastic ones.
+
+##### Configuring Coherent Noise
+
+The `NoiseModel` class supports coherent noise alongside Pauli noise.
+Both can coexist on the same model:
+
+```python
+import maestro
+
+nm = maestro.NoiseModel()
+
+# From a depolarizing probability: ε = 2·arcsin(√p)
+# This gives the same per-gate infidelity as DEPOLARIZE1(p)
+nm.set_coherent_depolarizing(qubit=0, p=0.01)
+
+# Apply to all qubits at once
+nm.set_all_coherent_depolarizing(num_qubits=5, p=0.001)
+
+# Convenience alias for set_all_coherent_depolarizing
+nm.set_coherent_strength(num_qubits=5, p=0.001)
+
+# Per-axis control: explicit rotation angles (radians)
+nm.set_coherent_rotation(qubit=0, rx=0.01, ry=0.0, rz=0.05)
+
+# Dephasing-like: Z-axis rotation only
+nm.set_coherent_dephasing(qubit=1, p=0.02)
+
+# Bit-flip-like: X-axis rotation only
+nm.set_coherent_bit_flip(qubit=2, p=0.01)
+
+# Check if coherent noise is configured
+print(nm.has_coherent())  # True
+```
+
+##### Coherent Estimate (Expectation Values)
+
+`coherent_estimate` is the coherent analogue of `noisy_estimate_montecarlo`.
+It injects rotation noise, runs expectation value estimation, and averages
+over multiple sign realizations:
+
+```python
+from maestro.circuits import QuantumCircuit
+
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+
+nm = maestro.NoiseModel()
+nm.set_all_coherent_depolarizing(2, 0.005)
+
+result = maestro.coherent_estimate(
+    qc, ['ZZ', 'XX', 'YY'], nm,
+    noise_realizations=200,
+    seed=42
+)
+
+print(result['expectation_values'])        # Coherent-noisy values
+print(result['ideal_expectation_values'])  # Noiseless reference
+print(result['noise_type'])                # 'coherent'
+```
+
+##### Coherent Execute (Shot-based)
+
+`coherent_execute` is the shot-based counterpart. Each noise realization
+gets a deterministic rotation pattern, and shots are distributed across
+realizations:
+
+```python
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+qc.measure_all()
+
+nm = maestro.NoiseModel()
+nm.set_coherent_strength(2, 0.001)
+
+result = maestro.coherent_execute(
+    qc, nm,
+    shots=1024,
+    noise_realizations=64,
+    seed=42
+)
+print(result['counts'])           # Aggregated counts
+print(result['noise_type'])       # 'coherent'
+```
+
+> **Note:** Coherent noise uses rotation gates, so it requires a simulation
+> backend that supports continuous rotations — **MPS**, **Statevector**, or
+> **TensorNetwork**. Stabilizer simulation will not work.
+
+##### Coherent Noise API Reference
+
+| Method | Description |
+|--------|-------------|
+| `nm.set_coherent_depolarizing(q, p)` | Rz angle from depolarizing probability |
+| `nm.set_coherent_dephasing(q, p)` | Rz rotation from dephasing probability |
+| `nm.set_coherent_bit_flip(q, p)` | Rx rotation from bit-flip probability |
+| `nm.set_coherent_rotation(q, rx, ry, rz)` | Explicit per-axis angles (radians) |
+| `nm.set_all_coherent_depolarizing(n, p)` | Uniform coherent noise on all qubits |
+| `nm.set_all_coherent_dephasing(n, p)` | Uniform coherent dephasing on all qubits |
+| `nm.set_coherent_strength(n, p)` | Alias for `set_all_coherent_depolarizing` |
+| `nm.has_coherent()` | Check if any coherent noise is configured |
+| `maestro.coherent_estimate(...)` | Expectation values with coherent noise |
+| `maestro.coherent_execute(...)` | Shot-based execution with coherent noise |
+
+##### All Noise Simulation Functions
+
+| Function | Noise Type | Overhead | Best for |
+|----------|-----------|----------|----------|
+| `noisy_estimate` | Pauli | Zero | Fast ansatz screening |
+| `noisy_estimate_montecarlo` | Pauli | N × noiseless | Training with realistic noise |
+| `noisy_execute` | Pauli | N × noiseless | Shot-based Pauli noise |
+| `coherent_estimate` | Coherent | N × noiseless | Coherent error analysis |
+| `coherent_execute` | Coherent | N × noiseless | Shot-based coherent noise |
+
+> **Tip:** All noise functions are also available as bound methods on `QuantumCircuit`:
+> `qc.noisy_execute(nm)`, `qc.noisy_estimate(['ZZ'], nm)`,
+> `qc.noisy_estimate_montecarlo(['ZZ'], nm)`,
+> `qc.coherent_execute(nm)`, `qc.coherent_estimate(['ZZ'], nm)`.
+
+---
+
+### Path Integral Simulation
+
+The **Path Integral** backend computes the probability of a single output
+state without building the full statevector. Instead of propagating all 2^n
+amplitudes, it traces only the Pauli paths that contribute to the target
+state.
+
+This is particularly useful for:
+- **QUBO/HUBO validation** — check if a known optimal solution has high probability
+- **Single-state queries at scale** — probe P(|target⟩) for circuits where
+  statevector/MPS would be too slow
+- **Circuits with few branching gates** — cost scales as O(2^b) where b is
+  the number of H/Rx/Ry gates, not O(2^n)
+
+#### Using `qc.prob()` (Recommended)
+
+The simplest way to query a single state probability:
+
+```python
+from maestro.circuits import QuantumCircuit
+
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+
+result = qc.prob('11')
+print(result['probability'])   # 0.5
+print(result['amplitude'])     # (0.707+0j)
+print(result['target_state'])  # '11'
+print(result['time_taken'])    # seconds
+```
+
+The `prob()` method returns a dictionary with:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `probability` | `float` | \|⟨target\|U\|0⟩\|² |
+| `amplitude` | `complex` | ⟨target\|U\|0⟩ |
+| `target_state` | `str` | The queried bitstring |
+| `time_taken` | `float` | Computation time in seconds |
+
+#### Module-Level `state_probability()`
+
+Alternatively, use the module-level function which also accepts QASM strings:
+
+```python
+import maestro
+from maestro.circuits import QuantumCircuit
+
+# From a QuantumCircuit
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+result = maestro.state_probability(qc, '11')
+
+# From a QASM string
+qasm = """
+OPENQASM 2.0;
+include "qelib1.inc";
+qreg q[2];
+h q[0];
+cx q[0], q[1];
+"""
+result = maestro.state_probability(qasm, '11')
+```
+
+#### Via SimulatorConfig
+
+Path Integral is also available as a `SimulationType` for `execute()` and
+`estimate()`:
+
+```python
+config = maestro.SimulatorConfig(
+    simulation_type=maestro.SimulationType.PathIntegral
+)
+result = qc.execute(config=config, shots=1024)
+result = qc.estimate(['ZZ'], config=config)
+```
+
+#### Performance Characteristics
+
+Path Integral cost depends on **branching gates** (H, Rx, Ry), not qubit count:
+
+| Circuit Type | Branching | PI Cost | vs Statevector |
+|---|---|---|---|
+| Mostly Rz/T/CX (few H) | O(1) | **Constant** | 1000x+ faster at 20+ qubits |
+| QAOA (H+Rx on all qubits) | O(n) | O(2^2n) | Slower than SV |
+| Warm-start (Rx on k qubits) | O(k) | O(2^k) | Fast if k << n |
+
+> **When to use Path Integral:**
+> - Querying P(|target⟩) for a specific bitstring
+> - Circuits dominated by diagonal gates (Rz, T, S, CZ, CX)
+> - QUBO validation where you know the expected optimal solution
+>
+> **When NOT to use Path Integral:**
+> - Full statevector/counts needed (use Statevector or MPS)
+> - QAOA circuits with H/Rx on every qubit (branching = 2n)
+
 ---
 
 ## QuEST and GPU Execution (Dynamic Backends)
@@ -1010,10 +1246,14 @@ print(f"Counts: {result['counts']}")
 | `maestro.is_quest_available()` | `bool` | Check if QuEST has been loaded and is ready to use.         |
 | `maestro.init_gpu()`        | `bool`  | Load the GPU shared library. Returns `True` on success.      |
 | `maestro.is_gpu_available()`| `bool`  | Check if the GPU backend has been loaded and is ready.        |
-| `maestro.NoiseModel()`      | object  | Create a noise model for configuring per-qubit Pauli channels. |
+| `maestro.NoiseModel()`      | object  | Create a noise model for configuring per-qubit Pauli and coherent noise channels. |
 | `maestro.noisy_estimate()`  | `dict`  | Analytical noisy estimation (zero overhead, per-qubit damping). |
 | `maestro.noisy_estimate_montecarlo()` | `dict` | Gate-by-gate Monte Carlo noisy estimation (accurate). |
 | `maestro.noisy_execute()`   | `dict`  | Monte Carlo noisy execution with shot-based sampling.        |
+| `maestro.coherent_estimate()` | `dict` | Coherent noise estimation (rotation errors, averaged over sign realizations). |
+| `maestro.coherent_execute()` | `dict`  | Coherent noise execution with shot-based sampling.           |
+| `maestro.state_probability()` | `dict` | Compute P(\|target⟩) via path integral (circuit or QASM input). |
+| `qc.prob(target_state)`     | `dict`  | Compute P(\|target⟩) via path integral (bound method).       |
 
 | Simulator Type               | Enum Value                        | Dynamic? | Backend Library                   |
 |-------------------------------|-----------------------------------|----------|-----------------------------------|
