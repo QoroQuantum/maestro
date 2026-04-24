@@ -929,7 +929,7 @@ NB_MODULE(maestro, m) {
              const SimulatorConfig &config,
              int shots, int noise_realizations,
              std::optional<unsigned int> seed) {
-            if (!self) throw nb::value_error("Circuit is null.git ou
+            if (!self) throw nb::value_error("Circuit is null.");
             std::mt19937 rng(seed.value_or(std::random_device{}()));
             const int batches =
                 std::min(shots, std::max(1, noise_realizations));
