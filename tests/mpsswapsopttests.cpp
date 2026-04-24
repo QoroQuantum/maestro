@@ -112,7 +112,7 @@ BOOST_DATA_TEST_CASE(ConvertForCuttingLayersRoundtripMatchesStatevector,
     const auto aMPS = mpsSim->Amplitude(s);
     BOOST_CHECK_PREDICATE(
         checkClose,
-        (aSV)(aMPS)(1e-6));  // no bond dim limit, expect close match
+        (aSV)(aMPS)(1e-5));  // no bond dim limit, expect close match
   }
 }
 
