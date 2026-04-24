@@ -118,6 +118,98 @@ void CheckCountsAgainstStatevector(
   }
 }
 
+
+std::shared_ptr<Circuits::Circuit<>> GenerateRandomMixedCircuit(
+    int nrGates, int nrQubits,
+                                            std::mt19937& g) {
+  auto circuit = Circuits::CircuitFactory<>::CreateCircuit();
+
+  std::uniform_real_distribution<double> paramDist(-2.0 * M_PI, 2.0 * M_PI);
+  // the path integral simulation is quite costly for the three qubit gates so
+  // avoid them
+  std::uniform_int_distribution<int> gateDist(0, static_cast<int>(Circuits::QuantumGateType::kCUGateType/*kCCXGateType*/));
+  std::uniform_int_distribution<int> qubitDist(0, nrQubits - 1);
+  std::bernoulli_distribution measureNow(0.15);  // ~15% chance per gate slot
+
+  // Classical bits: reserve nrQubits slots for mid-circuit measurements (one
+  // per qubit) and nrQubits more for the final measurements.
+  const size_t midCbitBase = 0;
+  const size_t finalCbitBase = static_cast<size_t>(nrQubits);
+
+  // Track which qubits have been measured mid-circuit (and thus have a valid
+  // classical bit we can condition on).
+  std::vector<bool> measuredMidCircuit(nrQubits, false);
+
+  auto addRandomGate = [&]() {
+    Types::qubits_vector qubits(nrQubits);
+    std::iota(qubits.begin(), qubits.end(), 0);
+    std::shuffle(qubits.begin(), qubits.end(), g);
+
+    const auto q1 = qubits[0];
+    const auto q2 = qubits[1];
+    const auto q3 = qubits[2];
+
+    const double p1 = paramDist(g);
+    const double p2 = paramDist(g);
+    const double p3 = paramDist(g);
+    const double p4 = paramDist(g);
+
+    const auto gateType = static_cast<Circuits::QuantumGateType>(gateDist(g));
+    circuit->AddOperation(Circuits::CircuitFactory<>::CreateGate(
+        gateType, q1, q2, q3, p1, p2, p3, p4));
+  };
+
+  for (int i = 0; i < nrGates; ++i) {
+    addRandomGate();
+
+    // Occasionally insert a mid-circuit measurement on a random qubit.
+    if (measureNow(g)) {
+      const int mQubit = qubitDist(g);
+      const size_t mCbit = midCbitBase + static_cast<size_t>(mQubit);
+      circuit->AddOperation(Circuits::CircuitFactory<>::CreateMeasurement(
+          {{static_cast<Types::qubit_t>(mQubit), mCbit}}));
+      measuredMidCircuit[mQubit] = true;
+
+      // If we have measured at least one qubit, optionally add a classically
+      // controlled gate on another qubit conditioned on this bit.
+      if (measureNow(g)) {
+        const int tQubit = qubitDist(g);
+        const auto innerGate =
+            std::dynamic_pointer_cast<Circuits::IGateOperation<>>(
+                Circuits::CircuitFactory<>::CreateGate(
+                    Circuits::QuantumGateType::kXGateType,
+                    static_cast<size_t>(tQubit)));
+        if (innerGate) {
+          circuit->AddOperation(
+              Circuits::CircuitFactory<>::CreateSimpleConditionalGate(innerGate,
+                                                                      mCbit));
+        }
+      }
+    }
+  }
+
+  // Final measurement on a random non-empty subset of qubits.
+  Types::qubits_vector allQubits(nrQubits);
+  std::iota(allQubits.begin(), allQubits.end(), 0);
+  std::shuffle(allQubits.begin(), allQubits.end(), g);
+
+  std::uniform_int_distribution<int> subsetSizeDist(1, nrQubits);
+  const int finalMeasCount = subsetSizeDist(g);
+
+  std::vector<std::pair<Types::qubit_t, size_t>> finalPairs;
+  std::vector<size_t> finalCbits;
+  for (int k = 0; k < finalMeasCount; ++k) {
+    const size_t cbit = finalCbitBase + static_cast<size_t>(k);
+    finalPairs.push_back({static_cast<Types::qubit_t>(allQubits[k]), cbit});
+    finalCbits.push_back(cbit);
+  }
+
+  circuit->AddOperation(
+      Circuits::CircuitFactory<>::CreateMeasurement(finalPairs));
+
+  return circuit;
+}
+
 }  // namespace
 
 struct NetwSimTestFixture {
@@ -167,9 +259,6 @@ struct NetwSimTestFixture {
   std::shared_ptr<Network::SimpleDisconnectedNetwork<>> networkSimMPS;
 };
 
-
-extern bool checkClose(std::complex<double> a, std::complex<double> b,
-                       double dif);
 
 BOOST_AUTO_TEST_SUITE(NetwSimTests)
 
@@ -276,6 +365,32 @@ BOOST_DATA_TEST_CASE_F(NetwSimTestFixture,
   const auto pauliPropCounts = networkSimPauliProp->RepeatedExecuteOnHost(circuit, 0, shots);
   const auto pathIntegralCounts = networkSimPathIntegral->RepeatedExecuteOnHost(circuit, 0, shots);
   const auto mpsCounts = networkSimMPS->RepeatedExecuteOnHost(circuit, 0, shots);
+
+  CheckCountsAgainstStatevector(pauliPropCounts, statevectorCounts, shots);
+  CheckCountsAgainstStatevector(pathIntegralCounts, statevectorCounts, shots);
+  CheckCountsAgainstStatevector(mpsCounts, statevectorCounts, shots);
+}
+
+
+BOOST_DATA_TEST_CASE_F(NetwSimTestFixture,
+                       RandomMixedCircuitSampleCountsMatchStatevectorProbabilities,
+                       bdata::xrange(5), trial) {
+  std::mt19937 g(static_cast<std::mt19937::result_type>(0xC0DEC0DEu + trial));
+
+  auto circuit = GenerateRandomMixedCircuit(nrGates, nrQubits, g);
+  BOOST_REQUIRE(circuit);
+
+  constexpr size_t shots = 2000;
+
+  const auto statevectorCounts =
+      networkSimStatevector->RepeatedExecuteOnHost(circuit, 0, shots);
+
+  const auto pauliPropCounts =
+      networkSimPauliProp->RepeatedExecuteOnHost(circuit, 0, shots);
+  const auto pathIntegralCounts =
+      networkSimPathIntegral->RepeatedExecuteOnHost(circuit, 0, shots);
+  const auto mpsCounts =
+      networkSimMPS->RepeatedExecuteOnHost(circuit, 0, shots);
 
   CheckCountsAgainstStatevector(pauliPropCounts, statevectorCounts, shots);
   CheckCountsAgainstStatevector(pathIntegralCounts, statevectorCounts, shots);

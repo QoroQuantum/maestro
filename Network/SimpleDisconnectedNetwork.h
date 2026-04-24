@@ -602,7 +602,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       nrThreads = 1;
     else
 #endif
-        if ((method == Simulators::SimulationType::kStatevector &&
+        if (((method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral) &&
              !distCirc->HasOpsAfterMeasurements()) ||
             simType == Simulators::SimulatorType::kQuestSim)
       nrThreads = 1;
@@ -796,7 +796,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       nrThreads = 1;
     else
 #endif
-        if ((method == Simulators::SimulationType::kStatevector &&
+        if (((method == Simulators::SimulationType::kStatevector ||
+              method == Simulators::SimulationType::kPathIntegral) &&
              !distCirc->HasOpsAfterMeasurements()) ||
             simType == Simulators::SimulatorType::kQuestSim)
       nrThreads = 1;
