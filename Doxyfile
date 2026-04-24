@@ -7,9 +7,10 @@
 #  Project metadata
 # ---------------------------------------------------------------------------
 PROJECT_NAME           = "Maestro"
-PROJECT_NUMBER         = "0.2.10"
+PROJECT_NUMBER         = "0.2.11"
 PROJECT_BRIEF          = "Unified interface for quantum circuit simulation"
-PROJECT_LOGO           =
+PROJECT_LOGO           = markdown/favicon.ico
+PROJECT_ICON           = markdown/favicon.ico
 
 OUTPUT_DIRECTORY       = docs
 CREATE_SUBDIRS         = YES
@@ -169,11 +170,11 @@ VERBATIM_HEADERS       = YES
 GENERATE_HTML          = YES
 HTML_OUTPUT            = html
 HTML_FILE_EXTENSION    = .html
-HTML_HEADER            =
+HTML_HEADER            = docs/header.html
 HTML_FOOTER            = docs/footer.html
 HTML_STYLESHEET        =
 HTML_EXTRA_STYLESHEET  = docs/custom.css
-HTML_EXTRA_FILES       =
+HTML_EXTRA_FILES       = markdown/favicon.ico
 HTML_COLORSTYLE        = DARK
 HTML_COLORSTYLE_HUE    = 270
 HTML_COLORSTYLE_SAT    = 80

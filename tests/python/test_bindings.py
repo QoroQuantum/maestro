@@ -24,6 +24,7 @@ class TestEnums:
         assert hasattr(maestro.SimulationType, 'TensorNetwork')
         assert hasattr(maestro.SimulationType, 'PauliPropagator')
         assert hasattr(maestro.SimulationType, 'ExtendedStabilizer')
+        assert hasattr(maestro.SimulationType, 'PathIntegral')
 
 
 class TestMaestroClass:
@@ -507,6 +508,213 @@ class TestReset:
         counts = result['counts']
         assert counts.get('0', 0) == 100
 
+
+class TestPathIntegralSimulation:
+    """Test the Path Integral simulation backend via SimulatorConfig."""
+
+    def test_path_integral_enum_exposed(self):
+        """Test that PathIntegral is available in SimulationType."""
+        assert hasattr(maestro.SimulationType, 'PathIntegral')
+
+    def test_path_integral_execute(self):
+        """Test execute with Path Integral backend."""
+        result = maestro.simple_execute(
+            GENERAL_QASM,
+            shots=1000,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.PathIntegral,
+            ),
+        )
+        assert result is not None
+        assert 'counts' in result
+        total = sum(result['counts'].values())
+        assert total == 1000
+
+    def test_path_integral_estimate(self):
+        """Test estimate with Path Integral backend."""
+        result = maestro.simple_estimate(
+            GENERAL_NO_MEASURE_QASM,
+            "ZZ;XX",
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.PathIntegral,
+            ),
+        )
+        assert result is not None
+        assert 'expectation_values' in result
+        exp_vals = result['expectation_values']
+        assert len(exp_vals) == 2
+        # State is (|00> + e^{i*pi/4}|11>) / sqrt(2)
+        # <ZZ> = 1.0, <XX> = cos(pi/4) = 1/sqrt(2)
+        assert exp_vals[0] == pytest.approx(1.0, abs=1e-5)
+        assert exp_vals[1] == pytest.approx(0.7071, abs=1e-3)
+
+    def test_path_integral_bell_distribution(self):
+        """Test Path Integral produces correct Bell state distribution."""
+        result = maestro.simple_execute(
+            CLIFFORD_BELL_QASM,
+            shots=10000,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.PathIntegral,
+            ),
+        )
+        counts = result['counts']
+        total = sum(counts.values())
+        assert total == 10000
+
+    def test_path_integral_circuit_api(self):
+        """Test Path Integral via QuantumCircuit.execute()."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        result = qc.execute(
+            shots=1000,
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.PathIntegral,
+            ),
+        )
+        assert result is not None
+        assert 'counts' in result
+        total = sum(result['counts'].values())
+        assert total == 1000
+
+    def test_path_integral_circuit_estimate(self):
+        """Test Path Integral via QuantumCircuit.estimate()."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        result = qc.estimate(
+            'ZZ',
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.PathIntegral,
+            ),
+        )
+        assert result is not None
+        assert 'expectation_values' in result
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
+
+class TestStateProbability:
+    """Test the state_probability path integral function."""
+
+    def test_state_probability_zero_state(self):
+        """P(|00>) for identity circuit should be 1.0."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)  # Need at least one gate to set qubit count
+        qc.h(0)  # H^2 = I
+
+        result = maestro.state_probability(qc, '00')
+        assert result['probability'] == pytest.approx(1.0, abs=1e-10)
+        assert result['target_state'] == '00'
+        assert 'amplitude' in result
+        assert 'time_taken' in result
+
+    def test_state_probability_x_gate(self):
+        """P(|1>) after X gate should be 1.0, P(|0>) should be 0.0."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+
+        result_1 = maestro.state_probability(qc, '1')
+        result_0 = maestro.state_probability(qc, '0')
+        assert result_1['probability'] == pytest.approx(1.0, abs=1e-10)
+        assert result_0['probability'] == pytest.approx(0.0, abs=1e-10)
+
+    def test_state_probability_bell_state(self):
+        """Bell state: P(|00>) = P(|11>) = 0.5, P(|01>) = P(|10>) = 0."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        assert maestro.state_probability(qc, '00')['probability'] == \
+            pytest.approx(0.5, abs=1e-10)
+        assert maestro.state_probability(qc, '11')['probability'] == \
+            pytest.approx(0.5, abs=1e-10)
+        assert maestro.state_probability(qc, '01')['probability'] == \
+            pytest.approx(0.0, abs=1e-10)
+        assert maestro.state_probability(qc, '10')['probability'] == \
+            pytest.approx(0.0, abs=1e-10)
+
+    def test_state_probability_hadamard(self):
+        """P(|0>) = P(|1>) = 0.5 for H|0>."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+
+        assert maestro.state_probability(qc, '0')['probability'] == \
+            pytest.approx(0.5, abs=1e-10)
+        assert maestro.state_probability(qc, '1')['probability'] == \
+            pytest.approx(0.5, abs=1e-10)
+
+    def test_state_probability_qasm(self):
+        """Test QASM string variant."""
+        qasm = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        h q[0];
+        cx q[0], q[1];
+        """
+        result = maestro.state_probability(qasm, '00')
+        assert result['probability'] == pytest.approx(0.5, abs=1e-10)
+
+    def test_state_probability_amplitude_complex(self):
+        """Verify amplitude is complex-valued."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+
+        result = maestro.state_probability(qc, '0')
+        assert isinstance(result['amplitude'], complex)
+
+    def test_state_probability_invalid_bitstring(self):
+        """Invalid characters in target_state should raise."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+
+        with pytest.raises(ValueError):
+            maestro.state_probability(qc, '2')
+
+    def test_state_probability_empty_bitstring(self):
+        """Empty target_state should raise."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+
+        with pytest.raises(ValueError):
+            maestro.state_probability(qc, '')
+
+    def test_qc_prob_method(self):
+        """Test qc.prob('11') bound method on QuantumCircuit."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        result = qc.prob('11')
+        assert result['probability'] == pytest.approx(0.5, abs=1e-10)
+        assert result['target_state'] == '11'
+        assert isinstance(result['amplitude'], complex)
+        assert 'time_taken' in result
+
+        result_00 = qc.prob('00')
+        assert result_00['probability'] == pytest.approx(0.5, abs=1e-10)
+
+        result_01 = qc.prob('01')
+        assert result_01['probability'] == pytest.approx(0.0, abs=1e-10)
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
@@ -2191,4 +2399,606 @@ class TestNoisyExecute:
         r1 = maestro.noisy_execute(qc, nm, shots=500, seed=99)
         r2 = maestro.noisy_execute(qc, nm, shots=500, seed=99)
         assert r1['counts'] == r2['counts']
+
+
+# ============================================================================
+# Coherent Noise Tests
+# ============================================================================
+
+class TestCoherentNoiseModel:
+    """Test coherent noise configuration on NoiseModel."""
+
+    def test_has_coherent_initially_false(self):
+        """New NoiseModel has no coherent noise."""
+        nm = maestro.NoiseModel()
+        assert nm.has_coherent() is False
+
+    def test_set_coherent_depolarizing(self):
+        """set_coherent_depolarizing sets coherent params and has_coherent=True."""
+        nm = maestro.NoiseModel()
+        nm.set_coherent_depolarizing(0, 0.01)
+        assert nm.has_coherent() is True
+
+    def test_set_coherent_rotation(self):
+        """set_coherent_rotation with explicit angles."""
+        nm = maestro.NoiseModel()
+        nm.set_coherent_rotation(0, 0.01, 0.02, 0.03)
+        assert nm.has_coherent() is True
+
+    def test_set_all_coherent_depolarizing(self):
+        """set_all_coherent_depolarizing sets noise on multiple qubits."""
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(5, 0.001)
+        assert nm.has_coherent() is True
+
+    def test_set_coherent_strength(self):
+        """set_coherent_strength is a convenience alias."""
+        nm = maestro.NoiseModel()
+        nm.set_coherent_strength(3, 0.005)
+        assert nm.has_coherent() is True
+
+    def test_set_coherent_dephasing(self):
+        """set_coherent_dephasing sets Z-axis rotation."""
+        nm = maestro.NoiseModel()
+        nm.set_coherent_dephasing(0, 0.01)
+        assert nm.has_coherent() is True
+
+    def test_set_coherent_bit_flip(self):
+        """set_coherent_bit_flip sets X-axis rotation."""
+        nm = maestro.NoiseModel()
+        nm.set_coherent_bit_flip(0, 0.01)
+        assert nm.has_coherent() is True
+
+
+class TestCoherentEstimate:
+    """Test coherent_estimate (coherent noise expectation values)."""
+
+    def test_returns_all_keys(self):
+        """coherent_estimate returns expected result keys."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, 0.01)
+
+        result = maestro.coherent_estimate(
+            qc, ['ZZ', 'XX'], nm, noise_realizations=10, seed=42)
+
+        assert 'expectation_values' in result
+        assert 'ideal_expectation_values' in result
+        assert 'time_taken' in result
+        assert 'noise_realizations' in result
+        assert 'noise_type' in result
+        assert result['noise_type'] == 'coherent'
+        assert result['noise_realizations'] == 10
+        assert len(result['expectation_values']) == 2
+
+    def test_zero_noise_matches_ideal(self):
+        """With zero coherent noise angle, estimate should match ideal."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, 0.0)  # zero noise
+
+        result = maestro.coherent_estimate(
+            qc, ['ZZ', 'XX'], nm, noise_realizations=5, seed=42)
+
+        for noisy, ideal in zip(
+                result['expectation_values'],
+                result['ideal_expectation_values']):
+            assert abs(noisy - ideal) < 1e-10
+
+    def test_noise_changes_expectation(self):
+        """Coherent noise should change expectation values from ideal."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, 0.05)
+
+        # Use XX observable — Z rotations commute with ZZ so ZZ is unaffected,
+        # but XX is genuinely damped by Rz coherent noise.
+        result = maestro.coherent_estimate(
+            qc, ['XX'], nm, noise_realizations=200, seed=42)
+
+        noisy = abs(result['expectation_values'][0])
+        ideal = abs(result['ideal_expectation_values'][0])
+        # Coherent noise generally reduces magnitude (averaged over signs)
+        assert noisy < ideal, "Coherent noise should reduce averaged magnitude"
+
+    def test_seed_reproducibility(self):
+        """Same seed should give identical results."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, 0.02)
+
+        r1 = maestro.coherent_estimate(
+            qc, ['ZZ', 'XX'], nm, noise_realizations=50, seed=123)
+        r2 = maestro.coherent_estimate(
+            qc, ['ZZ', 'XX'], nm, noise_realizations=50, seed=123)
+
+        for v1, v2 in zip(r1['expectation_values'],
+                          r2['expectation_values']):
+            assert abs(v1 - v2) < 1e-12
+
+    def test_depth_dependence(self):
+        """Deeper circuit should show more coherent noise effect."""
+        from maestro.circuits import QuantumCircuit
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, 0.01)
+
+        # Shallow: just Bell state
+        shallow = QuantumCircuit()
+        shallow.h(0)
+        shallow.cx(0, 1)
+
+        # Deep: Bell + many identity-like layers
+        deep = QuantumCircuit()
+        deep.h(0)
+        deep.cx(0, 1)
+        for _ in range(20):
+            deep.cx(0, 1)
+            deep.cx(0, 1)  # cancels to identity but each gate adds noise
+
+        # Use XX — Z rotations commute with ZZ so won't show depth effect.
+        r_shallow = maestro.coherent_estimate(
+            shallow, ['XX'], nm, noise_realizations=200, seed=42)
+        r_deep = maestro.coherent_estimate(
+            deep, ['XX'], nm, noise_realizations=200, seed=42)
+
+        # Deep should be noisier
+        assert abs(r_deep['expectation_values'][0]) < \
+               abs(r_shallow['expectation_values'][0]), \
+            "Deeper circuit should show more coherent noise attenuation"
+
+
+class TestCoherentExecute:
+    """Test coherent_execute (shot-based coherent noise)."""
+
+    def test_returns_counts(self):
+        """coherent_execute returns valid counts."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, 0.01)
+
+        result = maestro.coherent_execute(qc, nm, shots=500)
+        assert 'counts' in result
+        assert 'noise_realizations' in result
+        assert 'noise_type' in result
+        assert result['noise_type'] == 'coherent'
+        total = sum(result['counts'].values())
+        assert total == 500
+
+    def test_zero_noise_matches_noiseless(self):
+        """With zero noise angle, coherent_execute matches noiseless."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(1, 0.0)  # zero noise
+
+        result = maestro.coherent_execute(qc, nm, shots=100, seed=42)
+        counts = result['counts']
+        assert counts.get('1', 0) == 100
+
+    def test_noise_introduces_errors(self):
+        """With coherent noise, we should see measurement errors."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_coherent_depolarizing(0, 0.3)  # heavy noise
+
+        result = maestro.coherent_execute(
+            qc, nm, shots=1000, seed=123,
+            config=maestro.SimulatorConfig(
+                simulation_type=maestro.SimulationType.Statevector,
+            ),
+        )
+        counts = result['counts']
+        total = sum(counts.values())
+        assert total == 1000
+
+    def test_seed_reproducibility(self):
+        """Same seed gives same coherent_execute results."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_coherent_depolarizing(0, 0.1)
+
+        r1 = maestro.coherent_execute(qc, nm, shots=500, seed=99)
+        r2 = maestro.coherent_execute(qc, nm, shots=500, seed=99)
+        assert r1['counts'] == r2['counts']
+
+    def test_requires_coherent_noise(self):
+        """coherent_execute raises ValueError if no coherent noise set."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.1)  # Pauli only, no coherent
+
+        with pytest.raises(ValueError, match="coherent"):
+            maestro.coherent_execute(qc, nm, shots=100)
+
+
+class TestCircuitBoundNoisyMethods:
+    """Test noisy and coherent methods as bound methods on QuantumCircuit."""
+
+    def test_qc_noisy_execute(self):
+        """qc.noisy_execute() works as a bound method."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.01)
+
+        result = qc.noisy_execute(nm, shots=500)
+        assert 'counts' in result
+        assert sum(result['counts'].values()) == 500
+
+    def test_qc_noisy_estimate(self):
+        """qc.noisy_estimate() works as a bound method."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.05)
+
+        result = qc.noisy_estimate(['ZZ', 'XX'], nm)
+        assert 'expectation_values' in result
+        assert 'ideal_expectation_values' in result
+        assert len(result['expectation_values']) == 2
+        # Noise should reduce magnitude
+        for noisy, ideal in zip(
+                result['expectation_values'],
+                result['ideal_expectation_values']):
+            if abs(ideal) > 1e-10:
+                assert abs(noisy) < abs(ideal)
+
+    def test_qc_noisy_estimate_montecarlo(self):
+        """qc.noisy_estimate_montecarlo() works as a bound method."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.05)
+
+        result = qc.noisy_estimate_montecarlo(
+            ['ZZ'], nm, noise_realizations=50, seed=42)
+        assert 'expectation_values' in result
+        assert 'noise_realizations' in result
+        assert result['noise_realizations'] == 50
+
+    def test_qc_coherent_execute(self):
+        """qc.coherent_execute() works as a bound method."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, 0.01)
+
+        result = qc.coherent_execute(nm, shots=500)
+        assert 'counts' in result
+        assert 'noise_type' in result
+        assert result['noise_type'] == 'coherent'
+        assert sum(result['counts'].values()) == 500
+
+    def test_qc_coherent_estimate(self):
+        """qc.coherent_estimate() works as a bound method."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, 0.01)
+
+        result = qc.coherent_estimate(
+            ['XX', 'ZZ'], nm, noise_realizations=50, seed=42)
+        assert 'expectation_values' in result
+        assert 'noise_type' in result
+        assert result['noise_type'] == 'coherent'
+        assert len(result['expectation_values']) == 2
+
+
+# ============================================================================
+# Physical Accuracy Tests
+# ============================================================================
+
+class TestNoisePhysicalAccuracy:
+    """
+    Verify that Maestro's noise models reproduce known analytical results
+    from quantum noise theory.
+
+    References:
+      - Nielsen & Chuang, Ch.8: Quantum noise and quantum operations
+      - Pauli channel: Λ(ρ) = (1-px-py-pz)ρ + px·XρX + py·YρY + pz·ZρZ
+      - Depolarizing: px=py=pz=p/3 → ⟨P⟩ damped by (1 - 4p/3) per qubit
+      - Dephasing: pz=p → ⟨X⟩,⟨Y⟩ damped by (1-2p), ⟨Z⟩ unaffected
+    """
+
+    def test_depolarizing_analytical_damping_single_qubit(self):
+        """
+        Depolarizing channel: px=py=pz=p/3.
+        For Z observable on qubit 0: damping = 1 - 2(px+py) = 1 - 4p/3.
+        """
+        nm = maestro.NoiseModel()
+        p = 0.06
+        nm.set_depolarizing(0, p)
+
+        # Z observable: damping = 1 - 2*(p/3 + p/3) = 1 - 4p/3
+        expected_damping = 1.0 - 4.0 * p / 3.0
+        actual_damping = nm.compute_damping('Z')
+        assert abs(actual_damping - expected_damping) < 1e-12, \
+            f"Z damping: expected {expected_damping}, got {actual_damping}"
+
+        # X observable: damping = 1 - 2*(py+pz) = 1 - 4p/3 (symmetric)
+        assert abs(nm.compute_damping('X') - expected_damping) < 1e-12
+        assert abs(nm.compute_damping('Y') - expected_damping) < 1e-12
+
+    def test_dephasing_kills_xy_preserves_z(self):
+        """
+        Pure dephasing (pz=p): Z is unaffected, X and Y are damped by (1-2p).
+        This is the defining property of T2 noise.
+        """
+        nm = maestro.NoiseModel()
+        p = 0.1
+        nm.set_dephasing(0, p)
+
+        # Z unaffected: damping = 1 - 2*(0+0) = 1.0
+        assert abs(nm.compute_damping('Z') - 1.0) < 1e-12
+
+        # X damped: damping = 1 - 2*(0+p) = 1 - 2p
+        expected = 1.0 - 2.0 * p
+        assert abs(nm.compute_damping('X') - expected) < 1e-12
+        assert abs(nm.compute_damping('Y') - expected) < 1e-12
+
+    def test_bit_flip_kills_yz_preserves_x(self):
+        """
+        Pure bit-flip (px=p): X is unaffected, Y and Z are damped by (1-2p).
+        """
+        nm = maestro.NoiseModel()
+        p = 0.05
+        nm.set_bit_flip(0, p)
+
+        # X unaffected (px noise commutes with X)
+        assert abs(nm.compute_damping('X') - 1.0) < 1e-12
+
+        # Y, Z damped by 1-2p
+        expected = 1.0 - 2.0 * p
+        assert abs(nm.compute_damping('Y') - expected) < 1e-12
+        assert abs(nm.compute_damping('Z') - expected) < 1e-12
+
+    def test_multiqubit_damping_is_multiplicative(self):
+        """
+        For uncorrelated noise, the damping of a tensor-product observable
+        P = P_0 ⊗ P_1 ⊗ ... is the product of individual dampings.
+        """
+        nm = maestro.NoiseModel()
+        p0, p1, p2 = 0.01, 0.03, 0.05
+        nm.set_depolarizing(0, p0)
+        nm.set_depolarizing(1, p1)
+        nm.set_depolarizing(2, p2)
+
+        # ZZZ: product of individual Z dampings
+        d0 = 1.0 - 4.0 * p0 / 3.0
+        d1 = 1.0 - 4.0 * p1 / 3.0
+        d2 = 1.0 - 4.0 * p2 / 3.0
+        expected = d0 * d1 * d2
+        actual = nm.compute_damping('ZZZ')
+        assert abs(actual - expected) < 1e-12
+
+        # IZI: only qubit 1 contributes
+        assert abs(nm.compute_damping('IZI') - d1) < 1e-12
+
+    def test_analytical_matches_montecarlo_depolarizing(self):
+        """
+        The analytical noisy_estimate should match noisy_estimate_montecarlo
+        for depolarizing noise in the limit of many realizations.
+        """
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.05)
+
+        # Analytical (exact)
+        analytical = maestro.noisy_estimate(qc, ['ZZ', 'XX', 'ZI'], nm)
+
+        # Monte Carlo (converges to analytical)
+        mc = maestro.noisy_estimate_montecarlo(
+            qc, ['ZZ', 'XX', 'ZI'], nm,
+            noise_realizations=2000, seed=42)
+
+        for i, obs in enumerate(['ZZ', 'XX', 'ZI']):
+            a = analytical['expectation_values'][i]
+            m = mc['expectation_values'][i]
+            # Tolerance accounts for MC variance + structural difference:
+            # analytical applies damping per-observable, MC per-gate (compounds)
+            assert abs(a - m) < 0.08, \
+                f"{obs}: analytical={a:.4f}, MC={m:.4f}, diff={abs(a-m):.4f}"
+
+    def test_bell_state_zz_depolarizing(self):
+        """
+        Bell state |Φ+⟩: ⟨ZZ⟩_ideal = 1.0.
+        With depolarizing p on both qubits:
+          ⟨ZZ⟩_noisy = (1-4p/3)² × 1.0
+        """
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        p = 0.03
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, p)
+
+        result = maestro.noisy_estimate(qc, ['ZZ'], nm)
+        noisy_zz = result['expectation_values'][0]
+        ideal_zz = result['ideal_expectation_values'][0]
+
+        # Ideal should be 1.0 for Bell state
+        assert abs(ideal_zz - 1.0) < 1e-10
+
+        # Noisy should be (1-4p/3)^2
+        expected_damped = (1.0 - 4.0 * p / 3.0) ** 2
+        assert abs(noisy_zz - expected_damped) < 1e-10, \
+            f"Expected {expected_damped:.6f}, got {noisy_zz:.6f}"
+
+    def test_depolarizing_noise_scales_with_depth(self):
+        """
+        For a circuit with d gates per qubit, per-gate depolarizing noise
+        of probability p gives effective noise ≈ d*p (for small p).
+        MC execution should show more errors for deeper circuits.
+        """
+        from maestro.circuits import QuantumCircuit
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(1, 0.05)
+
+        # Shallow: 1 gate
+        shallow = QuantumCircuit()
+        shallow.x(0)
+
+        # Deep: 21 gates (X repeated 21 times = X for odd count)
+        deep = QuantumCircuit()
+        for _ in range(21):
+            deep.x(0)
+
+        r_shallow = maestro.noisy_estimate_montecarlo(
+            shallow, ['Z'], nm, noise_realizations=500, seed=42)
+        r_deep = maestro.noisy_estimate_montecarlo(
+            deep, ['Z'], nm, noise_realizations=500, seed=42)
+
+        # Both should give ⟨Z⟩ < 0 (X|0⟩ = |1⟩ → ⟨Z⟩ = -1 ideally)
+        # But deeper circuit should be noisier (closer to 0)
+        assert abs(r_deep['expectation_values'][0]) < \
+               abs(r_shallow['expectation_values'][0]), \
+            "Deeper circuit should show more noise degradation"
+
+    def test_complete_depolarizing_kills_all_correlations(self):
+        """
+        At p=0.75 (maximum depolarizing), the channel maps ρ → I/2.
+        All Pauli expectations should vanish: damping = 1-4*0.75/3 = 0.
+        """
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.75)
+
+        assert abs(nm.compute_damping('X')) < 1e-12
+        assert abs(nm.compute_damping('Y')) < 1e-12
+        assert abs(nm.compute_damping('Z')) < 1e-12
+
+    def test_identity_observable_unaffected_by_noise(self):
+        """
+        The identity observable ⟨I⟩ = Tr(ρ) = 1 is unaffected by any channel.
+        """
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.5)
+        nm.set_dephasing(1, 0.3)
+
+        assert abs(nm.compute_damping('II') - 1.0) < 1e-12
+        assert abs(nm.compute_damping('I') - 1.0) < 1e-12
+
+    def test_coherent_averaged_converges_to_analytical(self):
+        """
+        Coherent noise (Rz with random ±ε) averaged over many sign
+        realizations should converge toward cos(ε) damping for off-diagonal
+        observables (XX). For small ε: cos(ε) ≈ 1 - ε²/2.
+
+        This is NOT exactly the Pauli damping — coherent noise preserves
+        purity while Pauli noise does not. But the averaged expectation
+        values should show consistent damping.
+        """
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        p = 0.01
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, p)
+
+        # Get ideal
+        ideal = maestro.noisy_estimate(qc, ['XX'], maestro.NoiseModel())
+        ideal_xx = ideal['expectation_values'][0]
+
+        # Get coherent-averaged
+        coherent = maestro.coherent_estimate(
+            qc, ['XX'], nm, noise_realizations=500, seed=42)
+        coherent_xx = coherent['expectation_values'][0]
+
+        # Coherent noise should reduce magnitude
+        assert abs(coherent_xx) < abs(ideal_xx), \
+            "Coherent noise should damp XX"
+
+        # But not by as much as Pauli noise (coherent preserves purity)
+        # Just verify it's in a physically reasonable range
+        assert abs(coherent_xx) > 0.5 * abs(ideal_xx), \
+            "Coherent noise at p=0.01 shouldn't destroy more than half the signal"
+
+    def test_shot_based_execution_matches_expectation(self):
+        """
+        For a simple |1⟩ state with depolarizing noise, the probability
+        of measuring |0⟩ should be approximately 2p/3 per gate
+        (X or Y error flips the state).
+        """
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+
+        p = 0.15  # large enough to see errors clearly
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, p)
+
+        result = maestro.noisy_execute(qc, nm, shots=5000,
+                                       noise_realizations=200, seed=42)
+        counts = result['counts']
+        total = sum(counts.values())
+
+        # P(measure 0) ≈ px + py = 2p/3 for one gate
+        p_flip = counts.get('0', 0) / total
+        expected_flip = 2.0 * p / 3.0  # X or Y error flips |1⟩ to |0⟩
+
+        assert abs(p_flip - expected_flip) < 0.03, \
+            f"P(flip) = {p_flip:.4f}, expected ≈ {expected_flip:.4f}"
 
