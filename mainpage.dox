@@ -11,7 +11,7 @@
  * researchers and developers to execute quantum circuits efficiently across
  * CPUs, GPUs, and distributed HPC environments — without manual tuning.
  *
- * - **Version:** 0.2.0.post1
+ * - **Version:** 0.2.11
  * - **License:** GPL-3.0
  * - **Organisation:** [Qoro Quantum](https://qoroquantum.de)
  *
