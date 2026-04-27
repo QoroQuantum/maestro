@@ -515,6 +515,16 @@ class IOperation : public std::enable_shared_from_this<IOperation<Time>> {
    */
   virtual bool IsClifford() const { return false; }
 
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  virtual bool IsBranching() const { return false; }
+
  private:
   Time delay; /**< The delay of the operation. */
 };
