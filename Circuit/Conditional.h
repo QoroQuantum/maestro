@@ -376,10 +376,10 @@ class IConditionalOperation : public IOperation<Time> {
    *
    * @return True if it branches a path, false otherwise.
    */
-  bool IsBranching() const override { 
-      if (!operation) return false;
+  bool IsBranching() const override {
+    if (!operation) return false;
 
-      return operation->IsBranching(); 
+    return operation->IsBranching();
   }
 
  private:

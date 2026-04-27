@@ -602,7 +602,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       nrThreads = 1;
     else
 #endif
-        if (((method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral) &&
+        if (((method == Simulators::SimulationType::kStatevector ||
+              method == Simulators::SimulationType::kPathIntegral) &&
              !distCirc->HasOpsAfterMeasurements()) ||
             simType == Simulators::SimulatorType::kQuestSim)
       nrThreads = 1;
@@ -1973,9 +1974,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       simulatorTypes.emplace_back(Simulators::SimulatorType::kQCSim,
                                   Simulators::SimulationType::kPauliPropagator);
 
-    if (OptimizationSimulatorExists(
-            Simulators::SimulatorType::kQCSim,
-            Simulators::SimulationType::kPathIntegral))
+    if (OptimizationSimulatorExists(Simulators::SimulatorType::kQCSim,
+                                    Simulators::SimulationType::kPathIntegral))
       simulatorTypes.emplace_back(Simulators::SimulatorType::kQCSim,
                                   Simulators::SimulationType::kPathIntegral);
 
@@ -2173,7 +2173,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             maxBondDim.empty() ? 0 : std::stoi(maxBondDim);
 
         if (maxBondDim.empty() ||
-            static_cast<int>(mpsOptimizationBondDimensionThreshold) <= maxBondDimValue) {
+            static_cast<int>(mpsOptimizationBondDimensionThreshold) <=
+                maxBondDimValue) {
           // need to be sure the circuit is correctly converted
           dcirc->ConvertForCutting();  // convert the three qubit gates
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();
@@ -2210,7 +2211,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
               }
               avgTwoQubitGatesPerLayer /= layers.size();
 
-              int lookaheadVal = static_cast<int>(4. * avgTwoQubitGatesPerLayer);
+              int lookaheadVal =
+                  static_cast<int>(4. * avgTwoQubitGatesPerLayer);
               if (lookaheadVal > 15) lookaheadVal = 15;
 
               lookaheadDepthLocal = layers.size() < 10 || nrQubits <= 10 ? 0
@@ -2225,9 +2227,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
               lookaheadHeuristicDepthLocal =
                   layers.size() < 10 || nrQubits <= 10 ? 0
-                                                : layers.size() < 20
-                                                    ? lookaheadDepthLocal - 1
-                                                    : lookaheadDepthLocal - 2;
+                  : layers.size() < 20                 ? lookaheadDepthLocal - 1
+                                       : lookaheadDepthLocal - 2;
 
             sim->setGrowthFactorGate(growthFactorGate);
             sim->setGrowthFactorSwap(growthFactorSwap);

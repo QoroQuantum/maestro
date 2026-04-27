@@ -419,7 +419,6 @@ class MPSDummySimulator {
 
     if (layers.empty() || nrQubits <= 2) return qubitsMap;
 
-    
     auto evaluateCost =
         [&, this](const std::vector<IndexType>& candidateMap) -> double {
       auto saveQubitsMap = qubitsMap;
@@ -430,8 +429,7 @@ class MPSDummySimulator {
 
       SetInitialQubitsMap(candidateMap);
 
-      for (const auto& layer : layers) 
-          ApplyGates(layer->GetOperations());
+      for (const auto& layer : layers) ApplyGates(layer->GetOperations());
       auto cost = getTotalSwappingCost();
       qubitsMap = std::move(saveQubitsMap);
       qubitsMapInv = std::move(saveQubitsMapInv);
@@ -476,7 +474,6 @@ class MPSDummySimulator {
 
       return cost;
     };
-    
 
     // Collect 2-qubit pairs from each layer, preserving layer boundaries
     struct QubitPair {
@@ -645,7 +642,6 @@ class MPSDummySimulator {
       }
     }
 
-
     std::uniform_int_distribution<IndexType> qubitDist(0, nrQubits - 1);
     std::uniform_int_distribution<int> nrSwapsDist(
         1, std::min<int>(3, static_cast<int>(nrQubits) / 2));
@@ -654,7 +650,8 @@ class MPSDummySimulator {
     const int maxTotalShuffles = maxNoImprove * 3;
     int noImproveCount = 0;
 
-    for (int s = 0; s < maxTotalShuffles && noImproveCount < maxNoImprove; ++s) {
+    for (int s = 0; s < maxTotalShuffles && noImproveCount < maxNoImprove;
+         ++s) {
       auto tryMap = optMap;
       const int nrSwaps = nrSwapsDist(rng);
       for (int sw = 0; sw < nrSwaps; ++sw) {
@@ -719,9 +716,7 @@ class MPSDummySimulator {
 
   // Lightweight constructor: sets up qubit maps but skips the expensive
   // SetMaxBondDimension computation.  Caller must populate bond arrays.
-  MPSDummySimulator(size_t N, LightweightInitTag)
-      : nrQubits(N) {
-  }
+  MPSDummySimulator(size_t N, LightweightInitTag) : nrQubits(N) {}
 
   void SwapQubits(IndexType qubit1, IndexType qubit2) {
     IndexType realq1 = qubitsMap[qubit1];
@@ -832,7 +827,7 @@ class MPSDummySimulator {
   double totalSwappingCost = 0;
 
   double growthFactorSwap = 1.;
-  double growthFactorGate = 0.65; 
+  double growthFactorGate = 0.65;
 
   void growBondDimension(IndexType bond, bool swap = true) {
     // the left and right bond dimensions are relevant because:
@@ -849,27 +844,35 @@ class MPSDummySimulator {
     //    ---
     //    | |
 
-    // the left and right dimensions stay the same and also the physical legs have dimension 2
+    // the left and right dimensions stay the same and also the physical legs
+    // have dimension 2
 
-    // then the swap or the other gate is applied, getting a result that looks graphically as above, but of course with different values inside the tensor
-    // swap is special, just swaps the values for (0, 1) and (1, 0) in
+    // then the swap or the other gate is applied, getting a result that looks
+    // graphically as above, but of course with different values inside the
+    // tensor swap is special, just swaps the values for (0, 1) and (1, 0) in
     // the physical legs, while other gates can change all values in the tensor
-    
-    // then the tensor is reshaped into a matrix, having dimensions 2 * leftDim x 2 * rightNeighborDim on this matrix SVD is applied, to separate out the
+
+    // then the tensor is reshaped into a matrix, having dimensions 2 * leftDim
+    // x 2 * rightNeighborDim on this matrix SVD is applied, to separate out the
     // qubits tensors again, and the bond dimension is the number of singular
     // values kept after truncation (if done), or the number of non-zero
     // singular values if no truncation is done. The bond dimension can be at
-    // most min(2 * min(leftDim, rightNeighborDim), maxBondDim[bond]) and the minimum is obviously 1
-
+    // most min(2 * min(leftDim, rightNeighborDim), maxBondDim[bond]) and the
+    // minimum is obviously 1
 
     const IndexType leftBond = bond - 1;
     const IndexType rightNeigborBond = bond + 1;
     const double betweenDim = currentBondDim[bond];
 
     const double leftDim = leftBond >= 0 ? currentBondDim[leftBond] : 1;
-    const double rightNeighborDim = rightNeigborBond < static_cast<IndexType>(currentBondDim.size()) ? currentBondDim[rightNeigborBond] : 1;
-    
-    const double newMaxDim = (swap && leftDim == rightNeighborDim) ? betweenDim : 2. * std::min(leftDim, rightNeighborDim);
+    const double rightNeighborDim =
+        rightNeigborBond < static_cast<IndexType>(currentBondDim.size())
+            ? currentBondDim[rightNeigborBond]
+            : 1;
+
+    const double newMaxDim = (swap && leftDim == rightNeighborDim)
+                                 ? betweenDim
+                                 : 2. * std::min(leftDim, rightNeighborDim);
 
     const double growthFactor = swap ? growthFactorSwap : growthFactorGate;
 

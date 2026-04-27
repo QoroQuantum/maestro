@@ -1609,7 +1609,8 @@ class QCSimState : public ISimulator {
         return result;
       } else {
         throw std::runtime_error(
-            "QCSimState::MeasureNoCollapse: The path integral simulator does not "
+            "QCSimState::MeasureNoCollapse: The path integral simulator does "
+            "not "
             "support measuring more than 63 qubits into 64 bits integers.");
       }
     }

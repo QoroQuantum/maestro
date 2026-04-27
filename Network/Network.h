@@ -156,9 +156,9 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
    *
    * Execute the circuit on the specified host and return the complex amplitudes
    * of the resulting quantum state. The circuit must fit on the host, otherwise
-   * an exception is thrown. The circuit will be mapped on the specified host, if
-   * its qubits start with indexing from 0 (if already mapped, the qubits won't
-   * be altered).
+   * an exception is thrown. The circuit will be mapped on the specified host,
+   * if its qubits start with indexing from 0 (if already mapped, the qubits
+   * won't be altered).
    *
    * @param circuit The circuit to execute.
    * @param hostId The id of the host to execute the circuit on.
@@ -947,8 +947,9 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
    * Choose the best simulator for the given circuit, based on the number of
    * qubits, number of classical bits, number of result classical bits and
    * number of shots. The choice is made from the optimization simulators set.
-   * 
-   * WARNING: the circuit might be modified, depending on the chosen simulator and some optimization settings
+   *
+   * WARNING: the circuit might be modified, depending on the chosen simulator
+   * and some optimization settings
    *
    * @param dcirc The distributed circuit to choose the simulator for.
    * @param counts The number of shots to be executed.
@@ -971,7 +972,6 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
       Simulators::SimulatorType &simType, Simulators::SimulationType &method,
       std::vector<bool> &executed, bool multithreading = false,
       bool dontRunCircuitStart = false) const = 0;
-
 
   virtual void SetInitialQubitsMapOptimization(bool optimize = true) = 0;
 

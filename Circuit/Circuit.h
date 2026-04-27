@@ -1753,10 +1753,13 @@ class Circuit : public IOperation<Time> {
 
       if (!executed) {
         executionStopped = true;
-        if (sim && sim->GetSimulationType() ==
-                       Simulators::SimulationType::kMatrixProductState && sim->SupportsMPSSwapOptimization() && 
+        if (sim &&
+            sim->GetSimulationType() ==
+                Simulators::SimulationType::kMatrixProductState &&
+            sim->SupportsMPSSwapOptimization() &&
             op->GetType() != OperationType::kRandomGen &&
-            op->GetType() != OperationType::kConditionalRandomGen && op->GetType() != OperationType::kNoOp)
+            op->GetType() != OperationType::kConditionalRandomGen &&
+            op->GetType() != OperationType::kNoOp)
           sim->SetGatesCounter(sim->GetGatesCounter() + 1);
       }
       if (executionStopped) executedOps.emplace_back(executed);
@@ -1795,14 +1798,15 @@ class Circuit : public IOperation<Time> {
     // sim->Flush();
   }
 
-
   /**
-   * @brief Returns a new circuit with the operations that were not yet executed.
-   * 
+   * @brief Returns a new circuit with the operations that were not yet
+   * executed.
+   *
    * The parameter is modified to reflect the newly created circuit, which
    * contains only the operations that were not yet executed.
-   * 
-   * @param executedOps A vector of bools indicating which operations were executed.
+   *
+   * @param executedOps A vector of bools indicating which operations were
+   * executed.
    * @return A new circuit with the operations that were not yet executed.
    */
   std::shared_ptr<Circuits::Circuit<Time>> RemoveExecutedOperations(
@@ -1824,8 +1828,6 @@ class Circuit : public IOperation<Time> {
 
     return std::make_shared<Circuit<Time>>(newops);
   }
-
-
 
   // used internally to optimize measurements in the case of having measurements
   // only at the end of the circuit

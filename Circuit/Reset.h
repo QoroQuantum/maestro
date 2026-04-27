@@ -70,8 +70,7 @@ class Reset : public IOperation<Time> {
 
         if (sim->SupportsMPSSwapOptimization()) {
           const auto counter = sim->GetGatesCounter();
-          if (counter > 0)
-            sim->SetGatesCounter(counter - 1);
+          if (counter > 0) sim->SetGatesCounter(counter - 1);
         }
       }
     }

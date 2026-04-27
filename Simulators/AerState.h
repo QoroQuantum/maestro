@@ -380,10 +380,7 @@ class AerState : public ISimulator {
    *
    * @return The inner product result as a complex number.
    */
-  std::complex<double> ProjectOnZero() override {
-    return Amplitude(0);
-  }
-
+  std::complex<double> ProjectOnZero() override { return Amplitude(0); }
 
   /**
    * @brief Returns the probabilities of all possible outcomes.

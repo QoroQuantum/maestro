@@ -420,8 +420,7 @@ class CompositeSimulator : public ISimulator {
   std::complex<double> ProjectOnZero() override {
     std::complex<double> res = 1.0;
 
-    for (auto &[id, simulator] : simulators)
-      res *= simulator->ProjectOnZero();
+    for (auto &[id, simulator] : simulators) res *= simulator->ProjectOnZero();
 
     return res;
   }

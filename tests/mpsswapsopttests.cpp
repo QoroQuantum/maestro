@@ -37,9 +37,7 @@ extern bool checkClose(std::complex<double> a, std::complex<double> b,
 BOOST_AUTO_TEST_SUITE(MPSSwapOptTests)
 
 constexpr std::array numGates{10,  20,  30,  50,  80,  100, 150,
-                              200, 270, 340, 500,     800, 1000};
-
-
+                              200, 270, 340, 500, 800, 1000};
 
 BOOST_DATA_TEST_CASE(ConvertForCuttingLayersRoundtripMatchesStatevector,
                      numGates, nrGates) {
@@ -116,7 +114,6 @@ BOOST_DATA_TEST_CASE(ConvertForCuttingLayersRoundtripMatchesStatevector,
   }
 }
 
-
 BOOST_DATA_TEST_CASE(OptimalQubitsMapZeroSwapCost, numGates, nrGates) {
   constexpr int nrQubits = 10;
 
@@ -180,8 +177,6 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapZeroSwapCost, numGates, nrGates) {
                      << "x");
 }
 
-
-
 BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
   constexpr int nrQubits = 12;
   const size_t nrStates = 1ULL << nrQubits;
@@ -189,7 +184,8 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
   // build a random circuit with 1- and 2-qubit gates
   auto randomCirc = std::make_shared<Circuits::Circuit<>>();
 
-  std::mt19937 g(/*static_cast<unsigned>(nrGates) * 12345u*/ std::random_device{}());
+  std::mt19937 g(
+      /*static_cast<unsigned>(nrGates) * 12345u*/ std::random_device{}());
   std::uniform_real_distribution<double> dblDist(-2. * M_PI, 2. * M_PI);
   std::uniform_int_distribution<int> gateDist(
       0, static_cast<int>(Circuits::QuantumGateType::kCUGateType));
@@ -269,11 +265,10 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
   qcsimOpt->Configure("matrix_product_state_max_bond_dimension", "64");
   qcsimOpt->Initialize();
 
-  //qcsimOpt->SetUseOptimalMeetingPosition(true);
+  // qcsimOpt->SetUseOptimalMeetingPosition(true);
 
   qcsimOpt->SetInitialQubitsMap(
       std::vector<long long int>(optimalMap.begin(), optimalMap.end()));
-
 
   Circuits::OperationState stateOpt;
   stateOpt.AllocateBits(nrQubits);
@@ -291,7 +286,7 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
   BOOST_TEST_MESSAGE("Optimized is " << origTime / optTime << "x vs original");
 
   // compute swapping costs with the dummy simulator
-  
+
   std::vector<long long int> origqubits(nrQubits);
   std::iota(origqubits.begin(), origqubits.end(), 0);
   dummySim.SetInitialQubitsMap(origqubits);
@@ -306,9 +301,8 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
   BOOST_TEST_MESSAGE("Optimized swapping cost: " << optSwappingCost);
 
   const double improvementPct =
-      origSwappingCost > 0
-          ? (1.0 - optSwappingCost / origSwappingCost) * 100.0
-          : 0.0;
+      origSwappingCost > 0 ? (1.0 - optSwappingCost / origSwappingCost) * 100.0
+                           : 0.0;
   BOOST_TEST_MESSAGE("Swap cost reduction: " << improvementPct << "%");
   BOOST_TEST_MESSAGE("Speedup ratio: "
                      << (optSwappingCost > 0
@@ -326,13 +320,13 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
   }
 }
 
-
 BOOST_DATA_TEST_CASE(LookaheadSwapOptimization, numGates, nrGates) {
   constexpr int nrQubits = 10;
 
   auto randomCirc = std::make_shared<Circuits::Circuit<>>();
 
-  std::mt19937 g(/*static_cast<unsigned>(nrGates) * 99999u*/ std::random_device{}());
+  std::mt19937 g(
+      /*static_cast<unsigned>(nrGates) * 99999u*/ std::random_device{}());
   std::uniform_int_distribution<int> gateDist(
       0, static_cast<int>(Circuits::QuantumGateType::kCUGateType));
 
@@ -386,11 +380,12 @@ BOOST_DATA_TEST_CASE(LookaheadSwapOptimization, numGates, nrGates) {
     std::vector<std::shared_ptr<Circuits::IOperation<>>> window;
     window.reserve(lookaheadDepth);
     int twoQubitCount = 0;
-    for (size_t j = i; j < opsVec.size() && twoQubitCount < lookaheadDepth; ++j) {
-       window.push_back(opsVec[j]);
-       if (opsVec[j]->AffectedQubits().size() >= 2) ++twoQubitCount;
+    for (size_t j = i; j < opsVec.size() && twoQubitCount < lookaheadDepth;
+         ++j) {
+      window.push_back(opsVec[j]);
+      if (opsVec[j]->AffectedQubits().size() >= 2) ++twoQubitCount;
     }
- 
+
     double meetBestCost = std::numeric_limits<double>::infinity();
     const auto meetPos = dummySim.FindBestMeetingPosition(
         window, 0, lookaheadDepth, lookaheadDepthWithHeuristic, 0.0,
@@ -403,12 +398,11 @@ BOOST_DATA_TEST_CASE(LookaheadSwapOptimization, numGates, nrGates) {
   const auto lookaheadCost = dummySim.getTotalSwappingCost();
 
   BOOST_TEST_MESSAGE("Heuristic swap cost: " << heuristicCost);
-  BOOST_TEST_MESSAGE("Lookahead (depth " << lookaheadDepth << ") swap cost: " << lookaheadCost);
+  BOOST_TEST_MESSAGE("Lookahead (depth " << lookaheadDepth
+                                         << ") swap cost: " << lookaheadCost);
 
   const double improvementPct =
-      heuristicCost > 0
-          ? (1.0 - lookaheadCost / heuristicCost) * 100.0
-          : 0.0;
+      heuristicCost > 0 ? (1.0 - lookaheadCost / heuristicCost) * 100.0 : 0.0;
   BOOST_TEST_MESSAGE("Lookahead improvement: " << improvementPct << "%");
 
   // Lookahead should generally be no worse than heuristic, but due to the
@@ -424,7 +418,8 @@ BOOST_DATA_TEST_CASE(OptimalMeetingPositionSimulationMatch, numGates, nrGates) {
 
   auto randomCirc = std::make_shared<Circuits::Circuit<>>();
 
-  std::mt19937 g(/*static_cast<unsigned>(nrGates) * 77777u*/ std::random_device{}());
+  std::mt19937 g(
+      /*static_cast<unsigned>(nrGates) * 77777u*/ std::random_device{}());
   std::uniform_real_distribution<double> dblDist(-2. * M_PI, 2. * M_PI);
   std::uniform_int_distribution<int> gateDist(
       0, static_cast<int>(Circuits::QuantumGateType::kCUGateType));
@@ -486,7 +481,8 @@ BOOST_DATA_TEST_CASE(OptimalMeetingPositionSimulationMatch, numGates, nrGates) {
       std::chrono::duration<double>(endOpt - startOpt).count() * 1000.;
 
   BOOST_TEST_MESSAGE("Default heuristic execution time: " << origTime << " ms");
-  BOOST_TEST_MESSAGE("Optimal meeting position execution time: " << optTime << " ms");
+  BOOST_TEST_MESSAGE("Optimal meeting position execution time: " << optTime
+                                                                 << " ms");
   BOOST_TEST_MESSAGE("Optimized is " << origTime / optTime << "x vs default");
 
   // Both executions should produce the same amplitudes
@@ -494,8 +490,7 @@ BOOST_DATA_TEST_CASE(OptimalMeetingPositionSimulationMatch, numGates, nrGates) {
   for (size_t s = 0; s < nrStates; ++s) {
     const auto aOrig = qcsimOrig->Amplitude(s);
     const auto aOpt = qcsimOpt->Amplitude(s);
-    BOOST_CHECK_PREDICATE(
-        checkClose, (aOrig)(aOpt)(0.05));
+    BOOST_CHECK_PREDICATE(checkClose, (aOrig)(aOpt)(0.05));
   }
 }
 
@@ -538,7 +533,8 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
       Simulators::SimulatorType::kQCSim,
       Simulators::SimulationType::kMatrixProductState);
   qcsimOrig->AllocateQubits(nrQubits);
-  qcsimOrig->Configure("matrix_product_state_max_bond_dimension", std::to_string(MAX_BOND_DIMENSION).c_str());
+  qcsimOrig->Configure("matrix_product_state_max_bond_dimension",
+                       std::to_string(MAX_BOND_DIMENSION).c_str());
   qcsimOrig->Initialize();
 
   Circuits::OperationState stateOrig;
@@ -569,7 +565,8 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
     avgTwoQubitGatesPerLayer += twoQubitGates;
   }
   avgTwoQubitGatesPerLayer /= layers.size();
-  BOOST_TEST_MESSAGE("Average number of 2-qubit gates per layer: " << avgTwoQubitGatesPerLayer);
+  BOOST_TEST_MESSAGE("Average number of 2-qubit gates per layer: "
+                     << avgTwoQubitGatesPerLayer);
 
   Simulators::MPSDummySimulator dummySim(nrQubits);
   dummySim.SetMaxBondDimension(MAX_BOND_DIMENSION);
@@ -579,12 +576,13 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
   auto endOptMap = std::chrono::system_clock::now();
   double optMapTime =
       std::chrono::duration<double>(endOptMap - startOptMap).count() * 1000.;
-  BOOST_TEST_MESSAGE("Optimization (map + layers) time: " << optMapTime << " ms");
+  BOOST_TEST_MESSAGE("Optimization (map + layers) time: " << optMapTime
+                                                          << " ms");
 
   /*
   std::cout << "Circuit, on qubits:" << std::endl;
   for (size_t i = 0; i < optCirc->size(); ++i) {
-    std::cout << "Gate " << i 
+    std::cout << "Gate " << i
               << " on qubits ";
     const auto qubits = optCirc->GetOperations()[i]->AffectedQubits();
     for (size_t j = 0; j < qubits.size(); ++j) {
@@ -594,20 +592,20 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
     std::cout << std::endl;
   }
   */
- 
 
-  // Create the optimized simulator with optimal map + meeting position + lookahead
+  // Create the optimized simulator with optimal map + meeting position +
+  // lookahead
   int lookaheadVal = nrQubits;
   if (nrQubits > 15) lookaheadVal = 15;
 
-  int lookaheadDepth =          layers.size()   < 10  ? 0 
-                                      : layers.size() < 20 ? static_cast<int>(lookaheadVal) 
-                                      : layers.size() < 35 ? 1.5 * lookaheadVal
-                                      : 2 * lookaheadVal;
+  int lookaheadDepth = layers.size() < 10   ? 0
+                       : layers.size() < 20 ? static_cast<int>(lookaheadVal)
+                       : layers.size() < 35 ? 1.5 * lookaheadVal
+                                            : 2 * lookaheadVal;
 
-  int lookaheadHeuristicDepth = layers.size()   < 10 ? 0
-                                      : layers.size() < 20 ? lookaheadDepth - 1
-                                      : lookaheadDepth - 2; 
+  int lookaheadHeuristicDepth = layers.size() < 10   ? 0
+                                : layers.size() < 20 ? lookaheadDepth - 1
+                                                     : lookaheadDepth - 2;
 
   if (nrQubits < 10 || MAX_BOND_DIMENSION < 32) {
     lookaheadDepth = 0;
@@ -622,7 +620,8 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
                       std::to_string(MAX_BOND_DIMENSION).c_str());
   qcsimOpt->Initialize();
 
-  qcsimOpt->SetInitialQubitsMap(std::vector<long long int>(optimalMap.begin(), optimalMap.end()));
+  qcsimOpt->SetInitialQubitsMap(
+      std::vector<long long int>(optimalMap.begin(), optimalMap.end()));
 
   qcsimOpt->SetUseOptimalMeetingPosition(true);
   qcsimOpt->SetLookaheadDepth(lookaheadDepth);
@@ -641,21 +640,20 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
   // --- Runtime comparison ---
   BOOST_TEST_MESSAGE("Original execution time: " << origTime << " ms");
   BOOST_TEST_MESSAGE("Window-optimized execution time: " << optTime << " ms");
-  BOOST_TEST_MESSAGE("Window-optimized is "
-                     << origTime / optTime << "x vs original");
+  BOOST_TEST_MESSAGE("Window-optimized is " << origTime / optTime
+                                            << "x vs original");
 
   // --- Amplitude comparison ---
   for (size_t s = 0; s < nrStates; ++s) {
     const auto aOrig = qcsimOrig->Amplitude(s);
     const auto aOpt = qcsimOpt->Amplitude(s);
-    BOOST_CHECK_PREDICATE(
-        checkClose, (aOrig)(aOpt)(0.05));  // max bond dimension is set,
-                                           // tolerance needed
+    BOOST_CHECK_PREDICATE(checkClose,
+                          (aOrig)(aOpt)(0.05));  // max bond dimension is set,
+                                                 // tolerance needed
   }
 }
 
-
-constexpr std::array numGatesForNetworkExecution{10,  20,  30,  50,  80,  100 };
+constexpr std::array numGatesForNetworkExecution{10, 20, 30, 50, 80, 100};
 
 BOOST_DATA_TEST_CASE(NetworkOptimizedSwapsVsUnoptimizedOnHost,
                      numGatesForNetworkExecution, nrGates) {
@@ -678,10 +676,9 @@ BOOST_DATA_TEST_CASE(NetworkOptimizedSwapsVsUnoptimizedOnHost,
     if (gateNr > 0 && measureCoin(g)) {
       const int mq = qubitDist(g);
       const size_t cbit = static_cast<size_t>(mq);
-      randomCirc->AddOperation(
-          Circuits::CircuitFactory<>::CreateMeasurement(
-              std::vector<std::pair<Types::qubit_t, size_t>>{{
-                  static_cast<Types::qubit_t>(mq), cbit}}));
+      randomCirc->AddOperation(Circuits::CircuitFactory<>::CreateMeasurement(
+          std::vector<std::pair<Types::qubit_t, size_t>>{
+              {static_cast<Types::qubit_t>(mq), cbit}}));
 
       // conditional X on a different qubit driven by the measurement result
       int tgt = (mq + 1) % nrQubits;
@@ -728,7 +725,8 @@ BOOST_DATA_TEST_CASE(NetworkOptimizedSwapsVsUnoptimizedOnHost,
   auto netUnopt = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
       std::vector<Types::qubit_t>{static_cast<Types::qubit_t>(nrQubits)},
       std::vector<size_t>{static_cast<size_t>(nrQubits)});
-  netUnopt->RemoveAllOptimizationSimulatorsAndAdd(Simulators::SimulatorType::kQCSim,
+  netUnopt->RemoveAllOptimizationSimulatorsAndAdd(
+      Simulators::SimulatorType::kQCSim,
       Simulators::SimulationType::kMatrixProductState);
   netUnopt->CreateSimulator();
   netUnopt->Configure("matrix_product_state_max_bond_dimension", "64");
@@ -745,7 +743,8 @@ BOOST_DATA_TEST_CASE(NetworkOptimizedSwapsVsUnoptimizedOnHost,
   auto netOpt = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
       std::vector<Types::qubit_t>{static_cast<Types::qubit_t>(nrQubits)},
       std::vector<size_t>{static_cast<size_t>(nrQubits)});
-  netOpt->RemoveAllOptimizationSimulatorsAndAdd(Simulators::SimulatorType::kQCSim,
+  netOpt->RemoveAllOptimizationSimulatorsAndAdd(
+      Simulators::SimulatorType::kQCSim,
       Simulators::SimulationType::kMatrixProductState);
   netOpt->CreateSimulator();
   netOpt->Configure("matrix_product_state_max_bond_dimension", "64");
@@ -774,16 +773,17 @@ BOOST_DATA_TEST_CASE(NetworkOptimizedSwapsVsUnoptimizedOnHost,
 
   double totalVariation = 0.0;
   for (const auto& key : allKeys) {
-    const double pUnopt =
-        (resUnopt.count(key) ? resUnopt.at(key) : 0) /
-        static_cast<double>(shots);
+    const double pUnopt = (resUnopt.count(key) ? resUnopt.at(key) : 0) /
+                          static_cast<double>(shots);
     const double pOpt =
-        (resOpt.count(key) ? resOpt.at(key) : 0) /
-        static_cast<double>(shots);
+        (resOpt.count(key) ? resOpt.at(key) : 0) / static_cast<double>(shots);
     totalVariation += std::abs(pUnopt - pOpt);
 
     if (pUnopt > 1E-2 && pOpt > 1E-2) {
-      BOOST_CHECK_CLOSE(pUnopt, pOpt, (pUnopt < 0.05 || pOpt < 0.05) ? 100. : (pUnopt < 0.1 || pOpt < 0.1) ? 50. : 30.);
+      BOOST_CHECK_CLOSE(pUnopt, pOpt,
+                        (pUnopt < 0.05 || pOpt < 0.05) ? 100.
+                        : (pUnopt < 0.1 || pOpt < 0.1) ? 50.
+                                                       : 30.);
     }
   }
   totalVariation *= 0.5;

@@ -3001,4 +3001,3 @@ class TestNoisePhysicalAccuracy:
 
         assert abs(p_flip - expected_flip) < 0.03, \
             f"P(flip) = {p_flip:.4f}, expected ≈ {expected_flip:.4f}"
-

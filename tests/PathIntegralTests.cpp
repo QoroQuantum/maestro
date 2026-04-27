@@ -41,8 +41,9 @@ namespace {
 
 // Build a random circuit using the gate kinds the path integral wrapper knows
 // how to convert. Measurements / resets are intentionally excluded.
-std::shared_ptr<Circuits::Circuit<>> GenerateRandomCircuit(
-    int nrGates, int nrQubits, std::mt19937& g) {
+std::shared_ptr<Circuits::Circuit<>> GenerateRandomCircuit(int nrGates,
+                                                           int nrQubits,
+                                                           std::mt19937& g) {
   auto circuit = Circuits::CircuitFactory<>::CreateCircuit();
 
   std::uniform_real_distribution<double> paramDist(-2.0 * M_PI, 2.0 * M_PI);
@@ -120,8 +121,7 @@ std::unordered_map<Types::qubit_t, Types::qubit_t> ConvertManyCounts(
 
 std::vector<double> ComputeMarginalProbabilities(
     const std::shared_ptr<Simulators::ISimulator>& simulator,
-    const Types::qubits_vector& qubits,
-    int nrQubits) {
+    const Types::qubits_vector& qubits, int nrQubits) {
   const size_t nrOutcomes = 1ULL << qubits.size();
   const size_t nrStates = 1ULL << nrQubits;
   std::vector<double> probabilities(nrOutcomes, 0.0);
@@ -143,8 +143,7 @@ std::vector<double> ComputeMarginalProbabilities(
 
 void CheckCountsAgainstProbabilities(
     const std::unordered_map<Types::qubit_t, Types::qubit_t>& counts,
-    const std::vector<double>& probabilities,
-    size_t shots) {
+    const std::vector<double>& probabilities, size_t shots) {
   Types::qubit_t totalCounts = 0;
   for (const auto& [outcome, count] : counts) totalCounts += count;
 
@@ -236,15 +235,15 @@ MixedCircuitInfo GenerateRandomMixedCircuit(int nrGates, int nrQubits,
       // controlled gate on another qubit conditioned on this bit.
       if (measureNow(g)) {
         const int tQubit = qubitDist(g);
-        const auto innerGate = std::dynamic_pointer_cast<
-            Circuits::IGateOperation<>>(
-            Circuits::CircuitFactory<>::CreateGate(
-                Circuits::QuantumGateType::kXGateType,
-                static_cast<size_t>(tQubit)));
+        const auto innerGate =
+            std::dynamic_pointer_cast<Circuits::IGateOperation<>>(
+                Circuits::CircuitFactory<>::CreateGate(
+                    Circuits::QuantumGateType::kXGateType,
+                    static_cast<size_t>(tQubit)));
         if (innerGate) {
           circuit->AddOperation(
-              Circuits::CircuitFactory<>::CreateSimpleConditionalGate(
-                  innerGate, mCbit));
+              Circuits::CircuitFactory<>::CreateSimpleConditionalGate(innerGate,
+                                                                      mCbit));
         }
       }
     }
@@ -276,8 +275,7 @@ MixedCircuitInfo GenerateRandomMixedCircuit(int nrGates, int nrQubits,
 // bits, returning them as a packed integer (bit k = cbits[k]).
 Types::qubit_t RunOneShot(
     const std::shared_ptr<Simulators::ISimulator>& simulator,
-    const std::shared_ptr<Circuits::Circuit<>>& circuit,
-    size_t totalCbits,
+    const std::shared_ptr<Circuits::Circuit<>>& circuit, size_t totalCbits,
     const std::vector<size_t>& readbackCbits) {
   simulator->Reset();
 
@@ -331,10 +329,8 @@ BOOST_AUTO_TEST_SUITE(path_integral_tests)
 // Generate several random Maestro circuits and check that the per basis-state
 // amplitudes computed by the path integral wrapper match those of the Qiskit
 // Aer statevector simulator.
-BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
-                       RandomCircuitAmplitudesMatchAer,
-                       bdata::xrange(10),
-                       trial) {
+BOOST_DATA_TEST_CASE_F(PathIntegralFixture, RandomCircuitAmplitudesMatchAer,
+                       bdata::xrange(10), trial) {
   BOOST_TEST(aer);
   aer->Reset();
 
@@ -363,18 +359,16 @@ BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
 
     BOOST_CHECK_SMALL(std::abs(aerAmp - piAmp), 1e-7);
   }
-
-  
 }
 
 // Generate several random Maestro circuits and execute them through the common
 // simulator interface using qcsim's path integral implementation. Check that
 // the resulting per basis-state amplitudes match qcsim's statevector
 // simulation.
-BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
-                       RandomCircuitCommonInterfaceAmplitudesMatchQCSimStatevector,
-                       bdata::xrange(10),
-                       trial) {
+BOOST_DATA_TEST_CASE_F(
+    PathIntegralFixture,
+    RandomCircuitCommonInterfaceAmplitudesMatchQCSimStatevector,
+    bdata::xrange(10), trial) {
   BOOST_TEST(qcsimStatevector);
   BOOST_TEST(qcsimPathIntegral);
 
@@ -409,8 +403,7 @@ BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
 // statevector simulator.
 BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
                        RandomPauliExpectationValuesMatchQCSimStatevector,
-                       bdata::xrange(10),
-                       trial) {
+                       bdata::xrange(10), trial) {
   BOOST_TEST(qcsimStatevector);
   BOOST_TEST(qcsimPathIntegral);
 
@@ -445,8 +438,7 @@ BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
 // both qcsim's statevector and path integral simulators.
 BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
                        RandomCircuitSampleCountsMatchReferenceProbabilities,
-                       bdata::xrange(5),
-                       trial) {
+                       bdata::xrange(5), trial) {
   BOOST_TEST(qcsimStatevector);
   BOOST_TEST(qcsimPathIntegral);
 
@@ -469,9 +461,8 @@ BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
   Types::qubits_vector allQubits(nrQubits);
   std::iota(allQubits.begin(), allQubits.end(), 0);
 
-  const Types::qubits_vector sampledQubits {
-    allQubits[0], allQubits[1], allQubits[2], allQubits[3]
-  };
+  const Types::qubits_vector sampledQubits{allQubits[0], allQubits[1],
+                                           allQubits[2], allQubits[3]};
   constexpr size_t shots = 4000;
 
   const auto probabilities =
@@ -491,8 +482,7 @@ BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
 // for both qcsim's statevector and path integral simulators.
 BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
                        RandomCircuitSampleCountsManyMatchReferenceProbabilities,
-                       bdata::xrange(5),
-                       trial) {
+                       bdata::xrange(5), trial) {
   BOOST_TEST(qcsimStatevector);
   BOOST_TEST(qcsimPathIntegral);
 
@@ -547,8 +537,7 @@ BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
 // other.
 BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
                        RandomMixedCircuitMeasurementCountsMatch,
-                       bdata::xrange(5),
-                       trial) {
+                       bdata::xrange(5), trial) {
   BOOST_TEST(qcsimStatevector);
   BOOST_TEST(qcsimPathIntegral);
 
@@ -588,12 +577,12 @@ BOOST_DATA_TEST_CASE_F(PathIntegralFixture,
     const auto svIt = svCounts.find(static_cast<Types::qubit_t>(outcome));
     const auto piIt = piCounts.find(static_cast<Types::qubit_t>(outcome));
 
-    const double svProb =
-        svIt == svCounts.end() ? 0.0
-                               : static_cast<double>(svIt->second) / shots;
-    const double piProb =
-        piIt == piCounts.end() ? 0.0
-                               : static_cast<double>(piIt->second) / shots;
+    const double svProb = svIt == svCounts.end()
+                              ? 0.0
+                              : static_cast<double>(svIt->second) / shots;
+    const double piProb = piIt == piCounts.end()
+                              ? 0.0
+                              : static_cast<double>(piIt->second) / shots;
 
     // Tolerance: allow for statistical fluctuations in both samples.
     const double refProb = (svProb + piProb) / 2.0;

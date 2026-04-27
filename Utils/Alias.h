@@ -21,7 +21,6 @@
 
 namespace Utils {
 
-
 class AliasEntry {
  public:
   AliasEntry() : probability(1.), alias(-1) {}
@@ -93,7 +92,6 @@ class AliasBase {
       1. - std::numeric_limits<double>::epsilon();
 };
 
-
 class Alias : public AliasBase {
  public:
   Alias() = delete;
@@ -125,7 +123,7 @@ class Alias : public AliasBase {
       if (stateProb < std::numeric_limits<double>::epsilon()) continue;
 
       ++numNonZeroStates;
-      
+
       accum += stateProb;
       if (accum > oneMinusEps) break;
     }
@@ -139,8 +137,8 @@ class Alias : public AliasBase {
 
     long long int i = 0;
     accum = 0.;
-    for (Eigen::Index state = 0; state < static_cast<Eigen::Index>(statevector.size());
-         ++state) {
+    for (Eigen::Index state = 0;
+         state < static_cast<Eigen::Index>(statevector.size()); ++state) {
       const double stateProb = std::norm(statevector[state]);
       if (stateProb < std::numeric_limits<double>::epsilon()) continue;
 
@@ -163,7 +161,8 @@ class Alias : public AliasBase {
     SetAliasTable(under, over);
   }
 
-  Alias(const std::unordered_map<QC::PathIntegral::FastVectorBool, std::complex<double>,
+  Alias(const std::unordered_map<
+        QC::PathIntegral::FastVectorBool, std::complex<double>,
         QC::PathIntegral::FastVectorBoolHash> &amplitudesMap) {
     std::vector<AliasEntry> under;
     std::vector<AliasEntry> over;
@@ -174,7 +173,7 @@ class Alias : public AliasBase {
 
     statesTable.reserve(amplitudesMap.size());
 
-    //size_t maxState = 0;
+    // size_t maxState = 0;
     long long int i = 0;
     for (const auto &valPair : amplitudesMap) {
       const double prob = std::norm(valPair.second) * amplitudesMap.size();
@@ -184,13 +183,13 @@ class Alias : public AliasBase {
       else
         over.emplace_back(prob, i);
 
-      //if (state > maxState) maxState = state;
+      // if (state > maxState) maxState = state;
       statesTable.push_back(state);
       ++i;
     }
 
-    //aliasTable.resize(maxState + 1);
-    //std::fill(aliasTable.begin(), aliasTable.end(), AliasEntry(1., -1));
+    // aliasTable.resize(maxState + 1);
+    // std::fill(aliasTable.begin(), aliasTable.end(), AliasEntry(1., -1));
     aliasTable.resize(under.size() + over.size());
 
     SetAliasTable(under, over);
@@ -198,26 +197,26 @@ class Alias : public AliasBase {
 
   inline size_t Sample(double v) const {
     const double vadj = v * aliasTable.size();
-    const size_t offset = std::min<size_t>(static_cast<size_t>(vadj), aliasTable.size() - 1);
+    const size_t offset =
+        std::min<size_t>(static_cast<size_t>(vadj), aliasTable.size() - 1);
     const double up = std::min<double>(vadj - offset, oneMinusEps);
 
-    return statesTable[up < aliasTable[offset].probability ? offset
-                                               : aliasTable[offset].alias];
+    return statesTable[up < aliasTable[offset].probability
+                           ? offset
+                           : aliasTable[offset].alias];
   }
 
  private:
   std::vector<long long int> statesTable;
 };
 
-
-
 class AliasBig : public AliasBase {
  public:
   AliasBig() = delete;
 
   AliasBig(const std::unordered_map<
-        QC::PathIntegral::FastVectorBool, std::complex<double>,
-        QC::PathIntegral::FastVectorBoolHash> &amplitudesMap) {
+           QC::PathIntegral::FastVectorBool, std::complex<double>,
+           QC::PathIntegral::FastVectorBoolHash> &amplitudesMap) {
     std::vector<AliasEntry> under;
     std::vector<AliasEntry> over;
 

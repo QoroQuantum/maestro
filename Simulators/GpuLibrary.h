@@ -345,8 +345,8 @@ class GpuLibrary : public Utils::Library {
           fMPSExpectationValue = (double (*)(
               void *, const char *, int))GetFunction("MPSExpectationValue");
           CheckFunction((void *)fMPSExpectationValue, __LINE__);
-          fMPSProjectOnZero =
-              (int (*)(void *, double *, double *))GetFunction("MPSProjectOnZero");
+          fMPSProjectOnZero = (int (*)(void *, double *, double *))GetFunction(
+              "MPSProjectOnZero");
           CheckFunction((void *)fMPSProjectOnZero, __LINE__);
 
           fMPSApplyX = (int (*)(void *, unsigned int))GetFunction("MPSApplyX");
@@ -1532,8 +1532,10 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  bool MPSSetMeetingPositionCallback(void *obj, int64_t(*callback)(void*, const int64_t*)) {
-      if (LibraryHandle)
+  bool MPSSetMeetingPositionCallback(void *obj,
+                                     int64_t (*callback)(void *,
+                                                         const int64_t *)) {
+    if (LibraryHandle)
       return fMPSSetMeetingPositionCallback(obj, callback) == 1;
     else
       throw std::runtime_error(
@@ -1660,18 +1662,18 @@ class GpuLibrary : public Utils::Library {
     return 0;
   }
 
-  std::complex<double> MPSProjectOnZero(void* obj)
-  {
+  std::complex<double> MPSProjectOnZero(void *obj) {
     if (LibraryHandle) {
       double real, imag;
       if (fMPSProjectOnZero(obj, &real, &imag) == 1)
         return std::complex<double>(real, imag);
-      else 
+      else
         throw std::runtime_error(
             "GpuLibrary: Unable to project on zero for mps");
     } else
       throw std::runtime_error(
-          "GpuLibrary: Unable to project on zero for mps, library handle is null");
+          "GpuLibrary: Unable to project on zero for mps, library handle is "
+          "null");
 
     return std::complex<double>(0, 0);
   }
@@ -3243,7 +3245,9 @@ class GpuLibrary : public Utils::Library {
   long int (*fMPSGetMaxExtent)(void *) = nullptr;
   int (*fMPSGetNrQubits)(void *) = nullptr;
   int (*fMPSSetCallbackContext)(void *, void *) = nullptr;
-  int (*fMPSSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
+  int (*fMPSSetMeetingPositionCallback)(void *,
+                                        int64_t (*)(void *,
+                                                    const int64_t *)) = nullptr;
 
   int (*fMPSAmplitude)(void *, long int, long int *, double *,
                        double *) = nullptr;

@@ -34,7 +34,8 @@
 #include "SimulatorObserver.h"
 
 namespace Circuits {
-template <typename Time> class IOperation;
+template <typename Time>
+class IOperation;
 }
 
 namespace Simulators {
@@ -233,13 +234,15 @@ class IState {
    * with lookahead depth > 0.
    */
   virtual void SetUpcomingGates(
-      const std::vector<std::shared_ptr<Circuits::IOperation<double>>> & /*gates*/) {}
+      const std::vector<std::shared_ptr<Circuits::IOperation<double>>>
+          & /*gates*/) {}
 
   /**
    * @brief Returns the gates counter.
    *
-   * Usually does nothing, except for MPS simulators that support swap optimization.
-   * 
+   * Usually does nothing, except for MPS simulators that support swap
+   * optimization.
+   *
    * @return The number of gates executed in the circuit.
    */
   virtual long long int GetGatesCounter() const { return 0; }
@@ -247,27 +250,32 @@ class IState {
   /**
    * @brief Sets the gates counter.
    *
-   * Usually does nothing, except for MPS simulators that support swap optimization.
-   * 
-   * @param counter The position in the circuit from where the execution should continue.
+   * Usually does nothing, except for MPS simulators that support swap
+   * optimization.
+   *
+   * @param counter The position in the circuit from where the execution should
+   * continue.
    */
   virtual void SetGatesCounter(long long int /*counter*/) {}
 
   /**
    * @brief Increments the gates counter.
    *
-   * Usually does nothing, except for MPS simulators that support swap optimization. Increments the position in the circuit from where the
-   * execution should continue. Useful for classically controlled gates, for the case when the controlled gate is not executed.
+   * Usually does nothing, except for MPS simulators that support swap
+   * optimization. Increments the position in the circuit from where the
+   * execution should continue. Useful for classically controlled gates, for the
+   * case when the controlled gate is not executed.
    */
   virtual void IncrementGatesCounter() {}
 
-  // the following four functions are also for MPS swaps optimizations, might be removed in the future
+  // the following four functions are also for MPS swaps optimizations, might be
+  // removed in the future
 
   virtual double getGrowthFactorSwap() const { return 0.; }
   virtual double getGrowthFactorGate() const { return 0.; }
 
-  virtual void setGrowthFactorSwap(double factor) { }
-  virtual void setGrowthFactorGate(double factor) { }
+  virtual void setGrowthFactorSwap(double factor) {}
+  virtual void setGrowthFactorGate(double factor) {}
 
   /**
    * @brief Configures the state.
@@ -375,7 +383,7 @@ class IState {
    * For most simulator is the same as calling Amplitude(0), but for some
    * simulators it can be optimized to be faster than calling Amplitude(0).
    * This for now is done for qcsim mps and gpu mps.
-   * 
+   *
    * @sa IState::Amplitude
    * @sa IState::Probability
    *

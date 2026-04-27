@@ -48,10 +48,14 @@ struct QubitNoise {
   /// Damping factor a single-qubit Pauli operator acquires from this channel.
   double damping_for(char pauli) const {
     switch (toupper(pauli)) {
-      case 'X': return 1.0 - 2.0 * (py + pz);
-      case 'Y': return 1.0 - 2.0 * (px + pz);
-      case 'Z': return 1.0 - 2.0 * (px + py);
-      default:  return 1.0;  // Identity
+      case 'X':
+        return 1.0 - 2.0 * (py + pz);
+      case 'Y':
+        return 1.0 - 2.0 * (px + pz);
+      case 'Z':
+        return 1.0 - 2.0 * (px + py);
+      default:
+        return 1.0;  // Identity
     }
   }
 

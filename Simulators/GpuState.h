@@ -307,7 +307,7 @@ class GpuState : public ISimulator {
     // for lookahead evaluation with actual bond dimensions
     // the callback is called only for two qubits gates and only if executing
     // them would require a swap
-    mps->SetCallbackContext((void*)this);
+    mps->SetCallbackContext((void *)this);
     mps->SetMeetingPositionCallback(&GpuState::FindBestMeetingPosition);
   }
 
@@ -1165,20 +1165,20 @@ class GpuState : public ISimulator {
   }
 
  protected:
-  static int64_t FindBestMeetingPosition(void* thisPtr, const int64_t* bondDims) {
-    GpuState* self = static_cast<GpuState*>(thisPtr);
+  static int64_t FindBestMeetingPosition(void *thisPtr,
+                                         const int64_t *bondDims) {
+    GpuState *self = static_cast<GpuState *>(thisPtr);
 
     return self->FindBestMeetingPositionFunc(bondDims);
   };
 
-  int64_t FindBestMeetingPositionFunc(const int64_t* bondDims)
-  {
+  int64_t FindBestMeetingPositionFunc(const int64_t *bondDims) {
     const size_t nQ = GetNumberOfQubits();
 
     if (!dummySim || dummySim->getNrQubits() != nQ) {
       dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
-      dummySim->SetMaxBondDimension(
-          limitSize ? static_cast<long long int>(chi) : 0);
+      dummySim->SetMaxBondDimension(limitSize ? static_cast<long long int>(chi)
+                                              : 0);
       dummySim->setGrowthFactorGate(growthFactorGate);
       dummySim->setGrowthFactorSwap(growthFactorSwap);
     }
@@ -1233,7 +1233,7 @@ class GpuState : public ISimulator {
   std::vector<std::shared_ptr<Circuits::IOperation<>>> upcomingGates;
   long long int upcomingGateIndex = 0;
   double growthFactorSwap = 1.;
-  double growthFactorGate = 0.65; 
+  double growthFactorGate = 0.65;
 
   std::unique_ptr<Simulators::MPSDummySimulator> dummySim;
 

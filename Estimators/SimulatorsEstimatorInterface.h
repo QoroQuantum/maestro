@@ -43,7 +43,8 @@ class SimulatorsEstimatorInterface {
       Simulators::SimulatorType &simType, Simulators::SimulationType &method,
       std::vector<bool> &executed, const std::string &maxBondDim,
       const std::string &singularValueThreshold, const std::string &mpsSample,
-      size_t maxSimulators, const std::vector<std::string> *paulis, bool multithreading = false) const = 0;
+      size_t maxSimulators, const std::vector<std::string> *paulis,
+      bool multithreading = false) const = 0;
 
   static void ExecuteUpToMeasurements(
       const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits,

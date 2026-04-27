@@ -78,8 +78,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(pgate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(pgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -102,8 +101,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(xgate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(xgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -126,8 +124,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(ygate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(ygate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -150,8 +147,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(zgate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(zgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -174,8 +170,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(h.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(h, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -198,8 +193,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(sgate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(sgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -222,8 +216,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(sdggate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(sdggate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -248,8 +241,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(tgate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(tgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -274,8 +266,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(tdggate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(tdggate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -298,8 +289,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(sxgate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(sxgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -322,8 +312,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(sxdaggate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(sxdaggate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -346,8 +335,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(k.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(k, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -374,8 +362,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(rxgate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(rxgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -402,8 +389,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(rygate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(rygate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -430,8 +416,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(rzgate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(rzgate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -462,8 +447,7 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(ugate.getRawOperatorMatrix(), qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(ugate, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
@@ -489,11 +473,10 @@ class QCSimSimulator : public QCSimState {
       pp->ApplyCX(static_cast<unsigned int>(ctrl_qubit),
                   static_cast<unsigned int>(tgt_qubit));
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
-      QC::Gates::AppliedGate<> agate(cxgate.getRawOperatorMatrix(),
-                                     tgt_qubit, ctrl_qubit);
+      QC::Gates::AppliedGate<> agate(cxgate.getRawOperatorMatrix(), tgt_qubit,
+                                     ctrl_qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(cxgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
@@ -520,11 +503,10 @@ class QCSimSimulator : public QCSimState {
       pp->ApplyCY(static_cast<unsigned int>(ctrl_qubit),
                   static_cast<unsigned int>(tgt_qubit));
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
-      QC::Gates::AppliedGate<> agate(cygate.getRawOperatorMatrix(),
-                                     tgt_qubit, ctrl_qubit);
+      QC::Gates::AppliedGate<> agate(cygate.getRawOperatorMatrix(), tgt_qubit,
+                                     ctrl_qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(cygate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
@@ -551,11 +533,10 @@ class QCSimSimulator : public QCSimState {
       pp->ApplyCZ(static_cast<unsigned int>(ctrl_qubit),
                   static_cast<unsigned int>(tgt_qubit));
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
-      QC::Gates::AppliedGate<> agate(czgate.getRawOperatorMatrix(),
-                                     tgt_qubit, ctrl_qubit);
+      QC::Gates::AppliedGate<> agate(czgate.getRawOperatorMatrix(), tgt_qubit,
+                                     ctrl_qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(czgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
@@ -586,11 +567,10 @@ class QCSimSimulator : public QCSimState {
       pp->ApplyCP(static_cast<unsigned int>(ctrl_qubit),
                   static_cast<unsigned int>(tgt_qubit), lambda);
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
-      QC::Gates::AppliedGate<> agate(cpgate.getRawOperatorMatrix(),
-                                     tgt_qubit, ctrl_qubit);
+      QC::Gates::AppliedGate<> agate(cpgate.getRawOperatorMatrix(), tgt_qubit,
+                                     ctrl_qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(cpgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
@@ -621,11 +601,10 @@ class QCSimSimulator : public QCSimState {
       pp->ApplyCRX(static_cast<unsigned int>(ctrl_qubit),
                    static_cast<unsigned int>(tgt_qubit), theta);
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
-      QC::Gates::AppliedGate<> agate(crxgate.getRawOperatorMatrix(),
-                                     tgt_qubit, ctrl_qubit);
+      QC::Gates::AppliedGate<> agate(crxgate.getRawOperatorMatrix(), tgt_qubit,
+                                     ctrl_qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(crxgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
@@ -656,11 +635,10 @@ class QCSimSimulator : public QCSimState {
       pp->ApplyCRY(static_cast<unsigned int>(ctrl_qubit),
                    static_cast<unsigned int>(tgt_qubit), theta);
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
-      QC::Gates::AppliedGate<> agate(crygate.getRawOperatorMatrix(),
-                                     tgt_qubit, ctrl_qubit);
+      QC::Gates::AppliedGate<> agate(crygate.getRawOperatorMatrix(), tgt_qubit,
+                                     ctrl_qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(crygate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
@@ -694,8 +672,7 @@ class QCSimSimulator : public QCSimState {
       QC::Gates::AppliedGate<> agate(crzgate.getRawOperatorMatrix(), tgt_qubit,
                                      ctrl_qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(crzgate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
@@ -726,8 +703,7 @@ class QCSimSimulator : public QCSimState {
       QC::Gates::AppliedGate<> agate(ch.getRawOperatorMatrix(), tgt_qubit,
                                      ctrl_qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(ch, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
@@ -758,8 +734,7 @@ class QCSimSimulator : public QCSimState {
       QC::Gates::AppliedGate<> agate(csx.getRawOperatorMatrix(), tgt_qubit,
                                      ctrl_qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(csx, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
@@ -791,8 +766,7 @@ class QCSimSimulator : public QCSimState {
       QC::Gates::AppliedGate<> agate(csxdag.getRawOperatorMatrix(), tgt_qubit,
                                      ctrl_qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(csxdag, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
@@ -820,10 +794,9 @@ class QCSimSimulator : public QCSimState {
                     static_cast<unsigned int>(qubit1));
     else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(swapgate.getRawOperatorMatrix(), qubit1,
-                                                               qubit0);
-      pathIntegralSimulator->ApplyGate(agate);                
-    }
-    else
+                                     qubit0);
+      pathIntegralSimulator->ApplyGate(agate);
+    } else
       state->ApplyGate(swapgate, static_cast<unsigned int>(qubit1),
                        static_cast<unsigned int>(qubit0));
     NotifyObservers({qubit1, qubit0});
@@ -883,8 +856,7 @@ class QCSimSimulator : public QCSimState {
       QC::Gates::AppliedGate<> agate(ccxgate.getRawOperatorMatrix(), qubit2,
                                      qubit1, qubit0);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(ccxgate, static_cast<unsigned int>(qubit2),
                        static_cast<unsigned int>(qubit1),
                        static_cast<unsigned int>(qubit0));
@@ -972,9 +944,9 @@ class QCSimSimulator : public QCSimState {
                      static_cast<unsigned int>(qubit0),
                      static_cast<unsigned int>(qubit1));
     } else if (GetSimulationType() == SimulationType::kPathIntegral) {
-        QC::Gates::AppliedGate<> agate(cswapgate.getRawOperatorMatrix(),
-                                       qubit1, qubit0, ctrl_qubit);
-        pathIntegralSimulator->ApplyGate(agate);
+      QC::Gates::AppliedGate<> agate(cswapgate.getRawOperatorMatrix(), qubit1,
+                                     qubit0, ctrl_qubit);
+      pathIntegralSimulator->ApplyGate(agate);
     } else
       state->ApplyGate(cswapgate, static_cast<unsigned int>(qubit1),
                        static_cast<unsigned int>(qubit0),
@@ -1014,8 +986,7 @@ class QCSimSimulator : public QCSimState {
       QC::Gates::AppliedGate<> agate(cugate.getRawOperatorMatrix(), tgt_qubit,
                                      ctrl_qubit);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+    } else
       state->ApplyGate(cugate, static_cast<unsigned int>(tgt_qubit),
                        static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});

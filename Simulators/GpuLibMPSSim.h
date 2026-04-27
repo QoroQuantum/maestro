@@ -64,7 +64,9 @@ class GpuLibMPSSim {
   }
 
   bool SetUseOptimalMeetingPosition(bool useOptimalMeetingPosition) {
-    if (obj) return lib->MPSSetUseOptimalMeetingPosition(obj, useOptimalMeetingPosition);
+    if (obj)
+      return lib->MPSSetUseOptimalMeetingPosition(obj,
+                                                  useOptimalMeetingPosition);
     return false;
   }
 
@@ -139,7 +141,8 @@ class GpuLibMPSSim {
     return false;
   }
 
-  bool SetMeetingPositionCallback(int64_t (*callback)(void *, const int64_t *)) {
+  bool SetMeetingPositionCallback(int64_t (*callback)(void *,
+                                                      const int64_t *)) {
     if (obj) return lib->MPSSetMeetingPositionCallback(obj, callback);
     return false;
   }
@@ -225,7 +228,7 @@ class GpuLibMPSSim {
 
   std::complex<double> ProjectOnZero() {
     if (obj) return lib->MPSProjectOnZero(obj);
-    
+
     return std::complex<double>(0., 0.);
   }
 

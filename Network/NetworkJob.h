@@ -89,7 +89,7 @@ class ExecuteJob {
 
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
         if (network->GetMPSOptimizeSwaps())
-            optSim->SetUpcomingGates(dcirc->GetOperations());
+          optSim->SetUpcomingGates(dcirc->GetOperations());
       }
     }
 
@@ -187,7 +187,6 @@ class ExecuteJob {
         method == Simulators::SimulationType::kMatrixProductState &&
         hasMeasurementsOnlyAtEnd;
 
-    
     if (optSim) {
       optSim->SetMultithreading(true);
 
@@ -272,7 +271,7 @@ class ExecuteJob {
 
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
         if (network->GetMPSOptimizeSwaps())
-            optSim->SetUpcomingGates(dcirc->GetOperations());
+          optSim->SetUpcomingGates(dcirc->GetOperations());
       }
     }
 
@@ -351,7 +350,7 @@ class ExecuteJob {
 
   size_t GetJobCount() const { return curCnt; }
 
-private:
+ private:
   void OptimizeMPSInitialQubitsMap(
       std::shared_ptr<Simulators::ISimulator> &sim,
       std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits) const {
@@ -366,7 +365,8 @@ private:
         const auto maxBondDimValue =
             maxBondDim.empty() ? 0 : std::stoi(maxBondDim);
 
-        if (maxBondDim.empty() || static_cast<int>(bondDimThreshold) <= maxBondDimValue) {
+        if (maxBondDim.empty() ||
+            static_cast<int>(bondDimThreshold) <= maxBondDimValue) {
           // need to be sure the circuit is correctly converted
           dcirc->ConvertForCutting();  // convert the three qubit gates
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();
@@ -376,7 +376,7 @@ private:
           dummySim.setGrowthFactorSwap(network->getGrowthFactorSwap());
           if (!maxBondDim.empty())
             dummySim.SetMaxBondDimension(maxBondDimValue);
-          
+
           if (network->GetInitialQubitsMapOptimization()) {
             const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
             sim->SetInitialQubitsMap(optimalMap);
@@ -418,9 +418,8 @@ private:
             if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
               lookaheadHeuristicDepthLocal =
                   layers.size() < 10 || nrQubits <= 10 ? 0
-                                             : layers.size() < 20
-                                                 ? lookaheadDepthLocal - 1
-                                                 : lookaheadDepthLocal - 2;
+                  : layers.size() < 20                 ? lookaheadDepthLocal - 1
+                                       : lookaheadDepthLocal - 2;
 
             sim->SetUseOptimalMeetingPosition(true);
             sim->SetLookaheadDepth(lookaheadDepthLocal);
@@ -434,7 +433,7 @@ private:
     }
   }
 
-public:
+ public:
   std::shared_ptr<Circuits::Circuit<Time>> dcirc;
   ExecuteResults &res;
   const size_t curCnt;

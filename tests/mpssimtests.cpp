@@ -506,15 +506,18 @@ BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, ProjectOnZeroTest,
   BOOST_CHECK_PREDICATE(checkClose, (svProjectOnZero)(svAmplitude0)(1e-10));
 
   const auto aerProjectOnZero = aerMPS->ProjectOnZero();
-  BOOST_CHECK_PREDICATE(checkClose, (svProjectOnZero)(aerProjectOnZero)(0.0001));
+  BOOST_CHECK_PREDICATE(checkClose,
+                        (svProjectOnZero)(aerProjectOnZero)(0.0001));
 
   const auto qcsimProjectOnZero = qcsimMPS->ProjectOnZero();
-  BOOST_CHECK_PREDICATE(checkClose, (svProjectOnZero)(qcsimProjectOnZero)(0.0001));
+  BOOST_CHECK_PREDICATE(checkClose,
+                        (svProjectOnZero)(qcsimProjectOnZero)(0.0001));
 
 #ifdef __linux__
   if (gpusimMPS) {
     const auto gpuProjectOnZero = gpusimMPS->ProjectOnZero();
-    BOOST_CHECK_PREDICATE(checkClose, (svProjectOnZero)(gpuProjectOnZero)(0.0001));
+    BOOST_CHECK_PREDICATE(checkClose,
+                          (svProjectOnZero)(gpuProjectOnZero)(0.0001));
   }
 #endif
 
@@ -570,9 +573,9 @@ BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, SampleCountsManyTest,
 
     double mpsProb = 0;
     if (mpsCounts.find(outcome) != mpsCounts.end())
-      mpsProb = static_cast<double>(mpsCounts[outcome]) /
-                static_cast<double>(shots);
-    
+      mpsProb =
+          static_cast<double>(mpsCounts[outcome]) / static_cast<double>(shots);
+
     double mpsAerProb = 0;
     if (mpsAerCounts.find(outcome) != mpsAerCounts.end())
       mpsAerProb = static_cast<double>(mpsAerCounts[outcome]) /
@@ -594,8 +597,8 @@ BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, SampleCountsManyTest,
 
     double svProb = 0;
     if (svCounts.find(outcome) != svCounts.end())
-      svProb = static_cast<double>(svCounts[outcome]) /
-               static_cast<double>(shots);
+      svProb =
+          static_cast<double>(svCounts[outcome]) / static_cast<double>(shots);
 
     double mpsAerProb = 0;
     if (mpsAerCounts.find(outcome) != mpsAerCounts.end())
