@@ -859,6 +859,16 @@ class HadamardGate : public SingleQubitGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
 };
 
 /**
@@ -1197,6 +1207,16 @@ class SxGate : public SingleQubitGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
 };
 
 /**
@@ -1269,6 +1289,16 @@ class SxDagGate : public SingleQubitGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
 };
 
 /**
@@ -1341,6 +1371,16 @@ class KGate : public SingleQubitGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
 };
 
 /**
@@ -1459,6 +1499,16 @@ class RxGate : public RotationGate<Time> {
                                           RotationGate<Time>::GetTheta(),
                                           IOperation<Time>::GetDelay());
   }
+
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
 };
 
 /**
@@ -1524,6 +1574,16 @@ class RyGate : public RotationGate<Time> {
                                           RotationGate<Time>::GetTheta(),
                                           IOperation<Time>::GetDelay());
   }
+
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
 };
 
 /**
@@ -1742,6 +1802,16 @@ class UGate : public SingleQubitGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return false; }
+
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
 
  private:
   double theta;  /**< The theta parameter for the gate. */
@@ -2272,6 +2342,16 @@ class CRxGate : public ControlledRotationGate<Time> {
         TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1),
         ControlledRotationGate<Time>::GetTheta(), IOperation<Time>::GetDelay());
   }
+
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
 };
 
 /**
@@ -2339,6 +2419,16 @@ class CRyGate : public ControlledRotationGate<Time> {
         TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1),
         ControlledRotationGate<Time>::GetTheta(), IOperation<Time>::GetDelay());
   }
+
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
 };
 
 /**
@@ -2470,6 +2560,16 @@ class CHGate : public TwoQubitsGate<Time> {
                                           TwoQubitsGate<Time>::GetQubit(1),
                                           IOperation<Time>::GetDelay());
   }
+
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
 };
 
 /**
@@ -2534,6 +2634,16 @@ class CSxGate : public TwoQubitsGate<Time> {
                                            TwoQubitsGate<Time>::GetQubit(1),
                                            IOperation<Time>::GetDelay());
   }
+
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
 };
 
 /**
@@ -2598,6 +2708,16 @@ class CSxDagGate : public TwoQubitsGate<Time> {
                                               TwoQubitsGate<Time>::GetQubit(1),
                                               IOperation<Time>::GetDelay());
   }
+
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
 };
 
 /**
@@ -2748,6 +2868,16 @@ class CUGate : public TwoQubitsGate<Time> {
     return {theta, phi, lambda, gamma};
   }
 
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { return true; }
+
  private:
   double theta;  /**< The theta parameter for the controlled U gate. */
   double phi;    /**< The phi parameter for the controlled U gate. */
@@ -2894,6 +3024,7 @@ class CSwapGate : public ThreeQubitsGate<Time> {
         ThreeQubitsGate<Time>::GetQubit(2), IOperation<Time>::GetDelay());
   }
 };
+
 }  // namespace Circuits
 
 #endif  // !_QUANTUM_GATES_H_

@@ -2425,6 +2425,21 @@ class Circuit : public IOperation<Time> {
   }
 
   /**
+   * @brief Checks if any operation is a branching one.
+   *
+   * Checks if any operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override {
+    for (const auto &op : GetOperations())
+      if (op->IsBranching()) return true;
+
+    return false;
+  }
+
+  /**
    * @brief Get the begin iterator for the operations.
    *
    * Returns the begin iterator for the operations.

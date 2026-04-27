@@ -368,6 +368,20 @@ class IConditionalOperation : public IOperation<Time> {
     return operation->IsClifford();
   }
 
+  /**
+   * @brief Checks if the operation is a branching one.
+   *
+   * Checks if the operation is a branching one, meaning that it can lead to
+   * splitting paths (relevant for the path integral simulator).
+   *
+   * @return True if it branches a path, false otherwise.
+   */
+  bool IsBranching() const override { 
+      if (!operation) return false;
+
+      return operation->IsBranching(); 
+  }
+
  private:
   std::shared_ptr<IOperation<Time>>
       operation; /**< The operation to execute if the condition is met. */
