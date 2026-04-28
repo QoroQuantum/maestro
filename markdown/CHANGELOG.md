@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.12] - 2026-04-28
+
+### Added
+- **Path Integral simulation backend** — new exact-amplitude simulator (`kPathIntegral`) integrated into the QCSim common interface, supporting amplitudes, measurements, sampling, and Pauli-string expectation values. Exposed through the factory and the `SimulatorConfig(simulator_type="path_integral")` Python API
+- **Path Integral Python bindings** — `amplitude_from_zero()` and `amplitude()` methods on `QuantumCircuit` for computing exact transition amplitudes via path integrals
+- `IsBranching()` method on all quantum gate types, used by the path integral simulator to identify branching operations
+- **Path Integral via Network interface** — `SimpleDisconnectedNetwork` now dispatches path integral jobs; multithreading is disabled for path integral simulators in networks when measurements are only at the end
+- **Coherent noise model** — `NoiseModel` now supports deterministic rotation-gate noise injection (Rx/Ry/Rz) alongside stochastic Pauli channels. Coherent angle is derived from error probability via ε = 2·arcsin(√p) to match per-gate infidelity
+- Coherent noise setters: `set_coherent_depolarizing()`, `set_coherent_dephasing()`, `set_coherent_bit_flip()`, `set_coherent_rotation()`, `set_all_coherent_depolarizing()`
+- **T1 amplitude damping noise** — `set_t1()`, `set_all_t1()`, `set_t1_from_time()` for per-qubit T1 decay with physical time-constant conversion (γ = 1 − e^(−t_gate/T₁))
+- **ZZ crosstalk noise** — `set_crosstalk()` for pairwise qubit coupling injection
+- **`coherent_execute`** / **`coherent_estimate`** — Python bindings for executing circuits and estimating expectation values with coherent rotation noise
+- **`full_noise_execute`** / **`full_noise_estimate`** — combined noise pipeline applying coherent + crosstalk + T1 + Pauli noise in a single call
+- Comprehensive test suites: 600+ lines of path integral C++ tests (random circuits, amplitudes, measurements, sampling, Pauli strings), 290+ lines of network simulator tests, 1200+ lines of new Python binding tests covering all noise modes
+- Noise simulation and path integral sections in `TUTORIAL.md` with usage examples
+
+### Changed
+- `NoiseModel` header expanded to support Pauli, coherent, T1, and crosstalk noise in a unified model — both modes can be configured on the same instance
+- `QCSimSimulator` routes all gate types through the path integral backend when `kPathIntegral` simulation type is selected
+- `QCSimState` extended with path integral simulator state management, amplitude computation, and measurement support
+- Doxygen upgraded to latest version; docs CI workflow updated
+- Python package version bumped to `0.2.12`
+
+### Fixed
+- Missing `public:` access specifier on `PathIntegralSimulator` class methods
+- Include path issues for Linux compilation in network simulator tests
+- Compile warnings in `NetworkJob.h` and `SimpleDisconnectedNetwork.h`
+
 ## [0.2.11] - 2026-04-20
 
 ### Added
@@ -155,7 +183,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.2.11...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.2.12...HEAD
+[0.2.12]: https://github.com/QoroQuantum/maestro/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/QoroQuantum/maestro/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/QoroQuantum/maestro/compare/v0.2.7...v0.2.10
 [0.2.7]: https://github.com/QoroQuantum/maestro/compare/v0.2.6...v0.2.7
