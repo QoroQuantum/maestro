@@ -607,6 +607,229 @@
  * | `seed` | `int` or `None` | `None` | RNG seed for reproducibility |
  * | `config` | `SimulatorConfig` | `SimulatorConfig()` | Simulator configuration |
  *
+ * @subsection py_noise_coherent Coherent Noise Simulation
+ *
+ * Coherent noise models systematic calibration errors — e.g. over/under-rotation
+ * of gates — rather than stochastic Pauli errors. Instead of randomly inserting
+ * X, Y, Z gates, coherent noise injects **deterministic rotation gates**
+ * (Rx, Ry, Rz) after every gate in the circuit.
+ *
+ * The key difference from Pauli noise:
+ * - **Pauli noise** averages out over shots (each shot sees a different random error)
+ * - **Coherent noise** is deterministic within a single noise realization — all
+ *   shots from one circuit see the same systematic error. The ± sign of the
+ *   rotation is sampled per-realization.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # From a depolarizing probability: epsilon = 2*arcsin(sqrt(p))
+ * nm.set_coherent_depolarizing(qubit=0, p=0.01)
+ *
+ * # Apply to all qubits at once
+ * nm.set_all_coherent_depolarizing(num_qubits=5, p=0.001)
+ *
+ * # Convenience alias
+ * nm.set_coherent_strength(num_qubits=5, p=0.001)
+ *
+ * # Per-axis control: explicit rotation angles (radians)
+ * nm.set_coherent_rotation(qubit=0, rx=0.01, ry=0.0, rz=0.05)
+ *
+ * # Dephasing-like: Z-axis rotation only
+ * nm.set_coherent_dephasing(qubit=1, p=0.02)
+ *
+ * # Bit-flip-like: X-axis rotation only
+ * nm.set_coherent_bit_flip(qubit=2, p=0.01)
+ *
+ * # Check if coherent noise is configured
+ * print(nm.has_coherent())  # True
+ * @endcode
+ *
+ * **Coherent Estimate** — the coherent analogue of `noisy_estimate_montecarlo`:
+ *
+ * @code{.py}
+ * result = maestro.coherent_estimate(
+ *     qc, ['ZZ', 'XX', 'YY'], nm,
+ *     noise_realizations=200,
+ *     seed=42
+ * )
+ * print(result['expectation_values'])        # Coherent-noisy values
+ * print(result['ideal_expectation_values'])  # Noiseless reference
+ * print(result['noise_type'])                # 'coherent'
+ * @endcode
+ *
+ * **Coherent Execute** — the shot-based counterpart:
+ *
+ * @code{.py}
+ * result = maestro.coherent_execute(
+ *     qc, nm,
+ *     shots=1024,
+ *     noise_realizations=64,
+ *     seed=42
+ * )
+ * print(result['counts'])       # Aggregated counts
+ * print(result['noise_type'])   # 'coherent'
+ * @endcode
+ *
+ * @note Coherent noise uses rotation gates, so it requires a simulation
+ * backend that supports continuous rotations — **MPS**, **Statevector**, or
+ * **TensorNetwork**. Stabilizer simulation will not work.
+ *
+ * | Method | Description |
+ * |--------|-------------|
+ * | `nm.set_coherent_depolarizing(q, p)` | Rz angle from depolarizing probability |
+ * | `nm.set_coherent_dephasing(q, p)` | Rz rotation from dephasing probability |
+ * | `nm.set_coherent_bit_flip(q, p)` | Rx rotation from bit-flip probability |
+ * | `nm.set_coherent_rotation(q, rx, ry, rz)` | Explicit per-axis angles (radians) |
+ * | `nm.set_all_coherent_depolarizing(n, p)` | Uniform coherent noise on all qubits |
+ * | `nm.set_all_coherent_dephasing(n, p)` | Uniform coherent dephasing on all qubits |
+ * | `nm.set_coherent_strength(n, p)` | Alias for `set_all_coherent_depolarizing` |
+ * | `nm.has_coherent()` | Check if any coherent noise is configured |
+ *
+ * @subsection py_noise_t1 T1 Amplitude Damping
+ *
+ * T1 amplitude damping models energy relaxation — the spontaneous decay from
+ * |1⟩ to |0⟩ over time. Maestro implements this using the **quantum trajectory
+ * method**: after each gate, with probability γ, the qubit is probabilistically
+ * reset to |0⟩.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # Set per-gate decay probability directly
+ * nm.set_t1(qubit=0, gamma=0.001)
+ *
+ * # Set uniform T1 on all qubits
+ * nm.set_all_t1(num_qubits=5, gamma=0.0003)
+ *
+ * # Compute gamma from physical time constants (most accurate)
+ * # gamma = 1 - exp(-gate_time / T1)
+ * nm.set_t1_from_time(qubit=0, gate_time_s=500e-9, t1_time_s=200e-6)
+ *
+ * # Check if T1 is configured
+ * print(nm.has_t1())  # True
+ * @endcode
+ *
+ * @note T1 damping is asymmetric — it only decays |1⟩ → |0⟩, never the reverse.
+ * This is physically correct: thermal relaxation at millikelvin temperatures
+ * overwhelmingly favours the ground state.
+ *
+ * | Method | Description |
+ * |--------|-------------|
+ * | `nm.set_t1(q, gamma)` | Per-gate T1 decay probability |
+ * | `nm.set_all_t1(n, gamma)` | Uniform T1 on all qubits |
+ * | `nm.set_t1_from_time(q, gate_time_s, t1_time_s)` | T1 from physical time constants |
+ * | `nm.has_t1()` | Check if T1 is configured |
+ *
+ * @subsection py_noise_crosstalk ZZ Crosstalk
+ *
+ * ZZ crosstalk models parasitic coupling between neighbouring qubits. When a
+ * gate acts on qubit q1, the spectator qubit q2 accumulates an unwanted Rz
+ * rotation. This is one of the dominant error sources on superconducting
+ * devices.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # Set symmetric ZZ coupling between qubits 0 and 1
+ * # After a gate on q0, Rz(strength) is applied on q1, and vice versa
+ * nm.set_crosstalk(q1=0, q2=1, strength=0.005)
+ *
+ * # Set nearest-neighbour crosstalk on a chain
+ * for i in range(n_qubits - 1):
+ *     nm.set_crosstalk(i, i + 1, 0.008)
+ *
+ * print(nm.has_crosstalk())  # True
+ * @endcode
+ *
+ * | Method | Description |
+ * |--------|-------------|
+ * | `nm.set_crosstalk(q1, q2, strength)` | Symmetric ZZ coupling |
+ * | `nm.has_crosstalk()` | Check if crosstalk is configured |
+ *
+ * @subsection py_noise_combined Combined Noise Simulation
+ *
+ * The `full_noise_execute` and `full_noise_estimate` functions apply **all
+ * configured noise layers** in a single call, using Monte Carlo averaging.
+ * The noise is injected per gate in physical order:
+ *
+ * 1. **Coherent over-rotations** (systematic Rx/Ry/Rz)
+ * 2. **ZZ crosstalk** (Rz on spectator neighbours)
+ * 3. **T1 amplitude damping** (probabilistic reset to |0⟩)
+ * 4. **Pauli noise** (stochastic X/Y/Z errors)
+ *
+ * This enables realistic device-level simulation with a single noise model.
+ *
+ * @code{.py}
+ * # Build a noise model matching your hardware
+ * nm = maestro.NoiseModel()
+ *
+ * # Layer 1: Coherent gate over-rotations
+ * nm.set_all_coherent_depolarizing(n_qubits, 0.005)
+ *
+ * # Layer 2: ZZ crosstalk between neighbours
+ * for i in range(n_qubits - 1):
+ *     nm.set_crosstalk(i, i + 1, 0.008)
+ *
+ * # Layer 3: T1 amplitude damping
+ * for q in range(n_qubits):
+ *     nm.set_t1_from_time(q, gate_time_s=500e-9, t1_time_s=200e-6)
+ *
+ * # Layer 4: Pauli (incoherent) noise
+ * nm.set_all_depolarizing(n_qubits, 0.005)
+ *
+ * # Check if any noise is configured
+ * print(nm.has_any())  # True
+ * @endcode
+ *
+ * **Combined Execute** (shot-based):
+ *
+ * @code{.py}
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ * qc.measure_all()
+ *
+ * result = qc.full_noise_execute(
+ *     nm, shots=1024,
+ *     noise_realizations=64, seed=42
+ * )
+ * print(result['counts'])       # Aggregated counts
+ * print(result['noise_type'])   # 'combined'
+ * @endcode
+ *
+ * **Combined Estimate** (expectation values):
+ *
+ * @code{.py}
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ *
+ * result = qc.full_noise_estimate(
+ *     ['ZZ', 'XX'], nm,
+ *     noise_realizations=100, seed=42
+ * )
+ * print(result['expectation_values'])        # Noisy values
+ * print(result['ideal_expectation_values'])  # Noiseless reference
+ * print(result['noise_type'])                # 'combined'
+ * @endcode
+ *
+ * @subsection py_noise_summary All Noise Functions
+ *
+ * | Function | Noise Type | Overhead | Best For |
+ * |----------|-----------|----------|----------|
+ * | `noisy_estimate` | Pauli | Zero | Fast ansatz screening |
+ * | `noisy_estimate_montecarlo` | Pauli | N × noiseless | Training with realistic noise |
+ * | `noisy_execute` | Pauli | N × noiseless | Shot-based Pauli noise |
+ * | `coherent_estimate` | Coherent | N × noiseless | Coherent error analysis |
+ * | `coherent_execute` | Coherent | N × noiseless | Shot-based coherent noise |
+ * | `full_noise_execute` | **All layers** | N × noiseless | Realistic device simulation |
+ * | `full_noise_estimate` | **All layers** | N × noiseless | Hardware-accurate expectation values |
+ *
+ * All noise functions are also available as bound methods on `QuantumCircuit`:
+ * `qc.noisy_execute(nm)`, `qc.coherent_execute(nm)`,
+ * `qc.full_noise_execute(nm)`, etc.
+ *
  * ---
  *
  * @section py_advanced Advanced: Object-Oriented Simulator Control
