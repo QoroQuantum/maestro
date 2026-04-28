@@ -1161,7 +1161,115 @@ NB_MODULE(maestro, m) {
           "seed"_a = nb::none(),
           "Estimate expectation values with coherent noise.\n\n"
           "Example: qc.coherent_estimate(['ZZ', 'XX'], nm, "
-          "noise_realizations=200)");
+          "noise_realizations=200)")
+      // ---- Combined Noise (all layers) ----
+      .def(
+          "full_noise_execute",
+          [](std::shared_ptr<Circuits::Circuit<double>> self,
+             const noise::NoiseModel &noise_model,
+             const SimulatorConfig &config,
+             int shots, int noise_realizations,
+             std::optional<unsigned int> seed) {
+            if (!self) throw nb::value_error("Circuit is null.");
+            if (!noise_model.has_any())
+              throw nb::value_error("NoiseModel has no noise configured.");
+
+            std::mt19937 rng(seed.value_or(std::random_device{}()));
+            const int batches =
+                std::min(shots, std::max(1, noise_realizations));
+            const int base_batch = shots / batches;
+            int leftover = shots % batches;
+
+            std::unordered_map<std::string, size_t> combined;
+
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int b = 0; b < batches; ++b) {
+              int batch_shots = base_batch + (b < leftover ? 1 : 0);
+              if (batch_shots <= 0) continue;
+
+              auto noisy =
+                  noise::inject_combined_noise(self, noise_model, rng);
+              nb::dict r = execute_core(noisy, config, batch_shots);
+              nb::dict counts = nb::cast<nb::dict>(r["counts"]);
+              for (auto item : counts)
+                combined[nb::cast<std::string>(nb::str(item.first))] +=
+                    nb::cast<size_t>(item.second);
+            }
+            auto end = std::chrono::high_resolution_clock::now();
+
+            nb::dict py_counts;
+            for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
+
+            nb::dict out;
+            out["counts"] = py_counts;
+            out["time_taken"] =
+                std::chrono::duration<double>(end - start).count();
+            out["simulator"] = (int)config.simulator_type;
+            out["method"] = (int)config.simulation_type;
+            out["noise_realizations"] = batches;
+            out["noise_type"] = "combined";
+            return out;
+          },
+          "noise_model"_a,
+          "config"_a = SimulatorConfig{},
+          "shots"_a = 1024,
+          "noise_realizations"_a = 64, "seed"_a = nb::none(),
+          "Execute with combined noise: coherent + crosstalk + T1 + Pauli.\n\n"
+          "All configured noise layers are applied in physical order per gate.\n"
+          "Example: qc.full_noise_execute(nm, shots=1000)")
+      .def(
+          "full_noise_estimate",
+          [](std::shared_ptr<Circuits::Circuit<double>> self,
+             const nb::object &observables,
+             const noise::NoiseModel &noise_model, int noise_realizations,
+             const SimulatorConfig &config,
+             std::optional<unsigned int> seed) {
+            if (!self) throw nb::value_error("Circuit is null.");
+            if (!noise_model.has_any())
+              throw nb::value_error("NoiseModel has no noise configured.");
+
+            auto paulis = ParseObservables(observables);
+            std::mt19937 rng(seed.value_or(std::random_device{}()));
+            const size_t n_obs = paulis.size();
+            std::vector<double> sum_vals(n_obs, 0.0);
+
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int r = 0; r < noise_realizations; ++r) {
+              auto noisy =
+                  noise::inject_combined_noise(self, noise_model, rng);
+              nb::dict result = estimate_core(noisy, paulis, config);
+              nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
+              for (size_t i = 0; i < n_obs; ++i)
+                sum_vals[i] += nb::cast<double>(ev[i]);
+            }
+            auto end = std::chrono::high_resolution_clock::now();
+
+            nb::dict ideal_result = estimate_core(self, paulis, config);
+            nb::list noisy_vals, ideal_vals;
+            nb::list ideal_ev =
+                nb::cast<nb::list>(ideal_result["expectation_values"]);
+            for (size_t i = 0; i < n_obs; ++i) {
+              noisy_vals.append(sum_vals[i] / noise_realizations);
+              ideal_vals.append(nb::cast<double>(ideal_ev[i]));
+            }
+
+            nb::dict out;
+            out["expectation_values"] = noisy_vals;
+            out["ideal_expectation_values"] = ideal_vals;
+            out["time_taken"] =
+                std::chrono::duration<double>(end - start).count();
+            out["simulator"] = ideal_result["simulator"];
+            out["method"] = ideal_result["method"];
+            out["noise_realizations"] = noise_realizations;
+            out["noise_type"] = "combined";
+            return out;
+          },
+          "observables"_a, "noise_model"_a,
+          "noise_realizations"_a = 100,
+          "config"_a = SimulatorConfig{},
+          "seed"_a = nb::none(),
+          "Estimate with combined noise (coherent + crosstalk + T1 + Pauli).\n\n"
+          "Example: qc.full_noise_estimate(['ZZ', 'XX'], nm)");
 
   // --- QASM Tools ---
   nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
@@ -1463,7 +1571,32 @@ NB_MODULE(maestro, m) {
            "Convenience: set uniform coherent noise strength on all qubits. "
            "Equivalent to set_all_coherent_depolarizing(n, p).")
       .def("has_coherent", &noise::NoiseModel::has_coherent,
-           "Return True if any coherent noise parameters have been set.");
+           "Return True if any coherent noise parameters have been set.")
+      // ── T1 amplitude damping ──
+      .def("set_t1", &noise::NoiseModel::set_t1, "qubit"_a, "gamma"_a,
+           "Set per-gate T1 decay probability. After each gate on this "
+           "qubit, with probability gamma, the qubit resets to |0⟩.")
+      .def("set_all_t1", &noise::NoiseModel::set_all_t1,
+           "num_qubits"_a, "gamma"_a,
+           "Set uniform T1 decay probability on qubits [0, num_qubits).")
+      .def("set_t1_from_time", &noise::NoiseModel::set_t1_from_time,
+           "qubit"_a, "gate_time_s"_a, "t1_time_s"_a,
+           "Set T1 from physical time constants. "
+           "gamma = 1 - exp(-gate_time / T1).\n\n"
+           "Example: nm.set_t1_from_time(0, gate_time_s=30e-9, "
+           "t1_time_s=100e-6)")
+      .def("has_t1", &noise::NoiseModel::has_t1,
+           "Return True if any T1 parameters have been set.")
+      // ── Crosstalk ──
+      .def("set_crosstalk", &noise::NoiseModel::set_crosstalk,
+           "q1"_a, "q2"_a, "strength"_a,
+           "Set ZZ crosstalk coupling between two qubits. "
+           "After a gate on q1, an Rz(strength) is applied on q2, "
+           "and vice versa. Symmetric.")
+      .def("has_crosstalk", &noise::NoiseModel::has_crosstalk,
+           "Return True if any crosstalk couplings have been set.")
+      .def("has_any", &noise::NoiseModel::has_any,
+           "Return True if any noise of any type has been configured.");
 
   // --- Noisy Estimation (analytical — zero simulation overhead) ---
   m.def(
@@ -1753,4 +1886,123 @@ NB_MODULE(maestro, m) {
       "    nm = maestro.NoiseModel()\n"
       "    nm.set_coherent_strength(n_qubits, 0.001)\n"
       "    result = maestro.coherent_estimate(qc, ['ZZ', 'XX'], nm)\n");
+
+  // =========================================================================
+  // Combined Noise: Execute (all layers in one call)
+  // =========================================================================
+
+  m.def(
+      "full_noise_execute",
+      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
+         const noise::NoiseModel& noise_model, const SimulatorConfig& config,
+         int shots, int noise_realizations, std::optional<unsigned int> seed) {
+        if (!circuit) throw nb::value_error("Circuit is null.");
+        if (!noise_model.has_any())
+          throw nb::value_error("NoiseModel has no noise configured.");
+
+        std::mt19937 rng(seed.value_or(std::random_device{}()));
+        const int batches = std::min(shots, std::max(1, noise_realizations));
+        const int base_batch = shots / batches;
+        int leftover = shots % batches;
+
+        std::unordered_map<std::string, size_t> combined;
+
+        auto start = std::chrono::high_resolution_clock::now();
+        for (int b = 0; b < batches; ++b) {
+          int batch_shots = base_batch + (b < leftover ? 1 : 0);
+          if (batch_shots <= 0) continue;
+
+          auto noisy = noise::inject_combined_noise(circuit, noise_model, rng);
+          nb::dict r = execute_core(noisy, config, batch_shots);
+          nb::dict counts = nb::cast<nb::dict>(r["counts"]);
+          for (auto item : counts)
+            combined[nb::cast<std::string>(nb::str(item.first))] +=
+                nb::cast<size_t>(item.second);
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+
+        nb::dict py_counts;
+        for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
+
+        nb::dict out;
+        out["counts"] = py_counts;
+        out["time_taken"] = std::chrono::duration<double>(end - start).count();
+        out["simulator"] = (int)config.simulator_type;
+        out["method"] = (int)config.simulation_type;
+        out["noise_realizations"] = batches;
+        out["noise_type"] = "combined";
+        return out;
+      },
+      "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
+      "shots"_a = 1024, "noise_realizations"_a = 64, "seed"_a = nb::none(),
+      "Execute a circuit with combined noise (coherent + crosstalk + T1 + "
+      "Pauli). All configured noise layers are applied per gate in physical "
+      "order.\n\n"
+      "Example:\n"
+      "    nm = maestro.NoiseModel()\n"
+      "    nm.set_all_coherent_depolarizing(n, 0.001)\n"
+      "    nm.set_crosstalk(0, 1, 0.005)\n"
+      "    nm.set_all_t1(n, 0.0003)\n"
+      "    nm.set_all_depolarizing(n, 0.001)\n"
+      "    result = maestro.full_noise_execute(qc, nm, shots=1000)\n");
+
+  // =========================================================================
+  // Combined Noise: Estimate (all layers in one call)
+  // =========================================================================
+
+  m.def(
+      "full_noise_estimate",
+      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
+         const nb::object& observables, const noise::NoiseModel& noise_model,
+         int noise_realizations, const SimulatorConfig& config,
+         std::optional<unsigned int> seed) {
+        if (!circuit) throw nb::value_error("Circuit is null.");
+        if (!noise_model.has_any())
+          throw nb::value_error("NoiseModel has no noise configured.");
+
+        auto paulis = ParseObservables(observables);
+        std::mt19937 rng(seed.value_or(std::random_device{}()));
+        const size_t n_obs = paulis.size();
+        std::vector<double> sum_vals(n_obs, 0.0);
+
+        auto start = std::chrono::high_resolution_clock::now();
+        for (int r = 0; r < noise_realizations; ++r) {
+          auto noisy = noise::inject_combined_noise(circuit, noise_model, rng);
+          nb::dict result = estimate_core(noisy, paulis, config);
+          nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
+          for (size_t i = 0; i < n_obs; ++i)
+            sum_vals[i] += nb::cast<double>(ev[i]);
+        }
+        auto end = std::chrono::high_resolution_clock::now();
+
+        nb::dict ideal_result = estimate_core(circuit, paulis, config);
+        nb::list noisy_vals, ideal_vals;
+        nb::list ideal_ev =
+            nb::cast<nb::list>(ideal_result["expectation_values"]);
+        for (size_t i = 0; i < n_obs; ++i) {
+          noisy_vals.append(sum_vals[i] / noise_realizations);
+          ideal_vals.append(nb::cast<double>(ideal_ev[i]));
+        }
+
+        nb::dict out;
+        out["expectation_values"] = noisy_vals;
+        out["ideal_expectation_values"] = ideal_vals;
+        out["time_taken"] = std::chrono::duration<double>(end - start).count();
+        out["simulator"] = ideal_result["simulator"];
+        out["method"] = ideal_result["method"];
+        out["noise_realizations"] = noise_realizations;
+        out["noise_type"] = "combined";
+        return out;
+      },
+      "circuit"_a, "observables"_a, "noise_model"_a,
+      "noise_realizations"_a = 100, "config"_a = SimulatorConfig{},
+      "seed"_a = nb::none(),
+      "Estimate expectation values with combined noise (coherent + crosstalk "
+      "+ T1 + Pauli). All configured noise layers are applied per gate.\n\n"
+      "Example:\n"
+      "    nm = maestro.NoiseModel()\n"
+      "    nm.set_all_coherent_depolarizing(n, 0.001)\n"
+      "    nm.set_crosstalk(0, 1, 0.005)\n"
+      "    nm.set_all_t1(n, 0.0003)\n"
+      "    result = maestro.full_noise_estimate(qc, ['ZZ'], nm)\n");
 }

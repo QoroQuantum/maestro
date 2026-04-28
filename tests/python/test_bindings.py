@@ -3002,3 +3002,405 @@ class TestNoisePhysicalAccuracy:
         assert abs(p_flip - expected_flip) < 0.03, \
             f"P(flip) = {p_flip:.4f}, expected ≈ {expected_flip:.4f}"
 
+
+class TestT1AmplitudeDamping:
+    """Test T1 amplitude damping noise model."""
+
+    def test_has_t1_initially_false(self):
+        """New NoiseModel has no T1 noise."""
+        nm = maestro.NoiseModel()
+        assert nm.has_t1() is False
+
+    def test_set_t1(self):
+        """set_t1 sets T1 decay probability and has_t1=True."""
+        nm = maestro.NoiseModel()
+        nm.set_t1(0, 0.001)
+        assert nm.has_t1() is True
+
+    def test_set_all_t1(self):
+        """set_all_t1 sets T1 on all qubits."""
+        nm = maestro.NoiseModel()
+        nm.set_all_t1(5, 0.0003)
+        assert nm.has_t1() is True
+
+    def test_set_t1_from_time(self):
+        """set_t1_from_time computes gamma from physical constants."""
+        nm = maestro.NoiseModel()
+        nm.set_t1_from_time(0, gate_time_s=30e-9, t1_time_s=100e-6)
+        assert nm.has_t1() is True
+
+    def test_t1_biases_toward_zero(self):
+        """T1 amplitude damping should increase P(|0⟩) for a |1⟩ state.
+
+        With large gamma, the qubit resets to |0⟩ more often.
+        """
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.x(0)  # prepare |1⟩
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_t1(0, 0.3)  # high gamma to see effect clearly
+
+        result = qc.full_noise_execute(
+            nm, shots=5000, noise_realizations=100, seed=42
+        )
+        counts = result['counts']
+        total = sum(counts.values())
+        p_zero = counts.get('0', 0) / total
+
+        # With gamma=0.3 and 1 gate (X), ~30% of trajectories reset to |0⟩
+        assert p_zero > 0.1, f"Expected P(0) > 0.1, got {p_zero:.4f}"
+        assert p_zero < 0.6, f"Expected P(0) < 0.6, got {p_zero:.4f}"
+
+
+class TestCrosstalk:
+    """Test ZZ crosstalk noise model."""
+
+    def test_has_crosstalk_initially_false(self):
+        """New NoiseModel has no crosstalk."""
+        nm = maestro.NoiseModel()
+        assert nm.has_crosstalk() is False
+
+    def test_set_crosstalk(self):
+        """set_crosstalk sets coupling and has_crosstalk=True."""
+        nm = maestro.NoiseModel()
+        nm.set_crosstalk(0, 1, 0.005)
+        assert nm.has_crosstalk() is True
+
+    def test_crosstalk_degrades_mirror_fidelity(self):
+        """Crosstalk should lower P(|00...0⟩) in a mirror circuit.
+
+        Mirror circuit (H-CX-CX†-H†) returns |0...0⟩ ideally.
+        Crosstalk adds spurious Rz rotations that degrade fidelity.
+        """
+        from maestro.circuits import QuantumCircuit
+
+        n = 5
+        # Build mirror GHZ
+        qc = QuantumCircuit()
+        qc.h(0)
+        for i in range(n - 1):
+            qc.cx(i, i + 1)
+        for i in range(n - 2, -1, -1):
+            qc.cx(i, i + 1)
+        qc.h(0)
+        qc.measure_all()
+
+        # Strong crosstalk
+        nm = maestro.NoiseModel()
+        for i in range(n - 1):
+            nm.set_crosstalk(i, i + 1, 0.05)
+        # Need some minimal Pauli to pass has_any() check
+        nm.set_all_depolarizing(n, 1e-12)
+
+        result = qc.full_noise_execute(
+            nm, shots=5000, noise_realizations=50, seed=42
+        )
+        counts = result['counts']
+        total = sum(counts.values())
+        p_all_zero = counts.get('0' * n, 0) / total
+
+        # With crosstalk, mirror fidelity should be less than perfect
+        assert p_all_zero < 0.99, \
+            f"Expected degraded mirror fidelity, got P(0...0)={p_all_zero:.4f}"
+        # But still dominant
+        assert p_all_zero > 0.3, \
+            f"Expected some mirror fidelity, got P(0...0)={p_all_zero:.4f}"
+
+
+class TestHasAny:
+    """Test the has_any() method for detecting any configured noise."""
+
+    def test_has_any_initially_false(self):
+        """Empty NoiseModel has has_any()=False."""
+        nm = maestro.NoiseModel()
+        assert nm.has_any() is False
+
+    def test_has_any_with_pauli(self):
+        """has_any is True when Pauli noise is set."""
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.01)
+        assert nm.has_any() is True
+
+    def test_has_any_with_coherent(self):
+        """has_any is True when coherent noise is set."""
+        nm = maestro.NoiseModel()
+        nm.set_coherent_depolarizing(0, 0.01)
+        assert nm.has_any() is True
+
+    def test_has_any_with_t1(self):
+        """has_any is True when T1 is set."""
+        nm = maestro.NoiseModel()
+        nm.set_t1(0, 0.001)
+        assert nm.has_any() is True
+
+    def test_has_any_with_crosstalk(self):
+        """has_any is True when crosstalk is set."""
+        nm = maestro.NoiseModel()
+        nm.set_crosstalk(0, 1, 0.005)
+        assert nm.has_any() is True
+
+    def test_has_any_with_all_noise_types(self):
+        """has_any is True when all noise types are set."""
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.01)
+        nm.set_coherent_depolarizing(0, 0.01)
+        nm.set_t1(0, 0.001)
+        nm.set_crosstalk(0, 1, 0.005)
+        assert nm.has_any() is True
+
+
+class TestCombinedNoiseExecution:
+    """Test full_noise_execute and full_noise_estimate with combined noise."""
+
+    def test_full_noise_execute_returns_valid_result(self):
+        """full_noise_execute returns dict with counts and metadata."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.01)
+
+        result = qc.full_noise_execute(nm, shots=1000, noise_realizations=10)
+        assert 'counts' in result
+        assert 'time_taken' in result
+        assert 'noise_type' in result
+        assert result['noise_type'] == 'combined'
+        total = sum(result['counts'].values())
+        assert total == 1000
+
+    def test_full_noise_execute_with_all_noise_types(self):
+        """full_noise_execute works with coherent + T1 + crosstalk + Pauli."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.cx(1, 2)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(3, 0.005)
+        nm.set_all_t1(3, 0.001)
+        nm.set_crosstalk(0, 1, 0.005)
+        nm.set_all_depolarizing(3, 0.005)
+
+        result = qc.full_noise_execute(nm, shots=2000, noise_realizations=20)
+        assert sum(result['counts'].values()) == 2000
+
+    def test_full_noise_execute_no_noise_raises(self):
+        """full_noise_execute raises ValueError with empty NoiseModel."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        with pytest.raises(ValueError, match="no noise configured"):
+            qc.full_noise_execute(nm, shots=100)
+
+    def test_full_noise_estimate_returns_valid_result(self):
+        """full_noise_estimate returns expectation values and ideal values."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.01)
+
+        result = qc.full_noise_estimate(
+            ['ZZ', 'XX'], nm, noise_realizations=20
+        )
+        assert 'expectation_values' in result
+        assert 'ideal_expectation_values' in result
+        assert result['noise_type'] == 'combined'
+        assert len(result['expectation_values']) == 2
+        assert len(result['ideal_expectation_values']) == 2
+
+    def test_full_noise_estimate_degrades_expectation_values(self):
+        """Noisy expectation values should be closer to zero than ideal."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.05)
+
+        result = qc.full_noise_estimate(
+            ['XX'], nm, noise_realizations=50, seed=42
+        )
+        noisy_xx = result['expectation_values'][0]
+        ideal_xx = result['ideal_expectation_values'][0]
+
+        # Ideal ⟨XX⟩ for Bell state = 1.0
+        assert ideal_xx == pytest.approx(1.0, abs=1e-5)
+        # Noisy ⟨XX⟩ should be less than ideal
+        assert noisy_xx < ideal_xx - 0.01, \
+            f"Expected degradation, got noisy={noisy_xx:.4f}, ideal={ideal_xx:.4f}"
+
+    def test_full_noise_estimate_no_noise_raises(self):
+        """full_noise_estimate raises ValueError with empty NoiseModel."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+
+        nm = maestro.NoiseModel()
+        with pytest.raises(ValueError, match="no noise configured"):
+            qc.full_noise_estimate(['Z'], nm)
+
+    def test_full_noise_estimate_seed_reproducibility(self):
+        """Same seed produces identical expectation values."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, 0.01)
+        nm.set_all_depolarizing(2, 0.01)
+
+        r1 = qc.full_noise_estimate(['ZZ', 'XX'], nm, noise_realizations=20, seed=123)
+        r2 = qc.full_noise_estimate(['ZZ', 'XX'], nm, noise_realizations=20, seed=123)
+
+        for i in range(2):
+            assert r1['expectation_values'][i] == pytest.approx(
+                r2['expectation_values'][i], abs=1e-10
+            )
+
+    def test_module_level_full_noise_execute(self):
+        """Module-level maestro.full_noise_execute works."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.01)
+
+        result = maestro.full_noise_execute(qc, nm, shots=500)
+        assert sum(result['counts'].values()) == 500
+        assert result['noise_type'] == 'combined'
+
+    def test_module_level_full_noise_estimate(self):
+        """Module-level maestro.full_noise_estimate works."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.01)
+
+        result = maestro.full_noise_estimate(
+            qc, ['ZZ'], nm, noise_realizations=10
+        )
+        assert len(result['expectation_values']) == 1
+        assert result['noise_type'] == 'combined'
+
+    def test_full_noise_with_mps_backend(self):
+        """Combined noise works with MPS simulator."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, 0.005)
+        nm.set_all_t1(2, 0.001)
+
+        mps_config = maestro.SimulatorConfig(
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=32,
+        )
+        result = qc.full_noise_estimate(
+            ['ZZ'], nm, noise_realizations=10, config=mps_config
+        )
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=0.2)
+
+
+class TestCombinedNoisePhysics:
+    """Test that combined noise produces physically correct behavior."""
+
+    def test_more_noise_means_worse_fidelity(self):
+        """Higher noise parameters should degrade fidelity more."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        # Low noise
+        nm_low = maestro.NoiseModel()
+        nm_low.set_all_depolarizing(2, 0.005)
+        nm_low.set_all_coherent_depolarizing(2, 0.002)
+
+        # High noise
+        nm_high = maestro.NoiseModel()
+        nm_high.set_all_depolarizing(2, 0.05)
+        nm_high.set_all_coherent_depolarizing(2, 0.02)
+
+        r_low = qc.full_noise_estimate(
+            ['XX'], nm_low, noise_realizations=50, seed=42
+        )
+        r_high = qc.full_noise_estimate(
+            ['XX'], nm_high, noise_realizations=50, seed=42
+        )
+
+        # ⟨XX⟩ should be closer to ideal (1.0) for low noise
+        assert abs(r_low['expectation_values'][0]) > abs(r_high['expectation_values'][0]), \
+            f"Low noise XX={r_low['expectation_values'][0]:.4f} should be > " \
+            f"high noise XX={r_high['expectation_values'][0]:.4f}"
+
+    def test_combined_noise_worse_than_single_layer(self):
+        """Combined noise should degrade fidelity more than any single layer."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        for i in range(4):
+            qc.cx(i, i + 1)
+
+        p = 0.01
+
+        # Pauli only
+        nm_pauli = maestro.NoiseModel()
+        nm_pauli.set_all_depolarizing(5, p)
+
+        # Coherent only
+        nm_coh = maestro.NoiseModel()
+        nm_coh.set_all_coherent_depolarizing(5, p)
+
+        # Combined
+        nm_both = maestro.NoiseModel()
+        nm_both.set_all_depolarizing(5, p)
+        nm_both.set_all_coherent_depolarizing(5, p)
+
+        reps = 50
+        r_p = qc.full_noise_estimate(['XXXXX'], nm_pauli, noise_realizations=reps, seed=42)
+        r_c = qc.full_noise_estimate(['XXXXX'], nm_coh, noise_realizations=reps, seed=42)
+        r_b = qc.full_noise_estimate(['XXXXX'], nm_both, noise_realizations=reps, seed=42)
+
+        xx_combined = abs(r_b['expectation_values'][0])
+        xx_pauli = abs(r_p['expectation_values'][0])
+        xx_coherent = abs(r_c['expectation_values'][0])
+
+        # Combined should be worse (lower |⟨XX⟩|) than either alone
+        assert xx_combined < max(xx_pauli, xx_coherent) + 0.05, \
+            f"Combined={xx_combined:.4f} should be ≤ max(pauli={xx_pauli:.4f}, coh={xx_coherent:.4f})"

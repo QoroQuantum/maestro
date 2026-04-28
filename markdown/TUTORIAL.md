@@ -940,6 +940,141 @@ print(result['noise_type'])       # 'coherent'
 | `maestro.coherent_estimate(...)` | Expectation values with coherent noise |
 | `maestro.coherent_execute(...)` | Shot-based execution with coherent noise |
 
+#### T1 Amplitude Damping
+
+T1 amplitude damping models energy relaxation — the spontaneous decay from |1⟩
+to |0⟩ over time. Maestro implements this using the **quantum trajectory method**:
+after each gate, with probability γ, the qubit is probabilistically reset to |0⟩.
+
+```python
+nm = maestro.NoiseModel()
+
+# Set per-gate decay probability directly
+nm.set_t1(qubit=0, gamma=0.001)
+
+# Set uniform T1 on all qubits
+nm.set_all_t1(num_qubits=5, gamma=0.0003)
+
+# Compute gamma from physical time constants (most accurate)
+# gamma = 1 - exp(-gate_time / T1)
+nm.set_t1_from_time(qubit=0, gate_time_s=500e-9, t1_time_s=200e-6)
+
+# Check if T1 is configured
+print(nm.has_t1())  # True
+```
+
+> **Note:** T1 damping is asymmetric — it only decays |1⟩ → |0⟩, never the
+> reverse. This is physically correct: thermal relaxation at millikelvin
+> temperatures overwhelmingly favours the ground state.
+
+#### ZZ Crosstalk
+
+ZZ crosstalk models parasitic coupling between neighbouring qubits. When a gate
+acts on qubit q1, the spectator qubit q2 accumulates an unwanted Rz rotation.
+This is one of the dominant error sources on superconducting devices.
+
+```python
+nm = maestro.NoiseModel()
+
+# Set symmetric ZZ coupling between qubits 0 and 1
+# After a gate on q0, Rz(0.005) is applied on q1, and vice versa
+nm.set_crosstalk(q1=0, q2=1, strength=0.005)
+
+# Set nearest-neighbour crosstalk on a chain
+for i in range(n_qubits - 1):
+    nm.set_crosstalk(i, i + 1, 0.008)
+
+print(nm.has_crosstalk())  # True
+```
+
+> **Tip:** Crosstalk strength values can be estimated from simultaneous
+> randomised benchmarking (sim-RB) data on IBM devices.
+
+#### Combined Noise Simulation
+
+The `full_noise_execute` and `full_noise_estimate` functions apply **all configured
+noise layers** in a single call. The noise is injected per gate in physical order:
+
+1. **Coherent over-rotations** (systematic Rx/Ry/Rz)
+2. **ZZ crosstalk** (Rz on spectator neighbours)
+3. **T1 amplitude damping** (probabilistic reset to |0⟩)
+4. **Pauli noise** (stochastic X/Y/Z errors)
+
+This enables realistic device-level simulation with a single noise model:
+
+```python
+from maestro.circuits import QuantumCircuit
+
+# Build a noise model matching your hardware
+nm = maestro.NoiseModel()
+
+# Layer 1: Coherent gate over-rotations (from GST or calibration data)
+nm.set_all_coherent_depolarizing(n_qubits, 0.005)
+
+# Layer 2: ZZ crosstalk between neighbours
+for i in range(n_qubits - 1):
+    nm.set_crosstalk(i, i + 1, 0.008)
+
+# Layer 3: T1 amplitude damping (from backend properties)
+for q in range(n_qubits):
+    nm.set_t1_from_time(q, gate_time_s=500e-9, t1_time_s=200e-6)
+
+# Layer 4: Pauli (incoherent) noise (from RB data)
+nm.set_all_depolarizing(n_qubits, 0.005)
+
+# Check if any noise is configured
+print(nm.has_any())  # True
+```
+
+##### Combined Execute (Shot-based)
+
+```python
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+qc.measure_all()
+
+result = qc.full_noise_execute(
+    nm,
+    shots=1024,
+    noise_realizations=64,
+    seed=42
+)
+print(result['counts'])       # Aggregated counts
+print(result['noise_type'])   # 'combined'
+```
+
+##### Combined Estimate (Expectation Values)
+
+```python
+qc = QuantumCircuit()
+qc.h(0)
+qc.cx(0, 1)
+
+result = qc.full_noise_estimate(
+    ['ZZ', 'XX'], nm,
+    noise_realizations=100,
+    seed=42
+)
+print(result['expectation_values'])        # Noisy values
+print(result['ideal_expectation_values'])  # Noiseless reference
+print(result['noise_type'])                # 'combined'
+```
+
+##### Combined Noise API Reference
+
+| Method | Description |
+|--------|-------------|
+| `nm.set_t1(q, gamma)` | Per-gate T1 decay probability |
+| `nm.set_all_t1(n, gamma)` | Uniform T1 on all qubits |
+| `nm.set_t1_from_time(q, gate_time_s, t1_time_s)` | T1 from physical time constants |
+| `nm.has_t1()` | Check if T1 is configured |
+| `nm.set_crosstalk(q1, q2, strength)` | Symmetric ZZ coupling |
+| `nm.has_crosstalk()` | Check if crosstalk is configured |
+| `nm.has_any()` | Check if any noise type is configured |
+| `maestro.full_noise_execute(...)` | Shot-based combined execution |
+| `maestro.full_noise_estimate(...)` | Combined expectation values |
+
 ##### All Noise Simulation Functions
 
 | Function | Noise Type | Overhead | Best for |
@@ -949,11 +1084,14 @@ print(result['noise_type'])       # 'coherent'
 | `noisy_execute` | Pauli | N × noiseless | Shot-based Pauli noise |
 | `coherent_estimate` | Coherent | N × noiseless | Coherent error analysis |
 | `coherent_execute` | Coherent | N × noiseless | Shot-based coherent noise |
+| `full_noise_execute` | **All layers** | N × noiseless | Realistic device simulation |
+| `full_noise_estimate` | **All layers** | N × noiseless | Hardware-accurate expectation values |
 
 > **Tip:** All noise functions are also available as bound methods on `QuantumCircuit`:
 > `qc.noisy_execute(nm)`, `qc.noisy_estimate(['ZZ'], nm)`,
 > `qc.noisy_estimate_montecarlo(['ZZ'], nm)`,
-> `qc.coherent_execute(nm)`, `qc.coherent_estimate(['ZZ'], nm)`.
+> `qc.coherent_execute(nm)`, `qc.coherent_estimate(['ZZ'], nm)`,
+> `qc.full_noise_execute(nm)`, `qc.full_noise_estimate(['ZZ'], nm)`.
 
 ---
 
@@ -1252,6 +1390,8 @@ print(f"Counts: {result['counts']}")
 | `maestro.noisy_execute()`   | `dict`  | Monte Carlo noisy execution with shot-based sampling.        |
 | `maestro.coherent_estimate()` | `dict` | Coherent noise estimation (rotation errors, averaged over sign realizations). |
 | `maestro.coherent_execute()` | `dict`  | Coherent noise execution with shot-based sampling.           |
+| `maestro.full_noise_execute()` | `dict` | Combined noise execution (coherent + crosstalk + T1 + Pauli). |
+| `maestro.full_noise_estimate()` | `dict` | Combined noise estimation (all layers, expectation values). |
 | `maestro.state_probability()` | `dict` | Compute P(\|target⟩) via path integral (circuit or QASM input). |
 | `qc.prob(target_state)`     | `dict`  | Compute P(\|target⟩) via path integral (bound method).       |
 

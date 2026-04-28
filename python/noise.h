@@ -197,9 +197,64 @@ class NoiseModel {
   bool coherent_empty() const { return coherent_.empty(); }
   bool has_coherent() const { return !coherent_.empty(); }
 
+  // ── T1 amplitude damping setters ──
+
+  /// Set per-gate T1 decay probability on a qubit.
+  /// After each gate, with probability gamma, the qubit decays to |0⟩.
+  void set_t1(int q, double gamma) { t1_[q] = gamma; }
+
+  /// Set uniform T1 decay probability on qubits 0..n-1.
+  void set_all_t1(int n, double gamma) {
+    for (int q = 0; q < n; ++q) t1_[q] = gamma;
+  }
+
+  /**
+   * Set T1 from physical time constants.
+   * gamma = 1 - exp(-gate_time / t1_time)
+   */
+  void set_t1_from_time(int q, double gate_time_s, double t1_time_s) {
+    t1_[q] = 1.0 - std::exp(-gate_time_s / t1_time_s);
+  }
+
+  /// Get T1 decay probability for a qubit (0 if not set).
+  double get_t1(int q) const {
+    auto it = t1_.find(q);
+    return (it != t1_.end()) ? it->second : 0.0;
+  }
+
+  bool has_t1() const { return !t1_.empty(); }
+
+  // ── Crosstalk setters ──
+
+  /**
+   * Set ZZ crosstalk coupling between two qubits.
+   * After a gate on q1, an Rz(strength) rotation is applied on q2
+   * (and vice versa). Symmetric by default.
+   */
+  void set_crosstalk(int q1, int q2, double strength) {
+    crosstalk_[q1][q2] = strength;
+    crosstalk_[q2][q1] = strength;
+  }
+
+  /// Get crosstalk neighbor map for a qubit (nullptr if none).
+  const std::unordered_map<int, double> *get_crosstalk_neighbors(int q) const {
+    auto it = crosstalk_.find(q);
+    return (it != crosstalk_.end()) ? &it->second : nullptr;
+  }
+
+  bool has_crosstalk() const { return !crosstalk_.empty(); }
+
+  /// True if any noise of any type has been configured.
+  bool has_any() const {
+    return !noise_.empty() || !coherent_.empty() ||
+           !t1_.empty() || !crosstalk_.empty();
+  }
+
  private:
   std::unordered_map<int, QubitNoise> noise_;
   std::unordered_map<int, CoherentNoise> coherent_;
+  std::unordered_map<int, double> t1_;
+  std::unordered_map<int, std::unordered_map<int, double>> crosstalk_;
 };
 
 /**
@@ -283,6 +338,100 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_coherent_noise(
         out->AddOperation(
             std::make_shared<Circuits::RzGate<>>(q, sign * cn->rz));
       }
+    }
+  }
+  return out;
+}
+
+/**
+ * Inject ALL configured noise types into a circuit in physical order:
+ *   1. Coherent over-rotations (systematic gate errors)
+ *   2. Crosstalk (ZZ coupling to spectator neighbors)
+ *   3. T1 amplitude damping (probabilistic decay to |0⟩)
+ *   4. Pauli noise (stochastic bit/phase flips)
+ *
+ * This is the "realistic" noise injection that combines every layer.
+ * Only noise types that have been configured on the NoiseModel are applied.
+ */
+inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
+    const std::shared_ptr<Circuits::Circuit<double>> &circ,
+    const NoiseModel &nm, std::mt19937 &rng) {
+  auto out = std::make_shared<Circuits::Circuit<double>>();
+  std::uniform_real_distribution<double> dist(0.0, 1.0);
+  std::uniform_int_distribution<int> sign_dist(0, 1);
+
+  for (const auto &op : circ->GetOperations()) {
+    out->AddOperation(op->Clone());
+
+    if (op->GetType() != Circuits::OperationType::kGate) continue;
+
+    auto affected = op->AffectedQubits();
+
+    // Helper: check if qubit is in the affected set
+    auto is_affected = [&affected](int q) {
+      for (auto aq : affected)
+        if (static_cast<int>(aq) == q) return true;
+      return false;
+    };
+
+    // ── 1. Coherent over-rotations on affected qubits ──
+    for (auto q : affected) {
+      const auto *cn = nm.get_coherent(q);
+      if (!cn) continue;
+      if (std::abs(cn->rx) > 1e-15) {
+        double s = sign_dist(rng) ? 1.0 : -1.0;
+        out->AddOperation(
+            std::make_shared<Circuits::RxGate<>>(q, s * cn->rx));
+      }
+      if (std::abs(cn->ry) > 1e-15) {
+        double s = sign_dist(rng) ? 1.0 : -1.0;
+        out->AddOperation(
+            std::make_shared<Circuits::RyGate<>>(q, s * cn->ry));
+      }
+      if (std::abs(cn->rz) > 1e-15) {
+        double s = sign_dist(rng) ? 1.0 : -1.0;
+        out->AddOperation(
+            std::make_shared<Circuits::RzGate<>>(q, s * cn->rz));
+      }
+    }
+
+    // ── 2. Crosstalk: Rz on spectator neighbors ──
+    // Accumulate crosstalk from all affected qubits, then apply once
+    // per spectator (avoids double-counting).
+    std::unordered_map<int, double> spectator_rotations;
+    for (auto q : affected) {
+      const auto *xt = nm.get_crosstalk_neighbors(q);
+      if (!xt) continue;
+      for (const auto &[neighbor, strength] : *xt) {
+        if (!is_affected(neighbor))
+          spectator_rotations[neighbor] += strength;
+      }
+    }
+    for (const auto &[spectator, total] : spectator_rotations) {
+      out->AddOperation(std::make_shared<Circuits::RzGate<>>(
+          static_cast<Types::qubit_t>(spectator), total));
+    }
+
+    // ── 3. T1 amplitude damping (quantum trajectory) ──
+    for (auto q : affected) {
+      double gamma = nm.get_t1(q);
+      if (gamma > 0 && dist(rng) < gamma) {
+        out->AddOperation(std::make_shared<Circuits::Reset<>>(
+            Types::qubits_vector{q}));
+      }
+    }
+
+    // ── 4. Pauli (incoherent) noise ──
+    for (auto q : affected) {
+      const auto *qn = nm.get(q);
+      if (!qn || qn->total() <= 0) continue;
+      double r = dist(rng);
+      if (r < qn->px)
+        out->AddOperation(std::make_shared<Circuits::XGate<>>(q));
+      else if (r < qn->px + qn->py)
+        out->AddOperation(std::make_shared<Circuits::YGate<>>(q));
+      else if (r < qn->total())
+        out->AddOperation(std::make_shared<Circuits::ZGate<>>(q));
     }
   }
   return out;
