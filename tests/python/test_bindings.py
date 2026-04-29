@@ -3404,3 +3404,300 @@ class TestCombinedNoisePhysics:
         # Combined should be worse (lower |⟨XX⟩|) than either alone
         assert xx_combined < max(xx_pauli, xx_coherent) + 0.05, \
             f"Combined={xx_combined:.4f} should be ≤ max(pauli={xx_pauli:.4f}, coh={xx_coherent:.4f})"
+
+
+class TestReadoutError:
+    """Test native readout error (classical post-measurement channel)."""
+
+    def test_has_readout_error_initially_false(self):
+        """New NoiseModel has no readout error."""
+        nm = maestro.NoiseModel()
+        assert nm.has_readout_error() is False
+
+    def test_set_readout_error_asymmetric(self):
+        """set_readout_error sets asymmetric rates and has_readout_error=True."""
+        nm = maestro.NoiseModel()
+        nm.set_readout_error(0, 0.003, 0.06)
+        assert nm.has_readout_error() is True
+        assert nm.has_any() is True
+
+    def test_set_readout_error_symmetric(self):
+        """set_readout_error_symmetric sets equal rates."""
+        nm = maestro.NoiseModel()
+        nm.set_readout_error_symmetric(0, 0.05)
+        assert nm.has_readout_error() is True
+
+    def test_set_all_readout_error(self):
+        """set_all_readout_error sets readout error on all qubits."""
+        nm = maestro.NoiseModel()
+        nm.set_all_readout_error(5, 0.02)
+        assert nm.has_readout_error() is True
+
+    def test_readout_only_triggers_has_any(self):
+        """has_any returns True when only readout error is set."""
+        nm = maestro.NoiseModel()
+        nm.set_readout_error(0, 0.01, 0.01)
+        assert nm.has_any() is True
+
+    def test_readout_flips_bits_in_execute(self):
+        """High readout error should flip measured bits significantly.
+
+        Prepare |0⟩ with 100% p_meas1_prep0 → should always measure '1'.
+        """
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)   # H twice = identity; still adds a gate so noise can apply
+        qc.h(0)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_readout_error(0, 1.0, 0.0)  # always flip 0→1
+        # Need some noise to pass has_any for full_noise_execute
+        nm.set_depolarizing(0, 1e-12)
+
+        result = qc.full_noise_execute(nm, shots=100, noise_realizations=1, seed=42)
+        counts = result['counts']
+        # All shots should report '1' due to readout flip
+        assert counts.get('1', 0) == 100, \
+            f"Expected all '1' with 100% readout flip, got {counts}"
+
+    def test_readout_preserves_without_error(self):
+        """Zero readout error should not change results."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_readout_error(0, 0.0, 0.0)
+        nm.set_depolarizing(0, 1e-12)
+
+        result = qc.full_noise_execute(nm, shots=100, noise_realizations=1, seed=42)
+        counts = result['counts']
+        assert counts.get('1', 0) == 100
+
+    def test_moderate_readout_error(self):
+        """Moderate readout error should flip some bits but not all.
+
+        Prepare |1⟩ with p_meas0_prep1 = 0.3 → ~30% of shots should flip.
+        """
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_readout_error(0, 0.0, 0.3)
+        nm.set_depolarizing(0, 1e-12)
+
+        result = qc.full_noise_execute(
+            nm, shots=5000, noise_realizations=1, seed=42)
+        counts = result['counts']
+        total = sum(counts.values())
+        p_flip = counts.get('0', 0) / total
+
+        assert 0.2 < p_flip < 0.4, \
+            f"Expected ~30% flips, got {p_flip:.4f}"
+
+
+class Test2QDepolarizing:
+    """Test two-qubit depolarizing channel."""
+
+    def test_has_2q_depolarizing_initially_false(self):
+        """New NoiseModel has no 2Q depolarizing."""
+        nm = maestro.NoiseModel()
+        assert nm.has_any_2q_depolarizing() is False
+
+    def test_set_2q_depolarizing(self):
+        """set_2q_depolarizing sets rates and has_any_2q_depolarizing=True."""
+        nm = maestro.NoiseModel()
+        nm.set_2q_depolarizing(0, 1, 0.01)
+        assert nm.has_any_2q_depolarizing() is True
+        assert nm.has_any() is True
+
+    def test_2q_depolarizing_only_triggers_has_any(self):
+        """has_any returns True when only 2Q depolarizing is set."""
+        nm = maestro.NoiseModel()
+        nm.set_2q_depolarizing(0, 1, 0.01)
+        assert nm.has_any() is True
+
+    def test_2q_depolarizing_degrades_bell_state(self):
+        """2Q depolarizing on CX gate should degrade Bell state fidelity.
+
+        Prepare Bell state, apply high 2Q depolarizing, measure.
+        Should see more error bitstrings than without.
+        """
+        from maestro.circuits import QuantumCircuit
+
+        # No 2Q noise
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        nm_clean = maestro.NoiseModel()
+        nm_clean.set_depolarizing(0, 1e-12)
+
+        r_clean = qc.full_noise_execute(
+            nm_clean, shots=5000, noise_realizations=10, seed=42)
+        p_bell_clean = (
+            r_clean['counts'].get('00', 0) + r_clean['counts'].get('11', 0)
+        ) / sum(r_clean['counts'].values())
+
+        # With 2Q depolarizing
+        nm_noisy = maestro.NoiseModel()
+        nm_noisy.set_2q_depolarizing(0, 1, 0.15)  # high 2Q noise
+        nm_noisy.set_depolarizing(0, 1e-12)
+
+        r_noisy = qc.full_noise_execute(
+            nm_noisy, shots=5000, noise_realizations=50, seed=42)
+        p_bell_noisy = (
+            r_noisy['counts'].get('00', 0) + r_noisy['counts'].get('11', 0)
+        ) / sum(r_noisy['counts'].values())
+
+        assert p_bell_noisy < p_bell_clean - 0.05, \
+            f"2Q noise should degrade Bell fidelity: clean={p_bell_clean:.4f}, noisy={p_bell_noisy:.4f}"
+
+    def test_2q_depolarizing_does_not_affect_1q_gates(self):
+        """2Q depolarizing should NOT apply after single-qubit gates.
+
+        Circuit with only 1Q gates and 2Q depol → should behave like ideal.
+        """
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_2q_depolarizing(0, 1, 0.5)  # high rate but no 2Q gate
+        nm.set_depolarizing(0, 1e-12)
+
+        result = qc.full_noise_execute(
+            nm, shots=1000, noise_realizations=10, seed=42)
+        counts = result['counts']
+        p_one = counts.get('1', 0) / sum(counts.values())
+        # Should be ~100% since 2Q noise doesn't apply to 1Q gates
+        assert p_one > 0.99, \
+            f"2Q noise should not affect 1Q-only circuit, got P(1)={p_one:.4f}"
+
+
+class TestGateTypeSpecificNoise:
+    """Test gate-type-specific (1Q vs 2Q) depolarizing channels."""
+
+    def test_has_1q_gate_noise_initially_false(self):
+        nm = maestro.NoiseModel()
+        assert nm.has_1q_gate_noise() is False
+
+    def test_has_2q_gate_noise_initially_false(self):
+        nm = maestro.NoiseModel()
+        assert nm.has_2q_gate_noise() is False
+
+    def test_set_1q_gate_depolarizing(self):
+        nm = maestro.NoiseModel()
+        nm.set_1q_gate_depolarizing(0, 0.01)
+        assert nm.has_1q_gate_noise() is True
+        assert nm.has_any() is True
+
+    def test_set_2q_gate_depolarizing(self):
+        nm = maestro.NoiseModel()
+        nm.set_2q_gate_depolarizing(0, 0.01)
+        assert nm.has_2q_gate_noise() is True
+        assert nm.has_any() is True
+
+    def test_set_all_1q_gate_depolarizing(self):
+        nm = maestro.NoiseModel()
+        nm.set_all_1q_gate_depolarizing(5, 0.001)
+        assert nm.has_1q_gate_noise() is True
+
+    def test_set_all_2q_gate_depolarizing(self):
+        nm = maestro.NoiseModel()
+        nm.set_all_2q_gate_depolarizing(5, 0.001)
+        assert nm.has_2q_gate_noise() is True
+
+    def test_1q_noise_only_after_1q_gates(self):
+        """1Q gate noise should NOT apply after 2Q gates.
+
+        Build a circuit where all noise is set_1q_gate_depolarizing.
+        A 2Q gate (CX) should not receive this noise.
+        """
+        from maestro.circuits import QuantumCircuit
+
+        # 1Q noise only, heavy
+        nm = maestro.NoiseModel()
+        nm.set_all_1q_gate_depolarizing(2, 0.5)  # extreme noise
+
+        # Circuit: just CX (2Q gate only)
+        qc_2q = QuantumCircuit()
+        qc_2q.cx(0, 1)
+        qc_2q.measure_all()
+
+        result = qc_2q.full_noise_execute(
+            nm, shots=1000, noise_realizations=10, seed=42)
+        counts = result['counts']
+        total = sum(counts.values())
+        # CX|00⟩ = |00⟩. With only 1Q noise (not applying to 2Q gates),
+        # this should stay mostly |00⟩.
+        p_00 = counts.get('00', 0) / total
+        assert p_00 > 0.95, \
+            f"1Q noise should not degrade 2Q-only circuit, got P(00)={p_00:.4f}"
+
+    def test_2q_noise_only_after_2q_gates(self):
+        """2Q gate noise should NOT apply after 1Q gates."""
+        from maestro.circuits import QuantumCircuit
+
+        nm = maestro.NoiseModel()
+        nm.set_all_2q_gate_depolarizing(1, 0.5)  # extreme noise
+
+        # Circuit: just X (1Q gate only)
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+
+        result = qc.full_noise_execute(
+            nm, shots=1000, noise_realizations=10, seed=42)
+        counts = result['counts']
+        total = sum(counts.values())
+        p_one = counts.get('1', 0) / total
+        assert p_one > 0.95, \
+            f"2Q noise should not degrade 1Q-only circuit, got P(1)={p_one:.4f}"
+
+    def test_different_rates_produce_different_results(self):
+        """Different 1Q vs 2Q noise rates should produce distinguishable results.
+
+        Set heavy 2Q noise but light 1Q noise. A mixed circuit should
+        show that the CX gate contributes more error than the H gate.
+        """
+        from maestro.circuits import QuantumCircuit
+
+        # H(0) + CX(0,1) + mirror
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.cx(0, 1)
+        qc.h(0)
+        qc.measure_all()
+
+        # Scenario 1: Light 1Q noise, no 2Q noise
+        nm_1q = maestro.NoiseModel()
+        nm_1q.set_all_1q_gate_depolarizing(2, 0.01)
+
+        # Scenario 2: No 1Q noise, heavy 2Q noise
+        nm_2q = maestro.NoiseModel()
+        nm_2q.set_all_2q_gate_depolarizing(2, 0.10)
+
+        r1 = qc.full_noise_execute(
+            nm_1q, shots=5000, noise_realizations=50, seed=42)
+        r2 = qc.full_noise_execute(
+            nm_2q, shots=5000, noise_realizations=50, seed=42)
+
+        t1 = sum(r1['counts'].values())
+        t2 = sum(r2['counts'].values())
+        p00_1q = r1['counts'].get('00', 0) / t1
+        p00_2q = r2['counts'].get('00', 0) / t2
+
+        # Mirror circuit returns |00⟩ ideally. Heavy 2Q noise should
+        # degrade this more than light 1Q noise.
+        assert p00_2q < p00_1q, \
+            f"Heavy 2Q noise should degrade more: 1Q P(00)={p00_1q:.4f}, 2Q P(00)={p00_2q:.4f}"
+

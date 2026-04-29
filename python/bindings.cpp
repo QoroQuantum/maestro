@@ -175,6 +175,35 @@ std::vector<std::string> ParseObservables(const nb::object& observables) {
   return paulis;
 }
 
+// Apply classical readout error to a counts map (post-measurement channel).
+// For each shot in each bitstring, flip bits according to per-qubit rates.
+static void apply_readout_error_to_counts(
+    std::unordered_map<std::string, size_t> &counts,
+    const noise::NoiseModel &nm, std::mt19937 &rng) {
+  if (!nm.has_readout_error()) return;
+
+  std::uniform_real_distribution<double> dist(0.0, 1.0);
+  std::unordered_map<std::string, size_t> new_counts;
+
+  for (const auto &[bitstring, count] : counts) {
+    for (size_t shot = 0; shot < count; ++shot) {
+      std::string noisy_bs = bitstring;
+      for (size_t i = 0; i < noisy_bs.size(); ++i) {
+        int qubit_idx = static_cast<int>(i);
+        const auto *re = nm.get_readout_error(qubit_idx);
+        if (!re) continue;
+        double r = dist(rng);
+        if (noisy_bs[i] == '0' && r < re->p_meas1_prep0)
+          noisy_bs[i] = '1';
+        else if (noisy_bs[i] == '1' && r < re->p_meas0_prep1)
+          noisy_bs[i] = '0';
+      }
+      new_counts[noisy_bs]++;
+    }
+  }
+  counts = std::move(new_counts);
+}
+
 // Core Execution Logic
 nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
                       const SimulatorConfig& config, int shots) {
@@ -920,6 +949,106 @@ NB_MODULE(maestro, m) {
           "Returns:\n"
           "    dict with 'probability', 'amplitude', 'target_state', "
           "'time_taken'.")
+      .def(
+          "noisy_prob",
+          [](std::shared_ptr<Circuits::Circuit<double>> self,
+             const std::string &target_state,
+             const noise::NoiseModel &noise_model) -> nb::dict {
+            if (!self) throw nb::value_error("Circuit is null.");
+            if (target_state.empty())
+              throw nb::value_error(
+                  "target_state must be a non-empty bitstring.");
+
+            const size_t n = target_state.size();
+            for (size_t i = 0; i < n; ++i) {
+              if (target_state[i] != '0' && target_state[i] != '1')
+                throw nb::value_error(
+                    "target_state must contain only '0' and '1' characters.");
+            }
+
+            // Helper: compute P(bitstring) via path integral
+            auto pi_prob = [&](const std::string &bs) -> double {
+              std::vector<bool> end_state(bs.size());
+              for (size_t i = 0; i < bs.size(); ++i)
+                end_state[i] = (bs[i] == '1');
+
+              Simulators::PathIntegralSimulator sim;
+              sim.SetStartZeroState(bs.size());
+              bool ok;
+              {
+                nb::gil_scoped_release release;
+                ok = sim.SetCircuit(self);
+              }
+              if (!ok)
+                throw std::runtime_error(
+                    "Circuit contains operations not supported by the path "
+                    "integral simulator.");
+              auto amplitude = sim.AmplitudeFromZero(end_state);
+              return std::norm(amplitude);
+            };
+
+            auto start = std::chrono::high_resolution_clock::now();
+
+            double p_noisy;
+
+            if (noise_model.has_readout_error()) {
+              // First-order readout error expansion:
+              // P_noisy(b) ≈ Π(1-p_i) * P(b) + Σ_i [p_i * Π_{j≠i}(1-p_j)] * P(b⊕e_i)
+
+              // Compute per-qubit flip probabilities for the target bitstring
+              std::vector<double> p_flip(n);
+              for (size_t i = 0; i < n; ++i) {
+                const auto *re = noise_model.get_readout_error(
+                    static_cast<int>(i));
+                if (!re) { p_flip[i] = 0.0; continue; }
+                p_flip[i] = (target_state[i] == '0')
+                    ? re->p_meas1_prep0 : re->p_meas0_prep1;
+              }
+
+              // 0-flip term: probability of no readout errors
+              double no_flip_prob = 1.0;
+              for (size_t i = 0; i < n; ++i)
+                no_flip_prob *= (1.0 - p_flip[i]);
+
+              double p_target = pi_prob(target_state);
+              p_noisy = no_flip_prob * p_target;
+
+              // 1-flip terms: one readout error on qubit i
+              for (size_t i = 0; i < n; ++i) {
+                if (p_flip[i] <= 0.0) continue;
+                std::string flipped = target_state;
+                flipped[i] = (flipped[i] == '0') ? '1' : '0';
+                double one_flip_weight =
+                    p_flip[i] / (1.0 - p_flip[i]) * no_flip_prob;
+                p_noisy += one_flip_weight * pi_prob(flipped);
+              }
+            } else {
+              // No readout error — just compute exact probability
+              p_noisy = pi_prob(target_state);
+            }
+
+            auto end = std::chrono::high_resolution_clock::now();
+
+            nb::dict result;
+            result["probability"] = p_noisy;
+            result["target_state"] = target_state;
+            result["time_taken"] =
+                std::chrono::duration<double>(end - start).count();
+            result["has_readout_error"] = noise_model.has_readout_error();
+            return result;
+          },
+          "target_state"_a, "noise_model"_a,
+          "Compute readout-corrected probability using path integral.\n\n"
+          "When the noise model has readout error, uses first-order expansion:\n"
+          "P_noisy(b) ≈ Π(1-p_i)·P(b) + Σ_i p_i·Π_{j≠i}(1-p_j)·P(b⊕eᵢ)\n\n"
+          "This requires n+1 path integral evaluations (target + n flipped "
+          "variants).\n\n"
+          "Args:\n"
+          "    target_state: Bitstring like '10001001'.\n"
+          "    noise_model: NoiseModel with readout error set.\n\n"
+          "Returns:\n"
+          "    dict with 'probability', 'target_state', 'time_taken', "
+          "'has_readout_error'.")
 
       // ---- Bound Methods for Noisy Execution ----
       .def(
@@ -951,6 +1080,9 @@ NB_MODULE(maestro, m) {
                     nb::cast<size_t>(item.second);
             }
             auto end = std::chrono::high_resolution_clock::now();
+
+            // Apply readout error (classical post-measurement channel)
+            apply_readout_error_to_counts(combined, noise_model, rng);
 
             nb::dict py_counts;
             for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
@@ -1196,6 +1328,9 @@ NB_MODULE(maestro, m) {
                     nb::cast<size_t>(item.second);
             }
             auto end = std::chrono::high_resolution_clock::now();
+
+            // Apply readout error (classical post-measurement channel)
+            apply_readout_error_to_counts(combined, noise_model, rng);
 
             nb::dict py_counts;
             for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
@@ -1595,6 +1730,63 @@ NB_MODULE(maestro, m) {
            "and vice versa. Symmetric.")
       .def("has_crosstalk", &noise::NoiseModel::has_crosstalk,
            "Return True if any crosstalk couplings have been set.")
+      // ── Readout error ──
+      .def("set_readout_error", &noise::NoiseModel::set_readout_error,
+           "qubit"_a, "p_meas1_prep0"_a, "p_meas0_prep1"_a,
+           "Set asymmetric readout error on a qubit.\n\n"
+           "Args:\n"
+           "    qubit: Qubit index.\n"
+           "    p_meas1_prep0: P(measure 1 | state was 0) — false positive.\n"
+           "    p_meas0_prep1: P(measure 0 | state was 1) — false negative.\n\n"
+           "Example: nm.set_readout_error(0, 0.003, 0.06)")
+      .def("set_readout_error_symmetric",
+           &noise::NoiseModel::set_readout_error_symmetric,
+           "qubit"_a, "p_error"_a,
+           "Set symmetric readout error (same rate for both directions).\n\n"
+           "Example: nm.set_readout_error_symmetric(0, 0.01)")
+      .def("set_all_readout_error", &noise::NoiseModel::set_all_readout_error,
+           "num_qubits"_a, "p_error"_a,
+           "Set uniform symmetric readout error on qubits [0, num_qubits).")
+      .def("has_readout_error", &noise::NoiseModel::has_readout_error,
+           "Return True if any readout error parameters have been set.")
+      // ── Two-qubit depolarizing ──
+      .def("set_2q_depolarizing", &noise::NoiseModel::set_2q_depolarizing,
+           "q1"_a, "q2"_a, "p"_a,
+           "Set two-qubit depolarizing channel applied after CX/CZ gates "
+           "on (q1, q2).\n\n"
+           "Channel: Λ(ρ) = (1-p)ρ + p/15 · Σ PρP†  "
+           "(15 non-identity two-qubit Paulis).\n"
+           "Applied ONLY after 2Q gates, separate from per-qubit noise.\n\n"
+           "Example: nm.set_2q_depolarizing(0, 1, 1.8e-3)")
+      .def("has_any_2q_depolarizing",
+           &noise::NoiseModel::has_any_2q_depolarizing,
+           "Return True if any two-qubit depolarizing has been set.")
+      // ── Gate-type-specific noise ──
+      .def("set_1q_gate_depolarizing",
+           &noise::NoiseModel::set_1q_gate_depolarizing,
+           "qubit"_a, "p"_a,
+           "Set depolarizing noise applied only after single-qubit gates.\n\n"
+           "This is separate from set_depolarizing() which applies after ALL "
+           "gates.\n\n"
+           "Example: nm.set_1q_gate_depolarizing(0, 2.3e-4)")
+      .def("set_2q_gate_depolarizing",
+           &noise::NoiseModel::set_2q_gate_depolarizing,
+           "qubit"_a, "p"_a,
+           "Set depolarizing noise applied only after two-qubit gates "
+           "involving this qubit.\n\n"
+           "Example: nm.set_2q_gate_depolarizing(0, 1.8e-3)")
+      .def("set_all_1q_gate_depolarizing",
+           &noise::NoiseModel::set_all_1q_gate_depolarizing,
+           "num_qubits"_a, "p"_a,
+           "Set uniform 1Q gate depolarizing on qubits [0, num_qubits).")
+      .def("set_all_2q_gate_depolarizing",
+           &noise::NoiseModel::set_all_2q_gate_depolarizing,
+           "num_qubits"_a, "p"_a,
+           "Set uniform 2Q gate depolarizing on qubits [0, num_qubits).")
+      .def("has_1q_gate_noise", &noise::NoiseModel::has_1q_gate_noise,
+           "Return True if any 1Q gate-specific noise has been set.")
+      .def("has_2q_gate_noise", &noise::NoiseModel::has_2q_gate_noise,
+           "Return True if any 2Q gate-specific noise has been set.")
       .def("has_any", &noise::NoiseModel::has_any,
            "Return True if any noise of any type has been configured.");
 
@@ -1743,6 +1935,9 @@ NB_MODULE(maestro, m) {
                 nb::cast<size_t>(item.second);
         }
         auto end = std::chrono::high_resolution_clock::now();
+
+        // Apply readout error (classical post-measurement channel)
+        apply_readout_error_to_counts(combined, noise_model, rng);
 
         nb::dict py_counts;
         for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
@@ -1920,6 +2115,9 @@ NB_MODULE(maestro, m) {
                 nb::cast<size_t>(item.second);
         }
         auto end = std::chrono::high_resolution_clock::now();
+
+        // Apply readout error (classical post-measurement channel)
+        apply_readout_error_to_counts(combined, noise_model, rng);
 
         nb::dict py_counts;
         for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
