@@ -65,6 +65,12 @@ struct CoherentNoise {
   double rz = 0.0;  ///< Z-axis rotation angle
 };
 
+/// Per-qubit readout error parameters (classical post-measurement channel).
+struct ReadoutError {
+  double p_meas1_prep0 = 0.0;  ///< P(measure 1 | prepared 0) — false positive
+  double p_meas0_prep1 = 0.0;  ///< P(measure 0 | prepared 1) — false negative
+};
+
 /**
  * @class NoiseModel
  * @brief Maps qubit indices to Pauli channel and/or coherent noise parameters.
@@ -244,10 +250,105 @@ class NoiseModel {
 
   bool has_crosstalk() const { return !crosstalk_.empty(); }
 
+  // ── Readout error setters ──
+
+  /**
+   * Set asymmetric readout error on a qubit.
+   * @param q Qubit index.
+   * @param p_meas1_prep0 P(measure 1 | state was 0) — false positive.
+   * @param p_meas0_prep1 P(measure 0 | state was 1) — false negative.
+   */
+  void set_readout_error(int q, double p_meas1_prep0, double p_meas0_prep1) {
+    readout_[q] = {p_meas1_prep0, p_meas0_prep1};
+  }
+
+  /// Symmetric readout error: both directions use the same rate.
+  void set_readout_error_symmetric(int q, double p_error) {
+    readout_[q] = {p_error, p_error};
+  }
+
+  /// Apply uniform symmetric readout error to qubits 0..n-1.
+  void set_all_readout_error(int n, double p_error) {
+    for (int q = 0; q < n; ++q) readout_[q] = {p_error, p_error};
+  }
+
+  /// Get readout error for a qubit (nullptr if not set).
+  const ReadoutError *get_readout_error(int q) const {
+    auto it = readout_.find(q);
+    return (it != readout_.end()) ? &it->second : nullptr;
+  }
+
+  bool has_readout_error() const { return !readout_.empty(); }
+
+  // ── Two-qubit depolarizing setters ──
+
+  /**
+   * Set two-qubit depolarizing channel applied after CX/CZ gates on (q1, q2).
+   * Channel: Λ(ρ) = (1-p)ρ + p/15 · Σ_{P∈{I,X,Y,Z}⊗2 \ {II}} PρP†
+   * Stored symmetrically: set_2q_depolarizing(a,b,p) == set_2q_depolarizing(b,a,p).
+   */
+  void set_2q_depolarizing(int q1, int q2, double p) {
+    depol_2q_[q1][q2] = p;
+    depol_2q_[q2][q1] = p;
+  }
+
+  /// Get two-qubit depolarizing probability for a qubit pair (0 if not set).
+  double get_2q_depolarizing(int q1, int q2) const {
+    auto it = depol_2q_.find(q1);
+    if (it == depol_2q_.end()) return 0.0;
+    auto jt = it->second.find(q2);
+    return (jt != it->second.end()) ? jt->second : 0.0;
+  }
+
+  bool has_2q_depolarizing(int q1, int q2) const {
+    return get_2q_depolarizing(q1, q2) > 0.0;
+  }
+
+  bool has_any_2q_depolarizing() const { return !depol_2q_.empty(); }
+
+  // ── Gate-type-specific noise setters ──
+
+  /// Per-qubit depolarizing applied only after single-qubit gates.
+  void set_1q_gate_depolarizing(int q, double p) {
+    noise_1q_[q] = {p / 3.0, p / 3.0, p / 3.0};
+  }
+
+  /// Per-qubit depolarizing applied only after two-qubit gates.
+  void set_2q_gate_depolarizing(int q, double p) {
+    noise_2q_[q] = {p / 3.0, p / 3.0, p / 3.0};
+  }
+
+  /// Bulk: 1Q gate depolarizing on qubits 0..n-1.
+  void set_all_1q_gate_depolarizing(int n, double p) {
+    for (int q = 0; q < n; ++q) set_1q_gate_depolarizing(q, p);
+  }
+
+  /// Bulk: 2Q gate depolarizing on qubits 0..n-1.
+  void set_all_2q_gate_depolarizing(int n, double p) {
+    for (int q = 0; q < n; ++q) set_2q_gate_depolarizing(q, p);
+  }
+
+  /// Get 1Q-gate-specific noise for a qubit (nullptr if none set).
+  const QubitNoise *get_1q_gate_noise(int q) const {
+    auto it = noise_1q_.find(q);
+    return (it != noise_1q_.end()) ? &it->second : nullptr;
+  }
+
+  /// Get 2Q-gate-specific noise for a qubit (nullptr if none set).
+  const QubitNoise *get_2q_gate_noise(int q) const {
+    auto it = noise_2q_.find(q);
+    return (it != noise_2q_.end()) ? &it->second : nullptr;
+  }
+
+  bool has_1q_gate_noise() const { return !noise_1q_.empty(); }
+  bool has_2q_gate_noise() const { return !noise_2q_.empty(); }
+
   /// True if any noise of any type has been configured.
   bool has_any() const {
     return !noise_.empty() || !coherent_.empty() ||
-           !t1_.empty() || !crosstalk_.empty();
+           !t1_.empty() || !crosstalk_.empty() ||
+           !readout_.empty() || !depol_2q_.empty() ||
+           !noise_1q_.empty() || !noise_2q_.empty();
   }
 
  private:
@@ -255,12 +356,70 @@ class NoiseModel {
   std::unordered_map<int, CoherentNoise> coherent_;
   std::unordered_map<int, double> t1_;
   std::unordered_map<int, std::unordered_map<int, double>> crosstalk_;
+  std::unordered_map<int, ReadoutError> readout_;
+  std::unordered_map<int, std::unordered_map<int, double>> depol_2q_;
+  std::unordered_map<int, QubitNoise> noise_1q_;  ///< after 1Q gates only
+  std::unordered_map<int, QubitNoise> noise_2q_;  ///< after 2Q gates only
 };
+
+/// Helper: inject a single-qubit Pauli error on qubit q with probabilities qn.
+inline void inject_1q_pauli_(std::shared_ptr<Circuits::Circuit<double>> &out,
+                             Types::qubit_t q, const QubitNoise &qn,
+                             std::uniform_real_distribution<double> &dist,
+                             std::mt19937 &rng) {
+  if (qn.total() <= 0) return;
+  double r = dist(rng);
+  if (r < qn.px)
+    out->AddOperation(std::make_shared<Circuits::XGate<>>(q));
+  else if (r < qn.px + qn.py)
+    out->AddOperation(std::make_shared<Circuits::YGate<>>(q));
+  else if (r < qn.total())
+    out->AddOperation(std::make_shared<Circuits::ZGate<>>(q));
+}
+
+/**
+ * Helper: inject a two-qubit depolarizing channel on (q1, q2).
+ * Samples from 15 non-identity two-qubit Paulis each with probability p/15.
+ * Total error probability = p.  With probability (1-p), identity is applied.
+ */
+inline void inject_2q_depol_(
+    std::shared_ptr<Circuits::Circuit<double>> &out,
+    Types::qubit_t q1, Types::qubit_t q2, double p,
+    std::uniform_real_distribution<double> &dist, std::mt19937 &rng) {
+  if (p <= 0) return;
+  double r = dist(rng);
+  if (r >= p) return;  // identity (no error)
+
+  // 15 equally-weighted non-identity Paulis on 2 qubits.
+  // Map r ∈ [0, p) to one of 15 bins.
+  int idx = static_cast<int>(r / p * 15.0);
+  if (idx >= 15) idx = 14;
+
+  // Paulis: I=0, X=1, Y=2, Z=3.  Pair index = 4*a + b, skip II (0).
+  // idx 0..14 → pair indices 1..15.
+  int pair = idx + 1;
+  int pa = pair / 4;  // Pauli on q1
+  int pb = pair % 4;  // Pauli on q2
+
+  auto apply_pauli = [&](Types::qubit_t q, int pauli_id) {
+    switch (pauli_id) {
+      case 1: out->AddOperation(std::make_shared<Circuits::XGate<>>(q)); break;
+      case 2: out->AddOperation(std::make_shared<Circuits::YGate<>>(q)); break;
+      case 3: out->AddOperation(std::make_shared<Circuits::ZGate<>>(q)); break;
+      default: break;  // Identity
+    }
+  };
+  apply_pauli(q1, pa);
+  apply_pauli(q2, pb);
+}
 
 /**
  * Inject random Pauli error gates into a circuit copy (Monte Carlo sample).
  * After each gate, for every affected qubit with noise, a random Pauli
  * (X, Y, Z, or I) is applied according to the channel probabilities.
+ *
+ * Supports gate-type-specific noise: if 1Q/2Q gate noise maps are set,
+ * they are applied in addition to the "all gates" channel.
  */
 inline std::shared_ptr<Circuits::Circuit<double>> inject_noise(
     const std::shared_ptr<Circuits::Circuit<double>> &circ,
@@ -273,18 +432,31 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise(
 
     if (op->GetType() != Circuits::OperationType::kGate) continue;
 
-    for (auto q : op->AffectedQubits()) {
-      const auto *qn = nm.get(q);
-      if (!qn || qn->total() <= 0) continue;
+    auto affected = op->AffectedQubits();
+    bool is_2q = affected.size() >= 2;
 
-      double r = dist(rng);
-      if (r < qn->px)
-        out->AddOperation(std::make_shared<Circuits::XGate<>>(q));
-      else if (r < qn->px + qn->py)
-        out->AddOperation(std::make_shared<Circuits::YGate<>>(q));
-      else if (r < qn->total())
-        out->AddOperation(std::make_shared<Circuits::ZGate<>>(q));
-      // else: identity (no error)
+    for (auto q : affected) {
+      // "All gates" channel (existing behavior)
+      const auto *qn = nm.get(q);
+      if (qn) inject_1q_pauli_(out, q, *qn, dist, rng);
+
+      // Gate-type-specific channels
+      if (is_2q) {
+        const auto *qn2 = nm.get_2q_gate_noise(q);
+        if (qn2) inject_1q_pauli_(out, q, *qn2, dist, rng);
+      } else {
+        const auto *qn1 = nm.get_1q_gate_noise(q);
+        if (qn1) inject_1q_pauli_(out, q, *qn1, dist, rng);
+      }
+    }
+
+    // Two-qubit depolarizing (correlated 2Q Pauli channel)
+    if (is_2q && affected.size() >= 2) {
+      auto q1 = affected[0];
+      auto q2 = affected[1];
+      double p2q = nm.get_2q_depolarizing(
+          static_cast<int>(q1), static_cast<int>(q2));
+      if (p2q > 0) inject_2q_depol_(out, q1, q2, p2q, dist, rng);
     }
   }
   return out;
@@ -366,6 +538,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
     if (op->GetType() != Circuits::OperationType::kGate) continue;
 
     auto affected = op->AffectedQubits();
+    bool is_2q = affected.size() >= 2;
 
     // Helper: check if qubit is in the affected set
     auto is_affected = [&affected](int q) {
@@ -421,17 +594,30 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
       }
     }
 
-    // ── 4. Pauli (incoherent) noise ──
+    // ── 4. Pauli (incoherent) noise — "all gates" channel ──
     for (auto q : affected) {
       const auto *qn = nm.get(q);
-      if (!qn || qn->total() <= 0) continue;
-      double r = dist(rng);
-      if (r < qn->px)
-        out->AddOperation(std::make_shared<Circuits::XGate<>>(q));
-      else if (r < qn->px + qn->py)
-        out->AddOperation(std::make_shared<Circuits::YGate<>>(q));
-      else if (r < qn->total())
-        out->AddOperation(std::make_shared<Circuits::ZGate<>>(q));
+      if (qn) inject_1q_pauli_(out, q, *qn, dist, rng);
+    }
+
+    // ── 5. Gate-type-specific Pauli noise ──
+    for (auto q : affected) {
+      if (is_2q) {
+        const auto *qn2 = nm.get_2q_gate_noise(q);
+        if (qn2) inject_1q_pauli_(out, q, *qn2, dist, rng);
+      } else {
+        const auto *qn1 = nm.get_1q_gate_noise(q);
+        if (qn1) inject_1q_pauli_(out, q, *qn1, dist, rng);
+      }
+    }
+
+    // ── 6. Two-qubit depolarizing (correlated 2Q Pauli channel) ──
+    if (is_2q && affected.size() >= 2) {
+      auto q1 = affected[0];
+      auto q2 = affected[1];
+      double p2q = nm.get_2q_depolarizing(
+          static_cast<int>(q1), static_cast<int>(q2));
+      if (p2q > 0) inject_2q_depol_(out, q1, q2, p2q, dist, rng);
     }
   }
   return out;
