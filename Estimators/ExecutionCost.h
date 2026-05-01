@@ -143,7 +143,32 @@ class ExecutionCost {
           cost += opOrder * affectedQubits.size();
       }
       return cost;
-    }
+    } else if (method == Simulators::SimulationType::kPathIntegral) {
+      double cost = 0;
+      double doublingCost = 1;
+
+      for (const auto& op : *circuit) {
+        if (op->IsBranching())
+           doublingCost *= 2;
+        
+        const auto affectedQubits = op->AffectedQubits();
+        if (op->GetType() == Circuits::OperationType::kMeasurement ||
+            op->GetType() == Circuits::OperationType::kConditionalMeasurement ||
+            op->GetType() == Circuits::OperationType::kReset)
+          cost += doublingCost * affectedQubits.size();
+        else if (op->GetType() == Circuits::OperationType::kGate ||
+                 op->GetType() == Circuits::OperationType::kConditionalGate) {
+          if (affectedQubits.size() == 1)
+            cost += doublingCost;
+          else if (affectedQubits.size() == 2)
+            cost += doublingCost * 2;
+          else if (affectedQubits.size() == 3)
+            cost += doublingCost * 4;
+        }
+      }
+
+      return cost;
+    } 
 
     // for tensor network is hard to guess, it depends on contraction path
 
@@ -350,10 +375,73 @@ class ExecutionCost {
         return cost + samplingCost * samples;
       }
 
+      // TODO: to be changed to handle the all qubits sampling case, also the
+      // sampling for qcsim which is efficient for sampling less than all
+      // qubits!
+
       // sampling is done with saving state, measuring and restoring state
       // the overhead for saving / restoring is not here (it's of the same order
       // as measuring), but measurements are not all O(n^2) anyways
       return cost + samples * measOrder * nrQubitsSampled;
+    } else if (method == Simulators::SimulationType::kPathIntegral) {
+      double cost = 0;
+      double doublingCost = 1;
+      for (size_t i = 0; i < circuit->size(); ++i) {
+        if (i >= dif && !executedOps[i - dif]) continue;
+        const auto& op = (*circuit)[i];
+        if (op->IsBranching()) doublingCost *= 2;
+
+        const auto affectedQubits = op->AffectedQubits();
+        if (op->GetType() == Circuits::OperationType::kMeasurement ||
+            op->GetType() == Circuits::OperationType::kConditionalMeasurement ||
+            op->GetType() == Circuits::OperationType::kReset)
+          cost += doublingCost * affectedQubits.size();
+        else if (op->GetType() == Circuits::OperationType::kGate ||
+                 op->GetType() == Circuits::OperationType::kConditionalGate) {
+          if (affectedQubits.size() == 1)
+            cost += doublingCost;
+          else if (affectedQubits.size() == 2)
+            cost += doublingCost * 2;
+          else if (affectedQubits.size() == 3)
+            cost += doublingCost * 4;
+        }
+      }
+
+
+       if (hasMeasurementsInTheMiddle) {
+        double samplingCost = 0;
+        for (size_t i = dif; i < circuit->size(); ++i) {
+          if (executedOps[i - dif]) continue;
+
+          const auto& op = (*circuit)[i];
+          if (op->IsBranching()) doublingCost *= 2;
+
+          const auto affectedQubits = op->AffectedQubits();
+
+          if (op->GetType() == Circuits::OperationType::kMeasurement ||
+              op->GetType() ==
+                  Circuits::OperationType::kConditionalMeasurement ||
+              op->GetType() == Circuits::OperationType::kReset)
+            samplingCost += doublingCost * affectedQubits.size();
+          else if (op->GetType() == Circuits::OperationType::kGate ||
+                   op->GetType() == Circuits::OperationType::kConditionalGate) {
+            if (affectedQubits.size() == 1)
+              samplingCost += doublingCost;
+            else if (affectedQubits.size() == 2)
+              samplingCost += doublingCost * 2;
+            else if (affectedQubits.size() == 3)
+              samplingCost += doublingCost * 4;
+          }
+        }
+
+
+        samplingCost += doublingCost * nrQubitsSampled;
+
+        return cost + samplingCost * samples;
+      }
+    
+      // some dummy cost, it's not going to fit all anyways
+      return cost + 30 * doublingCost + samples * nrQubits;
     }
 
     // for tensor network is hard to guess, it depends on contraction path
@@ -369,12 +457,13 @@ class ExecutionCost {
     if (method == Simulators::SimulationType::kPauliPropagator)
       return Simulators::QcsimPauliPropagator::GetCost(circuit);
 
+    double cost = EstimateExecutionCost(method, nrQubits, circuit, maxBondDim);
+
     size_t pauliCnt = 0;
     for (char c : pauliString) {
       if (c == 'X' || c == 'x' || c == 'Y' || c == 'y' || c == 'Z' || c == 'z')
         ++pauliCnt;
     }
-    double cost = EstimateExecutionCost(method, nrQubits, circuit, maxBondDim);
 
     if (method == Simulators::SimulationType::kStatevector) {
       const double opOrder = exp2(nrQubits);
@@ -396,6 +485,14 @@ class ExecutionCost {
     } else if (method == Simulators::SimulationType::kStabilizer) {
       cost += nrQubits * nrQubits;
       return cost;
+    } else if (method == Simulators::SimulationType::kPathIntegral) {
+      double doublingCost = 1;
+      for (const auto& op : *circuit) {
+        if (op->IsBranching()) doublingCost *= 2;
+      }
+      cost += 4 * doublingCost * pauliCnt;
+
+      return cost;
     }
 
     return std::numeric_limits<double>::infinity();
@@ -404,7 +501,7 @@ class ExecutionCost {
   static std::shared_ptr<Circuits::Circuit<>> GenerateRandomCircuit(
       size_t nrQubits, size_t depth, double measureInsideProbability = 0.,
       size_t nrMeasAtEnd = 0, bool isClifford = false,
-      size_t nrNonCliffordGatesLimit = 0) {
+      size_t nrNonCliffordGatesLimit = 0, size_t nrBranchingGatesLimit = 0) {
     auto circuit = std::make_shared<Circuits::Circuit<>>();
     std::random_device rdev;
     std::mt19937 rng(rdev());
@@ -423,6 +520,9 @@ class ExecutionCost {
     size_t nrNonCliffordGates = 0;
     if (nrNonCliffordGatesLimit == 0 && !isClifford)
       nrNonCliffordGatesLimit = depth;
+
+    size_t nrBranchingGates = 0;
+    if (nrBranchingGatesLimit == 0) nrBranchingGatesLimit = depth; 
 
     for (size_t i = 0; i < depth; ++i) {
       if (dist(rng) < measureInsideProbability) {
@@ -459,6 +559,7 @@ class ExecutionCost {
       }
 
       if (!theGate->IsClifford()) ++nrNonCliffordGates;
+      if (theGate->IsBranching()) ++nrBranchingGates;
 
       if (nrNonCliffordGates > nrNonCliffordGatesLimit) {
         // replace the non clifford gate with a clifford one
@@ -475,8 +576,24 @@ class ExecutionCost {
         --nrNonCliffordGates;
       }
 
+      if (nrBranchingGates > nrBranchingGatesLimit) {
+        // replace the branching gate with a non branching one
+        gateType = static_cast<Circuits::QuantumGateType>(gateDist(rng));
+
+        theGate = Circuits::CircuitFactory<>::CreateGate(
+            gateType, q1, q2, q3, param1, param2, param3, param4);
+        while (theGate->IsBranching()) {
+          gateType = static_cast<Circuits::QuantumGateType>(gateDist(rng)); 
+          theGate = Circuits::CircuitFactory<>::CreateGate(
+              gateType, q1, q2, q3, param1, param2, param3, param4);
+        }
+        --nrBranchingGates;
+      }
+
       circuit->AddOperation(theGate);
     }
+
+    std::shuffle(circuit->begin(), circuit->end(), rng);
 
     if (nrMeasAtEnd > 0) {
       if (nrMeasAtEnd > nrQubits) nrMeasAtEnd = nrQubits;
@@ -679,11 +796,15 @@ class ExecutionCost {
       const std::string& logFilePath) {
     bool isClifford = (method == Simulators::SimulationType::kStabilizer);
     int nrNonCliffordGates = static_cast<int>(depthMax);  // a limit
+    int nrBranchingGates = static_cast<int>(depthMax); 
+
     // but if it's pauli...
     if (method == Simulators::SimulationType::kPauliPropagator) {
       nrNonCliffordGates = 1;
     } else if (method == Simulators::SimulationType::kStabilizer) {
       nrNonCliffordGates = 0;
+    } else if (method == Simulators::SimulationType::kPathIntegral) {
+      nrBranchingGates = 8;
     }
 
     std::cout << "Benchmarking execution for simType: "
@@ -710,7 +831,7 @@ class ExecutionCost {
 
             const auto circuit = GenerateRandomCircuit(
                 nrQubits, depth, measureInsideProbability, nrMeasAtEnd,
-                isClifford, nrNonCliffordGates);
+                isClifford, nrNonCliffordGates, nrBranchingGates);
             BenchmarkAndLogExecution(simType, method, circuit, nrReps,
                                      maxBondDim, log);
           }
@@ -755,11 +876,15 @@ class ExecutionCost {
       const std::string& logFilePath) {
     bool isClifford = (method == Simulators::SimulationType::kStabilizer);
     int nrNonCliffordGates = static_cast<int>(depthMax);  // a limit
+    int nrBranchingGates = static_cast<int>(depthMax);
+
     // but if it's pauli...
     if (method == Simulators::SimulationType::kPauliPropagator) {
       nrNonCliffordGates = 1;
     } else if (method == Simulators::SimulationType::kStabilizer) {
       nrNonCliffordGates = 0;
+    } else if (method == Simulators::SimulationType::kPathIntegral) {
+      nrBranchingGates = 8;
     }
     Utils::LogFile log(logFilePath);
 
@@ -776,8 +901,8 @@ class ExecutionCost {
           if (method == Simulators::SimulationType::kPauliPropagator)
             isClifford = !isClifford;
 
-          const auto circuit = GenerateRandomCircuit(
-              nrQubits, depth, 0., 0, isClifford, nrNonCliffordGates);
+          const auto circuit = GenerateRandomCircuit(nrQubits, depth, 0., 0, isClifford,
+                                    nrNonCliffordGates, nrBranchingGates);
           const std::string pauliString = GeneratePauliString(nrQubits);
 
           std::cout << "      Random circuit: " << i + 1 << "/"
@@ -800,11 +925,14 @@ class ExecutionCost {
       const std::string& logFilePath) {
     bool isClifford = (method == Simulators::SimulationType::kStabilizer);
     int nrNonCliffordGates = static_cast<int>(depthMax);  // a limit
+    int nrBranchingGates = static_cast<int>(depthMax);
     // but if it's pauli...
     if (method == Simulators::SimulationType::kPauliPropagator) {
       nrNonCliffordGates = 1;
     } else if (method == Simulators::SimulationType::kStabilizer) {
       nrNonCliffordGates = 0;
+    } else if (method == Simulators::SimulationType::kPathIntegral) {
+      nrBranchingGates = 8;
     }
     Utils::LogFile log(logFilePath);
 
@@ -824,7 +952,7 @@ class ExecutionCost {
             if (method == Simulators::SimulationType::kPauliPropagator)
               isClifford = !isClifford;
             const auto circuit = GenerateRandomCircuit(
-                nrQubits, depth, 0., 0, isClifford, nrNonCliffordGates);
+                nrQubits, depth, 0., 0, isClifford, nrNonCliffordGates, nrBranchingGates);
             for (size_t nrQubitsSampled = nrQubits; nrQubitsSampled >= 1;
                  nrQubitsSampled /= 2) {
               std::cout << "        Random circuit: " << i + 1 << "/"
