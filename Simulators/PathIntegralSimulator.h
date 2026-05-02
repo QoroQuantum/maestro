@@ -206,9 +206,24 @@ namespace Simulators {
           }
 
           size_t GetBranchingForMaestroCircuit(const std::shared_ptr<Circuits::Circuit<>>& circuit) {
+            /*
             const auto circ = ConvertCircuit(circuit);
-
             return GetBranchingForQcsimCircuit(circ);
+            */
+           
+            return GetBranchingForMaestroCircuitFromPos(circuit, 0);
+          }
+
+          size_t GetBranchingForMaestroCircuitFromPos(
+              const std::shared_ptr<Circuits::Circuit<>>& circuit, size_t pos) {
+            if (!circuit) return 0;
+            
+            size_t doublings = 0;
+            const auto& operations = circuit->GetOperations();
+            for (size_t i = pos; i < operations.size(); ++i)
+                if (operations[i]->IsBranching()) ++doublings;
+
+            return doublings;
           }
 
           double QubitProbability(size_t qubit, bool value = true) {
