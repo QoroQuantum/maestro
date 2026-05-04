@@ -60,7 +60,7 @@ class ExecutionCost {
     size_t maxBondDim = 0;
     size_t nrPauliOps = 0;
     double executionCost = 0;
-    double samplingCost = 0;
+    double runtime = 0;
   };
 
   static double EstimateExecutionCost(
@@ -776,7 +776,7 @@ class ExecutionCost {
       std::getline(ss, value, ',');
       info.executionCost = std::stod(value);
       std::getline(ss, value, ',');
-      info.samplingCost = std::stod(value);
+      info.runtime = std::stod(value);
 
       if (info.nrSamples < 1) info.nrSamples = 1;
 
