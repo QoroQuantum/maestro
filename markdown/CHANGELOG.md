@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.13] - 2026-05-02
+
+### Added
+- **Asymmetric readout error** — `set_readout_error(q, p_meas1_prep0, p_meas0_prep1)`, `set_readout_error_symmetric(q, p)`, `set_all_readout_error(n, p)` for per-qubit classical measurement error modelling. Applied as a post-measurement channel in `noisy_execute` and `full_noise_execute`
+- **Two-qubit depolarizing channel** — `set_2q_depolarizing(q1, q2, p)` for correlated 15-Pauli noise applied after CX/CZ gates on specific qubit pairs
+- **Gate-type-specific depolarizing** — `set_1q_gate_depolarizing(q, p)` and `set_2q_gate_depolarizing(q, p)` for separate noise rates after single-qubit vs two-qubit gates, with bulk setters `set_all_1q_gate_depolarizing` and `set_all_2q_gate_depolarizing`
+- **`qc.noisy_prob(target, nm)`** — readout-corrected path integral probability using first-order analytic expansion (n+1 PI evaluations instead of Monte Carlo)
+- Readout error, two-qubit depolarizing, gate-type-specific noise, and `noisy_prob` sections in `python.dox` (Doxygen) and `TUTORIAL.md`
+- Complete `NoiseModel` method reference table in both documentation sources
+
+### Changed
+- Python package version bumped to `0.2.13`
+- Fixed `set_pauli_channel` documentation to use correct binding name `set_qubit_noise`
+
 ## [0.2.12] - 2026-04-28
 
 ### Added
@@ -183,7 +197,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.2.12...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.2.13...HEAD
+[0.2.13]: https://github.com/QoroQuantum/maestro/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/QoroQuantum/maestro/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/QoroQuantum/maestro/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/QoroQuantum/maestro/compare/v0.2.7...v0.2.10

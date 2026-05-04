@@ -477,14 +477,18 @@
  *
  * @section py_noise Noise Simulation
  *
- * Maestro provides three approaches to noisy simulation, each targeting a
- * different trade-off between speed and accuracy:
+ * Maestro provides a comprehensive noise simulation suite with multiple
+ * approaches, each targeting a different trade-off between speed and accuracy:
  *
  * | Function | Overhead | Accuracy | Best For |
  * |----------|----------|----------|----------|
  * | `noisy_estimate` | Zero | Per-qubit Pauli damping | Fast ansatz screening |
  * | `noisy_estimate_montecarlo` | N × noiseless | Gate-by-gate accurate | Training with realistic noise |
  * | `noisy_execute` | N × noiseless | Gate-by-gate + shot noise | Shot-based workflows |
+ * | `coherent_estimate` | N × noiseless | Coherent rotation errors | Coherent error analysis |
+ * | `coherent_execute` | N × noiseless | Coherent + shot noise | Shot-based coherent noise |
+ * | `full_noise_execute` | N × noiseless | All layers combined | Realistic device simulation |
+ * | `full_noise_estimate` | N × noiseless | All layers combined | Hardware-accurate estimation |
  *
  * All noise functions accept a `config` parameter for backend selection.
  *
@@ -507,11 +511,11 @@
  * # Dephasing noise: only Z errors (T2 relaxation)
  * nm.set_dephasing(qubit=1, p=0.02)
  *
- * # Bit-flip noise: only X errors (T1 relaxation)
+ * # Bit-flip noise: only X errors
  * nm.set_bit_flip(qubit=2, p=0.01)
  *
  * # Custom Pauli channel: specify px, py, pz independently
- * nm.set_pauli_channel(qubit=3, px=0.005, py=0.002, pz=0.01)
+ * nm.set_qubit_noise(qubit=3, px=0.005, py=0.002, pz=0.01)
  * @endcode
  *
  * @subsection py_noise_analytical Analytical Noisy Estimation (Zero Overhead)
@@ -747,6 +751,171 @@
  * | `nm.set_crosstalk(q1, q2, strength)` | Symmetric ZZ coupling |
  * | `nm.has_crosstalk()` | Check if crosstalk is configured |
  *
+ * @subsection py_noise_readout Readout Error
+ *
+ * Readout error models classical measurement errors — the probability of
+ * reporting the wrong bit value when measuring a qubit. On real hardware,
+ * readout errors are **asymmetric**: the false-positive rate P(1|0) is
+ * typically much lower than the false-negative rate P(0|1).
+ *
+ * Maestro applies readout error as a **post-measurement classical channel**:
+ * after all quantum noise and measurement, each bit is independently flipped
+ * according to its readout error rates.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # Asymmetric readout error (matches IBM backend properties)
+ * # P(measure 1 | prepared 0) = 0.3%
+ * # P(measure 0 | prepared 1) = 6.0%
+ * nm.set_readout_error(qubit=0, p_meas1_prep0=0.003, p_meas0_prep1=0.06)
+ *
+ * # Symmetric readout error (same rate both directions)
+ * nm.set_readout_error_symmetric(qubit=1, p_error=0.01)
+ *
+ * # Apply uniform symmetric readout error to all qubits
+ * nm.set_all_readout_error(num_qubits=5, p_error=0.02)
+ *
+ * print(nm.has_readout_error())  # True
+ * @endcode
+ *
+ * Readout error is applied automatically by `noisy_execute` and
+ * `full_noise_execute`. For path integral queries, use `qc.noisy_prob()`
+ * which applies an analytic first-order readout correction.
+ *
+ * | Method | Description |
+ * |--------|-------------|
+ * | `nm.set_readout_error(q, p10, p01)` | Asymmetric readout error |
+ * | `nm.set_readout_error_symmetric(q, p)` | Symmetric readout error |
+ * | `nm.set_all_readout_error(n, p)` | Uniform symmetric readout on all qubits |
+ * | `nm.has_readout_error()` | Check if readout error is configured |
+ *
+ * @subsection py_noise_2q Two-Qubit Depolarizing
+ *
+ * Two-qubit depolarizing models **correlated errors** on qubit pairs after
+ * two-qubit gates (CX, CZ, etc.). The channel applies one of 15 non-identity
+ * two-qubit Pauli operators with equal probability p/15:
+ *
+ * Λ(ρ) = (1−p)ρ + (p/15) Σ_{P ∈ {I,X,Y,Z}⊗2 \ {II}} PρP†
+ *
+ * This is separate from per-qubit depolarizing — it captures the **joint
+ * error** that occurs specifically during two-qubit interactions.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # Set two-qubit depolarizing for a specific qubit pair
+ * # Stored symmetrically: set_2q_depolarizing(0,1,p) == set_2q_depolarizing(1,0,p)
+ * nm.set_2q_depolarizing(q1=0, q2=1, p=1.8e-3)
+ *
+ * # Typical IBM Heron 2Q error rates
+ * nm.set_2q_depolarizing(0, 1, 4.5e-3)
+ * nm.set_2q_depolarizing(1, 2, 3.2e-3)
+ *
+ * print(nm.has_any_2q_depolarizing())  # True
+ * @endcode
+ *
+ * @note Two-qubit depolarizing is applied **only after 2-qubit gates** on the
+ * specified qubit pair. It is injected in addition to any per-qubit noise.
+ *
+ * | Method | Description |
+ * |--------|-------------|
+ * | `nm.set_2q_depolarizing(q1, q2, p)` | Correlated 2Q depolarizing channel |
+ * | `nm.has_any_2q_depolarizing()` | Check if any 2Q depolarizing is set |
+ *
+ * @subsection py_noise_gate_specific Gate-Type-Specific Noise
+ *
+ * Real hardware has different error rates for single-qubit and two-qubit
+ * gates. Gate-type-specific noise lets you set **separate depolarizing
+ * rates** that are applied only after the corresponding gate type:
+ *
+ * - **1Q gate noise**: applied after single-qubit gates (H, X, Rx, etc.)
+ * - **2Q gate noise**: applied after two-qubit gates (CX, CZ, etc.)
+ *
+ * These are **in addition to** the base `set_depolarizing()` channel, which
+ * applies after all gates regardless of type.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # Per-qubit depolarizing after 1Q gates only
+ * nm.set_1q_gate_depolarizing(qubit=0, p=2.3e-4)
+ *
+ * # Per-qubit depolarizing after 2Q gates only
+ * nm.set_2q_gate_depolarizing(qubit=0, p=1.8e-3)
+ *
+ * # Bulk: apply to all qubits at once
+ * nm.set_all_1q_gate_depolarizing(num_qubits=5, p=2.3e-4)
+ * nm.set_all_2q_gate_depolarizing(num_qubits=5, p=1.8e-3)
+ *
+ * print(nm.has_1q_gate_noise())  # True
+ * print(nm.has_2q_gate_noise())  # True
+ * @endcode
+ *
+ * **Typical usage** — matching IBM backend calibration data:
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # From IBM backend.properties():
+ * # Average 1Q gate error: ~2.3e-4
+ * # Average 2Q gate error: ~1.8e-3
+ * n = 127  # IBM Eagle/Heron qubit count
+ * nm.set_all_1q_gate_depolarizing(n, 2.3e-4)
+ * nm.set_all_2q_gate_depolarizing(n, 1.8e-3)
+ *
+ * # Combine with readout error for full device model
+ * nm.set_all_readout_error(n, 0.01)
+ * @endcode
+ *
+ * | Method | Description |
+ * |--------|-------------|
+ * | `nm.set_1q_gate_depolarizing(q, p)` | Depolarizing after 1Q gates only |
+ * | `nm.set_2q_gate_depolarizing(q, p)` | Depolarizing after 2Q gates only |
+ * | `nm.set_all_1q_gate_depolarizing(n, p)` | Bulk 1Q gate noise on all qubits |
+ * | `nm.set_all_2q_gate_depolarizing(n, p)` | Bulk 2Q gate noise on all qubits |
+ * | `nm.has_1q_gate_noise()` | Check if 1Q gate noise is set |
+ * | `nm.has_2q_gate_noise()` | Check if 2Q gate noise is set |
+ *
+ * @subsection py_noise_noisy_prob Readout-Corrected Path Integral Probability
+ *
+ * The `qc.noisy_prob()` method computes the probability of a target state
+ * with analytic readout error correction via the path integral simulator.
+ * This avoids Monte Carlo sampling entirely — it uses a **first-order
+ * expansion** that requires only n+1 path integral evaluations (the target
+ * state plus n single-bit-flipped variants):
+ *
+ * P_noisy(b) ≈ Π(1−pᵢ)·P(b) + Σᵢ pᵢ·Π_{j≠i}(1−pⱼ)·P(b⊕eᵢ)
+ *
+ * @code{.py}
+ * from maestro.circuits import QuantumCircuit
+ *
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ *
+ * nm = maestro.NoiseModel()
+ * nm.set_readout_error(0, 0.003, 0.06)
+ * nm.set_readout_error(1, 0.005, 0.04)
+ *
+ * result = qc.noisy_prob('11', nm)
+ * print(result['probability'])       # Readout-corrected probability
+ * print(result['target_state'])       # '11'
+ * print(result['has_readout_error'])  # True
+ * print(result['time_taken'])         # seconds
+ * @endcode
+ *
+ * | Key | Type | Description |
+ * |-----|------|-------------|
+ * | `probability` | `float` | Readout-corrected P(target) |
+ * | `target_state` | `str` | The queried bitstring |
+ * | `has_readout_error` | `bool` | Whether correction was applied |
+ * | `time_taken` | `float` | Computation time in seconds |
+ *
+ * @note When no readout error is configured on the noise model,
+ * `noisy_prob` returns the exact noiseless probability (equivalent to
+ * `qc.prob()`).
+ *
  * @subsection py_noise_combined Combined Noise Simulation
  *
  * The `full_noise_execute` and `full_noise_estimate` functions apply **all
@@ -824,11 +993,42 @@
  * | `coherent_estimate` | Coherent | N × noiseless | Coherent error analysis |
  * | `coherent_execute` | Coherent | N × noiseless | Shot-based coherent noise |
  * | `full_noise_execute` | **All layers** | N × noiseless | Realistic device simulation |
- * | `full_noise_estimate` | **All layers** | N × noiseless | Hardware-accurate expectation values |
+ * | `full_noise_estimate` | **All layers** | N × noiseless | Hardware-accurate estimation |
+ * | `qc.noisy_prob(target, nm)` | Readout | O(n) PI evals | Path integral readout correction |
  *
  * All noise functions are also available as bound methods on `QuantumCircuit`:
  * `qc.noisy_execute(nm)`, `qc.coherent_execute(nm)`,
- * `qc.full_noise_execute(nm)`, etc.
+ * `qc.full_noise_execute(nm)`, `qc.noisy_prob(target, nm)`, etc.
+ *
+ * @subsection py_noise_model_summary All NoiseModel Methods
+ *
+ * | Method | Category | Description |
+ * |--------|----------|-------------|
+ * | `nm.set_depolarizing(q, p)` | Pauli | Symmetric depolarizing (px=py=pz=p/3) |
+ * | `nm.set_dephasing(q, p)` | Pauli | Pure phase-flip (Z only) |
+ * | `nm.set_bit_flip(q, p)` | Pauli | Pure bit-flip (X only) |
+ * | `nm.set_qubit_noise(q, px, py, pz)` | Pauli | Custom Pauli channel |
+ * | `nm.set_all_depolarizing(n, p)` | Pauli | Uniform depolarizing on all qubits |
+ * | `nm.set_all_dephasing(n, p)` | Pauli | Uniform dephasing on all qubits |
+ * | `nm.set_1q_gate_depolarizing(q, p)` | Gate-specific | Depolarizing after 1Q gates only |
+ * | `nm.set_2q_gate_depolarizing(q, p)` | Gate-specific | Depolarizing after 2Q gates only |
+ * | `nm.set_all_1q_gate_depolarizing(n, p)` | Gate-specific | Bulk 1Q gate noise |
+ * | `nm.set_all_2q_gate_depolarizing(n, p)` | Gate-specific | Bulk 2Q gate noise |
+ * | `nm.set_2q_depolarizing(q1, q2, p)` | 2Q correlated | Correlated 2Q Pauli channel |
+ * | `nm.set_readout_error(q, p10, p01)` | Readout | Asymmetric readout error |
+ * | `nm.set_readout_error_symmetric(q, p)` | Readout | Symmetric readout error |
+ * | `nm.set_all_readout_error(n, p)` | Readout | Uniform readout error |
+ * | `nm.set_coherent_depolarizing(q, p)` | Coherent | Rz from depolarizing probability |
+ * | `nm.set_coherent_dephasing(q, p)` | Coherent | Rz from dephasing probability |
+ * | `nm.set_coherent_bit_flip(q, p)` | Coherent | Rx from bit-flip probability |
+ * | `nm.set_coherent_rotation(q, rx, ry, rz)` | Coherent | Explicit rotation angles |
+ * | `nm.set_all_coherent_depolarizing(n, p)` | Coherent | Uniform coherent noise |
+ * | `nm.set_coherent_strength(n, p)` | Coherent | Alias for above |
+ * | `nm.set_t1(q, gamma)` | T1 | Per-gate decay probability |
+ * | `nm.set_all_t1(n, gamma)` | T1 | Uniform T1 decay |
+ * | `nm.set_t1_from_time(q, t_gate, t1)` | T1 | T1 from physical constants |
+ * | `nm.set_crosstalk(q1, q2, strength)` | Crosstalk | Symmetric ZZ coupling |
+ * | `nm.has_any()` | Query | Any noise configured? |
  *
  * ---
  *
