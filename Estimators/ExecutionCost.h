@@ -253,8 +253,9 @@ class ExecutionCost {
       // some dummy cost, it's not going to fit all anyways
       return cost + 30 * opOrder + samples * nrQubits;
     } else if (method == Simulators::SimulationType::kMatrixProductState) {
-      const double twoQubitOpOrder = pow(maxBondDim, 3);
-      const double oneQubitOpOrder = pow(maxBondDim, 2);
+      const double oneQubitOpOrder = maxBondDim * maxBondDim;
+      const double twoQubitOpOrder = oneQubitOpOrder * maxBondDim;
+      
 
       double cost = 0;
       for (size_t i = 0; i < circuit->size(); ++i) {

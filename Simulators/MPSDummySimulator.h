@@ -147,9 +147,14 @@ class MPSDummySimulator {
       static const QC::Gates::AppliedGate<MatrixClass> dummy2qGate(
           MatrixClass::Identity(4, 4), 0, 1);
       ApplyGate(dummy2qGate, qbits[0], qbits[1]);
-    } else {
+    } 
+    // TODO: maybe translate here into the corresponding sequence of 2-qubit
+    // gates, as the MPS simulator does
+    /*
+    else {
       throw std::invalid_argument("Unsupported number of qubits for the gate");
     }
+    */
   }
 
   void ApplyGate(const GateClass& gate, IndexType qubit,

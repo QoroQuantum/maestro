@@ -2216,7 +2216,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
               lookaheadDepthLocal = layers.size() < 10 || nrQubits <= 10 ? 0
                                     : layers.size() < 20
                                         ? static_cast<int>(lookaheadVal)
-                                    : layers.size() < 35 ? 1.5 * lookaheadVal
+                                       : layers.size() < 35
+                                            ? static_cast<int>(1.5 * lookaheadVal)
                                                          : 2 * lookaheadVal;
             }
 
