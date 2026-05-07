@@ -88,10 +88,12 @@ class ExecuteJob {
           optSim->SaveState();
 
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
-        if (network->GetMPSOptimizeSwaps())
+        if (method == Simulators::SimulationType::kMatrixProductState &&
+            network->GetMPSOptimizeSwaps())
             optSim->SetUpcomingGates(dcirc->GetOperations());
       }
-    }
+    } else if (method == Simulators::SimulationType::kMatrixProductState && network->GetMPSOptimizeSwaps())
+      optSim->SetUpcomingGates(dcirc->GetOperations());
 
     std::shared_ptr<Circuits::MeasurementOperation<Time>> measurementsOp;
 
@@ -215,7 +217,8 @@ class ExecuteJob {
               !specialOptimizationForMPS && curCnt > 1)
             optSim->SaveState();
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
-          if (network->GetMPSOptimizeSwaps())
+          if (method == Simulators::SimulationType::kMatrixProductState &&
+              network->GetMPSOptimizeSwaps())
             optSim->SetUpcomingGates(dcirc->GetOperations());
         }
       } else if (executedGates.size() == dcirc->size()) {
@@ -234,14 +237,20 @@ class ExecuteJob {
               !specialOptimizationForMPS && curCnt > 1)
             optSim->SaveState();
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
-          optSim->SetUpcomingGates(dcirc->GetOperations());
+          if (method == Simulators::SimulationType::kMatrixProductState &&
+              network->GetMPSOptimizeSwaps())
+            optSim->SetUpcomingGates(dcirc->GetOperations());
         } else {
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
-          optSim->SetUpcomingGates(dcirc->GetOperations());
+          if (method == Simulators::SimulationType::kMatrixProductState &&
+              network->GetMPSOptimizeSwaps())
+            optSim->SetUpcomingGates(dcirc->GetOperations());
         }
       } else {
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
-        optSim->SetUpcomingGates(dcirc->GetOperations());
+        if (method == Simulators::SimulationType::kMatrixProductState &&
+            network->GetMPSOptimizeSwaps())
+            optSim->SetUpcomingGates(dcirc->GetOperations());
       }
     } else {
       optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
@@ -271,7 +280,7 @@ class ExecuteJob {
           optSim->SaveState();
 
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
-        if (network->GetMPSOptimizeSwaps())
+        if (method == Simulators::SimulationType::kMatrixProductState && network->GetMPSOptimizeSwaps())
             optSim->SetUpcomingGates(dcirc->GetOperations());
       }
     }

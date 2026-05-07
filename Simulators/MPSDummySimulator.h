@@ -147,14 +147,32 @@ class MPSDummySimulator {
       static const QC::Gates::AppliedGate<MatrixClass> dummy2qGate(
           MatrixClass::Identity(4, 4), 0, 1);
       ApplyGate(dummy2qGate, qbits[0], qbits[1]);
-    } 
-    // TODO: maybe translate here into the corresponding sequence of 2-qubit
-    // gates, as the MPS simulator does
-    /*
-    else {
-      throw std::invalid_argument("Unsupported number of qubits for the gate");
+    } else  if (qbits.size() == 3 && gate->GetType() == Circuits::OperationType::kGate) {
+      static const QC::Gates::AppliedGate<MatrixClass> dummy2qGate(
+          MatrixClass::Identity(4, 4), 0, 1);
+
+      const auto gateptr =
+          std::static_pointer_cast<Circuits::IQuantumGate<>>(gate);
+
+      const size_t q1 = qbits[0];  // control 1
+      const size_t q2 = qbits[1];  // control 2
+      const size_t q3 = qbits[2];  // target
+      if (gateptr->GetGateType() == Circuits::QuantumGateType::kCCXGateType) {
+        ApplyGate(dummy2qGate, q3, q2);
+        ApplyGate(dummy2qGate, q2, q1);
+        ApplyGate(dummy2qGate, q3, q2);
+        ApplyGate(dummy2qGate, q2, q1);
+        ApplyGate(dummy2qGate, q3, q1);
+      } else { // cswap
+        ApplyGate(dummy2qGate, q2, q3);
+        ApplyGate(dummy2qGate, q3, q2);
+        ApplyGate(dummy2qGate, q2, q1);
+        ApplyGate(dummy2qGate, q3, q2);
+        ApplyGate(dummy2qGate, q2, q1);
+        ApplyGate(dummy2qGate, q3, q1);
+        ApplyGate(dummy2qGate, q2, q3);
+      }
     }
-    */
   }
 
   void ApplyGate(const GateClass& gate, IndexType qubit,
