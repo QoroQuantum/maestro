@@ -184,24 +184,26 @@ BOOST_DATA_TEST_CASE(
   std::mt19937 g(static_cast<std::mt19937::result_type>(0xD15CD15Cu +
                                                         nrQubits));
 
-  // a few gates per qubit makes a non-trivial but still tractable circuit
-  const int nrGates = 3 * nrQubits;
+  for (int trial = 0; trial < 3; ++trial) {
+    // a few gates per qubit makes a non-trivial but still tractable circuit
+    const int nrGates = 3 * nrQubits;
 
-  auto circuit = GenerateRandomCircuitWithMeasurements(nrGates, nrQubits, g);
-  BOOST_REQUIRE(circuit);
+    auto circuit = GenerateRandomCircuitWithMeasurements(nrGates, nrQubits, g);
+    BOOST_REQUIRE(circuit);
 
-  auto mpsNet = MakeNetwork(nrQubits,
-                            Simulators::SimulationType::kMatrixProductState);
-  auto svNet = MakeNetwork(nrQubits,
-                           Simulators::SimulationType::kStatevector);
+    auto mpsNet =
+        MakeNetwork(nrQubits, Simulators::SimulationType::kMatrixProductState);
+    auto svNet =
+        MakeNetwork(nrQubits, Simulators::SimulationType::kStatevector);
 
-  constexpr size_t shots = 4000;
+    constexpr size_t shots = 4000;
 
-  const auto statevectorCounts =
-      svNet->RepeatedExecuteOnHost(circuit, 0, shots);
-  const auto mpsCounts = mpsNet->RepeatedExecuteOnHost(circuit, 0, shots);
+    const auto statevectorCounts =
+        svNet->RepeatedExecuteOnHost(circuit, 0, shots);
+    const auto mpsCounts = mpsNet->RepeatedExecuteOnHost(circuit, 0, shots);
 
-  CheckCountsAgainstStatevector(mpsCounts, statevectorCounts, shots);
+    CheckCountsAgainstStatevector(mpsCounts, statevectorCounts, shots);
+  }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

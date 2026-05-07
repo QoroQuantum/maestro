@@ -305,6 +305,11 @@ class QCSimState : public ISimulator {
     mpsSimulator->SetMeetingPositionCallback(
         [this](/*const auto &qMap,*/ const auto &bondDims)
             -> QC::TensorNetworks::MPSSimulatorInterface::IndexType {
+          if (upcomingGates.empty() ||
+              upcomingGateIndex >= upcomingGates.size()) {
+            return -1;  // will fallback to default behavior
+          }
+
           const size_t nQ = bondDims.size() + 1;
 
           if (!dummySim || dummySim->getNrQubits() != nQ) {
