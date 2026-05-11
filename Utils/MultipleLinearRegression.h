@@ -125,9 +125,10 @@ namespace Utils {
 		Eigen::VectorXd W;
 		double b = 0.;
 
-		bool trueLinearRegression = false;
-		static constexpr double divisor = 8;
 		double minValue = 0.;
+        bool trueLinearRegression = false;
+
+		static constexpr double divisor = 8;
 	};
 
 }

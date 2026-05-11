@@ -21,6 +21,7 @@
 #include "../Simulators/QcsimPauliPropagator.h"
 #include "../Simulators/Factory.h"
 #include "../Utils/LogFile.h"
+#include "../Utils/MultipleLinearRegression.h"
 
 #include <cstddef>
 
@@ -52,6 +53,31 @@ class ExecutionCost {
     size_t nrOneQubitOpsExecutedOnce = 0;
     size_t nrTwoQubitOpsExecutedOnce = 0;
     size_t nrThreeQubitOpsExecutedOnce = 0;
+
+    double getFieldValue(size_t index) const {
+      switch (index) {
+        case 0:
+          return nrQubits;
+        case 1:
+          return nrOneQubitOps;
+        case 2:
+          return nrTwoQubitOps;
+        case 3:
+          return nrThreeQubitOps;
+        case 4:
+          return nrMiddleMeasurementOps;
+        case 5:
+          return nrEndMeasurementOps;
+        case 6:
+          return nrOneQubitOpsExecutedOnce;
+        case 7:
+          return nrTwoQubitOpsExecutedOnce;
+        case 8:
+          return nrThreeQubitOpsExecutedOnce;
+        default:
+          throw std::out_of_range("Invalid index for CircuitInfo field");
+      }
+    }
   };
 
   struct ExecutionInfo : public CircuitInfo {
@@ -61,6 +87,29 @@ class ExecutionCost {
     size_t nrPauliOps = 0;
     double executionCost = 0;
     double runtime = 0;
+
+    double getFieldValue(size_t index) const {
+      if (index < 9) {
+        return CircuitInfo::getFieldValue(index);
+      } else {
+        switch (index) {
+          case 9:
+            return nrSamples;
+          case 10:
+            return nrQubitsSampled;
+          case 11:
+            return maxBondDim;
+          case 12:
+            return nrPauliOps;
+          case 13:
+            return executionCost;
+          case 14:
+            return runtime;
+          default:
+            throw std::out_of_range("Invalid index for ExecutionInfo field");
+        }
+      }
+    }
   };
 
   static double EstimateExecutionCost(
@@ -784,6 +833,10 @@ class ExecutionCost {
       executionInfos.push_back(std::move(info));
     }
 
+    std::random_device rdev;
+    std::mt19937 rng(rdev());
+    std::shuffle(executionInfos.begin(), executionInfos.end(), rng);
+
     return executionInfos;
   }
 
@@ -1048,6 +1101,34 @@ class ExecutionCost {
        << "0,0," << maxBondDim << "," << cntPauli << "," << estimatedCost << ","
        << expectationTime;
     log.Log(ss.str());
+  }
+
+  static std::shared_ptr<Utils::MultipleLinearRegression> GetRegressor(
+      const std::string& logFilePath, const std::vector<size_t>& featureIndices)
+  {
+    const auto executionInfos = ReadLog(logFilePath);
+
+    std::vector<std::vector<double>> features;
+    features.reserve(executionInfos.size());
+
+    std::vector<double> targetValues;
+    targetValues.reserve(executionInfos.size());
+
+    for (const auto& info : executionInfos)
+    {
+      std::vector<double> featureVector(featureIndices.size());
+      for (size_t i = 0; i < featureVector.size(); ++i)
+        featureVector[i] =
+            info.getFieldValue(featureIndices[i]);
+      features.push_back(std::move(featureVector));
+
+      targetValues.push_back(info.runtime);
+    }
+
+    auto regressor = std::make_shared<Utils::MultipleLinearRegression>();
+    regressor->SetSamples(features, targetValues);
+
+    return regressor;
   }
 };
 
