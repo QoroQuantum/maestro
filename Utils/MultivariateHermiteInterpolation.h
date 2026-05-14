@@ -25,7 +25,7 @@
 #include <memory>
 #include <vector>
 
-#include "HermiteInterpolation.h"
+#include "BivariateHermiteInterpolation.h"
 
 namespace Utils {
 
@@ -37,10 +37,10 @@ namespace Utils {
         {
             assert(x.size() == y.size());
             assert(!x.empty());
-            assert(!x[0].empty());
 
-            if (x.empty() || y.empty())
-                return;
+            if (x.empty() || y.empty()) return;
+
+            assert(x[0].size() >= 2);
 
             leafInterpolator.reset();
             children.clear();
@@ -51,15 +51,15 @@ namespace Utils {
             for (size_t i = 0; i < y.size(); ++i)
                 minValue = std::min(minValue, y[i]);
 
-            if (dimension == 1)
+            if (dimension == 2)
             {
-                // degenerate to the univariate case
-                std::vector<double> xv;
+                // degenerate to the bivariate case
+                std::vector<std::vector<double>> xv;
                 xv.reserve(x.size());
                 for (size_t i = 0; i < x.size(); ++i)
-                    xv.push_back(x[i][0]);
+                  xv.push_back(x[i]);
 
-                leafInterpolator = std::make_unique<HermiteInterpolation>();
+                leafInterpolator = std::make_unique<BivariateHermiteInterpolation>();
                 leafInterpolator->SetTrueInterpolation(trueInterpolation);
                 leafInterpolator->SetSamples(xv, y);
                 return;
@@ -100,11 +100,11 @@ namespace Utils {
         {
             assert(x.size() == dimension);
 
-            if (dimension == 0 || x.size() != dimension)
+            if (dimension < 2 || x.size() != dimension)
                 return 0;
 
             if (leafInterpolator)
-                return leafInterpolator->Predict(x[0]);
+                return leafInterpolator->Predict(x);
 
             const std::vector<double> tail(x.begin() + 1, x.end());
 
@@ -142,10 +142,10 @@ namespace Utils {
         }
 
     private:
-        // Used when dimension == 1.
-        std::unique_ptr<HermiteInterpolation> leafInterpolator;
+        // Used when dimension == 2.
+        std::unique_ptr<BivariateHermiteInterpolation> leafInterpolator;
 
-        // Used when dimension > 1: one child per unique value of the first coordinate.
+        // Used when dimension > 2: one child per unique value of the first coordinate.
         std::vector<std::unique_ptr<MultivariateHermiteInterpolation>> children;
         std::vector<double> xValues;
 

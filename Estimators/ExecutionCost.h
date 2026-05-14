@@ -845,8 +845,8 @@ class ExecutionCost {
       size_t depthMin, size_t depthMax, size_t stepDepth,
       double measureInsideProbability, size_t nrMeasAtEndMin,
       size_t nrMeasAtEndMax, size_t stepMeasAtEnd,
-      size_t nrRandomCircuitsPerConfig, size_t maxBondDim,
-      const std::string& logFilePath) {
+      size_t nrRandomCircuitsPerConfig, const std::string& logFilePath,
+      size_t startBondDim = 16, size_t endBondDim = 16) {
     bool isClifford = (method == Simulators::SimulationType::kStabilizer);
     int nrNonCliffordGates = static_cast<int>(depthMax);  // a limit
     int nrBranchingGates = static_cast<int>(depthMax);
@@ -885,8 +885,12 @@ class ExecutionCost {
             const auto circuit = GenerateRandomCircuit(
                 nrQubits, depth, measureInsideProbability, nrMeasAtEnd,
                 isClifford, nrNonCliffordGates, nrBranchingGates);
-            BenchmarkAndLogExecution(simType, method, circuit, nrReps,
-                                     maxBondDim, log);
+
+            for (size_t maxBondDim = startBondDim; maxBondDim <= endBondDim;
+                 maxBondDim *= 2) {
+              BenchmarkAndLogExecution(simType, method, circuit, nrReps,
+                                       maxBondDim, log);
+            }
           }
         }
       }
@@ -925,8 +929,8 @@ class ExecutionCost {
       Simulators::SimulatorType simType, Simulators::SimulationType method,
       size_t nrReps, size_t nrMinQubits, size_t nrMaxQubits, size_t stepQubits,
       size_t depthMin, size_t depthMax, size_t stepDepth,
-      size_t nrRandomCircuitsPerConfig, size_t maxBondDim,
-      const std::string& logFilePath) {
+      size_t nrRandomCircuitsPerConfig,
+      const std::string& logFilePath, size_t startBondDim = 16, size_t endBondDim = 16) {
     bool isClifford = (method == Simulators::SimulationType::kStabilizer);
     int nrNonCliffordGates = static_cast<int>(depthMax);  // a limit
     int nrBranchingGates = static_cast<int>(depthMax);
@@ -962,8 +966,13 @@ class ExecutionCost {
           std::cout << "      Random circuit: " << i + 1 << "/"
                     << nrRandomCircuitsPerConfig
                     << " Pauli string: " << pauliString << std::endl;
-          BenchmarkAndLogPauliExpectation(simType, method, circuit, pauliString,
-                                          nrReps, maxBondDim, log);
+          for (size_t maxBondDim = startBondDim; maxBondDim <= endBondDim;
+               maxBondDim *= 2) {
+            std::cout << "        Max bond dimension: " << maxBondDim
+                      << std::endl;
+            BenchmarkAndLogPauliExpectation(
+                simType, method, circuit, pauliString, nrReps, maxBondDim, log);
+          }
         }
       }
     }
@@ -975,8 +984,8 @@ class ExecutionCost {
       size_t depthMin, size_t depthMax, size_t stepDepth, size_t nrMeasAtEndMin,
       size_t nrMeasAtEndMax, size_t stepMeasAtEnd, size_t nrSamplesMin,
       size_t nrSamplesMax, size_t multiplierSamples,
-      size_t nrRandomCircuitsPerConfig, size_t maxBondDim,
-      const std::string& logFilePath) {
+      size_t nrRandomCircuitsPerConfig, const std::string& logFilePath,
+      size_t startBondDim = 16, size_t endBondDim = 16) {
     bool isClifford = (method == Simulators::SimulationType::kStabilizer);
     int nrNonCliffordGates = static_cast<int>(depthMax);  // a limit
     int nrBranchingGates = static_cast<int>(depthMax);
@@ -1013,8 +1022,12 @@ class ExecutionCost {
               std::cout << "        Random circuit: " << i + 1 << "/"
                         << nrRandomCircuitsPerConfig
                         << " Qubits sampled: " << nrQubitsSampled << std::endl;
-              BenchmarkAndLogSampling(simType, method, circuit, nrQubitsSampled,
-                                      nrSamples, nrReps, maxBondDim, log);
+              for (size_t maxBondDim = startBondDim; maxBondDim <= endBondDim;
+                   maxBondDim *= 2) {
+                BenchmarkAndLogSampling(simType, method, circuit,
+                                        nrQubitsSampled, nrSamples, nrReps,
+                                        maxBondDim, log);
+              }
             }
           }
         }
