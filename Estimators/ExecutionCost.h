@@ -57,6 +57,11 @@ class ExecutionCost {
     size_t nrTwoQubitOpsExecutedOnce = 0;
     size_t nrThreeQubitOpsExecutedOnce = 0;
 
+    CircuitInfo() = default;
+    CircuitInfo(const CircuitInfo& other) = default;
+
+    CircuitInfo& operator=(const CircuitInfo& other) = default;
+
     double getFieldValue(size_t index) const {
       switch (index) {
         case 0:
@@ -90,6 +95,18 @@ class ExecutionCost {
     size_t nrPauliOps = 0;
     double executionCost = 0;
     double runtime = 0;
+
+
+    ExecutionInfo() = default;
+    ExecutionInfo(const ExecutionInfo& other) = default;
+    ExecutionInfo(const CircuitInfo& circuitInfo) : CircuitInfo(circuitInfo) {}
+
+    ExecutionInfo& operator=(const ExecutionInfo& other) = default;
+
+    ExecutionInfo& operator=(const CircuitInfo& circuitInfo) {
+      CircuitInfo::operator=(circuitInfo);
+      return *this;
+    }
 
     double getFieldValue(size_t index) const {
       if (index < 9) {
