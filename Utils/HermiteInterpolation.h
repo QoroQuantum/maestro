@@ -17,94 +17,91 @@
 
 namespace Utils {
 
-	class HermiteInterpolation {
-	public:
-		template<typename T = size_t> void SetSamples(const std::vector<T>& x, const std::vector<double>& y)
-		{
-			assert(x.size() == y.size());
-			assert(!x.empty());
-			if (x.empty() || y.empty())
-				return;
+class HermiteInterpolation {
+ public:
+  template <typename T = size_t>
+  void SetSamples(const std::vector<T>& x, const std::vector<double>& y) {
+    assert(x.size() == y.size());
+    assert(!x.empty());
+    if (x.empty() || y.empty()) return;
 
-			std::vector<double> xvals(x.begin(), x.end());
-			std::vector<double> yvals = y;
-			x1 = xvals.front();
-			x2 = xvals.back();
-			y1 = yvals.front();
-			y2 = yvals.back();
+    spline.reset();
 
-			if (xvals.size() == 1)
-				slopel = sloper = 0;
-			else
-			{
-				slopel = (yvals[1] - y1) / (xvals[1] - x1);
-				sloper = (y2 - yvals[yvals.size() - 2]) / (x2 - xvals[xvals.size() - 2]);
-			}
+    std::vector<double> xvals(x.begin(), x.end());
+    std::vector<double> yvals = y;
+    x1 = xvals.front();
+    x2 = xvals.back();
+    y1 = yvals.front();
+    y2 = yvals.back();
 
-			minValue = *std::min_element(yvals.begin(), yvals.end());
+    if (xvals.size() == 1)
+      slopel = sloper = 0;
+    else {
+      slopel = (yvals[1] - y1) / (xvals[1] - x1);
+      sloper = (y2 - yvals[yvals.size() - 2]) / (x2 - xvals[xvals.size() - 2]);
+    }
 
-			spline = std::make_unique<boost::math::interpolators::pchip<std::vector<double>>>(std::move(xvals), std::move(yvals));
-		}
+    minValue = *std::min_element(yvals.begin(), yvals.end());
 
-		double Predict(double x) const
-		{
-			if (!spline)
-				return 0;
+    // needs 4 values to work, if we don't have them,
+    // fallback to linear
+    if (xvals.size() < 4) return;
 
-			double result = 0;
-			
-			const bool smallx = x <= x1;
-			const bool largex = x >= x2;
-			if (smallx || largex)
-			{
-				if (smallx)
-				{
-					if (slopel == 0)
-						result = y1;
-					else
-						result = y1 + slopel * (x - x1);
-				}
-				else
-				{
-					if (sloper == 0)
-						result = y2;
-					else
-						result = y2 + sloper * (x - x2);
-				}
-			}
-			else
-				result = (*spline)(x);
+    spline = std::make_unique<
+        boost::math::interpolators::pchip<std::vector<double>>>(
+        std::move(xvals), std::move(yvals));
+  }
 
-			if (trueInterpolation)
-				return result;
+  double Predict(double x) const {
+    double result = 0;
 
-			const auto m = minValue / divisor;
-			if (result < m)
-				return m;
+    const bool smallx = x <= x1;
+    const bool largex = x >= x2;
+    if (smallx || largex) {
+      if (smallx) {
+        if (slopel == 0)
+          result = y1;
+        else
+          result = y1 + slopel * (x - x1);
+      } else {
+        if (sloper == 0)
+          result = y2;
+        else
+          result = y2 + sloper * (x - x2);
+      }
+    } else if (spline) {
+      result = (*spline)(x);
+    } else {
+      const double slope = (y2 - y1) / (x2 - x1);
+      result = y1 + slope * (x - x1);
+    }
 
-			return result;
-		}
+    if (trueInterpolation) return result;
 
-		void SetTrueInterpolation(bool reg)
-		{
-			trueInterpolation = reg;
-		}
+    const auto m = minValue / divisor;
+    if (result < m) return m;
 
-	private:
-		std::unique_ptr<boost::math::interpolators::pchip<std::vector<double>>> spline;
+    return result;
+  }
 
-		double x1 = 0;
-		double x2 = 0;
-		double y1 = 0;
-		double y2 = 0;
-		double slopel = 0;
-		double sloper = 0;
+  void SetTrueInterpolation(bool reg) { trueInterpolation = reg; }
 
-		static constexpr double divisor = 8;
-		double minValue = 0;
-		bool trueInterpolation = false;
-	};
+ private:
+  std::unique_ptr<boost::math::interpolators::pchip<std::vector<double>>>
+      spline;
 
-}
+  double x1 = 0;
+  double x2 = 0;
+  double y1 = 0;
+  double y2 = 0;
+  double slopel = 0;
+  double sloper = 0;
 
-#endif // __UTILS_HERMITE_INTERPOLATION_H__
+  static constexpr double divisor = 8;
+  double minValue = 0;
+  bool trueInterpolation = false;
+};
+
+}  // namespace Utils
+
+#endif  // __UTILS_HERMITE_INTERPOLATION_H__
