@@ -1,4 +1,4 @@
-"""Tests for ibm_noise_bridge.py.
+"""Tests for noise_bridge.py.
 
 Covers:
 - ``calculate_noise_params``: per-qubit T1/T2 → Pauli probabilities,
@@ -12,7 +12,7 @@ Covers:
   against the noiseless simulation of the same transpiled circuit via
   ``maestro.simple_execute`` / ``maestro.simple_estimate``.
 
-Run with: pytest python/test_ibm_noise_bridge.py
+Run with: pytest python/test_noise_bridge.py
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ import maestro  # noqa: E402
 import qiskit  # noqa: E402
 import qiskit.qasm2  # noqa: E402
 
-import ibm_noise_bridge as br  # noqa: E402
+import noise_bridge as br  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures

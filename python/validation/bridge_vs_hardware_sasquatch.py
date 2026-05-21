@@ -10,7 +10,7 @@ side-by-side bar plot of the resulting marginal distributions:
   2. ``qiskit-aer``  — ``AerSimulator(NoiseModel.from_backend(...))`` driven
                        by the same calibration data the bridge sees.
   3. ``maestro bridge`` — ``br.execute_backend_noise_model`` with the noise
-                       model this repo builds (see ``ibm_noise_bridge.py``).
+                       model this repo builds (see ``noise_bridge.py``).
   4. ``hardware``    — the real IBM backend, via the Runtime SamplerV2
                        primitive. Only included when ``IBM_QUANTUM_TOKEN``
                        is set and ``--skip-hardware`` is not passed.
@@ -73,7 +73,7 @@ import maestro  # noqa: E402
 import qiskit  # noqa: E402
 import qiskit.qasm2  # noqa: E402
 
-import ibm_noise_bridge as br  # noqa: E402
+import noise_bridge as br  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

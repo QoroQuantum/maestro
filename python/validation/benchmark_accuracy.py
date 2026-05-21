@@ -64,7 +64,7 @@ import maestro  # noqa: E402
 import qiskit  # noqa: E402
 import qiskit.qasm2  # noqa: E402
 
-import ibm_noise_bridge as br  # noqa: E402
+import noise_bridge as br  # noqa: E402
 
 DEFAULT_CIRCUITS_DIR = os.path.join(_HERE, "sasquatch_epoch")
 DEFAULT_BACKEND = "FakeAlmadenV2"
