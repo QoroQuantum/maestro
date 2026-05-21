@@ -25,6 +25,7 @@
 #include "Simulators/Factory.h"
 #include "Simulators/Simulator.h"
 #include "Simulators/PathIntegralSimulator.h"
+#include "qasm/CircQasm.h"
 #include "qasm/QasmCirc.h"
 #include "Network/SimpleDisconnectedNetwork.h"
 
@@ -674,6 +675,13 @@ NB_MODULE(maestro, m) {
                    [](const Circuits::Circuit<double> &c) {
                      return c.GetMaxQubitIndex() + 1;
                    })
+      .def("to_qasm",
+           [](const Circuits::Circuit<double> &c) {
+             auto ptr = std::make_shared<Circuits::Circuit<double>>(
+                 c.GetOperations());
+             return qasm::CircToQasm<double>::Generate(ptr);
+           },
+           "Export the circuit as an OpenQASM 2.0 string.")
       // Standard Gates
       .def("x",
            [](Circuits::Circuit<double> &s, Types::qubit_t q) {

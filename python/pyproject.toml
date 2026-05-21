@@ -1,0 +1,49 @@
+[project]
+name = "fermi-hubbard"
+version = "0.1.0"
+description = ""
+readme = "README.md"
+requires-python = "~=3.11.0"
+authors = [
+    { name = "uri", email = "oriol@qoroquantum.net" }
+]
+dependencies = [
+    "numpy>=2.0.0,<3.0.0",
+    "qoro-maestro>=0.2.0.post1,<0.3.0",
+    "gast>=0.7.0,<0.8.0",
+    # "quimb>=1.12.1,<2.0.0",
+    # "qibo>=0.2.8,<0.3.0",
+    # "qibotn>=0.0.3,<0.0.4",
+    # "qoro-divi @ git+https://github.com/QoroQuantum/divi.git@main"
+    "matplotlib>=3.10.9",
+    "pennylane>=0.39.0",
+    "rich>=15.0.0",
+    "qiskit<=2.3.0",
+    "qiskit-aer>=0.17.2",
+    "dotenv>=0.9.9",
+    "llvmlite<0.46",
+    "numba>=0.62.1",
+    "sympy>=1.14.0",
+    "pennylane-qiskit>=0.39.0",
+    "stim>=1.15.0",
+    "dimod>=0.12.21",
+    "cma>=4.4.4",
+    "pymoo>=0.6.1.6",
+    "scikit-learn>=1.8.0",
+    "dwave-hybrid>=0.6.15",
+    "pennylane-maestro>=0.2.2",
+    "iqm-client>=34.0.3",
+]
+
+[project.optional-dependencies]
+cuda = [
+    "cuquantum>=22.11.0,<23.0.0; sys_platform == 'linux'"
+]
+
+[dependency-groups]
+dev = [
+    "setuptools>=82.0.1,<83.0.0"
+]
+
+[tool.uv]
+package = false
