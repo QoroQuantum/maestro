@@ -89,7 +89,7 @@ namespace Utils {
 			if (trueInterpolation)
 				return val;
 
-			const auto m = minValue / divisor;
+			const auto m = 1E-12;//minValue / divisor;
 			if (val < m)
 				return m;
 
