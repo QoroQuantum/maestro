@@ -78,7 +78,7 @@ class HermiteInterpolation {
 
     if (trueInterpolation) return result;
 
-    const auto m = minValue / divisor;
+    const auto m = 1E-12;//minValue / divisor;
     if (result < m) return m;
 
     return result;
