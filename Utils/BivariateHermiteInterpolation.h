@@ -108,7 +108,7 @@ namespace Utils {
 		std::vector<HermiteInterpolation> interpolators;
 		std::vector<double> xValues;
 
-		static constexpr double divisor = 8;
+		//static constexpr double divisor = 8;
 		double minValue = 0;
 		bool trueInterpolation = false;
 	};

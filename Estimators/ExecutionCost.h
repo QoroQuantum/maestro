@@ -23,6 +23,7 @@
 #include "../Utils/LogFile.h"
 #include "../Utils/MultipleLinearRegression.h"
 #include "../Utils/MultivariateHermiteInterpolation.h"
+#include "../Circuit/Factory.h"
 
 #include <algorithm>
 #include <cstddef>
