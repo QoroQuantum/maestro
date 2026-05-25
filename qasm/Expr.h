@@ -101,7 +101,7 @@ struct MakeConstantExpression {
   }
 };
 
-phx::function<MakeConstantExpression> MakeConstant;
+inline phx::function<MakeConstantExpression> MakeConstant;
 
 class Variable : public AbstractSyntaxTree {
  public:
@@ -140,7 +140,7 @@ struct MakeVariableExpression {
   }
 };
 
-phx::function<MakeVariableExpression> MakeVariable;
+inline phx::function<MakeVariableExpression> MakeVariable;
 
 class BinaryOperator : public AbstractSyntaxTree {
  public:
@@ -204,7 +204,7 @@ struct MakeBinaryExpression {
   }
 };
 
-phx::function<MakeBinaryExpression> MakeBinary;
+inline phx::function<MakeBinaryExpression> MakeBinary;
 
 class UnaryOperator : public AbstractSyntaxTree {
  public:
@@ -256,7 +256,7 @@ struct MakeUnaryExpression {
   }
 };
 
-phx::function<MakeUnaryExpression> MakeUnary;
+inline phx::function<MakeUnaryExpression> MakeUnary;
 
 class Function : public AbstractSyntaxTree {
  public:
@@ -320,7 +320,7 @@ struct MakeFunctionExpression {
   }
 };
 
-phx::function<MakeFunctionExpression> MakeFunction;
+inline phx::function<MakeFunctionExpression> MakeFunction;
 
 class Expression : public AbstractSyntaxTree {
  public:

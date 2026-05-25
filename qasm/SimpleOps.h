@@ -51,7 +51,7 @@ struct MakeIndexedIdExpression {
   }
 };
 
-phx::function<MakeIndexedIdExpression> MakeIndexedId;
+inline phx::function<MakeIndexedIdExpression> MakeIndexedId;
 
 using SimpleExpType = std::variant<double, int, std::string>;
 
@@ -144,7 +144,7 @@ struct AddCregExpr : public AbstractSyntaxTree {
   }
 };
 
-phx::function<AddCregExpr> AddCreg;
+inline phx::function<AddCregExpr> AddCreg;
 
 struct AddQregExpr : public AbstractSyntaxTree {
   struct result {
@@ -166,7 +166,7 @@ struct AddQregExpr : public AbstractSyntaxTree {
   }
 };
 
-phx::function<AddQregExpr> AddQreg;
+inline phx::function<AddQregExpr> AddQreg;
 
 struct AddCommentExpr : public AbstractSyntaxTree {
   struct result {
@@ -183,7 +183,7 @@ struct AddCommentExpr : public AbstractSyntaxTree {
   }
 };
 
-phx::function<AddCommentExpr> AddComment;
+inline phx::function<AddCommentExpr> AddComment;
 
 struct AddDeclarationExpr : public AbstractSyntaxTree {
   struct result {
@@ -199,7 +199,7 @@ struct AddDeclarationExpr : public AbstractSyntaxTree {
   }
 };
 
-phx::function<AddDeclarationExpr> AddDeclaration;
+inline phx::function<AddDeclarationExpr> AddDeclaration;
 
 struct AddMeasureExpr : public AbstractSyntaxTree {
   struct result {
@@ -259,7 +259,7 @@ struct AddMeasureExpr : public AbstractSyntaxTree {
   }
 };
 
-phx::function<AddMeasureExpr> AddMeasure;
+inline phx::function<AddMeasureExpr> AddMeasure;
 
 struct AddResetExpr : public AbstractSyntaxTree {
   struct result {
@@ -295,7 +295,7 @@ struct AddResetExpr : public AbstractSyntaxTree {
   }
 };
 
-phx::function<AddResetExpr> AddReset;
+inline phx::function<AddResetExpr> AddReset;
 
 struct AddBarrierExpr : public AbstractSyntaxTree {
   struct result {
@@ -336,7 +336,7 @@ struct AddBarrierExpr : public AbstractSyntaxTree {
   }
 };
 
-phx::function<AddBarrierExpr> AddBarrier;
+inline phx::function<AddBarrierExpr> AddBarrier;
 
 struct AddOpaqueDeclExpr : public AbstractSyntaxTree {
   struct result {
@@ -368,7 +368,7 @@ struct AddOpaqueDeclExpr : public AbstractSyntaxTree {
   }
 };
 
-phx::function<AddOpaqueDeclExpr> AddOpaqueDecl;
+inline phx::function<AddOpaqueDeclExpr> AddOpaqueDecl;
 
 struct AddGateDeclExpr : public AbstractSyntaxTree {
   struct result {
@@ -425,7 +425,7 @@ struct AddGateDeclExpr : public AbstractSyntaxTree {
   }
 };
 
-phx::function<AddGateDeclExpr> AddGateDecl;
+inline phx::function<AddGateDeclExpr> AddGateDecl;
 }  // namespace qasm
 
 #endif
