@@ -151,7 +151,7 @@ namespace Utils {
 
         size_t dimension = 0;
 
-        static constexpr double divisor = 8;
+        //static constexpr double divisor = 8;
         double minValue = 0;
         bool trueInterpolation = false;
     };

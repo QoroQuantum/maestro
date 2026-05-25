@@ -121,7 +121,7 @@ namespace Utils {
 		double minValue = 0.;
         bool trueLinearRegression = false;
 
-		static constexpr double divisor = 8;
+		//static constexpr double divisor = 8;
 	};
 
 }
