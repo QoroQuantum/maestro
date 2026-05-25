@@ -515,7 +515,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
       "u", "u3", "cu1", "cu3"};  // max 4
 };
 
-phx::function<AddGateExpr> AddGate;
+inline phx::function<AddGateExpr> AddGate;
 
 struct AddCondQopExpr : public AbstractSyntaxTree {
   struct result {
@@ -553,7 +553,7 @@ struct AddCondQopExpr : public AbstractSyntaxTree {
   }
 };
 
-phx::function<AddCondQopExpr> AddCondQop;
+inline phx::function<AddCondQopExpr> AddCondQop;
 
 struct Program {
   double version = 2.0;
