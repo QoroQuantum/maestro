@@ -25,8 +25,8 @@ namespace Utils {
 	public:
         MultipleLinearRegression() = default;
 
-		MultipleLinearRegression(const Eigen::VectorXd& initialWeights, double initialBias = 0.0, double initialMinValue = 0.0, bool initialTrueLinearRegression = false)
-			: W(initialWeights), b(initialBias), minValue(initialMinValue), trueLinearRegression(initialTrueLinearRegression) {}
+		MultipleLinearRegression(const Eigen::VectorXd& initialWeights, double initialBias = 0.0, bool initialTrueLinearRegression = false)
+			: W(initialWeights), b(initialBias), trueLinearRegression(initialTrueLinearRegression) {}
 
 		void SetSamples(const std::vector<std::vector<double>>& x, const std::vector<double>& y)
 		{
@@ -51,16 +51,10 @@ namespace Utils {
 				for (size_t j = 1; j <= m; ++j)
 					X(i, j) = x[i][j - 1];
 
-
-			minValue = y[0];
-
 			Eigen::VectorXd Y;
 			Y.resize(n);
 			for (size_t i = 0; i < n; ++i)
-			{
 				Y(i) = y[i];
-				minValue = std::min(minValue, y[i]);
-			}
 
 			Eigen::MatrixXd Xt = X.transpose();
 			Eigen::MatrixXd XtX = Xt * X;
@@ -97,7 +91,7 @@ namespace Utils {
 			if (trueLinearRegression)
 				return val;
 
-			const auto m = 1E-12;//minValue / divisor;
+			const auto m = 1E-12;
 			if (val < m)
 				return m;
 
@@ -111,17 +105,13 @@ namespace Utils {
 
 		const Eigen::VectorXd& GetWeights() const { return W; }
 		double GetBias() const { return b; }
-		double GetMinValue() const { return minValue; }
 		bool IsTrueLinearRegression() const { return trueLinearRegression; }
 
 	private:
 		Eigen::VectorXd W;
 		double b = 0.;
 
-		double minValue = 0.;
         bool trueLinearRegression = false;
-
-		//static constexpr double divisor = 8;
 	};
 
 }

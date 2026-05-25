@@ -47,9 +47,6 @@ namespace Utils {
             xValues.clear();
 
             dimension = x[0].size();
-            minValue = y[0];
-            for (size_t i = 0; i < y.size(); ++i)
-                minValue = std::min(minValue, y[i]);
 
             if (dimension == 2)
             {
@@ -122,7 +119,7 @@ namespace Utils {
             if (trueInterpolation)
                 return val;
 
-            const auto m = 1E-12;//minValue / divisor;
+            const auto m = 1E-12;
             if (val < m)
                 return m;
 
@@ -151,8 +148,6 @@ namespace Utils {
 
         size_t dimension = 0;
 
-        //static constexpr double divisor = 8;
-        double minValue = 0;
         bool trueInterpolation = false;
     };
 

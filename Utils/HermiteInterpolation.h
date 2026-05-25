@@ -15,6 +15,8 @@
 #include <vector>
 #include <boost/math/interpolators/pchip.hpp>
 
+#include "SimpleLinearRegression.h"
+
 namespace Utils {
 
 class HermiteInterpolation {
@@ -41,11 +43,29 @@ class HermiteInterpolation {
       sloper = (y2 - yvals[yvals.size() - 2]) / (x2 - xvals[xvals.size() - 2]);
     }
 
-    minValue = *std::min_element(yvals.begin(), yvals.end());
+
+    bool fallbackToLinear = false;
 
     // needs 4 values to work, if we don't have them,
     // fallback to linear
-    if (xvals.size() < 4) return;
+    if (xvals.size() < 4) fallbackToLinear = true;
+    else {
+      // check the xvals to ensure they are strictly increasing, otherwise the
+      // pchip interpolator will throw an exception
+      // if that's the case, fallback to linear
+
+      for (size_t i = 1; i < xvals.size(); ++i)
+        if (xvals[i] <= xvals[i - 1]) {
+          fallbackToLinear = true;
+          break;
+        }
+    }
+
+    if (fallbackToLinear) {
+      linearExtrapolation = std::make_unique<SimpleLinearRegression<double, double>>();
+      linearExtrapolation->SetSamples(xvals, yvals);
+      return;
+    }
 
     spline = std::make_unique<
         boost::math::interpolators::pchip<std::vector<double>>>(
@@ -71,6 +91,8 @@ class HermiteInterpolation {
       }
     } else if (spline) {
       result = (*spline)(x);
+    } else if (linearExtrapolation) {
+      result = linearExtrapolation->Predict(x);
     } else {
       const double slope = (y2 - y1) / (x2 - x1);
       result = y1 + slope * (x - x1);
@@ -78,7 +100,7 @@ class HermiteInterpolation {
 
     if (trueInterpolation) return result;
 
-    const auto m = 1E-12;//minValue / divisor;
+    const auto m = 1E-12;
     if (result < m) return m;
 
     return result;
@@ -89,6 +111,7 @@ class HermiteInterpolation {
  private:
   std::unique_ptr<boost::math::interpolators::pchip<std::vector<double>>>
       spline;
+  std::unique_ptr<SimpleLinearRegression<double, double>> linearExtrapolation;
 
   double x1 = 0;
   double x2 = 0;

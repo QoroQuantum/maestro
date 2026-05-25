@@ -39,8 +39,6 @@ namespace Utils {
 			std::vector<double> xvals;
 			std::vector<double> yvals;
 
-			minValue = y[0];
-
 			for (size_t i = 0; i < x.size(); ++i)
 			{
 				if (xValues.back() != x[i][0])
@@ -55,8 +53,6 @@ namespace Utils {
 
 				xvals.push_back(x[i][1]);
 				yvals.push_back(y[i]);
-
-				minValue = std::min(minValue, y[i]);
 			}
 
 			if (!xvals.empty())
@@ -89,7 +85,7 @@ namespace Utils {
 			if (trueInterpolation)
 				return val;
 
-			const auto m = 1E-12;//minValue / divisor;
+			const auto m = 1E-12;
 			if (val < m)
 				return m;
 
@@ -108,8 +104,6 @@ namespace Utils {
 		std::vector<HermiteInterpolation> interpolators;
 		std::vector<double> xValues;
 
-		//static constexpr double divisor = 8;
-		double minValue = 0;
 		bool trueInterpolation = false;
 	};
 
