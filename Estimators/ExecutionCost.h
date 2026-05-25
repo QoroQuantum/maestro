@@ -18,6 +18,7 @@
 #ifndef __EXECUTION_COST_H_
 #define __EXECUTION_COST_H_
 
+#include "../Circuit/Factory.h"
 #include "../Simulators/QcsimPauliPropagator.h"
 #include "../Simulators/Factory.h"
 #include "../Utils/LogFile.h"
