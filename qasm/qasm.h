@@ -32,7 +32,7 @@ struct error_handler_ {
   }
 };
 
-phx::function<error_handler_> const error_handler = error_handler_();
+inline phx::function<error_handler_> const error_handler = error_handler_();
 }  // namespace qasm
 
 BOOST_FUSION_ADAPT_STRUCT(qasm::Program,
@@ -43,9 +43,9 @@ BOOST_FUSION_ADAPT_STRUCT(qasm::Program,
 
 namespace qasm {
 
-void printd(const double &v) { std::cout << "version: " << v << "\n"; }
+inline void printd(const double &v) { std::cout << "version: " << v << "\n"; }
 
-void prints(const std::string &s) { std::cout << "statement: " << s << "\n"; }
+inline void prints(const std::string &s) { std::cout << "statement: " << s << "\n"; }
 
 // TODO:
 // 1. 'opaque' will be parsed but ignored in the first phase.
