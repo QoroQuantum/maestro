@@ -466,6 +466,12 @@ if(BUILD_PYTHON_BINDINGS)
         else()
             install(TARGETS maestro_py LIBRARY DESTINATION .)
         endif()
+
+        install(FILES
+            python/noise_bridge.py
+            python/_noise_math.py
+            DESTINATION .
+        )
     else()
         message(WARNING "Python 3.8+ (with Interpreter and Development.Module) not found. Skipping Python bindings.")
     endif()
