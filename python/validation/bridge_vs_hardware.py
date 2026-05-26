@@ -322,10 +322,6 @@ def main() -> int:
                              "small --limit for first runs.")
     parser.add_argument("--shots", type=int, default=4000,
                         help="Shots per simulator pathway (default 4000).")
-    parser.add_argument("--hardware-shots", type=int, default=None,
-                        help="Shots per hardware circuit. Default: --shots. "
-                             "Set higher (e.g. 8192) for a tighter hardware "
-                             "estimate at the cost of more queue time.")
     parser.add_argument("--repeats", type=int, default=1,
                         help="Run each circuit N times per pathway and "
                              "report mean ± stdev of the Hellinger fidelity "
@@ -357,7 +353,7 @@ def main() -> int:
                         help="Plot output path.")
     args = parser.parse_args()
 
-    hardware_shots = args.hardware_shots or args.shots
+    hardware_shots = args.shots
     token = os.environ.get("IBM_QUANTUM_TOKEN")
     use_hardware = bool(token) and not args.skip_hardware
 

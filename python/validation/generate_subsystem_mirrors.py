@@ -1,6 +1,9 @@
 import numpy as np
 from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, qasm2
+import os
 
+SAVE_TO_DIR = "windowed_mirror_circuits_iqm"
+os.makedirs(SAVE_TO_DIR, exist_ok=True)
 
 def generate_windowed_mirror_qasm(N: int, W: int, window_start: int, depth: int) -> str:
     """
@@ -60,12 +63,12 @@ def generate_windowed_mirror_qasm(N: int, W: int, window_start: int, depth: int)
     # Decompose custom instructions into standard gates for QASM export
     decomposed_qc = qc.decompose()
 
-    return qasm2.dump(decomposed_qc, f"windowed_mirror_circuits/subsystem_mirror_{window_start//W:02}.qasm" )
+    return qasm2.dump(decomposed_qc, f"{SAVE_TO_DIR}/subsystem_mirror_{window_start//W:02}.qasm" )
 
 
 # Example Usage:
 # Total qubits = 54, Window = 5 qubits, starting at qubit 10, depth = 3
 if __name__ == "__main__":
-    for i in range(0, 150,5):
-        qasm_string = generate_windowed_mirror_qasm(N=156, W=5, window_start=i, depth=1)
+    for i in range(0, 16,5):
+        qasm_string = generate_windowed_mirror_qasm(N=20, W=5, window_start=i, depth=1)
 
