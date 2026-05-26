@@ -64,6 +64,20 @@ class HermiteInterpolation {
     if (fallbackToLinear) {
       linearExtrapolation = std::make_unique<SimpleLinearRegression<double, double>>();
       linearExtrapolation->SetTrueLinearRegression(trueInterpolation);
+
+      size_t offset = 0;
+      for (size_t i = 0; i < xvals.size(); ++i) {
+        if (xvals[i] > 1E-12) {
+          offset = i;
+          break;
+        }
+      }
+
+      if (offset > 0) {
+        xvals.erase(xvals.begin(), xvals.begin() + offset);
+        yvals.erase(yvals.begin(), yvals.begin() + offset);
+      }
+
       linearExtrapolation->SetSamples(xvals, yvals);
       return;
     }
