@@ -63,6 +63,7 @@ class HermiteInterpolation {
 
     if (fallbackToLinear) {
       linearExtrapolation = std::make_unique<SimpleLinearRegression<double, double>>();
+      linearExtrapolation->SetTrueLinearRegression(trueInterpolation);
       linearExtrapolation->SetSamples(xvals, yvals);
       return;
     }
@@ -106,7 +107,11 @@ class HermiteInterpolation {
     return result;
   }
 
-  void SetTrueInterpolation(bool reg) { trueInterpolation = reg; }
+  void SetTrueInterpolation(bool reg) {
+    trueInterpolation = reg;
+    if (linearExtrapolation)
+      linearExtrapolation->SetTrueLinearRegression(trueInterpolation);
+  }
 
  private:
   std::unique_ptr<boost::math::interpolators::pchip<std::vector<double>>>
