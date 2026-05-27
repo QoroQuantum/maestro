@@ -204,6 +204,13 @@ def _read_ibm_backend(backend: Any) -> CalibrationData:
     props = backend.properties()
     n = backend.num_qubits
 
+    # Pre-group single-qubit gates by qubit index so the per-qubit loop is O(n)
+    # rather than O(n × |gates|).
+    _1q_gates_by_qubit: dict[int, list] = {}
+    for gp in props.gates:
+        if len(gp.qubits) == 1:
+            _1q_gates_by_qubit.setdefault(gp.qubits[0], []).append(gp)
+
     rows = []
     missing_t1t2: list[int] = []
     for q in range(n):
@@ -229,13 +236,14 @@ def _read_ibm_backend(backend: Any) -> CalibrationData:
             row["prob_meas1_prep0"] = 0.0
 
         gate_errors_1q, gate_lengths_1q = [], []
-        for gp in props.gates:
-            if len(gp.qubits) == 1 and gp.qubits[0] == q:
-                try:
-                    gate_errors_1q.append(props.gate_error(gp.gate, q))
-                    gate_lengths_1q.append(props.gate_length(gp.gate, q))
-                except (AttributeError, KeyError, _BackendPropertyError):
-                    continue
+        for gp in _1q_gates_by_qubit.get(q, []):
+            try:
+                gate_error = props.gate_error(gp.gate, q)
+                gate_length = props.gate_length(gp.gate, q)
+                gate_errors_1q.append(gate_error)
+                gate_lengths_1q.append(gate_length)
+            except (AttributeError, KeyError, _BackendPropertyError):
+                continue
         row["gate_error_1q"] = (
             sum(gate_errors_1q) / len(gate_errors_1q) if gate_errors_1q else 0.0
         )
@@ -397,6 +405,8 @@ def _read_iqm_live(backend: Any) -> CalibrationData:
             res = obs.get_measure_errors(g, impl, locus)
             if res is None:
                 continue
+            # IQM convention (matches fake path): index 0 = prepared |0⟩ error
+            # → prob_meas1_prep0; index 1 = prepared |1⟩ error → prob_meas0_prep1.
             e0, e1 = res
             p_meas1_prep0 = max(p_meas1_prep0, float(e0))
             p_meas0_prep1 = max(p_meas0_prep1, float(e1))

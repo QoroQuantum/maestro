@@ -42,26 +42,34 @@ class CalibrationData:
     crosstalk: dict[tuple[int, int], float] = field(default_factory=dict)
 
 
+def _dephasing_prob(t1_s: float, t2_s: float, gate_time_s: float) -> float:
+    """Pure-dephasing (Pauli-Z) probability for a gate of duration `gate_time_s`.
+
+    p_z = (1 − exp(−t · (1/T2_eff − 1/T1))) / 2,  T2_eff = min(T2, 2·T1).
+    Returns 0.0 when any input is non-positive or when T2_eff ≥ 2·T1 (no gap).
+    """
+    if t1_s <= 0 or t2_s <= 0 or gate_time_s <= 0:
+        return 0.0
+    t2_eff = min(t2_s, 2.0 * t1_s)
+    inv_gap = (1.0 / t2_eff) - (1.0 / t1_s)
+    if inv_gap <= 0.0:
+        return 0.0
+    return (1.0 - math.exp(-gate_time_s * inv_gap)) / 2.0
+
+
 def _thermal_relax_avg_infid(t1_s: float, t2_s: float,
                              gate_time_s: float) -> float:
     """Average gate infidelity of the bridge's thermal-relaxation channel.
 
     Stochastic mixture matching qiskit-aer's ``thermal_relaxation_error``
     for T2 ≤ T1: Reset → |0⟩ with prob ``p_reset = 1 − exp(−t/T1)``, and
-    Pauli Z with conditional prob ``p_z = (1 − exp(−t·(1/T2_eff − 1/T1)))/2``
-    on the surviving trajectories (T2_eff = min(T2, 2·T1)). Returns the
-    corresponding 1 − F_avg.
+    Pauli Z with conditional prob ``p_z`` (see ``_dephasing_prob``)
+    on the surviving trajectories. Returns the corresponding 1 − F_avg.
     """
     if t1_s <= 0 or gate_time_s <= 0:
         return 0.0
     p_reset = 1.0 - math.exp(-gate_time_s / t1_s)
-    if t2_s <= 0:
-        return 0.5 * p_reset
-    t2_eff = min(t2_s, 2.0 * t1_s)
-    inv_gap = (1.0 / t2_eff) - (1.0 / t1_s)
-    if inv_gap < 0.0:
-        inv_gap = 0.0
-    p_z = (1.0 - math.exp(-gate_time_s * inv_gap)) / 2.0
+    p_z = _dephasing_prob(t1_s, t2_s, gate_time_s)
     return (2.0 / 3.0) * (1.0 - p_reset) * p_z + 0.5 * p_reset
 
 
@@ -112,21 +120,15 @@ def calculate_noise_params(data: CalibrationData) -> dict:
         _nan_f = float("nan")
         gate_error_raw = row.get("gate_error_1q", _nan_f)
         gate_error = gate_error_raw if not _nan(gate_error_raw) else 0.0
-        t_1q = row.get("gate_length_1q", _nan_f)
+        t_1q_raw = row.get("gate_length_1q", _nan_f)
         t1_raw = row.get("T1", _nan_f)
         t2_raw = row.get("T2", _nan_f)
+        t_1q = t_1q_raw if not _nan(t_1q_raw) else 0.0
         t1 = t1_raw if not _nan(t1_raw) else 0.0
         t2 = t2_raw if not _nan(t2_raw) else 0.0
         t_2q = t_2q_per_q.get(int(q), 0.0)
 
-        if t1 > 0 and t2 > 0 and t_1q > 0:
-            t2_eff = min(t2, 2.0 * t1)
-            inv_gap = (1.0 / t2_eff) - (1.0 / t1)
-            if inv_gap < 0.0:
-                inv_gap = 0.0
-            p_dephasing = (1.0 - math.exp(-t_1q * inv_gap)) / 2.0
-        else:
-            p_dephasing = 0.0
+        p_dephasing = _dephasing_prob(t1, t2, t_1q)
 
         infid_thermal_1q = _thermal_relax_avg_infid(t1, t2, t_1q)
         infid_thermal_2q = (_thermal_relax_avg_infid(t1, t2, t_2q)

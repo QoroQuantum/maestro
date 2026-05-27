@@ -238,6 +238,41 @@ class TestCalculateNoiseParams:
         # p=0.25 -> 2*asin(0.5) = pi/3
         assert params["crosstalk"][(0, 1)] == pytest.approx(math.pi / 3.0)
 
+    def test_2q_depolarizing_5_over_4_factor_applied(self):
+        """5/4 factor is actually applied when gate_error exceeds thermal infidelity.
+
+        synthetic_cal qubits are too noisy for this (thermal > gate_error), so
+        this test uses long-T1/T2 qubits where the residual is non-zero.
+        """
+        import math as _math
+        data = _cal(
+            [
+                {"T1": 1e-3, "T2": 500e-6, "prob_meas0_prep1": 0.0,
+                 "prob_meas1_prep0": 0.0, "gate_error_1q": 1e-4, "gate_length_1q": 20e-9},
+                {"T1": 1e-3, "T2": 500e-6, "prob_meas0_prep1": 0.0,
+                 "prob_meas1_prep0": 0.0, "gate_error_1q": 1e-4, "gate_length_1q": 20e-9},
+            ],
+            gates_2q={(0, 1): {"cx_error": 1e-2, "cx_length": 50e-9}},
+        )
+        params = br.calculate_noise_params(data)
+
+        def _thermal(T1, T2, t):
+            if T1 <= 0 or t <= 0:
+                return 0.0
+            p_reset = 1.0 - _math.exp(-t / T1)
+            if T2 <= 0:
+                return 0.5 * p_reset
+            T2_eff = min(T2, 2.0 * T1)
+            inv_gap = max(0.0, 1.0 / T2_eff - 1.0 / T1)
+            p_z = (1.0 - _math.exp(-t * inv_gap)) / 2.0
+            return (2.0 / 3.0) * (1.0 - p_reset) * p_z + 0.5 * p_reset
+
+        thermal_pair = _thermal(1e-3, 500e-6, 50e-9) * 2
+        residual = max(0.0, 1e-2 - thermal_pair)
+        expected_p = min(1.0, residual * 5.0 / 4.0)
+        assert expected_p > 0.0, "test is misconfigured — residual should be non-zero"
+        assert params["gates_2q"][(0, 1)]["p"] == pytest.approx(expected_p, rel=1e-10)
+
     def test_2q_depolarizing_clamped_at_1(self):
         """When the residual times the 5/4 factor exceeds 1, clamp."""
         data = _cal(
