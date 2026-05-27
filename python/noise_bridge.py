@@ -331,6 +331,8 @@ def _read_iqm_fake(backend: Any) -> CalibrationData:
         for pair_names, err in pair_dict.items():
             if any(_is_resonator(n) for n in pair_names):
                 continue
+            if any(n not in name_to_idx for n in pair_names):
+                continue
             idxs: tuple[int, int] = (name_to_idx[pair_names[0]], name_to_idx[pair_names[1]])
             entry = gates_2q.setdefault(idxs, {})
             entry[f"{gname}_error"] = float(err)
@@ -338,7 +340,7 @@ def _read_iqm_fake(backend: Any) -> CalibrationData:
                 entry[f"{gname}_length"] = float(dur_ns) * _NS_TO_S
 
     return CalibrationData(
-        num_qubits=len(qubits),
+        num_qubits=backend.num_qubits,
         qubits=qubits,
         gates_2q=gates_2q,
         crosstalk={},
@@ -365,14 +367,7 @@ def _read_iqm_live(backend: Any) -> CalibrationData:
     qubit_names = [n for n in dqa.qubits if not _is_resonator(n)]
     name_to_idx = {n: _name_to_index(n) for n in qubit_names}
 
-    try:
-        t1_map, t2_map = obs.get_coherence_times(qubit_names)
-    except Exception as exc:
-        warnings.warn(
-            f"Could not fetch coherence times from IQM: {exc}; using zeros.",
-            stacklevel=3,
-        )
-        t1_map, t2_map = {}, {}
+    t1_map, t2_map = obs.get_coherence_times(qubit_names)
 
     one_q_gates: list[tuple[str, str, tuple[str, ...]]] = []
     two_q_gates: list[tuple[str, str, tuple[str, ...]]] = []
@@ -445,7 +440,7 @@ def _read_iqm_live(backend: Any) -> CalibrationData:
             entry[f"{g}_length"] = float(dur)
 
     return CalibrationData(
-        num_qubits=len(qubits),
+        num_qubits=backend.num_qubits,
         qubits=qubits,
         gates_2q=gates_2q,
         crosstalk={},
@@ -500,8 +495,10 @@ def maestro_noise_from_backend(backend: Any) -> maestro.NoiseModel:
             nm.set_1q_gate_depolarizing(q, p["p_1q_residual"])
         if p["delta_2q_per_q"] > 0:
             nm.set_2q_gate_depolarizing(q, p["delta_2q_per_q"])
-        if p["p_meas1_prep0"] > 0 or p["p_meas0_prep1"] > 0:
-            nm.set_readout_error(q, p["p_meas1_prep0"], p["p_meas0_prep1"])
+        p01 = p["p_meas0_prep1"] if not math.isnan(p["p_meas0_prep1"]) else 0.0
+        p10 = p["p_meas1_prep0"] if not math.isnan(p["p_meas1_prep0"]) else 0.0
+        if p10 > 0 or p01 > 0:
+            nm.set_readout_error(q, p10, p01)
     for (q1, q2), gp in params["gates_2q"].items():
         if gp["p"] > 0:
             nm.set_2q_depolarizing(q1, q2, gp["p"])

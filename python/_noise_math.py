@@ -110,7 +110,8 @@ def calculate_noise_params(data: CalibrationData) -> dict:
     stale_qubits: list[int] = []
     for q, row in data.qubits.items():
         _nan_f = float("nan")
-        gate_error = row.get("gate_error_1q", _nan_f)
+        gate_error_raw = row.get("gate_error_1q", _nan_f)
+        gate_error = gate_error_raw if not _nan(gate_error_raw) else 0.0
         t_1q = row.get("gate_length_1q", _nan_f)
         t1_raw = row.get("T1", _nan_f)
         t2_raw = row.get("T2", _nan_f)
@@ -170,6 +171,12 @@ def calculate_noise_params(data: CalibrationData) -> dict:
             stem = key[: -len("_error")]
             chosen_err = float(val)
             chosen_length = float(entry.get(f"{stem}_length", 0.0))
+            if chosen_length == 0.0 and f"{stem}_length" not in entry:
+                warnings.warn(
+                    f"No gate duration for pair {pair} gate '{stem}'; "
+                    f"thermal contribution set to zero.",
+                    stacklevel=2,
+                )
             break
         if chosen_err is None:
             if entry:
