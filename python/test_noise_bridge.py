@@ -22,7 +22,6 @@ import os
 import sys
 import warnings
 
-import pandas as pd
 import pytest
 
 # Allow running directly from the repo without installing the package: prepend
@@ -40,6 +39,17 @@ import qiskit  # noqa: E402
 import qiskit.qasm2  # noqa: E402
 
 import noise_bridge as br  # noqa: E402
+from _noise_math import CalibrationData  # noqa: E402
+
+
+def _cal(qubits_list: list[dict], gates_2q=None, crosstalk=None) -> CalibrationData:
+    """Build a CalibrationData from a plain list of per-qubit dicts."""
+    return CalibrationData(
+        num_qubits=len(qubits_list),
+        qubits={i: row for i, row in enumerate(qubits_list)},
+        gates_2q=gates_2q or {},
+        crosstalk=crosstalk or {},
+    )
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -72,45 +82,44 @@ def _ghz_qasm(n: int, measure: bool = True) -> str:
 
 
 @pytest.fixture
-def synthetic_df():
-    """Hand-built DataFrame so we can check the math exactly."""
-    rows = [
-        {
-            "T1": 100e-6,
-            "T2": 50e-6,
-            "prob_meas0_prep1": 0.03,
-            "prob_meas1_prep0": 0.01,
-            "gate_error_1q": 1e-3,
-            "gate_length_1q": 50e-9,
+def synthetic_cal():
+    """Hand-built CalibrationData so we can check the math exactly."""
+    return _cal(
+        [
+            {
+                "T1": 100e-6,
+                "T2": 50e-6,
+                "prob_meas0_prep1": 0.03,
+                "prob_meas1_prep0": 0.01,
+                "gate_error_1q": 1e-3,
+                "gate_length_1q": 50e-9,
+            },
+            {
+                "T1": 10e-6,
+                "T2": 100e-6,   # > 2*T1: must be capped to 2*T1 = 20e-6
+                "prob_meas0_prep1": 0.0,
+                "prob_meas1_prep0": 0.0,
+                "gate_error_1q": 5e-4,
+                "gate_length_1q": 35e-9,
+            },
+            {
+                # gate_error sits well below the decoherence floor → expect clamp + warning
+                "T1": 1e-6,
+                "T2": 2e-6,
+                "prob_meas0_prep1": 0.0,
+                "prob_meas1_prep0": 0.0,
+                "gate_error_1q": 1e-8,
+                "gate_length_1q": 100e-9,
+            },
+        ],
+        gates_2q={
+            (0, 1): {"cx_error": 1e-2, "cx_length": 300e-9},
+            (1, 2): {"ecr_error": 5e-3, "ecr_length": 250e-9},
+            # pair with no recognizable "*_error" key — should be skipped + warn
+            (2, 0): {"junk_length": 0.0},
         },
-        {
-            "T1": 10e-6,
-            "T2": 100e-6,   # > 2*T1: must be capped to 2*T1 = 20e-6
-            "prob_meas0_prep1": 0.0,
-            "prob_meas1_prep0": 0.0,
-            "gate_error_1q": 5e-4,
-            "gate_length_1q": 35e-9,
-        },
-        {
-            # gate_error sits well below the decoherence floor → expect clamp + warning
-            "T1": 1e-6,
-            "T2": 2e-6,
-            "prob_meas0_prep1": 0.0,
-            "prob_meas1_prep0": 0.0,
-            "gate_error_1q": 1e-8,
-            "gate_length_1q": 100e-9,
-        },
-    ]
-    df = pd.DataFrame(rows)
-    df.index.name = "qubit"
-    df.attrs["gates_2q"] = {
-        (0, 1): {"cx_error": 1e-2, "cx_length": 300e-9},
-        (1, 2): {"ecr_error": 5e-3, "ecr_length": 250e-9},
-        # pair with no recognizable "*_error" key — should be skipped + warn
-        (2, 0): {"junk_length": 0.0},
-    }
-    df.attrs["crosstalk"] = {(0, 1): 0.25}  # 2*asin(sqrt(0.25)) = pi/3
-    return df
+        crosstalk={(0, 1): 0.25},  # 2*asin(sqrt(0.25)) = pi/3
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -119,14 +128,15 @@ def synthetic_df():
 
 
 class TestCalculateNoiseParams:
-    def test_returns_three_sections(self, synthetic_df):
-        params = br.calculate_noise_params(synthetic_df)
+    @pytest.mark.filterwarnings("ignore::UserWarning")
+    def test_returns_three_sections(self, synthetic_cal):
+        params = br.calculate_noise_params(synthetic_cal)
         assert set(params) == {"qubits", "gates_2q", "crosstalk"}
 
-    def test_per_qubit_keys(self, synthetic_df):
+    def test_per_qubit_keys(self, synthetic_cal):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            params = br.calculate_noise_params(synthetic_df)
+            params = br.calculate_noise_params(synthetic_cal)
         expected_keys = {
             "t1_time", "gate_time_1q", "p_dephasing",
             "p_1q_residual", "delta_2q_per_q",
@@ -135,12 +145,13 @@ class TestCalculateNoiseParams:
         for q, entry in params["qubits"].items():
             assert set(entry) == expected_keys, f"qubit {q}: {set(entry)}"
 
-    def test_q0_dephasing_and_residual_match_formulas(self, synthetic_df):
+    @pytest.mark.filterwarnings("ignore::UserWarning")
+    def test_q0_dephasing_and_residual_match_formulas(self, synthetic_cal):
         """The 1Q dephasing probability follows the pure-T2 decay rate
         γ_φ = max(0, 1/T2_eff − 1/T1) at the 1Q gate time, and the 1Q
         residual depolarizing equals (3/2)·max(0, gate_error − thermal_infid)
         per maestro's Pauli-mixing convention with dim=2."""
-        params = br.calculate_noise_params(synthetic_df)
+        params = br.calculate_noise_params(synthetic_cal)
         q0 = params["qubits"][0]
 
         T1, T2, t = 100e-6, 50e-6, 50e-9
@@ -159,34 +170,33 @@ class TestCalculateNoiseParams:
         assert q0["p_meas0_prep1"] == 0.03
         assert q0["p_meas1_prep0"] == 0.01
 
-    def test_t2_capped_at_2T1_kills_pure_dephasing(self, synthetic_df):
+    @pytest.mark.filterwarnings("ignore::UserWarning")
+    def test_t2_capped_at_2T1_kills_pure_dephasing(self, synthetic_cal):
         """At the physical bound T2 = 2·T1 the pure dephasing rate
         γ_φ = 1/T2_eff − 1/(2·T1) is zero, so the bridge applies no
         explicit Pauli-Z channel (all decoherence flows through T1
         amplitude damping)."""
-        params = br.calculate_noise_params(synthetic_df)
+        params = br.calculate_noise_params(synthetic_cal)
         q1 = params["qubits"][1]
-        # q1 has T2 > 2·T1 in synthetic_df, so T2_eff caps at 2·T1.
+        # q1 has T2 > 2·T1 in synthetic_cal, so T2_eff caps at 2·T1.
         assert q1["p_dephasing"] == pytest.approx(0.0, abs=1e-15)
 
-    def test_stale_calibration_clamps_and_warns(self, synthetic_df):
+    def test_stale_calibration_clamps_and_warns(self, synthetic_cal):
         """When gate_error < thermal_infid the 1Q residual would go
         negative; clamp to 0 and warn."""
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            params = br.calculate_noise_params(synthetic_df)
+        with pytest.warns(UserWarning) as caught:
+            params = br.calculate_noise_params(synthetic_cal)
         assert params["qubits"][2]["p_1q_residual"] == 0.0
-        msgs = [str(w.message) for w in caught]
-        assert any("below the T1/T2 decoherence floor" in m for m in msgs), msgs
+        assert any("below the T1/T2 decoherence floor" in str(w.message) for w in caught)
 
-    def test_2q_depolarizing_subtracts_thermal_and_uses_5_over_4_factor(self, synthetic_df):
+    def test_2q_depolarizing_subtracts_thermal_and_uses_5_over_4_factor(self, synthetic_cal):
         """For 2Q gates: ``p_2q = (5/4) · max(0, gate_error_2q − thermal_2q_pair)``.
         The 5/4 factor is the maestro Pauli-mixing convention for d=4
         (``p = err_avg · (d+1)/d``); thermal_2q_pair is the sum of
         per-qubit thermal infidelities over the CX duration."""
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            params = br.calculate_noise_params(synthetic_df)
+            params = br.calculate_noise_params(synthetic_cal)
 
         def _thermal(T1, T2, t):
             if T1 <= 0 or t <= 0:
@@ -215,62 +225,48 @@ class TestCalculateNoiseParams:
         assert params["gates_2q"][(1, 2)]["p"] == pytest.approx(expected_12, rel=1e-10)
         assert params["gates_2q"][(1, 2)]["gate_time"] == pytest.approx(250e-9)
 
-    def test_unrecognized_2q_gate_warns_and_skips(self, synthetic_df):
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            params = br.calculate_noise_params(synthetic_df)
+    def test_unrecognized_2q_gate_warns_and_skips(self, synthetic_cal):
+        with pytest.warns(UserWarning) as caught:
+            params = br.calculate_noise_params(synthetic_cal)
         assert (2, 0) not in params["gates_2q"]
-        msgs = [str(w.message) for w in caught]
-        assert any("No recognized 2Q gate for pair (2, 0)" in m for m in msgs), msgs
+        assert any("No recognized 2Q gate for pair (2, 0)" in str(w.message) for w in caught)
 
-    def test_crosstalk_angle_is_2_asin_sqrt_p(self, synthetic_df):
+    def test_crosstalk_angle_is_2_asin_sqrt_p(self, synthetic_cal):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            params = br.calculate_noise_params(synthetic_df)
+            params = br.calculate_noise_params(synthetic_cal)
         # p=0.25 -> 2*asin(0.5) = pi/3
         assert params["crosstalk"][(0, 1)] == pytest.approx(math.pi / 3.0)
 
     def test_2q_depolarizing_clamped_at_1(self):
         """When the residual times the 5/4 factor exceeds 1, clamp."""
-        df = pd.DataFrame([{
-            "T1": 100e-6, "T2": 50e-6,
-            "prob_meas0_prep1": 0.0, "prob_meas1_prep0": 0.0,
-            "gate_error_1q": 0.0, "gate_length_1q": 50e-9,
-        }])
-        df.index.name = "qubit"
-        df.attrs["gates_2q"] = {(0, 1): {"cx_error": 0.95, "cx_length": 0.0}}
-        df.attrs["crosstalk"] = {}
-        params = br.calculate_noise_params(df)
+        data = _cal(
+            [{"T1": 100e-6, "T2": 50e-6, "prob_meas0_prep1": 0.0,
+              "prob_meas1_prep0": 0.0, "gate_error_1q": 1e-3, "gate_length_1q": 50e-9}],
+            gates_2q={(0, 1): {"cx_error": 0.95, "cx_length": 0.0}},
+        )
+        params = br.calculate_noise_params(data)
         # gate_time=0 → no thermal subtraction → (5/4)·0.95 = 1.1875 → clamp 1.0
         assert params["gates_2q"][(0, 1)]["p"] == 1.0
 
     def test_p_1q_residual_clamped_at_1(self):
         """When the per-qubit residual times 3/2 exceeds 1, clamp."""
-        df = pd.DataFrame([{
-            "T1": 100e-6, "T2": 50e-6,
-            "prob_meas0_prep1": 0.0, "prob_meas1_prep0": 0.0,
-            "gate_error_1q": 5.0,  # absurd, just to exercise clamp
-            "gate_length_1q": 50e-9,
-        }])
-        df.index.name = "qubit"
-        df.attrs["gates_2q"] = {}
-        df.attrs["crosstalk"] = {}
-        params = br.calculate_noise_params(df)
+        data = _cal(
+            [{"T1": 100e-6, "T2": 50e-6, "prob_meas0_prep1": 0.0,
+              "prob_meas1_prep0": 0.0, "gate_error_1q": 5.0, "gate_length_1q": 50e-9}],
+        )
+        params = br.calculate_noise_params(data)
         assert params["qubits"][0]["p_1q_residual"] == 1.0
 
     def test_zero_t1_t2_zero_thermal_means_full_residual(self):
         """With no T1/T2 data the thermal floor is 0, so the entire
         gate_error goes into the residual depolarizing channel
         (scaled by 3/2 per the Pauli-mixing convention for dim=2)."""
-        df = pd.DataFrame([{
-            "T1": 0.0, "T2": 0.0,
-            "prob_meas0_prep1": 0.0, "prob_meas1_prep0": 0.0,
-            "gate_error_1q": 1e-4, "gate_length_1q": 50e-9,
-        }])
-        df.index.name = "qubit"
-        df.attrs["gates_2q"] = {}
-        df.attrs["crosstalk"] = {}
-        params = br.calculate_noise_params(df)
+        data = _cal(
+            [{"T1": 0.0, "T2": 0.0, "prob_meas0_prep1": 0.0,
+              "prob_meas1_prep0": 0.0, "gate_error_1q": 1e-4, "gate_length_1q": 50e-9}],
+        )
+        params = br.calculate_noise_params(data)
         q = params["qubits"][0]
         assert q["p_dephasing"] == 0.0
         assert q["delta_2q_per_q"] == 0.0
@@ -279,34 +275,27 @@ class TestCalculateNoiseParams:
     def test_delta_2q_thermal_present_when_2q_gate_longer(self):
         """A qubit that participates in a 2Q gate longer than its 1Q
         gates gets a positive delta_2q_per_q (extra CX-time thermal)."""
-        df = pd.DataFrame([{
-            "T1": 50e-6, "T2": 30e-6,
-            "prob_meas0_prep1": 0.0, "prob_meas1_prep0": 0.0,
-            "gate_error_1q": 1e-3, "gate_length_1q": 35e-9,
-        }, {
-            "T1": 80e-6, "T2": 60e-6,
-            "prob_meas0_prep1": 0.0, "prob_meas1_prep0": 0.0,
-            "gate_error_1q": 1e-3, "gate_length_1q": 35e-9,
-        }])
-        df.index.name = "qubit"
-        df.attrs["gates_2q"] = {(0, 1): {"cx_error": 1e-2, "cx_length": 400e-9}}
-        df.attrs["crosstalk"] = {}
-        params = br.calculate_noise_params(df)
+        data = _cal(
+            [
+                {"T1": 50e-6, "T2": 30e-6, "prob_meas0_prep1": 0.0,
+                 "prob_meas1_prep0": 0.0, "gate_error_1q": 1e-3, "gate_length_1q": 35e-9},
+                {"T1": 80e-6, "T2": 60e-6, "prob_meas0_prep1": 0.0,
+                 "prob_meas1_prep0": 0.0, "gate_error_1q": 1e-3, "gate_length_1q": 35e-9},
+            ],
+            gates_2q={(0, 1): {"cx_error": 1e-2, "cx_length": 400e-9}},
+        )
+        params = br.calculate_noise_params(data)
         # Both qubits should see a positive 2Q delta (longer CX → more decay)
         assert params["qubits"][0]["delta_2q_per_q"] > 0.0
         assert params["qubits"][1]["delta_2q_per_q"] > 0.0
 
     def test_delta_2q_zero_when_no_2q_gates(self):
         """A qubit not involved in any 2Q gate has zero delta thermal."""
-        df = pd.DataFrame([{
-            "T1": 100e-6, "T2": 50e-6,
-            "prob_meas0_prep1": 0.0, "prob_meas1_prep0": 0.0,
-            "gate_error_1q": 1e-4, "gate_length_1q": 50e-9,
-        }])
-        df.index.name = "qubit"
-        df.attrs["gates_2q"] = {}
-        df.attrs["crosstalk"] = {}
-        params = br.calculate_noise_params(df)
+        data = _cal(
+            [{"T1": 100e-6, "T2": 50e-6, "prob_meas0_prep1": 0.0,
+              "prob_meas1_prep0": 0.0, "gate_error_1q": 1e-3, "gate_length_1q": 50e-9}],
+        )
+        params = br.calculate_noise_params(data)
         assert params["qubits"][0]["delta_2q_per_q"] == 0.0
 
 
@@ -317,28 +306,27 @@ class TestCalculateNoiseParams:
 
 class TestReadBackendData:
     def test_dataframe_shape(self, fake_backend):
-        df = br.read_backend_data(fake_backend)
-        assert isinstance(df, pd.DataFrame)
-        assert len(df) == fake_backend.num_qubits
-        assert df.index.name == "qubit"
-        for col in ("T1", "T2", "prob_meas0_prep1", "prob_meas1_prep0",
-                    "gate_error_1q", "gate_length_1q"):
-            assert col in df.columns
+        data = br.read_backend_data(fake_backend)
+        assert isinstance(data, CalibrationData)
+        assert data.num_qubits == fake_backend.num_qubits
+        assert len(data.qubits) == fake_backend.num_qubits
+        expected_keys = {"T1", "T2", "prob_meas0_prep1", "prob_meas1_prep0",
+                         "gate_error_1q", "gate_length_1q"}
+        assert set(data.qubits[0]) == expected_keys
 
     def test_attrs_have_2q_dicts(self, fake_backend):
-        df = br.read_backend_data(fake_backend)
-        assert isinstance(df.attrs.get("gates_2q"), dict)
-        assert isinstance(df.attrs.get("crosstalk"), dict)
-        # Manila has cx pairs.
-        assert len(df.attrs["gates_2q"]) > 0
-        for pair, entry in df.attrs["gates_2q"].items():
+        data = br.read_backend_data(fake_backend)
+        assert isinstance(data.gates_2q, dict)
+        assert isinstance(data.crosstalk, dict)
+        assert len(data.gates_2q) > 0
+        for pair, entry in data.gates_2q.items():
             assert isinstance(pair, tuple) and len(pair) == 2
             assert any(k.endswith("_error") for k in entry)
 
     def test_t1_t2_positive(self, fake_backend):
-        df = br.read_backend_data(fake_backend)
-        assert (df["T1"] > 0).all()
-        assert (df["T2"] > 0).all()
+        data = br.read_backend_data(fake_backend)
+        assert all(row["T1"] > 0 for row in data.qubits.values())
+        assert all(row["T2"] > 0 for row in data.qubits.values())
 
 
 # ---------------------------------------------------------------------------
