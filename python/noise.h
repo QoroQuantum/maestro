@@ -483,7 +483,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_coherent_noise(
     const std::shared_ptr<Circuits::Circuit<double>> &circ,
     const NoiseModel &nm, std::mt19937 &rng) {
   auto out = std::make_shared<Circuits::Circuit<double>>();
-  std::uniform_int_distribution<int> sign_dist(0, 1);
+  std::bernoulli_distribution sign_dist(0.5);
 
   for (const auto &op : circ->GetOperations()) {
     out->AddOperation(op->Clone());
@@ -530,7 +530,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
     const NoiseModel &nm, std::mt19937 &rng) {
   auto out = std::make_shared<Circuits::Circuit<double>>();
   std::uniform_real_distribution<double> dist(0.0, 1.0);
-  std::uniform_int_distribution<int> sign_dist(0, 1);
+  std::bernoulli_distribution sign_dist(0.5);
 
   for (const auto &op : circ->GetOperations()) {
     out->AddOperation(op->Clone());

@@ -25,7 +25,7 @@ class NoiseAdd {
   std::shared_ptr<Circuits::Circuit<double>> inject(
       const std::shared_ptr<Circuits::Circuit<double>>& circ,
       const NoiseModel& nm) {
-    return inject_combined_noise(circ, nm, rng);
+    return inject_noise(circ, nm, rng);
   }
 
   std::shared_ptr<Circuits::Circuit<double>> inject_coherent(
