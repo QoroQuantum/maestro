@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export calibration YAML files for IBM Fez and IQM Garnet.
+"""Export calibration json files for IBM Fez and IQM Garnet.
 
 Uses fake backends unless live tokens are present in the environment.
 
@@ -46,7 +46,7 @@ def export_ibm_fez() -> None:
 
     print(f"IBM: reading calibration from {type(backend).__name__} "
           f"({backend.num_qubits} qubits)...", flush=True)
-    out = os.path.join(_HERE, f"ibm_fez_{tag}.yaml")
+    out = os.path.join(_HERE, f"ibm_fez_{tag}.json")
     br.save_calibration_file(backend, out)
     print(f"IBM: saved → {out}")
 
@@ -90,7 +90,7 @@ def export_iqm_garnet() -> None:
 
     print(f"IQM: reading calibration from {type(backend).__name__} "
           f"({backend.num_qubits} qubits)...", flush=True)
-    out = os.path.join(_HERE, f"iqm_garnet_{tag}.yaml")
+    out = os.path.join(_HERE, f"iqm_garnet_{tag}.json")
     br.save_calibration_file(backend, out)
     print(f"IQM: saved → {out}")
 
@@ -99,4 +99,4 @@ if __name__ == "__main__":
     export_ibm_fez()
     export_iqm_garnet()
     print("\nDone. Reload either file with:")
-    print("  backend = br.load_calibration_file('<path>.yaml')")
+    print("  backend = br.load_calibration_file('<path>.json')")

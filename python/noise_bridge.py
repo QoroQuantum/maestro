@@ -847,7 +847,10 @@ def _backend_to_dict(backend: Any) -> dict:
     for (q1, q2), strength in cal.crosstalk.items():
         crosstalk[f"{q1},{q2}"] = float(strength)
 
+    name: str | None = getattr(backend, "name", None)
     result: dict = {"num_qubits": num_qubits, "qubits": qubits}
+    if name:
+        result = {"name": name, **result}
     if coupling_map is not None:
         result["coupling_map"] = coupling_map
     if basis_gates:
@@ -893,8 +896,16 @@ def save_calibration_file(backend: Any, path: str) -> None:
     data = _backend_to_dict(backend)
 
     if ext == ".json":
+        _SENTINEL = "<<<COUPLING_MAP>>>"
+        cm = data.get("coupling_map")
+        if cm is not None:
+            data = {**data, "coupling_map": _SENTINEL}
+            compact_cm = '[' + ', '.join(f'[{a}, {b}]' for a, b in cm) + ']'
+        text = json.dumps(data, indent=2)
+        if cm is not None:
+            text = text.replace(f'"{_SENTINEL}"', compact_cm)
         with open(path, "w") as fh:
-            json.dump(data, fh, indent=2)
+            fh.write(text)
     elif ext in (".yaml", ".yml"):
         try:
             import yaml
