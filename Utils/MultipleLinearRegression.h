@@ -14,6 +14,7 @@
 #ifndef __MULTIPLE_LINEAR_REGRESSION_H__
 #define __MULTIPLE_LINEAR_REGRESSION_H__
 
+#include <cmath>
 #include <vector>
 #include <Eigen/Eigen>
 
@@ -56,16 +57,50 @@ namespace Utils {
 			for (size_t i = 0; i < n; ++i)
 				Y(i) = y[i];
 
+			Eigen::MatrixXd Wa;
+
+			/*
 			Eigen::MatrixXd Xt = X.transpose();
 			Eigen::MatrixXd XtX = Xt * X;
-			
-			Eigen::MatrixXd Wa;
-			
+
 			if (abs(XtX.determinant()) < 1E-10)
 				Wa = XtX.completeOrthogonalDecomposition().pseudoInverse() * Xt * Y;
 			else
 				Wa = XtX.inverse() * Xt * Y;
-			
+			*/
+
+			if (alpha > 0.)
+			{
+				// Ridge (L2) regularization: minimize ||X * w - Y||^2 + lambda * ||w||^2.
+				// The penalty strength is derived from the data so it adapts to the
+				// (unscaled) feature magnitudes: lambda = alpha * trace(X^t * X) / m,
+				// using only the feature columns (the bias column is left unregularized).
+				// It is solved by augmenting the system with sqrt(lambda) * I rows (and
+				// zeros in Y), which keeps the well-conditioned QR solve instead of
+				// forming X^t * X.
+				double trace = 0.;
+				for (size_t j = 1; j <= m; ++j)
+					trace += X.col(j).squaredNorm();
+
+				const double lambda = (m > 0) ? alpha * trace / static_cast<double>(m) : 0.;
+
+				Eigen::MatrixXd Xa(n + m, m + 1);
+				Xa.topRows(n) = X;
+				Xa.bottomRows(m).setZero();
+
+				const double sqrtLambda = std::sqrt(lambda);
+				for (size_t j = 0; j < m; ++j)
+					Xa(n + j, j + 1) = sqrtLambda;
+
+				Eigen::VectorXd Ya(n + m);
+				Ya.head(n) = Y;
+				Ya.tail(m).setZero();
+
+				Wa = Xa.colPivHouseholderQr().solve(Ya);
+			}
+			else
+				Wa = X.colPivHouseholderQr().solve(Y);
+
 			b = Wa(0);
 			W.resize(m);
 			for (size_t i = 0; i < m; ++i)
@@ -103,15 +138,27 @@ namespace Utils {
 			trueLinearRegression = reg;
 		}
 
+		// Ridge (L2) regularization factor (alpha). The effective penalty is derived
+		// from the data as alpha * trace(X^t * X) / m, so it adapts to the (unscaled)
+		// feature magnitudes. Set to 0 to disable. Applied before SetSamples.
+		// A small value such as 1e-6 stabilizes collinear/rank-deficient fits without
+		// materially biasing the weights.
+		void SetRegularization(double reg)
+		{
+			alpha = reg;
+		}
+
 		const Eigen::VectorXd& GetWeights() const { return W; }
 		double GetBias() const { return b; }
 		bool IsTrueLinearRegression() const { return trueLinearRegression; }
+		double GetRegularization() const { return alpha; }
 
 	private:
 		Eigen::VectorXd W;
 		double b = 0.;
 
-        bool trueLinearRegression = false;
+		bool trueLinearRegression = false;
+		double alpha = 1e-6;
 	};
 
 }
