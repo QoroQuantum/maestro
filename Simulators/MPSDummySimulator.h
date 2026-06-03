@@ -198,10 +198,14 @@ class MPSDummySimulator {
       }
 
       // any 2-qubit gate (whether swaps were needed or not) grows the
-      // bond dimension at the bond between the two adjacent qubits
+      // bond dimension at the bond between the two adjacent qubits.
+      // Charge the cost based on the bond dimension *before* the growth,
+      // consistent with SwapQubitsToPosition: the cost reflects the size of
+      // the SVD/contraction actually performed for this operation, and the
+      // grown bond dimension only affects subsequent operations.
       const IndexType bond = std::min(qubit1, qubit2);
-      growBondDimension(bond, false);
       totalSwappingCost += bondCost[bond];
+      growBondDimension(bond, false);
     }
   }
 
