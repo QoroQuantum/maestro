@@ -441,7 +441,7 @@ class MPSDummySimulator {
 
   std::vector<long long int> ComputeOptimalQubitsMap(
       const std::vector<std::shared_ptr<Circuits::Circuit<>>>& layers,
-      int nrShuffles = 25) {
+      int nrShuffles = 25, int nrSwaps = 10) {
     const IndexType nrQubits = getNrQubits();
 
     if (layers.empty() || nrQubits <= 2) return qubitsMap;
@@ -703,10 +703,11 @@ class MPSDummySimulator {
 
     // 2-opt local search: iteratively swap pairs of positions in the best map
     // and keep improvements, until no single swap can reduce the cost
-    {
+    {  
       auto candidate = optMap;
       bool improved = true;
-      while (improved) {
+      for (int improvementCount = 0; improved && improvementCount < nrSwaps;
+           ++improvementCount) {
         improved = false;
         for (IndexType i = 0; i < nrQubits; ++i) {
           for (IndexType j = i + 1; j < nrQubits; ++j) {
