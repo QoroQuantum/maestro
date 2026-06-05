@@ -847,14 +847,23 @@ class QCSimSimulator : public QCSimState {
       // Sleator-Weinfurter decomposition
       mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3),
                               static_cast<unsigned int>(q2));
+      NotifyObservers({qubit1, qubit2});
+
       mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2),
                               static_cast<unsigned int>(q1));
+      NotifyObservers({qubit0, qubit1});
+
       mpsSimulator->ApplyGate(csxdag, static_cast<unsigned int>(q3),
                               static_cast<unsigned int>(q2));
+      NotifyObservers({qubit1, qubit2});
+
       mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2),
                               static_cast<unsigned int>(q1));
+      NotifyObservers({qubit0, qubit1});
+
       mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3),
                               static_cast<unsigned int>(q1));
+      NotifyObservers({qubit0, qubit2});
     } else if (GetSimulationType() == SimulationType::kStabilizer)
       throw std::runtime_error(
           "QCSimSimulator::ApplyCCX: The stabilizer "
@@ -867,28 +876,39 @@ class QCSimSimulator : public QCSimState {
       // Sleator-Weinfurter decomposition
       tensorNetwork->AddGate(csx, static_cast<unsigned int>(q2),
                              static_cast<unsigned int>(q3));
+      NotifyObservers({qubit1, qubit2});
+
       tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q1),
                              static_cast<unsigned int>(q2));
+      NotifyObservers({qubit0, qubit1});
+
       tensorNetwork->AddGate(csxdag, static_cast<unsigned int>(q2),
                              static_cast<unsigned int>(q3));
+      NotifyObservers({qubit1, qubit2});
+
       tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q1),
                              static_cast<unsigned int>(q2));
+      NotifyObservers({qubit0, qubit1});
+
       tensorNetwork->AddGate(csx, static_cast<unsigned int>(q1),
                              static_cast<unsigned int>(q3));
-    } else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      NotifyObservers({qubit0, qubit2});
+    } else if (GetSimulationType() == SimulationType::kPauliPropagator) {
       pp->ApplyCCX(static_cast<unsigned int>(qubit0),
                    static_cast<unsigned int>(qubit1),
                    static_cast<unsigned int>(qubit2));
-    else if (GetSimulationType() == SimulationType::kPathIntegral) {
+      NotifyObservers({qubit2, qubit1, qubit0});
+    } else if (GetSimulationType() == SimulationType::kPathIntegral) {
       QC::Gates::AppliedGate<> agate(ccxgate.getRawOperatorMatrix(), qubit2,
                                      qubit1, qubit0);
       pathIntegralSimulator->ApplyGate(agate);
-    }
-    else
+      NotifyObservers({qubit2, qubit1, qubit0});
+    } else {
       state->ApplyGate(ccxgate, static_cast<unsigned int>(qubit2),
                        static_cast<unsigned int>(qubit1),
                        static_cast<unsigned int>(qubit0));
-    NotifyObservers({qubit2, qubit1, qubit0});
+      NotifyObservers({qubit2, qubit1, qubit0});
+    }
   }
 
   /**
@@ -910,28 +930,42 @@ class QCSimSimulator : public QCSimState {
       // this one I've got with the qiskit transpiler
       mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2),
                               static_cast<unsigned int>(q3));
+      NotifyObservers({qubit1, qubit0});
+
       mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3),
                               static_cast<unsigned int>(q2));
+      NotifyObservers({qubit0, qubit1});
+
       mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2),
                               static_cast<unsigned int>(q1));
+      NotifyObservers({ctrl_qubit, qubit0});
 
       pgate.SetPhaseShift(M_PI);
       mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q3));
+      NotifyObservers({qubit1});
       pgate.SetPhaseShift(-M_PI_2);
       mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q2));
+      NotifyObservers({qubit0});
 
       mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3),
                               static_cast<unsigned int>(q2));
+      NotifyObservers({qubit0, qubit1});
+
       mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2),
                               static_cast<unsigned int>(q1));
+      NotifyObservers({ctrl_qubit, qubit0});
 
       pgate.SetPhaseShift(M_PI);
       mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q3));
+      NotifyObservers({qubit1});
 
       mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3),
                               static_cast<unsigned int>(q1));
+      NotifyObservers({ctrl_qubit, qubit1});
+
       mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2),
                               static_cast<unsigned int>(q3));
+      NotifyObservers({qubit1, qubit0});
     } else if (GetSimulationType() == SimulationType::kStabilizer)
       throw std::runtime_error(
           "QCSimSimulator::ApplyCSwap: The stabilizer "
@@ -945,41 +979,58 @@ class QCSimSimulator : public QCSimState {
       // this one I've got with the qiskit transpiler
       tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q3),
                              static_cast<unsigned int>(q2));
+      NotifyObservers({qubit1, qubit0});
+
       tensorNetwork->AddGate(csx, static_cast<unsigned int>(q2),
                              static_cast<unsigned int>(q3));
+      NotifyObservers({qubit0, qubit1});
+
       tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q1),
                              static_cast<unsigned int>(q2));
+      NotifyObservers({ctrl_qubit, qubit0});
 
       pgate.SetPhaseShift(M_PI);
       tensorNetwork->AddGate(pgate, static_cast<unsigned int>(q3));
+      NotifyObservers({qubit1});
       pgate.SetPhaseShift(-M_PI_2);
       tensorNetwork->AddGate(pgate, static_cast<unsigned int>(q2));
+      NotifyObservers({qubit0});
 
       tensorNetwork->AddGate(csx, static_cast<unsigned int>(q2),
                              static_cast<unsigned int>(q3));
+      NotifyObservers({qubit0, qubit1});
+
       tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q1),
                              static_cast<unsigned int>(q2));
+      NotifyObservers({ctrl_qubit, qubit0});
 
       pgate.SetPhaseShift(M_PI);
       tensorNetwork->AddGate(pgate, static_cast<unsigned int>(q3));
+      NotifyObservers({qubit1});
 
       tensorNetwork->AddGate(csx, static_cast<unsigned int>(q1),
                              static_cast<unsigned int>(q3));
+      NotifyObservers({ctrl_qubit, qubit1});
+
       tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q3),
                              static_cast<unsigned int>(q2));
+      NotifyObservers({qubit1, qubit0});
     } else if (GetSimulationType() == SimulationType::kPauliPropagator) {
       pp->ApplyCSwap(static_cast<unsigned int>(ctrl_qubit),
                      static_cast<unsigned int>(qubit0),
                      static_cast<unsigned int>(qubit1));
+      NotifyObservers({qubit1, qubit0, ctrl_qubit});
     } else if (GetSimulationType() == SimulationType::kPathIntegral) {
-        QC::Gates::AppliedGate<> agate(cswapgate.getRawOperatorMatrix(),
+      QC::Gates::AppliedGate<> agate(cswapgate.getRawOperatorMatrix(),
                                        qubit1, qubit0, ctrl_qubit);
-        pathIntegralSimulator->ApplyGate(agate);
-    } else
+      pathIntegralSimulator->ApplyGate(agate);
+      NotifyObservers({qubit1, qubit0, ctrl_qubit});
+    } else {
       state->ApplyGate(cswapgate, static_cast<unsigned int>(qubit1),
                        static_cast<unsigned int>(qubit0),
                        static_cast<unsigned int>(ctrl_qubit));
-    NotifyObservers({qubit1, qubit0, ctrl_qubit});
+      NotifyObservers({qubit1, qubit0, ctrl_qubit});
+    }
   }
 
   /**

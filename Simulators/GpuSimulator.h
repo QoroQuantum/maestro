@@ -598,9 +598,10 @@ class GpuSimulator : public GpuState {
    */
   void ApplyCCX(Types::qubit_t qubit0, Types::qubit_t qubit1,
                 Types::qubit_t qubit2) override {
-    if (GetSimulationType() == SimulationType::kStatevector)
+    if (GetSimulationType() == SimulationType::kStatevector) {
       state->ApplyCCX(qubit0, qubit1, qubit2);
-    else if (GetSimulationType() == SimulationType::kMatrixProductState) {
+      NotifyObservers({qubit0, qubit1, qubit2});
+    } else if (GetSimulationType() == SimulationType::kMatrixProductState) {
       const size_t q1 = qubit0;  // control 1
       const size_t q2 = qubit1;  // control 2
       const size_t q3 = qubit2;  // target
@@ -608,20 +609,30 @@ class GpuSimulator : public GpuState {
       // Sleator-Weinfurter decomposition
       mps->ApplyCSX(static_cast<unsigned int>(q2),
                     static_cast<unsigned int>(q3));
+      NotifyObservers({qubit1, qubit2});
+
       mps->ApplyCX(static_cast<unsigned int>(q1),
                    static_cast<unsigned int>(q2));
+      NotifyObservers({qubit0, qubit1});
+
       mps->ApplyCSXDG(static_cast<unsigned int>(q2),
                       static_cast<unsigned int>(q3));
+      NotifyObservers({qubit1, qubit2});
+
       mps->ApplyCX(static_cast<unsigned int>(q1),
                    static_cast<unsigned int>(q2));
+      NotifyObservers({qubit0, qubit1});
+
       mps->ApplyCSX(static_cast<unsigned int>(q1),
                     static_cast<unsigned int>(q3));
+      NotifyObservers({qubit0, qubit2});
     } else if (GetSimulationType() == SimulationType::kTensorNetwork) {
       tn->ApplyCCX(qubit0, qubit1, qubit2);
-    } else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      NotifyObservers({qubit0, qubit1, qubit2});
+    } else if (GetSimulationType() == SimulationType::kPauliPropagator) {
       pp->ApplyCCX(qubit0, qubit1, qubit2);
-
-    NotifyObservers({qubit0, qubit1, qubit2});
+      NotifyObservers({qubit0, qubit1, qubit2});
+    }
   }
 
   /**
@@ -634,9 +645,10 @@ class GpuSimulator : public GpuState {
    */
   void ApplyCSwap(Types::qubit_t ctrl_qubit, Types::qubit_t qubit0,
                   Types::qubit_t qubit1) override {
-    if (GetSimulationType() == SimulationType::kStatevector)
+    if (GetSimulationType() == SimulationType::kStatevector) {
       state->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
-    else if (GetSimulationType() == SimulationType::kMatrixProductState) {
+      NotifyObservers({qubit1, qubit0, ctrl_qubit});
+    } else if (GetSimulationType() == SimulationType::kMatrixProductState) {
       const size_t q1 = ctrl_qubit;  // control
       const size_t q2 = qubit0;
       const size_t q3 = qubit1;
@@ -645,31 +657,46 @@ class GpuSimulator : public GpuState {
       // this one I've got with the qiskit transpiler
       mps->ApplyCX(static_cast<unsigned int>(q3),
                    static_cast<unsigned int>(q2));
+      NotifyObservers({qubit1, qubit0});
+
       mps->ApplyCSX(static_cast<unsigned int>(q2),
                     static_cast<unsigned int>(q3));
+      NotifyObservers({qubit0, qubit1});
+
       mps->ApplyCX(static_cast<unsigned int>(q1),
                    static_cast<unsigned int>(q2));
+      NotifyObservers({ctrl_qubit, qubit0});
 
       mps->ApplyP(static_cast<unsigned int>(q3), M_PI);
+      NotifyObservers({qubit1});
       mps->ApplyP(static_cast<unsigned int>(q2), -M_PI_2);
+      NotifyObservers({qubit0});
 
       mps->ApplyCSX(static_cast<unsigned int>(q2),
                     static_cast<unsigned int>(q3));
+      NotifyObservers({qubit0, qubit1});
+
       mps->ApplyCX(static_cast<unsigned int>(q1),
                    static_cast<unsigned int>(q2));
+      NotifyObservers({ctrl_qubit, qubit0});
 
       mps->ApplyP(static_cast<unsigned int>(q3), M_PI);
+      NotifyObservers({qubit1});
 
       mps->ApplyCSX(static_cast<unsigned int>(q1),
                     static_cast<unsigned int>(q3));
+      NotifyObservers({ctrl_qubit, qubit1});
+
       mps->ApplyCX(static_cast<unsigned int>(q3),
                    static_cast<unsigned int>(q2));
+      NotifyObservers({qubit1, qubit0});
     } else if (GetSimulationType() == SimulationType::kTensorNetwork) {
       tn->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
-    } else if (GetSimulationType() == SimulationType::kPauliPropagator)
+      NotifyObservers({qubit1, qubit0, ctrl_qubit});
+    } else if (GetSimulationType() == SimulationType::kPauliPropagator) {
       pp->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
-
-    NotifyObservers({qubit1, qubit0, ctrl_qubit});
+      NotifyObservers({qubit1, qubit0, ctrl_qubit});
+    }
   }
 
   /**
