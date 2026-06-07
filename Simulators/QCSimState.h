@@ -90,6 +90,12 @@ class QCSimState : public ISimulator {
       } else if (simulationType == SimulationType::kPauliPropagator) {
         pp = std::make_unique<Simulators::QcsimPauliPropagator>();
         pp->SetNrQubits(static_cast<int>(nrQubits));
+        if (ppCoefficientThreshold > 0.)
+          pp->SetCoefficientThreshold(ppCoefficientThreshold);
+        if (ppPauliWeightThreshold < std::numeric_limits<size_t>::max())
+          pp->SetPauliWeightThreshold(ppPauliWeightThreshold);
+        if (ppStepsBetweenTrims < std::numeric_limits<int>::max())
+          pp->SetStepsBetweenTrims(ppStepsBetweenTrims);
       } else if (simulationType == SimulationType::kPathIntegral) {
         pathIntegralSimulator = std::make_unique<PathIntegralSimulator>();
         pathIntegralSimulator->SetStartZeroState(nrQubits);
@@ -516,6 +522,19 @@ class QCSimState : public ISimulator {
       }
     } else if (std::string("mps_sample_measure_algorithm") == key)
       useMPSMeasureNoCollapse = std::string("mps_probabilities") == value;
+    else if (std::string("pauli_propagator_coefficient_threshold") == key) {
+      ppCoefficientThreshold = std::stod(value);
+      if (pp && ppCoefficientThreshold > 0.)
+        pp->SetCoefficientThreshold(ppCoefficientThreshold);
+    } else if (std::string("pauli_propagator_pauli_weight_threshold") == key) {
+      ppPauliWeightThreshold = std::stoull(value);
+      if (pp && ppPauliWeightThreshold < std::numeric_limits<size_t>::max())
+        pp->SetPauliWeightThreshold(ppPauliWeightThreshold);
+    } else if (std::string("pauli_propagator_steps_between_trims") == key) {
+      ppStepsBetweenTrims = std::stoi(value);
+      if (pp && ppStepsBetweenTrims < std::numeric_limits<int>::max())
+        pp->SetStepsBetweenTrims(ppStepsBetweenTrims);
+    }
   }
 
   /**
@@ -1694,6 +1713,11 @@ class QCSimState : public ISimulator {
   bool enableMultithreading = true;    /**< The multithreading flag. */
   bool useMPSMeasureNoCollapse =
       true; /**< The flag to use the mps measure no collapse algorithm. */
+
+  // PauliPropagator truncation settings
+  double ppCoefficientThreshold = 0.;
+  size_t ppPauliWeightThreshold = std::numeric_limits<size_t>::max();
+  int ppStepsBetweenTrims = std::numeric_limits<int>::max();
 
   int lookaheadDepth = 0;
   int lookaheadDepthWithHeuristic = 0;
