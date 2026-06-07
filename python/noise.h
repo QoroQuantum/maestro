@@ -81,22 +81,29 @@ struct ReadoutError {
 
 /**
  * @class NoiseModel
- * @brief Maps qubit indices to Pauli channel and/or coherent noise parameters.
+ * @brief Maps qubit indices to noise parameters for realistic device simulation.
  *
- * Supports two noise modes:
- *   1. **Pauli (incoherent)**: stochastic Pauli gate injection or analytical
+ * Supports six noise categories, all combinable on the same model:
+ *   1. **Pauli (incoherent)**: stochastic X/Y/Z gate injection or analytical
  *      damping. Configured via set_depolarizing(), set_dephasing(), etc.
  *   2. **Coherent**: systematic rotation gate injection. Configured via
  *      set_coherent_depolarizing(), set_coherent_rotation(), etc.
+ *   3. **Correlated (time-correlated)**: non-Markovian dephasing via
+ *      per-qubit AR(1) processes. Configured via set_correlated_ou(),
+ *      set_correlated_ar1(), set_all_correlated_from_power(), etc.
+ *   4. **T1 amplitude damping**: probabilistic |1⟩→|0⟩ decay.
+ *   5. **ZZ crosstalk**: parasitic Rz rotations on spectator qubits.
+ *   6. **Readout error**: classical post-measurement bit-flip channel.
  *
- * Both modes can be configured on the same model — the caller chooses
- * which injection function to use (inject_noise vs inject_coherent_noise).
+ * Use inject_combined_noise() to apply all configured layers in a single pass,
+ * or use the individual inject_noise/inject_coherent_noise/inject_correlated_noise
+ * functions for specific noise types.
  *
  * Usage:
  *   NoiseModel nm;
  *   nm.set_depolarizing(0, 0.01);              // Pauli: 1% depolarizing
  *   nm.set_coherent_depolarizing(1, 0.01);     // Coherent: same infidelity
- *   nm.set_coherent_rotation(2, 0.0, 0.0, 0.05); // Coherent: custom angles
+ *   nm.set_all_correlated_ou(4, 15.0, 0.5, 100e-9); // Correlated: OU noise
  *   double d = nm.compute_damping("ZZ");       // damping for ⟨ZZ⟩
  */
 class NoiseModel {
@@ -611,8 +618,9 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_coherent_noise(
  * produces time-varying amplitudes with temporal correlations governed by φ.
  * This models realistic non-Markovian dephasing from 1/f or OU noise sources.
  *
- * The inject_after_1q flag on each qubit's CorrelatedNoise controls whether
- * noise is injected after single-qubit gates (true) or only multi-qubit (false).
+ * The inject_after_1q and inject_after_2q flags on each qubit's
+ * CorrelatedNoise control whether noise is injected after single-qubit
+ * and/or multi-qubit gates respectively.
  *
  * @param circ  Input circuit (not modified).
  * @param nm    NoiseModel with correlated noise parameters set.
