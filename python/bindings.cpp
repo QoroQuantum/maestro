@@ -1434,7 +1434,65 @@ NB_MODULE(maestro, m) {
           "config"_a = SimulatorConfig{},
           "seed"_a = nb::none(),
           "Estimate with combined noise (coherent + crosstalk + T1 + Pauli).\n\n"
-          "Example: qc.full_noise_estimate(['ZZ', 'XX'], nm)");
+          "Example: qc.full_noise_estimate(['ZZ', 'XX'], nm)")
+      // ---- Noisy Fidelity (inner-product) ----
+      .def(
+          "noisy_fidelity",
+          [](std::shared_ptr<Circuits::Circuit<double>> self,
+             const noise::NoiseModel &noise_model, int noise_realizations,
+             const SimulatorConfig &config,
+             std::optional<unsigned int> seed) {
+            if (!self) throw nb::value_error("Circuit is null.");
+            if (noise_realizations <= 0)
+              throw nb::value_error(
+                  "noise_realizations must be >= 1.");
+            if (!noise_model.has_any())
+              throw nb::value_error(
+                  "NoiseModel has no noise configured.");
+
+            std::mt19937 rng(seed.value_or(std::random_device{}()));
+            double sum_fid = 0.0;
+            double sum_fid_sq = 0.0;
+
+            auto start = std::chrono::high_resolution_clock::now();
+            for (int r = 0; r < noise_realizations; ++r) {
+              auto noisy =
+                  noise::inject_combined_noise(self, noise_model, rng);
+              auto ip = inner_product_core(self, noisy, config);
+              double fid = std::norm(ip);
+              sum_fid += fid;
+              sum_fid_sq += fid * fid;
+            }
+            auto end = std::chrono::high_resolution_clock::now();
+
+            double mean_fid = sum_fid / noise_realizations;
+            double var = (noise_realizations > 1)
+                ? (sum_fid_sq - noise_realizations * mean_fid * mean_fid) /
+                      (noise_realizations - 1)
+                : 0.0;
+            double se = std::sqrt(std::max(var, 0.0) / noise_realizations);
+            double mean_infid = 1.0 - mean_fid;
+
+            nb::dict out;
+            out["fidelity"] = mean_fid;
+            out["infidelity"] = mean_infid;
+            out["std_error"] = se;
+            out["time_taken"] =
+                std::chrono::duration<double>(end - start).count();
+            out["noise_realizations"] = noise_realizations;
+            return out;
+          },
+          "noise_model"_a,
+          "noise_realizations"_a = 100,
+          "config"_a = SimulatorConfig{},
+          "seed"_a = nb::none(),
+          "Compute fidelity under noise via inner_product.\n\n"
+          "Injects all configured noise types (correlated, coherent, "
+          "crosstalk, T1, Pauli) and averages |<psi_ideal|psi_noisy>|^2 "
+          "over noise realizations.\n\n"
+          "Returns dict with 'fidelity', 'infidelity', 'std_error', "
+          "'time_taken', 'noise_realizations'.\n\n"
+          "Example: qc.noisy_fidelity(nm, noise_realizations=200)");
 
   // --- QASM Tools ---
   nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
@@ -1737,6 +1795,62 @@ NB_MODULE(maestro, m) {
            "Equivalent to set_all_coherent_depolarizing(n, p).")
       .def("has_coherent", &noise::NoiseModel::has_coherent,
            "Return True if any coherent noise parameters have been set.")
+      // ── Correlated (time-correlated) noise ──
+      .def("set_correlated_ar1", &noise::NoiseModel::set_correlated_ar1,
+           "qubit"_a, "phi"_a, "sigma_eta"_a, "after_1q"_a = true,
+           "after_2q"_a = true,
+           "Set AR(1) correlated dephasing on a qubit.\n\n"
+           "After every gate, Rz(y[k]) is injected where:\n"
+           "  y[k] = phi * y[k-1] + eta[k],  eta ~ N(0, sigma_eta^2)\n\n"
+           "Args:\n"
+           "    qubit: Qubit index.\n"
+           "    phi: AR(1) autoregressive coefficient.\n"
+           "    sigma_eta: Driving noise standard deviation.\n"
+           "    after_1q: If True (default), inject after 1Q gates.\n"
+           "    after_2q: If True (default), inject after 2Q gates.\n\n"
+           "Example: nm.set_correlated_ar1(0, phi=0.135, sigma_eta=2.35e-3)")
+      .def("set_correlated_ou", &noise::NoiseModel::set_correlated_ou,
+           "qubit"_a, "sigma"_a, "alpha"_a, "gate_time"_a,
+           "after_1q"_a = true, "after_2q"_a = true,
+           "Set correlated noise from Ornstein-Uhlenbeck parameters.\n\n"
+           "OU: dX = -theta*X*dt + sigma*dW, discretized as AR(1).\n"
+           "  theta = 1/(alpha * gate_time)\n"
+           "  phi = exp(-theta * gate_time)\n"
+           "  sigma_eta^2 = (sigma^2 / 2*theta) * (1 - phi^2)\n\n"
+           "Args:\n"
+           "    qubit: Qubit index.\n"
+           "    sigma: OU diffusion coefficient (noise strength).\n"
+           "    alpha: Correlation time in gate-time units.\n"
+           "    gate_time: Gate duration in seconds.\n"
+           "    after_1q: If True (default), inject after 1Q gates.\n"
+           "    after_2q: If True (default), inject after 2Q gates.\n\n"
+           "Example: nm.set_correlated_ou(0, sigma=15.0, alpha=0.5, "
+           "gate_time=100e-9)")
+      .def("set_all_correlated_ou",
+           &noise::NoiseModel::set_all_correlated_ou,
+           "num_qubits"_a, "sigma"_a, "alpha"_a, "gate_time"_a,
+           "after_1q"_a = true, "after_2q"_a = true,
+           "Set identical OU correlated noise on qubits [0, num_qubits).\n\n"
+           "Example: nm.set_all_correlated_ou(20, sigma=15.0, alpha=0.5, "
+           "gate_time=100e-9)")
+      .def("set_all_correlated_from_power",
+           &noise::NoiseModel::set_all_correlated_from_power,
+           "num_qubits"_a, "power"_a, "alpha"_a, "gate_time"_a,
+           "after_1q"_a = true, "after_2q"_a = true,
+           "Set correlated noise from total noise power.\n\n"
+           "P_tot = N * sigma^2 * pi * alpha * gate_time\n"
+           "Derives sigma from P_tot and sets OU noise on all qubits.\n\n"
+           "Args:\n"
+           "    num_qubits: Number of qubits N.\n"
+           "    power: Total noise power P_tot.\n"
+           "    alpha: Correlation time in gate-time units.\n"
+           "    gate_time: Gate duration in seconds.\n"
+           "    after_1q: If True (default), inject after 1Q gates too.\n"
+           "    after_2q: If True (default), inject after 2Q gates too.\n\n"
+           "Example: nm.set_all_correlated_from_power(20, power=1e-3, "
+           "alpha=0.5, gate_time=100e-9)")
+      .def("has_correlated", &noise::NoiseModel::has_correlated,
+           "Return True if any correlated noise parameters have been set.")
       // ── T1 amplitude damping ──
       .def("set_t1", &noise::NoiseModel::set_t1, "qubit"_a, "gamma"_a,
            "Set per-gate T1 decay probability. After each gate on this "
