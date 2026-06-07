@@ -3701,3 +3701,316 @@ class TestGateTypeSpecificNoise:
         assert p00_2q < p00_1q, \
             f"Heavy 2Q noise should degrade more: 1Q P(00)={p00_1q:.4f}, 2Q P(00)={p00_2q:.4f}"
 
+
+class TestCorrelatedNoiseModel:
+    """Test correlated (time-correlated OU/AR(1)) noise setters."""
+
+    def test_has_correlated_initially_false(self):
+        """New NoiseModel should have no correlated noise."""
+        nm = maestro.NoiseModel()
+        assert nm.has_correlated() is False
+
+    def test_set_correlated_ar1(self):
+        """set_correlated_ar1 should enable has_correlated."""
+        nm = maestro.NoiseModel()
+        nm.set_correlated_ar1(0, phi=0.135, sigma_eta=2.35e-3)
+        assert nm.has_correlated() is True
+
+    def test_set_correlated_ou(self):
+        """set_correlated_ou should enable has_correlated."""
+        nm = maestro.NoiseModel()
+        nm.set_correlated_ou(0, sigma=15.0, alpha=0.5, gate_time=100e-9)
+        assert nm.has_correlated() is True
+
+    def test_set_all_correlated_ou(self):
+        """set_all_correlated_ou should set noise on all qubits."""
+        nm = maestro.NoiseModel()
+        nm.set_all_correlated_ou(10, sigma=15.0, alpha=0.5, gate_time=100e-9)
+        assert nm.has_correlated() is True
+
+    def test_set_all_correlated_from_power(self):
+        """set_all_correlated_from_power should set noise from P_tot."""
+        nm = maestro.NoiseModel()
+        nm.set_all_correlated_from_power(
+            10, power=1e-3, alpha=0.5, gate_time=100e-9)
+        assert nm.has_correlated() is True
+
+    def test_set_correlated_ar1_after_1q_flag(self):
+        """after_1q flag should be accepted."""
+        nm = maestro.NoiseModel()
+        nm.set_correlated_ar1(0, phi=0.5, sigma_eta=0.01, after_1q=False)
+        assert nm.has_correlated() is True
+
+    def test_set_correlated_ou_after_1q_flag(self):
+        """after_1q flag should be accepted on OU setter."""
+        nm = maestro.NoiseModel()
+        nm.set_correlated_ou(
+            0, sigma=15.0, alpha=0.5, gate_time=100e-9, after_1q=False)
+        assert nm.has_correlated() is True
+
+    def test_has_any_includes_correlated(self):
+        """has_any() should return True when only correlated is set."""
+        nm = maestro.NoiseModel()
+        assert nm.has_any() is False
+        nm.set_correlated_ar1(0, phi=0.5, sigma_eta=0.01)
+        assert nm.has_any() is True
+
+
+class TestCorrelatedNoiseExecution:
+    """Test correlated noise via full_noise_execute/estimate and noisy_fidelity."""
+
+    def test_correlated_full_noise_execute(self):
+        """full_noise_execute should work with only correlated noise set."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_all_correlated_ou(2, sigma=15.0, alpha=0.5, gate_time=100e-9)
+
+        result = qc.full_noise_execute(
+            nm, shots=1000, noise_realizations=10, seed=42)
+
+        assert 'counts' in result
+        assert 'time_taken' in result
+        total = sum(result['counts'].values())
+        assert total == 1000
+
+    def test_correlated_full_noise_estimate(self):
+        """full_noise_estimate should work with only correlated noise set."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_correlated_ou(2, sigma=15.0, alpha=0.5, gate_time=100e-9)
+
+        result = qc.full_noise_estimate(
+            'ZZ', nm, noise_realizations=20, seed=42)
+
+        assert 'expectation_values' in result
+        assert 'ideal_expectation_values' in result
+        assert result['noise_realizations'] == 20
+
+    def test_noisy_fidelity_returns_valid_result(self):
+        """noisy_fidelity should return fidelity and infidelity."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_correlated_ou(2, sigma=15.0, alpha=0.5, gate_time=100e-9)
+
+        result = qc.noisy_fidelity(nm, noise_realizations=20, seed=42)
+
+        assert 'fidelity' in result
+        assert 'infidelity' in result
+        assert 'std_error' in result
+        assert 0.0 <= result['fidelity'] <= 1.0
+        assert abs(result['fidelity'] + result['infidelity'] - 1.0) < 1e-12
+
+    def test_noisy_fidelity_no_noise_raises(self):
+        """Should raise if no noise is configured at all."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+
+        nm = maestro.NoiseModel()
+
+        with pytest.raises(ValueError, match="noise"):
+            qc.noisy_fidelity(nm)
+
+    def test_noisy_fidelity_works_with_coherent(self):
+        """noisy_fidelity should work with coherent noise too."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, 0.01)
+
+        result = qc.noisy_fidelity(nm, noise_realizations=20, seed=42)
+        assert 0.0 <= result['fidelity'] <= 1.0
+
+    def test_noisy_fidelity_seed_reproducibility(self):
+        """Same seed should produce identical fidelity."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_correlated_ou(2, sigma=15.0, alpha=0.5, gate_time=100e-9)
+
+        r1 = qc.noisy_fidelity(nm, noise_realizations=20, seed=12345)
+        r2 = qc.noisy_fidelity(nm, noise_realizations=20, seed=12345)
+
+        assert r1['fidelity'] == pytest.approx(r2['fidelity'], abs=1e-15)
+
+    def test_correlated_estimate_seed_reproducibility(self):
+        """Same seed should produce identical expectation values."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_correlated_ou(2, sigma=15.0, alpha=0.5, gate_time=100e-9)
+
+        r1 = qc.full_noise_estimate('ZZ', nm, noise_realizations=20,
+                                     seed=12345)
+        r2 = qc.full_noise_estimate('ZZ', nm, noise_realizations=20,
+                                     seed=12345)
+
+        assert r1['expectation_values'] == r2['expectation_values']
+
+
+class TestCorrelatedNoisePhysics:
+    """Test physical correctness of correlated noise."""
+
+    def test_zero_noise_preserves_fidelity(self):
+        """Zero sigma should produce fidelity ≈ 1.0."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_correlated_ou(2, sigma=0.0, alpha=0.5, gate_time=100e-9)
+
+        result = qc.noisy_fidelity(nm, noise_realizations=10, seed=42)
+        assert result['fidelity'] == pytest.approx(1.0, abs=1e-10)
+
+    def test_stronger_noise_reduces_fidelity(self):
+        """Higher sigma should produce lower fidelity."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm_weak = maestro.NoiseModel()
+        nm_weak.set_all_correlated_ou(
+            2, sigma=5.0, alpha=0.5, gate_time=100e-9)
+
+        nm_strong = maestro.NoiseModel()
+        nm_strong.set_all_correlated_ou(
+            2, sigma=50.0, alpha=0.5, gate_time=100e-9)
+
+        r_weak = qc.noisy_fidelity(nm_weak, noise_realizations=50, seed=42)
+        r_strong = qc.noisy_fidelity(nm_strong, noise_realizations=50,
+                                      seed=42)
+
+        assert r_strong['fidelity'] < r_weak['fidelity'], \
+            f"Stronger noise should reduce fidelity: " \
+            f"weak={r_weak['fidelity']:.6f}, strong={r_strong['fidelity']:.6f}"
+
+    def test_noise_degrades_expectation(self):
+        """Correlated noise should degrade ⟨ZZ⟩ below ideal value."""
+        from maestro.circuits import QuantumCircuit
+        import math
+
+        # Deeper circuit so OU noise accumulates visibly
+        N = 4
+        qc = QuantumCircuit()
+        for i in range(N):
+            qc.h(i)
+            for k in range(1, N - i):
+                qc.crz(i, i + k, math.pi / (2 ** k))
+
+        obs = 'Z' + 'I' * (N - 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_correlated_ou(
+            N, sigma=500.0, alpha=0.5, gate_time=100e-9)
+
+        result = qc.full_noise_estimate(
+            obs, nm, noise_realizations=100, seed=42)
+
+        ideal_z = result['ideal_expectation_values'][0]
+        noisy_z = result['expectation_values'][0]
+
+        # Noisy should have lower magnitude than ideal
+        assert abs(noisy_z) < abs(ideal_z) + 0.01, \
+            f"Noise should degrade: ideal={ideal_z:.4f}, noisy={noisy_z:.4f}"
+
+    def test_correlated_with_mps_backend(self):
+        """Correlated noise should work with MPS backend."""
+        from maestro.circuits import QuantumCircuit
+        import math
+
+        qc = QuantumCircuit()
+        # Small QFT
+        N = 4
+        for i in range(N):
+            qc.h(i)
+            for k in range(1, N - i):
+                qc.crz(i, i + k, math.pi / (2 ** k))
+
+        nm = maestro.NoiseModel()
+        nm.set_all_correlated_ou(N, sigma=15.0, alpha=0.5, gate_time=100e-9)
+
+        mps_config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=8)
+
+        result = qc.noisy_fidelity(
+            nm, noise_realizations=10, config=mps_config, seed=42)
+
+        assert 'fidelity' in result
+        assert 0.0 <= result['fidelity'] <= 1.0
+
+    def test_after_1q_flag_changes_behavior(self):
+        """after_1q=False should give higher fidelity (less noise injected)."""
+        from maestro.circuits import QuantumCircuit
+
+        # Circuit with mix of 1Q and 2Q gates
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.h(1)
+        qc.rx(0, 0.5)
+        qc.ry(1, 0.5)
+        qc.cx(0, 1)
+
+        nm_all = maestro.NoiseModel()
+        nm_all.set_all_correlated_ou(
+            2, sigma=50.0, alpha=0.5, gate_time=100e-9, after_1q=True)
+
+        nm_2q_only = maestro.NoiseModel()
+        nm_2q_only.set_all_correlated_ou(
+            2, sigma=50.0, alpha=0.5, gate_time=100e-9, after_1q=False)
+
+        r_all = qc.noisy_fidelity(
+            nm_all, noise_realizations=50, seed=42)
+        r_2q = qc.noisy_fidelity(
+            nm_2q_only, noise_realizations=50, seed=42)
+
+        # Less noise injection → higher fidelity
+        assert r_2q['fidelity'] >= r_all['fidelity'], \
+            f"after_1q=False should inject less noise: " \
+            f"all={r_all['fidelity']:.6f}, 2q_only={r_2q['fidelity']:.6f}"
+
+    def test_combined_noise_includes_correlated(self):
+        """full_noise_execute should apply correlated + coherent noise."""
+        from maestro.circuits import QuantumCircuit
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_all_correlated_ou(2, sigma=15.0, alpha=0.5, gate_time=100e-9)
+        # Also set some coherent noise so has_any() is true
+        nm.set_all_coherent_depolarizing(2, 0.001)
+
+        result = qc.full_noise_execute(nm, shots=1000,
+                                        noise_realizations=10, seed=42)
+        assert 'counts' in result
+        total = sum(result['counts'].values())
+        assert total == 1000
