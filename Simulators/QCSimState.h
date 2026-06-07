@@ -524,13 +524,16 @@ class QCSimState : public ISimulator {
       useMPSMeasureNoCollapse = std::string("mps_probabilities") == value;
     else if (std::string("pauli_propagator_coefficient_threshold") == key) {
       ppCoefficientThreshold = std::stod(value);
-      if (pp) pp->SetCoefficientThreshold(ppCoefficientThreshold);
+      if (pp && ppCoefficientThreshold > 0.)
+        pp->SetCoefficientThreshold(ppCoefficientThreshold);
     } else if (std::string("pauli_propagator_pauli_weight_threshold") == key) {
       ppPauliWeightThreshold = std::stoull(value);
-      if (pp) pp->SetPauliWeightThreshold(ppPauliWeightThreshold);
+      if (pp && ppPauliWeightThreshold < std::numeric_limits<size_t>::max())
+        pp->SetPauliWeightThreshold(ppPauliWeightThreshold);
     } else if (std::string("pauli_propagator_steps_between_trims") == key) {
       ppStepsBetweenTrims = std::stoi(value);
-      if (pp) pp->SetStepsBetweenTrims(ppStepsBetweenTrims);
+      if (pp && ppStepsBetweenTrims < std::numeric_limits<int>::max())
+        pp->SetStepsBetweenTrims(ppStepsBetweenTrims);
     }
   }
 
