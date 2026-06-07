@@ -1413,6 +1413,9 @@ NB_MODULE(maestro, m) {
              const SimulatorConfig &config,
              std::optional<unsigned int> seed) {
             if (!self) throw nb::value_error("Circuit is null.");
+            if (noise_realizations <= 0)
+              throw nb::value_error(
+                  "noise_realizations must be >= 1.");
             if (!noise_model.has_any())
               throw nb::value_error(
                   "NoiseModel has no noise configured.");
@@ -1433,7 +1436,10 @@ NB_MODULE(maestro, m) {
             auto end = std::chrono::high_resolution_clock::now();
 
             double mean_fid = sum_fid / noise_realizations;
-            double var = sum_fid_sq / noise_realizations - mean_fid * mean_fid;
+            double var = (noise_realizations > 1)
+                ? (sum_fid_sq - noise_realizations * mean_fid * mean_fid) /
+                      (noise_realizations - 1)
+                : 0.0;
             double se = std::sqrt(std::max(var, 0.0) / noise_realizations);
             double mean_infid = 1.0 - mean_fid;
 
@@ -1809,7 +1815,8 @@ NB_MODULE(maestro, m) {
            "    power: Total noise power P_tot.\n"
            "    alpha: Correlation time in gate-time units.\n"
            "    gate_time: Gate duration in seconds.\n"
-           "    after_1q: If True (default), inject after 1Q gates too.\n\n"
+           "    after_1q: If True (default), inject after 1Q gates too.\n"
+           "    after_2q: If True (default), inject after 2Q gates too.\n\n"
            "Example: nm.set_all_correlated_from_power(20, power=1e-3, "
            "alpha=0.5, gate_time=100e-9)")
       .def("has_correlated", &noise::NoiseModel::has_correlated,
