@@ -489,6 +489,7 @@
  * | `coherent_execute` | N × noiseless | Coherent + shot noise | Shot-based coherent noise |
  * | `full_noise_execute` | N × noiseless | All layers combined | Realistic device simulation |
  * | `full_noise_estimate` | N × noiseless | All layers combined | Hardware-accurate estimation |
+ * | `noisy_fidelity` | N × inner_product | All layers combined | MPS-native fidelity |
  *
  * All noise functions accept a `config` parameter for backend selection.
  *
@@ -916,16 +917,73 @@
  * `noisy_prob` returns the exact noiseless probability (equivalent to
  * `qc.prob()`).
  *
+ * @subsection py_noise_correlated Correlated (Time-Correlated) Noise
+ *
+ * Correlated noise models **non-Markovian dephasing** — noise that has temporal
+ * correlations between successive gates, as found on real superconducting
+ * hardware. This is implemented as an Ornstein-Uhlenbeck → AR(1) process:
+ *
+ * After each gate, a dephasing rotation Rz(y[k]) is injected, where:
+ *
+ *     y[k] = Ω · y[k-1] + η[k],   η ~ N(0, σ_η²)
+ *
+ * The per-qubit AR(1) state is maintained across the circuit, giving
+ * time-correlated (coloured) noise rather than white noise.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # From Ornstein-Uhlenbeck parameters (recommended)
+ * nm.set_correlated_ou(qubit=0, sigma=15.0, alpha=0.5, gate_time=100e-9)
+ *
+ * # Set on all qubits at once
+ * nm.set_all_correlated_ou(num_qubits=20, sigma=15.0,
+ *                          alpha=0.5, gate_time=100e-9)
+ *
+ * # From total noise power P_tot = N·σ²·π·α·t_g
+ * nm.set_all_correlated_from_power(num_qubits=20, power=1e-3,
+ *                                  alpha=0.5, gate_time=100e-9)
+ *
+ * # Direct AR(1) coefficients
+ * nm.set_correlated_ar1(qubit=0, phi=0.135, sigma_eta=2.35e-3)
+ * @endcode
+ *
+ * **Injection granularity flags**:
+ *
+ * All setters accept optional `after_1q` (default: True) and `after_2q`
+ * (default: True) flags to control which gate types trigger noise injection:
+ *
+ * @code{.py}
+ * # Only inject after 2Q gates (common simplification)
+ * nm.set_all_correlated_ou(20, sigma=15.0, alpha=0.5,
+ *                          gate_time=100e-9,
+ *                          after_1q=False, after_2q=True)
+ *
+ * # Inject after all gates (paper's approach)
+ * nm.set_all_correlated_ou(20, sigma=15.0, alpha=0.5,
+ *                          gate_time=100e-9,
+ *                          after_1q=True, after_2q=True)
+ * @endcode
+ *
+ * | Method | Description |
+ * |--------|-------------|
+ * | `nm.set_correlated_ar1(q, phi, sigma_eta)` | Direct AR(1) parameters |
+ * | `nm.set_correlated_ou(q, sigma, alpha, gate_time)` | From OU parameters |
+ * | `nm.set_all_correlated_ou(n, sigma, alpha, gate_time)` | OU on all qubits |
+ * | `nm.set_all_correlated_from_power(n, P, alpha, gate_time)` | From noise power |
+ * | `nm.has_correlated()` | Check if correlated noise is set |
+ *
  * @subsection py_noise_combined Combined Noise Simulation
  *
- * The `full_noise_execute` and `full_noise_estimate` functions apply **all
- * configured noise layers** in a single call, using Monte Carlo averaging.
- * The noise is injected per gate in physical order:
+ * The `full_noise_execute`, `full_noise_estimate`, and `noisy_fidelity`
+ * functions apply **all configured noise layers** in a single call, using
+ * Monte Carlo averaging. The noise is injected per gate in physical order:
  *
- * 1. **Coherent over-rotations** (systematic Rx/Ry/Rz)
- * 2. **ZZ crosstalk** (Rz on spectator neighbours)
- * 3. **T1 amplitude damping** (probabilistic reset to |0⟩)
- * 4. **Pauli noise** (stochastic X/Y/Z errors)
+ * 1. **Correlated dephasing** (time-correlated Rz via AR(1) per qubit)
+ * 2. **Coherent over-rotations** (systematic Rx/Ry/Rz)
+ * 3. **ZZ crosstalk** (Rz on spectator neighbours)
+ * 4. **T1 amplitude damping** (probabilistic reset to |0⟩)
+ * 5. **Pauli noise** (stochastic X/Y/Z errors)
  *
  * This enables realistic device-level simulation with a single noise model.
  *
@@ -933,18 +991,22 @@
  * # Build a noise model matching your hardware
  * nm = maestro.NoiseModel()
  *
- * # Layer 1: Coherent gate over-rotations
+ * # Layer 1: Time-correlated dephasing
+ * nm.set_all_correlated_ou(n_qubits, sigma=15.0, alpha=0.5,
+ *                          gate_time=100e-9)
+ *
+ * # Layer 2: Coherent gate over-rotations
  * nm.set_all_coherent_depolarizing(n_qubits, 0.005)
  *
- * # Layer 2: ZZ crosstalk between neighbours
+ * # Layer 3: ZZ crosstalk between neighbours
  * for i in range(n_qubits - 1):
  *     nm.set_crosstalk(i, i + 1, 0.008)
  *
- * # Layer 3: T1 amplitude damping
+ * # Layer 4: T1 amplitude damping
  * for q in range(n_qubits):
  *     nm.set_t1_from_time(q, gate_time_s=500e-9, t1_time_s=200e-6)
  *
- * # Layer 4: Pauli (incoherent) noise
+ * # Layer 5: Pauli (incoherent) noise
  * nm.set_all_depolarizing(n_qubits, 0.005)
  *
  * # Check if any noise is configured
@@ -983,6 +1045,34 @@
  * print(result['noise_type'])                # 'combined'
  * @endcode
  *
+ * **Noisy Fidelity** (MPS-native, no shots):
+ *
+ * Computes |⟨ψ_ideal|ψ_noisy⟩|² averaged over noise realizations.
+ * Uses inner_product — O(N·χ²) cost, no 2^N statevector needed.
+ *
+ * @code{.py}
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ *
+ * result = qc.noisy_fidelity(
+ *     nm, noise_realizations=200, seed=42
+ * )
+ * print(result['fidelity'])     # Mean |⟨ψ_ideal|ψ_noisy⟩|²
+ * print(result['infidelity'])   # 1 - fidelity
+ * print(result['std_error'])    # Standard error of the mean
+ * @endcode
+ *
+ * **noisy_fidelity return dict:**
+ *
+ * | Key | Type | Description |
+ * |-----|------|-------------|
+ * | `fidelity` | `float` | Mean fidelity across noise realizations |
+ * | `infidelity` | `float` | 1 − fidelity |
+ * | `std_error` | `float` | Standard error of fidelity estimate |
+ * | `time_taken` | `float` | Wall-clock seconds |
+ * | `noise_realizations` | `int` | Number of noise samples used |
+ *
  * @subsection py_noise_summary All Noise Functions
  *
  * | Function | Noise Type | Overhead | Best For |
@@ -994,11 +1084,13 @@
  * | `coherent_execute` | Coherent | N × noiseless | Shot-based coherent noise |
  * | `full_noise_execute` | **All layers** | N × noiseless | Realistic device simulation |
  * | `full_noise_estimate` | **All layers** | N × noiseless | Hardware-accurate estimation |
+ * | `noisy_fidelity` | **All layers** | N × inner_product | MPS-native fidelity |
  * | `qc.noisy_prob(target, nm)` | Readout | O(n) PI evals | Path integral readout correction |
  *
  * All noise functions are also available as bound methods on `QuantumCircuit`:
  * `qc.noisy_execute(nm)`, `qc.coherent_execute(nm)`,
- * `qc.full_noise_execute(nm)`, `qc.noisy_prob(target, nm)`, etc.
+ * `qc.full_noise_execute(nm)`, `qc.noisy_fidelity(nm)`,
+ * `qc.noisy_prob(target, nm)`, etc.
  *
  * @subsection py_noise_model_summary All NoiseModel Methods
  *
@@ -1024,11 +1116,16 @@
  * | `nm.set_coherent_rotation(q, rx, ry, rz)` | Coherent | Explicit rotation angles |
  * | `nm.set_all_coherent_depolarizing(n, p)` | Coherent | Uniform coherent noise |
  * | `nm.set_coherent_strength(n, p)` | Coherent | Alias for above |
+ * | `nm.set_correlated_ar1(q, phi, sigma_eta)` | Correlated | Direct AR(1) parameters |
+ * | `nm.set_correlated_ou(q, sigma, alpha, gt)` | Correlated | From OU parameters |
+ * | `nm.set_all_correlated_ou(n, sigma, alpha, gt)` | Correlated | OU on all qubits |
+ * | `nm.set_all_correlated_from_power(n, P, alpha, gt)` | Correlated | From total noise power |
  * | `nm.set_t1(q, gamma)` | T1 | Per-gate decay probability |
  * | `nm.set_all_t1(n, gamma)` | T1 | Uniform T1 decay |
  * | `nm.set_t1_from_time(q, t_gate, t1)` | T1 | T1 from physical constants |
  * | `nm.set_crosstalk(q1, q2, strength)` | Crosstalk | Symmetric ZZ coupling |
  * | `nm.has_any()` | Query | Any noise configured? |
+ * | `nm.has_correlated()` | Query | Correlated noise configured? |
  *
  * ---
  *

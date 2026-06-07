@@ -65,6 +65,14 @@ struct CoherentNoise {
   double rz = 0.0;  ///< Z-axis rotation angle
 };
 
+/// Per-qubit time-correlated (OU → AR(1)) dephasing noise parameters.
+struct CorrelatedNoise {
+  double phi = 0.0;        ///< AR(1) coefficient Ω = exp(-θ·dt)
+  double sigma_eta = 0.0;  ///< Driving noise std dev
+  bool inject_after_1q = true;  ///< Inject after 1Q gates (default: yes)
+  bool inject_after_2q = true;  ///< Inject after 2Q gates (default: yes)
+};
+
 /// Per-qubit readout error parameters (classical post-measurement channel).
 struct ReadoutError {
   double p_meas1_prep0 = 0.0;  ///< P(measure 1 | prepared 0) — false positive
@@ -73,22 +81,29 @@ struct ReadoutError {
 
 /**
  * @class NoiseModel
- * @brief Maps qubit indices to Pauli channel and/or coherent noise parameters.
+ * @brief Maps qubit indices to noise parameters for realistic device simulation.
  *
- * Supports two noise modes:
- *   1. **Pauli (incoherent)**: stochastic Pauli gate injection or analytical
+ * Supports six noise categories, all combinable on the same model:
+ *   1. **Pauli (incoherent)**: stochastic X/Y/Z gate injection or analytical
  *      damping. Configured via set_depolarizing(), set_dephasing(), etc.
  *   2. **Coherent**: systematic rotation gate injection. Configured via
  *      set_coherent_depolarizing(), set_coherent_rotation(), etc.
+ *   3. **Correlated (time-correlated)**: non-Markovian dephasing via
+ *      per-qubit AR(1) processes. Configured via set_correlated_ou(),
+ *      set_correlated_ar1(), set_all_correlated_from_power(), etc.
+ *   4. **T1 amplitude damping**: probabilistic |1⟩→|0⟩ decay.
+ *   5. **ZZ crosstalk**: parasitic Rz rotations on spectator qubits.
+ *   6. **Readout error**: classical post-measurement bit-flip channel.
  *
- * Both modes can be configured on the same model — the caller chooses
- * which injection function to use (inject_noise vs inject_coherent_noise).
+ * Use inject_combined_noise() to apply all configured layers in a single pass,
+ * or use the individual inject_noise/inject_coherent_noise/inject_correlated_noise
+ * functions for specific noise types.
  *
  * Usage:
  *   NoiseModel nm;
  *   nm.set_depolarizing(0, 0.01);              // Pauli: 1% depolarizing
  *   nm.set_coherent_depolarizing(1, 0.01);     // Coherent: same infidelity
- *   nm.set_coherent_rotation(2, 0.0, 0.0, 0.05); // Coherent: custom angles
+ *   nm.set_all_correlated_ou(4, 15.0, 0.5, 100e-9); // Correlated: OU noise
  *   double d = nm.compute_damping("ZZ");       // damping for ⟨ZZ⟩
  */
 class NoiseModel {
@@ -168,6 +183,81 @@ class NoiseModel {
    */
   void set_coherent_strength(int n, double p) {
     set_all_coherent_depolarizing(n, p);
+  }
+
+  // ── Correlated (time-correlated) noise setters ──
+
+  /**
+   * Set AR(1) correlated dephasing noise on a qubit.
+   * After every gate, an Rz(y[k]) rotation is injected where:
+   *   y[k] = phi * y[k-1] + eta[k],  eta ~ N(0, sigma_eta²)
+   *
+   * @param q Qubit index.
+   * @param phi AR(1) autoregressive coefficient.
+   * @param sigma_eta Driving noise standard deviation.
+   * @param after_1q If true (default), inject after 1Q gates too.
+   */
+  void set_correlated_ar1(int q, double phi, double sigma_eta,
+                          bool after_1q = true, bool after_2q = true) {
+    correlated_[q] = {phi, sigma_eta, after_1q, after_2q};
+  }
+
+  /**
+   * Set correlated noise from Ornstein-Uhlenbeck parameters.
+   * OU: dX = -θ·X·dt + σ·dW, discretized as AR(1).
+   *   θ = 1/(α · gate_time)
+   *   Ω = exp(-θ · gate_time)
+   *   σ_η² = (σ²/2θ)(1 - Ω²)
+   *
+   * @param q Qubit index.
+   * @param sigma OU diffusion coefficient (noise strength).
+   * @param alpha Correlation time in gate-time units (τ/t_g).
+   * @param gate_time Gate duration in seconds.
+   * @param after_1q If true (default), inject after 1Q gates too.
+   */
+  void set_correlated_ou(int q, double sigma, double alpha,
+                         double gate_time, bool after_1q = true,
+                         bool after_2q = true) {
+    double theta = 1.0 / (alpha * gate_time);
+    double phi = std::exp(-theta * gate_time);
+    double sigma_eta_sq = (sigma * sigma / (2.0 * theta)) * (1.0 - phi * phi);
+    double sigma_eta = std::sqrt(std::max(sigma_eta_sq, 0.0));
+    correlated_[q] = {phi, sigma_eta, after_1q, after_2q};
+  }
+
+  /// Set identical OU correlated noise on qubits [0, n).
+  void set_all_correlated_ou(int n, double sigma, double alpha,
+                             double gate_time, bool after_1q = true,
+                             bool after_2q = true) {
+    for (int q = 0; q < n; ++q)
+      set_correlated_ou(q, sigma, alpha, gate_time, after_1q, after_2q);
+  }
+
+  /**
+   * Set correlated noise from total noise power.
+   * P_tot = N·σ²·π·α·t_g  →  σ = sqrt(P_tot / (N·π·α·t_g))
+   *
+   * @param n Number of qubits.
+   * @param power Total noise power P_tot.
+   * @param alpha Correlation time in gate-time units.
+   * @param gate_time Gate duration.
+   * @param after_1q If true (default), inject after 1Q gates too.
+   */
+  void set_all_correlated_from_power(int n, double power, double alpha,
+                                     double gate_time,
+                                     bool after_1q = true,
+                                     bool after_2q = true) {
+    double sigma = std::sqrt(power / (n * M_PI * alpha * gate_time));
+    set_all_correlated_ou(n, sigma, alpha, gate_time, after_1q, after_2q);
+  }
+
+  /// Get correlated noise for a qubit (nullptr if not set).
+  const CorrelatedNoise *get_correlated(int q) const {
+    auto it = correlated_.find(q);
+    return (it != correlated_.end()) ? &it->second : nullptr;
+  }
+
+  bool has_correlated() const { return !correlated_.empty();
   }
 
   // ── Analytical damping ──
@@ -346,6 +436,7 @@ class NoiseModel {
   /// True if any noise of any type has been configured.
   bool has_any() const {
     return !noise_.empty() || !coherent_.empty() ||
+           !correlated_.empty() ||
            !t1_.empty() || !crosstalk_.empty() ||
            !readout_.empty() || !depol_2q_.empty() ||
            !noise_1q_.empty() || !noise_2q_.empty();
@@ -360,6 +451,7 @@ class NoiseModel {
   std::unordered_map<int, std::unordered_map<int, double>> depol_2q_;
   std::unordered_map<int, QubitNoise> noise_1q_;  ///< after 1Q gates only
   std::unordered_map<int, QubitNoise> noise_2q_;  ///< after 2Q gates only
+  std::unordered_map<int, CorrelatedNoise> correlated_;  ///< time-correlated
 };
 
 /// Helper: inject a single-qubit Pauli error on qubit q with probabilities qn.
@@ -516,11 +608,75 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_coherent_noise(
 }
 
 /**
+ * Inject time-correlated (OU → AR(1)) dephasing noise into a circuit copy.
+ *
+ * Each qubit with correlated noise parameters gets an independent AR(1)
+ * trajectory: y[k] = φ·y[k-1] + η[k], η ~ N(0, σ_η²).
+ * After each gate affecting qubit q, an Rz(y[k]) rotation is injected.
+ *
+ * Unlike coherent noise (fixed amplitude, random sign), correlated noise
+ * produces time-varying amplitudes with temporal correlations governed by φ.
+ * This models realistic non-Markovian dephasing from 1/f or OU noise sources.
+ *
+ * The inject_after_1q and inject_after_2q flags on each qubit's
+ * CorrelatedNoise control whether noise is injected after single-qubit
+ * and/or multi-qubit gates respectively.
+ *
+ * @param circ  Input circuit (not modified).
+ * @param nm    NoiseModel with correlated noise parameters set.
+ * @param rng   Random number generator for AR(1) driving noise.
+ * @return New circuit with correlated Rz gates inserted.
+ */
+inline std::shared_ptr<Circuits::Circuit<double>> inject_correlated_noise(
+    const std::shared_ptr<Circuits::Circuit<double>> &circ,
+    const NoiseModel &nm, std::mt19937 &rng) {
+  auto out = std::make_shared<Circuits::Circuit<double>>();
+  std::normal_distribution<double> normal(0.0, 1.0);
+
+  // Per-qubit AR(1) state: y[k] = phi * y[k-1] + sigma_eta * eta[k]
+  std::unordered_map<int, double> state;  // current y value per qubit
+
+  for (const auto &op : circ->GetOperations()) {
+    out->AddOperation(op->Clone());
+
+    if (op->GetType() != Circuits::OperationType::kGate) continue;
+
+    auto affected = op->AffectedQubits();
+    bool is_multiq = affected.size() >= 2;
+
+    for (auto q : affected) {
+      const auto *cn = nm.get_correlated(static_cast<int>(q));
+      if (!cn) continue;
+
+      // Check gate-type flags
+      if (!is_multiq && !cn->inject_after_1q) continue;
+      if (is_multiq && !cn->inject_after_2q) continue;
+
+      // Advance AR(1): y[k] = phi * y[k-1] + sigma_eta * eta
+      double prev = state[static_cast<int>(q)];  // 0 if not yet set
+      double eta = normal(rng);
+      double y = cn->phi * prev + cn->sigma_eta * eta;
+      state[static_cast<int>(q)] = y;
+
+      // Inject Rz(y)
+      if (std::abs(y) > 1e-18) {
+        out->AddOperation(
+            std::make_shared<Circuits::RzGate<>>(q, y));
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Inject ALL configured noise types into a circuit in physical order:
- *   1. Coherent over-rotations (systematic gate errors)
- *   2. Crosstalk (ZZ coupling to spectator neighbors)
- *   3. T1 amplitude damping (probabilistic decay to |0⟩)
- *   4. Pauli noise (stochastic bit/phase flips)
+ *   1. Correlated dephasing (time-correlated OU/AR(1) noise)
+ *   2. Coherent over-rotations (systematic gate errors)
+ *   3. Crosstalk (ZZ coupling to spectator neighbors)
+ *   4. T1 amplitude damping (probabilistic decay to |0⟩)
+ *   5. Pauli noise (stochastic bit/phase flips)
+ *   6. Gate-type-specific Pauli noise
+ *   7. Two-qubit depolarizing
  *
  * This is the "realistic" noise injection that combines every layer.
  * Only noise types that have been configured on the NoiseModel are applied.
@@ -531,6 +687,8 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
   auto out = std::make_shared<Circuits::Circuit<double>>();
   std::uniform_real_distribution<double> dist(0.0, 1.0);
   std::bernoulli_distribution sign_dist(0.5);
+  std::normal_distribution<double> normal_dist(0.0, 1.0);
+  std::unordered_map<int, double> corr_state;  // AR(1) state per qubit
 
   for (const auto &op : circ->GetOperations()) {
     out->AddOperation(op->Clone());
@@ -547,7 +705,25 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
       return false;
     };
 
-    // ── 1. Coherent over-rotations on affected qubits ──
+    // ── 1. Correlated (time-correlated) dephasing on affected qubits ──
+    for (auto q : affected) {
+      const auto *crn = nm.get_correlated(static_cast<int>(q));
+      if (!crn) continue;
+      if (!is_2q && !crn->inject_after_1q) continue;
+      if (is_2q && !crn->inject_after_2q) continue;
+
+      double prev = corr_state[static_cast<int>(q)];
+      double eta = normal_dist(rng);
+      double y = crn->phi * prev + crn->sigma_eta * eta;
+      corr_state[static_cast<int>(q)] = y;
+
+      if (std::abs(y) > 1e-18) {
+        out->AddOperation(
+            std::make_shared<Circuits::RzGate<>>(q, y));
+      }
+    }
+
+    // ── 2. Coherent over-rotations on affected qubits ──
     for (auto q : affected) {
       const auto *cn = nm.get_coherent(q);
       if (!cn) continue;
@@ -568,7 +744,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
       }
     }
 
-    // ── 2. Crosstalk: Rz on spectator neighbors ──
+    // ── 3. Crosstalk: Rz on spectator neighbors ──
     // Accumulate crosstalk from all affected qubits, then apply once
     // per spectator (avoids double-counting).
     std::unordered_map<int, double> spectator_rotations;
@@ -585,7 +761,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
           static_cast<Types::qubit_t>(spectator), total));
     }
 
-    // ── 3. T1 amplitude damping (quantum trajectory) ──
+    // ── 4. T1 amplitude damping (quantum trajectory) ──
     for (auto q : affected) {
       double gamma = nm.get_t1(q);
       if (gamma > 0 && dist(rng) < gamma) {
@@ -594,13 +770,13 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
       }
     }
 
-    // ── 4. Pauli (incoherent) noise — "all gates" channel ──
+    // ── 5. Pauli (incoherent) noise — "all gates" channel ──
     for (auto q : affected) {
       const auto *qn = nm.get(q);
       if (qn) inject_1q_pauli_(out, q, *qn, dist, rng);
     }
 
-    // ── 5. Gate-type-specific Pauli noise ──
+    // ── 6. Gate-type-specific Pauli noise ──
     for (auto q : affected) {
       if (is_2q) {
         const auto *qn2 = nm.get_2q_gate_noise(q);
@@ -611,7 +787,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
       }
     }
 
-    // ── 6. Two-qubit depolarizing (correlated 2Q Pauli channel) ──
+    // ── 7. Two-qubit depolarizing (correlated 2Q Pauli channel) ──
     if (is_2q && affected.size() >= 2) {
       auto q1 = affected[0];
       auto q2 = affected[1];
