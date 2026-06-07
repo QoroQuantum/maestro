@@ -51,6 +51,11 @@ struct SimulatorConfig {
   int lookahead_depth = -1;
   bool mps_measure_no_collapse = true;
 
+  // PauliPropagator truncation parameters
+  std::optional<double> pp_coefficient_threshold = std::nullopt;
+  std::optional<size_t> pp_pauli_weight_threshold = std::nullopt;
+  std::optional<int> pp_steps_between_trims = std::nullopt;
+
   SimulatorConfig() = default;
 
   SimulatorConfig(Simulators::SimulatorType st, Simulators::SimulationType set,
@@ -144,6 +149,25 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
   // Always create the default simulator (no parameters = QCSim MPS).
   // The desired simulator type is specified via
   // RemoveAllOptimizationSimulatorsAndAdd above.
+  // PauliPropagator truncation settings are passed via Configure before
+  // CreateSimulator; QCSimState stores them in member variables and applies
+  // them when pp is constructed inside CreateSimulator.
+  if (config.pp_coefficient_threshold) {
+    std::ostringstream oss;
+    oss << std::setprecision(std::numeric_limits<double>::max_digits10)
+        << *config.pp_coefficient_threshold;
+    network->Configure("pauli_propagator_coefficient_threshold",
+                       oss.str().c_str());
+  }
+  if (config.pp_pauli_weight_threshold) {
+    network->Configure("pauli_propagator_pauli_weight_threshold",
+                       std::to_string(*config.pp_pauli_weight_threshold).c_str());
+  }
+  if (config.pp_steps_between_trims) {
+    network->Configure("pauli_propagator_steps_between_trims",
+                       std::to_string(*config.pp_steps_between_trims).c_str());
+  }
+
   network->CreateSimulator();
 
   // Verify the simulator was actually created (e.g. GPU library may fail)
@@ -629,6 +653,12 @@ NB_MODULE(maestro, m) {
       .def_rw("lookahead_depth", &SimulatorConfig::lookahead_depth)
       .def_rw("mps_measure_no_collapse",
               &SimulatorConfig::mps_measure_no_collapse)
+      .def_rw("pp_coefficient_threshold",
+              &SimulatorConfig::pp_coefficient_threshold)
+      .def_rw("pp_pauli_weight_threshold",
+              &SimulatorConfig::pp_pauli_weight_threshold)
+      .def_rw("pp_steps_between_trims",
+              &SimulatorConfig::pp_steps_between_trims)
       .def("__repr__", [](const SimulatorConfig& c) {
         std::ostringstream oss;
         oss << "SimulatorConfig("
