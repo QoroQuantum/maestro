@@ -295,7 +295,7 @@ class NoiseModel {
 
   // ── T1 amplitude damping setters ──
 
-  /// Set per-gate T1 decay probability on a qubit.
+  /// Set per-gate T1 decay probability on a qubit (applied after ALL gates).
   /// After each gate, with probability gamma, the qubit decays to |0⟩.
   void set_t1(int q, double gamma) { t1_[q] = gamma; }
 
@@ -318,7 +318,31 @@ class NoiseModel {
     return (it != t1_.end()) ? it->second : 0.0;
   }
 
-  bool has_t1() const { return !t1_.empty(); }
+  bool has_t1() const { return !t1_.empty() || !t1_2q_.empty(); }
+
+  // ── T1 gate-type-specific overrides ──
+
+  /// Set T1 decay probability applied only after two-qubit gates.
+  /// When set, 2Q gates use this gamma instead of the "all gates" value.
+  void set_t1_2q(int q, double gamma) { t1_2q_[q] = gamma; }
+
+  /// Set T1 for 2Q gates from physical time constants.
+  void set_t1_2q_from_time(int q, double gate_time_s, double t1_time_s) {
+    t1_2q_[q] = 1.0 - std::exp(-gate_time_s / t1_time_s);
+  }
+
+  /// Get T1 decay probability for 2Q gates (falls back to get_t1 if not set).
+  double get_t1_2q(int q) const {
+    auto it = t1_2q_.find(q);
+    if (it != t1_2q_.end()) return it->second;
+    return get_t1(q);  // fallback to "all gates" T1
+  }
+
+  /// Get gate-type-aware T1: returns t1_2q if is_2q and set, else t1.
+  double get_t1_for_gate(int q, bool is_2q) const {
+    if (is_2q) return get_t1_2q(q);
+    return get_t1(q);
+  }
 
   // ── Crosstalk setters ──
 
@@ -437,7 +461,7 @@ class NoiseModel {
   bool has_any() const {
     return !noise_.empty() || !coherent_.empty() ||
            !correlated_.empty() ||
-           !t1_.empty() || !crosstalk_.empty() ||
+           !t1_.empty() || !t1_2q_.empty() || !crosstalk_.empty() ||
            !readout_.empty() || !depol_2q_.empty() ||
            !noise_1q_.empty() || !noise_2q_.empty();
   }
@@ -446,6 +470,7 @@ class NoiseModel {
   std::unordered_map<int, QubitNoise> noise_;
   std::unordered_map<int, CoherentNoise> coherent_;
   std::unordered_map<int, double> t1_;
+  std::unordered_map<int, double> t1_2q_;  ///< T1 decay after 2Q gates only
   std::unordered_map<int, std::unordered_map<int, double>> crosstalk_;
   std::unordered_map<int, ReadoutError> readout_;
   std::unordered_map<int, std::unordered_map<int, double>> depol_2q_;
@@ -528,6 +553,13 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise(
     bool is_2q = affected.size() >= 2;
 
     for (auto q : affected) {
+      // T1 amplitude damping (gate-type-aware)
+      double gamma = nm.get_t1_for_gate(static_cast<int>(q), is_2q);
+      if (gamma > 0 && dist(rng) < gamma) {
+        out->AddOperation(std::make_shared<Circuits::Reset<>>(
+            Types::qubits_vector{q}));
+      }
+
       // "All gates" channel (existing behavior)
       const auto *qn = nm.get(q);
       if (qn) inject_1q_pauli_(out, q, *qn, dist, rng);
@@ -761,9 +793,9 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
           static_cast<Types::qubit_t>(spectator), total));
     }
 
-    // ── 4. T1 amplitude damping (quantum trajectory) ──
+    // ── 4. T1 amplitude damping (quantum trajectory, gate-type-aware) ──
     for (auto q : affected) {
-      double gamma = nm.get_t1(q);
+      double gamma = nm.get_t1_for_gate(static_cast<int>(q), is_2q);
       if (gamma > 0 && dist(rng) < gamma) {
         out->AddOperation(std::make_shared<Circuits::Reset<>>(
             Types::qubits_vector{q}));
