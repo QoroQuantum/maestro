@@ -205,7 +205,13 @@ class MPSDummySimulator {
       // grown bond dimension only affects subsequent operations.
       const IndexType bond = std::min(qubit1, qubit2);
       totalSwappingCost += bondCost[bond];
-      growBondDimension(bond, false);
+      // TODO: This is basic, the two qubit gates can have rank 2 and 4 (1 if
+      // can be decomposed into two 1-qubit gates)
+      // the controlled ones have Schmidt rank 2
+      // here we assume that the others have Schmidt rank 4,
+      // but that might not be the case for all gates
+      // (3 is not possible for two qubit gates)
+      growBondDimension(bond, false, gate.isControlled() ? 2 : 4);
     }
   }
 
@@ -441,7 +447,7 @@ class MPSDummySimulator {
 
   std::vector<long long int> ComputeOptimalQubitsMap(
       const std::vector<std::shared_ptr<Circuits::Circuit<>>>& layers,
-      int nrShuffles = 25, int nrSwaps = 10) {
+      int nrShuffles = 0/*25*/, int nrSwaps = 0/*10*/) {
     const IndexType nrQubits = getNrQubits();
 
     if (layers.empty() || nrQubits <= 2) return qubitsMap;
@@ -859,10 +865,10 @@ class MPSDummySimulator {
 
   double totalSwappingCost = 0;
 
-  double growthFactorSwap = 1.;
-  double growthFactorGate = 0.65; 
+  double growthFactorSwap = 1;
+  double growthFactorGate = 0.7;  
 
-  void growBondDimension(IndexType bond, bool swap = true) {
+  void growBondDimension(IndexType bond, bool swap = true, int schmidtRank = 4) {
     // the left and right bond dimensions are relevant because:
     // the initial configuration before applying the swap or other gate is:
 
@@ -897,7 +903,8 @@ class MPSDummySimulator {
     const double leftDim = leftBond >= 0 ? currentBondDim[leftBond] : 1;
     const double rightNeighborDim = rightNeigborBond < static_cast<IndexType>(currentBondDim.size()) ? currentBondDim[rightNeigborBond] : 1;
     
-    const double newMaxDim = (swap && leftDim == rightNeighborDim) ? betweenDim : 2. * std::min(leftDim, rightNeighborDim);
+    double newMaxDim = (swap && leftDim == rightNeighborDim) ? betweenDim : 2. * std::min(leftDim, rightNeighborDim);
+    newMaxDim = std::min(newMaxDim, betweenDim * schmidtRank);
 
     const double growthFactor = swap ? growthFactorSwap : growthFactorGate;
 
