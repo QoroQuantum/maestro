@@ -1866,6 +1866,23 @@ NB_MODULE(maestro, m) {
            "t1_time_s=100e-6)")
       .def("has_t1", &noise::NoiseModel::has_t1,
            "Return True if any T1 parameters have been set.")
+      // ── T1 gate-type-specific overrides ──
+      .def("set_t1_2q", &noise::NoiseModel::set_t1_2q, "qubit"_a, "gamma"_a,
+           "Set T1 decay probability applied only after two-qubit gates. "
+           "When set, 2Q gates use this gamma instead of the 'all gates' value.")
+      .def("set_t1_2q_from_time", &noise::NoiseModel::set_t1_2q_from_time,
+           "qubit"_a, "gate_time_s"_a, "t1_time_s"_a,
+           "Set T1 for 2Q gates from physical time constants. "
+           "gamma = 1 - exp(-gate_time / T1).\n\n"
+           "Example: nm.set_t1_2q_from_time(0, gate_time_s=40e-9, "
+           "t1_time_s=100e-6)")
+      .def("get_t1_2q", &noise::NoiseModel::get_t1_2q, "qubit"_a,
+           "Get T1 decay probability for 2Q gates (falls back to get_t1 "
+           "if not set).")
+      .def("get_t1_for_gate", &noise::NoiseModel::get_t1_for_gate,
+           "qubit"_a, "is_2q"_a,
+           "Get gate-type-aware T1: returns t1_2q if is_2q and set, "
+           "else t1.")
       // ── Crosstalk ──
       .def("set_crosstalk", &noise::NoiseModel::set_crosstalk,
            "q1"_a, "q2"_a, "strength"_a,
