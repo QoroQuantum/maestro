@@ -970,6 +970,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           nrQubits == 0 ? GetNumQubits() + GetNumNetworkEntangledQubits()
                         : nrQubits);
       simulator->Initialize();
+
+      simulator->setGrowthFactorGate(growthFactorGate);
+      simulator->setGrowthFactorSwap(growthFactorSwap);
+      simulator->SetLookaheadDepth(lookaheadDepth);
+      simulator->SetLookaheadDepthWithHeuristic(lookaheadDepthWithHeuristic);
     }
   }
 
@@ -1888,8 +1893,19 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     cloned->singularValueThreshold = singularValueThreshold;
     cloned->mpsSample = mpsSample;
 
-    // cloned->optimizeSimulator = optimizeSimulator;
-    // cloned->simulatorsForOptimizations = simulatorsForOptimizations;
+    cloned->optimizeSimulator = optimizeSimulator;
+    cloned->simulatorsForOptimizations = simulatorsForOptimizations;
+
+    cloned->SetMPSOptimizeSwaps(GetMPSOptimizeSwaps());
+
+    cloned->SetMPSOptimizationBondDimensionThreshold(GetMPSOptimizationBondDimensionThreshold());
+    cloned->SetMPSOptimizationQubitsNumberThreshold(GetMPSOptimizationQubitsNumberThreshold());
+
+    cloned->SetLookaheadDepth(GetLookaheadDepth());
+    cloned->SetLookaheadDepthWithHeuristic(GetLookaheadDepthWithHeuristic());
+
+    cloned->setGrowthFactorGate(getGrowthFactorGate());
+    cloned->setGrowthFactorSwap(getGrowthFactorSwap());
 
     if (GetSimulator())
       cloned->CreateSimulator(GetSimulator()->GetType(),
@@ -2064,6 +2080,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           sim->Initialize();
         }
 
+        sim->setGrowthFactorGate(growthFactorGate);
+        sim->setGrowthFactorSwap(growthFactorSwap);
+        sim->SetLookaheadDepth(lookaheadDepth);
+        sim->SetLookaheadDepthWithHeuristic(lookaheadDepthWithHeuristic);
+
         if (!dontRunCircuitStart) {
           sim->SetMultithreading(true);
           Estimators::SimulatorsEstimatorInterface<
@@ -2085,6 +2106,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (sim) {
       sim->AllocateQubits(nrQubits);
       sim->Initialize();
+
+      sim->setGrowthFactorGate(growthFactorGate);
+      sim->setGrowthFactorSwap(growthFactorSwap);
+      sim->SetLookaheadDepth(lookaheadDepth);
+      sim->SetLookaheadDepthWithHeuristic(lookaheadDepthWithHeuristic);
 
       OptimizeMPSInitialQubitsMap(sim, dcirc, nrQubits);
 
@@ -2133,6 +2159,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (depth < 0) depth = std::numeric_limits<int>::max();
 
     lookaheadDepth = depth;
+
+    if (simulator) simulator->SetLookaheadDepth(depth);
   }
 
   int GetLookaheadDepth() const override { return lookaheadDepth; }
@@ -2143,6 +2171,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (depth > lookaheadDepth) depth = lookaheadDepth;
 
     lookaheadDepthWithHeuristic = depth;
+
+    if (simulator) simulator->SetLookaheadDepthWithHeuristic(depth);
   }
 
   int GetLookaheadDepthWithHeuristic() const override {
@@ -2154,10 +2184,14 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
   void setGrowthFactorSwap(double factor) override {
     growthFactorSwap = factor;
+
+    if (simulator) simulator->setGrowthFactorSwap(factor);
   }
 
   void setGrowthFactorGate(double factor) override {
     growthFactorGate = factor;
+
+    if (simulator) simulator->setGrowthFactorGate(factor);
   }
 
  protected:
@@ -2198,6 +2232,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             int lookaheadDepthLocal = lookaheadDepth;
 
             if (lookaheadDepthLocal == std::numeric_limits<int>::max()) {
+              /*
               double avgTwoQubitGatesPerLayer = 0.0;
               for (const auto &layer : layers) {
                 int twoQubitGates = 0;
@@ -2213,22 +2248,31 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
               int lookaheadVal = static_cast<int>(4. * avgTwoQubitGatesPerLayer);
               if (lookaheadVal > 15) lookaheadVal = 15;
 
-              lookaheadDepthLocal = layers.size() < 10 || nrQubits <= 10 ? 0
-                                    : layers.size() < 20
-                                        ? static_cast<int>(lookaheadVal)
-                                       : layers.size() < 35
-                                            ? static_cast<int>(1.5 * lookaheadVal)
-                                                         : 2 * lookaheadVal;
+              lookaheadDepthLocal =
+                  layers.size() < 8 || nrQubits <= 10 ? 0
+                  : layers.size() < 15 ? static_cast<int>(lookaheadVal)
+                  : layers.size() < 25 ? static_cast<int>(1.5 * lookaheadVal)
+                                       : 2 * lookaheadVal;
+              */
+              lookaheadDepthLocal =
+                  layers.size() < 10 || nrQubits <= 10 ? 0 : 40;
             }
 
             int lookaheadHeuristicDepthLocal = lookaheadDepthWithHeuristic;
 
             if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
+              /*
               lookaheadHeuristicDepthLocal =
                   layers.size() < 10 || nrQubits <= 10 ? 0
-                                                : layers.size() < 20
-                                                    ? lookaheadDepthLocal - 1
-                                                    : lookaheadDepthLocal - 2;
+                  : layers.size() < 20 ? lookaheadDepthLocal - 1
+                                       : lookaheadDepthLocal - 2;
+              */
+              lookaheadHeuristicDepthLocal =
+                  layers.size() < 10 || nrQubits <= 10
+                  ? 0 : lookaheadDepthLocal - 2;
+            
+            if (lookaheadHeuristicDepthLocal < 0)
+              lookaheadHeuristicDepthLocal = 0;
 
             sim->setGrowthFactorGate(growthFactorGate);
             sim->setGrowthFactorSwap(growthFactorSwap);
@@ -2487,8 +2531,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   int lookaheadDepthWithHeuristic = std::numeric_limits<int>::max(); /**< The
             lookahead depth with heuristic for MPS swap optimization. */
 
-  double growthFactorSwap = 1.;
-  double growthFactorGate = 0.65;
+  double growthFactorSwap = 0.8;
+  double growthFactorGate = 0.3;
 };
 
 }  // namespace Network

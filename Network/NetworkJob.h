@@ -398,6 +398,7 @@ private:
             int lookaheadDepthLocal = network->GetLookaheadDepth();
 
             if (lookaheadDepthLocal == std::numeric_limits<int>::max()) {
+              /*
               double avgTwoQubitGatesPerLayer = 0.0;
               for (const auto &layer : layers) {
                 int twoQubitGates = 0;
@@ -414,22 +415,35 @@ private:
                   static_cast<int>(4. * avgTwoQubitGatesPerLayer);
               if (lookaheadVal > 15) lookaheadVal = 15;
 
-              lookaheadDepthLocal = layers.size() < 10 || nrQubits <= 10 ? 0
-                                    : layers.size() < 20
-                                        ? static_cast<int>(lookaheadVal)
-                                    : layers.size() < 35 ? 1.5 * lookaheadVal
-                                                         : 2 * lookaheadVal;
+              lookaheadDepthLocal =
+                  layers.size() < 8 || nrQubits <= 10 ? 0
+                  : layers.size() < 15 ? static_cast<int>(lookaheadVal)
+                  : layers.size() < 25 ? static_cast<int>(1.5 * lookaheadVal)
+                                       : 2 * lookaheadVal;
+              */
+
+              lookaheadDepthLocal =
+                  layers.size() < 10 || nrQubits <= 10 ? 0 : 40;
             }
 
             int lookaheadHeuristicDepthLocal =
                 network->GetLookaheadDepthWithHeuristic();
 
             if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
+              /*
               lookaheadHeuristicDepthLocal =
                   layers.size() < 10 || nrQubits <= 10 ? 0
                                              : layers.size() < 20
                                                  ? lookaheadDepthLocal - 1
                                                  : lookaheadDepthLocal - 2;
+              */
+              lookaheadHeuristicDepthLocal =
+                  layers.size() < 10 || nrQubits <= 10
+                      ? 0
+                      : lookaheadDepthLocal - 2;
+
+            if (lookaheadHeuristicDepthLocal < 0)
+              lookaheadHeuristicDepthLocal = 0;
 
             sim->SetUseOptimalMeetingPosition(true);
             sim->SetLookaheadDepth(lookaheadDepthLocal);

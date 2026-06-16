@@ -865,8 +865,8 @@ class MPSDummySimulator {
 
   double totalSwappingCost = 0;
 
-  double growthFactorSwap = 0.65;
-  double growthFactorGate = 0.35;  
+  double growthFactorSwap = 0.8;
+  double growthFactorGate = 0.3;  
 
   void growBondDimension(IndexType bond, bool swap = true, int schmidtRank = 4) {
     // the left and right bond dimensions are relevant because:
