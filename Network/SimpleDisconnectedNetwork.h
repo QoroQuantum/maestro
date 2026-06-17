@@ -602,7 +602,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       nrThreads = 1;
     else
 #endif
-        if (((method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral) &&
+        if (((method == Simulators::SimulationType::kStatevector ||
+              method == Simulators::SimulationType::kPathIntegral) &&
              !distCirc->HasOpsAfterMeasurements()) ||
             simType == Simulators::SimulatorType::kQuestSim)
       nrThreads = 1;
@@ -785,6 +786,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     std::vector<bool> executed;
     auto optSim = ChooseBestSimulator(distCirc, shots, nrQubits, nrCbits,
                                       nrCbits, simType, method, executed);
+
+    // Seed the executing simulator's terminal sampling RNG, if requested. The
+    // single-thread path uses optSim directly; in the multi-thread path each
+    // Clone() derives a distinct deterministic seed from this one.
+    if (optSim && !seed.empty()) optSim->Configure("seed", seed.c_str());
 
     lastSimulatorType = simType;
     lastMethod = method;
@@ -1001,6 +1007,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           (std::string("1") == value || std::string("true") == value);
     else if (std::string("max_simulators") == key)
       maxSimulators = std::stoull(value);
+    else if (std::string("seed") == key)
+      seed = value;
 
     if (simulator) simulator->Configure(key, value);
   }
@@ -1898,8 +1906,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     cloned->SetMPSOptimizeSwaps(GetMPSOptimizeSwaps());
 
-    cloned->SetMPSOptimizationBondDimensionThreshold(GetMPSOptimizationBondDimensionThreshold());
-    cloned->SetMPSOptimizationQubitsNumberThreshold(GetMPSOptimizationQubitsNumberThreshold());
+    cloned->SetMPSOptimizationBondDimensionThreshold(
+        GetMPSOptimizationBondDimensionThreshold());
+    cloned->SetMPSOptimizationQubitsNumberThreshold(
+        GetMPSOptimizationQubitsNumberThreshold());
 
     cloned->SetLookaheadDepth(GetLookaheadDepth());
     cloned->SetLookaheadDepthWithHeuristic(GetLookaheadDepthWithHeuristic());
@@ -1989,9 +1999,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       simulatorTypes.emplace_back(Simulators::SimulatorType::kQCSim,
                                   Simulators::SimulationType::kPauliPropagator);
 
-    if (OptimizationSimulatorExists(
-            Simulators::SimulatorType::kQCSim,
-            Simulators::SimulationType::kPathIntegral))
+    if (OptimizationSimulatorExists(Simulators::SimulatorType::kQCSim,
+                                    Simulators::SimulationType::kPathIntegral))
       simulatorTypes.emplace_back(Simulators::SimulatorType::kQCSim,
                                   Simulators::SimulationType::kPathIntegral);
 
@@ -2207,7 +2216,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             maxBondDim.empty() ? 0 : std::stoi(maxBondDim);
 
         if (maxBondDim.empty() ||
-            static_cast<int>(mpsOptimizationBondDimensionThreshold) <= maxBondDimValue) {
+            static_cast<int>(mpsOptimizationBondDimensionThreshold) <=
+                maxBondDimValue) {
           // need to be sure the circuit is correctly converted
           dcirc->ConvertForCutting();  // convert the three qubit gates
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();
@@ -2245,8 +2255,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
               }
               avgTwoQubitGatesPerLayer /= layers.size();
 
-              int lookaheadVal = static_cast<int>(4. * avgTwoQubitGatesPerLayer);
-              if (lookaheadVal > 15) lookaheadVal = 15;
+              int lookaheadVal = static_cast<int>(4. *
+              avgTwoQubitGatesPerLayer); if (lookaheadVal > 15) lookaheadVal =
+              15;
 
               lookaheadDepthLocal =
                   layers.size() < 8 || nrQubits <= 10 ? 0
@@ -2269,8 +2280,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
               */
               lookaheadHeuristicDepthLocal =
                   layers.size() < 10 || nrQubits <= 10
-                  ? 0 : lookaheadDepthLocal - 2;
-            
+                      ? 0
+                      : lookaheadDepthLocal - 2;
+
             if (lookaheadHeuristicDepthLocal < 0)
               lookaheadHeuristicDepthLocal = 0;
 
@@ -2479,6 +2491,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   std::string maxBondDim;
   std::string singularValueThreshold;
   std::string mpsSample;
+  std::string seed; /**< User RNG seed for the executing simulator; empty means
+                       non-deterministic (random) sampling. */
   bool useDoublePrecision = false;
 
   size_t maxSimulators = QC::QubitRegisterCalculator<>::

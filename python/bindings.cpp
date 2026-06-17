@@ -10,8 +10,10 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -56,11 +58,15 @@ struct SimulatorConfig {
   std::optional<size_t> pp_pauli_weight_threshold = std::nullopt;
   std::optional<int> pp_steps_between_trims = std::nullopt;
 
+  // Optional RNG seed for the simulator's multi-shot terminal sampling.
+  std::optional<uint64_t> seed = std::nullopt;
+
   SimulatorConfig() = default;
 
   SimulatorConfig(Simulators::SimulatorType st, Simulators::SimulationType set,
                   std::optional<size_t> mb, std::optional<double> sv, bool dp,
-                  bool ds, int la, bool mnc)
+                  bool ds, int la, bool mnc,
+                  std::optional<uint64_t> sd = std::nullopt)
       : simulator_type(st),
         simulation_type(set),
         max_bond_dimension(mb),
@@ -68,7 +74,8 @@ struct SimulatorConfig {
         use_double_precision(dp),
         disable_optimized_swapping(ds),
         lookahead_depth(la),
-        mps_measure_no_collapse(mnc) {}
+        mps_measure_no_collapse(mnc),
+        seed(sd) {}
 };
 
 // ============================================================================
@@ -91,13 +98,13 @@ struct ScopedSimulator {
   }
 
   // Disable copying to prevent double-free
-  ScopedSimulator(const ScopedSimulator&) = delete;
-  ScopedSimulator& operator=(const ScopedSimulator&) = delete;
+  ScopedSimulator(const ScopedSimulator &) = delete;
+  ScopedSimulator &operator=(const ScopedSimulator &) = delete;
 };
 
 // Helper to configure the simulation network
 std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
-    unsigned long int handle, const SimulatorConfig& config) {
+    unsigned long int handle, const SimulatorConfig &config) {
   // QuEST only supports statevector simulation
   if (config.simulator_type == Simulators::SimulatorType::kQuestSim &&
       config.simulation_type != Simulators::SimulationType::kStatevector) {
@@ -110,7 +117,7 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     return nullptr;
   }
 
-  auto* maestro = static_cast<Maestro*>(GetMaestroObject());
+  auto *maestro = static_cast<Maestro *>(GetMaestroObject());
   auto network = maestro->GetSimpleSimulator(handle);
 
   if (!network) return nullptr;
@@ -160,12 +167,19 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
                        oss.str().c_str());
   }
   if (config.pp_pauli_weight_threshold) {
-    network->Configure("pauli_propagator_pauli_weight_threshold",
-                       std::to_string(*config.pp_pauli_weight_threshold).c_str());
+    network->Configure(
+        "pauli_propagator_pauli_weight_threshold",
+        std::to_string(*config.pp_pauli_weight_threshold).c_str());
   }
   if (config.pp_steps_between_trims) {
     network->Configure("pauli_propagator_steps_between_trims",
                        std::to_string(*config.pp_steps_between_trims).c_str());
+  }
+
+  // Seed for reproducible multi-shot terminal sampling (applied to the
+  // executing simulator inside RepeatedExecuteOnHost).
+  if (config.seed) {
+    network->Configure("seed", std::to_string(*config.seed).c_str());
   }
 
   network->CreateSimulator();
@@ -179,7 +193,7 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
 }
 
 // Helper to parse observables from String (";" sep) or List[str]
-std::vector<std::string> ParseObservables(const nb::object& observables) {
+std::vector<std::string> ParseObservables(const nb::object &observables) {
   std::vector<std::string> paulis;
 
   if (nb::isinstance<nb::str>(observables)) {
@@ -230,7 +244,7 @@ static void apply_readout_error_to_counts(
 
 // Core Execution Logic
 nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
-                      const SimulatorConfig& config, int shots) {
+                      const SimulatorConfig &config, int shots) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   int num_qubits =
@@ -254,9 +268,9 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
 
   // Process results back in Python land
   nb::dict counts;
-  for (const auto& pair : raw_results) {
+  for (const auto &pair : raw_results) {
     // Optimization: Pre-allocate string to avoid repeated reallocation
-    const auto& bool_vec = pair.first;
+    const auto &bool_vec = pair.first;
     std::string bitstring(bool_vec.size(), '0');
     for (size_t i = 0; i < bool_vec.size(); ++i) {
       if (bool_vec[i]) bitstring[i] = '1';
@@ -275,12 +289,12 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
 
 // Core Estimation Logic
 nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
-                       const std::vector<std::string>& paulis,
-                       const SimulatorConfig& config) {
+                       const std::vector<std::string> &paulis,
+                       const SimulatorConfig &config) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   int num_qubits = static_cast<int>(circuit->GetMaxQubitIndex()) + 1;
-  for (const auto& p : paulis)
+  for (const auto &p : paulis)
     num_qubits = std::max(num_qubits, (int)p.length());
 
   ScopedSimulator sim(std::max(1, num_qubits));
@@ -316,7 +330,7 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
 // Core Statevector Logic
 std::vector<std::complex<double>> statevector_core(
     std::shared_ptr<Circuits::Circuit<double>> circuit,
-    const SimulatorConfig& config) {
+    const SimulatorConfig &config) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   int num_qubits =
@@ -341,7 +355,7 @@ std::vector<std::complex<double>> statevector_core(
 // skipped when building the mirror circuit.
 using OperationPtr = std::shared_ptr<Circuits::IOperation<double>>;
 
-OperationPtr adjoint_gate(const OperationPtr& op) {
+OperationPtr adjoint_gate(const OperationPtr &op) {
   if (op->GetType() != Circuits::OperationType::kGate) return nullptr;
 
   auto gate = std::dynamic_pointer_cast<Circuits::IQuantumGate<double>>(op);
@@ -432,16 +446,16 @@ OperationPtr adjoint_gate(const OperationPtr& op) {
 // By default uses shot-based sampling. Set full_amplitude=true for exact
 // statevector computation (only feasible for small qubit counts).
 double mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
-                            const SimulatorConfig& config, int shots,
+                            const SimulatorConfig &config, int shots,
                             bool full_amplitude) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   // Build the mirror circuit: forward gates + adjoint gates in reverse
   auto mirror = std::make_shared<Circuits::Circuit<double>>();
-  const auto& ops = circuit->GetOperations();
+  const auto &ops = circuit->GetOperations();
 
   // Forward pass: add only gate operations (skip measurements)
-  for (const auto& op : ops) {
+  for (const auto &op : ops) {
     if (op->GetType() == Circuits::OperationType::kGate) {
       mirror->AddOperation(op->Clone());
     }
@@ -459,7 +473,7 @@ double mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
   auto run_shot_based = [&]() -> double {
     // Need a fresh mirror circuit since measurements mutate it
     auto mirror_copy = std::make_shared<Circuits::Circuit<double>>();
-    for (const auto& op : mirror->GetOperations()) {
+    for (const auto &op : mirror->GetOperations()) {
       mirror_copy->AddOperation(op->Clone());
     }
 
@@ -502,8 +516,8 @@ double mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
     // Convert results to counts dict and look up all-zeros bitstring
     std::string zeros(n, '0');
     size_t zero_count = 0;
-    for (const auto& pair : raw_results) {
-      const auto& bool_vec = pair.first;
+    for (const auto &pair : raw_results) {
+      const auto &bool_vec = pair.first;
       std::string bitstring(bool_vec.size(), '0');
       for (size_t i = 0; i < bool_vec.size(); ++i)
         if (bool_vec[i]) bitstring[i] = '1';
@@ -550,9 +564,9 @@ double mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
 // Core Inner Product Logic
 // Computes <psi_1|psi_2> = <0|U1† U2|0> via ProjectOnZero.
 std::complex<double> inner_product_core(
-    const std::shared_ptr<Circuits::Circuit<double>>& circuit_1,
-    const std::shared_ptr<Circuits::Circuit<double>>& circuit_2,
-    const SimulatorConfig& config) {
+    const std::shared_ptr<Circuits::Circuit<double>> &circuit_1,
+    const std::shared_ptr<Circuits::Circuit<double>> &circuit_2,
+    const SimulatorConfig &config) {
   if (!circuit_1) throw nb::value_error("circuit_1 is null.");
   if (!circuit_2) throw nb::value_error("circuit_2 is null.");
 
@@ -561,11 +575,11 @@ std::complex<double> inner_product_core(
   // (they act on |0> first), then U1†'s gates (applied last = leftmost in
   // the matrix product).
   auto combined = std::make_shared<Circuits::Circuit<double>>();
-  const auto& ops1 = circuit_1->GetOperations();
-  const auto& ops2 = circuit_2->GetOperations();
+  const auto &ops1 = circuit_1->GetOperations();
+  const auto &ops2 = circuit_2->GetOperations();
 
   // Forward pass of circuit_2: gate operations only
-  for (const auto& op : ops2) {
+  for (const auto &op : ops2) {
     if (op->GetType() == Circuits::OperationType::kGate) {
       combined->AddOperation(op->Clone());
     }
@@ -631,17 +645,24 @@ NB_MODULE(maestro, m) {
   nb::class_<SimulatorConfig>(
       m, "SimulatorConfig",
       "Configuration for the quantum simulator backend. Create once and "
-      "reuse across execute/estimate/statevector calls.")
+      "reuse across execute/estimate/statevector calls.\n\n"
+      "The optional `seed` makes the simulator's multi-shot terminal sampling "
+      "reproducible on the statevector and path-integral backends (both run "
+      "single-threaded, so results are fully portable). `None` keeps the "
+      "default non-deterministic behavior. Note: MPS, stabilizer and "
+      "tensor-network sampling, as well as mid-circuit and single-shot "
+      "measurements, delegate to the underlying qcsim backends and remain "
+      "non-deterministic.")
       .def(nb::init<Simulators::SimulatorType, Simulators::SimulationType,
                     std::optional<size_t>, std::optional<double>, bool, bool,
-                    int, bool>(),
+                    int, bool, std::optional<uint64_t>>(),
            "simulator_type"_a = Simulators::SimulatorType::kQCSim,
            "simulation_type"_a = Simulators::SimulationType::kStatevector,
            "max_bond_dimension"_a = nb::none(),
            "singular_value_threshold"_a = nb::none(),
            "use_double_precision"_a = false,
            "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
-           "mps_measure_no_collapse"_a = true)
+           "mps_measure_no_collapse"_a = true, "seed"_a = nb::none())
       .def_rw("simulator_type", &SimulatorConfig::simulator_type)
       .def_rw("simulation_type", &SimulatorConfig::simulation_type)
       .def_rw("max_bond_dimension", &SimulatorConfig::max_bond_dimension)
@@ -659,7 +680,8 @@ NB_MODULE(maestro, m) {
               &SimulatorConfig::pp_pauli_weight_threshold)
       .def_rw("pp_steps_between_trims",
               &SimulatorConfig::pp_steps_between_trims)
-      .def("__repr__", [](const SimulatorConfig& c) {
+      .def_rw("seed", &SimulatorConfig::seed)
+      .def("__repr__", [](const SimulatorConfig &c) {
         std::ostringstream oss;
         oss << "SimulatorConfig("
             << "simulator_type=" << (int)c.simulator_type
@@ -677,7 +699,8 @@ NB_MODULE(maestro, m) {
             << (c.disable_optimized_swapping ? "True" : "False")
             << ", lookahead_depth=" << c.lookahead_depth
             << ", mps_measure_no_collapse="
-            << (c.mps_measure_no_collapse ? "True" : "False") << ")";
+            << (c.mps_measure_no_collapse ? "True" : "False")
+            << ", seed=" << (c.seed ? std::to_string(*c.seed) : "None") << ")";
         return oss.str();
       });
 
@@ -689,8 +712,8 @@ NB_MODULE(maestro, m) {
            "sim_exec_type"_a = Simulators::SimulationType::kMatrixProductState)
       .def(
           "get_simulator",
-          [](Maestro& self, unsigned long int h) {
-            return static_cast<Simulators::ISimulator*>(self.GetSimulator(h));
+          [](Maestro &self, unsigned long int h) {
+            return static_cast<Simulators::ISimulator *>(self.GetSimulator(h));
           },
           nb::rv_policy::reference_internal)
       .def("destroy_simulator", &Maestro::DestroySimulator);
@@ -1498,7 +1521,7 @@ NB_MODULE(maestro, m) {
   nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
       .def(nb::init<>())
       .def("parse_and_translate",
-           [](qasm::QasmToCirc<double>& self, const std::string& qasm_str) {
+           [](qasm::QasmToCirc<double> &self, const std::string &qasm_str) {
              auto circuit = self.ParseAndTranslate(qasm_str);
              if (self.Failed() || !circuit) {
                throw nb::value_error(
@@ -1520,7 +1543,7 @@ NB_MODULE(maestro, m) {
   // Variant B: QASM String
   m.def(
       "simple_execute",
-      [](const std::string& qasm, const SimulatorConfig& config, int shots) {
+      [](const std::string &qasm, const SimulatorConfig &config, int shots) {
         qasm::QasmToCirc<> parser;
         auto circuit = parser.ParseAndTranslate(qasm);
         if (parser.Failed() || !circuit) {
@@ -1536,7 +1559,7 @@ NB_MODULE(maestro, m) {
   m.def(
       "simple_estimate",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const nb::object& obs, const SimulatorConfig& config) {
+         const nb::object &obs, const SimulatorConfig &config) {
         return estimate_core(circuit, ParseObservables(obs), config);
       },
       "circuit"_a, "observables"_a, "config"_a = SimulatorConfig{});
@@ -1544,8 +1567,8 @@ NB_MODULE(maestro, m) {
   // Variant B: QASM String
   m.def(
       "simple_estimate",
-      [](const std::string& qasm, const nb::object& obs,
-         const SimulatorConfig& config) {
+      [](const std::string &qasm, const nb::object &obs,
+         const SimulatorConfig &config) {
         qasm::QasmToCirc<> parser;
         auto circuit = parser.ParseAndTranslate(qasm);
         if (parser.Failed() || !circuit) {
@@ -1581,10 +1604,10 @@ NB_MODULE(maestro, m) {
   m.def(
       "get_probabilities",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const SimulatorConfig& config) -> nb::list {
+         const SimulatorConfig &config) -> nb::list {
         const auto amplitudes = statevector_core(circuit, config);
         nb::list probs;
-        for (const auto& amp : amplitudes) probs.append(std::norm(amp));
+        for (const auto &amp : amplitudes) probs.append(std::norm(amp));
         return probs;
       },
       "circuit"_a, "config"_a = SimulatorConfig{},
@@ -1593,7 +1616,7 @@ NB_MODULE(maestro, m) {
   m.def(
       "get_statevector",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const SimulatorConfig& config) {
+         const SimulatorConfig &config) {
         return statevector_core(circuit, config);
       },
       "circuit"_a, "config"_a = SimulatorConfig{},
@@ -1603,7 +1626,7 @@ NB_MODULE(maestro, m) {
   m.def(
       "mirror_fidelity",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const SimulatorConfig& config, int shots, bool full_amplitude) {
+         const SimulatorConfig &config, int shots, bool full_amplitude) {
         return mirror_fidelity_core(circuit, config, shots, full_amplitude);
       },
       "circuit"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024,
@@ -1615,9 +1638,9 @@ NB_MODULE(maestro, m) {
 
   m.def(
       "inner_product",
-      [](const std::shared_ptr<Circuits::Circuit<double>>& circuit_1,
-         const std::shared_ptr<Circuits::Circuit<double>>& circuit_2,
-         const SimulatorConfig& config) {
+      [](const std::shared_ptr<Circuits::Circuit<double>> &circuit_1,
+         const std::shared_ptr<Circuits::Circuit<double>> &circuit_2,
+         const SimulatorConfig &config) {
         return inner_product_core(circuit_1, circuit_2, config);
       },
       "circuit_1"_a, "circuit_2"_a, "config"_a = SimulatorConfig{},
@@ -1631,7 +1654,7 @@ NB_MODULE(maestro, m) {
   m.def(
       "state_probability",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const std::string& target_state) -> nb::dict {
+         const std::string &target_state) -> nb::dict {
         if (!circuit) throw nb::value_error("Circuit is null.");
         if (target_state.empty())
           throw nb::value_error("target_state must be a non-empty bitstring.");
@@ -1690,7 +1713,7 @@ NB_MODULE(maestro, m) {
   // QASM variant
   m.def(
       "state_probability",
-      [](const std::string& qasm, const std::string& target_state) -> nb::dict {
+      [](const std::string &qasm, const std::string &target_state) -> nb::dict {
         if (target_state.empty())
           throw nb::value_error("target_state must be a non-empty bitstring.");
 
@@ -1810,8 +1833,8 @@ NB_MODULE(maestro, m) {
            "    after_2q: If True (default), inject after 2Q gates.\n\n"
            "Example: nm.set_correlated_ar1(0, phi=0.135, sigma_eta=2.35e-3)")
       .def("set_correlated_ou", &noise::NoiseModel::set_correlated_ou,
-           "qubit"_a, "sigma"_a, "alpha"_a, "gate_time"_a,
-           "after_1q"_a = true, "after_2q"_a = true,
+           "qubit"_a, "sigma"_a, "alpha"_a, "gate_time"_a, "after_1q"_a = true,
+           "after_2q"_a = true,
            "Set correlated noise from Ornstein-Uhlenbeck parameters.\n\n"
            "OU: dX = -theta*X*dt + sigma*dW, discretized as AR(1).\n"
            "  theta = 1/(alpha * gate_time)\n"
@@ -1826,17 +1849,16 @@ NB_MODULE(maestro, m) {
            "    after_2q: If True (default), inject after 2Q gates.\n\n"
            "Example: nm.set_correlated_ou(0, sigma=15.0, alpha=0.5, "
            "gate_time=100e-9)")
-      .def("set_all_correlated_ou",
-           &noise::NoiseModel::set_all_correlated_ou,
+      .def("set_all_correlated_ou", &noise::NoiseModel::set_all_correlated_ou,
            "num_qubits"_a, "sigma"_a, "alpha"_a, "gate_time"_a,
            "after_1q"_a = true, "after_2q"_a = true,
            "Set identical OU correlated noise on qubits [0, num_qubits).\n\n"
            "Example: nm.set_all_correlated_ou(20, sigma=15.0, alpha=0.5, "
            "gate_time=100e-9)")
       .def("set_all_correlated_from_power",
-           &noise::NoiseModel::set_all_correlated_from_power,
-           "num_qubits"_a, "power"_a, "alpha"_a, "gate_time"_a,
-           "after_1q"_a = true, "after_2q"_a = true,
+           &noise::NoiseModel::set_all_correlated_from_power, "num_qubits"_a,
+           "power"_a, "alpha"_a, "gate_time"_a, "after_1q"_a = true,
+           "after_2q"_a = true,
            "Set correlated noise from total noise power.\n\n"
            "P_tot = N * sigma^2 * pi * alpha * gate_time\n"
            "Derives sigma from P_tot and sets OU noise on all qubits.\n\n"
@@ -1855,11 +1877,11 @@ NB_MODULE(maestro, m) {
       .def("set_t1", &noise::NoiseModel::set_t1, "qubit"_a, "gamma"_a,
            "Set per-gate T1 decay probability. After each gate on this "
            "qubit, with probability gamma, the qubit resets to |0⟩.")
-      .def("set_all_t1", &noise::NoiseModel::set_all_t1,
-           "num_qubits"_a, "gamma"_a,
+      .def("set_all_t1", &noise::NoiseModel::set_all_t1, "num_qubits"_a,
+           "gamma"_a,
            "Set uniform T1 decay probability on qubits [0, num_qubits).")
-      .def("set_t1_from_time", &noise::NoiseModel::set_t1_from_time,
-           "qubit"_a, "gate_time_s"_a, "t1_time_s"_a,
+      .def("set_t1_from_time", &noise::NoiseModel::set_t1_from_time, "qubit"_a,
+           "gate_time_s"_a, "t1_time_s"_a,
            "Set T1 from physical time constants. "
            "gamma = 1 - exp(-gate_time / T1).\n\n"
            "Example: nm.set_t1_from_time(0, gate_time_s=30e-9, "
@@ -1867,9 +1889,10 @@ NB_MODULE(maestro, m) {
       .def("has_t1", &noise::NoiseModel::has_t1,
            "Return True if any T1 parameters have been set.")
       // ── T1 gate-type-specific overrides ──
-      .def("set_t1_2q", &noise::NoiseModel::set_t1_2q, "qubit"_a, "gamma"_a,
-           "Set T1 decay probability applied only after two-qubit gates. "
-           "When set, 2Q gates use this gamma instead of the 'all gates' value.")
+      .def(
+          "set_t1_2q", &noise::NoiseModel::set_t1_2q, "qubit"_a, "gamma"_a,
+          "Set T1 decay probability applied only after two-qubit gates. "
+          "When set, 2Q gates use this gamma instead of the 'all gates' value.")
       .def("set_t1_2q_from_time", &noise::NoiseModel::set_t1_2q_from_time,
            "qubit"_a, "gate_time_s"_a, "t1_time_s"_a,
            "Set T1 for 2Q gates from physical time constants. "
@@ -1879,13 +1902,13 @@ NB_MODULE(maestro, m) {
       .def("get_t1_2q", &noise::NoiseModel::get_t1_2q, "qubit"_a,
            "Get T1 decay probability for 2Q gates (falls back to get_t1 "
            "if not set).")
-      .def("get_t1_for_gate", &noise::NoiseModel::get_t1_for_gate,
-           "qubit"_a, "is_2q"_a,
+      .def("get_t1_for_gate", &noise::NoiseModel::get_t1_for_gate, "qubit"_a,
+           "is_2q"_a,
            "Get gate-type-aware T1: returns t1_2q if is_2q and set, "
            "else t1.")
       // ── Crosstalk ──
-      .def("set_crosstalk", &noise::NoiseModel::set_crosstalk,
-           "q1"_a, "q2"_a, "strength"_a,
+      .def("set_crosstalk", &noise::NoiseModel::set_crosstalk, "q1"_a, "q2"_a,
+           "strength"_a,
            "Set ZZ crosstalk coupling between two qubits. "
            "After a gate on q1, an Rz(strength) is applied on q2, "
            "and vice versa. Symmetric.")
@@ -1901,8 +1924,8 @@ NB_MODULE(maestro, m) {
            "    p_meas0_prep1: P(measure 0 | state was 1) — false negative.\n\n"
            "Example: nm.set_readout_error(0, 0.003, 0.06)")
       .def("set_readout_error_symmetric",
-           &noise::NoiseModel::set_readout_error_symmetric,
-           "qubit"_a, "p_error"_a,
+           &noise::NoiseModel::set_readout_error_symmetric, "qubit"_a,
+           "p_error"_a,
            "Set symmetric readout error (same rate for both directions).\n\n"
            "Example: nm.set_readout_error_symmetric(0, 0.01)")
       .def("set_all_readout_error", &noise::NoiseModel::set_all_readout_error,
@@ -1924,26 +1947,22 @@ NB_MODULE(maestro, m) {
            "Return True if any two-qubit depolarizing has been set.")
       // ── Gate-type-specific noise ──
       .def("set_1q_gate_depolarizing",
-           &noise::NoiseModel::set_1q_gate_depolarizing,
-           "qubit"_a, "p"_a,
+           &noise::NoiseModel::set_1q_gate_depolarizing, "qubit"_a, "p"_a,
            "Set depolarizing noise applied only after single-qubit gates.\n\n"
            "This is separate from set_depolarizing() which applies after ALL "
            "gates.\n\n"
            "Example: nm.set_1q_gate_depolarizing(0, 2.3e-4)")
       .def("set_2q_gate_depolarizing",
-           &noise::NoiseModel::set_2q_gate_depolarizing,
-           "qubit"_a, "p"_a,
+           &noise::NoiseModel::set_2q_gate_depolarizing, "qubit"_a, "p"_a,
            "Set depolarizing noise applied only after two-qubit gates "
            "involving this qubit.\n\n"
            "Example: nm.set_2q_gate_depolarizing(0, 1.8e-3)")
       .def("set_all_1q_gate_depolarizing",
-           &noise::NoiseModel::set_all_1q_gate_depolarizing,
-           "num_qubits"_a, "p"_a,
-           "Set uniform 1Q gate depolarizing on qubits [0, num_qubits).")
+           &noise::NoiseModel::set_all_1q_gate_depolarizing, "num_qubits"_a,
+           "p"_a, "Set uniform 1Q gate depolarizing on qubits [0, num_qubits).")
       .def("set_all_2q_gate_depolarizing",
-           &noise::NoiseModel::set_all_2q_gate_depolarizing,
-           "num_qubits"_a, "p"_a,
-           "Set uniform 2Q gate depolarizing on qubits [0, num_qubits).")
+           &noise::NoiseModel::set_all_2q_gate_depolarizing, "num_qubits"_a,
+           "p"_a, "Set uniform 2Q gate depolarizing on qubits [0, num_qubits).")
       .def("has_1q_gate_noise", &noise::NoiseModel::has_1q_gate_noise,
            "Return True if any 1Q gate-specific noise has been set.")
       .def("has_2q_gate_noise", &noise::NoiseModel::has_2q_gate_noise,
@@ -1955,8 +1974,8 @@ NB_MODULE(maestro, m) {
   m.def(
       "noisy_estimate",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const nb::object& observables, const noise::NoiseModel& noise_model,
-         const SimulatorConfig& config) {
+         const nb::object &observables, const noise::NoiseModel &noise_model,
+         const SimulatorConfig &config) {
         auto paulis = ParseObservables(observables);
         nb::dict result = estimate_core(circuit, paulis, config);
 
@@ -1985,8 +2004,8 @@ NB_MODULE(maestro, m) {
   // --- QASM variant ---
   m.def(
       "noisy_estimate",
-      [](const std::string& qasm, const nb::object& observables,
-         const noise::NoiseModel& noise_model, const SimulatorConfig& config) {
+      [](const std::string &qasm, const nb::object &observables,
+         const noise::NoiseModel &noise_model, const SimulatorConfig &config) {
         qasm::QasmToCirc<> parser;
         auto circuit = parser.ParseAndTranslate(qasm);
         if (parser.Failed() || !circuit)
@@ -2019,8 +2038,8 @@ NB_MODULE(maestro, m) {
   m.def(
       "noisy_estimate_montecarlo",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const nb::object& observables, const noise::NoiseModel& noise_model,
-         int noise_realizations, const SimulatorConfig& config,
+         const nb::object &observables, const noise::NoiseModel &noise_model,
+         int noise_realizations, const SimulatorConfig &config,
          std::optional<unsigned int> seed) {
         if (!circuit) throw nb::value_error("Circuit is null.");
         auto paulis = ParseObservables(observables);
@@ -2072,7 +2091,7 @@ NB_MODULE(maestro, m) {
   m.def(
       "noisy_execute",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const noise::NoiseModel& noise_model, const SimulatorConfig& config,
+         const noise::NoiseModel &noise_model, const SimulatorConfig &config,
          int shots, int noise_realizations, std::optional<unsigned int> seed) {
         if (!circuit) throw nb::value_error("Circuit is null.");
 
@@ -2101,7 +2120,7 @@ NB_MODULE(maestro, m) {
         apply_readout_error_to_counts(combined, noise_model, rng);
 
         nb::dict py_counts;
-        for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
+        for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
 
         nb::dict out;
         out["counts"] = py_counts;
@@ -2124,7 +2143,7 @@ NB_MODULE(maestro, m) {
   m.def(
       "coherent_execute",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const noise::NoiseModel& noise_model, const SimulatorConfig& config,
+         const noise::NoiseModel &noise_model, const SimulatorConfig &config,
          int shots, int noise_realizations, std::optional<unsigned int> seed) {
         if (!circuit) throw nb::value_error("Circuit is null.");
         if (!noise_model.has_coherent())
@@ -2154,7 +2173,7 @@ NB_MODULE(maestro, m) {
         auto end = std::chrono::high_resolution_clock::now();
 
         nb::dict py_counts;
-        for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
+        for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
 
         nb::dict out;
         out["counts"] = py_counts;
@@ -2183,8 +2202,8 @@ NB_MODULE(maestro, m) {
   m.def(
       "coherent_estimate",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const nb::object& observables, const noise::NoiseModel& noise_model,
-         int noise_realizations, const SimulatorConfig& config,
+         const nb::object &observables, const noise::NoiseModel &noise_model,
+         int noise_realizations, const SimulatorConfig &config,
          std::optional<unsigned int> seed) {
         if (!circuit) throw nb::value_error("Circuit is null.");
         if (!noise_model.has_coherent())
@@ -2250,7 +2269,7 @@ NB_MODULE(maestro, m) {
   m.def(
       "full_noise_execute",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const noise::NoiseModel& noise_model, const SimulatorConfig& config,
+         const noise::NoiseModel &noise_model, const SimulatorConfig &config,
          int shots, int noise_realizations, std::optional<unsigned int> seed) {
         if (!circuit) throw nb::value_error("Circuit is null.");
         if (!noise_model.has_any())
@@ -2281,7 +2300,7 @@ NB_MODULE(maestro, m) {
         apply_readout_error_to_counts(combined, noise_model, rng);
 
         nb::dict py_counts;
-        for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
+        for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
 
         nb::dict out;
         out["counts"] = py_counts;
@@ -2312,8 +2331,8 @@ NB_MODULE(maestro, m) {
   m.def(
       "full_noise_estimate",
       [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const nb::object& observables, const noise::NoiseModel& noise_model,
-         int noise_realizations, const SimulatorConfig& config,
+         const nb::object &observables, const noise::NoiseModel &noise_model,
+         int noise_realizations, const SimulatorConfig &config,
          std::optional<unsigned int> seed) {
         if (!circuit) throw nb::value_error("Circuit is null.");
         if (!noise_model.has_any())

@@ -4014,3 +4014,60 @@ class TestCorrelatedNoisePhysics:
         assert 'counts' in result
         total = sum(result['counts'].values())
         assert total == 1000
+
+
+class TestSimulatorSeed:
+    """Test the SimulatorConfig.seed RNG seeding for reproducible sampling."""
+
+    QASM_BELL = """
+    OPENQASM 2.0;
+    include "qelib1.inc";
+    qreg q[2];
+    creg c[2];
+    h q[0];
+    cx q[0], q[1];
+    measure q -> c;
+    """
+
+    def _run(self, seed, shots=4000,
+             simulation_type=maestro.SimulationType.Statevector,
+             max_bond_dimension=None):
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=simulation_type,
+            max_bond_dimension=max_bond_dimension,
+            seed=seed,
+        )
+        return maestro.simple_execute(self.QASM_BELL, shots=shots,
+                                      config=config)['counts']
+
+    def test_config_seed_field(self):
+        """seed is stored on SimulatorConfig and defaults to None."""
+        assert maestro.SimulatorConfig().seed is None
+        assert maestro.SimulatorConfig(seed=42).seed == 42
+
+    def test_config_seed_repr(self):
+        """seed shows up in the SimulatorConfig repr."""
+        assert "seed=None" in repr(maestro.SimulatorConfig())
+        assert "seed=42" in repr(maestro.SimulatorConfig(seed=42))
+
+    def test_same_seed_is_reproducible(self):
+        """Two runs with the same seed produce identical counts."""
+        assert self._run(12345) == self._run(12345)
+
+    def test_different_seed_differs(self):
+        """Different seeds should (almost surely) give different counts."""
+        # With 4000 shots on a Bell state the exact split fluctuates, so two
+        # different seeds are overwhelmingly unlikely to match exactly.
+        assert self._run(1) != self._run(2)
+
+    def test_no_seed_still_works(self):
+        """seed=None keeps the default (non-deterministic) behavior."""
+        counts = self._run(None)
+        assert sum(counts.values()) == 4000
+
+    def test_seed_reproducible_path_integral(self):
+        """Path-integral terminal sampling is reproducible with a fixed seed."""
+        a = self._run(777, simulation_type=maestro.SimulationType.PathIntegral)
+        b = self._run(777, simulation_type=maestro.SimulationType.PathIntegral)
+        assert a == b

@@ -18,8 +18,10 @@
 #ifdef INCLUDED_BY_FACTORY
 
 #include <algorithm>
+#include <cstdint>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <random>
 
@@ -534,6 +536,15 @@ class QCSimState : public ISimulator {
       ppStepsBetweenTrims = std::stoi(value);
       if (pp && ppStepsBetweenTrims < std::numeric_limits<int>::max())
         pp->SetStepsBetweenTrims(ppStepsBetweenTrims);
+    } else if (std::string("seed") == key) {
+      // Seeds the terminal multi-shot sampling RNG for reproducible results.
+      // Only the statevector and path-integral SampleCountsMany paths draw
+      // from this rng. MPS / stabilizer / tensor-network sampling, as well as
+      // mid-circuit and single-shot measurements, delegate to the underlying
+      // qcsim backends and remain non-deterministic.
+      userSeed_ = static_cast<uint64_t>(std::stoull(value));
+      cloneCounter_ = 0;
+      rng.seed(*userSeed_);
     }
   }
 
@@ -1633,7 +1644,8 @@ class QCSimState : public ISimulator {
         return result;
       } else {
         throw std::runtime_error(
-            "QCSimState::MeasureNoCollapse: The path integral simulator does not "
+            "QCSimState::MeasureNoCollapse: The path integral simulator does "
+            "not "
             "support measuring more than 63 qubits into 64 bits integers.");
       }
     }
@@ -1742,6 +1754,12 @@ class QCSimState : public ISimulator {
 
   std::mt19937_64 rng;
   std::uniform_real_distribution<double> uniformZeroOne;
+
+  // When set, the terminal sampling RNG (rng) is seeded deterministically.
+  // See QCSimState::Configure ("seed") and QCSimSimulator::Clone.
+  std::optional<uint64_t> userSeed_;
+  // Counter used to derive a distinct deterministic seed for each clone.
+  uint64_t cloneCounter_ = 0;
 };
 
 }  // namespace Private
