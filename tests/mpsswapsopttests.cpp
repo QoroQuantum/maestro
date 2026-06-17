@@ -741,6 +741,8 @@ BOOST_DATA_TEST_CASE(NetworkOptimizedSwapsVsUnoptimizedOnHost,
   double unoptTime =
       std::chrono::duration<double>(endUnopt - startUnopt).count() * 1000.;
 
+  BOOST_TEST_MESSAGE("Unoptimized execution time: " << unoptTime << " ms");
+
   // Optimized network (swaps optimization enabled, the default)
   auto netOpt = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
       std::vector<Types::qubit_t>{static_cast<Types::qubit_t>(nrQubits)},
@@ -758,7 +760,7 @@ BOOST_DATA_TEST_CASE(NetworkOptimizedSwapsVsUnoptimizedOnHost,
   double optTime =
       std::chrono::duration<double>(endOpt - startOpt).count() * 1000.;
 
-  BOOST_TEST_MESSAGE("Unoptimized execution time: " << unoptTime << " ms");
+  
   BOOST_TEST_MESSAGE("Optimized execution time: " << optTime << " ms");
   if (optTime > 0.)
     BOOST_TEST_MESSAGE("Speedup: " << unoptTime / optTime << "x");

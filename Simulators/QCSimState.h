@@ -295,7 +295,7 @@ class QCSimState : public ISimulator {
     upcomingGates = gates;
     upcomingGateIndex = 0;
 
-    if (!mpsSimulator || lookaheadDepth <= 0) return;
+    if (!mpsSimulator || lookaheadDepth <= 0 || lookaheadDepth == std::numeric_limits<int>::max()) return;
 
     // Register an observer that advances the gate index
     ClearObservers();  // for now we only have this observer, so this should be

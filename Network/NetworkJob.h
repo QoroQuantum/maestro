@@ -89,11 +89,18 @@ class ExecuteJob {
 
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
         if (method == Simulators::SimulationType::kMatrixProductState &&
-            network->GetMPSOptimizeSwaps())
-            optSim->SetUpcomingGates(dcirc->GetOperations());
+            network->GetMPSOptimizeSwaps()) {
+          auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+          circ->ConvertForCutting();
+          optSim->SetUpcomingGates(circ->GetOperations());
+        }
       }
-    } else if (method == Simulators::SimulationType::kMatrixProductState && network->GetMPSOptimizeSwaps())
-      optSim->SetUpcomingGates(dcirc->GetOperations());
+    } else if (method == Simulators::SimulationType::kMatrixProductState && network->GetMPSOptimizeSwaps()) {
+      auto circ =
+          std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+      circ->ConvertForCutting();
+      optSim->SetUpcomingGates(circ->GetOperations());
+    }
 
     std::shared_ptr<Circuits::MeasurementOperation<Time>> measurementsOp;
 
@@ -218,8 +225,11 @@ class ExecuteJob {
             optSim->SaveState();
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
           if (method == Simulators::SimulationType::kMatrixProductState &&
-              network->GetMPSOptimizeSwaps())
-            optSim->SetUpcomingGates(dcirc->GetOperations());
+              network->GetMPSOptimizeSwaps()) {
+            auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+            circ->ConvertForCutting();
+            optSim->SetUpcomingGates(circ->GetOperations());
+          }
         }
       } else if (executedGates.size() == dcirc->size()) {
         // special case for when the simulator is passed from the network
@@ -238,19 +248,29 @@ class ExecuteJob {
             optSim->SaveState();
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
           if (method == Simulators::SimulationType::kMatrixProductState &&
-              network->GetMPSOptimizeSwaps())
-            optSim->SetUpcomingGates(dcirc->GetOperations());
+              network->GetMPSOptimizeSwaps()) {
+            auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+            circ->ConvertForCutting();
+            optSim->SetUpcomingGates(circ->GetOperations());
+          }
         } else {
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
           if (method == Simulators::SimulationType::kMatrixProductState &&
-              network->GetMPSOptimizeSwaps())
-            optSim->SetUpcomingGates(dcirc->GetOperations());
+              network->GetMPSOptimizeSwaps()) {
+            auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+            circ->ConvertForCutting();
+            optSim->SetUpcomingGates(circ->GetOperations());
+          }
         }
       } else {
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
         if (method == Simulators::SimulationType::kMatrixProductState &&
-            network->GetMPSOptimizeSwaps())
-            optSim->SetUpcomingGates(dcirc->GetOperations());
+            network->GetMPSOptimizeSwaps()) {
+          auto circ =
+              std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+          circ->ConvertForCutting();
+          optSim->SetUpcomingGates(circ->GetOperations());
+        }
       }
     } else {
       optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
@@ -280,8 +300,11 @@ class ExecuteJob {
           optSim->SaveState();
 
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
-        if (method == Simulators::SimulationType::kMatrixProductState && network->GetMPSOptimizeSwaps())
-            optSim->SetUpcomingGates(dcirc->GetOperations());
+        if (method == Simulators::SimulationType::kMatrixProductState && network->GetMPSOptimizeSwaps()) {
+            auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+            circ->ConvertForCutting();
+            optSim->SetUpcomingGates(circ->GetOperations());
+        }
       }
     }
 
@@ -398,7 +421,6 @@ private:
             int lookaheadDepthLocal = network->GetLookaheadDepth();
 
             if (lookaheadDepthLocal == std::numeric_limits<int>::max()) {
-              /*
               double avgTwoQubitGatesPerLayer = 0.0;
               for (const auto &layer : layers) {
                 int twoQubitGates = 0;
@@ -420,27 +442,17 @@ private:
                   : layers.size() < 15 ? static_cast<int>(lookaheadVal)
                   : layers.size() < 25 ? static_cast<int>(1.5 * lookaheadVal)
                                        : 2 * lookaheadVal;
-              */
-
-              lookaheadDepthLocal =
-                  layers.size() < 10 || nrQubits <= 10 ? 0 : 40;
             }
 
             int lookaheadHeuristicDepthLocal =
                 network->GetLookaheadDepthWithHeuristic();
 
             if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
-              /*
               lookaheadHeuristicDepthLocal =
                   layers.size() < 10 || nrQubits <= 10 ? 0
                                              : layers.size() < 20
                                                  ? lookaheadDepthLocal - 1
                                                  : lookaheadDepthLocal - 2;
-              */
-              lookaheadHeuristicDepthLocal =
-                  layers.size() < 10 || nrQubits <= 10
-                      ? 0
-                      : lookaheadDepthLocal - 2;
 
             if (lookaheadHeuristicDepthLocal < 0)
               lookaheadHeuristicDepthLocal = 0;

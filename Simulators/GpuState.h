@@ -294,7 +294,7 @@ class GpuState : public ISimulator {
     upcomingGates = gates;
     upcomingGateIndex = 0;
 
-    if (!mps || lookaheadDepth <= 0) return;
+    if (!mps || lookaheadDepth <= 0 || lookaheadDepth == std::numeric_limits<int>::max()) return;
 
     // Register an observer that advances the gate index
     ClearObservers();  // for now we only have this observer, so this should be
@@ -1187,6 +1187,10 @@ class GpuState : public ISimulator {
     // Convert actual bond dims to doubles
     std::vector<double> bondDimsD(bondDims, bondDims + nrQubits - 1);
     dummySim->SetCurrentBondDimensions(bondDimsD);
+
+    if (upcomingGates.size() <= upcomingGateIndex) {
+      return -1;  // will fallback
+    }
 
     const auto &op = upcomingGates[upcomingGateIndex];
     const auto qbits = op->AffectedQubits();
