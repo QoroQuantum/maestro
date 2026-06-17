@@ -2074,16 +2074,16 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           sim->AllocateQubits(nrQubits);
           sim->Initialize();
 
+          sim->setGrowthFactorGate(growthFactorGate);
+          sim->setGrowthFactorSwap(growthFactorSwap);
+          sim->SetLookaheadDepth(lookaheadDepth);
+          sim->SetLookaheadDepthWithHeuristic(lookaheadDepthWithHeuristic);
+
           OptimizeMPSInitialQubitsMap(sim, dcirc, nrQubits);
         } else {
           sim->AllocateQubits(nrQubits);
           sim->Initialize();
         }
-
-        sim->setGrowthFactorGate(growthFactorGate);
-        sim->setGrowthFactorSwap(growthFactorSwap);
-        sim->SetLookaheadDepth(lookaheadDepth);
-        sim->SetLookaheadDepthWithHeuristic(lookaheadDepthWithHeuristic);
 
         if (!dontRunCircuitStart) {
           sim->SetMultithreading(true);
