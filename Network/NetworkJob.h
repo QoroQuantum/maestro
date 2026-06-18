@@ -90,9 +90,9 @@ class ExecuteJob {
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
         if (method == Simulators::SimulationType::kMatrixProductState &&
             network->GetMPSOptimizeSwaps()) {
-          auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
-          circ->ConvertForCutting();
-          optSim->SetUpcomingGates(circ->GetOperations());
+          //auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+          //circ->ConvertForCutting();
+          optSim->SetUpcomingGates(dcirc->GetOperations());
         }
       }
     } else if (method == Simulators::SimulationType::kMatrixProductState && network->GetMPSOptimizeSwaps()) {
@@ -226,9 +226,9 @@ class ExecuteJob {
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
           if (method == Simulators::SimulationType::kMatrixProductState &&
               network->GetMPSOptimizeSwaps()) {
-            auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
-            circ->ConvertForCutting();
-            optSim->SetUpcomingGates(circ->GetOperations());
+            //auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+            //circ->ConvertForCutting();
+            optSim->SetUpcomingGates(dcirc->GetOperations());
           }
         }
       } else if (executedGates.size() == dcirc->size()) {
@@ -249,17 +249,17 @@ class ExecuteJob {
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
           if (method == Simulators::SimulationType::kMatrixProductState &&
               network->GetMPSOptimizeSwaps()) {
-            auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
-            circ->ConvertForCutting();
-            optSim->SetUpcomingGates(circ->GetOperations());
+            //auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+            //circ->ConvertForCutting();
+            optSim->SetUpcomingGates(dcirc->GetOperations());
           }
         } else {
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
           if (method == Simulators::SimulationType::kMatrixProductState &&
               network->GetMPSOptimizeSwaps()) {
-            auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
-            circ->ConvertForCutting();
-            optSim->SetUpcomingGates(circ->GetOperations());
+            //auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+            //circ->ConvertForCutting();
+            optSim->SetUpcomingGates(dcirc->GetOperations());
           }
         }
       } else {
@@ -301,9 +301,9 @@ class ExecuteJob {
 
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
         if (method == Simulators::SimulationType::kMatrixProductState && network->GetMPSOptimizeSwaps()) {
-            auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
-            circ->ConvertForCutting();
-            optSim->SetUpcomingGates(circ->GetOperations());
+            //auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+            //circ->ConvertForCutting();
+            optSim->SetUpcomingGates(dcirc->GetOperations());
         }
       }
     }

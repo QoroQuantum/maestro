@@ -611,7 +611,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     std::mutex resultsMutex;
 
-    const auto dcirc = distCirc;
+    auto dcirc = distCirc;
 
     if (nrThreads > 1) {
       // since it's going to execute on multiple threads, free the memory from
@@ -679,12 +679,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       } else {
         if (simulator && method == saveMethod && simType == saveSimType) {
           // use the already created simulator
-
           optSim = simulator;
           job->optSim = optSim;
-          OptimizeMPSInitialQubitsMap(optSim, distCirc,
+          OptimizeMPSInitialQubitsMap(optSim, dcirc,
                                       optSim->GetNumberOfQubits());
-          job->executedGates.resize(distCirc->size(),
+          job->executedGates.resize(dcirc->size(),
                                     false);  // no gates executed yet
           simulator = nullptr;
         }
@@ -2135,12 +2134,24 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
   void SetMPSOptimizeSwaps(bool optimize = true) override {
     mpsOptimizeSwaps = optimize;
+
+    if (simulator) {
+      simulator->SetLookaheadDepth(0);
+      simulator->SetLookaheadDepthWithHeuristic(0);
+    }
   }
 
   bool GetMPSOptimizeSwaps() const override { return mpsOptimizeSwaps; }
 
   void SetMPSOptimizationBondDimensionThreshold(size_t threshold) override {
     mpsOptimizationBondDimensionThreshold = threshold;
+
+    if (simulator &&
+        std::stoull(simulator->GetConfiguration(
+            "matrix_product_state_max_bond_dimension")) < threshold) {
+      simulator->SetLookaheadDepth(0);
+      simulator->SetLookaheadDepthWithHeuristic(0);
+    }
   }
 
   size_t GetMPSOptimizationBondDimensionThreshold() const override {
@@ -2149,6 +2160,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
   void SetMPSOptimizationQubitsNumberThreshold(size_t threshold) override {
     mpsOptimizationQubitsNumberThreshold = threshold;
+
+    if (GetNumQubits() < threshold && simulator) {
+      simulator->SetLookaheadDepth(0);
+      simulator->SetLookaheadDepthWithHeuristic(0);
+    }
   }
 
   size_t GetMPSOptimizationQubitsNumberThreshold() const override {
@@ -2160,7 +2176,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     lookaheadDepth = depth;
 
-    if (simulator) simulator->SetLookaheadDepth(depth);
+    if (simulator && lookaheadDepth != std::numeric_limits<int>::max()) {
+      simulator->SetLookaheadDepth(0);
+      simulator->SetLookaheadDepthWithHeuristic(0);
+    }
   }
 
   int GetLookaheadDepth() const override { return lookaheadDepth; }
@@ -2172,7 +2191,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     lookaheadDepthWithHeuristic = depth;
 
-    if (simulator) simulator->SetLookaheadDepthWithHeuristic(depth);
+    if (simulator && lookaheadDepthWithHeuristic != std::numeric_limits<int>::max())
+      simulator->SetLookaheadDepthWithHeuristic(depth);
   }
 
   int GetLookaheadDepthWithHeuristic() const override {
