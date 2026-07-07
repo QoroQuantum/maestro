@@ -804,6 +804,64 @@ class GpuLibrary : public Utils::Library {
               (void (*)(void *))GetFunction("PauliPropRestoreState");
           CheckFunction((void *)fPauliPropRestoreState, __LINE__);
 
+          // tt engine api functions
+
+          fCreateTTEngine = (void *(*)(void *))GetFunction("CreateTTEngine");
+          CheckFunction((void *)fCreateTTEngine, __LINE__);
+          fDestroyTTEngine = (void (*)(void *))GetFunction("DestroyTTEngine");
+          CheckFunction((void *)fDestroyTTEngine, __LINE__);
+
+          fTTIsValid = (int (*)(void *))GetFunction("TTIsValid");
+          CheckFunction((void *)fTTIsValid, __LINE__);
+          fTTIsCreated = (int (*)(void *))GetFunction("TTIsCreated");
+          CheckFunction((void *)fTTIsCreated, __LINE__);
+          fTTCreate =
+              (int (*)(void *, int, const int *))GetFunction("TTCreate");
+          CheckFunction((void *)fTTCreate, __LINE__);
+          fTTReset = (int (*)(void *))GetFunction("TTReset");
+          CheckFunction((void *)fTTReset, __LINE__);
+
+          fTTSetMaxRank = (int (*)(void *, int))GetFunction("TTSetMaxRank");
+          CheckFunction((void *)fTTSetMaxRank, __LINE__);
+          fTTGetMaxRank = (int (*)(void *))GetFunction("TTGetMaxRank");
+          CheckFunction((void *)fTTGetMaxRank, __LINE__);
+          fTTSetCutoff = (int (*)(void *, double))GetFunction("TTSetCutoff");
+          CheckFunction((void *)fTTSetCutoff, __LINE__);
+          fTTGetCutoff = (double (*)(void *))GetFunction("TTGetCutoff");
+          CheckFunction((void *)fTTGetCutoff, __LINE__);
+          fTTGetDimension = (int (*)(void *))GetFunction("TTGetDimension");
+          CheckFunction((void *)fTTGetDimension, __LINE__);
+
+          fTTSetCore = (int (*)(void *, int, const double *, int, int,
+                                int))GetFunction("TTSetCore");
+          CheckFunction((void *)fTTSetCore, __LINE__);
+          fTTGetCore = (int (*)(void *, int, double *))GetFunction("TTGetCore");
+          CheckFunction((void *)fTTGetCore, __LINE__);
+          fTTGetCoreShape =
+              (int (*)(void *, int, int *, int *, int *))GetFunction(
+                  "TTGetCoreShape");
+          CheckFunction((void *)fTTGetCoreShape, __LINE__);
+          fTTGetRanks = (int (*)(void *, int *))GetFunction("TTGetRanks");
+          CheckFunction((void *)fTTGetRanks, __LINE__);
+          fTTGetTotalElements =
+              (long long (*)(void *))GetFunction("TTGetTotalElements");
+          CheckFunction((void *)fTTGetTotalElements, __LINE__);
+
+          fTTTruncate =
+              (int (*)(void *, double, int))GetFunction("TTTruncate");
+          CheckFunction((void *)fTTTruncate, __LINE__);
+          fTTEvaluate =
+              (double (*)(void *, const int *))GetFunction("TTEvaluate");
+          CheckFunction((void *)fTTEvaluate, __LINE__);
+          fTTEvaluateBatch = (int (*)(void *, const int *, int,
+                                      double *))GetFunction("TTEvaluateBatch");
+          CheckFunction((void *)fTTEvaluateBatch, __LINE__);
+
+          fTTSave = (int (*)(void *, const char *))GetFunction("TTSave");
+          CheckFunction((void *)fTTSave, __LINE__);
+          fTTLoad = (int (*)(void *, const char *))GetFunction("TTLoad");
+          CheckFunction((void *)fTTLoad, __LINE__);
+
           return true;
         } else
           std::cerr << "GpuLibrary: Unable to initialize gpu library"
@@ -3151,6 +3209,123 @@ class GpuLibrary : public Utils::Library {
           "GpuLibrary: Unable to restore state in pauli propagation simulator");
   }
 
+  // tt engine functions
+
+  void *CreateTTEngine() {
+    if (LibraryHandle)
+      return fCreateTTEngine(LibraryHandle);
+    else
+      throw std::runtime_error("GpuLibrary: Unable to create TT engine");
+  }
+
+  void DestroyTTEngine(void *obj) {
+    if (LibraryHandle)
+      fDestroyTTEngine(obj);
+    else
+      throw std::runtime_error("GpuLibrary: Unable to destroy TT engine");
+  }
+
+  bool TTIsValid(void *obj) {
+    if (LibraryHandle) return fTTIsValid(obj) == 1;
+    return false;
+  }
+
+  bool TTIsCreated(void *obj) {
+    if (LibraryHandle) return fTTIsCreated(obj) == 1;
+    return false;
+  }
+
+  bool TTCreate(void *obj, int dimension, const int *physExtents) {
+    if (LibraryHandle) return fTTCreate(obj, dimension, physExtents) == 1;
+    return false;
+  }
+
+  bool TTReset(void *obj) {
+    if (LibraryHandle) return fTTReset(obj) == 1;
+    return false;
+  }
+
+  bool TTSetMaxRank(void *obj, int maxRank) {
+    if (LibraryHandle) return fTTSetMaxRank(obj, maxRank) == 1;
+    return false;
+  }
+
+  int TTGetMaxRank(void *obj) {
+    if (LibraryHandle) return fTTGetMaxRank(obj);
+    return 0;
+  }
+
+  bool TTSetCutoff(void *obj, double cutoff) {
+    if (LibraryHandle) return fTTSetCutoff(obj, cutoff) == 1;
+    return false;
+  }
+
+  double TTGetCutoff(void *obj) {
+    if (LibraryHandle) return fTTGetCutoff(obj);
+    return 0.0;
+  }
+
+  int TTGetDimension(void *obj) {
+    if (LibraryHandle) return fTTGetDimension(obj);
+    return 0;
+  }
+
+  bool TTSetCore(void *obj, int site, const double *data,
+                 int leftRank, int physExtent, int rightRank) {
+    if (LibraryHandle)
+      return fTTSetCore(obj, site, data, leftRank, physExtent, rightRank) == 1;
+    return false;
+  }
+
+  bool TTGetCore(void *obj, int site, double *data) {
+    if (LibraryHandle) return fTTGetCore(obj, site, data) == 1;
+    return false;
+  }
+
+  bool TTGetCoreShape(void *obj, int site,
+                      int *leftRank, int *physExtent, int *rightRank) {
+    if (LibraryHandle)
+      return fTTGetCoreShape(obj, site, leftRank, physExtent, rightRank) == 1;
+    return false;
+  }
+
+  bool TTGetRanks(void *obj, int *ranks) {
+    if (LibraryHandle) return fTTGetRanks(obj, ranks) == 1;
+    return false;
+  }
+
+  long long TTGetTotalElements(void *obj) {
+    if (LibraryHandle) return fTTGetTotalElements(obj);
+    return 0;
+  }
+
+  bool TTTruncate(void *obj, double cutoff, int maxRank) {
+    if (LibraryHandle) return fTTTruncate(obj, cutoff, maxRank) == 1;
+    return false;
+  }
+
+  double TTEvaluate(void *obj, const int *indices) {
+    if (LibraryHandle) return fTTEvaluate(obj, indices);
+    return 0.0;
+  }
+
+  bool TTEvaluateBatch(void *obj, const int *indices,
+                       int numPoints, double *results) {
+    if (LibraryHandle)
+      return fTTEvaluateBatch(obj, indices, numPoints, results) == 1;
+    return false;
+  }
+
+  bool TTSave(void *obj, const char *filepath) {
+    if (LibraryHandle) return fTTSave(obj, filepath) == 1;
+    return false;
+  }
+
+  bool TTLoad(void *obj, const char *filepath) {
+    if (LibraryHandle) return fTTLoad(obj, filepath) == 1;
+    return false;
+  }
+
  private:
   void *LibraryHandle = nullptr;
 
@@ -3433,6 +3608,29 @@ class GpuLibrary : public Utils::Library {
   void (*fPauliPropFreeSampledQubits)(unsigned char *) = nullptr;
   void (*fPauliPropSaveState)(void *) = nullptr;
   void (*fPauliPropRestoreState)(void *) = nullptr;
+
+  // TT Engine functions
+  void *(*fCreateTTEngine)(void *) = nullptr;
+  void (*fDestroyTTEngine)(void *) = nullptr;
+  int (*fTTIsValid)(void *) = nullptr;
+  int (*fTTIsCreated)(void *) = nullptr;
+  int (*fTTCreate)(void *, int, const int *) = nullptr;
+  int (*fTTReset)(void *) = nullptr;
+  int (*fTTSetMaxRank)(void *, int) = nullptr;
+  int (*fTTGetMaxRank)(void *) = nullptr;
+  int (*fTTSetCutoff)(void *, double) = nullptr;
+  double (*fTTGetCutoff)(void *) = nullptr;
+  int (*fTTGetDimension)(void *) = nullptr;
+  int (*fTTSetCore)(void *, int, const double *, int, int, int) = nullptr;
+  int (*fTTGetCore)(void *, int, double *) = nullptr;
+  int (*fTTGetCoreShape)(void *, int, int *, int *, int *) = nullptr;
+  int (*fTTGetRanks)(void *, int *) = nullptr;
+  long long (*fTTGetTotalElements)(void *) = nullptr;
+  int (*fTTTruncate)(void *, double, int) = nullptr;
+  double (*fTTEvaluate)(void *, const int *) = nullptr;
+  int (*fTTEvaluateBatch)(void *, const int *, int, double *) = nullptr;
+  int (*fTTSave)(void *, const char *) = nullptr;
+  int (*fTTLoad)(void *, const char *) = nullptr;
 };
 }  // namespace Simulators
 

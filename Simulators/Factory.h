@@ -21,6 +21,7 @@
 #include "GpuLibStateVectorSim.h"
 #include "GpuLibMPSSim.h"
 #include "GpuLibTNSim.h"
+#include "GpuLibTTEngine.h"
 #include "GpuStabilizer.h"
 #include "GpuPauliPropagator.h"
 #include "QuestLibSim.h"
@@ -104,6 +105,11 @@ class SimulatorsFactory {
   CreateGpuPauliPropagatorSimulatorUnique() {
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
     return std::make_unique<GpuPauliPropagator>(gpuLibrary);
+  }
+
+  static std::unique_ptr<GpuLibTTEngine> CreateGpuTTEngine() {
+    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+    return std::make_unique<GpuLibTTEngine>(gpuLibrary);
   }
 
  private:

@@ -1577,6 +1577,111 @@ NB_MODULE(maestro, m) {
       []() { return Simulators::SimulatorsFactory::IsGpuLibraryAvailable(); },
       "Check whether the GPU simulation library is loaded and available.");
 
+#ifdef __linux__
+  // --- TT Engine (Tensor-Train) ---
+  nb::class_<Simulators::GpuLibTTEngine>(
+      m, "TTEngine",
+      "GPU-accelerated Tensor-Train engine for high-dimensional function "
+      "approximation.\n\n"
+      "The TT engine stores a tensor in TT format on the GPU and provides "
+      "efficient batch evaluation and SVD truncation.\n\n"
+      "Example:\n"
+      "    maestro.init_gpu()\n"
+      "    tt = maestro.create_tt_engine()\n"
+      "    tt.create([4, 4, 4])  # 3-site TT with phys extent 4\n"
+      "    tt.set_core(0, data, 1, 4, 2)\n"
+      "    result = tt.evaluate([1, 2, 3])\n")
+      .def("is_valid", &Simulators::GpuLibTTEngine::IsValid,
+           "Check if the TT engine was initialized successfully.")
+      .def("is_created", &Simulators::GpuLibTTEngine::IsCreated,
+           "Check if a TT decomposition has been created.")
+      .def("create", &Simulators::GpuLibTTEngine::Create, "phys_extents"_a,
+           "Create a TT decomposition with the given physical extents per "
+           "site.\n\n"
+           "Args:\n"
+           "    phys_extents: List of int, physical dimension at each site.\n\n"
+           "Returns:\n"
+           "    True on success.")
+      .def("reset", &Simulators::GpuLibTTEngine::Reset,
+           "Reset all cores to rank-1 identity state.")
+      .def_prop_rw(
+          "max_rank",
+          [](Simulators::GpuLibTTEngine &self) { return self.GetMaxRank(); },
+          [](Simulators::GpuLibTTEngine &self, int v) { self.SetMaxRank(v); },
+          "Maximum bond dimension (0 = unlimited).")
+      .def_prop_rw(
+          "cutoff",
+          [](Simulators::GpuLibTTEngine &self) { return self.GetCutoff(); },
+          [](Simulators::GpuLibTTEngine &self, double v) {
+            self.SetCutoff(v);
+          },
+          "SVD truncation cutoff.")
+      .def_prop_ro(
+          "dimension",
+          [](Simulators::GpuLibTTEngine &self) { return self.GetDimension(); },
+          "Number of TT sites (read-only).")
+      .def("set_core", &Simulators::GpuLibTTEngine::SetCore, "site"_a,
+           "data"_a, "left_rank"_a, "phys_extent"_a, "right_rank"_a,
+           "Set the core tensor at a given site.\n\n"
+           "Args:\n"
+           "    site: Site index (0-based).\n"
+           "    data: Flat list of doubles, row-major (left_rank, phys_extent, "
+           "right_rank).\n"
+           "    left_rank: Left bond dimension.\n"
+           "    phys_extent: Physical dimension (must match create).\n"
+           "    right_rank: Right bond dimension.\n\n"
+           "Returns:\n"
+           "    True on success.")
+      .def("get_core", &Simulators::GpuLibTTEngine::GetCore, "site"_a,
+           "Get the core tensor at a given site as a flat list of doubles.")
+      .def("get_core_shape", &Simulators::GpuLibTTEngine::GetCoreShape,
+           "site"_a,
+           "Get the shape [left_rank, phys_extent, right_rank] at a site.")
+      .def("get_ranks", &Simulators::GpuLibTTEngine::GetRanks,
+           "Get the bond dimensions as a list of length dimension+1.")
+      .def_prop_ro(
+          "total_elements",
+          [](Simulators::GpuLibTTEngine &self) {
+            return self.GetTotalElements();
+          },
+          "Total number of stored elements across all cores (read-only).")
+      .def("truncate", &Simulators::GpuLibTTEngine::Truncate, "cutoff"_a,
+           "max_rank"_a,
+           "Perform SVD truncation sweep on the TT.\n\n"
+           "Args:\n"
+           "    cutoff: Absolute singular value cutoff.\n"
+           "    max_rank: Maximum bond dimension.\n\n"
+           "Returns:\n"
+           "    True on success.\n\n"
+           "Note: Not yet implemented on GPU (returns False).")
+      .def("evaluate", &Simulators::GpuLibTTEngine::Evaluate, "indices"_a,
+           "Evaluate the TT at a single index set.\n\n"
+           "Args:\n"
+           "    indices: List of int of length dimension.\n\n"
+           "Returns:\n"
+           "    The scalar value T(i_0, ..., i_{d-1}).")
+      .def("evaluate_batch", &Simulators::GpuLibTTEngine::EvaluateBatch,
+           "indices"_a, "num_points"_a,
+           "Evaluate the TT at multiple index sets on the GPU.\n\n"
+           "Args:\n"
+           "    indices: Flat list of int of length num_points * dimension.\n"
+           "    num_points: Number of evaluation points.\n\n"
+           "Returns:\n"
+           "    List of double with num_points results.")
+      .def("save", &Simulators::GpuLibTTEngine::Save, "filepath"_a,
+           "Save the TT to a binary file.")
+      .def("load", &Simulators::GpuLibTTEngine::Load, "filepath"_a,
+           "Load a TT from a binary file.");
+
+  m.def(
+      "create_tt_engine",
+      []() { return Simulators::SimulatorsFactory::CreateGpuTTEngine(); },
+      "Create a new GPU TT Engine instance.\n\n"
+      "Requires init_gpu() to have been called successfully.\n\n"
+      "Returns:\n"
+      "    A TTEngine instance, or None if GPU library is unavailable.");
+#endif  // __linux__
+
   // --- Probability / Amplitude Access ---
   m.def(
       "get_probabilities",
