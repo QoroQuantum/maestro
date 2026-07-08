@@ -948,6 +948,80 @@
  * nm.set_correlated_ar1(qubit=0, phi=0.135, sigma_eta=2.35e-3)
  * @endcode
  *
+ * **`set_correlated_ou(qubit, sigma, alpha, gate_time, after_1q=True, after_2q=True)`**
+ *
+ * Set correlated noise on a single qubit from Ornstein-Uhlenbeck (OU) process
+ * parameters. The continuous OU process dX = −θ·X·dt + σ·dW is discretized
+ * into the AR(1) form used during simulation:
+ *
+ *     θ        = 1 / (α · gate_time)
+ *     Ω (phi)  = exp(−θ · gate_time)
+ *     σ_η²     = (σ² / 2θ) · (1 − Ω²)
+ *
+ * Parameters:
+ * - **qubit** (`int`): Qubit index.
+ * - **sigma** (`float`): OU diffusion coefficient (noise strength). Larger
+ *   values produce stronger dephasing.
+ * - **alpha** (`float`): Correlation time in gate-time units (τ_corr / t_g).
+ *   Values > 1 give long-range correlations; values < 1 approach white noise.
+ * - **gate_time** (`float`): Gate duration in seconds (e.g. `100e-9` for 100 ns).
+ * - **after_1q** (`bool`, default `True`): Inject noise after single-qubit gates.
+ * - **after_2q** (`bool`, default `True`): Inject noise after two-qubit gates.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ * nm.set_correlated_ou(0, sigma=15.0, alpha=0.5, gate_time=100e-9)
+ * @endcode
+ *
+ * **`set_correlated_ar1(qubit, phi, sigma_eta, after_1q=True, after_2q=True)`**
+ *
+ * Set AR(1) correlated dephasing on a single qubit using direct AR(1)
+ * coefficients. After every gate, Rz(y[k]) is injected where:
+ *
+ *     y[k] = phi · y[k-1] + η[k],   η ~ N(0, σ_η²)
+ *
+ * Parameters:
+ * - **qubit** (`int`): Qubit index.
+ * - **phi** (`float`): AR(1) autoregressive coefficient (0 < phi < 1).
+ * - **sigma_eta** (`float`): Driving noise standard deviation.
+ * - **after_1q** (`bool`, default `True`): Inject noise after single-qubit gates.
+ * - **after_2q** (`bool`, default `True`): Inject noise after two-qubit gates.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ * nm.set_correlated_ar1(0, phi=0.135, sigma_eta=2.35e-3)
+ * @endcode
+ *
+ * **`set_all_correlated_ou(num_qubits, sigma, alpha, gate_time, after_1q=True, after_2q=True)`**
+ *
+ * Set identical OU correlated noise on qubits [0, num_qubits). Convenience
+ * wrapper that calls `set_correlated_ou` on each qubit with the same parameters.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ * nm.set_all_correlated_ou(20, sigma=15.0, alpha=0.5, gate_time=100e-9)
+ * @endcode
+ *
+ * **`set_all_correlated_from_power(num_qubits, power, alpha, gate_time, after_1q=True, after_2q=True)`**
+ *
+ * Set correlated noise on all qubits from a total noise power budget.
+ * Derives the OU diffusion coefficient σ from:
+ *
+ *     P_tot = N · σ² · π · α · t_g   →   σ = sqrt(P_tot / (N · π · α · t_g))
+ *
+ * Parameters:
+ * - **num_qubits** (`int`): Number of qubits N.
+ * - **power** (`float`): Total noise power P_tot.
+ * - **alpha** (`float`): Correlation time in gate-time units.
+ * - **gate_time** (`float`): Gate duration in seconds.
+ * - **after_1q** (`bool`, default `True`): Inject noise after single-qubit gates.
+ * - **after_2q** (`bool`, default `True`): Inject noise after two-qubit gates.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ * nm.set_all_correlated_from_power(20, power=1e-3, alpha=0.5, gate_time=100e-9)
+ * @endcode
+ *
  * **Injection granularity flags**:
  *
  * All setters accept optional `after_1q` (default: True) and `after_2q`
