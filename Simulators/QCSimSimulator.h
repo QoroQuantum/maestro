@@ -54,6 +54,58 @@ class QCSimSimulator : public QCSimState {
   QCSimSimulator(QCSimSimulator &&other) = default;
   QCSimSimulator &operator=(QCSimSimulator &&other) = default;
 
+
+  /**
+   * @brief Apply a generic one-qubit gate to the specified qubit.
+   * @param qubit The qubit to apply the gate to.
+   * @param gate The 2x2 matrix representing the gate.
+   */
+  void ApplyGenericOneQubitGate(Types::qubit_t qubit,
+                                const Eigen::Matrix2cd& gate) override {
+    if (GetSimulationType() != SimulationType::kMatrixProductState &&
+        GetSimulationType() != SimulationType::kTensorNetwork&&
+        GetSimulationType() != SimulationType::kStatevector)
+        throw std::runtime_error("QCSimSimulator::ApplyGenericOneQubitGate: Unsupported simulation type.");
+
+    const QC::Gates::AppliedGate<> agate(gate, qubit);
+
+    if (GetSimulationType() == SimulationType::kMatrixProductState)
+      mpsSimulator->ApplyGate(agate);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tensorNetwork->AddGate(agate, qubit);
+    else if (GetSimulationType() == SimulationType::kStatevector)
+      state->ApplyGate(agate);
+
+    NotifyObservers({qubit});
+  }
+
+  /**
+   * @brief Apply a generic two-qubit gate to the specified qubits.
+   * @param qubit0 The first qubit to apply the gate to.
+   * @param qubit1 The second qubit to apply the gate to.
+   * @param gate The 4x4 matrix representing the gate.
+   */
+  void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1,
+                                const Eigen::Matrix4cd& gate) override {
+    if (GetSimulationType() != SimulationType::kMatrixProductState &&
+        GetSimulationType() != SimulationType::kTensorNetwork &&
+        GetSimulationType() != SimulationType::kStatevector)
+      throw std::runtime_error(
+          "QCSimSimulator::ApplyGenericTwoQubitGate: Unsupported simulation "
+          "type.");
+
+    const QC::Gates::AppliedGate<> agate(gate, qubit0, qubit1);
+
+    if (GetSimulationType() == SimulationType::kMatrixProductState)
+      mpsSimulator->ApplyGate(agate);
+    else if (GetSimulationType() == SimulationType::kTensorNetwork)
+      tensorNetwork->AddGate(agate, qubit0, qubit1);
+    else if (GetSimulationType() == SimulationType::kStatevector)
+      state->ApplyGate(agate);
+
+    NotifyObservers({qubit0, qubit1});
+  }
+
   /**
    * @brief Applies a phase shift gate to the qubit
    *
