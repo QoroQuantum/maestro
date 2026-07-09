@@ -46,6 +46,31 @@ class QuestSimulator : public QuestState {
   QuestSimulator &operator=(QuestSimulator &&other) = default;
 
   /**
+   * @brief Apply a generic one-qubit gate to the specified qubit.
+   * @param qubit The qubit to apply the gate to.
+   * @param gate The 2x2 matrix representing the gate.
+   */
+  void ApplyGenericOneQubitGate(Types::qubit_t qubit,
+                                const Eigen::Matrix2cd& gate) override {
+    throw std::runtime_error(
+        "QuestSimulator::ApplyGenericOneQubitGate: Not supported for Quest "
+        "simulator.");
+  }
+
+  /**
+   * @brief Apply a generic two-qubit gate to the specified qubits.
+   * @param qubit0 The first qubit to apply the gate to.
+   * @param qubit1 The second qubit to apply the gate to.
+   * @param gate The 4x4 matrix representing the gate.
+   */
+  void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1,
+                                const Eigen::Matrix4cd& gate) override {
+      throw std::runtime_error(
+          "QuestSimulator::ApplyGenericTwoQubitGate: Not supported for Quest "
+          "simulator.");
+  }
+
+  /**
    * @brief Applies a phase shift gate to the qubit
    *
    * Applies a specified phase shift gate to the qubit

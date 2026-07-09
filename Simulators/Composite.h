@@ -662,6 +662,31 @@ class CompositeSimulator : public ISimulator {
     for (auto &[id, simulator] : simulators) simulator->Flush();
   }
 
+
+  /**
+   * @brief Apply a generic one-qubit gate to the specified qubit.
+   * @param qubit The qubit to apply the gate to.
+   * @param gate The 2x2 matrix representing the gate.
+   */
+  void ApplyGenericOneQubitGate(Types::qubit_t qubit,
+                                const Eigen::Matrix2cd& gate) override {
+    GetSimulator(qubit)->ApplyGenericOneQubitGate(qubit, gate);
+    NotifyObservers({qubit});
+  }
+
+  /**
+   * @brief Apply a generic two-qubit gate to the specified qubits.
+   * @param qubit0 The first qubit to apply the gate to.
+   * @param qubit1 The second qubit to apply the gate to.
+   * @param gate The 4x4 matrix representing the gate.
+   */
+  void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1,
+                                const Eigen::Matrix4cd& gate) override {
+    JoinIfNeeded(qubit0, qubit1);
+    GetSimulator(qubit0)->ApplyGenericTwoQubitGate(qubit0, qubit1, gate);
+    NotifyObservers({qubit0, qubit1});
+  }
+
   // YES, all one qubit gates are that easy:
 
   /**
