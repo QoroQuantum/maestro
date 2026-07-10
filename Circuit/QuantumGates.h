@@ -18,6 +18,7 @@
 #define _QUANTUM_GATES_H_
 
 #include "Operations.h"
+#include "QuantumGate.h"
 
 namespace Circuits {
 
@@ -97,6 +98,14 @@ class IQuantumGate : public IGateOperation<Time> {
    * parameters.
    */
   virtual std::vector<double> GetParams() const { return {}; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  virtual Eigen::MatrixXcd GetMatrix() const = 0;
 };
 
 /**
@@ -569,6 +578,18 @@ class PhaseGate : public SingleQubitGate<Time> {
     return true;
   }
 
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    const QC::Gates::PhaseShiftGate<> pgate(lambda);
+    
+    return pgate.getRawOperatorMatrix();
+  }
+
  private:
   double lambda;
 };
@@ -643,6 +664,18 @@ class XGate : public SingleQubitGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::PauliXGate<> xgate;
+
+    return xgate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -715,6 +748,18 @@ class YGate : public SingleQubitGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::PauliYGate<> ygate;
+
+    return ygate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -787,6 +832,18 @@ class ZGate : public SingleQubitGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::PauliZGate<> zgate;
+
+    return zgate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -869,6 +926,18 @@ class HadamardGate : public SingleQubitGate<Time> {
    * @return True if it branches a path, false otherwise.
    */
   bool IsBranching() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::HadamardGate<> hgate;
+
+    return hgate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -941,6 +1010,18 @@ class SGate : public SingleQubitGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::SGate<> sgate;
+
+    return sgate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -1013,6 +1094,18 @@ class SdgGate : public SingleQubitGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::SDGGate<> sdggate;
+
+    return sdggate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -1074,6 +1167,18 @@ class TGate : public SingleQubitGate<Time> {
     return std::make_shared<TGate<Time>>(SingleQubitGate<Time>::GetQubit(),
                                          IOperation<Time>::GetDelay());
   }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::TGate<> tgate;
+
+    return tgate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -1134,6 +1239,18 @@ class TdgGate : public SingleQubitGate<Time> {
   std::shared_ptr<IOperation<Time>> Clone() const override {
     return std::make_shared<TdgGate<Time>>(SingleQubitGate<Time>::GetQubit(),
                                            IOperation<Time>::GetDelay());
+  }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::TDGGate<> tdggate;
+
+    return tdggate.getRawOperatorMatrix();
   }
 };
 
@@ -1217,7 +1334,18 @@ class SxGate : public SingleQubitGate<Time> {
    * @return True if it branches a path, false otherwise.
    */
   bool IsBranching() const override { return true; }
-};
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::SquareRootNOTGate<> sxgate;
+    return sxgate.getRawOperatorMatrix();
+  }
+  };
 
 /**
  * @class SxDagGate
@@ -1299,7 +1427,18 @@ class SxDagGate : public SingleQubitGate<Time> {
    * @return True if it branches a path, false otherwise.
    */
   bool IsBranching() const override { return true; }
-};
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::SquareRootNOTDagGate<> sxdggate;
+    return sxdggate.getRawOperatorMatrix();
+  }
+  };
 
 /**
  * @class KGate
@@ -1381,6 +1520,17 @@ class KGate : public SingleQubitGate<Time> {
    * @return True if it branches a path, false otherwise.
    */
   bool IsBranching() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::HyGate<> hygate;
+    return hygate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -1509,6 +1659,17 @@ class RxGate : public RotationGate<Time> {
    * @return True if it branches a path, false otherwise.
    */
   bool IsBranching() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    const QC::Gates::RxGate<> rxgate(RotationGate<Time>::GetTheta());
+    return rxgate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -1584,6 +1745,17 @@ class RyGate : public RotationGate<Time> {
    * @return True if it branches a path, false otherwise.
    */
   bool IsBranching() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    const QC::Gates::RyGate<> rygate(RotationGate<Time>::GetTheta());
+    return rygate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -1648,6 +1820,17 @@ class RzGate : public RotationGate<Time> {
     return std::make_shared<RzGate<Time>>(SingleQubitGate<Time>::GetQubit(),
                                           RotationGate<Time>::GetTheta(),
                                           IOperation<Time>::GetDelay());
+  }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    const QC::Gates::RzGate<> rzgate(RotationGate<Time>::GetTheta());
+    return rzgate.getRawOperatorMatrix();
   }
 };
 
@@ -1813,6 +1996,17 @@ class UGate : public SingleQubitGate<Time> {
    */
   bool IsBranching() const override { return true; }
 
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    const QC::Gates::UGate<> ugate(theta, phi, lambda, gamma);
+    return ugate.getRawOperatorMatrix();
+  }
+
  private:
   double theta;  /**< The theta parameter for the gate. */
   double phi;    /**< The phi parameter for the gate. */
@@ -1900,6 +2094,17 @@ class SwapGate : public TwoQubitsGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::SwapGate<> swapgate;
+    return swapgate.getRawOperatorMatrix();
+  }
 };
 
 // the others are all controlled gates
@@ -1977,6 +2182,17 @@ class CXGate : public TwoQubitsGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::CNOTGate<> cnotgate;
+    return cnotgate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -2052,6 +2268,17 @@ class CYGate : public TwoQubitsGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::ControlledYGate<> cygate;
+    return cygate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -2127,6 +2354,17 @@ class CZGate : public TwoQubitsGate<Time> {
    * otherwise.
    */
   bool IsClifford() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::ControlledZGate<> czgate;
+    return czgate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -2217,6 +2455,17 @@ class CPGate : public TwoQubitsGate<Time> {
    * @return A vector with the parameters of the gate.
    */
   std::vector<double> GetParams() const override { return {lambda}; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    const QC::Gates::ControlledPhaseShiftGate<> cpgate(lambda);
+    return cpgate.getRawOperatorMatrix();
+  }
 
  private:
   double lambda; /**< The lambda parameter for the controlled phase gate. */
@@ -2352,6 +2601,17 @@ class CRxGate : public ControlledRotationGate<Time> {
    * @return True if it branches a path, false otherwise.
    */
   bool IsBranching() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    const QC::Gates::ControlledRxGate<> crxgate(ControlledRotationGate<Time>::GetTheta());
+    return crxgate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -2429,6 +2689,17 @@ class CRyGate : public ControlledRotationGate<Time> {
    * @return True if it branches a path, false otherwise.
    */
   bool IsBranching() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    const QC::Gates::ControlledRyGate<> crygate(ControlledRotationGate<Time>::GetTheta());
+    return crygate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -2495,6 +2766,17 @@ class CRzGate : public ControlledRotationGate<Time> {
     return std::make_shared<CRzGate<Time>>(
         TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1),
         ControlledRotationGate<Time>::GetTheta(), IOperation<Time>::GetDelay());
+  }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    const QC::Gates::ControlledRzGate<> crzgate(ControlledRotationGate<Time>::GetTheta());
+    return crzgate.getRawOperatorMatrix();
   }
 };
 
@@ -2570,7 +2852,18 @@ class CHGate : public TwoQubitsGate<Time> {
    * @return True if it branches a path, false otherwise.
    */
   bool IsBranching() const override { return true; }
-};
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::ControlledHadamardGate<> chgate;
+    return chgate.getRawOperatorMatrix();
+  }
+  };
 
 /**
  * @class CSxGate
@@ -2644,7 +2937,18 @@ class CSxGate : public TwoQubitsGate<Time> {
    * @return True if it branches a path, false otherwise.
    */
   bool IsBranching() const override { return true; }
-};
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::ControlledSquareRootNOTGate<> csxgate;
+    return csxgate.getRawOperatorMatrix();
+  }
+  };
 
 /**
  * @class CSxDagGate
@@ -2718,6 +3022,17 @@ class CSxDagGate : public TwoQubitsGate<Time> {
    * @return True if it branches a path, false otherwise.
    */
   bool IsBranching() const override { return true; }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::ControlledSquareRootNOTDagGate<> csxdaggate;
+    return csxdaggate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -2878,6 +3193,17 @@ class CUGate : public TwoQubitsGate<Time> {
    */
   bool IsBranching() const override { return true; }
 
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    const QC::Gates::ControlledUGate<> cugate(theta, phi, lambda, gamma);
+    return cugate.getRawOperatorMatrix();
+  }
+
  private:
   double theta;  /**< The theta parameter for the controlled U gate. */
   double phi;    /**< The phi parameter for the controlled U gate. */
@@ -2956,6 +3282,17 @@ class CCXGate : public ThreeQubitsGate<Time> {
         ThreeQubitsGate<Time>::GetQubit(0), ThreeQubitsGate<Time>::GetQubit(1),
         ThreeQubitsGate<Time>::GetQubit(2), IOperation<Time>::GetDelay());
   }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::ToffoliGate<> ccxaggate;
+    return ccxaggate.getRawOperatorMatrix();
+  }
 };
 
 /**
@@ -3022,6 +3359,17 @@ class CSwapGate : public ThreeQubitsGate<Time> {
     return std::make_shared<CSwapGate<Time>>(
         ThreeQubitsGate<Time>::GetQubit(0), ThreeQubitsGate<Time>::GetQubit(1),
         ThreeQubitsGate<Time>::GetQubit(2), IOperation<Time>::GetDelay());
+  }
+
+  /**
+   * @brief Get the matrix representation of the quantum gate.
+   *
+   * Returns the matrix representation of the quantum gate.
+   * @return The matrix representation of the quantum gate.
+   */
+  Eigen::MatrixXcd GetMatrix() const override {
+    static const QC::Gates::FredkinGate<> cswapgate;
+    return cswapgate.getRawOperatorMatrix();
   }
 };
 
