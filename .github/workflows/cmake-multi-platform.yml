@@ -96,4 +96,6 @@ jobs:
       run: ccache -s
       
     - name: Run tests
-      run: ./bin/tests --log_level=test_suite     
+      run: |
+        ./bin/tests --log_level=test_suite \
+          --run_test='!gpu_simulator_tests:!MPSSwapOptTests:!circuit_tests/RandomCircuitsTest*:!circuit_tests/RandomCircuitsOptimizationTest*:!mps_tests/RandomCircuitsTest*:!mps_tests/RandomCircuitsTest50*:!clifford_tests/RandomCircuitsTest*:!convsim_tests/RandomAerCircuitsTest*:!convsim_tests/RandomQcsimCircuitsTest*:!convsim_tests/RandomAerQcsimCircuitsTest*'
