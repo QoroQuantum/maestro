@@ -239,6 +239,115 @@
  *
  * ---
  *
+ * @section py_incremental_evolve Incremental Time Evolution
+ *
+ * `maestro.incremental_evolve` performs Trotterized time evolution with
+ * expectation value measurements at multiple intermediate time points,
+ * using a **single persistent simulator** instance. This avoids the
+ * cost of re-simulating from scratch at each measurement point.
+ *
+ * @subsection py_incremental_motivation Motivation
+ *
+ * When simulating time evolution, you often want to measure observables
+ * at multiple time points. The naïve approach builds a fresh circuit for
+ * each measurement point (init + k Trotter steps), paying
+ * O(Σ step_i) total gate cost. For n measurement points evenly spaced
+ * over N total steps, this is O(n × N / 2) — roughly n/2 times the cost
+ * of a single full evolution.
+ *
+ * `incremental_evolve` keeps the MPS state alive between measurements
+ * and evolves forward incrementally. Total cost: **O(N)** regardless of
+ * how many measurement points you request.
+ *
+ * | Approach | Total Steps Executed | Example (N=300, 20 points) |
+ * |----------|---------------------|----------------------------|
+ * | Fresh circuit per point | Σ step_i ≈ n×N/2 | ~3,000 |
+ * | `incremental_evolve` | N | 300 |
+ * | **Speedup** | | **~10×** |
+ *
+ * @subsection py_incremental_usage Usage
+ *
+ * @code{.py}
+ * import maestro
+ * from maestro.circuits import QuantumCircuit
+ *
+ * # 1. Build the initial state preparation circuit
+ * init = QuantumCircuit()
+ * init.x(0)  # e.g. excite qubit 0
+ *
+ * # 2. Build a SINGLE Trotter step circuit
+ * step = QuantumCircuit()
+ * step.rx(0, 0.1)
+ * step.rx(1, 0.2)
+ * step.cx(0, 1)
+ * step.rz(1, 0.05)
+ * step.cx(0, 1)
+ *
+ * # 3. Specify which step indices to measure at
+ * measure_at = [10, 20, 30, 50, 100]
+ *
+ * # 4. Run incremental evolution
+ * result = maestro.incremental_evolve(
+ *     init_circuit=init,
+ *     trotter_step=step,
+ *     measure_at_steps=measure_at,
+ *     observables=["ZI", "IZ", "ZZ"],
+ *     config=maestro.SimulatorConfig(
+ *         simulation_type=maestro.SimulationType.MatrixProductState,
+ *         max_bond_dimension=64,
+ *     ),
+ * )
+ *
+ * # 5. Access results
+ * for i, s in enumerate(result["steps"]):
+ *     evs = result["expectation_values"][i]
+ *     print(f"Step {s}: <ZI>={evs[0]:.4f}  <IZ>={evs[1]:.4f}  <ZZ>={evs[2]:.4f}")
+ *
+ * print(f"Total time: {result['time_taken']:.2f}s")
+ * @endcode
+ *
+ * @subsection py_incremental_params Parameters
+ *
+ * | Parameter | Type | Default | Description |
+ * |-----------|------|---------|-------------|
+ * | `init_circuit` | `QuantumCircuit` | — | State preparation circuit (executed once) |
+ * | `trotter_step` | `QuantumCircuit` | — | Single Trotter step circuit (applied repeatedly) |
+ * | `measure_at_steps` | `list[int]` | — | Step indices at which to compute expectation values |
+ * | `observables` | `list[str]` or `str` | — | Pauli strings to measure (list or `;`-separated) |
+ * | `config` | `SimulatorConfig` | `SimulatorConfig()` | Simulator configuration |
+ *
+ * @subsection py_incremental_result Return Value
+ *
+ * Returns a `dict` with:
+ *
+ * | Key | Type | Description |
+ * |-----|------|-------------|
+ * | `expectation_values` | `list[list[float]]` | Outer list = measurement points, inner list = one value per observable |
+ * | `steps` | `list[int]` | Step indices where measurements were taken (sorted) |
+ * | `time_taken` | `float` | Wall-clock time for the entire evolution (seconds) |
+ * | `simulator` | `int` | Backend enum value |
+ * | `method` | `int` | Simulation method enum value |
+ *
+ * @subsection py_incremental_notes Implementation Notes
+ *
+ * - The function creates a **single simulator** and drives it directly
+ *   via `ExecuteNonMeasurements()`, bypassing the usual per-call
+ *   create/destroy cycle.
+ * - Expectation values are computed via `ExpectationValue()` which is
+ *   **non-destructive** for MPS — the state is not modified by measurement.
+ * - Measurement steps are automatically sorted; duplicates are ignored.
+ * - The GIL is released during gate execution for maximum parallelism.
+ * - Circuit optimization is disabled to preserve gate ordering.
+ * - Works with all simulation backends (Statevector, MPS, TensorNetwork, etc.).
+ *   The MPS backend benefits the most from this approach.
+ *
+ * @note This function is designed for **Trotterized time evolution** workflows
+ * where the same step circuit is applied repeatedly. For general stateful
+ * simulation (branching, checkpointing, parameter sweeps), a more general
+ * stateful simulator API may be added in a future release.
+ *
+ * ---
+ *
  * @section py_circuit QuantumCircuit Builder
  *
  * For a more Pythonic workflow (similar to Qiskit), use the
