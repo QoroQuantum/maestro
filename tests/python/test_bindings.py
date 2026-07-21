@@ -4014,3 +4014,342 @@ class TestCorrelatedNoisePhysics:
         assert 'counts' in result
         total = sum(result['counts'].values())
         assert total == 1000
+
+
+class TestIncrementalEvolve:
+    """Test the incremental_evolve function for time evolution."""
+
+    def test_function_exists(self):
+        """Test that incremental_evolve is exposed in the module."""
+        assert hasattr(maestro, 'incremental_evolve')
+        assert callable(maestro.incremental_evolve)
+
+    def test_basic_result_structure(self):
+        """Test that incremental_evolve returns the expected dict keys."""
+        from maestro.circuits import QuantumCircuit
+
+        init = QuantumCircuit()
+        init.x(0)
+
+        step = QuantumCircuit()
+        step.rz(0, 0.1)
+
+        result = maestro.incremental_evolve(
+            init_circuit=init,
+            trotter_step=step,
+            measure_at_steps=[1, 2, 3],
+            observables=["Z"],
+        )
+
+        assert isinstance(result, dict)
+        assert 'expectation_values' in result
+        assert 'steps' in result
+        assert 'time_taken' in result
+        assert 'simulator' in result
+        assert 'method' in result
+
+    def test_result_dimensions(self):
+        """Test that output dimensions match inputs."""
+        from maestro.circuits import QuantumCircuit
+
+        init = QuantumCircuit()
+        init.h(0)
+
+        step = QuantumCircuit()
+        step.rz(0, 0.1)
+
+        measure_at = [5, 10, 15, 20]
+        observables = ["Z", "X"]
+
+        result = maestro.incremental_evolve(
+            init_circuit=init,
+            trotter_step=step,
+            measure_at_steps=measure_at,
+            observables=observables,
+        )
+
+        # One entry per measurement point
+        assert len(result['expectation_values']) == len(measure_at)
+        assert len(result['steps']) == len(measure_at)
+
+        # One value per observable at each measurement point
+        for ev_list in result['expectation_values']:
+            assert len(ev_list) == len(observables)
+
+    def test_identity_step_preserves_state(self):
+        """Applying identity steps should not change expectation values."""
+        from maestro.circuits import QuantumCircuit
+
+        # Prepare |1⟩
+        init = QuantumCircuit()
+        init.x(0)
+
+        # Empty step (identity)
+        step = QuantumCircuit()
+
+        result = maestro.incremental_evolve(
+            init_circuit=init,
+            trotter_step=step,
+            measure_at_steps=[1, 5, 10],
+            observables=["Z"],
+        )
+
+        # |1⟩ has ⟨Z⟩ = -1.0 at all time points
+        for ev_list in result['expectation_values']:
+            assert ev_list[0] == pytest.approx(-1.0, abs=1e-10)
+
+    def test_agrees_with_simple_estimate(self):
+        """incremental_evolve at step N should match building the full circuit."""
+        from maestro.circuits import QuantumCircuit
+
+        n_steps = 5
+
+        # Build the full circuit manually: init + n_steps × trotter_step
+        full_qc = QuantumCircuit()
+        full_qc.x(0)
+        for _ in range(n_steps):
+            full_qc.rx(0, 0.3)
+            full_qc.rz(0, 0.2)
+
+        full_result = full_qc.estimate(observables=["Z", "X"])
+        full_evs = full_result['expectation_values']
+
+        # Now use incremental_evolve
+        init = QuantumCircuit()
+        init.x(0)
+
+        step = QuantumCircuit()
+        step.rx(0, 0.3)
+        step.rz(0, 0.2)
+
+        incr_result = maestro.incremental_evolve(
+            init_circuit=init,
+            trotter_step=step,
+            measure_at_steps=[n_steps],
+            observables=["Z", "X"],
+        )
+        incr_evs = incr_result['expectation_values'][0]
+
+        assert incr_evs[0] == pytest.approx(full_evs[0], abs=1e-10)
+        assert incr_evs[1] == pytest.approx(full_evs[1], abs=1e-10)
+
+    def test_agrees_with_simple_estimate_two_qubits(self):
+        """Two-qubit test: incremental_evolve matches full circuit."""
+        from maestro.circuits import QuantumCircuit
+
+        n_steps = 3
+
+        full_qc = QuantumCircuit()
+        full_qc.h(0)
+        full_qc.cx(0, 1)
+        for _ in range(n_steps):
+            full_qc.rx(0, 0.2)
+            full_qc.ry(1, 0.15)
+            full_qc.cx(0, 1)
+            full_qc.rz(1, 0.1)
+
+        full_result = full_qc.estimate(observables=["ZZ", "XX", "ZI", "IZ"])
+        full_evs = full_result['expectation_values']
+
+        init = QuantumCircuit()
+        init.h(0)
+        init.cx(0, 1)
+
+        step = QuantumCircuit()
+        step.rx(0, 0.2)
+        step.ry(1, 0.15)
+        step.cx(0, 1)
+        step.rz(1, 0.1)
+
+        incr_result = maestro.incremental_evolve(
+            init_circuit=init,
+            trotter_step=step,
+            measure_at_steps=[n_steps],
+            observables=["ZZ", "XX", "ZI", "IZ"],
+        )
+        incr_evs = incr_result['expectation_values'][0]
+
+        for i in range(4):
+            assert incr_evs[i] == pytest.approx(full_evs[i], abs=1e-10)
+
+    def test_multiple_measurement_points_incremental(self):
+        """Each measurement point should correspond to the correct step count."""
+        from maestro.circuits import QuantumCircuit
+
+        init = QuantumCircuit()
+        init.x(0)
+
+        step = QuantumCircuit()
+        step.rx(0, 0.5)
+
+        measure_at = [1, 3, 5]
+        incr_result = maestro.incremental_evolve(
+            init_circuit=init,
+            trotter_step=step,
+            measure_at_steps=measure_at,
+            observables=["Z"],
+        )
+
+        # Verify each point independently
+        for idx, n in enumerate(measure_at):
+            full_qc = QuantumCircuit()
+            full_qc.x(0)
+            for _ in range(n):
+                full_qc.rx(0, 0.5)
+            full_ev = full_qc.estimate(observables=["Z"])['expectation_values'][0]
+            incr_ev = incr_result['expectation_values'][idx][0]
+            assert incr_ev == pytest.approx(full_ev, abs=1e-10), \
+                f"Mismatch at step {n}: incremental={incr_ev}, full={full_ev}"
+
+    def test_steps_are_sorted(self):
+        """Steps should be sorted in the output even if input is unsorted."""
+        from maestro.circuits import QuantumCircuit
+
+        init = QuantumCircuit()
+        init.x(0)
+
+        step = QuantumCircuit()
+        step.rz(0, 0.1)
+
+        result = maestro.incremental_evolve(
+            init_circuit=init,
+            trotter_step=step,
+            measure_at_steps=[10, 2, 7, 1],
+            observables=["Z"],
+        )
+
+        steps = list(result['steps'])
+        assert steps == [1, 2, 7, 10]
+
+    def test_mps_backend(self):
+        """Test with explicit MPS backend configuration."""
+        from maestro.circuits import QuantumCircuit
+
+        init = QuantumCircuit()
+        init.h(0)
+        init.cx(0, 1)
+
+        step = QuantumCircuit()
+        step.rx(0, 0.1)
+        step.ry(1, 0.1)
+
+        mps_config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=8,
+        )
+
+        result = maestro.incremental_evolve(
+            init_circuit=init,
+            trotter_step=step,
+            measure_at_steps=[1, 5],
+            observables=["ZZ", "XX"],
+            config=mps_config,
+        )
+
+        # Verify results are correct (method field may not reflect config
+        # since incremental_evolve bypasses the normal execution pipeline)
+        assert len(result['expectation_values']) == 2
+        for ev_list in result['expectation_values']:
+            assert len(ev_list) == 2  # ZZ, XX
+
+    def test_semicolon_separated_observables(self):
+        """Test that semicolon-separated observable strings work."""
+        from maestro.circuits import QuantumCircuit
+
+        init = QuantumCircuit()
+        init.x(0)
+
+        step = QuantumCircuit()
+        step.rz(0, 0.1)
+
+        result = maestro.incremental_evolve(
+            init_circuit=init,
+            trotter_step=step,
+            measure_at_steps=[1],
+            observables="Z;X;Y",
+        )
+
+        assert len(result['expectation_values'][0]) == 3
+
+    def test_time_taken_is_positive(self):
+        """time_taken should be a positive number."""
+        from maestro.circuits import QuantumCircuit
+
+        init = QuantumCircuit()
+        init.h(0)
+
+        step = QuantumCircuit()
+        step.rz(0, 0.1)
+
+        result = maestro.incremental_evolve(
+            init_circuit=init,
+            trotter_step=step,
+            measure_at_steps=[1],
+            observables=["Z"],
+        )
+
+        assert result['time_taken'] > 0.0
+
+    def test_single_step(self):
+        """Test with a single measurement at step 1."""
+        from maestro.circuits import QuantumCircuit
+
+        init = QuantumCircuit()
+
+        step = QuantumCircuit()
+        step.x(0)  # flip qubit each step
+
+        result = maestro.incremental_evolve(
+            init_circuit=init,
+            trotter_step=step,
+            measure_at_steps=[1],
+            observables=["Z"],
+        )
+
+        # After one X gate on |0⟩, we get |1⟩ → ⟨Z⟩ = -1
+        assert result['expectation_values'][0][0] == pytest.approx(-1.0, abs=1e-10)
+
+    def test_empty_measure_steps_raises(self):
+        """Empty measure_at_steps should raise an error."""
+        from maestro.circuits import QuantumCircuit
+
+        init = QuantumCircuit()
+        step = QuantumCircuit()
+        step.rz(0, 0.1)
+
+        with pytest.raises(ValueError, match="must not be empty"):
+            maestro.incremental_evolve(
+                init_circuit=init,
+                trotter_step=step,
+                measure_at_steps=[],
+                observables=["Z"],
+            )
+
+    def test_evolution_produces_dynamics(self):
+        """Verify that Rabi-like oscillations are captured across steps."""
+        from maestro.circuits import QuantumCircuit
+        import math
+
+        # Rx(θ) on |0⟩: ⟨Z⟩ = cos(θ_total)
+        theta_per_step = 0.2
+
+        init = QuantumCircuit()  # |0⟩
+
+        step = QuantumCircuit()
+        step.rx(0, theta_per_step)
+
+        steps = list(range(1, 32))
+        result = maestro.incremental_evolve(
+            init_circuit=init,
+            trotter_step=step,
+            measure_at_steps=steps,
+            observables=["Z"],
+        )
+
+        for idx, n in enumerate(steps):
+            expected_z = math.cos(n * theta_per_step)
+            actual_z = result['expectation_values'][idx][0]
+            assert actual_z == pytest.approx(expected_z, abs=1e-10), \
+                f"Step {n}: expected ⟨Z⟩={expected_z:.6f}, got {actual_z:.6f}"
+

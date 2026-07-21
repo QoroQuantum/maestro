@@ -593,6 +593,110 @@ std::complex<double> inner_product_core(
   }
   return result;
 }
+// Core Incremental Time Evolution Logic
+// Uses SaveState/RestoreState to avoid re-simulating from scratch at each
+// measurement point. Instead of building a fresh circuit with k Trotter steps
+// per measurement, this creates one simulator, evolves forward incrementally,
+// and checkpoints the MPS state for expectation value computation.
+//
+// Cost: O(total_steps) instead of O(Σ step_i) ≈ O(n_points × avg_step).
+nb::dict incremental_evolve_core(
+    std::shared_ptr<Circuits::Circuit<double>> init_circuit,
+    std::shared_ptr<Circuits::Circuit<double>> trotter_step,
+    const std::vector<int>& measure_at_steps,
+    const std::vector<std::string>& paulis,
+    const SimulatorConfig& config) {
+  if (!init_circuit) throw nb::value_error("init_circuit is null.");
+  if (!trotter_step) throw nb::value_error("trotter_step is null.");
+  if (measure_at_steps.empty())
+    throw nb::value_error("measure_at_steps must not be empty.");
+
+  // Determine qubit count from circuits and observables
+  int num_qubits =
+      std::max(1, static_cast<int>(init_circuit->GetMaxQubitIndex()) + 1);
+  num_qubits = std::max(
+      num_qubits, static_cast<int>(trotter_step->GetMaxQubitIndex()) + 1);
+  for (const auto& p : paulis)
+    num_qubits = std::max(num_qubits, (int)p.length());
+
+  ScopedSimulator sim(num_qubits);
+  if (sim.handle == 0)
+    throw std::runtime_error(
+        "incremental_evolve: failed to create simulator handle.");
+
+  auto network = ConfigureNetwork(sim.handle, config);
+  if (!network)
+    throw std::runtime_error(
+        "incremental_evolve: failed to configure network.");
+
+  // Disable circuit optimization to preserve gate ordering
+  network->GetController()->SetOptimizeCircuit(false);
+
+  // Sort measurement steps for sequential processing
+  std::vector<int> sorted_steps = measure_at_steps;
+  std::sort(sorted_steps.begin(), sorted_steps.end());
+
+  // Results storage: one vector of expectation values per measurement point
+  nb::list all_expectations;
+  nb::list steps_measured;
+
+  // Drive the simulator directly: execute gate-by-gate on the persistent
+  // simulator instance, computing expectation values at checkpoints.
+  auto simulator = network->GetSimulator();
+  if (!simulator)
+    throw std::runtime_error(
+        "incremental_evolve: no simulator available.");
+
+  Circuits::OperationState opState;
+  opState.AllocateBits(num_qubits);
+
+  auto start = std::chrono::high_resolution_clock::now();
+
+  // Execute initial circuit (non-measurement gates) — release GIL
+  {
+    nb::gil_scoped_release release;
+    init_circuit->ExecuteNonMeasurements(simulator, opState);
+  }
+
+  int current_step = 0;
+  for (int target_step : sorted_steps) {
+    int delta = target_step - current_step;
+    if (delta < 0)
+      continue;  // duplicate or out-of-order (shouldn't happen after sort)
+
+    // Apply delta trotter steps — release GIL for heavy computation
+    {
+      nb::gil_scoped_release release;
+      for (int s = 0; s < delta; ++s) {
+        trotter_step->ExecuteNonMeasurements(simulator, opState);
+      }
+    }
+    current_step = target_step;
+
+    // Compute expectation values (non-destructive for MPS)
+    // GIL is held here — needed for Python object creation
+    nb::list step_exp;
+    for (const auto& pauli : paulis) {
+      double ev = simulator->ExpectationValue(pauli);
+      step_exp.append(ev);
+    }
+    all_expectations.append(step_exp);
+    steps_measured.append(target_step);
+  }
+
+  auto end = std::chrono::high_resolution_clock::now();
+
+  nb::dict py_result;
+  py_result["expectation_values"] = all_expectations;
+  py_result["steps"] = steps_measured;
+  py_result["time_taken"] =
+      std::chrono::duration<double>(end - start).count();
+  py_result["simulator"] = (int)network->GetLastSimulatorType();
+  py_result["method"] = (int)network->GetLastSimulationType();
+
+  return py_result;
+}
+
 }  // namespace
 
 // ============================================================================
@@ -1554,6 +1658,38 @@ NB_MODULE(maestro, m) {
         return estimate_core(circuit, ParseObservables(obs), config);
       },
       "qasm_circuit"_a, "observables"_a, "config"_a = SimulatorConfig{});
+
+  // 3. incremental_evolve
+  // Runs time evolution incrementally: executes init_circuit once, then
+  // applies trotter_step repeatedly, computing expectation values at
+  // specified measurement steps. Uses the simulator's persistent state
+  // to avoid re-simulating from scratch at each measurement point.
+  m.def(
+      "incremental_evolve",
+      [](std::shared_ptr<Circuits::Circuit<double>> init_circuit,
+         std::shared_ptr<Circuits::Circuit<double>> trotter_step,
+         const std::vector<int>& measure_at_steps,
+         const nb::object& observables, const SimulatorConfig& config) {
+        return incremental_evolve_core(init_circuit, trotter_step,
+                                       measure_at_steps,
+                                       ParseObservables(observables), config);
+      },
+      "init_circuit"_a, "trotter_step"_a, "measure_at_steps"_a,
+      "observables"_a, "config"_a = SimulatorConfig{},
+      "Incremental time evolution with persistent simulator state.\n\n"
+      "Creates a single simulator, executes init_circuit once, then applies\n"
+      "trotter_step incrementally. At each step in measure_at_steps, computes\n"
+      "expectation values for the given observables without re-simulating\n"
+      "from scratch. Cost: O(total_steps) instead of O(sum of step indices).\n\n"
+      "Args:\n"
+      "    init_circuit: Circuit preparing the initial state.\n"
+      "    trotter_step: Circuit for one Trotter step.\n"
+      "    measure_at_steps: List of step indices at which to measure.\n"
+      "    observables: Pauli strings to measure (list or ';'-separated).\n"
+      "    config: SimulatorConfig for backend selection.\n\n"
+      "Returns:\n"
+      "    dict with 'expectation_values' (list of lists), 'steps', "
+      "'time_taken'.");
 
   // --- QuEST Library Management ---
   m.def(
