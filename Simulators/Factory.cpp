@@ -98,6 +98,27 @@ bool SimulatorsFactory::InitQuestLibrary() {
   return false;
 }
 
+bool SimulatorsFactory::InitQuestLibraryWithMute() {
+  if (!questLibrary) {
+    questLibrary = std::make_shared<QuestLibSim>();
+    firstTimeQuest = false;
+    questLibrary->SetMute(true);
+    if (questLibrary->Init(
+#ifdef _WIN32
+            "maestroquest.dll"
+#elif defined(__APPLE__)
+            "libmaestroquest.dylib"
+#else
+            "libmaestroquest.so"
+#endif
+            ))
+      return true;
+    else
+      questLibrary = nullptr;
+  }
+  return false;
+}
+
 std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
     SimulatorType t, SimulationType m) {
   switch (t) {
