@@ -21,10 +21,11 @@
 #include <vector>
 
 #include "GpuLibrary.h"
+#include "ITTEngine.h"
 
 namespace Simulators {
 
-class GpuLibTTEngine {
+class GpuLibTTEngine : public ITTEngine {
  public:
   explicit GpuLibTTEngine(const std::shared_ptr<GpuLibrary> &lib) : lib(lib) {
     if (lib)
@@ -43,62 +44,62 @@ class GpuLibTTEngine {
     if (lib && obj) lib->DestroyTTEngine(obj);
   }
 
-  bool IsValid() const {
+  bool IsValid() const override {
     if (obj) return lib->TTIsValid(obj);
     return false;
   }
 
-  bool IsCreated() const {
+  bool IsCreated() const override {
     if (obj) return lib->TTIsCreated(obj);
     return false;
   }
 
-  bool Create(const std::vector<int> &physExtents) {
+  bool Create(const std::vector<int> &physExtents) override {
     if (obj)
       return lib->TTCreate(obj, static_cast<int>(physExtents.size()),
                            physExtents.data());
     return false;
   }
 
-  bool Reset() {
+  bool Reset() override {
     if (obj) return lib->TTReset(obj);
     return false;
   }
 
-  bool SetMaxRank(int maxRank) {
+  bool SetMaxRank(int maxRank) override {
     if (obj) return lib->TTSetMaxRank(obj, maxRank);
     return false;
   }
 
-  int GetMaxRank() const {
+  int GetMaxRank() const override {
     if (obj) return lib->TTGetMaxRank(obj);
     return 0;
   }
 
-  bool SetCutoff(double cutoff) {
+  bool SetCutoff(double cutoff) override {
     if (obj) return lib->TTSetCutoff(obj, cutoff);
     return false;
   }
 
-  double GetCutoff() const {
+  double GetCutoff() const override {
     if (obj) return lib->TTGetCutoff(obj);
     return 0.0;
   }
 
-  int GetDimension() const {
+  int GetDimension() const override {
     if (obj) return lib->TTGetDimension(obj);
     return 0;
   }
 
   bool SetCore(int site, const std::vector<double> &data,
-               int leftRank, int physExtent, int rightRank) {
+               int leftRank, int physExtent, int rightRank) override {
     if (obj)
       return lib->TTSetCore(obj, site, data.data(),
                             leftRank, physExtent, rightRank);
     return false;
   }
 
-  std::vector<double> GetCore(int site) const {
+  std::vector<double> GetCore(int site) const override {
     if (!obj) return {};
     int lR, pE, rR;
     if (!lib->TTGetCoreShape(obj, site, &lR, &pE, &rR))
@@ -109,7 +110,7 @@ class GpuLibTTEngine {
     return data;
   }
 
-  std::vector<int> GetCoreShape(int site) const {
+  std::vector<int> GetCoreShape(int site) const override {
     if (!obj) return {};
     int lR, pE, rR;
     if (!lib->TTGetCoreShape(obj, site, &lR, &pE, &rR))
@@ -117,7 +118,7 @@ class GpuLibTTEngine {
     return {lR, pE, rR};
   }
 
-  std::vector<int> GetRanks() const {
+  std::vector<int> GetRanks() const override {
     if (!obj) return {};
     int d = lib->TTGetDimension(obj);
     std::vector<int> ranks(d + 1);
@@ -126,23 +127,23 @@ class GpuLibTTEngine {
     return ranks;
   }
 
-  long long GetTotalElements() const {
+  long long GetTotalElements() const override {
     if (obj) return lib->TTGetTotalElements(obj);
     return 0;
   }
 
-  bool Truncate(double cutoff, int maxRank) {
+  bool Truncate(double cutoff, int maxRank) override {
     if (obj) return lib->TTTruncate(obj, cutoff, maxRank);
     return false;
   }
 
-  double Evaluate(const std::vector<int> &indices) const {
+  double Evaluate(const std::vector<int> &indices) const override {
     if (obj) return lib->TTEvaluate(obj, indices.data());
     return 0.0;
   }
 
   std::vector<double> EvaluateBatch(const std::vector<int> &indices,
-                                     int numPoints) const {
+                                     int numPoints) const override {
     if (!obj) return {};
     std::vector<double> results(numPoints);
     if (!lib->TTEvaluateBatch(obj, indices.data(), numPoints, results.data()))
@@ -150,12 +151,12 @@ class GpuLibTTEngine {
     return results;
   }
 
-  bool Save(const std::string &filepath) const {
+  bool Save(const std::string &filepath) const override {
     if (obj) return lib->TTSave(obj, filepath.c_str());
     return false;
   }
 
-  bool Load(const std::string &filepath) {
+  bool Load(const std::string &filepath) override {
     if (obj) return lib->TTLoad(obj, filepath.c_str());
     return false;
   }

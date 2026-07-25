@@ -25,6 +25,7 @@
 #include "Simulators/Factory.h"
 #include "Simulators/Simulator.h"
 #include "Simulators/PathIntegralSimulator.h"
+#include "Simulators/ITTEngine.h"
 #include "qasm/QasmCirc.h"
 #include "Network/SimpleDisconnectedNetwork.h"
 
@@ -1713,50 +1714,48 @@ NB_MODULE(maestro, m) {
       []() { return Simulators::SimulatorsFactory::IsGpuLibraryAvailable(); },
       "Check whether the GPU simulation library is loaded and available.");
 
-#ifdef __linux__
   // --- TT Engine (Tensor-Train) ---
-  nb::class_<Simulators::GpuLibTTEngine>(
+  nb::class_<Simulators::ITTEngine>(
       m, "TTEngine",
-      "GPU-accelerated Tensor-Train engine for high-dimensional function "
-      "approximation.\n\n"
-      "The TT engine stores a tensor in TT format on the GPU and provides "
+      "Tensor-Train engine for high-dimensional function approximation.\n\n"
+      "The TT engine stores a tensor in TT format and provides "
       "efficient batch evaluation and SVD truncation.\n\n"
       "Example:\n"
-      "    maestro.init_gpu()\n"
-      "    tt = maestro.create_tt_engine()\n"
+      "    maestro.init_gpu() # If using GPU device\n"
+      "    tt = maestro.create_tt_engine(device='gpu')\n"
       "    tt.create([4, 4, 4])  # 3-site TT with phys extent 4\n"
       "    tt.set_core(0, data, 1, 4, 2)\n"
       "    result = tt.evaluate([1, 2, 3])\n")
-      .def("is_valid", &Simulators::GpuLibTTEngine::IsValid,
+      .def("is_valid", &Simulators::ITTEngine::IsValid,
            "Check if the TT engine was initialized successfully.")
-      .def("is_created", &Simulators::GpuLibTTEngine::IsCreated,
+      .def("is_created", &Simulators::ITTEngine::IsCreated,
            "Check if a TT decomposition has been created.")
-      .def("create", &Simulators::GpuLibTTEngine::Create, "phys_extents"_a,
+      .def("create", &Simulators::ITTEngine::Create, "phys_extents"_a,
            "Create a TT decomposition with the given physical extents per "
            "site.\n\n"
            "Args:\n"
            "    phys_extents: List of int, physical dimension at each site.\n\n"
            "Returns:\n"
            "    True on success.")
-      .def("reset", &Simulators::GpuLibTTEngine::Reset,
+      .def("reset", &Simulators::ITTEngine::Reset,
            "Reset all cores to rank-1 identity state.")
       .def_prop_rw(
           "max_rank",
-          [](Simulators::GpuLibTTEngine &self) { return self.GetMaxRank(); },
-          [](Simulators::GpuLibTTEngine &self, int v) { self.SetMaxRank(v); },
+          [](Simulators::ITTEngine &self) { return self.GetMaxRank(); },
+          [](Simulators::ITTEngine &self, int v) { self.SetMaxRank(v); },
           "Maximum bond dimension (0 = unlimited).")
       .def_prop_rw(
           "cutoff",
-          [](Simulators::GpuLibTTEngine &self) { return self.GetCutoff(); },
-          [](Simulators::GpuLibTTEngine &self, double v) {
+          [](Simulators::ITTEngine &self) { return self.GetCutoff(); },
+          [](Simulators::ITTEngine &self, double v) {
             self.SetCutoff(v);
           },
           "SVD truncation cutoff.")
       .def_prop_ro(
           "dimension",
-          [](Simulators::GpuLibTTEngine &self) { return self.GetDimension(); },
+          [](Simulators::ITTEngine &self) { return self.GetDimension(); },
           "Number of TT sites (read-only).")
-      .def("set_core", &Simulators::GpuLibTTEngine::SetCore, "site"_a,
+      .def("set_core", &Simulators::ITTEngine::SetCore, "site"_a,
            "data"_a, "left_rank"_a, "phys_extent"_a, "right_rank"_a,
            "Set the core tensor at a given site.\n\n"
            "Args:\n"
@@ -1768,20 +1767,20 @@ NB_MODULE(maestro, m) {
            "    right_rank: Right bond dimension.\n\n"
            "Returns:\n"
            "    True on success.")
-      .def("get_core", &Simulators::GpuLibTTEngine::GetCore, "site"_a,
+      .def("get_core", &Simulators::ITTEngine::GetCore, "site"_a,
            "Get the core tensor at a given site as a flat list of doubles.")
-      .def("get_core_shape", &Simulators::GpuLibTTEngine::GetCoreShape,
+      .def("get_core_shape", &Simulators::ITTEngine::GetCoreShape,
            "site"_a,
            "Get the shape [left_rank, phys_extent, right_rank] at a site.")
-      .def("get_ranks", &Simulators::GpuLibTTEngine::GetRanks,
+      .def("get_ranks", &Simulators::ITTEngine::GetRanks,
            "Get the bond dimensions as a list of length dimension+1.")
       .def_prop_ro(
           "total_elements",
-          [](Simulators::GpuLibTTEngine &self) {
+          [](Simulators::ITTEngine &self) {
             return self.GetTotalElements();
           },
           "Total number of stored elements across all cores (read-only).")
-      .def("truncate", &Simulators::GpuLibTTEngine::Truncate, "cutoff"_a,
+      .def("truncate", &Simulators::ITTEngine::Truncate, "cutoff"_a,
            "max_rank"_a,
            "Perform SVD truncation sweep on the TT.\n\n"
            "Args:\n"
@@ -1790,33 +1789,49 @@ NB_MODULE(maestro, m) {
            "Returns:\n"
            "    True on success.\n\n"
            "Note: Not yet implemented on GPU (returns False).")
-      .def("evaluate", &Simulators::GpuLibTTEngine::Evaluate, "indices"_a,
+      .def("evaluate", &Simulators::ITTEngine::Evaluate, "indices"_a,
            "Evaluate the TT at a single index set.\n\n"
            "Args:\n"
            "    indices: List of int of length dimension.\n\n"
            "Returns:\n"
            "    The scalar value T(i_0, ..., i_{d-1}).")
-      .def("evaluate_batch", &Simulators::GpuLibTTEngine::EvaluateBatch,
+      .def("evaluate_batch", &Simulators::ITTEngine::EvaluateBatch,
            "indices"_a, "num_points"_a,
-           "Evaluate the TT at multiple index sets on the GPU.\n\n"
+           "Evaluate the TT at multiple index sets.\n\n"
            "Args:\n"
            "    indices: Flat list of int of length num_points * dimension.\n"
            "    num_points: Number of evaluation points.\n\n"
            "Returns:\n"
            "    List of double with num_points results.")
-      .def("save", &Simulators::GpuLibTTEngine::Save, "filepath"_a,
+      .def("save", &Simulators::ITTEngine::Save, "filepath"_a,
            "Save the TT to a binary file.")
-      .def("load", &Simulators::GpuLibTTEngine::Load, "filepath"_a,
+      .def("load", &Simulators::ITTEngine::Load, "filepath"_a,
            "Load a TT from a binary file.");
 
   m.def(
       "create_tt_engine",
-      []() { return Simulators::SimulatorsFactory::CreateGpuTTEngine(); },
-      "Create a new GPU TT Engine instance.\n\n"
-      "Requires init_gpu() to have been called successfully.\n\n"
+      [](const std::string& device) -> std::unique_ptr<Simulators::ITTEngine> {
+          if (device == "gpu") {
+#ifdef __linux__
+              auto engine = Simulators::SimulatorsFactory::CreateGpuTTEngine();
+              if (!engine) return nullptr;
+              return engine;
+#else
+              throw std::runtime_error("GPU library is unavailable on this platform.");
+#endif
+          } else if (device == "cpu") {
+              throw std::invalid_argument("CPU TT Engine not yet implemented in C++");
+          } else {
+              throw std::invalid_argument("Invalid device for TT engine (use 'cpu' or 'gpu')");
+          }
+      },
+      "device"_a = "gpu",
+      "Create a new TT Engine instance.\n\n"
+      "Args:\n"
+      "    device: 'cpu' or 'gpu' (default: 'gpu').\n\n"
+      "Requires init_gpu() to have been called successfully if device='gpu'.\n\n"
       "Returns:\n"
-      "    A TTEngine instance, or None if GPU library is unavailable.");
-#endif  // __linux__
+      "    A TTEngine instance, or None if library is unavailable.");
 
   // --- Probability / Amplitude Access ---
   m.def(
