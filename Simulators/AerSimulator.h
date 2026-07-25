@@ -50,6 +50,45 @@ class AerSimulator : public AerState {
   AerSimulator &operator=(AerSimulator &&other) = default;
 
   /**
+   * @brief Apply a generic one-qubit gate to the specified qubit.
+   * @param qubit The qubit to apply the gate to.
+   * @param gate The 2x2 matrix representing the gate.
+   */
+  void ApplyGenericOneQubitGate(Types::qubit_t qubit,
+      const Eigen::Matrix2cd& gate) override
+  {
+    const AER::reg_t qubits = {qubit};
+    AER::cmatrix_t gate_matrix(2, 2);
+    gate_matrix(0, 0) = gate(0, 0);
+    gate_matrix(0, 1) = gate(0, 1);
+    gate_matrix(1, 0) = gate(1, 0);
+    gate_matrix(1, 1) = gate(1, 1);
+
+    state->apply_unitary(qubits, gate_matrix);
+    NotifyObservers(qubits);
+  }
+
+  /**
+   * @brief Apply a generic two-qubit gate to the specified qubits.
+   * @param qubit0 The first qubit to apply the gate to.
+   * @param qubit1 The second qubit to apply the gate to.
+   * @param gate The 4x4 matrix representing the gate.
+   */
+  void ApplyGenericTwoQubitGate(Types::qubit_t qubit0,
+                                Types::qubit_t qubit1,
+                                const Eigen::Matrix4cd& gate) override
+  {
+    const AER::reg_t qubits = {qubit1, qubit0};
+    AER::cmatrix_t gate_matrix(4, 4);
+    for (size_t i = 0; i < 4; ++i)
+      for (size_t j = 0; j < 4; ++j)
+        gate_matrix(i, j) = gate(i, j);
+     
+    state->apply_unitary(qubits, gate_matrix);
+    NotifyObservers(qubits);
+  }
+
+  /**
    * @brief Applies a phase shift gate to the qubit
    *
    * Applies a specified phase shift gate to the qubit

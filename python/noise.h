@@ -69,6 +69,7 @@ struct CoherentNoise {
 struct CorrelatedNoise {
   double phi = 0.0;        ///< AR(1) coefficient Ω = exp(-θ·dt)
   double sigma_eta = 0.0;  ///< Driving noise std dev
+  double sigma_stat = 0.0; ///< Stationary std dev σ_stat = σ_η/√(1-Ω²); AR(1) state seeded from N(0, σ_stat²) to avoid cold start
   bool inject_after_1q = true;  ///< Inject after 1Q gates (default: yes)
   bool inject_after_2q = true;  ///< Inject after 2Q gates (default: yes)
 };
@@ -199,7 +200,14 @@ class NoiseModel {
    */
   void set_correlated_ar1(int q, double phi, double sigma_eta,
                           bool after_1q = true, bool after_2q = true) {
-    correlated_[q] = {phi, sigma_eta, after_1q, after_2q};
+    // Stationary std dev σ_η/√(1-φ²); guard the φ²→1 (quasi-static) limit where
+    // 1-φ² underflows — fall back to σ_η so the seed is finite (a truly static
+    // process is degenerate and the caller should use a finite τ_c instead).
+    double one_minus_phi2 = 1.0 - phi * phi;
+    double sigma_stat = (one_minus_phi2 > 1e-15)
+                            ? sigma_eta / std::sqrt(one_minus_phi2)
+                            : sigma_eta;
+    correlated_[q] = {phi, sigma_eta, sigma_stat, after_1q, after_2q};
   }
 
   /**
@@ -220,9 +228,11 @@ class NoiseModel {
                          bool after_2q = true) {
     double theta = 1.0 / (alpha * gate_time);
     double phi = std::exp(-theta * gate_time);
-    double sigma_eta_sq = (sigma * sigma / (2.0 * theta)) * (1.0 - phi * phi);
+    double sigma_stat_sq = sigma * sigma / (2.0 * theta);  // stationary variance
+    double sigma_eta_sq = sigma_stat_sq * (1.0 - phi * phi);
     double sigma_eta = std::sqrt(std::max(sigma_eta_sq, 0.0));
-    correlated_[q] = {phi, sigma_eta, after_1q, after_2q};
+    double sigma_stat = std::sqrt(std::max(sigma_stat_sq, 0.0));
+    correlated_[q] = {phi, sigma_eta, sigma_stat, after_1q, after_2q};
   }
 
   /// Set identical OU correlated noise on qubits [0, n).
@@ -684,11 +694,17 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_correlated_noise(
       if (!is_multiq && !cn->inject_after_1q) continue;
       if (is_multiq && !cn->inject_after_2q) continue;
 
-      // Advance AR(1): y[k] = phi * y[k-1] + sigma_eta * eta
-      double prev = state[static_cast<int>(q)];  // 0 if not yet set
+      // Advance AR(1): y[k] = phi * y[k-1] + sigma_eta * eta. Seed from the
+      // stationary distribution N(0, σ_stat²) on first touch (see the note in
+      // inject_combined_noise) rather than climbing off 0.
+      int qi = static_cast<int>(q);
+      auto it = state.find(qi);
+      double prev = (it == state.end())
+                        ? cn->sigma_stat * normal(rng)
+                        : it->second;
       double eta = normal(rng);
       double y = cn->phi * prev + cn->sigma_eta * eta;
-      state[static_cast<int>(q)] = y;
+      state[qi] = y;
 
       // Inject Rz(y)
       if (std::abs(y) > 1e-18) {
@@ -744,10 +760,17 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
       if (!is_2q && !crn->inject_after_1q) continue;
       if (is_2q && !crn->inject_after_2q) continue;
 
-      double prev = corr_state[static_cast<int>(q)];
+      int qi = static_cast<int>(q);
+      auto it = corr_state.find(qi);
+      // Seed the AR(1) state from its stationary distribution N(0, σ_stat²)
+      // so a long-τ_c (Ω→1) process delivers its full variance from
+      // the start instead of climbing off 0 over the (finite) circuit.
+      double prev = (it == corr_state.end())
+                        ? crn->sigma_stat * normal_dist(rng)
+                        : it->second;
       double eta = normal_dist(rng);
       double y = crn->phi * prev + crn->sigma_eta * eta;
-      corr_state[static_cast<int>(q)] = y;
+      corr_state[qi] = y;
 
       if (std::abs(y) > 1e-18) {
         out->AddOperation(

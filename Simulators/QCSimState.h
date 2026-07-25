@@ -673,7 +673,10 @@ class QCSimState : public ISimulator {
         mask <<= 1;
       }
     } else if (simulationType == SimulationType::kPauliPropagator) {
-      std::vector<int> qubitsInt(qubits.begin(), qubits.end());
+      std::vector<int> qubitsInt;
+      qubitsInt.reserve(qubits.size());
+      for (const auto q : qubits)
+        qubitsInt.push_back(static_cast<int>(q));
       const auto res = pp->Measure(qubitsInt);
       Types::qubit_t result = 0;
       for (size_t i = 0; i < res.size(); ++i) {

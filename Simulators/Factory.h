@@ -123,6 +123,7 @@ class SimulatorsFactory {
   static bool InitGpuLibrary() { return false; }
 #endif
   static bool InitQuestLibrary();
+  static bool InitQuestLibraryWithMute();
   static bool IsQuestLibraryAvailable() {
     return questLibrary && questLibrary->IsValid();
   }
