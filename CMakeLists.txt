@@ -436,7 +436,8 @@ if(BUILD_PYTHON_BINDINGS)
             target_sources(maestro_py PRIVATE Simulators/Factory.cpp)
             target_link_libraries(maestro_py PRIVATE Boost::serialization)
         endif()
-        target_link_libraries(maestro_py PRIVATE maestro)
+        add_subdirectory(../maestro-tt maestro-tt-build)
+        target_link_libraries(maestro_py PRIVATE maestro maestro_tt_lib)
         target_include_directories(maestro_py PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/maestrolib
             ${CMAKE_CURRENT_SOURCE_DIR}

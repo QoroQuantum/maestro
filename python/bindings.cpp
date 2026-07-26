@@ -26,6 +26,7 @@
 #include "Simulators/Simulator.h"
 #include "Simulators/PathIntegralSimulator.h"
 #include "Simulators/ITTEngine.h"
+#include "../maestro-tt/lib/CpuTTEngine.hpp"
 #include "qasm/QasmCirc.h"
 #include "Network/SimpleDisconnectedNetwork.h"
 
@@ -1820,7 +1821,7 @@ NB_MODULE(maestro, m) {
               throw std::runtime_error("GPU library is unavailable on this platform.");
 #endif
           } else if (device == "cpu") {
-              throw std::invalid_argument("CPU TT Engine not yet implemented in C++");
+              return std::make_unique<maestro_tt::CpuTTEngine>();
           } else {
               throw std::invalid_argument("Invalid device for TT engine (use 'cpu' or 'gpu')");
           }

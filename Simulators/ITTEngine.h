@@ -1,6 +1,6 @@
 /**
  * @file ITTEngine.h
- * @version 1.0
+ * @version 2.0
  *
  * @section DESCRIPTION
  *
@@ -53,6 +53,18 @@ class ITTEngine {
                                             
   virtual bool Save(const std::string &filepath) const = 0;
   virtual bool Load(const std::string &filepath) = 0;
+
+  // --- New methods (v2.0) ---
+  
+  /// Weighted contraction of TT cores with quadrature weight vectors.
+  virtual double Integrate(
+      const std::vector<std::vector<double>> &weightsPerDim) const = 0;
+  
+  /// Initialize with random TT cores at the given rank.
+  virtual bool InitRandom(const std::vector<int> &physExtents, int rank) = 0;
+  
+  /// Compute the Frobenius norm of the TT.
+  virtual double Norm() const = 0;
 };
 
 }  // namespace Simulators
