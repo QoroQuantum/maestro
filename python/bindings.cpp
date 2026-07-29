@@ -624,10 +624,7 @@ nb::dict incremental_evolve_core(
     throw std::runtime_error(
         "incremental_evolve: failed to create simulator handle.");
 
-  auto network = ConfigureNetwork(sim.handle, config);
-  if (!network)
-    throw std::runtime_error(
-        "incremental_evolve: failed to configure network.");
+  // Simulator and simulation types need to be set explicitely
 
   // Disable circuit optimization to preserve gate ordering
   network->GetController()->SetOptimizeCircuit(false);
@@ -640,12 +637,14 @@ nb::dict incremental_evolve_core(
   nb::list all_expectations;
   nb::list steps_measured;
 
-  // Drive the simulator directly: execute gate-by-gate on the persistent
-  // simulator instance, computing expectation values at checkpoints.
-  auto simulator = network->GetSimulator();
-  if (!simulator)
-    throw std::runtime_error(
-        "incremental_evolve: no simulator available.");
+  auto network = ConfigureNetwork(sim.handle, config);
+  if (!network)
+    throw std::runtime_error("incremental_evolve: failed to configure network.");
+
+// ConfigureNetwork returns a dummy QCSim MPS simulator, backend must be set after Network at runtime
+  network->CreateSimulator(config.simulator_type, config.simulation_type);
+  if (!network->GetSimulator())
+    throw std::runtime_error("incremental_evolve: requested simulator/simulation type is not available.")
 
   Circuits::OperationState opState;
   opState.AllocateBits(num_qubits);
@@ -691,8 +690,8 @@ nb::dict incremental_evolve_core(
   py_result["steps"] = steps_measured;
   py_result["time_taken"] =
       std::chrono::duration<double>(end - start).count();
-  py_result["simulator"] = (int)network->GetLastSimulatorType();
-  py_result["method"] = (int)network->GetLastSimulationType();
+  py_result["simulator"] = (int)config.simulator_type;
+  py_result["method"] = (int)config.simulation_type;
 
   return py_result;
 }
@@ -1670,7 +1669,7 @@ NB_MODULE(maestro, m) {
          std::shared_ptr<Circuits::Circuit<double>> trotter_step,
          const std::vector<int>& measure_at_steps,
          const nb::object& observables, const SimulatorConfig& config) {
-        return incremental_evolve_core(init_circuit, trotter_step,
+        return incrementalb_evolve_core(init_circuit, trotter_step,
                                        measure_at_steps,
                                        ParseObservables(observables), config);
       },
