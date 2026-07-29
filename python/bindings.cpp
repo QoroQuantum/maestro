@@ -624,11 +624,6 @@ nb::dict incremental_evolve_core(
     throw std::runtime_error(
         "incremental_evolve: failed to create simulator handle.");
 
-  // Simulator and simulation types need to be set explicitely
-
-  // Disable circuit optimization to preserve gate ordering
-  network->GetController()->SetOptimizeCircuit(false);
-
   // Sort measurement steps for sequential processing
   std::vector<int> sorted_steps = measure_at_steps;
   std::sort(sorted_steps.begin(), sorted_steps.end());
@@ -641,10 +636,18 @@ nb::dict incremental_evolve_core(
   if (!network)
     throw std::runtime_error("incremental_evolve: failed to configure network.");
 
-// ConfigureNetwork returns a dummy QCSim MPS simulator, backend must be set after Network at runtime
+  // Simulator and simulation types need to be set explicitely.
+  // ConfigureNetwork returns a dummy QCSim MPS simulator, backend must be set
+  // after Network at runtime
   network->CreateSimulator(config.simulator_type, config.simulation_type);
-  if (!network->GetSimulator())
-    throw std::runtime_error("incremental_evolve: requested simulator/simulation type is not available.")
+  auto simulator = network->GetSimulator();
+  if (!simulator)
+    throw std::runtime_error(
+        "incremental_evolve: requested simulator/simulation type is not "
+        "available.");
+
+  // Disable circuit optimization to preserve gate ordering
+  network->GetController()->SetOptimizeCircuit(false);
 
   Circuits::OperationState opState;
   opState.AllocateBits(num_qubits);
@@ -1669,7 +1672,7 @@ NB_MODULE(maestro, m) {
          std::shared_ptr<Circuits::Circuit<double>> trotter_step,
          const std::vector<int>& measure_at_steps,
          const nb::object& observables, const SimulatorConfig& config) {
-        return incrementalb_evolve_core(init_circuit, trotter_step,
+        return incremental_evolve_core(init_circuit, trotter_step,
                                        measure_at_steps,
                                        ParseObservables(observables), config);
       },
