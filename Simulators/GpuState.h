@@ -274,7 +274,25 @@ class GpuState : public ISimulator {
 
   void SetUseOptimalMeetingPosition(bool enable) override {
     useOptimalMeetingPosition = enable;
-    if (mps) mps->SetUseOptimalMeetingPosition(enable);
+    if (mps) {
+      mps->SetUseOptimalMeetingPosition(enable);
+
+      if (enable) {
+        // Register an observer that advances the gate index
+        ClearObservers();  // for now we only have this observer, so this should
+                           // be fine
+        gateCounterObserver =
+            std::make_shared<GateCounterObserver>(upcomingGateIndex);
+        RegisterObserver(gateCounterObserver);
+
+        // Set up a meeting position callback that uses MPSDummySimulator
+        // for lookahead evaluation with actual bond dimensions
+        // the callback is called only for two qubits gates and only if
+        // executing them would require a swap
+        mps->SetCallbackContext((void*)this);
+        mps->SetMeetingPositionCallback(&GpuState::FindBestMeetingPosition);
+      }
+    }
   }
 
   void SetLookaheadDepth(int depth) override {
@@ -294,7 +312,7 @@ class GpuState : public ISimulator {
     upcomingGates = gates;
     upcomingGateIndex = 0;
 
-    if (!mps || lookaheadDepth <= 0 || lookaheadDepth == std::numeric_limits<int>::max()) return;
+    if (!mps) return;
 
     // Register an observer that advances the gate index
     ClearObservers();  // for now we only have this observer, so this should be
@@ -1164,6 +1182,14 @@ class GpuState : public ISimulator {
     return std::vector<bool>(nrQubits, false);
   }
 
+  /**
+   * @brief Returns the maximum bond dimension reached.
+   *
+   * Returns the maximum bond dimension reached during execution, if applicable
+   * (mps simulator, either qcsim or gpu).
+   */
+  size_t GetCurrentMaxBondDimension() const override { return curMaxBondDim; }
+
  protected:
   static int64_t FindBestMeetingPosition(void* thisPtr, const int64_t* bondDims) {
     GpuState* self = static_cast<GpuState*>(thisPtr);
@@ -1174,6 +1200,15 @@ class GpuState : public ISimulator {
   int64_t FindBestMeetingPositionFunc(const int64_t* bondDims)
   {
     const size_t nQ = GetNumberOfQubits();
+
+    if (bondDims) {
+      curMaxBondDim = 0;
+      for (int i = 0; i < static_cast<int>(nQ) - 1; ++i)
+        if (bondDims[i] > curMaxBondDim) curMaxBondDim = bondDims[i];
+    }
+
+    if (lookaheadDepth <= 0 || lookaheadDepth == std::numeric_limits<int>::max()) 
+       return -1;
 
     if (!dummySim || dummySim->getNrQubits() != nQ) {
       dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
@@ -1248,6 +1283,7 @@ class GpuState : public ISimulator {
     void Update(const Types::qubits_vector &) override { ++index; }
 
    private:
+    size_t curMaxBondDim = 0;
     long long int &index;
   };
   std::shared_ptr<GateCounterObserver> gateCounterObserver;
