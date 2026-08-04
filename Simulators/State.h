@@ -631,6 +631,13 @@ class IState {
    */
   virtual std::vector<bool> MeasureNoCollapseMany() = 0;
 
+  /**
+   * @brief Returns the maximum bond dimension reached.
+   *
+   * Returns the maximum bond dimension reached during execution, if applicable (mps simulator, either qcsim or gpu).
+   */
+  virtual size_t GetCurrentMaxBondDimension() const { return 0; }
+
  protected:
   /**
    * @brief Stops notifying observers.
