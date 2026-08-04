@@ -624,14 +624,6 @@ nb::dict incremental_evolve_core(
     throw std::runtime_error(
         "incremental_evolve: failed to create simulator handle.");
 
-  auto network = ConfigureNetwork(sim.handle, config);
-  if (!network)
-    throw std::runtime_error(
-        "incremental_evolve: failed to configure network.");
-
-  // Disable circuit optimization to preserve gate ordering
-  network->GetController()->SetOptimizeCircuit(false);
-
   // Sort measurement steps for sequential processing
   std::vector<int> sorted_steps = measure_at_steps;
   std::sort(sorted_steps.begin(), sorted_steps.end());
@@ -640,12 +632,22 @@ nb::dict incremental_evolve_core(
   nb::list all_expectations;
   nb::list steps_measured;
 
-  // Drive the simulator directly: execute gate-by-gate on the persistent
-  // simulator instance, computing expectation values at checkpoints.
+  auto network = ConfigureNetwork(sim.handle, config);
+  if (!network)
+    throw std::runtime_error("incremental_evolve: failed to configure network.");
+
+  // Simulator and simulation types need to be set explicitely.
+  // ConfigureNetwork returns a dummy QCSim MPS simulator, backend must be set
+  // after Network at runtime
+  network->CreateSimulator(config.simulator_type, config.simulation_type);
   auto simulator = network->GetSimulator();
   if (!simulator)
     throw std::runtime_error(
-        "incremental_evolve: no simulator available.");
+        "incremental_evolve: requested simulator/simulation type is not "
+        "available.");
+
+  // Disable circuit optimization to preserve gate ordering
+  network->GetController()->SetOptimizeCircuit(false);
 
   Circuits::OperationState opState;
   opState.AllocateBits(num_qubits);
@@ -691,8 +693,8 @@ nb::dict incremental_evolve_core(
   py_result["steps"] = steps_measured;
   py_result["time_taken"] =
       std::chrono::duration<double>(end - start).count();
-  py_result["simulator"] = (int)network->GetLastSimulatorType();
-  py_result["method"] = (int)network->GetLastSimulationType();
+  py_result["simulator"] = (int)config.simulator_type;
+  py_result["method"] = (int)config.simulation_type;
 
   return py_result;
 }
