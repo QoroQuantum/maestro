@@ -88,7 +88,7 @@ if (NOT DEFINED QCSIM_INCLUDE_DIR)
         FetchContent_Declare(
             qcsim
             GIT_REPOSITORY https://github.com/aromanro/QCSim.git
-            GIT_TAG master
+            GIT_TAG 6ec931becbb22b97ffd06df2a7806daac05736f3
         )
 
         # Just populate the source (don't build it with add_subdirectory)
