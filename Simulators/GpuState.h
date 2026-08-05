@@ -1283,10 +1283,11 @@ class GpuState : public ISimulator {
     void Update(const Types::qubits_vector &) override { ++index; }
 
    private:
-    size_t curMaxBondDim = 0;
     long long int &index;
   };
+
   std::shared_ptr<GateCounterObserver> gateCounterObserver;
+  size_t curMaxBondDim = 0;
 };
 
 }  // namespace Private
