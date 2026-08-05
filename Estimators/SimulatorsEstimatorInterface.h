@@ -49,7 +49,7 @@ class SimulatorsEstimatorInterface {
       const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits,
       size_t nrCbits, size_t nrResultCbits,
       const std::shared_ptr<Simulators::ISimulator> &sim,
-      std::vector<bool> &executed) {
+      std::vector<bool> &executed, size_t *curMaxBondDim = nullptr) {
     Circuits::OperationState state;
     state.AllocateBits(nrCbits);
 
@@ -62,7 +62,7 @@ class SimulatorsEstimatorInterface {
             Simulators::SimulationType::kMatrixProductState &&
         hasMeasurementsOnlyAtEnd;
 
-    executed = dcirc->ExecuteNonMeasurements(sim, state);
+    executed = dcirc->ExecuteNonMeasurements(sim, state, curMaxBondDim);
 
     if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
       sim->SaveState();

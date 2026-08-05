@@ -587,6 +587,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       GetState().Clear();
     }
 
+    curMaxBondDim = 0;
+
     std::vector<bool> executed;
     auto optSim =
         ChooseBestSimulator(distCirc, shots, nrQubits, nrQubits, nrCbitsResults,
@@ -647,6 +649,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         job->singularValueThreshold = singularValueThreshold;
 
         job->network = BaseClass::getptr();
+        job->curMaxBondDim = &curMaxBondDim;
 
         if (optSim) {
           job->optSim = optSim->Clone();
@@ -671,6 +674,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       job->singularValueThreshold = singularValueThreshold;
 
       job->network = BaseClass::getptr();
+      job->curMaxBondDim = &curMaxBondDim;
 
       if (optSim) {
         optSim->SetMultithreading(true);
@@ -781,6 +785,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     simulator->Clear();
     GetState().Clear();
 
+    curMaxBondDim = 0;
+
     std::vector<bool> executed;
     auto optSim = ChooseBestSimulator(distCirc, shots, nrQubits, nrCbits,
                                       nrCbits, simType, method, executed);
@@ -833,6 +839,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         job->singularValueThreshold = singularValueThreshold;
 
         job->network = BaseClass::getptr();
+        job->curMaxBondDim = &curMaxBondDim;
 
         if (optSim) {
           job->optSim = optSim->Clone();
@@ -857,6 +864,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       job->singularValueThreshold = singularValueThreshold;
 
       job->network = BaseClass::getptr();
+      job->curMaxBondDim = &curMaxBondDim;
 
       if (optSim) {
         optSim->SetMultithreading(true);
@@ -1913,12 +1921,12 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     return cloned;
   }
 
-  std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(
+  std::shared_ptr<Simulators::ISimulator>ChooseBestSimulator(
       std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t &counts,
       size_t nrQubits, size_t nrCbits, size_t nrResultCbits,
       Simulators::SimulatorType &simType, Simulators::SimulationType &method,
       std::vector<bool> &executed, bool multithreading = false,
-      bool dontRunCircuitStart = false) const override {
+      bool dontRunCircuitStart = false) override {
     if (!optimizeSimulator) return nullptr;
 
     if ((!simulatorsEstimator || !simulatorsEstimator->IsInitialized()) &&
@@ -2088,7 +2096,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           sim->SetMultithreading(true);
           Estimators::SimulatorsEstimatorInterface<
               Time>::ExecuteUpToMeasurements(dcirc, nrQubits, nrCbits,
-                                             nrResultCbits, sim, executed);
+                                             nrResultCbits, sim, executed, &curMaxBondDim);
         }
         sim->SetMultithreading(multithreading || GetMaxSimulators() == 1);
 
@@ -2116,7 +2124,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       if (!dontRunCircuitStart) {
         sim->SetMultithreading(true);
         Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(
-            dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed);
+            dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed, &curMaxBondDim);
       }
       sim->SetMultithreading(multithreading || GetMaxSimulators() == 1);
     }
@@ -2213,6 +2221,14 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     if (simulator) simulator->setGrowthFactorGate(factor);
   }
+
+  /**
+   * @brief Returns the maximum bond dimension reached.
+   *
+   * Returns the maximum bond dimension reached during execution, if applicable
+   * (mps simulator, either qcsim or gpu).
+   */
+  size_t GetCurrentMaxBondDimension() const override { return curMaxBondDim; }
 
  protected:
   void OptimizeMPSInitialQubitsMap(
@@ -2544,6 +2560,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
   double growthFactorSwap = 1.;
   double growthFactorGate = 0.7;
+  size_t curMaxBondDim = 0;
 };
 
 }  // namespace Network

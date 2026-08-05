@@ -970,7 +970,7 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
       size_t nrQubits, size_t nrCbits, size_t nrResultCbits,
       Simulators::SimulatorType &simType, Simulators::SimulationType &method,
       std::vector<bool> &executed, bool multithreading = false,
-      bool dontRunCircuitStart = false) const = 0;
+      bool dontRunCircuitStart = false) = 0;
 
 
   virtual void SetInitialQubitsMapOptimization(bool optimize = true) = 0;
@@ -1002,6 +1002,14 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
 
   virtual void setGrowthFactorSwap(double factor) {}
   virtual void setGrowthFactorGate(double factor) {}
+
+  /**
+   * @brief Returns the maximum bond dimension reached.
+   *
+   * Returns the maximum bond dimension reached during execution, if applicable
+   * (mps simulator, either qcsim or gpu).
+   */
+  virtual size_t GetCurrentMaxBondDimension() const { return 0; }
 };
 
 }  // namespace Network

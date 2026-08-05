@@ -270,6 +270,10 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
   py_result["simulator"] = (int)network->GetLastSimulatorType();
   py_result["method"] = (int)network->GetLastSimulationType();
 
+  size_t max_bond_dim = network->GetCurrentMaxBondDimension();
+  if (max_bond_dim > 0)
+    py_result["max_bond_dim_reached"] = max_bond_dim;
+
   return py_result;
 }
 
@@ -309,6 +313,9 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
   py_result["time_taken"] = std::chrono::duration<double>(end - start).count();
   py_result["simulator"] = (int)network->GetLastSimulatorType();
   py_result["method"] = (int)network->GetLastSimulationType();
+
+  size_t max_bond_dim = network->GetCurrentMaxBondDimension();
+  if (max_bond_dim > 0) py_result["max_bond_dim_reached"] = max_bond_dim;
 
   return py_result;
 }
@@ -652,12 +659,14 @@ nb::dict incremental_evolve_core(
   Circuits::OperationState opState;
   opState.AllocateBits(num_qubits);
 
+  size_t current_max_bond_dim = 0;
+
   auto start = std::chrono::high_resolution_clock::now();
 
   // Execute initial circuit (non-measurement gates) — release GIL
   {
     nb::gil_scoped_release release;
-    init_circuit->ExecuteNonMeasurements(simulator, opState);
+    init_circuit->ExecuteNonMeasurements(simulator, opState, &current_max_bond_dim);
   }
 
   int current_step = 0;
@@ -670,7 +679,7 @@ nb::dict incremental_evolve_core(
     {
       nb::gil_scoped_release release;
       for (int s = 0; s < delta; ++s) {
-        trotter_step->ExecuteNonMeasurements(simulator, opState);
+        trotter_step->ExecuteNonMeasurements(simulator, opState, &current_max_bond_dim);
       }
     }
     current_step = target_step;
@@ -695,6 +704,9 @@ nb::dict incremental_evolve_core(
       std::chrono::duration<double>(end - start).count();
   py_result["simulator"] = (int)config.simulator_type;
   py_result["method"] = (int)config.simulation_type;
+
+  if (current_max_bond_dim > 0)
+    py_result["max_bond_dim_reached"] = current_max_bond_dim;
 
   return py_result;
 }
