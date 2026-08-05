@@ -93,12 +93,34 @@ class Circuit : public IOperation<Time> {
    * @sa ISimulator
    * @sa OperationState
    */
-  void Execute(const std::shared_ptr<Simulators::ISimulator> &sim,
-               OperationState &state) const override {
+  void Execute(const std::shared_ptr<Simulators::ISimulator>& sim,
+               OperationState& state) const override {
+    ExecuteBD(sim, state);
+  }
+
+  /**
+   * @brief Execute the circuit on the given simulator.
+   *
+   * Executes the circuit on the given simulator.
+   * @param sim The simulator to execute the circuit on.
+   * @param state The classical state containing the classical bits.
+   * @param curMaxBondDim Pointer to the current maximum bond dimension, if
+   * applicable.
+   * @sa ISimulator
+   * @sa OperationState
+   */
+  void ExecuteBD(const std::shared_ptr<Simulators::ISimulator> &sim,
+               OperationState &state, size_t* curMaxBondDim = nullptr) const {
     state.Reset();
     if (!sim) return;
 
-    for (const auto &op : operations) op->Execute(sim, state);
+    for (const auto& op : operations) {
+      op->Execute(sim, state);
+      if (curMaxBondDim) {
+        const auto bondDim = sim->GetCurrentMaxBondDimension();
+        if (bondDim > *curMaxBondDim) *curMaxBondDim = bondDim;
+      }
+    }
     // sim->Flush();
   }
 
@@ -1670,13 +1692,15 @@ class Circuit : public IOperation<Time> {
    * simulator.
    * @param sim The simulator to execute the circuit on.
    * @param state The classical state containing the classical bits.
+   * @param curMaxBondDim Pointer to the current maximum bond dimension, if
+   * applicable.
    * @return A bool vector with the executed operations marked.
    * @sa ISimulator
    * @sa OperationState
    */
   std::vector<bool> ExecuteNonMeasurements(
       const std::shared_ptr<Simulators::ISimulator> &sim,
-      OperationState &state) const {
+      OperationState &state, size_t* curMaxBondDim = nullptr) const {
     std::vector<bool> executedOps;
     executedOps.reserve(operations.size());
 
@@ -1707,7 +1731,13 @@ class Circuit : public IOperation<Time> {
           }
 
         if (executed) {
-          if (sim) op->Execute(sim, state);
+          if (sim) {
+            op->Execute(sim, state);
+            if (curMaxBondDim) {
+              const auto bondDim = sim->GetCurrentMaxBondDimension();
+              if (bondDim > *curMaxBondDim) *curMaxBondDim = bondDim;
+            }
+          }
         } else
           measuredQubits.insert(qubits.begin(), qubits.end());
       } else  // regular gate or conditional gate
@@ -1739,7 +1769,13 @@ class Circuit : public IOperation<Time> {
         }
 
         if (canExecute) {
-          if (sim) op->Execute(sim, state);
+          if (sim) {
+            op->Execute(sim, state);
+            if (curMaxBondDim) {
+              const auto bondDim = sim->GetCurrentMaxBondDimension();
+              if (bondDim > *curMaxBondDim) *curMaxBondDim = bondDim;
+            }
+          }
           executed = true;
         } else {
           // this is a 'trick', if it cannot execute, then neither can any
@@ -1775,12 +1811,14 @@ class Circuit : public IOperation<Time> {
    * simulator.
    * @param sim The simulator to execute the circuit on.
    * @param state The classical state containing the classical bits.
+   * @param curMaxBondDim Pointer to the current maximum bond dimension, if
+   * applicable.
    * @sa ISimulator
    * @sa OperationState
    */
   void ExecuteMeasurements(const std::shared_ptr<Simulators::ISimulator> &sim,
                            OperationState &state,
-                           const std::vector<bool> &executedOps) const {
+                           const std::vector<bool> &executedOps, size_t* curMaxBondDim = nullptr) const {
     state.Reset();
     if (!sim) return;
 
@@ -1790,7 +1828,13 @@ class Circuit : public IOperation<Time> {
     const size_t dif = operations.size() - executedOps.size();
 
     for (size_t i = dif; i < operations.size(); ++i)
-      if (!executedOps[i - dif]) operations[i]->Execute(sim, state);
+      if (!executedOps[i - dif]) {
+        operations[i]->Execute(sim, state);
+        if (curMaxBondDim) {
+          const auto bondDim = sim->GetCurrentMaxBondDimension();
+          if (bondDim > *curMaxBondDim) *curMaxBondDim = bondDim;
+        }
+      }
 
     // sim->Flush();
   }

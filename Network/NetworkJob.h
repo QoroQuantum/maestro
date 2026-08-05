@@ -62,6 +62,8 @@ class ExecuteJob {
 
     dcirc = dcirc->RemoveExecutedOperations(executedGates);
 
+    size_t curMaxBondDimLocal = 0;
+
     if (!optSim) {
       optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
       if (!optSim) return;
@@ -81,7 +83,7 @@ class ExecuteJob {
       OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
 
       if (optimiseMultipleShots) {
-        executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
+        executedGates = dcirc->ExecuteNonMeasurements(optSim, state, &curMaxBondDimLocal);
 
         if (!specialOptimizationForStatevector && !specialOptimizationForMPS &&
             curCnt > 1)
@@ -122,6 +124,9 @@ class ExecuteJob {
         const std::lock_guard lock(resultsMutex);
         res[bits] += curCnt;
 
+        if (curMaxBondDim && curMaxBondDimLocal > *curMaxBondDim)
+          *curMaxBondDim = curMaxBondDimLocal;
+
         return;
       }
     }
@@ -148,6 +153,9 @@ class ExecuteJob {
       const std::lock_guard lock(resultsMutex);
       for (const auto &r : localRes) res[r.first] += r.second;
 
+      if (curMaxBondDim && curMaxBondDimLocal > *curMaxBondDim)
+        *curMaxBondDim = curMaxBondDimLocal;
+
       return;
     }
 
@@ -158,9 +166,9 @@ class ExecuteJob {
           optSim->RestoreState();
           optSim->SetGatesCounter(0);
         }
-        dcirc->ExecuteMeasurements(optSim, state, executed);
+        dcirc->ExecuteMeasurements(optSim, state, executed, &curMaxBondDimLocal);
       } else {
-        dcirc->Execute(optSim, state);
+        dcirc->ExecuteBD(optSim, state, &curMaxBondDimLocal);
         if (i < curCnt1) {
           optSim->Reset();
           optSim->SetGatesCounter(0);
@@ -177,6 +185,9 @@ class ExecuteJob {
 
     const std::lock_guard lock(resultsMutex);
     for (const auto &r : localRes) res[r.first] += r.second;
+
+    if (curMaxBondDim && curMaxBondDimLocal > *curMaxBondDim) 
+        *curMaxBondDim = curMaxBondDimLocal;
   }
 
   void DoWorkNoLock() {
@@ -218,7 +229,7 @@ class ExecuteJob {
         OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
 
         if (optimiseMultipleShots) {
-          executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
+          executedGates = dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
 
           if (!specialOptimizationForStatevector &&
               !specialOptimizationForMPS && curCnt > 1)
@@ -242,7 +253,7 @@ class ExecuteJob {
           }
         }
         if (needToExecuteGates && optimiseMultipleShots) {
-          executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
+          executedGates = dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
           if (!specialOptimizationForStatevector &&
               !specialOptimizationForMPS && curCnt > 1)
             optSim->SaveState();
@@ -293,7 +304,7 @@ class ExecuteJob {
       OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
 
       if (optimiseMultipleShots) {
-        executedGates = dcirc->ExecuteNonMeasurements(optSim, state);
+        executedGates = dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
 
         if (!specialOptimizationForStatevector && !specialOptimizationForMPS &&
             curCnt > 1)
@@ -358,9 +369,9 @@ class ExecuteJob {
           optSim->RestoreState();
           optSim->SetGatesCounter(0);
         }
-        dcirc->ExecuteMeasurements(optSim, state, executed);
+        dcirc->ExecuteMeasurements(optSim, state, executed, curMaxBondDim);
       } else {
-        dcirc->Execute(optSim, state);
+        dcirc->ExecuteBD(optSim, state, curMaxBondDim);
         if (i < curCnt1) {
           optSim->Reset();  // leave the simulator state for the last iteration
           optSim->SetGatesCounter(0);
@@ -491,6 +502,7 @@ public:
   std::string mpsSample;
 
   std::shared_ptr<Network::INetwork<Time>> network;
+  size_t* curMaxBondDim = nullptr;
 };
 
 }  // namespace Network
