@@ -311,7 +311,7 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fMPSSetMeetingPositionCallback, __LINE__);
 
           fMPSSetBondDimensionsCallback =
-              (void (*)(void*, void (*)(void*, const int64_t*)))GetFunction(
+              (int (*)(void*, void (*)(void*, const int64_t*)))GetFunction(
                   "MPSSetBondDimensionsCallback");
           CheckFunction((void *)fMPSSetBondDimensionsCallback, __LINE__);
 
@@ -3258,7 +3258,7 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSGetNrQubits)(void *) = nullptr;
   int (*fMPSSetCallbackContext)(void *, void *) = nullptr;
   int (*fMPSSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
-  void (*fMPSSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;
+  int (*fMPSSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;
 
   int (*fMPSAmplitude)(void *, long int, long int *, double *,
                        double *) = nullptr;
