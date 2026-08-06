@@ -809,6 +809,7 @@ class GpuSimulator : public GpuState {
       cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
 
       cloned->curMaxBondDim = curMaxBondDim;
+      cloned->mps->SetCallbackContext(cloned.get());
     }
 
     return cloned;

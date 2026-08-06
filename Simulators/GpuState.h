@@ -67,6 +67,10 @@ class GpuState : public ISimulator {
       } else if (simulationType == SimulationType::kMatrixProductState) {
         mps = SimulatorsFactory::CreateGpuLibMPSSim();
         if (mps) {
+          mps->SetCallbackContext((void*)this);
+          curMaxBondDim = 1;
+          mps->SetBondDimensionCallback(bondDimensionCallback);
+
           if (useDoublePrecision) mps->SetDataType(true);
           if (limitEntanglement && singularValueThreshold > 0.)
             mps->SetCutoff(singularValueThreshold);
@@ -289,7 +293,6 @@ class GpuState : public ISimulator {
         // for lookahead evaluation with actual bond dimensions
         // the callback is called only for two qubits gates and only if
         // executing them would require a swap
-        mps->SetCallbackContext((void*)this);
         mps->SetMeetingPositionCallback(&GpuState::FindBestMeetingPosition);
       }
     }
@@ -325,7 +328,6 @@ class GpuState : public ISimulator {
     // for lookahead evaluation with actual bond dimensions
     // the callback is called only for two qubits gates and only if executing
     // them would require a swap
-    mps->SetCallbackContext((void*)this);
     mps->SetMeetingPositionCallback(&GpuState::FindBestMeetingPosition);
   }
 
@@ -1201,11 +1203,6 @@ class GpuState : public ISimulator {
   {
     const size_t nQ = GetNumberOfQubits();
 
-    if (bondDims) {
-      for (int i = 0; i < static_cast<int>(nQ) - 1; ++i)
-        if (bondDims[i] > curMaxBondDim) curMaxBondDim = bondDims[i];
-    }
-
     if (lookaheadDepth <= 0 || lookaheadDepth == std::numeric_limits<int>::max()) 
        return -1;
 
@@ -1247,6 +1244,22 @@ class GpuState : public ISimulator {
 
     return res;
   }
+
+  static void BondDimCallback(void* thisPtr, const int64_t* bondDims) {
+    GpuState* self = static_cast<GpuState*>(thisPtr);
+    
+    return self->BondDimCallbackFunc(bondDims);
+  }
+
+  void BondDimCallbackFunc(const int64_t* bondDims)
+  {
+    if (bondDims) {
+      const size_t nQ = GetNumberOfQubits();
+      for (int i = 0; i < static_cast<int>(nQ) - 1; ++i)
+        if (bondDims[i] > curMaxBondDim) curMaxBondDim = bondDims[i];
+    }
+  }
+
 
   SimulationType simulationType =
       SimulationType::kStatevector; /**< The simulation type. */

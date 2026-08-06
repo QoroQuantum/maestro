@@ -144,6 +144,11 @@ class GpuLibMPSSim {
     return false;
   }
 
+  bool SetBondDimensionsCallback(void (*callback)(void*, const int64_t*)) {
+    if (obj) return lib->MPSSetBondDimensionsCallback(obj, callback);
+    return false;
+  }
+
   bool Amplitude(long int numFixedValues, long int *fixedValues, double *real,
                  double *imaginary) const {
     if (obj)
