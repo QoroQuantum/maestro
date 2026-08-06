@@ -310,6 +310,11 @@ class GpuLibrary : public Utils::Library {
                   GetFunction("MPSSetMeetingPositionCallback");
           CheckFunction((void *)fMPSSetMeetingPositionCallback, __LINE__);
 
+          fMPSSetBondDimensionsCallback =
+              (void (*)(void*, void (*)(void*, const int64_t*)))GetFunction(
+                  "MPSSetBondDimensionsCallback");
+          CheckFunction((void *)fMPSSetBondDimensionsCallback, __LINE__);
+
           fMPSAmplitude = (int (*)(void *, long int, long int *, double *,
                                    double *))GetFunction("MPSAmplitude");
           CheckFunction((void *)fMPSAmplitude, __LINE__);
@@ -1538,6 +1543,15 @@ class GpuLibrary : public Utils::Library {
     else
       throw std::runtime_error(
           "GpuLibrary: Unable to set meeting position callback for mps");
+    return false;
+  }
+
+  bool MPSSetBondDimensionsCallback(void* obj, void (*callback)(void*, const int64_t*)) {
+    if (LibraryHandle)
+      return fMPSSetBondDimensionsCallback(obj, callback) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set bond dimensions callback for mps");
     return false;
   }
 
@@ -3244,6 +3258,7 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSGetNrQubits)(void *) = nullptr;
   int (*fMPSSetCallbackContext)(void *, void *) = nullptr;
   int (*fMPSSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
+  void (*fMPSSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;
 
   int (*fMPSAmplitude)(void *, long int, long int *, double *,
                        double *) = nullptr;
