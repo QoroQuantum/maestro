@@ -807,6 +807,8 @@ class GpuSimulator : public GpuState {
       cloned->RegisterObserver(cloned->gateCounterObserver);
 
       cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
+
+      cloned->curMaxBondDim = curMaxBondDim;
     }
 
     return cloned;
