@@ -59,10 +59,6 @@ class QCSimState : public ISimulator {
   QCSimState() : rng(std::random_device{}()), uniformZeroOne(0, 1) {
     meetingPositionCallback = [this](/*const auto &qMap,*/ const auto& bondDims)
         -> QC::TensorNetworks::MPSSimulatorInterface::IndexType {
-      curMaxBondDim = 0;
-      for (int i = 0; i < static_cast<int>(bondDims.size()); ++i)
-        if (bondDims[i] > curMaxBondDim) curMaxBondDim = bondDims[i];
-
       if (lookaheadDepth <= 0 ||
           lookaheadDepth == std::numeric_limits<int>::max())
         return -1;  // will fallback to default behavior
@@ -184,6 +180,11 @@ class QCSimState : public ISimulator {
 
       return res;
     };
+
+    bondDimensionCallback = [this](const auto& bondDims) {
+      for (int i = 0; i < static_cast<int>(bondDims.size()); ++i)
+        if (bondDims[i] > curMaxBondDim) curMaxBondDim = bondDims[i];
+    };
   }
 
   /**
@@ -204,6 +205,8 @@ class QCSimState : public ISimulator {
         // default is true
         if (!useOptimalMeetingPosition)
           mpsSimulator->SetUseOptimalMeetingPosition(false);
+        mpsSimulator->SetBondDimensionCallback(bondDimensionCallback);
+        curMaxBondDim = 1;
       } else if (simulationType == SimulationType::kStabilizer)
         cliffordSimulator =
             std::make_unique<QC::Clifford::StabilizerSimulator>(nrQubits);
@@ -350,9 +353,10 @@ class QCSimState : public ISimulator {
    * op on each qubit would do).
    */
   void Reset() override {
-    if (mpsSimulator)
+    if (mpsSimulator) {
       mpsSimulator->Clear();
-    else if (cliffordSimulator)
+      curMaxBondDim = 1;
+    } else if (cliffordSimulator)
       cliffordSimulator->Reset();
     else if (tensorNetwork)
       tensorNetwork->Clear();
@@ -1750,6 +1754,8 @@ class QCSimState : public ISimulator {
 
   size_t curMaxBondDim = 0;
   QC::TensorNetworks::MPSSimulator::MeetingPositionCallback meetingPositionCallback = nullptr;
+  QC::TensorNetworks::MPSSimulator::BondDimensionCallback bondDimensionCallback = nullptr;
+
 
   // Observer that counts applied gates to track position in upcomingGates
   class GateCounterObserver : public ISimulatorObserver {

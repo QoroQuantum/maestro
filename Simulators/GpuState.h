@@ -1202,7 +1202,6 @@ class GpuState : public ISimulator {
     const size_t nQ = GetNumberOfQubits();
 
     if (bondDims) {
-      curMaxBondDim = 0;
       for (int i = 0; i < static_cast<int>(nQ) - 1; ++i)
         if (bondDims[i] > curMaxBondDim) curMaxBondDim = bondDims[i];
     }

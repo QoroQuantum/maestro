@@ -1181,6 +1181,13 @@ class QCSimSimulator : public QCSimState {
       cloned->gateCounterObserver =
           std::make_shared<GateCounterObserver>(upcomingGateIndex);
       cloned->RegisterObserver(cloned->gateCounterObserver);
+
+      cloned->curMaxBondDim = curMaxBondDim;
+
+      cloned->mpsSimulator->SetMeetingPositionCallback(
+          cloned->meetingPositionCallback);
+      cloned->mpsSimulator->SetBondDimensionCallback(
+          cloned->bondDimensionCallback);
     }
 
     if (cliffordSimulator)
