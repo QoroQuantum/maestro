@@ -69,7 +69,7 @@ class GpuState : public ISimulator {
         if (mps) {
           mps->SetCallbackContext((void*)this);
           curMaxBondDim = 1;
-          mps->SetBondDimensionCallback(bondDimensionCallback);
+          mps->SetBondDimensionsCallback(&GpuState::BondDimCallback);
 
           if (useDoublePrecision) mps->SetDataType(true);
           if (limitEntanglement && singularValueThreshold > 0.)
