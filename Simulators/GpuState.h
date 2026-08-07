@@ -233,9 +233,10 @@ class GpuState : public ISimulator {
   void Reset() override {
     if (state)
       state->Reset();
-    else if (mps)
+    else if (mps) {
       mps->Reset();
-    else if (tn)
+      curMaxBondDim = 1;
+    } else if (tn)
       tn->Reset();
     else if (pp)
       pp->ClearOperators();
