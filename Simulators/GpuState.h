@@ -1273,6 +1273,7 @@ class GpuState : public ISimulator {
       pp; /**< The gpu Pauli propagator simulator. */
 
   size_t nrQubits = 0; /**< The number of allocated qubits. */
+
   bool limitSize = false;
   bool limitEntanglement = false;
   Eigen::Index chi = 10;               // if limitSize is true

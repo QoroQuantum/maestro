@@ -173,7 +173,7 @@ class AerState : public ISimulator {
    * @param key The key of the configuration option.
    * @param value The value of the configuration.
    */
-  void Configure(const char *key, const char *value) override {
+  void Configure(const char* key, const char* value) override {
     if (std::string("method") == key) {
       if (std::string("statevector") == value)
         simulationType = SimulationType::kStatevector;
@@ -202,8 +202,14 @@ class AerState : public ISimulator {
         limitSize = false;
     } else if (std::string("mps_sample_measure_algorithm") == key)
       useMPSMeasureNoCollapse = std::string("mps_probabilities") == value;
-
-    state->configure(key, value);
+    else if (std::string("use_double_precision") == key) {
+      const bool useDoublePrecision =
+          (std::string("1") == value || std::string("true") == value);
+      state->configure("precision", useDoublePrecision ? "double" : "single");
+    } 
+     
+    if (std::string("use_double_precision") != key)
+        state->configure(key, value);
   }
 
   /**
@@ -872,10 +878,12 @@ class AerState : public ISimulator {
   std::unique_ptr<QiskitAerState> state =
       std::make_unique<QiskitAerState>(); /**< The qiskit aer state. */
   AER::Vector<complex_t> savedAmplitudes; /**< The amplitudes, saved. */
+
   bool limitSize = false;
   bool limitEntanglement = false;
   Eigen::Index chi = 10;               // if limitSize is true
   double singularValueThreshold = 0.;  // if limitEntanglement is true
+  
   bool enableMultithreading = true;    /**< The multithreading flag. */
   AER::Data savedState; /**< The saved data - here there will be the saved state
                            of the simulator */
