@@ -4,21 +4,20 @@
  *
  * @section DESCRIPTION
  *
- * The simulator configuration class.
+ * The network configuration class.
  */
 
 #pragma once
 
-#ifndef _SIMULATOR_CONFIGURATION_H_
-#define _SIMULATOR_CONFIGURATION_H_
+#ifndef _NETWORK_CONFIGURATION_H_
+#define _NETWORK_CONFIGURATION_H_
 
-#include <string>
-#include <unordered_map>
+#include "Network.h"
+#include "../Simulators/Configuration.h"
 
-#include "State.h"
+namespace Network {
 
-namespace Simulators {
-
+template <typename Time = Types::time_type>
 class Configuration {
  public:
   /**
@@ -72,7 +71,7 @@ class Configuration {
    * @param value The value of the configuration.
    */
   void SetConfiguration(const std::string& key, const std::string& value) {
-    configMap[key] = value;
+    simulatorConfig.SetConfiguration(key, value);
   }
 
   /**
@@ -83,9 +82,7 @@ class Configuration {
    * @param key The key of the configuration value.
    * @return True if the configuration value is set, false otherwise.
    */
-  bool IsSet(const std::string& key) const {
-    return configMap.find(key) != configMap.end();
-  }
+  bool IsSet(const std::string& key) const { return simulatorConfig.IsSet(key); }
 
   /**
    * @brief Get a configuration value.
@@ -96,39 +93,37 @@ class Configuration {
    * @return The configuration value as a string.
    */
   std::string GetConfiguration(const std::string& key) const {
-    auto it = configMap.find(key);
-    if (it != configMap.end()) {
-      return it->second;
-    }
-    return "";
+    return simulatorConfig.GetConfiguration(key);
   }
 
   bool CanBeAppliedOnInitializedSimulator(const std::string& key) const {
-    if (key == "method" || key == "use_double_precision" ||
-        key == "precision" ||
-        key == "max_parallel_threads" || key == "parallel_state_update" ||
-        key == "statevector_parallel_threshold")
-      return false;
-    
-    return true;
+    return simulatorConfig.CanBeAppliedOnInitializedSimulator(key);
   }
 
-  void ApplyConfigurationToSimulator(const std::shared_ptr<IState>& simulator) const {
-    for (const auto& [key, value] : configMap)
-        simulator->Configure(key.c_str(), value.c_str());
+  void SetSimulatorConfiguration(const Simulators::Configuration& config) {
+    simulatorConfig = config;
+  }
+
+  void ApplyConfigurationToSimulator(
+      const std::shared_ptr<Simulators::IState>& simulator) const {
+    simulatorConfig.ApplyConfigurationToSimulator(simulator);
+  }
+
+  void ApplyConfigurationToNetwork(
+      const std::shared_ptr<INetwork<Time>>& network) const {
+    for (const auto& [key, value] : simulatorConfig.GetConfigMap())
+      network->Configure(key.c_str(), value.c_str());
   }
 
   const std::unordered_map<std::string, std::string>& GetConfigMap() const {
-    return configMap;
+    return simulatorConfig.GetConfigMap();
   }
 
-  private:
-  std::unordered_map<std::string, std::string>
-      configMap; /**< The configuration map. */
+ private:
+  Simulators::Configuration
+      simulatorConfig; /**< The simulator configuration. */
 };
 
 }
 
 #endif
-
-
