@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.17] - 2026-08-11
+
+### Added
+- **Bond Dimension Callback & Max Bond Dimension Tracking** — exposed maximum bond dimension reached during MPS simulation across `execute`, `estimate`, and `incremental_evolve` Python return dictionaries (`max_bond_dim_reached`)
+- Integrated QCSim bond dimension callback support and GPU MPS simulator bond dimension callback
+- Added simulator `Configuration` class to standardise parameter delivery across simulator backends
+
+### Changed
+- Python package version bumped to `0.2.17`
+
+
 ## [0.2.13] - 2026-05-02
 
 ### Added
