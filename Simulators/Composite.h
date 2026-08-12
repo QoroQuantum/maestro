@@ -23,6 +23,8 @@
 
 #include <vector>
 
+#include "Configuration.h"
+
 namespace Simulators {
 
 // TODO: Maybe use the pimpl idiom
@@ -206,6 +208,8 @@ class CompositeSimulator : public ISimulator {
     // don't allow chaning the method, it should stay statevector
     if (std::string("method") == key) return;
 
+    config.SetConfiguration(key, value);
+
     for (auto &[id, simulator] : simulators) simulator->Configure(key, value);
   }
 
@@ -219,7 +223,7 @@ class CompositeSimulator : public ISimulator {
   std::string GetConfiguration(const char *key) const override {
     if (simulators.empty()) return "";
 
-    return simulators.begin()->second->GetConfiguration(key);
+    return config.GetConfiguration(key);
   }
 
   /**
@@ -1264,6 +1268,8 @@ class CompositeSimulator : public ISimulator {
         enableMultithreading; /**< A flag to indicate if multithreading should
                                  be enabled. */
 
+    clone->config = config; /**< The configuration of the simulator. */
+
     for (auto &[id, simulator] : simulators) {
       auto isim = simulator->Clone();
       clone->simulators[id] = std::unique_ptr<IndividualSimulator>(
@@ -1273,6 +1279,13 @@ class CompositeSimulator : public ISimulator {
     if (savedState) clone->savedState = savedState->Clone();
 
     return clone;
+  }
+
+  const Configuration& GetConfiguration() const { return config; }
+
+  const std::unordered_map<std::string, std::string>& GetConfigMap()
+      const override {
+    return config.GetConfigMap();
   }
 
  private:
@@ -1377,6 +1390,8 @@ class CompositeSimulator : public ISimulator {
       true; /**< A flag to indicate if multithreading should be enabled. */
 
   std::unique_ptr<ISimulator> savedState; /**< The saved state, if any. */
+
+  Configuration config; /**< The configuration of the simulator. */
 };
 
 }  // namespace Private

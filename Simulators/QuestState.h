@@ -23,6 +23,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "Configuration.h"
+
 namespace Simulators {
 namespace Private {
 /**
@@ -691,6 +693,13 @@ class QuestState : public ISimulator {
     return result;
   }
 
+  const Configuration& GetConfiguration() const { return configuration; }
+
+  const std::unordered_map<std::string, std::string>& GetConfigMap()
+      const override {
+    return configuration.GetConfigMap();
+  }
+
  protected:
   std::shared_ptr<QuestLibSim> questLib; /**< The quest library. */
   unsigned long int simHandle = 0;       /**< The simulator handle. */
@@ -700,6 +709,8 @@ class QuestState : public ISimulator {
   void *savedSim = nullptr;              /**< The saved simulator pointer. */
   std::mt19937_64 rng;
   std::uniform_real_distribution<double> uniformZeroOne;
+
+  Configuration configuration; /**< The configuration of the simulator. */
 };
 }  // namespace Private
 }  // namespace Simulators

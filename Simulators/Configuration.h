@@ -15,9 +15,11 @@
 #include <string>
 #include <unordered_map>
 
+
 #include "State.h"
 
 namespace Simulators {
+
 
 class Configuration {
  public:
@@ -72,7 +74,21 @@ class Configuration {
    * @param value The value of the configuration.
    */
   void SetConfiguration(const std::string& key, const std::string& value) {
+    // specially handled, ignore it
+    if (key == "method") return;
     configMap[key] = value;
+  }
+
+  void SetConfiguration(const std::string& key, long long int value) {
+    // specially handled, ignore it
+    if (key == "method") return;
+    configMap[key] = std::to_string(value);
+  }
+
+  void SetConfiguration(const std::string& key, double value) {
+    // specially handled, ignore it
+    if (key == "method") return;
+    configMap[key] = std::to_string(value);
   }
 
   /**
@@ -103,6 +119,22 @@ class Configuration {
     return "";
   }
 
+  long long int GetConfigurationAsInt(const std::string& key) const {
+    auto it = configMap.find(key);
+    if (it != configMap.end()) {
+      return std::stoll(it->second);
+    }
+    return 0;
+  }
+
+  double GetConfigurationAsDouble(const std::string& key) const {
+    auto it = configMap.find(key);
+    if (it != configMap.end()) {
+      return std::stod(it->second);
+    }
+    return 0.0;
+  }
+
   bool CanBeAppliedOnInitializedSimulator(const std::string& key) const {
     if (key == "method" || key == "use_double_precision" ||
         key == "precision" ||
@@ -113,9 +145,18 @@ class Configuration {
     return true;
   }
 
-  void ApplyConfigurationToSimulator(const std::shared_ptr<IState>& simulator) const {
+  void ApplyConfigurationToSimulator(const std::shared_ptr<Simulators::IState>& simulator) const {
     for (const auto& [key, value] : configMap)
         simulator->Configure(key.c_str(), value.c_str());
+  }
+
+  void ApplyConfigurationFromSimulator(const std::shared_ptr<Simulators::IState>& simulator) {
+    if (!simulator) return;
+    ApplyConfigurationFromMap(simulator->GetConfigMap());
+  }
+
+  void ApplyConfigurationFromMap(const std::unordered_map<std::string, std::string>& config) {
+    for (const auto& [key, value] : config) SetConfiguration(key, value);
   }
 
   const std::unordered_map<std::string, std::string>& GetConfigMap() const {

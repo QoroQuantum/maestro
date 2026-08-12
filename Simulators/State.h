@@ -638,6 +638,8 @@ class IState {
    */
   virtual size_t GetCurrentMaxBondDimension() const { return 0; }
 
+  virtual const std::unordered_map<std::string, std::string>& GetConfigMap() const = 0;
+
  protected:
   /**
    * @brief Stops notifying observers.
@@ -667,6 +669,7 @@ class IState {
       observer->Update(affectedQubits);
     }
   }
+
 
  private:
   std::unordered_set<std::shared_ptr<ISimulatorObserver>>

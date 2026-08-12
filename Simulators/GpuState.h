@@ -26,6 +26,8 @@
 #include <limits>
 #include <sstream>
 
+#include "Configuration.h"
+
 namespace Simulators {
 // TODO: Maybe use the pimpl idiom
 // https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation
@@ -387,6 +389,8 @@ class GpuState : public ISimulator {
    * @param value The value of the configuration.
    */
   void Configure(const char *key, const char *value) override {
+    configuration.SetConfiguration(key, value);
+
     if (std::string("method") == key) {
       if (std::string("statevector") == value)
         simulationType = SimulationType::kStatevector;
@@ -1193,6 +1197,14 @@ class GpuState : public ISimulator {
    */
   size_t GetCurrentMaxBondDimension() const override { return curMaxBondDim; }
 
+  
+  const Configuration& GetConfiguration() const { return configuration; }
+
+    const std::unordered_map<std::string, std::string>& GetConfigMap()
+      const override {
+    return configuration.GetConfigMap();
+  }
+
  protected:
   static int64_t FindBestMeetingPosition(void* thisPtr, const int64_t* bondDims) {
     GpuState* self = static_cast<GpuState*>(thisPtr);
@@ -1302,6 +1314,8 @@ class GpuState : public ISimulator {
 
   std::shared_ptr<GateCounterObserver> gateCounterObserver;
   size_t curMaxBondDim = 0;
+
+  Configuration configuration; /**< The configuration of the simulator. */
 };
 
 }  // namespace Private

@@ -959,6 +959,10 @@ class AerSimulator : public AerState {
   std::unique_ptr<ISimulator> Clone() override {
     auto sim = std::make_unique<AerSimulator>();
 
+    sim->configuration = configuration;  // copy the configuration
+    for (const auto& [key, value] : configuration.GetConfigMap())
+      sim->Configure(key.c_str(), value.c_str());
+
     // the tricky part is cloning the state
     if (simulationType == SimulationType::kMatrixProductState)
       sim->Configure("method", "matrix_product_state");

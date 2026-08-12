@@ -23,6 +23,8 @@
 
 #include "../Simulators/MPSDummySimulator.h"
 
+#include "Configuration.h"
+
 namespace Network {
 
 /**
@@ -57,6 +59,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
    */
   SimpleDisconnectedNetwork(const std::vector<Types::qubit_t> &qubits = {},
                             const std::vector<size_t> &cbits = {}) {
+    configuration.SetConfiguration("use_double_precision", "1");
     if (!qubits.empty()) CreateNetwork(qubits, cbits);
   }
 
@@ -579,6 +582,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         "matrix_product_state_truncation_threshold");
     mpsSample = simulator->GetConfiguration("mps_sample_measure_algorithm");
 
+    configuration.ApplyConfigurationFromSimulator(simulator);
+
     // do that only if the optimization for simulator is on and the estimator is
     // available, ortherwise an 'optimal' simulator won't be created
     if (optimizeSimulator && simulatorsEstimator &&
@@ -651,6 +656,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         job->network = BaseClass::getptr();
         job->curMaxBondDim = &curMaxBondDim;
 
+        job->config = configuration;
+
         if (optSim) {
           job->optSim = optSim->Clone();
           job->executedGates = executed;
@@ -675,6 +682,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
       job->network = BaseClass::getptr();
       job->curMaxBondDim = &curMaxBondDim;
+
+      job->config = configuration;
 
       if (optSim) {
         optSim->SetMultithreading(true);
@@ -747,6 +756,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     singularValueThreshold = simulator->GetConfiguration(
         "matrix_product_state_truncation_threshold");
     mpsSample = simulator->GetConfiguration("mps_sample_measure_algorithm");
+
+    configuration.ApplyConfigurationFromSimulator(simulator);
 
     if (distCirc->HasOpsAfterMeasurements() &&
         (
@@ -841,6 +852,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         job->network = BaseClass::getptr();
         job->curMaxBondDim = &curMaxBondDim;
 
+        job->config = configuration;
+
         if (optSim) {
           job->optSim = optSim->Clone();
           job->executedGates = executed;
@@ -865,6 +878,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
       job->network = BaseClass::getptr();
       job->curMaxBondDim = &curMaxBondDim;
+
+      job->config = configuration;
 
       if (optSim) {
         optSim->SetMultithreading(true);
@@ -973,6 +988,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         simulator->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
       if (useDoublePrecision) simulator->Configure("use_double_precision", "1");
 
+      configuration.ApplyConfigurationToSimulator(simulator);
+
       simulator->AllocateQubits(
           nrQubits == 0 ? GetNumQubits() + GetNumNetworkEntangledQubits()
                         : nrQubits);
@@ -1008,6 +1025,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           (std::string("1") == value || std::string("true") == value);
     else if (std::string("max_simulators") == key)
       maxSimulators = std::stoull(value);
+
+
+    configuration.SetConfiguration(key, value);
 
     if (simulator) simulator->Configure(key, value);
   }
@@ -1895,6 +1915,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     const auto cloned =
         std::make_shared<SimpleDisconnectedNetwork<Time, Controller>>(qubits,
                                                                       cbits);
+    
+    cloned->configuration = configuration;
 
     cloned->maxBondDim = maxBondDim;
     cloned->singularValueThreshold = singularValueThreshold;
@@ -2068,6 +2090,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       std::shared_ptr<Simulators::ISimulator> sim =
           Simulators::SimulatorsFactory::CreateSimulator(simType, method);
       if (sim) {
+        configuration.ApplyConfigurationToSimulator(sim);
+        
         if (method == Simulators::SimulationType::kMatrixProductState) {
           if (!maxBondDim.empty())
             sim->Configure("matrix_product_state_max_bond_dimension",
@@ -2507,6 +2531,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   std::string singularValueThreshold;
   std::string mpsSample;
   bool useDoublePrecision = false;
+
+  Configuration<Time> configuration;
 
   size_t maxSimulators = QC::QubitRegisterCalculator<>::
       GetNumberOfThreads(); /**< The maximum number of simulators that can be

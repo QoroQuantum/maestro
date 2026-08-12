@@ -37,6 +37,7 @@
 #include "../Utils/Alias.h"
 
 #include "MPSDummySimulator.h"
+#include "Configuration.h"
 
 namespace Simulators {
 // TODO: Maybe use the pimpl idiom
@@ -498,6 +499,8 @@ class QCSimState : public ISimulator {
    * @param value The value of the configuration.
    */
   void Configure(const char *key, const char *value) override {
+    configuration.SetConfiguration(key, value);
+
     if (std::string("method") == key) {
       if (std::string("statevector") == value)
         simulationType = SimulationType::kStatevector;
@@ -574,22 +577,9 @@ class QCSimState : public ISimulator {
         default:
           return "other";
       }
-    } else if (std::string("matrix_product_state_truncation_threshold") ==
-               key) {
-      if (limitEntanglement && singularValueThreshold > 0.) {
-        std::ostringstream oss;
-        oss << std::setprecision(std::numeric_limits<double>::max_digits10)
-            << singularValueThreshold;
-        return oss.str();
-      }
-    } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
-      if (limitSize && chi > 0) return std::to_string(chi);
-    } else if (std::string("mps_sample_measure_algorithm") == key) {
-      return useMPSMeasureNoCollapse ? "mps_probabilities"
-                                     : "mps_apply_measure";
-    }
+    } 
 
-    return "";
+    return configuration.GetConfiguration(key);
   }
 
   /**
@@ -1713,6 +1703,13 @@ class QCSimState : public ISimulator {
    */
   size_t GetCurrentMaxBondDimension() const override { return curMaxBondDim; }
 
+  const Configuration& GetConfiguration() const { return configuration; }
+
+  const std::unordered_map<std::string, std::string>& GetConfigMap()
+      const override {
+    return configuration.GetConfigMap();
+  }
+
  protected:
   SimulationType simulationType =
       SimulationType::kStatevector; /**< The simulation type. */
@@ -1770,6 +1767,8 @@ class QCSimState : public ISimulator {
 
   std::mt19937_64 rng;
   std::uniform_real_distribution<double> uniformZeroOne;
+
+  Configuration configuration; /**< The configuration of the simulator. */
 };
 
 }  // namespace Private
