@@ -20,6 +20,8 @@
 
 #include "Network.h"
 
+#include "Configuration.h"
+
 namespace Network {
 
 template <typename Time = Types::time_type>
@@ -76,6 +78,8 @@ class ExecuteJob {
                           singularValueThreshold.c_str());
       if (!mpsSample.empty())
         optSim->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
+
+      config.ApplyConfigurationToSimulator(optSim);
 
       optSim->AllocateQubits(nrQubits);
       optSim->Initialize();
@@ -223,6 +227,8 @@ class ExecuteJob {
         if (!mpsSample.empty())
           optSim->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
 
+        config.ApplyConfigurationToSimulator(optSim);
+
         optSim->AllocateQubits(nrQubits);
         optSim->Initialize();
 
@@ -297,6 +303,8 @@ class ExecuteJob {
                           singularValueThreshold.c_str());
       if (!mpsSample.empty())
         optSim->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
+
+      config.ApplyConfigurationToSimulator(optSim);
 
       optSim->AllocateQubits(nrQubits);
       optSim->Initialize();
@@ -500,6 +508,8 @@ public:
   std::string maxBondDim;
   std::string singularValueThreshold;
   std::string mpsSample;
+
+  Configuration<Time> config;
 
   std::shared_ptr<Network::INetwork<Time>> network;
   size_t* curMaxBondDim = nullptr;

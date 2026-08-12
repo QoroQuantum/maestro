@@ -189,6 +189,10 @@ class IndividualSimulator : public ISimulator {
         0;  // the qubit is mapped to the only local qubit in the new simulator,
             // which is 0
     newSimulator->SetMultithreading(enableMultithreading);
+
+    for (const auto& [key, value] : GetConfigMap())
+      newSimulator->Configure(key.c_str(), value.c_str());
+
     newSimulator->Initialize();
     if (qubitOutcome) {
       newSimulator->ApplyX(qubit);
@@ -1331,6 +1335,16 @@ class IndividualSimulator : public ISimulator {
     const size_t measRaw = alias->Sample(prob);
 
     return ConvertOutcomeFromLocal(measRaw);
+  }
+
+  const std::unordered_map<std::string, std::string>& GetConfigMap()
+      const override {
+    if (!simulator) {
+      static const std::unordered_map<std::string, std::string> emptyMap;
+      return emptyMap;
+    }
+
+    return simulator->GetConfigMap();
   }
 
  private:

@@ -1165,6 +1165,7 @@ class QCSimSimulator : public QCSimState {
     cloned->upcomingGateIndex = upcomingGateIndex;
     cloned->growthFactorGate = growthFactorGate;
     cloned->growthFactorSwap = growthFactorSwap;
+    cloned->configuration = configuration;
 
     if (state) cloned->state = state->Clone();
 

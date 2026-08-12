@@ -28,6 +28,7 @@
 #include "Simulator.h"
 
 #include "QiskitAerState.h"
+#include "Configuration.h"
 
 namespace Simulators {
 // TODO: Maybe use the pimpl idiom
@@ -174,6 +175,8 @@ class AerState : public ISimulator {
    * @param value The value of the configuration.
    */
   void Configure(const char* key, const char* value) override {
+    configuration.SetConfiguration(key, value);
+
     if (std::string("method") == key) {
       if (std::string("statevector") == value)
         simulationType = SimulationType::kStatevector;
@@ -235,22 +238,9 @@ class AerState : public ISimulator {
         default:
           return "other";
       }
-    } else if (std::string("matrix_product_state_truncation_threshold") ==
-               key) {
-      if (limitEntanglement && singularValueThreshold > 0.) {
-        std::ostringstream oss;
-        oss << std::setprecision(std::numeric_limits<double>::max_digits10)
-            << singularValueThreshold;
-        return oss.str();
-      }
-    } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
-      if (limitSize && limitSize > 0) return std::to_string(chi);
-    } else if (std::string("mps_sample_measure_algorithm") == key) {
-      return useMPSMeasureNoCollapse ? "mps_probabilities"
-                                     : "mps_apply_measure";
     }
 
-    return "";
+    return configuration.GetConfiguration(key);
   }
 
   /**
@@ -872,6 +862,15 @@ class AerState : public ISimulator {
     return {};
   }
 
+  const Configuration& GetConfiguration() const {
+    return configuration;
+  }
+
+  const std::unordered_map<std::string, std::string>& GetConfigMap()
+      const override {
+    return configuration.GetConfigMap();
+  }
+
  protected:
   SimulationType simulationType =
       SimulationType::kStatevector; /**< The simulation type. */
@@ -891,6 +890,8 @@ class AerState : public ISimulator {
   std::uniform_real_distribution<double> uniformZeroOne{0., 1.};
   bool useMPSMeasureNoCollapse =
       true; /**< The flag to use the mps measure no collapse algorithm. */
+
+  Configuration configuration; /**< The configuration of the simulator. */
 };
 
 }  // namespace Private

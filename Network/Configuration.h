@@ -74,6 +74,14 @@ class Configuration {
     simulatorConfig.SetConfiguration(key, value);
   }
 
+  void SetConfiguration(const std::string& key, long long int value) {
+    simulatorConfig.SetConfiguration(key, value);
+  }
+
+  void SetConfiguration(const std::string& key, double value) {
+    simulatorConfig.SetConfiguration(key, value);
+  }
+
   /**
    * @brief Check if a configuration value is set.
    *
@@ -96,6 +104,14 @@ class Configuration {
     return simulatorConfig.GetConfiguration(key);
   }
 
+  long long int GetConfigurationAsInt(const std::string& key) const {
+    return simulatorConfig.GetConfigurationAsInt(key);
+  }
+
+  double GetConfigurationAsDouble(const std::string& key) const {
+    return simulatorConfig.GetConfigurationAsDouble(key);
+  }
+
   bool CanBeAppliedOnInitializedSimulator(const std::string& key) const {
     return simulatorConfig.CanBeAppliedOnInitializedSimulator(key);
   }
@@ -107,6 +123,17 @@ class Configuration {
   void ApplyConfigurationToSimulator(
       const std::shared_ptr<Simulators::IState>& simulator) const {
     simulatorConfig.ApplyConfigurationToSimulator(simulator);
+  }
+
+  void ApplyConfigurationFromSimulator(
+      const std::shared_ptr<Simulators::IState>& simulator) {
+    simulatorConfig.ApplyConfigurationFromSimulator(simulator);
+  }
+
+  void ApplyConfigurationFromNetwork(
+      const std::shared_ptr<INetwork<Time>>& network) {
+    if (!network) return;
+    ApplyConfigurationFromMap(network->GetConfigMap());
   }
 
   void ApplyConfigurationToNetwork(
