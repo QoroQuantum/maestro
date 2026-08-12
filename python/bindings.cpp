@@ -694,9 +694,8 @@ nb::dict incremental_evolve_core(
     }
     all_expectations.append(step_exp);
     steps_measured.append(target_step);
-    if (current_max_bond_dim > 0) {
-      bond_dim_evolution.append(current_max_bond_dim);
-    }
+    bond_dim_evolution.append(current_max_bond_dim);
+
 
   }
 
