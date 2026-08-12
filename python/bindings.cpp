@@ -638,6 +638,7 @@ nb::dict incremental_evolve_core(
   // Results storage: one vector of expectation values per measurement point
   nb::list all_expectations;
   nb::list steps_measured;
+  nb::list bond_dim_evolution;
 
   auto network = ConfigureNetwork(sim.handle, config);
   if (!network)
@@ -693,6 +694,10 @@ nb::dict incremental_evolve_core(
     }
     all_expectations.append(step_exp);
     steps_measured.append(target_step);
+    if (current_max_bond_dim > 0) {
+      bond_dim_evolution.append(current_max_bond_dim);
+    }
+
   }
 
   auto end = std::chrono::high_resolution_clock::now();
@@ -705,8 +710,10 @@ nb::dict incremental_evolve_core(
   py_result["simulator"] = (int)config.simulator_type;
   py_result["method"] = (int)config.simulation_type;
 
-  if (current_max_bond_dim > 0)
+  py_result["dynamic_bond_dims"] = bond_dim_evolution;
+  if (current_max_bond_dim > 0) {
     py_result["max_bond_dim_reached"] = current_max_bond_dim;
+  }
 
   return py_result;
 }
