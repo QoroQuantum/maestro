@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.18] - 2026-08-13
+
+### Added
+- Bond dimension tracking per time step in `incremental_evolve`
+- Simulators and networks Configuration classes and refactoring
+
+### Fixed
+- Misaligned time step guard handling in network evolution
+
+### Changed
+- Python package version bumped to `0.2.18`
+
+
 ## [0.2.17] - 2026-08-11
 
 ### Added
