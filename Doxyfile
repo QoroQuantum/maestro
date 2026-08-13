@@ -7,7 +7,7 @@
 #  Project metadata
 # ---------------------------------------------------------------------------
 PROJECT_NAME           = "Maestro"
-PROJECT_NUMBER         = "0.2.17"
+PROJECT_NUMBER         = "0.2.18"
 PROJECT_BRIEF          = "Unified interface for quantum circuit simulation"
 PROJECT_LOGO           = markdown/favicon.ico
 PROJECT_ICON           = markdown/favicon.ico
