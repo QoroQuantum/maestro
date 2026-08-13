@@ -64,7 +64,7 @@ class QCSimState : public ISimulator {
           lookaheadDepth == std::numeric_limits<int>::max())
         return -1;  // will fallback to default behavior
 
-      if (upcomingGates.empty() || upcomingGateIndex >= upcomingGates.size()) {
+      if (upcomingGates.empty() || upcomingGateIndex >= static_cast<long long>(upcomingGates.size())) {
         return -1;  // will fallback to default behavior
       }
 
@@ -550,6 +550,7 @@ class QCSimState : public ISimulator {
       if (pp && ppStepsBetweenTrims < std::numeric_limits<int>::max())
         pp->SetStepsBetweenTrims(ppStepsBetweenTrims);
     }
+    // TODO: add path integral configuration options
   }
 
   /**

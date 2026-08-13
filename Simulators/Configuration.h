@@ -75,19 +75,19 @@ class Configuration {
    */
   void SetConfiguration(const std::string& key, const std::string& value) {
     // specially handled, ignore it
-    if (key == "method") return;
+    if (IgnoredSetting(key)) return;
     configMap[key] = value;
   }
 
   void SetConfiguration(const std::string& key, long long int value) {
     // specially handled, ignore it
-    if (key == "method") return;
+    if (IgnoredSetting(key)) return;
     configMap[key] = std::to_string(value);
   }
 
   void SetConfiguration(const std::string& key, double value) {
     // specially handled, ignore it
-    if (key == "method") return;
+    if (IgnoredSetting(key)) return;
     configMap[key] = std::to_string(value);
   }
 
@@ -135,7 +135,7 @@ class Configuration {
     return 0.0;
   }
 
-  bool CanBeAppliedOnInitializedSimulator(const std::string& key) const {
+  static bool CanBeAppliedOnInitializedSimulator(const std::string& key) {
     if (key == "method" || key == "use_double_precision" ||
         key == "precision" ||
         key == "max_parallel_threads" || key == "parallel_state_update" ||
@@ -143,6 +143,13 @@ class Configuration {
       return false;
     
     return true;
+  }
+
+  static bool IgnoredSetting(const std::string& key) {
+    if (key == "max_simulators" || key == "method")
+      return true;
+
+    return false;
   }
 
   void ApplyConfigurationToSimulator(const std::shared_ptr<Simulators::IState>& simulator) const {
