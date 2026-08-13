@@ -66,23 +66,23 @@ class ExecutionCost {
     double getFieldValue(size_t index) const {
       switch (index) {
         case 0:
-          return nrQubits;
+          return static_cast<double>(nrQubits);
         case 1:
-          return nrOneQubitOps;
+          return static_cast<double>(nrOneQubitOps);
         case 2:
-          return nrTwoQubitOps;
+          return static_cast<double>(nrTwoQubitOps);
         case 3:
-          return nrThreeQubitOps;
+          return static_cast<double>(nrThreeQubitOps);
         case 4:
-          return nrMiddleMeasurementOps;
+          return static_cast<double>(nrMiddleMeasurementOps);
         case 5:
-          return nrEndMeasurementOps;
+          return static_cast<double>(nrEndMeasurementOps);
         case 6:
-          return nrOneQubitOpsExecutedOnce;
+          return static_cast<double>(nrOneQubitOpsExecutedOnce);
         case 7:
-          return nrTwoQubitOpsExecutedOnce;
+          return static_cast<double>(nrTwoQubitOpsExecutedOnce);
         case 8:
-          return nrThreeQubitOpsExecutedOnce;
+          return static_cast<double>(nrThreeQubitOpsExecutedOnce);
         default:
           throw std::out_of_range("Invalid index for CircuitInfo field");
       }
@@ -115,17 +115,17 @@ class ExecutionCost {
       } else {
         switch (index) {
           case 9:
-            return nrSamples;
+            return static_cast<double>(nrSamples);
           case 10:
-            return nrQubitsSampled;
+            return static_cast<double>(nrQubitsSampled);
           case 11:
-            return maxBondDim;
+            return static_cast<double>(maxBondDim);
           case 12:
-            return nrPauliOps;
+            return static_cast<double>(nrPauliOps);
           case 13:
-            return executionCost;
+            return static_cast<double>(executionCost);
           case 14:
-            return runtime;
+            return static_cast<double>(runtime);
           default:
             throw std::out_of_range("Invalid index for ExecutionInfo field");
         }
@@ -322,8 +322,8 @@ class ExecutionCost {
       // some dummy cost, it's not going to fit all anyways
       return cost + 30 * opOrder + samples * nrQubits;
     } else if (method == Simulators::SimulationType::kMatrixProductState) {
-      const double oneQubitOpOrder = maxBondDim * maxBondDim;
-      const double twoQubitOpOrder = oneQubitOpOrder * maxBondDim;
+      const double oneQubitOpOrder = static_cast<double>(maxBondDim * maxBondDim);
+      const double twoQubitOpOrder = static_cast<double>(oneQubitOpOrder * maxBondDim);
 
       double cost = 0;
       for (size_t i = 0; i < circuit->size(); ++i) {

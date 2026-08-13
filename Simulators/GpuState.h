@@ -458,7 +458,7 @@ class GpuState : public ISimulator {
     }
     // TODO: add pauli propagator configuration options
 
-    return "";
+    return configuration.GetConfiguration(key);
   }
 
   /**

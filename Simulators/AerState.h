@@ -205,11 +205,6 @@ class AerState : public ISimulator {
         limitSize = false;
     } else if (std::string("mps_sample_measure_algorithm") == key)
       useMPSMeasureNoCollapse = std::string("mps_probabilities") == value;
-    else if (std::string("use_double_precision") == key) {
-      const bool useDoublePrecision =
-          (std::string("1") == value || std::string("true") == value);
-      state->configure("precision", useDoublePrecision ? "double" : "single");
-    } 
      
     if (std::string("use_double_precision") != key)
         state->configure(key, value);
@@ -882,14 +877,14 @@ class AerState : public ISimulator {
   bool limitEntanglement = false;
   Eigen::Index chi = 10;               // if limitSize is true
   double singularValueThreshold = 0.;  // if limitEntanglement is true
+  bool useMPSMeasureNoCollapse =
+      true; /**< The flag to use the mps measure no collapse algorithm. */
   
   bool enableMultithreading = true;    /**< The multithreading flag. */
   AER::Data savedState; /**< The saved data - here there will be the saved state
                            of the simulator */
   std::mt19937_64 rng;
   std::uniform_real_distribution<double> uniformZeroOne{0., 1.};
-  bool useMPSMeasureNoCollapse =
-      true; /**< The flag to use the mps measure no collapse algorithm. */
 
   Configuration configuration; /**< The configuration of the simulator. */
 };
