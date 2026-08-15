@@ -28,6 +28,7 @@
 #include <boost/spirit/include/qi.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <variant>
@@ -142,6 +143,12 @@ struct MakeVariableExpression {
 
 inline phx::function<MakeVariableExpression> MakeVariable;
 
+// Operator codes are the source characters, with one exception: 'X' stands
+// for bitwise XOR. QASM2 spells exponentiation '^' and QASM3 spells it '**'
+// while giving '^' to bitwise XOR, so the two meanings cannot share a code -
+// '^' is kept for exponentiation (built by both the QASM2 '^' rule and the
+// '**' rule) and XOR gets its own. Which node is built is decided by the
+// grammar, per language version; see `factor2`/`expression` in qasm.h.
 class BinaryOperator : public AbstractSyntaxTree {
  public:
   template <typename L, typename R>
@@ -160,6 +167,9 @@ class BinaryOperator : public AbstractSyntaxTree {
         return left->Eval() / right->Eval();
       case '^':
         return pow(left->Eval(), right->Eval());
+      case 'X':
+        return static_cast<double>(AsInteger(left->Eval()) ^
+                                   AsInteger(right->Eval()));
       default:
         throw std::invalid_argument("Unknown binary operator");
     }
@@ -180,6 +190,9 @@ class BinaryOperator : public AbstractSyntaxTree {
         return left->Eval(variables) / right->Eval(variables);
       case '^':
         return pow(left->Eval(variables), right->Eval(variables));
+      case 'X':
+        return static_cast<double>(AsInteger(left->Eval(variables)) ^
+                                   AsInteger(right->Eval(variables)));
       default:
         throw std::invalid_argument("Unknown binary operator");
     }
@@ -188,6 +201,29 @@ class BinaryOperator : public AbstractSyntaxTree {
   }
 
  private:
+  // Bitwise XOR is only defined on integers, but every value in this
+  // expression tree is a double. A non-integral or out-of-range operand is
+  // rejected by name rather than truncated: truncating would turn e.g.
+  // `rx(0.5 ^ 1)` into a silently wrong rotation angle, which is exactly the
+  // failure mode QASM3's '^' was introducing here in the first place.
+  static long long AsInteger(double value) {
+    const double rounded = std::round(value);
+
+    if (std::abs(value - rounded) > 1e-9)
+      throw std::invalid_argument(
+          "Bitwise XOR ('^') requires integer operands, got: " +
+          std::to_string(value));
+
+    // The magnitude bound keeps the cast below defined; anything near it is
+    // far outside the range of a meaningful gate parameter anyway.
+    if (std::abs(rounded) > 4.5e15)
+      throw std::invalid_argument(
+          "Bitwise XOR ('^') operand is out of the supported integer range: " +
+          std::to_string(value));
+
+    return static_cast<long long>(rounded);
+  }
+
   char op;
   AbstractSyntaxTreePtr left, right;
 };

@@ -160,8 +160,9 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
                        oss.str().c_str());
   }
   if (config.pp_pauli_weight_threshold) {
-    network->Configure("pauli_propagator_pauli_weight_threshold",
-                       std::to_string(*config.pp_pauli_weight_threshold).c_str());
+    network->Configure(
+        "pauli_propagator_pauli_weight_threshold",
+        std::to_string(*config.pp_pauli_weight_threshold).c_str());
   }
   if (config.pp_steps_between_trims) {
     network->Configure("pauli_propagator_steps_between_trims",
@@ -202,19 +203,19 @@ std::vector<std::string> ParseObservables(const nb::object& observables) {
 // Apply classical readout error to a counts map (post-measurement channel).
 // For each shot in each bitstring, flip bits according to per-qubit rates.
 static void apply_readout_error_to_counts(
-    std::unordered_map<std::string, size_t> &counts,
-    const noise::NoiseModel &nm, std::mt19937 &rng) {
+    std::unordered_map<std::string, size_t>& counts,
+    const noise::NoiseModel& nm, std::mt19937& rng) {
   if (!nm.has_readout_error()) return;
 
   std::uniform_real_distribution<double> dist(0.0, 1.0);
   std::unordered_map<std::string, size_t> new_counts;
 
-  for (const auto &[bitstring, count] : counts) {
+  for (const auto& [bitstring, count] : counts) {
     for (size_t shot = 0; shot < count; ++shot) {
       std::string noisy_bs = bitstring;
       for (size_t i = 0; i < noisy_bs.size(); ++i) {
         int qubit_idx = static_cast<int>(i);
-        const auto *re = nm.get_readout_error(qubit_idx);
+        const auto* re = nm.get_readout_error(qubit_idx);
         if (!re) continue;
         double r = dist(rng);
         if (noisy_bs[i] == '0' && r < re->p_meas1_prep0)
@@ -271,8 +272,7 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
   py_result["method"] = (int)network->GetLastSimulationType();
 
   size_t max_bond_dim = network->GetCurrentMaxBondDimension();
-  if (max_bond_dim > 0)
-    py_result["max_bond_dim_reached"] = max_bond_dim;
+  if (max_bond_dim > 0) py_result["max_bond_dim_reached"] = max_bond_dim;
 
   return py_result;
 }
@@ -611,8 +611,7 @@ nb::dict incremental_evolve_core(
     std::shared_ptr<Circuits::Circuit<double>> init_circuit,
     std::shared_ptr<Circuits::Circuit<double>> trotter_step,
     const std::vector<int>& measure_at_steps,
-    const std::vector<std::string>& paulis,
-    const SimulatorConfig& config) {
+    const std::vector<std::string>& paulis, const SimulatorConfig& config) {
   if (!init_circuit) throw nb::value_error("init_circuit is null.");
   if (!trotter_step) throw nb::value_error("trotter_step is null.");
   if (measure_at_steps.empty())
@@ -621,8 +620,8 @@ nb::dict incremental_evolve_core(
   // Determine qubit count from circuits and observables
   int num_qubits =
       std::max(1, static_cast<int>(init_circuit->GetMaxQubitIndex()) + 1);
-  num_qubits = std::max(
-      num_qubits, static_cast<int>(trotter_step->GetMaxQubitIndex()) + 1);
+  num_qubits = std::max(num_qubits,
+                        static_cast<int>(trotter_step->GetMaxQubitIndex()) + 1);
   for (const auto& p : paulis)
     num_qubits = std::max(num_qubits, (int)p.length());
 
@@ -642,7 +641,8 @@ nb::dict incremental_evolve_core(
 
   auto network = ConfigureNetwork(sim.handle, config);
   if (!network)
-    throw std::runtime_error("incremental_evolve: failed to configure network.");
+    throw std::runtime_error(
+        "incremental_evolve: failed to configure network.");
 
   // Simulator and simulation types need to be set explicitely.
   // ConfigureNetwork returns a dummy QCSim MPS simulator, backend must be set
@@ -667,7 +667,8 @@ nb::dict incremental_evolve_core(
   // Execute initial circuit (non-measurement gates) — release GIL
   {
     nb::gil_scoped_release release;
-    init_circuit->ExecuteNonMeasurements(simulator, opState, &current_max_bond_dim);
+    init_circuit->ExecuteNonMeasurements(simulator, opState,
+                                         &current_max_bond_dim);
   }
 
   int current_step = 0;
@@ -680,7 +681,8 @@ nb::dict incremental_evolve_core(
     {
       nb::gil_scoped_release release;
       for (int s = 0; s < delta; ++s) {
-        trotter_step->ExecuteNonMeasurements(simulator, opState, &current_max_bond_dim);
+        trotter_step->ExecuteNonMeasurements(simulator, opState,
+                                             &current_max_bond_dim);
       }
     }
     current_step = target_step;
@@ -695,8 +697,6 @@ nb::dict incremental_evolve_core(
     all_expectations.append(step_exp);
     steps_measured.append(target_step);
     bond_dim_evolution.append(current_max_bond_dim);
-
-
   }
 
   auto end = std::chrono::high_resolution_clock::now();
@@ -704,8 +704,7 @@ nb::dict incremental_evolve_core(
   nb::dict py_result;
   py_result["expectation_values"] = all_expectations;
   py_result["steps"] = steps_measured;
-  py_result["time_taken"] =
-      std::chrono::duration<double>(end - start).count();
+  py_result["time_taken"] = std::chrono::duration<double>(end - start).count();
   py_result["simulator"] = (int)config.simulator_type;
   py_result["method"] = (int)config.simulation_type;
 
@@ -1621,18 +1620,29 @@ NB_MODULE(maestro, m) {
   // --- QASM Tools ---
   nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
       .def(nb::init<>())
-      .def("parse_and_translate",
-           [](qasm::QasmToCirc<double>& self, const std::string& qasm_str) {
-             auto circuit = self.ParseAndTranslate(qasm_str);
-             if (self.Failed() || !circuit) {
-               throw nb::value_error(
-                   ("Failed to parse QASM string: " + self.GetErrorMessage())
-                       .c_str());
-             }
-             return circuit;
-           })
+      .def(
+          "parse_and_translate",
+          [](qasm::QasmToCirc<double>& self, const std::string& qasm_str,
+             const std::unordered_map<std::string, double>& params) {
+            auto circuit = self.ParseAndTranslate(qasm_str, params);
+            if (self.Failed() || !circuit) {
+              throw nb::value_error(
+                  ("Failed to parse QASM string: " + self.GetErrorMessage())
+                      .c_str());
+            }
+            return circuit;
+          },
+          "qasm_str"_a, "params"_a = std::unordered_map<std::string, double>{},
+          "Parse an OpenQASM string and translate it into a circuit.\n\n"
+          "Args:\n"
+          "    qasm_str: The QASM program text.\n"
+          "    params: Optional dict binding QASM3 `input` declarations "
+          "(str -> float) at parse time.")
       .def("failed", &qasm::QasmToCirc<double>::Failed)
-      .def("get_error_message", &qasm::QasmToCirc<double>::GetErrorMessage);
+      .def("get_error_message", &qasm::QasmToCirc<double>::GetErrorMessage)
+      .def("get_inputs", &qasm::QasmToCirc<double>::GetInputs,
+           "The names declared by QASM3 `input` statements, in declaration "
+           "order.");
 
   // --- Module Level Convenience Functions ---
 
@@ -1694,13 +1704,14 @@ NB_MODULE(maestro, m) {
                                        measure_at_steps,
                                        ParseObservables(observables), config);
       },
-      "init_circuit"_a, "trotter_step"_a, "measure_at_steps"_a,
-      "observables"_a, "config"_a = SimulatorConfig{},
+      "init_circuit"_a, "trotter_step"_a, "measure_at_steps"_a, "observables"_a,
+      "config"_a = SimulatorConfig{},
       "Incremental time evolution with persistent simulator state.\n\n"
       "Creates a single simulator, executes init_circuit once, then applies\n"
       "trotter_step incrementally. At each step in measure_at_steps, computes\n"
       "expectation values for the given observables without re-simulating\n"
-      "from scratch. Cost: O(total_steps) instead of O(sum of step indices).\n\n"
+      "from scratch. Cost: O(total_steps) instead of O(sum of step "
+      "indices).\n\n"
       "Args:\n"
       "    init_circuit: Circuit preparing the initial state.\n"
       "    trotter_step: Circuit for one Trotter step.\n"
@@ -1966,8 +1977,8 @@ NB_MODULE(maestro, m) {
            "    after_2q: If True (default), inject after 2Q gates.\n\n"
            "Example: nm.set_correlated_ar1(0, phi=0.135, sigma_eta=2.35e-3)")
       .def("set_correlated_ou", &noise::NoiseModel::set_correlated_ou,
-           "qubit"_a, "sigma"_a, "alpha"_a, "gate_time"_a,
-           "after_1q"_a = true, "after_2q"_a = true,
+           "qubit"_a, "sigma"_a, "alpha"_a, "gate_time"_a, "after_1q"_a = true,
+           "after_2q"_a = true,
            "Set correlated noise from Ornstein-Uhlenbeck parameters.\n\n"
            "OU: dX = -theta*X*dt + sigma*dW, discretized as AR(1).\n"
            "  theta = 1/(alpha * gate_time)\n"
@@ -1982,17 +1993,16 @@ NB_MODULE(maestro, m) {
            "    after_2q: If True (default), inject after 2Q gates.\n\n"
            "Example: nm.set_correlated_ou(0, sigma=15.0, alpha=0.5, "
            "gate_time=100e-9)")
-      .def("set_all_correlated_ou",
-           &noise::NoiseModel::set_all_correlated_ou,
+      .def("set_all_correlated_ou", &noise::NoiseModel::set_all_correlated_ou,
            "num_qubits"_a, "sigma"_a, "alpha"_a, "gate_time"_a,
            "after_1q"_a = true, "after_2q"_a = true,
            "Set identical OU correlated noise on qubits [0, num_qubits).\n\n"
            "Example: nm.set_all_correlated_ou(20, sigma=15.0, alpha=0.5, "
            "gate_time=100e-9)")
       .def("set_all_correlated_from_power",
-           &noise::NoiseModel::set_all_correlated_from_power,
-           "num_qubits"_a, "power"_a, "alpha"_a, "gate_time"_a,
-           "after_1q"_a = true, "after_2q"_a = true,
+           &noise::NoiseModel::set_all_correlated_from_power, "num_qubits"_a,
+           "power"_a, "alpha"_a, "gate_time"_a, "after_1q"_a = true,
+           "after_2q"_a = true,
            "Set correlated noise from total noise power.\n\n"
            "P_tot = N * sigma^2 * pi * alpha * gate_time\n"
            "Derives sigma from P_tot and sets OU noise on all qubits.\n\n"
@@ -2011,11 +2021,11 @@ NB_MODULE(maestro, m) {
       .def("set_t1", &noise::NoiseModel::set_t1, "qubit"_a, "gamma"_a,
            "Set per-gate T1 decay probability. After each gate on this "
            "qubit, with probability gamma, the qubit resets to |0⟩.")
-      .def("set_all_t1", &noise::NoiseModel::set_all_t1,
-           "num_qubits"_a, "gamma"_a,
+      .def("set_all_t1", &noise::NoiseModel::set_all_t1, "num_qubits"_a,
+           "gamma"_a,
            "Set uniform T1 decay probability on qubits [0, num_qubits).")
-      .def("set_t1_from_time", &noise::NoiseModel::set_t1_from_time,
-           "qubit"_a, "gate_time_s"_a, "t1_time_s"_a,
+      .def("set_t1_from_time", &noise::NoiseModel::set_t1_from_time, "qubit"_a,
+           "gate_time_s"_a, "t1_time_s"_a,
            "Set T1 from physical time constants. "
            "gamma = 1 - exp(-gate_time / T1).\n\n"
            "Example: nm.set_t1_from_time(0, gate_time_s=30e-9, "
@@ -2023,9 +2033,10 @@ NB_MODULE(maestro, m) {
       .def("has_t1", &noise::NoiseModel::has_t1,
            "Return True if any T1 parameters have been set.")
       // ── T1 gate-type-specific overrides ──
-      .def("set_t1_2q", &noise::NoiseModel::set_t1_2q, "qubit"_a, "gamma"_a,
-           "Set T1 decay probability applied only after two-qubit gates. "
-           "When set, 2Q gates use this gamma instead of the 'all gates' value.")
+      .def(
+          "set_t1_2q", &noise::NoiseModel::set_t1_2q, "qubit"_a, "gamma"_a,
+          "Set T1 decay probability applied only after two-qubit gates. "
+          "When set, 2Q gates use this gamma instead of the 'all gates' value.")
       .def("set_t1_2q_from_time", &noise::NoiseModel::set_t1_2q_from_time,
            "qubit"_a, "gate_time_s"_a, "t1_time_s"_a,
            "Set T1 for 2Q gates from physical time constants. "
@@ -2035,13 +2046,13 @@ NB_MODULE(maestro, m) {
       .def("get_t1_2q", &noise::NoiseModel::get_t1_2q, "qubit"_a,
            "Get T1 decay probability for 2Q gates (falls back to get_t1 "
            "if not set).")
-      .def("get_t1_for_gate", &noise::NoiseModel::get_t1_for_gate,
-           "qubit"_a, "is_2q"_a,
+      .def("get_t1_for_gate", &noise::NoiseModel::get_t1_for_gate, "qubit"_a,
+           "is_2q"_a,
            "Get gate-type-aware T1: returns t1_2q if is_2q and set, "
            "else t1.")
       // ── Crosstalk ──
-      .def("set_crosstalk", &noise::NoiseModel::set_crosstalk,
-           "q1"_a, "q2"_a, "strength"_a,
+      .def("set_crosstalk", &noise::NoiseModel::set_crosstalk, "q1"_a, "q2"_a,
+           "strength"_a,
            "Set ZZ crosstalk coupling between two qubits. "
            "After a gate on q1, an Rz(strength) is applied on q2, "
            "and vice versa. Symmetric.")
@@ -2057,8 +2068,8 @@ NB_MODULE(maestro, m) {
            "    p_meas0_prep1: P(measure 0 | state was 1) — false negative.\n\n"
            "Example: nm.set_readout_error(0, 0.003, 0.06)")
       .def("set_readout_error_symmetric",
-           &noise::NoiseModel::set_readout_error_symmetric,
-           "qubit"_a, "p_error"_a,
+           &noise::NoiseModel::set_readout_error_symmetric, "qubit"_a,
+           "p_error"_a,
            "Set symmetric readout error (same rate for both directions).\n\n"
            "Example: nm.set_readout_error_symmetric(0, 0.01)")
       .def("set_all_readout_error", &noise::NoiseModel::set_all_readout_error,
@@ -2080,26 +2091,22 @@ NB_MODULE(maestro, m) {
            "Return True if any two-qubit depolarizing has been set.")
       // ── Gate-type-specific noise ──
       .def("set_1q_gate_depolarizing",
-           &noise::NoiseModel::set_1q_gate_depolarizing,
-           "qubit"_a, "p"_a,
+           &noise::NoiseModel::set_1q_gate_depolarizing, "qubit"_a, "p"_a,
            "Set depolarizing noise applied only after single-qubit gates.\n\n"
            "This is separate from set_depolarizing() which applies after ALL "
            "gates.\n\n"
            "Example: nm.set_1q_gate_depolarizing(0, 2.3e-4)")
       .def("set_2q_gate_depolarizing",
-           &noise::NoiseModel::set_2q_gate_depolarizing,
-           "qubit"_a, "p"_a,
+           &noise::NoiseModel::set_2q_gate_depolarizing, "qubit"_a, "p"_a,
            "Set depolarizing noise applied only after two-qubit gates "
            "involving this qubit.\n\n"
            "Example: nm.set_2q_gate_depolarizing(0, 1.8e-3)")
       .def("set_all_1q_gate_depolarizing",
-           &noise::NoiseModel::set_all_1q_gate_depolarizing,
-           "num_qubits"_a, "p"_a,
-           "Set uniform 1Q gate depolarizing on qubits [0, num_qubits).")
+           &noise::NoiseModel::set_all_1q_gate_depolarizing, "num_qubits"_a,
+           "p"_a, "Set uniform 1Q gate depolarizing on qubits [0, num_qubits).")
       .def("set_all_2q_gate_depolarizing",
-           &noise::NoiseModel::set_all_2q_gate_depolarizing,
-           "num_qubits"_a, "p"_a,
-           "Set uniform 2Q gate depolarizing on qubits [0, num_qubits).")
+           &noise::NoiseModel::set_all_2q_gate_depolarizing, "num_qubits"_a,
+           "p"_a, "Set uniform 2Q gate depolarizing on qubits [0, num_qubits).")
       .def("has_1q_gate_noise", &noise::NoiseModel::has_1q_gate_noise,
            "Return True if any 1Q gate-specific noise has been set.")
       .def("has_2q_gate_noise", &noise::NoiseModel::has_2q_gate_noise,
