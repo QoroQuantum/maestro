@@ -106,29 +106,25 @@ class TestQasmParser:
         num_qubits = circuit.num_qubits
         assert num_qubits == 3
 
-    def test_qasm3_parsing_yields_expected_qubit_count(self):
-        """A QASM3 program parses through parse_and_translate and yields the
-        expected num_qubits."""
+    def test_qasm3_parsing_and_execution(self):
+        """Test that QASM3 operations are translated, not merely accepted."""
         qasm = """
         OPENQASM 3.0;
         include "stdgates.inc";
         qubit[3] q;
-        bit[3] c;
-        h q[0];
+        x q[0];
         cx q[0], q[1];
         cx q[1], q[2];
-        c[0] = measure q[0];
         """
 
         parser = maestro.QasmToCirc()
         circuit = parser.parse_and_translate(qasm)
-        assert circuit is not None
         assert circuit.num_qubits == 3
+        result = circuit.estimate("ZZZ")
+        assert result["expectation_values"][0] == pytest.approx(-1.0, abs=1e-6)
 
-    def test_params_dict_is_actually_consumed(self):
-        """A parameterised program with params={"theta": 0.7} must produce
-        different results from params={"theta": 1.9} - this is what proves
-        the dict is consumed rather than ignored."""
+    def test_input_binding_changes_circuit_result(self):
+        """Test that different input bindings produce different circuits."""
         qasm = """
         OPENQASM 3.0;
         input float[64] theta;
@@ -140,16 +136,33 @@ class TestQasmParser:
 
         parser_a = maestro.QasmToCirc()
         circuit_a = parser_a.parse_and_translate(qasm, {"theta": 0.7})
-        assert circuit_a is not None
 
         parser_b = maestro.QasmToCirc()
         circuit_b = parser_b.parse_and_translate(qasm, {"theta": 1.9})
-        assert circuit_b is not None
 
         exp_a = circuit_a.estimate("Z")
         exp_b = circuit_b.estimate("Z")
-        assert exp_a['expectation_values'][0] != pytest.approx(
-            exp_b['expectation_values'][0], abs=1e-6)
+        assert exp_a["expectation_values"][0] != pytest.approx(
+            exp_b["expectation_values"][0], abs=1e-6)
+
+    def test_input_binding_accepts_params_keyword(self):
+        """Test the documented keyword form for input bindings."""
+        parser = maestro.QasmToCirc()
+        circuit = parser.parse_and_translate(
+            "OPENQASM 3.0; input float theta; qubit q; rx(theta) q;",
+            params={"theta": 3.141592653589793},
+        )
+
+        result = circuit.estimate("Z")
+        assert result["expectation_values"][0] == pytest.approx(-1.0, abs=1e-6)
+
+    def test_invalid_typed_input_binding_reaches_python(self):
+        parser = maestro.QasmToCirc()
+        with pytest.raises(ValueError, match="boolean"):
+            parser.parse_and_translate(
+                "OPENQASM 3.0; input bool enabled; qubit q; rx(enabled) q;",
+                {"enabled": 0.5},
+            )
 
     def test_get_inputs_returns_declared_names(self):
         """get_inputs() returns the declared input names, in declaration
@@ -165,20 +178,32 @@ class TestQasmParser:
         parser.parse_and_translate(qasm, {"theta": 0.5, "shots": 10.0})
         assert parser.get_inputs() == ["theta", "shots"]
 
-    def test_single_argument_call_still_works_for_qasm2(self):
-        """Single-argument parse_and_translate(qasm) still works for a QASM2
-        program - backward compatibility."""
+    def test_unbound_input_still_reports_required_names(self):
+        """Test input discovery after parsing reports an unbound value."""
+        parser = maestro.QasmToCirc()
         qasm = """
-        OPENQASM 2.0;
-        include "qelib1.inc";
-        qreg q[1];
-        h q[0];
+        OPENQASM 3.0;
+        input float theta;
+        input int shots;
+        qubit q;
+        rx(theta) q;
         """
 
+        with pytest.raises(ValueError, match="theta"):
+            parser.parse_and_translate(qasm)
+
+        assert parser.get_inputs() == ["theta", "shots"]
+
+    def test_reusing_parser_clears_inputs(self):
+        """Test that input metadata belongs only to the latest parse."""
         parser = maestro.QasmToCirc()
-        circuit = parser.parse_and_translate(qasm)
-        assert circuit is not None
-        assert circuit.num_qubits == 1
+        parser.parse_and_translate(
+            "OPENQASM 3.0; input float theta; qubit q; rx(theta) q;",
+            {"theta": 0.5},
+        )
+        assert parser.get_inputs() == ["theta"]
+
+        parser.parse_and_translate("OPENQASM 2.0; qreg q[1]; x q[0];")
         assert parser.get_inputs() == []
 
     def test_unsupported_construct_raises_naming_it(self):
@@ -193,6 +218,12 @@ class TestQasmParser:
         parser = maestro.QasmToCirc()
         with pytest.raises(ValueError, match="'for' loops"):
             parser.parse_and_translate(qasm)
+
+    def test_semantic_validation_errors_reach_python(self):
+        """Shared parser validation is surfaced as the existing ValueError."""
+        parser = maestro.QasmToCirc()
+        with pytest.raises(ValueError, match="index 1 is out of range"):
+            parser.parse_and_translate("OPENQASM 3.0;\nqubit q;\nx q[1];\n")
 
 
 @pytest.mark.skip(reason="ISimulator is not yet exposed as a nanobind type")

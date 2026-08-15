@@ -7,7 +7,7 @@
  *
  * Classes for the qasm parser and interpreter.
  *
- * It's supposed to support only open qasm 2.0.
+ * Supports the static-circuit subset of OpenQASM 2 and OpenQASM 3.
  */
 
 #pragma once
@@ -15,10 +15,22 @@
 #ifndef _SYNTAXTREE_H_
 #define _SYNTAXTREE_H_
 
+#include <algorithm>
+
 #include "../Circuit/Factory.h"
 #include "SimpleOps.h"
 
 namespace qasm {
+inline double EvaluateGateParameter(
+    const Expression &parameter,
+    const std::unordered_map<std::string, double> &variables) {
+  const double value = parameter.Eval(variables);
+  if (!std::isfinite(value))
+    throw std::invalid_argument("Gate parameters must be finite, got: " +
+                                std::to_string(value));
+  return value;
+}
+
 struct AddGateExpr : public AbstractSyntaxTree {
   struct result {
     typedef QoperationStatement type;
@@ -40,7 +52,8 @@ struct AddGateExpr : public AbstractSyntaxTree {
 
       stmt.gateType = Circuits::QuantumGateType::kUGateType;
 
-      for (const auto &p : params) stmt.parameters.push_back(p.Eval(variables));
+      for (const auto &p : params)
+        stmt.parameters.push_back(EvaluateGateParameter(p, variables));
 
       stmt.qubits = ParseQubits(arg, qreg_map);
     } else if (std::holds_alternative<CXGateCallType>(uop)) {
@@ -213,7 +226,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
         const MixedListType &args = boost::fusion::at_c<2>(gate);
 
         for (const auto &p : params)
-          stmt.parameters.push_back(p.Eval(variables));
+          stmt.parameters.push_back(EvaluateGateParameter(p, variables));
 
         // Case-sensitive, exactly as in the parameterless branch above: `rx`
         // is the builtin rotation and `RX` is not a gate at all unless the
@@ -373,27 +386,7 @@ struct AddGateExpr : public AbstractSyntaxTree {
   static std::vector<int> ParseQubits(
       const ArgumentType &arg,
       const std::unordered_map<std::string, IndexedId> &qreg_map) {
-    std::vector<int> qubits;
-    // there are two possibilities here, either it's an indexed id or a simple
-    // id
-    if (std::holds_alternative<IndexedId>(arg)) {
-      const IndexedId &indexedId = std::get<IndexedId>(arg);
-      auto it = qreg_map.find(indexedId.id);
-      if (it != qreg_map.end()) {
-        int base = it->second.base;
-        qubits.push_back(base + indexedId.index);
-      }
-    } else if (std::holds_alternative<std::string>(arg)) {
-      const std::string &id = std::get<std::string>(arg);
-      auto it = qreg_map.find(id);
-      if (it != qreg_map.end()) {
-        int base = it->second.base;
-        int size = static_cast<int>(std::round(it->second.Eval()));
-        for (int i = 0; i < size; ++i) qubits.push_back(base + i);
-      }
-    }
-
-    return qubits;
+    return ResolveRegisterOperand(arg, qreg_map, "quantum");
   }
 
   static bool IsSuppportedNoParamGate(const std::string &gateName) {
@@ -592,10 +585,6 @@ struct AddModifiedGateExpr : public AbstractSyntaxTree {
     std::string canonicalName = gateName;
     NormalizeGateName(canonicalName);
 
-    // The identity gate stays the identity whatever is applied to it, so it
-    // is dropped before the tables below, which do not list it.
-    if (canonicalName == "id") return NoOpStatement();
-
     // `ctrl(n) @` contributes n controls, not one, so the count is summed
     // rather than the modifiers counted - this is what makes `ctrl(3) @ x`
     // report the multi-control limit below instead of being lowered as a
@@ -610,6 +599,17 @@ struct AddModifiedGateExpr : public AbstractSyntaxTree {
           "ctrl @ with more than two controls is not supported, " +
           std::to_string(nrControls) +
           " were requested for the gate: " + canonicalName);
+
+    // Identity remains a no-op under every modifier, but its call still has
+    // to satisfy the same operand, arity, broadcast-width and parameter
+    // checks as any other modified gate. Validate through the equivalent
+    // one-, two- or three-qubit gate shape before dropping it.
+    if (canonicalName == "id") {
+      static constexpr const char *validationGates[] = {"id", "cx", "ccx"};
+      addGate(MakeCall(validationGates[nrControls], params, args), qreg_map,
+              opaqueGates, definedGates);
+      return NoOpStatement();
+    }
 
     // The number of times the rewritten gate is emitted; pow(k) on a gate
     // whose angle cannot be scaled turns into repetition instead.
@@ -734,7 +734,7 @@ struct AddModifiedGateExpr : public AbstractSyntaxTree {
       const auto &gate = std::get<UGateCallType>(uop);
       gateName = "u";
       for (const auto &p : boost::fusion::at_c<0>(gate))
-        params.push_back(p.Eval(variables));
+        params.push_back(EvaluateGateParameter(p, variables));
       args.push_back(boost::fusion::at_c<1>(gate));
     } else if (std::holds_alternative<CXGateCallType>(uop)) {
       const auto &gate = std::get<CXGateCallType>(uop);
@@ -751,7 +751,7 @@ struct AddModifiedGateExpr : public AbstractSyntaxTree {
         const auto &gate = std::get<ExpGatecallType>(gateCall);
         gateName = boost::fusion::at_c<0>(gate);
         for (const auto &p : boost::fusion::at_c<1>(gate))
-          params.push_back(p.Eval(variables));
+          params.push_back(EvaluateGateParameter(p, variables));
         args = boost::fusion::at_c<2>(gate);
       }
     }
@@ -834,6 +834,12 @@ struct AddModifiedGateExpr : public AbstractSyntaxTree {
 
   static void ApplyPow(double exponent, std::string &gateName,
                        std::vector<double> &params, int &repetitions) {
+    if (!std::isfinite(exponent))
+      throw std::invalid_argument(
+          "pow(k) @ requires a finite exponent for "
+          "the gate: " +
+          gateName);
+
     if (exponent < 0.) {
       // g^(-k) is (g^-1)^k.
       ApplyInv(gateName, params);
@@ -885,6 +891,11 @@ struct AddModifiedGateExpr : public AbstractSyntaxTree {
         {"sdg", -M_PI / 2.},
         {"t", M_PI / 4.},
         {"tdg", -M_PI / 4.}};
+
+    if (gateName == "gphase")
+      throw std::invalid_argument(
+          "Controlled global phase ('ctrl @ gphase') is not supported by "
+          "the Circuit IR.");
 
     if (gateName == "u") {
       // cu takes the same (theta, phi, lambda[, gamma]) parameters as u; a
@@ -1012,6 +1023,61 @@ struct RejectQasm3OnlyGateExpr : public AbstractSyntaxTree {
 
 inline phx::function<RejectQasm3OnlyGateExpr> RejectQasm3OnlyGate;
 
+template <class Time>
+inline std::shared_ptr<Circuits::ICondition> MakeEqualCondition(
+    const std::vector<int> &conditionBits,
+    const std::vector<bool> &expectedValues) {
+  if (conditionBits.size() != expectedValues.size())
+    throw std::invalid_argument(
+        "Condition bit indices and expected values must have the same width.");
+
+  std::vector<size_t> ind;
+  ind.reserve(conditionBits.size());
+  for (const int bit : conditionBits) ind.push_back(static_cast<size_t>(bit));
+
+  return Circuits::CircuitFactory<Time>::CreateEqualCondition(ind,
+                                                              expectedValues);
+}
+
+inline std::vector<bool> DecodeRegisterCondition(
+    const std::string &registerName, int value, size_t width) {
+  if (value < 0)
+    throw std::invalid_argument("Condition value for classical register '" +
+                                registerName + "' must be non-negative.");
+
+  const auto unsignedValue = static_cast<unsigned int>(value);
+  if (width < std::numeric_limits<unsigned int>::digits &&
+      unsignedValue >= (1u << width))
+    throw std::invalid_argument("Condition value " + std::to_string(value) +
+                                " does not fit classical register '" +
+                                registerName + "' of width " +
+                                std::to_string(width) + ".");
+
+  std::vector<bool> expected(width, false);
+  auto remaining = unsignedValue;
+  for (size_t bit = 0; bit < width && remaining != 0; ++bit) {
+    expected[bit] = (remaining & 1u) != 0;
+    remaining >>= 1;
+  }
+  return expected;
+}
+
+// Measurement/Reset keep their own cbits (the targets) and take the condition
+// in condBits; everything else becomes a CondUop conditioned via cbits.
+inline void ApplyCondition(StatementType &stmt,
+                           const std::vector<int> &conditionBits,
+                           const std::vector<bool> &expectedValues) {
+  stmt.condExpected = expectedValues;
+  if (stmt.opType == QoperationStatement::OperationType::Measurement ||
+      stmt.opType == QoperationStatement::OperationType::Reset) {
+    stmt.condBits = conditionBits;
+    return;
+  }
+
+  stmt.opType = QoperationStatement::OperationType::CondUop;
+  stmt.cbits = conditionBits;
+}
+
 struct AddCondQopExpr : public AbstractSyntaxTree {
   struct result {
     typedef QoperationStatement type;
@@ -1032,17 +1098,11 @@ struct AddCondQopExpr : public AbstractSyntaxTree {
 
     stmt = op;
 
-    stmt.opType = QoperationStatement::OperationType::CondUop;
-    stmt.condValue = condVal;
-
-    if (creg_map.find(condId) == creg_map.end())
-      throw std::invalid_argument("Condition register not found: " + condId);
-    else {
-      const IndexedId &condCreg = creg_map.at(condId);
-
-      for (int c = 0; c < condCreg.Eval(); ++c)
-        stmt.cbits.push_back(condCreg.base + c);
-    }
+    const std::vector<int> conditionBits =
+        ResolveRegisterOperand(ArgumentType(condId), creg_map, "classical");
+    ApplyCondition(
+        stmt, conditionBits,
+        DecodeRegisterCondition(condId, condVal, conditionBits.size()));
 
     return stmt;
   }
@@ -1050,33 +1110,53 @@ struct AddCondQopExpr : public AbstractSyntaxTree {
 
 inline phx::function<AddCondQopExpr> AddCondQop;
 
-// Builds the CondUop statements for one braced conditional body, given an
-// already-resolved single classical bit and the boolean value it must equal
-// for these statements to fire. Shared by the if-branch and (when present)
-// the else-branch of a bit-form condition, since the two only differ in
-// which expected value they condition on (see AddCondQopBracedExpr).
+// Conditions one braced-conditional body on the given bits. Shared by the
+// if-branch and the else-branch, which differ only in the expected values.
 struct AddBitCondBranchExpr : public AbstractSyntaxTree {
   struct result {
     typedef std::vector<QoperationStatement> type;
   };
 
-  std::vector<QoperationStatement> operator()(const std::vector<QopType> &body,
-                                              int absoluteBit,
-                                              bool expectedValue) const {
+  std::vector<QoperationStatement> operator()(
+      const std::vector<QopType> &body, const std::vector<int> &absoluteBits,
+      const std::vector<bool> &expectedValues) const {
     std::vector<QoperationStatement> stmts;
     stmts.reserve(body.size());
 
     for (const auto &bodyStmt : body) {
       StatementType stmt = bodyStmt;
-      stmt.opType = QoperationStatement::OperationType::CondUop;
-      stmt.cbits = {absoluteBit};
-      stmt.condValue = expectedValue ? 1 : 0;
+      ApplyCondition(stmt, absoluteBits, expectedValues);
       stmts.push_back(stmt);
     }
 
     return stmts;
   }
 };
+
+inline void RejectPredicateMutationBeforeReevaluation(
+    const std::vector<QopType> &body, const std::vector<int> &conditionBits,
+    bool followedByElse, std::string_view branchName) {
+  for (size_t statementIndex = 0; statementIndex < body.size();
+       ++statementIndex) {
+    const auto &stmt = body[statementIndex];
+    if (stmt.opType != QoperationStatement::OperationType::Measurement)
+      continue;
+
+    const bool writesPredicate =
+        std::any_of(stmt.cbits.begin(), stmt.cbits.end(), [&](int targetBit) {
+          return std::find(conditionBits.begin(), conditionBits.end(),
+                           targetBit) != conditionBits.end();
+        });
+    const bool predicateWillBeReadAgain =
+        statementIndex + 1 < body.size() || followedByElse;
+    if (writesPredicate && predicateWillBeReadAgain)
+      throw std::invalid_argument(
+          "A measurement in the " + std::string(branchName) +
+          " branch changes a predicate bit before the braced condition is "
+          "evaluated again. The Circuit IR cannot preserve the source-level "
+          "single evaluation of that predicate.");
+  }
+}
 
 // A QASM3 braced conditional, `if ( <condHead> ) { <body> }`, with an
 // optional `else { <elseBody> }`. `condHead` (see CondHeadType) already
@@ -1091,9 +1171,9 @@ struct AddBitCondBranchExpr : public AbstractSyntaxTree {
 //    in Circuit/Factory.h) - no not-equal primitive exists to build the
 //    else-branch's condition, and adding one is out of scope here.
 //
-//  - Bit form (`c[0]` / `!c[0]`): both branches are expressible with
-//    CreateEqualCondition on the very same bit - the else-branch is just the
-//    complementary expected value - so it is fully supported.
+//  - Bit form (`c[0]` / `!c[0]` / `&&` chain): both branches are expressible
+//    with CreateEqualCondition on the very same bits - the else-branch is just
+//    the complementary expected value, so it is supported for a single bit.
 struct AddCondQopBracedExpr : public AbstractSyntaxTree {
   struct result {
     typedef std::vector<QoperationStatement> type;
@@ -1108,20 +1188,37 @@ struct AddCondQopBracedExpr : public AbstractSyntaxTree {
       const std::unordered_map<std::string, StatementType> &definedGates)
       const {
     if (condHead.isBitForm) {
-      if (creg_map.find(condHead.bit.id) == creg_map.end())
-        throw std::invalid_argument("Condition register not found: " +
-                                    condHead.bit.id);
+      std::vector<int> absoluteBits;
+      std::vector<bool> expectedValues;
+      for (const auto &test : condHead.bits) {
+        absoluteBits.push_back(ResolveRegisterOperand(ArgumentType(test.bit),
+                                                      creg_map, "classical")
+                                   .front());
+        expectedValues.push_back(test.expected);
+      }
 
-      const IndexedId &condCreg = creg_map.at(condHead.bit.id);
-      const int absoluteBit = condCreg.base + condHead.bit.index;
+      RejectPredicateMutationBeforeReevaluation(body, absoluteBits,
+                                                elseBody.has_value(), "if");
+      if (elseBody)
+        RejectPredicateMutationBeforeReevaluation(*elseBody, absoluteBits,
+                                                  false, "else");
 
       AddBitCondBranchExpr addBranch;
       std::vector<QoperationStatement> stmts =
-          addBranch(body, absoluteBit, condHead.bitExpected);
+          addBranch(body, absoluteBits, expectedValues);
 
       if (elseBody) {
+        // Negating a `&&` chain needs an or-of-negations, which
+        // CreateEqualCondition cannot express.
+        if (absoluteBits.size() > 1)
+          throw std::invalid_argument(
+              "'else' on a multi-bit condition (if (... && ...) { ... } else "
+              "{ ... }) is not supported: negating a conjunction would require "
+              "a disjunctive condition, and no such primitive exists.");
+
+        std::vector<bool> elseValues{!expectedValues.front()};
         std::vector<QoperationStatement> elseStmts =
-            addBranch(*elseBody, absoluteBit, !condHead.bitExpected);
+            addBranch(*elseBody, absoluteBits, elseValues);
         stmts.insert(stmts.end(), elseStmts.begin(), elseStmts.end());
       }
 
@@ -1138,19 +1235,14 @@ struct AddCondQopBracedExpr : public AbstractSyntaxTree {
           "single-bit conditions (if (" +
           condHead.regId + "[i]) { ... } else { ... }) support 'else'.");
 
-    std::vector<QoperationStatement> stmts;
-    stmts.reserve(body.size());
+    const std::vector<int> absoluteBits = ResolveRegisterOperand(
+        ArgumentType(condHead.regId), creg_map, "classical");
+    const std::vector<bool> expectedValues = DecodeRegisterCondition(
+        condHead.regId, condHead.regValue, absoluteBits.size());
+    RejectPredicateMutationBeforeReevaluation(body, absoluteBits, false, "if");
 
-    // Delegate the per-statement cbit population to the existing
-    // AddCondQopExpr rather than duplicating its logic here.
-    AddCondQopExpr addCondQop;
-    for (const auto &bodyStmt : body) {
-      CondOpType singleCondOp(condHead.regId, condHead.regValue, bodyStmt);
-      stmts.push_back(addCondQop(singleCondOp, qreg_map, creg_map, opaqueGates,
-                                 definedGates));
-    }
-
-    return stmts;
+    AddBitCondBranchExpr addBranch;
+    return addBranch(body, absoluteBits, expectedValues);
   }
 };
 
@@ -1206,10 +1298,25 @@ struct Program {
           qs.push_back({static_cast<Types::qubit_t>(stmt.qubits[i]),
                         static_cast<size_t>(stmt.cbits[i])});
 
-        auto measureOp = Circuits::CircuitFactory<Time>::CreateMeasurement(qs);
-        circuit->AddOperation(measureOp);
+        auto measureOp =
+            std::make_shared<Circuits::MeasurementOperation<Time>>(qs);
+
+        if (stmt.condBits.empty()) {
+          circuit->AddOperation(measureOp);
+          break;
+        }
+
+        circuit->AddOperation(
+            Circuits::CircuitFactory<Time>::CreateConditionalMeasurement(
+                measureOp,
+                MakeEqualCondition<Time>(stmt.condBits, stmt.condExpected)));
       } break;
       case QoperationStatement::OperationType::Reset: {
+        if (!stmt.condBits.empty())
+          throw std::invalid_argument(
+              "Conditional 'reset' (if ( ... ) reset q[i];) is not supported: "
+              "the circuit representation has no conditional reset operation.");
+
         Types::qubits_vector qubits(stmt.qubits.begin(), stmt.qubits.end());
         auto resetOp = Circuits::CircuitFactory<Time>::CreateReset(qubits);
         circuit->AddOperation(resetOp);
@@ -1299,9 +1406,6 @@ struct Program {
             stmt.qubitsDecl.empty())
           break;
 
-        unsigned long long int condValue =
-            static_cast<unsigned long long int>(stmt.condValue);
-
         if (stmt.gateType != Circuits::QuantumGateType::kNone) {
           // can add more than one gate here depending on what's in qubits
           double param1 = stmt.parameters.size() > 0 ? stmt.parameters[0] : 0;
@@ -1315,18 +1419,8 @@ struct Program {
                 "Uop operation: number of qubits does "
                 "not match the gate requirements.");
 
-          std::vector<size_t> ind;
-          std::vector<bool> condBits;
-
-          for (size_t i = 0; i < stmt.cbits.size(); ++i) {
-            ind.push_back(static_cast<size_t>(stmt.cbits[i]));
-            condBits.push_back((condValue & 1) == 1);
-            condValue >>= 1;
-          }
-
           const auto condition =
-              Circuits::CircuitFactory<Time>::CreateEqualCondition(ind,
-                                                                   condBits);
+              MakeEqualCondition<Time>(stmt.cbits, stmt.condExpected);
 
           for (int pos = 0; pos < static_cast<int>(stmt.qubits.size());
                pos += nrQubits) {
@@ -1382,7 +1476,7 @@ struct Program {
 
               // make each of them conditioned on the original condition
               gateStmt.opType = QoperationStatement::OperationType::CondUop;
-              gateStmt.condValue = static_cast<int>(condValue);
+              gateStmt.condExpected = stmt.condExpected;
               gateStmt.cbits = stmt.cbits;
 
               AddToCircuit(circuit, gateStmt, opaqueGates, definedGates);
@@ -1392,6 +1486,8 @@ struct Program {
       } break;
       case QoperationStatement::OperationType::Comment:
       case QoperationStatement::OperationType::Declaration:
+      // Barriers are validated during parsing but intentionally erased here
+      // because the Circuit IR has no barrier operation.
       case QoperationStatement::OperationType::Barrier:
       case QoperationStatement::OperationType::OpaqueDecl:
       case QoperationStatement::OperationType::

@@ -7,7 +7,7 @@
  *
  * Classes for the qasm parser and interpreter.
  *
- * Not fully implemented yet, it's supposed to support only open qasm 2.0.
+ * Supports the static-circuit subset of OpenQASM 2 and OpenQASM 3.
  */
 
 #pragma once
@@ -56,14 +56,76 @@ inline void prints(const std::string &s) {
 // existent. Adding it would have implications in circuit execution with the
 // discrete event simulator and also in the transpiler functionality.
 
+template <typename Iterator>
+struct QasmSkipper : qi::grammar<Iterator> {
+  QasmSkipper() : QasmSkipper::base_type(skip) {
+    // Block comments are accepted as whitespace in both dialects, including
+    // before a header, as a harmless compatibility extension.
+    blockComment = qi::lexeme[qi::lit("/*") >> *(qi::char_ - qi::lit("*/")) >>
+                              qi::lit("*/")];
+    skip = ascii::space | blockComment;
+  }
+
+  qi::rule<Iterator> skip;
+  qi::rule<Iterator> blockComment;
+};
+
+struct MakeSupportedVersionExpr {
+  template <typename, typename, typename>
+  struct result {
+    typedef double type;
+  };
+
+  // `VersionSpecifier: [0-9]+ ('.' [0-9]+)?` - the minor version is optional
+  // in QASM3, but QASM2 spells the field as `real`, which is never bare.
+  double operator()(unsigned int major,
+                    const boost::optional<unsigned int> &minor,
+                    bool &isQasm3) const {
+    if (major != 2U && major != 3U)
+      throw std::invalid_argument("Unsupported OpenQASM major version " +
+                                  std::to_string(major) +
+                                  ". Only versions 2.x and 3.x are supported.");
+
+    if (major == 2U && !minor)
+      throw std::invalid_argument(
+          "OpenQASM 2 requires an explicit minor version, as in "
+          "'OPENQASM 2.0;'.");
+
+    isQasm3 = major == 3U;
+    if (!minor) return static_cast<double>(major);
+
+    return std::stod(std::to_string(major) + "." + std::to_string(*minor));
+  }
+};
+
+inline phx::function<MakeSupportedVersionExpr> MakeSupportedVersion;
+
+struct ValidateIncludeExpr {
+  template <typename>
+  struct result {
+    typedef std::string type;
+  };
+
+  std::string operator()(const std::string &includeName) const {
+    if (includeName != "qelib1.inc" && includeName != "stdgates.inc")
+      throw std::invalid_argument(
+          "Unsupported OpenQASM include '" + includeName +
+          "'. Only qelib1.inc and "
+          "stdgates.inc are recognized prelude markers.");
+    return includeName;
+  }
+};
+
+inline phx::function<ValidateIncludeExpr> ValidateInclude;
+
 template <typename Iterator = std::string::iterator,
-          typename Skipper = ascii::space_type>
+          typename Skipper = QasmSkipper<Iterator>>
 struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
   QasmGrammar() : QasmGrammar::base_type{program} {
     version = (qi::omit[qi::lexeme[qi::lit("OPENQASM") >> qi::space]] >>
-               qi::double_ >>
-               ';')[qi::_val = qi::_1,
-                    phx::ref(isQasm3) = (qi::_1 >= 3.0)];
+               qi::lexeme[qi::uint_ >> -('.' >> qi::uint_)] >>
+               ';')[qi::_val = MakeSupportedVersion(qi::_1, qi::_2,
+                                                    phx::ref(isQasm3))];
 
     // Keyword -> diagnostic message table for QASM3 constructs outside our
     // supported subset. Table-driven rather than one rule per keyword, since
@@ -77,8 +139,18 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
         "OpenQASM 3 duration declarations ('duration') are not supported.")(
         "delay", "OpenQASM 3 delay instructions ('delay') are not supported.")(
         "box", "OpenQASM 3 box blocks ('box') are not supported.")(
-        "array",
-        "OpenQASM 3 array declarations ('array') are not supported.");
+        "array", "OpenQASM 3 array declarations ('array') are not supported.")(
+        "output",
+        "OpenQASM 3 output declarations ('output') are not supported.")(
+        "const",
+        "OpenQASM 3 constant declarations ('const') are not supported.")(
+        "extern",
+        "OpenQASM 3 external subroutines ('extern') are not supported.")(
+        "stretch",
+        "OpenQASM 3 stretch declarations ('stretch') are not supported.")(
+        "pragma", "OpenQASM 3 pragma statements are not supported.")(
+        "defcal",
+        "OpenQASM 3 calibration definitions ('defcal') are not supported.");
 
     // The gate names that exist only in OpenQASM 3's stdgates.inc, kept as a
     // symbol table for the same reason unsupportedKeywords is one: the
@@ -90,6 +162,8 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
     comments %= *comment;
     includes %= *include;
 
+    // An absent header intentionally retains the parser's historical QASM2
+    // compatibility mode; an explicit header selects and validates a dialect.
     program = comments >> (-version) >> includes >> statements;
 
     // condOpBraced is tried before the plain `statement` alternative (which
@@ -107,15 +181,18 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
     statement =
         comment[qi::_val = AddComment(qi::_1)] |
         decl[qi::_val = AddDeclaration(qi::_1)] |
-        opaque[qi::_val = AddOpaqueDecl(qi::_1, std::ref(opaqueGates),
-                                        std::ref(qreg_map))] |
+        opaque[qi::_val =
+                   AddOpaqueDecl(qi::_1, std::ref(opaqueGates),
+                                 std::ref(qreg_map), std::ref(declarations))] |
         condOp[qi::_val =
                    AddCondQop(qi::_1, std::ref(qreg_map), std::ref(creg_map),
                               std::ref(opaqueGates), std::ref(definedGates))] |
-        gatedeclfull[qi::_val = AddGateDecl(qi::_1, std::ref(definedGates))] |
-        inputdecl[qi::_val = AddInputDecl(qi::_1, std::ref(inputNames))] |
-        unsupportedConstruct[qi::_val = qi::_1] |
-        qop[qi::_val = qi::_1];
+        gatedeclfull[qi::_val = AddGateDecl(qi::_1, std::ref(definedGates),
+                                            std::ref(declarations))] |
+        inputdecl[qi::_val = AddInputDecl(
+                      qi::_1, std::ref(inputNames), std::ref(declarations),
+                      std::ref(inputBindings), std::ref(inputValues))] |
+        unsupportedConstruct[qi::_val = qi::_1] | qop[qi::_val = qi::_1];
 
     // this is the opaque gate declaration, it will be simply ignored (in 3.0 is
     // supposed to be ignored)
@@ -143,6 +220,8 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
 
     // **************************************************************************************************************************************************************
 
+    // `==` and the `!` below are supported only in conditional heads; they are
+    // intentionally not part of the general expression grammar.
     condOp %= qi::lit("if") >> '(' >> identifier >> qi::lit("==") >> qi::int_ >>
               ')' >> qop;
 
@@ -154,14 +233,21 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
     //   - register comparison: `c == 2`
     //   - negated bit: `!c[0]`   -> bit must equal 0
     //   - bare bit:    `c[0]`    -> bit must equal 1
+    //   - `&&` chain:  `c0[0] && !c1[0]` -> every listed bit must match
     // Register form is tried first only to mirror condOp/condOpBraced's
     // pre-existing ordering; the two are unambiguous regardless of order
     // since '==' vs '[' immediately disambiguate them after `identifier`.
+    condBitTest =
+        (qi::lit('!') >> indexedId)[qi::_val = MakeCondBitTest(qi::_1, false)] |
+        indexedId[qi::_val = MakeCondBitTest(qi::_1, true)];
+
+    // A `&&`-joined chain is what CircToQasm emits for a condition spanning
+    // more than one classical bit, so accepting it here is what makes
+    // circuit -> QASM3 -> circuit round-trip for those conditions.
     condHead =
         (identifier >> qi::lit("==") >>
          qi::int_)[qi::_val = MakeRegCondHead(qi::_1, qi::_2)] |
-        (qi::lit('!') >> indexedId)[qi::_val = MakeBitCondHead(qi::_1, false)] |
-        indexedId[qi::_val = MakeBitCondHead(qi::_1, true)];
+        (condBitTest % qi::lit("&&"))[qi::_val = MakeBitCondHead(qi::_1)];
 
     // QASM3 braced conditional: `if (c == 1) { x q[0]; y q[1]; }`, plus the
     // three additional Qiskit spellings this grammar accepts via condHead:
@@ -212,6 +298,8 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
     // once a later element of the enclosing sequence fails. For unmodified
     // QASM2 those over-long calls were parse errors before and are now
     // reported by AddGateExpr as a qubit-count error instead.
+    // Lowercase `u` and `cx` are retained QASM2 compatibility aliases for the
+    // specification's uppercase `U` and `CX` builtins.
     ugateCall %= (qi::lit("U") | qi::lit("u")) >> '(' >> expList >> ')' >>
                  argument >> !qi::lit(',');
     cxgateCall %=
@@ -282,10 +370,12 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
 
     qregdecl %= (qi::omit[qi::lexeme[qi::lit("qreg") >> qi::space]] >>
                  indexedId)[qi::_val = AddQreg(std::ref(qreg_counter),
-                                               std::ref(qreg_map), qi::_1)];
+                                               std::ref(qreg_map),
+                                               std::ref(declarations), qi::_1)];
     cregdecl %= (qi::omit[qi::lexeme[qi::lit("creg") >> qi::space]] >>
                  indexedId)[qi::_val = AddCreg(std::ref(creg_counter),
-                                               std::ref(creg_map), qi::_1)];
+                                               std::ref(creg_map),
+                                               std::ref(declarations), qi::_1)];
 
     // QASM3 register declarations: the size comes before the name, so we
     // reuse MakeIndexedId with swapped placeholders instead of a new functor.
@@ -298,24 +388,27 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
     qubitdecl =
         qi::eps(phx::ref(isQasm3)) >>
         ((qi::lit("qubit") >> '[' >> qi::int_ >> ']' >>
-          identifier)[qi::_val = AddQreg(std::ref(qreg_counter),
-                                         std::ref(qreg_map),
-                                         MakeIndexedId(qi::_2, qi::_1))] |
-         (qi::omit[qi::lexeme[qi::lit("qubit") >> qi::space]] >>
-          qi::attr(1) >>
-          identifier)[qi::_val = AddQreg(std::ref(qreg_counter),
-                                         std::ref(qreg_map),
-                                         MakeIndexedId(qi::_2, qi::_1))]);
+          identifier)[qi::_val =
+                          AddQreg(std::ref(qreg_counter), std::ref(qreg_map),
+                                  std::ref(declarations),
+                                  MakeIndexedId(qi::_2, qi::_1))] |
+         (qi::omit[qi::lexeme[qi::lit("qubit") >> qi::space]] >> qi::attr(1) >>
+          identifier)[qi::_val =
+                          AddQreg(std::ref(qreg_counter), std::ref(qreg_map),
+                                  std::ref(declarations),
+                                  MakeIndexedId(qi::_2, qi::_1))]);
     bitdecl =
         qi::eps(phx::ref(isQasm3)) >>
         ((qi::lit("bit") >> '[' >> qi::int_ >> ']' >>
-          identifier)[qi::_val = AddCreg(std::ref(creg_counter),
-                                         std::ref(creg_map),
-                                         MakeIndexedId(qi::_2, qi::_1))] |
+          identifier)[qi::_val =
+                          AddCreg(std::ref(creg_counter), std::ref(creg_map),
+                                  std::ref(declarations),
+                                  MakeIndexedId(qi::_2, qi::_1))] |
          (qi::omit[qi::lexeme[qi::lit("bit") >> qi::space]] >> qi::attr(1) >>
-          identifier)[qi::_val = AddCreg(std::ref(creg_counter),
-                                         std::ref(creg_map),
-                                         MakeIndexedId(qi::_2, qi::_1))]);
+          identifier)[qi::_val =
+                          AddCreg(std::ref(creg_counter), std::ref(creg_map),
+                                  std::ref(declarations),
+                                  MakeIndexedId(qi::_2, qi::_1))]);
 
     decl %= (qregdecl | cregdecl | qubitdecl | bitdecl) >> ';';
 
@@ -323,22 +416,20 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
     // before `qop` in `statement`, or gatecall's identifier would match
     // "input" as a gate name. The type keyword and its optional bit-width
     // qualifier ("float[64]", "int[32]", "uint", "bool", "angle", ...) are
-    // accepted and then discarded via qi::omit - only the declared name
-    // survives, since every input value is supplied and consumed as a plain
-    // double regardless of the OpenQASM3 classical type it was declared with.
+    // retained so AddInputDecl can validate and normalize the API's double
+    // carrier before publishing the value to expression evaluation.
     // The type keyword's `!qi::char_(...)` lookahead is wrapped in its own
     // qi::lexeme, like "input"'s own keyword guard above, so a name that
     // merely starts with a type keyword (e.g. "intx") cannot be mistaken for
     // the keyword itself - the lookahead must run before the skipper can eat
     // any whitespace, or it would never see the very next character.
+    inputType %= qi::lexeme[(qi::string("float") | qi::string("int") |
+                             qi::string("uint") | qi::string("bool") |
+                             qi::string("angle")) >>
+                            !qi::char_("a-zA-Z0-9_")];
     inputdecl %= qi::eps(phx::ref(isQasm3)) >>
                  qi::omit[qi::lexeme[qi::lit("input") >> qi::space]] >>
-                 qi::omit[qi::lexeme[(qi::lit("float") | qi::lit("int") |
-                                      qi::lit("uint") | qi::lit("bool") |
-                                      qi::lit("angle")) >>
-                                     !qi::char_("a-zA-Z0-9_")] >>
-                          -('[' >> qi::int_ >> ']')] >>
-                 identifier >> ';';
+                 inputType >> -('[' >> qi::int_ >> ']') >> identifier >> ';';
 
     // QASM3 constructs outside our supported subset. Tried before `qop` in
     // `statement`, or gatecall's identifier would swallow the keyword as a
@@ -501,10 +592,12 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
     // **************************************************************************************************************************************************************
 
     // very basic stuff
-    comment %= qi::lexeme[qi::lit("//") >> *(qi::char_ - qi::eol) >> qi::eol];
+    comment %= qi::lexeme[qi::lit("//") >> *(qi::char_ - qi::eol) >> -qi::eol];
     quoted_string %= qi::lexeme['"' >> +(qi::char_ - '"') >> '"'];
-    include %= qi::omit[qi::lexeme[qi::lit("include") >> qi::space]] >>
-               quoted_string >> ';';
+    // Includes are validated prelude markers only; this parser never loads an
+    // external file, and the program rule permits markers only at the start.
+    include = (qi::omit[qi::lexeme[qi::lit("include") >> qi::space]] >>
+               quoted_string >> ';')[qi::_val = ValidateInclude(qi::_1)];
     // The two dialects differ on the *first* character of an identifier and
     // nowhere else. QASM2's lexical rule is `id := [a-z][A-Za-z0-9_]*`, i.e.
     // the initial character must be a lowercase letter; QASM3's is
@@ -539,6 +632,7 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
     BOOST_SPIRIT_DEBUG_NODE(gatedeclfull);
 
     BOOST_SPIRIT_DEBUG_NODE(condOp);
+    BOOST_SPIRIT_DEBUG_NODE(condBitTest);
     BOOST_SPIRIT_DEBUG_NODE(condHead);
     BOOST_SPIRIT_DEBUG_NODE(condOpBraced);
     BOOST_SPIRIT_DEBUG_NODE(simpleGatecall);
@@ -604,9 +698,11 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
     qreg_counter = 0;
     creg_map.clear();
     qreg_map.clear();
+    declarations.clear();
     opaqueGates.clear();
     definedGates.clear();
     inputNames.clear();
+    inputBindings.clear();
     inputValues.clear();
     isQasm3 = false;
   }
@@ -630,6 +726,7 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
       gatedeclfull;
 
   qi::rule<Iterator, CondOpType(), Skipper> condOp;
+  qi::rule<Iterator, CondBitTest(), Skipper> condBitTest;
   qi::rule<Iterator, CondHeadType(), Skipper> condHead;
   qi::rule<Iterator, std::vector<StatementType>(), Skipper> condOpBraced;
 
@@ -658,7 +755,8 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
   qi::rule<Iterator, IndexedId(), Skipper> bitdecl;
   qi::rule<Iterator, IndexedId(), Skipper> decl;
 
-  qi::rule<Iterator, std::string(), Skipper> inputdecl;
+  qi::rule<Iterator, std::string(), Skipper> inputType;
+  qi::rule<Iterator, InputDeclType(), Skipper> inputdecl;
 
   qi::rule<Iterator, StatementType, Skipper> unsupportedConstruct;
 
@@ -707,17 +805,26 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
 
   std::unordered_map<std::string, IndexedId> creg_map;
   std::unordered_map<std::string, IndexedId> qreg_map;
+  DeclarationRegistry declarations;
 
   std::unordered_map<std::string, StatementType> opaqueGates;
   std::unordered_map<std::string, StatementType> definedGates;
 
-  // QASM3 `input` declarations: names in declaration order (exposed via
-  // QasmToCirc::GetInputs) and the caller-supplied name->value bindings
-  // consulted at parse time by AddGateExpr's `variables` parameter. Set by
-  // QasmToCirc::ParseAndTranslate after clear(), so a stale binding from a
-  // previous parse never leaks into the next one.
+  // Raw caller bindings are separate from values made visible by declarations,
+  // so QASM2, undeclared names, and forward references cannot consume them.
   std::vector<std::string> inputNames;
+  std::unordered_map<std::string, double> inputBindings;
   std::unordered_map<std::string, double> inputValues;
+
+  void ValidateInputBindings() const {
+    for (const auto &[name, value] : inputBindings) {
+      (void)value;
+      if (std::find(inputNames.begin(), inputNames.end(), name) ==
+          inputNames.end())
+        throw std::invalid_argument("No input declaration for binding '" +
+                                    name + "'.");
+    }
+  }
 };
 
 }  // namespace qasm
