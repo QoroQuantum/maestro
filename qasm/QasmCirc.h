@@ -28,8 +28,11 @@ class QasmToCirc {
   }
 
   std::shared_ptr<Circuits::Circuit<Time>> ParseAndTranslate(
-      const std::string &qasmInputStr) {
+      const std::string &qasmInputStr,
+      const std::unordered_map<std::string, double> &params = {}) {
     clear();
+
+    grammar.inputValues = params;
 
     std::string qasmInput = qasmInputStr;
 
@@ -70,6 +73,13 @@ class QasmToCirc {
 
   const std::vector<std::string> &GetIncludes() const {
     return program.includes;
+  }
+
+  // The names declared by QASM3 `input` statements, in declaration order, so
+  // callers can discover what a circuit requires before supplying values via
+  // ParseAndTranslate's params map.
+  const std::vector<std::string> &GetInputs() const {
+    return grammar.inputNames;
   }
 
  protected:

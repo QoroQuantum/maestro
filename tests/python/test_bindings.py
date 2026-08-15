@@ -106,6 +106,94 @@ class TestQasmParser:
         num_qubits = circuit.num_qubits
         assert num_qubits == 3
 
+    def test_qasm3_parsing_yields_expected_qubit_count(self):
+        """A QASM3 program parses through parse_and_translate and yields the
+        expected num_qubits."""
+        qasm = """
+        OPENQASM 3.0;
+        include "stdgates.inc";
+        qubit[3] q;
+        bit[3] c;
+        h q[0];
+        cx q[0], q[1];
+        cx q[1], q[2];
+        c[0] = measure q[0];
+        """
+
+        parser = maestro.QasmToCirc()
+        circuit = parser.parse_and_translate(qasm)
+        assert circuit is not None
+        assert circuit.num_qubits == 3
+
+    def test_params_dict_is_actually_consumed(self):
+        """A parameterised program with params={"theta": 0.7} must produce
+        different results from params={"theta": 1.9} - this is what proves
+        the dict is consumed rather than ignored."""
+        qasm = """
+        OPENQASM 3.0;
+        input float[64] theta;
+        qubit[1] q;
+        h q[0];
+        rz(theta) q[0];
+        h q[0];
+        """
+
+        parser_a = maestro.QasmToCirc()
+        circuit_a = parser_a.parse_and_translate(qasm, {"theta": 0.7})
+        assert circuit_a is not None
+
+        parser_b = maestro.QasmToCirc()
+        circuit_b = parser_b.parse_and_translate(qasm, {"theta": 1.9})
+        assert circuit_b is not None
+
+        exp_a = circuit_a.estimate("Z")
+        exp_b = circuit_b.estimate("Z")
+        assert exp_a['expectation_values'][0] != pytest.approx(
+            exp_b['expectation_values'][0], abs=1e-6)
+
+    def test_get_inputs_returns_declared_names(self):
+        """get_inputs() returns the declared input names, in declaration
+        order."""
+        qasm = """
+        OPENQASM 3.0;
+        input float[64] theta;
+        input int[32] shots;
+        qubit[1] q;
+        """
+
+        parser = maestro.QasmToCirc()
+        parser.parse_and_translate(qasm, {"theta": 0.5, "shots": 10.0})
+        assert parser.get_inputs() == ["theta", "shots"]
+
+    def test_single_argument_call_still_works_for_qasm2(self):
+        """Single-argument parse_and_translate(qasm) still works for a QASM2
+        program - backward compatibility."""
+        qasm = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[1];
+        h q[0];
+        """
+
+        parser = maestro.QasmToCirc()
+        circuit = parser.parse_and_translate(qasm)
+        assert circuit is not None
+        assert circuit.num_qubits == 1
+        assert parser.get_inputs() == []
+
+    def test_unsupported_construct_raises_naming_it(self):
+        """An unsupported construct (a `for` loop) raises with a message
+        naming the construct."""
+        qasm = """
+        OPENQASM 3.0;
+        qubit[1] q;
+        for i in [0:3] { x q[0]; }
+        """
+
+        parser = maestro.QasmToCirc()
+        with pytest.raises(ValueError, match="'for' loops"):
+            parser.parse_and_translate(qasm)
+
 
 @pytest.mark.skip(reason="ISimulator is not yet exposed as a nanobind type")
 class TestSimulatorOperations:
@@ -4352,4 +4440,3 @@ class TestIncrementalEvolve:
             actual_z = result['expectation_values'][idx][0]
             assert actual_z == pytest.approx(expected_z, abs=1e-10), \
                 f"Step {n}: expected ⟨Z⟩={expected_z:.6f}, got {actual_z:.6f}"
-
