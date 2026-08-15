@@ -15,6 +15,10 @@
 #ifndef _SIMPLEOPS_H_
 #define _SIMPLEOPS_H_
 
+#include <cctype>
+#include <limits>
+#include <string_view>
+
 #include "Expr.h"
 
 namespace qasm {
@@ -39,6 +43,55 @@ class IndexedId : public AbstractSyntaxTree {
   std::string declType;  // "qreg" or "creg" or "id"
 };
 
+enum class DeclarationKind { Qubit, Bit, Input, Gate, Opaque };
+
+using DeclarationRegistry = std::unordered_map<std::string, DeclarationKind>;
+
+inline std::string_view DeclarationKindName(DeclarationKind kind) {
+  switch (kind) {
+    case DeclarationKind::Qubit:
+      return "quantum register";
+    case DeclarationKind::Bit:
+      return "classical register";
+    case DeclarationKind::Input:
+      return "input";
+    case DeclarationKind::Gate:
+      return "gate";
+    case DeclarationKind::Opaque:
+      return "opaque gate";
+  }
+
+  return "declaration";
+}
+
+inline void RegisterDeclaration(DeclarationRegistry &declarations,
+                                const std::string &name, DeclarationKind kind) {
+  const auto [it, inserted] = declarations.emplace(name, kind);
+  if (inserted) return;
+
+  if (it->second == kind)
+    throw std::invalid_argument("Duplicate declaration of '" + name + "'.");
+
+  throw std::invalid_argument(
+      "Declaration of '" + name + "' conflicts with an existing " +
+      std::string(DeclarationKindName(it->second)) + ".");
+}
+
+inline int ValidateRegisterAllocation(const IndexedId &id, int currentSize,
+                                      std::string_view kind) {
+  const int size = id.index;
+  if (size <= 0)
+    throw std::invalid_argument(std::string(kind) + " register '" + id.id +
+                                "' must have a positive size.");
+
+  if (currentSize < 0 || currentSize > std::numeric_limits<int>::max() - size)
+    throw std::overflow_error(std::string(kind) +
+                              " register allocation exceeds supported "
+                              "maximum.");
+
+  return size;
+}
+
 struct MakeIndexedIdExpression {
   template <typename, typename>
   struct result {
@@ -56,7 +109,51 @@ inline phx::function<MakeIndexedIdExpression> MakeIndexedId;
 using SimpleExpType = std::variant<double, int, std::string>;
 
 using ArgumentType = std::variant<std::string, IndexedId>;
+using RegisterMap = std::unordered_map<std::string, IndexedId>;
 using MixedListType = std::vector<ArgumentType>;
+using InputDeclType =
+    boost::fusion::vector<std::string, boost::optional<int>, std::string>;
+
+inline std::vector<int> ResolveRegisterOperand(const ArgumentType &argument,
+                                               const RegisterMap &registers,
+                                               std::string_view kind) {
+  const std::string &name = std::holds_alternative<IndexedId>(argument)
+                                ? std::get<IndexedId>(argument).id
+                                : std::get<std::string>(argument);
+  const auto it = registers.find(name);
+  if (it == registers.end())
+    throw std::invalid_argument("Undeclared " + std::string(kind) +
+                                " register '" + name + "'.");
+
+  const IndexedId &declaration = it->second;
+  if (std::holds_alternative<IndexedId>(argument)) {
+    const int index = std::get<IndexedId>(argument).index;
+    if (index < 0 || index >= declaration.index) {
+      std::string titledKind(kind);
+      titledKind[0] = static_cast<char>(
+          std::toupper(static_cast<unsigned char>(titledKind[0])));
+      throw std::out_of_range(titledKind + " register '" + name + "' index " +
+                              std::to_string(index) + " is out of range [0, " +
+                              std::to_string(declaration.index) + ").");
+    }
+
+    return {declaration.base + index};
+  }
+
+  std::vector<int> resolved;
+  resolved.reserve(static_cast<size_t>(declaration.index));
+  for (int index = 0; index < declaration.index; ++index)
+    resolved.push_back(declaration.base + index);
+  return resolved;
+}
+
+inline void RequireMatchingRegisterWidths(const std::vector<int> &left,
+                                          const std::vector<int> &right,
+                                          std::string_view operation) {
+  if (left.size() != right.size())
+    throw std::invalid_argument(std::string(operation) +
+                                " operands must have the same width.");
+}
 
 using SimpleGatecallType = boost::fusion::vector<std::string, MixedListType>;
 using ExpGatecallType =
@@ -137,6 +234,12 @@ struct MakeCtrlModifierExpression {
     if (!count) return ModifierType(kind);
 
     const double value = count->Eval(variables);
+    if (!std::isfinite(value))
+      throw std::invalid_argument(
+          "The control count of ctrl(n) @ / negctrl(n) @ must be finite, "
+          "got: " +
+          std::to_string(value));
+
     const double rounded = std::round(value);
 
     if (std::abs(value - rounded) > 1e-9 || rounded < 1. || rounded > 64.)
@@ -179,7 +282,11 @@ struct QoperationStatement : public AbstractSyntaxTree {
   std::vector<std::string> paramsDecl;
   std::vector<std::string> qubitsDecl;
 
-  int condValue = 0;
+  // Expected values are stored explicitly instead of packed into an integer,
+  // so QASM3 conjunctions are not limited by the host integer width.
+  std::vector<bool> condExpected;
+  // Condition bits for a conditional Measurement/Reset; CondUop uses cbits.
+  std::vector<int> condBits;
   std::vector<UopType> declOps;
 };
 
@@ -208,20 +315,25 @@ using CondOpType = boost::fusion::vector<std::string, int, QopType>;
 // register name and comparison value - the same information CondOpType
 // carried before this type existed.
 //
-// Bit form (`c[0]` or `!c[0]`): isBitForm is true, bit holds the indexed
-// classical bit and bitExpected holds the value that bit must equal for the
-// condition to be true (true for the bare form, false for the negated
-// form). This is deliberately expressed as a single bit + expected value,
-// not a register + mask, since CreateEqualCondition already takes bit
-// indices and expected booleans directly (see AddCondQopBracedExpr).
+// Bit form (`c[0]`, `!c[0]`, or a `&&`-joined chain of either): isBitForm is
+// true and bits holds one entry per tested bit, each pairing the indexed
+// classical bit with the value it must equal for the condition to be true
+// (true for the bare form, false for the negated form). This is deliberately
+// expressed as bits + expected values, not a register + mask, since
+// CreateEqualCondition already takes bit indices and expected booleans
+// directly (see AddCondQopBracedExpr).
+struct CondBitTest {
+  IndexedId bit;
+  bool expected = true;
+};
+
 struct CondHeadType {
   bool isBitForm = false;
 
   std::string regId;
   int regValue = 0;
 
-  IndexedId bit;
-  bool bitExpected = true;
+  std::vector<CondBitTest> bits;
 };
 
 struct MakeRegCondHeadExpression {
@@ -240,16 +352,30 @@ struct MakeRegCondHeadExpression {
 
 inline phx::function<MakeRegCondHeadExpression> MakeRegCondHead;
 
+struct MakeCondBitTestExpression {
+  struct result {
+    typedef CondBitTest type;
+  };
+
+  CondBitTest operator()(const IndexedId &bit, bool expected) const {
+    CondBitTest test;
+    test.bit = bit;
+    test.expected = expected;
+    return test;
+  }
+};
+
+inline phx::function<MakeCondBitTestExpression> MakeCondBitTest;
+
 struct MakeBitCondHeadExpression {
   struct result {
     typedef CondHeadType type;
   };
 
-  CondHeadType operator()(const IndexedId &bit, bool bitExpected) const {
+  CondHeadType operator()(const std::vector<CondBitTest> &bits) const {
     CondHeadType head;
     head.isBitForm = true;
-    head.bit = bit;
-    head.bitExpected = bitExpected;
+    head.bits = bits;
     return head;
   }
 };
@@ -272,15 +398,17 @@ struct AddCregExpr : public AbstractSyntaxTree {
 
   IndexedId operator()(int &counter,
                        std::unordered_map<std::string, IndexedId> &creg_map,
+                       DeclarationRegistry &declarations,
                        const IndexedId &id) const {
     IndexedId id_copy = id;
+    const int size = ValidateRegisterAllocation(id_copy, counter, "Classical");
+    RegisterDeclaration(declarations, id_copy.id, DeclarationKind::Bit);
+
     id_copy.base = counter;
-
-    counter += static_cast<int>(std::round(id_copy.Eval()));
-
-    creg_map[id_copy.id] = id_copy;
-
     id_copy.declType = "creg";
+
+    counter += size;
+    creg_map[id_copy.id] = id_copy;
 
     return id_copy;
   }
@@ -295,14 +423,17 @@ struct AddQregExpr : public AbstractSyntaxTree {
 
   IndexedId operator()(int &counter,
                        std::unordered_map<std::string, IndexedId> &qreg_map,
+                       DeclarationRegistry &declarations,
                        const IndexedId &id) const {
     IndexedId id_copy = id;
+    const int size = ValidateRegisterAllocation(id_copy, counter, "Quantum");
+    RegisterDeclaration(declarations, id_copy.id, DeclarationKind::Qubit);
+
     id_copy.base = counter;
-
-    counter += static_cast<int>(std::round(id_copy.Eval()));
-    qreg_map[id_copy.id] = id_copy;
-
     id_copy.declType = "qreg";
+
+    counter += size;
+    qreg_map[id_copy.id] = id_copy;
 
     return id_copy;
   }
@@ -343,22 +474,116 @@ struct AddDeclarationExpr : public AbstractSyntaxTree {
 
 inline phx::function<AddDeclarationExpr> AddDeclaration;
 
-// Records a QASM3 `input <type> <name>;` declaration. The type annotation is
-// accepted by the grammar but discarded before it reaches here - every input
-// value arrives as a plain double via QasmToCirc::ParseAndTranslate's params
-// map, so there is no type to track. The name is appended to inputNames in
-// declaration order so callers can discover what a circuit requires (see
-// QasmToCirc::GetInputs); the value itself is looked up later, at the point a
-// gate parameter expression references it, via Variable::Eval against
-// QasmGrammar::inputValues.
+inline void ValidateInputDeclaration(const std::string &name,
+                                     const std::string &type,
+                                     const boost::optional<int> &width) {
+  if (width && *width <= 0)
+    throw std::invalid_argument("Input '" + name +
+                                "' must have a positive type width.");
+
+  if (type == "bool") {
+    if (width)
+      throw std::invalid_argument("Boolean input '" + name +
+                                  "' cannot have a width designator.");
+    return;
+  }
+
+  if (type == "float") {
+    if (width && *width != 32 && *width != 64)
+      throw std::invalid_argument(
+          "Input '" + name +
+          "' uses an unsupported float width; only float, float[32], and "
+          "float[64] are supported.");
+    return;
+  }
+
+  if (type == "angle") {
+    if (width)
+      throw std::invalid_argument(
+          "Precisely quantized sized angle inputs are not supported.");
+    return;
+  }
+
+  if (width && *width > 64)
+    throw std::invalid_argument("Input '" + name +
+                                "' uses an integer width above 64, which "
+                                "the numeric binding API cannot represent.");
+}
+
+inline double ValidateInputBinding(const std::string &name,
+                                   const std::string &type,
+                                   const boost::optional<int> &width,
+                                   double value) {
+  ValidateInputDeclaration(name, type, width);
+
+  if (!std::isfinite(value))
+    throw std::invalid_argument("Input binding '" + name + "' must be finite.");
+
+  if (type == "bool") {
+    if (value != 0. && value != 1.)
+      throw std::invalid_argument("Input binding '" + name +
+                                  "' must be a boolean value (0 or 1).");
+    return value;
+  }
+
+  if (type == "float") {
+    if (!width || *width == 64) return value;
+    const float narrowed = static_cast<float>(value);
+    if (!std::isfinite(narrowed))
+      throw std::invalid_argument("Input binding '" + name +
+                                  "' does not fit float[32].");
+    return static_cast<double>(narrowed);
+  }
+
+  if (type == "angle") {
+    double normalized = std::fmod(value, 2. * M_PI);
+    if (normalized < 0.) normalized += 2. * M_PI;
+    return normalized;
+  }
+
+  const bool isUnsigned = type == "uint";
+  if (std::trunc(value) != value)
+    throw std::invalid_argument("Input binding '" + name +
+                                "' must be an integer value.");
+  if (isUnsigned && value < 0.)
+    throw std::invalid_argument("Unsigned input binding '" + name +
+                                "' must be non-negative.");
+
+  if (width) {
+    const double upper = std::ldexp(1., isUnsigned ? *width : *width - 1);
+    const double lower = isUnsigned ? 0. : -upper;
+    if (value < lower || value >= upper)
+      throw std::invalid_argument("Input binding '" + name +
+                                  "' does not fit its declared " + type + "[" +
+                                  std::to_string(*width) + "] type.");
+  }
+
+  return value;
+}
+
+// Records a QASM3 input declaration and publishes a validated caller binding
+// to the expression environment only when that declaration is reached.
 struct AddInputDeclExpr : public AbstractSyntaxTree {
   struct result {
     typedef QoperationStatement type;
   };
 
-  QoperationStatement operator()(const std::string &name,
-                                 std::vector<std::string> &inputNames) const {
+  QoperationStatement operator()(
+      const InputDeclType &inputDecl, std::vector<std::string> &inputNames,
+      DeclarationRegistry &declarations,
+      const std::unordered_map<std::string, double> &inputBindings,
+      std::unordered_map<std::string, double> &visibleInputValues) const {
+    const std::string &type = boost::fusion::at_c<0>(inputDecl);
+    const boost::optional<int> &width = boost::fusion::at_c<1>(inputDecl);
+    const std::string &name = boost::fusion::at_c<2>(inputDecl);
+    ValidateInputDeclaration(name, type, width);
+    RegisterDeclaration(declarations, name, DeclarationKind::Input);
     inputNames.push_back(name);
+
+    const auto binding = inputBindings.find(name);
+    if (binding != inputBindings.end())
+      visibleInputValues[name] =
+          ValidateInputBinding(name, type, width, binding->second);
 
     QoperationStatement stmt;
     stmt.opType = QoperationStatement::OperationType::Declaration;
@@ -381,54 +606,17 @@ struct AddMeasureExpr : public AbstractSyntaxTree {
     typedef QoperationStatement type;
   };
 
-  QoperationStatement operator()(
-      const MeasureType &measure,
-      const std::unordered_map<std::string, IndexedId> &creg_map,
-      const std::unordered_map<std::string, IndexedId> &qreg_map) const {
+  QoperationStatement operator()(const MeasureType &measure,
+                                 const RegisterMap &creg_map,
+                                 const RegisterMap &qreg_map) const {
     QoperationStatement stmt;
     stmt.opType = QoperationStatement::OperationType::Measurement;
 
-    ArgumentType arg1 = boost::fusion::at_c<0>(measure);  // qubits info
-
-    // there are two possibilities here, either it's an indexed id or a simple
-    // id
-    if (std::holds_alternative<IndexedId>(arg1)) {
-      IndexedId indexedId = std::get<IndexedId>(arg1);
-      auto it = qreg_map.find(indexedId.id);
-      if (it != qreg_map.end()) {
-        int base = it->second.base;
-        stmt.qubits.push_back(base + indexedId.index);
-      }
-    } else if (std::holds_alternative<std::string>(arg1)) {
-      std::string id = std::get<std::string>(arg1);
-      auto it = qreg_map.find(id);
-      if (it != qreg_map.end()) {
-        int base = it->second.base;
-        int size = static_cast<int>(std::round(it->second.Eval()));
-        for (int i = 0; i < size; ++i) stmt.qubits.push_back(base + i);
-      }
-    }
-
-    ArgumentType arg2 = boost::fusion::at_c<1>(measure);  // cbits info
-    // there are two possibilities here, either it's an indexed id or a simple
-    // id
-
-    if (std::holds_alternative<IndexedId>(arg2)) {
-      IndexedId indexedId = std::get<IndexedId>(arg2);
-      auto it = creg_map.find(indexedId.id);
-      if (it != creg_map.end()) {
-        int base = it->second.base;
-        stmt.cbits.push_back(base + indexedId.index);
-      }
-    } else if (std::holds_alternative<std::string>(arg2)) {
-      std::string id = std::get<std::string>(arg2);
-      auto it = creg_map.find(id);
-      if (it != creg_map.end()) {
-        int base = it->second.base;
-        int size = static_cast<int>(std::round(it->second.Eval()));
-        for (int i = 0; i < size; ++i) stmt.cbits.push_back(base + i);
-      }
-    }
+    stmt.qubits = ResolveRegisterOperand(boost::fusion::at_c<0>(measure),
+                                         qreg_map, "quantum");
+    stmt.cbits = ResolveRegisterOperand(boost::fusion::at_c<1>(measure),
+                                        creg_map, "classical");
+    RequireMatchingRegisterWidths(stmt.qubits, stmt.cbits, "Measurement");
 
     return stmt;
   }
@@ -468,31 +656,11 @@ struct AddResetExpr : public AbstractSyntaxTree {
     typedef QoperationStatement type;
   };
 
-  QoperationStatement operator()(
-      const ResetType &reset,
-      const std::unordered_map<std::string, IndexedId> &qreg_map) const {
+  QoperationStatement operator()(const ResetType &reset,
+                                 const RegisterMap &qreg_map) const {
     QoperationStatement stmt;
     stmt.opType = QoperationStatement::OperationType::Reset;
-
-    // there are two possibilities here, either it's an indexed id or a simple
-    // id
-    if (std::holds_alternative<IndexedId>(reset)) {
-      IndexedId indexedId = std::get<IndexedId>(reset);
-      auto it = qreg_map.find(indexedId.id);
-      if (it != qreg_map.end()) {
-        int base = it->second.base;
-        stmt.qubits.push_back(base + indexedId.index);
-      }
-    } else if (std::holds_alternative<std::string>(reset)) {
-      std::string id = std::get<std::string>(reset);
-      auto it = qreg_map.find(id);
-      if (it != qreg_map.end()) {
-        int base = it->second.base;
-        int size = static_cast<int>(std::round(it->second.Eval()));
-        for (int i = 0; i < size; ++i) stmt.qubits.push_back(base + i);
-      }
-    }
-
+    stmt.qubits = ResolveRegisterOperand(reset, qreg_map, "quantum");
     return stmt;
   }
 };
@@ -504,46 +672,23 @@ struct AddBarrierExpr : public AbstractSyntaxTree {
     typedef QoperationStatement type;
   };
 
-  QoperationStatement operator()(
-      const BarrierType &barrier,
-      const std::unordered_map<std::string, IndexedId> &qreg_map) const {
+  QoperationStatement operator()(const BarrierType &barrier,
+                                 const RegisterMap &qreg_map) const {
     StatementType stmt;
     stmt.opType = QoperationStatement::OperationType::Barrier;
     std::set<int> qubit_set;
 
-    // A bare `barrier;` (no operand list) applies to every qubit. That is the
-    // only way an empty list reaches here: the operand-list alternative of
-    // `barrierOp` goes through `mixedList`, which requires at least one
-    // operand.
+    // A bare QASM3 barrier applies to every declared qubit. The Circuit IR
+    // has no barrier operation, so Program intentionally erases this statement.
     if (barrier.empty()) {
-      for (const auto &[name, reg] : qreg_map) {
-        const int size = static_cast<int>(std::round(reg.Eval()));
-        for (int i = 0; i < size; ++i) qubit_set.insert(reg.base + i);
-      }
-
-      stmt.qubits.assign(qubit_set.begin(), qubit_set.end());
-
-      return stmt;
-    }
-
-    for (const auto &b : barrier) {
-      // there are two possibilities here, either it's an indexed id or a simple
-      // id
-      if (std::holds_alternative<IndexedId>(b)) {
-        IndexedId indexedId = std::get<IndexedId>(b);
-        auto it = qreg_map.find(indexedId.id);
-        if (it != qreg_map.end()) {
-          int base = it->second.base;
-          qubit_set.insert(base + indexedId.index);
-        }
-      } else if (std::holds_alternative<std::string>(b)) {
-        std::string id = std::get<std::string>(b);
-        auto it = qreg_map.find(id);
-        if (it != qreg_map.end()) {
-          int base = it->second.base;
-          int size = static_cast<int>(std::round(it->second.Eval()));
-          for (int i = 0; i < size; ++i) qubit_set.insert(base + i);
-        }
+      for (const auto &[name, reg] : qreg_map)
+        for (int index = 0; index < reg.index; ++index)
+          qubit_set.insert(reg.base + index);
+    } else {
+      for (const auto &operand : barrier) {
+        const std::vector<int> resolved =
+            ResolveRegisterOperand(operand, qreg_map, "quantum");
+        qubit_set.insert(resolved.begin(), resolved.end());
       }
     }
 
@@ -562,11 +707,13 @@ struct AddOpaqueDeclExpr : public AbstractSyntaxTree {
   QoperationStatement operator()(
       const OpaqueDeclType &opaqueDecl,
       std::unordered_map<std::string, StatementType> &opaqueGates,
-      const std::unordered_map<std::string, IndexedId> &qreg_map) const {
+      const std::unordered_map<std::string, IndexedId> &qreg_map,
+      DeclarationRegistry &declarations) const {
     StatementType stmt;
     stmt.opType = QoperationStatement::OperationType::OpaqueDecl;
 
     std::string gateName = boost::fusion::at_c<0>(opaqueDecl);
+    RegisterDeclaration(declarations, gateName, DeclarationKind::Opaque);
 
     stmt.comment = gateName;
 
@@ -594,7 +741,8 @@ struct AddGateDeclExpr : public AbstractSyntaxTree {
   QoperationStatement operator()(
       const boost::fusion::vector<GateDeclType, std::vector<GateDeclOpType>>
           &gateDecl,
-      std::unordered_map<std::string, StatementType> &definedGates) const {
+      std::unordered_map<std::string, StatementType> &definedGates,
+      DeclarationRegistry &declarations) const {
     StatementType stmt;
     stmt.opType = QoperationStatement::OperationType::GateDecl;
 
@@ -603,6 +751,8 @@ struct AddGateDeclExpr : public AbstractSyntaxTree {
     const std::string &gateName = boost::fusion::at_c<0>(declInfo);
     const std::vector<std::string> &params = boost::fusion::at_c<1>(declInfo);
     const std::vector<std::string> &args = boost::fusion::at_c<2>(declInfo);
+
+    RegisterDeclaration(declarations, gateName, DeclarationKind::Gate);
 
     if (args.empty())
       throw std::invalid_argument(

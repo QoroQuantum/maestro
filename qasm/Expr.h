@@ -207,6 +207,11 @@ class BinaryOperator : public AbstractSyntaxTree {
   // `rx(0.5 ^ 1)` into a silently wrong rotation angle, which is exactly the
   // failure mode QASM3's '^' was introducing here in the first place.
   static long long AsInteger(double value) {
+    if (!std::isfinite(value))
+      throw std::invalid_argument(
+          "Bitwise XOR ('^') requires finite integer operands, got: " +
+          std::to_string(value));
+
     const double rounded = std::round(value);
 
     if (std::abs(value - rounded) > 1e-9)
