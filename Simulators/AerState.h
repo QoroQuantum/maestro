@@ -74,10 +74,9 @@ class AerState : public ISimulator {
    */
   void Initialize() override {
     SetMultithreading(enableMultithreading);
-    if (simulationType == SimulationType::kMatrixProductState)
-      Configure("mps_sample_measure_algorithm", useMPSMeasureNoCollapse
-                                                    ? "mps_probabilities"
-                                                    : "mps_apply_measure");
+    if (simulationType == SimulationType::kMatrixProductState && !configuration.IsSet("mps_sample_measure_algorithm"))
+      Configure("mps_sample_measure_algorithm", "mps_probabilities");
+
     state->initialize();
   }
 
@@ -175,7 +174,11 @@ class AerState : public ISimulator {
    * @param value The value of the configuration.
    */
   void Configure(const char* key, const char* value) override {
-    configuration.SetConfiguration(key, value);
+    if (configuration.WasApplied(key, value) && state->is_initialized())
+      return;
+
+    if (!configuration.WasApplied(key, value))
+        configuration.SetConfiguration(key, value);
 
     if (std::string("method") == key) {
       if (std::string("statevector") == value)
@@ -190,21 +193,7 @@ class AerState : public ISimulator {
         simulationType = SimulationType::kExtendedStabilizer;
       else
         simulationType = SimulationType::kOther;
-    } else if (std::string("matrix_product_state_truncation_threshold") ==
-               key) {
-      singularValueThreshold = std::stod(value);
-      if (singularValueThreshold > 0.)
-        limitEntanglement = true;
-      else
-        limitEntanglement = false;
-    } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
-      chi = std::stoi(value);
-      if (chi > 0)
-        limitSize = true;
-      else
-        limitSize = false;
-    } else if (std::string("mps_sample_measure_algorithm") == key)
-      useMPSMeasureNoCollapse = std::string("mps_probabilities") == value;
+    }
      
     if (std::string("use_double_precision") != key)
         state->configure(key, value);
@@ -273,10 +262,8 @@ class AerState : public ISimulator {
     state->clear();
     SetMultithreading(enableMultithreading);
 
-    if (simulationType == SimulationType::kMatrixProductState)
-      Configure("mps_sample_measure_algorithm", useMPSMeasureNoCollapse
-                                                    ? "mps_probabilities"
-                                                    : "mps_apply_measure");
+    if (simulationType == SimulationType::kMatrixProductState && !configuration.IsSet("mps_sample_measure_algorithm"))
+      Configure("mps_sample_measure_algorithm", "mps_probabilities");
   }
 
   /**
@@ -756,6 +743,10 @@ class AerState : public ISimulator {
           std::to_string(12);  // set one less, multithreading is started if the
                                // value is bigger than this
       state->configure("statevector_parallel_threshold", threadsLimit);
+
+      configuration.SetConfiguration(std::string("max_parallel_threads"), nrThreads);
+      configuration.SetConfiguration(std::string("parallel_state_update"), nrThreads);
+      configuration.SetConfiguration(std::string("statevector_parallel_threshold"), threadsLimit);
     }
   }
 
@@ -872,13 +863,6 @@ class AerState : public ISimulator {
   std::unique_ptr<QiskitAerState> state =
       std::make_unique<QiskitAerState>(); /**< The qiskit aer state. */
   AER::Vector<complex_t> savedAmplitudes; /**< The amplitudes, saved. */
-
-  bool limitSize = false;
-  bool limitEntanglement = false;
-  Eigen::Index chi = 10;               // if limitSize is true
-  double singularValueThreshold = 0.;  // if limitEntanglement is true
-  bool useMPSMeasureNoCollapse =
-      true; /**< The flag to use the mps measure no collapse algorithm. */
   
   bool enableMultithreading = true;    /**< The multithreading flag. */
   AER::Data savedState; /**< The saved data - here there will be the saved state

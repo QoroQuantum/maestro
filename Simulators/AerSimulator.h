@@ -976,19 +976,18 @@ class AerSimulator : public AerState {
       sim->Configure("method", "statevector");
 
     if (simulationType == SimulationType::kMatrixProductState) {
-      if (limitSize)
-        sim->Configure("matrix_product_state_max_bond_dimension",
-                       std::to_string(chi).c_str());
-      if (limitEntanglement) {
-        std::ostringstream oss;
-        oss << std::setprecision(std::numeric_limits<double>::max_digits10)
-            << singularValueThreshold;
-        sim->Configure("matrix_product_state_truncation_threshold",
-                       oss.str().c_str());
-      }
-      sim->Configure("mps_sample_measure_algorithm", useMPSMeasureNoCollapse
-                                                         ? "mps_probabilities"
-                                                         : "mps_apply_measure");
+      std::string key = "matrix_product_state_max_bond_dimension";
+      if (configuration.IsSet(key))
+        sim->Configure(key.c_str(), configuration.GetConfiguration(key).c_str());
+      
+      key = "matrix_product_state_truncation_threshold";
+      if (configuration.IsSet(key))
+        sim->Configure(key.c_str(), configuration.GetConfiguration(key).c_str());
+
+      key = "mps_sample_measure_algorithm";
+      if (configuration.IsSet(key))
+        sim->Configure(key.c_str(),
+                       configuration.GetConfiguration(key).c_str());
     }
 
     sim->SetMultithreading(

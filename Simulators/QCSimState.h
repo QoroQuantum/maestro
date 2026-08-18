@@ -73,7 +73,7 @@ class QCSimState : public ISimulator {
       if (!dummySim || dummySim->getNrQubits() != nQ) {
         dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
         dummySim->SetMaxBondDimension(
-            limitSize ? static_cast<long long int>(chi) : 0);
+            configuration.GetConfigurationAsInt("mps_max_bond_dimension"));
         dummySim->setGrowthFactorGate(growthFactorGate);
         dummySim->setGrowthFactorSwap(growthFactorSwap);
       }
@@ -200,13 +200,12 @@ class QCSimState : public ISimulator {
       if (simulationType == SimulationType::kMatrixProductState) {
         mpsSimulator =
             std::make_unique<QC::TensorNetworks::MPSSimulator>(nrQubits);
-        if (limitEntanglement && singularValueThreshold > 0.)
-          mpsSimulator->setLimitEntanglement(singularValueThreshold);
-        if (limitSize && chi > 0) mpsSimulator->setLimitBondDimension(chi);
+
         // default is true
         if (!useOptimalMeetingPosition)
           mpsSimulator->SetUseOptimalMeetingPosition(false);
         mpsSimulator->SetBondDimensionCallback(bondDimensionCallback);
+        
         curMaxBondDim = 1;
       } else if (simulationType == SimulationType::kStabilizer)
         cliffordSimulator =
@@ -222,19 +221,18 @@ class QCSimState : public ISimulator {
       } else if (simulationType == SimulationType::kPauliPropagator) {
         pp = std::make_unique<Simulators::QcsimPauliPropagator>();
         pp->SetNrQubits(static_cast<int>(nrQubits));
-        if (ppCoefficientThreshold > 0.)
-          pp->SetCoefficientThreshold(ppCoefficientThreshold);
-        if (ppPauliWeightThreshold < std::numeric_limits<size_t>::max())
-          pp->SetPauliWeightThreshold(ppPauliWeightThreshold);
-        if (ppStepsBetweenTrims < std::numeric_limits<int>::max())
-          pp->SetStepsBetweenTrims(ppStepsBetweenTrims);
       } else if (simulationType == SimulationType::kPathIntegral) {
         pathIntegralSimulator = std::make_unique<PathIntegralSimulator>();
         pathIntegralSimulator->SetStartZeroState(nrQubits);
+
       } else
         state = std::make_unique<QC::QubitRegister<>>(nrQubits);
 
       SetMultithreading(enableMultithreading);
+
+      // ensure the config settings are applied, they need to be applied after the simulator is created
+      for (const auto& [key, value] : configuration.GetConfigMap())
+        if (key != "method") Configure(key.c_str(), value.c_str());
     }
   }
 
@@ -397,8 +395,7 @@ class QCSimState : public ISimulator {
       if (!dummySim || dummySim->getNrQubits() != initialMap.size()) {
         dummySim =
             std::make_unique<Simulators::MPSDummySimulator>(initialMap.size());
-        dummySim->SetMaxBondDimension(
-            limitSize ? static_cast<long long int>(chi) : 0);
+        dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt("mps_max_bond_dimension"));
       }
       dummySim->setGrowthFactorGate(growthFactorGate);
       dummySim->setGrowthFactorSwap(growthFactorSwap);
@@ -499,8 +496,6 @@ class QCSimState : public ISimulator {
    * @param value The value of the configuration.
    */
   void Configure(const char *key, const char *value) override {
-    configuration.SetConfiguration(key, value);
-
     if (std::string("method") == key) {
       if (std::string("statevector") == value)
         simulationType = SimulationType::kStatevector;
@@ -514,43 +509,35 @@ class QCSimState : public ISimulator {
         simulationType = SimulationType::kPauliPropagator;
       else if (std::string("path_integral") == value)
         simulationType = SimulationType::kPathIntegral;
-    } else if (std::string("matrix_product_state_truncation_threshold") ==
-               key) {
-      singularValueThreshold = std::stod(value);
-      if (singularValueThreshold > 0.) {
-        limitEntanglement = true;
-        if (mpsSimulator)
-          mpsSimulator->setLimitEntanglement(singularValueThreshold);
-      } else
-        limitEntanglement = false;
-    } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
-      chi = std::stoi(value);
-      if (chi > 0) {
-        limitSize = true;
-        if (mpsSimulator) mpsSimulator->setLimitBondDimension(chi);
-        if (dummySim)
-          dummySim->SetMaxBondDimension(static_cast<long long int>(chi));
-      } else {
-        limitSize = false;
-        if (mpsSimulator) mpsSimulator->setLimitBondDimension(0);
-        if (dummySim) dummySim->SetMaxBondDimension(0);
-      }
-    } else if (std::string("mps_sample_measure_algorithm") == key)
-      useMPSMeasureNoCollapse = std::string("mps_probabilities") == value;
-    else if (std::string("pauli_propagator_coefficient_threshold") == key) {
-      ppCoefficientThreshold = std::stod(value);
-      if (pp && ppCoefficientThreshold > 0.)
-        pp->SetCoefficientThreshold(ppCoefficientThreshold);
-    } else if (std::string("pauli_propagator_pauli_weight_threshold") == key) {
-      ppPauliWeightThreshold = std::stoull(value);
-      if (pp && ppPauliWeightThreshold < std::numeric_limits<size_t>::max())
-        pp->SetPauliWeightThreshold(ppPauliWeightThreshold);
-    } else if (std::string("pauli_propagator_steps_between_trims") == key) {
-      ppStepsBetweenTrims = std::stoi(value);
-      if (pp && ppStepsBetweenTrims < std::numeric_limits<int>::max())
-        pp->SetStepsBetweenTrims(ppStepsBetweenTrims);
     }
-    // TODO: add path integral configuration options
+
+    if (!configuration.WasApplied(key, value))
+        configuration.SetConfiguration(key, value);
+
+    if (mpsSimulator) {
+      if (std::string(key) == "matrix_product_state_max_bond_dimension") {
+        mpsSimulator->setLimitBondDimension(configuration.GetConfigurationAsInt(key));
+      } else if (std::string(key) == "matrix_product_state_truncation_threshold") {
+          const double threshold = configuration.GetConfigurationAsDouble(key);
+          if (threshold > 0.) mpsSimulator->setLimitEntanglement(threshold);
+      }
+    }
+
+    if (pp) {
+      if (std::string(key) == "pauli_propagator_coefficient_threshold") {
+        pp->SetCoefficientThreshold(configuration.GetConfigurationAsDouble(key));
+      } else if (std::string(key) == "pauli_propagator_pauli_weight_threshold") {
+        pp->SetPauliWeightThreshold(configuration.GetConfigurationAsDouble(key));
+      } else if (std::string(key) == "pauli_propagator_steps_between_trims") {
+        pp->SetStepsBetweenTrims(configuration.GetConfigurationAsInt(key));
+      }
+    }
+
+    if (pathIntegralSimulator) {
+      if (std::string(key) == "path_integral_threshold") {
+        pathIntegralSimulator->SetTrimValue(configuration.GetConfigurationAsDouble(key));
+      }
+    }
   }
 
   /**
@@ -1004,7 +991,7 @@ class QCSimState : public ISimulator {
 
     if (simulationType == SimulationType::kMatrixProductState) {
       bool normal = true;
-      if (useMPSMeasureNoCollapse) {
+      if (!configuration.IsSet("mps_sample_measure_algorithm") || configuration.GetConfiguration("mps_sample_measure_algorithm") == "mps_probabilities") {
         // check to see if it can be used
         const std::set<Eigen::Index> qset(qubits.begin(), qubits.end());
         if (qset.size() == GetNumberOfQubits()) {
@@ -1198,7 +1185,7 @@ class QCSimState : public ISimulator {
 
     if (simulationType == SimulationType::kMatrixProductState) {
       bool normal = true;
-      if (useMPSMeasureNoCollapse) {
+      if (!configuration.IsSet("mps_sample_measure_algorithm") || configuration.GetConfiguration("mps_sample_measure_algorithm") == "mps_probabilities") {
         // check to see if it can be used
         const std::set<Eigen::Index> qset(qubits.begin(), qubits.end());
         if (qset.size() == GetNumberOfQubits()) {
@@ -1727,18 +1714,8 @@ class QCSimState : public ISimulator {
       pathIntegralSimulator; /**< The qcsim path integral simulator. */
 
   size_t nrQubits = 0; /**< The number of allocated qubits. */
-  bool limitSize = false;
-  bool limitEntanglement = false;
-  Eigen::Index chi = 10;               // if limitSize is true
-  double singularValueThreshold = 0.;  // if limitEntanglement is true
-  bool enableMultithreading = true;    /**< The multithreading flag. */
-  bool useMPSMeasureNoCollapse =
-      true; /**< The flag to use the mps measure no collapse algorithm. */
 
-  // PauliPropagator truncation settings
-  double ppCoefficientThreshold = 0.;
-  size_t ppPauliWeightThreshold = std::numeric_limits<size_t>::max();
-  int ppStepsBetweenTrims = std::numeric_limits<int>::max();
+  bool enableMultithreading = true;    /**< The multithreading flag. */
 
   int lookaheadDepth = 0;
   int lookaheadDepthWithHeuristic = 0;

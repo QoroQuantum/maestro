@@ -154,7 +154,7 @@ class Configuration {
 
   void ApplyConfigurationToSimulator(const std::shared_ptr<Simulators::IState>& simulator) const {
     for (const auto& [key, value] : configMap)
-        simulator->Configure(key.c_str(), value.c_str());
+      simulator->Configure(key.c_str(), value.c_str());
   }
 
   void ApplyConfigurationFromSimulator(const std::shared_ptr<Simulators::IState>& simulator) {
@@ -168,6 +168,14 @@ class Configuration {
 
   const std::unordered_map<std::string, std::string>& GetConfigMap() const {
     return configMap;
+  }
+
+  bool WasApplied(const std::string& key, const std::string& value) const {
+    auto it = configMap.find(key);
+    if (it != configMap.end())
+      return it->second == value;
+
+    return false;
   }
 
   private:

@@ -51,10 +51,18 @@ struct SimulatorConfig {
   int lookahead_depth = -1;
   bool mps_measure_no_collapse = true;
 
+  // true for double precision, false for single precision, nullopt for default
+  // this is a separate setting for qiskit aer, the use_double_precision above
+  // is for gpu mps and tensor network simulators
+  std::optional<bool> precision = std::nullopt;
+
   // PauliPropagator truncation parameters
   std::optional<double> pp_coefficient_threshold = std::nullopt;
   std::optional<size_t> pp_pauli_weight_threshold = std::nullopt;
   std::optional<int> pp_steps_between_trims = std::nullopt;
+
+  // path integral parameters
+  std::optional<double> path_integral_threshold = std::nullopt;
 
   SimulatorConfig() = default;
 
@@ -131,6 +139,10 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("use_double_precision", "1");
   }
 
+  if (config.precision) {
+    network->Configure("precision", *config.precision ? "double" : "single");
+  }
+
   // Disable MPS swap optimization if requested
   if (config.disable_optimized_swapping) {
     network->SetInitialQubitsMapOptimization(false);
@@ -166,6 +178,13 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
   if (config.pp_steps_between_trims) {
     network->Configure("pauli_propagator_steps_between_trims",
                        std::to_string(*config.pp_steps_between_trims).c_str());
+  }
+  if (config.path_integral_threshold) {
+    std::ostringstream oss;
+    oss << std::setprecision(std::numeric_limits<double>::max_digits10)
+        << *config.path_integral_threshold;
+    auto val = oss.str();
+    network->Configure("path_integral_threshold", val.c_str());
   }
 
   network->CreateSimulator();
@@ -772,6 +791,7 @@ NB_MODULE(maestro, m) {
       .def_rw("singular_value_threshold",
               &SimulatorConfig::singular_value_threshold)
       .def_rw("use_double_precision", &SimulatorConfig::use_double_precision)
+      .def_rw("precision", &SimulatorConfig::precision)
       .def_rw("disable_optimized_swapping",
               &SimulatorConfig::disable_optimized_swapping)
       .def_rw("lookahead_depth", &SimulatorConfig::lookahead_depth)
@@ -783,6 +803,8 @@ NB_MODULE(maestro, m) {
               &SimulatorConfig::pp_pauli_weight_threshold)
       .def_rw("pp_steps_between_trims",
               &SimulatorConfig::pp_steps_between_trims)
+      .def_rw("path_integral_threshold",
+              &SimulatorConfig::path_integral_threshold)
       .def("__repr__", [](const SimulatorConfig& c) {
         std::ostringstream oss;
         oss << "SimulatorConfig("
