@@ -281,8 +281,7 @@ class GpuState : public ISimulator {
       if (!dummySim || dummySim->getNrQubits() != initialMap.size()) {
         dummySim =
             std::make_unique<Simulators::MPSDummySimulator>(initialMap.size());
-        dummySim->SetMaxBondDimension(
-            limitSize ? static_cast<long long int>(chi) : 0);
+        dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt("mps_max_bond_dimension"));
       }
       dummySim->setGrowthFactorGate(growthFactorGate);
       dummySim->setGrowthFactorSwap(growthFactorSwap);
@@ -421,7 +420,7 @@ class GpuState : public ISimulator {
         if (tn) tn->SetCutoff(singularValueThreshold);
       }
     } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
-      chi = std::stoi(value);
+      const long long int chi = std::stoi(value);
       if (chi > 0) {
         if (mps) mps->SetMaxExtent(chi);
         if (tn) tn->SetMaxExtent(chi);
@@ -440,14 +439,14 @@ class GpuState : public ISimulator {
       } else if (std::string("pauli_propagator_pauli_weight_threshold") ==
                  key) {
         const double pauliWeightThreshold = std::stod(value);
-        pp->SetPauliWeightTruncationCutoff(pauliWeightThreshold);
+        pp->SetWeightTruncationCutoff(pauliWeightThreshold);
       } else if (std::string("pauli_propagator_steps_between_trims") == key) {
         const int stepsBetweenTrims = std::stoi(value);
-        pp->SetStepsBetweenTrims(stepsBetweenTrims);
+        pp->SetStepsBetweenTruncations(stepsBetweenTrims);
       } else if (std::string("pauli_propagator_num_gates_between_trims") ==
                  key) {
         const int numGatesBetweenTrims = std::stoi(value);
-        pp->SetNumGatesBetweenTrims(numGatesBetweenTrims);
+        pp->SetNumGatesBetweenTruncations(numGatesBetweenTrims);
       } else if (std::string("pauli_propagator_num_gates_between_deduplications") ==
                  key) {
         const int numGatesBetweenDeduplications = std::stoi(value);
@@ -477,18 +476,7 @@ class GpuState : public ISimulator {
         default:
           return "other";
       }
-    } else if (std::string("matrix_product_state_truncation_threshold") ==
-               key) {
-      if (limitEntanglement && singularValueThreshold > 0.) {
-        std::ostringstream oss;
-        oss << std::setprecision(std::numeric_limits<double>::max_digits10)
-            << singularValueThreshold;
-        return oss.str();
-      }
-    } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
-      if (limitSize && limitSize > 0) return std::to_string(chi);
     }
-    // TODO: add pauli propagator configuration options
 
     return configuration.GetConfiguration(key);
   }
@@ -1253,8 +1241,7 @@ class GpuState : public ISimulator {
 
     if (!dummySim || dummySim->getNrQubits() != nQ) {
       dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
-      dummySim->SetMaxBondDimension(
-          limitSize ? static_cast<long long int>(chi) : 0);
+      dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt("matrix_product_state_max_bond_dimension"));
       dummySim->setGrowthFactorGate(growthFactorGate);
       dummySim->setGrowthFactorSwap(growthFactorSwap);
     }
