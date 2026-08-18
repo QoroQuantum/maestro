@@ -60,6 +60,7 @@ struct SimulatorConfig {
   std::optional<double> pp_coefficient_threshold = std::nullopt;
   std::optional<size_t> pp_pauli_weight_threshold = std::nullopt;
   std::optional<int> pp_steps_between_trims = std::nullopt;
+  std::optional<int> pp_steps_between_deduplications = std::nullopt;
 
   // path integral parameters
   std::optional<double> path_integral_threshold = std::nullopt;
@@ -178,6 +179,11 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
   if (config.pp_steps_between_trims) {
     network->Configure("pauli_propagator_steps_between_trims",
                        std::to_string(*config.pp_steps_between_trims).c_str());
+  }
+  if (config.pp_steps_between_deduplications) {
+    network->Configure(
+        "pauli_propagator_num_gates_between_deduplications",
+        std::to_string(*config.pp_steps_between_deduplications).c_str());
   }
   if (config.path_integral_threshold) {
     std::ostringstream oss;
@@ -803,6 +809,8 @@ NB_MODULE(maestro, m) {
               &SimulatorConfig::pp_pauli_weight_threshold)
       .def_rw("pp_steps_between_trims",
               &SimulatorConfig::pp_steps_between_trims)
+      .def_rw("pp_steps_between_deduplications",
+              &SimulatorConfig::pp_steps_between_deduplications)
       .def_rw("path_integral_threshold",
               &SimulatorConfig::path_integral_threshold)
       .def("__repr__", [](const SimulatorConfig& c) {

@@ -442,11 +442,7 @@ class GpuState : public ISimulator {
         pp->SetWeightTruncationCutoff(pauliWeightThreshold);
       } else if (std::string("pauli_propagator_steps_between_trims") == key) {
         const int stepsBetweenTrims = std::stoi(value);
-        pp->SetStepsBetweenTruncations(stepsBetweenTrims);
-      } else if (std::string("pauli_propagator_num_gates_between_trims") ==
-                 key) {
-        const int numGatesBetweenTrims = std::stoi(value);
-        pp->SetNumGatesBetweenTruncations(numGatesBetweenTrims);
+        pp->SetNumGatesBetweenTruncations(stepsBetweenTrims);
       } else if (std::string("pauli_propagator_num_gates_between_deduplications") ==
                  key) {
         const int numGatesBetweenDeduplications = std::stoi(value);

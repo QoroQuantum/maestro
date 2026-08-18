@@ -184,7 +184,7 @@ class QCSimState : public ISimulator {
 
     bondDimensionCallback = [this](const auto& bondDims) {
       for (int i = 0; i < static_cast<int>(bondDims.size()); ++i)
-        if (bondDims[i] > curMaxBondDim) curMaxBondDim = bondDims[i];
+        if (static_cast<size_t>(bondDims[i]) > curMaxBondDim) curMaxBondDim = static_cast<size_t>(bondDims[i]);
     };
   }
 
