@@ -73,10 +73,11 @@ class GpuState : public ISimulator {
           curMaxBondDim = 1;
           mps->SetBondDimensionsCallback(&GpuState::BondDimCallback);
 
-          if (useDoublePrecision) mps->SetDataType(true);
-          if (limitEntanglement && singularValueThreshold > 0.)
-            mps->SetCutoff(singularValueThreshold);
-          if (limitSize && chi > 0) mps->SetMaxExtent(chi);
+          // ensure the config settings are applied, they need to be applied
+          // after the simulator is created but before the state is created
+          for (const auto& [key, value] : configuration.GetConfigMap())
+            if (key != "method") Configure(key.c_str(), value.c_str());
+
           const bool res = mps->Create(nrQubits);
           if (!res)
             throw std::runtime_error(
@@ -91,6 +92,11 @@ class GpuState : public ISimulator {
       } else if (simulationType == SimulationType::kTensorNetwork) {
         tn = SimulatorsFactory::CreateGpuLibTensorNetSim();
         if (tn) {
+          // ensure the config settings are applied, they need to be applied
+          // after the simulator is created but before the state is created
+          for (const auto& [key, value] : configuration.GetConfigMap())
+            if (key != "method") Configure(key.c_str(), value.c_str());
+
           const bool res = tn->Create(nrQubits);
           if (!res)
             throw std::runtime_error(
@@ -103,6 +109,11 @@ class GpuState : public ISimulator {
       } else if (simulationType == SimulationType::kPauliPropagator) {
         pp = SimulatorsFactory::CreateGpuPauliPropagatorSimulatorUnique();
         if (pp) {
+          // ensure the config settings are applied, they need to be applied
+          // after the simulator is created but before the state is created
+          for (const auto& [key, value] : configuration.GetConfigMap())
+            if (key != "method") Configure(key.c_str(), value.c_str());
+
           const bool res = pp->CreateSimulator(nrQubits);
           if (!res)
             throw std::runtime_error(
@@ -270,8 +281,7 @@ class GpuState : public ISimulator {
       if (!dummySim || dummySim->getNrQubits() != initialMap.size()) {
         dummySim =
             std::make_unique<Simulators::MPSDummySimulator>(initialMap.size());
-        dummySim->SetMaxBondDimension(
-            limitSize ? static_cast<long long int>(chi) : 0);
+        dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt("mps_max_bond_dimension"));
       }
       dummySim->setGrowthFactorGate(growthFactorGate);
       dummySim->setGrowthFactorSwap(growthFactorSwap);
@@ -389,8 +399,6 @@ class GpuState : public ISimulator {
    * @param value The value of the configuration.
    */
   void Configure(const char *key, const char *value) override {
-    configuration.SetConfiguration(key, value);
-
     if (std::string("method") == key) {
       if (std::string("statevector") == value)
         simulationType = SimulationType::kStatevector;
@@ -400,28 +408,47 @@ class GpuState : public ISimulator {
         simulationType = SimulationType::kTensorNetwork;
       else if (std::string("pauli_propagator") == value)
         simulationType = SimulationType::kPauliPropagator;
-    } else if (std::string("matrix_product_state_truncation_threshold") ==
-               key) {
-      singularValueThreshold = std::stod(value);
+    }
+        
+    if (!configuration.WasApplied(key, value))
+        configuration.SetConfiguration(key, value);    
+        
+    if (std::string("matrix_product_state_truncation_threshold") == key) {
+      const double singularValueThreshold = std::stod(value);
       if (singularValueThreshold > 0.) {
-        limitEntanglement = true;
         if (mps) mps->SetCutoff(singularValueThreshold);
         if (tn) tn->SetCutoff(singularValueThreshold);
-      } else
-        limitEntanglement = false;
+      }
     } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
-      chi = std::stoi(value);
+      const long long int chi = std::stoi(value);
       if (chi > 0) {
-        limitSize = true;
         if (mps) mps->SetMaxExtent(chi);
         if (tn) tn->SetMaxExtent(chi);
-      } else
-        limitSize = false;
+      }
     } else if (std::string("use_double_precision") == key) {
-      useDoublePrecision =
+      const bool useDoublePrecision =
           (std::string("1") == value || std::string("true") == value);
+      if (mps) mps->SetDataType(useDoublePrecision);
+      if (tn) tn->SetDataType(useDoublePrecision);
+    } 
+    
+    if (pp) {
+      if (std::string("pauli_propagator_coefficient_threshold") == key) {
+        const double coefficientThreshold = std::stod(value);
+        pp->SetCoefficientTruncationCutoff(coefficientThreshold);
+      } else if (std::string("pauli_propagator_pauli_weight_threshold") ==
+                 key) {
+        const double pauliWeightThreshold = std::stod(value);
+        pp->SetWeightTruncationCutoff(pauliWeightThreshold);
+      } else if (std::string("pauli_propagator_steps_between_trims") == key) {
+        const int stepsBetweenTrims = std::stoi(value);
+        pp->SetNumGatesBetweenTruncations(stepsBetweenTrims);
+      } else if (std::string("pauli_propagator_num_gates_between_deduplications") ==
+                 key) {
+        const int numGatesBetweenDeduplications = std::stoi(value);
+        pp->SetNumGatesBetweenDeduplications(numGatesBetweenDeduplications);
+      }
     }
-    // TODO: add pauli propagator configuration options
   }
 
   /**
@@ -445,20 +472,9 @@ class GpuState : public ISimulator {
         default:
           return "other";
       }
-    } else if (std::string("matrix_product_state_truncation_threshold") ==
-               key) {
-      if (limitEntanglement && singularValueThreshold > 0.) {
-        std::ostringstream oss;
-        oss << std::setprecision(std::numeric_limits<double>::max_digits10)
-            << singularValueThreshold;
-        return oss.str();
-      }
-    } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
-      if (limitSize && limitSize > 0) return std::to_string(chi);
     }
-    // TODO: add pauli propagator configuration options
 
-    return "";
+    return configuration.GetConfiguration(key);
   }
 
   /**
@@ -1221,8 +1237,7 @@ class GpuState : public ISimulator {
 
     if (!dummySim || dummySim->getNrQubits() != nQ) {
       dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
-      dummySim->SetMaxBondDimension(
-          limitSize ? static_cast<long long int>(chi) : 0);
+      dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt("matrix_product_state_max_bond_dimension"));
       dummySim->setGrowthFactorGate(growthFactorGate);
       dummySim->setGrowthFactorSwap(growthFactorSwap);
     }
@@ -1285,12 +1300,6 @@ class GpuState : public ISimulator {
       pp; /**< The gpu Pauli propagator simulator. */
 
   size_t nrQubits = 0; /**< The number of allocated qubits. */
-
-  bool limitSize = false;
-  bool limitEntanglement = false;
-  Eigen::Index chi = 10;               // if limitSize is true
-  double singularValueThreshold = 0.;  // if limitEntanglement is true
-  bool useDoublePrecision = false;     // if true, GPU MPS uses float64
 
   int lookaheadDepth = 0;
   int lookaheadDepthWithHeuristic = 0;

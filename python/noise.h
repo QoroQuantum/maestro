@@ -571,15 +571,15 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise(
       }
 
       // "All gates" channel (existing behavior)
-      const auto *qn = nm.get(q);
+      const auto *qn = nm.get(static_cast<int>(q));
       if (qn) inject_1q_pauli_(out, q, *qn, dist, rng);
 
       // Gate-type-specific channels
       if (is_2q) {
-        const auto *qn2 = nm.get_2q_gate_noise(q);
+        const auto *qn2 = nm.get_2q_gate_noise(static_cast<int>(q));
         if (qn2) inject_1q_pauli_(out, q, *qn2, dist, rng);
       } else {
-        const auto *qn1 = nm.get_1q_gate_noise(q);
+        const auto *qn1 = nm.get_1q_gate_noise(static_cast<int>(q));
         if (qn1) inject_1q_pauli_(out, q, *qn1, dist, rng);
       }
     }
@@ -804,7 +804,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
     // per spectator (avoids double-counting).
     std::unordered_map<int, double> spectator_rotations;
     for (auto q : affected) {
-      const auto *xt = nm.get_crosstalk_neighbors(q);
+      const auto *xt = nm.get_crosstalk_neighbors(static_cast<int>(q));
       if (!xt) continue;
       for (const auto &[neighbor, strength] : *xt) {
         if (!is_affected(neighbor))
@@ -827,17 +827,17 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
 
     // ── 5. Pauli (incoherent) noise — "all gates" channel ──
     for (auto q : affected) {
-      const auto *qn = nm.get(q);
+      const auto *qn = nm.get(static_cast<int>(q));
       if (qn) inject_1q_pauli_(out, q, *qn, dist, rng);
     }
 
     // ── 6. Gate-type-specific Pauli noise ──
     for (auto q : affected) {
       if (is_2q) {
-        const auto *qn2 = nm.get_2q_gate_noise(q);
+        const auto *qn2 = nm.get_2q_gate_noise(static_cast<int>(q));
         if (qn2) inject_1q_pauli_(out, q, *qn2, dist, rng);
       } else {
-        const auto *qn1 = nm.get_1q_gate_noise(q);
+        const auto *qn1 = nm.get_1q_gate_noise(static_cast<int>(q));
         if (qn1) inject_1q_pauli_(out, q, *qn1, dist, rng);
       }
     }
