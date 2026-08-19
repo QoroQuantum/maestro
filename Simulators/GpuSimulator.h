@@ -785,11 +785,6 @@ class GpuSimulator : public GpuState {
     cloned->simulationType = simulationType;
     cloned->nrQubits = nrQubits;
 
-    cloned->limitSize = limitSize;
-    cloned->limitEntanglement = limitEntanglement;
-    cloned->chi = chi;
-    cloned->singularValueThreshold = singularValueThreshold;
-
     cloned->lookaheadDepth = lookaheadDepth;
     cloned->useOptimalMeetingPosition = useOptimalMeetingPosition;
     cloned->upcomingGates = upcomingGates;
@@ -810,6 +805,11 @@ class GpuSimulator : public GpuState {
 
       cloned->curMaxBondDim = curMaxBondDim;
       cloned->mps->SetCallbackContext(cloned.get());
+    } else if (tn || pp) {
+      throw std::runtime_error(
+          "GpuSimulator::Clone: Cloning Tensor Network or Pauli Propagator "
+          "simulation is not "
+          "supported.");
     }
 
     return cloned;

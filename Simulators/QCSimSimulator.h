@@ -1151,13 +1151,7 @@ class QCSimSimulator : public QCSimState {
     cloned->simulationType = simulationType;
     cloned->nrQubits = nrQubits;
 
-    cloned->limitSize = limitSize;
-    cloned->limitEntanglement = limitEntanglement;
-    cloned->chi = chi;
-    cloned->singularValueThreshold = singularValueThreshold;
-
     cloned->enableMultithreading = enableMultithreading;
-    cloned->useMPSMeasureNoCollapse = useMPSMeasureNoCollapse;
 
     cloned->lookaheadDepth = lookaheadDepth;
     cloned->useOptimalMeetingPosition = useOptimalMeetingPosition;
@@ -1165,18 +1159,12 @@ class QCSimSimulator : public QCSimState {
     cloned->upcomingGateIndex = upcomingGateIndex;
     cloned->growthFactorGate = growthFactorGate;
     cloned->growthFactorSwap = growthFactorSwap;
-    cloned->configuration = configuration;
 
     if (state) cloned->state = state->Clone();
 
     if (mpsSimulator) {
       cloned->mpsSimulator = mpsSimulator->Clone();
-
-      if (limitEntanglement && singularValueThreshold > 0.)
-        cloned->mpsSimulator->setLimitEntanglement(singularValueThreshold);
-      if (limitSize && chi > 0)
-        cloned->mpsSimulator->setLimitBondDimension(chi);
-
+  
       cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
 
       cloned->gateCounterObserver =
@@ -1200,6 +1188,9 @@ class QCSimSimulator : public QCSimState {
 
     if (pathIntegralSimulator)
       cloned->pathIntegralSimulator = pathIntegralSimulator->Clone();
+
+    for (const auto& [key, value] : configuration.GetConfigMap())
+      cloned->Configure(key.c_str(), value.c_str());
 
     return cloned;
   }

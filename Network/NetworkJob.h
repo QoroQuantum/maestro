@@ -69,16 +69,6 @@ class ExecuteJob {
     if (!optSim) {
       optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
       if (!optSim) return;
-
-      if (!maxBondDim.empty())
-        optSim->Configure("matrix_product_state_max_bond_dimension",
-                          maxBondDim.c_str());
-      if (!singularValueThreshold.empty())
-        optSim->Configure("matrix_product_state_truncation_threshold",
-                          singularValueThreshold.c_str());
-      if (!mpsSample.empty())
-        optSim->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
-
       config.ApplyConfigurationToSimulator(optSim);
 
       optSim->AllocateQubits(nrQubits);
@@ -217,16 +207,6 @@ class ExecuteJob {
 
       if (optSim->GetNumberOfQubits() != nrQubits) {
         optSim->Clear();
-
-        if (!maxBondDim.empty())
-          optSim->Configure("matrix_product_state_max_bond_dimension",
-                            maxBondDim.c_str());
-        if (!singularValueThreshold.empty())
-          optSim->Configure("matrix_product_state_truncation_threshold",
-                            singularValueThreshold.c_str());
-        if (!mpsSample.empty())
-          optSim->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
-
         config.ApplyConfigurationToSimulator(optSim);
 
         optSim->AllocateQubits(nrQubits);
@@ -294,16 +274,6 @@ class ExecuteJob {
       if (!optSim) return;
 
       optSim->SetMultithreading(true);
-
-      if (!maxBondDim.empty())
-        optSim->Configure("matrix_product_state_max_bond_dimension",
-                          maxBondDim.c_str());
-      if (!singularValueThreshold.empty())
-        optSim->Configure("matrix_product_state_truncation_threshold",
-                          singularValueThreshold.c_str());
-      if (!mpsSample.empty())
-        optSim->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
-
       config.ApplyConfigurationToSimulator(optSim);
 
       optSim->AllocateQubits(nrQubits);
@@ -415,9 +385,10 @@ private:
         const auto bondDimThreshold =
             network->GetMPSOptimizationBondDimensionThreshold();
         const auto maxBondDimValue =
-            maxBondDim.empty() ? 0 : std::stoi(maxBondDim);
+            config.GetConfigurationAsInt("matrix_product_state_max_bond_dimension");
 
-        if (maxBondDim.empty() || static_cast<int>(bondDimThreshold) <= maxBondDimValue) {
+        if (maxBondDimValue == 0 ||
+            static_cast<int>(bondDimThreshold) <= maxBondDimValue) {
           // need to be sure the circuit is correctly converted
           dcirc->ConvertForCutting();  // convert the three qubit gates
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();
@@ -425,7 +396,7 @@ private:
           Simulators::MPSDummySimulator dummySim(nrQubits);
           dummySim.setGrowthFactorGate(network->getGrowthFactorGate());
           dummySim.setGrowthFactorSwap(network->getGrowthFactorSwap());
-          if (!maxBondDim.empty())
+          if (maxBondDimValue != 0)
             dummySim.SetMaxBondDimension(maxBondDimValue);
           
           if (network->GetInitialQubitsMapOptimization()) {
@@ -504,11 +475,8 @@ public:
   std::shared_ptr<Simulators::ISimulator> optSim;
   std::vector<bool> executedGates;
 
-  // only fill them if passing null simulator
-  std::string maxBondDim;
-  std::string singularValueThreshold;
-  std::string mpsSample;
-
+  // relevant only if the simulator is not passed or the simulator doesn't have the proper number of qubits,
+  // otherwise the simulator is already configured
   Configuration<Time> config;
 
   std::shared_ptr<Network::INetwork<Time>> network;

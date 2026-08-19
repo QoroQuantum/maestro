@@ -75,19 +75,19 @@ class Configuration {
    */
   void SetConfiguration(const std::string& key, const std::string& value) {
     // specially handled, ignore it
-    if (key == "method") return;
+    if (IgnoredSetting(key)) return;
     configMap[key] = value;
   }
 
   void SetConfiguration(const std::string& key, long long int value) {
     // specially handled, ignore it
-    if (key == "method") return;
+    if (IgnoredSetting(key)) return;
     configMap[key] = std::to_string(value);
   }
 
   void SetConfiguration(const std::string& key, double value) {
     // specially handled, ignore it
-    if (key == "method") return;
+    if (IgnoredSetting(key)) return;
     configMap[key] = std::to_string(value);
   }
 
@@ -135,7 +135,7 @@ class Configuration {
     return 0.0;
   }
 
-  bool CanBeAppliedOnInitializedSimulator(const std::string& key) const {
+  static bool CanBeAppliedOnInitializedSimulator(const std::string& key) {
     if (key == "method" || key == "use_double_precision" ||
         key == "precision" ||
         key == "max_parallel_threads" || key == "parallel_state_update" ||
@@ -145,9 +145,16 @@ class Configuration {
     return true;
   }
 
+  static bool IgnoredSetting(const std::string& key) {
+    if (key == "max_simulators" || key == "method")
+      return true;
+
+    return false;
+  }
+
   void ApplyConfigurationToSimulator(const std::shared_ptr<Simulators::IState>& simulator) const {
     for (const auto& [key, value] : configMap)
-        simulator->Configure(key.c_str(), value.c_str());
+      simulator->Configure(key.c_str(), value.c_str());
   }
 
   void ApplyConfigurationFromSimulator(const std::shared_ptr<Simulators::IState>& simulator) {
@@ -161,6 +168,14 @@ class Configuration {
 
   const std::unordered_map<std::string, std::string>& GetConfigMap() const {
     return configMap;
+  }
+
+  bool WasApplied(const std::string& key, const std::string& value) const {
+    auto it = configMap.find(key);
+    if (it != configMap.end())
+      return it->second == value;
+
+    return false;
   }
 
   private:

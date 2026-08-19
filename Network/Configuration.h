@@ -146,6 +146,10 @@ class Configuration {
     return simulatorConfig.GetConfigMap();
   }
 
+  bool WasApplied(const std::string& key, const std::string& value) const {
+    return simulatorConfig.WasApplied(key, value);
+  }
+
  private:
   Simulators::Configuration
       simulatorConfig; /**< The simulator configuration. */

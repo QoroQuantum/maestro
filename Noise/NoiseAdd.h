@@ -280,7 +280,7 @@ class NoiseAdd {
       int noise_realizations) {
     if (!network || !circuit) return {};
 
-    const int n_obs = paulis.size();
+    const int n_obs = static_cast<int>(paulis.size());
     std::vector<double> vals(n_obs, 0.0);
 
     for (int r = 0; r < noise_realizations; ++r) {
@@ -302,7 +302,7 @@ class NoiseAdd {
       int noise_realizations) {
     if (!network || !circuit) return {};
 
-    const int n_obs = paulis.size();
+    const int n_obs = static_cast<int>(paulis.size());
     std::vector<double> vals(n_obs, 0.0);
 
     for (int r = 0; r < noise_realizations; ++r) {
@@ -343,7 +343,7 @@ class NoiseAdd {
       int noise_realizations) {
     if (!network || !circuit) return {};
 
-    const int n_obs = paulis.size();
+    const int n_obs = static_cast<int>(paulis.size());
     std::vector<double> vals(n_obs, 0.0);
 
     for (int r = 0; r < noise_realizations; ++r) {
@@ -365,7 +365,7 @@ class NoiseAdd {
       int noise_realizations) {
     if (!network || !circuit) return {};
 
-    const int n_obs = paulis.size();
+    const int n_obs = static_cast<int>(paulis.size());
     std::vector<double> vals(n_obs, 0.0);
 
     for (int r = 0; r < noise_realizations; ++r) {
@@ -387,7 +387,7 @@ class NoiseAdd {
       int noise_realizations) {
     if (!network || !circuit) return {};
 
-    const int n_obs = paulis.size();
+    const int n_obs = static_cast<int>(paulis.size());
     std::vector<double> vals(n_obs, 0.0);
 
     for (int r = 0; r < noise_realizations; ++r) {

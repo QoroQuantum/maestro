@@ -59,7 +59,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
    */
   SimpleDisconnectedNetwork(const std::vector<Types::qubit_t> &qubits = {},
                             const std::vector<size_t> &cbits = {}) {
-    configuration.SetConfiguration("use_double_precision", "1");
+    configuration.SetConfiguration("use_double_precision", "0");
     if (!qubits.empty()) CreateNetwork(qubits, cbits);
   }
 
@@ -576,12 +576,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     const size_t nrQubits = GetNumQubits() + GetNumNetworkEntangledQubits();
     const size_t nrCbitsResults = GetNumClassicalBits();
 
-    maxBondDim =
-        simulator->GetConfiguration("matrix_product_state_max_bond_dimension");
-    singularValueThreshold = simulator->GetConfiguration(
-        "matrix_product_state_truncation_threshold");
-    mpsSample = simulator->GetConfiguration("mps_sample_measure_algorithm");
-
     configuration.ApplyConfigurationFromSimulator(simulator);
 
     // do that only if the optimization for simulator is on and the estimator is
@@ -649,10 +643,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             method, resultsMutex);
         job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
 
-        job->maxBondDim = maxBondDim;
-        job->mpsSample = mpsSample;
-        job->singularValueThreshold = singularValueThreshold;
-
         job->network = BaseClass::getptr();
         job->curMaxBondDim = &curMaxBondDim;
 
@@ -675,10 +665,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           dcirc, res, curCnt, nrQubits, nrQubits, nrCbitsResults, simType,
           method, resultsMutex);
       job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
-
-      job->maxBondDim = maxBondDim;
-      job->mpsSample = mpsSample;
-      job->singularValueThreshold = singularValueThreshold;
 
       job->network = BaseClass::getptr();
       job->curMaxBondDim = &curMaxBondDim;
@@ -750,12 +736,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (!simulator || !distCirc) return {};
 
     auto simType = simulator->GetType();
-
-    maxBondDim =
-        simulator->GetConfiguration("matrix_product_state_max_bond_dimension");
-    singularValueThreshold = simulator->GetConfiguration(
-        "matrix_product_state_truncation_threshold");
-    mpsSample = simulator->GetConfiguration("mps_sample_measure_algorithm");
 
     configuration.ApplyConfigurationFromSimulator(simulator);
 
@@ -845,10 +825,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             resultsMutex);
         job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
 
-        job->maxBondDim = maxBondDim;
-        job->mpsSample = mpsSample;
-        job->singularValueThreshold = singularValueThreshold;
-
         job->network = BaseClass::getptr();
         job->curMaxBondDim = &curMaxBondDim;
 
@@ -871,10 +847,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           dcirc, res, curCnt, nrQubits, nrCbits, nrCbits, simType, method,
           resultsMutex);
       job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
-
-      job->maxBondDim = maxBondDim;
-      job->mpsSample = mpsSample;
-      job->singularValueThreshold = singularValueThreshold;
 
       job->network = BaseClass::getptr();
       job->curMaxBondDim = &curMaxBondDim;
@@ -978,16 +950,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         Simulators::SimulatorsFactory::CreateSimulator(simType, simExecType);
 
     if (simulator) {
-      if (!maxBondDim.empty())
-        simulator->Configure("matrix_product_state_max_bond_dimension",
-                             maxBondDim.c_str());
-      if (!singularValueThreshold.empty())
-        simulator->Configure("matrix_product_state_truncation_threshold",
-                             singularValueThreshold.c_str());
-      if (!mpsSample.empty())
-        simulator->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
-      if (useDoublePrecision) simulator->Configure("use_double_precision", "1");
-
       configuration.ApplyConfigurationToSimulator(simulator);
 
       simulator->AllocateQubits(
@@ -1014,18 +976,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   void Configure(const char *key, const char *value) override {
     if (!key || !value) return;
 
-    if (std::string("matrix_product_state_max_bond_dimension") == key)
-      maxBondDim = value;
-    else if (std::string("matrix_product_state_truncation_threshold") == key)
-      singularValueThreshold = value;
-    else if (std::string("mps_sample_measure_algorithm") == key)
-      mpsSample = value;
-    else if (std::string("use_double_precision") == key)
-      useDoublePrecision =
-          (std::string("1") == value || std::string("true") == value);
-    else if (std::string("max_simulators") == key)
+    if (std::string("max_simulators") == key)
       maxSimulators = std::stoull(value);
-
 
     configuration.SetConfiguration(key, value);
 
@@ -1918,9 +1870,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     
     cloned->configuration = configuration;
 
-    cloned->maxBondDim = maxBondDim;
-    cloned->singularValueThreshold = singularValueThreshold;
-    cloned->mpsSample = mpsSample;
+    cloned->maxSimulators = maxSimulators;
 
     cloned->optimizeSimulator = optimizeSimulator;
     cloned->simulatorsForOptimizations = simulatorsForOptimizations;
@@ -2004,10 +1954,13 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       simulatorTypes.emplace_back(Simulators::SimulatorType::kQCSim,
                                   Simulators::SimulationType::kTensorNetwork);
 
+    const long long int maxBondDim = configuration.GetConfigurationAsInt(
+        "matrix_product_state_max_bond_dimension");
+
     if (OptimizationSimulatorExists(
             Simulators::SimulatorType::kQCSim,
             Simulators::SimulationType::kMatrixProductState) &&
-        (nrQubits <= 4 || !maxBondDim.empty()))
+        (nrQubits <= 4 || maxBondDim > 0))
       simulatorTypes.emplace_back(
           Simulators::SimulatorType::kQCSim,
           Simulators::SimulationType::kMatrixProductState);
@@ -2044,7 +1997,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (OptimizationSimulatorExists(
             Simulators::SimulatorType::kQiskitAer,
             Simulators::SimulationType::kMatrixProductState) &&
-        (nrQubits <= 4 || !maxBondDim.empty()))
+        (nrQubits <= 4 || maxBondDim > 0))
       simulatorTypes.emplace_back(
           Simulators::SimulatorType::kQiskitAer,
           Simulators::SimulationType::kMatrixProductState);
@@ -2093,15 +2046,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         configuration.ApplyConfigurationToSimulator(sim);
         
         if (method == Simulators::SimulationType::kMatrixProductState) {
-          if (!maxBondDim.empty())
-            sim->Configure("matrix_product_state_max_bond_dimension",
-                           maxBondDim.c_str());
-          if (!singularValueThreshold.empty())
-            sim->Configure("matrix_product_state_truncation_threshold",
-                           singularValueThreshold.c_str());
-          if (!mpsSample.empty())
-            sim->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
-
           sim->AllocateQubits(nrQubits);
           sim->Initialize();
 
@@ -2127,6 +2071,13 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         return sim;
       }
     }
+
+    const double singularValueThreshold =
+        configuration.GetConfigurationAsDouble(
+            "matrix_product_state_truncation_threshold");
+
+    const std::string mpsSample = configuration.GetConfiguration(
+        "mps_sample_measure_algorithm");
 
     std::shared_ptr<Simulators::ISimulator> sim =
         simulatorsEstimator->ChooseBestSimulator(
@@ -2264,9 +2215,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         sim->SupportsMPSSwapOptimization()) {
       if (mpsOptimizationQubitsNumberThreshold <= nrQubits) {
         const auto maxBondDimValue =
-            maxBondDim.empty() ? 0 : std::stoi(maxBondDim);
+            configuration.GetConfigurationAsInt("matrix_product_state_max_bond_dimension");
 
-        if (maxBondDim.empty() ||
+        if (maxBondDimValue <= 0 ||
             static_cast<int>(mpsOptimizationBondDimensionThreshold) <= maxBondDimValue) {
           // need to be sure the circuit is correctly converted
           dcirc->ConvertForCutting();  // convert the three qubit gates
@@ -2276,7 +2227,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           dummySim.setGrowthFactorGate(growthFactorGate);
           dummySim.setGrowthFactorSwap(growthFactorSwap);
 
-          if (!maxBondDim.empty())
+          if (maxBondDimValue > 0)
             dummySim.SetMaxBondDimension(maxBondDimValue);
 
           if (optimizeInitialQubitsMap) {
@@ -2526,11 +2477,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   Simulators::SimulationType lastMethod =
       Simulators::SimulationType::kStatevector; /**< The last simulation method
                                                    used. */
-
-  std::string maxBondDim;
-  std::string singularValueThreshold;
-  std::string mpsSample;
-  bool useDoublePrecision = false;
 
   Configuration<Time> configuration;
 
