@@ -58,6 +58,11 @@ class GpuState : public ISimulator {
       if (simulationType == SimulationType::kStatevector) {
         state = SimulatorsFactory::CreateGpuLibStateVectorSim();
         if (state) {
+          // ensure the config settings are applied, they need to be applied
+          // after the simulator is created
+          for (const auto& [key, value] : configuration.GetConfigMap())
+            if (key != "method") Configure(key.c_str(), value.c_str());
+
           const bool res = state->Create(nrQubits);
           if (!res)
             throw std::runtime_error(
@@ -1244,9 +1249,19 @@ class GpuState : public ISimulator {
     }
 
     dummySim->setTotalSwappingCost(0);
+
     // Convert actual bond dims to doubles
     std::vector<double> bondDimsD(bondDims, bondDims + nrQubits - 1);
     dummySim->SetCurrentBondDimensions(bondDimsD);
+
+      // display bond dimensions for debugging
+#ifdef LOG_CALLBACK_INFO
+    std::cout << "Bond dimensions before swapping and applying the gate:";
+    for (size_t i = 0; i < nrQubits - 1; ++i) {
+      std::cout << bondDims[i] << " ";
+    }
+    std::cout << std::endl;
+#endif
 
     if (upcomingGates.size() <= static_cast<size_t>(upcomingGateIndex)) {
       return -1;  // will fallback
@@ -1263,13 +1278,51 @@ class GpuState : public ISimulator {
       return -1;  // will fallback
     }
 
+#ifdef LOG_CALLBACK_INFO
+    const auto& qmap = dummySim->getQubitsMap();
+
+    std::cout << "Applying 2-qubit gate on physical qubits " << qmap[qbits[0]]
+              << " and " << qmap[qbits[1]] << std::endl;
+
+    std::cout << "Finding best meeting position for upcoming gates starting at index "
+              << upcomingGateIndex << " with lookahead depth " << lookaheadDepth
+              << " and heuristic depth " << lookaheadDepthWithHeuristic
+              << std::endl;
+
+    std::cout << "Affected qubits: ";
+    for (const auto& q : qbits) std::cout << q << " ";
+    std::cout << std::endl;
+#endif
+
     double bestCost = std::numeric_limits<double>::infinity();
     int64_t res = dummySim->FindBestMeetingPosition(
         upcomingGates, upcomingGateIndex, lookaheadDepth,
         lookaheadDepthWithHeuristic, 0, bestCost);
 
+#ifdef LOG_CALLBACK_INFO
+    std::cout << "Swapping the two qubits on position: " << res << " and "
+              << (res + 1) << std::endl;
+#endif
+
     dummySim->SwapQubitsToPosition(qbits[0], qbits[1], res);
     dummySim->ApplyGate(op);
+
+    // display the expected bond dimensions after applying the gate for
+    // debugging
+
+#ifdef LOG_CALLBACK_INFO
+    const auto& expectedBondDims = dummySim->getCurrentBondDimensions();
+    std::cout << "Expected bond dimensions after swapping and applying "
+                 "the gate: ";
+    for (size_t i = 0; i < expectedBondDims.size(); ++i) {
+      std::cout << expectedBondDims[i] << " ";
+    }
+    std::cout << std::endl;
+
+    std::cout << "Best meeting position: " << res
+              << " with estimated cost: " << bestCost << std::endl;
+#endif
+
 
     return res;
   }

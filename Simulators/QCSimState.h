@@ -55,6 +55,9 @@ namespace Private {
  * @sa IState
  * @sa QCSimSimulator
  */
+
+//#define LOG_CALLBACK_INFO 1
+
 class QCSimState : public ISimulator {
  public:
   QCSimState() : rng(std::random_device{}()), uniformZeroOne(0, 1) {
@@ -83,33 +86,18 @@ class QCSimState : public ISimulator {
       // dummySim->SetInitialQubitsMap(map64);
       dummySim->setTotalSwappingCost(0);
 
-      // check qubits map:
-      /*
-      auto qbitmMap = dummySim->getQubitsMap();
-      for (size_t i = 0; i < nQ; ++i) {
-        if (qbitmMap[i] != qMap[i]) {
-          std::cerr << "Error: qubits map mismatch at index " << i
-                    << ": dummySim has " << qbitmMap[i]
-                    << " but real sim has " << qMap[i] << std::endl;
-          exit(0);
-        }
-      }
-      */
-
-      // check them, they should be the same, otherwise something is wrong
-
       // Convert actual bond dims to doubles
       std::vector<double> bondDimsD(bondDims.begin(), bondDims.end());
       dummySim->SetCurrentBondDimensions(bondDimsD);
 
       // display bond dimensions for debugging
-      /*
-      std::cout << "Bond dimensions before swapping and applying the gate:
-      "; for (size_t i = 0; i < bondDims.size(); ++i) { std::cout <<
-      bondDims[i] << " ";
+#ifdef LOG_CALLBACK_INFO
+      std::cout << "Bond dimensions before swapping and applying the gate:"; 
+      for (size_t i = 0; i < bondDims.size(); ++i) { 
+          std::cout << bondDims[i] << " ";
       }
       std::cout << std::endl;
-      */
+#endif
 
       const auto& op = upcomingGates[upcomingGateIndex];
       const auto qbits = op->AffectedQubits();
@@ -122,43 +110,32 @@ class QCSimState : public ISimulator {
         return -1;  // will fallback
       }
 
-      /*
+#ifdef LOG_CALLBACK_INFO
       const auto &qmap = dummySim->getQubitsMap();
 
       std::cout << "Applying 2-qubit gate on physical qubits " <<
       qmap[qbits[0]] << " and "
                 << qmap[qbits[1]]
                 << std::endl;
-      */
-      /*
-      std::cout << "Finding best meeting position for upcoming gates
-      starting at index "
+
+      std::cout << "Finding best meeting position for upcoming gates starting at index "
                 << upcomingGateIndex << " with lookahead depth " <<
       lookaheadDepth << " and heuristic depth "
                 << lookaheadDepthWithHeuristic << std::endl;
 
-
-
       std::cout << "Affected qubits: ";
       for (const auto &q : qbits) std::cout << q << " ";
       std::cout << std::endl;
-
-      std::cout << "Current qubits map: ";
-      for (size_t i = 0; i < qMap.size(); ++i) std::cout << qMap[i] << " ";
-      std::cout << std::endl;
-
-      std::cout << "Current inverse qubits map: ";
-      for (size_t i = 0; i < qMapInv.size(); ++i) std::cout << qMapInv[i] <<
-      " "; std::cout << std::endl;
-      */
+#endif
 
       double bestCost = std::numeric_limits<double>::infinity();
       auto res = dummySim->FindBestMeetingPosition(
           upcomingGates, upcomingGateIndex, lookaheadDepth,
           lookaheadDepthWithHeuristic, 0, bestCost);
 
-      // std::cout << "Swapping the two qubits on position: " << res << "
-      // and " << (res + 1) << std::endl;
+#ifdef LOG_CALLBACK_INFO
+       std::cout << "Swapping the two qubits on position: " << res << " and " << (res + 1) << std::endl;
+#endif
 
       dummySim->SwapQubitsToPosition(qbits[0], qbits[1], res);
       dummySim->ApplyGate(op);
@@ -166,7 +143,7 @@ class QCSimState : public ISimulator {
       // display the expected bond dimensions after applying the gate for
       // debugging
 
-      /*
+#ifdef LOG_CALLBACK_INFO
       const auto &expectedBondDims = dummySim->getCurrentBondDimensions();
       std::cout << "Expected bond dimensions after swapping and applying "
                    "the gate: ";
@@ -174,10 +151,9 @@ class QCSimState : public ISimulator {
         std::cout << expectedBondDims[i] << " ";
       }
       std::cout << std::endl;
-      */
 
-      // std::cout << "Best meeting position: " << res
-      //           << " with estimated cost: " << bestCost << std::endl;
+      std::cout << "Best meeting position: " << res << " with estimated cost: " << bestCost << std::endl;
+#endif
 
       return res;
     };
