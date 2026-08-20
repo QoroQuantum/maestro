@@ -1654,7 +1654,7 @@ NB_MODULE(maestro, m) {
           "parse_and_translate",
           [](qasm::QasmToCirc<double>& self, const std::string& qasm_str,
              const std::unordered_map<std::string, double>& params) {
-            auto circuit = self.ParseAndTranslate(qasm_str, params);
+            auto circuit = self.ParseAndTranslateWithParams(qasm_str, params);
             if (self.Failed() || !circuit) {
               throw nb::value_error(
                   ("Failed to parse QASM string: " + self.GetErrorMessage())

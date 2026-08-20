@@ -116,7 +116,7 @@ inline void CheckBoundInputMatchesLiteral(
     const std::unordered_map<std::string, double> &params,
     const std::string &referenceQasmStr, unsigned int nrQubits) {
   qasm::QasmToCirc<> parser;
-  auto circuit = parser.ParseAndTranslate(qasmStr, params);
+  auto circuit = parser.ParseAndTranslateWithParams(qasmStr, params);
   BOOST_TEST(!parser.Failed(), parser.GetErrorMessage());
   BOOST_TEST_REQUIRE(!parser.Failed());
 
