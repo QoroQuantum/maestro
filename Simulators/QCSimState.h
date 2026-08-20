@@ -503,9 +503,14 @@ class QCSimState : public ISimulator {
       if (std::string(key) == "pauli_propagator_coefficient_threshold") {
         pp->SetCoefficientThreshold(configuration.GetConfigurationAsDouble(key));
       } else if (std::string(key) == "pauli_propagator_pauli_weight_threshold") {
-        pp->SetPauliWeightThreshold(configuration.GetConfigurationAsDouble(key));
+        pp->SetPauliWeightThreshold(
+            configuration.GetConfigurationAsUnsigned(key));
       } else if (std::string(key) == "pauli_propagator_steps_between_trims") {
         pp->SetStepsBetweenTrims(configuration.GetConfigurationAsInt(key));
+      } else if (std::string(key) ==
+                 "pauli_propagator_num_gates_between_deduplications") {
+        pp->SetStepsBetweenDeduplication(
+            configuration.GetConfigurationAsInt(key));
       }
     }
 

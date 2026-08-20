@@ -970,6 +970,80 @@ class TestPauliPropagatorSimulation:
         assert exp_vals[1] == pytest.approx(0.7071, abs=1e-3)
 
 
+class TestPauliPropagatorTruncation:
+    """Truncation knobs on the Pauli Propagator backend.
+
+    <XX> for GENERAL_NO_MEASURE_QASM is 1/sqrt(2) with no truncation; each
+    test below pins how a knob moves it away from that.
+    """
+
+    UNTRUNCATED = 0.7071067811865
+
+    @staticmethod
+    def _estimate_xx(**knobs):
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.PauliPropagator,
+        )
+        # Maestro binds these as properties, not constructor arguments.
+        for name, value in knobs.items():
+            setattr(config, name, value)
+        result = maestro.simple_estimate(
+            GENERAL_NO_MEASURE_QASM, "XX", config=config
+        )
+        return result['expectation_values'][0]
+
+    def test_no_truncation_baseline(self):
+        assert self._estimate_xx() == pytest.approx(self.UNTRUNCATED, abs=1e-9)
+
+    def test_trim_cadence_applies_coefficient_threshold(self):
+        """A trim cadence activates the coefficient threshold."""
+        assert self._estimate_xx(
+            pp_coefficient_threshold=0.99, pp_steps_between_trims=1
+        ) == pytest.approx(0.0, abs=1e-9)
+
+    def test_deduplication_cadence_applies_coefficient_threshold(self):
+        """A deduplication cadence activates it too, on QCSim as on GPU."""
+        assert self._estimate_xx(
+            pp_coefficient_threshold=0.99, pp_steps_between_deduplications=1
+        ) == pytest.approx(0.0, abs=1e-9)
+
+    def test_cadence_applies_weight_threshold(self):
+        """Weight 0 keeps only the identity string, discarding the rest."""
+        assert self._estimate_xx(
+            pp_pauli_weight_threshold=0, pp_steps_between_trims=1
+        ) == pytest.approx(0.0, abs=1e-9)
+
+    @pytest.mark.parametrize(
+        "knob", ["pp_coefficient_threshold", "pp_pauli_weight_threshold"]
+    )
+    def test_threshold_without_cadence_is_inert(self, knob):
+        """Thresholds are only consulted during a truncation pass."""
+        value = 0.99 if knob == "pp_coefficient_threshold" else 0
+        assert self._estimate_xx(**{knob: value}) == pytest.approx(
+            self.UNTRUNCATED, abs=1e-9
+        )
+
+    def test_weight_threshold_at_qubit_count_is_ignored(self):
+        """A threshold at or above the qubit count disables weight filtering."""
+        assert self._estimate_xx(
+            pp_pauli_weight_threshold=2, pp_steps_between_trims=1
+        ) == pytest.approx(self.UNTRUNCATED, abs=1e-9)
+
+    @pytest.mark.parametrize(
+        "threshold", [2**53 + 1, 2**63, 2**64 - 1], ids=["2^53+1", "2^63", "SIZE_MAX"]
+    )
+    def test_large_weight_threshold_disables_filtering(self, threshold):
+        """Huge thresholds mean "no weight limit", including SIZE_MAX.
+
+        Parsing this key through a double rounds SIZE_MAX past the top of
+        size_t, which converts to 0 and discards every Pauli string.
+        """
+        assert self._estimate_xx(
+            pp_pauli_weight_threshold=threshold, pp_steps_between_trims=1
+        ) == pytest.approx(self.UNTRUNCATED, abs=1e-9)
+
+
 class TestExtendedStabilizerSimulation:
     """Test the Extended Stabilizer simulation backend"""
 

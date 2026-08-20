@@ -162,9 +162,10 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
   // Always create the default simulator (no parameters = QCSim MPS).
   // The desired simulator type is specified via
   // RemoveAllOptimizationSimulatorsAndAdd above.
-  // PauliPropagator truncation settings are passed via Configure before
-  // CreateSimulator; QCSimState stores them in member variables and applies
-  // them when pp is constructed inside CreateSimulator.
+  // PauliPropagator truncation settings are Configured before CreateSimulator;
+  // the state replays its config map once the propagator exists, so they are
+  // applied then. Note that both thresholds are only consulted during a
+  // truncation pass, so a trim or deduplication cadence must also be set.
   if (config.pp_coefficient_threshold) {
     std::ostringstream oss;
     oss << std::setprecision(std::numeric_limits<double>::max_digits10)
