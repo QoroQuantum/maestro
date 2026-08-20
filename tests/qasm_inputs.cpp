@@ -15,7 +15,7 @@ void CheckBindingRejected(
     const std::unordered_map<std::string, double> &bindings,
     const std::string &messageFragment) {
   qasm::QasmToCirc<> parser;
-  auto circuit = parser.ParseAndTranslate(qasmStr, bindings);
+  auto circuit = parser.ParseAndTranslateWithParams(qasmStr, bindings);
   BOOST_TEST(parser.Failed(), "Expected parser failure for:\n" << qasmStr);
   BOOST_TEST(circuit == nullptr);
   BOOST_TEST(
@@ -92,7 +92,7 @@ BOOST_AUTO_TEST_CASE(UnboundInputFailsNamingTheVariable) {
 
 BOOST_AUTO_TEST_CASE(GetInputsReturnsDeclaredNamesInOrder) {
   qasm::QasmToCirc<> parser;
-  auto circuit = parser.ParseAndTranslate(
+  auto circuit = parser.ParseAndTranslateWithParams(
       "OPENQASM 3.0;\n"
       "input float[64] theta;\n"
       "input int[32] shots;\n"
@@ -124,7 +124,7 @@ BOOST_AUTO_TEST_CASE(UnboundInputStillReportsTheRequiredNames) {
 
 BOOST_AUTO_TEST_CASE(ParseAndTranslateClearsInputsBetweenPrograms) {
   qasm::QasmToCirc<> parser;
-  auto parameterized = parser.ParseAndTranslate(
+  auto parameterized = parser.ParseAndTranslateWithParams(
       "OPENQASM 3.0;\n"
       "input float theta;\n"
       "qubit q;\n"
@@ -202,7 +202,7 @@ BOOST_AUTO_TEST_CASE(InputDeclarationRejectedUnderQasm2) {
 
 BOOST_AUTO_TEST_CASE(MultipleInputTypesParse) {
   qasm::QasmToCirc<> parser;
-  auto circuit = parser.ParseAndTranslate(
+  auto circuit = parser.ParseAndTranslateWithParams(
       "OPENQASM 3.0;\n"
       "input float[64] a;\n"
       "input int[32] b;\n"
@@ -275,7 +275,7 @@ BOOST_AUTO_TEST_CASE(Float32InputBindingUsesFloat32Precision) {
   const double expected = static_cast<double>(static_cast<float>(supplied));
 
   qasm::QasmToCirc<> parser;
-  auto circuit = parser.ParseAndTranslate(
+  auto circuit = parser.ParseAndTranslateWithParams(
       "OPENQASM 3.0;\ninput float[32] theta;\nqubit q;\nrx(theta) q;\n",
       {{"theta", supplied}});
   BOOST_TEST(!parser.Failed(), parser.GetErrorMessage());
@@ -291,7 +291,7 @@ BOOST_AUTO_TEST_CASE(UnsizedAngleInputBindingIsNormalized) {
   const double expected = 2. * M_PI + supplied;
 
   qasm::QasmToCirc<> parser;
-  auto circuit = parser.ParseAndTranslate(
+  auto circuit = parser.ParseAndTranslateWithParams(
       "OPENQASM 3.0;\ninput angle theta;\nqubit q;\nrx(theta) q;\n",
       {{"theta", supplied}});
   BOOST_TEST(!parser.Failed(), parser.GetErrorMessage());

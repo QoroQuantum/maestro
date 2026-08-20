@@ -29,12 +29,45 @@ class QasmToCirc {
 
   // QASM3 `input` values are parse-time substitutions represented as doubles;
   // no runtime classical state or symbolic value enters the Circuit IR.
-  std::shared_ptr<Circuits::Circuit<Time>> ParseAndTranslate(
-      const std::string &qasmInputStr,
-      const std::unordered_map<std::string, double> &params = {}) {
+  std::shared_ptr<Circuits::Circuit<Time>> ParseAndTranslateWithParams(
+      const std::string& qasmInputStr,
+      const std::unordered_map<std::string, double>& params = {}) {
     clear();
 
     grammar.inputBindings = params;
+
+    std::string qasmInput = qasmInputStr;
+
+    try {
+      auto it = qasmInput.begin();
+      QasmSkipper<std::string::iterator> skipper;
+      if (boost::spirit::qi::phrase_parse(it, qasmInput.end(), grammar, skipper,
+                                          program)) {
+        if (it == qasmInput.end()) {
+          grammar.ValidateInputBindings();
+          return program.ToCircuit<Time>(grammar.opaqueGates,
+                                         grammar.definedGates);
+        } else {
+          error = true;
+          errorMessage = "Error: Unparsed input remaining: '" +
+                         std::string(it, qasmInput.end()) + "'";
+        }
+      } else {
+        error = true;
+        errorMessage = "Error: Parsing failed, unparsed input remaining: '" +
+                       std::string(it, qasmInput.end()) + "'";
+      }
+    } catch (const std::exception& ex) {
+      error = true;
+      errorMessage = ex.what();
+    }
+
+    return nullptr;
+  }
+
+  std::shared_ptr<Circuits::Circuit<Time>> ParseAndTranslate(
+      const std::string &qasmInputStr) {
+    clear();
 
     std::string qasmInput = qasmInputStr;
 
