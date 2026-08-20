@@ -5,15 +5,48 @@ on:
     types: [published]
   workflow_dispatch:
 
+env:
+  VIRTUALENV_VERSION: "20.27.1"
+  VCPKG_CACHE_KEY: vcpkg-windows-x64-deps1
+  VCPKG_CACHE_PATHS: |
+    C:/vcpkg/installed
+    C:/vcpkg/binary-cache
+  VCPKG_TOOLCHAIN: C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+  WINDOWS_WHEEL_BIN_PATHS: "build\\cp310-cp310-win_amd64\\bin;build\\cp311-cp311-win_amd64\\bin;build\\cp312-cp312-win_amd64\\bin;build\\cp313-cp313-win_amd64\\bin;build\\cp314-cp314-win_amd64\\bin"
+  MACOS_DYLD_PATH: $(brew --prefix)/lib:$(brew --prefix openblas)/lib:$(brew --prefix libomp)/lib
+
 jobs:
   # Run CI tests first — must pass before any publishing happens
   ci:
     name: Run CI tests
     uses: ./.github/workflows/cmake-multi-platform.yml
 
+  # Single source of the version being published, for both triggers: a release
+  # whose tag disagrees with pyproject.toml fails here, before anything builds.
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: resolve
+        run: |
+          version=$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)
+          if [ -z "$version" ]; then
+            echo "::error::could not read version from pyproject.toml"
+            exit 1
+          fi
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = "release" ] && [ "$GITHUB_REF_NAME" != "$tag" ]; then
+            echo "::error::release tag $GITHUB_REF_NAME does not match pyproject.toml version $tag"
+            exit 1
+          fi
+
   build_sdist:
     name: Build source distribution
-    needs: [ci]
+    needs: [ci, version]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -26,26 +59,19 @@ jobs:
 
   build_wheels:
     name: Build wheels (${{ matrix.os }}, ${{ matrix.cibw_build }})
-    needs: [ci]
+    needs: [ci, version]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # Windows builds one CPython per job; Linux and macOS build all five in one.
       matrix:
+        os: [windows-latest]
+        cibw_build: ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*"]
         include:
           - os: ubuntu-latest
             cibw_build: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           - os: macos-14
             cibw_build: "cp310-* cp311-* cp312-* cp313-* cp314-*"
-          - os: windows-latest
-            cibw_build: "cp310-*"
-          - os: windows-latest
-            cibw_build: "cp311-*"
-          - os: windows-latest
-            cibw_build: "cp312-*"
-          - os: windows-latest
-            cibw_build: "cp313-*"
-          - os: windows-latest
-            cibw_build: "cp314-*"
 
     steps:
       - uses: actions/checkout@v5
@@ -57,7 +83,7 @@ jobs:
             ~/Library/Caches/cibuildwheel
             ~/.cache/cibuildwheel
             ~\AppData\Local\pypa\cibuildwheel\Cache
-          key: cibw-virtualenv-20.27.1
+          key: cibw-virtualenv-${{ env.VIRTUALENV_VERSION }}
 
       - name: Pre-download virtualenv (Unix)
         if: runner.os != 'Windows'
@@ -68,10 +94,10 @@ jobs:
             CACHE_DIR=~/.cache/cibuildwheel
           fi
           mkdir -p "$CACHE_DIR"
-          if [ ! -f "$CACHE_DIR/virtualenv-20.27.1.pyz" ]; then
+          if [ ! -f "$CACHE_DIR/virtualenv-$VIRTUALENV_VERSION.pyz" ]; then
             curl -L --retry 5 --retry-delay 10 --retry-all-errors \
-              -o "$CACHE_DIR/virtualenv-20.27.1.pyz" \
-              "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true"
+              -o "$CACHE_DIR/virtualenv-$VIRTUALENV_VERSION.pyz" \
+              "https://github.com/pypa/get-virtualenv/blob/$VIRTUALENV_VERSION/public/virtualenv.pyz?raw=true"
           fi
 
       - name: Pre-download virtualenv (Windows)
@@ -79,13 +105,13 @@ jobs:
         run: |
           $CacheDir = "$env:USERPROFILE\AppData\Local\pypa\cibuildwheel\Cache"
           New-Item -ItemType Directory -Force -Path $CacheDir | Out-Null
-          $VenvPath = "$CacheDir\virtualenv-20.27.1.pyz"
+          $VenvPath = "$CacheDir\virtualenv-$env:VIRTUALENV_VERSION.pyz"
           if (-not (Test-Path $VenvPath)) {
             $headers = @{ Authorization = "token $env:GITHUB_TOKEN" }
             $retries = 5
             for ($i = 0; $i -lt $retries; $i++) {
               try {
-                Invoke-WebRequest -Uri "https://github.com/pypa/get-virtualenv/blob/20.27.1/public/virtualenv.pyz?raw=true" -Headers $headers -OutFile $VenvPath
+                Invoke-WebRequest -Uri "https://github.com/pypa/get-virtualenv/blob/$env:VIRTUALENV_VERSION/public/virtualenv.pyz?raw=true" -Headers $headers -OutFile $VenvPath
                 break
               } catch {
                 if ($i -lt $retries - 1) { Start-Sleep -Seconds 10 }
@@ -101,10 +127,8 @@ jobs:
         id: cache-vcpkg
         uses: actions/cache@v5
         with:
-          path: |
-            C:/vcpkg/installed
-            C:/vcpkg/binary-cache
-          key: vcpkg-windows-x64-deps1
+          path: ${{ env.VCPKG_CACHE_PATHS }}
+          key: ${{ env.VCPKG_CACHE_KEY }}
           restore-keys: |
             vcpkg-windows-x64-
 
@@ -125,20 +149,20 @@ jobs:
       - name: Install dependencies (Windows)
         if: runner.os == 'Windows' && steps.cache-vcpkg.outputs.cache-hit != 'true'
         run: |
+          # In-process removal: the earlier unset only reaches later steps.
           Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
           Remove-Item Env:VCPKG_INSTALLATION_ROOT -ErrorAction SilentlyContinue
           vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
         env:
           VCPKG_BINARY_SOURCES: "clear;files,C:/vcpkg/binary-cache,readwrite"
 
-      - name: Set CMake env (Windows, cache hit)
-        if: runner.os == 'Windows' && steps.cache-vcpkg.outputs.cache-hit == 'true'
+      - name: Set CMake env (Windows)
+        if: runner.os == 'Windows'
         run: |
-          if (-not (Test-Path "C:\vcpkg\scripts\buildsystems\vcpkg.cmake")) {
-            Write-Error "Cache hit but vcpkg toolchain not found at C:\vcpkg. Ensure vcpkg is at C:\vcpkg on this runner."
+          if (-not (Test-Path "$env:VCPKG_TOOLCHAIN")) {
+            Write-Error "vcpkg toolchain not found at $env:VCPKG_TOOLCHAIN. Ensure vcpkg is at C:\vcpkg on this runner."
           }
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_TOOLCHAIN" >> $env:GITHUB_ENV
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.4.1
@@ -169,10 +193,10 @@ jobs:
           CIBW_ENVIRONMENT_MACOS: >-
             MACOSX_DEPLOYMENT_TARGET=14.0
             CMAKE_ARGS="-DOpenMP_ROOT=$(brew --prefix libomp)"
-            DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix)/lib:$(brew --prefix openblas)/lib:$(brew --prefix libomp)/lib
+            DYLD_FALLBACK_LIBRARY_PATH=${{ env.MACOS_DYLD_PATH }}
 
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-
-            DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix)/lib:$(brew --prefix openblas)/lib:$(brew --prefix libomp)/lib
+            DYLD_FALLBACK_LIBRARY_PATH=${{ env.MACOS_DYLD_PATH }}
             delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}
 
           CIBW_ARCHS_MACOS: auto
@@ -182,7 +206,7 @@ jobs:
           CIBW_ENVIRONMENT_WINDOWS: "CMAKE_BUILD_PARALLEL_LEVEL=8"
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
             pip install delvewheel &&
-            delvewheel repair -w {dest_dir} --add-path "C:\vcpkg\installed\x64-windows\bin;build\cp310-cp310-win_amd64\bin;build\cp311-cp311-win_amd64\bin;build\cp312-cp312-win_amd64\bin;build\cp313-cp313-win_amd64\bin;build\cp314-cp314-win_amd64\bin" {wheel}
+            delvewheel repair -w {dest_dir} --add-path "C:\vcpkg\installed\x64-windows\bin;${{ env.WINDOWS_WHEEL_BIN_PATHS }}" {wheel}
 
           # ---- Common ----
           CIBW_BUILD: "${{ matrix.cibw_build }}"
@@ -192,10 +216,8 @@ jobs:
         if: runner.os == 'Windows' && always() && steps.cache-vcpkg.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
-          path: |
-            C:/vcpkg/installed
-            C:/vcpkg/binary-cache
-          key: vcpkg-windows-x64-deps1
+          path: ${{ env.VCPKG_CACHE_PATHS }}
+          key: ${{ env.VCPKG_CACHE_KEY }}
 
       - uses: actions/upload-artifact@v6
         with:
@@ -222,3 +244,28 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
+
+  # Every published version ends up with a release for it. Under the release
+  # trigger one already exists and this is a no-op; a manual dispatch would
+  # otherwise leave PyPI ahead of the GitHub release log.
+  # GITHUB_TOKEN deliberately: releases it creates do not trigger workflows,
+  # so this cannot re-enter the publish flow.
+  github_release:
+    name: Ensure GitHub release exists
+    needs: [version, upload_pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create release for the published version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already has a release; nothing to do."
+          else
+            gh release create "$TAG" --target "$GITHUB_SHA" \
+              --title "$TAG" --generate-notes
+          fi
