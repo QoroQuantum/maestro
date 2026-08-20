@@ -127,6 +127,17 @@ class Configuration {
     return 0;
   }
 
+  // For size_t-valued settings: the signed and double getters cannot represent
+  // the whole range, and a value near SIZE_MAX misconverts through double.
+  unsigned long long int GetConfigurationAsUnsigned(
+      const std::string& key) const {
+    auto it = configMap.find(key);
+    if (it != configMap.end()) {
+      return std::stoull(it->second);
+    }
+    return 0;
+  }
+
   double GetConfigurationAsDouble(const std::string& key) const {
     auto it = configMap.find(key);
     if (it != configMap.end()) {
