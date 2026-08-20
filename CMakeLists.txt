@@ -143,6 +143,15 @@ set(TESTSSRC tests/aertests.cpp
 	tests/gputests.cpp
 	tests/mpssimtests.cpp
 	tests/qasm.cpp
+	tests/qasm_core.cpp
+	tests/qasm_dialects.cpp
+	tests/qasm_expressions.cpp
+	tests/qasm_gate_contract.cpp
+	tests/qasm_integration.cpp
+	tests/qasm_inputs.cpp
+	tests/qasm_modifiers.cpp
+	tests/qasm_syntax.cpp
+	tests/qasm_validation.cpp
 	tests/qcsimtests.cpp
 	tests/tensorstests.cpp
 	tests/pauliproptests.cpp
