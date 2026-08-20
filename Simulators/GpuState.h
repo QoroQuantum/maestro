@@ -430,6 +430,7 @@ class GpuState : public ISimulator {
           (std::string("1") == value || std::string("true") == value);
       if (mps) mps->SetDataType(useDoublePrecision);
       if (tn) tn->SetDataType(useDoublePrecision);
+      if (state) state->SetDataType(useDoublePrecision);
     } 
     
     if (pp) {
@@ -1247,7 +1248,7 @@ class GpuState : public ISimulator {
     std::vector<double> bondDimsD(bondDims, bondDims + nrQubits - 1);
     dummySim->SetCurrentBondDimensions(bondDimsD);
 
-    if (upcomingGates.size() <= upcomingGateIndex) {
+    if (upcomingGates.size() <= static_cast<size_t>(upcomingGateIndex)) {
       return -1;  // will fallback
     }
 
@@ -1284,7 +1285,7 @@ class GpuState : public ISimulator {
     if (bondDims) {
       const size_t nQ = GetNumberOfQubits();
       for (int i = 0; i < static_cast<int>(nQ) - 1; ++i)
-        if (bondDims[i] > curMaxBondDim) curMaxBondDim = bondDims[i];
+        if (static_cast<size_t>(bondDims[i]) > curMaxBondDim) curMaxBondDim = static_cast<size_t>(bondDims[i]);
     }
   }
 
