@@ -7,7 +7,7 @@
  *
  * Class for parsing qasm and translating it to a circuit.
  *
- * It's supposed to support only open qasm 2.0.
+ * Supports the static-circuit subset of OpenQASM 2 and OpenQASM 3.
  */
 #pragma once
 
@@ -27,17 +27,24 @@ class QasmToCirc {
     error = false;
   }
 
+  // QASM3 `input` values are parse-time substitutions represented as doubles;
+  // no runtime classical state or symbolic value enters the Circuit IR.
   std::shared_ptr<Circuits::Circuit<Time>> ParseAndTranslate(
-      const std::string &qasmInputStr) {
+      const std::string &qasmInputStr,
+      const std::unordered_map<std::string, double> &params = {}) {
     clear();
+
+    grammar.inputBindings = params;
 
     std::string qasmInput = qasmInputStr;
 
     try {
       auto it = qasmInput.begin();
-      if (boost::spirit::qi::phrase_parse(it, qasmInput.end(), grammar,
-                                          qasm::ascii::space, program)) {
+      QasmSkipper<std::string::iterator> skipper;
+      if (boost::spirit::qi::phrase_parse(it, qasmInput.end(), grammar, skipper,
+                                          program)) {
         if (it == qasmInput.end()) {
+          grammar.ValidateInputBindings();
           return program.ToCircuit<Time>(grammar.opaqueGates,
                                          grammar.definedGates);
         } else {
@@ -70,6 +77,13 @@ class QasmToCirc {
 
   const std::vector<std::string> &GetIncludes() const {
     return program.includes;
+  }
+
+  // The names declared by QASM3 `input` statements, in declaration order, so
+  // callers can discover what a circuit requires before supplying values via
+  // ParseAndTranslate's params map.
+  const std::vector<std::string> &GetInputs() const {
+    return grammar.inputNames;
   }
 
  protected:

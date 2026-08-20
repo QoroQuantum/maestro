@@ -22,6 +22,11 @@ namespace qasm {
 template <typename Time = Types::time_type>
 class CircToQasm {
  public:
+  // selects which OpenQASM dialect Generate/GenerateWithMapping emit; only
+  // the version line, include, register declarations and measurement syntax
+  // differ between the two, see QasmHeader/QasmRegisters/OperationToQasm
+  enum class QasmVersion { V2, V3 };
+
   enum class QasmGateType : size_t {
     X,     // XGate
     Y,     // YGate
@@ -63,12 +68,13 @@ class CircToQasm {
 
   static std::string GenerateWithMapping(
       const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
-      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap) {
+      const std::unordered_map<Types::qubit_t, Types::qubit_t> &bitsMap,
+      QasmVersion version = QasmVersion::V2) {
     const auto mappedCircuit =
         std::static_pointer_cast<Circuits::Circuit<Time>>(
             circuit->Remap(bitsMap, bitsMap));
 
-    return GenerateFromCircuit(mappedCircuit, false);
+    return GenerateFromCircuit(mappedCircuit, false, version);
   }
 
   // look over the circuit and convert it to qasm
@@ -79,13 +85,15 @@ class CircToQasm {
   // if they are used in the definitions of the gates that are used
 
   static std::string Generate(
-      const std::shared_ptr<Circuits::Circuit<Time>> &circuit) {
-    return GenerateFromCircuit(circuit, true);
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      QasmVersion version = QasmVersion::V2) {
+    return GenerateFromCircuit(circuit, true, version);
   }
 
  private:
   static std::string GenerateFromCircuit(
-      const std::shared_ptr<Circuits::Circuit<Time>> &circuit, bool clone) {
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit, bool clone,
+      QasmVersion version = QasmVersion::V2) {
     if (circuit->empty()) return "";
 
     const auto circ =
@@ -95,24 +103,25 @@ class CircToQasm {
 
     circ->ConvertForDistribution();  // get rid of swap and 3 qubit gates
 
-    std::string qasm = QasmHeader();
+    std::string qasm = QasmHeader(version);
 
-    qasm += QasmGatesAndRegsDefinitions(circ);
+    qasm += QasmGatesAndRegsDefinitions(circ, version);
 
     // iterate over the circuit and generate the qasm
     for (const auto &gate : circ->GetOperations())
-      qasm += OperationToQasm(gate);
+      qasm += OperationToQasm(gate, version);
 
     return qasm;
   }
 
   static std::string OperationToQasm(
-      const std::shared_ptr<Circuits::IOperation<Time>> &operation) {
+      const std::shared_ptr<Circuits::IOperation<Time>> &operation,
+      QasmVersion version = QasmVersion::V2) {
     std::string qasm;
 
     switch (operation->GetType()) {
       case Circuits::OperationType::kGate:
-        qasm += GateToQasm(operation);
+        qasm += GateToQasm(operation, version);
         break;
       case Circuits::OperationType::kMeasurement: {
         auto qbits = operation->AffectedQubits();
@@ -121,8 +130,11 @@ class CircToQasm {
         assert(qbits.size() == bits.size());
 
         for (size_t i = 0; i < qbits.size(); ++i)
-          qasm += "measure q[" + std::to_string(qbits[i]) + "]->c" +
-                  std::to_string(bits[i]) + "[0];\n";
+          qasm += (version == QasmVersion::V3)
+                      ? "c" + std::to_string(bits[i]) + "[0] = measure q[" +
+                            std::to_string(qbits[i]) + "];\n"
+                      : "measure q[" + std::to_string(qbits[i]) + "]->c" +
+                            std::to_string(bits[i]) + "[0];\n";
       } break;
       case Circuits::OperationType::kReset: {
         auto qbits = operation->AffectedQubits();
@@ -144,12 +156,31 @@ class CircToQasm {
                           ->GetAllBits();
           assert(bits.size() == vals.size());
 
-          for (size_t i = 0; i < bits.size(); ++i)
-            qasm += "if(c" + std::to_string(bits[i]) +
-                    "==" + std::to_string(vals[i] ? 1 : 0) + ") ";
-
           const auto theop = condop->GetOperation();
-          qasm += OperationToQasm(theop);
+          if (version == QasmVersion::V3) {
+            qasm += "if (";
+            for (size_t i = 0; i < bits.size(); ++i) {
+              if (i != 0) qasm += " && ";
+              if (!vals[i]) qasm += "!";
+              qasm += "c" + std::to_string(bits[i]) + "[0]";
+            }
+            qasm += ") {\n";
+
+            const std::string body = OperationToQasm(theop, version);
+            size_t lineStart = 0;
+            while (lineStart < body.size()) {
+              const size_t lineEnd = body.find('\n', lineStart);
+              qasm += "  " + body.substr(lineStart, lineEnd - lineStart) + "\n";
+              if (lineEnd == std::string::npos) break;
+              lineStart = lineEnd + 1;
+            }
+            qasm += "}\n";
+          } else {
+            for (size_t i = 0; i < bits.size(); ++i)
+              qasm += "if(c" + std::to_string(bits[i]) +
+                      "==" + std::to_string(vals[i] ? 1 : 0) + ") ";
+            qasm += OperationToQasm(theop, version);
+          }
         }
         break;
       case Circuits::OperationType::kNoOp:
@@ -168,7 +199,8 @@ class CircToQasm {
   }
 
   static std::string GateToQasm(
-      const std::shared_ptr<Circuits::IOperation<Time>> &operation) {
+      const std::shared_ptr<Circuits::IOperation<Time>> &operation,
+      QasmVersion version = QasmVersion::V2) {
     if (!operation || operation->GetType() != Circuits::OperationType::kGate)
       return "";
 
@@ -208,7 +240,7 @@ class CircToQasm {
         break;
 
       //*************************************************************************************************
-      // defined here, not in the 'standard' header
+      // Defined locally for QASM2; provided by stdgates.inc for QASM3.
       case Circuits::QuantumGateType::kSxGateType:
         qasm += "sx q[" + std::to_string(gate->GetQubit(0)) + "];\n";
         break;
@@ -256,7 +288,8 @@ class CircToQasm {
                 std::to_string(gate->GetQubit(1)) + "];\n";
         break;
       case Circuits::QuantumGateType::kCPGateType:
-        qasm += "cu1(" + std::to_string(gate->GetParams()[0]) + ") q[" +
+        qasm += (version == QasmVersion::V3 ? "cp(" : "cu1(") +
+                std::to_string(gate->GetParams()[0]) + ") q[" +
                 std::to_string(gate->GetQubit(0)) + "],q[" +
                 std::to_string(gate->GetQubit(1)) + "];\n";
         break;
@@ -299,7 +332,14 @@ class CircToQasm {
       // we have a problem with this, our CU is with 4 parameters, so not fully
       // converted if the 4th parameter is not zero!
       case Circuits::QuantumGateType::kCUGateType:
-        if (gate->GetParams()[3] == 0)
+        if (version == QasmVersion::V3)
+          qasm += "cu(" + std::to_string(gate->GetParams()[0]) + "," +
+                  std::to_string(gate->GetParams()[1]) + "," +
+                  std::to_string(gate->GetParams()[2]) + "," +
+                  std::to_string(gate->GetParams()[3]) + ") q[" +
+                  std::to_string(gate->GetQubit(0)) + "], q[" +
+                  std::to_string(gate->GetQubit(1)) + "];\n";
+        else if (gate->GetParams()[3] == 0)
           qasm += "cu3(" + std::to_string(gate->GetParams()[0]) + "," +
                   std::to_string(gate->GetParams()[1]) + "," +
                   std::to_string(gate->GetParams()[2]) + ") q[" +
@@ -329,8 +369,9 @@ class CircToQasm {
     return qasm;
   }
 
-  static std::string QasmHeader() {
-    std::string qasm = "OPENQASM 2.0;\n";
+  static std::string QasmHeader(QasmVersion version = QasmVersion::V2) {
+    std::string qasm =
+        (version == QasmVersion::V3) ? "OPENQASM 3.0;\n" : "OPENQASM 2.0;\n";
 
     return qasm;
   }
@@ -338,19 +379,35 @@ class CircToQasm {
   // assume qubits and cbits starting from 0, map the circuit to that if not
   // already like that
   static std::string QasmRegisters(
-      const std::shared_ptr<Circuits::Circuit<Time>> &circuit) {
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      QasmVersion version = QasmVersion::V2) {
     const auto nrq = circuit->GetMaxQubitIndex() + 1;
 
     const std::string nrq_str = std::to_string(nrq);
 
-    std::string qasm = "qreg q[" + nrq_str + "];\n";
+    std::string qasm = (version == QasmVersion::V3)
+                           ? "qubit[" + nrq_str + "] q;\n"
+                           : "qreg q[" + nrq_str + "];\n";
 
     std::set<size_t> measQubits;
 
     for (const auto &op : *circuit) {
-      const auto bits = op->AffectedBits();
+      std::vector<std::shared_ptr<Circuits::IOperation<Time>>> pending{op};
+      while (!pending.empty()) {
+        const auto current = pending.back();
+        pending.pop_back();
 
-      for (auto bit : bits) measQubits.insert(bit);
+        for (const auto bit : current->AffectedBits()) measQubits.insert(bit);
+
+        if (current->GetType() == Circuits::OperationType::kConditionalGate ||
+            current->GetType() ==
+                Circuits::OperationType::kConditionalMeasurement) {
+          pending.push_back(
+              std::static_pointer_cast<Circuits::IConditionalOperation<Time>>(
+                  current)
+                  ->GetOperation());
+        }
+      }
     }
 
     int creg_count = 0;
@@ -358,11 +415,18 @@ class CircToQasm {
       // this completion is needed to have a proper total cregister definition
       // we need this to be able to address the bits properly, otherwise
       // conversion circuit -> qasm -> circuit would not work properly
-      if (creg_count < static_cast<int>(bit))
-        qasm += "creg c" + std::to_string(creg_count) + "[" +
-                std::to_string(bit - creg_count) + "];\n";
+      if (creg_count < static_cast<int>(bit)) {
+        const std::string fillerSize = std::to_string(bit - creg_count);
+        qasm += (version == QasmVersion::V3)
+                    ? "bit[" + fillerSize + "] c" + std::to_string(creg_count) +
+                          ";\n"
+                    : "creg c" + std::to_string(creg_count) + "[" + fillerSize +
+                          "];\n";
+      }
 
-      qasm += "creg c" + std::to_string(bit) + "[1];\n";
+      qasm += (version == QasmVersion::V3)
+                  ? "bit[1] c" + std::to_string(bit) + ";\n"
+                  : "creg c" + std::to_string(bit) + "[1];\n";
       creg_count = bit + 1;
     }
 
@@ -370,7 +434,8 @@ class CircToQasm {
   }
 
   static std::string QasmGatesAndRegsDefinitions(
-      const std::shared_ptr<Circuits::Circuit<Time>> &circuit) {
+      const std::shared_ptr<Circuits::Circuit<Time>> &circuit,
+      QasmVersion version = QasmVersion::V2) {
     std::vector<bool> neededGates(static_cast<size_t>(QasmGateType::NoGate),
                                   false);
 
@@ -454,11 +519,15 @@ class CircToQasm {
             break;
 
           //*************************************************************************************************
-          // defined here, not in the 'standard' header
+          // Defined locally for QASM2; provided by stdgates.inc for QASM3.
           case Circuits::QuantumGateType::kSxGateType:
+#ifdef DONT_USE_HEADER_DEFINITIONS
             neededGates[static_cast<size_t>(QasmGateType::Sx)] = true;
-#ifndef DONT_USE_HEADER_DEFINITIONS
+#else
             neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+            // stdgates.inc defines sx, qelib1.inc does not.
+            if (version == QasmVersion::V2)
+              neededGates[static_cast<size_t>(QasmGateType::Sx)] = true;
 #endif
             break;
           case Circuits::QuantumGateType::kSxDagGateType:
@@ -539,19 +608,23 @@ class CircToQasm {
           //*************************************************************************************************
           // defined here, not in the 'standard' header
           case Circuits::QuantumGateType::kCRxGateType:
-            neededGates[static_cast<size_t>(QasmGateType::CRX)] = true;
 #ifdef DONT_USE_HEADER_DEFINITIONS
+            neededGates[static_cast<size_t>(QasmGateType::CRX)] = true;
             neededGates[static_cast<size_t>(QasmGateType::CU3)] = true;
 #else
             neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+            if (version == QasmVersion::V2)
+              neededGates[static_cast<size_t>(QasmGateType::CRX)] = true;
 #endif
             break;
           case Circuits::QuantumGateType::kCRyGateType:
-            neededGates[static_cast<size_t>(QasmGateType::CRY)] = true;
 #ifdef DONT_USE_HEADER_DEFINITIONS
+            neededGates[static_cast<size_t>(QasmGateType::CRY)] = true;
             neededGates[static_cast<size_t>(QasmGateType::CU3)] = true;
 #else
             neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] = true;
+            if (version == QasmVersion::V2)
+              neededGates[static_cast<size_t>(QasmGateType::CRY)] = true;
 #endif
             break;
             //*************************************************************************************************
@@ -590,7 +663,10 @@ class CircToQasm {
             // we have a problem with this, our CU is with 4 parameters, so not
             // fully converted if the 4th parameter is not zero!
           case Circuits::QuantumGateType::kCUGateType:
-            if (gate->GetParams()[3] == 0) {
+            if (version == QasmVersion::V3) {
+              neededGates[static_cast<size_t>(QasmGateType::IncludedGate)] =
+                  true;
+            } else if (gate->GetParams()[3] == 0) {
 #ifdef DONT_USE_HEADER_DEFINITIONS
               neededGates[static_cast<size_t>(QasmGateType::CU3)] = true;
 #else
@@ -623,9 +699,10 @@ class CircToQasm {
     std::string qasm;
 
     if (neededGates[static_cast<size_t>(QasmGateType::IncludedGate)])
-      qasm += "include \"qelib1.inc\";\n";
+      qasm += (version == QasmVersion::V3) ? "include \"stdgates.inc\";\n"
+                                           : "include \"qelib1.inc\";\n";
 
-    qasm += QasmRegisters(circuit);
+    qasm += QasmRegisters(circuit, version);
 
     // WARNING: order matters, so be sure you won't define gates based on gates
     // that are defined later here
