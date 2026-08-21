@@ -786,6 +786,7 @@ class GpuSimulator : public GpuState {
     cloned->nrQubits = nrQubits;
 
     cloned->lookaheadDepth = lookaheadDepth;
+    cloned->lookaheadDepthWithHeuristic = lookaheadDepthWithHeuristic;
     cloned->useOptimalMeetingPosition = useOptimalMeetingPosition;
     cloned->upcomingGates = upcomingGates;
     cloned->upcomingGateIndex = upcomingGateIndex;
