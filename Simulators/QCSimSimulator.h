@@ -1154,6 +1154,7 @@ class QCSimSimulator : public QCSimState {
     cloned->enableMultithreading = enableMultithreading;
 
     cloned->lookaheadDepth = lookaheadDepth;
+    cloned->lookaheadDepthWithHeuristic = lookaheadDepthWithHeuristic;
     cloned->useOptimalMeetingPosition = useOptimalMeetingPosition;
     cloned->upcomingGates = upcomingGates;
     cloned->upcomingGateIndex = upcomingGateIndex;
