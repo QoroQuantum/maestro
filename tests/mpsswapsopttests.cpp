@@ -39,11 +39,71 @@ BOOST_AUTO_TEST_SUITE(MPSSwapOptTests)
 constexpr std::array numGates{10,  20,  30,  50,  80,  100, 150,
                               200, 270, 340, 500,     800, 1000};
 
+namespace {
 
+std::shared_ptr<Circuits::Circuit<>> CreateRandomMPSCircuit(int nrQubits,
+                                                            int nrGates,
+                                                            unsigned int seed) {
+  auto circuit = std::make_shared<Circuits::Circuit<>>();
+
+  std::mt19937 generator(seed);
+  std::uniform_real_distribution<double> parameterDistribution(-2. * M_PI,
+                                                               2. * M_PI);
+  std::uniform_int_distribution<int> gateDistribution(
+      0, static_cast<int>(Circuits::QuantumGateType::kCUGateType));
+
+  for (int gateNr = 0; gateNr < nrGates; ++gateNr) {
+    Types::qubits_vector qubits(nrQubits);
+    std::iota(qubits.begin(), qubits.end(), 0);
+    std::shuffle(qubits.begin(), qubits.end(), generator);
+
+    const auto gateType =
+        static_cast<Circuits::QuantumGateType>(gateDistribution(generator));
+    circuit->AddOperation(Circuits::CircuitFactory<>::CreateGate(
+        gateType, qubits[0], qubits[1], 0, parameterDistribution(generator),
+        parameterDistribution(generator), parameterDistribution(generator),
+        parameterDistribution(generator)));
+  }
+
+  return circuit;
+}
+
+std::shared_ptr<Simulators::ISimulator> CreateGpuMPSSimulator(
+    int nrQubits, int maxBondDimension) {
+#ifdef __linux__
+  Simulators::SimulatorsFactory::InitGpuLibrary();
+  auto simulator = Simulators::SimulatorsFactory::CreateSimulator(
+      Simulators::SimulatorType::kGpuSim,
+      Simulators::SimulationType::kMatrixProductState);
+  if (simulator) {
+    simulator->AllocateQubits(nrQubits);
+    simulator->Configure("matrix_product_state_max_bond_dimension",
+                         std::to_string(maxBondDimension).c_str());
+    simulator->Initialize();
+  }
+  return simulator;
+#else
+  return nullptr;
+#endif
+}
+
+void CheckSimulatorAmplitudes(
+    const std::shared_ptr<Simulators::ISimulator>& expected,
+    const std::shared_ptr<Simulators::ISimulator>& actual, size_t nrStates,
+    double tolerance) {
+  for (size_t state = 0; state < nrStates; ++state) {
+    const auto expectedAmplitude = expected->Amplitude(state);
+    const auto actualAmplitude = actual->Amplitude(state);
+    BOOST_CHECK_PREDICATE(
+        checkClose, (expectedAmplitude)(actualAmplitude)(tolerance));
+  }
+}
+
+}  // namespace
 
 BOOST_DATA_TEST_CASE(ConvertForCuttingLayersRoundtripMatchesStatevector,
                      numGates, nrGates) {
-  constexpr int nrQubits = 10;
+  constexpr int nrQubits = 13;
   const size_t nrStates = 1ULL << nrQubits;
 
   // build a random circuit with 1- and 2-qubit gates
@@ -118,7 +178,7 @@ BOOST_DATA_TEST_CASE(ConvertForCuttingLayersRoundtripMatchesStatevector,
 
 
 BOOST_DATA_TEST_CASE(OptimalQubitsMapZeroSwapCost, numGates, nrGates) {
-  constexpr int nrQubits = 10;
+  constexpr int nrQubits = 13;
 
   auto randomCirc = std::make_shared<Circuits::Circuit<>>();
 
@@ -183,7 +243,7 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapZeroSwapCost, numGates, nrGates) {
 
 
 BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
-  constexpr int nrQubits = 12;
+  constexpr int nrQubits = 13;
   const size_t nrStates = 1ULL << nrQubits;
 
   // build a random circuit with 1- and 2-qubit gates
@@ -328,7 +388,7 @@ BOOST_DATA_TEST_CASE(OptimalQubitsMapSimulationMatch, numGates, nrGates) {
 
 
 BOOST_DATA_TEST_CASE(LookaheadSwapOptimization, numGates, nrGates) {
-  constexpr int nrQubits = 10;
+  constexpr int nrQubits = 13;
 
   auto randomCirc = std::make_shared<Circuits::Circuit<>>();
 
@@ -419,7 +479,7 @@ BOOST_DATA_TEST_CASE(LookaheadSwapOptimization, numGates, nrGates) {
 }
 
 BOOST_DATA_TEST_CASE(OptimalMeetingPositionSimulationMatch, numGates, nrGates) {
-  constexpr int nrQubits = 12;
+  constexpr int nrQubits = 13;
   const size_t nrStates = 1ULL << nrQubits;
 
   auto randomCirc = std::make_shared<Circuits::Circuit<>>();
@@ -501,7 +561,7 @@ BOOST_DATA_TEST_CASE(OptimalMeetingPositionSimulationMatch, numGates, nrGates) {
 
 BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
 #define MAX_BOND_DIMENSION 64
-  constexpr int nrQubits = 12;
+  constexpr int nrQubits = 13;
   const size_t nrStates = 1ULL << nrQubits;
 
   // build a random circuit with 1- and 2-qubit gates
@@ -654,12 +714,132 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
   }
 }
 
+constexpr std::array numGatesForGpuExecution{10, 50, 100};
+
+BOOST_DATA_TEST_CASE(GpuOptimalQubitsMapSimulationMatch,
+                     numGatesForGpuExecution, nrGates) {
+  constexpr int nrQubits = 13;
+  constexpr int maxBondDimension = 64;
+  constexpr double tolerance = 1e-4;
+  const size_t nrStates = 1ULL << nrQubits;
+
+  auto gpuOrig = CreateGpuMPSSimulator(nrQubits, maxBondDimension);
+  auto gpuOpt = CreateGpuMPSSimulator(nrQubits, maxBondDimension);
+  if (!gpuOrig || !gpuOpt) {
+    BOOST_TEST_MESSAGE(
+        "GPU MPS simulator is not available; skipping swap optimization "
+        "test.");
+    return;
+  }
+
+  const auto randomCirc = CreateRandomMPSCircuit(
+      nrQubits, nrGates, static_cast<unsigned int>(nrGates) * 12345u);
+  const auto layers = randomCirc->ToMultipleQubitsLayers();
+
+  Simulators::MPSDummySimulator dummySim(nrQubits);
+  dummySim.SetMaxBondDimension(maxBondDimension);
+  const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
+  const auto optCirc = randomCirc->LayersToCircuit(layers);
+
+  Circuits::OperationState stateOrig;
+  Circuits::OperationState stateOpt;
+  stateOrig.AllocateBits(nrQubits);
+  stateOpt.AllocateBits(nrQubits);
+
+  randomCirc->Execute(gpuOrig, stateOrig);
+  gpuOpt->SetInitialQubitsMap(
+      std::vector<long long int>(optimalMap.begin(), optimalMap.end()));
+  optCirc->Execute(gpuOpt, stateOpt);
+
+  CheckSimulatorAmplitudes(gpuOrig, gpuOpt, nrStates, tolerance);
+}
+
+BOOST_DATA_TEST_CASE(GpuOptimalMeetingPositionSimulationMatch,
+                     numGatesForGpuExecution, nrGates) {
+  constexpr int nrQubits = 13;
+  constexpr int maxBondDimension = 64;
+  constexpr double tolerance = 1e-4;
+  const size_t nrStates = 1ULL << nrQubits;
+
+  auto gpuOrig = CreateGpuMPSSimulator(nrQubits, maxBondDimension);
+  auto gpuOpt = CreateGpuMPSSimulator(nrQubits, maxBondDimension);
+  if (!gpuOrig || !gpuOpt) {
+    BOOST_TEST_MESSAGE(
+        "GPU MPS simulator is not available; skipping swap optimization "
+        "test.");
+    return;
+  }
+
+  const auto randomCirc = CreateRandomMPSCircuit(
+      nrQubits, nrGates, static_cast<unsigned int>(nrGates) * 77777u);
+
+  gpuOrig->SetUseOptimalMeetingPosition(false);
+  gpuOpt->SetUseOptimalMeetingPosition(true);
+
+  Circuits::OperationState stateOrig;
+  Circuits::OperationState stateOpt;
+  stateOrig.AllocateBits(nrQubits);
+  stateOpt.AllocateBits(nrQubits);
+
+  randomCirc->Execute(gpuOrig, stateOrig);
+  randomCirc->Execute(gpuOpt, stateOpt);
+
+  CheckSimulatorAmplitudes(gpuOrig, gpuOpt, nrStates, tolerance);
+}
+
+BOOST_DATA_TEST_CASE(GpuWindowOptimizedVsOriginalSimulation,
+                     numGatesForGpuExecution, nrGates) {
+  constexpr int nrQubits = 13;
+  constexpr int maxBondDimension = 64;
+  constexpr double tolerance = 1e-4;
+  const size_t nrStates = 1ULL << nrQubits;
+
+  auto gpuOrig = CreateGpuMPSSimulator(nrQubits, maxBondDimension);
+  auto gpuOpt = CreateGpuMPSSimulator(nrQubits, maxBondDimension);
+  if (!gpuOrig || !gpuOpt) {
+    BOOST_TEST_MESSAGE(
+        "GPU MPS simulator is not available; skipping swap optimization "
+        "test.");
+    return;
+  }
+
+  const auto randomCirc = CreateRandomMPSCircuit(
+      nrQubits, nrGates, static_cast<unsigned int>(nrGates) * 31415u);
+  const auto layers = randomCirc->ToMultipleQubitsLayers();
+
+  Simulators::MPSDummySimulator dummySim(nrQubits);
+  dummySim.SetMaxBondDimension(maxBondDimension);
+  const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
+  const auto optCirc = randomCirc->LayersToCircuit(layers);
+
+  const int lookaheadDepth =
+      std::min(30, static_cast<int>(layers.size()));
+  const int lookaheadHeuristicDepth = std::max(0, lookaheadDepth - 2);
+
+  gpuOrig->SetUseOptimalMeetingPosition(false);
+  gpuOpt->SetInitialQubitsMap(
+      std::vector<long long int>(optimalMap.begin(), optimalMap.end()));
+  gpuOpt->SetUseOptimalMeetingPosition(true);
+  gpuOpt->SetLookaheadDepth(lookaheadDepth);
+  gpuOpt->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepth);
+  gpuOpt->SetUpcomingGates(optCirc->GetOperations());
+
+  Circuits::OperationState stateOrig;
+  Circuits::OperationState stateOpt;
+  stateOrig.AllocateBits(nrQubits);
+  stateOpt.AllocateBits(nrQubits);
+
+  randomCirc->Execute(gpuOrig, stateOrig);
+  optCirc->Execute(gpuOpt, stateOpt);
+
+  CheckSimulatorAmplitudes(gpuOrig, gpuOpt, nrStates, tolerance);
+}
 
 constexpr std::array numGatesForNetworkExecution{10,  20,  30,  50,  80,  100 };
 
 BOOST_DATA_TEST_CASE(NetworkOptimizedSwapsVsUnoptimizedOnHost,
                      numGatesForNetworkExecution, nrGates) {
-  constexpr int nrQubits = 8;
+  constexpr int nrQubits = 13;
   constexpr size_t shots = 3000;
 
   // build a random circuit with 1- and 2-qubit gates and mid-circuit
