@@ -714,6 +714,8 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates) {
   }
 }
 
+#ifdef _SLOW_GPU_TESTS
+
 constexpr std::array numGatesForGpuExecution{10, 50, 100};
 
 BOOST_DATA_TEST_CASE(GpuOptimalQubitsMapSimulationMatch,
@@ -746,10 +748,30 @@ BOOST_DATA_TEST_CASE(GpuOptimalQubitsMapSimulationMatch,
   stateOrig.AllocateBits(nrQubits);
   stateOpt.AllocateBits(nrQubits);
 
+  const auto startOrig = std::chrono::system_clock::now();
   randomCirc->Execute(gpuOrig, stateOrig);
+  const auto endOrig = std::chrono::system_clock::now();
+
   gpuOpt->SetInitialQubitsMap(
       std::vector<long long int>(optimalMap.begin(), optimalMap.end()));
+
+  const auto startOpt = std::chrono::system_clock::now();
   optCirc->Execute(gpuOpt, stateOpt);
+  const auto endOpt = std::chrono::system_clock::now();
+
+  const double origTime =
+      std::chrono::duration<double>(endOrig - startOrig).count() * 1000.;
+  const double optTime =
+      std::chrono::duration<double>(endOpt - startOpt).count() * 1000.;
+
+  BOOST_TEST_MESSAGE("GPU original mapping execution time: "
+                     << origTime << " ms");
+  BOOST_TEST_MESSAGE("GPU optimized mapping execution time: "
+                     << optTime << " ms");
+  if (optTime > 0.) {
+    BOOST_TEST_MESSAGE("GPU optimized mapping is "
+                       << origTime / optTime << "x vs original");
+  }
 
   CheckSimulatorAmplitudes(gpuOrig, gpuOpt, nrStates, tolerance);
 }
@@ -781,8 +803,27 @@ BOOST_DATA_TEST_CASE(GpuOptimalMeetingPositionSimulationMatch,
   stateOrig.AllocateBits(nrQubits);
   stateOpt.AllocateBits(nrQubits);
 
+  const auto startOrig = std::chrono::system_clock::now();
   randomCirc->Execute(gpuOrig, stateOrig);
+  const auto endOrig = std::chrono::system_clock::now();
+
+  const auto startOpt = std::chrono::system_clock::now();
   randomCirc->Execute(gpuOpt, stateOpt);
+  const auto endOpt = std::chrono::system_clock::now();
+
+  const double origTime =
+      std::chrono::duration<double>(endOrig - startOrig).count() * 1000.;
+  const double optTime =
+      std::chrono::duration<double>(endOpt - startOpt).count() * 1000.;
+
+  BOOST_TEST_MESSAGE("GPU default heuristic execution time: "
+                     << origTime << " ms");
+  BOOST_TEST_MESSAGE("GPU optimal meeting position execution time: "
+                     << optTime << " ms");
+  if (optTime > 0.) {
+    BOOST_TEST_MESSAGE("GPU optimal meeting position is "
+                       << origTime / optTime << "x vs default");
+  }
 
   CheckSimulatorAmplitudes(gpuOrig, gpuOpt, nrStates, tolerance);
 }
@@ -829,11 +870,31 @@ BOOST_DATA_TEST_CASE(GpuWindowOptimizedVsOriginalSimulation,
   stateOrig.AllocateBits(nrQubits);
   stateOpt.AllocateBits(nrQubits);
 
+  const auto startOrig = std::chrono::system_clock::now();
   randomCirc->Execute(gpuOrig, stateOrig);
+  const auto endOrig = std::chrono::system_clock::now();
+
+  const auto startOpt = std::chrono::system_clock::now();
   optCirc->Execute(gpuOpt, stateOpt);
+  const auto endOpt = std::chrono::system_clock::now();
+
+  const double origTime =
+      std::chrono::duration<double>(endOrig - startOrig).count() * 1000.;
+  const double optTime =
+      std::chrono::duration<double>(endOpt - startOpt).count() * 1000.;
+
+  BOOST_TEST_MESSAGE("GPU original execution time: " << origTime << " ms");
+  BOOST_TEST_MESSAGE("GPU window-optimized execution time: "
+                     << optTime << " ms");
+  if (optTime > 0.) {
+    BOOST_TEST_MESSAGE("GPU window-optimized is "
+                       << origTime / optTime << "x vs original");
+  }
 
   CheckSimulatorAmplitudes(gpuOrig, gpuOpt, nrStates, tolerance);
 }
+
+#endif
 
 constexpr std::array numGatesForNetworkExecution{10,  20,  30,  50,  80,  100 };
 
