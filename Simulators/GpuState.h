@@ -286,7 +286,7 @@ class GpuState : public ISimulator {
       if (!dummySim || dummySim->getNrQubits() != initialMap.size()) {
         dummySim =
             std::make_unique<Simulators::MPSDummySimulator>(initialMap.size());
-        dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt("mps_max_bond_dimension"));
+        dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt("matrix_product_state_max_bond_dimension"));
       }
       dummySim->setGrowthFactorGate(growthFactorGate);
       dummySim->setGrowthFactorSwap(growthFactorSwap);
