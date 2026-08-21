@@ -92,11 +92,11 @@ class QCSimState : public ISimulator {
 
       // display bond dimensions for debugging
 #ifdef LOG_CALLBACK_INFO
-      std::cout << "Bond dimensions before swapping and applying the gate:"; 
+      std::cerr << "Bond dimensions before swapping and applying the gate:"; 
       for (size_t i = 0; i < bondDims.size(); ++i) { 
-          std::cout << bondDims[i] << " ";
+          std::cerr << bondDims[i] << " ";
       }
-      std::cout << std::endl;
+      std::cerr << std::endl;
 #endif
 
       const auto& op = upcomingGates[upcomingGateIndex];
@@ -113,19 +113,19 @@ class QCSimState : public ISimulator {
 #ifdef LOG_CALLBACK_INFO
       const auto &qmap = dummySim->getQubitsMap();
 
-      std::cout << "Applying 2-qubit gate on physical qubits " <<
+      std::cerr << "Applying 2-qubit gate on physical qubits " <<
       qmap[qbits[0]] << " and "
                 << qmap[qbits[1]]
                 << std::endl;
 
-      std::cout << "Finding best meeting position for upcoming gates starting at index "
+      std::cerr << "Finding best meeting position for upcoming gates starting at index "
                 << upcomingGateIndex << " with lookahead depth " <<
       lookaheadDepth << " and heuristic depth "
                 << lookaheadDepthWithHeuristic << std::endl;
 
-      std::cout << "Affected qubits: ";
-      for (const auto &q : qbits) std::cout << q << " ";
-      std::cout << std::endl;
+      std::cerr << "Affected qubits: ";
+      for (const auto &q : qbits) std::cerr << q << " ";
+      std::cerr << std::endl;
 #endif
 
       double bestCost = std::numeric_limits<double>::infinity();
@@ -134,7 +134,7 @@ class QCSimState : public ISimulator {
           lookaheadDepthWithHeuristic, 0, bestCost);
 
 #ifdef LOG_CALLBACK_INFO
-       std::cout << "Swapping the two qubits on position: " << res << " and " << (res + 1) << std::endl;
+       std::cerr << "Swapping the two qubits on position: " << res << " and " << (res + 1) << std::endl;
 #endif
 
       dummySim->SwapQubitsToPosition(qbits[0], qbits[1], res);
@@ -145,14 +145,14 @@ class QCSimState : public ISimulator {
 
 #ifdef LOG_CALLBACK_INFO
       const auto &expectedBondDims = dummySim->getCurrentBondDimensions();
-      std::cout << "Expected bond dimensions after swapping and applying "
+      std::cerr << "Expected bond dimensions after swapping and applying "
                    "the gate: ";
       for (size_t i = 0; i < expectedBondDims.size(); ++i) {
-        std::cout << expectedBondDims[i] << " ";
+        std::cerr << expectedBondDims[i] << " ";
       }
-      std::cout << std::endl;
+      std::cerr << std::endl;
 
-      std::cout << "Best meeting position: " << res << " with estimated cost: " << bestCost << std::endl;
+      std::cerr << "Best meeting position: " << res << " with estimated cost: " << bestCost << std::endl;
 #endif
 
       return res;
