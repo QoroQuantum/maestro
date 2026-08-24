@@ -27,6 +27,7 @@
 
 #include "Clifford.h"
 #include "DensityMatrix.h"
+#include "MPOSimulator.h"
 #include "MPSSimulator.h"
 #include "QubitRegister.h"
 #include "QcsimPauliPropagator.h"
@@ -77,8 +78,14 @@ class QCSimState : public ISimulator {
 
       if (!dummySim || dummySim->getNrQubits() != nQ) {
         dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
+        const char* maxBondDimensionKey =
+            simulationType == SimulationType::kMatrixProductOperator &&
+                    configuration.IsSet(
+                        "matrix_product_operator_max_bond_dimension")
+                ? "matrix_product_operator_max_bond_dimension"
+                : "matrix_product_state_max_bond_dimension";
         dummySim->SetMaxBondDimension(
-            configuration.GetConfigurationAsInt("matrix_product_state_max_bond_dimension"));
+            configuration.GetConfigurationAsInt(maxBondDimensionKey));
         dummySim->setGrowthFactorGate(growthFactorGate);
         dummySim->setGrowthFactorSwap(growthFactorSwap);
       }
@@ -183,7 +190,11 @@ class QCSimState : public ISimulator {
         if (!useOptimalMeetingPosition)
           mpsSimulator->SetUseOptimalMeetingPosition(false);
         mpsSimulator->SetBondDimensionCallback(bondDimensionCallback);
-        
+
+        curMaxBondDim = 1;
+      } else if (simulationType == SimulationType::kMatrixProductOperator) {
+        mpoSimulator =
+            std::make_unique<QC::TensorNetworks::MPOSimulator>(nrQubits);
         curMaxBondDim = 1;
       } else if (simulationType == SimulationType::kStabilizer)
         cliffordSimulator =
@@ -350,6 +361,9 @@ class QCSimState : public ISimulator {
     if (mpsSimulator) {
       mpsSimulator->Clear();
       curMaxBondDim = 1;
+    } else if (mpoSimulator) {
+      mpoSimulator->Clear();
+      curMaxBondDim = 1;
     } else if (cliffordSimulator)
       cliffordSimulator->Reset();
     else if (tensorNetwork)
@@ -423,7 +437,7 @@ class QCSimState : public ISimulator {
     upcomingGates = gates;
     upcomingGateIndex = 0;
 
-    if (!mpsSimulator) return;
+    if (!mpsSimulator && !mpoSimulator) return;
 
     // Register an observer that advances the gate index
     ClearObservers();  // for now we only have this observer, so this should be
@@ -436,7 +450,10 @@ class QCSimState : public ISimulator {
     // for lookahead evaluation with actual bond dimensions
     // the callback is called only for two qubits gates and only if executing
     // them would require a swap
-    mpsSimulator->SetMeetingPositionCallback(meetingPositionCallback);
+    if (mpsSimulator)
+      mpsSimulator->SetMeetingPositionCallback(meetingPositionCallback);
+    else
+      mpoSimulator->SetMeetingPositionCallback(meetingPositionCallback);
   }
 
   /**
@@ -499,6 +516,8 @@ class QCSimState : public ISimulator {
         simulationType = SimulationType::kStatevector;
       else if (std::string("matrix_product_state") == value)
         simulationType = SimulationType::kMatrixProductState;
+      else if (std::string("matrix_product_operator") == value)
+        simulationType = SimulationType::kMatrixProductOperator;
       else if (std::string("stabilizer") == value)
         simulationType = SimulationType::kStabilizer;
       else if (std::string("tensor_network") == value)
@@ -522,6 +541,20 @@ class QCSimState : public ISimulator {
       } else if (std::string(key) == "matrix_product_state_truncation_threshold") {
           const double threshold = configuration.GetConfigurationAsDouble(key);
           if (threshold > 0.) mpsSimulator->setLimitEntanglement(threshold);
+      }
+    }
+
+    if (mpoSimulator) {
+      if (std::string(key) == "matrix_product_state_max_bond_dimension" ||
+          std::string(key) == "matrix_product_operator_max_bond_dimension") {
+        mpoSimulator->setLimitBondDimension(
+            configuration.GetConfigurationAsInt(key));
+      } else if (
+          std::string(key) == "matrix_product_state_truncation_threshold" ||
+          std::string(key) ==
+              "matrix_product_operator_truncation_threshold") {
+        const double threshold = configuration.GetConfigurationAsDouble(key);
+        if (threshold > 0.) mpoSimulator->setLimitEntanglement(threshold);
       }
     }
 
@@ -561,6 +594,8 @@ class QCSimState : public ISimulator {
           return "statevector";
         case SimulationType::kMatrixProductState:
           return "matrix_product_state";
+        case SimulationType::kMatrixProductOperator:
+          return "matrix_product_operator";
         case SimulationType::kStabilizer:
           return "stabilizer";
         case SimulationType::kTensorNetwork:
@@ -592,6 +627,8 @@ class QCSimState : public ISimulator {
     if ((simulationType == SimulationType::kStatevector && state) ||
         (simulationType == SimulationType::kMatrixProductState &&
          mpsSimulator) ||
+        (simulationType == SimulationType::kMatrixProductOperator &&
+         mpoSimulator) ||
         (simulationType == SimulationType::kStabilizer && cliffordSimulator) ||
         (simulationType == SimulationType::kTensorNetwork && tensorNetwork) ||
         (simulationType == SimulationType::kDensityMatrix && densityMatrix) ||
@@ -625,6 +662,7 @@ class QCSimState : public ISimulator {
   void Clear() override {
     state = nullptr;
     mpsSimulator = nullptr;
+    mpoSimulator = nullptr;
     cliffordSimulator = nullptr;
     tensorNetwork = nullptr;
     pp = nullptr;
@@ -669,6 +707,13 @@ class QCSimState : public ISimulator {
     } else if (simulationType == SimulationType::kDensityMatrix) {
       for (size_t qubit : qubits) {
         if (densityMatrix->MeasureQubit(qubit)) res |= mask;
+        mask <<= 1;
+      }
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      const std::set<Eigen::Index> qubitsSet(qubits.begin(), qubits.end());
+      const auto measured = mpoSimulator->MeasureQubits(qubitsSet);
+      for (Types::qubit_t qubit : qubits) {
+        if (measured.at(static_cast<Eigen::Index>(qubit))) res |= mask;
         mask <<= 1;
       }
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
@@ -745,6 +790,11 @@ class QCSimState : public ISimulator {
     } else if (simulationType == SimulationType::kDensityMatrix) {
       for (size_t q = 0; q < qubits.size(); ++q)
         if (densityMatrix->MeasureQubit(qubits[q])) res[q] = true;
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      const std::set<Eigen::Index> qubitsSet(qubits.begin(), qubits.end());
+      const auto measured = mpoSimulator->MeasureQubits(qubitsSet);
+      for (size_t q = 0; q < qubits.size(); ++q)
+        res[q] = measured.at(static_cast<Eigen::Index>(qubits[q]));
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
       for (size_t q = 0; q < qubits.size(); ++q)
         if (extendedStabilizer->Measure(qubits[q])) res[q] = true;
@@ -791,6 +841,11 @@ class QCSimState : public ISimulator {
           state->ApplyGate(xGate, static_cast<unsigned int>(qubit));
     } else if (simulationType == SimulationType::kDensityMatrix) {
       for (size_t qubit : qubits) densityMatrix->ApplyReset(qubit);
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      for (size_t qubit : qubits) {
+        mpoSimulator->ApplyReset(static_cast<Eigen::Index>(qubit));
+        UpdateCurrentMPOBondDimension();
+      }
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
       for (size_t qubit : qubits)
         if (extendedStabilizer->Measure(qubit))
@@ -852,6 +907,8 @@ class QCSimState : public ISimulator {
       return pathIntegralSimulator->Probability(outcome);
     else if (simulationType == SimulationType::kDensityMatrix)
       return densityMatrix->getBasisStateProbability(outcome);
+    else if (simulationType == SimulationType::kMatrixProductOperator)
+      return mpoSimulator->getBasisStateProbability(outcome);
     else if (simulationType == SimulationType::kExtendedStabilizer)
       return ExtendedStabilizerBasisProbability(outcome);
 
@@ -890,6 +947,10 @@ class QCSimState : public ISimulator {
       throw std::runtime_error(
           "QCSimState::Amplitude: Amplitudes are not defined for the density "
           "matrix simulator.");
+    else if (simulationType == SimulationType::kMatrixProductOperator)
+      throw std::runtime_error(
+          "QCSimState::Amplitude: Amplitudes are not defined for the matrix "
+          "product operator simulator.");
     else if (simulationType == SimulationType::kExtendedStabilizer)
       throw std::runtime_error(
           "QCSimState::Amplitude: Amplitudes are not exposed by the extended "
@@ -953,6 +1014,12 @@ class QCSimState : public ISimulator {
       for (size_t i = 0; i < nrBasisStates; ++i)
         result[i] = densityMatrix->getBasisStateProbability(i);
       return result;
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      const size_t nrBasisStates = CheckedBasisStateCountForQueries();
+      std::vector<double> result(nrBasisStates);
+      for (size_t i = 0; i < nrBasisStates; ++i)
+        result[i] = mpoSimulator->getBasisStateProbability(i);
+      return result;
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
       const size_t nrBasisStates = CheckedBasisStateCountForQueries();
       std::vector<double> result(nrBasisStates);
@@ -1011,6 +1078,9 @@ class QCSimState : public ISimulator {
     } else if (simulationType == SimulationType::kDensityMatrix) {
       for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
         result[i] = densityMatrix->getBasisStateProbability(qubits[i]);
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
+        result[i] = mpoSimulator->getBasisStateProbability(qubits[i]);
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
       for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
         result[i] = ExtendedStabilizerBasisProbability(qubits[i]);
@@ -1193,6 +1263,16 @@ class QCSimState : public ISimulator {
         Types::qubit_t packed = 0;
         for (size_t i = 0; i < qubits.size(); ++i)
           if ((measured & (1ULL << qubits[i])) != 0) packed |= 1ULL << i;
+        ++result[packed];
+      }
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      const std::set<Eigen::Index> qubitsSet(qubits.begin(), qubits.end());
+      for (size_t shot = 0; shot < shots; ++shot) {
+        const auto measured = mpoSimulator->MeasureNoCollapse(qubitsSet);
+        Types::qubit_t packed = 0;
+        for (size_t i = 0; i < qubits.size(); ++i)
+          if (measured.at(static_cast<Eigen::Index>(qubits[i])))
+            packed |= 1ULL << i;
         ++result[packed];
       }
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
@@ -1403,6 +1483,15 @@ class QCSimState : public ISimulator {
           packed[i] = (measured & (1ULL << qubits[i])) != 0;
         ++result[packed];
       }
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      const std::set<Eigen::Index> qubitsSet(qubits.begin(), qubits.end());
+      for (size_t shot = 0; shot < shots; ++shot) {
+        const auto measured = mpoSimulator->MeasureNoCollapse(qubitsSet);
+        std::vector<bool> packed(qubits.size(), false);
+        for (size_t i = 0; i < qubits.size(); ++i)
+          packed[i] = measured.at(static_cast<Eigen::Index>(qubits[i]));
+        ++result[packed];
+      }
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
       auto sampler = extendedStabilizer->Clone();
       sampler->SaveState();
@@ -1484,6 +1573,10 @@ class QCSimState : public ISimulator {
     else if (simulationType == SimulationType::kDensityMatrix) {
       pauliString.resize(GetNumberOfQubits(), 'I');
       return densityMatrix->ExpectationValue(pauliString).real();
+    }
+    else if (simulationType == SimulationType::kMatrixProductOperator) {
+      pauliString.resize(GetNumberOfQubits(), 'I');
+      return mpoSimulator->ExpectationValue(pauliString).real();
     }
     else if (simulationType == SimulationType::kExtendedStabilizer)
       return extendedStabilizer->ExpectationValue(pauliString);
@@ -1598,6 +1691,8 @@ class QCSimState : public ISimulator {
       pathIntegralSimulator->SaveState();
     else if (simulationType == SimulationType::kDensityMatrix)
       densityMatrix->SaveState();
+    else if (simulationType == SimulationType::kMatrixProductOperator)
+      mpoSimulator->SaveState();
     else if (simulationType == SimulationType::kExtendedStabilizer)
       extendedStabilizer->SaveState();
     else
@@ -1625,6 +1720,8 @@ class QCSimState : public ISimulator {
       pathIntegralSimulator->RestoreState();
     else if (simulationType == SimulationType::kDensityMatrix)
       densityMatrix->RestoreState();
+    else if (simulationType == SimulationType::kMatrixProductOperator)
+      mpoSimulator->RestoreState();
     else if (simulationType == SimulationType::kExtendedStabilizer)
       extendedStabilizer->RestoreState();
     else
@@ -1716,6 +1813,14 @@ class QCSimState : public ISimulator {
       return state->MeasureNoCollapse();
     else if (simulationType == SimulationType::kDensityMatrix)
       return densityMatrix->MeasureNoCollapse();
+    else if (simulationType == SimulationType::kMatrixProductOperator) {
+      const auto measured = mpoSimulator->MeasureNoCollapse();
+      Types::qubit_t result = 0;
+      for (size_t qubit = 0; qubit < nrQubits; ++qubit)
+        if (measured.at(static_cast<Eigen::Index>(qubit)))
+          result |= 1ULL << qubit;
+      return result;
+    }
     else if (simulationType == SimulationType::kExtendedStabilizer) {
       auto sampler = extendedStabilizer->Clone();
       Types::qubit_t result = 0;
@@ -1793,6 +1898,12 @@ class QCSimState : public ISimulator {
       for (size_t i = 0; i < nrQubits; ++i)
         res[i] = ((measured >> i) & 1) == 1;
       return res;
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      const auto measured = mpoSimulator->MeasureNoCollapse();
+      std::vector<bool> res(nrQubits);
+      for (size_t i = 0; i < nrQubits; ++i)
+        res[i] = measured.at(static_cast<Eigen::Index>(i));
+      return res;
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
       auto sampler = extendedStabilizer->Clone();
       std::vector<bool> res(nrQubits);
@@ -1867,12 +1978,20 @@ class QCSimState : public ISimulator {
     return std::max(0.0, std::min(1.0, probability));
   }
 
+  void UpdateCurrentMPOBondDimension() {
+    for (const auto bondDimension : mpoSimulator->getBondDimensions())
+      curMaxBondDim =
+          std::max(curMaxBondDim, static_cast<size_t>(bondDimension));
+  }
+
   SimulationType simulationType =
       SimulationType::kStatevector; /**< The simulation type. */
 
   std::unique_ptr<QC::QubitRegister<>> state; /**< The qcsim state. */
   std::unique_ptr<QC::TensorNetworks::MPSSimulator>
       mpsSimulator; /**< The qcsim mps simulator. */
+  std::unique_ptr<QC::TensorNetworks::MPOSimulator>
+      mpoSimulator; /**< The qcsim mpo simulator. */
   std::unique_ptr<QC::Clifford::StabilizerSimulator>
       cliffordSimulator; /**< The qcsim clifford simulator. */
   std::unique_ptr<TensorNetworks::TensorNetwork>

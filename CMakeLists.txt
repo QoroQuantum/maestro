@@ -156,6 +156,7 @@ set(TESTSSRC tests/aertests.cpp
 	tests/qcsimtests.cpp
 	tests/qcsimdensitymatrixtests.cpp
 	tests/qcsimextendedstabilizertests.cpp
+	tests/qcsimmpotests.cpp
 	tests/tensorstests.cpp
 	tests/pauliproptests.cpp
 	tests/extstabtests.cpp
