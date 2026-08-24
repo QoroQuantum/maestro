@@ -88,7 +88,7 @@ if (NOT DEFINED QCSIM_INCLUDE_DIR)
         FetchContent_Declare(
             qcsim
             GIT_REPOSITORY https://github.com/aromanro/QCSim.git
-            GIT_TAG 8b5bd3e3d59c29c4bc5c3be0b1daf5b4ed7eb339
+            GIT_TAG d5056c68d53e09ae09054f9f8ec2fc1928462f28
         )
 
         # Just populate the source (don't build it with add_subdirectory)
@@ -136,6 +136,7 @@ endif()
 # add here common sources
 
 set(TESTSSRC tests/aertests.cpp
+	tests/densitymatrixtests.cpp
 	tests/circtests.cpp
 	tests/cliffordtests.cpp
 	tests/compsimtests.cpp
@@ -153,6 +154,8 @@ set(TESTSSRC tests/aertests.cpp
 	tests/qasm_syntax.cpp
 	tests/qasm_validation.cpp
 	tests/qcsimtests.cpp
+	tests/qcsimdensitymatrixtests.cpp
+	tests/qcsimextendedstabilizertests.cpp
 	tests/tensorstests.cpp
 	tests/pauliproptests.cpp
 	tests/extstabtests.cpp

@@ -290,6 +290,9 @@ __declspec(dllexport)
     case Simulators::SimulationType::kPathIntegral:
       response.emplace("method", "path_integral");
       break;
+    case Simulators::SimulationType::kDensityMatrix:
+      response.emplace("method", "density_matrix");
+      break;
     default:
       response.emplace("method", "unknown");
       break;
@@ -446,6 +449,9 @@ __declspec(dllexport)
       break;
     case Simulators::SimulationType::kPathIntegral:
       response.emplace("method", "path_integral");
+      break;
+    case Simulators::SimulationType::kDensityMatrix:
+      response.emplace("method", "density_matrix");
       break;
     default:
       response.emplace("method", "unknown");

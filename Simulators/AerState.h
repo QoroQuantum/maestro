@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <limits>
+#include <numeric>
 #include <sstream>
 
 #include "QubitRegister.h"
@@ -94,7 +95,10 @@ class AerState : public ISimulator {
   void InitializeState(size_t num_qubits,
                        std::vector<std::complex<double>> &amplitudes) override {
     Clear();
-    state->initialize_statevector(num_qubits, amplitudes.data(), true);
+    if (simulationType == SimulationType::kDensityMatrix)
+      InitializeDensityMatrixFromStatevector(num_qubits, amplitudes.data());
+    else
+      state->initialize_statevector(num_qubits, amplitudes.data(), true);
   }
 
   /**
@@ -131,8 +135,11 @@ class AerState : public ISimulator {
   void InitializeState(size_t num_qubits,
                        AER::Vector<std::complex<double>> &amplitudes) override {
     Clear();
-    state->initialize_statevector(num_qubits, amplitudes.move_to_buffer(),
-                                  false);
+    if (simulationType == SimulationType::kDensityMatrix)
+      InitializeDensityMatrixFromStatevector(num_qubits, amplitudes.data());
+    else
+      state->initialize_statevector(num_qubits, amplitudes.move_to_buffer(),
+                                    false);
   }
 
   /**
@@ -149,7 +156,10 @@ class AerState : public ISimulator {
   void InitializeState(size_t num_qubits,
                        Eigen::VectorXcd &amplitudes) override {
     Clear();
-    state->initialize_statevector(num_qubits, amplitudes.data(), true);
+    if (simulationType == SimulationType::kDensityMatrix)
+      InitializeDensityMatrixFromStatevector(num_qubits, amplitudes.data());
+    else
+      state->initialize_statevector(num_qubits, amplitudes.data(), true);
   }
 
   /**
@@ -191,6 +201,8 @@ class AerState : public ISimulator {
         simulationType = SimulationType::kTensorNetwork;
       else if (std::string("extended_stabilizer") == value)
         simulationType = SimulationType::kExtendedStabilizer;
+      else if (std::string("density_matrix") == value)
+        simulationType = SimulationType::kDensityMatrix;
       else
         simulationType = SimulationType::kOther;
     }
@@ -219,6 +231,8 @@ class AerState : public ISimulator {
           return "tensor_network";
         case SimulationType::kExtendedStabilizer:
           return "extended_stabilizer";
+        case SimulationType::kDensityMatrix:
+          return "density_matrix";
         default:
           return "other";
       }
@@ -342,6 +356,10 @@ class AerState : public ISimulator {
    * @return The amplitude of the specified outcome.
    */
   std::complex<double> Amplitude(Types::qubit_t outcome) override {
+    if (simulationType == SimulationType::kDensityMatrix)
+      throw std::runtime_error(
+          "AerState::Amplitude is not defined for density matrix simulation");
+
     return state->amplitude(outcome);
   }
 
@@ -374,6 +392,12 @@ class AerState : public ISimulator {
    * @return A vector with the probabilities of all possible outcomes.
    */
   std::vector<double> AllProbabilities() override {
+    if (simulationType == SimulationType::kDensityMatrix) {
+      Types::qubits_vector qubits(GetNumberOfQubits());
+      std::iota(qubits.begin(), qubits.end(), 0);
+      return state->probabilities(qubits);
+    }
+
     return state->probabilities();
   }
 
@@ -390,6 +414,14 @@ class AerState : public ISimulator {
    */
   std::vector<double> Probabilities(
       const Types::qubits_vector &qubits) override {
+    if (simulationType == SimulationType::kDensityMatrix) {
+      std::vector<double> probabilities;
+      probabilities.reserve(qubits.size());
+      for (const auto outcome : qubits)
+        probabilities.push_back(state->probability(outcome));
+      return probabilities;
+    }
+
     return state->probabilities(qubits);
   }
 
@@ -538,7 +570,10 @@ class AerState : public ISimulator {
    * simulator, for an optimization for qiskit aer. For qcsim it does nothing.
    */
   void SaveStateToInternalDestructive() override {
-    savedAmplitudes = state->move_to_vector();
+    if (simulationType == SimulationType::kDensityMatrix)
+      savedDensityMatrix = state->move_to_matrix();
+    else
+      savedAmplitudes = state->move_to_vector();
   }
 
   /**
@@ -548,6 +583,14 @@ class AerState : public ISimulator {
    * This does something only for qiskit aer.
    */
   void RestoreInternalDestructiveSavedState() override {
+    if (simulationType == SimulationType::kDensityMatrix) {
+      const size_t numQubits = static_cast<size_t>(
+          log2(savedDensityMatrix.GetRows()));
+      state->initialize_density_matrix(numQubits, savedDensityMatrix.data(),
+                                       true, true);
+      return;
+    }
+
     const size_t numQubits = static_cast<size_t>(log2(savedAmplitudes.size()));
     state->initialize_statevector(numQubits, savedAmplitudes.move_to_buffer(),
                                   false);
@@ -566,9 +609,14 @@ class AerState : public ISimulator {
 
     const auto numQubits = GetNumberOfQubits();
 
-    if (simulationType == SimulationType::kStatevector) {
+    if (simulationType == SimulationType::kStatevector ||
+        simulationType == SimulationType::kDensityMatrix) {
       SaveStateToInternalDestructive();
-      state->initialize_statevector(numQubits, savedAmplitudes.data(), true);
+      if (simulationType == SimulationType::kDensityMatrix)
+        state->initialize_density_matrix(numQubits, savedDensityMatrix.data(),
+                                         true, true);
+      else
+        state->initialize_statevector(numQubits, savedAmplitudes.data(), true);
       return;
     }
 
@@ -638,6 +686,15 @@ class AerState : public ISimulator {
         Clear();
         numQubits = static_cast<size_t>(log2(savedAmplitudes.size()));
         state->initialize_statevector(numQubits, savedAmplitudes.data(), true);
+
+        return;
+      } break;
+      case SimulationType::kDensityMatrix: {
+        Clear();
+        numQubits = static_cast<size_t>(
+            log2(savedDensityMatrix.GetRows()));
+        state->initialize_density_matrix(numQubits, savedDensityMatrix.data(),
+                                         true, true);
 
         return;
       } break;
@@ -719,6 +776,11 @@ class AerState : public ISimulator {
    * qiskit aer. For qcsim it does the same thing as Amplitude.
    */
   std::complex<double> AmplitudeRaw(Types::qubit_t outcome) override {
+    if (simulationType == SimulationType::kDensityMatrix)
+      throw std::runtime_error(
+          "AerState::AmplitudeRaw is not defined for density matrix "
+          "simulation");
+
     return savedAmplitudes[outcome];
   }
 
@@ -858,11 +920,25 @@ class AerState : public ISimulator {
   }
 
  protected:
+  void InitializeDensityMatrixFromStatevector(
+      size_t numQubits, const std::complex<double>* amplitudes) {
+    const size_t dimension = 1ULL << numQubits;
+    AER::cmatrix_t densityMatrix(dimension, dimension);
+    for (size_t row = 0; row < dimension; ++row)
+      for (size_t column = 0; column < dimension; ++column)
+        densityMatrix(row, column) =
+            amplitudes[row] * std::conj(amplitudes[column]);
+
+    state->initialize_density_matrix(numQubits, densityMatrix.data(), true,
+                                     true);
+  }
+
   SimulationType simulationType =
       SimulationType::kStatevector; /**< The simulation type. */
   std::unique_ptr<QiskitAerState> state =
       std::make_unique<QiskitAerState>(); /**< The qiskit aer state. */
   AER::Vector<complex_t> savedAmplitudes; /**< The amplitudes, saved. */
+  AER::cmatrix_t savedDensityMatrix; /**< The density matrix, saved. */
   
   bool enableMultithreading = true;    /**< The multithreading flag. */
   AER::Data savedState; /**< The saved data - here there will be the saved state

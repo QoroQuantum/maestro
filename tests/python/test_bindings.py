@@ -25,6 +25,7 @@ class TestEnums:
         assert hasattr(maestro.SimulationType, 'PauliPropagator')
         assert hasattr(maestro.SimulationType, 'ExtendedStabilizer')
         assert hasattr(maestro.SimulationType, 'PathIntegral')
+        assert hasattr(maestro.SimulationType, 'DensityMatrix')
 
 
 class TestMaestroClass:
