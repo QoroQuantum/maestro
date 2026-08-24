@@ -664,6 +664,7 @@ nb::dict incremental_evolve_core(
   nb::list all_expectations;
   nb::list steps_measured;
   nb::list bond_dim_evolution;
+  nb::list times_per_step;
 
   auto network = ConfigureNetwork(sim.handle, config);
   if (!network)
@@ -699,6 +700,7 @@ nb::dict incremental_evolve_core(
 
   int current_step = 0;
   for (int target_step : sorted_steps) {
+    auto start_step = std::chrono::high_resolution_clock::now();
     int delta = target_step - current_step;
     if (delta < 0)
       continue;  // duplicate or out-of-order (shouldn't happen after sort)
@@ -720,9 +722,13 @@ nb::dict incremental_evolve_core(
       double ev = simulator->ExpectationValue(pauli);
       step_exp.append(ev);
     }
+
+    auto end_step = std::chrono::high_resolution_clock::now();
+
     all_expectations.append(step_exp);
     steps_measured.append(target_step);
     bond_dim_evolution.append(current_max_bond_dim);
+    times_per_step.append(std::chrono::duration<double>(end_step - start_step).count());
   }
 
   auto end = std::chrono::high_resolution_clock::now();
@@ -731,6 +737,7 @@ nb::dict incremental_evolve_core(
   py_result["expectation_values"] = all_expectations;
   py_result["steps"] = steps_measured;
   py_result["time_taken"] = std::chrono::duration<double>(end - start).count();
+  py_result["time_per_step"] = times_per_step;
   py_result["simulator"] = (int)config.simulator_type;
   py_result["method"] = (int)config.simulation_type;
 
