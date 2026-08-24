@@ -15,58 +15,132 @@
 #ifndef _QCSIM_EXTENDED_STABILIZER_H
 #define _QCSIM_EXTENDED_STABILIZER_H 1
 
+#include <memory>
+#include <random>
+#include <string>
+#include <utility>
+#include <vector>
+
 #include "ExtendedStabilizer.h"
 
 namespace Simulators {
 
-class QCSimExtendedStabilizer : public QC::ExtendedStabilizer {
+class QCSimExtendedStabilizer {
  public:
-  using QC::ExtendedStabilizer::ExtendedStabilizer;
+  explicit QCSimExtendedStabilizer(size_t nrQubits)
+      : simulator(std::make_unique<QC::ExtendedStabilizer>(nrQubits)) {}
+
+  QCSimExtendedStabilizer(
+      size_t nrQubits,
+      const QC::ExtendedStabilizerApproximationPolicy& policy)
+      : simulator(std::make_unique<QC::ExtendedStabilizer>(nrQubits, policy)) {}
+
+  size_t GetNrQubits() const { return simulator->GetNrQubits(); }
+
+  void Reset(size_t nrQubits) { simulator->Reset(nrQubits); }
+
+  void SetRandomSeed(std::mt19937::result_type seed) {
+    simulator->SetRandomSeed(seed);
+  }
+
+  void ApplyH(size_t qubit) { simulator->ApplyH(qubit); }
+
+  void ApplyS(size_t qubit) { simulator->ApplyS(qubit); }
+
+  void ApplyX(size_t qubit) { simulator->ApplyX(qubit); }
+
+  void ApplyY(size_t qubit) { simulator->ApplyY(qubit); }
+
+  void ApplyZ(size_t qubit) { simulator->ApplyZ(qubit); }
+
+  void ApplyK(size_t qubit) { simulator->ApplyK(qubit); }
+
+  bool Measure(size_t qubit) { return simulator->Measure(qubit); }
+
+  double GetQubitProbability(size_t qubit) const {
+    return simulator->GetQubitProbability(qubit);
+  }
+
+  double ExpectationValue(const std::string& pauliString) const {
+    return simulator->ExpectationValue(pauliString);
+  }
+
+  void SaveState() { simulator->SaveState(); }
+
+  void RestoreState() { simulator->RestoreState(); }
+
+  std::unique_ptr<QCSimExtendedStabilizer> Clone() const {
+    return std::unique_ptr<QCSimExtendedStabilizer>(
+        new QCSimExtendedStabilizer(simulator->Clone()));
+  }
+
+  const std::vector<QC::ExtendedFrame>& GetFrames() const noexcept {
+    return simulator->GetFrames();
+  }
+
+  const QC::ExtendedStabilizerApproximationPolicy& GetApproximationPolicy()
+      const noexcept {
+    return simulator->GetApproximationPolicy();
+  }
+
+  const QC::ExtendedStabilizerApproximationStatistics&
+  GetApproximationStatistics() const noexcept {
+    return simulator->GetApproximationStatistics();
+  }
+
+  double GetApproximationErrorBound() const noexcept {
+    return simulator->GetApproximationErrorBound();
+  }
+
+  void SetApproximationPolicy(
+      const QC::ExtendedStabilizerApproximationPolicy& policy) {
+    simulator->SetApproximationPolicy(policy);
+  }
 
   // Keep the gate names and control/target order consistent with the other
   // Maestro QCSim wrappers. QCSim's ExtendedStabilizer uses target/control.
-  void ApplySDG(size_t qubit) { QC::ExtendedStabilizer::ApplySdg(qubit); }
+  void ApplySDG(size_t qubit) { simulator->ApplySdg(qubit); }
 
-  void ApplySX(size_t qubit) { QC::ExtendedStabilizer::ApplySx(qubit); }
+  void ApplySX(size_t qubit) { simulator->ApplySx(qubit); }
 
-  void ApplySXDG(size_t qubit) { QC::ExtendedStabilizer::ApplySxDag(qubit); }
+  void ApplySXDG(size_t qubit) { simulator->ApplySxDag(qubit); }
 
   void ApplySxDAG(size_t qubit) { ApplySXDG(qubit); }
 
   void ApplyCX(size_t controlQubit, size_t targetQubit) {
-    QC::ExtendedStabilizer::ApplyCX(targetQubit, controlQubit);
+    simulator->ApplyCX(targetQubit, controlQubit);
   }
 
   void ApplyCY(size_t controlQubit, size_t targetQubit) {
-    QC::ExtendedStabilizer::ApplyCY(targetQubit, controlQubit);
+    simulator->ApplyCY(targetQubit, controlQubit);
   }
 
   void ApplyCZ(size_t controlQubit, size_t targetQubit) {
-    QC::ExtendedStabilizer::ApplyCZ(targetQubit, controlQubit);
+    simulator->ApplyCZ(targetQubit, controlQubit);
   }
 
   void ApplySWAP(size_t qubit1, size_t qubit2) {
-    QC::ExtendedStabilizer::ApplySwap(qubit1, qubit2);
+    simulator->ApplySwap(qubit1, qubit2);
   }
 
   void ApplyISWAP(size_t qubit1, size_t qubit2) {
-    QC::ExtendedStabilizer::ApplyISwap(qubit1, qubit2);
+    simulator->ApplyISwap(qubit1, qubit2);
   }
 
   void ApplyISWAPDG(size_t qubit1, size_t qubit2) {
-    QC::ExtendedStabilizer::ApplyISwapDag(qubit1, qubit2);
+    simulator->ApplyISwapDag(qubit1, qubit2);
   }
 
   void ApplyRX(size_t qubit, double angle) {
-    QC::ExtendedStabilizer::ApplyRx(qubit, angle);
+    simulator->ApplyRx(qubit, angle);
   }
 
   void ApplyRY(size_t qubit, double angle) {
-    QC::ExtendedStabilizer::ApplyRy(qubit, angle);
+    simulator->ApplyRy(qubit, angle);
   }
 
   void ApplyRZ(size_t qubit, double angle) {
-    QC::ExtendedStabilizer::ApplyRz(qubit, angle);
+    simulator->ApplyRz(qubit, angle);
   }
 
   void ApplyP(size_t qubit, double lambda) { ApplyRZ(qubit, lambda); }
@@ -232,6 +306,11 @@ class QCSimExtendedStabilizer : public QC::ExtendedStabilizer {
   }
 
  private:
+  explicit QCSimExtendedStabilizer(
+      std::unique_ptr<QC::ExtendedStabilizer> simulatorToOwn)
+      : simulator(std::move(simulatorToOwn)) {}
+
+  std::unique_ptr<QC::ExtendedStabilizer> simulator;
   static constexpr double kPi = 3.141592653589793238462643383279502884;
 };
 

@@ -30,6 +30,7 @@
 #include "MPSSimulator.h"
 #include "QubitRegister.h"
 #include "QcsimPauliPropagator.h"
+#include "QCSimExtendedStabilizer.h"
 #include "PathIntegralSimulator.h"
 
 #include "../TensorNetworks/ForestContractor.h"
@@ -203,6 +204,9 @@ class QCSimState : public ISimulator {
         pathIntegralSimulator->SetStartZeroState(nrQubits);
       } else if (simulationType == SimulationType::kDensityMatrix) {
         densityMatrix = std::make_unique<QC::DensityMatrix<>>(nrQubits);
+      } else if (simulationType == SimulationType::kExtendedStabilizer) {
+        extendedStabilizer =
+            std::make_unique<Simulators::QCSimExtendedStabilizer>(nrQubits);
       } else
         state = std::make_unique<QC::QubitRegister<>>(nrQubits);
 
@@ -359,6 +363,8 @@ class QCSimState : public ISimulator {
       pathIntegralSimulator->SetStartZeroState(nrQubits);
     } else if (densityMatrix)
       densityMatrix->Reset();
+    else if (extendedStabilizer)
+      extendedStabilizer->Reset(nrQubits);
 
     upcomingGateIndex = 0;
   }
@@ -503,6 +509,8 @@ class QCSimState : public ISimulator {
         simulationType = SimulationType::kPathIntegral;
       else if (std::string("density_matrix") == value)
         simulationType = SimulationType::kDensityMatrix;
+      else if (std::string("extended_stabilizer") == value)
+        simulationType = SimulationType::kExtendedStabilizer;
     }
 
     if (!configuration.WasApplied(key, value))
@@ -563,6 +571,8 @@ class QCSimState : public ISimulator {
           return "path_integral";
         case SimulationType::kDensityMatrix:
           return "density_matrix";
+        case SimulationType::kExtendedStabilizer:
+          return "extended_stabilizer";
         default:
           return "other";
       }
@@ -584,7 +594,9 @@ class QCSimState : public ISimulator {
          mpsSimulator) ||
         (simulationType == SimulationType::kStabilizer && cliffordSimulator) ||
         (simulationType == SimulationType::kTensorNetwork && tensorNetwork) ||
-        (simulationType == SimulationType::kDensityMatrix && densityMatrix))
+        (simulationType == SimulationType::kDensityMatrix && densityMatrix) ||
+        (simulationType == SimulationType::kExtendedStabilizer &&
+         extendedStabilizer))
       return 0;
 
     const size_t oldNrQubits = nrQubits;
@@ -618,6 +630,7 @@ class QCSimState : public ISimulator {
     pp = nullptr;
     pathIntegralSimulator = nullptr;
     densityMatrix = nullptr;
+    extendedStabilizer = nullptr;
     dummySim = nullptr;
     nrQubits = 0;
     upcomingGateIndex = 0;
@@ -656,6 +669,11 @@ class QCSimState : public ISimulator {
     } else if (simulationType == SimulationType::kDensityMatrix) {
       for (size_t qubit : qubits) {
         if (densityMatrix->MeasureQubit(qubit)) res |= mask;
+        mask <<= 1;
+      }
+    } else if (simulationType == SimulationType::kExtendedStabilizer) {
+      for (size_t qubit : qubits) {
+        if (extendedStabilizer->Measure(qubit)) res |= mask;
         mask <<= 1;
       }
     } else if (simulationType == SimulationType::kStabilizer) {
@@ -727,6 +745,9 @@ class QCSimState : public ISimulator {
     } else if (simulationType == SimulationType::kDensityMatrix) {
       for (size_t q = 0; q < qubits.size(); ++q)
         if (densityMatrix->MeasureQubit(qubits[q])) res[q] = true;
+    } else if (simulationType == SimulationType::kExtendedStabilizer) {
+      for (size_t q = 0; q < qubits.size(); ++q)
+        if (extendedStabilizer->Measure(qubits[q])) res[q] = true;
     } else if (simulationType == SimulationType::kStabilizer) {
       for (size_t q = 0; q < qubits.size(); ++q)
         if (cliffordSimulator->MeasureQubit(
@@ -770,6 +791,10 @@ class QCSimState : public ISimulator {
           state->ApplyGate(xGate, static_cast<unsigned int>(qubit));
     } else if (simulationType == SimulationType::kDensityMatrix) {
       for (size_t qubit : qubits) densityMatrix->ApplyReset(qubit);
+    } else if (simulationType == SimulationType::kExtendedStabilizer) {
+      for (size_t qubit : qubits)
+        if (extendedStabilizer->Measure(qubit))
+          extendedStabilizer->ApplyX(qubit);
     } else if (simulationType == SimulationType::kStabilizer) {
       for (size_t qubit : qubits)
         if (cliffordSimulator->MeasureQubit(static_cast<unsigned int>(qubit)))
@@ -827,6 +852,8 @@ class QCSimState : public ISimulator {
       return pathIntegralSimulator->Probability(outcome);
     else if (simulationType == SimulationType::kDensityMatrix)
       return densityMatrix->getBasisStateProbability(outcome);
+    else if (simulationType == SimulationType::kExtendedStabilizer)
+      return ExtendedStabilizerBasisProbability(outcome);
 
     return state->getBasisStateProbability(static_cast<unsigned int>(outcome));
   }
@@ -863,6 +890,10 @@ class QCSimState : public ISimulator {
       throw std::runtime_error(
           "QCSimState::Amplitude: Amplitudes are not defined for the density "
           "matrix simulator.");
+    else if (simulationType == SimulationType::kExtendedStabilizer)
+      throw std::runtime_error(
+          "QCSimState::Amplitude: Amplitudes are not exposed by the extended "
+          "stabilizer simulator.");
 
     return state->getBasisStateAmplitude(static_cast<unsigned int>(outcome));
   }
@@ -922,6 +953,12 @@ class QCSimState : public ISimulator {
       for (size_t i = 0; i < nrBasisStates; ++i)
         result[i] = densityMatrix->getBasisStateProbability(i);
       return result;
+    } else if (simulationType == SimulationType::kExtendedStabilizer) {
+      const size_t nrBasisStates = CheckedBasisStateCountForQueries();
+      std::vector<double> result(nrBasisStates);
+      for (size_t i = 0; i < nrBasisStates; ++i)
+        result[i] = ExtendedStabilizerBasisProbability(i);
+      return result;
     }
 
     const Eigen::VectorXcd probs =
@@ -974,6 +1011,9 @@ class QCSimState : public ISimulator {
     } else if (simulationType == SimulationType::kDensityMatrix) {
       for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
         result[i] = densityMatrix->getBasisStateProbability(qubits[i]);
+    } else if (simulationType == SimulationType::kExtendedStabilizer) {
+      for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
+        result[i] = ExtendedStabilizerBasisProbability(qubits[i]);
     } else {
       const Eigen::VectorXcd &reg = state->getRegisterStorage();
 
@@ -1153,6 +1193,16 @@ class QCSimState : public ISimulator {
         Types::qubit_t packed = 0;
         for (size_t i = 0; i < qubits.size(); ++i)
           if ((measured & (1ULL << qubits[i])) != 0) packed |= 1ULL << i;
+        ++result[packed];
+      }
+    } else if (simulationType == SimulationType::kExtendedStabilizer) {
+      auto sampler = extendedStabilizer->Clone();
+      sampler->SaveState();
+      for (size_t shot = 0; shot < shots; ++shot) {
+        sampler->RestoreState();
+        Types::qubit_t packed = 0;
+        for (size_t i = 0; i < qubits.size(); ++i)
+          if (sampler->Measure(qubits[i])) packed |= 1ULL << i;
         ++result[packed];
       }
     } else {
@@ -1353,6 +1403,16 @@ class QCSimState : public ISimulator {
           packed[i] = (measured & (1ULL << qubits[i])) != 0;
         ++result[packed];
       }
+    } else if (simulationType == SimulationType::kExtendedStabilizer) {
+      auto sampler = extendedStabilizer->Clone();
+      sampler->SaveState();
+      for (size_t shot = 0; shot < shots; ++shot) {
+        sampler->RestoreState();
+        std::vector<bool> packed(qubits.size(), false);
+        for (size_t i = 0; i < qubits.size(); ++i)
+          packed[i] = sampler->Measure(qubits[i]);
+        ++result[packed];
+      }
     } else {
       if (shots > 1) {
         const auto &statev = state->getRegisterStorage();
@@ -1425,6 +1485,8 @@ class QCSimState : public ISimulator {
       pauliString.resize(GetNumberOfQubits(), 'I');
       return densityMatrix->ExpectationValue(pauliString).real();
     }
+    else if (simulationType == SimulationType::kExtendedStabilizer)
+      return extendedStabilizer->ExpectationValue(pauliString);
 
     // statevector or mps
     static const QC::Gates::PauliXGate<> xgate;
@@ -1536,6 +1598,8 @@ class QCSimState : public ISimulator {
       pathIntegralSimulator->SaveState();
     else if (simulationType == SimulationType::kDensityMatrix)
       densityMatrix->SaveState();
+    else if (simulationType == SimulationType::kExtendedStabilizer)
+      extendedStabilizer->SaveState();
     else
       state->SaveState();
   }
@@ -1561,6 +1625,8 @@ class QCSimState : public ISimulator {
       pathIntegralSimulator->RestoreState();
     else if (simulationType == SimulationType::kDensityMatrix)
       densityMatrix->RestoreState();
+    else if (simulationType == SimulationType::kExtendedStabilizer)
+      extendedStabilizer->RestoreState();
     else
       state->RestoreState();
   }
@@ -1650,6 +1716,13 @@ class QCSimState : public ISimulator {
       return state->MeasureNoCollapse();
     else if (simulationType == SimulationType::kDensityMatrix)
       return densityMatrix->MeasureNoCollapse();
+    else if (simulationType == SimulationType::kExtendedStabilizer) {
+      auto sampler = extendedStabilizer->Clone();
+      Types::qubit_t result = 0;
+      for (size_t qubit = 0; qubit < nrQubits; ++qubit)
+        if (sampler->Measure(qubit)) result |= 1ULL << qubit;
+      return result;
+    }
     else if (simulationType == SimulationType::kMatrixProductState) {
       const auto measured = mpsSimulator->MeasureNoCollapse();
       Types::qubit_t result = 0;
@@ -1720,6 +1793,11 @@ class QCSimState : public ISimulator {
       for (size_t i = 0; i < nrQubits; ++i)
         res[i] = ((measured >> i) & 1) == 1;
       return res;
+    } else if (simulationType == SimulationType::kExtendedStabilizer) {
+      auto sampler = extendedStabilizer->Clone();
+      std::vector<bool> res(nrQubits);
+      for (size_t i = 0; i < nrQubits; ++i) res[i] = sampler->Measure(i);
+      return res;
     } else if (simulationType == SimulationType::kMatrixProductState) {
       const auto measured = mpsSimulator->MeasureNoCollapse();
       std::vector<bool> res(nrQubits);
@@ -1759,6 +1837,36 @@ class QCSimState : public ISimulator {
   }
 
  protected:
+  size_t CheckedBasisStateCountForQueries() const {
+    if (nrQubits >= std::numeric_limits<size_t>::digits)
+      throw std::runtime_error(
+          "QCSimState: Too many qubits for enumerating basis states.");
+    return 1ULL << nrQubits;
+  }
+
+  double ExtendedStabilizerBasisProbability(Types::qubit_t outcome) const {
+    const size_t nrBasisStates = CheckedBasisStateCountForQueries();
+    if (outcome >= nrBasisStates) return 0.0;
+
+    double probability = 0.0;
+    std::string pauliString(nrQubits, 'I');
+    for (size_t mask = 0; mask < nrBasisStates; ++mask) {
+      double sign = 1.0;
+      size_t parityBits = mask & static_cast<size_t>(outcome);
+      while (parityBits != 0) {
+        sign = -sign;
+        parityBits &= parityBits - 1;
+      }
+
+      for (size_t qubit = 0; qubit < nrQubits; ++qubit)
+        pauliString[qubit] = ((mask >> qubit) & 1ULL) == 0 ? 'I' : 'Z';
+      probability += sign * extendedStabilizer->ExpectationValue(pauliString);
+    }
+
+    probability /= static_cast<double>(nrBasisStates);
+    return std::max(0.0, std::min(1.0, probability));
+  }
+
   SimulationType simulationType =
       SimulationType::kStatevector; /**< The simulation type. */
 
@@ -1774,6 +1882,8 @@ class QCSimState : public ISimulator {
       pathIntegralSimulator; /**< The qcsim path integral simulator. */
   std::unique_ptr<QC::DensityMatrix<>>
       densityMatrix; /**< The qcsim density matrix simulator. */
+  std::unique_ptr<Simulators::QCSimExtendedStabilizer>
+      extendedStabilizer; /**< The qcsim extended stabilizer simulator. */
 
   size_t nrQubits = 0; /**< The number of allocated qubits. */
 
