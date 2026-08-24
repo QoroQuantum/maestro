@@ -972,6 +972,8 @@ class AerSimulator : public AerState {
       sim->Configure("method", "tensor_network");
     else if (simulationType == SimulationType::kExtendedStabilizer)
       sim->Configure("method", "extended_stabilizer");
+    else if (simulationType == SimulationType::kDensityMatrix)
+      sim->Configure("method", "density_matrix");
     else
       sim->Configure("method", "statevector");
 
@@ -998,6 +1000,8 @@ class AerSimulator : public AerState {
     AER::Data localSavedState =
         savedState; /**< The saved data - here there will be the saved state of
                        the simulator */
+    AER::cmatrix_t localSavedDensityMatrix =
+        savedDensityMatrix; /**< The density matrix, saved. */
 
     // now the tricky part
     if (state && state->is_initialized()) {
@@ -1007,6 +1011,7 @@ class AerSimulator : public AerState {
       // it to initialize the cloned state, like this
       sim->savedAmplitudes = std::move(savedAmplitudes);
       sim->savedState = std::move(savedState);
+      sim->savedDensityMatrix = std::move(savedDensityMatrix);
 
       sim->RestoreState();  // now the state is loaded in the cloned simulator
 
@@ -1014,14 +1019,17 @@ class AerSimulator : public AerState {
       // too
       sim->savedAmplitudes = localSavedAmplitudes;
       sim->savedState = localSavedState;
+      sim->savedDensityMatrix = localSavedDensityMatrix;
 
       // those saved previously can be an older state, so put them back
       savedAmplitudes = std::move(localSavedAmplitudes);
       savedState = std::move(localSavedState);
+      savedDensityMatrix = std::move(localSavedDensityMatrix);
     } else {
       // std::cout << "Restored from non initialized state" << std::endl;
       sim->savedAmplitudes = std::move(localSavedAmplitudes);
       sim->savedState = std::move(localSavedState);
+      sim->savedDensityMatrix = std::move(localSavedDensityMatrix);
 
       sim->RestoreState();  // this might not be necessary, but sometimes, not
                             // very often, an exception is thrown about the

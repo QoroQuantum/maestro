@@ -134,6 +134,8 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
         sim->Configure("method", "pauli_propagator");
       else if (m == SimulationType::kPathIntegral)
         sim->Configure("method", "path_integral");
+      else if (m == SimulationType::kDensityMatrix)
+        sim->Configure("method", "density_matrix");
       else if (m != SimulationType::kStatevector)
         throw std::invalid_argument("Simulation Type not supported for QCSim");
 
@@ -150,6 +152,8 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
         sim->Configure("method", "tensor_network");
       else if (m == SimulationType::kExtendedStabilizer)
         sim->Configure("method", "extended_stabilizer");
+      else if (m == SimulationType::kDensityMatrix)
+        sim->Configure("method", "density_matrix");
       else if (m == SimulationType::kStatevector)
         sim->Configure("method", "statevector");
       else
@@ -219,6 +223,8 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
         sim->Configure("method", "pauli_propagator");
       else if (m == SimulationType::kPathIntegral)
         sim->Configure("method", "path_integral");
+      else if (m == SimulationType::kDensityMatrix)
+        sim->Configure("method", "density_matrix");
       else if (m != SimulationType::kStatevector)
         throw std::invalid_argument("Simulation Type not supported for QCSim");
 
@@ -235,6 +241,8 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
         sim->Configure("method", "tensor_network");
       else if (m == SimulationType::kExtendedStabilizer)
         sim->Configure("method", "extended_stabilizer");
+      else if (m == SimulationType::kDensityMatrix)
+        sim->Configure("method", "density_matrix");
       else if (m == SimulationType::kStatevector)
         sim->Configure("method", "statevector");
       else

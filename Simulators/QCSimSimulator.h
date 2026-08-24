@@ -64,7 +64,8 @@ class QCSimSimulator : public QCSimState {
                                 const Eigen::Matrix2cd& gate) override {
     if (GetSimulationType() != SimulationType::kMatrixProductState &&
         GetSimulationType() != SimulationType::kTensorNetwork&&
-        GetSimulationType() != SimulationType::kStatevector)
+        GetSimulationType() != SimulationType::kStatevector &&
+        GetSimulationType() != SimulationType::kDensityMatrix)
         throw std::runtime_error("QCSimSimulator::ApplyGenericOneQubitGate: Unsupported simulation type.");
 
     const QC::Gates::AppliedGate<> agate(gate, qubit);
@@ -73,8 +74,9 @@ class QCSimSimulator : public QCSimState {
       mpsSimulator->ApplyGate(agate);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(agate, qubit);
-    else if (GetSimulationType() == SimulationType::kStatevector)
-      state->ApplyGate(agate);
+    else if (GetSimulationType() == SimulationType::kStatevector ||
+             GetSimulationType() == SimulationType::kDensityMatrix)
+      ApplyStatevectorOrDensityMatrix(agate);
 
     NotifyObservers({qubit});
   }
@@ -89,7 +91,8 @@ class QCSimSimulator : public QCSimState {
                                 const Eigen::Matrix4cd& gate) override {
     if (GetSimulationType() != SimulationType::kMatrixProductState &&
         GetSimulationType() != SimulationType::kTensorNetwork &&
-        GetSimulationType() != SimulationType::kStatevector)
+        GetSimulationType() != SimulationType::kStatevector &&
+        GetSimulationType() != SimulationType::kDensityMatrix)
       throw std::runtime_error(
           "QCSimSimulator::ApplyGenericTwoQubitGate: Unsupported simulation "
           "type.");
@@ -100,8 +103,9 @@ class QCSimSimulator : public QCSimState {
       mpsSimulator->ApplyGate(agate);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(agate, qubit0, qubit1);
-    else if (GetSimulationType() == SimulationType::kStatevector)
-      state->ApplyGate(agate);
+    else if (GetSimulationType() == SimulationType::kStatevector ||
+             GetSimulationType() == SimulationType::kDensityMatrix)
+      ApplyStatevectorOrDensityMatrix(agate);
 
     NotifyObservers({qubit0, qubit1});
   }
@@ -132,7 +136,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(pgate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(pgate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -156,7 +161,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(xgate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(xgate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -180,7 +186,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(ygate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(ygate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -204,7 +211,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(zgate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(zgate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -228,7 +236,7 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(h, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(h, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -252,7 +260,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(sgate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(sgate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -276,7 +285,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(sdggate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(sdggate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -302,7 +312,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(tgate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(tgate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -328,7 +339,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(tdggate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(tdggate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -352,7 +364,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(sxgate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(sxgate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -376,7 +389,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(sxdaggate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(sxdaggate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -400,7 +414,7 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(k, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(k, static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -428,7 +442,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(rxgate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(rxgate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -456,7 +471,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(rygate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(rygate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -484,7 +500,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(rzgate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(rzgate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -516,7 +533,8 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(ugate, static_cast<unsigned int>(qubit));
+      ApplyStatevectorOrDensityMatrix(ugate,
+                                      static_cast<unsigned int>(qubit));
     NotifyObservers({qubit});
   }
 
@@ -546,8 +564,9 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(cxgate, static_cast<unsigned int>(tgt_qubit),
-                       static_cast<unsigned int>(ctrl_qubit));
+      ApplyStatevectorOrDensityMatrix(
+          cxgate, static_cast<unsigned int>(tgt_qubit),
+          static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
 
@@ -577,8 +596,9 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(cygate, static_cast<unsigned int>(tgt_qubit),
-                       static_cast<unsigned int>(ctrl_qubit));
+      ApplyStatevectorOrDensityMatrix(
+          cygate, static_cast<unsigned int>(tgt_qubit),
+          static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
 
@@ -608,8 +628,9 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(czgate, static_cast<unsigned int>(tgt_qubit),
-                       static_cast<unsigned int>(ctrl_qubit));
+      ApplyStatevectorOrDensityMatrix(
+          czgate, static_cast<unsigned int>(tgt_qubit),
+          static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
 
@@ -643,8 +664,9 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(cpgate, static_cast<unsigned int>(tgt_qubit),
-                       static_cast<unsigned int>(ctrl_qubit));
+      ApplyStatevectorOrDensityMatrix(
+          cpgate, static_cast<unsigned int>(tgt_qubit),
+          static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
 
@@ -678,8 +700,9 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(crxgate, static_cast<unsigned int>(tgt_qubit),
-                       static_cast<unsigned int>(ctrl_qubit));
+      ApplyStatevectorOrDensityMatrix(
+          crxgate, static_cast<unsigned int>(tgt_qubit),
+          static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
 
@@ -713,8 +736,9 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(crygate, static_cast<unsigned int>(tgt_qubit),
-                       static_cast<unsigned int>(ctrl_qubit));
+      ApplyStatevectorOrDensityMatrix(
+          crygate, static_cast<unsigned int>(tgt_qubit),
+          static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
 
@@ -748,8 +772,9 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(crzgate, static_cast<unsigned int>(tgt_qubit),
-                       static_cast<unsigned int>(ctrl_qubit));
+      ApplyStatevectorOrDensityMatrix(
+          crzgate, static_cast<unsigned int>(tgt_qubit),
+          static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
 
@@ -780,8 +805,9 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(ch, static_cast<unsigned int>(tgt_qubit),
-                       static_cast<unsigned int>(ctrl_qubit));
+      ApplyStatevectorOrDensityMatrix(
+          ch, static_cast<unsigned int>(tgt_qubit),
+          static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
 
@@ -812,8 +838,9 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(csx, static_cast<unsigned int>(tgt_qubit),
-                       static_cast<unsigned int>(ctrl_qubit));
+      ApplyStatevectorOrDensityMatrix(
+          csx, static_cast<unsigned int>(tgt_qubit),
+          static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
 
@@ -845,8 +872,9 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(csxdag, static_cast<unsigned int>(tgt_qubit),
-                       static_cast<unsigned int>(ctrl_qubit));
+      ApplyStatevectorOrDensityMatrix(
+          csxdag, static_cast<unsigned int>(tgt_qubit),
+          static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
 
@@ -876,8 +904,9 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);                
     }
     else
-      state->ApplyGate(swapgate, static_cast<unsigned int>(qubit1),
-                       static_cast<unsigned int>(qubit0));
+      ApplyStatevectorOrDensityMatrix(
+          swapgate, static_cast<unsigned int>(qubit1),
+          static_cast<unsigned int>(qubit0));
     NotifyObservers({qubit1, qubit0});
   }
 
@@ -956,9 +985,10 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
       NotifyObservers({qubit2, qubit1, qubit0});
     } else {
-      state->ApplyGate(ccxgate, static_cast<unsigned int>(qubit2),
-                       static_cast<unsigned int>(qubit1),
-                       static_cast<unsigned int>(qubit0));
+      ApplyStatevectorOrDensityMatrix(
+          ccxgate, static_cast<unsigned int>(qubit2),
+          static_cast<unsigned int>(qubit1),
+          static_cast<unsigned int>(qubit0));
       NotifyObservers({qubit2, qubit1, qubit0});
     }
   }
@@ -1078,9 +1108,10 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
       NotifyObservers({qubit1, qubit0, ctrl_qubit});
     } else {
-      state->ApplyGate(cswapgate, static_cast<unsigned int>(qubit1),
-                       static_cast<unsigned int>(qubit0),
-                       static_cast<unsigned int>(ctrl_qubit));
+      ApplyStatevectorOrDensityMatrix(
+          cswapgate, static_cast<unsigned int>(qubit1),
+          static_cast<unsigned int>(qubit0),
+          static_cast<unsigned int>(ctrl_qubit));
       NotifyObservers({qubit1, qubit0, ctrl_qubit});
     }
   }
@@ -1119,8 +1150,9 @@ class QCSimSimulator : public QCSimState {
       pathIntegralSimulator->ApplyGate(agate);
     }
     else
-      state->ApplyGate(cugate, static_cast<unsigned int>(tgt_qubit),
-                       static_cast<unsigned int>(ctrl_qubit));
+      ApplyStatevectorOrDensityMatrix(
+          cugate, static_cast<unsigned int>(tgt_qubit),
+          static_cast<unsigned int>(ctrl_qubit));
     NotifyObservers({tgt_qubit, ctrl_qubit});
   }
 
@@ -1190,6 +1222,8 @@ class QCSimSimulator : public QCSimState {
     if (pathIntegralSimulator)
       cloned->pathIntegralSimulator = pathIntegralSimulator->Clone();
 
+    if (densityMatrix) cloned->densityMatrix = densityMatrix->Clone();
+
     for (const auto& [key, value] : configuration.GetConfigMap())
       cloned->Configure(key.c_str(), value.c_str());
 
@@ -1197,6 +1231,14 @@ class QCSimSimulator : public QCSimState {
   }
 
  private:
+  template <class Gate, class... Qubits>
+  void ApplyStatevectorOrDensityMatrix(const Gate& gate, Qubits... qubits) {
+    if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyGate(gate, static_cast<size_t>(qubits)...);
+    else
+      state->ApplyGate(gate, qubits...);
+  }
+
   QC::Gates::PhaseShiftGate<> pgate;
   QC::Gates::PauliXGate<> xgate;
   QC::Gates::PauliYGate<> ygate;

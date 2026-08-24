@@ -88,8 +88,8 @@ void CheckRandomRoundTripWithMeasurement(QasmTestFixture &fixture, int nrGates,
       fixture.state.Reset();
     }
 
-    const auto checkDistribution = [](const auto &observed,
-                                      const auto &reference) {
+    const auto checkDistribution = [nrShots](const auto &observed,
+                                             const auto &reference) {
       for (const auto &[outcome, count] : observed) {
         const double probability =
             static_cast<double>(count) / static_cast<double>(nrShots);

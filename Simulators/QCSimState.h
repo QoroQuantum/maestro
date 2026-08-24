@@ -26,6 +26,7 @@
 #include "Simulator.h"
 
 #include "Clifford.h"
+#include "DensityMatrix.h"
 #include "MPSSimulator.h"
 #include "QubitRegister.h"
 #include "QcsimPauliPropagator.h"
@@ -200,7 +201,8 @@ class QCSimState : public ISimulator {
       } else if (simulationType == SimulationType::kPathIntegral) {
         pathIntegralSimulator = std::make_unique<PathIntegralSimulator>();
         pathIntegralSimulator->SetStartZeroState(nrQubits);
-
+      } else if (simulationType == SimulationType::kDensityMatrix) {
+        densityMatrix = std::make_unique<QC::DensityMatrix<>>(nrQubits);
       } else
         state = std::make_unique<QC::QubitRegister<>>(nrQubits);
 
@@ -229,7 +231,8 @@ class QCSimState : public ISimulator {
     Clear();
     nrQubits = num_qubits;
     Initialize();
-    if (simulationType != SimulationType::kStatevector)
+    if (simulationType != SimulationType::kStatevector &&
+        simulationType != SimulationType::kDensityMatrix)
       throw std::runtime_error(
           "QCSimState::InitializeState: Invalid "
           "simulation type for initializing the state.");
@@ -237,7 +240,10 @@ class QCSimState : public ISimulator {
     Eigen::VectorXcd amplitudesEigen(
         Eigen::Map<Eigen::VectorXcd, Eigen::Unaligned>(amplitudes.data(),
                                                        amplitudes.size()));
-    state->setRegisterStorageFastNoNormalize(amplitudesEigen);
+    if (simulationType == SimulationType::kDensityMatrix)
+      densityMatrix->setFromStatevector(amplitudesEigen);
+    else
+      state->setRegisterStorageFastNoNormalize(amplitudesEigen);
   }
 
   /**
@@ -282,7 +288,8 @@ class QCSimState : public ISimulator {
     Clear();
     nrQubits = num_qubits;
     Initialize();
-    if (simulationType != SimulationType::kStatevector)
+    if (simulationType != SimulationType::kStatevector &&
+        simulationType != SimulationType::kDensityMatrix)
       throw std::runtime_error(
           "QCSimState::InitializeState: Invalid "
           "simulation type for initializing the state.");
@@ -290,7 +297,10 @@ class QCSimState : public ISimulator {
     Eigen::VectorXcd amplitudesEigen(
         Eigen::Map<Eigen::VectorXcd, Eigen::Unaligned>(amplitudes.data(),
                                                        amplitudes.size()));
-    state->setRegisterStorageFastNoNormalize(amplitudesEigen);
+    if (simulationType == SimulationType::kDensityMatrix)
+      densityMatrix->setFromStatevector(amplitudesEigen);
+    else
+      state->setRegisterStorageFastNoNormalize(amplitudesEigen);
   }
 #endif
 
@@ -312,13 +322,18 @@ class QCSimState : public ISimulator {
     nrQubits = num_qubits;
     Initialize();
 
-    if (simulationType != SimulationType::kStatevector)
+    if (simulationType != SimulationType::kStatevector &&
+        simulationType != SimulationType::kDensityMatrix)
       throw std::runtime_error(
           "QCSimState::InitializeState: Invalid "
           "simulation type for initializing the state.");
 
-    state = std::make_unique<QC::QubitRegister<>>(nrQubits, amplitudes);
-    state->SetMultithreading(enableMultithreading);
+    if (simulationType == SimulationType::kDensityMatrix)
+      densityMatrix->setFromStatevector(amplitudes);
+    else {
+      state = std::make_unique<QC::QubitRegister<>>(nrQubits, amplitudes);
+      state->SetMultithreading(enableMultithreading);
+    }
   }
 
   /**
@@ -342,7 +357,8 @@ class QCSimState : public ISimulator {
     else if (pathIntegralSimulator) {
       pathIntegralSimulator->Reset();
       pathIntegralSimulator->SetStartZeroState(nrQubits);
-    }
+    } else if (densityMatrix)
+      densityMatrix->Reset();
 
     upcomingGateIndex = 0;
   }
@@ -485,6 +501,8 @@ class QCSimState : public ISimulator {
         simulationType = SimulationType::kPauliPropagator;
       else if (std::string("path_integral") == value)
         simulationType = SimulationType::kPathIntegral;
+      else if (std::string("density_matrix") == value)
+        simulationType = SimulationType::kDensityMatrix;
     }
 
     if (!configuration.WasApplied(key, value))
@@ -543,6 +561,8 @@ class QCSimState : public ISimulator {
           return "pauli_propagator";
         case SimulationType::kPathIntegral:
           return "path_integral";
+        case SimulationType::kDensityMatrix:
+          return "density_matrix";
         default:
           return "other";
       }
@@ -563,7 +583,8 @@ class QCSimState : public ISimulator {
         (simulationType == SimulationType::kMatrixProductState &&
          mpsSimulator) ||
         (simulationType == SimulationType::kStabilizer && cliffordSimulator) ||
-        (simulationType == SimulationType::kTensorNetwork && tensorNetwork))
+        (simulationType == SimulationType::kTensorNetwork && tensorNetwork) ||
+        (simulationType == SimulationType::kDensityMatrix && densityMatrix))
       return 0;
 
     const size_t oldNrQubits = nrQubits;
@@ -596,6 +617,7 @@ class QCSimState : public ISimulator {
     tensorNetwork = nullptr;
     pp = nullptr;
     pathIntegralSimulator = nullptr;
+    densityMatrix = nullptr;
     dummySim = nullptr;
     nrQubits = 0;
     upcomingGateIndex = 0;
@@ -629,6 +651,11 @@ class QCSimState : public ISimulator {
     if (simulationType == SimulationType::kStatevector) {
       for (size_t qubit : qubits) {
         if (state->MeasureQubit(static_cast<unsigned int>(qubit))) res |= mask;
+        mask <<= 1;
+      }
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      for (size_t qubit : qubits) {
+        if (densityMatrix->MeasureQubit(qubit)) res |= mask;
         mask <<= 1;
       }
     } else if (simulationType == SimulationType::kStabilizer) {
@@ -697,6 +724,9 @@ class QCSimState : public ISimulator {
       for (size_t q = 0; q < qubits.size(); ++q)
         if (state->MeasureQubit(static_cast<unsigned int>(qubits[q])))
           res[q] = true;
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      for (size_t q = 0; q < qubits.size(); ++q)
+        if (densityMatrix->MeasureQubit(qubits[q])) res[q] = true;
     } else if (simulationType == SimulationType::kStabilizer) {
       for (size_t q = 0; q < qubits.size(); ++q)
         if (cliffordSimulator->MeasureQubit(
@@ -738,6 +768,8 @@ class QCSimState : public ISimulator {
       for (size_t qubit : qubits)
         if (state->MeasureQubit(static_cast<unsigned int>(qubit)))
           state->ApplyGate(xGate, static_cast<unsigned int>(qubit));
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      for (size_t qubit : qubits) densityMatrix->ApplyReset(qubit);
     } else if (simulationType == SimulationType::kStabilizer) {
       for (size_t qubit : qubits)
         if (cliffordSimulator->MeasureQubit(static_cast<unsigned int>(qubit)))
@@ -793,6 +825,8 @@ class QCSimState : public ISimulator {
       return pp->Probability(outcome);
     else if (simulationType == SimulationType::kPathIntegral)
       return pathIntegralSimulator->Probability(outcome);
+    else if (simulationType == SimulationType::kDensityMatrix)
+      return densityMatrix->getBasisStateProbability(outcome);
 
     return state->getBasisStateProbability(static_cast<unsigned int>(outcome));
   }
@@ -825,6 +859,10 @@ class QCSimState : public ISimulator {
       throw std::runtime_error(
           "QCSimState::Amplitude: Invalid simulation type for obtaining the "
           "amplitude of the specified outcome.");
+    else if (simulationType == SimulationType::kDensityMatrix)
+      throw std::runtime_error(
+          "QCSimState::Amplitude: Amplitudes are not defined for the density "
+          "matrix simulator.");
 
     return state->getBasisStateAmplitude(static_cast<unsigned int>(outcome));
   }
@@ -878,6 +916,12 @@ class QCSimState : public ISimulator {
       for (size_t i = 0; i < nrBasisStates; ++i)
         result[i] = pathIntegralSimulator->Probability(i);
       return result;
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      const size_t nrBasisStates = densityMatrix->getNrBasisStates();
+      std::vector<double> result(nrBasisStates);
+      for (size_t i = 0; i < nrBasisStates; ++i)
+        result[i] = densityMatrix->getBasisStateProbability(i);
+      return result;
     }
 
     const Eigen::VectorXcd probs =
@@ -927,6 +971,9 @@ class QCSimState : public ISimulator {
     } else if (simulationType == SimulationType::kPathIntegral) {
       for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
         result[i] = pathIntegralSimulator->Probability(qubits[i]);
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
+        result[i] = densityMatrix->getBasisStateProbability(qubits[i]);
     } else {
       const Eigen::VectorXcd &reg = state->getRegisterStorage();
 
@@ -1099,6 +1146,14 @@ class QCSimState : public ISimulator {
         throw std::runtime_error(
             "QCSimState::SampleCounts: The path integral simulator does not "
             "support sampling for more than 63 qubits into 64 bits integers.");
+      }
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      for (size_t shot = 0; shot < shots; ++shot) {
+        const size_t measured = densityMatrix->MeasureNoCollapse();
+        Types::qubit_t packed = 0;
+        for (size_t i = 0; i < qubits.size(); ++i)
+          if ((measured & (1ULL << qubits[i])) != 0) packed |= 1ULL << i;
+        ++result[packed];
       }
     } else {
       if (shots > 1) {
@@ -1290,6 +1345,14 @@ class QCSimState : public ISimulator {
           }
         }
       }
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      for (size_t shot = 0; shot < shots; ++shot) {
+        const size_t measured = densityMatrix->MeasureNoCollapse();
+        std::vector<bool> packed(qubits.size(), false);
+        for (size_t i = 0; i < qubits.size(); ++i)
+          packed[i] = (measured & (1ULL << qubits[i])) != 0;
+        ++result[packed];
+      }
     } else {
       if (shots > 1) {
         const auto &statev = state->getRegisterStorage();
@@ -1358,6 +1421,10 @@ class QCSimState : public ISimulator {
       return pp->ExpectationValue(pauliString);
     else if (simulationType == SimulationType::kPathIntegral)
       return pathIntegralSimulator->ExpectationValue(pauliString);
+    else if (simulationType == SimulationType::kDensityMatrix) {
+      pauliString.resize(GetNumberOfQubits(), 'I');
+      return densityMatrix->ExpectationValue(pauliString).real();
+    }
 
     // statevector or mps
     static const QC::Gates::PauliXGate<> xgate;
@@ -1467,6 +1534,8 @@ class QCSimState : public ISimulator {
       pp->SaveState();
     else if (simulationType == SimulationType::kPathIntegral)
       pathIntegralSimulator->SaveState();
+    else if (simulationType == SimulationType::kDensityMatrix)
+      densityMatrix->SaveState();
     else
       state->SaveState();
   }
@@ -1490,6 +1559,8 @@ class QCSimState : public ISimulator {
       pp->RestoreState();
     else if (simulationType == SimulationType::kPathIntegral)
       pathIntegralSimulator->RestoreState();
+    else if (simulationType == SimulationType::kDensityMatrix)
+      densityMatrix->RestoreState();
     else
       state->RestoreState();
   }
@@ -1577,6 +1648,8 @@ class QCSimState : public ISimulator {
 
     if (simulationType == SimulationType::kStatevector)
       return state->MeasureNoCollapse();
+    else if (simulationType == SimulationType::kDensityMatrix)
+      return densityMatrix->MeasureNoCollapse();
     else if (simulationType == SimulationType::kMatrixProductState) {
       const auto measured = mpsSimulator->MeasureNoCollapse();
       Types::qubit_t result = 0;
@@ -1641,6 +1714,12 @@ class QCSimState : public ISimulator {
       std::vector<bool> res(nrQubits);
       for (size_t i = 0; i < nrQubits; ++i) res[i] = ((state >> i) & 1) == 1;
       return res;
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      const auto measured = densityMatrix->MeasureNoCollapse();
+      std::vector<bool> res(nrQubits);
+      for (size_t i = 0; i < nrQubits; ++i)
+        res[i] = ((measured >> i) & 1) == 1;
+      return res;
     } else if (simulationType == SimulationType::kMatrixProductState) {
       const auto measured = mpsSimulator->MeasureNoCollapse();
       std::vector<bool> res(nrQubits);
@@ -1693,6 +1772,8 @@ class QCSimState : public ISimulator {
   std::unique_ptr<QcsimPauliPropagator> pp; /**< The qcsim pauli propagator. */
   std::unique_ptr<PathIntegralSimulator>
       pathIntegralSimulator; /**< The qcsim path integral simulator. */
+  std::unique_ptr<QC::DensityMatrix<>>
+      densityMatrix; /**< The qcsim density matrix simulator. */
 
   size_t nrQubits = 0; /**< The number of allocated qubits. */
 

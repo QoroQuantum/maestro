@@ -90,8 +90,9 @@ enum class SimulationType : int {
   kPauliPropagator,    /**< Pauli propagator simulation type */
   kExtendedStabilizer, /**< Extended stabilizer simulation type */
   kPathIntegral,       /**< Path integral simulation type */
+  kDensityMatrix,      /**< Density matrix simulation type */
   kOther /**< other simulation type, could occur for the aer simulator, which
-            also has density matrix, stabilizer, unitary, superop */
+            also has unitary and superop methods */
 };
 
 /**
