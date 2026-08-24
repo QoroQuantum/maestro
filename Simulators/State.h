@@ -91,6 +91,7 @@ enum class SimulationType : int {
   kExtendedStabilizer, /**< Extended stabilizer simulation type */
   kPathIntegral,       /**< Path integral simulation type */
   kDensityMatrix,      /**< Density matrix simulation type */
+  kMatrixProductOperator, /**< Matrix product operator simulation type */
   kOther /**< other simulation type, could occur for the aer simulator, which
             also has unitary and superop methods */
 };

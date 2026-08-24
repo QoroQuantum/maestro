@@ -63,6 +63,7 @@ class QCSimSimulator : public QCSimState {
   void ApplyGenericOneQubitGate(Types::qubit_t qubit,
                                 const Eigen::Matrix2cd& gate) override {
     if (GetSimulationType() != SimulationType::kMatrixProductState &&
+        GetSimulationType() != SimulationType::kMatrixProductOperator &&
         GetSimulationType() != SimulationType::kTensorNetwork&&
         GetSimulationType() != SimulationType::kStatevector &&
         GetSimulationType() != SimulationType::kDensityMatrix)
@@ -75,7 +76,8 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(agate, qubit);
     else if (GetSimulationType() == SimulationType::kStatevector ||
-             GetSimulationType() == SimulationType::kDensityMatrix)
+             GetSimulationType() == SimulationType::kDensityMatrix ||
+             GetSimulationType() == SimulationType::kMatrixProductOperator)
       ApplyStatevectorOrDensityMatrix(agate);
 
     NotifyObservers({qubit});
@@ -90,6 +92,7 @@ class QCSimSimulator : public QCSimState {
   void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1,
                                 const Eigen::Matrix4cd& gate) override {
     if (GetSimulationType() != SimulationType::kMatrixProductState &&
+        GetSimulationType() != SimulationType::kMatrixProductOperator &&
         GetSimulationType() != SimulationType::kTensorNetwork &&
         GetSimulationType() != SimulationType::kStatevector &&
         GetSimulationType() != SimulationType::kDensityMatrix)
@@ -104,7 +107,8 @@ class QCSimSimulator : public QCSimState {
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
       tensorNetwork->AddGate(agate, qubit0, qubit1);
     else if (GetSimulationType() == SimulationType::kStatevector ||
-             GetSimulationType() == SimulationType::kDensityMatrix)
+             GetSimulationType() == SimulationType::kDensityMatrix ||
+             GetSimulationType() == SimulationType::kMatrixProductOperator)
       ApplyStatevectorOrDensityMatrix(agate);
 
     NotifyObservers({qubit0, qubit1});
@@ -999,6 +1003,13 @@ class QCSimSimulator : public QCSimState {
       mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3),
                               static_cast<unsigned int>(q1));
       NotifyObservers({qubit0, qubit2});
+    } else if (GetSimulationType() ==
+               SimulationType::kMatrixProductOperator) {
+      ApplyCSx(qubit1, qubit2);
+      ApplyCX(qubit0, qubit1);
+      ApplyCSxDAG(qubit1, qubit2);
+      ApplyCX(qubit0, qubit1);
+      ApplyCSx(qubit0, qubit2);
     } else if (GetSimulationType() == SimulationType::kStabilizer)
       throw std::runtime_error(
           "QCSimSimulator::ApplyCCX: The stabilizer "
@@ -1105,6 +1116,18 @@ class QCSimSimulator : public QCSimState {
       mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2),
                               static_cast<unsigned int>(q3));
       NotifyObservers({qubit1, qubit0});
+    } else if (GetSimulationType() ==
+               SimulationType::kMatrixProductOperator) {
+      ApplyCX(qubit1, qubit0);
+      ApplyCSx(qubit0, qubit1);
+      ApplyCX(ctrl_qubit, qubit0);
+      ApplyP(qubit1, M_PI);
+      ApplyP(qubit0, -M_PI_2);
+      ApplyCSx(qubit0, qubit1);
+      ApplyCX(ctrl_qubit, qubit0);
+      ApplyP(qubit1, M_PI);
+      ApplyCSx(ctrl_qubit, qubit1);
+      ApplyCX(qubit1, qubit0);
     } else if (GetSimulationType() == SimulationType::kStabilizer)
       throw std::runtime_error(
           "QCSimSimulator::ApplyCSwap: The stabilizer "
@@ -1264,7 +1287,7 @@ class QCSimSimulator : public QCSimState {
       cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
 
       cloned->gateCounterObserver =
-          std::make_shared<GateCounterObserver>(upcomingGateIndex);
+          std::make_shared<GateCounterObserver>(cloned->upcomingGateIndex);
       cloned->RegisterObserver(cloned->gateCounterObserver);
 
       cloned->curMaxBondDim = curMaxBondDim;
@@ -1273,6 +1296,16 @@ class QCSimSimulator : public QCSimState {
           cloned->meetingPositionCallback);
       cloned->mpsSimulator->SetBondDimensionCallback(
           cloned->bondDimensionCallback);
+    }
+
+    if (mpoSimulator) {
+      cloned->mpoSimulator = mpoSimulator->Clone();
+      cloned->curMaxBondDim = curMaxBondDim;
+      cloned->gateCounterObserver =
+          std::make_shared<GateCounterObserver>(cloned->upcomingGateIndex);
+      cloned->RegisterObserver(cloned->gateCounterObserver);
+      cloned->mpoSimulator->SetMeetingPositionCallback(
+          cloned->meetingPositionCallback);
     }
 
     if (cliffordSimulator)
@@ -1299,7 +1332,16 @@ class QCSimSimulator : public QCSimState {
  private:
   template <class Gate, class... Qubits>
   void ApplyStatevectorOrDensityMatrix(const Gate& gate, Qubits... qubits) {
-    if (GetSimulationType() == SimulationType::kDensityMatrix)
+    if (GetSimulationType() == SimulationType::kMatrixProductOperator) {
+      if constexpr (sizeof...(Qubits) <= 2) {
+        mpoSimulator->ApplyGate(gate, static_cast<Eigen::Index>(qubits)...);
+        UpdateCurrentMPOBondDimension();
+      } else {
+        throw std::runtime_error(
+            "QCSimSimulator: The matrix product operator simulator supports "
+            "only one- and two-qubit gate operators.");
+      }
+    } else if (GetSimulationType() == SimulationType::kDensityMatrix)
       densityMatrix->ApplyGate(gate, static_cast<size_t>(qubits)...);
     else
       state->ApplyGate(gate, qubits...);

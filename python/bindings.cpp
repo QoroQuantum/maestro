@@ -775,6 +775,8 @@ NB_MODULE(maestro, m) {
              Simulators::SimulationType::kExtendedStabilizer)
       .value("PathIntegral", Simulators::SimulationType::kPathIntegral)
       .value("DensityMatrix", Simulators::SimulationType::kDensityMatrix)
+      .value("MatrixProductOperator",
+             Simulators::SimulationType::kMatrixProductOperator)
       .export_values();
 
   // --- SimulatorConfig ---

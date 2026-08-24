@@ -126,6 +126,8 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
       auto sim = std::make_shared<Private::QCSimSimulator>();
       if (m == SimulationType::kMatrixProductState)
         sim->Configure("method", "matrix_product_state");
+      else if (m == SimulationType::kMatrixProductOperator)
+        sim->Configure("method", "matrix_product_operator");
       else if (m == SimulationType::kStabilizer)
         sim->Configure("method", "stabilizer");
       else if (m == SimulationType::kTensorNetwork)
@@ -217,6 +219,8 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
       auto sim = std::make_unique<Private::QCSimSimulator>();
       if (m == SimulationType::kMatrixProductState)
         sim->Configure("method", "matrix_product_state");
+      else if (m == SimulationType::kMatrixProductOperator)
+        sim->Configure("method", "matrix_product_operator");
       else if (m == SimulationType::kStabilizer)
         sim->Configure("method", "stabilizer");
       else if (m == SimulationType::kTensorNetwork)
