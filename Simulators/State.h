@@ -22,7 +22,9 @@
 #define _SIMULATOR_STATE_H_
 
 #include <Eigen/Eigen>
+#include <cmath>
 #include <complex>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -31,6 +33,7 @@
 #include "framework/linalg/vector.hpp"
 #endif
 
+#include "QuantumChannel.h"
 #include "SimulatorObserver.h"
 
 namespace Circuits {
@@ -344,6 +347,182 @@ class IState {
    * @param qubits A vector with the qubits to be reset.
    */
   virtual void ApplyReset(const Types::qubits_vector &qubits) = 0;
+
+  /**
+   * @brief Returns whether this state retains channel ensembles directly.
+   *
+   * This is true for QCSim density-matrix/MPO states and Aer density-matrix
+   * states. MPO results remain subject to configured bond truncation. A
+   * statevector or MPS can sample Kraus trajectories, but does not retain the
+   * resulting ensemble in a single state.
+   */
+  virtual bool SupportsQuantumChannels() const { return false; }
+
+  /**
+   * @brief Applies a local CPTP quantum channel to one or two qubits.
+   *
+   * The order of target qubits has the same matrix convention as
+   * ApplyGenericTwoQubitGate: targets[0] is the least-significant local basis
+   * bit. Backends that do not represent mixed states exactly throw.
+   */
+  virtual void ApplyQuantumChannel(const Types::qubits_vector &targets,
+                                   const QuantumChannel &channel) {
+    (void)targets;
+    (void)channel;
+    throw std::runtime_error(
+        "This simulator does not support exact quantum-channel evolution");
+  }
+
+  /** Apply an arbitrary CPTP map supplied in Kraus form. */
+  void ApplyKrausChannel(
+      const Types::qubits_vector &targets,
+      const QuantumChannel::KrausOperators &krausOperators) {
+    ApplyQuantumChannel(targets, QuantumChannel(krausOperators));
+  }
+
+  /** Alias matching the channel terminology used by QCSim's dense backend. */
+  void ApplyChannel(
+      const Types::qubits_vector &targets,
+      const QuantumChannel::KrausOperators &krausOperators) {
+    ApplyKrausChannel(targets, krausOperators);
+  }
+
+  /** Apply an arbitrary one- or two-qubit Pauli channel. */
+  void ApplyPauliChannel(const Types::qubits_vector &targets,
+                         const std::vector<double> &probabilities) {
+    ApplyQuantumChannel(targets, QuantumChannel::Pauli(probabilities));
+  }
+
+  /** Apply a single-qubit Pauli channel specified by X/Y/Z probabilities. */
+  void ApplyPauliChannel(Types::qubit_t qubit, double px, double py,
+                         double pz) {
+    ApplyQuantumChannel({qubit}, QuantumChannel::Pauli(px, py, pz));
+  }
+
+  void ApplyBitFlipNoise(Types::qubit_t qubit, double probability) {
+    ApplyQuantumChannel({qubit}, QuantumChannel::BitFlip(probability));
+  }
+
+  void ApplyBitPhaseFlipNoise(Types::qubit_t qubit, double probability) {
+    ApplyQuantumChannel({qubit},
+                        QuantumChannel::BitPhaseFlip(probability));
+  }
+
+  void ApplyPhaseFlipNoise(Types::qubit_t qubit, double probability) {
+    ApplyQuantumChannel({qubit}, QuantumChannel::PhaseFlip(probability));
+  }
+
+  /** `noise.h` dephasing is a stochastic phase flip, not phase damping. */
+  void ApplyDephasingNoise(Types::qubit_t qubit, double probability) {
+    ApplyPhaseFlipNoise(qubit, probability);
+  }
+
+  /** Depolarizing noise using total nonidentity-Pauli probability p. */
+  void ApplyDepolarizingNoise(Types::qubit_t qubit,
+                              double errorProbability) {
+    ApplyQuantumChannel({qubit},
+                        QuantumChannel::Depolarizing(errorProbability));
+  }
+
+  /** Depolarizing replacement `(1-p)rho + p I/2`, fully mixed at p=1. */
+  void ApplyDepolarizingMixingNoise(Types::qubit_t qubit,
+                                    double mixingProbability) {
+    ApplyQuantumChannel(
+        {qubit}, QuantumChannel::DepolarizingMixing(mixingProbability));
+  }
+
+  void ApplyAmplitudeDamping(Types::qubit_t qubit, double gamma) {
+    ApplyQuantumChannel({qubit}, QuantumChannel::AmplitudeDamping(gamma));
+  }
+
+  /** Alias for the exact T1 amplitude-damping channel. */
+  void ApplyT1Relaxation(Types::qubit_t qubit, double gamma) {
+    ApplyAmplitudeDamping(qubit, gamma);
+  }
+
+  /** Exact T1 relaxation for a physical duration and time constant. */
+  void ApplyT1RelaxationFromTime(Types::qubit_t qubit, double duration,
+                                 double t1) {
+    if (!std::isfinite(duration) || duration < 0.0)
+      throw std::invalid_argument(
+          "T1-relaxation duration must be finite and nonnegative");
+    if (std::isnan(t1) || t1 <= 0.0)
+      throw std::invalid_argument(
+          "T1 must be positive (infinity is allowed)");
+    const double gamma =
+        std::isinf(t1) ? 0.0 : -std::expm1(-duration / t1);
+    ApplyAmplitudeDamping(qubit, gamma);
+  }
+
+  /** Phase damping with coherence multiplier `sqrt(1-gamma)`. */
+  void ApplyPhaseDamping(Types::qubit_t qubit, double gamma) {
+    ApplyQuantumChannel({qubit}, QuantumChannel::PhaseDamping(gamma));
+  }
+
+  /**
+   * Pure phase damping for a physical duration and T_phi.
+   * gamma=1-exp(-2 duration/T_phi), so coherences decay as exp(-duration/T_phi).
+   */
+  void ApplyPhaseDampingFromTime(Types::qubit_t qubit, double duration,
+                                 double tPhi) {
+    if (!std::isfinite(duration) || duration < 0.0)
+      throw std::invalid_argument(
+          "Phase-damping duration must be finite and nonnegative");
+    if (std::isnan(tPhi) || tPhi <= 0.0)
+      throw std::invalid_argument(
+          "T_phi must be positive (infinity is allowed)");
+    const double gamma =
+        std::isinf(tPhi) ? 0.0 : -std::expm1(-2.0 * duration / tPhi);
+    ApplyPhaseDamping(qubit, gamma);
+  }
+
+  void ApplyGeneralizedAmplitudeDamping(Types::qubit_t qubit, double gamma,
+                                        double excitedStatePopulation) {
+    ApplyQuantumChannel(
+        {qubit}, QuantumChannel::GeneralizedAmplitudeDamping(
+                      gamma, excitedStatePopulation));
+  }
+
+  void ApplyThermalRelaxation(Types::qubit_t qubit, double duration,
+                              double t1, double t2,
+                              double excitedStatePopulation = 0.0) {
+    ApplyQuantumChannel(
+        {qubit}, QuantumChannel::ThermalRelaxation(
+                      duration, t1, t2, excitedStatePopulation));
+  }
+
+  void ApplyCorrelatedPhaseFlipNoise(Types::qubit_t qubit0,
+                                     Types::qubit_t qubit1,
+                                     double probability) {
+    ApplyQuantumChannel(
+        {qubit0, qubit1},
+        QuantumChannel::CorrelatedPhaseFlip(probability));
+  }
+
+  void ApplyCorrelatedPhaseFlipNoise(Types::qubit_t qubit0,
+                                     Types::qubit_t qubit1,
+                                     double probability,
+                                     double correlation) {
+    ApplyQuantumChannel(
+        {qubit0, qubit1},
+        QuantumChannel::CorrelatedPhaseFlip(probability, correlation));
+  }
+
+  void ApplyTwoQubitDepolarizingNoise(Types::qubit_t qubit0,
+                                      Types::qubit_t qubit1,
+                                      double errorProbability) {
+    ApplyQuantumChannel(
+        {qubit0, qubit1},
+        QuantumChannel::TwoQubitDepolarizing(errorProbability));
+  }
+
+  void ApplyTwoQubitDepolarizingMixingNoise(
+      Types::qubit_t qubit0, Types::qubit_t qubit1,
+      double mixingProbability) {
+    ApplyQuantumChannel(
+        {qubit0, qubit1},
+        QuantumChannel::TwoQubitDepolarizingMixing(mixingProbability));
+  }
 
   /**
    * @brief Returns the probability of the specified outcome.

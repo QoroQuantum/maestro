@@ -778,7 +778,8 @@ class ExecutionCost {
         else
           ++info.nrEndMeasurementOps;
       } else if (op->GetType() == Circuits::OperationType::kGate ||
-                 op->GetType() == Circuits::OperationType::kConditionalGate) {
+                 op->GetType() == Circuits::OperationType::kConditionalGate ||
+                 op->GetType() == Circuits::OperationType::kQuantumChannel) {
         if (affectedQubits.size() == 1) {
           ++info.nrOneQubitOps;
           if (i < dif || executedOps[i - dif]) ++info.nrOneQubitOpsExecutedOnce;
