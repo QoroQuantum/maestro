@@ -2083,18 +2083,29 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
                                   Simulators::SimulationType::kStatevector);
 
 
-    if (simulatorTypes.empty() && simulatorsForOptimizations.size() == 1)
-        simulatorTypes.push_back(*simulatorsForOptimizations.begin());
+    // Honor a singleton optimization set (e.g. density_matrix) even if it is
+    // not in the hardcoded candidate list. Skip backends that cannot actually
+    // be constructed, such as GPU MPS when the GPU library is missing: the
+    // caller then keeps the network simulator instead of recording 0 shots.
+    if (simulatorTypes.empty() && simulatorsForOptimizations.size() == 1) {
+      const auto candidate = *simulatorsForOptimizations.begin();
+      if (Simulators::SimulatorsFactory::CreateSimulator(candidate.first,
+                                                         candidate.second))
+        simulatorTypes.push_back(candidate);
+    }
 
     if (simulatorTypes.empty())
       return nullptr;
     else if (simulatorTypes.size() == 1) {
-      simType = simulatorTypes[0].first;
-      method = simulatorTypes[0].second;
+      const auto candidateType = simulatorTypes[0].first;
+      const auto candidateMethod = simulatorTypes[0].second;
 
       std::shared_ptr<Simulators::ISimulator> sim =
-          Simulators::SimulatorsFactory::CreateSimulator(simType, method);
+          Simulators::SimulatorsFactory::CreateSimulator(candidateType,
+                                                         candidateMethod);
       if (sim) {
+        simType = candidateType;
+        method = candidateMethod;
         configuration.ApplyConfigurationToSimulator(sim);
         
         if (method == Simulators::SimulationType::kMatrixProductState) {
@@ -2122,6 +2133,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
         return sim;
       }
+
+      // Singleton backend cannot be constructed (typical for GPU on CI).
+      // Leave simType/method unchanged so RepeatedExecuteOnHost keeps the
+      // network simulator instead of recording empty counts.
+      return nullptr;
     }
 
     const double singularValueThreshold =
