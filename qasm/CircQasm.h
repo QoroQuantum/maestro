@@ -190,6 +190,8 @@ class CircToQasm {
         [[fallthrough]];
       case Circuits::OperationType::kConditionalRandomGen:
         [[fallthrough]];
+      case Circuits::OperationType::kQuantumChannel:
+        [[fallthrough]];
       case Circuits::OperationType::kComposite:
         throw std::runtime_error("Not supported!");
         break;
@@ -427,7 +429,7 @@ class CircToQasm {
       qasm += (version == QasmVersion::V3)
                   ? "bit[1] c" + std::to_string(bit) + ";\n"
                   : "creg c" + std::to_string(bit) + "[1];\n";
-      creg_count = bit + 1;
+      creg_count = static_cast<int>(bit) + 1;
     }
 
     return qasm;

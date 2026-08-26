@@ -159,7 +159,9 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("mps_sample_measure_algorithm", "mps_probabilities");
   }
 
-  // Always create the default simulator (no parameters = QCSim MPS).
+  // Usually create the default QCSim MPS simulator as the lightweight network
+  // placeholder. A requested GPU density matrix uses QCSim MPO instead so an
+  // unavailable GPU backend still preserves exact quantum-channel semantics.
   // The desired simulator type is specified via
   // RemoveAllOptimizationSimulatorsAndAdd above.
   // PauliPropagator truncation settings are Configured before CreateSimulator;
@@ -195,7 +197,13 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("path_integral_threshold", val.c_str());
   }
 
-  network->CreateSimulator();
+  if (config.simulator_type == Simulators::SimulatorType::kGpuSim &&
+      config.simulation_type == Simulators::SimulationType::kDensityMatrix)
+    network->CreateSimulator(
+        Simulators::SimulatorType::kQCSim,
+        Simulators::SimulationType::kMatrixProductOperator);
+  else
+    network->CreateSimulator();
 
   // Verify the simulator was actually created (e.g. GPU library may fail)
   if (!network->GetSimulator()) {
@@ -253,6 +261,52 @@ static void apply_readout_error_to_counts(
     }
   }
   counts = std::move(new_counts);
+}
+
+// Density-matrix and QCSim MPO configurations can retain the full ensemble in
+// one state. Route their Markovian noise through circuit channel operations;
+// pure-state/MPS configurations retain the legacy trajectory implementation.
+static bool uses_exact_quantum_channels(const SimulatorConfig& config) {
+  // Composite simulators still contain pure-state components and cannot
+  // represent ensemble channels exactly as a single mixed state.
+  const bool qcsim =
+      config.simulator_type == Simulators::SimulatorType::kQCSim;
+  const bool gpu =
+      config.simulator_type == Simulators::SimulatorType::kGpuSim;
+#ifndef NO_QISKIT_AER
+  const bool aer =
+      config.simulator_type == Simulators::SimulatorType::kQiskitAer;
+#else
+  const bool aer = false;
+#endif
+
+  return (qcsim &&
+          (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
+           config.simulation_type ==
+               Simulators::SimulationType::kMatrixProductOperator)) ||
+         (aer &&
+          config.simulation_type == Simulators::SimulationType::kDensityMatrix) ||
+         (gpu &&
+          config.simulation_type == Simulators::SimulationType::kDensityMatrix);
+}
+
+static std::shared_ptr<Circuits::Circuit<double>> inject_noise_for_config(
+    const std::shared_ptr<Circuits::Circuit<double>>& circuit,
+    const noise::NoiseModel& noise_model, std::mt19937& rng,
+    const SimulatorConfig& config) {
+  if (uses_exact_quantum_channels(config))
+    return noise::inject_exact_noise(circuit, noise_model);
+  return noise::inject_noise(circuit, noise_model, rng);
+}
+
+static std::shared_ptr<Circuits::Circuit<double>>
+inject_combined_noise_for_config(
+    const std::shared_ptr<Circuits::Circuit<double>>& circuit,
+    const noise::NoiseModel& noise_model, std::mt19937& rng,
+    const SimulatorConfig& config) {
+  if (uses_exact_quantum_channels(config))
+    return noise::inject_combined_noise_exact(circuit, noise_model, rng);
+  return noise::inject_combined_noise(circuit, noise_model, rng);
 }
 
 // Core Execution Logic
@@ -1266,7 +1320,8 @@ NB_MODULE(maestro, m) {
               int batch_shots = base_batch + (b < leftover ? 1 : 0);
               if (batch_shots <= 0) continue;
 
-              auto noisy = noise::inject_noise(self, noise_model, rng);
+              auto noisy =
+                  inject_noise_for_config(self, noise_model, rng, config);
               nb::dict r = execute_core(noisy, config, batch_shots);
               nb::dict counts = nb::cast<nb::dict>(r["counts"]);
               for (auto item : counts)
@@ -1294,7 +1349,8 @@ NB_MODULE(maestro, m) {
           "config"_a = SimulatorConfig{},
           "shots"_a = 1024,
           "noise_realizations"_a = 64, "seed"_a = nb::none(),
-          "Execute this circuit with Monte Carlo Pauli noise.\n\n"
+          "Execute with exact Pauli/T1 channels for density-matrix/MPO "
+          "methods, or sampled trajectories for pure-state methods.\n\n"
           "Example: qc.noisy_execute(nm, shots=1000)")
       .def(
           "noisy_estimate",
@@ -1322,8 +1378,21 @@ NB_MODULE(maestro, m) {
           },
           "observables"_a, "noise_model"_a,
           "config"_a = SimulatorConfig{},
-          "Analytical noisy estimation (zero overhead). "
-          "Applies per-qubit Pauli damping to ideal expectation values.\n\n"
+          "Single-layer analytical noisy estimation (zero simulation "
+          "overhead). Applies per-qubit Pauli damping to the ideal "
+          "expectation values.\n\n"
+          "WARNING -- this is a SINGLE-LAYER approximation, not an exact "
+          "result. The damping factor is exact only for one Pauli layer applied "
+          "immediately before measurement. A circuit that carries noise after "
+          "every gate is not modelled: Pauli channels do not commute through "
+          "non-Clifford gates, and the damping does not compound with the number "
+          "of noisy layers acting on each qubit. The returned values therefore "
+          "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
+          "Only the all-gates Pauli layer contributes; T1, thermal, coherent, "
+          "correlated and two-qubit layers are ignored entirely. Use "
+          "noisy_estimate_montecarlo(), or noisy_execute() with a density-matrix "
+          "or MPO method, when the magnitude of the noise matters."
+          "\n\n"
           "Example: qc.noisy_estimate(['ZZ', 'XX'], nm)")
       .def(
           "noisy_estimate_montecarlo",
@@ -1341,7 +1410,8 @@ NB_MODULE(maestro, m) {
 
             auto start = std::chrono::high_resolution_clock::now();
             for (int r = 0; r < noise_realizations; ++r) {
-              auto noisy = noise::inject_noise(self, noise_model, rng);
+              auto noisy =
+                  inject_noise_for_config(self, noise_model, rng, config);
               nb::dict result = estimate_core(noisy, paulis, config);
               nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
               for (size_t i = 0; i < n_obs; ++i)
@@ -1429,7 +1499,7 @@ NB_MODULE(maestro, m) {
           "config"_a = SimulatorConfig{},
           "shots"_a = 1024,
           "noise_realizations"_a = 64, "seed"_a = nb::none(),
-          "Execute this circuit with coherent noise (rotation errors).\n\n"
+          "Execute with sampled coherent over/under-rotation errors.\n\n"
           "Example: qc.coherent_execute(nm, shots=1000)")
       .def(
           "coherent_estimate",
@@ -1513,8 +1583,8 @@ NB_MODULE(maestro, m) {
               int batch_shots = base_batch + (b < leftover ? 1 : 0);
               if (batch_shots <= 0) continue;
 
-              auto noisy =
-                  noise::inject_combined_noise(self, noise_model, rng);
+              auto noisy = inject_combined_noise_for_config(
+                  self, noise_model, rng, config);
               nb::dict r = execute_core(noisy, config, batch_shots);
               nb::dict counts = nb::cast<nb::dict>(r["counts"]);
               for (auto item : counts)
@@ -1544,7 +1614,8 @@ NB_MODULE(maestro, m) {
           "shots"_a = 1024,
           "noise_realizations"_a = 64, "seed"_a = nb::none(),
           "Execute with combined noise: coherent + crosstalk + T1 + Pauli.\n\n"
-          "All configured noise layers are applied in physical order per gate.\n"
+          "DM/MPO methods use exact channels for T1 and Pauli layers; "
+          "trajectory-only layers remain sampled.\n"
           "Example: qc.full_noise_execute(nm, shots=1000)")
       .def(
           "full_noise_estimate",
@@ -1564,8 +1635,8 @@ NB_MODULE(maestro, m) {
 
             auto start = std::chrono::high_resolution_clock::now();
             for (int r = 0; r < noise_realizations; ++r) {
-              auto noisy =
-                  noise::inject_combined_noise(self, noise_model, rng);
+              auto noisy = inject_combined_noise_for_config(
+                  self, noise_model, rng, config);
               nb::dict result = estimate_core(noisy, paulis, config);
               nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
               for (size_t i = 0; i < n_obs; ++i)
@@ -1971,7 +2042,12 @@ NB_MODULE(maestro, m) {
            "Add uniform dephasing noise to all qubits [0, num_qubits).")
       .def("compute_damping", &noise::NoiseModel::compute_damping,
            "pauli_string"_a,
-           "Compute the noise damping factor for a Pauli string observable.")
+           "Damping factor for a Pauli string observable from ONE "
+           "application of the configured Pauli channels.\n\n"
+           "Exact only when the channel acts once, immediately before "
+           "measurement; for a circuit with noise after every gate it "
+           "underestimates the noise. Only the all-gates Pauli layer "
+           "contributes.")
       // ── Coherent noise setters ──
       .def("set_coherent_rotation", &noise::NoiseModel::set_coherent_rotation,
            "qubit"_a, "rx"_a, "ry"_a, "rz"_a,
@@ -2060,8 +2136,9 @@ NB_MODULE(maestro, m) {
            "Return True if any correlated noise parameters have been set.")
       // ── T1 amplitude damping ──
       .def("set_t1", &noise::NoiseModel::set_t1, "qubit"_a, "gamma"_a,
-           "Set per-gate T1 decay probability. After each gate on this "
-           "qubit, with probability gamma, the qubit resets to |0⟩.")
+           "Set per-gate T1 decay probability. Density-matrix/MPO execution "
+           "uses exact amplitude damping; pure-state execution retains the "
+           "legacy sampled-reset approximation.")
       .def("set_all_t1", &noise::NoiseModel::set_all_t1, "num_qubits"_a,
            "gamma"_a,
            "Set uniform T1 decay probability on qubits [0, num_qubits).")
@@ -2073,6 +2150,115 @@ NB_MODULE(maestro, m) {
            "t1_time_s=100e-6)")
       .def("has_t1", &noise::NoiseModel::has_t1,
            "Return True if any T1 parameters have been set.")
+      // ── Additional exact CPTP channels (density matrix / MPO) ──
+      .def("set_phase_damping", &noise::NoiseModel::set_phase_damping,
+           "qubit"_a, "gamma"_a,
+           "Set phase damping with coherence multiplier sqrt(1-gamma).\n\n"
+           "Phase damping and the stochastic phase flip are the same "
+           "channel (sqrt(1-gamma) = 1-2p), so this is realized exactly on "
+           "every backend, not only density-matrix/MPO.")
+      .def("set_phase_damping_from_time",
+           &noise::NoiseModel::set_phase_damping_from_time, "qubit"_a,
+           "gate_time_s"_a, "t_phi_s"_a,
+           "Set pure phase damping so coherence decays as "
+           "exp(-gate_time/T_phi). Realized exactly on every backend.")
+      .def("set_generalized_amplitude_damping",
+           &noise::NoiseModel::set_generalized_amplitude_damping, "qubit"_a,
+           "gamma"_a, "excited_population"_a,
+           "Set finite-temperature generalized amplitude damping after each "
+           "gate on a qubit. Requires an exact density-matrix or MPO backend.")
+      .def("set_thermal_relaxation",
+           &noise::NoiseModel::set_thermal_relaxation, "qubit"_a,
+           "gate_time_s"_a, "t1_s"_a, "t2_s"_a,
+           "excited_population"_a = 0.0,
+           "Set hardware-style T1/T2 thermal relaxation after each gate.\n\n"
+           "This is the preferred way to specify decoherence. Because T1 and "
+           "T2 are given together, every backend reproduces the same "
+           "coherence decay exp(-gate_time/T2): density-matrix/MPO use the "
+           "exact CPTP channel, pure-state/MPS use the equivalent reset+Z "
+           "mixture. Calling set_t1() and set_dephasing() separately cannot "
+           "achieve that -- the phase-flip probability that is correct for "
+           "the sampled reset model under-dephases by exp(t/2*T1) per gate "
+           "on the exact amplitude-damping path.\n\n"
+           "The physical constraint T2 <= 2*T1 is enforced.")
+      .def("set_thermal_relaxation_2q",
+           &noise::NoiseModel::set_thermal_relaxation_2q, "qubit"_a,
+           "gate_time_s"_a, "t1_s"_a, "t2_s"_a,
+           "excited_population"_a = 0.0,
+           "Set T1/T2 thermal relaxation applied only after two-qubit "
+           "gates, using the (longer) 2Q gate duration. When set, 2Q gates "
+           "use this instead of the 'all gates' relaxation.")
+      .def("has_thermal_relaxation",
+           &noise::NoiseModel::has_thermal_relaxation,
+           "Return True if any T1/T2 thermal relaxation has been set.")
+      .def("set_correlated_phase_flip",
+           &noise::NoiseModel::set_correlated_phase_flip, "q1"_a, "q2"_a,
+           "probability"_a, "correlation"_a = 1.0,
+           "Set a correlated two-qubit phase-flip channel after gates on the "
+           "pair. correlation=0 is independent; correlation=1 is II/ZZ.")
+      .def(
+          "set_kraus_channel",
+          [](noise::NoiseModel &self,
+             const Types::qubits_vector &targets,
+             const std::vector<std::vector<std::vector<std::complex<double>>>>
+                 &operators) {
+            Simulators::QuantumChannel::KrausOperators kraus;
+            kraus.reserve(operators.size());
+            for (const auto &operatorRows : operators) {
+              if (operatorRows.empty() || operatorRows.front().empty())
+                throw nb::value_error(
+                    "Kraus operators must be nonempty matrices.");
+              const size_t rows = operatorRows.size();
+              const size_t columns = operatorRows.front().size();
+              Eigen::MatrixXcd matrix(static_cast<Eigen::Index>(rows),
+                                      static_cast<Eigen::Index>(columns));
+              for (size_t row = 0; row < rows; ++row) {
+                if (operatorRows[row].size() != columns)
+                  throw nb::value_error(
+                      "Kraus operator rows must all have equal length.");
+                for (size_t column = 0; column < columns; ++column)
+                  matrix(static_cast<Eigen::Index>(row),
+                         static_cast<Eigen::Index>(column)) =
+                      operatorRows[row][column];
+              }
+              kraus.emplace_back(std::move(matrix));
+            }
+            self.set_kraus_channel(targets, kraus);
+          },
+          "targets"_a, "kraus_operators"_a,
+          "Attach an arbitrary one- or two-qubit CPTP Kraus channel after "
+          "gates on the same targets. Matrices are nested row-major lists; "
+          "completeness (sum_k E_k^dag E_k = I) is validated.\n\n"
+          "BASIS ORDER for two-qubit operators: targets[0] is the LEAST "
+          "significant bit of the 4x4 matrix index, targets[1] the most "
+          "significant. So an operator acting as A on targets[0] and B on "
+          "targets[1] must be supplied as the Kronecker product B (x) A. "
+          "Getting this backwards silently transposes the channel onto the "
+          "wrong qubit.\n\n"
+          "Example (X on targets[0], identity on targets[1]):\n"
+          "    nm.set_kraus_channel([0, 2], [[[0,1,0,0],[1,0,0,0],"
+          "[0,0,0,1],[0,0,1,0]]])")
+      .def("has_additional_quantum_channels",
+           &noise::NoiseModel::has_additional_quantum_channels,
+           "Return True if a channel that ONLY an exact density-matrix/MPO "
+           "backend can run is configured: generalized amplitude damping, "
+           "correlated phase flips or custom Kraus maps. Phase damping and "
+           "thermal relaxation are excluded -- both have an exact or "
+           "well-defined stochastic realization on sampled backends.")
+      .def("has_thermal_in_sampled_overdephasing_regime",
+           &noise::NoiseModel::has_thermal_in_sampled_overdephasing_regime,
+           "Return True if any thermal-relaxation layer has T2 > T1, where "
+           "the sampled reset+Z mixture over-dephases. Use density-matrix "
+           "or MPO execution in that regime.")
+      .def("requires_exact_quantum_channels",
+           &noise::NoiseModel::requires_exact_quantum_channels,
+           "Return True if sampled injection cannot realize this model "
+           "(exact-only Kraus maps, or thermal relaxation with T2 > T1).")
+      .def("compute_damping_covers_model",
+           &noise::NoiseModel::compute_damping_covers_model,
+           "Return True iff compute_damping() captures every layer that "
+           "affects Pauli expectations. False for thermal, T1, gate-type "
+           "Pauli, 2Q depolarizing, coherent, correlated and crosstalk.")
       // ── T1 gate-type-specific overrides ──
       .def(
           "set_t1_2q", &noise::NoiseModel::set_t1_2q, "qubit"_a, "gamma"_a,
@@ -2094,9 +2280,9 @@ NB_MODULE(maestro, m) {
       // ── Crosstalk ──
       .def("set_crosstalk", &noise::NoiseModel::set_crosstalk, "q1"_a, "q2"_a,
            "strength"_a,
-           "Set ZZ crosstalk coupling between two qubits. "
-           "After a gate on q1, an Rz(strength) is applied on q2, "
-           "and vice versa. Symmetric.")
+           "Set spectator-Z crosstalk between two qubits. After a gate on "
+           "q1, Rz(strength) is applied on q2, and vice versa. This is not "
+           "a genuine two-qubit ZZ interaction.")
       .def("has_crosstalk", &noise::NoiseModel::has_crosstalk,
            "Return True if any crosstalk couplings have been set.")
       // ── Readout error ──
@@ -2182,9 +2368,21 @@ NB_MODULE(maestro, m) {
       },
       "circuit"_a, "observables"_a, "noise_model"_a,
       "config"_a = SimulatorConfig{},
-      "Compute expectation values with analytical Pauli noise damping. "
-      "Runs noiseless simulation then applies exact noise attenuation — "
-      "zero simulation overhead compared to noiseless.");
+      "Compute expectation values with single-layer analytical Pauli "
+      "noise damping. Runs the noiseless simulation then applies the "
+      "damping factor -- zero simulation overhead compared to "
+      "noiseless.\n\n"
+      "WARNING -- this is a SINGLE-LAYER approximation, not an exact "
+      "result. The damping factor is exact only for one Pauli layer applied "
+      "immediately before measurement. A circuit that carries noise after "
+      "every gate is not modelled: Pauli channels do not commute through "
+      "non-Clifford gates, and the damping does not compound with the number "
+      "of noisy layers acting on each qubit. The returned values therefore "
+      "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
+      "Only the all-gates Pauli layer contributes; T1, thermal, coherent, "
+      "correlated and two-qubit layers are ignored entirely. Use "
+      "noisy_estimate_montecarlo(), or noisy_execute() with a density-matrix "
+      "or MPO method, when the magnitude of the noise matters.");
 
   // --- QASM variant ---
   m.def(
@@ -2216,8 +2414,19 @@ NB_MODULE(maestro, m) {
       },
       "qasm_circuit"_a, "observables"_a, "noise_model"_a,
       "config"_a = SimulatorConfig{},
-      "Compute expectation values from a QASM circuit with analytical Pauli "
-      "noise. Zero simulation overhead.");
+      "Compute expectation values from a QASM circuit with single-layer "
+      "analytical Pauli noise damping. Zero simulation overhead.\n\n"
+      "WARNING -- this is a SINGLE-LAYER approximation, not an exact "
+      "result. The damping factor is exact only for one Pauli layer applied "
+      "immediately before measurement. A circuit that carries noise after "
+      "every gate is not modelled: Pauli channels do not commute through "
+      "non-Clifford gates, and the damping does not compound with the number "
+      "of noisy layers acting on each qubit. The returned values therefore "
+      "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
+      "Only the all-gates Pauli layer contributes; T1, thermal, coherent, "
+      "correlated and two-qubit layers are ignored entirely. Use "
+      "noisy_estimate_montecarlo(), or noisy_execute() with a density-matrix "
+      "or MPO method, when the magnitude of the noise matters.");
 
   // --- Gate-by-gate Monte Carlo Noisy Estimation ---
   m.def(
@@ -2237,7 +2446,8 @@ NB_MODULE(maestro, m) {
 
         auto start = std::chrono::high_resolution_clock::now();
         for (int r = 0; r < noise_realizations; ++r) {
-          auto noisy = noise::inject_noise(circuit, noise_model, rng);
+          auto noisy =
+              inject_noise_for_config(circuit, noise_model, rng, config);
           nb::dict result = estimate_core(noisy, paulis, config);
           nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
           for (size_t i = 0; i < n_obs; ++i)
@@ -2292,7 +2502,8 @@ NB_MODULE(maestro, m) {
           int batch_shots = base_batch + (b < leftover ? 1 : 0);
           if (batch_shots <= 0) continue;
 
-          auto noisy = noise::inject_noise(circuit, noise_model, rng);
+          auto noisy =
+              inject_noise_for_config(circuit, noise_model, rng, config);
           nb::dict r = execute_core(noisy, config, batch_shots);
           nb::dict counts = nb::cast<nb::dict>(r["counts"]);
           for (auto item : counts)
@@ -2317,9 +2528,9 @@ NB_MODULE(maestro, m) {
       },
       "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
       "shots"_a = 1024, "noise_realizations"_a = 64, "seed"_a = nb::none(),
-      "Execute a circuit with Monte Carlo Pauli noise. "
-      "Each of 'noise_realizations' batches uses a different random noise "
-      "pattern, with shots distributed evenly across batches.");
+      "Execute with exact Pauli/T1 channels for density-matrix/MPO methods, "
+      "or sampled trajectories for pure-state methods. Shots are distributed "
+      "evenly across 'noise_realizations' batches.");
 
   // =========================================================================
   // Coherent Noise: Execute
@@ -2371,10 +2582,11 @@ NB_MODULE(maestro, m) {
       },
       "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
       "shots"_a = 1024, "noise_realizations"_a = 64, "seed"_a = nb::none(),
-      "Execute a circuit with coherent noise (systematic rotation errors). "
+      "Execute a circuit with sampled coherent over/under-rotation errors. "
       "After every gate, Rx/Ry/Rz rotations are injected with random ± "
       "signs. Each of 'noise_realizations' batches uses a different sign "
-      "pattern. Requires MPS/Statevector simulation (not Stabilizer).\n\n"
+      "pattern. Supported by statevector, MPS, density-matrix, and MPO "
+      "methods (not Stabilizer).\n\n"
       "Example:\n"
       "    nm = maestro.NoiseModel()\n"
       "    nm.set_all_coherent_depolarizing(n_qubits, 0.001)\n"
@@ -2472,7 +2684,8 @@ NB_MODULE(maestro, m) {
           int batch_shots = base_batch + (b < leftover ? 1 : 0);
           if (batch_shots <= 0) continue;
 
-          auto noisy = noise::inject_combined_noise(circuit, noise_model, rng);
+          auto noisy = inject_combined_noise_for_config(
+              circuit, noise_model, rng, config);
           nb::dict r = execute_core(noisy, config, batch_shots);
           nb::dict counts = nb::cast<nb::dict>(r["counts"]);
           for (auto item : counts)
@@ -2499,8 +2712,8 @@ NB_MODULE(maestro, m) {
       "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
       "shots"_a = 1024, "noise_realizations"_a = 64, "seed"_a = nb::none(),
       "Execute a circuit with combined noise (coherent + crosstalk + T1 + "
-      "Pauli). All configured noise layers are applied per gate in physical "
-      "order.\n\n"
+      "Pauli). Density-matrix/MPO methods apply Markovian T1 and Pauli layers "
+      "as exact channels; trajectory-only layers remain sampled.\n\n"
       "Example:\n"
       "    nm = maestro.NoiseModel()\n"
       "    nm.set_all_coherent_depolarizing(n, 0.001)\n"
@@ -2530,7 +2743,8 @@ NB_MODULE(maestro, m) {
 
         auto start = std::chrono::high_resolution_clock::now();
         for (int r = 0; r < noise_realizations; ++r) {
-          auto noisy = noise::inject_combined_noise(circuit, noise_model, rng);
+          auto noisy = inject_combined_noise_for_config(
+              circuit, noise_model, rng, config);
           nb::dict result = estimate_core(noisy, paulis, config);
           nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
           for (size_t i = 0; i < n_obs; ++i)

@@ -21,7 +21,10 @@
 #include <unordered_map>
 #include <vector>
 
+#include "../Circuit/Factory.h"
+#include "../Network/SimpleDisconnectedNetwork.h"
 #include "../Simulators/Factory.h"
+#include "../python/noise.h"
 
 namespace {
 
@@ -381,6 +384,226 @@ BOOST_FIXTURE_TEST_CASE(ClonePreservesStateAndIsIndependent,
                         original.begin()));
   clone->RestoreState();
   CheckQCSimDensityProbabilities(*densityMatrix, *clone);
+}
+
+BOOST_AUTO_TEST_CASE(ExactSingleQubitNoiseChannelsAndConventions) {
+  auto densityMatrix = MakeQCSim(Simulators::SimulationType::kDensityMatrix,
+                                 1);
+  BOOST_TEST(densityMatrix->SupportsQuantumChannels());
+
+  densityMatrix->ApplyH(0);
+  densityMatrix->ApplyPhaseFlipNoise(0, 0.2);
+  BOOST_CHECK_SMALL(densityMatrix->ExpectationValue("X") - 0.6,
+                    kQCSimDensityTolerance);
+
+  densityMatrix->Reset();
+  densityMatrix->ApplyH(0);
+  densityMatrix->ApplyPhaseDamping(0, 0.36);
+  BOOST_CHECK_SMALL(densityMatrix->ExpectationValue("X") - 0.8,
+                    kQCSimDensityTolerance);
+
+  densityMatrix->Reset();
+  densityMatrix->ApplyH(0);
+  densityMatrix->ApplyPhaseDampingFromTime(0, 0.4, 0.8);
+  BOOST_CHECK_SMALL(densityMatrix->ExpectationValue("X") - std::exp(-0.5),
+                    kQCSimDensityTolerance);
+
+  densityMatrix->Reset();
+  densityMatrix->ApplyX(0);
+  densityMatrix->ApplyAmplitudeDamping(0, 0.25);
+  BOOST_CHECK_SMALL(densityMatrix->Probability(0) - 0.25,
+                    kQCSimDensityTolerance);
+  BOOST_CHECK_SMALL(densityMatrix->Probability(1) - 0.75,
+                    kQCSimDensityTolerance);
+
+  // QCSim/noise.h use total nonidentity-Pauli probability. Consequently
+  // p=3/4, rather than p=1, is the fully mixed single-qubit channel.
+  densityMatrix->Reset();
+  densityMatrix->ApplyDepolarizingNoise(0, 0.75);
+  BOOST_CHECK_SMALL(densityMatrix->Probability(0) - 0.5,
+                    kQCSimDensityTolerance);
+  BOOST_CHECK_SMALL(densityMatrix->Probability(1) - 0.5,
+                    kQCSimDensityTolerance);
+
+  densityMatrix->Reset();
+  densityMatrix->ApplyDepolarizingMixingNoise(0, 1.0);
+  BOOST_CHECK_SMALL(densityMatrix->Probability(0) - 0.5,
+                    kQCSimDensityTolerance);
+  BOOST_CHECK_SMALL(densityMatrix->Probability(1) - 0.5,
+                    kQCSimDensityTolerance);
+}
+
+BOOST_AUTO_TEST_CASE(AdvancedAndCorrelatedNoiseChannels) {
+  auto densityMatrix = MakeQCSim(Simulators::SimulationType::kDensityMatrix,
+                                 2);
+
+  densityMatrix->ApplyGeneralizedAmplitudeDamping(0, 0.4, 0.25);
+  BOOST_CHECK_SMALL(densityMatrix->Probability(1) - 0.1,
+                    kQCSimDensityTolerance);
+
+  densityMatrix->Reset();
+  densityMatrix->ApplyX(0);
+  constexpr double duration = 0.7;
+  constexpr double t1 = 2.0;
+  constexpr double t2 = 1.5;
+  constexpr double excitedPopulation = 0.1;
+  densityMatrix->ApplyThermalRelaxation(
+      0, duration, t1, t2, excitedPopulation);
+  const double expectedExcited =
+      excitedPopulation + (1.0 - excitedPopulation) *
+                                  std::exp(-duration / t1);
+  BOOST_CHECK_SMALL(densityMatrix->Probability(1) - expectedExcited,
+                    kQCSimDensityTolerance);
+
+  densityMatrix->Reset();
+  densityMatrix->ApplyH(0);
+  densityMatrix->ApplyThermalRelaxation(
+      0, duration, t1, t2, excitedPopulation);
+  BOOST_CHECK_SMALL(densityMatrix->ExpectationValue("XI") -
+                        std::exp(-duration / t2),
+                    kQCSimDensityTolerance);
+
+  densityMatrix->Reset();
+  densityMatrix->ApplyH(0);
+  densityMatrix->ApplyH(1);
+  densityMatrix->ApplyCorrelatedPhaseFlipNoise(0, 1, 0.5);
+  BOOST_CHECK_SMALL(densityMatrix->ExpectationValue("XI"),
+                    kQCSimDensityTolerance);
+  BOOST_CHECK_SMALL(densityMatrix->ExpectationValue("XX") - 1.0,
+                    kQCSimDensityTolerance);
+
+  densityMatrix->Reset();
+  densityMatrix->ApplyH(0);
+  densityMatrix->ApplyH(1);
+  densityMatrix->ApplyCorrelatedPhaseFlipNoise(0, 1, 0.25, 0.4);
+  BOOST_CHECK_SMALL(densityMatrix->ExpectationValue("XX") - 0.55,
+                    kQCSimDensityTolerance);
+
+  // p=15/16 makes all sixteen two-qubit Paulis equiprobable and hence sends
+  // every input to I/4 in the total-Pauli-error convention.
+  densityMatrix->Reset();
+  densityMatrix->ApplyTwoQubitDepolarizingNoise(0, 1, 15.0 / 16.0);
+  const auto probabilities = densityMatrix->AllProbabilities();
+  for (const double probability : probabilities)
+    BOOST_CHECK_SMALL(probability - 0.25, kQCSimDensityTolerance);
+
+  densityMatrix->Reset();
+  densityMatrix->ApplyTwoQubitDepolarizingMixingNoise(0, 1, 1.0);
+  for (const double probability : densityMatrix->AllProbabilities())
+    BOOST_CHECK_SMALL(probability - 0.25, kQCSimDensityTolerance);
+}
+
+BOOST_AUTO_TEST_CASE(ArbitraryPauliAndKrausValidation) {
+  auto densityMatrix = MakeQCSim(Simulators::SimulationType::kDensityMatrix,
+                                 2);
+
+  // Base-4 digit zero selects the Pauli on targets[0].
+  std::vector<double> pauliProbabilities(16, 0.0);
+  pauliProbabilities[1] = 1.0;  // XI in target-list order: X on qubit 0.
+  densityMatrix->ApplyPauliChannel({0, 1}, pauliProbabilities);
+  BOOST_CHECK_CLOSE(densityMatrix->Probability(1), 1.0, 1e-10);
+
+  densityMatrix->Reset();
+  pauliProbabilities[1] = 0.0;
+  pauliProbabilities[4] = 1.0;  // IX: X on qubit 1.
+  densityMatrix->ApplyPauliChannel({0, 1}, pauliProbabilities);
+  BOOST_CHECK_CLOSE(densityMatrix->Probability(2), 1.0, 1e-10);
+
+  Eigen::MatrixXcd nonTracePreserving =
+      0.5 * Eigen::MatrixXcd::Identity(2, 2);
+  BOOST_CHECK_THROW(
+      densityMatrix->ApplyKrausChannel({0}, {nonTracePreserving}),
+      std::invalid_argument);
+  BOOST_CHECK_THROW(densityMatrix->ApplyBitFlipNoise(0, -0.1),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(densityMatrix->ApplyPauliChannel(0, 0.6, 0.5, 0.0),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(
+      densityMatrix->ApplyQuantumChannel(
+          {0, 1}, Simulators::QuantumChannel::BitFlip(0.1)),
+      std::invalid_argument);
+  BOOST_CHECK_THROW(densityMatrix->ApplyCorrelatedPhaseFlipNoise(0, 0, 0.1),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(
+      densityMatrix->ApplyThermalRelaxation(0, 1.0, 1.0, 2.1),
+      std::invalid_argument);
+
+  auto statevector = MakeQCSim(Simulators::SimulationType::kStatevector, 1);
+  BOOST_TEST(!statevector->SupportsQuantumChannels());
+  BOOST_CHECK_THROW(statevector->ApplyBitFlipNoise(0, 0.1),
+                    std::runtime_error);
+}
+
+BOOST_AUTO_TEST_CASE(NoiseModelUsesExactT1CircuitOperation) {
+  auto circuit = std::make_shared<Circuits::Circuit<double>>();
+  circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+
+  noise::NoiseModel noiseModel;
+  noiseModel.set_t1(0, 0.75);
+  const auto noisyCircuit = noise::inject_exact_noise(circuit, noiseModel);
+  BOOST_REQUIRE_EQUAL(noisyCircuit->GetOperations().size(), 2);
+  BOOST_TEST(static_cast<int>(noisyCircuit->GetOperations()[1]->GetType()) ==
+             static_cast<int>(Circuits::OperationType::kQuantumChannel));
+
+  auto densityMatrix = MakeQCSim(Simulators::SimulationType::kDensityMatrix,
+                                 1);
+  Circuits::OperationState classicalState;
+  noisyCircuit->Execute(densityMatrix, classicalState);
+
+  // Amplitude damping multiplies |0><1| by sqrt(1-gamma). The old
+  // state-independent probabilistic Reset path would incorrectly give 0.25.
+  BOOST_CHECK_SMALL(densityMatrix->ExpectationValue("X") - 0.5,
+                    kQCSimDensityTolerance);
+}
+
+BOOST_AUTO_TEST_CASE(ExactChannelRunsInOptimizedMultiShotPrefix) {
+  auto circuit = std::make_shared<Circuits::Circuit<double>>();
+  circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+  circuit->AddOperation(
+      std::make_shared<Circuits::QuantumChannelOperation<double>>(
+          Types::qubits_vector{0},
+          Simulators::QuantumChannel::AmplitudeDamping(0.75)));
+  circuit->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+  circuit->AddOperation(
+      Circuits::CircuitFactory<>::CreateMeasurement({{0, 0}}));
+
+  auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
+      std::vector<Types::qubit_t>{1}, std::vector<size_t>{1});
+  network->RemoveAllOptimizationSimulatorsAndAdd(
+      Simulators::SimulatorType::kQCSim,
+      Simulators::SimulationType::kDensityMatrix);
+  network->SetMaxSimulators(1);
+  network->CreateSimulator();
+
+  constexpr size_t shots = 4096;
+  const auto counts = network->RepeatedExecuteOnHost(circuit, 0, shots);
+  size_t ones = 0;
+  for (const auto& [bits, count] : counts)
+    if (!bits.empty() && bits[0]) ones += count;
+
+  // H, AD(0.75), X gives P(1)=0.875. If a channel incorrectly stops the
+  // optimized prefix, the sampler observes the post-H state and returns 0.5.
+  const double measuredProbability = static_cast<double>(ones) / shots;
+  BOOST_CHECK_SMALL(measuredProbability - 0.875, 0.04);
+}
+
+BOOST_AUTO_TEST_CASE(QuantumChannelCircuitComparisonUsesChannelContents) {
+  Circuits::ComparableCircuit<> left;
+  Circuits::ComparableCircuit<> equal;
+  Circuits::ComparableCircuit<> different;
+  left.AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
+      Types::qubits_vector{0},
+      Simulators::QuantumChannel::PhaseDamping(0.2)));
+  equal.AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
+      Types::qubits_vector{0},
+      Simulators::QuantumChannel::PhaseDamping(0.2)));
+  different.AddOperation(
+      std::make_shared<Circuits::QuantumChannelOperation<>>(
+          Types::qubits_vector{0},
+          Simulators::QuantumChannel::PhaseDamping(0.3)));
+
+  BOOST_TEST(left == equal);
+  BOOST_TEST(left != different);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

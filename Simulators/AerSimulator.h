@@ -78,7 +78,8 @@ class AerSimulator : public AerState {
                                 Types::qubit_t qubit1,
                                 const Eigen::Matrix4cd& gate) override
   {
-    const AER::reg_t qubits = {qubit1, qubit0};
+    // Aer, like QCSim, maps the first entry to local matrix bit zero.
+    const AER::reg_t qubits = {qubit0, qubit1};
     AER::cmatrix_t gate_matrix(4, 4);
     for (size_t i = 0; i < 4; ++i)
       for (size_t j = 0; j < 4; ++j)

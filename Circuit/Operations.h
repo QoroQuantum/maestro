@@ -41,9 +41,10 @@ enum class OperationType {
              then discarded */
   kNoOp,  /**< no operation, just a placeholder, could be used to erase some
              operation from a circuit */
-  kComposite /**< a composite operation, contains other operations - should not
-                be used in the beginning, only the 'Circuit' is a composite for
-                now */
+  kComposite, /**< a composite operation, contains other operations - should
+                 not be used in the beginning, only the 'Circuit' is a
+                 composite for now */
+  kQuantumChannel /**< a non-unitary CPTP operation on the simulator state */
 };
 
 // simulators keep track of the quantum state, but there are things that are not
@@ -428,6 +429,7 @@ class IOperation : public std::enable_shared_from_this<IOperation<Time>> {
    */
   virtual bool CanAffectQuantumState() const {
     return GetType() == OperationType::kGate ||
+           GetType() == OperationType::kQuantumChannel ||
            GetType() == OperationType::kMeasurement ||
            GetType() == OperationType::kConditionalGate ||
            GetType() == OperationType::kConditionalMeasurement ||
@@ -445,7 +447,8 @@ class IOperation : public std::enable_shared_from_this<IOperation<Time>> {
    */
   virtual bool NeedsEntanglementForDistribution() const {
     return (GetType() == OperationType::kGate ||
-            GetType() == OperationType::kConditionalGate) &&
+            GetType() == OperationType::kConditionalGate ||
+            GetType() == OperationType::kQuantumChannel) &&
            AffectedQubits().size() > 1;
   }
 

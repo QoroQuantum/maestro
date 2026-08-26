@@ -25,6 +25,7 @@
 
 #include "Conditional.h"
 #include "Operations.h"
+#include "QuantumChannelOperation.h"
 #include "QuantumGates.h"
 #include "Reset.h"
 #include <vector>
@@ -1749,7 +1750,8 @@ class Circuit : public IOperation<Time> {
         // would affect certain qubits will prevent the execution of any
         // following gate that affects those qubits
 
-        bool canExecute = op->GetType() == OperationType::kGate;
+        bool canExecute = op->GetType() == OperationType::kGate ||
+                          op->GetType() == OperationType::kQuantumChannel;
 
         if (canExecute)  // a conditional gate cannot be executed, it needs
                          // something executed at each shot, either a
@@ -2499,6 +2501,23 @@ class Circuit : public IOperation<Time> {
    */
   iterator end() noexcept { return operations.end(); }
 
+
+  /**
+   * @brief Get the begin iterator for the operations.
+   *
+   * Returns the begin iterator for the operations.
+   * @return The begin iterator for the operations.
+   */
+  const_iterator begin() const noexcept { return operations.begin(); }
+
+  /**
+   * @brief Get the end iterator for the operations.
+   *
+   * Returns the end iterator for the operations.
+   * @return The end iterator for the operations.
+   */
+  const_iterator end() const noexcept { return operations.end(); }
+
   /**
    * @brief Get the const begin iterator for the operations.
    *
@@ -2911,6 +2930,19 @@ class ComparableCircuit : public Circuit<Time> {
                       ->GetResetTargets())
             return false;
           break;
+        case OperationType::kQuantumChannel: {
+          const auto left =
+              std::static_pointer_cast<QuantumChannelOperation<Time>>(
+                  BaseClass::GetOperations()[i]);
+          const auto right =
+              std::static_pointer_cast<QuantumChannelOperation<Time>>(
+                  rhs.GetOperations()[i]);
+          if (left->AffectedQubits() != right->AffectedQubits() ||
+              !left->GetChannel().IsApprox(
+                  right->GetChannel(),
+                  approximateParamsCheck ? paramsEpsilon : 0.0))
+            return false;
+        } break;
         case OperationType::kNoOp:
           break;
         default:

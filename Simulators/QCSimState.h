@@ -881,6 +881,67 @@ class QCSimState : public ISimulator {
     NotifyObservers(qubits);
   }
 
+  bool SupportsQuantumChannels() const override {
+    return simulationType == SimulationType::kDensityMatrix ||
+           simulationType == SimulationType::kMatrixProductOperator;
+  }
+
+  /**
+   * @brief Applies a deterministic one- or two-qubit CPTP channel.
+   *
+   * QCSim's dense backend calls DensityMatrix::ApplyChannel and its MPO
+   * backend calls MPOSimulator::ApplyKrausOperators. QuantumChannel performs
+   * the common completeness validation first, since the native MPO primitive
+   * also permits non-trace-preserving maps. MPO evolution is subject to any
+   * configured bond-dimension or singular-value truncation.
+   */
+  void ApplyQuantumChannel(const Types::qubits_vector &targets,
+                           const QuantumChannel &channel) override {
+    if (!SupportsQuantumChannels())
+      throw std::runtime_error(
+          "QCSim quantum channels require density_matrix or "
+          "matrix_product_operator simulation");
+    if (targets.size() != channel.GetNumberOfQubits())
+      throw std::invalid_argument(
+          "The number of channel targets does not match its Kraus operators");
+    if (targets.empty() || targets.size() > 2)
+      throw std::invalid_argument(
+          "QCSim supports only one- and two-qubit local channels");
+
+    std::unordered_set<Types::qubit_t> uniqueTargets;
+    for (const Types::qubit_t target : targets) {
+      if (target >= nrQubits)
+        throw std::invalid_argument("Quantum-channel qubit is out of range");
+      if (!uniqueTargets.insert(target).second)
+        throw std::invalid_argument(
+            "Quantum-channel target qubits must be distinct");
+    }
+
+    const auto &krausOperators = channel.GetKrausOperators();
+    if (simulationType == SimulationType::kDensityMatrix) {
+      if (!densityMatrix)
+        throw std::runtime_error(
+            "QCSim density-matrix state is not initialized");
+      if (targets.size() == 1)
+        densityMatrix->ApplyChannel(krausOperators, targets[0]);
+      else
+        densityMatrix->ApplyChannel(krausOperators, targets[0], targets[1]);
+    } else {
+      if (!mpoSimulator)
+        throw std::runtime_error("QCSim MPO state is not initialized");
+      if (targets.size() == 1)
+        mpoSimulator->ApplyKrausOperators(
+            krausOperators, static_cast<Eigen::Index>(targets[0]));
+      else
+        mpoSimulator->ApplyKrausOperators(
+            krausOperators, static_cast<Eigen::Index>(targets[0]),
+            static_cast<Eigen::Index>(targets[1]));
+      UpdateCurrentMPOBondDimension();
+    }
+
+    NotifyObservers(targets);
+  }
+
   /**
    * @brief Returns the probability of the specified outcome.
    *
