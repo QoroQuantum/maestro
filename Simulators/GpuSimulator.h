@@ -57,6 +57,10 @@ class GpuSimulator : public GpuState {
    */
   void ApplyGenericOneQubitGate(Types::qubit_t qubit,
                                 const Eigen::Matrix2cd& gate) override {
+    if (GetSimulationType() == SimulationType::kDensityMatrix) {
+      ApplyQuantumChannel({qubit}, QuantumChannel({gate}));
+      return;
+    }
     throw std::runtime_error(
         "GpuSimulator::ApplyGenericOneQubitGate: Not supported for GPU "
         "simulator yet.");
@@ -70,6 +74,10 @@ class GpuSimulator : public GpuState {
    */
   void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1,
                                 const Eigen::Matrix4cd& gate) override {
+    if (GetSimulationType() == SimulationType::kDensityMatrix) {
+      ApplyQuantumChannel({qubit0, qubit1}, QuantumChannel({gate}));
+      return;
+    }
     throw std::runtime_error(
         "GpuSimulator::ApplyGenericTwoQubitGate: Not supported for GPU "
         "simulator yet.");
@@ -85,6 +93,8 @@ class GpuSimulator : public GpuState {
   void ApplyP(Types::qubit_t qubit, double lambda) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyP(qubit, lambda);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyP(qubit, lambda);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyP(qubit, lambda);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -104,6 +114,8 @@ class GpuSimulator : public GpuState {
   void ApplyX(Types::qubit_t qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyX(qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyX(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyX(qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -123,6 +135,8 @@ class GpuSimulator : public GpuState {
   void ApplyY(Types::qubit_t qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyY(qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyY(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyY(qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -142,6 +156,8 @@ class GpuSimulator : public GpuState {
   void ApplyZ(Types::qubit_t qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyZ(qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyZ(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyZ(qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -161,6 +177,8 @@ class GpuSimulator : public GpuState {
   void ApplyH(Types::qubit_t qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyH(qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyH(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyH(qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -180,6 +198,8 @@ class GpuSimulator : public GpuState {
   void ApplyS(Types::qubit_t qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyS(qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyS(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyS(qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -199,6 +219,8 @@ class GpuSimulator : public GpuState {
   void ApplySDG(Types::qubit_t qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplySDG(qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplySDG(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplySDG(qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -218,6 +240,8 @@ class GpuSimulator : public GpuState {
   void ApplyT(Types::qubit_t qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyT(qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyT(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyT(qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -237,6 +261,8 @@ class GpuSimulator : public GpuState {
   void ApplyTDG(Types::qubit_t qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyTDG(qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyTDG(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyTDG(qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -256,6 +282,8 @@ class GpuSimulator : public GpuState {
   void ApplySx(Types::qubit_t qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplySX(qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplySX(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplySX(qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -275,6 +303,8 @@ class GpuSimulator : public GpuState {
   void ApplySxDAG(Types::qubit_t qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplySXDG(qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplySXDG(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplySXDG(qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -294,6 +324,8 @@ class GpuSimulator : public GpuState {
   void ApplyK(Types::qubit_t qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyK(qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyK(qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyK(qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -314,6 +346,8 @@ class GpuSimulator : public GpuState {
   void ApplyRx(Types::qubit_t qubit, double theta) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyRx(qubit, theta);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyRx(qubit, theta);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyRx(qubit, theta);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -334,6 +368,8 @@ class GpuSimulator : public GpuState {
   void ApplyRy(Types::qubit_t qubit, double theta) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyRy(qubit, theta);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyRy(qubit, theta);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyRy(qubit, theta);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -354,6 +390,8 @@ class GpuSimulator : public GpuState {
   void ApplyRz(Types::qubit_t qubit, double theta) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyRz(qubit, theta);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyRz(qubit, theta);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyRz(qubit, theta);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -375,6 +413,8 @@ class GpuSimulator : public GpuState {
               double gamma) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyU(qubit, theta, phi, lambda, gamma);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyU(qubit, theta, phi, lambda, gamma);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyU(qubit, theta, phi, lambda, gamma);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -395,6 +435,8 @@ class GpuSimulator : public GpuState {
   void ApplyCX(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCX(ctrl_qubit, tgt_qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyCX(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCX(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -415,6 +457,8 @@ class GpuSimulator : public GpuState {
   void ApplyCY(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCY(ctrl_qubit, tgt_qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyCY(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCY(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -435,6 +479,8 @@ class GpuSimulator : public GpuState {
   void ApplyCZ(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCZ(ctrl_qubit, tgt_qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyCZ(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCZ(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -457,6 +503,8 @@ class GpuSimulator : public GpuState {
                double lambda) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -479,6 +527,8 @@ class GpuSimulator : public GpuState {
                 double theta) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -501,6 +551,8 @@ class GpuSimulator : public GpuState {
                 double theta) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -523,6 +575,8 @@ class GpuSimulator : public GpuState {
                 double theta) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -543,6 +597,8 @@ class GpuSimulator : public GpuState {
   void ApplyCH(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCH(ctrl_qubit, tgt_qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyCH(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCH(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -563,6 +619,8 @@ class GpuSimulator : public GpuState {
   void ApplyCSx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCSX(ctrl_qubit, tgt_qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyCSX(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCSX(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -584,6 +642,8 @@ class GpuSimulator : public GpuState {
                    Types::qubit_t tgt_qubit) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCSXDG(ctrl_qubit, tgt_qubit);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyCSXDG(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCSXDG(ctrl_qubit, tgt_qubit);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -604,6 +664,8 @@ class GpuSimulator : public GpuState {
   void ApplySwap(Types::qubit_t qubit0, Types::qubit_t qubit1) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplySwap(qubit0, qubit1);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplySwap(qubit0, qubit1);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplySwap(qubit0, qubit1);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -626,6 +688,9 @@ class GpuSimulator : public GpuState {
                 Types::qubit_t qubit2) override {
     if (GetSimulationType() == SimulationType::kStatevector) {
       state->ApplyCCX(qubit0, qubit1, qubit2);
+      NotifyObservers({qubit0, qubit1, qubit2});
+    } else if (GetSimulationType() == SimulationType::kDensityMatrix) {
+      densityMatrix->ApplyCCX(qubit0, qubit1, qubit2);
       NotifyObservers({qubit0, qubit1, qubit2});
     } else if (GetSimulationType() == SimulationType::kMatrixProductState) {
       const size_t q1 = qubit0;  // control 1
@@ -673,6 +738,9 @@ class GpuSimulator : public GpuState {
                   Types::qubit_t qubit1) override {
     if (GetSimulationType() == SimulationType::kStatevector) {
       state->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
+      NotifyObservers({qubit1, qubit0, ctrl_qubit});
+    } else if (GetSimulationType() == SimulationType::kDensityMatrix) {
+      densityMatrix->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
       NotifyObservers({qubit1, qubit0, ctrl_qubit});
     } else if (GetSimulationType() == SimulationType::kMatrixProductState) {
       const size_t q1 = ctrl_qubit;  // control
@@ -740,6 +808,8 @@ class GpuSimulator : public GpuState {
                double theta, double phi, double lambda, double gamma) override {
     if (GetSimulationType() == SimulationType::kStatevector)
       state->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
+    else if (GetSimulationType() == SimulationType::kDensityMatrix)
+      densityMatrix->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
     else if (GetSimulationType() == SimulationType::kMatrixProductState)
       mps->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
     else if (GetSimulationType() == SimulationType::kTensorNetwork)
@@ -792,10 +862,16 @@ class GpuSimulator : public GpuState {
     cloned->upcomingGateIndex = upcomingGateIndex;
     cloned->growthFactorGate = growthFactorGate;
     cloned->growthFactorSwap = growthFactorSwap;
+    cloned->configuration = configuration;
 
     if (state)
       cloned->state = state->Clone();
-    else if (mps) {
+    else if (densityMatrix) {
+      cloned->densityMatrix = densityMatrix->Clone();
+      if (!cloned->densityMatrix)
+        throw std::runtime_error(
+            "GpuSimulator::Clone: Failed to clone density matrix state.");
+    } else if (mps) {
       cloned->mps = mps->Clone();
 
       cloned->gateCounterObserver =

@@ -256,6 +256,68 @@ class GpuLibrary : public Utils::Library {
                               double))GetFunction("ApplyCU");
           CheckFunction((void *)fApplyCU, __LINE__);
 
+          // density matrix api functions
+#define LOAD_DM(name, type)                                                   \
+  f##name = reinterpret_cast<type>(GetFunction(#name));                       \
+  CheckFunction(reinterpret_cast<void *>(f##name), __LINE__)
+          LOAD_DM(CreateDensityMatrix, void *(*)(void *));
+          LOAD_DM(DestroyDensityMatrix, void (*)(void *));
+          LOAD_DM(DMCreate, int (*)(void *, unsigned int));
+          LOAD_DM(DMCreateWithState,
+                  int (*)(void *, unsigned int, const double *));
+          LOAD_DM(DMReset, int (*)(void *));
+          LOAD_DM(DMIsValid, int (*)(void *));
+          LOAD_DM(DMIsCreated, int (*)(void *));
+          LOAD_DM(DMSetDataType, int (*)(void *, int));
+          LOAD_DM(DMIsDoublePrecision, int (*)(void *));
+          LOAD_DM(DMGetNrQubits, int (*)(void *));
+          LOAD_DM(DMSaveState, int (*)(void *));
+          LOAD_DM(DMRestoreState, int (*)(void *));
+          LOAD_DM(DMCleanSavedState, int (*)(void *));
+          LOAD_DM(DMClone, void *(*)(void *));
+          LOAD_DM(DMMeasureQubitCollapse, int (*)(void *, int));
+          LOAD_DM(DMMeasureQubitNoCollapse, int (*)(void *, int));
+          LOAD_DM(DMSampleAll,
+                  int (*)(void *, unsigned int, long int *));
+          LOAD_DM(DMGetElement,
+                  int (*)(void *, long long, long long, double *, double *));
+          LOAD_DM(DMBasisStateProbability, double (*)(void *, long long));
+          LOAD_DM(DMAllProbabilities, int (*)(void *, double *));
+          LOAD_DM(DMExpectationValue,
+                  double (*)(void *, const char *, int));
+          LOAD_DM(DMApplyKraus,
+                  int (*)(void *, int, const int *, int, const double *));
+#define LOAD_DM_GATE1(name) LOAD_DM(name, int (*)(void *, int))
+#define LOAD_DM_GATE2(name) LOAD_DM(name, int (*)(void *, int, int))
+#define LOAD_DM_ROT1(name) LOAD_DM(name, int (*)(void *, int, double))
+#define LOAD_DM_ROT2(name) LOAD_DM(name, int (*)(void *, int, int, double))
+          LOAD_DM_GATE1(DMApplyReset);
+          LOAD_DM_GATE1(DMApplyX); LOAD_DM_GATE1(DMApplyY);
+          LOAD_DM_GATE1(DMApplyZ); LOAD_DM_GATE1(DMApplyH);
+          LOAD_DM_GATE1(DMApplyS); LOAD_DM_GATE1(DMApplySDG);
+          LOAD_DM_GATE1(DMApplyT); LOAD_DM_GATE1(DMApplyTDG);
+          LOAD_DM_GATE1(DMApplySX); LOAD_DM_GATE1(DMApplySXDG);
+          LOAD_DM_GATE1(DMApplyK);
+          LOAD_DM_ROT1(DMApplyP); LOAD_DM_ROT1(DMApplyRx);
+          LOAD_DM_ROT1(DMApplyRy); LOAD_DM_ROT1(DMApplyRz);
+          LOAD_DM(DMApplyU,
+                  int (*)(void *, int, double, double, double, double));
+          LOAD_DM_GATE2(DMApplyCX); LOAD_DM_GATE2(DMApplyCY);
+          LOAD_DM_GATE2(DMApplyCZ); LOAD_DM_GATE2(DMApplyCH);
+          LOAD_DM_GATE2(DMApplyCSX); LOAD_DM_GATE2(DMApplyCSXDG);
+          LOAD_DM_ROT2(DMApplyCP); LOAD_DM_ROT2(DMApplyCRx);
+          LOAD_DM_ROT2(DMApplyCRy); LOAD_DM_ROT2(DMApplyCRz);
+          LOAD_DM(DMApplyCCX, int (*)(void *, int, int, int));
+          LOAD_DM_GATE2(DMApplySwap);
+          LOAD_DM(DMApplyCSwap, int (*)(void *, int, int, int));
+          LOAD_DM(DMApplyCU,
+                  int (*)(void *, int, int, double, double, double, double));
+#undef LOAD_DM_ROT2
+#undef LOAD_DM_ROT1
+#undef LOAD_DM_GATE2
+#undef LOAD_DM_GATE1
+#undef LOAD_DM
+
           // mps api functions
 
           fCreateMPS = (void *(*)(void *))GetFunction("CreateMPS");
@@ -834,6 +896,23 @@ class GpuLibrary : public Utils::Library {
   }
 
   bool IsValid() const { return LibraryHandle != nullptr; }
+  bool HasDensityMatrixAPI() const {
+    return IsValid() && fCreateDensityMatrix && fDestroyDensityMatrix &&
+           fDMCreate && fDMCreateWithState && fDMReset && fDMIsCreated &&
+           fDMSetDataType &&
+           fDMSaveState && fDMRestoreState && fDMCleanSavedState && fDMClone &&
+           fDMMeasureQubitCollapse && fDMSampleAll &&
+           fDMBasisStateProbability && fDMAllProbabilities &&
+           fDMExpectationValue && fDMApplyKraus && fDMApplyReset &&
+           fDMApplyX && fDMApplyY && fDMApplyZ && fDMApplyH && fDMApplyS &&
+           fDMApplySDG && fDMApplyT && fDMApplyTDG && fDMApplySX &&
+           fDMApplySXDG && fDMApplyK && fDMApplyP && fDMApplyRx &&
+           fDMApplyRy && fDMApplyRz && fDMApplyU && fDMApplyCX &&
+           fDMApplyCY && fDMApplyCZ && fDMApplyCH && fDMApplyCSX &&
+           fDMApplyCSXDG && fDMApplyCP && fDMApplyCRx && fDMApplyCRy &&
+           fDMApplyCRz && fDMApplyCCX && fDMApplySwap && fDMApplyCSwap &&
+           fDMApplyCU;
+  }
 
   // statevector functions
 
@@ -1374,6 +1453,141 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
+ public:
+  // density matrix functions
+  void *CreateDensityMatrix() {
+    if (!LibraryHandle || !fCreateDensityMatrix) return nullptr;
+    return fCreateDensityMatrix(LibraryHandle);
+  }
+  void DestroyDensityMatrix(void *obj) {
+    if (obj && fDestroyDensityMatrix) fDestroyDensityMatrix(obj);
+  }
+#define DM_BOOL0(name)                                                        \
+  bool name(void *obj) { return obj && f##name && f##name(obj) == 1; }
+#define DM_BOOL1(name, type)                                                  \
+  bool name(void *obj, type a) { return obj && f##name && f##name(obj, a) == 1; }
+#define DM_BOOL2(name, type1, type2)                                          \
+  bool name(void *obj, type1 a, type2 b) {                                    \
+    return obj && f##name && f##name(obj, a, b) == 1;                         \
+  }
+#define DM_BOOL3(name, type1, type2, type3)                                   \
+  bool name(void *obj, type1 a, type2 b, type3 c) {                           \
+    return obj && f##name && f##name(obj, a, b, c) == 1;                      \
+  }
+  DM_BOOL1(DMCreate, unsigned int)
+  bool DMCreateWithState(void *obj, unsigned int n, const double *data) {
+    return obj && fDMCreateWithState && fDMCreateWithState(obj, n, data) == 1;
+  }
+  DM_BOOL0(DMReset) DM_BOOL0(DMIsValid) DM_BOOL0(DMIsCreated)
+  DM_BOOL1(DMSetDataType, int) DM_BOOL0(DMIsDoublePrecision)
+  int DMGetNrQubits(void *obj) const {
+    return obj && fDMGetNrQubits ? fDMGetNrQubits(obj) : 0;
+  }
+  DM_BOOL0(DMSaveState) DM_BOOL0(DMRestoreState)
+  DM_BOOL0(DMCleanSavedState)
+  void *DMClone(void *obj) { return obj && fDMClone ? fDMClone(obj) : nullptr; }
+  bool DMMeasureQubitCollapse(void *obj, int q) {
+    return obj && fDMMeasureQubitCollapse && fDMMeasureQubitCollapse(obj, q);
+  }
+  bool DMSampleAll(void *obj, unsigned int shots, long int *samples) {
+    return obj && fDMSampleAll && fDMSampleAll(obj, shots, samples) == 1;
+  }
+  double DMBasisStateProbability(void *obj, long long state) const {
+    return obj && fDMBasisStateProbability
+               ? fDMBasisStateProbability(obj, state) : 0.0;
+  }
+  bool DMAllProbabilities(void *obj, double *values) {
+    return obj && fDMAllProbabilities && fDMAllProbabilities(obj, values) == 1;
+  }
+  double DMExpectationValue(void *obj, const char *pauli, int len) const {
+    return obj && fDMExpectationValue ? fDMExpectationValue(obj, pauli, len) : 0.0;
+  }
+  bool DMApplyKraus(void *obj, int n, const int *qubits, int count,
+                    const double *operators) {
+    return obj && fDMApplyKraus &&
+           fDMApplyKraus(obj, n, qubits, count, operators) == 1;
+  }
+  DM_BOOL1(DMApplyReset, int)
+  DM_BOOL1(DMApplyX, int) DM_BOOL1(DMApplyY, int)
+  DM_BOOL1(DMApplyZ, int) DM_BOOL1(DMApplyH, int)
+  DM_BOOL1(DMApplyS, int) DM_BOOL1(DMApplySDG, int)
+  DM_BOOL1(DMApplyT, int) DM_BOOL1(DMApplyTDG, int)
+  DM_BOOL1(DMApplySX, int) DM_BOOL1(DMApplySXDG, int)
+  DM_BOOL1(DMApplyK, int)
+  DM_BOOL2(DMApplyP, int, double) DM_BOOL2(DMApplyRx, int, double)
+  DM_BOOL2(DMApplyRy, int, double) DM_BOOL2(DMApplyRz, int, double)
+  bool DMApplyU(void *o, int q, double a, double b, double c, double d) {
+    return o && fDMApplyU && fDMApplyU(o, q, a, b, c, d) == 1;
+  }
+  DM_BOOL2(DMApplyCX, int, int) DM_BOOL2(DMApplyCY, int, int)
+  DM_BOOL2(DMApplyCZ, int, int) DM_BOOL2(DMApplyCH, int, int)
+  DM_BOOL2(DMApplyCSX, int, int) DM_BOOL2(DMApplyCSXDG, int, int)
+  DM_BOOL3(DMApplyCP, int, int, double)
+  DM_BOOL3(DMApplyCRx, int, int, double)
+  DM_BOOL3(DMApplyCRy, int, int, double)
+  DM_BOOL3(DMApplyCRz, int, int, double)
+  DM_BOOL3(DMApplyCCX, int, int, int)
+  DM_BOOL2(DMApplySwap, int, int)
+  DM_BOOL3(DMApplyCSwap, int, int, int)
+  bool DMApplyCU(void *o, int c, int t, double a, double b, double d,
+                 double g) {
+    return o && fDMApplyCU && fDMApplyCU(o, c, t, a, b, d, g) == 1;
+  }
+#undef DM_BOOL3
+#undef DM_BOOL2
+#undef DM_BOOL1
+#undef DM_BOOL0
+
+ private:
+  // density matrix function pointers
+  void *(*fCreateDensityMatrix)(void *) = nullptr;
+  void (*fDestroyDensityMatrix)(void *) = nullptr;
+  int (*fDMCreate)(void *, unsigned int) = nullptr;
+  int (*fDMCreateWithState)(void *, unsigned int, const double *) = nullptr;
+  int (*fDMReset)(void *) = nullptr;
+  int (*fDMIsValid)(void *) = nullptr;
+  int (*fDMIsCreated)(void *) = nullptr;
+  int (*fDMSetDataType)(void *, int) = nullptr;
+  int (*fDMIsDoublePrecision)(void *) = nullptr;
+  int (*fDMGetNrQubits)(void *) = nullptr;
+  int (*fDMSaveState)(void *) = nullptr;
+  int (*fDMRestoreState)(void *) = nullptr;
+  int (*fDMCleanSavedState)(void *) = nullptr;
+  void *(*fDMClone)(void *) = nullptr;
+  int (*fDMMeasureQubitCollapse)(void *, int) = nullptr;
+  int (*fDMMeasureQubitNoCollapse)(void *, int) = nullptr;
+  int (*fDMSampleAll)(void *, unsigned int, long int *) = nullptr;
+  int (*fDMGetElement)(void *, long long, long long, double *, double *) = nullptr;
+  double (*fDMBasisStateProbability)(void *, long long) = nullptr;
+  int (*fDMAllProbabilities)(void *, double *) = nullptr;
+  double (*fDMExpectationValue)(void *, const char *, int) = nullptr;
+  int (*fDMApplyKraus)(void *, int, const int *, int, const double *) = nullptr;
+  int (*fDMApplyReset)(void *, int) = nullptr;
+#define DECL_DM1(name) int (*f##name)(void *, int) = nullptr
+#define DECL_DM2(name) int (*f##name)(void *, int, int) = nullptr
+#define DECL_DMR1(name) int (*f##name)(void *, int, double) = nullptr
+#define DECL_DMR2(name) int (*f##name)(void *, int, int, double) = nullptr
+  DECL_DM1(DMApplyX); DECL_DM1(DMApplyY); DECL_DM1(DMApplyZ);
+  DECL_DM1(DMApplyH); DECL_DM1(DMApplyS); DECL_DM1(DMApplySDG);
+  DECL_DM1(DMApplyT); DECL_DM1(DMApplyTDG); DECL_DM1(DMApplySX);
+  DECL_DM1(DMApplySXDG); DECL_DM1(DMApplyK);
+  DECL_DMR1(DMApplyP); DECL_DMR1(DMApplyRx); DECL_DMR1(DMApplyRy);
+  DECL_DMR1(DMApplyRz);
+  int (*fDMApplyU)(void *, int, double, double, double, double) = nullptr;
+  DECL_DM2(DMApplyCX); DECL_DM2(DMApplyCY); DECL_DM2(DMApplyCZ);
+  DECL_DM2(DMApplyCH); DECL_DM2(DMApplyCSX); DECL_DM2(DMApplyCSXDG);
+  DECL_DMR2(DMApplyCP); DECL_DMR2(DMApplyCRx); DECL_DMR2(DMApplyCRy);
+  DECL_DMR2(DMApplyCRz);
+  int (*fDMApplyCCX)(void *, int, int, int) = nullptr;
+  DECL_DM2(DMApplySwap);
+  int (*fDMApplyCSwap)(void *, int, int, int) = nullptr;
+  int (*fDMApplyCU)(void *, int, int, double, double, double, double) = nullptr;
+#undef DECL_DMR2
+#undef DECL_DMR1
+#undef DECL_DM2
+#undef DECL_DM1
+
+ public:
   // mps functions
 
   void *CreateMPS() {

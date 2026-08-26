@@ -142,6 +142,7 @@ set(TESTSSRC tests/aertests.cpp
 	tests/compsimtests.cpp
 	tests/expvals.cpp
 	tests/gputests.cpp
+	tests/gpudensitymatrixtests.cpp
 	tests/mpssimtests.cpp
 	tests/qasm.cpp
 	tests/qasm_core.cpp
@@ -161,6 +162,7 @@ set(TESTSSRC tests/aertests.cpp
 	tests/pauliproptests.cpp
 	tests/extstabtests.cpp
 	tests/mpsswapsopttests.cpp
+	tests/noisemodeltests.cpp
 	tests/PathIntegralTests.cpp
 	tests/netwsimtests.cpp
 	tests/mpsnetwtests.cpp

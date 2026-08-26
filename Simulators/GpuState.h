@@ -71,6 +71,18 @@ class GpuState : public ISimulator {
         } else
           throw std::runtime_error(
               "GpuState::Initialize: Failed to create the statevector state.");
+      } else if (simulationType == SimulationType::kDensityMatrix) {
+        densityMatrix = SimulatorsFactory::CreateGpuDensityMatrix();
+        if (!densityMatrix)
+          throw std::runtime_error(
+              "GpuState::Initialize: Failed to create the density matrix state.");
+        // Precision must be selected before native density-matrix storage is
+        // allocated.
+        for (const auto& [key, value] : configuration.GetConfigMap())
+          if (key != "method") Configure(key.c_str(), value.c_str());
+        if (!densityMatrix->Create(nrQubits))
+          throw std::runtime_error(
+              "GpuState::Initialize: Failed to initialize the density matrix state.");
       } else if (simulationType == SimulationType::kMatrixProductState) {
         mps = SimulatorsFactory::CreateGpuLibMPSSim();
         if (mps) {
@@ -159,19 +171,22 @@ class GpuState : public ISimulator {
     nrQubits = num_qubits;
     Initialize();
 
-    if (simulationType != SimulationType::kStatevector)
+    if (simulationType != SimulationType::kStatevector &&
+        simulationType != SimulationType::kDensityMatrix)
       throw std::runtime_error(
           "GpuState::InitializeState: Invalid simulation "
           "type for initializing the state.");
 
-    if (nrQubits) {
-      if (simulationType == SimulationType::kStatevector) {
-        state = SimulatorsFactory::CreateGpuLibStateVectorSim();
-        if (state)
-          state->CreateWithState(
-              nrQubits, reinterpret_cast<const double *>(amplitudes.data()));
-      }
-    }
+    const bool created = simulationType == SimulationType::kDensityMatrix
+                             ? densityMatrix->CreateWithState(
+                                   nrQubits, reinterpret_cast<const double *>(
+                                                 amplitudes.data()))
+                             : state->CreateWithState(
+                                   nrQubits, reinterpret_cast<const double *>(
+                                                 amplitudes.data()));
+    if (!created)
+      throw std::runtime_error(
+          "GpuState::InitializeState: Failed to initialize the state.");
   }
 
   /**
@@ -193,19 +208,22 @@ class GpuState : public ISimulator {
     nrQubits = num_qubits;
     Initialize();
 
-    if (simulationType != SimulationType::kStatevector)
+    if (simulationType != SimulationType::kStatevector &&
+        simulationType != SimulationType::kDensityMatrix)
       throw std::runtime_error(
           "GpuState::InitializeState: Invalid simulation "
           "type for initializing the state.");
 
-    if (nrQubits) {
-      if (simulationType == SimulationType::kStatevector) {
-        state = SimulatorsFactory::CreateGpuLibStateVectorSim();
-        if (state)
-          state->CreateWithState(
-              nrQubits, reinterpret_cast<const double *>(amplitudes.data()));
-      }
-    }
+    const bool created = simulationType == SimulationType::kDensityMatrix
+                             ? densityMatrix->CreateWithState(
+                                   nrQubits, reinterpret_cast<const double *>(
+                                                 amplitudes.data()))
+                             : state->CreateWithState(
+                                   nrQubits, reinterpret_cast<const double *>(
+                                                 amplitudes.data()));
+    if (!created)
+      throw std::runtime_error(
+          "GpuState::InitializeState: Failed to initialize the state.");
   }
 #endif
 
@@ -227,19 +245,22 @@ class GpuState : public ISimulator {
     nrQubits = num_qubits;
     Initialize();
 
-    if (simulationType != SimulationType::kStatevector)
+    if (simulationType != SimulationType::kStatevector &&
+        simulationType != SimulationType::kDensityMatrix)
       throw std::runtime_error(
           "GpuState::InitializeState: Invalid simulation "
           "type for initializing the state.");
 
-    if (nrQubits) {
-      if (simulationType == SimulationType::kStatevector) {
-        state = SimulatorsFactory::CreateGpuLibStateVectorSim();
-        if (state)
-          state->CreateWithState(
-              nrQubits, reinterpret_cast<const double *>(amplitudes.data()));
-      }
-    }
+    const bool created = simulationType == SimulationType::kDensityMatrix
+                             ? densityMatrix->CreateWithState(
+                                   nrQubits, reinterpret_cast<const double *>(
+                                                 amplitudes.data()))
+                             : state->CreateWithState(
+                                   nrQubits, reinterpret_cast<const double *>(
+                                                 amplitudes.data()));
+    if (!created)
+      throw std::runtime_error(
+          "GpuState::InitializeState: Failed to initialize the state.");
   }
 
   /**
@@ -251,6 +272,8 @@ class GpuState : public ISimulator {
   void Reset() override {
     if (state)
       state->Reset();
+    else if (densityMatrix)
+      densityMatrix->Reset();
     else if (mps) {
       mps->Reset();
       curMaxBondDim = 1;
@@ -409,12 +432,20 @@ class GpuState : public ISimulator {
         simulationType = SimulationType::kStatevector;
       else if (std::string("matrix_product_state") == value)
         simulationType = SimulationType::kMatrixProductState;
+      else if (std::string("density_matrix") == value)
+        simulationType = SimulationType::kDensityMatrix;
       else if (std::string("tensor_network") == value)
         simulationType = SimulationType::kTensorNetwork;
       else if (std::string("pauli_propagator") == value)
         simulationType = SimulationType::kPauliPropagator;
     }
         
+    if (std::string("use_double_precision") == key && densityMatrix &&
+        densityMatrix->IsCreated())
+      throw std::runtime_error(
+          "GpuState::Configure: Density-matrix precision must be configured "
+          "before initialization.");
+
     if (!configuration.WasApplied(key, value))
         configuration.SetConfiguration(key, value);    
         
@@ -436,6 +467,7 @@ class GpuState : public ISimulator {
       if (mps) mps->SetDataType(useDoublePrecision);
       if (tn) tn->SetDataType(useDoublePrecision);
       if (state) state->SetDataType(useDoublePrecision);
+      if (densityMatrix) densityMatrix->SetDataType(useDoublePrecision);
     } 
     
     if (pp) {
@@ -471,6 +503,8 @@ class GpuState : public ISimulator {
           return "statevector";
         case SimulationType::kMatrixProductState:
           return "matrix_product_state";
+        case SimulationType::kDensityMatrix:
+          return "density_matrix";
         case SimulationType::kTensorNetwork:
           return "tensor_network";
         case SimulationType::kPauliPropagator:
@@ -492,6 +526,7 @@ class GpuState : public ISimulator {
    */
   size_t AllocateQubits(size_t num_qubits) override {
     if ((simulationType == SimulationType::kStatevector && state) ||
+        (simulationType == SimulationType::kDensityMatrix && densityMatrix) ||
         (simulationType == SimulationType::kMatrixProductState && mps) ||
         (simulationType == SimulationType::kPauliPropagator && pp))
       return 0;
@@ -519,6 +554,7 @@ class GpuState : public ISimulator {
    */
   void Clear() override {
     state = nullptr;
+    densityMatrix = nullptr;
     mps = nullptr;
     tn = nullptr;
     pp = nullptr;
@@ -556,6 +592,11 @@ class GpuState : public ISimulator {
       // TODO: measure all qubits in one shot?
       for (size_t qubit : qubits) {
         if (state->MeasureQubitCollapse(static_cast<int>(qubit))) res |= mask;
+        mask <<= 1;
+      }
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      for (size_t qubit : qubits) {
+        if (densityMatrix->Measure(static_cast<unsigned int>(qubit))) res |= mask;
         mask <<= 1;
       }
     } else if (simulationType == SimulationType::kMatrixProductState) {
@@ -597,6 +638,9 @@ class GpuState : public ISimulator {
     if (simulationType == SimulationType::kStatevector) {
       for (size_t i = 0; i < qubits.size(); ++i)
         res[i] = state->MeasureQubitCollapse(static_cast<int>(qubits[i]));
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      for (size_t i = 0; i < qubits.size(); ++i)
+        res[i] = densityMatrix->Measure(qubits[i]);
     } else if (simulationType == SimulationType::kMatrixProductState) {
       for (size_t i = 0; i < qubits.size(); ++i)
         res[i] = mps->Measure(static_cast<unsigned int>(qubits[i]));
@@ -625,6 +669,8 @@ class GpuState : public ISimulator {
       for (size_t qubit : qubits)
         if (state->MeasureQubitCollapse(static_cast<int>(qubit)))
           state->ApplyX(static_cast<int>(qubit));
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      for (size_t qubit : qubits) densityMatrix->ApplyReset(qubit);
     } else if (simulationType == SimulationType::kMatrixProductState) {
       for (size_t qubit : qubits)
         if (mps->Measure(static_cast<unsigned int>(qubit)))
@@ -643,6 +689,42 @@ class GpuState : public ISimulator {
     NotifyObservers(qubits);
   }
 
+  bool SupportsQuantumChannels() const override {
+    return simulationType == SimulationType::kDensityMatrix;
+  }
+
+  void ApplyQuantumChannel(const Types::qubits_vector& targets,
+                           const QuantumChannel& channel) override {
+    if (!densityMatrix)
+      throw std::runtime_error(
+          "GPU quantum channels require an initialized density matrix");
+    if (targets.size() != channel.GetNumberOfQubits() || targets.empty() ||
+        targets.size() > 2)
+      throw std::invalid_argument(
+          "GPU density matrices support one- and two-qubit local channels");
+    std::vector<int> gpuTargets;
+    gpuTargets.reserve(targets.size());
+    for (auto target : targets) {
+      if (target >= nrQubits ||
+          std::find(gpuTargets.begin(), gpuTargets.end(), target) !=
+              gpuTargets.end())
+        throw std::invalid_argument("Invalid GPU quantum-channel target");
+      gpuTargets.push_back(static_cast<int>(target));
+    }
+    const auto& kraus = channel.GetKrausOperators();
+    std::vector<double> interleaved;
+    interleaved.reserve(kraus.size() * kraus.front().size() * 2);
+    for (const auto& op : kraus)
+      for (Eigen::Index i = 0; i < op.size(); ++i) {
+        interleaved.push_back(op.data()[i].real());
+        interleaved.push_back(op.data()[i].imag());
+      }
+    if (!densityMatrix->ApplyKraus(gpuTargets, kraus.size(),
+                                    interleaved.data()))
+      throw std::runtime_error("GPU density-matrix channel application failed");
+    NotifyObservers(targets);
+  }
+
   /**
    * @brief Returns the probability of the specified outcome.
    *
@@ -657,6 +739,8 @@ class GpuState : public ISimulator {
   double Probability(Types::qubit_t outcome) override {
     if (simulationType == SimulationType::kStatevector)
       return state->BasisStateProbability(outcome);
+    else if (simulationType == SimulationType::kDensityMatrix)
+      return densityMatrix->Probability(outcome);
     else if (simulationType == SimulationType::kMatrixProductState ||
              simulationType == SimulationType::kTensorNetwork) {
       const auto ampl = Amplitude(outcome);
@@ -684,6 +768,9 @@ class GpuState : public ISimulator {
 
     if (simulationType == SimulationType::kStatevector)
       state->Amplitude(outcome, &real, &imag);
+    else if (simulationType == SimulationType::kDensityMatrix)
+      throw std::runtime_error(
+          "GpuState::Amplitude: Amplitudes are not defined for density matrices.");
     else if (simulationType == SimulationType::kMatrixProductState ||
              simulationType == SimulationType::kTensorNetwork) {
       std::vector<long int> fixedValues(nrQubits);
@@ -740,6 +827,8 @@ class GpuState : public ISimulator {
 
     if (simulationType == SimulationType::kStatevector)
       state->AllProbabilities(result.data());
+    else if (simulationType == SimulationType::kDensityMatrix)
+      densityMatrix->AllProbabilities(result.data());
     else if (simulationType == SimulationType::kMatrixProductState ||
              simulationType == SimulationType::kTensorNetwork) {
       // this is very slow, it should be used only for tests!
@@ -775,6 +864,9 @@ class GpuState : public ISimulator {
     if (simulationType == SimulationType::kStatevector) {
       for (size_t i = 0; i < qubits.size(); ++i)
         result[i] = state->BasisStateProbability(qubits[i]);
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      for (size_t i = 0; i < qubits.size(); ++i)
+        result[i] = densityMatrix->Probability(qubits[i]);
     } else if (simulationType == SimulationType::kMatrixProductState ||
                simulationType == SimulationType::kTensorNetwork) {
       for (size_t i = 0; i < qubits.size(); ++i) {
@@ -833,6 +925,19 @@ class GpuState : public ISimulator {
           if (outcome & (1ULL << qubits[i])) translatedOutcome |= mask;
           mask <<= 1;
         }
+        ++result[translatedOutcome];
+      }
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      std::vector<long int> samples(shots);
+      if (!densityMatrix->SampleAll(shots, samples.data())) {
+        Notify();
+        throw std::runtime_error(
+            "GpuState::SampleCounts: Density-matrix sampling failed.");
+      }
+      for (auto outcome : samples) {
+        Types::qubit_t translatedOutcome = 0;
+        for (size_t i = 0; i < qubits.size(); ++i)
+          if (outcome & (1ULL << qubits[i])) translatedOutcome |= 1ULL << i;
         ++result[translatedOutcome];
       }
     } else if (simulationType == SimulationType::kMatrixProductState) {
@@ -921,6 +1026,19 @@ class GpuState : public ISimulator {
           outcomeVec[i] = ((outcome >> qubits[i]) & 1) == 1;
         ++result[outcomeVec];
       }
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      std::vector<long int> samples(shots);
+      if (!densityMatrix->SampleAll(shots, samples.data())) {
+        Notify();
+        throw std::runtime_error(
+            "GpuState::SampleCountsMany: Density-matrix sampling failed.");
+      }
+      std::vector<bool> outcomeVec(qubits.size());
+      for (auto outcome : samples) {
+        for (size_t i = 0; i < qubits.size(); ++i)
+          outcomeVec[i] = ((outcome >> qubits[i]) & 1) != 0;
+        ++result[outcomeVec];
+      }
     } else if (simulationType == SimulationType::kMatrixProductState) {
       std::unordered_map<std::vector<bool>, int64_t> *map =
           mps->GetMapForSample();
@@ -970,6 +1088,8 @@ class GpuState : public ISimulator {
 
     if (simulationType == SimulationType::kStatevector)
       result = state->ExpectationValue(pauliString);
+    else if (simulationType == SimulationType::kDensityMatrix)
+      result = densityMatrix->ExpectationValue(pauliString);
     else if (simulationType == SimulationType::kMatrixProductState)
       result = mps->ExpectationValue(pauliString);
     else if (simulationType == SimulationType::kTensorNetwork)
@@ -1058,6 +1178,8 @@ class GpuState : public ISimulator {
   void SaveState() override {
     if (simulationType == SimulationType::kStatevector)
       state->SaveState();
+    else if (simulationType == SimulationType::kDensityMatrix)
+      densityMatrix->SaveState();
     else if (simulationType == SimulationType::kMatrixProductState)
       mps->SaveState();
     else if (simulationType == SimulationType::kTensorNetwork)
@@ -1076,6 +1198,8 @@ class GpuState : public ISimulator {
   void RestoreState() override {
     if (simulationType == SimulationType::kStatevector)
       state->RestoreStateNoFreeSaved();
+    else if (simulationType == SimulationType::kDensityMatrix)
+      densityMatrix->RestoreState();
     else if (simulationType == SimulationType::kMatrixProductState)
       mps->RestoreState();
     else if (simulationType == SimulationType::kTensorNetwork)
@@ -1147,7 +1271,13 @@ class GpuState : public ISimulator {
   Types::qubit_t MeasureNoCollapse() override {
     if (simulationType == SimulationType::kStatevector)
       return state->MeasureAllQubitsNoCollapse();
-    else if (simulationType == SimulationType::kMatrixProductState ||
+    else if (simulationType == SimulationType::kDensityMatrix) {
+      std::vector<long int> samples(1);
+      if (!densityMatrix->SampleAll(1, samples.data()))
+        throw std::runtime_error(
+            "GpuState::MeasureNoCollapse: Density-matrix sampling failed.");
+      return static_cast<Types::qubit_t>(samples.front());
+    } else if (simulationType == SimulationType::kMatrixProductState ||
              simulationType == SimulationType::kTensorNetwork ||
              simulationType == SimulationType::kPauliPropagator) {
       if (nrQubits > sizeof(Types::qubit_t) * 8)
@@ -1166,7 +1296,7 @@ class GpuState : public ISimulator {
     }
 
     throw std::runtime_error(
-        "QCSimState::MeasureNoCollapse: Invalid simulation type for measuring "
+        "GpuState::MeasureNoCollapse: Invalid simulation type for measuring "
         "all the qubits without collapsing the state.");
 
     return 0;
@@ -1192,6 +1322,15 @@ class GpuState : public ISimulator {
       std::vector<bool> result(nrQubits, false);
       for (size_t i = 0; i < nrQubits; ++i) result[i] = ((meas >> i) & 1) == 1;
       return result;
+    } else if (simulationType == SimulationType::kDensityMatrix) {
+      std::vector<long int> samples(1);
+      if (!densityMatrix->SampleAll(1, samples.data()))
+        throw std::runtime_error(
+            "GpuState::MeasureNoCollapseMany: Density-matrix sampling failed.");
+      std::vector<bool> result(nrQubits, false);
+      for (size_t i = 0; i < nrQubits; ++i)
+        result[i] = ((samples.front() >> i) & 1) != 0;
+      return result;
     } else if (simulationType == SimulationType::kMatrixProductState ||
                simulationType == SimulationType::kTensorNetwork ||
                simulationType == SimulationType::kPauliPropagator) {
@@ -1204,7 +1343,7 @@ class GpuState : public ISimulator {
     }
 
     throw std::runtime_error(
-        "QCSimState::MeasureNoCollapseMany: Invalid simulation type for "
+        "GpuState::MeasureNoCollapseMany: Invalid simulation type for "
         "measuring "
         "all the qubits without collapsing the state.");
 
@@ -1348,6 +1487,8 @@ class GpuState : public ISimulator {
 
   std::unique_ptr<GpuLibStateVectorSim>
       state;                         /**< The gpu statevector simulator. */
+  std::unique_ptr<GpuDensityMatrix>
+      densityMatrix;                 /**< The gpu density matrix simulator. */
   std::unique_ptr<GpuLibMPSSim> mps; /**< The gpu MPS simulator. */
   std::unique_ptr<GpuLibTNSim> tn;   /**< The gpu tensor network simulator. */
   std::unique_ptr<GpuPauliPropagator>

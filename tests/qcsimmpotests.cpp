@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "../Simulators/Factory.h"
+#include "../python/noise.h"
 
 namespace {
 
@@ -346,6 +347,120 @@ BOOST_AUTO_TEST_CASE(measurement_reset_snapshots_and_clone) {
 
   mpo->Reset();
   BOOST_CHECK_CLOSE(mpo->Probability(0), 1.0, 1e-8);
+}
+
+BOOST_AUTO_TEST_CASE(exact_noise_channels_match_dense_density_matrix) {
+  auto mpo = MakeQCSimMPOTestSimulator(
+      Simulators::SimulationType::kMatrixProductOperator, 3);
+  auto densityMatrix = MakeQCSimMPOTestSimulator(
+      Simulators::SimulationType::kDensityMatrix, 3);
+  BOOST_TEST(mpo->SupportsQuantumChannels());
+  BOOST_TEST(densityMatrix->SupportsQuantumChannels());
+
+  auto prepare = [](Simulators::ISimulator &simulator) {
+    simulator.ApplyH(0);
+    simulator.ApplyRy(1, 0.43);
+    simulator.ApplyCX(0, 2);
+  };
+  prepare(*mpo);
+  prepare(*densityMatrix);
+
+  mpo->ApplyPauliChannel(0, 0.07, 0.03, 0.11);
+  densityMatrix->ApplyPauliChannel(0, 0.07, 0.03, 0.11);
+  mpo->ApplyAmplitudeDamping(2, 0.23);
+  densityMatrix->ApplyAmplitudeDamping(2, 0.23);
+  mpo->ApplyPhaseDamping(1, 0.31);
+  densityMatrix->ApplyPhaseDamping(1, 0.31);
+  mpo->ApplyGeneralizedAmplitudeDamping(0, 0.19, 0.08);
+  densityMatrix->ApplyGeneralizedAmplitudeDamping(0, 0.19, 0.08);
+  mpo->ApplyThermalRelaxation(2, 0.4, 1.7, 1.2, 0.06);
+  densityMatrix->ApplyThermalRelaxation(2, 0.4, 1.7, 1.2, 0.06);
+  mpo->ApplyCorrelatedPhaseFlipNoise(0, 2, 0.17);
+  densityMatrix->ApplyCorrelatedPhaseFlipNoise(0, 2, 0.17);
+  mpo->ApplyTwoQubitDepolarizingNoise(0, 2, 0.13);
+  densityMatrix->ApplyTwoQubitDepolarizingNoise(0, 2, 0.13);
+
+  CheckMPOProbabilities(*densityMatrix, *mpo, 2e-8);
+  for (const std::string &pauli : {"XII", "IZZ", "XYZ", "ZZZ"})
+    BOOST_TEST(std::abs(mpo->ExpectationValue(pauli) -
+                        densityMatrix->ExpectationValue(pauli)) < 2e-8,
+               "Expectation mismatch after exact channels for " << pauli);
+}
+
+BOOST_AUTO_TEST_CASE(two_qubit_pauli_target_order_is_preserved) {
+  auto mpo = MakeQCSimMPOTestSimulator(
+      Simulators::SimulationType::kMatrixProductOperator, 3);
+
+  std::vector<double> probabilities(16, 0.0);
+  probabilities[1] = 1.0;  // X on the first target, identity on the second.
+  mpo->ApplyPauliChannel({0, 2}, probabilities);
+  BOOST_CHECK_CLOSE(mpo->Probability(1), 1.0, 1e-8);
+
+  mpo->Reset();
+  probabilities[1] = 0.0;
+  probabilities[4] = 1.0;  // Identity on first target, X on second.
+  mpo->ApplyPauliChannel({0, 2}, probabilities);
+  BOOST_CHECK_CLOSE(mpo->Probability(4), 1.0, 1e-8);
+}
+
+BOOST_AUTO_TEST_CASE(noise_model_exact_path_matches_dense_density_matrix) {
+  auto circuit = std::make_shared<Circuits::Circuit<double>>();
+  circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+  circuit->AddOperation(std::make_shared<Circuits::RyGate<>>(1, 0.37));
+  circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 2));
+
+  noise::NoiseModel noiseModel;
+  noiseModel.set_qubit_noise(0, 0.02, 0.03, 0.04);
+  // T1 and thermal relaxation both implement T1 decay, so they cannot
+  // share a qubit. Keep amplitude damping on 0 and thermal on 2.
+  noiseModel.set_t1(0, 0.17);
+  noiseModel.set_1q_gate_depolarizing(1, 0.09);
+  noiseModel.set_2q_gate_depolarizing(0, 0.07);
+  noiseModel.set_2q_depolarizing(0, 2, 0.11);
+  noiseModel.set_phase_damping(0, 0.08);
+  noiseModel.set_generalized_amplitude_damping(1, 0.06, 0.2);
+  noiseModel.set_thermal_relaxation(2, 0.3, 2.0, 1.5, 0.1);
+  noiseModel.set_correlated_phase_flip(0, 2, 0.05, 0.4);
+  const auto customOneQubit = Simulators::QuantumChannel::BitFlip(0.03);
+  noiseModel.set_kraus_channel(
+      {1}, customOneQubit.GetKrausOperators());
+  const auto customTwoQubit =
+      Simulators::QuantumChannel::TwoQubitDepolarizing(0.02);
+  noiseModel.set_kraus_channel(
+      {2, 0}, customTwoQubit.GetKrausOperators());
+
+  std::mt19937 generator(1234);
+  const auto noisyCircuit =
+      noise::inject_combined_noise_exact(circuit, noiseModel, generator);
+  size_t channelOperations = 0;
+  for (const auto &operation : noisyCircuit->GetOperations())
+    if (operation->GetType() == Circuits::OperationType::kQuantumChannel)
+      ++channelOperations;
+  BOOST_TEST(channelOperations == 14);
+
+  std::mt19937 legacyGenerator(1234);
+  BOOST_CHECK_THROW(
+      noise::inject_combined_noise(circuit, noiseModel, legacyGenerator),
+      std::invalid_argument);
+
+  auto mpo = MakeQCSimMPOTestSimulator(
+      Simulators::SimulationType::kMatrixProductOperator, 3);
+  auto densityMatrix = MakeQCSimMPOTestSimulator(
+      Simulators::SimulationType::kDensityMatrix, 3);
+  mpo->SetUpcomingGates(noisyCircuit->GetOperations());
+  Circuits::OperationState mpoClassicalState;
+  Circuits::OperationState densityClassicalState;
+  noisyCircuit->Execute(mpo, mpoClassicalState);
+  noisyCircuit->Execute(densityMatrix, densityClassicalState);
+
+  BOOST_TEST(mpo->GetGatesCounter() ==
+             static_cast<long long>(noisyCircuit->GetOperations().size()));
+
+  CheckMPOProbabilities(*densityMatrix, *mpo, 2e-8);
+  for (const std::string &pauli : {"XII", "IZZ", "XYZ", "ZZZ"})
+    BOOST_TEST(std::abs(mpo->ExpectationValue(pauli) -
+                        densityMatrix->ExpectationValue(pauli)) < 2e-8,
+               "Expectation mismatch for exact NoiseModel path: " << pauli);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

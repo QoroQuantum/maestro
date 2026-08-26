@@ -60,6 +60,54 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   SimpleDisconnectedNetwork(const std::vector<Types::qubit_t> &qubits = {},
                             const std::vector<size_t> &cbits = {}) {
     configuration.SetConfiguration("use_double_precision", "0");
+
+	simulatorsForOptimizations.insert(
+        {Simulators::SimulatorType::kQCSim,
+         Simulators::SimulationType::kStatevector});
+    simulatorsForOptimizations.insert(
+        {Simulators::SimulatorType::kQCSim,
+         Simulators::SimulationType::kStabilizer});
+    simulatorsForOptimizations.insert(
+        {Simulators::SimulatorType::kQCSim,
+         Simulators::SimulationType::kMatrixProductState});
+    // this needs more work until it becomes useful - it's typically way too
+    // slow to be timed
+    // simulatorsForOptimizations.insert({
+    // SimulatorType::kQCSim,
+    // SimulationType::kTensorNetwork });
+    simulatorsForOptimizations.insert(
+        {Simulators::SimulatorType::kCompositeQCSim,
+         Simulators::SimulationType::kStatevector});
+
+#ifndef NO_QISKIT_AER
+    simulatorsForOptimizations.insert(
+        {Simulators::SimulatorType::kQiskitAer,
+         Simulators::SimulationType::kStatevector});
+    simulatorsForOptimizations.insert(
+        {Simulators::SimulatorType::kQiskitAer,
+         Simulators::SimulationType::kStabilizer});
+    simulatorsForOptimizations.insert(
+        {Simulators::SimulatorType::kQiskitAer,
+         Simulators::SimulationType::kMatrixProductState});
+    simulatorsForOptimizations.insert(
+        {Simulators::SimulatorType::kCompositeQiskitAer,
+         Simulators::SimulationType::kStatevector});
+#endif
+
+#ifdef __linux__
+    if (Simulators::SimulatorsFactory::IsGpuLibraryAvailable()) {
+      simulatorsForOptimizations.insert(
+          {Simulators::SimulatorType::kGpuSim,
+           Simulators::SimulationType::kStatevector});
+      simulatorsForOptimizations.insert(
+          {Simulators::SimulatorType::kGpuSim,
+           Simulators::SimulationType::kMatrixProductState});
+      simulatorsForOptimizations.insert(
+          {Simulators::SimulatorType::kGpuSim,
+           Simulators::SimulationType::kTensorNetwork});
+    }
+#endif
+
     if (!qubits.empty()) CreateNetwork(qubits, cbits);
   }
 
@@ -1893,7 +1941,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     return cloned;
   }
 
-  std::shared_ptr<Simulators::ISimulator>ChooseBestSimulator(
+  std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(
       std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t &counts,
       size_t nrQubits, size_t nrCbits, size_t nrResultCbits,
       Simulators::SimulatorType &simType, Simulators::SimulationType &method,
@@ -2034,15 +2082,30 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       simulatorTypes.emplace_back(Simulators::SimulatorType::kQuestSim,
                                   Simulators::SimulationType::kStatevector);
 
+
+    // Honor a singleton optimization set (e.g. density_matrix) even if it is
+    // not in the hardcoded candidate list. Skip backends that cannot actually
+    // be constructed, such as GPU MPS when the GPU library is missing: the
+    // caller then keeps the network simulator instead of recording 0 shots.
+    if (simulatorTypes.empty() && simulatorsForOptimizations.size() == 1) {
+      const auto candidate = *simulatorsForOptimizations.begin();
+      if (Simulators::SimulatorsFactory::CreateSimulator(candidate.first,
+                                                         candidate.second))
+        simulatorTypes.push_back(candidate);
+    }
+
     if (simulatorTypes.empty())
       return nullptr;
     else if (simulatorTypes.size() == 1) {
-      simType = simulatorTypes[0].first;
-      method = simulatorTypes[0].second;
+      const auto candidateType = simulatorTypes[0].first;
+      const auto candidateMethod = simulatorTypes[0].second;
 
       std::shared_ptr<Simulators::ISimulator> sim =
-          Simulators::SimulatorsFactory::CreateSimulator(simType, method);
+          Simulators::SimulatorsFactory::CreateSimulator(candidateType,
+                                                         candidateMethod);
       if (sim) {
+        simType = candidateType;
+        method = candidateMethod;
         configuration.ApplyConfigurationToSimulator(sim);
         
         if (method == Simulators::SimulationType::kMatrixProductState) {
@@ -2070,6 +2133,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
         return sim;
       }
+
+      // Singleton backend cannot be constructed (typical for GPU on CI).
+      // Leave simType/method unchanged so RepeatedExecuteOnHost keeps the
+      // network simulator instead of recording empty counts.
+      return nullptr;
     }
 
     const double singularValueThreshold =

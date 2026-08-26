@@ -330,6 +330,63 @@ class AerState : public ISimulator {
     NotifyObservers(qubits);
   }
 
+  bool SupportsQuantumChannels() const override {
+    return simulationType == SimulationType::kDensityMatrix;
+  }
+
+  /**
+   * @brief Applies an exact one- or two-qubit CPTP channel to Aer density
+   * matrix state.
+   *
+   * Aer's public controller does expose apply_kraus even though several of its
+   * other channel helpers are not exposed. On the density-matrix backend the
+   * Kraus operators are fused into a superoperator and applied
+   * deterministically. Statevector and MPS backends instead sample a single
+   * trajectory, so this exact mixed-state API intentionally rejects them.
+   */
+  void ApplyQuantumChannel(const Types::qubits_vector &targets,
+                           const QuantumChannel &channel) override {
+    if (!SupportsQuantumChannels())
+      throw std::runtime_error(
+          "Aer exact quantum channels require density_matrix simulation");
+    if (targets.size() != channel.GetNumberOfQubits())
+      throw std::invalid_argument(
+          "The number of channel targets does not match its Kraus operators");
+    if (targets.empty() || targets.size() > 2)
+      throw std::invalid_argument(
+          "Maestro supports only one- and two-qubit local channels");
+
+    std::unordered_set<Types::qubit_t> uniqueTargets;
+    for (const Types::qubit_t target : targets) {
+      if (target >= GetNumberOfQubits())
+        throw std::invalid_argument("Quantum-channel qubit is out of range");
+      if (!uniqueTargets.insert(target).second)
+        throw std::invalid_argument(
+            "Quantum-channel target qubits must be distinct");
+    }
+
+    std::vector<AER::cmatrix_t> aerKrausOperators;
+    aerKrausOperators.reserve(channel.GetKrausOperators().size());
+    for (const Eigen::MatrixXcd &krausOperator :
+         channel.GetKrausOperators()) {
+      AER::cmatrix_t aerOperator(
+          static_cast<size_t>(krausOperator.rows()),
+          static_cast<size_t>(krausOperator.cols()));
+      for (Eigen::Index row = 0; row < krausOperator.rows(); ++row)
+        for (Eigen::Index column = 0; column < krausOperator.cols(); ++column)
+          aerOperator(static_cast<size_t>(row),
+                      static_cast<size_t>(column)) =
+              krausOperator(row, column);
+      aerKrausOperators.emplace_back(std::move(aerOperator));
+    }
+
+    // Both QCSim and Aer treat targets[0] as local matrix bit zero (LSB), so
+    // channel target order is preserved and matrices need no permutation.
+    const AER::reg_t aerTargets(targets.begin(), targets.end());
+    state->apply_kraus(aerTargets, aerKrausOperators);
+    NotifyObservers(targets);
+  }
+
   /**
    * @brief Returns the probability of the specified outcome.
    *
