@@ -2141,9 +2141,7 @@ NB_MODULE(maestro, m) {
       // ── Additional exact CPTP channels (density matrix / MPO) ──
       .def("set_phase_damping", &noise::NoiseModel::set_phase_damping,
            "qubit"_a, "gamma"_a,
-           "Set phase damping with coherence multiplier sqrt(1-gamma).
-
-"
+           "Set phase damping with coherence multiplier sqrt(1-gamma).\n\n"
            "Phase damping and the stochastic phase flip are the same "
            "channel (sqrt(1-gamma) = 1-2p), so this is realized exactly on "
            "every backend, not only density-matrix/MPO.")
@@ -2161,9 +2159,7 @@ NB_MODULE(maestro, m) {
            &noise::NoiseModel::set_thermal_relaxation, "qubit"_a,
            "gate_time_s"_a, "t1_s"_a, "t2_s"_a,
            "excited_population"_a = 0.0,
-           "Set hardware-style T1/T2 thermal relaxation after each gate.
-
-"
+           "Set hardware-style T1/T2 thermal relaxation after each gate.\n\n"
            "This is the preferred way to specify decoherence. Because T1 and "
            "T2 are given together, every backend reproduces the same "
            "coherence decay exp(-gate_time/T2): density-matrix/MPO use the "
@@ -2171,9 +2167,7 @@ NB_MODULE(maestro, m) {
            "mixture. Calling set_t1() and set_dephasing() separately cannot "
            "achieve that -- the phase-flip probability that is correct for "
            "the sampled reset model under-dephases by exp(t/2*T1) per gate "
-           "on the exact amplitude-damping path.
-
-"
+           "on the exact amplitude-damping path.\n\n"
            "The physical constraint T2 <= 2*T1 is enforced.")
       .def("set_thermal_relaxation_2q",
            &noise::NoiseModel::set_thermal_relaxation_2q, "qubit"_a,
@@ -2222,19 +2216,14 @@ NB_MODULE(maestro, m) {
           "targets"_a, "kraus_operators"_a,
           "Attach an arbitrary one- or two-qubit CPTP Kraus channel after "
           "gates on the same targets. Matrices are nested row-major lists; "
-          "completeness (sum_k E_k^dag E_k = I) is validated.
-
-"
+          "completeness (sum_k E_k^dag E_k = I) is validated.\n\n"
           "BASIS ORDER for two-qubit operators: targets[0] is the LEAST "
           "significant bit of the 4x4 matrix index, targets[1] the most "
           "significant. So an operator acting as A on targets[0] and B on "
           "targets[1] must be supplied as the Kronecker product B (x) A. "
           "Getting this backwards silently transposes the channel onto the "
-          "wrong qubit.
-
-"
-          "Example (X on targets[0], identity on targets[1]):
-"
+          "wrong qubit.\n\n"
+          "Example (X on targets[0], identity on targets[1]):\n"
           "    nm.set_kraus_channel([0, 2], [[[0,1,0,0],[1,0,0,0],"
           "[0,0,0,1],[0,0,1,0]]])")
       .def("has_additional_quantum_channels",
