@@ -176,8 +176,11 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
 #ifdef __linux__
     case SimulatorType::kGpuSim:
       if (gpuLibrary && gpuLibrary->IsValid() &&
+          (m != SimulationType::kDensityMatrix ||
+           gpuLibrary->HasDensityMatrixAPI()) &&
           (m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
+           m == SimulationType::kDensityMatrix ||
            m == SimulationType::kTensorNetwork ||
            m == SimulationType::kPauliPropagator)) {
         auto sim = std::make_shared<Private::GpuSimulator>();
@@ -189,6 +192,8 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
           sim->Configure("method", "pauli_propagator");
         else if (m == SimulationType::kStatevector)
           sim->Configure("method", "statevector");
+        else if (m == SimulationType::kDensityMatrix)
+          sim->Configure("method", "density_matrix");
 
         return sim;
       }
@@ -269,8 +274,11 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
 #ifdef __linux__
     case SimulatorType::kGpuSim:
       if (gpuLibrary && gpuLibrary->IsValid() &&
+          (m != SimulationType::kDensityMatrix ||
+           gpuLibrary->HasDensityMatrixAPI()) &&
           (m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
+           m == SimulationType::kDensityMatrix ||
            m == SimulationType::kTensorNetwork ||
            m == SimulationType::kPauliPropagator)) {
         auto sim = std::make_unique<Private::GpuSimulator>();
@@ -282,6 +290,8 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
           sim->Configure("method", "pauli_propagator");
         else if (m == SimulationType::kStatevector)
           sim->Configure("method", "statevector");
+        else if (m == SimulationType::kDensityMatrix)
+          sim->Configure("method", "density_matrix");
 
         return sim;
       }

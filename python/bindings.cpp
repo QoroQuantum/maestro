@@ -159,7 +159,9 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("mps_sample_measure_algorithm", "mps_probabilities");
   }
 
-  // Always create the default simulator (no parameters = QCSim MPS).
+  // Usually create the default QCSim MPS simulator as the lightweight network
+  // placeholder. A requested GPU density matrix uses QCSim MPO instead so an
+  // unavailable GPU backend still preserves exact quantum-channel semantics.
   // The desired simulator type is specified via
   // RemoveAllOptimizationSimulatorsAndAdd above.
   // PauliPropagator truncation settings are Configured before CreateSimulator;
@@ -195,7 +197,13 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("path_integral_threshold", val.c_str());
   }
 
-  network->CreateSimulator();
+  if (config.simulator_type == Simulators::SimulatorType::kGpuSim &&
+      config.simulation_type == Simulators::SimulationType::kDensityMatrix)
+    network->CreateSimulator(
+        Simulators::SimulatorType::kQCSim,
+        Simulators::SimulationType::kMatrixProductOperator);
+  else
+    network->CreateSimulator();
 
   // Verify the simulator was actually created (e.g. GPU library may fail)
   if (!network->GetSimulator()) {
@@ -263,6 +271,8 @@ static bool uses_exact_quantum_channels(const SimulatorConfig& config) {
   // represent ensemble channels exactly as a single mixed state.
   const bool qcsim =
       config.simulator_type == Simulators::SimulatorType::kQCSim;
+  const bool gpu =
+      config.simulator_type == Simulators::SimulatorType::kGpuSim;
 #ifndef NO_QISKIT_AER
   const bool aer =
       config.simulator_type == Simulators::SimulatorType::kQiskitAer;
@@ -275,6 +285,8 @@ static bool uses_exact_quantum_channels(const SimulatorConfig& config) {
            config.simulation_type ==
                Simulators::SimulationType::kMatrixProductOperator)) ||
          (aer &&
+          config.simulation_type == Simulators::SimulationType::kDensityMatrix) ||
+         (gpu &&
           config.simulation_type == Simulators::SimulationType::kDensityMatrix);
 }
 
