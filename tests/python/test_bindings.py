@@ -1372,6 +1372,68 @@ class TestGpuSimulator:
         """SimulatorType.Gpu enum value is exposed."""
         assert hasattr(maestro.SimulatorType, 'Gpu')
 
+    @staticmethod
+    def _gpu_density_config():
+        return maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.Gpu,
+            simulation_type=maestro.SimulationType.DensityMatrix,
+            use_double_precision=True,
+        )
+
+    @staticmethod
+    def _skip_if_gpu_density_unavailable(call):
+        try:
+            return call()
+        except RuntimeError as error:
+            if "Failed to configure network" in str(error):
+                pytest.skip("GPU density-matrix backend is unavailable")
+            raise
+
+    def test_gpu_density_matrix_execute_and_estimate(self):
+        """GPU density matrices are selectable through network bindings."""
+        config = self._gpu_density_config()
+        result = self._skip_if_gpu_density_unavailable(
+            lambda: maestro.simple_execute(
+                CLIFFORD_BELL_QASM, shots=100, config=config))
+        assert sum(result['counts'].values()) == 100
+        gpu_available = result['simulator'] == maestro.SimulatorType.Gpu.value
+        if gpu_available:
+            assert result['method'] == maestro.SimulationType.DensityMatrix.value
+        else:
+            assert result['simulator'] == maestro.SimulatorType.QCSim.value
+            assert result['method'] in (
+                maestro.SimulationType.MatrixProductOperator.value,
+                maestro.SimulationType.Stabilizer.value,
+            )
+
+        estimate = maestro.simple_estimate(
+            CLIFFORD_BELL_NO_MEASURE_QASM, "ZZ", config=config)
+        assert estimate['expectation_values'][0] == pytest.approx(
+            1.0, abs=1e-8)
+        if gpu_available:
+            assert estimate['simulator'] == maestro.SimulatorType.Gpu.value
+            assert estimate['method'] == maestro.SimulationType.DensityMatrix.value
+        else:
+            assert estimate['simulator'] == maestro.SimulatorType.QCSim.value
+            assert estimate['method'] in (
+                maestro.SimulationType.MatrixProductOperator.value,
+                maestro.SimulationType.Stabilizer.value,
+            )
+
+    def test_gpu_density_matrix_exact_noise_or_mpo_fallback(self):
+        """Exact-only noise works on GPU density or its QCSim MPO fallback."""
+        from maestro.circuits import QuantumCircuit
+        circuit = QuantumCircuit()
+        circuit.x(0)
+        circuit.measure_all()
+
+        noise_model = maestro.NoiseModel()
+        noise_model.set_generalized_amplitude_damping(0, 1.0, 0.0)
+        result = maestro.noisy_execute(
+            circuit, noise_model, config=self._gpu_density_config(),
+            shots=64, noise_realizations=1, seed=1)
+        assert result['counts'] == {'0': 64}
+
     def test_gpu_execute_returns_result(self):
         """simple_execute with GPU type returns a valid result dict."""
         result = maestro.simple_execute(

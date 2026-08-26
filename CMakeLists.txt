@@ -142,6 +142,7 @@ set(TESTSSRC tests/aertests.cpp
 	tests/compsimtests.cpp
 	tests/expvals.cpp
 	tests/gputests.cpp
+	tests/gpudensitymatrixtests.cpp
 	tests/mpssimtests.cpp
 	tests/qasm.cpp
 	tests/qasm_core.cpp

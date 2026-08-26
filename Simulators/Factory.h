@@ -19,6 +19,7 @@
 #define _SIMULATORS_FACTORY_H_
 
 #include "GpuLibStateVectorSim.h"
+#include "GpuDensityMatrix.h"
 #include "GpuLibMPSSim.h"
 #include "GpuLibTNSim.h"
 #include "GpuStabilizer.h"
@@ -75,6 +76,11 @@ class SimulatorsFactory {
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
 
     return std::make_unique<GpuLibStateVectorSim>(gpuLibrary);
+  }
+
+  static std::unique_ptr<GpuDensityMatrix> CreateGpuDensityMatrix() {
+    if (!gpuLibrary || !gpuLibrary->HasDensityMatrixAPI()) return nullptr;
+    return std::make_unique<GpuDensityMatrix>(gpuLibrary);
   }
 
   static std::unique_ptr<GpuLibMPSSim> CreateGpuLibMPSSim() {
