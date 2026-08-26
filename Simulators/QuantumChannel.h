@@ -44,22 +44,47 @@ class QuantumChannel {
   const KrausOperators& GetKrausOperators() const { return krausOperators_; }
   size_t GetNumberOfQubits() const { return numQubits_; }
 
-  /** Compare two Kraus representations coefficient by coefficient. */
+  /**
+   * Compare two channels as MAPS, not as Kraus lists.
+   *
+   * The Kraus representation is not unique: {E_k} and {sum_j u_kj E_j} for any
+   * unitary u describe the same channel, and a channel may legitimately be
+   * built with a different number of operators (Pauli(), for instance, drops
+   * zero-probability terms, so the operator count depends on the parameter
+   * values). Comparing coefficient by coefficient therefore reports
+   * physically identical channels as different.
+   *
+   * The Choi matrix sum_k vec(E_k) vec(E_k)^dagger is unique to the map, so
+   * comparing Choi matrices answers the question actually being asked.
+   */
   bool IsApprox(const QuantumChannel& other, double tolerance = 1e-12) const {
     if (tolerance < 0.0 || !std::isfinite(tolerance))
       throw std::invalid_argument(
           "Quantum-channel comparison tolerance must be finite and nonnegative");
-    if (numQubits_ != other.numQubits_ ||
-        krausOperators_.size() != other.krausOperators_.size())
+    if (numQubits_ != other.numQubits_) return false;
+
+    const Matrix left = ChoiMatrix();
+    const Matrix right = other.ChoiMatrix();
+    if (left.rows() != right.rows() || left.cols() != right.cols())
       return false;
-    for (size_t i = 0; i < krausOperators_.size(); ++i) {
-      const Matrix& left = krausOperators_[i];
-      const Matrix& right = other.krausOperators_[i];
-      if (left.rows() != right.rows() || left.cols() != right.cols() ||
-          (left - right).cwiseAbs().maxCoeff() > tolerance)
-        return false;
+    return (left - right).cwiseAbs().maxCoeff() <= tolerance;
+  }
+
+  /**
+   * Choi matrix of the channel: sum_k vec(E_k) vec(E_k)^dagger, with vec()
+   * stacking the operator column by column. Two channels are the same map if
+   * and only if their Choi matrices are equal.
+   */
+  Matrix ChoiMatrix() const {
+    const Eigen::Index dimension = krausOperators_.front().rows();
+    const Eigen::Index choiDimension = dimension * dimension;
+    Matrix choi = Matrix::Zero(choiDimension, choiDimension);
+    for (const Matrix& krausOperator : krausOperators_) {
+      const Eigen::Map<const Eigen::VectorXcd> vectorized(
+          krausOperator.data(), choiDimension);
+      choi.noalias() += vectorized * vectorized.adjoint();
     }
-    return true;
+    return choi;
   }
 
   /** (1-p) rho + p X rho X. */

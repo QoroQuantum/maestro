@@ -411,7 +411,9 @@ BOOST_AUTO_TEST_CASE(noise_model_exact_path_matches_dense_density_matrix) {
 
   noise::NoiseModel noiseModel;
   noiseModel.set_qubit_noise(0, 0.02, 0.03, 0.04);
-  noiseModel.set_t1(2, 0.17);
+  // T1 and thermal relaxation both implement T1 decay, so they cannot
+  // share a qubit. Keep amplitude damping on 0 and thermal on 2.
+  noiseModel.set_t1(0, 0.17);
   noiseModel.set_1q_gate_depolarizing(1, 0.09);
   noiseModel.set_2q_gate_depolarizing(0, 0.07);
   noiseModel.set_2q_depolarizing(0, 2, 0.11);
@@ -434,7 +436,7 @@ BOOST_AUTO_TEST_CASE(noise_model_exact_path_matches_dense_density_matrix) {
   for (const auto &operation : noisyCircuit->GetOperations())
     if (operation->GetType() == Circuits::OperationType::kQuantumChannel)
       ++channelOperations;
-  BOOST_TEST(channelOperations == 13);
+  BOOST_TEST(channelOperations == 14);
 
   std::mt19937 legacyGenerator(1234);
   BOOST_CHECK_THROW(
