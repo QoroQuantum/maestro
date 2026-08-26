@@ -1366,8 +1366,21 @@ NB_MODULE(maestro, m) {
           },
           "observables"_a, "noise_model"_a,
           "config"_a = SimulatorConfig{},
-          "Analytical noisy estimation (zero overhead). "
-          "Applies per-qubit Pauli damping to ideal expectation values.\n\n"
+          "Single-layer analytical noisy estimation (zero simulation "
+          "overhead). Applies per-qubit Pauli damping to the ideal "
+          "expectation values.\n\n"
+          "WARNING -- this is a SINGLE-LAYER approximation, not an exact "
+          "result. The damping factor is exact only for one Pauli layer applied "
+          "immediately before measurement. A circuit that carries noise after "
+          "every gate is not modelled: Pauli channels do not commute through "
+          "non-Clifford gates, and the damping does not compound with the number "
+          "of noisy layers acting on each qubit. The returned values therefore "
+          "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
+          "Only the all-gates Pauli layer contributes; T1, thermal, coherent, "
+          "correlated and two-qubit layers are ignored entirely. Use "
+          "noisy_estimate_montecarlo(), or noisy_execute() with a density-matrix "
+          "or MPO method, when the magnitude of the noise matters."
+          "\n\n"
           "Example: qc.noisy_estimate(['ZZ', 'XX'], nm)")
       .def(
           "noisy_estimate_montecarlo",
@@ -2017,7 +2030,12 @@ NB_MODULE(maestro, m) {
            "Add uniform dephasing noise to all qubits [0, num_qubits).")
       .def("compute_damping", &noise::NoiseModel::compute_damping,
            "pauli_string"_a,
-           "Compute the noise damping factor for a Pauli string observable.")
+           "Damping factor for a Pauli string observable from ONE "
+           "application of the configured Pauli channels.\n\n"
+           "Exact only when the channel acts once, immediately before "
+           "measurement; for a circuit with noise after every gate it "
+           "underestimates the noise. Only the all-gates Pauli layer "
+           "contributes.")
       // ── Coherent noise setters ──
       .def("set_coherent_rotation", &noise::NoiseModel::set_coherent_rotation,
            "qubit"_a, "rx"_a, "ry"_a, "rz"_a,
@@ -2123,14 +2141,17 @@ NB_MODULE(maestro, m) {
       // ── Additional exact CPTP channels (density matrix / MPO) ──
       .def("set_phase_damping", &noise::NoiseModel::set_phase_damping,
            "qubit"_a, "gamma"_a,
-           "Set phase damping with coherence multiplier sqrt(1-gamma). "
-           "Requires an exact density-matrix or MPO noise backend.")
+           "Set phase damping with coherence multiplier sqrt(1-gamma).
+
+"
+           "Phase damping and the stochastic phase flip are the same "
+           "channel (sqrt(1-gamma) = 1-2p), so this is realized exactly on "
+           "every backend, not only density-matrix/MPO.")
       .def("set_phase_damping_from_time",
            &noise::NoiseModel::set_phase_damping_from_time, "qubit"_a,
            "gate_time_s"_a, "t_phi_s"_a,
            "Set pure phase damping so coherence decays as "
-           "exp(-gate_time/T_phi). Requires an exact density-matrix or MPO "
-           "noise backend.")
+           "exp(-gate_time/T_phi). Realized exactly on every backend.")
       .def("set_generalized_amplitude_damping",
            &noise::NoiseModel::set_generalized_amplitude_damping, "qubit"_a,
            "gamma"_a, "excited_population"_a,
@@ -2140,8 +2161,30 @@ NB_MODULE(maestro, m) {
            &noise::NoiseModel::set_thermal_relaxation, "qubit"_a,
            "gate_time_s"_a, "t1_s"_a, "t2_s"_a,
            "excited_population"_a = 0.0,
-           "Set hardware-style T1/T2 thermal relaxation after each gate. "
+           "Set hardware-style T1/T2 thermal relaxation after each gate.
+
+"
+           "This is the preferred way to specify decoherence. Because T1 and "
+           "T2 are given together, every backend reproduces the same "
+           "coherence decay exp(-gate_time/T2): density-matrix/MPO use the "
+           "exact CPTP channel, pure-state/MPS use the equivalent reset+Z "
+           "mixture. Calling set_t1() and set_dephasing() separately cannot "
+           "achieve that -- the phase-flip probability that is correct for "
+           "the sampled reset model under-dephases by exp(t/2*T1) per gate "
+           "on the exact amplitude-damping path.
+
+"
            "The physical constraint T2 <= 2*T1 is enforced.")
+      .def("set_thermal_relaxation_2q",
+           &noise::NoiseModel::set_thermal_relaxation_2q, "qubit"_a,
+           "gate_time_s"_a, "t1_s"_a, "t2_s"_a,
+           "excited_population"_a = 0.0,
+           "Set T1/T2 thermal relaxation applied only after two-qubit "
+           "gates, using the (longer) 2Q gate duration. When set, 2Q gates "
+           "use this instead of the 'all gates' relaxation.")
+      .def("has_thermal_relaxation",
+           &noise::NoiseModel::has_thermal_relaxation,
+           "Return True if any T1/T2 thermal relaxation has been set.")
       .def("set_correlated_phase_flip",
            &noise::NoiseModel::set_correlated_phase_flip, "q1"_a, "q2"_a,
            "probability"_a, "correlation"_a = 1.0,
@@ -2179,11 +2222,42 @@ NB_MODULE(maestro, m) {
           "targets"_a, "kraus_operators"_a,
           "Attach an arbitrary one- or two-qubit CPTP Kraus channel after "
           "gates on the same targets. Matrices are nested row-major lists; "
-          "completeness is validated.")
+          "completeness (sum_k E_k^dag E_k = I) is validated.
+
+"
+          "BASIS ORDER for two-qubit operators: targets[0] is the LEAST "
+          "significant bit of the 4x4 matrix index, targets[1] the most "
+          "significant. So an operator acting as A on targets[0] and B on "
+          "targets[1] must be supplied as the Kronecker product B (x) A. "
+          "Getting this backwards silently transposes the channel onto the "
+          "wrong qubit.
+
+"
+          "Example (X on targets[0], identity on targets[1]):
+"
+          "    nm.set_kraus_channel([0, 2], [[[0,1,0,0],[1,0,0,0],"
+          "[0,0,0,1],[0,0,1,0]]])")
       .def("has_additional_quantum_channels",
            &noise::NoiseModel::has_additional_quantum_channels,
-           "Return True if phase damping, thermal, correlated-phase, or "
-           "custom Kraus channels are configured.")
+           "Return True if a channel that ONLY an exact density-matrix/MPO "
+           "backend can run is configured: generalized amplitude damping, "
+           "correlated phase flips or custom Kraus maps. Phase damping and "
+           "thermal relaxation are excluded -- both have an exact or "
+           "well-defined stochastic realization on sampled backends.")
+      .def("has_thermal_in_sampled_overdephasing_regime",
+           &noise::NoiseModel::has_thermal_in_sampled_overdephasing_regime,
+           "Return True if any thermal-relaxation layer has T2 > T1, where "
+           "the sampled reset+Z mixture over-dephases. Use density-matrix "
+           "or MPO execution in that regime.")
+      .def("requires_exact_quantum_channels",
+           &noise::NoiseModel::requires_exact_quantum_channels,
+           "Return True if sampled injection cannot realize this model "
+           "(exact-only Kraus maps, or thermal relaxation with T2 > T1).")
+      .def("compute_damping_covers_model",
+           &noise::NoiseModel::compute_damping_covers_model,
+           "Return True iff compute_damping() captures every layer that "
+           "affects Pauli expectations. False for thermal, T1, gate-type "
+           "Pauli, 2Q depolarizing, coherent, correlated and crosstalk.")
       // ── T1 gate-type-specific overrides ──
       .def(
           "set_t1_2q", &noise::NoiseModel::set_t1_2q, "qubit"_a, "gamma"_a,
@@ -2293,9 +2367,21 @@ NB_MODULE(maestro, m) {
       },
       "circuit"_a, "observables"_a, "noise_model"_a,
       "config"_a = SimulatorConfig{},
-      "Compute expectation values with analytical Pauli noise damping. "
-      "Runs noiseless simulation then applies exact noise attenuation — "
-      "zero simulation overhead compared to noiseless.");
+      "Compute expectation values with single-layer analytical Pauli "
+      "noise damping. Runs the noiseless simulation then applies the "
+      "damping factor -- zero simulation overhead compared to "
+      "noiseless.\n\n"
+      "WARNING -- this is a SINGLE-LAYER approximation, not an exact "
+      "result. The damping factor is exact only for one Pauli layer applied "
+      "immediately before measurement. A circuit that carries noise after "
+      "every gate is not modelled: Pauli channels do not commute through "
+      "non-Clifford gates, and the damping does not compound with the number "
+      "of noisy layers acting on each qubit. The returned values therefore "
+      "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
+      "Only the all-gates Pauli layer contributes; T1, thermal, coherent, "
+      "correlated and two-qubit layers are ignored entirely. Use "
+      "noisy_estimate_montecarlo(), or noisy_execute() with a density-matrix "
+      "or MPO method, when the magnitude of the noise matters.");
 
   // --- QASM variant ---
   m.def(
@@ -2327,8 +2413,19 @@ NB_MODULE(maestro, m) {
       },
       "qasm_circuit"_a, "observables"_a, "noise_model"_a,
       "config"_a = SimulatorConfig{},
-      "Compute expectation values from a QASM circuit with analytical Pauli "
-      "noise. Zero simulation overhead.");
+      "Compute expectation values from a QASM circuit with single-layer "
+      "analytical Pauli noise damping. Zero simulation overhead.\n\n"
+      "WARNING -- this is a SINGLE-LAYER approximation, not an exact "
+      "result. The damping factor is exact only for one Pauli layer applied "
+      "immediately before measurement. A circuit that carries noise after "
+      "every gate is not modelled: Pauli channels do not commute through "
+      "non-Clifford gates, and the damping does not compound with the number "
+      "of noisy layers acting on each qubit. The returned values therefore "
+      "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
+      "Only the all-gates Pauli layer contributes; T1, thermal, coherent, "
+      "correlated and two-qubit layers are ignored entirely. Use "
+      "noisy_estimate_montecarlo(), or noisy_execute() with a density-matrix "
+      "or MPO method, when the magnitude of the noise matters.");
 
   // --- Gate-by-gate Monte Carlo Noisy Estimation ---
   m.def(

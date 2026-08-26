@@ -22,22 +22,46 @@ class NoiseAdd {
  public:
   NoiseAdd() : rng(std::random_device{}()) {}
 
+  /**
+   * Select the exact-channel (CPTP) realization of the Markovian noise
+   * layers instead of sampled trajectories.
+   *
+   * Enable this when the network executes on a backend that carries a mixed
+   * state -- QCSim density_matrix or matrix_product_operator, Aer
+   * density_matrix -- so the noise is applied as deterministic Kraus channels
+   * in one pass rather than averaged over realizations. It also unlocks the
+   * channels that have no stochastic realization (generalized amplitude
+   * damping, correlated phase flips, custom Kraus maps).
+   *
+   * Off by default, which keeps the sampled behavior that pure-state and MPS
+   * backends require. NoiseAdd cannot detect the backend on its own: the
+   * network only reports which simulator it used after a circuit has run.
+   * The Python bindings pick the path automatically from SimulatorConfig
+   * (see uses_exact_quantum_channels in bindings.cpp).
+   */
+  void set_exact_channels(bool exact) { exact_channels = exact; }
+  bool uses_exact_channels() const { return exact_channels; }
+
   std::shared_ptr<Circuits::Circuit<double>> inject(
       const std::shared_ptr<Circuits::Circuit<double>>& circ,
       const NoiseModel& nm) {
-    return inject_noise(circ, nm, rng);
+    return exact_channels ? inject_exact_noise(circ, nm)
+                          : inject_noise(circ, nm, rng);
   }
 
   std::shared_ptr<Circuits::Circuit<double>> inject_coherent(
       const std::shared_ptr<Circuits::Circuit<double>>& circ,
       const NoiseModel& nm) {
+    // Coherent noise is a sampled unitary trajectory on every backend: there
+    // is no single channel that reproduces a systematic miscalibration.
     return inject_coherent_noise(circ, nm, rng);
   }
 
   std::shared_ptr<Circuits::Circuit<double>> inject_combined(
       const std::shared_ptr<Circuits::Circuit<double>>& circ,
       const NoiseModel& nm) {
-    return inject_combined_noise(circ, nm, rng);
+    return exact_channels ? inject_combined_noise_exact(circ, nm, rng)
+                          : inject_combined_noise(circ, nm, rng);
   }
 
   void apply_readout_error_to_counts(
@@ -403,6 +427,7 @@ class NoiseAdd {
   }
 
  private:
+  bool exact_channels = false;
   std::mt19937 rng;
 };
 
