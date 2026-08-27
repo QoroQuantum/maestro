@@ -14,7 +14,7 @@
 #ifndef _TESTS_H_
 
 #ifdef COMPOSER
-#include "../composer/Estimators/ExecutionEstimator.h"
+#include "../../composer/composer/Estimators/ExecutionEstimator.h"
 #endif
 
 class InitSetup {
