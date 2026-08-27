@@ -6,6 +6,9 @@
  */
 
 #include <boost/test/unit_test.hpp>
+#include <boost/test/data/test_case.hpp>
+#include <boost/test/data/monomorphic.hpp>
+namespace bdata = boost::unit_test::data;
 
 #undef min
 #undef max
@@ -21,6 +24,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "../Circuit/Factory.h"
 #include "../Simulators/Factory.h"
 #include "../python/noise.h"
 
@@ -264,7 +268,21 @@ BOOST_AUTO_TEST_CASE(generic_gates_match_statevector) {
   mpo->ApplyGenericOneQubitGate(2, oneQubit);
   statevector->ApplyGenericTwoQubitGate(0, 2, twoQubit);
   mpo->ApplyGenericTwoQubitGate(0, 2, twoQubit);
+  statevector->ApplyNop();
+  mpo->ApplyNop();
   CheckMPOProbabilities(*statevector, *mpo);
+}
+
+BOOST_AUTO_TEST_CASE(pure_state_initialization_is_rejected) {
+  auto mpo = Simulators::SimulatorsFactory::CreateSimulator(
+      Simulators::SimulatorType::kQCSim,
+      Simulators::SimulationType::kMatrixProductOperator);
+  std::vector<std::complex<double>> amplitudes = {
+      {0.5, 0.0}, {0.0, 0.5}, {-0.5, 0.0}, {0.0, -0.5}};
+
+  // Unlike the dense density-matrix backend, the MPO backend currently only
+  // supports the canonical |0...0> initialization path.
+  BOOST_CHECK_THROW(mpo->InitializeState(2, amplitudes), std::runtime_error);
 }
 
 BOOST_AUTO_TEST_CASE(sampling_matches_marginals_without_collapsing) {
@@ -297,6 +315,48 @@ BOOST_AUTO_TEST_CASE(sampling_matches_marginals_without_collapsing) {
   BOOST_REQUIRE_EQUAL(after.size(), before.size());
   for (size_t outcome = 0; outcome < before.size(); ++outcome)
     BOOST_TEST(std::abs(after[outcome] - before[outcome]) < kMPOTolerance);
+}
+
+BOOST_AUTO_TEST_CASE(measurements_collapse_correlated_qubits) {
+  auto mpo = MakeQCSimMPOTestSimulator(
+      Simulators::SimulationType::kMatrixProductOperator, 2);
+  mpo->ApplyH(0);
+  mpo->ApplyCX(0, 1);
+
+  const auto first = mpo->Measure({0});
+  const auto second = mpo->Measure({1});
+  BOOST_TEST(first == second);
+  BOOST_CHECK_CLOSE(mpo->Probability(first == 0 ? 0 : 3), 1.0, 1e-8);
+
+  mpo->Reset();
+  mpo->ApplyH(0);
+  mpo->ApplyCX(0, 1);
+  const auto many = mpo->MeasureMany({0, 1});
+  BOOST_REQUIRE_EQUAL(many.size(), 2);
+  BOOST_TEST(many[0] == many[1]);
+}
+
+BOOST_AUTO_TEST_CASE(save_restore_supports_repeated_measurements) {
+  auto mpo = MakeQCSimMPOTestSimulator(
+      Simulators::SimulationType::kMatrixProductOperator, 2);
+  mpo->ApplyH(0);
+  mpo->ApplyRy(1, 0.8);
+
+  const auto exact = mpo->AllProbabilities();
+  mpo->SaveState();
+
+  constexpr size_t shots = 2000;
+  std::unordered_map<Types::qubit_t, Types::qubit_t> counts;
+  for (size_t shot = 0; shot < shots; ++shot) {
+    ++counts[mpo->Measure({0, 1})];
+    mpo->RestoreState();
+  }
+
+  CheckMPOSamples(counts, exact, shots, 0.055);
+  const auto restored = mpo->AllProbabilities();
+  BOOST_REQUIRE_EQUAL(restored.size(), exact.size());
+  for (size_t outcome = 0; outcome < exact.size(); ++outcome)
+    BOOST_TEST(std::abs(restored[outcome] - exact[outcome]) < kMPOTolerance);
 }
 
 BOOST_AUTO_TEST_CASE(measurement_reset_snapshots_and_clone) {
@@ -461,6 +521,155 @@ BOOST_AUTO_TEST_CASE(noise_model_exact_path_matches_dense_density_matrix) {
     BOOST_TEST(std::abs(mpo->ExpectationValue(pauli) -
                         densityMatrix->ExpectationValue(pauli)) < 2e-8,
                "Expectation mismatch for exact NoiseModel path: " << pauli);
+}
+
+struct QCSimMPORandomCircuitsFixture {
+  QCSimMPORandomCircuitsFixture() {
+    qcsimSV = MakeQCSimMPOTestSimulator(Simulators::SimulationType::kStatevector,
+                                       nrQubitsForRandomCirc);
+    qcsimMPO = MakeQCSimMPOTestSimulator(
+        Simulators::SimulationType::kMatrixProductOperator,
+        nrQubitsForRandomCirc);
+
+    circ = std::make_shared<Circuits::Circuit<>>();
+    state.AllocateBits(nrQubitsForRandomCirc);
+
+    resetRandomCirc = std::make_shared<Circuits::Circuit<>>();
+    Types::qubits_vector qubits(nrQubitsForRandomCirc);
+    std::iota(qubits.begin(), qubits.end(), 0);
+    resetRandomCirc->AddOperation(std::make_shared<Circuits::Reset<>>(qubits));
+  }
+
+  void GenerateCircuit(int nrGates) {
+    std::random_device rd;
+    std::mt19937 g(rd());
+
+    auto dblGen = bdata::random(-2. * M_PI, 2. * M_PI);
+    auto dblGenIter = dblGen.begin();
+
+    auto gateGen = bdata::random(
+        0, static_cast<int>(Circuits::QuantumGateType::kCCXGateType));
+    auto gateGenIter = gateGen.begin();
+
+    for (int gateNr = 0; gateNr < nrGates; ++gateNr, ++gateGenIter) {
+      Types::qubits_vector qubits(nrQubitsForRandomCirc);
+      std::iota(qubits.begin(), qubits.end(), 0);
+      std::shuffle(qubits.begin(), qubits.end(), g);
+      auto q1 = qubits[0];
+      auto q2 = qubits[1];
+      auto q3 = qubits[2];
+
+      const double param1 = *dblGenIter; ++dblGenIter;
+      const double param2 = *dblGenIter; ++dblGenIter;
+      const double param3 = *dblGenIter; ++dblGenIter;
+      const double param4 = *dblGenIter; ++dblGenIter;
+
+      Circuits::QuantumGateType gateType =
+          static_cast<Circuits::QuantumGateType>(*gateGenIter);
+
+      auto theGate = Circuits::CircuitFactory<>::CreateGate(
+          gateType, q1, q2, q3, param1, param2, param3, param4);
+      circ->AddOperation(theGate);
+    }
+  }
+
+  const unsigned int nrQubitsForRandomCirc = 4;
+  std::shared_ptr<Simulators::ISimulator> qcsimSV;
+  std::shared_ptr<Simulators::ISimulator> qcsimMPO;
+
+  std::shared_ptr<Circuits::Circuit<>> circ;
+  std::shared_ptr<Circuits::Circuit<>> resetRandomCirc;
+  Circuits::OperationState state;
+};
+
+BOOST_DATA_TEST_CASE_F(QCSimMPORandomCircuitsFixture,
+                       RandomCircuitsTest, bdata::xrange(1, 20), nrGates) {
+  size_t nrStates = 1ULL << nrQubitsForRandomCirc;
+
+  GenerateCircuit(nrGates);
+
+  circ->Execute(qcsimSV, state);
+  qcsimMPO->SetUpcomingGates(circ->GetOperations());
+  circ->Execute(qcsimMPO, state);
+
+  auto svProbs = qcsimSV->AllProbabilities();
+  BOOST_REQUIRE_EQUAL(svProbs.size(), nrStates);
+
+  auto mpoProbs = qcsimMPO->AllProbabilities();
+  BOOST_REQUIRE_EQUAL(mpoProbs.size(), nrStates);
+
+  for (size_t stateIdx = 0; stateIdx < nrStates; ++stateIdx) {
+    const auto psv = svProbs[stateIdx];
+    const auto pmpo = mpoProbs[stateIdx];
+
+    BOOST_TEST(std::abs(pmpo - psv) < kMPOTolerance,
+               "Probability mismatch for outcome " << stateIdx << ": expected "
+                                                << psv << ", got " << pmpo);
+  }
+
+  resetRandomCirc->Execute(qcsimMPO, state);
+  resetRandomCirc->Execute(qcsimSV, state);
+
+  circ->Clear();
+  state.Reset();
+}
+
+BOOST_DATA_TEST_CASE_F(QCSimMPORandomCircuitsFixture,
+                       SampleCountsManyTest, bdata::xrange(15, 30), nrGates) {
+  GenerateCircuit(nrGates);
+
+  circ->Execute(qcsimSV, state);
+  qcsimMPO->SetUpcomingGates(circ->GetOperations());
+  circ->Execute(qcsimMPO, state);
+
+  std::random_device rd;
+  std::mt19937 g(rd());
+
+  Types::qubits_vector allQubits(nrQubitsForRandomCirc);
+  std::iota(allQubits.begin(), allQubits.end(), 0);
+  std::shuffle(allQubits.begin(), allQubits.end(), g);
+
+  std::uniform_int_distribution<unsigned int> subsetSizeDist(
+      1, nrQubitsForRandomCirc - 1);
+  const unsigned int subsetSize = subsetSizeDist(g);
+
+  Types::qubits_vector sampledQubits(allQubits.begin(),
+                                     allQubits.begin() + subsetSize);
+
+  const size_t shots = 10000;
+
+  auto svCounts = qcsimSV->SampleCountsMany(sampledQubits, shots);
+  auto mpoCounts = qcsimMPO->SampleCountsMany(sampledQubits, shots);
+
+  for (const auto& [outcome, cnt] : svCounts) {
+    double svProb = static_cast<double>(cnt) / static_cast<double>(shots);
+    if (svProb < 0.02) continue;
+
+    double mpoProb = 0;
+    if (mpoCounts.find(outcome) != mpoCounts.end())
+      mpoProb = static_cast<double>(mpoCounts[outcome]) /
+                static_cast<double>(shots);
+
+    BOOST_CHECK_CLOSE(svProb, mpoProb, mpoProb < 0.1 ? 66 : 33);
+  }
+
+  for (const auto& [outcome, cnt] : mpoCounts) {
+    double mpoProb = static_cast<double>(cnt) / static_cast<double>(shots);
+    if (mpoProb < 0.02) continue;
+
+    double svProb = 0;
+    if (svCounts.find(outcome) != svCounts.end())
+      svProb = static_cast<double>(svCounts[outcome]) /
+               static_cast<double>(shots);
+
+    BOOST_CHECK_CLOSE(mpoProb, svProb, svProb < 0.1 ? 66 : 33);
+  }
+
+  resetRandomCirc->Execute(qcsimMPO, state);
+  resetRandomCirc->Execute(qcsimSV, state);
+
+  circ->Clear();
+  state.Reset();
 }
 
 BOOST_AUTO_TEST_SUITE_END()
