@@ -2,10 +2,16 @@
 #ifdef __linux__
 
 #include <boost/test/unit_test.hpp>
+#include <boost/test/data/test_case.hpp>
+#include <boost/test/data/monomorphic.hpp>
+namespace bdata = boost::unit_test::data;
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <memory>
+#include <numeric>
+#include <random>
 #include <unordered_map>
 #include <vector>
 
@@ -15,6 +21,8 @@
 #include "../Simulators/QuantumChannel.h"
 
 namespace {
+
+constexpr double kGpuDensityRandomCircuitTolerance = 1e-6;
 
 std::shared_ptr<Simulators::ISimulator> MakeGpuDensity(size_t qubits) {
   Simulators::SimulatorsFactory::InitGpuLibraryWithMute();
@@ -183,6 +191,165 @@ BOOST_AUTO_TEST_CASE(network_execution_uses_density_matrix_backend) {
   BOOST_TEST(static_cast<int>(network->GetLastSimulationType()) ==
              static_cast<int>(Simulators::SimulationType::kDensityMatrix));
   BOOST_CHECK_SMALL(static_cast<double>(ones) / shots - 0.875, 0.04);
+}
+
+struct GpuDensityMatrixRandomCircuitsFixture {
+  GpuDensityMatrixRandomCircuitsFixture() {
+    qcsimSV = Simulators::SimulatorsFactory::CreateSimulator(
+        Simulators::SimulatorType::kQCSim,
+        Simulators::SimulationType::kStatevector);
+    qcsimSV->AllocateQubits(nrQubitsForRandomCirc);
+    qcsimSV->Initialize();
+
+    gpuDensity = MakeGpuDensity(nrQubitsForRandomCirc);
+
+    circ = std::make_shared<Circuits::Circuit<>>();
+    state.AllocateBits(nrQubitsForRandomCirc);
+
+    resetRandomCirc = std::make_shared<Circuits::Circuit<>>();
+    Types::qubits_vector qubits(nrQubitsForRandomCirc);
+    std::iota(qubits.begin(), qubits.end(), 0);
+    resetRandomCirc->AddOperation(std::make_shared<Circuits::Reset<>>(qubits));
+  }
+
+  void GenerateCircuit(int nrGates) {
+    std::random_device rd;
+    std::mt19937 g(rd());
+
+    auto dblGen = bdata::random(-2. * M_PI, 2. * M_PI);
+    auto dblGenIter = dblGen.begin();
+
+    auto gateGen = bdata::random(
+        0, static_cast<int>(Circuits::QuantumGateType::kCCXGateType));
+    auto gateGenIter = gateGen.begin();
+
+    for (int gateNr = 0; gateNr < nrGates; ++gateNr, ++gateGenIter) {
+      Types::qubits_vector qubits(nrQubitsForRandomCirc);
+      std::iota(qubits.begin(), qubits.end(), 0);
+      std::shuffle(qubits.begin(), qubits.end(), g);
+      auto q1 = qubits[0];
+      auto q2 = qubits[1];
+      auto q3 = qubits[2];
+
+      const double param1 = *dblGenIter; ++dblGenIter;
+      const double param2 = *dblGenIter; ++dblGenIter;
+      const double param3 = *dblGenIter; ++dblGenIter;
+      const double param4 = *dblGenIter; ++dblGenIter;
+
+      Circuits::QuantumGateType gateType =
+          static_cast<Circuits::QuantumGateType>(*gateGenIter);
+
+      auto theGate = Circuits::CircuitFactory<>::CreateGate(
+          gateType, q1, q2, q3, param1, param2, param3, param4);
+      circ->AddOperation(theGate);
+    }
+  }
+
+  const unsigned int nrQubitsForRandomCirc = 4;
+  std::shared_ptr<Simulators::ISimulator> qcsimSV;
+  std::shared_ptr<Simulators::ISimulator> gpuDensity;
+
+  std::shared_ptr<Circuits::Circuit<>> circ;
+  std::shared_ptr<Circuits::Circuit<>> resetRandomCirc;
+  Circuits::OperationState state;
+};
+
+BOOST_DATA_TEST_CASE_F(GpuDensityMatrixRandomCircuitsFixture,
+                       RandomCircuitsTest, bdata::xrange(1, 20), nrGates) {
+  if (!gpuDensity) {
+    BOOST_TEST_MESSAGE("GPU density-matrix library is unavailable; skipping");
+    return;
+  }
+
+  size_t nrStates = 1ULL << nrQubitsForRandomCirc;
+
+  GenerateCircuit(nrGates);
+
+  circ->Execute(qcsimSV, state);
+  circ->Execute(gpuDensity, state);
+
+  auto svProbs = qcsimSV->AllProbabilities();
+  BOOST_REQUIRE_EQUAL(svProbs.size(), nrStates);
+
+  auto dmProbs = gpuDensity->AllProbabilities();
+  BOOST_REQUIRE_EQUAL(dmProbs.size(), nrStates);
+
+  for (size_t stateIdx = 0; stateIdx < nrStates; ++stateIdx) {
+    const auto psv = svProbs[stateIdx];
+    const auto pdm = dmProbs[stateIdx];
+
+    BOOST_TEST(std::abs(pdm - psv) < kGpuDensityRandomCircuitTolerance,
+               "Probability mismatch for outcome " << stateIdx << ": expected "
+                                                << psv << ", got " << pdm);
+  }
+
+  resetRandomCirc->Execute(gpuDensity, state);
+  resetRandomCirc->Execute(qcsimSV, state);
+
+  circ->Clear();
+  state.Reset();
+}
+
+BOOST_DATA_TEST_CASE_F(GpuDensityMatrixRandomCircuitsFixture,
+                       SampleCountsManyTest, bdata::xrange(15, 30), nrGates) {
+  if (!gpuDensity) {
+    BOOST_TEST_MESSAGE("GPU density-matrix library is unavailable; skipping");
+    return;
+  }
+
+  GenerateCircuit(nrGates);
+
+  circ->Execute(qcsimSV, state);
+  circ->Execute(gpuDensity, state);
+
+  std::random_device rd;
+  std::mt19937 g(rd());
+
+  Types::qubits_vector allQubits(nrQubitsForRandomCirc);
+  std::iota(allQubits.begin(), allQubits.end(), 0);
+  std::shuffle(allQubits.begin(), allQubits.end(), g);
+
+  std::uniform_int_distribution<unsigned int> subsetSizeDist(
+      1, nrQubitsForRandomCirc - 1);
+  const unsigned int subsetSize = subsetSizeDist(g);
+
+  Types::qubits_vector sampledQubits(allQubits.begin(),
+                                     allQubits.begin() + subsetSize);
+
+  const size_t shots = 10000;
+
+  auto svCounts = qcsimSV->SampleCountsMany(sampledQubits, shots);
+  auto dmCounts = gpuDensity->SampleCountsMany(sampledQubits, shots);
+
+  for (const auto& [outcome, cnt] : svCounts) {
+    double svProb = static_cast<double>(cnt) / static_cast<double>(shots);
+    if (svProb < 0.02) continue;
+
+    double dmProb = 0;
+    if (dmCounts.find(outcome) != dmCounts.end())
+      dmProb = static_cast<double>(dmCounts[outcome]) /
+               static_cast<double>(shots);
+
+    BOOST_CHECK_CLOSE(svProb, dmProb, dmProb < 0.1 ? 66 : 33);
+  }
+
+  for (const auto& [outcome, cnt] : dmCounts) {
+    double dmProb = static_cast<double>(cnt) / static_cast<double>(shots);
+    if (dmProb < 0.02) continue;
+
+    double svProb = 0;
+    if (svCounts.find(outcome) != svCounts.end())
+      svProb = static_cast<double>(svCounts[outcome]) /
+               static_cast<double>(shots);
+
+    BOOST_CHECK_CLOSE(dmProb, svProb, svProb < 0.1 ? 66 : 33);
+  }
+
+  resetRandomCirc->Execute(gpuDensity, state);
+  resetRandomCirc->Execute(qcsimSV, state);
+
+  circ->Clear();
+  state.Reset();
 }
 
 BOOST_AUTO_TEST_SUITE_END()
