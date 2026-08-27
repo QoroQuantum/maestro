@@ -32,11 +32,13 @@ struct MPSSimTestFixture {
     Simulators::SimulatorsFactory::InitGpuLibrary();
 #endif
 
+#ifndef NO_QISKIT_AER
     aerMPS = Simulators::SimulatorsFactory::CreateSimulator(
         Simulators::SimulatorType::kQiskitAer,
         Simulators::SimulationType::kMatrixProductState);
     aerMPS->AllocateQubits(nrQubitsForRandomCirc);
     aerMPS->Initialize();
+#endif
 
     qcsimMPS = Simulators::SimulatorsFactory::CreateSimulator(
         Simulators::SimulatorType::kQCSim,
@@ -50,6 +52,7 @@ struct MPSSimTestFixture {
     qcsimSV->AllocateQubits(nrQubitsForRandomCirc);
     qcsimSV->Initialize();
 
+#ifndef NO_QISKIT_AER
     aerSV = Simulators::SimulatorsFactory::CreateSimulator(
         Simulators::SimulatorType::kQiskitAer,
         Simulators::SimulationType::kStatevector);
@@ -63,6 +66,7 @@ struct MPSSimTestFixture {
     aerMPS50->Configure("matrix_product_state_max_bond_dimension", "20");
     aerMPS50->Configure("matrix_product_state_truncation_threshold", "0.0001");
     aerMPS50->Initialize();
+#endif
 
     qcsimMPS50 = Simulators::SimulatorsFactory::CreateSimulator(
         Simulators::SimulatorType::kQCSim,
@@ -241,10 +245,7 @@ BOOST_AUTO_TEST_SUITE(mps_tests)
 
 BOOST_FIXTURE_TEST_CASE(MPSSimInitializationTest, MPSSimTestFixture) {
   BOOST_TEST(qcsimSV);
-  BOOST_TEST(aerSV);
-  BOOST_TEST(aerMPS);
   BOOST_TEST(qcsimMPS);
-  BOOST_TEST(aerMPS50);
   BOOST_TEST(qcsimMPS50);
   BOOST_TEST(circ);
   BOOST_TEST(circ50);

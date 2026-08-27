@@ -88,7 +88,7 @@ if (NOT DEFINED QCSIM_INCLUDE_DIR)
         FetchContent_Declare(
             qcsim
             GIT_REPOSITORY https://github.com/aromanro/QCSim.git
-            GIT_TAG d5056c68d53e09ae09054f9f8ec2fc1928462f28
+            GIT_TAG 16358304f604de45668cde425ed22f9a40353e7f
         )
 
         # Just populate the source (don't build it with add_subdirectory)
@@ -285,8 +285,12 @@ endif()
 
 LINK_LIBRARIES()
 
-if (QAER AND COMPILE_TESTS)
-	add_executable(tests ${TESTSSRC})
+if (COMPILE_TESTS)
+    set(ACTIVE_TESTSSRC ${TESTSSRC})
+    if (NOT QAER)
+        list(REMOVE_ITEM ACTIVE_TESTSSRC tests/aertests.cpp tests/densitymatrixtests.cpp)
+    endif()
+    add_executable(tests ${ACTIVE_TESTSSRC})
 endif()
 
 add_executable(maestroexe ${MAESTROEXESRC})
