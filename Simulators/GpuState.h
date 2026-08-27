@@ -25,6 +25,7 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <utility>
 
 #include "Configuration.h"
 
@@ -83,6 +84,27 @@ class GpuState : public ISimulator {
         if (!densityMatrix->Create(nrQubits))
           throw std::runtime_error(
               "GpuState::Initialize: Failed to initialize the density matrix state.");
+      } else if (simulationType == SimulationType::kMatrixProductOperator) {
+        mpo = SimulatorsFactory::CreateGpuMPO();
+        if (!mpo)
+          throw std::runtime_error(
+              "GpuState::Initialize: Failed to create the matrix product "
+              "operator state.");
+        mpo->SetCallbackContext((void*)this);
+        curMaxBondDim = 1;
+        mpo->SetBondDimensionsCallback(&GpuState::BondDimCallback);
+
+        // Precision and truncation controls must be selected before native
+        // storage is allocated.
+        for (const auto& [key, value] : configuration.GetConfigMap())
+          if (key != "method") Configure(key.c_str(), value.c_str());
+        if (!mpo->Create(nrQubits))
+          throw std::runtime_error(
+              "GpuState::Initialize: Failed to initialize the matrix product "
+              "operator state.");
+        // default is true
+        if (!useOptimalMeetingPosition)
+          mpo->SetUseOptimalMeetingPosition(false);
       } else if (simulationType == SimulationType::kMatrixProductState) {
         mps = SimulatorsFactory::CreateGpuLibMPSSim();
         if (mps) {
@@ -172,18 +194,24 @@ class GpuState : public ISimulator {
     Initialize();
 
     if (simulationType != SimulationType::kStatevector &&
-        simulationType != SimulationType::kDensityMatrix)
+        simulationType != SimulationType::kDensityMatrix &&
+        simulationType != SimulationType::kMatrixProductOperator)
       throw std::runtime_error(
           "GpuState::InitializeState: Invalid simulation "
           "type for initializing the state.");
 
-    const bool created = simulationType == SimulationType::kDensityMatrix
-                             ? densityMatrix->CreateWithState(
-                                   nrQubits, reinterpret_cast<const double *>(
-                                                 amplitudes.data()))
-                             : state->CreateWithState(
-                                   nrQubits, reinterpret_cast<const double *>(
-                                                 amplitudes.data()));
+    const bool created =
+        simulationType == SimulationType::kDensityMatrix
+            ? densityMatrix->CreateWithState(
+                  nrQubits,
+                  reinterpret_cast<const double *>(amplitudes.data()))
+            : simulationType == SimulationType::kMatrixProductOperator
+                  ? mpo->CreateWithState(
+                        nrQubits,
+                        reinterpret_cast<const double *>(amplitudes.data()))
+                  : state->CreateWithState(
+                        nrQubits,
+                        reinterpret_cast<const double *>(amplitudes.data()));
     if (!created)
       throw std::runtime_error(
           "GpuState::InitializeState: Failed to initialize the state.");
@@ -209,18 +237,24 @@ class GpuState : public ISimulator {
     Initialize();
 
     if (simulationType != SimulationType::kStatevector &&
-        simulationType != SimulationType::kDensityMatrix)
+        simulationType != SimulationType::kDensityMatrix &&
+        simulationType != SimulationType::kMatrixProductOperator)
       throw std::runtime_error(
           "GpuState::InitializeState: Invalid simulation "
           "type for initializing the state.");
 
-    const bool created = simulationType == SimulationType::kDensityMatrix
-                             ? densityMatrix->CreateWithState(
-                                   nrQubits, reinterpret_cast<const double *>(
-                                                 amplitudes.data()))
-                             : state->CreateWithState(
-                                   nrQubits, reinterpret_cast<const double *>(
-                                                 amplitudes.data()));
+    const bool created =
+        simulationType == SimulationType::kDensityMatrix
+            ? densityMatrix->CreateWithState(
+                  nrQubits,
+                  reinterpret_cast<const double *>(amplitudes.data()))
+            : simulationType == SimulationType::kMatrixProductOperator
+                  ? mpo->CreateWithState(
+                        nrQubits,
+                        reinterpret_cast<const double *>(amplitudes.data()))
+                  : state->CreateWithState(
+                        nrQubits,
+                        reinterpret_cast<const double *>(amplitudes.data()));
     if (!created)
       throw std::runtime_error(
           "GpuState::InitializeState: Failed to initialize the state.");
@@ -246,21 +280,189 @@ class GpuState : public ISimulator {
     Initialize();
 
     if (simulationType != SimulationType::kStatevector &&
-        simulationType != SimulationType::kDensityMatrix)
+        simulationType != SimulationType::kDensityMatrix &&
+        simulationType != SimulationType::kMatrixProductOperator)
       throw std::runtime_error(
           "GpuState::InitializeState: Invalid simulation "
           "type for initializing the state.");
 
-    const bool created = simulationType == SimulationType::kDensityMatrix
-                             ? densityMatrix->CreateWithState(
-                                   nrQubits, reinterpret_cast<const double *>(
-                                                 amplitudes.data()))
-                             : state->CreateWithState(
-                                   nrQubits, reinterpret_cast<const double *>(
-                                                 amplitudes.data()));
+    const bool created =
+        simulationType == SimulationType::kDensityMatrix
+            ? densityMatrix->CreateWithState(
+                  nrQubits,
+                  reinterpret_cast<const double *>(amplitudes.data()))
+            : simulationType == SimulationType::kMatrixProductOperator
+                  ? mpo->CreateWithState(
+                        nrQubits,
+                        reinterpret_cast<const double *>(amplitudes.data()))
+                  : state->CreateWithState(
+                        nrQubits,
+                        reinterpret_cast<const double *>(amplitudes.data()));
     if (!created)
       throw std::runtime_error(
           "GpuState::InitializeState: Failed to initialize the state.");
+  }
+
+  /**
+   * @brief Initializes the state to a computational basis state.
+   *
+   * The density matrix, matrix product operator and matrix product state
+   * methods use their own direct primitive; every other method (statevector,
+   * tensor network, Pauli propagator) falls back to the generic ISimulator
+   * implementation (reset to |0...0>, then apply X on every set bit).
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param basisState The computational basis state, bit i selects qubit i.
+   */
+  void InitializeToBasisState(size_t num_qubits,
+                              Types::qubit_t basisState) override {
+    if (num_qubits == 0) return;
+    Clear();
+    nrQubits = num_qubits;
+    Initialize();
+
+    bool created = true;
+    if (simulationType == SimulationType::kDensityMatrix)
+      created = densityMatrix->CreateWithBasisState(
+          nrQubits, static_cast<unsigned long long>(basisState));
+    else if (simulationType == SimulationType::kMatrixProductOperator)
+      created = mpo->CreateWithBasisState(
+          nrQubits, static_cast<unsigned long long>(basisState));
+    else if (simulationType == SimulationType::kMatrixProductState)
+      created = mps->CreateWithBasisState(
+          nrQubits, static_cast<unsigned long long>(basisState));
+    else
+      for (size_t q = 0; q < num_qubits; ++q)
+        if ((basisState >> q) & 1ULL) ApplyX(static_cast<Types::qubit_t>(q));
+
+    if (!created)
+      throw std::runtime_error(
+          "GpuState::InitializeToBasisState: Failed to initialize the "
+          "state.");
+  }
+
+  /**
+   * @brief Initializes the state to a computational basis state.
+   *
+   * Same as the Types::qubit_t overload, but not limited to 64 qubits. The
+   * matrix product operator and matrix product state methods use their own
+   * direct primitive; every other method falls back to the generic
+   * ISimulator implementation (reset to |0...0>, then apply X on every set
+   * bit) - which is not limited either, unlike the density matrix method's
+   * native Types::qubit_t-based primitive.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param basisState The computational basis state, entry i selects qubit i.
+   */
+  void InitializeToBasisState(size_t num_qubits,
+                              const std::vector<bool> &basisState) override {
+    if (num_qubits == 0) return;
+    Clear();
+    nrQubits = num_qubits;
+    Initialize();
+
+    bool created = true;
+    if (simulationType == SimulationType::kMatrixProductOperator ||
+        simulationType == SimulationType::kMatrixProductState) {
+      std::vector<unsigned char> stateBits(num_qubits, 0);
+      for (size_t q = 0; q < num_qubits && q < basisState.size(); ++q)
+        stateBits[q] = basisState[q] ? 1 : 0;
+      created = simulationType == SimulationType::kMatrixProductOperator
+                    ? mpo->CreateWithBasisStateBits(nrQubits, stateBits)
+                    : mps->CreateWithBasisStateBits(nrQubits, stateBits);
+    } else
+      for (size_t q = 0; q < num_qubits && q < basisState.size(); ++q)
+        if (basisState[q]) ApplyX(static_cast<Types::qubit_t>(q));
+
+    if (!created)
+      throw std::runtime_error(
+          "GpuState::InitializeToBasisState: Failed to initialize the "
+          "state.");
+  }
+
+  /**
+   * @brief Initializes the state to a classical mixture of computational
+   * basis states.
+   *
+   * Works for the density matrix and matrix product operator methods. There
+   * is no generic fallback for other methods.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param mixture The mixture, as pairs of (basis state, weight).
+   */
+  void InitializeToMixtureOfBasisStates(
+      size_t num_qubits,
+      const std::vector<std::pair<Types::qubit_t, double>> &mixture)
+      override {
+    if (num_qubits == 0) return;
+    Clear();
+    nrQubits = num_qubits;
+    Initialize();
+
+    if (simulationType != SimulationType::kDensityMatrix &&
+        simulationType != SimulationType::kMatrixProductOperator)
+      throw std::runtime_error(
+          "GpuState::InitializeToMixtureOfBasisStates: Invalid simulation "
+          "type for initializing to a mixture of basis states.");
+
+    std::vector<std::pair<unsigned long long, double>> converted;
+    converted.reserve(mixture.size());
+    for (const auto &[basisState, weight] : mixture)
+      converted.emplace_back(static_cast<unsigned long long>(basisState),
+                             weight);
+
+    const bool created =
+        simulationType == SimulationType::kDensityMatrix
+            ? densityMatrix->CreateWithMixtureOfBasisStates(nrQubits,
+                                                            converted)
+            : mpo->CreateWithMixtureOfBasisStates(nrQubits, converted);
+
+    if (!created)
+      throw std::runtime_error(
+          "GpuState::InitializeToMixtureOfBasisStates: Failed to initialize "
+          "the state.");
+  }
+
+  /**
+   * @brief Initializes the state to a classical mixture of computational
+   * basis states.
+   *
+   * Same as the Types::qubit_t-keyed overload, but not limited to 64 qubits.
+   * Only the matrix product operator method supports this.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param mixture The mixture, as pairs of (basis state, weight).
+   */
+  void InitializeToMixtureOfBasisStates(
+      size_t num_qubits,
+      const std::vector<std::pair<std::vector<bool>, double>> &mixture)
+      override {
+    if (num_qubits == 0) return;
+    Clear();
+    nrQubits = num_qubits;
+    Initialize();
+
+    if (simulationType != SimulationType::kMatrixProductOperator)
+      throw std::runtime_error(
+          "GpuState::InitializeToMixtureOfBasisStates: Invalid simulation "
+          "type for initializing to a mixture of basis states.");
+
+    std::vector<double> weights;
+    weights.reserve(mixture.size());
+    std::vector<unsigned char> stateBitsFlat;
+    stateBitsFlat.reserve(mixture.size() * num_qubits);
+    for (const auto &[basisState, weight] : mixture) {
+      weights.push_back(weight);
+      for (size_t q = 0; q < num_qubits; ++q)
+        stateBitsFlat.push_back(
+            (q < basisState.size() && basisState[q]) ? 1 : 0);
+    }
+
+    if (!mpo->CreateWithMixtureOfBasisStatesBits(nrQubits, stateBitsFlat,
+                                                 weights))
+      throw std::runtime_error(
+          "GpuState::InitializeToMixtureOfBasisStates: Failed to initialize "
+          "the state.");
   }
 
   /**
@@ -274,7 +476,10 @@ class GpuState : public ISimulator {
       state->Reset();
     else if (densityMatrix)
       densityMatrix->Reset();
-    else if (mps) {
+    else if (mpo) {
+      mpo->Reset();
+      curMaxBondDim = 1;
+    } else if (mps) {
       mps->Reset();
       curMaxBondDim = 1;
     } else if (tn)
@@ -304,12 +509,14 @@ class GpuState : public ISimulator {
    */
   void SetInitialQubitsMap(
       const std::vector<long long int> &initialMap) override {
-    if (mps) {
-      mps->SetInitialQubitsMap(initialMap);
+    if (mps || mpo) {
+      if (mps) mps->SetInitialQubitsMap(initialMap);
+      else mpo->SetInitialQubitsMap(initialMap);
       if (!dummySim || dummySim->getNrQubits() != initialMap.size()) {
         dummySim =
             std::make_unique<Simulators::MPSDummySimulator>(initialMap.size());
-        dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt("matrix_product_state_max_bond_dimension"));
+        dummySim->SetMaxBondDimension(
+            configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey()));
       }
       dummySim->setGrowthFactorGate(growthFactorGate);
       dummySim->setGrowthFactorSwap(growthFactorSwap);
@@ -319,8 +526,9 @@ class GpuState : public ISimulator {
 
   void SetUseOptimalMeetingPosition(bool enable) override {
     useOptimalMeetingPosition = enable;
-    if (mps) {
-      mps->SetUseOptimalMeetingPosition(enable);
+    if (mps || mpo) {
+      if (mps) mps->SetUseOptimalMeetingPosition(enable);
+      else mpo->SetUseOptimalMeetingPosition(enable);
 
       if (enable) {
         // Register an observer that advances the gate index
@@ -334,15 +542,20 @@ class GpuState : public ISimulator {
         // for lookahead evaluation with actual bond dimensions
         // the callback is called only for two qubits gates and only if
         // executing them would require a swap
-        mps->SetMeetingPositionCallback(&GpuState::FindBestMeetingPosition);
+        if (mps)
+          mps->SetMeetingPositionCallback(&GpuState::FindBestMeetingPosition);
+        else
+          mpo->SetMeetingPositionCallback(&GpuState::FindBestMeetingPosition);
       }
     }
   }
 
   void SetLookaheadDepth(int depth) override {
     lookaheadDepth = depth;
-    if (mps && depth > 0 && !useOptimalMeetingPosition)
-      mps->SetUseOptimalMeetingPosition(true);
+    if (depth > 0 && !useOptimalMeetingPosition) {
+      if (mps) mps->SetUseOptimalMeetingPosition(true);
+      else if (mpo) mpo->SetUseOptimalMeetingPosition(true);
+    }
   }
 
   void SetLookaheadDepthWithHeuristic(int depth) override {
@@ -356,7 +569,7 @@ class GpuState : public ISimulator {
     upcomingGates = gates;
     upcomingGateIndex = 0;
 
-    if (!mps) return;
+    if (!mps && !mpo) return;
 
     // Register an observer that advances the gate index
     ClearObservers();  // for now we only have this observer, so this should be
@@ -369,7 +582,10 @@ class GpuState : public ISimulator {
     // for lookahead evaluation with actual bond dimensions
     // the callback is called only for two qubits gates and only if executing
     // them would require a swap
-    mps->SetMeetingPositionCallback(&GpuState::FindBestMeetingPosition);
+    if (mps)
+      mps->SetMeetingPositionCallback(&GpuState::FindBestMeetingPosition);
+    else
+      mpo->SetMeetingPositionCallback(&GpuState::FindBestMeetingPosition);
   }
 
   /**
@@ -434,32 +650,44 @@ class GpuState : public ISimulator {
         simulationType = SimulationType::kMatrixProductState;
       else if (std::string("density_matrix") == value)
         simulationType = SimulationType::kDensityMatrix;
+      else if (std::string("matrix_product_operator") == value)
+        simulationType = SimulationType::kMatrixProductOperator;
       else if (std::string("tensor_network") == value)
         simulationType = SimulationType::kTensorNetwork;
       else if (std::string("pauli_propagator") == value)
         simulationType = SimulationType::kPauliPropagator;
     }
-        
+
     if (std::string("use_double_precision") == key && densityMatrix &&
         densityMatrix->IsCreated())
       throw std::runtime_error(
           "GpuState::Configure: Density-matrix precision must be configured "
           "before initialization.");
 
+    if (std::string("use_double_precision") == key && mpo && mpo->IsCreated())
+      throw std::runtime_error(
+          "GpuState::Configure: Matrix-product-operator precision must be "
+          "configured before initialization.");
+
     if (!configuration.WasApplied(key, value))
-        configuration.SetConfiguration(key, value);    
-        
-    if (std::string("matrix_product_state_truncation_threshold") == key) {
+        configuration.SetConfiguration(key, value);
+
+    if (std::string("matrix_product_state_truncation_threshold") == key ||
+        std::string("matrix_product_operator_truncation_threshold") == key) {
       const double singularValueThreshold = std::stod(value);
       if (singularValueThreshold > 0.) {
         if (mps) mps->SetCutoff(singularValueThreshold);
         if (tn) tn->SetCutoff(singularValueThreshold);
+        if (mpo) mpo->SetCutoff(singularValueThreshold);
       }
-    } else if (std::string("matrix_product_state_max_bond_dimension") == key) {
+    } else if (std::string("matrix_product_state_max_bond_dimension") == key ||
+               std::string("matrix_product_operator_max_bond_dimension") ==
+                   key) {
       const long long int chi = std::stoi(value);
       if (chi > 0) {
         if (mps) mps->SetMaxExtent(chi);
         if (tn) tn->SetMaxExtent(chi);
+        if (mpo) mpo->SetMaxExtent(chi);
       }
     } else if (std::string("use_double_precision") == key) {
       const bool useDoublePrecision =
@@ -468,7 +696,8 @@ class GpuState : public ISimulator {
       if (tn) tn->SetDataType(useDoublePrecision);
       if (state) state->SetDataType(useDoublePrecision);
       if (densityMatrix) densityMatrix->SetDataType(useDoublePrecision);
-    } 
+      if (mpo) mpo->SetDataType(useDoublePrecision);
+    }
     
     if (pp) {
       if (std::string("pauli_propagator_coefficient_threshold") == key) {
@@ -505,6 +734,8 @@ class GpuState : public ISimulator {
           return "matrix_product_state";
         case SimulationType::kDensityMatrix:
           return "density_matrix";
+        case SimulationType::kMatrixProductOperator:
+          return "matrix_product_operator";
         case SimulationType::kTensorNetwork:
           return "tensor_network";
         case SimulationType::kPauliPropagator:
@@ -527,6 +758,7 @@ class GpuState : public ISimulator {
   size_t AllocateQubits(size_t num_qubits) override {
     if ((simulationType == SimulationType::kStatevector && state) ||
         (simulationType == SimulationType::kDensityMatrix && densityMatrix) ||
+        (simulationType == SimulationType::kMatrixProductOperator && mpo) ||
         (simulationType == SimulationType::kMatrixProductState && mps) ||
         (simulationType == SimulationType::kPauliPropagator && pp))
       return 0;
@@ -555,6 +787,7 @@ class GpuState : public ISimulator {
   void Clear() override {
     state = nullptr;
     densityMatrix = nullptr;
+    mpo = nullptr;
     mps = nullptr;
     tn = nullptr;
     pp = nullptr;
@@ -599,6 +832,11 @@ class GpuState : public ISimulator {
         if (densityMatrix->Measure(static_cast<unsigned int>(qubit))) res |= mask;
         mask <<= 1;
       }
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      for (size_t qubit : qubits) {
+        if (mpo->Measure(static_cast<unsigned int>(qubit))) res |= mask;
+        mask <<= 1;
+      }
     } else if (simulationType == SimulationType::kMatrixProductState) {
       // TODO: measure all qubits in one shot?
       for (size_t qubit : qubits) {
@@ -641,6 +879,9 @@ class GpuState : public ISimulator {
     } else if (simulationType == SimulationType::kDensityMatrix) {
       for (size_t i = 0; i < qubits.size(); ++i)
         res[i] = densityMatrix->Measure(qubits[i]);
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      for (size_t i = 0; i < qubits.size(); ++i)
+        res[i] = mpo->Measure(static_cast<unsigned int>(qubits[i]));
     } else if (simulationType == SimulationType::kMatrixProductState) {
       for (size_t i = 0; i < qubits.size(); ++i)
         res[i] = mps->Measure(static_cast<unsigned int>(qubits[i]));
@@ -671,6 +912,9 @@ class GpuState : public ISimulator {
           state->ApplyX(static_cast<int>(qubit));
     } else if (simulationType == SimulationType::kDensityMatrix) {
       for (size_t qubit : qubits) densityMatrix->ApplyReset(qubit);
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      for (size_t qubit : qubits)
+        mpo->ApplyReset(static_cast<int>(qubit));
     } else if (simulationType == SimulationType::kMatrixProductState) {
       for (size_t qubit : qubits)
         if (mps->Measure(static_cast<unsigned int>(qubit)))
@@ -690,18 +934,21 @@ class GpuState : public ISimulator {
   }
 
   bool SupportsQuantumChannels() const override {
-    return simulationType == SimulationType::kDensityMatrix;
+    return simulationType == SimulationType::kDensityMatrix ||
+           simulationType == SimulationType::kMatrixProductOperator;
   }
 
   void ApplyQuantumChannel(const Types::qubits_vector& targets,
                            const QuantumChannel& channel) override {
-    if (!densityMatrix)
+    if (!densityMatrix && !mpo)
       throw std::runtime_error(
-          "GPU quantum channels require an initialized density matrix");
+          "GPU quantum channels require an initialized density matrix or "
+          "matrix product operator");
     if (targets.size() != channel.GetNumberOfQubits() || targets.empty() ||
         targets.size() > 2)
       throw std::invalid_argument(
-          "GPU density matrices support one- and two-qubit local channels");
+          "GPU density matrices and matrix product operators support one- "
+          "and two-qubit local channels");
     std::vector<int> gpuTargets;
     gpuTargets.reserve(targets.size());
     for (auto target : targets) {
@@ -719,9 +966,15 @@ class GpuState : public ISimulator {
         interleaved.push_back(op.data()[i].real());
         interleaved.push_back(op.data()[i].imag());
       }
-    if (!densityMatrix->ApplyKraus(gpuTargets, kraus.size(),
-                                    interleaved.data()))
-      throw std::runtime_error("GPU density-matrix channel application failed");
+    const bool applied =
+        densityMatrix
+            ? densityMatrix->ApplyKraus(gpuTargets, kraus.size(),
+                                        interleaved.data())
+            : mpo->ApplyKraus(gpuTargets, kraus.size(), interleaved.data());
+    if (!applied)
+      throw std::runtime_error(
+          "GPU density-matrix/matrix-product-operator channel application "
+          "failed");
     NotifyObservers(targets);
   }
 
@@ -741,6 +994,8 @@ class GpuState : public ISimulator {
       return state->BasisStateProbability(outcome);
     else if (simulationType == SimulationType::kDensityMatrix)
       return densityMatrix->Probability(outcome);
+    else if (simulationType == SimulationType::kMatrixProductOperator)
+      return mpo->Probability(outcome);
     else if (simulationType == SimulationType::kMatrixProductState ||
              simulationType == SimulationType::kTensorNetwork) {
       const auto ampl = Amplitude(outcome);
@@ -771,6 +1026,10 @@ class GpuState : public ISimulator {
     else if (simulationType == SimulationType::kDensityMatrix)
       throw std::runtime_error(
           "GpuState::Amplitude: Amplitudes are not defined for density matrices.");
+    else if (simulationType == SimulationType::kMatrixProductOperator)
+      throw std::runtime_error(
+          "GpuState::Amplitude: Amplitudes are not defined for matrix "
+          "product operators.");
     else if (simulationType == SimulationType::kMatrixProductState ||
              simulationType == SimulationType::kTensorNetwork) {
       std::vector<long int> fixedValues(nrQubits);
@@ -829,6 +1088,8 @@ class GpuState : public ISimulator {
       state->AllProbabilities(result.data());
     else if (simulationType == SimulationType::kDensityMatrix)
       densityMatrix->AllProbabilities(result.data());
+    else if (simulationType == SimulationType::kMatrixProductOperator)
+      mpo->AllProbabilities(result.data());
     else if (simulationType == SimulationType::kMatrixProductState ||
              simulationType == SimulationType::kTensorNetwork) {
       // this is very slow, it should be used only for tests!
@@ -867,6 +1128,9 @@ class GpuState : public ISimulator {
     } else if (simulationType == SimulationType::kDensityMatrix) {
       for (size_t i = 0; i < qubits.size(); ++i)
         result[i] = densityMatrix->Probability(qubits[i]);
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      for (size_t i = 0; i < qubits.size(); ++i)
+        result[i] = mpo->Probability(qubits[i]);
     } else if (simulationType == SimulationType::kMatrixProductState ||
                simulationType == SimulationType::kTensorNetwork) {
       for (size_t i = 0; i < qubits.size(); ++i) {
@@ -933,6 +1197,20 @@ class GpuState : public ISimulator {
         Notify();
         throw std::runtime_error(
             "GpuState::SampleCounts: Density-matrix sampling failed.");
+      }
+      for (auto outcome : samples) {
+        Types::qubit_t translatedOutcome = 0;
+        for (size_t i = 0; i < qubits.size(); ++i)
+          if (outcome & (1ULL << qubits[i])) translatedOutcome |= 1ULL << i;
+        ++result[translatedOutcome];
+      }
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      std::vector<long int> samples(shots);
+      if (!mpo->SampleAll(shots, samples.data())) {
+        Notify();
+        throw std::runtime_error(
+            "GpuState::SampleCounts: Matrix-product-operator sampling "
+            "failed.");
       }
       for (auto outcome : samples) {
         Types::qubit_t translatedOutcome = 0;
@@ -1039,6 +1317,20 @@ class GpuState : public ISimulator {
           outcomeVec[i] = ((outcome >> qubits[i]) & 1) != 0;
         ++result[outcomeVec];
       }
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      std::vector<long int> samples(shots);
+      if (!mpo->SampleAll(shots, samples.data())) {
+        Notify();
+        throw std::runtime_error(
+            "GpuState::SampleCountsMany: Matrix-product-operator sampling "
+            "failed.");
+      }
+      std::vector<bool> outcomeVec(qubits.size());
+      for (auto outcome : samples) {
+        for (size_t i = 0; i < qubits.size(); ++i)
+          outcomeVec[i] = ((outcome >> qubits[i]) & 1) != 0;
+        ++result[outcomeVec];
+      }
     } else if (simulationType == SimulationType::kMatrixProductState) {
       std::unordered_map<std::vector<bool>, int64_t> *map =
           mps->GetMapForSample();
@@ -1090,6 +1382,8 @@ class GpuState : public ISimulator {
       result = state->ExpectationValue(pauliString);
     else if (simulationType == SimulationType::kDensityMatrix)
       result = densityMatrix->ExpectationValue(pauliString);
+    else if (simulationType == SimulationType::kMatrixProductOperator)
+      result = mpo->ExpectationValue(pauliString);
     else if (simulationType == SimulationType::kMatrixProductState)
       result = mps->ExpectationValue(pauliString);
     else if (simulationType == SimulationType::kTensorNetwork)
@@ -1180,6 +1474,8 @@ class GpuState : public ISimulator {
       state->SaveState();
     else if (simulationType == SimulationType::kDensityMatrix)
       densityMatrix->SaveState();
+    else if (simulationType == SimulationType::kMatrixProductOperator)
+      mpo->SaveState();
     else if (simulationType == SimulationType::kMatrixProductState)
       mps->SaveState();
     else if (simulationType == SimulationType::kTensorNetwork)
@@ -1200,6 +1496,8 @@ class GpuState : public ISimulator {
       state->RestoreStateNoFreeSaved();
     else if (simulationType == SimulationType::kDensityMatrix)
       densityMatrix->RestoreState();
+    else if (simulationType == SimulationType::kMatrixProductOperator)
+      mpo->RestoreState();
     else if (simulationType == SimulationType::kMatrixProductState)
       mps->RestoreState();
     else if (simulationType == SimulationType::kTensorNetwork)
@@ -1277,6 +1575,13 @@ class GpuState : public ISimulator {
         throw std::runtime_error(
             "GpuState::MeasureNoCollapse: Density-matrix sampling failed.");
       return static_cast<Types::qubit_t>(samples.front());
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      std::vector<long int> samples(1);
+      if (!mpo->SampleAll(1, samples.data()))
+        throw std::runtime_error(
+            "GpuState::MeasureNoCollapse: Matrix-product-operator sampling "
+            "failed.");
+      return static_cast<Types::qubit_t>(samples.front());
     } else if (simulationType == SimulationType::kMatrixProductState ||
              simulationType == SimulationType::kTensorNetwork ||
              simulationType == SimulationType::kPauliPropagator) {
@@ -1331,6 +1636,16 @@ class GpuState : public ISimulator {
       for (size_t i = 0; i < nrQubits; ++i)
         result[i] = ((samples.front() >> i) & 1) != 0;
       return result;
+    } else if (simulationType == SimulationType::kMatrixProductOperator) {
+      std::vector<long int> samples(1);
+      if (!mpo->SampleAll(1, samples.data()))
+        throw std::runtime_error(
+            "GpuState::MeasureNoCollapseMany: Matrix-product-operator "
+            "sampling failed.");
+      std::vector<bool> result(nrQubits, false);
+      for (size_t i = 0; i < nrQubits; ++i)
+        result[i] = ((samples.front() >> i) & 1) != 0;
+      return result;
     } else if (simulationType == SimulationType::kMatrixProductState ||
                simulationType == SimulationType::kTensorNetwork ||
                simulationType == SimulationType::kPauliPropagator) {
@@ -1367,6 +1682,17 @@ class GpuState : public ISimulator {
   }
 
  protected:
+  // The MPO method falls back to the shared MPS key unless a dedicated
+  // "matrix_product_operator_max_bond_dimension" override was configured,
+  // mirroring the CPU QCSim MPO simulator's lookup.
+  const char* MaxBondDimensionConfigKey() const {
+    return simulationType == SimulationType::kMatrixProductOperator &&
+                   configuration.IsSet(
+                       "matrix_product_operator_max_bond_dimension")
+               ? "matrix_product_operator_max_bond_dimension"
+               : "matrix_product_state_max_bond_dimension";
+  }
+
   static int64_t FindBestMeetingPosition(void* thisPtr, const int64_t* bondDims) {
     GpuState* self = static_cast<GpuState*>(thisPtr);
 
@@ -1382,7 +1708,8 @@ class GpuState : public ISimulator {
 
     if (!dummySim || dummySim->getNrQubits() != nQ) {
       dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
-      dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt("matrix_product_state_max_bond_dimension"));
+      dummySim->SetMaxBondDimension(
+          configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey()));
       dummySim->setGrowthFactorGate(growthFactorGate);
       dummySim->setGrowthFactorSwap(growthFactorSwap);
     }
@@ -1489,6 +1816,8 @@ class GpuState : public ISimulator {
       state;                         /**< The gpu statevector simulator. */
   std::unique_ptr<GpuDensityMatrix>
       densityMatrix;                 /**< The gpu density matrix simulator. */
+  std::unique_ptr<GpuMPO>
+      mpo; /**< The gpu matrix product operator simulator. */
   std::unique_ptr<GpuLibMPSSim> mps; /**< The gpu MPS simulator. */
   std::unique_ptr<GpuLibTNSim> tn;   /**< The gpu tensor network simulator. */
   std::unique_ptr<GpuPauliPropagator>

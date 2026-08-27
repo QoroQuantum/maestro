@@ -63,7 +63,13 @@ struct PauliSimTestFixture {
           Simulators::SimulatorsFactory::CreateGpuPauliPropagatorSimulator();
       gpuPauliSim->CreateSimulator(nrQubitsForRandomCirc);
       gpuPauliSim->SetWillUseSampling(true);
-      gpuPauliSim->AllocateMemory(0.8);
+      // nrQubitsForRandomCirc is tiny (4 qubits), so a small slice of free
+      // GPU memory is already far more than this needs. Requesting a large
+      // percentage here (this used to be 0.8) needlessly starves whatever
+      // else - including the gpuPauliStdSim created right below, which
+      // internally requests its own 90% of memory - runs in the same
+      // process, especially when many GPU-heavy test suites share one binary.
+      gpuPauliSim->AllocateMemory(0.1);
 
       gpuPauliStdSim = Simulators::SimulatorsFactory::CreateSimulator(
           Simulators::SimulatorType::kGpuSim,
@@ -535,6 +541,20 @@ BOOST_FIXTURE_TEST_CASE(PauliInitTests, PauliSimTestFixture) {
 BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomCliffordCircuitsTest,
                        bdata::xrange(1, 20), nrGates) {
   auto circuit = GenerateCircuit(nrQubitsForRandomCirc, nrGates);
+
+  // The circuit is drawn from a std::random_device-seeded RNG (not
+  // reproducible across runs), so if a specific circuit triggers a crash
+  // (e.g. a CUPAULIPROP_STATUS_INVALID_VALUE / segfault seen intermittently
+  // on this test), print it before execution so the exact trigger is
+  // captured even if the process dies mid-circuit. Uses std::cerr (not
+  // BOOST_TEST_MESSAGE, which is gated behind --log_level=message) so it
+  // always shows up, unconditionally flushed.
+  for (const auto& op : circuit)
+    std::cerr << "RandomCliffordCircuitsTest gate=" << op.gate
+              << " q1=" << op.qubit1 << " q2=" << op.qubit2
+              << " q3=" << op.qubit3 << " theta=" << op.theta
+              << " phi=" << op.phi << " lambda=" << op.lambda
+              << " gamma=" << op.gamma << std::endl;
 
   // execute
   for (const auto& op : circuit) {

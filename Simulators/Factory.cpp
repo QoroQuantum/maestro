@@ -178,14 +178,19 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
       if (gpuLibrary && gpuLibrary->IsValid() &&
           (m != SimulationType::kDensityMatrix ||
            gpuLibrary->HasDensityMatrixAPI()) &&
+          (m != SimulationType::kMatrixProductOperator ||
+           gpuLibrary->HasMPOAPI()) &&
           (m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
            m == SimulationType::kDensityMatrix ||
+           m == SimulationType::kMatrixProductOperator ||
            m == SimulationType::kTensorNetwork ||
            m == SimulationType::kPauliPropagator)) {
         auto sim = std::make_shared<Private::GpuSimulator>();
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");
+        else if (m == SimulationType::kMatrixProductOperator)
+          sim->Configure("method", "matrix_product_operator");
         else if (m == SimulationType::kTensorNetwork)
           sim->Configure("method", "tensor_network");
         else if (m == SimulationType::kPauliPropagator)
@@ -276,14 +281,19 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
       if (gpuLibrary && gpuLibrary->IsValid() &&
           (m != SimulationType::kDensityMatrix ||
            gpuLibrary->HasDensityMatrixAPI()) &&
+          (m != SimulationType::kMatrixProductOperator ||
+           gpuLibrary->HasMPOAPI()) &&
           (m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
            m == SimulationType::kDensityMatrix ||
+           m == SimulationType::kMatrixProductOperator ||
            m == SimulationType::kTensorNetwork ||
            m == SimulationType::kPauliPropagator)) {
         auto sim = std::make_unique<Private::GpuSimulator>();
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");
+        else if (m == SimulationType::kMatrixProductOperator)
+          sim->Configure("method", "matrix_product_operator");
         else if (m == SimulationType::kTensorNetwork)
           sim->Configure("method", "tensor_network");
         else if (m == SimulationType::kPauliPropagator)
