@@ -73,6 +73,7 @@ struct ExpvalTestFixture {
 
     state.AllocateBits(nrQubits);
 
+#ifndef NO_QISKIT_AER
     aerStatevector = Simulators::SimulatorsFactory::CreateSimulator(
         Simulators::SimulatorType::kQiskitAer,
         Simulators::SimulationType::kStatevector);
@@ -90,6 +91,7 @@ struct ExpvalTestFixture {
         Simulators::SimulationType::kMatrixProductState);
     aerMPS->AllocateQubits(nrQubits);
     aerMPS->Initialize();
+#endif
 
     qcsimStatevector = Simulators::SimulatorsFactory::CreateSimulator(
         Simulators::SimulatorType::kQCSim,
@@ -117,11 +119,13 @@ struct ExpvalTestFixture {
     qcsimMPS->AllocateQubits(nrQubits);
     qcsimMPS->Initialize();
 
+#ifndef NO_QISKIT_AER
     aerClifford = Simulators::SimulatorsFactory::CreateSimulator(
         Simulators::SimulatorType::kQiskitAer,
         Simulators::SimulationType::kStabilizer);
     aerClifford->AllocateQubits(nrQubits);
     aerClifford->Initialize();
+#endif
 
     qcsimClifford = Simulators::SimulatorsFactory::CreateSimulator(
         Simulators::SimulatorType::kQCSim,
@@ -321,14 +325,16 @@ extern bool checkClose(std::complex<double> a, std::complex<double> b,
 BOOST_AUTO_TEST_SUITE(expval_tests)
 
 BOOST_FIXTURE_TEST_CASE(ExpvalInitializationTests, ExpvalTestFixture) {
+#ifndef NO_QISKIT_AER
   BOOST_TEST(aerStatevector);
+  BOOST_TEST(aerComposite);
+  BOOST_TEST(aerMPS);
+  BOOST_TEST(aerClifford);
+#endif
   BOOST_TEST(qcsimStatevector);
   BOOST_TEST(qcsimStatevectorBig);
-  BOOST_TEST(aerComposite);
   BOOST_TEST(qcsimComposite);
-  BOOST_TEST(aerMPS);
   BOOST_TEST(qcsimMPS);
-  BOOST_TEST(aerClifford);
   BOOST_TEST(qcsimClifford);
 
   BOOST_TEST(qcTensor);
@@ -349,13 +355,15 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest,
   for (int i = 0; i < nrCircuitsLimit; ++i) {
     GenerateCircuit(nrGates, nrQubits);
 
-    randomCirc->Execute(aerStatevector, state);
+#ifndef NO_QISKIT_AER
+    if (aerStatevector) randomCirc->Execute(aerStatevector, state);
+    if (aerComposite) randomCirc->Execute(aerComposite, state);
+    if (aerMPS) randomCirc->Execute(aerMPS, state);
+#endif
     randomCirc->Execute(qcsimStatevector, state);
 
-    randomCirc->Execute(aerComposite, state);
     randomCirc->Execute(qcsimComposite, state);
 
-    randomCirc->Execute(aerMPS, state);
     randomCirc->Execute(qcsimMPS, state);
 
 #ifdef __linux__
@@ -371,26 +379,34 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest,
     for (int j = 0; j < nrPauliLimit; ++j) {
       const std::string pauli = GeneratePauliString(nrQubits);
 
-      const double aerStatevectorVal = aerStatevector->ExpectationValue(pauli);
       const double qcsimStatevectorVal =
           qcsimStatevector->ExpectationValue(pauli);
 
-      BOOST_CHECK_PREDICATE(
-          checkClose, (aerStatevectorVal)(qcsimStatevectorVal)(precision));
+#ifndef NO_QISKIT_AER
+      if (aerStatevector) {
+        const double aerStatevectorVal = aerStatevector->ExpectationValue(pauli);
+        BOOST_CHECK_PREDICATE(
+            checkClose, (aerStatevectorVal)(qcsimStatevectorVal)(precision));
+      }
 
-      const double aerCompVal = aerComposite->ExpectationValue(pauli);
+      if (aerComposite) {
+        const double aerCompVal = aerComposite->ExpectationValue(pauli);
+        BOOST_CHECK_PREDICATE(checkClose,
+                              (aerCompVal)(qcsimStatevectorVal)(precision));
+      }
+
+      if (aerMPS) {
+        const double aerMPSVal = aerMPS->ExpectationValue(pauli);
+        BOOST_CHECK_PREDICATE(checkClose,
+                              (aerMPSVal)(qcsimStatevectorVal)(precisionMPS));
+      }
+#endif
+
       const double qcsimCompVal = qcsimComposite->ExpectationValue(pauli);
-
-      BOOST_CHECK_PREDICATE(checkClose,
-                            (aerCompVal)(qcsimStatevectorVal)(precision));
       BOOST_CHECK_PREDICATE(checkClose,
                             (qcsimCompVal)(qcsimStatevectorVal)(precision));
 
-      const double aerMPSVal = aerMPS->ExpectationValue(pauli);
       const double qcsimMPSVal = qcsimMPS->ExpectationValue(pauli);
-
-      BOOST_CHECK_PREDICATE(checkClose,
-                            (aerMPSVal)(qcsimStatevectorVal)(precisionMPS));
       BOOST_CHECK_PREDICATE(checkClose,
                             (qcsimMPSVal)(qcsimStatevectorVal)(precisionMPS));
 
@@ -426,13 +442,15 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NormalSimulatorsTest,
       }
     }
 
-    resetRandomCirc->Execute(aerStatevector, state);
+#ifndef NO_QISKIT_AER
+    if (aerStatevector) resetRandomCirc->Execute(aerStatevector, state);
+    if (aerComposite) resetRandomCirc->Execute(aerComposite, state);
+    if (aerMPS) resetRandomCirc->Execute(aerMPS, state);
+#endif
     resetRandomCirc->Execute(qcsimStatevector, state);
 
-    resetRandomCirc->Execute(aerComposite, state);
     resetRandomCirc->Execute(qcsimComposite, state);
 
-    resetRandomCirc->Execute(aerMPS, state);
     resetRandomCirc->Execute(qcsimMPS, state);
 
 #ifdef __linux__
@@ -459,7 +477,9 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, CliffordSimulatorsTest,
     GenerateCliffordCircuit(nrGates, nrQubits);
 
     randomCirc->Execute(qcsimStatevector, state);
-    randomCirc->Execute(aerClifford, state);
+#ifndef NO_QISKIT_AER
+    if (aerClifford) randomCirc->Execute(aerClifford, state);
+#endif
     randomCirc->Execute(qcsimClifford, state);
 
     for (int j = 0; j < 30; ++j) {
@@ -469,18 +489,22 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, CliffordSimulatorsTest,
           qcsimStatevector->ExpectationValue(pauli);
       const double qcsimCliffordVal = qcsimClifford->ExpectationValue(pauli);
 
-      // aerClifford->SaveState();
-      const double aerCliffordVal = aerClifford->ExpectationValue(pauli);
-      // aerClifford->RestoreState();
-
       BOOST_CHECK_PREDICATE(checkClose,
                             (qcsimCliffordVal)(qcsimStatevectorVal)(precision));
-      BOOST_CHECK_PREDICATE(checkClose,
-                            (aerCliffordVal)(qcsimStatevectorVal)(precision));
+
+#ifndef NO_QISKIT_AER
+      if (aerClifford) {
+        const double aerCliffordVal = aerClifford->ExpectationValue(pauli);
+        BOOST_CHECK_PREDICATE(checkClose,
+                              (aerCliffordVal)(qcsimStatevectorVal)(precision));
+      }
+#endif
     }
 
     resetRandomCirc->Execute(qcsimStatevector, state);
-    resetRandomCirc->Execute(aerClifford, state);
+#ifndef NO_QISKIT_AER
+    if (aerClifford) resetRandomCirc->Execute(aerClifford, state);
+#endif
     resetRandomCirc->Execute(qcsimClifford, state);
 
     randomCirc->Clear();
