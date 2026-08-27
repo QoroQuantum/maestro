@@ -18,6 +18,7 @@
 #ifdef __linux__
 
 #include <memory>
+#include <vector>
 
 #include "GpuLibrary.h"
 
@@ -51,6 +52,21 @@ class GpuLibMPSSim {
     return false;
   }
 
+  bool CreateWithBasisState(unsigned int nrQubits, unsigned long long state) {
+    if (obj) return lib->MPSCreateWithBasisState(obj, nrQubits, state);
+
+    return false;
+  }
+
+  bool CreateWithBasisStateBits(unsigned int nrQubits,
+                                const std::vector<unsigned char> &stateBits) {
+    if (obj)
+      return lib->MPSCreateWithBasisStateBits(obj, nrQubits,
+                                              stateBits.data());
+
+    return false;
+  }
+
   bool Reset() {
     if (obj) return lib->MPSReset(obj);
 
@@ -65,6 +81,11 @@ class GpuLibMPSSim {
 
   bool SetUseOptimalMeetingPosition(bool useOptimalMeetingPosition) {
     if (obj) return lib->MPSSetUseOptimalMeetingPosition(obj, useOptimalMeetingPosition);
+    return false;
+  }
+
+  bool GetUseOptimalMeetingPosition() const {
+    if (obj) return lib->MPSGetUseOptimalMeetingPosition(obj);
     return false;
   }
 
@@ -134,6 +155,13 @@ class GpuLibMPSSim {
     return 0;
   }
 
+  std::vector<long long int> GetBondDimensions(size_t nrQubits) const {
+    if (!obj || nrQubits < 2) return {};
+    std::vector<long long int> bondDims(nrQubits - 1);
+    if (!lib->MPSGetBondDimensions(obj, bondDims.data())) return {};
+    return bondDims;
+  }
+
   bool SetCallbackContext(void *context) {
     if (obj) return lib->MPSSetCallbackContext(obj, context);
     return false;
@@ -192,6 +220,20 @@ class GpuLibMPSSim {
   bool Sample(long int numShots, long int numQubits, unsigned int *qubits,
               void *resultMap) {
     if (obj) return lib->MPSSample(obj, numShots, numQubits, qubits, resultMap);
+
+    return false;
+  }
+
+  bool SampleRaw(unsigned int nSamples, long int *samples, unsigned int nBits,
+                const unsigned int *bitOrdering) {
+    if (obj)
+      return lib->MPSSampleRaw(obj, nSamples, samples, nBits, bitOrdering);
+
+    return false;
+  }
+
+  bool SampleAll(unsigned int nSamples, long int *samples) {
+    if (obj) return lib->MPSSampleAll(obj, nSamples, samples);
 
     return false;
   }
@@ -327,6 +369,22 @@ class GpuLibMPSSim {
   bool ApplyU(unsigned int siteA, double theta, double phi, double lambda,
               double gamma) {
     if (obj) return lib->MPSApplyU(obj, siteA, theta, phi, lambda, gamma);
+
+    return false;
+  }
+
+  bool ApplyOneQubitMatrix(unsigned int qubit,
+                           const double *matrixInterleaved) {
+    if (obj) return lib->MPSApplyOneQubitMatrix(obj, qubit, matrixInterleaved);
+
+    return false;
+  }
+
+  bool ApplyTwoQubitMatrix(unsigned int qubit1, unsigned int qubit2,
+                           const double *matrixInterleaved) {
+    if (obj)
+      return lib->MPSApplyTwoQubitMatrix(obj, qubit1, qubit2,
+                                         matrixInterleaved);
 
     return false;
   }

@@ -343,6 +343,40 @@ class ISimulator : public IState, std::enable_shared_from_this<ISimulator> {
   virtual void ApplyNop() = 0;
 
   /**
+   * @brief Initializes the state to a computational basis state.
+   *
+   * Generic fallback usable by any simulator: resets to |0...0> and applies
+   * X on every set bit. Backends with a more direct primitive (density
+   * matrix, matrix product operator, matrix product state, statevector)
+   * override this for efficiency.
+   */
+  void InitializeToBasisState(size_t num_qubits,
+                              Types::qubit_t basisState) override {
+    if (num_qubits == 0) return;
+    Clear();
+    AllocateQubits(num_qubits);
+    Initialize();
+    for (size_t q = 0; q < num_qubits; ++q)
+      if ((basisState >> q) & 1ULL) ApplyX(static_cast<Types::qubit_t>(q));
+  }
+
+  /**
+   * @brief Initializes the state to a computational basis state.
+   *
+   * Generic fallback, see the Types::qubit_t overload; this one is not
+   * limited to 64 qubits.
+   */
+  void InitializeToBasisState(size_t num_qubits,
+                              const std::vector<bool> &basisState) override {
+    if (num_qubits == 0) return;
+    Clear();
+    AllocateQubits(num_qubits);
+    Initialize();
+    for (size_t q = 0; q < num_qubits && q < basisState.size(); ++q)
+      if (basisState[q]) ApplyX(static_cast<Types::qubit_t>(q));
+  }
+
+  /**
    * @brief Clones the simulator.
    *
    * Clones the simulator, including the state, the configuration and the

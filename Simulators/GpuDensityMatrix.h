@@ -11,6 +11,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "GpuLibrary.h"
@@ -31,6 +32,24 @@ class GpuDensityMatrix {
   bool Create(unsigned int n) { return lib->DMCreate(obj, n); }
   bool CreateWithState(unsigned int n, const double* state) {
     return lib->DMCreateWithState(obj, n, state);
+  }
+  bool CreateWithBasisState(unsigned int n, unsigned long long state) {
+    return lib->DMCreateWithBasisState(obj, n, state);
+  }
+  bool CreateWithMixtureOfBasisStates(
+      unsigned int n,
+      const std::vector<std::pair<unsigned long long, double>>& mixture) {
+    std::vector<unsigned long long> states;
+    std::vector<double> weights;
+    states.reserve(mixture.size());
+    weights.reserve(mixture.size());
+    for (const auto& [state, weight] : mixture) {
+      states.push_back(state);
+      weights.push_back(weight);
+    }
+    return lib->DMCreateWithMixtureOfBasisStates(
+        obj, n, states.data(), weights.data(),
+        static_cast<int>(states.size()));
   }
   void Reset() {
     if (!lib->DMReset(obj))

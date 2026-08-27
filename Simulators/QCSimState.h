@@ -22,6 +22,7 @@
 #include <limits>
 #include <sstream>
 #include <random>
+#include <utility>
 
 #include "Simulator.h"
 
@@ -349,6 +350,130 @@ class QCSimState : public ISimulator {
       state = std::make_unique<QC::QubitRegister<>>(nrQubits, amplitudes);
       state->SetMultithreading(enableMultithreading);
     }
+  }
+
+  /**
+   * @brief Initializes the state to a computational basis state.
+   *
+   * The density matrix, matrix product operator, matrix product state and
+   * statevector methods use their own direct primitive; every other method
+   * falls back to the generic ISimulator implementation (reset to |0...0>,
+   * then apply X on every set bit).
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param basisState The computational basis state, bit i selects qubit i.
+   */
+  void InitializeToBasisState(size_t num_qubits,
+                              Types::qubit_t basisState) override {
+    if (num_qubits == 0) return;
+    Clear();
+    nrQubits = num_qubits;
+    Initialize();
+
+    if (simulationType == SimulationType::kDensityMatrix)
+      densityMatrix->setToBasisState(static_cast<size_t>(basisState));
+    else if (simulationType == SimulationType::kMatrixProductOperator)
+      mpoSimulator->setToBasisState(static_cast<size_t>(basisState));
+    else if (simulationType == SimulationType::kMatrixProductState)
+      mpsSimulator->setToBasisState(static_cast<size_t>(basisState));
+    else if (simulationType == SimulationType::kStatevector)
+      state->setToBasisState(static_cast<size_t>(basisState));
+    else
+      for (size_t q = 0; q < num_qubits; ++q)
+        if ((basisState >> q) & 1ULL) ApplyX(static_cast<Types::qubit_t>(q));
+  }
+
+  /**
+   * @brief Initializes the state to a computational basis state.
+   *
+   * Same as the Types::qubit_t overload, but not limited to 64 qubits. The
+   * matrix product operator and matrix product state methods use their own
+   * direct primitive; every other method falls back to the generic
+   * ISimulator implementation (reset to |0...0>, then apply X on every set
+   * bit) - which is not limited either, unlike the other methods' native
+   * Types::qubit_t-based primitives.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param basisState The computational basis state, entry i selects qubit i.
+   */
+  void InitializeToBasisState(size_t num_qubits,
+                              const std::vector<bool> &basisState) override {
+    if (num_qubits == 0) return;
+    Clear();
+    nrQubits = num_qubits;
+    Initialize();
+
+    if (simulationType == SimulationType::kMatrixProductOperator)
+      mpoSimulator->setToBasisState(basisState);
+    else if (simulationType == SimulationType::kMatrixProductState)
+      mpsSimulator->setToBasisState(basisState);
+    else
+      for (size_t q = 0; q < num_qubits && q < basisState.size(); ++q)
+        if (basisState[q]) ApplyX(static_cast<Types::qubit_t>(q));
+  }
+
+  /**
+   * @brief Initializes the state to a classical mixture of computational
+   * basis states.
+   *
+   * Works for the density matrix and matrix product operator methods. There
+   * is no generic fallback for other methods, since a mixture cannot be
+   * reached with unitary gates alone.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param mixture The mixture, as pairs of (basis state, weight).
+   */
+  void InitializeToMixtureOfBasisStates(
+      size_t num_qubits,
+      const std::vector<std::pair<Types::qubit_t, double>> &mixture)
+      override {
+    if (num_qubits == 0) return;
+    Clear();
+    nrQubits = num_qubits;
+    Initialize();
+
+    if (simulationType != SimulationType::kDensityMatrix &&
+        simulationType != SimulationType::kMatrixProductOperator)
+      throw std::runtime_error(
+          "QCSimState::InitializeToMixtureOfBasisStates: Invalid simulation "
+          "type for initializing to a mixture of basis states.");
+
+    std::vector<std::pair<size_t, double>> converted;
+    converted.reserve(mixture.size());
+    for (const auto &[basisState, weight] : mixture)
+      converted.emplace_back(static_cast<size_t>(basisState), weight);
+
+    if (simulationType == SimulationType::kDensityMatrix)
+      densityMatrix->setToMixtureOfBasisStates(converted);
+    else
+      mpoSimulator->setToMixtureOfBasisStates(converted);
+  }
+
+  /**
+   * @brief Initializes the state to a classical mixture of computational
+   * basis states.
+   *
+   * Same as the Types::qubit_t-keyed overload, but not limited to 64 qubits.
+   * Only the matrix product operator method supports this.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param mixture The mixture, as pairs of (basis state, weight).
+   */
+  void InitializeToMixtureOfBasisStates(
+      size_t num_qubits,
+      const std::vector<std::pair<std::vector<bool>, double>> &mixture)
+      override {
+    if (num_qubits == 0) return;
+    Clear();
+    nrQubits = num_qubits;
+    Initialize();
+
+    if (simulationType != SimulationType::kMatrixProductOperator)
+      throw std::runtime_error(
+          "QCSimState::InitializeToMixtureOfBasisStates: Invalid simulation "
+          "type for initializing to a mixture of basis states.");
+
+    mpoSimulator->setToMixtureOfBasisStates(mixture);
   }
 
   /**

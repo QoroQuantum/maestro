@@ -27,6 +27,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #ifndef NO_QISKIT_AER
@@ -170,6 +171,100 @@ class IState {
    */
   virtual void InitializeState(size_t num_qubits,
                                Eigen::VectorXcd &amplitudes) = 0;
+
+  /**
+   * @brief Initializes the state to a computational basis state.
+   *
+   * Call it only on a non-initialized state, it allocates the qubits and
+   * initializes the state itself. Every simulator supports this: backends
+   * with a direct primitive (density matrix, matrix product operator, matrix
+   * product state, statevector) use it; ISimulator provides a generic
+   * fallback (reset to |0...0>, then apply X on every set bit) for the rest.
+   *
+   * Don't use it for more than 64 qubits, as the basis state is packed in a
+   * single Types::qubit_t; use the std::vector<bool> overload instead, which
+   * the matrix product operator and matrix product state backends (the only
+   * ones that can scale that far) support natively.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param basisState The computational basis state, bit i selects qubit i.
+   */
+  virtual void InitializeToBasisState(size_t num_qubits,
+                                      Types::qubit_t basisState) {
+    (void)num_qubits;
+    (void)basisState;
+    throw std::runtime_error(
+        "This simulator does not support initialization to a computational "
+        "basis state");
+  }
+
+  /**
+   * @brief Initializes the state to a computational basis state.
+   *
+   * Same as the Types::qubit_t overload, but the basis state is given as one
+   * bool per qubit so it is not limited to 64 qubits.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param basisState The computational basis state, entry i selects qubit i.
+   */
+  virtual void InitializeToBasisState(size_t num_qubits,
+                                      const std::vector<bool> &basisState) {
+    (void)num_qubits;
+    (void)basisState;
+    throw std::runtime_error(
+        "This simulator does not support initialization to a computational "
+        "basis state");
+  }
+
+  /**
+   * @brief Initializes the state to a classical mixture of computational
+   * basis states.
+   *
+   * Sets the state to rho = sum_k weights[k] |states[k]><states[k]|. Call it
+   * only on a non-initialized state, it allocates the qubits and initializes
+   * the state itself. Weights are normalized so the trace is 1; only backends
+   * that can represent a mixed state support this - currently the density
+   * matrix and matrix product operator backends. Other backends throw, and
+   * there is no generic fallback: unlike a basis state, a mixture cannot be
+   * reached with unitary gates alone.
+   *
+   * Don't use it for more than 64 qubits, as each basis state is packed in a
+   * single Types::qubit_t; use the std::vector<bool>-keyed overload instead
+   * for the matrix product operator backend, which can scale that far.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param mixture The mixture, as pairs of (basis state, weight).
+   */
+  virtual void InitializeToMixtureOfBasisStates(
+      size_t num_qubits,
+      const std::vector<std::pair<Types::qubit_t, double>> &mixture) {
+    (void)num_qubits;
+    (void)mixture;
+    throw std::runtime_error(
+        "This simulator does not support initialization to a mixture of "
+        "computational basis states");
+  }
+
+  /**
+   * @brief Initializes the state to a classical mixture of computational
+   * basis states.
+   *
+   * Same as the Types::qubit_t-keyed overload, but each basis state is given
+   * as one bool per qubit so it is not limited to 64 qubits. Currently only
+   * the matrix product operator backend supports this.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param mixture The mixture, as pairs of (basis state, weight).
+   */
+  virtual void InitializeToMixtureOfBasisStates(
+      size_t num_qubits,
+      const std::vector<std::pair<std::vector<bool>, double>> &mixture) {
+    (void)num_qubits;
+    (void)mixture;
+    throw std::runtime_error(
+        "This simulator does not support initialization to a mixture of "
+        "computational basis states");
+  }
 
   /**
    * @brief Just resets the state to 0.

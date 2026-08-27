@@ -265,6 +265,11 @@ class GpuLibrary : public Utils::Library {
           LOAD_DM(DMCreate, int (*)(void *, unsigned int));
           LOAD_DM(DMCreateWithState,
                   int (*)(void *, unsigned int, const double *));
+          LOAD_DM(DMCreateWithBasisState,
+                  int (*)(void *, unsigned int, unsigned long long));
+          LOAD_DM(DMCreateWithMixtureOfBasisStates,
+                  int (*)(void *, unsigned int, const unsigned long long *,
+                          const double *, int));
           LOAD_DM(DMReset, int (*)(void *));
           LOAD_DM(DMIsValid, int (*)(void *));
           LOAD_DM(DMIsCreated, int (*)(void *));
@@ -318,6 +323,102 @@ class GpuLibrary : public Utils::Library {
 #undef LOAD_DM_GATE1
 #undef LOAD_DM
 
+          // matrix product operator (mpo) api functions
+#define LOAD_MPO(name, type)                                                  \
+  f##name = reinterpret_cast<type>(GetFunction(#name));                       \
+  CheckFunction(reinterpret_cast<void *>(f##name), __LINE__)
+          LOAD_MPO(CreateMPO, void *(*)(void *));
+          LOAD_MPO(DestroyMPO, void (*)(void *));
+          LOAD_MPO(MPOCreate, int (*)(void *, unsigned int));
+          LOAD_MPO(MPOCreateWithState,
+                   int (*)(void *, unsigned int, const double *));
+          LOAD_MPO(MPOCreateWithBasisState,
+                   int (*)(void *, unsigned int, unsigned long long));
+          LOAD_MPO(MPOCreateWithBasisStateBits,
+                   int (*)(void *, unsigned int, const unsigned char *));
+          LOAD_MPO(MPOCreateWithMixtureOfBasisStates,
+                   int (*)(void *, unsigned int, const unsigned long long *,
+                           const double *, int));
+          LOAD_MPO(MPOCreateWithMixtureOfBasisStatesBits,
+                   int (*)(void *, unsigned int, const unsigned char *,
+                           const double *, int));
+          LOAD_MPO(MPOReset, int (*)(void *));
+          LOAD_MPO(MPOSetInitialQubitsMap,
+                   int (*)(void *, const long long int *, int));
+          LOAD_MPO(MPOSetUseOptimalMeetingPosition, int (*)(void *, int));
+          LOAD_MPO(MPOGetUseOptimalMeetingPosition, int (*)(void *));
+          LOAD_MPO(MPOIsValid, int (*)(void *));
+          LOAD_MPO(MPOIsCreated, int (*)(void *));
+          LOAD_MPO(MPOSetDataType, int (*)(void *, int));
+          LOAD_MPO(MPOIsDoublePrecision, int (*)(void *));
+          LOAD_MPO(MPOGetNrQubits, int (*)(void *));
+          LOAD_MPO(MPOSetCutoff, int (*)(void *, double));
+          LOAD_MPO(MPOGetCutoff, double (*)(void *));
+          LOAD_MPO(MPOSetMaxExtent, int (*)(void *, long int));
+          LOAD_MPO(MPOGetMaxExtent, long int (*)(void *));
+          LOAD_MPO(MPOGetBondDimensions,
+                   int (*)(void *, long long int *));
+          LOAD_MPO(MPOSetCallbackContext, int (*)(void *, void *));
+          LOAD_MPO(MPOSetMeetingPositionCallback,
+                   int (*)(void *, int64_t (*)(void *, const int64_t *)));
+          LOAD_MPO(MPOSetBondDimensionsCallback,
+                   int (*)(void *, void (*)(void *, const int64_t *)));
+          LOAD_MPO(MPOSaveState, int (*)(void *));
+          LOAD_MPO(MPORestoreState, int (*)(void *));
+          LOAD_MPO(MPOCleanSavedState, int (*)(void *));
+          LOAD_MPO(MPOClone, void *(*)(void *));
+          LOAD_MPO(MPOMeasureQubitCollapse, int (*)(void *, int));
+          LOAD_MPO(MPOMeasureQubitNoCollapse, int (*)(void *, int));
+          LOAD_MPO(MPOSample,
+                   int (*)(void *, unsigned int, long int *, unsigned int,
+                           int *));
+          LOAD_MPO(MPOSampleAll,
+                   int (*)(void *, unsigned int, long int *));
+          LOAD_MPO(MPOGetElement,
+                   int (*)(void *, long long, long long, double *, double *));
+          LOAD_MPO(MPOBasisStateProbability, double (*)(void *, long long));
+          LOAD_MPO(MPOAllProbabilities, int (*)(void *, double *));
+          LOAD_MPO(MPOExpectationValue,
+                   double (*)(void *, const char *, int));
+          LOAD_MPO(MPOApplyKraus,
+                   int (*)(void *, int, const int *, int, const double *));
+#define LOAD_MPO_GATE1(name) LOAD_MPO(name, int (*)(void *, int))
+#define LOAD_MPO_GATE2(name) LOAD_MPO(name, int (*)(void *, int, int))
+#define LOAD_MPO_ROT1(name) LOAD_MPO(name, int (*)(void *, int, double))
+#define LOAD_MPO_ROT2(name) LOAD_MPO(name, int (*)(void *, int, int, double))
+          LOAD_MPO_GATE1(MPOApplyReset);
+          LOAD_MPO_GATE1(MPOApplyX); LOAD_MPO_GATE1(MPOApplyY);
+          LOAD_MPO_GATE1(MPOApplyZ); LOAD_MPO_GATE1(MPOApplyH);
+          LOAD_MPO_GATE1(MPOApplyS); LOAD_MPO_GATE1(MPOApplySDG);
+          LOAD_MPO_GATE1(MPOApplyT); LOAD_MPO_GATE1(MPOApplyTDG);
+          LOAD_MPO_GATE1(MPOApplySX); LOAD_MPO_GATE1(MPOApplySXDG);
+          LOAD_MPO_GATE1(MPOApplyK);
+          LOAD_MPO_ROT1(MPOApplyP); LOAD_MPO_ROT1(MPOApplyRx);
+          LOAD_MPO_ROT1(MPOApplyRy); LOAD_MPO_ROT1(MPOApplyRz);
+          LOAD_MPO(MPOApplyU,
+                   int (*)(void *, int, double, double, double, double));
+          LOAD_MPO(MPOApplyOneQubitMatrix,
+                   int (*)(void *, int, const double *));
+          LOAD_MPO(MPOApplyTwoQubitMatrix,
+                   int (*)(void *, int, int, const double *));
+          LOAD_MPO_GATE2(MPOApplyCX); LOAD_MPO_GATE2(MPOApplyCY);
+          LOAD_MPO_GATE2(MPOApplyCZ); LOAD_MPO_GATE2(MPOApplyCH);
+          LOAD_MPO_GATE2(MPOApplyCSX); LOAD_MPO_GATE2(MPOApplyCSXDG);
+          LOAD_MPO_ROT2(MPOApplyCP); LOAD_MPO_ROT2(MPOApplyCRx);
+          LOAD_MPO_ROT2(MPOApplyCRy); LOAD_MPO_ROT2(MPOApplyCRz);
+          LOAD_MPO_GATE2(MPOApplySwap);
+          LOAD_MPO(MPOApplyCU,
+                   int (*)(void *, int, int, double, double, double, double));
+          // Note: the gpu MPO backend does not expose native 3-qubit gates
+          // (MPOApplyCCX / MPOApplyCSwap); those are decomposed into 1- and
+          // 2-qubit gates by GpuSimulator, matching the CPU MPOSimulator
+          // restriction to one- and two-qubit operators.
+#undef LOAD_MPO_ROT2
+#undef LOAD_MPO_ROT1
+#undef LOAD_MPO_GATE2
+#undef LOAD_MPO_GATE1
+#undef LOAD_MPO
+
           // mps api functions
 
           fCreateMPS = (void *(*)(void *))GetFunction("CreateMPS");
@@ -327,15 +428,26 @@ class GpuLibrary : public Utils::Library {
 
           fMPSCreate = (int (*)(void *, unsigned int))GetFunction("MPSCreate");
           CheckFunction((void *)fMPSCreate, __LINE__);
+          fMPSCreateWithBasisState =
+              (int (*)(void *, unsigned int, unsigned long long))GetFunction(
+                  "MPSCreateWithBasisState");
+          CheckFunction((void *)fMPSCreateWithBasisState, __LINE__);
+          fMPSCreateWithBasisStateBits =
+              (int (*)(void *, unsigned int, const unsigned char *))
+                  GetFunction("MPSCreateWithBasisStateBits");
+          CheckFunction((void *)fMPSCreateWithBasisStateBits, __LINE__);
           fMPSReset = (int (*)(void *))GetFunction("MPSReset");
           CheckFunction((void *)fMPSReset, __LINE__);
           fMPSSetInitialQubitsMap =
-              (int (*)(void *, const long long int *, unsigned int))GetFunction(
+              (int (*)(void *, const long long int *, int))GetFunction(
                   "MPSSetInitialQubitsMap");
           CheckFunction((void *)fMPSSetInitialQubitsMap, __LINE__);
           fMPSSetUseOptimalMeetingPosition = (int (*)(void *, int))GetFunction(
               "MPSSetUseOptimalMeetingPosition");
           CheckFunction((void *)fMPSSetUseOptimalMeetingPosition, __LINE__);
+          fMPSGetUseOptimalMeetingPosition = (int (*)(void *))GetFunction(
+              "MPSGetUseOptimalMeetingPosition");
+          CheckFunction((void *)fMPSGetUseOptimalMeetingPosition, __LINE__);
 
           fMPSIsValid = (int (*)(void *))GetFunction("MPSIsValid");
           CheckFunction((void *)fMPSIsValid, __LINE__);
@@ -363,6 +475,10 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fMPSGetMaxExtent, __LINE__);
           fMPSGetNrQubits = (int (*)(void *))GetFunction("MPSGetNrQubits");
           CheckFunction((void *)fMPSGetNrQubits, __LINE__);
+          fMPSGetBondDimensions =
+              (int (*)(void *, long long int *))GetFunction(
+                  "MPSGetBondDimensions");
+          CheckFunction((void *)fMPSGetBondDimensions, __LINE__);
           fMPSSetCallbackContext =
               (int (*)(void *, void *))GetFunction("MPSSetCallbackContext");
           CheckFunction((void *)fMPSSetCallbackContext, __LINE__);
@@ -398,6 +514,13 @@ class GpuLibrary : public Utils::Library {
           fMPSSample = (int (*)(void *, long int, long int, unsigned int *,
                                 void *))GetFunction("MPSSample");
           CheckFunction((void *)fMPSSample, __LINE__);
+          fMPSSampleRaw = (int (*)(void *, unsigned int, long int *,
+                                   unsigned int, const unsigned int *))
+              GetFunction("MPSSampleRaw");
+          CheckFunction((void *)fMPSSampleRaw, __LINE__);
+          fMPSSampleAll = (int (*)(void *, unsigned int, long int *))
+              GetFunction("MPSSampleAll");
+          CheckFunction((void *)fMPSSampleAll, __LINE__);
 
           fMPSSaveState = (int (*)(void *))GetFunction("MPSSaveState");
           CheckFunction((void *)fMPSSaveState, __LINE__);
@@ -457,6 +580,14 @@ class GpuLibrary : public Utils::Library {
           fMPSApplyU = (int (*)(void *, unsigned int, double, double, double,
                                 double))GetFunction("MPSApplyU");
           CheckFunction((void *)fMPSApplyU, __LINE__);
+          fMPSApplyOneQubitMatrix =
+              (int (*)(void *, unsigned int, const double *))GetFunction(
+                  "MPSApplyOneQubitMatrix");
+          CheckFunction((void *)fMPSApplyOneQubitMatrix, __LINE__);
+          fMPSApplyTwoQubitMatrix =
+              (int (*)(void *, unsigned int, unsigned int,
+                       const double *))GetFunction("MPSApplyTwoQubitMatrix");
+          CheckFunction((void *)fMPSApplyTwoQubitMatrix, __LINE__);
           fMPSApplySwap = (int (*)(void *, unsigned int,
                                    unsigned int))GetFunction("MPSApplySwap");
           CheckFunction((void *)fMPSApplySwap, __LINE__);
@@ -912,6 +1043,22 @@ class GpuLibrary : public Utils::Library {
            fDMApplyCSXDG && fDMApplyCP && fDMApplyCRx && fDMApplyCRy &&
            fDMApplyCRz && fDMApplyCCX && fDMApplySwap && fDMApplyCSwap &&
            fDMApplyCU;
+  }
+  bool HasMPOAPI() const {
+    return IsValid() && fCreateMPO && fDestroyMPO &&
+           fMPOCreate && fMPOCreateWithState && fMPOReset && fMPOIsCreated &&
+           fMPOSetDataType &&
+           fMPOSaveState && fMPORestoreState && fMPOCleanSavedState &&
+           fMPOClone && fMPOMeasureQubitCollapse && fMPOSampleAll &&
+           fMPOBasisStateProbability && fMPOAllProbabilities &&
+           fMPOExpectationValue && fMPOApplyKraus && fMPOApplyReset &&
+           fMPOApplyX && fMPOApplyY && fMPOApplyZ && fMPOApplyH &&
+           fMPOApplyS && fMPOApplySDG && fMPOApplyT && fMPOApplyTDG &&
+           fMPOApplySX && fMPOApplySXDG && fMPOApplyK && fMPOApplyP &&
+           fMPOApplyRx && fMPOApplyRy && fMPOApplyRz && fMPOApplyU &&
+           fMPOApplyCX && fMPOApplyCY && fMPOApplyCZ && fMPOApplyCH &&
+           fMPOApplyCSX && fMPOApplyCSXDG && fMPOApplyCP && fMPOApplyCRx &&
+           fMPOApplyCRy && fMPOApplyCRz && fMPOApplySwap && fMPOApplyCU;
   }
 
   // statevector functions
@@ -1478,6 +1625,18 @@ class GpuLibrary : public Utils::Library {
   bool DMCreateWithState(void *obj, unsigned int n, const double *data) {
     return obj && fDMCreateWithState && fDMCreateWithState(obj, n, data) == 1;
   }
+  bool DMCreateWithBasisState(void *obj, unsigned int n,
+                              unsigned long long state) {
+    return obj && fDMCreateWithBasisState &&
+           fDMCreateWithBasisState(obj, n, state) == 1;
+  }
+  bool DMCreateWithMixtureOfBasisStates(void *obj, unsigned int n,
+                                        const unsigned long long *states,
+                                        const double *weights, int nTerms) {
+    return obj && fDMCreateWithMixtureOfBasisStates &&
+           fDMCreateWithMixtureOfBasisStates(obj, n, states, weights,
+                                             nTerms) == 1;
+  }
   DM_BOOL0(DMReset) DM_BOOL0(DMIsValid) DM_BOOL0(DMIsCreated)
   DM_BOOL1(DMSetDataType, int) DM_BOOL0(DMIsDoublePrecision)
   int DMGetNrQubits(void *obj) const {
@@ -1538,12 +1697,182 @@ class GpuLibrary : public Utils::Library {
 #undef DM_BOOL1
 #undef DM_BOOL0
 
+ public:
+  // matrix product operator (mpo) functions
+  void *CreateMPO() {
+    if (!LibraryHandle || !fCreateMPO) return nullptr;
+    return fCreateMPO(LibraryHandle);
+  }
+  void DestroyMPO(void *obj) {
+    if (obj && fDestroyMPO) fDestroyMPO(obj);
+  }
+#define MPO_BOOL0(name)                                                       \
+  bool name(void *obj) { return obj && f##name && f##name(obj) == 1; }
+#define MPO_BOOL1(name, type)                                                 \
+  bool name(void *obj, type a) { return obj && f##name && f##name(obj, a) == 1; }
+#define MPO_BOOL2(name, type1, type2)                                         \
+  bool name(void *obj, type1 a, type2 b) {                                    \
+    return obj && f##name && f##name(obj, a, b) == 1;                        \
+  }
+#define MPO_BOOL3(name, type1, type2, type3)                                  \
+  bool name(void *obj, type1 a, type2 b, type3 c) {                           \
+    return obj && f##name && f##name(obj, a, b, c) == 1;                     \
+  }
+  MPO_BOOL1(MPOCreate, unsigned int)
+  bool MPOCreateWithState(void *obj, unsigned int n, const double *data) {
+    return obj && fMPOCreateWithState && fMPOCreateWithState(obj, n, data) == 1;
+  }
+  bool MPOCreateWithBasisState(void *obj, unsigned int n,
+                               unsigned long long state) {
+    return obj && fMPOCreateWithBasisState &&
+           fMPOCreateWithBasisState(obj, n, state) == 1;
+  }
+  bool MPOCreateWithBasisStateBits(void *obj, unsigned int n,
+                                   const unsigned char *stateBits) {
+    return obj && fMPOCreateWithBasisStateBits &&
+           fMPOCreateWithBasisStateBits(obj, n, stateBits) == 1;
+  }
+  bool MPOCreateWithMixtureOfBasisStates(void *obj, unsigned int n,
+                                         const unsigned long long *states,
+                                         const double *weights, int nTerms) {
+    return obj && fMPOCreateWithMixtureOfBasisStates &&
+           fMPOCreateWithMixtureOfBasisStates(obj, n, states, weights,
+                                              nTerms) == 1;
+  }
+  bool MPOCreateWithMixtureOfBasisStatesBits(void *obj, unsigned int n,
+                                             const unsigned char *stateBitsFlat,
+                                             const double *weights,
+                                             int nTerms) {
+    return obj && fMPOCreateWithMixtureOfBasisStatesBits &&
+           fMPOCreateWithMixtureOfBasisStatesBits(obj, n, stateBitsFlat,
+                                                  weights, nTerms) == 1;
+  }
+  MPO_BOOL0(MPOReset)
+  bool MPOSetInitialQubitsMap(void *obj,
+                              const std::vector<long long int> &initialMap) {
+    return obj && fMPOSetInitialQubitsMap &&
+           fMPOSetInitialQubitsMap(obj, initialMap.data(),
+                                   static_cast<int>(initialMap.size())) == 1;
+  }
+  MPO_BOOL1(MPOSetUseOptimalMeetingPosition, int)
+  bool MPOGetUseOptimalMeetingPosition(void *obj) const {
+    return obj && fMPOGetUseOptimalMeetingPosition &&
+           fMPOGetUseOptimalMeetingPosition(obj) == 1;
+  }
+  MPO_BOOL0(MPOIsValid) MPO_BOOL0(MPOIsCreated)
+  MPO_BOOL1(MPOSetDataType, int) MPO_BOOL0(MPOIsDoublePrecision)
+  int MPOGetNrQubits(void *obj) const {
+    return obj && fMPOGetNrQubits ? fMPOGetNrQubits(obj) : 0;
+  }
+  MPO_BOOL1(MPOSetCutoff, double)
+  double MPOGetCutoff(void *obj) const {
+    return obj && fMPOGetCutoff ? fMPOGetCutoff(obj) : 0.0;
+  }
+  MPO_BOOL1(MPOSetMaxExtent, long int)
+  long int MPOGetMaxExtent(void *obj) const {
+    return obj && fMPOGetMaxExtent ? fMPOGetMaxExtent(obj) : 0;
+  }
+  bool MPOGetBondDimensions(void *obj, long long int *bondDims) {
+    return obj && fMPOGetBondDimensions &&
+           fMPOGetBondDimensions(obj, bondDims) == 1;
+  }
+  bool MPOSetCallbackContext(void *obj, void *context) {
+    return obj && fMPOSetCallbackContext &&
+           fMPOSetCallbackContext(obj, context) == 1;
+  }
+  bool MPOSetMeetingPositionCallback(
+      void *obj, int64_t (*callback)(void *, const int64_t *)) {
+    return obj && fMPOSetMeetingPositionCallback &&
+           fMPOSetMeetingPositionCallback(obj, callback) == 1;
+  }
+  bool MPOSetBondDimensionsCallback(
+      void *obj, void (*callback)(void *, const int64_t *)) {
+    return obj && fMPOSetBondDimensionsCallback &&
+           fMPOSetBondDimensionsCallback(obj, callback) == 1;
+  }
+  MPO_BOOL0(MPOSaveState) MPO_BOOL0(MPORestoreState)
+  MPO_BOOL0(MPOCleanSavedState)
+  void *MPOClone(void *obj) {
+    return obj && fMPOClone ? fMPOClone(obj) : nullptr;
+  }
+  bool MPOMeasureQubitCollapse(void *obj, int q) {
+    return obj && fMPOMeasureQubitCollapse && fMPOMeasureQubitCollapse(obj, q);
+  }
+  bool MPOSample(void *obj, unsigned int nSamples, long int *samples,
+                 unsigned int nBits, int *bitOrdering) {
+    return obj && fMPOSample &&
+           fMPOSample(obj, nSamples, samples, nBits, bitOrdering) == 1;
+  }
+  bool MPOSampleAll(void *obj, unsigned int shots, long int *samples) {
+    return obj && fMPOSampleAll && fMPOSampleAll(obj, shots, samples) == 1;
+  }
+  double MPOBasisStateProbability(void *obj, long long state) const {
+    return obj && fMPOBasisStateProbability
+               ? fMPOBasisStateProbability(obj, state) : 0.0;
+  }
+  bool MPOAllProbabilities(void *obj, double *values) {
+    return obj && fMPOAllProbabilities && fMPOAllProbabilities(obj, values) == 1;
+  }
+  double MPOExpectationValue(void *obj, const char *pauli, int len) const {
+    return obj && fMPOExpectationValue ? fMPOExpectationValue(obj, pauli, len)
+                                        : 0.0;
+  }
+  bool MPOApplyKraus(void *obj, int n, const int *qubits, int count,
+                     const double *operators) {
+    return obj && fMPOApplyKraus &&
+           fMPOApplyKraus(obj, n, qubits, count, operators) == 1;
+  }
+  MPO_BOOL1(MPOApplyReset, int)
+  MPO_BOOL1(MPOApplyX, int) MPO_BOOL1(MPOApplyY, int)
+  MPO_BOOL1(MPOApplyZ, int) MPO_BOOL1(MPOApplyH, int)
+  MPO_BOOL1(MPOApplyS, int) MPO_BOOL1(MPOApplySDG, int)
+  MPO_BOOL1(MPOApplyT, int) MPO_BOOL1(MPOApplyTDG, int)
+  MPO_BOOL1(MPOApplySX, int) MPO_BOOL1(MPOApplySXDG, int)
+  MPO_BOOL1(MPOApplyK, int)
+  MPO_BOOL2(MPOApplyP, int, double) MPO_BOOL2(MPOApplyRx, int, double)
+  MPO_BOOL2(MPOApplyRy, int, double) MPO_BOOL2(MPOApplyRz, int, double)
+  bool MPOApplyU(void *o, int q, double a, double b, double c, double d) {
+    return o && fMPOApplyU && fMPOApplyU(o, q, a, b, c, d) == 1;
+  }
+  bool MPOApplyOneQubitMatrix(void *obj, int qubit,
+                              const double *matrixInterleaved) {
+    return obj && fMPOApplyOneQubitMatrix &&
+           fMPOApplyOneQubitMatrix(obj, qubit, matrixInterleaved) == 1;
+  }
+  bool MPOApplyTwoQubitMatrix(void *obj, int qubit1, int qubit2,
+                              const double *matrixInterleaved) {
+    return obj && fMPOApplyTwoQubitMatrix &&
+           fMPOApplyTwoQubitMatrix(obj, qubit1, qubit2, matrixInterleaved) ==
+               1;
+  }
+  MPO_BOOL2(MPOApplyCX, int, int) MPO_BOOL2(MPOApplyCY, int, int)
+  MPO_BOOL2(MPOApplyCZ, int, int) MPO_BOOL2(MPOApplyCH, int, int)
+  MPO_BOOL2(MPOApplyCSX, int, int) MPO_BOOL2(MPOApplyCSXDG, int, int)
+  MPO_BOOL3(MPOApplyCP, int, int, double)
+  MPO_BOOL3(MPOApplyCRx, int, int, double)
+  MPO_BOOL3(MPOApplyCRy, int, int, double)
+  MPO_BOOL3(MPOApplyCRz, int, int, double)
+  MPO_BOOL2(MPOApplySwap, int, int)
+  bool MPOApplyCU(void *o, int c, int t, double a, double b, double d,
+                  double g) {
+    return o && fMPOApplyCU && fMPOApplyCU(o, c, t, a, b, d, g) == 1;
+  }
+#undef MPO_BOOL3
+#undef MPO_BOOL2
+#undef MPO_BOOL1
+#undef MPO_BOOL0
+
  private:
   // density matrix function pointers
   void *(*fCreateDensityMatrix)(void *) = nullptr;
   void (*fDestroyDensityMatrix)(void *) = nullptr;
   int (*fDMCreate)(void *, unsigned int) = nullptr;
   int (*fDMCreateWithState)(void *, unsigned int, const double *) = nullptr;
+  int (*fDMCreateWithBasisState)(void *, unsigned int,
+                                 unsigned long long) = nullptr;
+  int (*fDMCreateWithMixtureOfBasisStates)(void *, unsigned int,
+                                           const unsigned long long *,
+                                           const double *, int) = nullptr;
   int (*fDMReset)(void *) = nullptr;
   int (*fDMIsValid)(void *) = nullptr;
   int (*fDMIsCreated)(void *) = nullptr;
@@ -1587,6 +1916,83 @@ class GpuLibrary : public Utils::Library {
 #undef DECL_DM2
 #undef DECL_DM1
 
+ private:
+  // matrix product operator (mpo) function pointers
+  void *(*fCreateMPO)(void *) = nullptr;
+  void (*fDestroyMPO)(void *) = nullptr;
+  int (*fMPOCreate)(void *, unsigned int) = nullptr;
+  int (*fMPOCreateWithState)(void *, unsigned int, const double *) = nullptr;
+  int (*fMPOCreateWithBasisState)(void *, unsigned int,
+                                  unsigned long long) = nullptr;
+  int (*fMPOCreateWithBasisStateBits)(void *, unsigned int,
+                                      const unsigned char *) = nullptr;
+  int (*fMPOCreateWithMixtureOfBasisStates)(void *, unsigned int,
+                                            const unsigned long long *,
+                                            const double *, int) = nullptr;
+  int (*fMPOCreateWithMixtureOfBasisStatesBits)(void *, unsigned int,
+                                                const unsigned char *,
+                                                const double *,
+                                                int) = nullptr;
+  int (*fMPOReset)(void *) = nullptr;
+  int (*fMPOSetInitialQubitsMap)(void *, const long long int *,
+                                 int) = nullptr;
+  int (*fMPOSetUseOptimalMeetingPosition)(void *, int) = nullptr;
+  int (*fMPOGetUseOptimalMeetingPosition)(void *) = nullptr;
+  int (*fMPOIsValid)(void *) = nullptr;
+  int (*fMPOIsCreated)(void *) = nullptr;
+  int (*fMPOSetDataType)(void *, int) = nullptr;
+  int (*fMPOIsDoublePrecision)(void *) = nullptr;
+  int (*fMPOGetNrQubits)(void *) = nullptr;
+  int (*fMPOSetCutoff)(void *, double) = nullptr;
+  double (*fMPOGetCutoff)(void *) = nullptr;
+  int (*fMPOSetMaxExtent)(void *, long int) = nullptr;
+  long int (*fMPOGetMaxExtent)(void *) = nullptr;
+  int (*fMPOGetBondDimensions)(void *, long long int *) = nullptr;
+  int (*fMPOSetCallbackContext)(void *, void *) = nullptr;
+  int (*fMPOSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
+  int (*fMPOSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;
+  int (*fMPOSaveState)(void *) = nullptr;
+  int (*fMPORestoreState)(void *) = nullptr;
+  int (*fMPOCleanSavedState)(void *) = nullptr;
+  void *(*fMPOClone)(void *) = nullptr;
+  int (*fMPOMeasureQubitCollapse)(void *, int) = nullptr;
+  int (*fMPOMeasureQubitNoCollapse)(void *, int) = nullptr;
+  int (*fMPOSample)(void *, unsigned int, long int *, unsigned int,
+                    int *) = nullptr;
+  int (*fMPOSampleAll)(void *, unsigned int, long int *) = nullptr;
+  int (*fMPOGetElement)(void *, long long, long long, double *,
+                        double *) = nullptr;
+  double (*fMPOBasisStateProbability)(void *, long long) = nullptr;
+  int (*fMPOAllProbabilities)(void *, double *) = nullptr;
+  double (*fMPOExpectationValue)(void *, const char *, int) = nullptr;
+  int (*fMPOApplyKraus)(void *, int, const int *, int,
+                        const double *) = nullptr;
+  int (*fMPOApplyReset)(void *, int) = nullptr;
+#define DECL_MPO1(name) int (*f##name)(void *, int) = nullptr
+#define DECL_MPO2(name) int (*f##name)(void *, int, int) = nullptr
+#define DECL_MPOR1(name) int (*f##name)(void *, int, double) = nullptr
+#define DECL_MPOR2(name) int (*f##name)(void *, int, int, double) = nullptr
+  DECL_MPO1(MPOApplyX); DECL_MPO1(MPOApplyY); DECL_MPO1(MPOApplyZ);
+  DECL_MPO1(MPOApplyH); DECL_MPO1(MPOApplyS); DECL_MPO1(MPOApplySDG);
+  DECL_MPO1(MPOApplyT); DECL_MPO1(MPOApplyTDG); DECL_MPO1(MPOApplySX);
+  DECL_MPO1(MPOApplySXDG); DECL_MPO1(MPOApplyK);
+  DECL_MPOR1(MPOApplyP); DECL_MPOR1(MPOApplyRx); DECL_MPOR1(MPOApplyRy);
+  DECL_MPOR1(MPOApplyRz);
+  int (*fMPOApplyU)(void *, int, double, double, double, double) = nullptr;
+  int (*fMPOApplyOneQubitMatrix)(void *, int, const double *) = nullptr;
+  int (*fMPOApplyTwoQubitMatrix)(void *, int, int, const double *) = nullptr;
+  DECL_MPO2(MPOApplyCX); DECL_MPO2(MPOApplyCY); DECL_MPO2(MPOApplyCZ);
+  DECL_MPO2(MPOApplyCH); DECL_MPO2(MPOApplyCSX); DECL_MPO2(MPOApplyCSXDG);
+  DECL_MPOR2(MPOApplyCP); DECL_MPOR2(MPOApplyCRx); DECL_MPOR2(MPOApplyCRy);
+  DECL_MPOR2(MPOApplyCRz);
+  DECL_MPO2(MPOApplySwap);
+  int (*fMPOApplyCU)(void *, int, int, double, double, double,
+                     double) = nullptr;
+#undef DECL_MPOR2
+#undef DECL_MPOR1
+#undef DECL_MPO2
+#undef DECL_MPO1
+
  public:
   // mps functions
 
@@ -1611,6 +2017,28 @@ class GpuLibrary : public Utils::Library {
       throw std::runtime_error(
           "GpuLibrary: Unable to create mps with the "
           "specified number of qubits");
+
+    return false;
+  }
+
+  bool MPSCreateWithBasisState(void *obj, unsigned int nrQubits,
+                               unsigned long long state) {
+    if (LibraryHandle)
+      return fMPSCreateWithBasisState(obj, nrQubits, state) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to create mps with a basis state");
+
+    return false;
+  }
+
+  bool MPSCreateWithBasisStateBits(void *obj, unsigned int nrQubits,
+                                   const unsigned char *stateBits) {
+    if (LibraryHandle)
+      return fMPSCreateWithBasisStateBits(obj, nrQubits, stateBits) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to create mps with a basis state (bits)");
 
     return false;
   }
@@ -1642,6 +2070,15 @@ class GpuLibrary : public Utils::Library {
     else
       throw std::runtime_error(
           "GpuLibrary: Unable to set use optimal meeting position for mps");
+    return false;
+  }
+
+  bool MPSGetUseOptimalMeetingPosition(void *obj) const {
+    if (LibraryHandle)
+      return fMPSGetUseOptimalMeetingPosition(obj) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get use optimal meeting position for mps");
     return false;
   }
 
@@ -1742,6 +2179,16 @@ class GpuLibrary : public Utils::Library {
     return 0;
   }
 
+  bool MPSGetBondDimensions(void *obj, long long int *bondDims) {
+    if (LibraryHandle)
+      return fMPSGetBondDimensions(obj, bondDims) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get bond dimensions for mps");
+
+    return false;
+  }
+
   bool MPSSetCallbackContext(void *obj, void *context) {
     if (LibraryHandle)
       return fMPSSetCallbackContext(obj, context) == 1;
@@ -1837,6 +2284,25 @@ class GpuLibrary : public Utils::Library {
       return fMPSSample(obj, numShots, numQubits, qubits, resultMap) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to sample mps");
+
+    return false;
+  }
+
+  bool MPSSampleRaw(void *obj, unsigned int nSamples, long int *samples,
+                    unsigned int nBits, const unsigned int *bitOrdering) {
+    if (LibraryHandle)
+      return fMPSSampleRaw(obj, nSamples, samples, nBits, bitOrdering) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to raw-sample mps");
+
+    return false;
+  }
+
+  bool MPSSampleAll(void *obj, unsigned int nSamples, long int *samples) {
+    if (LibraryHandle)
+      return fMPSSampleAll(obj, nSamples, samples) == 1;
+    else
+      throw std::runtime_error("GpuLibrary: Unable to sample all for mps");
 
     return false;
   }
@@ -2044,6 +2510,30 @@ class GpuLibrary : public Utils::Library {
       return fMPSApplyU(obj, siteA, theta, phi, lambda, gamma) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to apply u gate on mps");
+
+    return false;
+  }
+
+  bool MPSApplyOneQubitMatrix(void *obj, unsigned int qubit,
+                              const double *matrixInterleaved) {
+    if (LibraryHandle)
+      return fMPSApplyOneQubitMatrix(obj, qubit, matrixInterleaved) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply one-qubit matrix on mps");
+
+    return false;
+  }
+
+  bool MPSApplyTwoQubitMatrix(void *obj, unsigned int qubit1,
+                              unsigned int qubit2,
+                              const double *matrixInterleaved) {
+    if (LibraryHandle)
+      return fMPSApplyTwoQubitMatrix(obj, qubit1, qubit2,
+                                     matrixInterleaved) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to apply two-qubit matrix on mps");
 
     return false;
   }
@@ -3453,10 +3943,15 @@ class GpuLibrary : public Utils::Library {
   void (*fDestroyMPS)(void *) = nullptr;
 
   int (*fMPSCreate)(void *, unsigned int) = nullptr;
+  int (*fMPSCreateWithBasisState)(void *, unsigned int,
+                                  unsigned long long) = nullptr;
+  int (*fMPSCreateWithBasisStateBits)(void *, unsigned int,
+                                      const unsigned char *) = nullptr;
   int (*fMPSReset)(void *) = nullptr;
   int (*fMPSSetInitialQubitsMap)(void *, const long long int *,
-                                 unsigned int) = nullptr;
+                                 int) = nullptr;
   int (*fMPSSetUseOptimalMeetingPosition)(void *, int) = nullptr;
+  int (*fMPSGetUseOptimalMeetingPosition)(void *) = nullptr;
 
   int (*fMPSIsValid)(void *) = nullptr;
   int (*fMPSIsCreated)(void *) = nullptr;
@@ -3470,6 +3965,7 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSSetMaxExtent)(void *, long int) = nullptr;
   long int (*fMPSGetMaxExtent)(void *) = nullptr;
   int (*fMPSGetNrQubits)(void *) = nullptr;
+  int (*fMPSGetBondDimensions)(void *, long long int *) = nullptr;
   int (*fMPSSetCallbackContext)(void *, void *) = nullptr;
   int (*fMPSSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
   int (*fMPSSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;
@@ -3483,6 +3979,9 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSFreeMapForSample)(void *) = nullptr;
   int (*fMPSSample)(void *, long int, long int, unsigned int *,
                     void *) = nullptr;
+  int (*fMPSSampleRaw)(void *, unsigned int, long int *, unsigned int,
+                       const unsigned int *) = nullptr;
+  int (*fMPSSampleAll)(void *, unsigned int, long int *) = nullptr;
 
   int (*fMPSSaveState)(void *) = nullptr;
   int (*fMPSRestoreState)(void *) = nullptr;
@@ -3509,6 +4008,10 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSApplyRz)(void *, unsigned int, double) = nullptr;
   int (*fMPSApplyU)(void *, unsigned int, double, double, double,
                     double) = nullptr;
+  int (*fMPSApplyOneQubitMatrix)(void *, unsigned int,
+                                 const double *) = nullptr;
+  int (*fMPSApplyTwoQubitMatrix)(void *, unsigned int, unsigned int,
+                                 const double *) = nullptr;
   int (*fMPSApplySwap)(void *, unsigned int, unsigned int) = nullptr;
   int (*fMPSApplyCX)(void *, unsigned int, unsigned int) = nullptr;
   int (*fMPSApplyCY)(void *, unsigned int, unsigned int) = nullptr;

@@ -20,6 +20,7 @@
 
 #include "GpuLibStateVectorSim.h"
 #include "GpuDensityMatrix.h"
+#include "GpuMPO.h"
 #include "GpuLibMPSSim.h"
 #include "GpuLibTNSim.h"
 #include "GpuStabilizer.h"
@@ -81,6 +82,11 @@ class SimulatorsFactory {
   static std::unique_ptr<GpuDensityMatrix> CreateGpuDensityMatrix() {
     if (!gpuLibrary || !gpuLibrary->HasDensityMatrixAPI()) return nullptr;
     return std::make_unique<GpuDensityMatrix>(gpuLibrary);
+  }
+
+  static std::unique_ptr<GpuMPO> CreateGpuMPO() {
+    if (!gpuLibrary || !gpuLibrary->HasMPOAPI()) return nullptr;
+    return std::make_unique<GpuMPO>(gpuLibrary);
   }
 
   static std::unique_ptr<GpuLibMPSSim> CreateGpuLibMPSSim() {
