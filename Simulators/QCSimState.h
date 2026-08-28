@@ -20,8 +20,8 @@
 #include <algorithm>
 #include <iomanip>
 #include <limits>
-#include <sstream>
 #include <random>
+#include <sstream>
 #include <utility>
 
 #include "Simulator.h"
@@ -71,7 +71,9 @@ class QCSimState : public ISimulator {
           lookaheadDepth == std::numeric_limits<int>::max())
         return -1;  // will fallback to default behavior
 
-      if (upcomingGates.empty() || upcomingGateIndex >= static_cast<long long>(upcomingGates.size())) {
+      if (upcomingGates.empty() ||
+          upcomingGateIndex >=
+              static_cast<long long>(upcomingGates.size())) {
         return -1;  // will fallback to default behavior
       }
 
@@ -79,14 +81,8 @@ class QCSimState : public ISimulator {
 
       if (!dummySim || dummySim->getNrQubits() != nQ) {
         dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
-        const char* maxBondDimensionKey =
-            simulationType == SimulationType::kMatrixProductOperator &&
-                    configuration.IsSet(
-                        "matrix_product_operator_max_bond_dimension")
-                ? "matrix_product_operator_max_bond_dimension"
-                : "matrix_product_state_max_bond_dimension";
         dummySim->SetMaxBondDimension(
-            configuration.GetConfigurationAsInt(maxBondDimensionKey));
+            configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey()));
         dummySim->setGrowthFactorGate(growthFactorGate);
         dummySim->setGrowthFactorSwap(growthFactorSwap);
       }
@@ -112,13 +108,8 @@ class QCSimState : public ISimulator {
       const auto& op = upcomingGates[upcomingGateIndex];
       const auto qbits = op->AffectedQubits();
 
-      if (qbits.size() != 2) {
-        std::cerr << "Error: Meeting position callback called for a gate "
-                     "that does not have exactly 2 qubits."
-                  << std::endl;
-
+      if (qbits.size() != 2)
         return -1;  // will fallback
-      }
 
 #ifdef LOG_CALLBACK_INFO
       const auto &qmap = dummySim->getQubitsMap();
@@ -129,8 +120,8 @@ class QCSimState : public ISimulator {
                 << std::endl;
 
       std::cerr << "Finding best meeting position for upcoming gates starting at index "
-                << upcomingGateIndex << " with lookahead depth " <<
-      lookaheadDepth << " and heuristic depth "
+                << upcomingGateIndex << " with lookahead depth "
+                << lookaheadDepth << " and heuristic depth "
                 << lookaheadDepthWithHeuristic << std::endl;
 
       std::cerr << "Affected qubits: ";
@@ -170,7 +161,8 @@ class QCSimState : public ISimulator {
 
     bondDimensionCallback = [this](const auto& bondDims) {
       for (int i = 0; i < static_cast<int>(bondDims.size()); ++i)
-        if (static_cast<size_t>(bondDims[i]) > curMaxBondDim) curMaxBondDim = static_cast<size_t>(bondDims[i]);
+        if (static_cast<size_t>(bondDims[i]) > curMaxBondDim)
+          curMaxBondDim = static_cast<size_t>(bondDims[i]);
     };
   }
 
@@ -196,6 +188,9 @@ class QCSimState : public ISimulator {
       } else if (simulationType == SimulationType::kMatrixProductOperator) {
         mpoSimulator =
             std::make_unique<QC::TensorNetworks::MPOSimulator>(nrQubits);
+        if (!useOptimalMeetingPosition)
+          mpoSimulator->SetUseOptimalMeetingPosition(false);
+        mpoSimulator->SetBondDimensionCallback(bondDimensionCallback);
         curMaxBondDim = 1;
       } else if (simulationType == SimulationType::kStabilizer)
         cliffordSimulator =
@@ -506,6 +501,7 @@ class QCSimState : public ISimulator {
       extendedStabilizer->Reset(nrQubits);
 
     upcomingGateIndex = 0;
+    ResetDummySimulator();
   }
 
   /**
@@ -527,12 +523,15 @@ class QCSimState : public ISimulator {
    */
   void SetInitialQubitsMap(
       const std::vector<long long int> &initialMap) override {
-    if (mpsSimulator) {
-      mpsSimulator->SetInitialQubitsMap(initialMap);
+    if (mpsSimulator || mpoSimulator) {
+      if (mpsSimulator) mpsSimulator->SetInitialQubitsMap(initialMap);
+      else mpoSimulator->SetInitialQubitsMap(initialMap);
+
       if (!dummySim || dummySim->getNrQubits() != initialMap.size()) {
         dummySim =
             std::make_unique<Simulators::MPSDummySimulator>(initialMap.size());
-        dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt("matrix_product_state_max_bond_dimension"));
+        dummySim->SetMaxBondDimension(
+            configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey()));
       }
       dummySim->setGrowthFactorGate(growthFactorGate);
       dummySim->setGrowthFactorSwap(growthFactorSwap);
@@ -543,12 +542,17 @@ class QCSimState : public ISimulator {
   void SetUseOptimalMeetingPosition(bool enable) override {
     useOptimalMeetingPosition = enable;
     if (mpsSimulator) mpsSimulator->SetUseOptimalMeetingPosition(enable);
+    else if (mpoSimulator)
+      mpoSimulator->SetUseOptimalMeetingPosition(enable);
   }
 
   void SetLookaheadDepth(int depth) override {
     lookaheadDepth = depth;
-    if (mpsSimulator && depth > 0 && !useOptimalMeetingPosition)
-      mpsSimulator->SetUseOptimalMeetingPosition(true);
+    if (depth > 0 && !useOptimalMeetingPosition) {
+      if (mpsSimulator) mpsSimulator->SetUseOptimalMeetingPosition(true);
+      else if (mpoSimulator)
+        mpoSimulator->SetUseOptimalMeetingPosition(true);
+    }
   }
 
   void SetLookaheadDepthWithHeuristic(int depth) override {
@@ -676,8 +680,7 @@ class QCSimState : public ISimulator {
             configuration.GetConfigurationAsInt(key));
       } else if (
           std::string(key) == "matrix_product_state_truncation_threshold" ||
-          std::string(key) ==
-              "matrix_product_operator_truncation_threshold") {
+          std::string(key) == "matrix_product_operator_truncation_threshold") {
         const double threshold = configuration.GetConfigurationAsDouble(key);
         if (threshold > 0.) mpoSimulator->setLimitEntanglement(threshold);
       }
@@ -967,10 +970,8 @@ class QCSimState : public ISimulator {
     } else if (simulationType == SimulationType::kDensityMatrix) {
       for (size_t qubit : qubits) densityMatrix->ApplyReset(qubit);
     } else if (simulationType == SimulationType::kMatrixProductOperator) {
-      for (size_t qubit : qubits) {
+      for (size_t qubit : qubits)
         mpoSimulator->ApplyReset(static_cast<Eigen::Index>(qubit));
-        UpdateCurrentMPOBondDimension();
-      }
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
       for (size_t qubit : qubits)
         if (extendedStabilizer->Measure(qubit))
@@ -1061,7 +1062,6 @@ class QCSimState : public ISimulator {
         mpoSimulator->ApplyKrausOperators(
             krausOperators, static_cast<Eigen::Index>(targets[0]),
             static_cast<Eigen::Index>(targets[1]));
-      UpdateCurrentMPOBondDimension();
     }
 
     NotifyObservers(targets);
@@ -2134,6 +2134,27 @@ class QCSimState : public ISimulator {
   }
 
  protected:
+  const char* MaxBondDimensionConfigKey() const {
+    return simulationType == SimulationType::kMatrixProductOperator &&
+                   configuration.IsSet(
+                       "matrix_product_operator_max_bond_dimension")
+               ? "matrix_product_operator_max_bond_dimension"
+               : "matrix_product_state_max_bond_dimension";
+  }
+
+  void ResetDummySimulator() {
+    if (!dummySim) return;
+
+    std::vector<long long int> identityMap(nrQubits);
+    for (size_t qubit = 0; qubit < nrQubits; ++qubit)
+      identityMap[qubit] = static_cast<long long int>(qubit);
+    dummySim->SetInitialQubitsMap(identityMap);
+    dummySim->setTotalSwappingCost(0.);
+    if (nrQubits > 1)
+      dummySim->SetCurrentBondDimensions(
+          std::vector<double>(nrQubits - 1, 1.));
+  }
+
   size_t CheckedBasisStateCountForQueries() const {
     if (nrQubits >= std::numeric_limits<size_t>::digits)
       throw std::runtime_error(
@@ -2162,12 +2183,6 @@ class QCSimState : public ISimulator {
 
     probability /= static_cast<double>(nrBasisStates);
     return std::max(0.0, std::min(1.0, probability));
-  }
-
-  void UpdateCurrentMPOBondDimension() {
-    for (const auto bondDimension : mpoSimulator->getBondDimensions())
-      curMaxBondDim =
-          std::max(curMaxBondDim, static_cast<size_t>(bondDimension));
   }
 
   SimulationType simulationType =
