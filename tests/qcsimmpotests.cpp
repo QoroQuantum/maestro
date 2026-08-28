@@ -273,6 +273,84 @@ BOOST_AUTO_TEST_CASE(generic_gates_match_statevector) {
   CheckMPOProbabilities(*statevector, *mpo);
 }
 
+BOOST_AUTO_TEST_CASE(swap_optimization_and_bond_tracking_survive_clone) {
+  constexpr size_t numQubits = 5;
+  auto circuit = std::make_shared<Circuits::Circuit<double>>();
+  circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+  circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(4));
+  circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 4));
+  circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(4, 1));
+  circuit->AddOperation(std::make_shared<Circuits::SwapGate<>>(1, 3));
+  circuit->AddOperation(std::make_shared<Circuits::RyGate<>>(2, 0.37));
+  circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(3, 0));
+  circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(2, 4));
+  circuit->AddOperation(std::make_shared<Circuits::CCXGate<>>(0, 2, 4));
+  circuit->AddOperation(std::make_shared<Circuits::CSwapGate<>>(1, 0, 3));
+
+  auto mpo = Simulators::SimulatorsFactory::CreateSimulator(
+      Simulators::SimulatorType::kQCSim,
+      Simulators::SimulationType::kMatrixProductOperator);
+  mpo->Configure("matrix_product_operator_max_bond_dimension", "16");
+  mpo->AllocateQubits(numQubits);
+  mpo->Initialize();
+
+  BOOST_CHECK_THROW(mpo->SetInitialQubitsMap({0, 1, 2, 3, 3}),
+                    std::invalid_argument);
+  const std::vector<long long int> initialMap = {0, 4, 1, 3, 2};
+  mpo->SetInitialQubitsMap(initialMap);
+  mpo->SetUseOptimalMeetingPosition(true);
+  mpo->SetLookaheadDepth(4);
+  mpo->SetLookaheadDepthWithHeuristic(2);
+  mpo->SetUpcomingGates(circuit->GetOperations());
+
+  std::shared_ptr<Simulators::ISimulator> clone(mpo->Clone());
+  auto statevector = MakeQCSimMPOTestSimulator(
+      Simulators::SimulationType::kStatevector, numQubits);
+  Circuits::OperationState mpoState;
+  Circuits::OperationState cloneState;
+  Circuits::OperationState statevectorState;
+  circuit->Execute(mpo, mpoState);
+  circuit->Execute(clone, cloneState);
+  circuit->Execute(statevector, statevectorState);
+
+  CheckMPOProbabilities(*statevector, *mpo);
+  CheckMPOProbabilities(*statevector, *clone);
+  BOOST_TEST(mpo->GetGatesCounter() ==
+             static_cast<long long int>(circuit->GetOperations().size()));
+  BOOST_TEST(clone->GetGatesCounter() ==
+             static_cast<long long int>(circuit->GetOperations().size()));
+  BOOST_TEST(mpo->GetCurrentMaxBondDimension() > 1);
+  BOOST_TEST(clone->GetCurrentMaxBondDimension() ==
+             mpo->GetCurrentMaxBondDimension());
+  BOOST_TEST(mpo->GetCurrentMaxBondDimension() <= 16);
+
+  // Reset restores both the real and dummy chain mappings to identity. With
+  // zero explicit lookahead, MPO still uses one-gate bond-aware optimization
+  // when optimal meeting positions are enabled.
+  mpo->Reset();
+  statevector->Reset();
+  mpo->SetLookaheadDepth(0);
+  mpo->SetUpcomingGates(circuit->GetOperations());
+  Circuits::OperationState resetMpoState;
+  Circuits::OperationState resetStatevectorState;
+  circuit->Execute(mpo, resetMpoState);
+  circuit->Execute(statevector, resetStatevectorState);
+  CheckMPOProbabilities(*statevector, *mpo);
+  BOOST_TEST(mpo->GetCurrentMaxBondDimension() > 1);
+
+  // The native MPO switch also supports the MPS-compatible routing heuristic
+  // when immediate bond-aware optimization is disabled.
+  mpo->Reset();
+  statevector->Reset();
+  mpo->SetUseOptimalMeetingPosition(false);
+  mpo->SetUpcomingGates(circuit->GetOperations());
+  Circuits::OperationState heuristicMpoState;
+  Circuits::OperationState heuristicStatevectorState;
+  circuit->Execute(mpo, heuristicMpoState);
+  circuit->Execute(statevector, heuristicStatevectorState);
+  CheckMPOProbabilities(*statevector, *mpo);
+}
+
 BOOST_AUTO_TEST_CASE(pure_state_initialization_is_rejected) {
   auto mpo = Simulators::SimulatorsFactory::CreateSimulator(
       Simulators::SimulatorType::kQCSim,
