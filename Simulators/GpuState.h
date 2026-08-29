@@ -1440,6 +1440,8 @@ class GpuState : public ISimulator {
   void SaveStateToInternalDestructive() override {
     if (simulationType == SimulationType::kStatevector)
       state->SaveStateDestructive();
+    else if (simulationType == SimulationType::kPauliPropagator)
+      return;
     else
       throw std::runtime_error(
           "GpuState::SaveStateToInternalDestructive: Invalid simulation type "
@@ -1455,6 +1457,8 @@ class GpuState : public ISimulator {
   void RestoreInternalDestructiveSavedState() override {
     if (simulationType == SimulationType::kStatevector)
       state->RestoreStateFreeSaved();
+    else if (simulationType == SimulationType::kPauliPropagator)
+      return;
     else
       throw std::runtime_error(
           "GpuState::RestoreInternalDestructiveSavedState: Invalid simulation "
