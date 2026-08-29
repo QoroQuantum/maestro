@@ -1,0 +1,112 @@
+/**
+ * @page py_quickstart Getting Started & Configuration
+ *
+ * @tableofcontents
+ *
+ * @section py_install Installation
+ *
+ * Install pre-built binary wheels from PyPI (Linux, macOS, Windows):
+ *
+ * @code{.sh}
+ * pip install qoro-maestro
+ * @endcode
+ *
+ * Or build from source from the repository root:
+ *
+ * @code{.sh}
+ * pip install .
+ * @endcode
+ *
+ * **Supported platforms (pre-built wheels):**
+ *
+ * | Platform | Architecture | Python |
+ * |----------|-------------|--------|
+ * | Linux | x86_64 | 3.10, 3.11, 3.12 |
+ * | macOS | arm64 (Apple Silicon) | 3.10, 3.11, 3.12 |
+ * | Windows | AMD64 | 3.10, 3.11, 3.12 |
+ *
+ * ---
+ *
+ * @section py_config SimulatorConfig — Shared Configuration
+ *
+ * All execution and estimation functions accept a `SimulatorConfig` object
+ * that bundles every simulator knob into a single, reusable value.
+ * Create one config and pass it to every call — no need to repeat
+ * `simulator_type`, `simulation_type`, `max_bond_dimension`, etc.
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * # Create once, reuse everywhere
+ * config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=64,
+ *     singular_value_threshold=1e-10,
+ * )
+ *
+ * result = maestro.simple_execute(qasm, config=config, shots=1024)
+ * estimate = maestro.simple_estimate(qasm, "ZZ;XX", config=config)
+ * fidelity = maestro.mirror_fidelity(qc, config=config, shots=10000)
+ * @endcode
+ *
+ * @subsection py_config_params SimulatorConfig Parameters
+ *
+ * | Parameter | Type | Default | Description |
+ * |-----------|------|---------|-------------|
+ * | `simulator_type` | `SimulatorType` | `QCSim` | Simulation backend |
+ * | `simulation_type` | `SimulationType` | `Statevector` | Simulation method |
+ * | `max_bond_dimension` | `int` or `None` | `None` | MPS bond dimension limit |
+ * | `singular_value_threshold` | `float` or `None` | `None` | MPS truncation threshold |
+ * | `use_double_precision` | `bool` | `False` | GPU double precision flag |
+ * | `disable_optimized_swapping` | `bool` | `False` | Disable MPS swap optimization |
+ * | `lookahead_depth` | `int` | `-1` | Swap optimization lookahead depth |
+ * | `mps_measure_no_collapse` | `bool` | `True` | Use probability-based MPS sampling |
+ *
+ * @note When no `config` is passed, a default `SimulatorConfig()` is used
+ * (QCSim + Statevector with all defaults). You can also modify fields
+ * after construction:
+ *
+ * @code{.py}
+ * config = maestro.SimulatorConfig()
+ * config.simulation_type = maestro.SimulationType.MatrixProductState
+ * config.max_bond_dimension = 128
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_quick Quick Start — One-Line Execution
+ *
+ * The fastest way to run a circuit is `maestro.simple_execute`.
+ * Pass an OpenQASM 2.0 string and get measurement counts back immediately.
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * qasm = """
+ * OPENQASM 2.0;
+ * include "qelib1.inc";
+ * qreg q[2];
+ * creg c[2];
+ * h q[0];
+ * cx q[0], q[1];
+ * measure q -> c;
+ * """
+ *
+ * result = maestro.simple_execute(qasm, shots=1024)
+ *
+ * print(result["counts"])      # e.g. {"00": 512, "11": 512}
+ * print(result["simulator"])   # e.g. "QCSim"
+ * print(result["method"])      # e.g. "Statevector"
+ * print(f"{result['time_taken']:.4f}s")
+ * @endcode
+ *
+ * **Result Dictionary Schema:**
+ *
+ * | Key | Type | Description |
+ * |-----|------|-------------|
+ * | `counts` | `dict[str, int]` | Measurement outcome -> count |
+ * | `simulator` | `int` | Backend enum value (see `SimulatorType`) |
+ * | `method` | `int` | Simulation method enum value (see `SimulationType`) |
+ * | `time_taken` | `float` | Wall-clock execution time in seconds |
+ */

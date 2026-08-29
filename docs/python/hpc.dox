@@ -1,0 +1,83 @@
+/**
+ * @page py_hpc HPC Acceleration (GPU & QuEST)
+ *
+ * @tableofcontents
+ *
+ * @section py_gpu GPU Backend (NVIDIA cuStateVec & Custom Kernels)
+ *
+ * Maestro supports hardware-accelerated simulation on NVIDIA GPUs through cuStateVec and
+ * custom CUDA kernels.
+ *
+ * @subsection py_gpu_avail Availability & Initialization
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * # Check availability
+ * if maestro.is_gpu_available():
+ *     print("GPU acceleration available")
+ *     maestro.init_gpu()
+ * @endcode
+ *
+ * @subsection py_gpu_usage GPU Simulation
+ *
+ * @code{.py}
+ * # GPU Statevector
+ * gpu_sv_config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.Gpu,
+ *     simulation_type=maestro.SimulationType.Statevector,
+ * )
+ * result = maestro.simple_execute(qasm, config=gpu_sv_config, shots=1000)
+ *
+ * # GPU Matrix Product State (MPS)
+ * gpu_mps_config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.Gpu,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=64,
+ * )
+ * result_mps = maestro.simple_execute(qasm, config=gpu_mps_config, shots=1000)
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_quest QuEST Backend (MPI Distributed Simulation)
+ *
+ * Maestro integrates the QuEST engine for distributed statevector simulation across cluster nodes.
+ *
+ * @subsection py_quest_usage Running with QuEST
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * if maestro.is_quest_available():
+ *     maestro.init_quest()
+ *
+ * quest_config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.QuestSim,
+ *     simulation_type=maestro.SimulationType.Statevector,
+ * )
+ * result = maestro.simple_execute(qasm, config=quest_config, shots=1024)
+ * @endcode
+ *
+ * @note QuEST only supports `SimulationType.Statevector`. Attempting to use other simulation methods will raise an exception.
+ *
+ * ---
+ *
+ * @section py_gpu_fallback Graceful Hardware Fallback Pattern
+ *
+ * For portable workflows across GPU workstations, clusters, and developer laptops:
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * if maestro.is_gpu_available() and maestro.init_gpu():
+ *     backend = maestro.SimulatorType.Gpu
+ * elif maestro.is_quest_available() and maestro.init_quest():
+ *     backend = maestro.SimulatorType.QuestSim
+ * else:
+ *     backend = maestro.SimulatorType.QCSim
+ *
+ * config = maestro.SimulatorConfig(simulator_type=backend)
+ * result = maestro.simple_execute(qasm, config=config, shots=1024)
+ * @endcode
+ */

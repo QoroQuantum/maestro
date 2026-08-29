@@ -1,0 +1,103 @@
+/**
+ * @page py_circuits QuantumCircuit Builder
+ *
+ * @tableofcontents
+ *
+ * @section py_circuit_intro Overview
+ *
+ * For an ergonomic, Pythonic workflow similar to Qiskit, use the `QuantumCircuit`
+ * class to construct circuits programmatically in memory without writing QASM strings.
+ *
+ * @section py_circuit_basic Building and Running a Circuit
+ *
+ * @code{.py}
+ * from maestro.circuits import QuantumCircuit
+ *
+ * qc = QuantumCircuit()
+ *
+ * # Build a Bell state
+ * qc.h(0)
+ * qc.cx(0, 1)
+ * qc.measure([(0, 0), (1, 1)])  # (qubit, classical_bit) pairs
+ *
+ * # Execute with defaults
+ * result = qc.execute(shots=1000)
+ * print(result["counts"])  # {"00": ~500, "11": ~500}
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_circuit_gates Available Gates
+ *
+ * | Gate | Method | Parameters |
+ * |------|--------|------------|
+ * | Pauli-X | `qc.x(qubit)` | — |
+ * | Pauli-Y | `qc.y(qubit)` | — |
+ * | Pauli-Z | `qc.z(qubit)` | — |
+ * | Hadamard | `qc.h(qubit)` | — |
+ * | S | `qc.s(qubit)` | — |
+ * | S† | `qc.sdg(qubit)` | — |
+ * | T | `qc.t(qubit)` | — |
+ * | T† | `qc.tdg(qubit)` | — |
+ * | √X | `qc.sx(qubit)` | — |
+ * | √X† | `qc.sxdg(qubit)` | — |
+ * | K | `qc.k(qubit)` | — |
+ * | Phase | `qc.p(qubit, λ)` | λ (radians) |
+ * | Rx | `qc.rx(qubit, θ)` | θ (radians) |
+ * | Ry | `qc.ry(qubit, θ)` | θ (radians) |
+ * | Rz | `qc.rz(qubit, θ)` | θ (radians) |
+ * | U | `qc.u(qubit, θ, φ, λ)` | 3 angles (Euler) |
+ * | CNOT | `qc.cx(ctrl, tgt)` | — |
+ * | CY | `qc.cy(ctrl, tgt)` | — |
+ * | CZ | `qc.cz(ctrl, tgt)` | — |
+ * | CH | `qc.ch(ctrl, tgt)` | — |
+ * | CSX | `qc.csx(ctrl, tgt)` | — |
+ * | CSX† | `qc.csxdg(ctrl, tgt)` | — |
+ * | SWAP | `qc.swap(q1, q2)` | — |
+ * | CP | `qc.cp(ctrl, tgt, λ)` | λ |
+ * | CRx | `qc.crx(ctrl, tgt, θ)` | θ |
+ * | CRy | `qc.cry(ctrl, tgt, θ)` | θ |
+ * | CRz | `qc.crz(ctrl, tgt, θ)` | θ |
+ * | CU | `qc.cu(ctrl, tgt, θ, φ, λ, γ)` | 4 angles |
+ * | Toffoli | `qc.ccx(c1, c2, tgt)` | — |
+ * | Fredkin | `qc.cswap(ctrl, q1, q2)` | — |
+ *
+ * ---
+ *
+ * @section py_circuit_measure Measurements
+ *
+ * @code{.py}
+ * # Measure specific qubits to specific classical bits
+ * qc.measure([(0, 0), (1, 1), (2, 2)])
+ *
+ * # Or measure all active qubits at once
+ * qc.measure_all()
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_circuit_estimate Expectation Values with QuantumCircuit
+ *
+ * Expectation values can be estimated directly on a `QuantumCircuit` instance without adding measurement operations:
+ *
+ * @code{.py}
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ *
+ * # Direct expectation values
+ * result = qc.estimate(observables=["ZZ", "XX", "YY"])
+ *
+ * vals = result["expectation_values"]
+ * print(f"<ZZ> = {vals[0]:.4f}")  #  1.0
+ * print(f"<XX> = {vals[1]:.4f}")  #  1.0
+ * print(f"<YY> = {vals[2]:.4f}")  # -1.0
+ *
+ * # With a specific backend config
+ * mps_config = maestro.SimulatorConfig(
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=16,
+ * )
+ * result = qc.estimate(observables=["ZZ", "XX"], config=mps_config)
+ * @endcode
+ */

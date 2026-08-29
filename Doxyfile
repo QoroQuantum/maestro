@@ -3,9 +3,6 @@
 #  Professional documentation configuration for the Maestro C++ library.
 # =============================================================================
 
-# ---------------------------------------------------------------------------
-#  Project metadata
-# ---------------------------------------------------------------------------
 PROJECT_NAME           = "Maestro"
 PROJECT_NUMBER         = "0.2.18"
 PROJECT_BRIEF          = "Unified interface for quantum circuit simulation"
@@ -17,16 +14,11 @@ CREATE_SUBDIRS         = YES
 CREATE_SUBDIRS_LEVEL   = 2
 OUTPUT_LANGUAGE        = English
 
-# ---------------------------------------------------------------------------
-#  Build-related settings
-# ---------------------------------------------------------------------------
 BRIEF_MEMBER_DESC      = YES
 REPEAT_BRIEF           = YES
 ALWAYS_DETAILED_SEC    = YES
 INLINE_INHERITED_MEMB  = YES
 FULL_PATH_NAMES        = NO
-STRIP_FROM_PATH        =
-STRIP_FROM_INC_PATH    =
 SHORT_NAMES            = NO
 JAVADOC_AUTOBRIEF      = YES
 QT_AUTOBRIEF           = NO
@@ -34,18 +26,10 @@ MULTILINE_CPP_IS_BRIEF = NO
 INHERIT_DOCS           = YES
 SEPARATE_MEMBER_PAGES  = NO
 TAB_SIZE               = 4
-OPTIMIZE_OUTPUT_FOR_C  = NO
-OPTIMIZE_OUTPUT_JAVA   = NO
-OPTIMIZE_FOR_FORTRAN   = NO
-OPTIMIZE_OUTPUT_VHDL   = NO
-EXTENSION_MAPPING      =
 MARKDOWN_SUPPORT       = YES
 TOC_INCLUDE_HEADINGS   = 3
 AUTOLINK_SUPPORT       = YES
 BUILTIN_STL_SUPPORT    = YES
-CPP_CLI_SUPPORT        = NO
-SIP_SUPPORT            = NO
-IDL_PROPERTY_SUPPORT   = YES
 DISTRIBUTE_GROUP_DOC   = YES
 GROUP_NESTED_COMPOUNDS = YES
 SUBGROUPING            = YES
@@ -53,11 +37,7 @@ INLINE_GROUPED_CLASSES = YES
 INLINE_SIMPLE_STRUCTS  = YES
 TYPEDEF_HIDES_STRUCT   = NO
 LOOKUP_CACHE_SIZE      = 2
-ALIASES               += "mermaid{1}=@htmlonly <div class=\"mermaid\"> @endhtmlonly @htmlinclude \1 @htmlonly </div> @endhtmlonly"
 
-# ---------------------------------------------------------------------------
-#  Extraction & visibility
-# ---------------------------------------------------------------------------
 EXTRACT_ALL            = YES
 EXTRACT_PRIVATE        = NO
 EXTRACT_PACKAGE        = NO
@@ -82,15 +62,12 @@ SORT_BRIEF_DOCS        = YES
 SORT_MEMBERS_CTORS_1ST = YES
 SORT_GROUP_NAMES       = YES
 SORT_BY_SCOPE_NAME     = NO
-STRICT_PROTO_MATCHING  = NO
+
 GENERATE_TODOLIST      = YES
 GENERATE_TESTLIST      = YES
 GENERATE_BUGLIST       = YES
 GENERATE_DEPRECATEDLIST= YES
 
-# ---------------------------------------------------------------------------
-#  Input
-# ---------------------------------------------------------------------------
 INPUT                  = Circuit \
                          Distribution \
                          Estimators \
@@ -103,8 +80,9 @@ INPUT                  = Circuit \
                          maestrolib \
                          qasm \
                          docs/groups.dox \
-                         docs/python.dox \
+                         docs/python \
                          mainpage.dox \
+                         markdown \
                          Types.h
 
 INPUT_ENCODING         = UTF-8
@@ -139,21 +117,10 @@ EXCLUDE_PATTERNS       = */build/* \
                          *_test.cpp \
                          */tests/*
 
-EXCLUDE_SYMBOLS        =
-
 EXAMPLE_PATH           = examples
 EXAMPLE_PATTERNS       = *
 EXAMPLE_RECURSIVE      = YES
-IMAGE_PATH             =
-INPUT_FILTER           =
-FILTER_PATTERNS        =
-FILTER_SOURCE_FILES    = NO
-FILTER_SOURCE_PATTERNS =
-USE_MDFILE_AS_MAINPAGE =
 
-# ---------------------------------------------------------------------------
-#  Source browsing
-# ---------------------------------------------------------------------------
 SOURCE_BROWSER         = YES
 INLINE_SOURCES         = NO
 STRIP_CODE_COMMENTS    = YES
@@ -161,18 +128,13 @@ REFERENCED_BY_RELATION = YES
 REFERENCES_RELATION    = YES
 REFERENCES_LINK_SOURCE = YES
 SOURCE_TOOLTIPS        = YES
-USE_HTAGS              = NO
 VERBATIM_HEADERS       = YES
 
-# ---------------------------------------------------------------------------
-#  HTML output
-# ---------------------------------------------------------------------------
 GENERATE_HTML          = YES
 HTML_OUTPUT            = html
 HTML_FILE_EXTENSION    = .html
 HTML_HEADER            = docs/header.html
 HTML_FOOTER            = docs/footer.html
-HTML_STYLESHEET        =
 HTML_EXTRA_STYLESHEET  = docs/custom.css
 HTML_EXTRA_FILES       = markdown/favicon.ico
 HTML_COLORSTYLE        = DARK
@@ -188,7 +150,6 @@ SERVER_BASED_SEARCH    = NO
 EXTERNAL_SEARCH        = NO
 SEARCHDATA_FILE        = searchdata.js
 
-# Navigation sidebar
 GENERATE_TREEVIEW      = YES
 TREEVIEW_WIDTH         = 300
 DISABLE_INDEX          = NO
@@ -196,19 +157,8 @@ FULL_SIDEBAR           = NO
 ENUM_VALUES_PER_LINE   = 1
 EXT_LINKS_IN_WINDOW    = YES
 
-# MathJax for formulae
-USE_MATHJAX            = YES
-MATHJAX_VERSION        = MathJax_3
-MATHJAX_FORMAT         = HTML-CSS
-MATHJAX_RELPATH        = https://cdn.jsdelivr.net/npm/mathjax@3
-MATHJAX_EXTENSIONS     =
-MATHJAX_CODEFILE       =
-FORMULA_FONTSIZE       = 12
-FORMULA_TRANSPARENT    = YES
+USE_MATHJAX            = NO
 
-# ---------------------------------------------------------------------------
-#  Other output formats (disabled)
-# ---------------------------------------------------------------------------
 GENERATE_LATEX         = NO
 GENERATE_RTF           = NO
 GENERATE_MAN           = NO
@@ -217,11 +167,7 @@ GENERATE_DOCBOOK       = NO
 GENERATE_AUTOGEN_DEF   = NO
 GENERATE_PERLMOD       = NO
 
-# ---------------------------------------------------------------------------
-#  Graphs and diagrams (Graphviz)
-# ---------------------------------------------------------------------------
 HAVE_DOT               = YES
-
 CLASS_DIAGRAMS         = YES
 CLASS_GRAPH            = YES
 COLLABORATION_GRAPH    = YES

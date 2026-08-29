@@ -1,0 +1,223 @@
+/**
+ * @page py_algorithms Algorithms & Observables
+ *
+ * @tableofcontents
+ *
+ * @section py_expectation Expectation Values
+ *
+ * Use `maestro.simple_estimate` to compute expectation values of Pauli observables
+ * directly from state amplitudes without adding measurement gates to the circuit.
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * # Prepare a GHZ state
+ * ghz = """
+ * OPENQASM 2.0;
+ * include "qelib1.inc";
+ * qreg q[3];
+ * h q[0];
+ * cx q[0], q[1];
+ * cx q[1], q[2];
+ * """
+ *
+ * # Estimate multiple Pauli observables at once (semicolon-separated)
+ * result = maestro.simple_estimate(ghz, "ZZZ;XXX;IZI")
+ *
+ * obs = result["expectation_values"]
+ * print(f"<ZZZ> = {obs[0]:.4f}")  # 1.0 (parity conserved)
+ * print(f"<XXX> = {obs[1]:.4f}")  # 1.0
+ * print(f"<IZI> = {obs[2]:.4f}")  # 0.0 (maximally mixed marginal)
+ * @endcode
+ *
+ * You can also specify an exact backend via `config`:
+ *
+ * @code{.py}
+ * mps_config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=8,
+ * )
+ * result = maestro.simple_estimate(ghz, "ZZ;XX", config=mps_config)
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_mirror Mirror Fidelity
+ *
+ * Mirror fidelity measures how accurately a simulator executes a circuit by appending
+ * the adjoint (inverse) of every unitary gate in reverse order and measuring P(|0...0>),
+ * the probability of returning to the all-zero ground state. A value of 1.0 indicates
+ * exact execution.
+ *
+ * This metric is useful for:
+ * - Benchmarking simulator performance and accuracy.
+ * - Quantifying approximation errors in MPS simulations with low bond dimensions.
+ * - Validating circuit synthesis.
+ *
+ * By default, mirror fidelity uses shot-based sampling (1024 shots). For exact results
+ * on small circuits, pass `full_amplitude=True`.
+ *
+ * @subsection py_mirror_module Module-Level Function
+ *
+ * @code{.py}
+ * import maestro
+ * from maestro.circuits import QuantumCircuit
+ *
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ * qc.rx(0, 3.14159 / 4)
+ *
+ * # Default: shot-based (1024 shots)
+ * fidelity = maestro.mirror_fidelity(qc)
+ * print(f"Mirror fidelity: {fidelity:.4f}")  # ~1.0
+ *
+ * # High-statistics shot sampling
+ * fidelity = maestro.mirror_fidelity(qc, shots=10000)
+ *
+ * # Exact amplitude mode (small circuits only)
+ * fidelity = maestro.mirror_fidelity(qc, full_amplitude=True)
+ * @endcode
+ *
+ * @subsection py_mirror_circuit Circuit Method
+ *
+ * @code{.py}
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ * qc.s(0)
+ *
+ * fidelity = qc.mirror_fidelity()
+ * print(f"Mirror fidelity: {fidelity:.4f}")  # ~1.0
+ *
+ * # With MPS (scales to 50+ qubits)
+ * mps_config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=64,
+ * )
+ * fidelity = qc.mirror_fidelity(config=mps_config, shots=10000)
+ * @endcode
+ *
+ * @note Measurements in the input circuit are automatically skipped when generating the
+ * mirror circuit — only unitary gates are inverted.
+ *
+ * ---
+ *
+ * @section py_inner_product Inner Product & State Overlap
+ *
+ * The inner product calculates <psi1|psi2> between two circuits' output states, where
+ * |psi_i> = U_i |0>. Maestro constructs the combined sequence U1_dagger * U2 and evaluates
+ * <0| U1_dagger * U2 |0> via the efficient `ProjectOnZero` operation. With the MPS backend,
+ * this avoids constructing full statevectors.
+ *
+ * The return value is a complex number: `abs(overlap)` gives the state overlap (fidelity
+ * when squared), while the phase captures relative global phase differences.
+ *
+ * @subsection py_inner_module Module-Level Function
+ *
+ * @code{.py}
+ * import maestro
+ * from maestro.circuits import QuantumCircuit
+ *
+ * qc1 = QuantumCircuit()
+ * qc1.h(0)
+ * qc1.cx(0, 1)
+ *
+ * qc2 = QuantumCircuit()
+ * qc2.h(0)
+ * qc2.cx(0, 1)
+ *
+ * overlap = maestro.inner_product(qc1, qc2)
+ * print(f"<psi1|psi2> = {overlap}")         # (1+0j)
+ * print(f"|<psi1|psi2>| = {abs(overlap)}")    # 1.0
+ * @endcode
+ *
+ * @subsection py_inner_orthogonal Orthogonal States
+ *
+ * @code{.py}
+ * # |+> and |-> states are orthogonal
+ * qc_plus = QuantumCircuit()
+ * qc_plus.h(0)
+ *
+ * qc_minus = QuantumCircuit()
+ * qc_minus.x(0)
+ * qc_minus.h(0)
+ *
+ * overlap = maestro.inner_product(qc_plus, qc_minus)
+ * print(f"|<+|->| = {abs(overlap):.6f}")  # 0.000000
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_incremental_evolve Incremental Time Evolution
+ *
+ * `maestro.incremental_evolve` performs Trotterized time evolution with intermediate
+ * expectation value measurements using a **single persistent simulator instance**.
+ * This eliminates the computational overhead of re-simulating the circuit from step 0
+ * at each time point.
+ *
+ * @subsection py_incremental_motivation Motivation & Complexity
+ *
+ * When measuring observables across N total Trotter steps at n time points:
+ * - **Naive approach (fresh circuit per point):** Cost is O(n * N / 2) — roughly n/2 times
+ *   the cost of a single full evolution.
+ * - **Incremental evolution:** Keeps the internal state alive and advances forward.
+ *   Total cost is strictly **O(N)**.
+ *
+ * | Approach | Steps Executed (N=300, 20 points) | Complexity |
+ * |----------|-----------------------------------|------------|
+ * | Fresh circuit per point | ~3,000 steps | O(n * N) |
+ * | `incremental_evolve` | 300 steps | O(N) |
+ * | **Speedup** | **~10x faster** | |
+ *
+ * @subsection py_incremental_usage Usage Example
+ *
+ * @code{.py}
+ * import maestro
+ * from maestro.circuits import QuantumCircuit
+ *
+ * # 1. Initial state preparation
+ * init = QuantumCircuit()
+ * init.x(0)  # Excite qubit 0
+ *
+ * # 2. Single Trotter step circuit
+ * step = QuantumCircuit()
+ * step.rx(0, 0.1)
+ * step.rx(1, 0.2)
+ * step.cx(0, 1)
+ * step.rz(1, 0.05)
+ * step.cx(0, 1)
+ *
+ * # 3. Step indices to measure at
+ * measure_at = [10, 20, 30, 50, 100]
+ *
+ * # 4. Run incremental evolution
+ * result = maestro.incremental_evolve(
+ *     init_circuit=init,
+ *     trotter_step=step,
+ *     measure_at_steps=measure_at,
+ *     observables=["ZI", "IZ", "ZZ"],
+ *     config=maestro.SimulatorConfig(
+ *         simulation_type=maestro.SimulationType.MatrixProductState,
+ *         max_bond_dimension=64,
+ *     ),
+ * )
+ *
+ * # 5. Inspect results
+ * for i, s in enumerate(result["steps"]):
+ *     evs = result["expectation_values"][i]
+ *     print(f"Step {s:3d}: <ZI>={evs[0]:.4f}  <IZ>={evs[1]:.4f}  <ZZ>={evs[2]:.4f}")
+ * @endcode
+ *
+ * @subsection py_incremental_params Parameters
+ *
+ * | Parameter | Type | Default | Description |
+ * |-----------|------|---------|-------------|
+ * | `init_circuit` | `QuantumCircuit` | Required | State preparation circuit (executed once) |
+ * | `trotter_step` | `QuantumCircuit` | Required | Single Trotter step circuit (applied repeatedly) |
+ * | `measure_at_steps` | `list[int]` | Required | Step indices at which to compute expectation values |
+ * | `observables` | `list[str]` or `str` | Required | Pauli strings to evaluate |
+ * | `config` | `SimulatorConfig` | `SimulatorConfig()` | Backend configuration |
+ */
