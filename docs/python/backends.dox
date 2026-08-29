@@ -1,0 +1,110 @@
+/**
+ * @page py_backends Simulation Backends
+ *
+ * @tableofcontents
+ *
+ * @section py_backends_overview Overview
+ *
+ * Maestro provides a uniform interface to multiple quantum simulation algorithms and engines.
+ * You can explicitly select the simulator backend and method via `SimulatorConfig`.
+ *
+ * ---
+ *
+ * @section py_statevector Statevector Simulation
+ *
+ * Full 2^N amplitude statevector simulation. Recommended for high entanglement circuits with up to 30 qubits on CPU or 36+ on GPU.
+ *
+ * @code{.py}
+ * config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.Statevector,
+ * )
+ * result = maestro.simple_execute(qasm, config=config, shots=2000)
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_mps Matrix Product State (MPS)
+ *
+ * MPS enables simulation of circuits with hundreds of qubits when entanglement is bounded (1D area law).
+ *
+ * @code{.py}
+ * mps_config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=64,
+ *     singular_value_threshold=1e-10,
+ *     lookahead_depth=3,
+ *     disable_optimized_swapping=False,
+ * )
+ *
+ * result = maestro.simple_execute(qasm, config=mps_config, shots=1000)
+ * print(result["method"])  # "MatrixProductState"
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_stabilizer Stabilizer (Clifford-only)
+ *
+ * Ultra-fast polynomial-time simulation for circuits comprising only Clifford gates (H, S, CX, CZ, X, Y, Z). Scales to thousands of qubits.
+ *
+ * @code{.py}
+ * clifford_qasm = """
+ * OPENQASM 2.0;
+ * include "qelib1.inc";
+ * qreg q[100];
+ * creg c[100];
+ * h q[0];
+ * cx q[0], q[1];
+ * cx q[1], q[2];
+ * measure q -> c;
+ * """
+ *
+ * stab_config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.Stabilizer,
+ * )
+ * result = maestro.simple_execute(clifford_qasm, config=stab_config, shots=10000)
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_backend_table Backend Compatibility Matrix
+ *
+ * | SimulationType | QCSim | Qiskit Aer | GPU | QuEST |
+ * |----------------|-------|------------|-----|-------|
+ * | `Statevector` | Yes | Yes | Yes | Yes |
+ * | `MatrixProductState` | Yes | Yes | Yes | No |
+ * | `Stabilizer` | Yes | Yes | No | No |
+ * | `TensorNetwork` | Yes | Yes | Yes | No |
+ * | `PauliPropagator` | Yes | No | Yes | No |
+ * | `ExtendedStabilizer` | No | Yes | No | No |
+ *
+ * **Distributed Execution:**
+ * - QCSim and Qiskit Aer support p-block composite simulation via `CompositeQCSim` / `CompositeQiskitAer`.
+ * - QuEST natively supports MPI-distributed statevector simulation across cluster nodes.
+ *
+ * ---
+ *
+ * @section py_advanced Object-Oriented Simulator Control
+ *
+ * For full low-level control over the simulation lifecycle, use the `Maestro` engine directly:
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * m = maestro.Maestro()
+ *
+ * # Create a simulator handle
+ * handle = m.create_simulator(
+ *     maestro.SimulatorType.QCSim,
+ *     maestro.SimulationType.Statevector
+ * )
+ *
+ * # Get the raw simulator object
+ * sim = m.get_simulator(handle)
+ *
+ * # Clean up when finished
+ * m.destroy_simulator(handle)
+ * @endcode
+ */

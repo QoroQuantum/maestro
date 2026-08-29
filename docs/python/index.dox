@@ -1,0 +1,54 @@
+/**
+ * @page python_guide Python User Guide
+ *
+ * @tableofcontents
+ *
+ * @section py_guide_overview Overview
+ *
+ * Maestro ships high-performance Python bindings built with
+ * [nanobind](https://github.com/wjakob/nanobind). The bindings expose
+ * the full simulation pipeline — circuit construction, backend selection,
+ * high-performance execution, expectation-value estimation, and hardware-realistic
+ * noise modeling — in an ergonomic, Pythonic API.
+ *
+ * ---
+ *
+ * @section py_guide_contents Table of Contents
+ *
+ * The Python documentation is structured into the following focused guides:
+ *
+ * | Guide | Description |
+ * |-------|-------------|
+ * | @subpage py_quickstart "Getting Started & Configuration" | Installation, `SimulatorConfig` options, and one-line execution |
+ * | @subpage py_circuits "QuantumCircuit Builder" | Programmatic circuit construction, gate set, and measurements |
+ * | @subpage py_backends "Simulation Backends" | Statevector, MPS, Stabilizer, Tensor Networks, and tuning knobs |
+ * | @subpage py_algorithms "Algorithms & Observables" | Expectation values, mirror fidelity, inner products, and time evolution |
+ * | @subpage py_noise "Noise Simulation Manual" | Analytical, Monte Carlo, CPTP channels, thermal T1/T2, and correlated noise |
+ * | @subpage py_hpc "HPC Acceleration (GPU & QuEST)" | NVIDIA cuStateVec GPU acceleration and QuEST MPI distributed simulation |
+ * | @subpage py_reference "Python API Reference" | Enumerations (`SimulatorType`, `SimulationType`) and module functions |
+ *
+ * ---
+ *
+ * @section py_guide_quick_snippet 30-Second Quick Start
+ *
+ * @code{.py}
+ * import maestro
+ * from maestro.circuits import QuantumCircuit
+ *
+ * # 1. Build a Bell State
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ * qc.measure_all()
+ *
+ * # 2. Execute on default backend (QCSim Statevector)
+ * result = qc.execute(shots=1024)
+ * print("Measurement counts:", result["counts"])  # {"00": ~512, "11": ~512}
+ *
+ * # 3. Compute expectation values of Pauli observables directly
+ * estimate = qc.estimate(observables=["ZZ", "XX", "YY"])
+ * print("Expectation values:", estimate["expectation_values"])  # [1.0, 1.0, -1.0]
+ * @endcode
+ *
+ * Explore the subpages above for detailed tutorials and reference guides for each feature area.
+ */

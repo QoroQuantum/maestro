@@ -1,0 +1,236 @@
+/**
+ * @page py_noise Noise Simulation Manual
+ *
+ * @tableofcontents
+ *
+ * @section py_noise_intro Overview
+ *
+ * Maestro provides a high-performance noise simulation suite with multiple approaches
+ * balancing speed, accuracy, and memory usage:
+ *
+ * | Function | Overhead | Noise Mechanism | Best For |
+ * |----------|----------|-----------------|----------|
+ * | `noisy_estimate` | Zero | Analytical Pauli damping | Fast ansatz screening |
+ * | `noisy_estimate_montecarlo` | N x noiseless | Gate-by-gate stochastic Pauli | QML training with noise |
+ * | `noisy_execute` | N x noiseless | Gate-by-gate Pauli + shot noise | Shot-based sampling |
+ * | `coherent_estimate` | N x noiseless | Systematic rotation overshoots | Coherent error analysis |
+ * | `coherent_execute` | N x noiseless | Coherent errors + shot noise | Shot-based coherent noise |
+ * | `full_noise_execute` | N x noiseless | All physical noise layers combined | Full device simulation |
+ * | `full_noise_estimate` | N x noiseless | All physical noise layers combined | Hardware-realistic expectation values |
+ * | `noisy_fidelity` | N x inner_product | All noise layers (MPS-native) | Fast overlap & infidelity estimation |
+ * | `qc.noisy_prob` | O(n) path integral | Readout error correction | Direct path-integral probability queries |
+ *
+ * ---
+ *
+ * @section py_noise_model NoiseModel Builder
+ *
+ * The `NoiseModel` class specifies error parameters across qubits and gate operations:
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * nm = maestro.NoiseModel()
+ *
+ * # Depolarizing noise: equal X, Y, Z error rates (p/3 each)
+ * nm.set_depolarizing(qubit=0, p=0.01)
+ *
+ * # Uniform depolarizing across all qubits
+ * nm.set_all_depolarizing(num_qubits=5, p=0.005)
+ *
+ * # Dephasing noise: pure Z errors (T2 dephasing)
+ * nm.set_dephasing(qubit=1, p=0.02)
+ *
+ * # Bit-flip noise: pure X errors
+ * nm.set_bit_flip(qubit=2, p=0.01)
+ *
+ * # Custom Pauli channel with independent probabilities
+ * nm.set_qubit_noise(qubit=3, px=0.005, py=0.002, pz=0.01)
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_noise_analytical Analytical Noisy Estimation (Zero Overhead)
+ *
+ * `noisy_estimate` executes a single noiseless simulation and analytically damps each
+ * Pauli expectation value according to the noise model. This incurs zero additional simulation cost.
+ *
+ * @code{.py}
+ * from maestro.circuits import QuantumCircuit
+ *
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.cx(0, 1)
+ *
+ * nm = maestro.NoiseModel()
+ * nm.set_all_depolarizing(num_qubits=2, p=0.05)
+ *
+ * result = maestro.noisy_estimate(qc, ["ZZ", "XX", "YY"], nm)
+ *
+ * print("Noisy values:", result["expectation_values"])
+ * print("Ideal values:", result["ideal_expectation_values"])
+ * print(f"Time taken: {result['time_taken']:.4f}s (zero extra overhead)")
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_noise_mc Gate-by-Gate Monte Carlo Simulation
+ *
+ * For depth-dependent noise accumulation, `noisy_estimate_montecarlo` injects stochastic
+ * Pauli errors after each gate across multiple realization circuits:
+ *
+ * @code{.py}
+ * result = maestro.noisy_estimate_montecarlo(
+ *     qc, ["ZZ", "XX"], nm,
+ *     noise_realizations=200,
+ *     seed=42
+ * )
+ *
+ * print("Expectation values:", result["expectation_values"])
+ * print("Ideal reference:", result["ideal_expectation_values"])
+ * @endcode
+ *
+ * For shot-based measurement counts with gate-level noise:
+ *
+ * @code{.py}
+ * qc.measure_all()
+ * result = maestro.noisy_execute(
+ *     qc, nm,
+ *     shots=1024,
+ *     noise_realizations=64,
+ *     seed=42
+ * )
+ * print("Counts:", result["counts"])
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_noise_coherent Coherent Noise (Systematic Calibration Errors)
+ *
+ * Coherent noise injects deterministic unitary rotations (Rx, Ry, Rz) after gates rather than
+ * random Pauli flips, modeling systematic over-rotation and phase drift:
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # From depolarizing rate: angle epsilon = 2 * arcsin(sqrt(p))
+ * nm.set_coherent_depolarizing(qubit=0, p=0.01)
+ * nm.set_all_coherent_depolarizing(num_qubits=5, p=0.001)
+ *
+ * # Explicit rotation angles in radians
+ * nm.set_coherent_rotation(qubit=0, rx=0.01, ry=0.0, rz=0.05)
+ *
+ * # Estimate expectation values under coherent noise
+ * result = maestro.coherent_estimate(qc, ["ZZ", "XX"], nm, noise_realizations=100)
+ * print(result["expectation_values"])
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_noise_thermal Thermal Relaxation (T1 and T2 Decoherence)
+ *
+ * Thermal relaxation models physical energy decay (T1) and dephasing (T2) based on
+ * physical gate execution times.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # Single-qubit gates: gate_time = 30 ns, T1 = 100 us, T2 = 80 us
+ * nm.set_thermal_relaxation(qubit=0, gate_time_s=30e-9, t1_s=100e-6, t2_s=80e-6)
+ *
+ * # Two-qubit gates (slower): gate_time = 300 ns, T1 = 100 us, T2 = 80 us
+ * nm.set_thermal_relaxation_2q(qubit=0, gate_time_s=300e-9, t1_s=100e-6, t2_s=80e-6)
+ * @endcode
+ *
+ * Note: Physical consistency requires T2 <= 2 * T1.
+ *
+ * ---
+ *
+ * @section py_noise_cptp CPTP Quantum Channels (MPO & Density Matrix)
+ *
+ * For exact open quantum systems using Matrix Product Operator (MPO) or Density Matrix backends:
+ *
+ * 1. **Phase Damping:** Pure dephasing with coherence multiplier sqrt(1 - gamma) or exp(-t / T_phi).
+ * 2. **Generalized Amplitude Damping:** Energy relaxation at finite thermal equilibrium population.
+ * 3. **Correlated Phase Flip:** Correlated two-qubit ZZ phase error.
+ * 4. **Arbitrary Kraus Channels:** Custom single-qubit or two-qubit Kraus operator matrices satisfying sum_k (E_k^dagger * E_k) = I.
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # Phase damping
+ * nm.set_phase_damping(qubit=0, gamma=0.05)
+ * nm.set_phase_damping_from_time(qubit=1, gate_time_s=30e-9, t_phi_s=50e-6)
+ *
+ * # Generalized amplitude damping (finite temperature bath with 5% thermal excitation)
+ * nm.set_generalized_amplitude_damping(qubit=2, gamma=0.02, excited_population=0.05)
+ *
+ * # Correlated 2Q phase flip
+ * nm.set_correlated_phase_flip(q1=0, q2=1, probability=0.01, correlation=0.8)
+ *
+ * # Custom Kraus operators (example: bit-flip channel)
+ * bit_flip_kraus = [
+ *     [[0.994987, 0.0], [0.0, 0.994987]],   # sqrt(1-p) * I
+ *     [[0.0, 0.1], [0.1, 0.0]]              # sqrt(p) * X
+ * ]
+ * nm.set_kraus_channel([0], bit_flip_kraus)
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_noise_crosstalk ZZ Crosstalk & Two-Qubit Errors
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # ZZ parasitic crosstalk between neighbouring qubits
+ * nm.set_crosstalk(q1=0, q2=1, strength=0.005)
+ *
+ * # Correlated two-qubit depolarizing after 2Q gates (CX/CZ)
+ * nm.set_2q_depolarizing(q1=0, q2=1, p=1.8e-3)
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_noise_readout Readout Error & Path Integral Correction
+ *
+ * Readout errors model classical measurement confusion matrices:
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # Asymmetric readout error: P(1|prep 0) = 0.3%, P(0|prep 1) = 6.0%
+ * nm.set_readout_error(qubit=0, p_meas1_prep0=0.003, p_meas0_prep1=0.06)
+ *
+ * # Symmetric readout error across all qubits
+ * nm.set_all_readout_error(num_qubits=5, p_error=0.02)
+ *
+ * # Query path integral with analytical readout correction
+ * result = qc.noisy_prob("11", nm)
+ * print("Readout-corrected probability:", result["probability"])
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_noise_combined Combined Device-Level Simulation
+ *
+ * Run full device simulation with all active noise layers combined in physical sequence:
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ * nm.set_all_correlated_ou(num_qubits=5, sigma=15.0, alpha=0.5, gate_time=100e-9)
+ * nm.set_all_coherent_depolarizing(num_qubits=5, p=0.002)
+ * nm.set_all_readout_error(num_qubits=5, p_error=0.01)
+ *
+ * # Full noise execution
+ * exec_result = qc.full_noise_execute(nm, shots=1024, noise_realizations=64)
+ * print("Full noise counts:", exec_result["counts"])
+ *
+ * # Full noise expectation values
+ * est_result = qc.full_noise_estimate(["ZZ", "XX"], nm, noise_realizations=100)
+ * print("Full noise expectation values:", est_result["expectation_values"])
+ *
+ * # Noisy fidelity (MPS-native inner product, cost O(N * chi^2))
+ * fid_result = qc.noisy_fidelity(nm, noise_realizations=100)
+ * print(f"Fidelity: {fid_result['fidelity']:.4f} +/- {fid_result['std_error']:.4f}")
+ * @endcode
+ */

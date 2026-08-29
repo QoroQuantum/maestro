@@ -1,0 +1,46 @@
+/**
+ * @page py_reference Python API Reference
+ *
+ * @tableofcontents
+ *
+ * @section py_enums Enumerations
+ *
+ * @subsection py_enum_simtype SimulatorType
+ *
+ * | Enum Value | Description | Shared Library |
+ * |------------|-------------|----------------|
+ * | `SimulatorType.QCSim` | Built-in QCSim CPU simulator engine | Built-in |
+ * | `SimulatorType.CompositeQCSim` | Distributed composite CPU simulator | Built-in |
+ * | `SimulatorType.QuestSim` | QuEST statevector simulator | `libmaestroquest` |
+ * | `SimulatorType.Gpu` | GPU-accelerated simulator | `libmaestro_gpu_simulators` |
+ *
+ * @subsection py_enum_simmethod SimulationType
+ *
+ * | Enum Value | Description | Supported Backends |
+ * |------------|-------------|--------------------|
+ * | `SimulationType.Statevector` | Exact statevector simulation | QCSim, Aer, GPU, QuEST |
+ * | `SimulationType.MatrixProductState` | MPS / tensor-train simulation | QCSim, Aer, GPU |
+ * | `SimulationType.Stabilizer` | Polynomial-time Clifford simulation | QCSim, Aer |
+ * | `SimulationType.TensorNetwork` | Tensor network contraction | QCSim, Aer, GPU |
+ * | `SimulationType.PauliPropagator` | Pauli frame propagation | QCSim, GPU |
+ * | `SimulationType.ExtendedStabilizer` | Extended stabilizer decomposition | Aer only |
+ *
+ * ---
+ *
+ * @section py_top_functions Top-Level Functions
+ *
+ * - `maestro.simple_execute(qasm_str, config=None, shots=1024)`: Execute QASM circuit and return measurement counts.
+ * - `maestro.simple_estimate(qasm_str, observables, config=None)`: Estimate Pauli expectation values from QASM string.
+ * - `maestro.mirror_fidelity(circuit, config=None, shots=1024, full_amplitude=False)`: Compute mirror circuit ground-state fidelity.
+ * - `maestro.inner_product(circuit1, circuit2, config=None)`: Compute complex inner product <psi1|psi2>.
+ * - `maestro.incremental_evolve(init_circuit, trotter_step, measure_at_steps, observables, config=None)`: Fast persistent incremental Trotter evolution.
+ * - `maestro.noisy_estimate(circuit, observables, noise_model, config=None)`: Zero-overhead analytical noisy estimation.
+ * - `maestro.noisy_estimate_montecarlo(circuit, observables, noise_model, noise_realizations=100, seed=None, config=None)`: Gate-by-gate Monte Carlo noisy estimation.
+ * - `maestro.noisy_execute(circuit, noise_model, shots=1024, noise_realizations=64, seed=None, config=None)`: Gate-by-gate Monte Carlo noisy execution.
+ * - `maestro.coherent_estimate(circuit, observables, noise_model, noise_realizations=100, seed=None, config=None)`: Coherent systematic rotation noisy estimation.
+ * - `maestro.coherent_execute(circuit, noise_model, shots=1024, noise_realizations=64, seed=None, config=None)`: Coherent systematic rotation noisy execution.
+ * - `maestro.is_gpu_available()`: Check if GPU acceleration library is present.
+ * - `maestro.init_gpu()`: Load GPU acceleration library.
+ * - `maestro.is_quest_available()`: Check if QuEST library is present.
+ * - `maestro.init_quest()`: Load QuEST library.
+ */
