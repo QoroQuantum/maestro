@@ -586,15 +586,26 @@ double mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
           network->RepeatedExecuteOnHost(mirror_copy, 0, (size_t)shots);
     }
 
+    if (raw_results.empty() && shots > 0) {
+      throw std::runtime_error(
+          "mirror_fidelity: Simulation failed to return measurement samples.");
+    }
+
     // Convert results to counts dict and look up all-zeros bitstring
     std::string zeros(n, '0');
     size_t zero_count = 0;
+    size_t total_shots = 0;
     for (const auto& pair : raw_results) {
+      total_shots += pair.second;
       const auto& bool_vec = pair.first;
       std::string bitstring(bool_vec.size(), '0');
       for (size_t i = 0; i < bool_vec.size(); ++i)
         if (bool_vec[i]) bitstring[i] = '1';
       if (bitstring == zeros) zero_count += pair.second;
+    }
+    if (total_shots == 0 && shots > 0) {
+      throw std::runtime_error(
+          "mirror_fidelity: Simulation produced 0 total measurement shots.");
     }
     return static_cast<double>(zero_count) / static_cast<double>(shots);
   };
