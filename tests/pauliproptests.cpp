@@ -41,7 +41,8 @@ struct Operation {
 };
 
 struct PauliSimTestFixture {
-  PauliSimTestFixture() {
+  explicit PauliSimTestFixture(unsigned int nrQubits = 4)
+      : nrQubitsForRandomCirc(nrQubits) {
     statevectorSim = Simulators::SimulatorsFactory::CreateSimulator(
         Simulators::SimulatorType::kQCSim,
         Simulators::SimulationType::kStatevector);
@@ -508,7 +509,7 @@ struct PauliSimTestFixture {
   }
 #endif
 
-  const unsigned int nrQubitsForRandomCirc = 4;
+  const unsigned int nrQubitsForRandomCirc;
 
   std::shared_ptr<Simulators::ISimulator> statevectorSim;
   Simulators::QcsimPauliPropagator qcsimPauliSim;
@@ -1098,5 +1099,74 @@ BOOST_DATA_TEST_CASE_F(PauliSimTestFixture, RandomNonCliffordCircuitsTest,
   }
 #endif
 }
+
+#ifdef __linux__
+// Stresses PauliProp::Execute()'s in/out GPU buffer bookkeeping specifically around
+// ProjectorOperator entries (i.e. mid-stream measurements): more qubits than
+// PauliSimTestFixture uses means more ProjectorOperators can be accumulated in the
+// operators list at once (one per already-measured qubit in the current sampling
+// round), and a short deduplication interval forces many more dedup-boundary swaps
+// per Execute() call. This combination is what makes buffer-swap parity hard to track
+// correctly (see the "More related with pauli prop issues" fix in
+// maestro-gpu-simulators/lib/pauliprop.hpp), so it is a more targeted reproduction
+// vehicle for that bug class than the standard random-circuit tests above.
+struct PauliSimMeasurementStressFixture : PauliSimTestFixture {
+  PauliSimMeasurementStressFixture() : PauliSimTestFixture(7) {
+    if (gpuPauliSim) gpuPauliSim->SetNumGatesBetweenDeduplications(2);
+  }
+};
+
+BOOST_DATA_TEST_CASE_F(PauliSimMeasurementStressFixture,
+                       MeasurementBufferBookkeepingStressTest,
+                       bdata::xrange(1, 12), nrGates) {
+  auto circuit = GenerateCircuit(nrQubitsForRandomCirc, nrGates, 29);
+
+  for (const auto& op : circuit) {
+    ExecuteGate(op, statevectorSim);
+    if (gpuPauliSim) ExecuteGate(op, *gpuPauliSim);
+  }
+
+  const int nrSamples = 300;
+  Types::qubits_vector qubitsToMeasure(nrQubitsForRandomCirc);
+  std::iota(qubitsToMeasure.begin(), qubitsToMeasure.end(), 0);
+  auto svRes = statevectorSim->SampleCounts(qubitsToMeasure, nrSamples);
+
+  std::vector<int> pq(qubitsToMeasure.begin(), qubitsToMeasure.end());
+  std::random_device rd;
+  std::mt19937 g(rd());
+
+  if (gpuPauliSim) {
+    std::unordered_map<Types::qubit_t, Types::qubit_t> gpuRes;
+    gpuPauliSim->SaveState();
+    for (int i = 0; i < nrSamples; ++i) {
+      gpuPauliSim->RestoreState();
+      // shuffling the measurement order means a projector for any given qubit can
+      // land at any position (and any parity) within the accumulated operators list
+      // across samples, rather than always in the same slot.
+      std::shuffle(pq.begin(), pq.end(), g);
+
+      Types::qubit_t result = 0;
+      for (int q = 0; q < static_cast<int>(pq.size()); ++q) {
+        auto res = gpuPauliSim->MeasureQubit(pq[q]);
+        if (res) result |= (1ULL << pq[q]);
+      }
+      ++gpuRes[result];
+    }
+
+    for (const auto& kv : svRes) {
+      const Types::qubit_t key = kv.first;
+      const Types::qubit_t svCount = kv.second;
+      const Types::qubit_t psCount =
+          gpuRes.find(key) != gpuRes.end() ? gpuRes[key] : 0;
+      const double svProb = static_cast<double>(svCount) / nrSamples;
+      const double psProb = static_cast<double>(psCount) / nrSamples;
+      BOOST_TEST(std::abs(svProb - psProb) < 0.15,
+                 "Measurement probability mismatch for outcome "
+                     << key << ": statevector " << svProb << ", gpu pauli sim "
+                     << psProb);
+    }
+  }
+}
+#endif
 
 BOOST_AUTO_TEST_SUITE_END()
