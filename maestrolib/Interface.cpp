@@ -195,6 +195,15 @@ __declspec(dllexport)
                        singularValueThreshold.c_str());
   }
 
+  const std::string truncationMode = Json::JsonParserMaestro<>::GetConfigString(
+      "matrix_product_state_truncation_mode", configJson);
+  if (!truncationMode.empty()) {
+    configured = true;
+    if (network->GetSimulator()) network->GetSimulator()->Clear();
+    network->Configure("matrix_product_state_truncation_mode",
+                       truncationMode.c_str());
+  }
+
   const std::string mpsSample = Json::JsonParserMaestro<>::GetConfigString(
       "mps_sample_measure_algorithm", configJson);
   if (!mpsSample.empty()) {
@@ -354,6 +363,15 @@ __declspec(dllexport)
     if (network->GetSimulator()) network->GetSimulator()->Clear();
     network->Configure("matrix_product_state_truncation_threshold",
                        singularValueThreshold.c_str());
+  }
+
+  const std::string truncationMode = Json::JsonParserMaestro<>::GetConfigString(
+      "matrix_product_state_truncation_mode", configJson);
+  if (!truncationMode.empty()) {
+    configured = true;
+    if (network->GetSimulator()) network->GetSimulator()->Clear();
+    network->Configure("matrix_product_state_truncation_mode",
+                       truncationMode.c_str());
   }
 
   const std::string mpsSample = Json::JsonParserMaestro<>::GetConfigString(
