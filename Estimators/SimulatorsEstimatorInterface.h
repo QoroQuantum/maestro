@@ -42,7 +42,8 @@ class SimulatorsEstimatorInterface {
       size_t nrQubits, size_t nrCbits, size_t nrResultCbits,
       Simulators::SimulatorType &simType, Simulators::SimulationType &method,
       std::vector<bool> &executed, const long long int maxBondDim,
-      const double singularValueThreshold, const std::string &mpsSample,
+      const double singularValueThreshold, const std::string &truncationMode,
+      const std::string &mpsSample,
       size_t maxSimulators, const std::vector<std::string> *paulis, bool multithreading = false) const = 0;
 
   static void ExecuteUpToMeasurements(
