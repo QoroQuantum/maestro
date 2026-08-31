@@ -418,5 +418,79 @@ BOOST_AUTO_TEST_CASE(measurement_collapse_marginals_match) {
                     static_cast<double>(qcsimOnes) / trials, 40);
 }
 
+// The truncation threshold is documented (GpuState.h) to be relative to the
+// largest singular value at each bond, matching QCSim's Eigen-SVD
+// setThreshold()/rank() semantics -- see mpsimpl.cu/mpo.cu/tensornet.cu in
+// maestro-gpu-simulators. Before that fix, the GPU backends fed the same
+// value into cuTensorNet's absolute-magnitude cutoff (ABS_CUTOFF), which
+// truncates far more aggressively than the CPU side once entanglement grows
+// and the largest singular value at a bond shrinks well below 1. This test
+// grows real (non-stabilizer) entanglement across enough qubits that a
+// relative/absolute cutoff mismatch would show up as a large bond-dimension
+// gap between backends.
+BOOST_AUTO_TEST_CASE(truncation_threshold_bond_growth_matches) {
+  constexpr unsigned int kBondTestQubits = 14;
+  constexpr int kLayers = 12;
+
+  auto qcsimMPS = Simulators::SimulatorsFactory::CreateSimulator(
+      Simulators::SimulatorType::kQCSim,
+      Simulators::SimulationType::kMatrixProductState);
+  qcsimMPS->AllocateQubits(kBondTestQubits);
+  qcsimMPS->Configure("matrix_product_state_truncation_threshold", "1e-2");
+  qcsimMPS->Initialize();
+
+  Simulators::SimulatorsFactory::InitGpuLibraryWithMute();
+  auto gpuMPS = Simulators::SimulatorsFactory::CreateSimulator(
+      Simulators::SimulatorType::kGpuSim,
+      Simulators::SimulationType::kMatrixProductState);
+  if (!gpuMPS) {
+    BOOST_TEST_MESSAGE("GPU MPS library is unavailable; skipping");
+    return;
+  }
+  gpuMPS->AllocateQubits(kBondTestQubits);
+  gpuMPS->Configure("matrix_product_state_truncation_threshold", "1e-2");
+  gpuMPS->Initialize();
+
+  std::mt19937 g(12345);
+  std::uniform_real_distribution<double> angle(-2. * M_PI, 2. * M_PI);
+
+  for (int layer = 0; layer < kLayers; ++layer) {
+    for (unsigned int q = 0; q < kBondTestQubits; ++q) {
+      const double theta = angle(g);
+      const double phi = angle(g);
+      qcsimMPS->ApplyRy(q, theta);
+      qcsimMPS->ApplyRz(q, phi);
+      gpuMPS->ApplyRy(q, theta);
+      gpuMPS->ApplyRz(q, phi);
+    }
+    const unsigned int offset = layer % 2;
+    for (unsigned int q = offset; q + 1 < kBondTestQubits; q += 2) {
+      qcsimMPS->ApplyCX(q, q + 1);
+      gpuMPS->ApplyCX(q, q + 1);
+    }
+  }
+
+  const size_t qcsimMaxBond = qcsimMPS->GetCurrentMaxBondDimension();
+  const size_t gpuMaxBond = gpuMPS->GetCurrentMaxBondDimension();
+
+  BOOST_TEST_MESSAGE("CPU (QCSim) max bond dimension: " << qcsimMaxBond);
+  BOOST_TEST_MESSAGE("GPU max bond dimension: " << gpuMaxBond);
+
+  BOOST_REQUIRE_GT(qcsimMaxBond, 1u);
+  BOOST_REQUIRE_GT(gpuMaxBond, 1u);
+
+  // Different SVD implementations (Eigen rank() vs cuTensorNet value-based
+  // truncation) won't land on the exact same bond dimension, but with both
+  // backends now applying the same *relative* cutoff, they should stay
+  // within a small constant factor of each other rather than differing by
+  // orders of magnitude (which is what the absolute-vs-relative mismatch
+  // used to produce).
+  const double ratio = static_cast<double>(std::max(qcsimMaxBond, gpuMaxBond)) /
+                       static_cast<double>(std::min(qcsimMaxBond, gpuMaxBond));
+  BOOST_TEST(ratio < 3.0,
+             "CPU/GPU max bond dimension diverged: " << qcsimMaxBond
+                                                       << " vs " << gpuMaxBond);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 #endif
