@@ -173,4 +173,31 @@ BOOST_AUTO_TEST_CASE(matrix_product_state_truncation_mode_only_accepts_discarded
       std::invalid_argument);
 }
 
+// Regression test for a real bug found during review: Configure() used to store the
+// requested value into `configuration` BEFORE validating it, so a rejected
+// "relative_max" request would throw as intended but still leave "relative_max"
+// sitting in the configuration map -- visible via GetConfiguration(), and liable to
+// throw again, unexpectedly, from an unrelated later call site (e.g. Clone()'s
+// generic configuration-replay loop). Fixed by validating before storing.
+BOOST_AUTO_TEST_CASE(rejected_truncation_mode_does_not_linger_in_configuration) {
+  auto mps = Simulators::SimulatorsFactory::CreateSimulator(
+      Simulators::SimulatorType::kQiskitAer,
+      Simulators::SimulationType::kMatrixProductState);
+  mps->AllocateQubits(1);
+
+  BOOST_CHECK_THROW(
+      mps->Configure("matrix_product_state_truncation_mode", "relative_max"),
+      std::invalid_argument);
+
+  // The rejected value must not have been persisted -- GetConfiguration should report
+  // the unset/default state, not the value that was just thrown out.
+  BOOST_TEST(mps->GetConfiguration("matrix_product_state_truncation_mode") !=
+             std::string("relative_max"));
+
+  // A rejected call must not corrupt Configure()'s ability to accept the one value
+  // Aer actually supports right afterward.
+  BOOST_CHECK_NO_THROW(
+      mps->Configure("matrix_product_state_truncation_mode", "discarded_weight"));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

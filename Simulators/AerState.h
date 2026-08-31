@@ -188,6 +188,23 @@ class AerState : public ISimulator {
     if (configuration.WasApplied(key, value) && state->is_initialized())
       return;
 
+    // Validate BEFORE storing below: Qiskit Aer's own MPS/MPO truncation always
+    // implements the discarded-weight (Aer/iTensor) convention natively -- see
+    // reduce_zeros() in qiskit-aer/src/simulators/matrix_product_state/svd.cpp.
+    // Unlike the QCSim and GPU backends (see Simulators/QCSimState.h,
+    // Simulators/GpuState.h), there is no relative-to-max mode to switch to
+    // here, so requesting anything else is rejected outright. Checked here,
+    // ahead of the store below, so a rejected value never lingers in
+    // `configuration` -- otherwise it would still show up via
+    // GetConfiguration(), or get silently replayed later by Clone()'s
+    // generic configuration-replay loop, throwing again from an unrelated
+    // call site.
+    if ((std::string("matrix_product_state_truncation_mode") == key ||
+         std::string("matrix_product_operator_truncation_mode") == key) &&
+        std::string("discarded_weight") != value)
+      throw std::invalid_argument(
+          "Aer backend only supports the discarded_weight truncation mode");
+
     if (!configuration.WasApplied(key, value))
         configuration.SetConfiguration(key, value);
 
@@ -208,21 +225,11 @@ class AerState : public ISimulator {
         simulationType = SimulationType::kOther;
     }
      
+    // Already validated above; this key is a no-op once accepted (Aer has no
+    // other mode to switch to), so don't forward it to state->configure().
     if (std::string("matrix_product_state_truncation_mode") == key ||
-        std::string("matrix_product_operator_truncation_mode") == key) {
-      // Qiskit Aer's own MPS/MPO truncation always implements the
-      // discarded-weight (Aer/iTensor) convention natively -- see
-      // reduce_zeros() in
-      // qiskit-aer/src/simulators/matrix_product_state/svd.cpp. Unlike the
-      // QCSim and GPU backends (see Simulators/QCSimState.h,
-      // Simulators/GpuState.h), there is no relative-to-max mode to switch
-      // to here, so requesting anything else is rejected outright rather
-      // than silently ignored.
-      if (std::string("discarded_weight") != value)
-        throw std::invalid_argument(
-            "Aer backend only supports the discarded_weight truncation mode");
+        std::string("matrix_product_operator_truncation_mode") == key)
       return;
-    }
 
     if (std::string("use_double_precision") != key)
         state->configure(key, value);
