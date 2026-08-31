@@ -2144,6 +2144,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         configuration.GetConfigurationAsDouble(
             "matrix_product_state_truncation_threshold");
 
+    const std::string truncationMode = configuration.GetConfiguration(
+        "matrix_product_state_truncation_mode");
+
     const std::string mpsSample = configuration.GetConfiguration(
         "mps_sample_measure_algorithm");
 
@@ -2151,7 +2154,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         simulatorsEstimator->ChooseBestSimulator(
             simulatorTypes, dcirc, counts, nrQubits, nrCbits, nrResultCbits,
             simType, method, executed, maxBondDim, singularValueThreshold,
-            mpsSample, GetMaxSimulators(), pauliStrings, multithreading);
+            truncationMode, mpsSample, GetMaxSimulators(), pauliStrings, multithreading);
 
     if (sim) {
       sim->AllocateQubits(nrQubits);
