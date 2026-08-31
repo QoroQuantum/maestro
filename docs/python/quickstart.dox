@@ -58,6 +58,7 @@
  * | `simulation_type` | `SimulationType` | `Statevector` | Simulation method |
  * | `max_bond_dimension` | `int` or `None` | `None` | MPS bond dimension limit |
  * | `singular_value_threshold` | `float` or `None` | `None` | MPS truncation threshold |
+ * | `truncation_mode` | `str` or `None` | `None` (backend default: `"discarded_weight"`) | How `singular_value_threshold` is interpreted: `"discarded_weight"` (Qiskit Aer/ITensor convention — discard the smallest singular values until their cumulative squared weight reaches the threshold) or `"relative_max"` (discard singular values below `threshold * sigma_max`). Only the QCSim and GPU backends support `"relative_max"`; Aer raises `ValueError` if it's requested. |
  * | `use_double_precision` | `bool` | `False` | GPU double precision flag |
  * | `disable_optimized_swapping` | `bool` | `False` | Disable MPS swap optimization |
  * | `lookahead_depth` | `int` | `-1` | Swap optimization lookahead depth |

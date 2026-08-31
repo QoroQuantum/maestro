@@ -95,6 +95,12 @@ class GpuMPO {
     lib->MPOSetCutoff(obj, singularValueThreshold);
   }
   double GetCutoff() const { return lib->MPOGetCutoff(obj); }
+  // mode: 0 = RelativeToMax, 1 = DiscardedWeight (default). See
+  // TruncationMode in the GPU library's lib/truncationmode.hpp.
+  bool SetTruncationMode(int mode) {
+    return lib->MPOSetTruncationMode(obj, mode);
+  }
+  int GetTruncationMode() const { return lib->MPOGetTruncationMode(obj); }
   void SetMaxExtent(long int chi) { lib->MPOSetMaxExtent(obj, chi); }
   long int GetMaxExtent() const { return lib->MPOGetMaxExtent(obj); }
   std::vector<long long int> GetBondDimensions(size_t nrQubits) const {

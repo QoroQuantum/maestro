@@ -148,4 +148,29 @@ BOOST_AUTO_TEST_CASE(density_matrix_executes_exact_noise_model_circuit) {
   BOOST_CHECK_SMALL(densityMatrix->ExpectationValue("X") - 0.4, 1e-10);
 }
 
+BOOST_AUTO_TEST_CASE(matrix_product_state_truncation_mode_only_accepts_discarded_weight) {
+  auto mps = Simulators::SimulatorsFactory::CreateSimulator(
+      Simulators::SimulatorType::kQiskitAer,
+      Simulators::SimulationType::kMatrixProductState);
+  mps->AllocateQubits(1);
+
+  // Aer's own MPS/MPO truncation always implements the discarded-weight
+  // (Aer/iTensor) convention natively -- unlike the QCSim and GPU backends,
+  // there is no relative-to-max mode to switch to, so it should be a no-op
+  // to (re)confirm the only mode it has...
+  BOOST_CHECK_NO_THROW(
+      mps->Configure("matrix_product_state_truncation_mode", "discarded_weight"));
+  BOOST_CHECK_NO_THROW(
+      mps->Configure("matrix_product_operator_truncation_mode", "discarded_weight"));
+
+  // ...but should reject a request to switch to the relative-to-max mode
+  // that the QCSim/GPU backends support, rather than silently ignoring it.
+  BOOST_CHECK_THROW(
+      mps->Configure("matrix_product_state_truncation_mode", "relative_max"),
+      std::invalid_argument);
+  BOOST_CHECK_THROW(
+      mps->Configure("matrix_product_operator_truncation_mode", "relative_max"),
+      std::invalid_argument);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

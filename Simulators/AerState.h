@@ -24,6 +24,7 @@
 #include <limits>
 #include <numeric>
 #include <sstream>
+#include <stdexcept>
 
 #include "QubitRegister.h"
 #include "Simulator.h"
@@ -207,6 +208,22 @@ class AerState : public ISimulator {
         simulationType = SimulationType::kOther;
     }
      
+    if (std::string("matrix_product_state_truncation_mode") == key ||
+        std::string("matrix_product_operator_truncation_mode") == key) {
+      // Qiskit Aer's own MPS/MPO truncation always implements the
+      // discarded-weight (Aer/iTensor) convention natively -- see
+      // reduce_zeros() in
+      // qiskit-aer/src/simulators/matrix_product_state/svd.cpp. Unlike the
+      // QCSim and GPU backends (see Simulators/QCSimState.h,
+      // Simulators/GpuState.h), there is no relative-to-max mode to switch
+      // to here, so requesting anything else is rejected outright rather
+      // than silently ignored.
+      if (std::string("discarded_weight") != value)
+        throw std::invalid_argument(
+            "Aer backend only supports the discarded_weight truncation mode");
+      return;
+    }
+
     if (std::string("use_double_precision") != key)
         state->configure(key, value);
   }
