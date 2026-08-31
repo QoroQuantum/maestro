@@ -674,6 +674,10 @@ class GpuState : public ISimulator {
 
     if (std::string("matrix_product_state_truncation_threshold") == key ||
         std::string("matrix_product_operator_truncation_threshold") == key) {
+      // SetCutoff() on all three GPU backends interprets this as a threshold relative to
+      // the largest singular value at each bond/split, matching the CPU (QCSim) simulator's
+      // Eigen SVD setThreshold()/rank() semantics -- see mpsimpl.cu/mpo.cu/tensornet.cu in
+      // maestro-gpu-simulators.
       const double singularValueThreshold = std::stod(value);
       if (singularValueThreshold > 0.) {
         if (mps) mps->SetCutoff(singularValueThreshold);
