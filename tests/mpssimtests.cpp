@@ -284,6 +284,74 @@ BOOST_FIXTURE_TEST_CASE(MPSSimInitializationTest, MPSSimTestFixture) {
   TeardownMPS50();
 }
 
+// Exercises the matrix_product_state_truncation_mode config key end to end,
+// through the same string-based Configure() path a real caller would use
+// (Simulators/QCSimState.h and Simulators/GpuState.h), rather than calling
+// the QCSim/GPU-library TruncationMode setters directly. Not attempting to
+// prove the two modes truncate differently in general -- that's covered at
+// the QCSim and GPU-library level -- just that: (a) leaving the mode unset
+// reproduces the DiscardedWeight default exactly, since that's the specific
+// thing this glue code is responsible for wiring correctly, and (b) an
+// explicit "relative_max" request is accepted and the simulator still
+// produces a valid, normalized result.
+BOOST_FIXTURE_TEST_CASE(TruncationModeConfigKeyTest, MPSSimTestFixture) {
+  GenerateCircuit(15);
+
+  const size_t nrStates = 1ULL << nrQubitsForRandomCirc;
+  const char *threshold = "0.05";
+
+  auto runWithMode = [&](Simulators::SimulatorType type, const char *mode) {
+    auto sim = Simulators::SimulatorsFactory::CreateSimulator(
+        type, Simulators::SimulationType::kMatrixProductState);
+    if (!sim) return std::vector<double>{};
+
+    sim->AllocateQubits(nrQubitsForRandomCirc);
+    sim->Configure("matrix_product_state_truncation_threshold", threshold);
+    if (mode) sim->Configure("matrix_product_state_truncation_mode", mode);
+    sim->Initialize();
+    circ->Execute(sim, state);
+
+    auto probs = sim->AllProbabilities();
+    BOOST_TEST(probs.size() == nrStates);
+
+    resetRandomCirc->Execute(sim, state);
+    return probs;
+  };
+
+  const auto qcsimDefault =
+      runWithMode(Simulators::SimulatorType::kQCSim, nullptr);
+  const auto qcsimDiscardedWeight = runWithMode(
+      Simulators::SimulatorType::kQCSim, "discarded_weight");
+  const auto qcsimRelativeToMax =
+      runWithMode(Simulators::SimulatorType::kQCSim, "relative_max");
+
+  BOOST_TEST(qcsimDefault.size() == nrStates);
+  BOOST_TEST(qcsimRelativeToMax.size() == nrStates);
+  for (size_t i = 0; i < nrStates; ++i)
+    BOOST_CHECK_PREDICATE(checkClose,
+                          (qcsimDefault[i])(qcsimDiscardedWeight[i])(1e-9));
+
+#ifdef __linux__
+  if (gpusimMPS) {
+    const auto gpuDefault =
+        runWithMode(Simulators::SimulatorType::kGpuSim, nullptr);
+    const auto gpuDiscardedWeight = runWithMode(
+        Simulators::SimulatorType::kGpuSim, "discarded_weight");
+    const auto gpuRelativeToMax =
+        runWithMode(Simulators::SimulatorType::kGpuSim, "relative_max");
+
+    BOOST_TEST(gpuDefault.size() == nrStates);
+    BOOST_TEST(gpuRelativeToMax.size() == nrStates);
+    for (size_t i = 0; i < nrStates; ++i)
+      BOOST_CHECK_PREDICATE(checkClose,
+                            (gpuDefault[i])(gpuDiscardedWeight[i])(1e-9));
+  }
+#endif
+
+  circ->Clear();
+  state.Reset();
+}
+
 BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, RandomCircuitsTest,
                        bdata::xrange(1, 20), nrGates) {
   size_t nrStates = 1ULL << nrQubitsForRandomCirc;

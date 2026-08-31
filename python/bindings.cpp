@@ -46,6 +46,13 @@ struct SimulatorConfig {
       Simulators::SimulationType::kStatevector;
   std::optional<size_t> max_bond_dimension = std::nullopt;
   std::optional<double> singular_value_threshold = std::nullopt;
+  // "relative_max" (keep sigma_i > threshold * sigma_max, the historical QCSim/GPU
+  // convention) or "discarded_weight" (discard the smallest singular values until
+  // their cumulative squared weight reaches the threshold, matching Qiskit Aer's and
+  // ITensor's convention -- the default on every backend unless this is set). The
+  // Aer backend only ever implements discarded_weight and raises if relative_max is
+  // requested; QCSim and the GPU backend support switching between both.
+  std::optional<std::string> truncation_mode = std::nullopt;
   bool use_double_precision = false;
   bool disable_optimized_swapping = false;
   int lookahead_depth = -1;
@@ -135,6 +142,10 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     auto val = oss.str();
     network->Configure("matrix_product_state_truncation_threshold",
                        val.c_str());
+  }
+  if (config.truncation_mode) {
+    network->Configure("matrix_product_state_truncation_mode",
+                       config.truncation_mode->c_str());
   }
   if (config.use_double_precision) {
     network->Configure("use_double_precision", "1");
@@ -871,6 +882,10 @@ NB_MODULE(maestro, m) {
       .def_rw("max_bond_dimension", &SimulatorConfig::max_bond_dimension)
       .def_rw("singular_value_threshold",
               &SimulatorConfig::singular_value_threshold)
+      .def_rw("truncation_mode", &SimulatorConfig::truncation_mode,
+              "'relative_max' or 'discarded_weight' (the default on every "
+              "backend). Only QCSim and the GPU backend support "
+              "'relative_max'; Aer raises if it's requested.")
       .def_rw("use_double_precision", &SimulatorConfig::use_double_precision)
       .def_rw("precision", &SimulatorConfig::precision)
       .def_rw("disable_optimized_swapping",
@@ -900,6 +915,8 @@ NB_MODULE(maestro, m) {
             << (c.singular_value_threshold
                     ? std::to_string(*c.singular_value_threshold)
                     : "None")
+            << ", truncation_mode="
+            << (c.truncation_mode ? "'" + *c.truncation_mode + "'" : "None")
             << ", use_double_precision="
             << (c.use_double_precision ? "True" : "False")
             << ", disable_optimized_swapping="

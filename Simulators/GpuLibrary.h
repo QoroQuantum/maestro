@@ -354,6 +354,8 @@ class GpuLibrary : public Utils::Library {
           LOAD_MPO(MPOGetNrQubits, int (*)(void *));
           LOAD_MPO(MPOSetCutoff, int (*)(void *, double));
           LOAD_MPO(MPOGetCutoff, double (*)(void *));
+          LOAD_MPO(MPOSetTruncationMode, int (*)(void *, int));
+          LOAD_MPO(MPOGetTruncationMode, int (*)(void *));
           LOAD_MPO(MPOSetMaxExtent, int (*)(void *, long int));
           LOAD_MPO(MPOGetMaxExtent, long int (*)(void *));
           LOAD_MPO(MPOGetBondDimensions,
@@ -463,6 +465,12 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fMPSSetCutoff, __LINE__);
           fMPSGetCutoff = (double (*)(void *))GetFunction("MPSGetCutoff");
           CheckFunction((void *)fMPSGetCutoff, __LINE__);
+          fMPSSetTruncationMode =
+              (int (*)(void *, int))GetFunction("MPSSetTruncationMode");
+          CheckFunction((void *)fMPSSetTruncationMode, __LINE__);
+          fMPSGetTruncationMode =
+              (int (*)(void *))GetFunction("MPSGetTruncationMode");
+          CheckFunction((void *)fMPSGetTruncationMode, __LINE__);
           fMPSSetGesvdJ = (int (*)(void *, int))GetFunction("MPSSetGesvdJ");
           CheckFunction((void *)fMPSSetGesvdJ, __LINE__);
           fMPSGetGesvdJ = (int (*)(void *))GetFunction("MPSGetGesvdJ");
@@ -652,6 +660,12 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fTNSetCutoff, __LINE__);
           fTNGetCutoff = (double (*)(void *))GetFunction("TNGetCutoff");
           CheckFunction((void *)fTNGetCutoff, __LINE__);
+          fTNSetTruncationMode =
+              (int (*)(void *, int))GetFunction("TNSetTruncationMode");
+          CheckFunction((void *)fTNSetTruncationMode, __LINE__);
+          fTNGetTruncationMode =
+              (int (*)(void *))GetFunction("TNGetTruncationMode");
+          CheckFunction((void *)fTNGetTruncationMode, __LINE__);
           fTNSetGesvdJ = (int (*)(void *, int))GetFunction("TNSetGesvdJ");
           CheckFunction((void *)fTNSetGesvdJ, __LINE__);
           fTNGetGesvdJ = (int (*)(void *))GetFunction("TNGetGesvdJ");
@@ -1768,6 +1782,10 @@ class GpuLibrary : public Utils::Library {
   double MPOGetCutoff(void *obj) const {
     return obj && fMPOGetCutoff ? fMPOGetCutoff(obj) : 0.0;
   }
+  MPO_BOOL1(MPOSetTruncationMode, int)
+  int MPOGetTruncationMode(void *obj) const {
+    return obj && fMPOGetTruncationMode ? fMPOGetTruncationMode(obj) : 0;
+  }
   MPO_BOOL1(MPOSetMaxExtent, long int)
   long int MPOGetMaxExtent(void *obj) const {
     return obj && fMPOGetMaxExtent ? fMPOGetMaxExtent(obj) : 0;
@@ -1945,6 +1963,8 @@ class GpuLibrary : public Utils::Library {
   int (*fMPOGetNrQubits)(void *) = nullptr;
   int (*fMPOSetCutoff)(void *, double) = nullptr;
   double (*fMPOGetCutoff)(void *) = nullptr;
+  int (*fMPOSetTruncationMode)(void *, int) = nullptr;
+  int (*fMPOGetTruncationMode)(void *) = nullptr;
   int (*fMPOSetMaxExtent)(void *, long int) = nullptr;
   long int (*fMPOGetMaxExtent)(void *) = nullptr;
   int (*fMPOGetBondDimensions)(void *, long long int *) = nullptr;
@@ -2132,6 +2152,24 @@ class GpuLibrary : public Utils::Library {
       return fMPSGetCutoff(obj);
     else
       throw std::runtime_error("GpuLibrary: Unable to get cutoff for mps");
+  }
+
+  bool MPSSetTruncationMode(void *obj, int mode) {
+    if (LibraryHandle)
+      return fMPSSetTruncationMode(obj, mode) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set truncation mode for mps");
+
+    return false;
+  }
+
+  int MPSGetTruncationMode(void *obj) const {
+    if (LibraryHandle)
+      return fMPSGetTruncationMode(obj);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get truncation mode for mps");
   }
 
   bool MPSSetGesvdJ(void *obj, int val) {
@@ -2750,6 +2788,24 @@ class GpuLibrary : public Utils::Library {
     else
       throw std::runtime_error(
           "GpuLibrary: Unable to get cutoff for tensor network");
+  }
+
+  bool TNSetTruncationMode(void *obj, int mode) {
+    if (LibraryHandle)
+      return fTNSetTruncationMode(obj, mode) == 1;
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to set truncation mode for tensor network");
+
+    return false;
+  }
+
+  int TNGetTruncationMode(void *obj) const {
+    if (LibraryHandle)
+      return fTNGetTruncationMode(obj);
+    else
+      throw std::runtime_error(
+          "GpuLibrary: Unable to get truncation mode for tensor network");
   }
 
   bool TNSetGesvdJ(void *obj, int val) {
@@ -3960,6 +4016,8 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSIsDoublePrecision)(void *) = nullptr;
   int (*fMPSSetCutoff)(void *, double) = nullptr;
   double (*fMPSGetCutoff)(void *) = nullptr;
+  int (*fMPSSetTruncationMode)(void *, int) = nullptr;
+  int (*fMPSGetTruncationMode)(void *) = nullptr;
   int (*fMPSSetGesvdJ)(void *, int) = nullptr;
   int (*fMPSGetGesvdJ)(void *) = nullptr;
   int (*fMPSSetMaxExtent)(void *, long int) = nullptr;
@@ -4039,6 +4097,8 @@ class GpuLibrary : public Utils::Library {
   int (*fTNIsDoublePrecision)(void *) = nullptr;
   int (*fTNSetCutoff)(void *, double) = nullptr;
   double (*fTNGetCutoff)(void *) = nullptr;
+  int (*fTNSetTruncationMode)(void *, int) = nullptr;
+  int (*fTNGetTruncationMode)(void *) = nullptr;
   int (*fTNSetGesvdJ)(void *, int) = nullptr;
   int (*fTNGetGesvdJ)(void *) = nullptr;
   int (*fTNSetMaxExtent)(void *, long int) = nullptr;

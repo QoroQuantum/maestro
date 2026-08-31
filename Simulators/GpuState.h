@@ -674,15 +674,36 @@ class GpuState : public ISimulator {
 
     if (std::string("matrix_product_state_truncation_threshold") == key ||
         std::string("matrix_product_operator_truncation_threshold") == key) {
-      // SetCutoff() on all three GPU backends interprets this as a threshold relative to
-      // the largest singular value at each bond/split, matching the CPU (QCSim) simulator's
-      // Eigen SVD setThreshold()/rank() semantics -- see mpsimpl.cu/mpo.cu/tensornet.cu in
-      // maestro-gpu-simulators.
+      // SetCutoff() sets the numeric threshold value. How that number is interpreted --
+      // relative to the largest singular value at each bond/split, or as a cumulative
+      // discarded-weight budget -- is a separate, independently configurable setting; see
+      // matrix_product_state_truncation_mode / matrix_product_operator_truncation_mode
+      // below. All three GPU backends default to discarded-weight (matching Qiskit Aer's
+      // and ITensor's convention) unless relative_max is explicitly requested -- see
+      // TruncationMode in maestro-gpu-simulators' lib/truncationmode.hpp and its use in
+      // mpsimpl.cu/mpo.cu/tensornet.cu.
       const double singularValueThreshold = std::stod(value);
       if (singularValueThreshold > 0.) {
         if (mps) mps->SetCutoff(singularValueThreshold);
         if (tn) tn->SetCutoff(singularValueThreshold);
         if (mpo) mpo->SetCutoff(singularValueThreshold);
+      }
+    } else if (std::string("matrix_product_state_truncation_mode") == key ||
+               std::string("matrix_product_operator_truncation_mode") == key) {
+      // "relative_max" -> TruncationMode::RelativeToMax (0), "discarded_weight" ->
+      // TruncationMode::DiscardedWeight (1, the default -- see lib/truncationmode.hpp in
+      // maestro-gpu-simulators). Unrecognized values are ignored, matching this function's
+      // existing convention of silently guarding malformed config values rather than
+      // throwing (see the max-bond-dimension/threshold branches below/above).
+      int truncationMode = -1;
+      if (std::string("relative_max") == value)
+        truncationMode = 0;
+      else if (std::string("discarded_weight") == value)
+        truncationMode = 1;
+      if (truncationMode >= 0) {
+        if (mps) mps->SetTruncationMode(truncationMode);
+        if (tn) tn->SetTruncationMode(truncationMode);
+        if (mpo) mpo->SetTruncationMode(truncationMode);
       }
     } else if (std::string("matrix_product_state_max_bond_dimension") == key ||
                std::string("matrix_product_operator_max_bond_dimension") ==

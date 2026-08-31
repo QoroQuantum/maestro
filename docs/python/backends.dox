@@ -42,6 +42,32 @@
  * print(result["method"])  # "MatrixProductState"
  * @endcode
  *
+ * @subsection py_mps_truncation_mode Truncation Mode
+ *
+ * `singular_value_threshold` is interpreted differently depending on `truncation_mode`:
+ *
+ * - `"discarded_weight"` (the default on every backend): discard the smallest singular
+ *   values until their cumulative squared weight, normalized by the total, would reach
+ *   the threshold. This matches Qiskit Aer's and ITensor's convention, so it's the mode
+ *   to use when comparing bond-dimension growth against an external ITensor run.
+ * - `"relative_max"`: discard singular values below `threshold * sigma_max` (the
+ *   largest singular value at that bond). This was the historical default for the
+ *   QCSim and GPU backends before `discarded_weight` became the default everywhere.
+ *
+ * Only the QCSim and GPU backends support `"relative_max"`; the Aer backend always
+ * implements `"discarded_weight"` and raises `ValueError` if `"relative_max"` is
+ * requested.
+ *
+ * @code{.py}
+ * # Opt back into the pre-existing QCSim/GPU convention
+ * mps_config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.QCSim,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     singular_value_threshold=1e-10,
+ *     truncation_mode="relative_max",
+ * )
+ * @endcode
+ *
  * ---
  *
  * @section py_stabilizer Stabilizer (Clifford-only)
