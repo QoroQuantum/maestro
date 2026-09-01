@@ -70,6 +70,58 @@ class QiskitAerState : public AER::AerState {
     return state->expval_pauli(qubits, pauli);
   }
 
+  AER::Vector<complex_t> statevector() {
+    const auto &state = get_state();
+    if (!state) return {};
+
+    flush_ops();
+
+    AER::Operations::Op op;
+    op.type = AER::Operations::OpType::save_statevec;
+    op.name = "save_statevector";
+    op.save_type = AER::Operations::DataSubType::single;
+    op.string_params.push_back("statevector");
+    for (uint_t qubit = 0; qubit < num_of_qubits(); ++qubit)
+      op.qubits.push_back(qubit);
+
+    AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
+    fakeState->last_result_ = AER::ExperimentResult();
+    state->apply_op(op, fakeState->last_result_, fakeState->rng_);
+
+    return std::move(
+        static_cast<AER::DataMap<AER::SingleData, AER::Vector<complex_t>>>(
+            std::move(fakeState->last_result_.data))
+            .value()["statevector"]
+            .value());
+  }
+
+  std::shared_ptr<AER::QuantumState::Base> clone_extended_stabilizer_state() {
+    flush_ops();
+    const auto extendedState =
+        std::dynamic_pointer_cast<AER::ExtendedStabilizer::State>(get_state());
+    if (!extendedState)
+      throw std::runtime_error(
+          "QiskitAerState: current state is not an extended stabilizer state");
+    return std::make_shared<AER::ExtendedStabilizer::State>(*extendedState);
+  }
+
+  void restore_extended_stabilizer_state(
+      const std::shared_ptr<AER::QuantumState::Base> &savedState) {
+    const auto extendedState =
+        std::dynamic_pointer_cast<AER::ExtendedStabilizer::State>(savedState);
+    if (!extendedState)
+      throw std::runtime_error(
+          "QiskitAerState: saved state is not an extended stabilizer state");
+
+    AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
+    fakeState->state_ =
+        std::make_shared<AER::ExtendedStabilizer::State>(*extendedState);
+    fakeState->num_of_qubits_ = extendedState->qreg().get_n_qubits();
+    fakeState->initialized_ = true;
+    fakeState->last_result_ = AER::ExperimentResult();
+    clear_ops();
+  }
+
   std::vector<bool> apply_measure_many(const reg_t &qubits) {
     const auto &state = get_state();
     if (!state) return {};

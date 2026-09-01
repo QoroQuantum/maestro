@@ -415,15 +415,6 @@ class AerSimulator : public AerState {
 
     const Types::qubits_vector qubits = {qubit};
     if (GetSimulationType() == SimulationType::kExtendedStabilizer) {
-      // this does not suffice, as it is implemented only for pi/4 multiples by
-      // qiskit aer... use p instead, which is implemented for any angle...
-      // there is a phase difference, but it is not important for the stabilizer
-      // simulation
-
-      // it's very important as many other non-clifford gates are implemented
-      // based on rotations!
-
-      /*
       AER::Operations::Op op;
       op.type = AER::Operations::OpType::gate;
       op.name = "rz";
@@ -431,8 +422,6 @@ class AerSimulator : public AerState {
       op.params = {theta};
 
       state->buffer_op(std::move(op));
-      */
-      ApplyP(qubit, theta);
     } else {
       const cmatrix_t rz = AER::Linalg::Matrix::rz(theta);
 
@@ -1003,6 +992,7 @@ class AerSimulator : public AerState {
                        the simulator */
     AER::cmatrix_t localSavedDensityMatrix =
         savedDensityMatrix; /**< The density matrix, saved. */
+    auto localSavedExtendedStabilizerState = savedExtendedStabilizerState;
 
     // now the tricky part
     if (state && state->is_initialized()) {
@@ -1013,6 +1003,7 @@ class AerSimulator : public AerState {
       sim->savedAmplitudes = std::move(savedAmplitudes);
       sim->savedState = std::move(savedState);
       sim->savedDensityMatrix = std::move(savedDensityMatrix);
+      sim->savedExtendedStabilizerState = savedExtendedStabilizerState;
 
       sim->RestoreState();  // now the state is loaded in the cloned simulator
 
@@ -1021,16 +1012,21 @@ class AerSimulator : public AerState {
       sim->savedAmplitudes = localSavedAmplitudes;
       sim->savedState = localSavedState;
       sim->savedDensityMatrix = localSavedDensityMatrix;
+      sim->savedExtendedStabilizerState = localSavedExtendedStabilizerState;
 
       // those saved previously can be an older state, so put them back
       savedAmplitudes = std::move(localSavedAmplitudes);
       savedState = std::move(localSavedState);
       savedDensityMatrix = std::move(localSavedDensityMatrix);
+      savedExtendedStabilizerState =
+          std::move(localSavedExtendedStabilizerState);
     } else {
       // std::cout << "Restored from non initialized state" << std::endl;
       sim->savedAmplitudes = std::move(localSavedAmplitudes);
       sim->savedState = std::move(localSavedState);
       sim->savedDensityMatrix = std::move(localSavedDensityMatrix);
+      sim->savedExtendedStabilizerState =
+          std::move(localSavedExtendedStabilizerState);
 
       sim->RestoreState();  // this might not be necessary, but sometimes, not
                             // very often, an exception is thrown about the

@@ -441,6 +441,11 @@ class AerState : public ISimulator {
       throw std::runtime_error(
           "AerState::Amplitude is not defined for density matrix simulation");
 
+    if (simulationType == SimulationType::kExtendedStabilizer) {
+      const auto amplitudes = state->statevector();
+      return outcome < amplitudes.size() ? amplitudes[outcome] : complex_t{};
+    }
+
     return state->amplitude(outcome);
   }
 
@@ -479,6 +484,14 @@ class AerState : public ISimulator {
       return state->probabilities(qubits);
     }
 
+    if (simulationType == SimulationType::kExtendedStabilizer) {
+      const auto amplitudes = state->statevector();
+      std::vector<double> probabilities(amplitudes.size());
+      for (size_t outcome = 0; outcome < amplitudes.size(); ++outcome)
+        probabilities[outcome] = std::norm(amplitudes[outcome]);
+      return probabilities;
+    }
+
     return state->probabilities();
   }
 
@@ -500,6 +513,16 @@ class AerState : public ISimulator {
       probabilities.reserve(qubits.size());
       for (const auto outcome : qubits)
         probabilities.push_back(state->probability(outcome));
+      return probabilities;
+    }
+
+    if (simulationType == SimulationType::kExtendedStabilizer) {
+      const auto amplitudes = state->statevector();
+      std::vector<double> probabilities;
+      probabilities.reserve(qubits.size());
+      for (const auto outcome : qubits)
+        probabilities.push_back(
+            outcome < amplitudes.size() ? std::norm(amplitudes[outcome]) : 0.0);
       return probabilities;
     }
 
@@ -690,6 +713,11 @@ class AerState : public ISimulator {
 
     const auto numQubits = GetNumberOfQubits();
 
+    if (simulationType == SimulationType::kExtendedStabilizer) {
+      savedExtendedStabilizerState = state->clone_extended_stabilizer_state();
+      return;
+    }
+
     if (simulationType == SimulationType::kStatevector ||
         simulationType == SimulationType::kDensityMatrix) {
       SaveStateToInternalDestructive();
@@ -779,6 +807,12 @@ class AerState : public ISimulator {
 
         return;
       } break;
+      case SimulationType::kExtendedStabilizer:
+        if (!savedExtendedStabilizerState)
+          throw std::runtime_error(
+              "AerState::RestoreState: no extended stabilizer state was saved");
+        state->restore_extended_stabilizer_state(savedExtendedStabilizerState);
+        return;
       case SimulationType::kMatrixProductState:
         op.type = AER::Operations::OpType::set_mps;
         op.name = "set_mps";
@@ -1020,6 +1054,7 @@ class AerState : public ISimulator {
       std::make_unique<QiskitAerState>(); /**< The qiskit aer state. */
   AER::Vector<complex_t> savedAmplitudes; /**< The amplitudes, saved. */
   AER::cmatrix_t savedDensityMatrix; /**< The density matrix, saved. */
+  std::shared_ptr<AER::QuantumState::Base> savedExtendedStabilizerState;
   
   bool enableMultithreading = true;    /**< The multithreading flag. */
   AER::Data savedState; /**< The saved data - here there will be the saved state
