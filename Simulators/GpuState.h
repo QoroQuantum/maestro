@@ -692,9 +692,7 @@ class GpuState : public ISimulator {
                std::string("matrix_product_operator_truncation_mode") == key) {
       // "relative_max" -> TruncationMode::RelativeToMax (0), "discarded_weight" ->
       // TruncationMode::DiscardedWeight (1, the default -- see lib/truncationmode.hpp in
-      // maestro-gpu-simulators). Unrecognized values are ignored, matching this function's
-      // existing convention of silently guarding malformed config values rather than
-      // throwing (see the max-bond-dimension/threshold branches below/above).
+      // maestro-gpu-simulators).
       int truncationMode = -1;
       if (std::string("relative_max") == value)
         truncationMode = 0;

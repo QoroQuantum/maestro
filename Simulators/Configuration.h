@@ -12,6 +12,7 @@
 #ifndef _SIMULATOR_CONFIGURATION_H_
 #define _SIMULATOR_CONFIGURATION_H_
 
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 
@@ -74,6 +75,13 @@ class Configuration {
    * @param value The value of the configuration.
    */
   void SetConfiguration(const std::string& key, const std::string& value) {
+    if ((key == "matrix_product_state_truncation_mode" ||
+         key == "matrix_product_operator_truncation_mode") &&
+        value != "relative_max" && value != "discarded_weight")
+      throw std::invalid_argument(
+          "Invalid truncation mode: expected relative_max or "
+          "discarded_weight");
+
     // specially handled, ignore it
     if (IgnoredSetting(key)) return;
     configMap[key] = value;

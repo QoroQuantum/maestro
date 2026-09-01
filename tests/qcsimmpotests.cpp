@@ -192,8 +192,16 @@ BOOST_AUTO_TEST_CASE(factory_configuration_and_unsupported_amplitudes) {
 
   mpo->Configure("matrix_product_operator_max_bond_dimension", "32");
   mpo->Configure("matrix_product_operator_truncation_threshold", "1e-12");
+  mpo->Configure("matrix_product_operator_truncation_mode", "relative_max");
   BOOST_TEST(mpo->GetConfiguration(
                  "matrix_product_operator_max_bond_dimension") == "32");
+  BOOST_TEST(mpo->GetConfiguration(
+                 "matrix_product_operator_truncation_mode") == "relative_max");
+  BOOST_CHECK_THROW(mpo->Configure("matrix_product_operator_truncation_mode",
+                                   "typo"),
+                    std::invalid_argument);
+  BOOST_TEST(mpo->GetConfiguration(
+                 "matrix_product_operator_truncation_mode") == "relative_max");
 
   auto unique = Simulators::SimulatorsFactory::CreateSimulatorUnique(
       Simulators::SimulatorType::kQCSim,

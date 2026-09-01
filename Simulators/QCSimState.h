@@ -673,8 +673,6 @@ class QCSimState : public ISimulator {
       } else if (std::string(key) == "matrix_product_state_truncation_mode") {
         // "relative_max" -> RelativeToMax, "discarded_weight" -> DiscardedWeight (the
         // default -- see QC::TensorNetworks::MPSSimulatorInterface::TruncationMode).
-        // Unrecognized values are ignored, matching this function's existing convention
-        // of silently guarding malformed config values (e.g. the threshold branch above).
         if (std::string(value) == "relative_max")
           mpsSimulator->setTruncationMode(
               QC::TensorNetworks::MPSSimulator::TruncationMode::RelativeToMax);
