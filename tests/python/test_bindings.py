@@ -389,11 +389,32 @@ class TestSimpleExecute:
                 simulator_type=maestro.SimulatorType.QCSim,
                 simulation_type=maestro.SimulationType.MatrixProductState,
                 max_bond_dimension=4,
-                singular_value_threshold=1e-10
+                singular_value_threshold=1e-10,
+                truncation_mode="relative_max",
             ),
         )
         assert result is not None
         assert result['method'] == maestro.SimulationType.MatrixProductState.value
+
+    def test_invalid_truncation_mode_is_rejected(self):
+        """Typos must not silently fall back to the backend default mode."""
+        qasm_bell = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        creg c[2];
+        h q[0];
+        cx q[0], q[1];
+        measure q -> c;
+        """
+
+        config = maestro.SimulatorConfig(
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            singular_value_threshold=1e-10,
+            truncation_mode="typo",
+        )
+        with pytest.raises(ValueError, match="truncation mode"):
+            maestro.simple_execute(qasm_bell, config=config)
 
     def test_simple_execute_ghz_state(self):
         """Test simple_execute with GHZ state"""

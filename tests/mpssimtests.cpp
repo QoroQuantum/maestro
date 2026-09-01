@@ -331,6 +331,16 @@ BOOST_FIXTURE_TEST_CASE(TruncationModeConfigKeyTest, MPSSimTestFixture) {
     BOOST_CHECK_PREDICATE(checkClose,
                           (qcsimDefault[i])(qcsimDiscardedWeight[i])(1e-9));
 
+  auto qcsimInvalid = Simulators::SimulatorsFactory::CreateSimulator(
+      Simulators::SimulatorType::kQCSim,
+      Simulators::SimulationType::kMatrixProductState);
+  BOOST_REQUIRE(qcsimInvalid);
+  BOOST_CHECK_THROW(qcsimInvalid->Configure(
+                        "matrix_product_state_truncation_mode", "typo"),
+                    std::invalid_argument);
+  BOOST_TEST(qcsimInvalid->GetConfiguration(
+                 "matrix_product_state_truncation_mode") != "typo");
+
 #ifdef __linux__
   if (gpusimMPS) {
     const auto gpuDefault =
@@ -345,6 +355,16 @@ BOOST_FIXTURE_TEST_CASE(TruncationModeConfigKeyTest, MPSSimTestFixture) {
     for (size_t i = 0; i < nrStates; ++i)
       BOOST_CHECK_PREDICATE(checkClose,
                             (gpuDefault[i])(gpuDiscardedWeight[i])(1e-9));
+
+    auto gpuInvalid = Simulators::SimulatorsFactory::CreateSimulator(
+        Simulators::SimulatorType::kGpuSim,
+        Simulators::SimulationType::kMatrixProductState);
+    BOOST_REQUIRE(gpuInvalid);
+    BOOST_CHECK_THROW(gpuInvalid->Configure(
+                          "matrix_product_state_truncation_mode", "typo"),
+                      std::invalid_argument);
+    BOOST_TEST(gpuInvalid->GetConfiguration(
+                   "matrix_product_state_truncation_mode") != "typo");
   }
 #endif
 

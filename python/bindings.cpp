@@ -76,11 +76,13 @@ struct SimulatorConfig {
 
   SimulatorConfig(Simulators::SimulatorType st, Simulators::SimulationType set,
                   std::optional<size_t> mb, std::optional<double> sv, bool dp,
-                  bool ds, int la, bool mnc)
+                  bool ds, int la, bool mnc,
+                  std::optional<std::string> tm)
       : simulator_type(st),
         simulation_type(set),
         max_bond_dimension(mb),
         singular_value_threshold(sv),
+        truncation_mode(std::move(tm)),
         use_double_precision(dp),
         disable_optimized_swapping(ds),
         lookahead_depth(la),
@@ -869,14 +871,15 @@ NB_MODULE(maestro, m) {
       "reuse across execute/estimate/statevector calls.")
       .def(nb::init<Simulators::SimulatorType, Simulators::SimulationType,
                     std::optional<size_t>, std::optional<double>, bool, bool,
-                    int, bool>(),
+                    int, bool, std::optional<std::string>>(),
            "simulator_type"_a = Simulators::SimulatorType::kQCSim,
            "simulation_type"_a = Simulators::SimulationType::kStatevector,
            "max_bond_dimension"_a = nb::none(),
            "singular_value_threshold"_a = nb::none(),
            "use_double_precision"_a = false,
            "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
-           "mps_measure_no_collapse"_a = true)
+           "mps_measure_no_collapse"_a = true,
+           "truncation_mode"_a = nb::none())
       .def_rw("simulator_type", &SimulatorConfig::simulator_type)
       .def_rw("simulation_type", &SimulatorConfig::simulation_type)
       .def_rw("max_bond_dimension", &SimulatorConfig::max_bond_dimension)
