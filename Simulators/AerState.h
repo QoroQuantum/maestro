@@ -79,6 +79,21 @@ class AerState : public ISimulator {
     if (simulationType == SimulationType::kMatrixProductState && !configuration.IsSet("mps_sample_measure_algorithm"))
       Configure("mps_sample_measure_algorithm", "mps_probabilities");
 
+    // Gate fusion must be off for MPS. Aer intends this itself -- AerState::transpile_ops()
+    // has `case Method::matrix_product_state: fusion_pass_.active = false;` -- but the very
+    // next statement is `fusion_pass_.set_config(configs_)`, and Fusion::set_config does an
+    // unconditional `active = config.fusion_enable`, whose default is true. The MPS disable is
+    // therefore dead code and fusion runs anyway (see qiskit-aer/src/transpile/fusion.hpp and
+    // src/controllers/state_controller.hpp). Aer's other execution path, transpile_fusion() in
+    // simulators/circuit_executor.hpp, guards against exactly this with an early return.
+    // Fixed in our fork as well, but kept here so a build against an unpatched Aer behaves.
+    // It is not a small effect: fusing gates into wider unitaries forces the MPS to bring more
+    // qubits together and do bigger SVDs, and on a 16 qubit brickwork circuit at bond dimension
+    // 128 it costs about 7x (1.5s -> 10.7s). Only set it when the caller has not, so an explicit
+    // "fusion_enable" from a configuration still wins.
+    if (simulationType == SimulationType::kMatrixProductState && !configuration.IsSet("fusion_enable"))
+      Configure("fusion_enable", "false");
+
     state->initialize();
   }
 
