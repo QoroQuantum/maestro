@@ -49,9 +49,9 @@ struct ExtStabTestFixture {
     simExtStabilizer->Configure("extended_stabilizer_approximation_error",
                                 "0.02");
     simExtStabilizer->Configure("extended_stabilizer_norm_estimation_samples",
-                                "100");
+                                "3000");
     simExtStabilizer->Configure(
-        "extended_stabilizer_norm_estimation_repetitions", "3");
+        "extended_stabilizer_norm_estimation_repetitions", "7");
     simExtStabilizer->Configure("seed_simulator", "1515870810");
     simExtStabilizer->AllocateQubits(nrQubitsForRandomCirc);
     simExtStabilizer->Initialize();
