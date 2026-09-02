@@ -12,8 +12,13 @@ else
 fi
 echo "Building with ${NPROC} parallel jobs."
 
+# Check for OpenBLAS specifically, not just any libblas.so. A plain -lblas succeeds against the
+# reference netlib BLAS, and on a machine with Intel MKL installed CMake's FindBLAS would pick MKL
+# regardless -- see the BLA_VENDOR block in CMakeLists.txt. Only Qiskit Aer's MPS depends on this
+# (it calls zgemm_ for every tensor contraction), so a poor choice here shows up as Aer being
+# mysteriously slow rather than as a build failure.
 check_lblas() {
-    printf "int main() { return 0; }" | cc -x c - -lblas -o /dev/null 2>/dev/null
+    printf "int main() { return 0; }" | cc -x c - -lopenblas -o /dev/null 2>/dev/null
 }
 
 install_blas() {

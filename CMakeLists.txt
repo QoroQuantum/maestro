@@ -280,6 +280,32 @@ ENDIF()
 if (QAER)
     INCLUDE_DIRECTORIES ( SYSTEM ${EIGEN5_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${QCSIM_INCLUDE_DIR} ${JSON_INCLUDE_DIR} ${AER_INCLUDE_DIR})
 
+    # CMake's FindBLAS tries Intel MKL before everything else, so on a machine that merely
+    # happens to have MKL installed it links libmkl_intel_lp64 + libmkl_intel_thread + libiomp5
+    # even when the system's own preferred BLAS (openblas-pthread, via update-alternatives) is
+    # something else -- and it drags a second OpenMP runtime into the process alongside libgomp.
+    # This only ever affects Qiskit Aer: its MPS routes every tensor contraction through zgemm_
+    # (qiskit-aer/src/framework/matrix.hpp), while QCSim uses Eigen and never calls BLAS. Ask for
+    # OpenBLAS first, matching what the Windows build links, and fall back to the generic search
+    # only if it really is not installed.
+    # Skip the probe entirely when the caller already said which BLAS to use, either by naming a
+    # vendor or by passing the libraries outright (-DBLAS_LIBRARIES=..., which is how the Windows
+    # build points at its OpenBLAS). Probing in that case would only risk clobbering their choice.
+    if (NOT DEFINED BLA_VENDOR AND "$ENV{BLA_VENDOR}" STREQUAL "" AND NOT BLAS_LIBRARIES)
+        set(BLA_VENDOR OpenBLAS)
+        find_package(BLAS QUIET)
+        if (NOT BLAS_FOUND)
+            message(STATUS "OpenBLAS not found, falling back to the generic BLAS search")
+            unset(BLA_VENDOR)
+            unset(BLA_VENDOR CACHE)
+            unset(BLAS_LIBRARIES)
+            unset(BLAS_LIBRARIES CACHE)
+            unset(BLAS_FOUND)
+        else()
+            message(STATUS "Using OpenBLAS: ${BLAS_LIBRARIES}")
+        endif()
+    endif()
+
     find_package(BLAS REQUIRED)
     IF(NOT BLAS_FOUND)
         MESSAGE( FATAL_ERROR "Couldn't find blas libs")
