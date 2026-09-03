@@ -48,6 +48,27 @@ void CheckClose(const std::vector<double>& actual,
 
 BOOST_AUTO_TEST_SUITE(gpu_density_matrix_tests)
 
+BOOST_AUTO_TEST_CASE(updated_diagnostics_and_measurement_api) {
+  auto density = MakeGpuDensity(2);
+  if (!density) {
+    BOOST_TEST_MESSAGE("GPU density-matrix library is unavailable; skipping");
+    return;
+  }
+  density->ApplyH(0);
+  density->ApplyCX(0, 1);
+  BOOST_CHECK_CLOSE(density->DensityMatrixTrace().real(), 1., 1e-7);
+  BOOST_CHECK_CLOSE(density->DensityMatrixPurity(), 1., 1e-6);
+  BOOST_CHECK(density->IsDensityMatrixHermitian());
+  Eigen::VectorXcd bell(4);
+  bell << 1. / std::sqrt(2.), 0., 0., 1. / std::sqrt(2.);
+  BOOST_CHECK_CLOSE(density->FidelityWithStatevector(bell), 1., 1e-6);
+  const auto reduced = density->PartialTrace(Types::qubits_vector{0});
+  BOOST_REQUIRE_EQUAL(reduced.rows(), 2);
+  BOOST_CHECK_SMALL(std::abs(reduced(0, 0) - 0.5), 1e-6);
+  BOOST_CHECK_SMALL(std::abs(reduced(1, 1) - 0.5), 1e-6);
+  BOOST_CHECK_SMALL(std::abs(density->DensityMatrixOverlap(*density).real() - 1.), 1e-6);
+}
+
 BOOST_AUTO_TEST_CASE(factory_and_unitary_evolution) {
   auto density = MakeGpuDensity(3);
   if (!density) {

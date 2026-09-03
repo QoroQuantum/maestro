@@ -9,6 +9,7 @@
 #ifdef __linux__
 
 #include <memory>
+#include <complex>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -101,6 +102,8 @@ class GpuMPO {
     return lib->MPOSetTruncationMode(obj, mode);
   }
   int GetTruncationMode() const { return lib->MPOGetTruncationMode(obj); }
+  bool SetGesvdJ(bool enable) { return lib->MPOSetGesvdJ(obj, enable); }
+  bool GetGesvdJ() const { return lib->MPOGetGesvdJ(obj); }
   void SetMaxExtent(long int chi) { lib->MPOSetMaxExtent(obj, chi); }
   long int GetMaxExtent() const { return lib->MPOGetMaxExtent(obj); }
   std::vector<long long int> GetBondDimensions(size_t nrQubits) const {
@@ -109,7 +112,20 @@ class GpuMPO {
     if (!lib->MPOGetBondDimensions(obj, bondDims.data())) return {};
     return bondDims;
   }
+  void ReCanonicalize(int centerSite = 0) {
+    if (!lib->MPOReCanonicalize(obj, centerSite)) throw std::runtime_error("GPU MPO canonicalization failed");
+  }
+  void Trim(double cutoff = -1., long int maxExtent = -1, int centerSite = 0) {
+    if (!lib->MPOTrim(obj, cutoff, maxExtent, centerSite)) throw std::runtime_error("GPU MPO trim failed");
+  }
   bool Measure(unsigned int q) { return lib->MPOMeasureQubitCollapse(obj, q); }
+  bool MeasureNoCollapse(unsigned int q) { return lib->MPOMeasureQubitNoCollapse(obj, q); }
+  bool MeasureQubits(std::vector<int>& qubits, std::vector<int>& bits, bool collapse = true) {
+    if (qubits.size() != bits.size()) throw std::invalid_argument("Measurement vectors must have equal size");
+    return collapse ? lib->MPOMeasureQubitsCollapse(obj, qubits.data(), bits.data(), static_cast<int>(bits.size()))
+                    : lib->MPOMeasureQubitsNoCollapse(obj, qubits.data(), bits.data(), static_cast<int>(bits.size()));
+  }
+  unsigned long long MeasureAll(bool collapse = true) { return collapse ? lib->MPOMeasureAllQubitsCollapse(obj) : lib->MPOMeasureAllQubitsNoCollapse(obj); }
   bool Sample(unsigned int nSamples, long int* samples, unsigned int nBits,
              int* bitOrdering) {
     return lib->MPOSample(obj, nSamples, samples, nBits, bitOrdering);
@@ -120,6 +136,11 @@ class GpuMPO {
   double Probability(long long outcome) const {
     return lib->MPOBasisStateProbability(obj, outcome);
   }
+  std::complex<double> GetElement(long long row, long long col) const {
+    double re = 0., im = 0.;
+    if (!lib->MPOGetElement(obj, row, col, &re, &im)) throw std::runtime_error("GPU MPO element query failed");
+    return {re, im};
+  }
   void AllProbabilities(double* probabilities) {
     if (!lib->MPOAllProbabilities(obj, probabilities))
       throw std::runtime_error(
@@ -127,6 +148,34 @@ class GpuMPO {
   }
   double ExpectationValue(const std::string& pauli) const {
     return lib->MPOExpectationValue(obj, pauli.c_str(), pauli.size());
+  }
+  double QubitProbability0(unsigned int q) const { return lib->MPOQubitProbability0(obj, q); }
+  double Trace() const { return lib->MPOTrace(obj); }
+  double Purity() const { return lib->MPOPurity(obj); }
+  double HermiticityResidual() const { return lib->MPOHermiticityResidual(obj); }
+  bool IsHermitian(double eps = 1e-10) const { return lib->MPOIsHermitian(obj, eps); }
+  double TraceOfSquare() const { return lib->MPOTraceOfSquare(obj); }
+  void RestoreTrace() { if (!lib->MPORestoreTrace(obj)) throw std::runtime_error("GPU MPO trace restoration failed"); }
+  void Hermitize() { if (!lib->MPOHermitize(obj)) throw std::runtime_error("GPU MPO hermitization failed"); }
+  bool SetKrausCompletenessCheck(int mode) { return lib->MPOSetKrausCompletenessCheck(obj, mode); }
+  int GetKrausCompletenessCheck() const { return lib->MPOGetKrausCompletenessCheck(obj); }
+  std::vector<std::complex<double>> PartialTrace(const std::vector<int>& qubits) const {
+    const size_t dim = size_t{1} << qubits.size();
+    std::vector<double> raw(2 * dim * dim);
+    if (!lib->MPOPartialTrace(obj, qubits.data(), static_cast<int>(qubits.size()), raw.data())) throw std::runtime_error("GPU MPO partial trace failed");
+    std::vector<std::complex<double>> result(dim * dim);
+    for (size_t i = 0; i < result.size(); ++i) result[i] = {raw[2*i], raw[2*i+1]};
+    return result;
+  }
+  std::complex<double> HilbertSchmidtOverlap(const GpuMPO& other) const {
+    double re = 0., im = 0.;
+    if (!lib->MPOHilbertSchmidtOverlap(obj, other.obj, &re, &im)) throw std::runtime_error("GPU MPO overlap failed");
+    return {re, im};
+  }
+  double FidelityWithStatevector(const double* state) const {
+    double result = 0.;
+    if (!lib->MPOFidelityWithStatevector(obj, state, &result)) throw std::runtime_error("GPU MPO fidelity failed");
+    return result;
   }
   void SaveState() {
     if (!lib->MPOSaveState(obj))
@@ -180,6 +229,9 @@ class GpuMPO {
     GPU_MPO_CHECK(lib->MPO##name(obj, a, b, x), #name);                      \
   }
   GPU_MPO_GATE1(ApplyReset)
+  GPU_MPO_ROT1(ApplyBitFlipNoise) GPU_MPO_ROT1(ApplyPhaseFlipNoise)
+  GPU_MPO_ROT1(ApplyDepolarizingNoise) GPU_MPO_ROT1(ApplyAmplitudeDamping)
+  GPU_MPO_ROT1(ApplyPhaseDamping) GPU_MPO_GATE1(ApplyNonSelectiveMeasurement)
   GPU_MPO_GATE1(ApplyX) GPU_MPO_GATE1(ApplyY) GPU_MPO_GATE1(ApplyZ)
   GPU_MPO_GATE1(ApplyH) GPU_MPO_GATE1(ApplyS) GPU_MPO_GATE1(ApplySDG)
   GPU_MPO_GATE1(ApplyT) GPU_MPO_GATE1(ApplyTDG) GPU_MPO_GATE1(ApplySX)

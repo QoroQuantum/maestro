@@ -468,6 +468,44 @@ class IState {
         "This simulator does not support exact quantum-channel evolution");
   }
 
+  /** Mixed-state diagnostics. Implemented by density-matrix and MPO backends. */
+  virtual std::complex<double> DensityMatrixTrace() const {
+    throw std::runtime_error("This simulator does not expose a density-matrix trace");
+  }
+  virtual double DensityMatrixPurity() const {
+    throw std::runtime_error("This simulator does not expose density-matrix purity");
+  }
+  virtual std::complex<double> DensityMatrixTraceOfSquare() const {
+    throw std::runtime_error("This simulator does not expose Tr(rho^2)");
+  }
+  virtual std::complex<double> DensityMatrixOverlap(const IState &) const {
+    throw std::runtime_error("This simulator does not support density-matrix overlap");
+  }
+  virtual double DensityMatrixHermiticityResidual() const {
+    throw std::runtime_error("This simulator does not expose a Hermiticity residual");
+  }
+  virtual bool IsDensityMatrixHermitian(double = 1e-10) const {
+    throw std::runtime_error("This simulator does not expose a Hermiticity test");
+  }
+  virtual Eigen::MatrixXcd PartialTrace(const Types::qubits_vector &) const {
+    throw std::runtime_error("This simulator does not support partial trace");
+  }
+  virtual double FidelityWithStatevector(const Eigen::VectorXcd &) const {
+    throw std::runtime_error("This simulator does not support mixed-state fidelity");
+  }
+  virtual void RestoreDensityMatrixTrace() {
+    throw std::runtime_error("This simulator cannot restore density-matrix trace");
+  }
+  virtual void HermitizeDensityMatrix() {
+    throw std::runtime_error("This simulator cannot hermitize its density matrix");
+  }
+  virtual void TrimMatrixProductOperator() {
+    throw std::runtime_error("This simulator is not a matrix-product operator");
+  }
+  virtual void ReCanonicalizeMatrixProductOperator() {
+    throw std::runtime_error("This simulator is not a matrix-product operator");
+  }
+
   /** Apply an arbitrary CPTP map supplied in Kraus form. */
   void ApplyKrausChannel(
       const Types::qubits_vector &targets,

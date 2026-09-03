@@ -48,6 +48,28 @@ void CheckClose(const std::vector<double>& actual,
 
 BOOST_AUTO_TEST_SUITE(gpu_mpo_tests)
 
+BOOST_AUTO_TEST_CASE(updated_diagnostics_compression_and_noise_api) {
+  auto mpo = MakeGpuMPO(2);
+  if (!mpo) {
+    BOOST_TEST_MESSAGE("GPU matrix-product-operator library is unavailable; skipping");
+    return;
+  }
+  mpo->ApplyH(0);
+  mpo->ApplyCX(0, 1);
+  BOOST_CHECK_CLOSE(mpo->DensityMatrixTrace().real(), 1., 1e-6);
+  BOOST_CHECK_CLOSE(mpo->DensityMatrixPurity(), 1., 1e-5);
+  BOOST_CHECK(mpo->IsDensityMatrixHermitian());
+  Eigen::VectorXcd bell(4);
+  bell << 1. / std::sqrt(2.), 0., 0., 1. / std::sqrt(2.);
+  BOOST_CHECK_CLOSE(mpo->FidelityWithStatevector(bell), 1., 1e-5);
+  const auto reduced = mpo->PartialTrace(Types::qubits_vector{0});
+  BOOST_REQUIRE_EQUAL(reduced.rows(), 2);
+  BOOST_CHECK_SMALL(std::abs(reduced(0, 0) - 0.5), 1e-5);
+  mpo->Configure("matrix_product_operator_kraus_completeness_check", "warn");
+  mpo->ReCanonicalizeMatrixProductOperator();
+  mpo->TrimMatrixProductOperator();
+}
+
 BOOST_AUTO_TEST_CASE(factory_and_unitary_evolution) {
   auto mpo = MakeGpuMPO(3);
   if (!mpo) {

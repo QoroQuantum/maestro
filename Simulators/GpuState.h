@@ -712,6 +712,15 @@ class GpuState : public ISimulator {
         if (tn) tn->SetMaxExtent(chi);
         if (mpo) mpo->SetMaxExtent(chi);
       }
+    } else if (std::string("matrix_product_operator_use_gesvdj") == key) {
+      if (mpo) mpo->SetGesvdJ(std::string(value) == "1" || std::string(value) == "true");
+    } else if (std::string("matrix_product_operator_kraus_completeness_check") == key) {
+      int mode = -1;
+      if (std::string(value) == "ignore") mode = 0;
+      else if (std::string(value) == "warn") mode = 1;
+      else if (std::string(value) == "strict") mode = 2;
+      if (mpo && mode >= 0 && !mpo->SetKrausCompletenessCheck(mode))
+        throw std::runtime_error("Invalid GPU MPO Kraus completeness mode");
     } else if (std::string("use_double_precision") == key) {
       const bool useDoublePrecision =
           (std::string("1") == value || std::string("true") == value);
@@ -999,6 +1008,73 @@ class GpuState : public ISimulator {
           "GPU density-matrix/matrix-product-operator channel application "
           "failed");
     NotifyObservers(targets);
+  }
+
+  std::complex<double> DensityMatrixTrace() const override {
+    if (densityMatrix) return densityMatrix->Trace();
+    if (mpo) return mpo->Trace();
+    throw std::runtime_error("GPU mixed-state diagnostics require density_matrix or matrix_product_operator");
+  }
+  double DensityMatrixPurity() const override {
+    if (densityMatrix) return densityMatrix->Purity();
+    if (mpo) return mpo->Purity();
+    throw std::runtime_error("GPU mixed-state diagnostics require density_matrix or matrix_product_operator");
+  }
+  std::complex<double> DensityMatrixTraceOfSquare() const override {
+    if (mpo) return mpo->TraceOfSquare();
+    if (densityMatrix) {
+      const double tr = densityMatrix->Trace();
+      return densityMatrix->Purity() * tr * tr;
+    }
+    throw std::runtime_error("GPU mixed-state diagnostics require density_matrix or matrix_product_operator");
+  }
+  std::complex<double> DensityMatrixOverlap(const IState &other) const override {
+    const auto *rhs = dynamic_cast<const GpuState *>(&other);
+    if (!rhs) throw std::invalid_argument("Density-matrix overlap requires matching GPU backends");
+    if (densityMatrix && rhs->densityMatrix)
+      return densityMatrix->HilbertSchmidtOverlap(*rhs->densityMatrix);
+    if (mpo && rhs->mpo) return mpo->HilbertSchmidtOverlap(*rhs->mpo);
+    throw std::invalid_argument("Density-matrix overlap requires two density matrices or two MPOs");
+  }
+  double DensityMatrixHermiticityResidual() const override {
+    if (mpo) return mpo->HermiticityResidual();
+    if (densityMatrix) return densityMatrix->IsHermitian() ? 0. : std::numeric_limits<double>::infinity();
+    throw std::runtime_error("GPU mixed-state diagnostics require density_matrix or matrix_product_operator");
+  }
+  bool IsDensityMatrixHermitian(double eps = 1e-10) const override {
+    if (densityMatrix) return densityMatrix->IsHermitian(eps);
+    if (mpo) return mpo->IsHermitian(eps);
+    throw std::runtime_error("GPU mixed-state diagnostics require density_matrix or matrix_product_operator");
+  }
+  Eigen::MatrixXcd PartialTrace(const Types::qubits_vector &qubits) const override {
+    std::vector<int> keep(qubits.begin(), qubits.end());
+    const auto values = densityMatrix ? densityMatrix->PartialTrace(keep) :
+                        mpo ? mpo->PartialTrace(keep) : throw std::runtime_error("GPU partial trace requires a mixed-state backend");
+    const Eigen::Index dim = static_cast<Eigen::Index>(size_t{1} << keep.size());
+    return Eigen::Map<const Eigen::MatrixXcd>(values.data(), dim, dim);
+  }
+  double FidelityWithStatevector(const Eigen::VectorXcd &psi) const override {
+    std::vector<double> raw(2 * static_cast<size_t>(psi.size()));
+    for (Eigen::Index i = 0; i < psi.size(); ++i) { raw[2*i] = psi[i].real(); raw[2*i+1] = psi[i].imag(); }
+    if (densityMatrix) return densityMatrix->FidelityWithStatevector(raw.data());
+    if (mpo) return mpo->FidelityWithStatevector(raw.data());
+    throw std::runtime_error("GPU mixed-state fidelity requires density_matrix or matrix_product_operator");
+  }
+  void RestoreDensityMatrixTrace() override {
+    if (!mpo) throw std::runtime_error("Trace restoration is only available for GPU MPO");
+    mpo->RestoreTrace();
+  }
+  void HermitizeDensityMatrix() override {
+    if (!mpo) throw std::runtime_error("Hermitization is only available for GPU MPO");
+    mpo->Hermitize();
+  }
+  void TrimMatrixProductOperator() override {
+    if (!mpo) throw std::runtime_error("GPU MPO is not initialized");
+    mpo->Trim();
+  }
+  void ReCanonicalizeMatrixProductOperator() override {
+    if (!mpo) throw std::runtime_error("GPU MPO is not initialized");
+    mpo->ReCanonicalize();
   }
 
   /**

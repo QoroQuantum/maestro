@@ -1,4 +1,5 @@
 #include <nanobind/nanobind.h>
+#include <nanobind/eigen/dense.h>
 #include <nanobind/stl/complex.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
@@ -57,6 +58,10 @@ struct SimulatorConfig {
   bool disable_optimized_swapping = false;
   int lookahead_depth = -1;
   bool mps_measure_no_collapse = true;
+  std::optional<std::string> mpo_kraus_completeness_check = std::nullopt;
+  bool mpo_restore_trace_after_truncation = false;
+  bool mpo_hermitize_after_truncation = false;
+  bool mpo_use_gesvdj = false;
 
   // true for double precision, false for single precision, nullopt for default
   // this is a separate setting for qiskit aer, the use_double_precision above
@@ -149,6 +154,15 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("matrix_product_state_truncation_mode",
                        config.truncation_mode->c_str());
   }
+  if (config.mpo_kraus_completeness_check)
+    network->Configure("matrix_product_operator_kraus_completeness_check",
+                       config.mpo_kraus_completeness_check->c_str());
+  if (config.mpo_restore_trace_after_truncation)
+    network->Configure("matrix_product_operator_restore_trace_after_truncation", "true");
+  if (config.mpo_hermitize_after_truncation)
+    network->Configure("matrix_product_operator_hermitize_after_truncation", "true");
+  if (config.mpo_use_gesvdj)
+    network->Configure("matrix_product_operator_use_gesvdj", "true");
   if (config.use_double_precision) {
     network->Configure("use_double_precision", "1");
   }
@@ -172,10 +186,7 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("mps_sample_measure_algorithm", "mps_probabilities");
   }
 
-  // Usually create the default QCSim MPS simulator as the lightweight network
-  // placeholder. A requested GPU density matrix uses QCSim MPO instead so an
-  // unavailable GPU backend still preserves exact quantum-channel semantics.
-  // The desired simulator type is specified via
+  // Create the configured backend. The desired simulator type is specified via
   // RemoveAllOptimizationSimulatorsAndAdd above.
   // PauliPropagator truncation settings are Configured before CreateSimulator;
   // the state replays its config map once the propagator exists, so they are
@@ -210,13 +221,7 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("path_integral_threshold", val.c_str());
   }
 
-  if (config.simulator_type == Simulators::SimulatorType::kGpuSim &&
-      config.simulation_type == Simulators::SimulationType::kDensityMatrix)
-    network->CreateSimulator(
-        Simulators::SimulatorType::kQCSim,
-        Simulators::SimulationType::kMatrixProductOperator);
-  else
-    network->CreateSimulator();
+  network->CreateSimulator();
 
   // Verify the simulator was actually created (e.g. GPU library may fail)
   if (!network->GetSimulator()) {
@@ -300,7 +305,8 @@ static bool uses_exact_quantum_channels(const SimulatorConfig& config) {
          (aer &&
           config.simulation_type == Simulators::SimulationType::kDensityMatrix) ||
          (gpu &&
-          config.simulation_type == Simulators::SimulationType::kDensityMatrix);
+          (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
+           config.simulation_type == Simulators::SimulationType::kMatrixProductOperator));
 }
 
 static std::shared_ptr<Circuits::Circuit<double>> inject_noise_for_config(
@@ -896,6 +902,13 @@ NB_MODULE(maestro, m) {
       .def_rw("lookahead_depth", &SimulatorConfig::lookahead_depth)
       .def_rw("mps_measure_no_collapse",
               &SimulatorConfig::mps_measure_no_collapse)
+      .def_rw("mpo_kraus_completeness_check",
+              &SimulatorConfig::mpo_kraus_completeness_check)
+      .def_rw("mpo_restore_trace_after_truncation",
+              &SimulatorConfig::mpo_restore_trace_after_truncation)
+      .def_rw("mpo_hermitize_after_truncation",
+              &SimulatorConfig::mpo_hermitize_after_truncation)
+      .def_rw("mpo_use_gesvdj", &SimulatorConfig::mpo_use_gesvdj)
       .def_rw("pp_coefficient_threshold",
               &SimulatorConfig::pp_coefficient_threshold)
       .def_rw("pp_pauli_weight_threshold",
@@ -929,6 +942,28 @@ NB_MODULE(maestro, m) {
             << (c.mps_measure_no_collapse ? "True" : "False") << ")";
         return oss.str();
       });
+
+  nb::class_<Simulators::ISimulator>(m, "Simulator")
+      .def("density_matrix_trace", &Simulators::ISimulator::DensityMatrixTrace)
+      .def("density_matrix_purity", &Simulators::ISimulator::DensityMatrixPurity)
+      .def("density_matrix_trace_of_square",
+           &Simulators::ISimulator::DensityMatrixTraceOfSquare)
+      .def("density_matrix_overlap",
+           &Simulators::ISimulator::DensityMatrixOverlap, "other"_a)
+      .def("density_matrix_hermiticity_residual",
+           &Simulators::ISimulator::DensityMatrixHermiticityResidual)
+      .def("is_density_matrix_hermitian",
+           &Simulators::ISimulator::IsDensityMatrixHermitian, "eps"_a = 1e-10)
+      .def("partial_trace", &Simulators::ISimulator::PartialTrace, "qubits"_a)
+      .def("fidelity_with_statevector",
+           &Simulators::ISimulator::FidelityWithStatevector, "statevector"_a)
+      .def("restore_density_matrix_trace",
+           &Simulators::ISimulator::RestoreDensityMatrixTrace)
+      .def("hermitize_density_matrix",
+           &Simulators::ISimulator::HermitizeDensityMatrix)
+      .def("trim_mpo", &Simulators::ISimulator::TrimMatrixProductOperator)
+      .def("recanonicalize_mpo",
+           &Simulators::ISimulator::ReCanonicalizeMatrixProductOperator);
 
   // --- Maestro Class ---
   nb::class_<Maestro>(m, "Maestro")
