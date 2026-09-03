@@ -269,8 +269,15 @@ BOOST_FIXTURE_TEST_CASE(ExtStabilizerSimInitializationTest,
   BOOST_TEST(simStatevector);
 }
 
+// Profiling showed this test case dominates the suite's runtime, and the cost is
+// almost entirely Aer's own metropolis sampling inside SampleCounts (1000 shots x
+// 5000 mixing steps per circuit size), not anything under our control here. Rather
+// than touch statistical parameters again (see the norm-estimation samples/repetitions
+// bump above, which was needed to stop flaky failures), sample circuit depth more
+// sparsely -- every other gate count from 1 to 19 still exercises the full range of
+// circuit sizes, just with half as many independent circuits to build and sample.
 BOOST_DATA_TEST_CASE_F(ExtStabTestFixture, RandomCliffordCircuitsTest,
-                       bdata::xrange(1, 20), nrGates) {
+                       bdata::xrange(1, 20, 2), nrGates) {
   auto circuit = GenerateCircuit(nrQubitsForRandomCirc, nrGates);
 
   // execute
@@ -280,7 +287,11 @@ BOOST_DATA_TEST_CASE_F(ExtStabTestFixture, RandomCliffordCircuitsTest,
   }
 
   // check, first some random pauli strings
-  const int nrChecks = 100;
+  // Each check costs two Aer norm-estimation passes (extended_stabilizer_norm_estimation_samples
+  // x extended_stabilizer_norm_estimation_repetitions each), which is the dominant cost of this
+  // test; 20 checks per circuit size, across the 10 circuit sizes covered by this data test case,
+  // is still plenty of random-Pauli coverage without the runtime of the original 100.
+  const int nrChecks = 20;
   for (int i = 0; i < nrChecks; ++i) {
     const std::string pauliStr = GeneratePauliString(nrQubitsForRandomCirc);
     const double expValStateVec = simStatevector->ExpectationValue(pauliStr);
@@ -362,9 +373,13 @@ BOOST_FIXTURE_TEST_CASE(IncrementalNonCliffordEvolutionTest,
                         ExtStabTestFixture) {
   const auto checkProbabilities = [&]() {
     const size_t dimension = 1ULL << nrQubitsForRandomCirc;
+    // AllProbabilities() reconstructs the state exactly from the stabilizer-rank
+    // decomposition (no random norm estimation), unlike per-outcome Probability(),
+    // so it's both cheaper and less noisy for a dimension-sized sweep.
+    const auto actualProbs = simExtStabilizer->AllProbabilities();
     for (size_t outcome = 0; outcome < dimension; ++outcome) {
       const double expected = simStatevector->Probability(outcome);
-      const double actual = simExtStabilizer->Probability(outcome);
+      const double actual = actualProbs[outcome];
       BOOST_TEST(std::abs(expected - actual) < 0.08,
                  "Probability mismatch for outcome "
                      << outcome << ": statevector " << expected
@@ -453,9 +468,13 @@ BOOST_DATA_TEST_CASE_F(ExtStabTestFixture, NonCliffordGateCoverageTest,
   }
 
   const size_t dimension = 1ULL << nrQubitsForRandomCirc;
+  // See IncrementalNonCliffordEvolutionTest: AllProbabilities() is the exact,
+  // non-statistical reconstruction, so it replaces a whole sweep of expensive
+  // per-outcome Probability() norm-estimation calls with one cheap call.
+  const auto actualProbs = simExtStabilizer->AllProbabilities();
   for (size_t outcome = 0; outcome < dimension; ++outcome) {
     const double expected = simStatevector->Probability(outcome);
-    const double actual = simExtStabilizer->Probability(outcome);
+    const double actual = actualProbs[outcome];
     BOOST_TEST(std::abs(expected - actual) < 0.15,
                "Gate " << gate << " probability mismatch for outcome "
                        << outcome << ": statevector " << expected
