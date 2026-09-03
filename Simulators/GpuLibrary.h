@@ -282,6 +282,11 @@ class GpuLibrary : public Utils::Library {
           LOAD_DM(DMClone, void *(*)(void *));
           LOAD_DM(DMMeasureQubitCollapse, int (*)(void *, int));
           LOAD_DM(DMMeasureQubitNoCollapse, int (*)(void *, int));
+          LOAD_DM(DMMeasureQubitsCollapse, int (*)(void *, int *, int *, int));
+          LOAD_DM(DMMeasureQubitsNoCollapse, int (*)(void *, int *, int *, int));
+          LOAD_DM(DMMeasureAllQubitsCollapse, unsigned long long (*)(void *));
+          LOAD_DM(DMMeasureAllQubitsNoCollapse, unsigned long long (*)(void *));
+          LOAD_DM(DMSample, int (*)(void *, unsigned int, long int *, unsigned int, int *));
           LOAD_DM(DMSampleAll,
                   int (*)(void *, unsigned int, long int *));
           LOAD_DM(DMGetElement,
@@ -290,6 +295,13 @@ class GpuLibrary : public Utils::Library {
           LOAD_DM(DMAllProbabilities, int (*)(void *, double *));
           LOAD_DM(DMExpectationValue,
                   double (*)(void *, const char *, int));
+          LOAD_DM(DMQubitProbability0, double (*)(void *, unsigned int));
+          LOAD_DM(DMTrace, double (*)(void *));
+          LOAD_DM(DMPurity, double (*)(void *));
+          LOAD_DM(DMIsHermitian, int (*)(void *, double));
+          LOAD_DM(DMPartialTrace, int (*)(void *, const int *, int, double *));
+          LOAD_DM(DMHilbertSchmidtOverlap, int (*)(void *, void *, double *, double *));
+          LOAD_DM(DMFidelityWithStatevector, int (*)(void *, const double *, double *));
           LOAD_DM(DMApplyKraus,
                   int (*)(void *, int, const int *, int, const double *));
 #define LOAD_DM_GATE1(name) LOAD_DM(name, int (*)(void *, int))
@@ -297,6 +309,10 @@ class GpuLibrary : public Utils::Library {
 #define LOAD_DM_ROT1(name) LOAD_DM(name, int (*)(void *, int, double))
 #define LOAD_DM_ROT2(name) LOAD_DM(name, int (*)(void *, int, int, double))
           LOAD_DM_GATE1(DMApplyReset);
+          LOAD_DM_ROT1(DMApplyBitFlipNoise); LOAD_DM_ROT1(DMApplyPhaseFlipNoise);
+          LOAD_DM_ROT1(DMApplyDepolarizingNoise); LOAD_DM_ROT1(DMApplyAmplitudeDamping);
+          LOAD_DM_ROT1(DMApplyPhaseDamping);
+          LOAD_DM_GATE1(DMApplyNonSelectiveMeasurement);
           LOAD_DM_GATE1(DMApplyX); LOAD_DM_GATE1(DMApplyY);
           LOAD_DM_GATE1(DMApplyZ); LOAD_DM_GATE1(DMApplyH);
           LOAD_DM_GATE1(DMApplyS); LOAD_DM_GATE1(DMApplySDG);
@@ -356,6 +372,8 @@ class GpuLibrary : public Utils::Library {
           LOAD_MPO(MPOGetCutoff, double (*)(void *));
           LOAD_MPO(MPOSetTruncationMode, int (*)(void *, int));
           LOAD_MPO(MPOGetTruncationMode, int (*)(void *));
+          LOAD_MPO(MPOSetGesvdJ, int (*)(void *, int));
+          LOAD_MPO(MPOGetGesvdJ, int (*)(void *));
           LOAD_MPO(MPOSetMaxExtent, int (*)(void *, long int));
           LOAD_MPO(MPOGetMaxExtent, long int (*)(void *));
           LOAD_MPO(MPOGetBondDimensions,
@@ -365,12 +383,18 @@ class GpuLibrary : public Utils::Library {
                    int (*)(void *, int64_t (*)(void *, const int64_t *)));
           LOAD_MPO(MPOSetBondDimensionsCallback,
                    int (*)(void *, void (*)(void *, const int64_t *)));
+          LOAD_MPO(MPOReCanonicalize, int (*)(void *, int));
+          LOAD_MPO(MPOTrim, int (*)(void *, double, long int, int));
           LOAD_MPO(MPOSaveState, int (*)(void *));
           LOAD_MPO(MPORestoreState, int (*)(void *));
           LOAD_MPO(MPOCleanSavedState, int (*)(void *));
           LOAD_MPO(MPOClone, void *(*)(void *));
           LOAD_MPO(MPOMeasureQubitCollapse, int (*)(void *, int));
           LOAD_MPO(MPOMeasureQubitNoCollapse, int (*)(void *, int));
+          LOAD_MPO(MPOMeasureQubitsCollapse, int (*)(void *, int *, int *, int));
+          LOAD_MPO(MPOMeasureQubitsNoCollapse, int (*)(void *, int *, int *, int));
+          LOAD_MPO(MPOMeasureAllQubitsCollapse, unsigned long long (*)(void *));
+          LOAD_MPO(MPOMeasureAllQubitsNoCollapse, unsigned long long (*)(void *));
           LOAD_MPO(MPOSample,
                    int (*)(void *, unsigned int, long int *, unsigned int,
                            int *));
@@ -382,6 +406,19 @@ class GpuLibrary : public Utils::Library {
           LOAD_MPO(MPOAllProbabilities, int (*)(void *, double *));
           LOAD_MPO(MPOExpectationValue,
                    double (*)(void *, const char *, int));
+          LOAD_MPO(MPOQubitProbability0, double (*)(void *, unsigned int));
+          LOAD_MPO(MPOPartialTrace, int (*)(void *, const int *, int, double *));
+          LOAD_MPO(MPOHilbertSchmidtOverlap, int (*)(void *, void *, double *, double *));
+          LOAD_MPO(MPOFidelityWithStatevector, int (*)(void *, const double *, double *));
+          LOAD_MPO(MPOTrace, double (*)(void *));
+          LOAD_MPO(MPOPurity, double (*)(void *));
+          LOAD_MPO(MPOHermiticityResidual, double (*)(void *));
+          LOAD_MPO(MPOIsHermitian, int (*)(void *, double));
+          LOAD_MPO(MPOTraceOfSquare, double (*)(void *));
+          LOAD_MPO(MPORestoreTrace, int (*)(void *));
+          LOAD_MPO(MPOHermitize, int (*)(void *));
+          LOAD_MPO(MPOSetKrausCompletenessCheck, int (*)(void *, int));
+          LOAD_MPO(MPOGetKrausCompletenessCheck, int (*)(void *));
           LOAD_MPO(MPOApplyKraus,
                    int (*)(void *, int, const int *, int, const double *));
 #define LOAD_MPO_GATE1(name) LOAD_MPO(name, int (*)(void *, int))
@@ -389,6 +426,10 @@ class GpuLibrary : public Utils::Library {
 #define LOAD_MPO_ROT1(name) LOAD_MPO(name, int (*)(void *, int, double))
 #define LOAD_MPO_ROT2(name) LOAD_MPO(name, int (*)(void *, int, int, double))
           LOAD_MPO_GATE1(MPOApplyReset);
+          LOAD_MPO_ROT1(MPOApplyBitFlipNoise); LOAD_MPO_ROT1(MPOApplyPhaseFlipNoise);
+          LOAD_MPO_ROT1(MPOApplyDepolarizingNoise); LOAD_MPO_ROT1(MPOApplyAmplitudeDamping);
+          LOAD_MPO_ROT1(MPOApplyPhaseDamping);
+          LOAD_MPO_GATE1(MPOApplyNonSelectiveMeasurement);
           LOAD_MPO_GATE1(MPOApplyX); LOAD_MPO_GATE1(MPOApplyY);
           LOAD_MPO_GATE1(MPOApplyZ); LOAD_MPO_GATE1(MPOApplyH);
           LOAD_MPO_GATE1(MPOApplyS); LOAD_MPO_GATE1(MPOApplySDG);
@@ -1048,7 +1089,9 @@ class GpuLibrary : public Utils::Library {
            fDMSaveState && fDMRestoreState && fDMCleanSavedState && fDMClone &&
            fDMMeasureQubitCollapse && fDMSampleAll &&
            fDMBasisStateProbability && fDMAllProbabilities &&
-           fDMExpectationValue && fDMApplyKraus && fDMApplyReset &&
+           fDMExpectationValue && fDMTrace && fDMPurity && fDMIsHermitian &&
+           fDMPartialTrace && fDMHilbertSchmidtOverlap &&
+           fDMFidelityWithStatevector && fDMApplyKraus && fDMApplyReset &&
            fDMApplyX && fDMApplyY && fDMApplyZ && fDMApplyH && fDMApplyS &&
            fDMApplySDG && fDMApplyT && fDMApplyTDG && fDMApplySX &&
            fDMApplySXDG && fDMApplyK && fDMApplyP && fDMApplyRx &&
@@ -1065,7 +1108,12 @@ class GpuLibrary : public Utils::Library {
            fMPOSaveState && fMPORestoreState && fMPOCleanSavedState &&
            fMPOClone && fMPOMeasureQubitCollapse && fMPOSampleAll &&
            fMPOBasisStateProbability && fMPOAllProbabilities &&
-           fMPOExpectationValue && fMPOApplyKraus && fMPOApplyReset &&
+           fMPOExpectationValue && fMPOPartialTrace &&
+           fMPOHilbertSchmidtOverlap && fMPOFidelityWithStatevector &&
+           fMPOTrace && fMPOPurity && fMPOHermiticityResidual &&
+           fMPOIsHermitian && fMPOTraceOfSquare && fMPORestoreTrace &&
+           fMPOHermitize && fMPOReCanonicalize && fMPOTrim &&
+           fMPOApplyKraus && fMPOApplyReset &&
            fMPOApplyX && fMPOApplyY && fMPOApplyZ && fMPOApplyH &&
            fMPOApplyS && fMPOApplySDG && fMPOApplyT && fMPOApplyTDG &&
            fMPOApplySX && fMPOApplySXDG && fMPOApplyK && fMPOApplyP &&
@@ -1662,6 +1710,21 @@ class GpuLibrary : public Utils::Library {
   bool DMMeasureQubitCollapse(void *obj, int q) {
     return obj && fDMMeasureQubitCollapse && fDMMeasureQubitCollapse(obj, q);
   }
+  DM_BOOL1(DMMeasureQubitNoCollapse, int)
+  bool DMMeasureQubitsCollapse(void *obj, int *q, int *bits, int n) {
+    return obj && fDMMeasureQubitsCollapse && fDMMeasureQubitsCollapse(obj, q, bits, n) == 1;
+  }
+  bool DMMeasureQubitsNoCollapse(void *obj, int *q, int *bits, int n) {
+    return obj && fDMMeasureQubitsNoCollapse && fDMMeasureQubitsNoCollapse(obj, q, bits, n) == 1;
+  }
+  unsigned long long DMMeasureAllQubitsCollapse(void *obj) { return obj && fDMMeasureAllQubitsCollapse ? fDMMeasureAllQubitsCollapse(obj) : 0; }
+  unsigned long long DMMeasureAllQubitsNoCollapse(void *obj) { return obj && fDMMeasureAllQubitsNoCollapse ? fDMMeasureAllQubitsNoCollapse(obj) : 0; }
+  bool DMGetElement(void *obj, long long row, long long col, double *re, double *im) const {
+    return obj && fDMGetElement && fDMGetElement(obj, row, col, re, im) == 1;
+  }
+  bool DMSample(void *obj, unsigned int n, long int *samples, unsigned int nBits, int *order) {
+    return obj && fDMSample && fDMSample(obj, n, samples, nBits, order) == 1;
+  }
   bool DMSampleAll(void *obj, unsigned int shots, long int *samples) {
     return obj && fDMSampleAll && fDMSampleAll(obj, shots, samples) == 1;
   }
@@ -1675,12 +1738,22 @@ class GpuLibrary : public Utils::Library {
   double DMExpectationValue(void *obj, const char *pauli, int len) const {
     return obj && fDMExpectationValue ? fDMExpectationValue(obj, pauli, len) : 0.0;
   }
+  double DMQubitProbability0(void *obj, unsigned int q) const { return obj && fDMQubitProbability0 ? fDMQubitProbability0(obj, q) : 0.; }
+  double DMTrace(void *obj) const { return obj && fDMTrace ? fDMTrace(obj) : 0.; }
+  double DMPurity(void *obj) const { return obj && fDMPurity ? fDMPurity(obj) : 0.; }
+  bool DMIsHermitian(void *obj, double eps) const { return obj && fDMIsHermitian && fDMIsHermitian(obj, eps) == 1; }
+  bool DMPartialTrace(void *obj, const int *q, int n, double *out) { return obj && fDMPartialTrace && fDMPartialTrace(obj, q, n, out) == 1; }
+  bool DMHilbertSchmidtOverlap(void *obj, void *other, double *re, double *im) { return obj && other && fDMHilbertSchmidtOverlap && fDMHilbertSchmidtOverlap(obj, other, re, im) == 1; }
+  bool DMFidelityWithStatevector(void *obj, const double *state, double *out) { return obj && fDMFidelityWithStatevector && fDMFidelityWithStatevector(obj, state, out) == 1; }
   bool DMApplyKraus(void *obj, int n, const int *qubits, int count,
                     const double *operators) {
     return obj && fDMApplyKraus &&
            fDMApplyKraus(obj, n, qubits, count, operators) == 1;
   }
   DM_BOOL1(DMApplyReset, int)
+  DM_BOOL2(DMApplyBitFlipNoise, int, double) DM_BOOL2(DMApplyPhaseFlipNoise, int, double)
+  DM_BOOL2(DMApplyDepolarizingNoise, int, double) DM_BOOL2(DMApplyAmplitudeDamping, int, double)
+  DM_BOOL2(DMApplyPhaseDamping, int, double) DM_BOOL1(DMApplyNonSelectiveMeasurement, int)
   DM_BOOL1(DMApplyX, int) DM_BOOL1(DMApplyY, int)
   DM_BOOL1(DMApplyZ, int) DM_BOOL1(DMApplyH, int)
   DM_BOOL1(DMApplyS, int) DM_BOOL1(DMApplySDG, int)
@@ -1786,6 +1859,8 @@ class GpuLibrary : public Utils::Library {
   int MPOGetTruncationMode(void *obj) const {
     return obj && fMPOGetTruncationMode ? fMPOGetTruncationMode(obj) : 0;
   }
+  MPO_BOOL1(MPOSetGesvdJ, int)
+  bool MPOGetGesvdJ(void *obj) const { return obj && fMPOGetGesvdJ && fMPOGetGesvdJ(obj) == 1; }
   MPO_BOOL1(MPOSetMaxExtent, long int)
   long int MPOGetMaxExtent(void *obj) const {
     return obj && fMPOGetMaxExtent ? fMPOGetMaxExtent(obj) : 0;
@@ -1808,6 +1883,8 @@ class GpuLibrary : public Utils::Library {
     return obj && fMPOSetBondDimensionsCallback &&
            fMPOSetBondDimensionsCallback(obj, callback) == 1;
   }
+  MPO_BOOL1(MPOReCanonicalize, int)
+  bool MPOTrim(void *obj, double cutoff, long int maxExtent, int center) { return obj && fMPOTrim && fMPOTrim(obj, cutoff, maxExtent, center) == 1; }
   MPO_BOOL0(MPOSaveState) MPO_BOOL0(MPORestoreState)
   MPO_BOOL0(MPOCleanSavedState)
   void *MPOClone(void *obj) {
@@ -1815,6 +1892,14 @@ class GpuLibrary : public Utils::Library {
   }
   bool MPOMeasureQubitCollapse(void *obj, int q) {
     return obj && fMPOMeasureQubitCollapse && fMPOMeasureQubitCollapse(obj, q);
+  }
+  MPO_BOOL1(MPOMeasureQubitNoCollapse, int)
+  bool MPOMeasureQubitsCollapse(void *obj, int *q, int *bits, int n) { return obj && fMPOMeasureQubitsCollapse && fMPOMeasureQubitsCollapse(obj, q, bits, n) == 1; }
+  bool MPOMeasureQubitsNoCollapse(void *obj, int *q, int *bits, int n) { return obj && fMPOMeasureQubitsNoCollapse && fMPOMeasureQubitsNoCollapse(obj, q, bits, n) == 1; }
+  unsigned long long MPOMeasureAllQubitsCollapse(void *obj) { return obj && fMPOMeasureAllQubitsCollapse ? fMPOMeasureAllQubitsCollapse(obj) : 0; }
+  unsigned long long MPOMeasureAllQubitsNoCollapse(void *obj) { return obj && fMPOMeasureAllQubitsNoCollapse ? fMPOMeasureAllQubitsNoCollapse(obj) : 0; }
+  bool MPOGetElement(void *obj, long long row, long long col, double *re, double *im) const {
+    return obj && fMPOGetElement && fMPOGetElement(obj, row, col, re, im) == 1;
   }
   bool MPOSample(void *obj, unsigned int nSamples, long int *samples,
                  unsigned int nBits, int *bitOrdering) {
@@ -1835,12 +1920,27 @@ class GpuLibrary : public Utils::Library {
     return obj && fMPOExpectationValue ? fMPOExpectationValue(obj, pauli, len)
                                         : 0.0;
   }
+  double MPOQubitProbability0(void *obj, unsigned int q) const { return obj && fMPOQubitProbability0 ? fMPOQubitProbability0(obj, q) : 0.; }
+  bool MPOPartialTrace(void *obj, const int *q, int n, double *out) { return obj && fMPOPartialTrace && fMPOPartialTrace(obj, q, n, out) == 1; }
+  bool MPOHilbertSchmidtOverlap(void *obj, void *other, double *re, double *im) { return obj && other && fMPOHilbertSchmidtOverlap && fMPOHilbertSchmidtOverlap(obj, other, re, im) == 1; }
+  bool MPOFidelityWithStatevector(void *obj, const double *state, double *out) { return obj && fMPOFidelityWithStatevector && fMPOFidelityWithStatevector(obj, state, out) == 1; }
+  double MPOTrace(void *obj) const { return obj && fMPOTrace ? fMPOTrace(obj) : 0.; }
+  double MPOPurity(void *obj) const { return obj && fMPOPurity ? fMPOPurity(obj) : 0.; }
+  double MPOHermiticityResidual(void *obj) const { return obj && fMPOHermiticityResidual ? fMPOHermiticityResidual(obj) : 0.; }
+  bool MPOIsHermitian(void *obj, double eps) const { return obj && fMPOIsHermitian && fMPOIsHermitian(obj, eps) == 1; }
+  double MPOTraceOfSquare(void *obj) const { return obj && fMPOTraceOfSquare ? fMPOTraceOfSquare(obj) : 0.; }
+  MPO_BOOL0(MPORestoreTrace) MPO_BOOL0(MPOHermitize)
+  MPO_BOOL1(MPOSetKrausCompletenessCheck, int)
+  int MPOGetKrausCompletenessCheck(void *obj) const { return obj && fMPOGetKrausCompletenessCheck ? fMPOGetKrausCompletenessCheck(obj) : -1; }
   bool MPOApplyKraus(void *obj, int n, const int *qubits, int count,
                      const double *operators) {
     return obj && fMPOApplyKraus &&
            fMPOApplyKraus(obj, n, qubits, count, operators) == 1;
   }
   MPO_BOOL1(MPOApplyReset, int)
+  MPO_BOOL2(MPOApplyBitFlipNoise, int, double) MPO_BOOL2(MPOApplyPhaseFlipNoise, int, double)
+  MPO_BOOL2(MPOApplyDepolarizingNoise, int, double) MPO_BOOL2(MPOApplyAmplitudeDamping, int, double)
+  MPO_BOOL2(MPOApplyPhaseDamping, int, double) MPO_BOOL1(MPOApplyNonSelectiveMeasurement, int)
   MPO_BOOL1(MPOApplyX, int) MPO_BOOL1(MPOApplyY, int)
   MPO_BOOL1(MPOApplyZ, int) MPO_BOOL1(MPOApplyH, int)
   MPO_BOOL1(MPOApplyS, int) MPO_BOOL1(MPOApplySDG, int)
@@ -1903,17 +2003,32 @@ class GpuLibrary : public Utils::Library {
   void *(*fDMClone)(void *) = nullptr;
   int (*fDMMeasureQubitCollapse)(void *, int) = nullptr;
   int (*fDMMeasureQubitNoCollapse)(void *, int) = nullptr;
+  int (*fDMMeasureQubitsCollapse)(void *, int *, int *, int) = nullptr;
+  int (*fDMMeasureQubitsNoCollapse)(void *, int *, int *, int) = nullptr;
+  unsigned long long (*fDMMeasureAllQubitsCollapse)(void *) = nullptr;
+  unsigned long long (*fDMMeasureAllQubitsNoCollapse)(void *) = nullptr;
+  int (*fDMSample)(void *, unsigned int, long int *, unsigned int, int *) = nullptr;
   int (*fDMSampleAll)(void *, unsigned int, long int *) = nullptr;
   int (*fDMGetElement)(void *, long long, long long, double *, double *) = nullptr;
   double (*fDMBasisStateProbability)(void *, long long) = nullptr;
   int (*fDMAllProbabilities)(void *, double *) = nullptr;
   double (*fDMExpectationValue)(void *, const char *, int) = nullptr;
+  double (*fDMQubitProbability0)(void *, unsigned int) = nullptr;
+  double (*fDMTrace)(void *) = nullptr;
+  double (*fDMPurity)(void *) = nullptr;
+  int (*fDMIsHermitian)(void *, double) = nullptr;
+  int (*fDMPartialTrace)(void *, const int *, int, double *) = nullptr;
+  int (*fDMHilbertSchmidtOverlap)(void *, void *, double *, double *) = nullptr;
+  int (*fDMFidelityWithStatevector)(void *, const double *, double *) = nullptr;
   int (*fDMApplyKraus)(void *, int, const int *, int, const double *) = nullptr;
   int (*fDMApplyReset)(void *, int) = nullptr;
 #define DECL_DM1(name) int (*f##name)(void *, int) = nullptr
 #define DECL_DM2(name) int (*f##name)(void *, int, int) = nullptr
 #define DECL_DMR1(name) int (*f##name)(void *, int, double) = nullptr
 #define DECL_DMR2(name) int (*f##name)(void *, int, int, double) = nullptr
+  DECL_DMR1(DMApplyBitFlipNoise); DECL_DMR1(DMApplyPhaseFlipNoise);
+  DECL_DMR1(DMApplyDepolarizingNoise); DECL_DMR1(DMApplyAmplitudeDamping);
+  DECL_DMR1(DMApplyPhaseDamping); DECL_DM1(DMApplyNonSelectiveMeasurement);
   DECL_DM1(DMApplyX); DECL_DM1(DMApplyY); DECL_DM1(DMApplyZ);
   DECL_DM1(DMApplyH); DECL_DM1(DMApplyS); DECL_DM1(DMApplySDG);
   DECL_DM1(DMApplyT); DECL_DM1(DMApplyTDG); DECL_DM1(DMApplySX);
@@ -1965,18 +2080,26 @@ class GpuLibrary : public Utils::Library {
   double (*fMPOGetCutoff)(void *) = nullptr;
   int (*fMPOSetTruncationMode)(void *, int) = nullptr;
   int (*fMPOGetTruncationMode)(void *) = nullptr;
+  int (*fMPOSetGesvdJ)(void *, int) = nullptr;
+  int (*fMPOGetGesvdJ)(void *) = nullptr;
   int (*fMPOSetMaxExtent)(void *, long int) = nullptr;
   long int (*fMPOGetMaxExtent)(void *) = nullptr;
   int (*fMPOGetBondDimensions)(void *, long long int *) = nullptr;
   int (*fMPOSetCallbackContext)(void *, void *) = nullptr;
   int (*fMPOSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
   int (*fMPOSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;
+  int (*fMPOReCanonicalize)(void *, int) = nullptr;
+  int (*fMPOTrim)(void *, double, long int, int) = nullptr;
   int (*fMPOSaveState)(void *) = nullptr;
   int (*fMPORestoreState)(void *) = nullptr;
   int (*fMPOCleanSavedState)(void *) = nullptr;
   void *(*fMPOClone)(void *) = nullptr;
   int (*fMPOMeasureQubitCollapse)(void *, int) = nullptr;
   int (*fMPOMeasureQubitNoCollapse)(void *, int) = nullptr;
+  int (*fMPOMeasureQubitsCollapse)(void *, int *, int *, int) = nullptr;
+  int (*fMPOMeasureQubitsNoCollapse)(void *, int *, int *, int) = nullptr;
+  unsigned long long (*fMPOMeasureAllQubitsCollapse)(void *) = nullptr;
+  unsigned long long (*fMPOMeasureAllQubitsNoCollapse)(void *) = nullptr;
   int (*fMPOSample)(void *, unsigned int, long int *, unsigned int,
                     int *) = nullptr;
   int (*fMPOSampleAll)(void *, unsigned int, long int *) = nullptr;
@@ -1985,6 +2108,19 @@ class GpuLibrary : public Utils::Library {
   double (*fMPOBasisStateProbability)(void *, long long) = nullptr;
   int (*fMPOAllProbabilities)(void *, double *) = nullptr;
   double (*fMPOExpectationValue)(void *, const char *, int) = nullptr;
+  double (*fMPOQubitProbability0)(void *, unsigned int) = nullptr;
+  int (*fMPOPartialTrace)(void *, const int *, int, double *) = nullptr;
+  int (*fMPOHilbertSchmidtOverlap)(void *, void *, double *, double *) = nullptr;
+  int (*fMPOFidelityWithStatevector)(void *, const double *, double *) = nullptr;
+  double (*fMPOTrace)(void *) = nullptr;
+  double (*fMPOPurity)(void *) = nullptr;
+  double (*fMPOHermiticityResidual)(void *) = nullptr;
+  int (*fMPOIsHermitian)(void *, double) = nullptr;
+  double (*fMPOTraceOfSquare)(void *) = nullptr;
+  int (*fMPORestoreTrace)(void *) = nullptr;
+  int (*fMPOHermitize)(void *) = nullptr;
+  int (*fMPOSetKrausCompletenessCheck)(void *, int) = nullptr;
+  int (*fMPOGetKrausCompletenessCheck)(void *) = nullptr;
   int (*fMPOApplyKraus)(void *, int, const int *, int,
                         const double *) = nullptr;
   int (*fMPOApplyReset)(void *, int) = nullptr;
@@ -1992,6 +2128,9 @@ class GpuLibrary : public Utils::Library {
 #define DECL_MPO2(name) int (*f##name)(void *, int, int) = nullptr
 #define DECL_MPOR1(name) int (*f##name)(void *, int, double) = nullptr
 #define DECL_MPOR2(name) int (*f##name)(void *, int, int, double) = nullptr
+  DECL_MPOR1(MPOApplyBitFlipNoise); DECL_MPOR1(MPOApplyPhaseFlipNoise);
+  DECL_MPOR1(MPOApplyDepolarizingNoise); DECL_MPOR1(MPOApplyAmplitudeDamping);
+  DECL_MPOR1(MPOApplyPhaseDamping); DECL_MPO1(MPOApplyNonSelectiveMeasurement);
   DECL_MPO1(MPOApplyX); DECL_MPO1(MPOApplyY); DECL_MPO1(MPOApplyZ);
   DECL_MPO1(MPOApplyH); DECL_MPO1(MPOApplyS); DECL_MPO1(MPOApplySDG);
   DECL_MPO1(MPOApplyT); DECL_MPO1(MPOApplyTDG); DECL_MPO1(MPOApplySX);

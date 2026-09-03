@@ -205,6 +205,33 @@ BOOST_FIXTURE_TEST_CASE(FactoryConfigurationAndUnsupportedAmplitudes,
   BOOST_TEST(unique->GetConfiguration("method") == "density_matrix");
 }
 
+BOOST_AUTO_TEST_CASE(MixedStateDiagnosticsAndReductions) {
+  auto dm = MakeQCSim(Simulators::SimulationType::kDensityMatrix, 2);
+  auto sv = MakeQCSim(Simulators::SimulationType::kStatevector, 2);
+  dm->ApplyH(0); dm->ApplyCX(0, 1);
+  sv->ApplyH(0); sv->ApplyCX(0, 1);
+
+  BOOST_CHECK_SMALL(std::abs(dm->DensityMatrixTrace() - std::complex<double>(1., 0.)),
+                    kQCSimDensityTolerance);
+  BOOST_CHECK_SMALL(std::abs(dm->DensityMatrixTraceOfSquare() - std::complex<double>(1., 0.)),
+                    kQCSimDensityTolerance);
+  BOOST_CHECK_CLOSE(dm->DensityMatrixPurity(), 1., 1e-8);
+  BOOST_CHECK(dm->IsDensityMatrixHermitian());
+  BOOST_CHECK_SMALL(dm->DensityMatrixHermiticityResidual(), kQCSimDensityTolerance);
+  BOOST_CHECK_SMALL(std::abs(dm->DensityMatrixOverlap(*dm) - std::complex<double>(1., 0.)),
+                    kQCSimDensityTolerance);
+
+  Eigen::VectorXcd bell(4);
+  bell << 1. / std::sqrt(2.), 0., 0., 1. / std::sqrt(2.);
+  BOOST_CHECK_CLOSE(dm->FidelityWithStatevector(bell), 1., 1e-8);
+  const auto reduced = dm->PartialTrace(Types::qubits_vector{0});
+  BOOST_REQUIRE_EQUAL(reduced.rows(), 2);
+  BOOST_REQUIRE_EQUAL(reduced.cols(), 2);
+  BOOST_CHECK_SMALL(std::abs(reduced(0, 0) - 0.5), kQCSimDensityTolerance);
+  BOOST_CHECK_SMALL(std::abs(reduced(1, 1) - 0.5), kQCSimDensityTolerance);
+  BOOST_CHECK_SMALL(std::abs(reduced(0, 1)), kQCSimDensityTolerance);
+}
+
 BOOST_FIXTURE_TEST_CASE(RandomCircuitsAndExpectationsMatchStatevector,
                         QCSimDensityMatrixFixture) {
   const std::array<std::string, 6> paulis = {

@@ -211,6 +211,39 @@ BOOST_AUTO_TEST_CASE(factory_configuration_and_unsupported_amplitudes) {
              "matrix_product_operator");
 }
 
+BOOST_AUTO_TEST_CASE(MixedStateDiagnosticsCompressionAndPolicies) {
+  auto mpo = MakeQCSimMPOTestSimulator(
+      Simulators::SimulationType::kMatrixProductOperator, 2);
+  auto sv = MakeQCSimMPOTestSimulator(Simulators::SimulationType::kStatevector, 2);
+  mpo->ApplyH(0); mpo->ApplyCX(0, 1);
+  sv->ApplyH(0); sv->ApplyCX(0, 1);
+
+  BOOST_CHECK_SMALL(std::abs(mpo->DensityMatrixTrace() - std::complex<double>(1., 0.)),
+                    kMPOTolerance);
+  BOOST_CHECK_SMALL(std::abs(mpo->DensityMatrixTraceOfSquare() - std::complex<double>(1., 0.)),
+                    kMPOTolerance);
+  BOOST_CHECK_CLOSE(mpo->DensityMatrixPurity(), 1., 1e-8);
+  BOOST_CHECK(mpo->IsDensityMatrixHermitian());
+  BOOST_CHECK_SMALL(mpo->DensityMatrixHermiticityResidual(), kMPOTolerance);
+  BOOST_CHECK_SMALL(std::abs(mpo->DensityMatrixOverlap(*mpo) - std::complex<double>(1., 0.)),
+                    kMPOTolerance);
+
+  Eigen::VectorXcd bell(4);
+  bell << 1. / std::sqrt(2.), 0., 0., 1. / std::sqrt(2.);
+  BOOST_CHECK_CLOSE(mpo->FidelityWithStatevector(bell), 1., 1e-8);
+  const auto reduced = mpo->PartialTrace(Types::qubits_vector{0});
+  BOOST_REQUIRE_EQUAL(reduced.rows(), 2);
+  BOOST_CHECK_SMALL(std::abs(reduced(0, 0) - 0.5), kMPOTolerance);
+  BOOST_CHECK_SMALL(std::abs(reduced(1, 1) - 0.5), kMPOTolerance);
+
+  mpo->Configure("matrix_product_operator_kraus_completeness_check", "warn");
+  BOOST_TEST(mpo->GetConfiguration("matrix_product_operator_kraus_completeness_check") == "warn");
+  mpo->ReCanonicalizeMatrixProductOperator();
+  mpo->TrimMatrixProductOperator();
+  BOOST_CHECK_SMALL(std::abs(mpo->DensityMatrixTrace() - std::complex<double>(1., 0.)),
+                    1e-7);
+}
+
 BOOST_AUTO_TEST_CASE(all_gates_random_circuits_and_expectations_match) {
   auto mpo = MakeQCSimMPOTestSimulator(
       Simulators::SimulationType::kMatrixProductOperator);

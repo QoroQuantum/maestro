@@ -702,6 +702,23 @@ class QCSimState : public ISimulator {
         else if (std::string(value) == "discarded_weight")
           mpoSimulator->setTruncationMode(
               QC::TensorNetworks::MPOSimulator::TruncationMode::DiscardedWeight);
+      } else if (std::string(key) ==
+                 "matrix_product_operator_kraus_completeness_check") {
+        using Check = QC::TensorNetworks::MPOSimulator::KrausCompletenessCheck;
+        if (std::string(value) == "ignore")
+          mpoSimulator->setKrausCompletenessCheck(Check::Ignore);
+        else if (std::string(value) == "warn")
+          mpoSimulator->setKrausCompletenessCheck(Check::Warn);
+        else if (std::string(value) == "strict")
+          mpoSimulator->setKrausCompletenessCheck(Check::Strict);
+      } else if (std::string(key) ==
+                 "matrix_product_operator_restore_trace_after_truncation") {
+        mpoSimulator->setRestoreTraceAfterTruncation(
+            std::string(value) == "1" || std::string(value) == "true");
+      } else if (std::string(key) ==
+                 "matrix_product_operator_hermitize_after_truncation") {
+        mpoSimulator->setHermitizeAfterTruncation(
+            std::string(value) == "1" || std::string(value) == "true");
       }
     }
 
@@ -1084,6 +1101,70 @@ class QCSimState : public ISimulator {
     }
 
     NotifyObservers(targets);
+  }
+
+  std::complex<double> DensityMatrixTrace() const override {
+    if (densityMatrix) return densityMatrix->Trace();
+    if (mpoSimulator) return mpoSimulator->Trace();
+    throw std::runtime_error("Mixed-state diagnostics require density_matrix or matrix_product_operator");
+  }
+  double DensityMatrixPurity() const override {
+    if (densityMatrix) return densityMatrix->Purity();
+    if (mpoSimulator) return mpoSimulator->Purity();
+    throw std::runtime_error("Mixed-state diagnostics require density_matrix or matrix_product_operator");
+  }
+  std::complex<double> DensityMatrixTraceOfSquare() const override {
+    if (densityMatrix) {
+      const auto &rho = densityMatrix->getDensityMatrix();
+      return (rho * rho).trace();
+    }
+    if (mpoSimulator) return mpoSimulator->TraceOfSquare();
+    throw std::runtime_error("Mixed-state diagnostics require density_matrix or matrix_product_operator");
+  }
+  std::complex<double> DensityMatrixOverlap(const IState &other) const override {
+    const auto *rhs = dynamic_cast<const QCSimState *>(&other);
+    if (!rhs) throw std::invalid_argument("Density-matrix overlap requires matching QCSim backends");
+    if (densityMatrix && rhs->densityMatrix)
+      return densityMatrix->HilbertSchmidtOverlap(*rhs->densityMatrix);
+    if (mpoSimulator && rhs->mpoSimulator)
+      return mpoSimulator->HilbertSchmidtOverlap(*rhs->mpoSimulator);
+    throw std::invalid_argument("Density-matrix overlap requires two density matrices or two MPOs");
+  }
+  double DensityMatrixHermiticityResidual() const override {
+    if (densityMatrix) return (densityMatrix->getDensityMatrix() - densityMatrix->getDensityMatrix().adjoint()).norm();
+    if (mpoSimulator) return mpoSimulator->HermiticityResidual();
+    throw std::runtime_error("Mixed-state diagnostics require density_matrix or matrix_product_operator");
+  }
+  bool IsDensityMatrixHermitian(double eps = 1e-10) const override {
+    if (densityMatrix) return densityMatrix->IsHermitian(eps);
+    if (mpoSimulator) return mpoSimulator->IsHermitian(eps);
+    throw std::runtime_error("Mixed-state diagnostics require density_matrix or matrix_product_operator");
+  }
+  Eigen::MatrixXcd PartialTrace(const Types::qubits_vector &qubits) const override {
+    if (densityMatrix) return densityMatrix->PartialTrace(std::vector<size_t>(qubits.begin(), qubits.end()));
+    if (mpoSimulator) return mpoSimulator->PartialTrace(std::vector<Eigen::Index>(qubits.begin(), qubits.end()));
+    throw std::runtime_error("Partial trace requires density_matrix or matrix_product_operator");
+  }
+  double FidelityWithStatevector(const Eigen::VectorXcd &psi) const override {
+    if (densityMatrix) return densityMatrix->FidelityWithStatevector(psi);
+    if (mpoSimulator) return mpoSimulator->FidelityWithStatevector(psi);
+    throw std::runtime_error("Mixed-state fidelity requires density_matrix or matrix_product_operator");
+  }
+  void RestoreDensityMatrixTrace() override {
+    if (!mpoSimulator) throw std::runtime_error("Trace restoration is only available for QCSim MPO");
+    mpoSimulator->RestoreTrace();
+  }
+  void HermitizeDensityMatrix() override {
+    if (!mpoSimulator) throw std::runtime_error("Hermitization is only available for QCSim MPO");
+    mpoSimulator->Hermitize();
+  }
+  void TrimMatrixProductOperator() override {
+    if (!mpoSimulator) throw std::runtime_error("QCSim MPO is not initialized");
+    mpoSimulator->Trim();
+  }
+  void ReCanonicalizeMatrixProductOperator() override {
+    if (!mpoSimulator) throw std::runtime_error("QCSim MPO is not initialized");
+    mpoSimulator->ReCanonicalize();
   }
 
   /**
@@ -1957,6 +2038,7 @@ class QCSimState : public ISimulator {
     if (state) state->SetMultithreading(multithreading);
     if (cliffordSimulator) cliffordSimulator->SetMultithreading(multithreading);
     if (tensorNetwork) tensorNetwork->SetMultithreading(multithreading);
+    if (densityMatrix) densityMatrix->SetMultithreading(multithreading);
     if (pp) {
       if (multithreading)
         pp->EnableParallel();
