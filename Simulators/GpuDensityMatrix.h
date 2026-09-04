@@ -56,6 +56,7 @@ class GpuDensityMatrix {
     if (!lib->DMReset(obj))
       throw std::runtime_error("GPU density-matrix reset failed");
   }
+  bool SetSeed(uint64_t seed) { return lib->DMSetSeed(obj, seed); }
   bool IsCreated() const { return lib->DMIsCreated(obj); }
   void SetDataType(bool useDouble) {
     if (!lib->DMSetDataType(obj, useDouble))

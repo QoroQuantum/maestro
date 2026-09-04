@@ -64,6 +64,8 @@ class GpuLibStateVectorSim {
     return false;
   }
 
+  bool SetSeed(uint64_t seed) { return obj && lib->SetSeed(obj, seed); }
+
   bool SetDataType(bool useDoublePrecision) {
     if (obj) return lib->SetDataType(obj, useDoublePrecision ? 1 : 0);
     return false;

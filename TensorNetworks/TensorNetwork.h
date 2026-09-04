@@ -26,6 +26,7 @@ namespace TensorNetworks {
 
 class TensorNetwork {
  public:
+  void SetSeed(uint64_t seed) { rng.seed(seed); }
   using Index = Eigen::Index;
 
   TensorNetwork() = delete;

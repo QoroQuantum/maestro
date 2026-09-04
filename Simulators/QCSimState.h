@@ -22,6 +22,7 @@
 #include <limits>
 #include <random>
 #include <sstream>
+#include <type_traits>
 #include <utility>
 
 #include "Simulator.h"
@@ -48,6 +49,17 @@ namespace Simulators {
 // https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation
 // for good but during development this should be good enough
 namespace Private {
+
+template <typename T, typename = void>
+struct HasSetSeed : std::false_type {};
+template <typename T>
+struct HasSetSeed<T, std::void_t<decltype(std::declval<T &>().SetSeed(
+                         std::declval<uint64_t>()))>> : std::true_type {};
+
+template <typename T>
+void SeedBackend(T *backend, uint64_t seed) {
+  if constexpr (HasSetSeed<T>::value) backend->SetSeed(seed);
+}
 
 /**
  * @class QCSimState
@@ -663,6 +675,24 @@ class QCSimState : public ISimulator {
 
     if (!configuration.WasApplied(key, value))
         configuration.SetConfiguration(key, value);
+
+    if (std::string("seed") == key) {
+      const uint64_t seed = std::stoull(value);
+      nextSeedStream = 0;
+      rng.seed(seed);
+      if (state) SeedBackend(state.get(), seed);
+      if (mpsSimulator) SeedBackend(mpsSimulator.get(), seed);
+      if (mpoSimulator) SeedBackend(mpoSimulator.get(), seed);
+      if (cliffordSimulator) SeedBackend(cliffordSimulator.get(), seed);
+      if (tensorNetwork) tensorNetwork->SetSeed(seed);
+      if (pp) SeedBackend(pp.get(), seed);
+      if (pathIntegralSimulator) pathIntegralSimulator->SetSeed(seed);
+      if (densityMatrix) SeedBackend(densityMatrix.get(), seed);
+      if (extendedStabilizer)
+        extendedStabilizer->SetRandomSeed(
+            static_cast<std::mt19937::result_type>(seed));
+      return;
+    }
 
     if (mpsSimulator) {
       if (std::string(key) == "matrix_product_state_max_bond_dimension") {
@@ -2337,6 +2367,7 @@ class QCSimState : public ISimulator {
   std::shared_ptr<GateCounterObserver> gateCounterObserver;
 
   std::mt19937_64 rng;
+  uint64_t nextSeedStream = 0;
   std::uniform_real_distribution<double> uniformZeroOne;
 
   Configuration configuration; /**< The configuration of the simulator. */

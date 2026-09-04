@@ -73,6 +73,8 @@ class GpuLibMPSSim {
     return false;
   }
 
+  bool SetSeed(uint64_t seed) { return obj && lib->MPSSetSeed(obj, seed); }
+
   bool SetInitialQubitsMap(const std::vector<long long int> &initialMap) {
     if (obj) return lib->MPSSetInitialQubitsMap(obj, initialMap);
 

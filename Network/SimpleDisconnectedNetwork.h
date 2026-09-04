@@ -681,6 +681,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       threadsPool.Resize(nrThreads);
       threadsPool.SetFinishLimit(shots);
 
+      uint64_t jobStream = 0;
       while (shots > 0) {
         const size_t curCnt = std::min(cntPerThread, shots);
 
@@ -695,10 +696,18 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         job->curMaxBondDim = &curMaxBondDim;
 
         job->config = configuration;
+        if (configuration.IsSet("seed")) {
+          const uint64_t childSeed = Simulators::IState::DeriveSeed(
+              std::stoull(configuration.GetConfiguration("seed")), jobStream++);
+          job->config.SetConfiguration("seed", std::to_string(childSeed));
+        }
 
         if (optSim) {
           job->optSim = optSim->Clone();
           job->executedGates = executed;
+          if (job->config.IsSet("seed"))
+            job->optSim->SetSeed(
+                std::stoull(job->config.GetConfiguration("seed")));
         }
 
         threadsPool.AddRunJob(std::move(job));
@@ -864,6 +873,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       threadsPool.Resize(nrThreads);
       threadsPool.SetFinishLimit(shots);
 
+      uint64_t jobStream = 0;
       while (shots > 0) {
         const size_t curCnt = std::min(cntPerThread, shots);
         shots -= curCnt;
@@ -877,10 +887,18 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         job->curMaxBondDim = &curMaxBondDim;
 
         job->config = configuration;
+        if (configuration.IsSet("seed")) {
+          const uint64_t childSeed = Simulators::IState::DeriveSeed(
+              std::stoull(configuration.GetConfiguration("seed")), jobStream++);
+          job->config.SetConfiguration("seed", std::to_string(childSeed));
+        }
 
         if (optSim) {
           job->optSim = optSim->Clone();
           job->executedGates = executed;
+          if (job->config.IsSet("seed"))
+            job->optSim->SetSeed(
+                std::stoull(job->config.GetConfiguration("seed")));
         }
 
         threadsPool.AddRunJob(std::move(job));

@@ -1337,6 +1337,11 @@ class QCSimSimulator : public QCSimState {
     for (const auto& [key, value] : configuration.GetConfigMap())
       cloned->Configure(key.c_str(), value.c_str());
 
+    if (configuration.IsSet("seed"))
+      cloned->SetSeed(DeriveSeed(
+          std::stoull(configuration.GetConfiguration("seed")),
+          nextSeedStream++));
+
     return cloned;
   }
 

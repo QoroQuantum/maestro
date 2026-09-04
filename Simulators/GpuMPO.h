@@ -67,6 +67,7 @@ class GpuMPO {
     if (!lib->MPOReset(obj))
       throw std::runtime_error("GPU matrix-product-operator reset failed");
   }
+  bool SetSeed(uint64_t seed) { return lib->MPOSetSeed(obj, seed); }
   bool SetInitialQubitsMap(const std::vector<long long int>& initialMap) {
     return lib->MPOSetInitialQubitsMap(obj, initialMap);
   }

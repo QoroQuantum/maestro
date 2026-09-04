@@ -210,7 +210,13 @@ class CompositeSimulator : public ISimulator {
 
     config.SetConfiguration(key, value);
 
-    for (auto &[id, simulator] : simulators) simulator->Configure(key, value);
+    if (std::string("seed") == key) {
+      const uint64_t seed = std::stoull(value);
+      for (auto &[id, simulator] : simulators)
+        simulator->SetSeed(DeriveSeed(seed, id));
+    } else {
+      for (auto &[id, simulator] : simulators) simulator->Configure(key, value);
+    }
   }
 
   /**

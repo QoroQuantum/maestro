@@ -21,6 +21,7 @@ namespace Simulators {
 
 	class PathIntegralSimulator {
 		public:
+		  void SetSeed(uint64_t seed) { simulator.SetSeed(seed); }
 		  void SetTrimValue(double val) { simulator.SetTrimValue(val); }
 
           double GetTrimValue() const { return simulator.GetTrimValue(); }
@@ -369,4 +370,3 @@ namespace Simulators {
 }
 
 #endif  // _PATH_INTEGRAL_SIMULATOR_H_
-

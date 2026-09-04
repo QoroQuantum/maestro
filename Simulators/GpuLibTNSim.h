@@ -57,6 +57,8 @@ class GpuLibTNSim {
     return false;
   }
 
+  bool SetSeed(uint64_t seed) { return obj && lib->TNSetSeed(obj, seed); }
+
   bool IsValid() const {
     if (obj) return lib->TNIsValid(obj);
 
