@@ -6,6 +6,9 @@ on:
     branches: [ "main" ]
   workflow_call:
 
+env:
+  QCSIM_VERSION: "34ed4ad694f7eaa3ab0f82dd6fc4bc40528624f9"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -35,7 +38,7 @@ jobs:
           QCSim
           json
           qiskit-aer
-        key: ${{ runner.os }}-git-deps-v2
+        key: ${{ runner.os }}-git-deps-qcsim${{ env.QCSIM_VERSION }}-v2
 
     # 3. SETUP CCACHE
     - name: Cache ccache
@@ -71,7 +74,8 @@ jobs:
     # 5. DOWNLOAD DYNAMIC DEPENDENCIES (shallow clones, only if not cached)
     - name: Download Dependencies (QCSim, JSON, AER)
       run: |
-        if [ -d QCSim ]; then cd QCSim && git pull && cd ..; else git clone --depth 1 https://github.com/aromanro/QCSim.git; fi
+        if [ ! -d QCSim ]; then git clone https://github.com/aromanro/QCSim.git; fi
+        cd QCSim && git checkout ${{ env.QCSIM_VERSION }} && cd ..
         [ -d json ] || git clone --depth 1 --branch v3.11.2 https://github.com/nlohmann/json.git
         [ -d qiskit-aer ] || git clone --depth 1 https://github.com/InvictusWingsSRL/qiskit-aer.git
 
