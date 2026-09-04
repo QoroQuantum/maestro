@@ -4629,3 +4629,32 @@ class TestIncrementalEvolve:
             actual_z = result['expectation_values'][idx][0]
             assert actual_z == pytest.approx(expected_z, abs=1e-10), \
                 f"Step {n}: expected ⟨Z⟩={expected_z:.6f}, got {actual_z:.6f}"
+
+
+class TestSimulatorSeed:
+    QASM = """
+    OPENQASM 2.0;
+    include "qelib1.inc";
+    qreg q[2];
+    creg c[2];
+    h q[0];
+    cx q[0], q[1];
+    measure q -> c;
+    """
+
+    @staticmethod
+    def run(seed):
+        config = maestro.SimulatorConfig(seed=seed)
+        return maestro.simple_execute(
+            TestSimulatorSeed.QASM, config=config, shots=4000)["counts"]
+
+    def test_seed_config_surface(self):
+        assert maestro.SimulatorConfig().seed is None
+        assert maestro.SimulatorConfig(seed=42).seed == 42
+        assert "seed=42" in repr(maestro.SimulatorConfig(seed=42))
+
+    def test_same_seed_reproduces_counts(self):
+        assert self.run(12345) == self.run(12345)
+
+    def test_different_seeds_use_different_streams(self):
+        assert self.run(1) != self.run(2)

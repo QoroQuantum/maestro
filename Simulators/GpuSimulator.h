@@ -1063,6 +1063,11 @@ class GpuSimulator : public GpuState {
           "supported.");
     }
 
+    if (configuration.IsSet("seed"))
+      cloned->SetSeed(DeriveSeed(
+          std::stoull(configuration.GetConfiguration("seed")),
+          nextSeedStream++));
+
     return cloned;
   }
 };

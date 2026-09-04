@@ -200,7 +200,8 @@ class AerState : public ISimulator {
    * @param value The value of the configuration.
    */
   void Configure(const char* key, const char* value) override {
-    if (configuration.WasApplied(key, value) && state->is_initialized())
+    if (std::string("seed") != key && configuration.WasApplied(key, value) &&
+        state->is_initialized())
       return;
 
     // Validate BEFORE storing below: Qiskit Aer's own MPS/MPO truncation always
@@ -222,6 +223,14 @@ class AerState : public ISimulator {
 
     if (!configuration.WasApplied(key, value))
         configuration.SetConfiguration(key, value);
+
+    if (std::string("seed") == key) {
+      const uint64_t seed = std::stoull(value);
+      nextSeedStream = 0;
+      rng.seed(seed);
+      state->set_seed(seed);
+      return;
+    }
 
     if (std::string("method") == key) {
       if (std::string("statevector") == value)
@@ -1075,6 +1084,7 @@ class AerState : public ISimulator {
   AER::Data savedState; /**< The saved data - here there will be the saved state
                            of the simulator */
   std::mt19937_64 rng;
+  uint64_t nextSeedStream = 0;
   std::uniform_real_distribution<double> uniformZeroOne{0., 1.};
 
   Configuration configuration; /**< The configuration of the simulator. */

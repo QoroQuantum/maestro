@@ -54,6 +54,10 @@ class GpuPauliPropagator {
     return 0;
   }
 
+  bool SetSeed(uint64_t seed) {
+    return lib && obj && lib->PauliPropSetSeed(obj, seed);
+  }
+
   bool SetWillUseSampling(bool willUseSampling) {
     if (lib) {
       return lib->PauliPropSetWillUseSampling(obj, willUseSampling) == 1;

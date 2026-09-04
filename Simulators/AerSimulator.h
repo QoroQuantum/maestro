@@ -1034,6 +1034,11 @@ class AerSimulator : public AerState {
                             // that
     }
 
+    if (configuration.IsSet("seed"))
+      sim->SetSeed(DeriveSeed(
+          std::stoull(configuration.GetConfiguration("seed")),
+          nextSeedStream++));
+
     return sim;
   }
 };

@@ -76,13 +76,15 @@ struct SimulatorConfig {
 
   // path integral parameters
   std::optional<double> path_integral_threshold = std::nullopt;
+  std::optional<uint64_t> seed = std::nullopt;
 
   SimulatorConfig() = default;
 
   SimulatorConfig(Simulators::SimulatorType st, Simulators::SimulationType set,
                   std::optional<size_t> mb, std::optional<double> sv, bool dp,
                   bool ds, int la, bool mnc,
-                  std::optional<std::string> tm)
+                  std::optional<std::string> tm,
+                  std::optional<uint64_t> random_seed)
       : simulator_type(st),
         simulation_type(set),
         max_bond_dimension(mb),
@@ -91,7 +93,8 @@ struct SimulatorConfig {
         use_double_precision(dp),
         disable_optimized_swapping(ds),
         lookahead_depth(la),
-        mps_measure_no_collapse(mnc) {}
+        mps_measure_no_collapse(mnc),
+        seed(random_seed) {}
 };
 
 // ============================================================================
@@ -169,6 +172,10 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
 
   if (config.precision) {
     network->Configure("precision", *config.precision ? "double" : "single");
+  }
+  if (config.seed) {
+    const auto value = std::to_string(*config.seed);
+    network->Configure("seed", value.c_str());
   }
 
   // Disable MPS swap optimization if requested
@@ -877,7 +884,8 @@ NB_MODULE(maestro, m) {
       "reuse across execute/estimate/statevector calls.")
       .def(nb::init<Simulators::SimulatorType, Simulators::SimulationType,
                     std::optional<size_t>, std::optional<double>, bool, bool,
-                    int, bool, std::optional<std::string>>(),
+                    int, bool, std::optional<std::string>,
+                    std::optional<uint64_t>>(),
            "simulator_type"_a = Simulators::SimulatorType::kQCSim,
            "simulation_type"_a = Simulators::SimulationType::kStatevector,
            "max_bond_dimension"_a = nb::none(),
@@ -885,7 +893,7 @@ NB_MODULE(maestro, m) {
            "use_double_precision"_a = false,
            "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
            "mps_measure_no_collapse"_a = true,
-           "truncation_mode"_a = nb::none())
+           "truncation_mode"_a = nb::none(), "seed"_a = nb::none())
       .def_rw("simulator_type", &SimulatorConfig::simulator_type)
       .def_rw("simulation_type", &SimulatorConfig::simulation_type)
       .def_rw("max_bond_dimension", &SimulatorConfig::max_bond_dimension)
@@ -919,6 +927,7 @@ NB_MODULE(maestro, m) {
               &SimulatorConfig::pp_steps_between_deduplications)
       .def_rw("path_integral_threshold",
               &SimulatorConfig::path_integral_threshold)
+      .def_rw("seed", &SimulatorConfig::seed)
       .def("__repr__", [](const SimulatorConfig& c) {
         std::ostringstream oss;
         oss << "SimulatorConfig("
@@ -939,11 +948,13 @@ NB_MODULE(maestro, m) {
             << (c.disable_optimized_swapping ? "True" : "False")
             << ", lookahead_depth=" << c.lookahead_depth
             << ", mps_measure_no_collapse="
-            << (c.mps_measure_no_collapse ? "True" : "False") << ")";
+            << (c.mps_measure_no_collapse ? "True" : "False")
+            << ", seed=" << (c.seed ? std::to_string(*c.seed) : "None") << ")";
         return oss.str();
       });
 
   nb::class_<Simulators::ISimulator>(m, "Simulator")
+      .def("set_seed", &Simulators::ISimulator::SetSeed, "seed"_a)
       .def("density_matrix_trace", &Simulators::ISimulator::DensityMatrixTrace)
       .def("density_matrix_purity", &Simulators::ISimulator::DensityMatrixPurity)
       .def("density_matrix_trace_of_square",

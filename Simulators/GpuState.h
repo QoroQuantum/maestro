@@ -672,6 +672,18 @@ class GpuState : public ISimulator {
     if (!configuration.WasApplied(key, value))
         configuration.SetConfiguration(key, value);
 
+    if (std::string("seed") == key) {
+      const uint64_t seed = std::stoull(value);
+      nextSeedStream = 0;
+      if (state) state->SetSeed(seed);
+      if (densityMatrix) densityMatrix->SetSeed(seed);
+      if (mpo) mpo->SetSeed(seed);
+      if (mps) mps->SetSeed(seed);
+      if (tn) tn->SetSeed(seed);
+      if (pp) pp->SetSeed(seed);
+      return;
+    }
+
     if (std::string("matrix_product_state_truncation_threshold") == key ||
         std::string("matrix_product_operator_truncation_threshold") == key) {
       // SetCutoff() sets the numeric threshold value. How that number is interpreted --
@@ -1914,6 +1926,7 @@ class GpuState : public ISimulator {
 
   SimulationType simulationType =
       SimulationType::kStatevector; /**< The simulation type. */
+  uint64_t nextSeedStream = 0;
 
   std::unique_ptr<GpuLibStateVectorSim>
       state;                         /**< The gpu statevector simulator. */

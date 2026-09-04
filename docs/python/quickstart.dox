@@ -63,6 +63,7 @@
  * | `disable_optimized_swapping` | `bool` | `False` | Disable MPS swap optimization |
  * | `lookahead_depth` | `int` | `-1` | Swap optimization lookahead depth |
  * | `mps_measure_no_collapse` | `bool` | `True` | Use probability-based MPS sampling |
+ * | `seed` | `int` or `None` | `None` | Seed all backend and Maestro sampling RNGs. Parallel jobs derive deterministic, distinct child streams. |
  *
  * @note When no `config` is passed, a default `SimulatorConfig()` is used
  * (QCSim + Statevector with all defaults). You can also modify fields

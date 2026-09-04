@@ -166,6 +166,9 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fFreeSavedState, __LINE__);
           fClone = (void *(*)(void *))GetFunction("Clone");
           CheckFunction((void *)fClone, __LINE__);
+          fSetSeed =
+              (int (*)(void *, unsigned long long))GetFunction("SetSeed");
+          CheckFunction((void *)fSetSeed, __LINE__);
 
           fSample = (int (*)(void *, unsigned int, long int *, unsigned int,
                              int *))GetFunction("Sample");
@@ -280,6 +283,7 @@ class GpuLibrary : public Utils::Library {
           LOAD_DM(DMRestoreState, int (*)(void *));
           LOAD_DM(DMCleanSavedState, int (*)(void *));
           LOAD_DM(DMClone, void *(*)(void *));
+          LOAD_DM(DMSetSeed, int (*)(void *, unsigned long long));
           LOAD_DM(DMMeasureQubitCollapse, int (*)(void *, int));
           LOAD_DM(DMMeasureQubitNoCollapse, int (*)(void *, int));
           LOAD_DM(DMMeasureQubitsCollapse, int (*)(void *, int *, int *, int));
@@ -389,6 +393,7 @@ class GpuLibrary : public Utils::Library {
           LOAD_MPO(MPORestoreState, int (*)(void *));
           LOAD_MPO(MPOCleanSavedState, int (*)(void *));
           LOAD_MPO(MPOClone, void *(*)(void *));
+          LOAD_MPO(MPOSetSeed, int (*)(void *, unsigned long long));
           LOAD_MPO(MPOMeasureQubitCollapse, int (*)(void *, int));
           LOAD_MPO(MPOMeasureQubitNoCollapse, int (*)(void *, int));
           LOAD_MPO(MPOMeasureQubitsCollapse, int (*)(void *, int *, int *, int));
@@ -580,6 +585,9 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fMPSCleanSavedState, __LINE__);
           fMPSClone = (void *(*)(void *))GetFunction("MPSClone");
           CheckFunction((void *)fMPSClone, __LINE__);
+          fMPSSetSeed = (int (*)(void *, unsigned long long))
+              GetFunction("MPSSetSeed");
+          CheckFunction((void *)fMPSSetSeed, __LINE__);
 
           fMPSExpectationValue = (double (*)(
               void *, const char *, int))GetFunction("MPSExpectationValue");
@@ -748,6 +756,9 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fTNCleanSavedState, __LINE__);
           fTNClone = (void *(*)(void *))GetFunction("TNClone");
           CheckFunction((void *)fTNClone, __LINE__);
+          fTNSetSeed = (int (*)(void *, unsigned long long))
+              GetFunction("TNSetSeed");
+          CheckFunction((void *)fTNSetSeed, __LINE__);
 
           fTNExpectationValue = (double (*)(
               void *, const char *, int))GetFunction("TNExpectationValue");
@@ -954,6 +965,9 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fPauliPropGetExpectationValue, __LINE__);
           fPauliPropExecute = (int (*)(void *))GetFunction("PauliPropExecute");
           CheckFunction((void *)fPauliPropExecute, __LINE__);
+          fPauliPropSetSeed = (int (*)(void *, unsigned long long))
+              GetFunction("PauliPropSetSeed");
+          CheckFunction((void *)fPauliPropSetSeed, __LINE__);
           fPauliPropSetInPauliExpansionUnique =
               (int (*)(void *, const char *))GetFunction(
                   "PauliPropSetInPauliExpansionUnique");
@@ -1087,6 +1101,7 @@ class GpuLibrary : public Utils::Library {
            fDMCreate && fDMCreateWithState && fDMReset && fDMIsCreated &&
            fDMSetDataType &&
            fDMSaveState && fDMRestoreState && fDMCleanSavedState && fDMClone &&
+           fDMSetSeed &&
            fDMMeasureQubitCollapse && fDMSampleAll &&
            fDMBasisStateProbability && fDMAllProbabilities &&
            fDMExpectationValue && fDMTrace && fDMPurity && fDMIsHermitian &&
@@ -1106,7 +1121,8 @@ class GpuLibrary : public Utils::Library {
            fMPOCreate && fMPOCreateWithState && fMPOReset && fMPOIsCreated &&
            fMPOSetDataType &&
            fMPOSaveState && fMPORestoreState && fMPOCleanSavedState &&
-           fMPOClone && fMPOMeasureQubitCollapse && fMPOSampleAll &&
+           fMPOClone && fMPOSetSeed && fMPOMeasureQubitCollapse &&
+           fMPOSampleAll &&
            fMPOBasisStateProbability && fMPOAllProbabilities &&
            fMPOExpectationValue && fMPOPartialTrace &&
            fMPOHilbertSchmidtOverlap && fMPOFidelityWithStatevector &&
@@ -1320,6 +1336,10 @@ class GpuLibrary : public Utils::Library {
       throw std::runtime_error("GpuLibrary: Unable to clone state vector");
 
     return nullptr;
+  }
+
+  bool SetSeed(void *obj, unsigned long long seed) const {
+    return obj && fSetSeed && fSetSeed(obj, seed) == 1;
   }
 
   bool Sample(void *obj, unsigned int nSamples, long int *samples,
@@ -1707,6 +1727,9 @@ class GpuLibrary : public Utils::Library {
   DM_BOOL0(DMSaveState) DM_BOOL0(DMRestoreState)
   DM_BOOL0(DMCleanSavedState)
   void *DMClone(void *obj) { return obj && fDMClone ? fDMClone(obj) : nullptr; }
+  bool DMSetSeed(void *obj, unsigned long long seed) const {
+    return obj && fDMSetSeed && fDMSetSeed(obj, seed) == 1;
+  }
   bool DMMeasureQubitCollapse(void *obj, int q) {
     return obj && fDMMeasureQubitCollapse && fDMMeasureQubitCollapse(obj, q);
   }
@@ -1890,6 +1913,9 @@ class GpuLibrary : public Utils::Library {
   void *MPOClone(void *obj) {
     return obj && fMPOClone ? fMPOClone(obj) : nullptr;
   }
+  bool MPOSetSeed(void *obj, unsigned long long seed) const {
+    return obj && fMPOSetSeed && fMPOSetSeed(obj, seed) == 1;
+  }
   bool MPOMeasureQubitCollapse(void *obj, int q) {
     return obj && fMPOMeasureQubitCollapse && fMPOMeasureQubitCollapse(obj, q);
   }
@@ -2001,6 +2027,7 @@ class GpuLibrary : public Utils::Library {
   int (*fDMRestoreState)(void *) = nullptr;
   int (*fDMCleanSavedState)(void *) = nullptr;
   void *(*fDMClone)(void *) = nullptr;
+  int (*fDMSetSeed)(void *, unsigned long long) = nullptr;
   int (*fDMMeasureQubitCollapse)(void *, int) = nullptr;
   int (*fDMMeasureQubitNoCollapse)(void *, int) = nullptr;
   int (*fDMMeasureQubitsCollapse)(void *, int *, int *, int) = nullptr;
@@ -2094,6 +2121,7 @@ class GpuLibrary : public Utils::Library {
   int (*fMPORestoreState)(void *) = nullptr;
   int (*fMPOCleanSavedState)(void *) = nullptr;
   void *(*fMPOClone)(void *) = nullptr;
+  int (*fMPOSetSeed)(void *, unsigned long long) = nullptr;
   int (*fMPOMeasureQubitCollapse)(void *, int) = nullptr;
   int (*fMPOMeasureQubitNoCollapse)(void *, int) = nullptr;
   int (*fMPOMeasureQubitsCollapse)(void *, int *, int *, int) = nullptr;
@@ -2518,6 +2546,10 @@ class GpuLibrary : public Utils::Library {
       throw std::runtime_error("GpuLibrary: Unable to clone mps");
 
     return nullptr;
+  }
+
+  bool MPSSetSeed(void *obj, unsigned long long seed) const {
+    return obj && fMPSSetSeed && fMPSSetSeed(obj, seed) == 1;
   }
 
   double MPSExpectationValue(void *obj, const char *pauliString,
@@ -3108,6 +3140,10 @@ class GpuLibrary : public Utils::Library {
       throw std::runtime_error("GpuLibrary: Unable to clone tensor network");
 
     return nullptr;
+  }
+
+  bool TNSetSeed(void *obj, unsigned long long seed) const {
+    return obj && fTNSetSeed && fTNSetSeed(obj, seed) == 1;
   }
 
   double TNExpectationValue(void *obj, const char *pauliString, int len) const {
@@ -3773,6 +3809,10 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
+  bool PauliPropSetSeed(void *obj, unsigned long long seed) const {
+    return obj && fPauliPropSetSeed && fPauliPropSetSeed(obj, seed) == 1;
+  }
+
   bool PauliPropSetInPauliExpansionUnique(void *obj, const char *pauliString) {
     if (!obj) return false;
     if (LibraryHandle)
@@ -4094,6 +4134,7 @@ class GpuLibrary : public Utils::Library {
   int (*fRestoreStateNoFreeSaved)(void *) = nullptr;
   void (*fFreeSavedState)(void *obj) = nullptr;
   void *(*fClone)(void *) = nullptr;
+  int (*fSetSeed)(void *, unsigned long long) = nullptr;
   int (*fSample)(void *, unsigned int, long int *, unsigned int,
                  int *) = nullptr;
   int (*fSampleAll)(void *, unsigned int, long int *) = nullptr;
@@ -4184,6 +4225,7 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSRestoreState)(void *) = nullptr;
   int (*fMPSCleanSavedState)(void *) = nullptr;
   void *(*fMPSClone)(void *) = nullptr;
+  int (*fMPSSetSeed)(void *, unsigned long long) = nullptr;
 
   double (*fMPSExpectationValue)(void *, const char *, int) = nullptr;
   int (*fMPSProjectOnZero)(void *, double *, double *) = nullptr;
@@ -4257,6 +4299,7 @@ class GpuLibrary : public Utils::Library {
   int (*fTNRestoreState)(void *) = nullptr;
   int (*fTNCleanSavedState)(void *) = nullptr;
   void *(*fTNClone)(void *) = nullptr;
+  int (*fTNSetSeed)(void *, unsigned long long) = nullptr;
 
   double (*fTNExpectationValue)(void *, const char *, int) = nullptr;
 
@@ -4331,6 +4374,7 @@ class GpuLibrary : public Utils::Library {
   int (*fPauliPropAllocateMemory)(void *, double) = nullptr;
   double (*fPauliPropGetExpectationValue)(void *) = nullptr;
   int (*fPauliPropExecute)(void *) = nullptr;
+  int (*fPauliPropSetSeed)(void *, unsigned long long) = nullptr;
   int (*fPauliPropSetInPauliExpansionUnique)(void *, const char *) = nullptr;
   int (*fPauliPropSetInPauliExpansionMultiple)(void *, const char **,
                                                const double *, int) = nullptr;
