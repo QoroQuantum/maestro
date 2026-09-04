@@ -1933,6 +1933,21 @@ NB_MODULE(maestro, m) {
       []() { return Simulators::SimulatorsFactory::IsGpuLibraryAvailable(); },
       "Check whether the GPU simulation library is loaded and available.");
 
+  m.def(
+      "select_gpu_device",
+      [](int deviceId) {
+        Simulators::SimulatorsFactory::SelectGpuDevice(deviceId);
+      },
+      "Selects which CUDA device init_gpu() will use. Must be called "
+      "before init_gpu() (or before the GPU library is otherwise "
+      "initialized) to take effect; has no effect afterwards.");
+
+  m.def(
+      "get_gpu_device_count",
+      []() { return Simulators::SimulatorsFactory::GetGpuDeviceCount(); },
+      "Number of CUDA-capable devices visible to the process, or 0 if the "
+      "GPU library isn't loaded or none are visible.");
+
   // --- Probability / Amplitude Access ---
   m.def(
       "get_probabilities",
