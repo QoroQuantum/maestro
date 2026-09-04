@@ -68,6 +68,13 @@ class GpuLibrary : public Utils::Library {
     if (LibraryHandle) FreeLib();
   }
 
+  // Requests that Init() select the given CUDA device before initializing
+  // the library. Must be called before Init(), otherwise it has no effect
+  // (matching the underlying SetGpuDevice()/InitLib() ordering requirement).
+  void SetRequestedGpuDevice(int deviceId) noexcept {
+    requestedGpuDeviceId = deviceId;
+  }
+
   bool Init(const char *libName) noexcept override {
     if (Utils::Library::Init(libName)) {
       // Validate license before initializing the library.
@@ -94,6 +101,22 @@ class GpuLibrary : public Utils::Library {
             std::cerr << "Check that your license key is correct." << std::endl;
         }
         return false;
+      }
+
+      // GPU device selection - optional API (older library builds may not
+      // export these symbols). Must be resolved and, if requested, invoked
+      // before InitLib() to take effect.
+      fSetGpuDevice = (int (*)(int))GetFunction("SetGpuDevice");
+      fGetGpuDeviceCount = (int (*)())GetFunction("GetGpuDeviceCount");
+      if (requestedGpuDeviceId >= 0) {
+        if (fSetGpuDevice) {
+          if (!fSetGpuDevice(requestedGpuDeviceId) && !IsMuted())
+            std::cerr << "GpuLibrary: Failed to select GPU device "
+                      << requestedGpuDeviceId << std::endl;
+        } else if (!IsMuted())
+          std::cerr << "GpuLibrary: GPU device selection was requested, but "
+                       "the loaded library does not support it."
+                    << std::endl;
       }
 
       InitLib = (void *(*)())GetFunction("InitLib");
@@ -1096,6 +1119,13 @@ class GpuLibrary : public Utils::Library {
   }
 
   bool IsValid() const { return LibraryHandle != nullptr; }
+
+  // Number of CUDA-capable devices visible to the process, or 0 if none are
+  // visible / the loaded library doesn't support device queries.
+  int GetGpuDeviceCount() const {
+    return fGetGpuDeviceCount ? fGetGpuDeviceCount() : 0;
+  }
+
   bool HasDensityMatrixAPI() const {
     return IsValid() && fCreateDensityMatrix && fDestroyDensityMatrix &&
            fDMCreate && fDMCreateWithState && fDMReset && fDMIsCreated &&
@@ -4110,6 +4140,10 @@ class GpuLibrary : public Utils::Library {
   int (*fValidateLicense)(const char *) = nullptr;
   void *(*InitLib)() = nullptr;
   void (*FreeLib)() = nullptr;
+
+  int requestedGpuDeviceId = -1;
+  int (*fSetGpuDevice)(int) = nullptr;
+  int (*fGetGpuDeviceCount)() = nullptr;
 
   void *(*fCreateStateVector)(void *) = nullptr;
   void (*fDestroyStateVector)(void *) = nullptr;

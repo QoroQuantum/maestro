@@ -43,11 +43,13 @@ namespace Simulators {
 #ifdef __linux__
 std::shared_ptr<GpuLibrary> SimulatorsFactory::gpuLibrary = nullptr;
 std::atomic_bool SimulatorsFactory::firstTime = true;
+int SimulatorsFactory::requestedGpuDeviceId = -1;
 
 bool SimulatorsFactory::InitGpuLibrary() {
   if (!gpuLibrary) {
     gpuLibrary = std::make_shared<GpuLibrary>();
     if (!firstTime.exchange(false)) gpuLibrary->SetMute(true);
+    gpuLibrary->SetRequestedGpuDevice(requestedGpuDeviceId);
 
     if (gpuLibrary->Init("libmaestro_gpu_simulators.so"))
       return true;
@@ -63,6 +65,7 @@ bool SimulatorsFactory::InitGpuLibraryWithMute() {
     gpuLibrary = std::make_shared<GpuLibrary>();
     firstTime = false;
     gpuLibrary->SetMute(true);
+    gpuLibrary->SetRequestedGpuDevice(requestedGpuDeviceId);
 
     if (gpuLibrary->Init("libmaestro_gpu_simulators.so"))
       return true;

@@ -64,6 +64,18 @@ class SimulatorsFactory {
   static bool InitGpuLibrary();
   static bool InitGpuLibraryWithMute();
 
+  // Selects which CUDA device InitGpuLibrary()/InitGpuLibraryWithMute() will
+  // use. Must be called before the GPU library is first initialized (i.e.
+  // before any InitGpuLibrary*() call, including indirectly through
+  // GetMaestroObject()) to take effect; has no effect afterwards.
+  static void SelectGpuDevice(int deviceId) { requestedGpuDeviceId = deviceId; }
+
+  // Number of CUDA-capable devices visible to the process, or 0 if the GPU
+  // library isn't loaded or none are visible.
+  static int GetGpuDeviceCount() {
+    return gpuLibrary ? gpuLibrary->GetGpuDeviceCount() : 0;
+  }
+
   static bool IsGpuLibraryAvailable() {
     return gpuLibrary && gpuLibrary->IsValid();
   }
@@ -121,12 +133,17 @@ class SimulatorsFactory {
  private:
   static std::shared_ptr<GpuLibrary> gpuLibrary;
   static std::atomic_bool firstTime;
+  static int requestedGpuDeviceId;
 
  public:
 #else
   static bool IsGpuLibraryAvailable() { return false; }
 
   static bool InitGpuLibrary() { return false; }
+
+  static void SelectGpuDevice(int) {}
+
+  static int GetGpuDeviceCount() { return 0; }
 #endif
   static bool InitQuestLibrary();
   static bool InitQuestLibraryWithMute();
