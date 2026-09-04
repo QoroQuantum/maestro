@@ -8,8 +8,8 @@ A unified interface for quantum circuit simulation. Write your circuit once — 
 
 - **One API, many backends** — compile from Qiskit / QASM to any supported simulator
 - **Automatic backend selection** — a prediction engine analyzes your circuit and routes it to the fastest backend
-- **CPU simulation** — statevector, MPS, Pauli propagation, Clifford/stabilizer
-- **GPU acceleration** — statevector (cuStateVec), MPS (custom CUDA), tensor network, Pauli propagation
+- **CPU simulation** — statevector, MPS, MPO, Pauli propagation, path integral, Clifford/stabilizer, extended stabilizer, density matrix
+- **GPU acceleration** — statevector (cuStateVec), MPS (custom CUDA and cuTensorNet), MPO (cuTensorNet, cuBlas and custrom CUDA) tensor network (cuTensorNet), Pauli propagation (cuPauliProp), density matrix (cuDensityMatrix)
 - **Distributed simulation** — p-block composite mode for distributed quantum computing
 - **Expectation values** — direct observable estimation (Pauli strings) for VQA workflows
 - **Performance optimizations** — automatic multi-threading, multi-processing, and optimized sampling
