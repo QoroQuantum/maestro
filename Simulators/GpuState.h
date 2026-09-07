@@ -656,6 +656,21 @@ class GpuState : public ISimulator {
         simulationType = SimulationType::kTensorNetwork;
       else if (std::string("pauli_propagator") == value)
         simulationType = SimulationType::kPauliPropagator;
+
+      // Match the GPU library's default cap.
+      if ((simulationType == SimulationType::kMatrixProductState ||
+           simulationType == SimulationType::kMatrixProductOperator) &&
+          !configuration.IsSet("matrix_product_state_max_bond_dimension"))
+        configuration.SetConfiguration(
+            "matrix_product_state_max_bond_dimension", "128");
+      if (simulationType == SimulationType::kMatrixProductOperator) {
+        const auto bondDimension =
+            configuration.GetConfiguration(MaxBondDimensionConfigKey());
+        configuration.SetConfiguration(
+            "matrix_product_state_max_bond_dimension", bondDimension);
+        configuration.SetConfiguration(
+            "matrix_product_operator_max_bond_dimension", bondDimension);
+      }
     }
 
     if (std::string("use_double_precision") == key && densityMatrix &&
@@ -719,10 +734,19 @@ class GpuState : public ISimulator {
                std::string("matrix_product_operator_max_bond_dimension") ==
                    key) {
       const long long int chi = std::stoi(value);
+      if (simulationType == SimulationType::kMatrixProductOperator) {
+        // Both names address the same MPO setting; the latest write wins.
+        const std::string bondDimension(value);
+        for (const char* alias : {"matrix_product_state_max_bond_dimension",
+                                  "matrix_product_operator_max_bond_dimension"})
+          if (!configuration.WasApplied(alias, bondDimension))
+            configuration.SetConfiguration(alias, bondDimension);
+      }
       if (chi > 0) {
         if (mps) mps->SetMaxExtent(chi);
         if (tn) tn->SetMaxExtent(chi);
         if (mpo) mpo->SetMaxExtent(chi);
+        if (dummySim) dummySim->SetMaxBondDimension(chi);
       }
     } else if (std::string("matrix_product_operator_use_gesvdj") == key) {
       if (mpo) mpo->SetGesvdJ(std::string(value) == "1" || std::string(value) == "true");
@@ -1797,9 +1821,8 @@ class GpuState : public ISimulator {
   }
 
  protected:
-  // The MPO method falls back to the shared MPS key unless a dedicated
-  // "matrix_product_operator_max_bond_dimension" override was configured,
-  // mirroring the CPU QCSim MPO simulator's lookup.
+  // MPO accepts both names; Configure keeps their values synchronized.
+  // The fallback also handles configuration before the method is selected.
   const char* MaxBondDimensionConfigKey() const {
     return simulationType == SimulationType::kMatrixProductOperator &&
                    configuration.IsSet(
