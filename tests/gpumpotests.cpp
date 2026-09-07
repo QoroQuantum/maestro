@@ -83,9 +83,20 @@ BOOST_AUTO_TEST_CASE(factory_and_unitary_evolution) {
   BOOST_CHECK_THROW(mpo->Amplitude(0), std::runtime_error);
   BOOST_CHECK_THROW(mpo->AmplitudeRaw(0), std::runtime_error);
 
+  BOOST_TEST(mpo->GetConfiguration(
+                 "matrix_product_state_max_bond_dimension") == "128");
+  BOOST_TEST(mpo->GetConfiguration(
+                 "matrix_product_operator_max_bond_dimension") == "128");
   mpo->Configure("matrix_product_operator_max_bond_dimension", "64");
   BOOST_TEST(mpo->GetConfiguration(
                  "matrix_product_operator_max_bond_dimension") == "64");
+  BOOST_TEST(mpo->GetConfiguration(
+                 "matrix_product_state_max_bond_dimension") == "64");
+  mpo->Configure("matrix_product_state_max_bond_dimension", "32");
+  BOOST_TEST(mpo->GetConfiguration(
+                 "matrix_product_operator_max_bond_dimension") == "32");
+  BOOST_TEST(mpo->GetConfiguration(
+                 "matrix_product_state_max_bond_dimension") == "32");
 
   auto unique = Simulators::SimulatorsFactory::CreateSimulatorUnique(
       Simulators::SimulatorType::kGpuSim,
