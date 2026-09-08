@@ -95,7 +95,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 #endif
 
 #ifdef __linux__
-    if (Simulators::SimulatorsFactory::IsGpuLibraryAvailable()) {
+    { // GPU candidates are resolved lazily when simulation is requested.
       simulatorsForOptimizations.insert(
           {Simulators::SimulatorType::kGpuSim,
            Simulators::SimulationType::kStatevector});
@@ -1023,6 +1023,12 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
                         : nrQubits);
       simulator->Initialize();
 
+      // Pin the resolved default as well as explicit selections. Cloning or
+      // recreating this network must not follow later process-default changes.
+      if (simType == Simulators::SimulatorType::kGpuSim)
+        configuration.SetConfiguration(
+            "gpu_device", simulator->GetConfiguration("gpu_device"));
+
       simulator->setGrowthFactorGate(growthFactorGate);
       simulator->setGrowthFactorSwap(growthFactorSwap);
       simulator->SetLookaheadDepth(lookaheadDepth);
@@ -1045,6 +1051,17 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (std::string("max_simulators") == key)
       maxSimulators = std::stoull(value);
 
+    if (std::string("gpu_device") == key) {
+      Simulators::Configuration::ParseGpuDevice(value);
+      if (simulator) simulator->Configure(key, value);
+      configuration.SetConfiguration(key, value);
+      return;
+    }
+    if (!Simulators::Configuration::GpuSvdSettingGroup(key).empty()) {
+      if (simulator) simulator->Configure(key, value);
+      configuration.SetConfiguration(key, value);
+      return;
+    }
     configuration.SetConfiguration(key, value);
 
     if (simulator) simulator->Configure(key, value);
@@ -2070,7 +2087,17 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 #endif
 
 #ifdef __linux__
-    if (Simulators::SimulatorsFactory::IsGpuLibraryAvailable()) {
+    const int gpuDevice = configuration.IsSet("gpu_device")
+        ? Simulators::Configuration::ParseGpuDevice(configuration.GetConfiguration("gpu_device"))
+        : Simulators::SimulatorsFactory::ResolveGpuDevice();
+    Simulators::SimulatorsFactory::ScopedGpuDevice gpuDeviceScope(gpuDevice);
+    const bool hasGpuCandidate = std::any_of(
+        simulatorsForOptimizations.begin(), simulatorsForOptimizations.end(),
+        [](const auto& candidate) { return candidate.first == Simulators::SimulatorType::kGpuSim; });
+    if (configuration.IsSet("gpu_device") && hasGpuCandidate &&
+        !Simulators::SimulatorsFactory::IsGpuLibraryAvailable(gpuDevice))
+      throw std::runtime_error("Unable to initialize requested GPU device " + std::to_string(gpuDevice));
+    if (hasGpuCandidate && Simulators::SimulatorsFactory::IsGpuLibraryAvailable(gpuDevice)) {
       if (OptimizationSimulatorExists(Simulators::SimulatorType::kGpuSim,
                                       Simulators::SimulationType::kStatevector))
         simulatorTypes.emplace_back(Simulators::SimulatorType::kGpuSim,
@@ -2107,6 +2134,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     // caller then keeps the network simulator instead of recording 0 shots.
     if (simulatorTypes.empty() && simulatorsForOptimizations.size() == 1) {
       const auto candidate = *simulatorsForOptimizations.begin();
+      if (candidate.first == Simulators::SimulatorType::kGpuSim &&
+          !Simulators::SimulatorsFactory::IsGpuLibraryAvailable()) return nullptr;
       if (Simulators::SimulatorsFactory::CreateSimulator(candidate.first,
                                                          candidate.second))
         simulatorTypes.push_back(candidate);

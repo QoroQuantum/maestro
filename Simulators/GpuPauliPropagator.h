@@ -16,7 +16,7 @@
 
 #ifdef __linux__
 
-#include "GpuLibrary.h"
+#include "GpuDeviceContext.h"
 
 #define _USE_MATH_DEFINES
 #include <math.h>
@@ -578,7 +578,7 @@ class GpuPauliPropagator {
   }
 
  private:
-  std::shared_ptr<GpuLibrary> lib;
+  GpuDeviceContext lib;
   void *obj;
 };
 

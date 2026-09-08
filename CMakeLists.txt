@@ -324,8 +324,53 @@ if (COMPILE_TESTS)
     add_executable(tests ${ACTIVE_TESTSSRC})
 endif()
 
+# Lightweight GPU-loader tests run with a mock C plugin and need no GPU.
+if(COMPILE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    include(CheckCXXSymbolExists)
+    set(CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE)
+    set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS})
+    check_cxx_symbol_exists(dlmopen "dlfcn.h" MAESTRO_HAS_DLMOPEN)
+    unset(CMAKE_REQUIRED_DEFINITIONS)
+    unset(CMAKE_REQUIRED_LIBRARIES)
+    if(MAESTRO_HAS_DLMOPEN)
+        find_package(Threads REQUIRED)
+        add_library(mock_gpu_plugin SHARED tests/gpu_device/mock_plugin.cpp)
+        set_target_properties(mock_gpu_plugin PROPERTIES
+            OUTPUT_NAME maestro_gpu_simulators
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/mock_gpu")
+        add_executable(gpu_registry_tests tests/gpu_device/registry_tests.cpp)
+        target_link_libraries(gpu_registry_tests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+        enable_testing()
+        add_test(NAME gpu_registry COMMAND gpu_registry_tests $<TARGET_FILE:mock_gpu_plugin>)
+    endif()
+endif()
+
 add_executable(maestroexe ${MAESTROEXESRC})
 add_library(maestro SHARED ${MAESTROSRC})
+
+if(TARGET mock_gpu_plugin)
+    add_executable(gpu_device_tests tests/gpu_device/simulator_tests.cpp)
+    target_link_libraries(gpu_device_tests PRIVATE maestro Threads::Threads)
+    add_dependencies(gpu_device_tests mock_gpu_plugin)
+    add_test(NAME gpu_device_configuration
+        COMMAND ${CMAKE_COMMAND} -E env
+            "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:mock_gpu_plugin>:$<TARGET_FILE_DIR:maestro>:$ENV{LD_LIBRARY_PATH}"
+            $<TARGET_FILE:gpu_device_tests>)
+    add_executable(gpu_svd_tests tests/gpu_device/svd_tests.cpp)
+    target_link_libraries(gpu_svd_tests PRIVATE maestro Threads::Threads)
+    add_dependencies(gpu_svd_tests mock_gpu_plugin)
+    # These tests use the current C++ factory API. Prefer their build library
+    # over older installations in LD_LIBRARY_PATH, including for direct runs.
+    # Linux DT_RPATH takes precedence over LD_LIBRARY_PATH; DT_RUNPATH does not.
+    foreach(gpu_test gpu_device_tests gpu_svd_tests)
+        set_property(TARGET ${gpu_test} APPEND_STRING PROPERTY
+            LINK_FLAGS " -Wl,--disable-new-dtags")
+    endforeach()
+    add_test(NAME gpu_svd_configuration
+        COMMAND ${CMAKE_COMMAND} -E env
+            "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:mock_gpu_plugin>:$<TARGET_FILE_DIR:maestro>:$ENV{LD_LIBRARY_PATH}"
+            $<TARGET_FILE:gpu_svd_tests> --config-only)
+endif()
 
 set_target_properties(maestro PROPERTIES OUTPUT_NAME "maestro")
 set_target_properties(maestroexe PROPERTIES OUTPUT_NAME "maestro")

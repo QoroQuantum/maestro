@@ -50,33 +50,71 @@
 #include <unordered_map>
 #include <vector>
 #include <complex>
+#include <stdexcept>
 
 namespace Simulators {
 
-// use it as a singleton
+// One isolated library instance per CUDA device.
 class GpuLibrary : public Utils::Library {
  public:
   GpuLibrary(const GpuLibrary &) = delete;
   GpuLibrary &operator=(const GpuLibrary &) = delete;
 
-  GpuLibrary(GpuLibrary &&) = default;
-  GpuLibrary &operator=(GpuLibrary &&) = default;
+  GpuLibrary(GpuLibrary &&) = delete;
+  GpuLibrary &operator=(GpuLibrary &&) = delete;
 
   GpuLibrary() noexcept {}
 
   virtual ~GpuLibrary() {
-    if (LibraryHandle) FreeLib();
+    if (LibraryHandle && FreeLib) {
+      // Cleanup also runs on a thread which may last have used another GPU.
+      int previous = -1;
+      if (fCudaGetDevice) fCudaGetDevice(&previous);
+      if (fCudaSetDevice) fCudaSetDevice(requestedGpuDeviceId);
+      FreeLib();
+      if (fCudaSetDevice && previous >= 0) fCudaSetDevice(previous);
+    }
   }
 
   // Requests that Init() select the given CUDA device before initializing
   // the library. Must be called before Init(), otherwise it has no effect
   // (matching the underlying SetGpuDevice()/InitLib() ordering requirement).
   void SetRequestedGpuDevice(int deviceId) noexcept {
-    requestedGpuDeviceId = deviceId;
+    if (!LibraryHandle) requestedGpuDeviceId = deviceId;
   }
 
+  int GetDeviceId() const noexcept { return requestedGpuDeviceId; }
+
+  // Discovery loads symbols but does not validate a license or initialize a
+  // simulator. The registry reuses this namespace on the next device request.
+  bool Load(const char *libName) noexcept {
+    if (!Utils::Library::InitIsolated(libName)) return false;
+    fGetGpuDeviceCount = (int (*)())GetFunction("GetGpuDeviceCount");
+    return true;
+  }
+
+  class DeviceScope {
+   public:
+    explicit DeviceScope(const GpuLibrary &lib) : lib(lib) {
+      if (!lib.fCudaGetDevice || !lib.fCudaSetDevice ||
+          lib.fCudaGetDevice(&previous) != 0 ||
+          lib.fCudaSetDevice(lib.requestedGpuDeviceId) != 0)
+        throw std::runtime_error("GpuLibrary: Unable to activate CUDA device " +
+                                 std::to_string(lib.requestedGpuDeviceId));
+    }
+    ~DeviceScope() {
+      if (previous >= 0) lib.fCudaSetDevice(previous);
+    }
+    DeviceScope(const DeviceScope &) = delete;
+    DeviceScope &operator=(const DeviceScope &) = delete;
+   private:
+    const GpuLibrary &lib;
+    int previous = -1;
+  };
+
   bool Init(const char *libName) noexcept override {
-    if (Utils::Library::Init(libName)) {
+    if (IsValid()) return true;
+    if (Load(libName)) {
       // Validate license before initializing the library.
       // The license key is read from the MAESTRO_LICENSE_KEY env var.
       // If not set, nullptr is passed to attempt cached/offline validation.
@@ -103,20 +141,23 @@ class GpuLibrary : public Utils::Library {
         return false;
       }
 
-      // GPU device selection - optional API (older library builds may not
-      // export these symbols). Must be resolved and, if requested, invoked
-      // before InitLib() to take effect.
+      // Device selection is required for isolated per-device instances and
+      // must precede InitLib(). Resolve CUDA activation from this namespace
+      // as well, so calls from other host threads use the same runtime.
       fSetGpuDevice = (int (*)(int))GetFunction("SetGpuDevice");
       fGetGpuDeviceCount = (int (*)())GetFunction("GetGpuDeviceCount");
-      if (requestedGpuDeviceId >= 0) {
-        if (fSetGpuDevice) {
-          if (!fSetGpuDevice(requestedGpuDeviceId) && !IsMuted())
-            std::cerr << "GpuLibrary: Failed to select GPU device "
-                      << requestedGpuDeviceId << std::endl;
-        } else if (!IsMuted())
-          std::cerr << "GpuLibrary: GPU device selection was requested, but "
-                       "the loaded library does not support it."
-                    << std::endl;
+      if (requestedGpuDeviceId < 0) requestedGpuDeviceId = 0;
+      fCudaGetDevice = (int (*)(int *))GetFunction("cudaGetDevice");
+      fCudaSetDevice = (int (*)(int))GetFunction("cudaSetDevice");
+      FreeLib = (void (*)())GetFunction("FreeLib");
+      if (!fSetGpuDevice || !fCudaGetDevice || !fCudaSetDevice || !FreeLib ||
+          !fSetGpuDevice(requestedGpuDeviceId)) {
+        if (!IsMuted())
+          std::cerr << "GpuLibrary: Cannot initialize GPU device "
+                    << requestedGpuDeviceId
+                    << "; device selection, CUDA runtime symbols and cleanup "
+                       "support are required." << std::endl;
+        return false;
       }
 
       InitLib = (void *(*)())GetFunction("InitLib");
@@ -401,6 +442,13 @@ class GpuLibrary : public Utils::Library {
           LOAD_MPO(MPOGetTruncationMode, int (*)(void *));
           LOAD_MPO(MPOSetGesvdJ, int (*)(void *, int));
           LOAD_MPO(MPOGetGesvdJ, int (*)(void *));
+          // Optional in older plugins; checked when explicitly requested.
+          fMPOSetGesvdP = (int (*)(void *, int))GetFunction("MPOSetGesvdP");
+          fMPOGetGesvdP = (int (*)(void *))GetFunction("MPOGetGesvdP");
+          fMPOSetGesvdR = (int (*)(void *, int))GetFunction("MPOSetGesvdR");
+          fMPOGetGesvdR = (int (*)(void *))GetFunction("MPOGetGesvdR");
+          fMPOGetLastSvdAlgo = (int (*)(void *))GetFunction("MPOGetLastSvdAlgo");
+
           LOAD_MPO(MPOSetMaxExtent, int (*)(void *, long int));
           LOAD_MPO(MPOGetMaxExtent, long int (*)(void *));
           LOAD_MPO(MPOGetBondDimensions,
@@ -544,6 +592,13 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fMPSSetGesvdJ, __LINE__);
           fMPSGetGesvdJ = (int (*)(void *))GetFunction("MPSGetGesvdJ");
           CheckFunction((void *)fMPSGetGesvdJ, __LINE__);
+          // Optional in older plugins; checked when explicitly requested.
+          fMPSSetGesvdP = (int (*)(void *, int))GetFunction("MPSSetGesvdP");
+          fMPSGetGesvdP = (int (*)(void *))GetFunction("MPSGetGesvdP");
+          fMPSSetGesvdR = (int (*)(void *, int))GetFunction("MPSSetGesvdR");
+          fMPSGetGesvdR = (int (*)(void *))GetFunction("MPSGetGesvdR");
+          fMPSGetLastSvdAlgo = (int (*)(void *))GetFunction("MPSGetLastSvdAlgo");
+
           fMPSSetMaxExtent =
               (int (*)(void *, long int))GetFunction("MPSSetMaxExtent");
           CheckFunction((void *)fMPSSetMaxExtent, __LINE__);
@@ -742,6 +797,12 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fTNSetGesvdJ, __LINE__);
           fTNGetGesvdJ = (int (*)(void *))GetFunction("TNGetGesvdJ");
           CheckFunction((void *)fTNGetGesvdJ, __LINE__);
+          // Optional in older plugins; checked when explicitly requested.
+          fTNSetGesvdP = (int (*)(void *, int))GetFunction("TNSetGesvdP");
+          fTNGetGesvdP = (int (*)(void *))GetFunction("TNGetGesvdP");
+          fTNSetGesvdR = (int (*)(void *, int))GetFunction("TNSetGesvdR");
+          fTNGetGesvdR = (int (*)(void *))GetFunction("TNGetGesvdR");
+
           fTNSetMaxExtent =
               (int (*)(void *, long int))GetFunction("TNSetMaxExtent");
           CheckFunction((void *)fTNSetMaxExtent, __LINE__);
@@ -1095,10 +1156,10 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fPauliPropRestoreState, __LINE__);
 
           return true;
-        } else
+        } else if (!IsMuted())
           std::cerr << "GpuLibrary: Unable to initialize gpu library"
                     << std::endl;
-      } else
+      } else if (!IsMuted())
         std::cerr << "GpuLibrary: Unable to get initialization function for "
                      "gpu library"
                   << std::endl;
@@ -1108,8 +1169,8 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
-  static void CheckFunction(void *func, int line) {
-    if (!func) {
+  void CheckFunction(void *func, int line) const {
+    if (!func && !IsMuted()) {
       std::cerr << "GpuLibrary: Unable to load function, line #: " << line;
       const char *dlsym_error = dlerror();
       if (dlsym_error) std::cerr << ", error: " << dlsym_error;
@@ -1914,6 +1975,35 @@ class GpuLibrary : public Utils::Library {
   }
   MPO_BOOL1(MPOSetGesvdJ, int)
   bool MPOGetGesvdJ(void *obj) const { return obj && fMPOGetGesvdJ && fMPOGetGesvdJ(obj) == 1; }
+  bool MPOSetGesvdP(void *obj, int val) {
+    return LibraryHandle && obj && fMPOSetGesvdP &&
+           fMPOSetGesvdP(obj, val) == 1;
+  }
+
+  bool MPOGetGesvdP(void *obj) const {
+    if (!LibraryHandle || !obj || !fMPOGetGesvdP)
+      throw std::runtime_error("GpuLibrary: MPOGetGesvdP is unavailable");
+    return fMPOGetGesvdP(obj) == 1;
+  }
+
+  bool MPOSetGesvdR(void *obj, int val) {
+    return LibraryHandle && obj && fMPOSetGesvdR &&
+           fMPOSetGesvdR(obj, val) == 1;
+  }
+
+  bool MPOGetGesvdR(void *obj) const {
+    if (!LibraryHandle || !obj || !fMPOGetGesvdR)
+      throw std::runtime_error("GpuLibrary: MPOGetGesvdR is unavailable");
+    return fMPOGetGesvdR(obj) == 1;
+  }
+
+  // 0=GESVD, 1=GESVDJ, 2=GESVDP, 3=GESVDR; -1 before the first split.
+  int MPOGetLastSvdAlgo(void *obj) const {
+    if (!LibraryHandle || !obj || !fMPOGetLastSvdAlgo)
+      throw std::runtime_error("GpuLibrary: MPOGetLastSvdAlgo is unavailable");
+    return fMPOGetLastSvdAlgo(obj);
+  }
+
   MPO_BOOL1(MPOSetMaxExtent, long int)
   long int MPOGetMaxExtent(void *obj) const {
     return obj && fMPOGetMaxExtent ? fMPOGetMaxExtent(obj) : 0;
@@ -2139,6 +2229,11 @@ class GpuLibrary : public Utils::Library {
   int (*fMPOGetTruncationMode)(void *) = nullptr;
   int (*fMPOSetGesvdJ)(void *, int) = nullptr;
   int (*fMPOGetGesvdJ)(void *) = nullptr;
+  int (*fMPOSetGesvdP)(void *, int) = nullptr;
+  int (*fMPOGetGesvdP)(void *) = nullptr;
+  int (*fMPOSetGesvdR)(void *, int) = nullptr;
+  int (*fMPOGetGesvdR)(void *) = nullptr;
+  int (*fMPOGetLastSvdAlgo)(void *) = nullptr;
   int (*fMPOSetMaxExtent)(void *, long int) = nullptr;
   long int (*fMPOGetMaxExtent)(void *) = nullptr;
   int (*fMPOGetBondDimensions)(void *, long long int *) = nullptr;
@@ -2370,7 +2465,7 @@ class GpuLibrary : public Utils::Library {
   }
 
   bool MPSSetGesvdJ(void *obj, int val) {
-    if (LibraryHandle)
+    if (LibraryHandle && obj && fMPSSetGesvdJ)
       return fMPSSetGesvdJ(obj, val) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to set GesvdJ for mps");
@@ -2379,12 +2474,41 @@ class GpuLibrary : public Utils::Library {
   }
 
   bool MPSGetGesvdJ(void *obj) const {
-    if (LibraryHandle)
+    if (LibraryHandle && obj && fMPSGetGesvdJ)
       return fMPSGetGesvdJ(obj) == 1;
     else
       throw std::runtime_error("GpuLibrary: Unable to get GesvdJ for mps");
 
     return false;
+  }
+
+  bool MPSSetGesvdP(void *obj, int val) {
+    return LibraryHandle && obj && fMPSSetGesvdP &&
+           fMPSSetGesvdP(obj, val) == 1;
+  }
+
+  bool MPSGetGesvdP(void *obj) const {
+    if (!LibraryHandle || !obj || !fMPSGetGesvdP)
+      throw std::runtime_error("GpuLibrary: MPSGetGesvdP is unavailable");
+    return fMPSGetGesvdP(obj) == 1;
+  }
+
+  bool MPSSetGesvdR(void *obj, int val) {
+    return LibraryHandle && obj && fMPSSetGesvdR &&
+           fMPSSetGesvdR(obj, val) == 1;
+  }
+
+  bool MPSGetGesvdR(void *obj) const {
+    if (!LibraryHandle || !obj || !fMPSGetGesvdR)
+      throw std::runtime_error("GpuLibrary: MPSGetGesvdR is unavailable");
+    return fMPSGetGesvdR(obj) == 1;
+  }
+
+  // 0=GESVD, 1=GESVDJ, 2=GESVDP, 3=GESVDR; -1 before the first split.
+  int MPSGetLastSvdAlgo(void *obj) const {
+    if (!LibraryHandle || !obj || !fMPSGetLastSvdAlgo)
+      throw std::runtime_error("GpuLibrary: MPSGetLastSvdAlgo is unavailable");
+    return fMPSGetLastSvdAlgo(obj);
   }
 
   bool MPSSetMaxExtent(void *obj, long int val) {
@@ -3010,7 +3134,7 @@ class GpuLibrary : public Utils::Library {
   }
 
   bool TNSetGesvdJ(void *obj, int val) {
-    if (LibraryHandle)
+    if (LibraryHandle && obj && fTNSetGesvdJ)
       return fTNSetGesvdJ(obj, val) == 1;
     else
       throw std::runtime_error(
@@ -3020,13 +3144,35 @@ class GpuLibrary : public Utils::Library {
   }
 
   bool TNGetGesvdJ(void *obj) const {
-    if (LibraryHandle)
+    if (LibraryHandle && obj && fTNGetGesvdJ)
       return fTNGetGesvdJ(obj) == 1;
     else
       throw std::runtime_error(
           "GpuLibrary: Unable to get GesvdJ for tensor network");
 
     return false;
+  }
+
+  bool TNSetGesvdP(void *obj, int val) {
+    return LibraryHandle && obj && fTNSetGesvdP &&
+           fTNSetGesvdP(obj, val) == 1;
+  }
+
+  bool TNGetGesvdP(void *obj) const {
+    if (!LibraryHandle || !obj || !fTNGetGesvdP)
+      throw std::runtime_error("GpuLibrary: TNGetGesvdP is unavailable");
+    return fTNGetGesvdP(obj) == 1;
+  }
+
+  bool TNSetGesvdR(void *obj, int val) {
+    return LibraryHandle && obj && fTNSetGesvdR &&
+           fTNSetGesvdR(obj, val) == 1;
+  }
+
+  bool TNGetGesvdR(void *obj) const {
+    if (!LibraryHandle || !obj || !fTNGetGesvdR)
+      throw std::runtime_error("GpuLibrary: TNGetGesvdR is unavailable");
+    return fTNGetGesvdR(obj) == 1;
   }
 
   bool TNSetMaxExtent(void *obj, long int val) {
@@ -4142,6 +4288,8 @@ class GpuLibrary : public Utils::Library {
   void (*FreeLib)() = nullptr;
 
   int requestedGpuDeviceId = -1;
+  int (*fCudaGetDevice)(int *) = nullptr;
+  int (*fCudaSetDevice)(int) = nullptr;
   int (*fSetGpuDevice)(int) = nullptr;
   int (*fGetGpuDeviceCount)() = nullptr;
 
@@ -4234,6 +4382,11 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSGetTruncationMode)(void *) = nullptr;
   int (*fMPSSetGesvdJ)(void *, int) = nullptr;
   int (*fMPSGetGesvdJ)(void *) = nullptr;
+  int (*fMPSSetGesvdP)(void *, int) = nullptr;
+  int (*fMPSGetGesvdP)(void *) = nullptr;
+  int (*fMPSSetGesvdR)(void *, int) = nullptr;
+  int (*fMPSGetGesvdR)(void *) = nullptr;
+  int (*fMPSGetLastSvdAlgo)(void *) = nullptr;
   int (*fMPSSetMaxExtent)(void *, long int) = nullptr;
   long int (*fMPSGetMaxExtent)(void *) = nullptr;
   int (*fMPSGetNrQubits)(void *) = nullptr;
@@ -4316,6 +4469,10 @@ class GpuLibrary : public Utils::Library {
   int (*fTNGetTruncationMode)(void *) = nullptr;
   int (*fTNSetGesvdJ)(void *, int) = nullptr;
   int (*fTNGetGesvdJ)(void *) = nullptr;
+  int (*fTNSetGesvdP)(void *, int) = nullptr;
+  int (*fTNGetGesvdP)(void *) = nullptr;
+  int (*fTNSetGesvdR)(void *, int) = nullptr;
+  int (*fTNGetGesvdR)(void *) = nullptr;
   int (*fTNSetMaxExtent)(void *, long int) = nullptr;
   long int (*fTNGetMaxExtent)(void *) = nullptr;
   int (*fTNGetNrQubits)(void *) = nullptr;

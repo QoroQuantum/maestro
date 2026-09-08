@@ -33,9 +33,6 @@ __declspec(dllexport)
 #endif
     void *GetMaestroObject() {
   if (!isInitialized.exchange(true)) {
-#ifdef __linux__
-    Simulators::SimulatorsFactory::InitGpuLibrary();
-#endif
     Simulators::SimulatorsFactory::InitQuestLibrary();
 
 #ifdef COMPOSER
@@ -53,9 +50,6 @@ __declspec(dllexport)
 #endif
     void *GetMaestroObjectWithMute() {
   if (!isInitialized.exchange(true)) {
-#ifdef __linux__
-    Simulators::SimulatorsFactory::InitGpuLibraryWithMute();
-#endif
     Simulators::SimulatorsFactory::InitQuestLibraryWithMute();
 
 #ifdef COMPOSER
@@ -175,6 +169,14 @@ __declspec(dllexport)
   }
 
   bool configured = false;
+  const std::string gpuDevice = Json::JsonParserMaestro<>::GetConfigString(
+      "gpu_device", configJson);
+  if (!gpuDevice.empty()) {
+    Simulators::Configuration::ParseGpuDevice(gpuDevice);
+    configured = true;
+    if (network->GetSimulator()) network->GetSimulator()->Clear();
+    network->Configure("gpu_device", gpuDevice.c_str());
+  }
 
   const std::string maxBondDim = Json::JsonParserMaestro<>::GetConfigString(
       "matrix_product_state_max_bond_dimension", configJson);
@@ -345,6 +347,14 @@ __declspec(dllexport)
   const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
 
   bool configured = false;
+  const std::string gpuDevice = Json::JsonParserMaestro<>::GetConfigString(
+      "gpu_device", configJson);
+  if (!gpuDevice.empty()) {
+    Simulators::Configuration::ParseGpuDevice(gpuDevice);
+    configured = true;
+    if (network->GetSimulator()) network->GetSimulator()->Clear();
+    network->Configure("gpu_device", gpuDevice.c_str());
+  }
 
   const std::string maxBondDim = Json::JsonParserMaestro<>::GetConfigString(
       "matrix_product_state_max_bond_dimension", configJson);

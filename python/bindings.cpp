@@ -61,7 +61,20 @@ struct SimulatorConfig {
   std::optional<std::string> mpo_kraus_completeness_check = std::nullopt;
   bool mpo_restore_trace_after_truncation = false;
   bool mpo_hermitize_after_truncation = false;
+  // GPU SVD algorithm selection. At most one setting in each backend group
+  // should be true; configuring one clears the other choices in the backend.
+  bool mps_use_gesvd = false;
+  bool mps_use_gesvdj = false;
+  bool mps_use_gesvdp = false;
+  bool mps_use_gesvdr = false;
+  bool mpo_use_gesvd = false;
   bool mpo_use_gesvdj = false;
+  bool mpo_use_gesvdp = false;
+  bool mpo_use_gesvdr = false;
+  bool tensor_network_use_gesvd = false;
+  bool tensor_network_use_gesvdj = false;
+  bool tensor_network_use_gesvdp = false;
+  bool tensor_network_use_gesvdr = false;
 
   // true for double precision, false for single precision, nullopt for default
   // this is a separate setting for qiskit aer, the use_double_precision above
@@ -77,6 +90,7 @@ struct SimulatorConfig {
   // path integral parameters
   std::optional<double> path_integral_threshold = std::nullopt;
   std::optional<uint64_t> seed = std::nullopt;
+  std::optional<int> gpu_device = std::nullopt;
 
   SimulatorConfig() = default;
 
@@ -84,7 +98,8 @@ struct SimulatorConfig {
                   std::optional<size_t> mb, std::optional<double> sv, bool dp,
                   bool ds, int la, bool mnc,
                   std::optional<std::string> tm,
-                  std::optional<uint64_t> random_seed)
+                  std::optional<uint64_t> random_seed,
+                  std::optional<int> device = std::nullopt)
       : simulator_type(st),
         simulation_type(set),
         max_bond_dimension(mb),
@@ -94,7 +109,10 @@ struct SimulatorConfig {
         disable_optimized_swapping(ds),
         lookahead_depth(la),
         mps_measure_no_collapse(mnc),
-        seed(random_seed) {}
+        seed(random_seed), gpu_device(device) {
+    if (device && *device < 0)
+      throw std::invalid_argument("gpu_device must be nonnegative");
+  }
 };
 
 // ============================================================================
@@ -141,6 +159,12 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
 
   if (!network) return nullptr;
 
+  if (config.gpu_device) {
+    if (*config.gpu_device < 0)
+      throw std::invalid_argument("gpu_device must be nonnegative");
+    network->Configure("gpu_device", std::to_string(*config.gpu_device).c_str());
+  }
+
   if (config.max_bond_dimension) {
     auto val = std::to_string(*config.max_bond_dimension);
     network->Configure("matrix_product_state_max_bond_dimension", val.c_str());
@@ -164,8 +188,24 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("matrix_product_operator_restore_trace_after_truncation", "true");
   if (config.mpo_hermitize_after_truncation)
     network->Configure("matrix_product_operator_hermitize_after_truncation", "true");
-  if (config.mpo_use_gesvdj)
-    network->Configure("matrix_product_operator_use_gesvdj", "true");
+  const auto configure_svd = [&network](const char *backend, const char *method,
+                                        bool enabled) {
+    if (!enabled) return;
+    const std::string key = std::string(backend) + "_use_" + method;
+    network->Configure(key.c_str(), "true");
+  };
+  configure_svd("matrix_product_state", "gesvd", config.mps_use_gesvd);
+  configure_svd("matrix_product_state", "gesvdj", config.mps_use_gesvdj);
+  configure_svd("matrix_product_state", "gesvdp", config.mps_use_gesvdp);
+  configure_svd("matrix_product_state", "gesvdr", config.mps_use_gesvdr);
+  configure_svd("matrix_product_operator", "gesvd", config.mpo_use_gesvd);
+  configure_svd("matrix_product_operator", "gesvdj", config.mpo_use_gesvdj);
+  configure_svd("matrix_product_operator", "gesvdp", config.mpo_use_gesvdp);
+  configure_svd("matrix_product_operator", "gesvdr", config.mpo_use_gesvdr);
+  configure_svd("tensor_network", "gesvd", config.tensor_network_use_gesvd);
+  configure_svd("tensor_network", "gesvdj", config.tensor_network_use_gesvdj);
+  configure_svd("tensor_network", "gesvdp", config.tensor_network_use_gesvdp);
+  configure_svd("tensor_network", "gesvdr", config.tensor_network_use_gesvdr);
   if (config.use_double_precision) {
     network->Configure("use_double_precision", "1");
   }
@@ -885,7 +925,7 @@ NB_MODULE(maestro, m) {
       .def(nb::init<Simulators::SimulatorType, Simulators::SimulationType,
                     std::optional<size_t>, std::optional<double>, bool, bool,
                     int, bool, std::optional<std::string>,
-                    std::optional<uint64_t>>(),
+                    std::optional<uint64_t>, std::optional<int>>(),
            "simulator_type"_a = Simulators::SimulatorType::kQCSim,
            "simulation_type"_a = Simulators::SimulationType::kStatevector,
            "max_bond_dimension"_a = nb::none(),
@@ -893,7 +933,16 @@ NB_MODULE(maestro, m) {
            "use_double_precision"_a = false,
            "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
            "mps_measure_no_collapse"_a = true,
-           "truncation_mode"_a = nb::none(), "seed"_a = nb::none())
+           "truncation_mode"_a = nb::none(), "seed"_a = nb::none(),
+           "gpu_device"_a = nb::none())
+      .def_prop_rw("gpu_device",
+          [](const SimulatorConfig& config) { return config.gpu_device; },
+          [](SimulatorConfig& config, std::optional<int> device) {
+            if (device && *device < 0)
+              throw std::invalid_argument("gpu_device must be nonnegative");
+            config.gpu_device = device;
+          }, nb::for_setter(nb::arg("device").none()),
+          "CUDA-visible device ordinal, or None to use the default.")
       .def_rw("simulator_type", &SimulatorConfig::simulator_type)
       .def_rw("simulation_type", &SimulatorConfig::simulation_type)
       .def_rw("max_bond_dimension", &SimulatorConfig::max_bond_dimension)
@@ -916,7 +965,22 @@ NB_MODULE(maestro, m) {
               &SimulatorConfig::mpo_restore_trace_after_truncation)
       .def_rw("mpo_hermitize_after_truncation",
               &SimulatorConfig::mpo_hermitize_after_truncation)
+      .def_rw("mps_use_gesvd", &SimulatorConfig::mps_use_gesvd)
+      .def_rw("mps_use_gesvdj", &SimulatorConfig::mps_use_gesvdj)
+      .def_rw("mps_use_gesvdp", &SimulatorConfig::mps_use_gesvdp)
+      .def_rw("mps_use_gesvdr", &SimulatorConfig::mps_use_gesvdr)
+      .def_rw("mpo_use_gesvd", &SimulatorConfig::mpo_use_gesvd)
       .def_rw("mpo_use_gesvdj", &SimulatorConfig::mpo_use_gesvdj)
+      .def_rw("mpo_use_gesvdp", &SimulatorConfig::mpo_use_gesvdp)
+      .def_rw("mpo_use_gesvdr", &SimulatorConfig::mpo_use_gesvdr)
+      .def_rw("tensor_network_use_gesvd",
+              &SimulatorConfig::tensor_network_use_gesvd)
+      .def_rw("tensor_network_use_gesvdj",
+              &SimulatorConfig::tensor_network_use_gesvdj)
+      .def_rw("tensor_network_use_gesvdp",
+              &SimulatorConfig::tensor_network_use_gesvdp)
+      .def_rw("tensor_network_use_gesvdr",
+              &SimulatorConfig::tensor_network_use_gesvdr)
       .def_rw("pp_coefficient_threshold",
               &SimulatorConfig::pp_coefficient_threshold)
       .def_rw("pp_pauli_weight_threshold",
@@ -949,7 +1013,8 @@ NB_MODULE(maestro, m) {
             << ", lookahead_depth=" << c.lookahead_depth
             << ", mps_measure_no_collapse="
             << (c.mps_measure_no_collapse ? "True" : "False")
-            << ", seed=" << (c.seed ? std::to_string(*c.seed) : "None") << ")";
+            << ", seed=" << (c.seed ? std::to_string(*c.seed) : "None")
+            << ", gpu_device=" << (c.gpu_device ? std::to_string(*c.gpu_device) : "None") << ")";
         return oss.str();
       });
 
@@ -1931,22 +1996,22 @@ NB_MODULE(maestro, m) {
   m.def(
       "is_gpu_available",
       []() { return Simulators::SimulatorsFactory::IsGpuLibraryAvailable(); },
-      "Check whether the GPU simulation library is loaded and available.");
+      "Check availability of the default GPU, initializing it lazily.");
 
   m.def(
       "select_gpu_device",
       [](int deviceId) {
         Simulators::SimulatorsFactory::SelectGpuDevice(deviceId);
       },
-      "Selects which CUDA device init_gpu() will use. Must be called "
-      "before init_gpu() (or before the GPU library is otherwise "
-      "initialized) to take effect; has no effect afterwards.");
+      "Select the default CUDA device for future simulators and init_gpu(). "
+      "SimulatorConfig.gpu_device overrides this default; existing simulators "
+      "keep their device.");
 
   m.def(
       "get_gpu_device_count",
       []() { return Simulators::SimulatorsFactory::GetGpuDeviceCount(); },
       "Number of CUDA-capable devices visible to the process, or 0 if the "
-      "GPU library isn't loaded or none are visible.");
+      "GPU library cannot be loaded or none are visible. Does not initialize a simulator.");
 
   // --- Probability / Amplitude Access ---
   m.def(

@@ -20,7 +20,7 @@
 #include <memory>
 #include <vector>
 
-#include "GpuLibrary.h"
+#include "GpuDeviceContext.h"
 
 namespace Simulators {
 
@@ -28,7 +28,7 @@ class GpuLibMPSSim {
  public:
   explicit GpuLibMPSSim(const std::shared_ptr<GpuLibrary> &lib) : lib(lib) {
     if (lib)
-      obj = lib->CreateMPS();
+      obj = this->lib->CreateMPS();
     else
       obj = nullptr;
   }
@@ -152,6 +152,17 @@ class GpuLibMPSSim {
 
     return false;
   }
+
+  // Enabling any of J/P/R clears the other two selectors in the plugin.
+  bool SetGesvdP(bool enable) {
+    return obj && lib->MPSSetGesvdP(obj, enable);
+  }
+  bool GetGesvdP() const { return lib->MPSGetGesvdP(obj); }
+  bool SetGesvdR(bool enable) {
+    return obj && lib->MPSSetGesvdR(obj, enable);
+  }
+  bool GetGesvdR() const { return lib->MPSGetGesvdR(obj); }
+  int GetLastSvdAlgo() const { return lib->MPSGetLastSvdAlgo(obj); }
 
   bool SetMaxExtent(long int val) {
     if (obj) return lib->MPSSetMaxExtent(obj, val);
@@ -485,7 +496,7 @@ class GpuLibMPSSim {
   }
 
  private:
-  std::shared_ptr<GpuLibrary> lib;
+  GpuDeviceContext lib;
   void *obj;
 };
 

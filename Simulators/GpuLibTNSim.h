@@ -19,7 +19,7 @@
 
 #include <memory>
 
-#include "GpuLibrary.h"
+#include "GpuDeviceContext.h"
 
 namespace Simulators {
 
@@ -27,7 +27,7 @@ class GpuLibTNSim {
  public:
   explicit GpuLibTNSim(const std::shared_ptr<GpuLibrary> &lib) : lib(lib) {
     if (lib)
-      obj = lib->CreateTensorNet();
+      obj = this->lib->CreateTensorNet();
     else
       obj = nullptr;
   }
@@ -120,6 +120,16 @@ class GpuLibTNSim {
 
     return false;
   }
+
+  // Enabling any of J/P/R clears the other two selectors in the plugin.
+  bool SetGesvdP(bool enable) {
+    return obj && lib->TNSetGesvdP(obj, enable);
+  }
+  bool GetGesvdP() const { return lib->TNGetGesvdP(obj); }
+  bool SetGesvdR(bool enable) {
+    return obj && lib->TNSetGesvdR(obj, enable);
+  }
+  bool GetGesvdR() const { return lib->TNGetGesvdR(obj); }
 
   bool SetMaxExtent(long int val) {
     if (obj) return lib->TNSetMaxExtent(obj, val);
@@ -408,7 +418,7 @@ class GpuLibTNSim {
   }
 
  private:
-  std::shared_ptr<GpuLibrary> lib;
+  GpuDeviceContext lib;
   void *obj;
 };
 
