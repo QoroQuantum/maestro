@@ -348,6 +348,18 @@ endif()
 add_executable(maestroexe ${MAESTROEXESRC})
 add_library(maestro SHARED ${MAESTROSRC})
 
+# Hardware coverage skips cleanly unless two GPUs are visible.
+if(COMPILE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(gpu_multi_device_tests tests/gpu_device/multi_gpu_tests.cpp)
+    target_link_libraries(gpu_multi_device_tests PRIVATE maestro)
+    set_property(TARGET gpu_multi_device_tests APPEND_STRING PROPERTY
+        LINK_FLAGS " -Wl,--disable-new-dtags")
+    enable_testing()
+    add_test(NAME gpu_multi_device COMMAND gpu_multi_device_tests)
+    set_tests_properties(gpu_multi_device PROPERTIES
+        SKIP_RETURN_CODE 77 LABELS "gpu;hardware")
+endif()
+
 if(TARGET mock_gpu_plugin)
     add_executable(gpu_device_tests tests/gpu_device/simulator_tests.cpp)
     target_link_libraries(gpu_device_tests PRIVATE maestro Threads::Threads)
