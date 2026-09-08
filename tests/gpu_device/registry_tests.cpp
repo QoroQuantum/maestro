@@ -1,7 +1,7 @@
 #include "../../Simulators/GpuLibraryRegistry.h"
 #include "../../Simulators/GpuLibStateVectorSim.h"
-#include "../../Simulators/GpuDensityMatrix.h"
-#include "../../Simulators/GpuMPO.h"
+#include "../../Simulators/GpuPauliPropagator.h"
+#include "../../Simulators/GpuStabilizer.h"
 #include <future>
 #include <iostream>
 #include <vector>
@@ -10,140 +10,121 @@ using namespace Simulators;
 void Require(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
 }
-void Exercise(const std::shared_ptr<GpuLibrary>& library) {
-  GpuLibStateVectorSim state(library);
-  Require(state.Create(2), "create failed");
-  state.ApplyX(1);
-  double values[4]{};
-  Require(state.AllProbabilities(values), "probability query failed");
-  Require(values[2] > 0.99999, "incorrect state / device");
-  auto clone = state.Clone();
-  Require(bool(clone), "clone failed");
-  clone->ApplyX(1);
-  Require(clone->AllProbabilities(values), "clone query failed");
-  Require(values[0] > 0.99999, "incorrect clone");
+
+std::unique_ptr<GpuLibStateVectorSim> Create(GpuLibraryRegistry& registry, int device) {
+  auto lock = GpuLibrary::GetInstance()->LockInitialization();
+  auto library = registry.Acquire(device, true);
+  Require(bool(library), "device initialization failed");
+  auto state = std::make_unique<GpuLibStateVectorSim>(library);
+  Require(state->Create(2), "state creation failed");
+  return state;
 }
+
 int main(int argc, char** argv) {
   try {
-    Require(argc >= 2, "usage: gpu_registry_tests plugin-path [--real]");
-    const bool real = argc > 2 && std::string(argv[2]) == "--real";
+    Require(argc == 2 || (argc == 3 && std::string(argv[2]) == "--real"),
+            "usage: gpu_registry_tests plugin-path [--real]");
+    const bool real = argc == 3;
     GpuLibraryRegistry registry(argv[1]);
     Require(registry.DeviceCount() >= 1, "no visible GPU devices");
     auto first = registry.Acquire(0, true);
     Require(bool(first), "device 0 initialization failed");
-    Require(first == registry.Acquire(0, true), "device 0 was not cached");
+    const int secondDevice = registry.DeviceCount() > 1 ? 1 : 0;
+    auto second = registry.Acquire(secondDevice, true);
+    Require(bool(second), "second device selection failed");
+    Require(first == second && first == GpuLibrary::GetInstance(),
+            "devices did not share the singleton");
+    GpuLibraryRegistry anotherRegistry(argv[1]);
+    Require(anotherRegistry.Acquire(0, true) == first,
+            "another registry created another GPU library");
+
     std::vector<std::future<std::shared_ptr<GpuLibrary>>> requests;
-    // Race the first request for a second device in the mock case.
     for (int i = 0; i < 8; ++i)
-      requests.push_back(std::async(std::launch::async, [&] {
-        return registry.Acquire(real ? 0 : 1, true);
+      requests.push_back(std::async(std::launch::async, [&, i] {
+        return registry.Acquire(i % 2 ? secondDevice : 0, true);
       }));
-    auto second = requests.front().get();
-    Require(bool(second), "second device initialization failed");
-    for (size_t i = 1; i < requests.size(); ++i)
-      Require(requests[i].get() == second,
-              "concurrent acquisition duplicated a library");
+    for (auto& request : requests)
+      Require(request.get() == first, "concurrent acquisition lost singleton identity");
     if (!real) {
-      Require(first != second && first->GetHandle() != second->GetHandle(),
-              "namespaces not isolated");
-      for (auto lib : {first, second}) {
-        auto count = reinterpret_cast<int (*)()>(
-            lib->GetFunction("MockInitializations"));
-        Require(count() == 1, "library initialized more than once");
-      }
-      // Device activation must restore the caller's previous device even
-      // when several simulators are interleaved on one host thread.
-      auto setDevice =
-          reinterpret_cast<int (*)(int)>(first->GetFunction("cudaSetDevice"));
-      auto getDevice =
-          reinterpret_cast<int (*)(int*)>(first->GetFunction("cudaGetDevice"));
-      Require(setDevice(2) == 0, "mock device setup failed");
-      Exercise(first);
-      int restored = -1;
-      Require(getDevice(&restored) == 0 && restored == 2,
-              "caller device not restored");
-      Require(!registry.Acquire(2, true), "failed init published in cache");
-      Require(!registry.Acquire(2, true), "failed init cached as successful");
-    } else if (registry.DeviceCount() > 1) {
-      second = registry.Acquire(1, true);
-      Require(bool(second), "real device 1 initialization failed");
-    } else {
-      // Deliberately bypass the cache to exercise two real CUDA namespaces on
-      // a single physical GPU. Production creates only one per device.
-      second = std::make_shared<GpuLibrary>();
-      second->SetMute(true);
-      second->SetRequestedGpuDevice(0);
-      Require(second->Init(argv[1]),
-              "second real namespace initialization failed");
+      auto count = reinterpret_cast<int (*)()>(first->GetFunction("MockInitializations"));
+      auto selected = reinterpret_cast<int (*)()>(first->GetFunction("MockSelectedDevice"));
+      Require(count && selected, "mock inspection API missing");
+      Require(count() == 1, "InitLib must run once, not once per device");
+      registry.Acquire(1, true);
+      Require(selected() == 1, "device selection was not reapplied");
+      registry.Acquire(0, true);
+      Require(selected() == 0, "returning to device 0 did not select it");
+      Require(!registry.Acquire(2, true), "failed selection accepted");
+      Require(!registry.Acquire(2, true), "failed selection cached as successful");
+      Require(count() == 1, "device selection reinitialized the plugin");
     }
-    Require(!registry.Acquire(registry.DeviceCount(), true),
-            "invalid device accepted");
-    Require(registry.Acquire(0, true) == first,
-            "invalid request poisoned cache");
-    for (int i = 0; i < 3; ++i) {
-      Exercise(first);
-      Exercise(second);
+    Require(!registry.Acquire(registry.DeviceCount(), true), "invalid device accepted");
+    Require(registry.Acquire(0, true) == first, "invalid request poisoned singleton");
+
+    auto zero = Create(registry, 0);
+    auto one = Create(registry, secondDevice);
+    if (!real) {
+      auto creations = reinterpret_cast<int (*)(int)>(first->GetFunction("MockCreationsOnDevice"));
+      Require(creations && creations(0) == 1 && creations(1) == 1,
+              "native objects were not created on their requested devices");
     }
-    // Create, operate and destroy on different host threads.
-    auto state = std::async(std::launch::async, [&] {
-                   auto result = std::make_unique<GpuLibStateVectorSim>(first);
-                   Require(result->Create(2), "worker create failed");
-                   return result;
-                 }).get();
-    std::async(std::launch::async, [&] { state->ApplyX(0); }).get();
+    Require(zero->GetGpuDevice() == 0 && one->GetGpuDevice() == secondDevice,
+            "native device queries disagree with requested placement");
+    // Wrappers with delayed native creation must remember their own selection.
+    {
+      Require(first->SetGpuDevice(0), "select delayed wrapper default");
+      GpuPauliPropagator pauli(first);
+      GpuStabilizer stabilizer(first, secondDevice);
+      Require(first->SetGpuDevice(secondDevice), "change selection before delayed creation");
+      Require(pauli.CreateSimulator(1) && pauli.GetGpuDevice() == 0,
+              "delayed Pauli creation followed a later selection");
+      Require(first->SetGpuDevice(0), "change selection before stabilizer creation");
+      Require(stabilizer.CreateSimulator(2, 4, 2, 0) &&
+                  stabilizer.GetGpuDevice() == secondDevice,
+              "delayed stabilizer creation lost explicit device");
+      Require(pauli.CreateSimulator(2) && pauli.GetGpuDevice() == 0,
+              "Pauli recreation changed GPU");
+      stabilizer.Clear();
+      Require(stabilizer.GetGpuDevice() == -1 &&
+                  stabilizer.CreateSimulator(2, 4, 2, 0) &&
+                  stabilizer.GetGpuDevice() == secondDevice,
+              "stabilizer clear/recreation lost GPU");
+      GpuLibStateVectorSim explicitDevice(first, secondDevice);
+      Require(explicitDevice.GetGpuDevice() == secondDevice,
+              "direct wrapper constructor ignored explicit device");
+    }
+    // Calls do not select a device in Maestro. The plugin must retain each
+    // object's device, including when objects are interleaved or cloned.
+    zero->ApplyX(0);
+    one->ApplyX(1);
     double values[4]{};
-    Require(state->AllProbabilities(values) && values[1] > 0.99999,
-            "worker device selection failed");
-    std::async(std::launch::async, [&] { state.reset(); }).get();
-    // Separate simulators/namespaces run concurrently (the mock live-state
-    // counter is intentionally used only by one thread per namespace here).
-    auto a = std::async(std::launch::async, [&] { Exercise(first); });
-    auto b = std::async(std::launch::async, [&] { Exercise(second); });
-    a.get();
-    b.get();
-    if (real) {
-      if (first->HasDensityMatrixAPI() && second->HasDensityMatrixAPI()) {
-        GpuDensityMatrix x(first), y(second);
-        Require(x.Create(2) && y.Create(2), "density matrix creation failed");
-        bool rejected = false;
-        try {
-          x.HilbertSchmidtOverlap(y);
-        } catch (const std::invalid_argument&) {
-          rejected = true;
-        }
-        Require(rejected, "cross-context density overlap accepted");
-        Require(std::abs(x.HilbertSchmidtOverlap(x).real() - 1.) < 1e-5,
-                "same-context density overlap failed");
-      }
-      if (first->HasMPOAPI() && second->HasMPOAPI()) {
-        GpuMPO x(first), y(second);
-        Require(x.Create(2) && y.Create(2), "MPO creation failed");
-        bool rejected = false;
-        try {
-          x.HilbertSchmidtOverlap(y);
-        } catch (const std::invalid_argument&) {
-          rejected = true;
-        }
-        Require(rejected, "cross-context MPO overlap accepted");
-        Require(std::abs(x.HilbertSchmidtOverlap(x).real() - 1.) < 1e-5,
-                "same-context MPO overlap failed");
-      }
-    }
-    // Outstanding wrappers own their library even if the registry goes away.
+    Require(zero->AllProbabilities(values) && values[1] > 0.99999,
+            "first instance lost its state/device");
+    Require(one->AllProbabilities(values) && values[2] > 0.99999,
+            "second instance lost its state/device");
+    auto clone = zero->Clone();
+    Require(bool(clone), "clone failed");
+    Require(clone->GetGpuDevice() == 0, "clone migrated to the selected GPU");
+    clone->ApplyX(1);
+    Require(clone->AllProbabilities(values) && values[3] > 0.99999, "clone lost state/device");
+    zero.reset();
+    Require(one->AllProbabilities(values) && values[2] > 0.99999,
+            "peer destruction invalidated singleton");
+
+    // A native object's device belongs to the plugin, not its calling thread.
+    std::async(std::launch::async, [&] { one->ApplyX(0); }).get();
+    Require(one->AllProbabilities(values) && values[3] > 0.99999,
+            "worker call lost state/device");
+    std::async(std::launch::async, [&] { one.reset(); }).get();
     std::unique_ptr<GpuLibStateVectorSim> survivor;
     {
       GpuLibraryRegistry temporary(argv[1]);
-      survivor =
-          std::make_unique<GpuLibStateVectorSim>(temporary.Acquire(0, true));
-      Require(survivor->Create(1), "survivor creation failed");
+      survivor = Create(temporary, 0);
     }
     survivor->ApplyX(0);
     Require(survivor->AllProbabilities(values) && values[1] > 0.99999,
-            "library lifetime ended too early");
-    survivor.reset();
-    second.reset();
-    Exercise(first);
-    std::cout << (real ? "Real GPU namespace" : "Mock GPU registry")
+            "registry destruction invalidated singleton");
+    std::cout << (real ? "Real GPU singleton" : "Mock GPU singleton")
               << " tests passed\n";
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';

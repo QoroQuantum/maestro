@@ -353,27 +353,46 @@ endif()
 
 # Lightweight GPU-loader tests run with a mock C plugin and need no GPU.
 if(COMPILE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    include(CheckCXXSymbolExists)
-    set(CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE)
-    set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS})
-    check_cxx_symbol_exists(dlmopen "dlfcn.h" MAESTRO_HAS_DLMOPEN)
-    unset(CMAKE_REQUIRED_DEFINITIONS)
-    unset(CMAKE_REQUIRED_LIBRARIES)
-    if(MAESTRO_HAS_DLMOPEN)
-        find_package(Threads REQUIRED)
-        add_library(mock_gpu_plugin SHARED tests/gpu_device/mock_plugin.cpp)
-        set_target_properties(mock_gpu_plugin PROPERTIES
-            OUTPUT_NAME maestro_gpu_simulators
-            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/mock_gpu")
-        add_executable(gpu_registry_tests tests/gpu_device/registry_tests.cpp)
-        target_link_libraries(gpu_registry_tests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
-        enable_testing()
-        add_test(NAME gpu_registry COMMAND gpu_registry_tests $<TARGET_FILE:mock_gpu_plugin>)
-    endif()
+    find_package(Threads REQUIRED)
+    add_library(mock_gpu_plugin SHARED tests/gpu_device/mock_plugin.cpp)
+    set_target_properties(mock_gpu_plugin PROPERTIES
+        OUTPUT_NAME maestro_gpu_simulators
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/mock_gpu")
+    add_executable(gpu_registry_tests tests/gpu_device/registry_tests.cpp)
+    target_link_libraries(gpu_registry_tests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+    enable_testing()
+    add_test(NAME gpu_registry COMMAND gpu_registry_tests $<TARGET_FILE:mock_gpu_plugin>)
 endif()
 
 add_executable(maestroexe ${MAESTROEXESRC})
 add_library(maestro SHARED ${MAESTROSRC})
+
+if(COMPILE_TESTS)
+    # IndividualSimulator is private and requires native simulator headers.
+    # Aer defines globals in those headers: compile the factory and tests in
+    # one translation unit, without also loading their definitions from maestro.
+    if(CMAKE_VERSION VERSION_LESS "3.16")
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/sampling_order_unity.cpp"
+            "#include \"${CMAKE_CURRENT_SOURCE_DIR}/Simulators/Factory.cpp\"\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_order_tests.cpp\"\n")
+        add_executable(sampling_order_tests "${CMAKE_CURRENT_BINARY_DIR}/sampling_order_unity.cpp")
+    else()
+        add_executable(sampling_order_tests Simulators/Factory.cpp tests/sampling_order_tests.cpp)
+        set_target_properties(sampling_order_tests PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 0)
+    endif()
+    target_link_libraries(sampling_order_tests PRIVATE Boost::serialization ${CMAKE_DL_LIBS}
+        $<TARGET_PROPERTY:maestro,INTERFACE_LINK_LIBRARIES>)
+    target_compile_options(sampling_order_tests PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_COMPILE_OPTIONS>)
+    target_include_directories(sampling_order_tests PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_INCLUDE_DIRECTORIES>)
+    set_property(TARGET sampling_order_tests PROPERTY LINK_DIRECTORIES $<TARGET_PROPERTY:maestro,INTERFACE_LINK_DIRECTORIES>)
+    enable_testing()
+    add_test(NAME sampling_order COMMAND sampling_order_tests)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME sampling_order_gpu COMMAND sampling_order_tests --gpu)
+        set_tests_properties(sampling_order_gpu PROPERTIES
+            SKIP_RETURN_CODE 77 LABELS "gpu;hardware")
+    endif()
+endif()
+
 
 # Hardware coverage skips cleanly unless two GPUs are visible.
 if(COMPILE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")

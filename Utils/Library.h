@@ -76,6 +76,7 @@ class Library {
   }
 
   virtual bool Init(const char *libName) noexcept {
+    if (handle) return true;
 #if defined(__linux__) || defined(__APPLE__)
     handle = dlopen(libName, RTLD_NOW);
 
@@ -99,26 +100,6 @@ class Library {
 #endif
 
     return true;
-  }
-
-  // GPU plugins contain process-global state. Give each device its own copy,
-  // without changing the loading semantics of other Maestro plugins.
-  bool InitIsolated(const char *libName) noexcept {
-    if (handle) return true;
-#if defined(__linux__) && defined(__GLIBC__)
-    handle = dlmopen(LM_ID_NEWLM, libName, RTLD_NOW | RTLD_LOCAL);
-    if (!handle && !mute) {
-      const char *error = dlerror();
-      std::cerr << "Library: Unable to load isolated library: "
-                << (error ? error : "unknown loader error") << std::endl;
-    }
-    return handle != nullptr;
-#else
-    if (!mute)
-      std::cerr << "Library: Isolated GPU loading requires glibc dlmopen"
-                << std::endl;
-    return false;
-#endif
   }
 
   void *GetFunction(const char *funcName) noexcept {

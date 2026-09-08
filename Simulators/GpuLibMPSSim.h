@@ -26,12 +26,16 @@ namespace Simulators {
 
 class GpuLibMPSSim {
  public:
-  explicit GpuLibMPSSim(const std::shared_ptr<GpuLibrary> &lib) : lib(lib) {
-    if (lib)
-      obj = this->lib->CreateMPS();
-    else
-      obj = nullptr;
+  explicit GpuLibMPSSim(const std::shared_ptr<GpuLibrary>& lib, int device = -1)
+      : lib(lib), obj(nullptr) {
+    if (lib) {
+      auto lock = lib->LockInitialization();
+      if (lib->SetGpuDevice(device == -1 ? lib->GetCreationDevice() : device))
+        obj = lib->CreateMPS();
+    }
   }
+
+  int GetGpuDevice() const { return lib ? lib->MPSGetGpuId(obj) : -1; }
 
   GpuLibMPSSim(const std::shared_ptr<GpuLibrary> &lib, void *obj)
       : lib(lib), obj(obj) {}

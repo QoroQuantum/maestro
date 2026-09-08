@@ -24,6 +24,8 @@ std::shared_ptr<ISimulator> Create(SimulatorType type, SimulationType method,
   }
   sim->AllocateQubits(kQubits);
   sim->Initialize();
+  if (type == SimulatorType::kGpuSim && sim->GetGpuDevice() != device)
+    throw std::runtime_error("native simulator placement differs from gpu_device");
   return sim;
 }
 
@@ -57,7 +59,9 @@ void Check(ISimulator& gpu, ISimulator& cpu, const std::string& context) {
 
 int main() {
   try {
-    if (Factory::GetGpuDeviceCount() < 2) {
+    const int deviceCount = Factory::GetGpuDeviceCount();
+    if (deviceCount < 0) throw std::runtime_error("CUDA device discovery failed");
+    if (deviceCount < 2) {
       std::cout << "SKIP: two visible CUDA GPUs and the real GPU plugin "
                    "are required (check CUDA_VISIBLE_DEVICES).\n";
       return 77;
@@ -79,6 +83,13 @@ int main() {
       std::array<std::shared_ptr<ISimulator>, 2> gpu, cpu;
       for (int device = 0; device < 2; ++device) {
         gpu[device] = Create(SimulatorType::kGpuSim, entry.first, device);
+        gpu[device]->ApplyX(2);
+        const auto samples = gpu[device]->SampleCounts({2, 0, 1}, 16);
+        const auto wideSamples = gpu[device]->SampleCountsMany({2, 0, 1}, 16);
+        if (samples.size() != 1 || samples.at(1) != 16 ||
+            wideSamples.size() != 1 || wideSamples.at(std::vector<bool>{true, false, false}) != 16)
+          throw std::runtime_error(std::string(entry.second) + " lost sampling bit order");
+        gpu[device]->ApplyX(2);
         cpu[device] =
             Create(SimulatorType::kQCSim, SimulationType::kStatevector, device);
       }

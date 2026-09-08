@@ -416,6 +416,8 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
   py_result["time_taken"] = std::chrono::duration<double>(end - start).count();
   py_result["simulator"] = (int)network->GetLastSimulatorType();
   py_result["method"] = (int)network->GetLastSimulationType();
+  if (network->GetLastGpuDevice() >= 0)
+    py_result["gpu_device"] = network->GetLastGpuDevice();
 
   size_t max_bond_dim = network->GetCurrentMaxBondDimension();
   if (max_bond_dim > 0) py_result["max_bond_dim_reached"] = max_bond_dim;
@@ -459,6 +461,8 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
   py_result["time_taken"] = std::chrono::duration<double>(end - start).count();
   py_result["simulator"] = (int)network->GetLastSimulatorType();
   py_result["method"] = (int)network->GetLastSimulationType();
+  if (network->GetLastGpuDevice() >= 0)
+    py_result["gpu_device"] = network->GetLastGpuDevice();
 
   size_t max_bond_dim = network->GetCurrentMaxBondDimension();
   if (max_bond_dim > 0) py_result["max_bond_dim_reached"] = max_bond_dim;
@@ -871,6 +875,8 @@ nb::dict incremental_evolve_core(
   py_result["time_per_step"] = times_per_step;
   py_result["simulator"] = (int)config.simulator_type;
   py_result["method"] = (int)config.simulation_type;
+  if (network->GetGpuDevice() >= 0)
+    py_result["gpu_device"] = network->GetGpuDevice();
 
   py_result["dynamic_bond_dims"] = bond_dim_evolution;
   if (current_max_bond_dim > 0) {
@@ -1516,6 +1522,7 @@ NB_MODULE(maestro, m) {
             out["time_taken"] = result["time_taken"];
             out["simulator"] = result["simulator"];
             out["method"] = result["method"];
+            if (result.contains("gpu_device")) out["gpu_device"] = result["gpu_device"];
             return out;
           },
           "observables"_a, "noise_model"_a,
@@ -1577,6 +1584,7 @@ NB_MODULE(maestro, m) {
                 std::chrono::duration<double>(end - start).count();
             out["simulator"] = ideal_result["simulator"];
             out["method"] = ideal_result["method"];
+            if (ideal_result.contains("gpu_device")) out["gpu_device"] = ideal_result["gpu_device"];
             out["noise_realizations"] = noise_realizations;
             return out;
           },
@@ -1689,6 +1697,7 @@ NB_MODULE(maestro, m) {
                 std::chrono::duration<double>(end - start).count();
             out["simulator"] = ideal_result["simulator"];
             out["method"] = ideal_result["method"];
+            if (ideal_result.contains("gpu_device")) out["gpu_device"] = ideal_result["gpu_device"];
             out["noise_realizations"] = noise_realizations;
             out["noise_type"] = "coherent";
             return out;
@@ -1802,6 +1811,7 @@ NB_MODULE(maestro, m) {
                 std::chrono::duration<double>(end - start).count();
             out["simulator"] = ideal_result["simulator"];
             out["method"] = ideal_result["method"];
+            if (ideal_result.contains("gpu_device")) out["gpu_device"] = ideal_result["gpu_device"];
             out["noise_realizations"] = noise_realizations;
             out["noise_type"] = "combined";
             return out;
@@ -2011,7 +2021,8 @@ NB_MODULE(maestro, m) {
       "get_gpu_device_count",
       []() { return Simulators::SimulatorsFactory::GetGpuDeviceCount(); },
       "Number of CUDA-capable devices visible to the process, or 0 if the "
-      "GPU library cannot be loaded or none are visible. Does not initialize a simulator.");
+      "GPU library cannot be loaded or none are visible; -1 on CUDA discovery errors. "
+      "Does not initialize a simulator.");
 
   // --- Probability / Amplitude Access ---
   m.def(
@@ -2521,6 +2532,7 @@ NB_MODULE(maestro, m) {
         out["time_taken"] = result["time_taken"];
         out["simulator"] = result["simulator"];
         out["method"] = result["method"];
+        if (result.contains("gpu_device")) out["gpu_device"] = result["gpu_device"];
         return out;
       },
       "circuit"_a, "observables"_a, "noise_model"_a,
@@ -2567,6 +2579,7 @@ NB_MODULE(maestro, m) {
         out["time_taken"] = result["time_taken"];
         out["simulator"] = result["simulator"];
         out["method"] = result["method"];
+        if (result.contains("gpu_device")) out["gpu_device"] = result["gpu_device"];
         return out;
       },
       "qasm_circuit"_a, "observables"_a, "noise_model"_a,
@@ -2629,6 +2642,7 @@ NB_MODULE(maestro, m) {
         out["time_taken"] = std::chrono::duration<double>(end - start).count();
         out["simulator"] = ideal_result["simulator"];
         out["method"] = ideal_result["method"];
+        if (ideal_result.contains("gpu_device")) out["gpu_device"] = ideal_result["gpu_device"];
         out["noise_realizations"] = noise_realizations;
         return out;
       },
@@ -2798,6 +2812,7 @@ NB_MODULE(maestro, m) {
         out["time_taken"] = std::chrono::duration<double>(end - start).count();
         out["simulator"] = ideal_result["simulator"];
         out["method"] = ideal_result["method"];
+        if (ideal_result.contains("gpu_device")) out["gpu_device"] = ideal_result["gpu_device"];
         out["noise_realizations"] = noise_realizations;
         out["noise_type"] = "coherent";
         return out;
@@ -2924,6 +2939,7 @@ NB_MODULE(maestro, m) {
         out["time_taken"] = std::chrono::duration<double>(end - start).count();
         out["simulator"] = ideal_result["simulator"];
         out["method"] = ideal_result["method"];
+        if (ideal_result.contains("gpu_device")) out["gpu_device"] = ideal_result["gpu_device"];
         out["noise_realizations"] = noise_realizations;
         out["noise_type"] = "combined";
         return out;

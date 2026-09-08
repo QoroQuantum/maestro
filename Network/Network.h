@@ -322,6 +322,12 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
    */
   virtual std::shared_ptr<Simulators::ISimulator> GetSimulator() const = 0;
 
+  // Actual device of the current simulator, or -1 if no GPU state exists.
+  virtual int GetGpuDevice() const {
+    const auto sim = GetSimulator();
+    return sim ? sim->GetGpuDevice() : -1;
+  }
+
   /**
    * @brief Configures the network.
    *
@@ -830,6 +836,9 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
    * @return The simulator type that was used last time.
    */
   virtual Simulators::SimulatorType GetLastSimulatorType() const = 0;
+
+  // Device used by the last execution, which may differ from a recreated simulator.
+  virtual int GetLastGpuDevice() const { return -1; }
 
   /**
    * @brief Get the last used simulation type.

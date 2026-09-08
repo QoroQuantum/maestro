@@ -25,8 +25,10 @@ namespace Simulators {
 
 class GpuPauliPropagator {
  public:
-  explicit GpuPauliPropagator(const std::shared_ptr<GpuLibrary> &lib)
-      : lib(lib), obj(nullptr) {}
+  explicit GpuPauliPropagator(const std::shared_ptr<GpuLibrary> &lib, int device = -1)
+      : device(device == -1 && lib ? lib->GetCreationDevice() : device), lib(lib), obj(nullptr) {}
+
+  int GetGpuDevice() const { return lib ? lib->PauliPropGetGpuId(obj) : -1; }
 
   GpuPauliPropagator() = delete;
   GpuPauliPropagator(const GpuPauliPropagator &) = delete;
@@ -40,6 +42,10 @@ class GpuPauliPropagator {
 
   bool CreateSimulator(int numQubits) {
     if (lib) {
+      auto lock = lib->LockInitialization();
+      if (!lib->SetGpuDevice(device)) return false;
+      if (obj) lib->DestroyPauliPropSimulator(obj);
+      obj = nullptr;
       obj = lib->CreatePauliPropSimulator(numQubits);
 
       return obj != nullptr;
@@ -578,6 +584,7 @@ class GpuPauliPropagator {
   }
 
  private:
+  int device; // Fixed even when native creation is delayed or repeated.
   GpuDeviceContext lib;
   void *obj;
 };

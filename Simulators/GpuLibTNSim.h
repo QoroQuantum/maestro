@@ -25,12 +25,16 @@ namespace Simulators {
 
 class GpuLibTNSim {
  public:
-  explicit GpuLibTNSim(const std::shared_ptr<GpuLibrary> &lib) : lib(lib) {
-    if (lib)
-      obj = this->lib->CreateTensorNet();
-    else
-      obj = nullptr;
+  explicit GpuLibTNSim(const std::shared_ptr<GpuLibrary>& lib, int device = -1)
+      : lib(lib), obj(nullptr) {
+    if (lib) {
+      auto lock = lib->LockInitialization();
+      if (lib->SetGpuDevice(device == -1 ? lib->GetCreationDevice() : device))
+        obj = lib->CreateTensorNet();
+    }
   }
+
+  int GetGpuDevice() const { return lib ? lib->TNGetGpuId(obj) : -1; }
 
   GpuLibTNSim(const std::shared_ptr<GpuLibrary> &lib, void *obj)
       : lib(lib), obj(obj) {}

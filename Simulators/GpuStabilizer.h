@@ -22,8 +22,10 @@ namespace Simulators {
 
 class GpuStabilizer {
  public:
-  explicit GpuStabilizer(const std::shared_ptr<GpuLibrary> &lib)
-      : lib(lib), obj(nullptr) {}
+  explicit GpuStabilizer(const std::shared_ptr<GpuLibrary> &lib, int device = -1)
+      : device(device == -1 && lib ? lib->GetCreationDevice() : device), lib(lib), obj(nullptr) {}
+
+  int GetGpuDevice() const { return lib ? lib->GetStabilizerGpuId(obj) : -1; }
 
   GpuStabilizer() = delete;
   GpuStabilizer(const GpuStabilizer &) = delete;
@@ -39,6 +41,10 @@ class GpuStabilizer {
                        long long int numMeasurements,
                        long long int numDetectors) {
     if (lib) {
+      auto lock = lib->LockInitialization();
+      if (!lib->SetGpuDevice(device)) return false;
+      if (obj) lib->DestroyStabilizerSimulator(obj);
+      obj = nullptr;
       obj = lib->CreateStabilizerSimulator(numQubits, numShots, numMeasurements,
                                            numDetectors);
       return obj != nullptr;
@@ -222,6 +228,7 @@ class GpuStabilizer {
   }
 
  private:
+  int device; // Fixed even when native creation is delayed or repeated.
   GpuDeviceContext lib;
   void *obj;
 };
