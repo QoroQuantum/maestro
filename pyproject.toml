@@ -4,7 +4,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "qoro-maestro"
-version = "0.2.19"
+version = "0.3.0"
 description = "Python bindings for Maestro - A unified interface for quantum circuit simulation"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -50,6 +50,7 @@ cmake.args = [
 ]
 
 [tool.scikit-build.cmake.define]
+COMPILE_TESTS = "OFF"
 EIGEN5_INCLUDE_DIR = {env = "EIGEN5_INCLUDE_DIR"}
 QCSIM_INCLUDE_DIR = {env = "QCSIM_INCLUDE_DIR"}
 JSON_INCLUDE_DIR = {env = "JSON_INCLUDE_DIR"}

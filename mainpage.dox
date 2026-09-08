@@ -8,7 +8,7 @@
  * It abstracts the complexity of simulator configuration, enabling seamless execution
  * across CPUs, NVIDIA GPUs, and distributed MPI environments.
  *
- * - **Version:** 0.2.18
+ * - **Version:** 0.3.0
  * - **License:** GPL-3.0
  * - **Organisation:** [Qoro Quantum](https://qoroquantum.de)
  *

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-07
+
+### Added
+- **GPU Density Matrix Simulator**: Added full density matrix simulation on GPU (`SimulationType.kDensityMatrix` with `SimulatorType.kGpuSim`) for exact mixed-state quantum simulation.
+- **GPU Matrix Product Operator (MPO) Simulator**: Added GPU-accelerated MPO simulation (`SimulationType.kMatrixProductOperator` with `SimulatorType.kGpuSim`), supporting non-unitary noise, truncation thresholding, trimming, and recanonicalization.
+- **QCSim Extended Stabilizer Simulator**: Added extended stabilizer simulation backend support in QCSim for near-Clifford circuit execution.
+- **CPTP Quantum Channels & Exact Noise Models**: Introduced `QuantumChannel` and `QuantumChannelOperation` classes supporting general Kraus representations, along with predefined channels (bit-flip, phase-flip, depolarizing, amplitude damping, phase damping, and thermal relaxation).
+- **Deterministic Simulation Seeding**: Exposed `seed` parameter in `SimulatorConfig` and across simulator backends for reproducible stochastic simulations.
+- **GPU Device Selection**: Added interface to select the target GPU device for GPU simulator backends.
+- **OpenQASM 3 Support**: Added OpenQASM 3 import and export capabilities.
+- **Documentation Rework**: Restructured Python API documentation into dedicated guides for backends, HPC execution, noise simulation, algorithms, and quickstart reference.
+
+### Fixed
+- **Bond Dimension Capping & Synchronization**: Configured default MPS and MPO bond dimension to 128 in `GpuState` and GPU plugin to prevent unbounded device memory allocation.
+- **Mirror Fidelity Validation**: Added validation in `mirror_fidelity` to raise informative errors if simulation yields zero measurement samples or zero shots instead of failing silently.
+- **Pauli Propagation**: Fixed GPU Pauli destructive state hooks and truncation configuration propagation.
+
+### Changed
+- Python package version bumped to `0.3.0`.
+
+
 ## [0.2.18] - 2026-08-13
 
 ### Added
