@@ -277,8 +277,18 @@ IF(NOT Boost_FOUND)
     )
 ENDIF()
 
+set(MAESTRO_DEPENDENCY_INCLUDE_DIRS
+    ${EIGEN5_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${QCSIM_INCLUDE_DIR})
+if(QAER)
+    list(APPEND MAESTRO_DEPENDENCY_INCLUDE_DIRS ${JSON_INCLUDE_DIR} ${AER_INCLUDE_DIR})
+endif()
+# System Boost may report /usr/include. Adding compiler-default directories
+# with -isystem can break libstdc++'s #include_next lookup of C headers.
+list(REMOVE_ITEM MAESTRO_DEPENDENCY_INCLUDE_DIRS
+    ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
+include_directories(SYSTEM ${MAESTRO_DEPENDENCY_INCLUDE_DIRS})
+
 if (QAER)
-    INCLUDE_DIRECTORIES ( SYSTEM ${EIGEN5_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${QCSIM_INCLUDE_DIR} ${JSON_INCLUDE_DIR} ${AER_INCLUDE_DIR})
 
     # CMake's FindBLAS tries Intel MKL before everything else, so on a machine that merely
     # happens to have MKL installed it links libmkl_intel_lp64 + libmkl_intel_thread + libiomp5
@@ -310,8 +320,6 @@ if (QAER)
     IF(NOT BLAS_FOUND)
         MESSAGE( FATAL_ERROR "Couldn't find blas libs")
     ENDIF()
-else()
-    INCLUDE_DIRECTORIES ( SYSTEM ${EIGEN5_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${QCSIM_INCLUDE_DIR})
 endif()
 
 LINK_LIBRARIES()
