@@ -56,6 +56,7 @@ class GpuState : public ISimulator {
    */
   void Initialize() override {
     if (nrQubits) {
+      auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
       const int gpuDevice = configuration.IsSet("gpu_device")
           ? Configuration::ParseGpuDevice(configuration.GetConfiguration("gpu_device"))
           : SimulatorsFactory::ResolveGpuDevice();
@@ -179,6 +180,8 @@ class GpuState : public ISimulator {
         throw std::runtime_error(
             "GpuState::Initialize: Invalid simulation "
             "type for initializing the state.");
+      if (GetGpuDevice() != gpuDevice)
+        throw std::runtime_error("GpuState::Initialize: GPU plugin did not confirm the requested device; update the GPU library");
     }
   }
 
@@ -1432,13 +1435,14 @@ class GpuState : public ISimulator {
       std::vector<unsigned int> qubitsIndices(qubits.begin(), qubits.end());
 
       mps->Sample(shots, qubitsIndices.size(), qubitsIndices.data(), map);
+      const auto positions = SampleBitPositions(qubits);
 
       // put the results in the result map
       for (const auto &[meas, cnt] : *map) {
         Types::qubit_t outcome = 0;
         Types::qubit_t mask = 1ULL;
         for (Types::qubit_t q = 0; q < qubits.size(); ++q) {
-          if (meas[q]) outcome |= mask;
+          if (meas[positions[q]]) outcome |= mask;
           mask <<= 1;
         }
 
@@ -1451,12 +1455,13 @@ class GpuState : public ISimulator {
           tn->GetMapForSample();
       std::vector<unsigned int> qubitsIndices(qubits.begin(), qubits.end());
       tn->Sample(shots, qubitsIndices.size(), qubitsIndices.data(), map);
+      const auto positions = SampleBitPositions(qubits);
       // put the results in the result map
       for (const auto &[meas, cnt] : *map) {
         Types::qubit_t outcome = 0;
         Types::qubit_t mask = 1ULL;
         for (Types::qubit_t q = 0; q < qubits.size(); ++q) {
-          if (meas[q]) outcome |= mask;
+          if (meas[positions[q]]) outcome |= mask;
           mask <<= 1;
         }
         result[outcome] += cnt;
@@ -1544,9 +1549,14 @@ class GpuState : public ISimulator {
 
       std::vector<unsigned int> qubitsIndices(qubits.begin(), qubits.end());
       mps->Sample(shots, qubitsIndices.size(), qubitsIndices.data(), map);
+      const auto positions = SampleBitPositions(qubits);
 
       // put the results in the result map
-      for (const auto &[meas, cnt] : *map) result[meas] += cnt;
+      for (const auto &[meas, cnt] : *map) {
+        std::vector<bool> ordered(qubits.size());
+        for (size_t q = 0; q < qubits.size(); ++q) ordered[q] = meas[positions[q]];
+        result[ordered] += cnt;
+      }
 
       mps->FreeMapForSample(map);
     } else if (simulationType == SimulationType::kTensorNetwork) {
@@ -1554,8 +1564,13 @@ class GpuState : public ISimulator {
           tn->GetMapForSample();
       std::vector<unsigned int> qubitsIndices(qubits.begin(), qubits.end());
       tn->Sample(shots, qubitsIndices.size(), qubitsIndices.data(), map);
+      const auto positions = SampleBitPositions(qubits);
       // put the results in the result map
-      for (const auto &[meas, cnt] : *map) result[meas] += cnt;
+      for (const auto &[meas, cnt] : *map) {
+        std::vector<bool> ordered(qubits.size());
+        for (size_t q = 0; q < qubits.size(); ++q) ordered[q] = meas[positions[q]];
+        result[ordered] += cnt;
+      }
       tn->FreeMapForSample(map);
     } else if (simulationType == SimulationType::kPauliPropagator) {
       std::vector<int> qb(qubits.begin(), qubits.end());
@@ -1612,6 +1627,16 @@ class GpuState : public ISimulator {
    * @return The type of simulator.
    * @sa SimulatorType
    */
+  int GetGpuDevice() const override {
+    if (state) return state->GetGpuDevice();
+    if (densityMatrix) return densityMatrix->GetGpuDevice();
+    if (mpo) return mpo->GetGpuDevice();
+    if (mps) return mps->GetGpuDevice();
+    if (tn) return tn->GetGpuDevice();
+    if (pp) return pp->GetGpuDevice();
+    return -1;
+  }
+
   SimulatorType GetType() const override { return SimulatorType::kGpuSim; }
 
   /**
@@ -1893,6 +1918,19 @@ class GpuState : public ISimulator {
   }
 
  protected:
+  // MPSSample/TNSample consume a set and return bits in ascending logical
+  // qubit order. Maestro's sampling interface preserves the caller's order.
+  static std::vector<size_t> SampleBitPositions(const Types::qubits_vector& qubits) {
+    auto sorted = qubits;
+    std::sort(sorted.begin(), sorted.end());
+    sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+    std::vector<size_t> positions;
+    positions.reserve(qubits.size());
+    for (const auto q : qubits)
+      positions.push_back(std::lower_bound(sorted.begin(), sorted.end(), q) - sorted.begin());
+    return positions;
+  }
+
   // MPO accepts both names; Configure keeps their values synchronized.
   // The fallback also handles configuration before the method is selected.
   const char* MaxBondDimensionConfigKey() const {

@@ -643,6 +643,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     lastSimulatorType = simType;
     lastMethod = method;
+    lastGpuDevice = -1;
 
     size_t nrThreads = GetMaxSimulators();
 
@@ -746,6 +747,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       }
 
       job->DoWorkNoLock();
+      lastGpuDevice = job->optSim ? job->optSim->GetGpuDevice() : -1;
       if (!recreateIfNeeded) simulator = job->optSim;
     }
 
@@ -841,6 +843,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     lastSimulatorType = simType;
     lastMethod = method;
+    lastGpuDevice = -1;
 
     size_t nrThreads = GetMaxSimulators();
 
@@ -926,6 +929,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       }
 
       job->DoWorkNoLock();
+      lastGpuDevice = job->optSim ? job->optSim->GetGpuDevice() : -1;
       if (!recreateIfNeeded) simulator = job->optSim;
     }
 
@@ -1027,7 +1031,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       // recreating this network must not follow later process-default changes.
       if (simType == Simulators::SimulatorType::kGpuSim)
         configuration.SetConfiguration(
-            "gpu_device", simulator->GetConfiguration("gpu_device"));
+            "gpu_device", std::to_string(simulator->GetGpuDevice()));
 
       simulator->setGrowthFactorGate(growthFactorGate);
       simulator->setGrowthFactorSwap(growthFactorSwap);
@@ -1786,6 +1790,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
    *
    * @return The simulator type that was used last time.
    */
+  int GetLastGpuDevice() const override { return lastGpuDevice; }
+
   Simulators::SimulatorType GetLastSimulatorType() const override {
     return lastSimulatorType;
   }
@@ -2590,6 +2596,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   bool optimizeSimulator = true; /**< The flag to optimize the simulator. */
   typename BaseClass::SimulatorsSet simulatorsForOptimizations;
 
+  int lastGpuDevice = -1;
   Simulators::SimulatorType lastSimulatorType =
       Simulators::SimulatorType::kQCSim; /**< The last simulator type used. */
   Simulators::SimulationType lastMethod =

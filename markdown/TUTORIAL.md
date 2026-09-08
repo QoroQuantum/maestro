@@ -145,12 +145,42 @@ For Python development, please see the comprehensive **Python User Guide** (`pyt
 - **Noise Modeling:** Hardware relaxation, CPTP channels, and Monte Carlo simulation (`py_noise`).
 - **HPC Accelerators:** GPU acceleration and QuEST MPI clusters (`py_hpc`).
 
+### Sampling-order regression tests
+
+Sampling results follow the order of the requested qubit list: result bit `i`
+corresponds to `qubits[i]`, including when sampling a subset. Both packed integer
+and vector results use this convention.
+
+```sh
+cmake --build build --target sampling_order_tests -j2
+ctest --test-dir build -R '^sampling_order$' --output-on-failure
+```
+
+The tests cover every three-qubit basis state, all full permutations, reordered
+subsets, one and multiple shots, and identity/nonidentity internal mappings.
+QCSim and composite tests always run. Aer tests are included when Aer is enabled,
+including both MPS sampling algorithms. Configure `AER_INCLUDE_DIR` to use the Aer
+fork checked out by `build.sh`. GPU coverage is a separate optional test:
+
+```sh
+ctest --test-dir build -R '^sampling_order_gpu$' --output-on-failure
+```
+
+It needs only one GPU and skips if no GPU/plugin is available. CUDA discovery
+errors remain failures. These tests do not require Python bindings.
+
 ### Selecting a GPU per simulator
 
-On Linux with glibc, Maestro loads an isolated GPU plugin instance with
-`dlmopen` for each requested CUDA-visible device ordinal. Instances on the same
-device share that initialized library. Loading and initialization are lazy;
-creating a CPU network no longer initializes the GPU plugin.
+On Linux, Maestro lazily loads one process-wide GPU library singleton with
+`dlopen`. All simulators share its handle and API table. `InitLib` runs once,
+and `FreeLib` runs when the singleton is released at process shutdown. Creating
+a CPU network does not initialize the GPU plugin.
+
+Before native simulator initialization, Maestro calls the plugin's
+`SetGpuDevice` with the configured CUDA-visible device ordinal. Selection and
+initialization are serialized by Maestro. After initialization, the GPU plugin
+owns device activation, state, cloning and cleanup for each native simulator;
+Maestro does not switch CUDA devices around ordinary simulator calls.
 
 Configure a C++ GPU simulator before `Initialize()`:
 
@@ -161,10 +191,20 @@ auto sim = Simulators::SimulatorsFactory::CreateSimulator(
 sim->Configure("gpu_device", "0");
 sim->AllocateQubits(2);
 sim->Initialize();
+assert(sim->GetGpuDevice() == 0); // Native placement; -1 before initialization.
 ```
 
+The low-level wrappers also accept a device when constructed, for example
+`GpuLibStateVectorSim(library, 1)`. Pauli and stabilizer wrappers capture this
+selection even though their native object is created later by `CreateSimulator`.
+`GetGpuDevice()` queries the native object, including clones. Each instance stays
+on one GPU; selecting a device does not distribute an instance across GPUs.
+
 For a simple network, call `network.Configure("gpu_device", "0")` before
-`network.CreateSimulator(...)`. The setting is retained by network jobs,
+`network.CreateSimulator(...)`; `network.GetGpuDevice()` reports the native
+placement after creation. `network.GetLastGpuDevice()` reports the device used
+by the last execution, even if the network recreates its original simulator
+afterward. The setting is retained by network jobs,
 recreated simulators and clones. The JSON configuration accepted by
 `SimpleExecute` and `SimpleEstimate` also accepts `"gpu_device": 0`.
 
@@ -177,6 +217,7 @@ config = maestro.SimulatorConfig(
     gpu_device=0,
 )
 result = maestro.simple_execute(qasm, shots=100, config=config)
+assert result["gpu_device"] == 0
 ```
 
 Use a separate configuration with `gpu_device=1` for a second visible GPU.
@@ -191,17 +232,21 @@ raise an error instead of silently selecting another GPU.
 `init_gpu()` remains an optional warm-up of the default device and returns true
 when it is already initialized. `is_gpu_available()` probes and initializes the
 default device; `get_gpu_device_count()` can load the plugin for discovery but
-does not initialize simulator resources. GPU plugins must export `SetGpuDevice`,
-`GetGpuDeviceCount`, and the CUDA runtime's `cudaGetDevice`/`cudaSetDevice` symbols
-(the latter can come from a linked shared CUDA runtime).
+does not initialize simulator resources. A return value of -1 reports a CUDA
+discovery error. Execution and expectation results include `gpu_device` when
+the chosen simulator runs on a GPU (also in the JSON API). GPU plugins must export `SetGpuDevice`
+and `GetGpuDeviceCount`, plus the per-object GPU ID queries (such as
+`GetStateVectorGpuId` and `MPSGetGpuId`), alongside
+`InitLib`, `FreeLib` and their simulator APIs. Maestro no longer requires the
+CUDA runtime's `cudaGetDevice`/`cudaSetDevice` symbols.
 
-Library instances remain cached for reuse. glibc has a finite namespace limit
-(documented as 16 total, including the application's base namespace), and plugin
-dependencies consume additional resources. Cross-context density-matrix/MPO
-overlap is rejected; clone operations retain their source context. Legacy
-synchronous simulator estimators inherit the network's device through a scoped
-thread-local default; custom estimators creating simulators on additional threads
-must propagate configuration to those threads explicitly.
+The plugin must allow `SetGpuDevice` after `InitLib` and retain the selected
+device in each newly initialized native simulator. It must initialize resources
+for each device as needed and handle any cross-device operation restrictions
+itself. A simulator's device cannot be inferred from the shared library pointer.
+Legacy synchronous simulator estimators inherit the network's device through a
+scoped thread-local default; custom estimators creating simulators on additional
+threads must propagate configuration to those threads explicitly.
 
 GPU loader regression tests need no GPU:
 
@@ -210,15 +255,46 @@ cmake --build build --target gpu_registry_tests gpu_device_tests
 ctest --test-dir build -R 'gpu_registry|gpu_device_configuration' --output-on-failure
 ```
 
-To test two isolated real-plugin namespaces on a single GPU:
+To test singleton ownership and plugin-managed device handling:
 
 ```sh
 build/bin/gpu_registry_tests /path/to/libmaestro_gpu_simulators.so --real
 ```
 
-This checks namespace compatibility, worker-thread use and cloning on GPU 0.
+This checks singleton identity, worker-thread use, interleaved states and cloning.
 When two GPUs are visible, it also exercises separate instances on devices 0
 and 1. Distinct physical-device placement still requires such a machine.
+
+To compare interleaved simulator instances on exactly two real GPUs against
+independent QCSim CPU statevectors (Linux):
+
+```sh
+cmake -S . -B build -DCOMPILE_TESTS=ON
+cmake --build build --target gpu_multi_device_tests -j2
+CUDA_VISIBLE_DEVICES=0,1 LD_LIBRARY_PATH=/path/to/gpu/plugin/directory${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH} ctest --test-dir build -R '^gpu_multi_device$' --output-on-failure -V
+```
+
+Use the directory containing the real `libmaestro_gpu_simulators.so`, not
+`build/mock_gpu`. Device ordinals 0 and 1 refer to the two GPUs exposed by
+`CUDA_VISIBLE_DEVICES`; change that variable to select another physical pair.
+No third GPU is used. Existing build dependency settings still apply.
+
+The test covers statevector, density matrix, MPS, MPO, tensor network and Pauli
+propagator backends, one pair at a time. It applies different three-qubit
+entangling circuits to the two live instances, reverses update order between
+rounds, and changes the process default to the other device. After each update,
+both instances are compared with their CPU references using all 64 Pauli
+expectation values (including phase-sensitive X/Y observables), with an absolute
+tolerance of `1e-6` in double precision. It also checks that destroying one
+instance leaves its peer usable.
+
+Success prints `Two-GPU CPU-statevector comparisons passed` and exits 0.
+With zero or one visible GPU (or no discoverable GPU plugin), CTest reports the
+test as skipped, not failed. On two GPUs, initialization errors, missing backend
+support or a numerical mismatch fail; mismatch messages identify the backend,
+device, round and observable. Direct execution of `build/bin/gpu_multi_device_tests`
+uses exit code 77 for a skip and 1 for a failure. Prefer CTest to handle skips
+automatically.
 
 ### GPU SVD algorithm selection
 

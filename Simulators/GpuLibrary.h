@@ -51,70 +51,94 @@
 #include <vector>
 #include <complex>
 #include <stdexcept>
+#include <memory>
+#include <mutex>
 
 namespace Simulators {
 
-// One isolated library instance per CUDA device.
+// One plugin handle and API table for the process. The plugin owns device state.
 class GpuLibrary : public Utils::Library {
+  GpuLibrary() noexcept = default;
+
  public:
+  static std::shared_ptr<GpuLibrary> GetInstance() {
+    static const auto instance = std::shared_ptr<GpuLibrary>(new GpuLibrary());
+    return instance;
+  }
+
   GpuLibrary(const GpuLibrary &) = delete;
   GpuLibrary &operator=(const GpuLibrary &) = delete;
-
   GpuLibrary(GpuLibrary &&) = delete;
   GpuLibrary &operator=(GpuLibrary &&) = delete;
 
-  GpuLibrary() noexcept {}
-
-  virtual ~GpuLibrary() {
-    if (LibraryHandle && FreeLib) {
-      // Cleanup also runs on a thread which may last have used another GPU.
-      int previous = -1;
-      if (fCudaGetDevice) fCudaGetDevice(&previous);
-      if (fCudaSetDevice) fCudaSetDevice(requestedGpuDeviceId);
-      FreeLib();
-      if (fCudaSetDevice && previous >= 0) fCudaSetDevice(previous);
-    }
+  ~GpuLibrary() override {
+    if (LibraryHandle && FreeLib) FreeLib();
   }
 
-  // Requests that Init() select the given CUDA device before initializing
-  // the library. Must be called before Init(), otherwise it has no effect
-  // (matching the underlying SetGpuDevice()/InitLib() ordering requirement).
-  void SetRequestedGpuDevice(int deviceId) noexcept {
-    if (!LibraryHandle) requestedGpuDeviceId = deviceId;
+  // Keep selection and native simulator initialization together even if the
+  // plugin's selected device is process-global. Ordinary simulator operations
+  // do not take this lock or change the device: the plugin owns that behavior.
+  std::unique_lock<std::recursive_mutex> LockInitialization() {
+    return std::unique_lock<std::recursive_mutex>(initializationMutex);
   }
 
-  int GetDeviceId() const noexcept { return requestedGpuDeviceId; }
-
-  // Discovery loads symbols but does not validate a license or initialize a
-  // simulator. The registry reuses this namespace on the next device request.
   bool Load(const char *libName) noexcept {
-    if (!Utils::Library::InitIsolated(libName)) return false;
+    auto lock = LockInitialization();
+    if (GetHandle()) {
+      if (loadedPath == libName) return true;
+      if (!IsMuted())
+        std::cerr << "GpuLibrary: singleton already loaded from " << loadedPath
+                  << "; cannot load " << libName << std::endl;
+      return false;
+    }
+    if (!Utils::Library::Init(libName)) return false;
+    loadedPath = libName;
     fGetGpuDeviceCount = (int (*)())GetFunction("GetGpuDeviceCount");
+    fSetGpuDevice = (int (*)(int))GetFunction("SetGpuDevice");
+    fGetStateVectorGpuId = (int (*)(void*))GetFunction("GetStateVectorGpuId");
+    fMPSGetGpuId = (int (*)(void*))GetFunction("MPSGetGpuId");
+    fTNGetGpuId = (int (*)(void*))GetFunction("TNGetGpuId");
+    fDMGetGpuId = (int (*)(void*))GetFunction("DMGetGpuId");
+    fMPOGetGpuId = (int (*)(void*))GetFunction("MPOGetGpuId");
+    fGetStabilizerGpuId = (int (*)(void*))GetFunction("GetStabilizerGpuId");
+    fPauliPropGetGpuId = (int (*)(void*))GetFunction("PauliPropGetGpuId");
+
     return true;
   }
 
-  class DeviceScope {
-   public:
-    explicit DeviceScope(const GpuLibrary &lib) : lib(lib) {
-      if (!lib.fCudaGetDevice || !lib.fCudaSetDevice ||
-          lib.fCudaGetDevice(&previous) != 0 ||
-          lib.fCudaSetDevice(lib.requestedGpuDeviceId) != 0)
-        throw std::runtime_error("GpuLibrary: Unable to activate CUDA device " +
-                                 std::to_string(lib.requestedGpuDeviceId));
+  int DiscoverDevices(const char *path) {
+    auto lock = LockInitialization();
+    SetMute(true);
+    return Load(path) ? GetGpuDeviceCount() : 0;
+  }
+
+  bool InitializeForDevice(const char *path, int device, bool mute = false) {
+    auto lock = LockInitialization();
+    SetMute(mute);
+    if (device < 0) throw std::invalid_argument("gpu_device must be nonnegative");
+    if (!Load(path)) return false;
+    const int count = GetGpuDeviceCount();
+    if (device >= count) {
+      if (!mute)
+        std::cerr << "GpuLibrary: GPU device " << device << " is unavailable ("
+                  << count << " visible devices)" << std::endl;
+      return false;
     }
-    ~DeviceScope() {
-      if (previous >= 0) lib.fCudaSetDevice(previous);
+    // Reapply selection on every acquisition, including after InitLib has
+    // already run. Native objects retain their own device inside the plugin.
+    if (!SetGpuDevice(device)) {
+      if (!mute)
+        std::cerr << "GpuLibrary: Unable to select GPU device " << device << std::endl;
+      return false;
     }
-    DeviceScope(const DeviceScope &) = delete;
-    DeviceScope &operator=(const DeviceScope &) = delete;
-   private:
-    const GpuLibrary &lib;
-    int previous = -1;
-  };
+    return Init(path);
+  }
 
   bool Init(const char *libName) noexcept override {
+    auto lock = LockInitialization();
+    if (!Load(libName)) return false;
     if (IsValid()) return true;
-    if (Load(libName)) {
+    {
       // Validate license before initializing the library.
       // The license key is read from the MAESTRO_LICENSE_KEY env var.
       // If not set, nullptr is passed to attempt cached/offline validation.
@@ -141,22 +165,10 @@ class GpuLibrary : public Utils::Library {
         return false;
       }
 
-      // Device selection is required for isolated per-device instances and
-      // must precede InitLib(). Resolve CUDA activation from this namespace
-      // as well, so calls from other host threads use the same runtime.
-      fSetGpuDevice = (int (*)(int))GetFunction("SetGpuDevice");
-      fGetGpuDeviceCount = (int (*)())GetFunction("GetGpuDeviceCount");
-      if (requestedGpuDeviceId < 0) requestedGpuDeviceId = 0;
-      fCudaGetDevice = (int (*)(int *))GetFunction("cudaGetDevice");
-      fCudaSetDevice = (int (*)(int))GetFunction("cudaSetDevice");
       FreeLib = (void (*)())GetFunction("FreeLib");
-      if (!fSetGpuDevice || !fCudaGetDevice || !fCudaSetDevice || !FreeLib ||
-          !fSetGpuDevice(requestedGpuDeviceId)) {
+      if (!fSetGpuDevice || !FreeLib) {
         if (!IsMuted())
-          std::cerr << "GpuLibrary: Cannot initialize GPU device "
-                    << requestedGpuDeviceId
-                    << "; device selection, CUDA runtime symbols and cleanup "
-                       "support are required." << std::endl;
+          std::cerr << "GpuLibrary: SetGpuDevice and FreeLib are required." << std::endl;
         return false;
       }
 
@@ -1163,8 +1175,7 @@ class GpuLibrary : public Utils::Library {
         std::cerr << "GpuLibrary: Unable to get initialization function for "
                      "gpu library"
                   << std::endl;
-    } else if (!Utils::Library::IsMuted())
-      std::cerr << "GpuLibrary: Unable to load gpu library" << std::endl;
+    }
 
     return false;
   }
@@ -1182,9 +1193,42 @@ class GpuLibrary : public Utils::Library {
   bool IsValid() const { return LibraryHandle != nullptr; }
 
   // Number of CUDA-capable devices visible to the process, or 0 if none are
-  // visible / the loaded library doesn't support device queries.
+  // visible / the loaded library doesn't support device queries. A negative
+  // result reports a CUDA discovery error, not absent hardware.
   int GetGpuDeviceCount() const {
     return fGetGpuDeviceCount ? fGetGpuDeviceCount() : 0;
+  }
+
+  // Selection affects future native objects only. Capture it in wrappers that
+  // defer native creation until CreateSimulator(). Never select around gates.
+  bool SetGpuDevice(int device) {
+    auto lock = LockInitialization();
+    if (device < 0 || !fSetGpuDevice || !fSetGpuDevice(device)) return false;
+    creationDevice = device;
+    return true;
+  }
+  int GetCreationDevice() const { return creationDevice; }
+
+  int GetStateVectorGpuId(void* obj) const {
+    return obj && fGetStateVectorGpuId ? fGetStateVectorGpuId(obj) : -1;
+  }
+  int MPSGetGpuId(void* obj) const {
+    return obj && fMPSGetGpuId ? fMPSGetGpuId(obj) : -1;
+  }
+  int TNGetGpuId(void* obj) const {
+    return obj && fTNGetGpuId ? fTNGetGpuId(obj) : -1;
+  }
+  int DMGetGpuId(void* obj) const {
+    return obj && fDMGetGpuId ? fDMGetGpuId(obj) : -1;
+  }
+  int MPOGetGpuId(void* obj) const {
+    return obj && fMPOGetGpuId ? fMPOGetGpuId(obj) : -1;
+  }
+  int GetStabilizerGpuId(void* obj) const {
+    return obj && fGetStabilizerGpuId ? fGetStabilizerGpuId(obj) : -1;
+  }
+  int PauliPropGetGpuId(void* obj) const {
+    return obj && fPauliPropGetGpuId ? fPauliPropGetGpuId(obj) : -1;
   }
 
   bool HasDensityMatrixAPI() const {
@@ -4281,15 +4325,22 @@ class GpuLibrary : public Utils::Library {
   }
 
  private:
+  std::recursive_mutex initializationMutex;
+  std::string loadedPath;
   void *LibraryHandle = nullptr;
 
   int (*fValidateLicense)(const char *) = nullptr;
   void *(*InitLib)() = nullptr;
   void (*FreeLib)() = nullptr;
 
-  int requestedGpuDeviceId = -1;
-  int (*fCudaGetDevice)(int *) = nullptr;
-  int (*fCudaSetDevice)(int) = nullptr;
+  inline static thread_local int creationDevice = 0;
+  int (*fGetStateVectorGpuId)(void*) = nullptr;
+  int (*fMPSGetGpuId)(void*) = nullptr;
+  int (*fTNGetGpuId)(void*) = nullptr;
+  int (*fDMGetGpuId)(void*) = nullptr;
+  int (*fMPOGetGpuId)(void*) = nullptr;
+  int (*fGetStabilizerGpuId)(void*) = nullptr;
+  int (*fPauliPropGetGpuId)(void*) = nullptr;
   int (*fSetGpuDevice)(int) = nullptr;
   int (*fGetGpuDeviceCount)() = nullptr;
 

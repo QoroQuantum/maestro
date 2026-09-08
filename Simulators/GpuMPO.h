@@ -21,8 +21,17 @@ namespace Simulators {
 
 class GpuMPO {
  public:
-  explicit GpuMPO(const std::shared_ptr<GpuLibrary>& lib)
-      : lib(lib), obj(lib ? this->lib->CreateMPO() : nullptr) {}
+  explicit GpuMPO(const std::shared_ptr<GpuLibrary>& lib, int device = -1)
+      : lib(lib), obj(nullptr) {
+    if (lib) {
+      auto lock = lib->LockInitialization();
+      if (lib->SetGpuDevice(device == -1 ? lib->GetCreationDevice() : device))
+        obj = lib->CreateMPO();
+    }
+  }
+
+  int GetGpuDevice() const { return lib ? lib->MPOGetGpuId(obj) : -1; }
+
   GpuMPO(const std::shared_ptr<GpuLibrary>& lib, void* obj)
       : lib(lib), obj(obj) {}
   GpuMPO() = delete;
@@ -180,8 +189,6 @@ class GpuMPO {
     return result;
   }
   std::complex<double> HilbertSchmidtOverlap(const GpuMPO& other) const {
-    if (lib != other.lib)
-      throw std::invalid_argument("GPU overlap requires states on the same device context");
     double re = 0., im = 0.;
     if (!lib->MPOHilbertSchmidtOverlap(obj, other.obj, &re, &im)) throw std::runtime_error("GPU MPO overlap failed");
     return {re, im};

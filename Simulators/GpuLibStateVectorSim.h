@@ -25,13 +25,16 @@ namespace Simulators {
 
 class GpuLibStateVectorSim {
  public:
-  explicit GpuLibStateVectorSim(const std::shared_ptr<GpuLibrary> &lib)
-      : lib(lib) {
-    if (lib)
-      obj = this->lib->CreateStateVector();
-    else
-      obj = nullptr;
+  explicit GpuLibStateVectorSim(const std::shared_ptr<GpuLibrary>& lib, int device = -1)
+      : lib(lib), obj(nullptr) {
+    if (lib) {
+      auto lock = lib->LockInitialization();
+      if (lib->SetGpuDevice(device == -1 ? lib->GetCreationDevice() : device))
+        obj = lib->CreateStateVector();
+    }
   }
+
+  int GetGpuDevice() const { return lib ? lib->GetStateVectorGpuId(obj) : -1; }
 
   GpuLibStateVectorSim(const std::shared_ptr<GpuLibrary> &lib, void *obj)
       : lib(lib), obj(obj) {}

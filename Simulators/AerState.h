@@ -580,8 +580,16 @@ class AerState : public ISimulator {
              "undefined"
           << std::endl;
 
-    std::unordered_map<Types::qubit_t, Types::qubit_t> res =
-        state->sample_counts(qubits, shots);
+    // Aer MPS can return native samples sorted by qubit index. Use the
+    // ordered sampling adapter for both public result formats.
+    std::unordered_map<Types::qubit_t, Types::qubit_t> res;
+    for (const auto& [bits, count] : state->sample_counts_many(qubits, shots)) {
+      Types::qubit_t packed = 0;
+      const size_t width = std::min(bits.size(), sizeof(Types::qubit_t) * 8);
+      for (size_t i = 0; i < width; ++i)
+        if (bits[i]) packed |= Types::qubit_t(1) << i;
+      res[packed] += count;
+    }
 
     NotifyObservers(qubits);
 

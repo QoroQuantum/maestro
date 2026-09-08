@@ -752,14 +752,9 @@ class IndividualSimulator : public ISimulator {
    */
   std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
-    std::unordered_map<Types::qubit_t, Types::qubit_t> res;
-
-    const auto sc = simulator->SampleCounts(ConvertQubits(qubits), shots);
-
-    for (auto [outcome, count] : sc)
-      res[ConvertOutcomeFromLocal(outcome)] += count;
-
-    return res;
+    // Results are indexed by positions in the requested list, not by local
+    // register IDs. Convert the input IDs only; preserve the returned order.
+    return simulator->SampleCounts(ConvertQubits(qubits), shots);
   }
 
   /**
@@ -777,14 +772,7 @@ class IndividualSimulator : public ISimulator {
    */
   std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
-    std::unordered_map<std::vector<bool>, Types::qubit_t> res;
-
-    const auto sc = simulator->SampleCountsMany(ConvertQubits(qubits), shots);
-
-    for (auto [outcome, count] : sc)
-      res[ConvertOutcomeFromLocal(outcome)] = count;
-
-    return res;
+    return simulator->SampleCountsMany(ConvertQubits(qubits), shots);
   }
 
   /**

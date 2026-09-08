@@ -63,7 +63,10 @@ int main() {
       sim->ApplyX(0);
       Require(sim->AllProbabilities()[1] == 1, "wrong simulator state");
     }
+    Require(one->GetGpuDevice() == 1 && zero->GetGpuDevice() == 0,
+            "configuration did not reach native GPU objects");
     auto clone = one->Clone();
+    Require(clone->GetGpuDevice() == 1, "cloned native state moved GPU");
     Require(clone->GetConfiguration("gpu_device") == "1", "clone lost device");
     Require(clone->AllProbabilities()[1] == 1, "clone lost state");
     one->Configure("gpu_device", "1");  // idempotent reapplication is allowed
@@ -73,6 +76,7 @@ int main() {
     Require(one->GetConfiguration("gpu_device") == "1",
             "failed update mutated device");
     one->Clear();
+    Require(one->GetGpuDevice() == -1, "cleared simulator reports a live GPU");
     one->Configure("gpu_device", "0");
     one->AllocateQubits(1);
     one->Initialize();
@@ -85,6 +89,7 @@ int main() {
     Network::SimpleDisconnectedNetwork<> network({2}, {2});
     network.Configure("gpu_device", "1");
     network.CreateSimulator(gpu, sv);
+    Require(network.GetGpuDevice() == 1, "network did not expose native placement");
     Require(network.GetSimulator()->GetConfiguration("gpu_device") == "1",
             "network lost device");
     Reject([&] { network.Configure("gpu_device", "0"); });

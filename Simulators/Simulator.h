@@ -32,6 +32,9 @@ namespace Simulators {
  */
 class ISimulator : public IState, std::enable_shared_from_this<ISimulator> {
  public:
+  // Native CUDA device, or -1 for CPU/uninitialized simulators.
+  virtual int GetGpuDevice() const { return -1; }
+
   /**
    * @brief Apply a generic one-qubit gate to the specified qubit.
    * @param qubit The qubit to apply the gate to.

@@ -271,6 +271,7 @@ __declspec(dllexport)
 #ifdef __linux__
     case Simulators::SimulatorType::kGpuSim:
       response.emplace("simulator", "gpu_simulator");
+      response.emplace("gpu_device", network->GetLastGpuDevice());
       break;
 #endif
     default:
@@ -448,6 +449,7 @@ __declspec(dllexport)
 #ifdef __linux__
     case Simulators::SimulatorType::kGpuSim:
       response.emplace("simulator", "gpu_simulator");
+      response.emplace("gpu_device", network->GetLastGpuDevice());
       break;
 #endif
     default:
