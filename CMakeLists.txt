@@ -288,6 +288,25 @@ list(REMOVE_ITEM MAESTRO_DEPENDENCY_INCLUDE_DIRS
     ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
 include_directories(SYSTEM ${MAESTRO_DEPENDENCY_INCLUDE_DIRS})
 
+# Boost's imported targets can reintroduce the same paths transitively through
+# target_link_libraries, independently of Boost_INCLUDE_DIRS above.
+foreach(boost_target Boost::headers Boost::boost Boost::container Boost::json
+                     Boost::serialization Boost::program_options)
+    if(TARGET ${boost_target})
+        get_target_property(boost_include_target ${boost_target} ALIASED_TARGET)
+        if(NOT boost_include_target)
+            set(boost_include_target ${boost_target})
+        endif()
+        foreach(include_property INTERFACE_INCLUDE_DIRECTORIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES)
+            get_target_property(boost_target_includes ${boost_include_target} ${include_property})
+            if(boost_target_includes)
+                list(REMOVE_ITEM boost_target_includes ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
+                set_property(TARGET ${boost_include_target} PROPERTY ${include_property} "${boost_target_includes}")
+            endif()
+        endforeach()
+    endif()
+endforeach()
+
 if (QAER)
 
     # CMake's FindBLAS tries Intel MKL before everything else, so on a machine that merely
