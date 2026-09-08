@@ -64,80 +64,86 @@ class SimulatorsFactory {
   static bool InitGpuLibrary();
   static bool InitGpuLibraryWithMute();
 
-  // Selects which CUDA device InitGpuLibrary()/InitGpuLibraryWithMute() will
-  // use. Must be called before the GPU library is first initialized (i.e.
-  // before any InitGpuLibrary*() call, including indirectly through
-  // GetMaestroObject()) to take effect; has no effect afterwards.
-  static void SelectGpuDevice(int deviceId) { requestedGpuDeviceId = deviceId; }
+  // Default for subsequently created simulators; explicit gpu_device wins.
+  static void SelectGpuDevice(int deviceId);
+  static int ResolveGpuDevice(int deviceId = -1);
+  static int GetGpuDeviceCount();
+  static bool IsGpuLibraryAvailable(int deviceId = -1);
+  static std::shared_ptr<GpuLibrary> GetGpuLibrary(int deviceId = -1);
 
-  // Number of CUDA-capable devices visible to the process, or 0 if the GPU
-  // library isn't loaded or none are visible.
-  static int GetGpuDeviceCount() {
-    return gpuLibrary ? gpuLibrary->GetGpuDeviceCount() : 0;
-  }
+  // Legacy estimators construct simulators synchronously without accepting a
+  // configuration map. Scope their default to the requesting network without
+  // changing the process-wide default or another network's worker thread.
+  class ScopedGpuDevice {
+   public:
+    explicit ScopedGpuDevice(int deviceId);
+    ~ScopedGpuDevice();
+    ScopedGpuDevice(const ScopedGpuDevice&) = delete;
+    ScopedGpuDevice& operator=(const ScopedGpuDevice&) = delete;
+   private:
+    int previous;
+  };
 
-  static bool IsGpuLibraryAvailable() {
-    return gpuLibrary && gpuLibrary->IsValid();
-  }
-
-  static std::shared_ptr<GpuLibrary> GetGpuLibrary() {
-    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
-    return gpuLibrary;
-  }
-
-  static std::unique_ptr<GpuLibStateVectorSim> CreateGpuLibStateVectorSim() {
+  static std::unique_ptr<GpuLibStateVectorSim> CreateGpuLibStateVectorSim(int deviceId = -1) {
+    auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
 
     return std::make_unique<GpuLibStateVectorSim>(gpuLibrary);
   }
 
-  static std::unique_ptr<GpuDensityMatrix> CreateGpuDensityMatrix() {
+  static std::unique_ptr<GpuDensityMatrix> CreateGpuDensityMatrix(int deviceId = -1) {
+    auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->HasDensityMatrixAPI()) return nullptr;
     return std::make_unique<GpuDensityMatrix>(gpuLibrary);
   }
 
-  static std::unique_ptr<GpuMPO> CreateGpuMPO() {
+  static std::unique_ptr<GpuMPO> CreateGpuMPO(int deviceId = -1) {
+    auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->HasMPOAPI()) return nullptr;
     return std::make_unique<GpuMPO>(gpuLibrary);
   }
 
-  static std::unique_ptr<GpuLibMPSSim> CreateGpuLibMPSSim() {
+  static std::unique_ptr<GpuLibMPSSim> CreateGpuLibMPSSim(int deviceId = -1) {
+    auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
 
     return std::make_unique<GpuLibMPSSim>(gpuLibrary);
   }
 
-  static std::unique_ptr<GpuLibTNSim> CreateGpuLibTensorNetSim() {
+  static std::unique_ptr<GpuLibTNSim> CreateGpuLibTensorNetSim(int deviceId = -1) {
+    auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
 
     return std::make_unique<GpuLibTNSim>(gpuLibrary);
   }
 
-  static std::shared_ptr<GpuStabilizer> CreateGpuStabilizerSimulator() {
+  static std::shared_ptr<GpuStabilizer> CreateGpuStabilizerSimulator(int deviceId = -1) {
+    auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
     return std::make_shared<GpuStabilizer>(gpuLibrary);
   }
 
   static std::shared_ptr<GpuPauliPropagator>
-  CreateGpuPauliPropagatorSimulator() {
+  CreateGpuPauliPropagatorSimulator(int deviceId = -1) {
+    auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
     return std::make_shared<GpuPauliPropagator>(gpuLibrary);
   }
 
   static std::unique_ptr<GpuPauliPropagator>
-  CreateGpuPauliPropagatorSimulatorUnique() {
+  CreateGpuPauliPropagatorSimulatorUnique(int deviceId = -1) {
+    auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
     return std::make_unique<GpuPauliPropagator>(gpuLibrary);
   }
 
  private:
-  static std::shared_ptr<GpuLibrary> gpuLibrary;
-  static std::atomic_bool firstTime;
-  static int requestedGpuDeviceId;
+  static std::atomic_int requestedGpuDeviceId;
+  static thread_local int scopedGpuDeviceId;
 
  public:
 #else
-  static bool IsGpuLibraryAvailable() { return false; }
+  static bool IsGpuLibraryAvailable(int = -1) { return false; }
 
   static bool InitGpuLibrary() { return false; }
 

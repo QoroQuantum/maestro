@@ -56,8 +56,15 @@ class GpuState : public ISimulator {
    */
   void Initialize() override {
     if (nrQubits) {
+      const int gpuDevice = configuration.IsSet("gpu_device")
+          ? Configuration::ParseGpuDevice(configuration.GetConfiguration("gpu_device"))
+          : SimulatorsFactory::ResolveGpuDevice();
+      configuration.SetConfiguration("gpu_device", std::to_string(gpuDevice));
+      if (!SimulatorsFactory::GetGpuLibrary(gpuDevice))
+        throw std::runtime_error("GpuState::Initialize: Unable to initialize GPU device " +
+                                 std::to_string(gpuDevice));
       if (simulationType == SimulationType::kStatevector) {
-        state = SimulatorsFactory::CreateGpuLibStateVectorSim();
+        state = SimulatorsFactory::CreateGpuLibStateVectorSim(gpuDevice);
         if (state) {
           // ensure the config settings are applied, they need to be applied
           // after the simulator is created
@@ -73,7 +80,7 @@ class GpuState : public ISimulator {
           throw std::runtime_error(
               "GpuState::Initialize: Failed to create the statevector state.");
       } else if (simulationType == SimulationType::kDensityMatrix) {
-        densityMatrix = SimulatorsFactory::CreateGpuDensityMatrix();
+        densityMatrix = SimulatorsFactory::CreateGpuDensityMatrix(gpuDevice);
         if (!densityMatrix)
           throw std::runtime_error(
               "GpuState::Initialize: Failed to create the density matrix state.");
@@ -85,7 +92,7 @@ class GpuState : public ISimulator {
           throw std::runtime_error(
               "GpuState::Initialize: Failed to initialize the density matrix state.");
       } else if (simulationType == SimulationType::kMatrixProductOperator) {
-        mpo = SimulatorsFactory::CreateGpuMPO();
+        mpo = SimulatorsFactory::CreateGpuMPO(gpuDevice);
         if (!mpo)
           throw std::runtime_error(
               "GpuState::Initialize: Failed to create the matrix product "
@@ -106,7 +113,7 @@ class GpuState : public ISimulator {
         if (!useOptimalMeetingPosition)
           mpo->SetUseOptimalMeetingPosition(false);
       } else if (simulationType == SimulationType::kMatrixProductState) {
-        mps = SimulatorsFactory::CreateGpuLibMPSSim();
+        mps = SimulatorsFactory::CreateGpuLibMPSSim(gpuDevice);
         if (mps) {
           mps->SetCallbackContext((void*)this);
           curMaxBondDim = 1;
@@ -129,7 +136,7 @@ class GpuState : public ISimulator {
         if (!useOptimalMeetingPosition)
           mps->SetUseOptimalMeetingPosition(false);
       } else if (simulationType == SimulationType::kTensorNetwork) {
-        tn = SimulatorsFactory::CreateGpuLibTensorNetSim();
+        tn = SimulatorsFactory::CreateGpuLibTensorNetSim(gpuDevice);
         if (tn) {
           // ensure the config settings are applied, they need to be applied
           // after the simulator is created but before the state is created
@@ -146,7 +153,7 @@ class GpuState : public ISimulator {
               "GpuState::Initialize: Failed to create the tensor network "
               "state.");
       } else if (simulationType == SimulationType::kPauliPropagator) {
-        pp = SimulatorsFactory::CreateGpuPauliPropagatorSimulatorUnique();
+        pp = SimulatorsFactory::CreateGpuPauliPropagatorSimulatorUnique(gpuDevice);
         if (pp) {
           // ensure the config settings are applied, they need to be applied
           // after the simulator is created but before the state is created
@@ -643,6 +650,44 @@ class GpuState : public ISimulator {
    * @param value The value of the configuration.
    */
   void Configure(const char *key, const char *value) override {
+    if (!key || !value) return;
+    if (std::string("gpu_device") == key) {
+      const int device = Configuration::ParseGpuDevice(value);
+      if ((state || densityMatrix || mpo || mps || tn || pp) &&
+          device != Configuration::ParseGpuDevice(configuration.GetConfiguration(key)))
+        throw std::invalid_argument("gpu_device cannot change after initialization; clear the simulator first");
+      configuration.SetConfiguration(key, std::to_string(device));
+      return;
+    }
+    const auto svdGroup = Configuration::GpuSvdSettingGroup(key);
+    if (!svdGroup.empty()) {
+      const bool enabled = Configuration::ParseGpuSvdFlag(value);
+      const bool gesvd = svdGroup == key;
+      const char algorithm = std::string(key).back();
+      const auto apply = [algorithm, enabled](auto& backend) {
+        if (!backend) return true; // Applied after native object creation.
+        if (algorithm == 'j') return backend->SetGesvdJ(enabled);
+        if (algorithm == 'p') return backend->SetGesvdP(enabled);
+        return backend->SetGesvdR(enabled);
+      };
+      const auto applyGesvd = [](auto& backend) {
+        if (!backend) return true; // Applied after native object creation.
+        return backend->SetGesvdJ(false) && backend->SetGesvdP(false) &&
+               backend->SetGesvdR(false);
+      };
+      bool applied = true;
+      if (svdGroup == "matrix_product_state_use_gesvd")
+        applied = gesvd ? applyGesvd(mps) : apply(mps);
+      else if (svdGroup == "matrix_product_operator_use_gesvd")
+        applied = gesvd ? applyGesvd(mpo) : apply(mpo);
+      else if (svdGroup == "tensor_network_use_gesvd")
+        applied = gesvd ? applyGesvd(tn) : apply(tn);
+      if (!applied)
+        throw std::runtime_error(std::string("GPU library cannot apply ") + key +
+                                 "; an updated GPU plugin may be required");
+      configuration.SetConfiguration(key, value);
+      return;
+    }
     if (std::string("method") == key) {
       if (std::string("statevector") == value)
         simulationType = SimulationType::kStatevector;
@@ -748,8 +793,7 @@ class GpuState : public ISimulator {
         if (mpo) mpo->SetMaxExtent(chi);
         if (dummySim) dummySim->SetMaxBondDimension(chi);
       }
-    } else if (std::string("matrix_product_operator_use_gesvdj") == key) {
-      if (mpo) mpo->SetGesvdJ(std::string(value) == "1" || std::string(value) == "true");
+
     } else if (std::string("matrix_product_operator_kraus_completeness_check") == key) {
       int mode = -1;
       if (std::string(value) == "ignore") mode = 0;
@@ -794,6 +838,34 @@ class GpuState : public ISimulator {
    * @return The configuration value as a string.
    */
   std::string GetConfiguration(const char *key) const override {
+    if (!key) return {};
+    const auto svdGroup = Configuration::GpuSvdSettingGroup(key);
+    if (!svdGroup.empty()) {
+      if (svdGroup == key) {
+        const auto readGesvd = [](const auto& backend) {
+          return !backend->GetGesvdJ() && !backend->GetGesvdP() &&
+                 !backend->GetGesvdR();
+        };
+        if (svdGroup == "matrix_product_state_use_gesvd" && mps)
+          return readGesvd(mps) ? "true" : "false";
+        if (svdGroup == "matrix_product_operator_use_gesvd" && mpo)
+          return readGesvd(mpo) ? "true" : "false";
+        if (svdGroup == "tensor_network_use_gesvd" && tn)
+          return readGesvd(tn) ? "true" : "false";
+      }
+      const char algorithm = std::string(key).back();
+      const auto read = [algorithm](const auto& backend) {
+        if (algorithm == 'j') return backend->GetGesvdJ();
+        if (algorithm == 'p') return backend->GetGesvdP();
+        return backend->GetGesvdR();
+      };
+      if (svdGroup == "matrix_product_state_use_gesvd" && mps)
+        return read(mps) ? "true" : "false";
+      if (svdGroup == "matrix_product_operator_use_gesvd" && mpo)
+        return read(mpo) ? "true" : "false";
+      if (svdGroup == "tensor_network_use_gesvd" && tn)
+        return read(tn) ? "true" : "false";
+    }
     if (std::string("method") == key) {
       switch (simulationType) {
         case SimulationType::kStatevector:

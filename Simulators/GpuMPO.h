@@ -15,14 +15,14 @@
 #include <utility>
 #include <vector>
 
-#include "GpuLibrary.h"
+#include "GpuDeviceContext.h"
 
 namespace Simulators {
 
 class GpuMPO {
  public:
   explicit GpuMPO(const std::shared_ptr<GpuLibrary>& lib)
-      : lib(lib), obj(lib ? lib->CreateMPO() : nullptr) {}
+      : lib(lib), obj(lib ? this->lib->CreateMPO() : nullptr) {}
   GpuMPO(const std::shared_ptr<GpuLibrary>& lib, void* obj)
       : lib(lib), obj(obj) {}
   GpuMPO() = delete;
@@ -105,6 +105,17 @@ class GpuMPO {
   int GetTruncationMode() const { return lib->MPOGetTruncationMode(obj); }
   bool SetGesvdJ(bool enable) { return lib->MPOSetGesvdJ(obj, enable); }
   bool GetGesvdJ() const { return lib->MPOGetGesvdJ(obj); }
+  // Enabling any of J/P/R clears the other two selectors in the plugin.
+  bool SetGesvdP(bool enable) {
+    return obj && lib->MPOSetGesvdP(obj, enable);
+  }
+  bool GetGesvdP() const { return lib->MPOGetGesvdP(obj); }
+  bool SetGesvdR(bool enable) {
+    return obj && lib->MPOSetGesvdR(obj, enable);
+  }
+  bool GetGesvdR() const { return lib->MPOGetGesvdR(obj); }
+  int GetLastSvdAlgo() const { return lib->MPOGetLastSvdAlgo(obj); }
+
   void SetMaxExtent(long int chi) { lib->MPOSetMaxExtent(obj, chi); }
   long int GetMaxExtent() const { return lib->MPOGetMaxExtent(obj); }
   std::vector<long long int> GetBondDimensions(size_t nrQubits) const {
@@ -169,6 +180,8 @@ class GpuMPO {
     return result;
   }
   std::complex<double> HilbertSchmidtOverlap(const GpuMPO& other) const {
+    if (lib != other.lib)
+      throw std::invalid_argument("GPU overlap requires states on the same device context");
     double re = 0., im = 0.;
     if (!lib->MPOHilbertSchmidtOverlap(obj, other.obj, &re, &im)) throw std::runtime_error("GPU MPO overlap failed");
     return {re, im};
@@ -257,7 +270,7 @@ class GpuMPO {
 #undef GPU_MPO_CHECK
 
  private:
-  std::shared_ptr<GpuLibrary> lib;
+  GpuDeviceContext lib;
   void* obj = nullptr;
 };
 

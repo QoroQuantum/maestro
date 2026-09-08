@@ -28,6 +28,7 @@
 #endif
 
 #include "Factory.h"
+#include "GpuLibraryRegistry.h"
 
 #define INCLUDED_BY_FACTORY
 #ifndef NO_QISKIT_AER
@@ -41,39 +42,53 @@
 namespace Simulators {
 
 #ifdef __linux__
-std::shared_ptr<GpuLibrary> SimulatorsFactory::gpuLibrary = nullptr;
-std::atomic_bool SimulatorsFactory::firstTime = true;
-int SimulatorsFactory::requestedGpuDeviceId = -1;
+std::atomic_int SimulatorsFactory::requestedGpuDeviceId{0};
+thread_local int SimulatorsFactory::scopedGpuDeviceId = -1;
+
+namespace {
+GpuLibraryRegistry& GpuLibraries() {
+  static GpuLibraryRegistry registry;
+  return registry;
+}
+}
+
+void SimulatorsFactory::SelectGpuDevice(int deviceId) {
+  if (deviceId < 0) throw std::invalid_argument("gpu_device must be nonnegative");
+  requestedGpuDeviceId = deviceId;
+}
+
+int SimulatorsFactory::ResolveGpuDevice(int deviceId) {
+  if (deviceId >= 0) return deviceId;
+  if (scopedGpuDeviceId >= 0) return scopedGpuDeviceId;
+  return requestedGpuDeviceId.load();
+}
+
+SimulatorsFactory::ScopedGpuDevice::ScopedGpuDevice(int deviceId)
+    : previous(scopedGpuDeviceId) {
+  scopedGpuDeviceId = ResolveGpuDevice(deviceId);
+}
+SimulatorsFactory::ScopedGpuDevice::~ScopedGpuDevice() {
+  scopedGpuDeviceId = previous;
+}
+
+std::shared_ptr<GpuLibrary> SimulatorsFactory::GetGpuLibrary(int deviceId) {
+  return GpuLibraries().Acquire(ResolveGpuDevice(deviceId));
+}
 
 bool SimulatorsFactory::InitGpuLibrary() {
-  if (!gpuLibrary) {
-    gpuLibrary = std::make_shared<GpuLibrary>();
-    if (!firstTime.exchange(false)) gpuLibrary->SetMute(true);
-    gpuLibrary->SetRequestedGpuDevice(requestedGpuDeviceId);
-
-    if (gpuLibrary->Init("libmaestro_gpu_simulators.so"))
-      return true;
-    else
-      gpuLibrary = nullptr;
-  }
-
-  return false;
+  return bool(GetGpuLibrary());
 }
 
 bool SimulatorsFactory::InitGpuLibraryWithMute() {
-  if (!gpuLibrary) {
-    gpuLibrary = std::make_shared<GpuLibrary>();
-    firstTime = false;
-    gpuLibrary->SetMute(true);
-    gpuLibrary->SetRequestedGpuDevice(requestedGpuDeviceId);
+  return bool(GpuLibraries().Acquire(ResolveGpuDevice(), true));
+}
 
-    if (gpuLibrary->Init("libmaestro_gpu_simulators.so"))
-      return true;
-    else
-      gpuLibrary = nullptr;
-  }
+int SimulatorsFactory::GetGpuDeviceCount() {
+  return GpuLibraries().DeviceCount();
+}
 
-  return false;
+bool SimulatorsFactory::IsGpuLibraryAvailable(int deviceId) {
+  return bool(GpuLibraries().Acquire(ResolveGpuDevice(deviceId), true));
 }
 
 #endif
@@ -178,18 +193,16 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
           SimulatorType::kQCSim);
 #ifdef __linux__
     case SimulatorType::kGpuSim:
-      if (gpuLibrary && gpuLibrary->IsValid() &&
-          (m != SimulationType::kDensityMatrix ||
-           gpuLibrary->HasDensityMatrixAPI()) &&
-          (m != SimulationType::kMatrixProductOperator ||
-           gpuLibrary->HasMPOAPI()) &&
-          (m == SimulationType::kStatevector ||
+      // Discovery does not initialize a device: configuration follows creation.
+      if (GetGpuDeviceCount() == 0) return nullptr;
+      if ((m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
            m == SimulationType::kDensityMatrix ||
            m == SimulationType::kMatrixProductOperator ||
            m == SimulationType::kTensorNetwork ||
            m == SimulationType::kPauliPropagator)) {
         auto sim = std::make_shared<Private::GpuSimulator>();
+        sim->Configure("gpu_device", std::to_string(ResolveGpuDevice()).c_str());
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");
         else if (m == SimulationType::kMatrixProductOperator)
@@ -281,18 +294,16 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
           SimulatorType::kQCSim);
 #ifdef __linux__
     case SimulatorType::kGpuSim:
-      if (gpuLibrary && gpuLibrary->IsValid() &&
-          (m != SimulationType::kDensityMatrix ||
-           gpuLibrary->HasDensityMatrixAPI()) &&
-          (m != SimulationType::kMatrixProductOperator ||
-           gpuLibrary->HasMPOAPI()) &&
-          (m == SimulationType::kStatevector ||
+      // Discovery does not initialize a device: configuration follows creation.
+      if (GetGpuDeviceCount() == 0) return nullptr;
+      if ((m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
            m == SimulationType::kDensityMatrix ||
            m == SimulationType::kMatrixProductOperator ||
            m == SimulationType::kTensorNetwork ||
            m == SimulationType::kPauliPropagator)) {
         auto sim = std::make_unique<Private::GpuSimulator>();
+        sim->Configure("gpu_device", std::to_string(ResolveGpuDevice()).c_str());
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");
         else if (m == SimulationType::kMatrixProductOperator)

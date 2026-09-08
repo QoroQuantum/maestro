@@ -17,7 +17,7 @@
 
 #ifdef __linux__
 
-#include "GpuLibrary.h"
+#include "GpuDeviceContext.h"
 
 #include <memory>
 
@@ -28,7 +28,7 @@ class GpuLibStateVectorSim {
   explicit GpuLibStateVectorSim(const std::shared_ptr<GpuLibrary> &lib)
       : lib(lib) {
     if (lib)
-      obj = lib->CreateStateVector();
+      obj = this->lib->CreateStateVector();
     else
       obj = nullptr;
   }
@@ -387,7 +387,7 @@ class GpuLibStateVectorSim {
   }
 
  private:
-  std::shared_ptr<GpuLibrary> lib;
+  GpuDeviceContext lib;
   void *obj;
 };
 }  // namespace Simulators

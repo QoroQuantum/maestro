@@ -15,14 +15,14 @@
 #include <utility>
 #include <vector>
 
-#include "GpuLibrary.h"
+#include "GpuDeviceContext.h"
 
 namespace Simulators {
 
 class GpuDensityMatrix {
  public:
   explicit GpuDensityMatrix(const std::shared_ptr<GpuLibrary>& lib)
-      : lib(lib), obj(lib ? lib->CreateDensityMatrix() : nullptr) {}
+      : lib(lib), obj(lib ? this->lib->CreateDensityMatrix() : nullptr) {}
   GpuDensityMatrix(const std::shared_ptr<GpuLibrary>& lib, void* obj)
       : lib(lib), obj(obj) {}
   GpuDensityMatrix() = delete;
@@ -105,6 +105,8 @@ class GpuDensityMatrix {
     return result;
   }
   std::complex<double> HilbertSchmidtOverlap(const GpuDensityMatrix& other) const {
+    if (lib != other.lib)
+      throw std::invalid_argument("GPU overlap requires states on the same device context");
     double re = 0., im = 0.;
     if (!lib->DMHilbertSchmidtOverlap(obj, other.obj, &re, &im))
       throw std::runtime_error("GPU density-matrix overlap failed");
@@ -188,7 +190,7 @@ class GpuDensityMatrix {
 #undef GPU_DM_CHECK
 
  private:
-  std::shared_ptr<GpuLibrary> lib;
+  GpuDeviceContext lib;
   void* obj = nullptr;
 };
 

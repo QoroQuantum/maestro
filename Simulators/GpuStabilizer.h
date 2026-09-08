@@ -16,7 +16,7 @@
 
 #ifdef __linux__
 
-#include "GpuLibrary.h"
+#include "GpuDeviceContext.h"
 
 namespace Simulators {
 
@@ -222,7 +222,7 @@ class GpuStabilizer {
   }
 
  private:
-  std::shared_ptr<GpuLibrary> lib;
+  GpuDeviceContext lib;
   void *obj;
 };
 
