@@ -4658,3 +4658,95 @@ class TestSimulatorSeed:
 
     def test_different_seeds_use_different_streams(self):
         assert self.run(1) != self.run(2)
+
+
+class TestIdleAndMultiBandNoise:
+    def test_quantum_circuit_delay(self):
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.delay(0, 100e-9)
+        qc.delay(200e-9, 1)
+        qc.measure_all()
+        res = qc.execute(shots=10)
+        assert res is not None
+
+    def test_qasm_delay_parsing(self):
+        parser = maestro.QasmToCirc()
+        qasm = """
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        delay[100ns] q[0];
+        delay(50us) q[1];
+        """
+        circ = parser.parse_and_translate(qasm)
+        assert circ is not None
+
+    def test_idle_noise_model_configuration(self):
+        nm = maestro.NoiseModel()
+        assert not nm.has_idle_noise()
+        nm.set_idle_noise(0, t1=50e-6, t2=30e-6, excited_population=0.02, detuning_hz=1e5)
+        assert nm.has_idle_noise()
+        assert nm.has_any()
+
+        with pytest.raises(ValueError):
+            nm.set_idle_noise(1, t1=10e-6, t2=25e-6)
+
+    def test_multi_band_ou_configuration(self):
+        nm = maestro.NoiseModel()
+        assert not nm.has_correlated()
+
+        nm.add_correlated_ou_band(0, sigma=10.0, alpha=2.0, gate_time=100e-9, stationary_init=True)
+        nm.add_correlated_ou_band(0, sigma=20.0, alpha=5.0, gate_time=100e-9, stationary_init=True)
+        assert nm.has_correlated()
+
+        nm.set_multi_correlated_ou(1, [(10.0, 2.0), (20.0, 5.0)], gate_time=100e-9)
+        assert nm.has_correlated()
+
+        nm.set_all_multi_correlated_ou(3, [(5.0, 1.0), (15.0, 4.0)], gate_time=100e-9)
+        assert nm.has_correlated()
+
+        nm.set_1_over_f_noise(2, total_power=1e-4, f_min=1e3, f_max=1e7, num_bands=4, gate_time=100e-9)
+        assert nm.has_correlated()
+
+    def test_ou_backward_compatibility(self):
+        nm = maestro.NoiseModel()
+        # 4 args (legacy default signature)
+        nm.set_correlated_ou(0, 15.0, 0.5, 100e-9)
+        assert nm.has_correlated()
+
+        # 6 args (legacy with after_1q / after_2q)
+        nm.set_correlated_ou(1, 15.0, 0.5, 100e-9, True, False)
+        assert nm.has_correlated()
+
+        # set_all_correlated_ou
+        nm.set_all_correlated_ou(4, 15.0, 0.5, 100e-9)
+        assert nm.has_correlated()
+
+        # set_all_correlated_from_power
+        nm.set_all_correlated_from_power(4, 1e-3, 0.5, 100e-9)
+        assert nm.has_correlated()
+
+    def test_delay_idle_simulation(self):
+        from maestro.circuits import QuantumCircuit
+        nm = maestro.NoiseModel()
+        nm.set_idle_noise(0, t1=40e-6, t2=25e-6)
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.delay(0, 5e-6)
+        qc.measure_all()
+
+        config_dm = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.DensityMatrix
+        )
+        res_dm = maestro.noisy_execute(qc, nm, config=config_dm, shots=10)
+        assert res_dm is not None
+
+        config_sv = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Statevector
+        )
+        res_sv = maestro.noisy_execute(qc, nm, config=config_sv, shots=10)
+        assert res_sv is not None
