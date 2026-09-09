@@ -158,7 +158,16 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
     qasm3OnlyGates.add("phase", "phase")("cphase", "cphase")("gphase",
                                                              "gphase");
 
-    durationUnit.add("ns", 1e-9)("us", 1e-6)("ms", 1e-3)("s", 1.0)("dt", 1e-9);
+    durationUnit.add("ns", 1e-9)("us", 1e-6)("ms", 1e-3)("s", 1.0);
+    unsupportedDurationUnit.add(
+        "dt",
+        "OpenQASM 3 'dt' unit delays require hardware timing context and are not "
+        "supported without a target waveform configuration.");
+
+    durationUnitRule =
+        durationUnit |
+        unsupportedDurationUnit[qi::_val =
+                                    RejectUnsupportedDurationUnit(qi::_1)];
 
     comments %= *comment;
     includes %= *include;
@@ -496,8 +505,8 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
 
     delayOp =
         (qi::omit[qi::lexeme[qi::lit("delay") >> (qi::space | &qi::char_("[("))]] >>
-         (('[' >> expression >> -durationUnit >> ']') |
-          ('(' >> expression >> -durationUnit >> ')')) >>
+         (('[' >> expression >> -durationUnitRule >> ']') |
+          ('(' >> expression >> -durationUnitRule >> ')')) >>
          mixedList)[qi::_val = MakeDelay(qi::_1, qi::_2,
                                          std::ref(inputValues))];
 
@@ -808,6 +817,8 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
   // to its own spelling.
   qi::symbols<char, std::string> qasm3OnlyGates;
   qi::symbols<char, double> durationUnit;
+  qi::symbols<char, std::string> unsupportedDurationUnit;
+  qi::rule<Iterator, double(), Skipper> durationUnitRule;
 
   int creg_counter = 0;
   int qreg_counter = 0;

@@ -140,6 +140,8 @@ struct OUBand {
   double theta = 0.0;      ///< 1 / (alpha * gate_time) for continuous OU integration
   double gate_time = 0.0;  ///< Gate duration in seconds
   bool stationary_init = true; ///< Seed from Gaussian equilibrium N(0, sigma_stat^2) at step 0
+  bool inject_after_1q = true; ///< Inject after 1Q gates (default: yes)
+  bool inject_after_2q = true; ///< Inject after 2Q gates (default: yes)
 };
 
 /// Per-qubit time-correlated (multi-band OU / 1/f) dephasing noise parameters.
@@ -374,7 +376,8 @@ class NoiseModel {
   // ── Correlated (time-correlated) noise setters ──
 
   static OUBand make_ou_band_(double sigma, double alpha, double gate_time,
-                              bool stationary_init = true) {
+                              bool stationary_init = true,
+                              bool after_1q = true, bool after_2q = true) {
     if (!std::isfinite(sigma) || sigma < 0.0)
       throw std::invalid_argument(
           "OU diffusion coefficient must be finite and nonnegative");
@@ -390,7 +393,8 @@ class NoiseModel {
     double sigma_eta_sq = sigma_stat_sq * (1.0 - phi * phi);
     double sigma_eta = std::sqrt(std::max(sigma_eta_sq, 0.0));
     double sigma_stat = std::sqrt(std::max(sigma_stat_sq, 0.0));
-    return OUBand{phi, sigma_eta, sigma_stat, theta, gate_time, stationary_init};
+    return OUBand{phi, sigma_eta, sigma_stat, theta, gate_time,
+                  stationary_init, after_1q, after_2q};
   }
 
   /**
@@ -411,7 +415,8 @@ class NoiseModel {
                             ? sigma_eta / std::sqrt(one_minus_phi2)
                             : sigma_eta;
     double theta = (phi > 0.0 && phi < 1.0) ? -std::log(phi) : 1.0;
-    OUBand band{phi, sigma_eta, sigma_stat, theta, 1.0, stationary_init};
+    OUBand band{phi, sigma_eta, sigma_stat, theta, 1.0, stationary_init,
+                after_1q, after_2q};
     correlated_[q] = CorrelatedNoise{{band}, after_1q, after_2q};
   }
 
@@ -435,7 +440,8 @@ class NoiseModel {
   void set_correlated_ou(int q, double sigma, double alpha,
                          double gate_time, bool after_1q = true,
                          bool after_2q = true, bool stationary_init = true) {
-    OUBand band = make_ou_band_(sigma, alpha, gate_time, stationary_init);
+    OUBand band = make_ou_band_(sigma, alpha, gate_time, stationary_init,
+                                after_1q, after_2q);
     correlated_[q] = CorrelatedNoise{{band}, after_1q, after_2q};
   }
 
@@ -446,12 +452,15 @@ class NoiseModel {
                               double gate_time, bool after_1q = true,
                               bool after_2q = true,
                               bool stationary_init = true) {
-    OUBand band = make_ou_band_(sigma, alpha, gate_time, stationary_init);
+    OUBand band = make_ou_band_(sigma, alpha, gate_time, stationary_init,
+                                after_1q, after_2q);
     auto it = correlated_.find(q);
     if (it == correlated_.end()) {
       correlated_[q] = CorrelatedNoise{{band}, after_1q, after_2q};
     } else {
       it->second.bands.push_back(band);
+      it->second.inject_after_1q = it->second.inject_after_1q || after_1q;
+      it->second.inject_after_2q = it->second.inject_after_2q || after_2q;
     }
   }
 
@@ -466,7 +475,8 @@ class NoiseModel {
     ou_bands.reserve(bands.size());
     for (const auto &[sigma, alpha] : bands) {
       ou_bands.push_back(
-          make_ou_band_(sigma, alpha, gate_time, stationary_init));
+          make_ou_band_(sigma, alpha, gate_time, stationary_init,
+                        after_1q, after_2q));
     }
     correlated_[q] = CorrelatedNoise{std::move(ou_bands), after_1q, after_2q};
   }
@@ -1343,6 +1353,71 @@ inline void inject_2q_depol_(
 }
 
 /**
+ * Analytically integrate an OU fluctuator band over a continuous delay tau.
+ *
+ * Given current state y0 = y(0) and delay tau:
+ *   - Terminal state y(tau) has conditional mean y0 * exp(-theta * tau)
+ *     and conditional variance sigma_stat^2 * (1 - exp(-2*theta*tau)).
+ *   - Accumulated phase Delta Phi = (1 / t_g) * integral_0^tau y(t) dt has
+ *     conditional mean y0 * (1 - exp(-theta * tau)) / (theta * t_g)
+ *     and exact variance computed via double Ito integration.
+ *   - (y(tau), Delta Phi) are jointly Gaussian with exact covariance.
+ *
+ * Returns {y(tau), Delta Phi}. If tau <= 1e-15, returns {y0, 0.0}.
+ */
+inline std::pair<double, double> integrate_ou_band_delay_(
+    const OUBand &band, double y0, double tau, std::mt19937 &rng) {
+  if (tau <= 1e-15) {
+    return {y0, 0.0};
+  }
+
+  double theta = band.theta;
+  double tg = (band.gate_time > 0.0) ? band.gate_time : 1.0;
+  double sigma_stat = band.sigma_stat;
+  double x = theta * tau;
+
+  double e1 = std::exp(-x);
+  double e2 = std::exp(-2.0 * x);
+
+  double m_y = y0 * e1;
+  double V_yy = sigma_stat * sigma_stat * std::max(0.0, 1.0 - e2);
+
+  double m_phi = 0.0;
+  double V_phi = 0.0;
+  double V_yphi = 0.0;
+
+  if (x < 1e-4) {
+    double one_minus_e1_div_theta =
+        tau * (1.0 - 0.5 * x + (1.0 / 6.0) * x * x - (1.0 / 24.0) * x * x * x);
+    m_phi = (y0 / tg) * one_minus_e1_div_theta;
+    double bracket =
+        tau * x * x * ((1.0 / 3.0) - 0.25 * x + (7.0 / 60.0) * x * x);
+    V_phi = (2.0 * sigma_stat * sigma_stat / (tg * tg * theta)) * bracket;
+    double om_e1_approx = x * (1.0 - 0.5 * x);
+    V_yphi = (sigma_stat * sigma_stat / (tg * theta)) * (om_e1_approx * om_e1_approx);
+  } else {
+    m_phi = (y0 / (tg * theta)) * (1.0 - e1);
+    double bracket = x - 2.0 * (1.0 - e1) + 0.5 * (1.0 - e2);
+    V_phi = (2.0 * sigma_stat * sigma_stat / (tg * tg * theta * theta)) * bracket;
+    double om_e1 = 1.0 - e1;
+    V_yphi = (sigma_stat * sigma_stat / (tg * theta)) * (om_e1 * om_e1);
+  }
+
+  std::normal_distribution<double> normal(0.0, 1.0);
+  double xi1 = normal(rng);
+  double xi2 = normal(rng);
+
+  double sigma_y = std::sqrt(std::max(0.0, V_yy));
+  double y_tau = m_y + sigma_y * xi1;
+
+  double V_cond = (V_yy > 1e-20) ? std::max(0.0, V_phi - (V_yphi * V_yphi) / V_yy) : V_phi;
+  double m_cond = (sigma_y > 1e-12) ? (m_phi + (V_yphi / sigma_y) * xi1) : m_phi;
+  double delta_phi = m_cond + std::sqrt(std::max(0.0, V_cond)) * xi2;
+
+  return {y_tau, delta_phi};
+}
+
+/**
  * Inject random Pauli error gates into a circuit copy (Monte Carlo sample).
  * After each gate, for every affected qubit with noise, a random Pauli
  * (X, Y, Z, or I) is applied according to the channel probabilities.
@@ -1373,6 +1448,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(
     if (op->GetType() == Circuits::OperationType::kDelay) {
       auto delay_op = std::dynamic_pointer_cast<Circuits::Delay<double>>(op);
       double tau = delay_op ? delay_op->GetDuration() : 0.0;
+      if (tau <= 1e-15) continue;
       auto affected = op->AffectedQubits();
       for (auto q : affected) {
         int qi = static_cast<int>(q);
@@ -1638,6 +1714,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_correlated_noise(
     if (op->GetType() == Circuits::OperationType::kDelay) {
       auto delay_op = std::dynamic_pointer_cast<Circuits::Delay<double>>(op);
       double tau = delay_op ? delay_op->GetDuration() : 0.0;
+      if (tau <= 1e-15) continue;
       auto affected = op->AffectedQubits();
       for (auto q : affected) {
         int qi = static_cast<int>(q);
@@ -1654,19 +1731,17 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_correlated_noise(
           }
         }
 
-        double y_total = 0.0;
+        double phase_total = 0.0;
         for (size_t b = 0; b < cn->bands.size(); ++b) {
           const auto &band = cn->bands[b];
-          double phi_tau = std::exp(-band.theta * tau);
-          double sigma_eta_tau =
-              band.sigma_stat * std::sqrt(std::max(0.0, 1.0 - phi_tau * phi_tau));
-          double y_b = phi_tau * bands_state[b] + sigma_eta_tau * normal(rng);
-          bands_state[b] = y_b;
-          y_total += y_b;
+          auto [y_tau, delta_phi] = integrate_ou_band_delay_(
+              band, bands_state[b], tau, rng);
+          bands_state[b] = y_tau;
+          phase_total += delta_phi;
         }
 
-        if (std::abs(y_total) > 1e-18) {
-          out->AddOperation(std::make_shared<Circuits::RzGate<>>(q, y_total));
+        if (std::abs(phase_total) > 1e-18) {
+          out->AddOperation(std::make_shared<Circuits::RzGate<>>(q, phase_total));
         }
       }
       continue;
@@ -1681,10 +1756,6 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_correlated_noise(
       int qi = static_cast<int>(q);
       const auto *cn = nm.get_correlated(qi);
       if (!cn || cn->bands.empty()) continue;
-
-      // Check gate-type flags
-      if (!is_multiq && !cn->inject_after_1q) continue;
-      if (is_multiq && !cn->inject_after_2q) continue;
 
       auto &bands_state = state[qi];
       if (bands_state.empty()) {
@@ -1701,6 +1772,8 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_correlated_noise(
         const auto &band = cn->bands[b];
         double y_b = band.phi * bands_state[b] + band.sigma_eta * normal(rng);
         bands_state[b] = y_b;
+        if (!is_multiq && !band.inject_after_1q) continue;
+        if (is_multiq && !band.inject_after_2q) continue;
         y_total += y_b;
       }
 
@@ -1754,6 +1827,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
     if (op->GetType() == Circuits::OperationType::kDelay) {
       auto delay_op = std::dynamic_pointer_cast<Circuits::Delay<double>>(op);
       double tau = delay_op ? delay_op->GetDuration() : 0.0;
+      if (tau <= 1e-15) continue;
       auto affected = op->AffectedQubits();
       for (auto q : affected) {
         int qi = static_cast<int>(q);
@@ -1769,18 +1843,16 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
                                    : 0.0;
             }
           }
-          double y_total = 0.0;
+          double phase_total = 0.0;
           for (size_t b = 0; b < crn->bands.size(); ++b) {
             const auto &band = crn->bands[b];
-            double phi_tau = std::exp(-band.theta * tau);
-            double sigma_eta_tau =
-                band.sigma_stat * std::sqrt(std::max(0.0, 1.0 - phi_tau * phi_tau));
-            double y_b = phi_tau * bands_state[b] + sigma_eta_tau * normal_dist(rng);
-            bands_state[b] = y_b;
-            y_total += y_b;
+            auto [y_tau, delta_phi] = integrate_ou_band_delay_(
+                band, bands_state[b], tau, rng);
+            bands_state[b] = y_tau;
+            phase_total += delta_phi;
           }
-          if (std::abs(y_total) > 1e-18) {
-            out->AddOperation(std::make_shared<Circuits::RzGate<>>(q, y_total));
+          if (std::abs(phase_total) > 1e-18) {
+            out->AddOperation(std::make_shared<Circuits::RzGate<>>(q, phase_total));
           }
         }
 
@@ -1839,8 +1911,6 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
       int qi = static_cast<int>(q);
       const auto *crn = nm.get_correlated(qi);
       if (!crn || crn->bands.empty()) continue;
-      if (!is_multiq && !crn->inject_after_1q) continue;
-      if (is_multiq && !crn->inject_after_2q) continue;
 
       auto &bands_state = corr_state[qi];
       if (bands_state.empty()) {
@@ -1857,6 +1927,8 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
         const auto &band = crn->bands[b];
         double y_b = band.phi * bands_state[b] + band.sigma_eta * normal_dist(rng);
         bands_state[b] = y_b;
+        if (!is_multiq && !band.inject_after_1q) continue;
+        if (is_multiq && !band.inject_after_2q) continue;
         y_total += y_b;
       }
 

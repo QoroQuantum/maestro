@@ -9,6 +9,8 @@
 #ifndef _CIRCUIT_DELAY_H_
 #define _CIRCUIT_DELAY_H_
 
+#include <cmath>
+#include <stdexcept>
 #include "Operations.h"
 
 namespace Circuits {
@@ -33,7 +35,13 @@ class Delay : public IOperation<Time> {
    * @param duration The physical delay duration in seconds.
    */
   Delay(Types::qubit_t qubit = 0, Time duration = 0)
-      : IOperation<Time>(duration), qubit_(qubit) {}
+      : IOperation<Time>(duration), qubit_(qubit) {
+    if (std::isnan(static_cast<double>(duration)) ||
+        std::isinf(static_cast<double>(duration)) ||
+        duration < 0) {
+      throw std::invalid_argument("Delay duration must be finite and nonnegative");
+    }
+  }
 
   /**
    * @brief Execute the delay operation on the simulator.

@@ -704,6 +704,20 @@ struct AddBarrierExpr : public AbstractSyntaxTree {
 
 inline phx::function<AddBarrierExpr> AddBarrier;
 
+struct RejectUnsupportedDurationUnitExpr {
+  template <typename>
+  struct result {
+    typedef double type;
+  };
+
+  double operator()(const std::string &message) const {
+    throw std::invalid_argument(message);
+  }
+};
+
+inline phx::function<RejectUnsupportedDurationUnitExpr>
+    RejectUnsupportedDurationUnit;
+
 struct MakeDelayExpr {
   template <typename, typename, typename>
   struct result {
