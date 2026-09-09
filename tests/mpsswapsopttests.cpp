@@ -13,7 +13,9 @@
 namespace utf = boost::unit_test;
 namespace bdata = boost::unit_test::data;
 
+#ifndef NO_QISKIT_AER
 #include <framework/avx2_detect.hpp>
+#endif
 
 #undef min
 #undef max

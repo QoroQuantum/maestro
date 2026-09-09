@@ -39,7 +39,7 @@ Issues = "https://github.com/QoroQuantum/maestro/issues"
 sinter = ["sinter>=1.14", "stim>=1.14"]
 
 [tool.scikit-build]
-cmake.version = ">=3.15"
+cmake.version = ">=3.16"
 cmake.build-type = "Release"
 build-dir = "build/{wheel_tag}"
 
