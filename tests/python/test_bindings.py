@@ -4750,3 +4750,54 @@ class TestIdleAndMultiBandNoise:
         )
         res_sv = maestro.noisy_execute(qc, nm, config=config_sv, shots=10)
         assert res_sv is not None
+
+    def test_zero_duration_delay_ou_no_rotation(self):
+        from maestro.circuits import QuantumCircuit
+        nm = maestro.NoiseModel()
+        nm.set_correlated_ou(
+            0, sigma=50.0, alpha=2.0, gate_time=100e-9, after_1q=False, stationary_init=True
+        )
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.delay(0, 0.0)
+
+        # Zero-duration delay must accumulate exactly zero phase
+        res = qc.full_noise_estimate("X", nm, noise_realizations=50, seed=42)
+        val = res["expectation_values"][0]
+        assert abs(val - 1.0) < 1e-6
+
+        # Nonzero delay accumulates phase and dephases
+        qc_long = QuantumCircuit()
+        qc_long.h(0)
+        qc_long.delay(0, 10e-6)
+        res_long = qc_long.full_noise_estimate("X", nm, noise_realizations=50, seed=42)
+        val_long = res_long["expectation_values"][0]
+        assert val_long < 0.97
+
+    def test_delay_invalid_durations_rejected(self):
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        with pytest.raises(ValueError, match="Delay duration must be finite and nonnegative"):
+            qc.delay(0, -1e-6)
+        with pytest.raises(ValueError, match="Delay duration must be finite and nonnegative"):
+            qc.delay(0, float("nan"))
+        with pytest.raises(ValueError, match="Delay duration must be finite and nonnegative"):
+            qc.delay(0, float("inf"))
+
+    def test_qasm_dt_rejected_without_context(self):
+        parser = maestro.QasmToCirc()
+        qasm = """
+        OPENQASM 3.0;
+        include "stdgates.inc";
+        qubit[1] q;
+        delay[100dt] q[0];
+        """
+        with pytest.raises(ValueError, match="dt"):
+            parser.parse_and_translate(qasm)
+
+    def test_multi_band_ou_per_band_gate_flags(self):
+        nm = maestro.NoiseModel()
+        nm.set_correlated_ou(0, sigma=20.0, alpha=2.0, gate_time=100e-9, after_1q=False, after_2q=True)
+        nm.add_correlated_ou_band(0, sigma=30.0, alpha=5.0, gate_time=100e-9, after_1q=True, after_2q=True)
+        assert nm.has_correlated()

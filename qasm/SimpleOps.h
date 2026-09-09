@@ -704,20 +704,6 @@ struct AddBarrierExpr : public AbstractSyntaxTree {
 
 inline phx::function<AddBarrierExpr> AddBarrier;
 
-struct RejectUnsupportedDurationUnitExpr {
-  template <typename>
-  struct result {
-    typedef double type;
-  };
-
-  double operator()(const std::string &message) const {
-    throw std::invalid_argument(message);
-  }
-};
-
-inline phx::function<RejectUnsupportedDurationUnitExpr>
-    RejectUnsupportedDurationUnit;
-
 struct MakeDelayExpr {
   template <typename, typename, typename>
   struct result {
@@ -731,6 +717,11 @@ struct MakeDelayExpr {
     const auto &unitOpt = boost::fusion::at_c<1>(dur);
     double val = expr.Eval(variables);
     double scale = unitOpt ? *unitOpt : 1.0;
+    if (scale < 0.0) {
+      throw std::invalid_argument(
+          "OpenQASM 'dt' unit delays require hardware timing context and are not "
+          "supported without a target waveform configuration.");
+    }
     return DelayType{val * scale, operands};
   }
 };
