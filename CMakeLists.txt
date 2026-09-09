@@ -1,27 +1,18 @@
-cmake_minimum_required(VERSION 3.16)
-project(maestro C CXX)
+cmake_minimum_required(VERSION 3.10)
+project(maestro)
 
-# ==============================================================================
-# 1. Global Project Settings & Defaults
-# ==============================================================================
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose Release or Debug" FORCE)
-endif()
-
-# Global binary output directory
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}/bin)
 
-# Fast tests definition across all targets
-add_definitions(-D_FAST_TESTS)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(default_build_type "Release")
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose Release or Debug" FORCE)
+endif()
 
-# Optional ccache launcher for compilation speedup
+# Use ccache if available to speed up recompilation
 find_program(CCACHE_FOUND ccache)
 if(CCACHE_FOUND)
     set(CMAKE_C_COMPILER_LAUNCHER ${CCACHE_FOUND})
@@ -31,53 +22,193 @@ else()
     message(STATUS "ccache not found, install it for faster recompilation: brew install ccache")
 endif()
 
-# Suppress deprecation warning on CMake >= 3.30 for FetchContent_Populate
-if(POLICY CMP0169)
-    cmake_policy(SET CMP0169 OLD)
+if(MSVC)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /bigobj")
+else()
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-array-bounds -Wno-delete-non-abstract-non-virtual-dtor")
 endif()
-# Suppress FindBoost removal policy warning on modern CMake
-if(POLICY CMP0167)
-    cmake_policy(SET CMP0167 NEW)
-endif()
+set(EXECUTABLE_OUTPUT_PATH ${CMAKE_BINARY_DIR}/bin)
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-include(FetchContent)
+add_definitions( -D_FAST_TESTS )
 
-# ==============================================================================
-# 2. Build Options
-# ==============================================================================
-
-option(COMPILE_TESTS "Compile test suite" ON)
-if(NOT "$ENV{NO_TESTS}" STREQUAL "")
-    set(COMPILE_TESTS OFF)
-endif()
-
-option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
-option(MAESTRO_ENABLE_OPENMP "Enable OpenMP acceleration" ON)
-
-# Qiskit Aer is optional - disabled by default for easier builds.
-# Enabled only if AER_INCLUDE_DIR is explicitly provided.
+# Qiskit Aer is optional - disabled by default for easier builds
+# Enable only if AER_INCLUDE_DIR is explicitly set
 set(QAER False)
-if(NOT "$ENV{NO_QISKIT_AER}" STREQUAL "")
+
+# Check if explicitly disabled
+if (NOT "$ENV{NO_QISKIT_AER}" STREQUAL "")
     add_definitions(-DNO_QISKIT_AER)
     set(QAER False)
     message(STATUS "Qiskit Aer support explicitly disabled via NO_QISKIT_AER")
-elseif(NOT "$ENV{AER_INCLUDE_DIR}" STREQUAL "")
+# Check if AER_INCLUDE_DIR is set (enables Aer)
+elseif (NOT "$ENV{AER_INCLUDE_DIR}" STREQUAL "")
     set(QAER True)
     message(STATUS "Qiskit Aer support enabled (AER_INCLUDE_DIR is set)")
+# Default: disabled (user-friendly for PyPI builds)
 else()
     add_definitions(-DNO_QISKIT_AER)
     set(QAER False)
     message(STATUS "Qiskit Aer support disabled by default. Set AER_INCLUDE_DIR to enable.")
 endif()
 
-# ==============================================================================
-# 3. Compiler Flags & Architecture / SIMD
-# ==============================================================================
+# Include FetchContent for automatic dependency management
+include(FetchContent)
+
+option(COMPILE_TESTS "Compile test suite" ON)
+if (NOT "$ENV{NO_TESTS}" STREQUAL "")
+	set(COMPILE_TESTS False)
+endif()
+
+option(MAESTRO_ENABLE_OPENMP "Enable OpenMP acceleration" ON)
+
+# Eigen 5 (header-only, can be fetched automatically)
+if (NOT DEFINED EIGEN5_INCLUDE_DIR)
+    SET( EIGEN5_INCLUDE_DIR "$ENV{EIGEN5_INCLUDE_DIR}" )
+    IF( NOT EIGEN5_INCLUDE_DIR )
+        # Auto-fetch Eigen if not provided
+        message(STATUS "EIGEN5_INCLUDE_DIR not set, fetching Eigen 5.0.0...")
+        FetchContent_Declare(
+            eigen
+            URL https://gitlab.com/libeigen/eigen/-/archive/5.0.0/eigen-5.0.0.tar.gz
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        )
+        FetchContent_MakeAvailable(eigen)
+        set(EIGEN5_INCLUDE_DIR ${eigen_SOURCE_DIR})
+        message(STATUS "Eigen fetched to: ${EIGEN5_INCLUDE_DIR}")
+    ENDIF()
+ENDIF()
+
+# QCSim (can be fetched automatically, but requires FFTW3)
+if (NOT DEFINED QCSIM_INCLUDE_DIR)
+    SET( QCSIM_INCLUDE_DIR "$ENV{QCSIM_INCLUDE_DIR}" )
+    IF( NOT QCSIM_INCLUDE_DIR )
+        # Auto-fetch QCSim if not provided
+        message(STATUS "QCSIM_INCLUDE_DIR not set, fetching QCSim...")
+        FetchContent_Declare(
+            qcsim
+            GIT_REPOSITORY https://github.com/aromanro/QCSim.git
+            GIT_TAG 34ed4ad694f7eaa3ab0f82dd6fc4bc40528624f9
+        )
+
+        # Just populate the source (don't build it with add_subdirectory)
+        FetchContent_GetProperties(qcsim)
+        if(NOT qcsim_POPULATED)
+            FetchContent_Populate(qcsim)
+        endif()
+
+        set(QCSIM_INCLUDE_DIR ${qcsim_SOURCE_DIR}/QCSim)
+        message(STATUS "QCSim fetched to: ${QCSIM_INCLUDE_DIR}")
+    ENDIF()
+ENDIF()
+
+if (QAER)
+    # nlohmann/json (header-only, can be fetched automatically)
+    if (NOT DEFINED JSON_INCLUDE_DIR)
+        SET( JSON_INCLUDE_DIR "$ENV{JSON_INCLUDE_DIR}" )
+        IF( NOT JSON_INCLUDE_DIR )
+            # Auto-fetch nlohmann/json if not provided
+            message(STATUS "JSON_INCLUDE_DIR not set, fetching nlohmann/json...")
+            FetchContent_Declare(
+                json
+                GIT_REPOSITORY https://github.com/nlohmann/json.git
+                GIT_TAG v3.11.2
+            )
+            FetchContent_MakeAvailable(json)
+            set(JSON_INCLUDE_DIR ${json_SOURCE_DIR}/single_include)
+            message(STATUS "nlohmann/json fetched to: ${JSON_INCLUDE_DIR}")
+        ENDIF()
+    ENDIF()
+
+    # Qiskit Aer (requires AER_INCLUDE_DIR to be set)
+    if (NOT DEFINED AER_INCLUDE_DIR)
+        SET( AER_INCLUDE_DIR "$ENV{AER_INCLUDE_DIR}" )
+        IF( NOT AER_INCLUDE_DIR )
+            # If we reach here, QAER is True but AER_INCLUDE_DIR is not set
+            # This shouldn't happen with the new logic, but handle it gracefully
+            MESSAGE( WARNING "AER_INCLUDE_DIR not set but Aer support is enabled. Disabling Aer support." )
+            add_definitions(-DNO_QISKIT_AER)
+            set(QAER False)
+        ENDIF()
+    ENDIF()
+endif()
+
+# add here common sources
+
+set(TESTSSRC tests/aertests.cpp
+	tests/densitymatrixtests.cpp
+	tests/circtests.cpp
+	tests/cliffordtests.cpp
+	tests/compsimtests.cpp
+	tests/expvals.cpp
+	tests/gputests.cpp
+	tests/gpudensitymatrixtests.cpp
+	tests/gpumpotests.cpp
+	tests/gpuvscpudensitymatrixtests.cpp
+	tests/gpuvscpumpotests.cpp
+	tests/gpuvscpumpstests.cpp
+	tests/initializetobasisstatetests.cpp
+	tests/mpssimtests.cpp
+	tests/qasm.cpp
+	tests/qasm_core.cpp
+	tests/qasm_dialects.cpp
+	tests/qasm_expressions.cpp
+	tests/qasm_gate_contract.cpp
+	tests/qasm_integration.cpp
+	tests/qasm_inputs.cpp
+	tests/qasm_modifiers.cpp
+	tests/qasm_syntax.cpp
+	tests/qasm_validation.cpp
+	tests/qcsimtests.cpp
+	tests/qcsimdensitymatrixtests.cpp
+	tests/qcsimextendedstabilizertests.cpp
+	tests/qcsimmpotests.cpp
+	tests/tensorstests.cpp
+	tests/pauliproptests.cpp
+	tests/extstabtests.cpp
+	tests/mpsswapsopttests.cpp
+	tests/noisemodeltests.cpp
+	tests/PathIntegralTests.cpp
+	tests/netwsimtests.cpp
+	tests/mpsnetwtests.cpp
+	tests/tests.cpp)
+
+set(MAESTROSRC maestrolib/Interface.cpp)
+if(WIN32)
+    list(APPEND MAESTROSRC maestrolib/dllmain.cpp)
+else()
+    list(APPEND MAESTROSRC Simulators/Factory.cpp)
+endif()
+
+set(MAESTROEXESRC maestroexe/maestroexe.cpp)
+
 
 if(MSVC)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W3 /bigobj")
+    set(OpenMP_CXX "${CMAKE_CXX_COMPILER}")
+    set(OpenMP_CXX_FLAGS "/openmp")
+    set(OpenMP_CXX_LIB_NAMES "")
+endif()
+
+if(APPLE)
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+      set(OpenMP_C "${CMAKE_C_COMPILER}")
+      set(OpenMP_C_FLAGS "-fopenmp")
+      set(OpenMP_C_LIB_NAMES "omp")
+      set(OpenMP_omp_LIBRARY omp)
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+      set(OpenMP_CXX "${CMAKE_CXX_COMPILER}")
+      set(OpenMP_CXX_FLAGS "-fopenmp")
+      set(OpenMP_CXX_LIB_NAMES "omp")
+      set(OpenMP_omp_LIBRARY omp)
+    endif()
+endif()
+
+if(MAESTRO_ENABLE_OPENMP)
+    find_package(OpenMP REQUIRED)
 else()
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wno-array-bounds -Wno-delete-non-abstract-non-virtual-dtor")
+    message(STATUS "OpenMP support disabled via MAESTRO_ENABLE_OPENMP")
+    set(OpenMP_CXX_FOUND FALSE CACHE BOOL "OpenMP disabled" FORCE)
 endif()
 
 include(CheckCXXCompilerFlag)
@@ -92,110 +223,24 @@ function(enable_cxx_flag flag)
     endif()
 endfunction()
 
-# Architecture SIMD flags
-if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64" OR
-   CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "amd64" OR
-   CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "AMD64")
+if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64" OR CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "amd64" OR CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "AMD64")
     if(UNIX OR APPLE)
-        if(NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
-            message(STATUS "Setting SIMD flags for x86_64...")
+        if (NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64")
+            message("Setting SIMD...")
             set(SIMD_FLAGS "-mfma;-mavx2")
             enable_cxx_flag("-mpopcnt")
         endif()
     elseif(MSVC)
-        message(STATUS "Setting SIMD flags for MSVC...")
+        message("Setting SIMD...")
         set(SIMD_FLAGS "/arch:AVX2")
     endif()
 endif()
 
-# ==============================================================================
-# 4. External Dependencies
-# ==============================================================================
 
-# --- Eigen 5 (header-only, auto-fetched if not provided) ---
-if(NOT DEFINED EIGEN5_INCLUDE_DIR)
-    set(EIGEN5_INCLUDE_DIR "$ENV{EIGEN5_INCLUDE_DIR}")
-    if(NOT EIGEN5_INCLUDE_DIR)
-        message(STATUS "EIGEN5_INCLUDE_DIR not set, fetching Eigen 5.0.0...")
-        FetchContent_Declare(
-            eigen
-            URL https://gitlab.com/libeigen/eigen/-/archive/5.0.0/eigen-5.0.0.tar.gz
-            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-        )
-        FetchContent_MakeAvailable(eigen)
-        set(EIGEN5_INCLUDE_DIR ${eigen_SOURCE_DIR})
-        message(STATUS "Eigen fetched to: ${EIGEN5_INCLUDE_DIR}")
-    endif()
-endif()
-
-# --- QCSim (source fetched, requires FFTW3 if compiled) ---
-if(NOT DEFINED QCSIM_INCLUDE_DIR)
-    set(QCSIM_INCLUDE_DIR "$ENV{QCSIM_INCLUDE_DIR}")
-    if(NOT QCSIM_INCLUDE_DIR)
-        message(STATUS "QCSIM_INCLUDE_DIR not set, fetching QCSim...")
-        FetchContent_Declare(
-            qcsim
-            GIT_REPOSITORY https://github.com/aromanro/QCSim.git
-            GIT_TAG 34ed4ad694f7eaa3ab0f82dd6fc4bc40528624f9
-        )
-        FetchContent_GetProperties(qcsim)
-        if(NOT qcsim_POPULATED)
-            FetchContent_Populate(qcsim)
-        endif()
-        set(QCSIM_INCLUDE_DIR ${qcsim_SOURCE_DIR}/QCSim)
-        message(STATUS "QCSim fetched to: ${QCSIM_INCLUDE_DIR}")
-    endif()
-endif()
-
-# --- Optional Qiskit Aer Dependencies ---
-if(QAER)
-    if(NOT DEFINED JSON_INCLUDE_DIR)
-        set(JSON_INCLUDE_DIR "$ENV{JSON_INCLUDE_DIR}")
-        if(NOT JSON_INCLUDE_DIR)
-            message(STATUS "JSON_INCLUDE_DIR not set, fetching nlohmann/json...")
-            FetchContent_Declare(
-                json
-                GIT_REPOSITORY https://github.com/nlohmann/json.git
-                GIT_TAG v3.11.2
-            )
-            FetchContent_MakeAvailable(json)
-            set(JSON_INCLUDE_DIR ${json_SOURCE_DIR}/single_include)
-            message(STATUS "nlohmann/json fetched to: ${JSON_INCLUDE_DIR}")
-        endif()
-    endif()
-
-    if(NOT DEFINED AER_INCLUDE_DIR)
-        set(AER_INCLUDE_DIR "$ENV{AER_INCLUDE_DIR}")
-        if(NOT AER_INCLUDE_DIR)
-            message(WARNING "AER_INCLUDE_DIR not set but Aer support is enabled. Disabling Aer support.")
-            add_definitions(-DNO_QISKIT_AER)
-            set(QAER False)
-        endif()
-    endif()
-
-    if(NOT DEFINED BLA_VENDOR AND "$ENV{BLA_VENDOR}" STREQUAL "" AND NOT BLAS_LIBRARIES)
-        set(BLA_VENDOR OpenBLAS)
-        find_package(BLAS QUIET)
-        if(NOT BLAS_FOUND)
-            message(STATUS "OpenBLAS not found, falling back to the generic BLAS search")
-            unset(BLA_VENDOR)
-            unset(BLA_VENDOR CACHE)
-            unset(BLAS_LIBRARIES)
-            unset(BLAS_LIBRARIES CACHE)
-            unset(BLAS_FOUND)
-        else()
-            message(STATUS "Using OpenBLAS: ${BLAS_LIBRARIES}")
-        endif()
-    endif()
-
-    find_package(BLAS REQUIRED)
-    if(NOT BLAS_FOUND)
-        message(FATAL_ERROR "Couldn't find BLAS libraries")
-    endif()
-endif()
-
-# --- Boost ---
-if(NOT "$ENV{BOOST_ROOT}" STREQUAL "")
+# Boost can be provided via:
+# 1. BOOST_ROOT environment variable (set by build.sh for local builds)
+# 2. System installation (for PyPI builds)
+if (NOT "$ENV{BOOST_ROOT}" STREQUAL "")
     set(BOOST_ROOT "$ENV{BOOST_ROOT}")
     message(STATUS "Using Boost from BOOST_ROOT: ${BOOST_ROOT}")
 endif()
@@ -207,8 +252,8 @@ set(Boost_USE_RELEASE_LIBS ON)
 set(Boost_USE_DEBUG_LIBS OFF)
 find_package(Boost REQUIRED COMPONENTS program_options json container serialization)
 
-if(NOT Boost_FOUND)
-    message(FATAL_ERROR "\n"
+IF(NOT Boost_FOUND)
+    MESSAGE( FATAL_ERROR "\n"
         "Boost library not found!\n"
         "Please install Boost 1.89+ with the following components:\n"
         "  - program_options\n"
@@ -230,18 +275,21 @@ if(NOT Boost_FOUND)
         "\n"
         "See INSTALL.md for more details.\n"
     )
-endif()
+ENDIF()
 
-# System Boost may report /usr/include. Adding compiler-default directories
-# with -isystem can break libstdc++'s #include_next lookup of C headers.
 set(MAESTRO_DEPENDENCY_INCLUDE_DIRS
     ${EIGEN5_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${QCSIM_INCLUDE_DIR})
 if(QAER)
     list(APPEND MAESTRO_DEPENDENCY_INCLUDE_DIRS ${JSON_INCLUDE_DIR} ${AER_INCLUDE_DIR})
 endif()
-list(REMOVE_ITEM MAESTRO_DEPENDENCY_INCLUDE_DIRS ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
+# System Boost may report /usr/include. Adding compiler-default directories
+# with -isystem can break libstdc++'s #include_next lookup of C headers.
+list(REMOVE_ITEM MAESTRO_DEPENDENCY_INCLUDE_DIRS
+    ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
 include_directories(SYSTEM ${MAESTRO_DEPENDENCY_INCLUDE_DIRS})
 
+# Boost's imported targets can reintroduce the same paths transitively through
+# target_link_libraries, independently of Boost_INCLUDE_DIRS above.
 foreach(boost_target Boost::headers Boost::boost Boost::container Boost::json
                      Boost::serialization Boost::program_options)
     if(TARGET ${boost_target})
@@ -259,59 +307,134 @@ foreach(boost_target Boost::headers Boost::boost Boost::container Boost::json
     endif()
 endforeach()
 
-# --- OpenMP ---
-if(MSVC)
-    set(OpenMP_CXX "${CMAKE_CXX_COMPILER}")
-    set(OpenMP_CXX_FLAGS "/openmp")
-    set(OpenMP_CXX_LIB_NAMES "")
-endif()
+if (QAER)
 
-if(APPLE)
-    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
-        set(OpenMP_C "${CMAKE_C_COMPILER}")
-        set(OpenMP_C_FLAGS "-fopenmp")
-        set(OpenMP_C_LIB_NAMES "omp")
-        set(OpenMP_omp_LIBRARY omp)
+    # CMake's FindBLAS tries Intel MKL before everything else, so on a machine that merely
+    # happens to have MKL installed it links libmkl_intel_lp64 + libmkl_intel_thread + libiomp5
+    # even when the system's own preferred BLAS (openblas-pthread, via update-alternatives) is
+    # something else -- and it drags a second OpenMP runtime into the process alongside libgomp.
+    # This only ever affects Qiskit Aer: its MPS routes every tensor contraction through zgemm_
+    # (qiskit-aer/src/framework/matrix.hpp), while QCSim uses Eigen and never calls BLAS. Ask for
+    # OpenBLAS first, matching what the Windows build links, and fall back to the generic search
+    # only if it really is not installed.
+    # Skip the probe entirely when the caller already said which BLAS to use, either by naming a
+    # vendor or by passing the libraries outright (-DBLAS_LIBRARIES=..., which is how the Windows
+    # build points at its OpenBLAS). Probing in that case would only risk clobbering their choice.
+    if (NOT DEFINED BLA_VENDOR AND "$ENV{BLA_VENDOR}" STREQUAL "" AND NOT BLAS_LIBRARIES)
+        set(BLA_VENDOR OpenBLAS)
+        find_package(BLAS QUIET)
+        if (NOT BLAS_FOUND)
+            message(STATUS "OpenBLAS not found, falling back to the generic BLAS search")
+            unset(BLA_VENDOR)
+            unset(BLA_VENDOR CACHE)
+            unset(BLAS_LIBRARIES)
+            unset(BLAS_LIBRARIES CACHE)
+            unset(BLAS_FOUND)
+        else()
+            message(STATUS "Using OpenBLAS: ${BLAS_LIBRARIES}")
+        endif()
     endif()
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-        set(OpenMP_CXX "${CMAKE_CXX_COMPILER}")
-        set(OpenMP_CXX_FLAGS "-fopenmp")
-        set(OpenMP_CXX_LIB_NAMES "omp")
-        set(OpenMP_omp_LIBRARY omp)
+
+    find_package(BLAS REQUIRED)
+    IF(NOT BLAS_FOUND)
+        MESSAGE( FATAL_ERROR "Couldn't find blas libs")
+    ENDIF()
+endif()
+
+LINK_LIBRARIES()
+
+if (COMPILE_TESTS)
+    set(ACTIVE_TESTSSRC ${TESTSSRC})
+    if (NOT QAER)
+        list(REMOVE_ITEM ACTIVE_TESTSSRC tests/aertests.cpp tests/densitymatrixtests.cpp tests/compsimtests.cpp)
     endif()
+    add_executable(tests ${ACTIVE_TESTSSRC})
 endif()
 
-if(MAESTRO_ENABLE_OPENMP)
-    find_package(OpenMP REQUIRED)
-else()
-    message(STATUS "OpenMP support disabled via MAESTRO_ENABLE_OPENMP")
-    set(OpenMP_CXX_FOUND FALSE CACHE BOOL "OpenMP disabled" FORCE)
+# Lightweight GPU-loader tests run with a mock C plugin and need no GPU.
+if(COMPILE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Threads REQUIRED)
+    add_library(mock_gpu_plugin SHARED tests/gpu_device/mock_plugin.cpp)
+    set_target_properties(mock_gpu_plugin PROPERTIES
+        OUTPUT_NAME maestro_gpu_simulators
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/mock_gpu")
+    add_executable(gpu_registry_tests tests/gpu_device/registry_tests.cpp)
+    target_link_libraries(gpu_registry_tests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+    enable_testing()
+    add_test(NAME gpu_registry COMMAND gpu_registry_tests $<TARGET_FILE:mock_gpu_plugin>)
 endif()
-
-# ==============================================================================
-# 5. Core Targets: libmaestro and maestroexe
-# ==============================================================================
-
-set(MAESTROSRC maestrolib/Interface.cpp)
-if(WIN32)
-    list(APPEND MAESTROSRC maestrolib/dllmain.cpp)
-else()
-    list(APPEND MAESTROSRC Simulators/Factory.cpp)
-endif()
-
-set(MAESTROEXESRC maestroexe/maestroexe.cpp)
-
-# Define core library and executable
-add_library(maestro SHARED ${MAESTROSRC})
-set_target_properties(maestro PROPERTIES OUTPUT_NAME "maestro")
 
 add_executable(maestroexe ${MAESTROEXESRC})
+add_library(maestro SHARED ${MAESTROSRC})
+
+if(COMPILE_TESTS)
+    # IndividualSimulator is private and requires native simulator headers.
+    # Aer defines globals in those headers: compile the factory and tests in
+    # one translation unit, without also loading their definitions from maestro.
+    if(CMAKE_VERSION VERSION_LESS "3.16")
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/sampling_order_unity.cpp"
+            "#include \"${CMAKE_CURRENT_SOURCE_DIR}/Simulators/Factory.cpp\"\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_order_tests.cpp\"\n")
+        add_executable(sampling_order_tests "${CMAKE_CURRENT_BINARY_DIR}/sampling_order_unity.cpp")
+    else()
+        add_executable(sampling_order_tests Simulators/Factory.cpp tests/sampling_order_tests.cpp)
+        set_target_properties(sampling_order_tests PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 0)
+    endif()
+    target_link_libraries(sampling_order_tests PRIVATE Boost::serialization ${CMAKE_DL_LIBS}
+        $<TARGET_PROPERTY:maestro,INTERFACE_LINK_LIBRARIES>)
+    target_compile_options(sampling_order_tests PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_COMPILE_OPTIONS>)
+    target_include_directories(sampling_order_tests PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_INCLUDE_DIRECTORIES>)
+    set_property(TARGET sampling_order_tests PROPERTY LINK_DIRECTORIES $<TARGET_PROPERTY:maestro,INTERFACE_LINK_DIRECTORIES>)
+    enable_testing()
+    add_test(NAME sampling_order COMMAND sampling_order_tests)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME sampling_order_gpu COMMAND sampling_order_tests --gpu)
+        set_tests_properties(sampling_order_gpu PROPERTIES
+            SKIP_RETURN_CODE 77 LABELS "gpu;hardware")
+    endif()
+endif()
+
+
+# Hardware coverage skips cleanly unless two GPUs are visible.
+if(COMPILE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(gpu_multi_device_tests tests/gpu_device/multi_gpu_tests.cpp)
+    target_link_libraries(gpu_multi_device_tests PRIVATE maestro)
+    set_property(TARGET gpu_multi_device_tests APPEND_STRING PROPERTY
+        LINK_FLAGS " -Wl,--disable-new-dtags")
+    enable_testing()
+    add_test(NAME gpu_multi_device COMMAND gpu_multi_device_tests)
+    set_tests_properties(gpu_multi_device PROPERTIES
+        SKIP_RETURN_CODE 77 LABELS "gpu;hardware")
+endif()
+
+if(TARGET mock_gpu_plugin)
+    add_executable(gpu_device_tests tests/gpu_device/simulator_tests.cpp)
+    target_link_libraries(gpu_device_tests PRIVATE maestro Threads::Threads)
+    add_dependencies(gpu_device_tests mock_gpu_plugin)
+    add_test(NAME gpu_device_configuration
+        COMMAND ${CMAKE_COMMAND} -E env
+            "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:mock_gpu_plugin>:$<TARGET_FILE_DIR:maestro>:$ENV{LD_LIBRARY_PATH}"
+            $<TARGET_FILE:gpu_device_tests>)
+    add_executable(gpu_svd_tests tests/gpu_device/svd_tests.cpp)
+    target_link_libraries(gpu_svd_tests PRIVATE maestro Threads::Threads)
+    add_dependencies(gpu_svd_tests mock_gpu_plugin)
+    # These tests use the current C++ factory API. Prefer their build library
+    # over older installations in LD_LIBRARY_PATH, including for direct runs.
+    # Linux DT_RPATH takes precedence over LD_LIBRARY_PATH; DT_RUNPATH does not.
+    foreach(gpu_test gpu_device_tests gpu_svd_tests)
+        set_property(TARGET ${gpu_test} APPEND_STRING PROPERTY
+            LINK_FLAGS " -Wl,--disable-new-dtags")
+    endforeach()
+    add_test(NAME gpu_svd_configuration
+        COMMAND ${CMAKE_COMMAND} -E env
+            "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:mock_gpu_plugin>:$<TARGET_FILE_DIR:maestro>:$ENV{LD_LIBRARY_PATH}"
+            $<TARGET_FILE:gpu_svd_tests> --config-only)
+endif()
+
+set_target_properties(maestro PROPERTIES OUTPUT_NAME "maestro")
 set_target_properties(maestroexe PROPERTIES OUTPUT_NAME "maestro")
 
-# RPATH configuration
-if(APPLE)
-    set_target_properties(maestro PROPERTIES INSTALL_NAME_DIR "@rpath")
-elseif(UNIX)
+# Set rpath for library linking (helps with PyPI distribution)
+if(UNIX AND NOT APPLE)
     set_target_properties(maestro PROPERTIES
         INSTALL_RPATH "$ORIGIN"
         INSTALL_RPATH_USE_LINK_PATH TRUE
@@ -319,211 +442,65 @@ elseif(UNIX)
     )
 endif()
 
-# Link dependencies & compile options for maestro and maestroexe
-target_link_libraries(maestro PRIVATE Boost::json Boost::serialization)
-target_link_libraries(maestroexe PRIVATE Boost::serialization Boost::program_options)
-
-if(UNIX)
-    target_link_libraries(maestro PRIVATE dl)
-    target_link_libraries(maestroexe PRIVATE dl)
+if(WIN32)
+    install(TARGETS maestro
+        RUNTIME DESTINATION .
+        LIBRARY DESTINATION .
+        ARCHIVE DESTINATION .
+    )
+    install(TARGETS maestroexe
+        RUNTIME DESTINATION bin
+        LIBRARY DESTINATION bin
+        ARCHIVE DESTINATION bin
+    )
+else()
+    install(TARGETS maestro DESTINATION .)
+    install(TARGETS maestroexe DESTINATION bin)
 endif()
 
-if(SIMD_FLAGS)
-    target_compile_options(maestro PUBLIC ${SIMD_FLAGS})
-endif()
-
-if(QAER AND BLAS_FOUND)
-    target_link_libraries(maestro PUBLIC ${BLAS_LIBRARIES})
-endif()
-
-# OpenMP target configuration
 if(OpenMP_CXX_FOUND)
-    message(STATUS "Configuring OpenMP for maestro and maestroexe")
+    message("Setting OpenMP")
+
+
     if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         find_program(BREW_CMD brew)
         if(BREW_CMD)
-            execute_process(COMMAND ${BREW_CMD} --prefix libomp
-                            OUTPUT_VARIABLE LIBOMP_PREFIX
-                            OUTPUT_STRIP_TRAILING_WHITESPACE)
+            execute_process(COMMAND ${BREW_CMD} --prefix libomp OUTPUT_VARIABLE LIBOMP_PREFIX OUTPUT_STRIP_TRAILING_WHITESPACE)
             message(STATUS "Found libomp at: ${LIBOMP_PREFIX}")
         endif()
 
         target_compile_options(maestro PUBLIC -Xpreprocessor -fopenmp)
+        if (TARGET tests)
+            target_compile_options(tests PUBLIC -Xpreprocessor -fopenmp)
+        endif()
 
         if(LIBOMP_PREFIX)
             target_include_directories(maestro PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "${LIBOMP_PREFIX}/include")
             target_link_directories(maestro PUBLIC "${LIBOMP_PREFIX}/lib")
+            if (TARGET tests)
+                target_include_directories(tests PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "${LIBOMP_PREFIX}/include")
+                target_link_directories(tests PUBLIC "${LIBOMP_PREFIX}/lib")
+            endif()
         else()
-            target_include_directories(maestro PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "$ENV{OpenMP_ROOT}/include")
-            target_link_directories(maestro PUBLIC "$ENV{OpenMP_ROOT}/lib")
+             target_include_directories(maestro PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "$ENV{OpenMP_ROOT}/include")
+             target_link_directories(maestro PUBLIC "$ENV{OpenMP_ROOT}/lib")
+             if (TARGET tests)
+                target_include_directories(tests PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "$ENV{OpenMP_ROOT}/include")
+                target_link_directories(tests PUBLIC "$ENV{OpenMP_ROOT}/lib")
+             endif()
         endif()
 
         target_link_libraries(maestro PUBLIC ${OpenMP_CXX_LIBRARIES})
+        if (TARGET tests)
+            target_link_libraries(tests PUBLIC ${OpenMP_CXX_LIBRARIES})
+        endif()
     else()
         target_link_libraries(maestro PUBLIC OpenMP::OpenMP_CXX)
         if(NOT MSVC)
             target_link_libraries(maestro PRIVATE ${OpenMP_CXX_FLAGS})
         endif()
         target_compile_options(maestro PRIVATE ${OpenMP_CXX_FLAGS})
-    endif()
-endif()
-
-# ==============================================================================
-# 6. Python Bindings (nanobind)
-# ==============================================================================
-
-if(BUILD_PYTHON_BINDINGS)
-    find_package(Python 3.10 COMPONENTS Interpreter Development.Module QUIET)
-    if(Python_FOUND)
-        message(STATUS "Found Python ${Python_VERSION} (${Python_EXECUTABLE})")
-
-        FetchContent_Declare(
-            nanobind
-            GIT_REPOSITORY https://github.com/wjakob/nanobind.git
-            GIT_TAG        v2.0.0
-        )
-        FetchContent_MakeAvailable(nanobind)
-
-        nanobind_add_module(maestro_py python/bindings.cpp)
-        set_target_properties(maestro_py PROPERTIES OUTPUT_NAME "maestro")
-
-        if(WIN32)
-            set_target_properties(maestro_py PROPERTIES ARCHIVE_OUTPUT_NAME "maestro_py")
-            target_sources(maestro_py PRIVATE Simulators/Factory.cpp)
-            target_link_libraries(maestro_py PRIVATE Boost::serialization)
-        endif()
-
-        target_link_libraries(maestro_py PRIVATE maestro)
-        target_include_directories(maestro_py PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/maestrolib
-            ${CMAKE_CURRENT_SOURCE_DIR}
-        )
-
-        if(APPLE)
-            set_target_properties(maestro_py PROPERTIES
-                BUILD_RPATH "${CMAKE_BINARY_DIR}"
-                INSTALL_RPATH "@loader_path;@loader_path/..;@loader_path/../lib"
-            )
-        elseif(UNIX)
-            set_target_properties(maestro_py PROPERTIES
-                INSTALL_RPATH "$ORIGIN:$ORIGIN/..:$ORIGIN/../lib"
-                BUILD_WITH_INSTALL_RPATH TRUE
-            )
-        endif()
-
-        # Python install rules
-        if(WIN32)
-            install(TARGETS maestro_py
-                RUNTIME DESTINATION maestro
-                LIBRARY DESTINATION maestro
-                ARCHIVE DESTINATION maestro
-            )
-        else()
-            install(TARGETS maestro_py LIBRARY DESTINATION maestro)
-        endif()
-
-        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/maestro/sinter.py")
-            install(FILES
-                maestro/__init__.py
-                maestro/sinter.py
-                DESTINATION maestro
-            )
-        endif()
-    else()
-        message(WARNING "Python 3.10+ (with Interpreter and Development.Module) not found. Skipping Python bindings.")
-    endif()
-endif()
-
-# ==============================================================================
-# 7. Test Suite
-# ==============================================================================
-
-if(COMPILE_TESTS)
-    enable_testing()
-
-    set(TESTSSRC
-        tests/aertests.cpp
-        tests/densitymatrixtests.cpp
-        tests/circtests.cpp
-        tests/cliffordtests.cpp
-        tests/compsimtests.cpp
-        tests/expvals.cpp
-        tests/gputests.cpp
-        tests/gpudensitymatrixtests.cpp
-        tests/gpumpotests.cpp
-        tests/gpuvscpudensitymatrixtests.cpp
-        tests/gpuvscpumpotests.cpp
-        tests/gpuvscpumpstests.cpp
-        tests/initializetobasisstatetests.cpp
-        tests/mpssimtests.cpp
-        tests/qasm.cpp
-        tests/qasm_core.cpp
-        tests/qasm_dialects.cpp
-        tests/qasm_expressions.cpp
-        tests/qasm_gate_contract.cpp
-        tests/qasm_integration.cpp
-        tests/qasm_inputs.cpp
-        tests/qasm_modifiers.cpp
-        tests/qasm_syntax.cpp
-        tests/qasm_validation.cpp
-        tests/qcsimtests.cpp
-        tests/qcsimdensitymatrixtests.cpp
-        tests/qcsimextendedstabilizertests.cpp
-        tests/qcsimmpotests.cpp
-        tests/tensorstests.cpp
-        tests/pauliproptests.cpp
-        tests/extstabtests.cpp
-        tests/mpsswapsopttests.cpp
-        tests/noisemodeltests.cpp
-        tests/PathIntegralTests.cpp
-        tests/netwsimtests.cpp
-        tests/mpsnetwtests.cpp
-        tests/tests.cpp
-    )
-
-    set(ACTIVE_TESTSSRC ${TESTSSRC})
-    if(NOT QAER)
-        list(REMOVE_ITEM ACTIVE_TESTSSRC
-            tests/aertests.cpp
-            tests/densitymatrixtests.cpp
-            tests/compsimtests.cpp
-            tests/cliffordtests.cpp
-            tests/circtests.cpp
-            tests/mpssimtests.cpp
-            tests/mpsswapsopttests.cpp
-            tests/expvals.cpp
-            tests/extstabtests.cpp
-            tests/PathIntegralTests.cpp
-        )
-    endif()
-
-    add_executable(tests ${ACTIVE_TESTSSRC})
-    target_link_libraries(tests PRIVATE Boost::serialization)
-
-    if(UNIX)
-        target_link_libraries(tests PRIVATE dl)
-    endif()
-
-    if(SIMD_FLAGS)
-        target_compile_options(tests PUBLIC ${SIMD_FLAGS})
-    endif()
-
-    if(QAER AND BLAS_FOUND)
-        target_link_libraries(tests PUBLIC ${BLAS_LIBRARIES})
-    endif()
-
-    if(OpenMP_CXX_FOUND)
-        if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-            target_compile_options(tests PUBLIC -Xpreprocessor -fopenmp)
-            if(LIBOMP_PREFIX)
-                target_include_directories(tests PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "${LIBOMP_PREFIX}/include")
-                target_link_directories(tests PUBLIC "${LIBOMP_PREFIX}/lib")
-            else()
-                target_include_directories(tests PUBLIC ${OpenMP_CXX_INCLUDE_DIRS} "$ENV{OpenMP_ROOT}/include")
-                target_link_directories(tests PUBLIC "$ENV{OpenMP_ROOT}/lib")
-            endif()
-            target_link_libraries(tests PUBLIC ${OpenMP_CXX_LIBRARIES})
-        else()
+        if (TARGET tests)
             target_link_libraries(tests PUBLIC OpenMP::OpenMP_CXX)
             if(NOT MSVC)
                 target_link_libraries(tests PRIVATE ${OpenMP_CXX_FLAGS})
@@ -531,98 +508,45 @@ if(COMPILE_TESTS)
             target_compile_options(tests PRIVATE ${OpenMP_CXX_FLAGS})
         endif()
     endif()
-
-    # Unity test: sampling_order_tests
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_order_tests.cpp")
-        if(CMAKE_VERSION VERSION_LESS "3.16")
-            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/sampling_order_unity.cpp"
-                "#include \"${CMAKE_CURRENT_SOURCE_DIR}/Simulators/Factory.cpp\"\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_order_tests.cpp\"\n")
-            add_executable(sampling_order_tests "${CMAKE_CURRENT_BINARY_DIR}/sampling_order_unity.cpp")
-        else()
-            add_executable(sampling_order_tests Simulators/Factory.cpp tests/sampling_order_tests.cpp)
-            set_target_properties(sampling_order_tests PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 0)
-        endif()
-        target_link_libraries(sampling_order_tests PRIVATE Boost::serialization ${CMAKE_DL_LIBS}
-            $<TARGET_PROPERTY:maestro,INTERFACE_LINK_LIBRARIES>)
-        target_compile_options(sampling_order_tests PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_COMPILE_OPTIONS>)
-        target_include_directories(sampling_order_tests PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_INCLUDE_DIRECTORIES>)
-        set_property(TARGET sampling_order_tests PROPERTY LINK_DIRECTORIES $<TARGET_PROPERTY:maestro,INTERFACE_LINK_DIRECTORIES>)
-
-        add_test(NAME sampling_order COMMAND sampling_order_tests)
-        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-            add_test(NAME sampling_order_gpu COMMAND sampling_order_tests --gpu)
-            set_tests_properties(sampling_order_gpu PROPERTIES
-                SKIP_RETURN_CODE 77 LABELS "gpu;hardware")
-        endif()
-    endif()
-
-    # Linux-only GPU mock plugin and device tests
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        find_package(Threads REQUIRED)
-
-        add_library(mock_gpu_plugin SHARED tests/gpu_device/mock_plugin.cpp)
-        set_target_properties(mock_gpu_plugin PROPERTIES
-            OUTPUT_NAME maestro_gpu_simulators
-            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/mock_gpu")
-
-        add_executable(gpu_registry_tests tests/gpu_device/registry_tests.cpp)
-        target_link_libraries(gpu_registry_tests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
-        add_test(NAME gpu_registry COMMAND gpu_registry_tests $<TARGET_FILE:mock_gpu_plugin>)
-
-        add_executable(gpu_multi_device_tests tests/gpu_device/multi_gpu_tests.cpp)
-        target_link_libraries(gpu_multi_device_tests PRIVATE maestro)
-        set_property(TARGET gpu_multi_device_tests APPEND_STRING PROPERTY
-            LINK_FLAGS " -Wl,--disable-new-dtags")
-        add_test(NAME gpu_multi_device COMMAND gpu_multi_device_tests)
-        set_tests_properties(gpu_multi_device PROPERTIES
-            SKIP_RETURN_CODE 77 LABELS "gpu;hardware")
-
-        add_executable(gpu_device_tests tests/gpu_device/simulator_tests.cpp)
-        target_link_libraries(gpu_device_tests PRIVATE maestro Threads::Threads)
-        add_dependencies(gpu_device_tests mock_gpu_plugin)
-        add_test(NAME gpu_device_configuration
-            COMMAND ${CMAKE_COMMAND} -E env
-                "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:mock_gpu_plugin>:$<TARGET_FILE_DIR:maestro>:$ENV{LD_LIBRARY_PATH}"
-                $<TARGET_FILE:gpu_device_tests>)
-
-        add_executable(gpu_svd_tests tests/gpu_device/svd_tests.cpp)
-        target_link_libraries(gpu_svd_tests PRIVATE maestro Threads::Threads)
-        add_dependencies(gpu_svd_tests mock_gpu_plugin)
-        add_test(NAME gpu_svd_configuration
-            COMMAND ${CMAKE_COMMAND} -E env
-                "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:mock_gpu_plugin>:$<TARGET_FILE_DIR:maestro>:$ENV{LD_LIBRARY_PATH}"
-                $<TARGET_FILE:gpu_svd_tests> --config-only)
-
-        foreach(gpu_test gpu_device_tests gpu_svd_tests)
-            set_property(TARGET ${gpu_test} APPEND_STRING PROPERTY
-                LINK_FLAGS " -Wl,--disable-new-dtags")
-        endforeach()
-    endif()
 endif()
 
-# ==============================================================================
-# 8. Installation & Documentation
-# ==============================================================================
+IF(QAER AND BLAS_FOUND)
+    message("Setting linking blas")
 
-if(SKBUILD)
-    install(TARGETS maestro DESTINATION maestro)
-else()
-    if(WIN32)
-        install(TARGETS maestro
-            RUNTIME DESTINATION .
-            LIBRARY DESTINATION .
-            ARCHIVE DESTINATION .
-        )
-        install(TARGETS maestroexe
-            RUNTIME DESTINATION bin
-            LIBRARY DESTINATION bin
-            ARCHIVE DESTINATION bin
-        )
-    else()
-        install(TARGETS maestro DESTINATION .)
-        install(TARGETS maestroexe DESTINATION bin)
-    endif()
+	if (TARGET tests)
+		target_link_libraries(tests PUBLIC ${BLAS_LIBRARIES})
+	endif()
+
+    target_link_libraries(maestro PUBLIC ${BLAS_LIBRARIES})
+ENDIF()
+
+IF(SIMD_FLAGS)
+    message("Setting SIMD flags")
+
+	if (TARGET tests)
+		target_compile_options(tests PUBLIC ${SIMD_FLAGS})
+	endif()
+
+    target_compile_options(maestro PUBLIC ${SIMD_FLAGS})
+ENDIF()
+
+if (UNIX)
+	if (TARGET tests)
+		target_link_libraries(tests PRIVATE dl)
+	endif()
+    target_link_libraries(maestro PRIVATE dl)
+    target_link_libraries(maestroexe PRIVATE dl)
 endif()
+
+IF(Boost_FOUND)
+    if (TARGET tests)
+	    target_link_libraries(tests PRIVATE Boost::serialization)
+    endif()
+    target_link_libraries(maestro PRIVATE Boost::json)
+    target_link_libraries(maestro PRIVATE Boost::serialization)
+    target_link_libraries(maestroexe PRIVATE Boost::serialization)
+    target_link_libraries(maestroexe PRIVATE Boost::program_options)
+ENDIF()
 
 find_package(Doxygen)
 if(DOXYGEN_FOUND)
@@ -637,4 +561,66 @@ else()
         COMMAND ${CMAKE_COMMAND} -E false
         COMMENT "Check for Doxygen"
         VERBATIM)
+endif()
+
+# Option to build Python bindings
+option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
+
+if(BUILD_PYTHON_BINDINGS)
+    # Find Python 3.10 or higher (matches pyproject.toml requires-python = ">=3.10")
+    find_package(Python 3.10 COMPONENTS Interpreter Development.Module QUIET)
+    if(Python_FOUND)
+        message(STATUS "Found Python ${Python_VERSION} (${Python_EXECUTABLE})")
+        message(STATUS "Python_INCLUDE_DIRS: ${Python_INCLUDE_DIRS}")
+        message(STATUS "Python_LIBRARIES: ${Python_LIBRARIES}")
+
+        include(FetchContent)
+        FetchContent_Declare(
+          nanobind
+          GIT_REPOSITORY https://github.com/wjakob/nanobind.git
+          GIT_TAG        v2.0.0
+        )
+        FetchContent_MakeAvailable(nanobind)
+
+        nanobind_add_module(maestro_py python/bindings.cpp)
+        set_target_properties(maestro_py PROPERTIES OUTPUT_NAME "maestro")
+        if(WIN32)
+            set_target_properties(maestro_py PROPERTIES ARCHIVE_OUTPUT_NAME "maestro_py")
+            target_sources(maestro_py PRIVATE Simulators/Factory.cpp)
+            target_link_libraries(maestro_py PRIVATE Boost::serialization)
+        endif()
+        target_link_libraries(maestro_py PRIVATE maestro)
+        target_include_directories(maestro_py PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/maestrolib
+            ${CMAKE_CURRENT_SOURCE_DIR}
+        )
+
+        # Set RPATH/RPATH-related properties
+        if(APPLE)
+            set_target_properties(maestro_py PROPERTIES
+                BUILD_RPATH "${CMAKE_BINARY_DIR}"
+                INSTALL_RPATH "@loader_path;@loader_path/../lib"
+            )
+            set_target_properties(maestro PROPERTIES
+                INSTALL_NAME_DIR "@rpath"
+            )
+        elseif(UNIX AND NOT APPLE)
+            set_target_properties(maestro_py PROPERTIES
+                INSTALL_RPATH "$ORIGIN"
+                BUILD_WITH_INSTALL_RPATH TRUE
+            )
+        endif()
+
+        if(WIN32)
+            install(TARGETS maestro_py
+                RUNTIME DESTINATION .
+                LIBRARY DESTINATION .
+                ARCHIVE DESTINATION .
+            )
+        else()
+            install(TARGETS maestro_py LIBRARY DESTINATION .)
+        endif()
+    else()
+        message(WARNING "Python 3.8+ (with Interpreter and Development.Module) not found. Skipping Python bindings.")
+    endif()
 endif()

@@ -94,10 +94,10 @@ std::string GenerateRandomPauliString(int nrQubits, std::mt19937& g) {
 
 
 void CheckCountsAgainstStatevector(
-    const std::unordered_map<std::vector<bool>, size_t>& counts,
-    const std::unordered_map<std::vector<bool>, size_t>& statevectorCounts,
+    const std::unordered_map<std::vector<bool>, Types::qubit_t>& counts,
+    const std::unordered_map<std::vector<bool>, Types::qubit_t>& statevectorCounts,
     size_t shots) {
-  size_t totalCounts = 0;
+  Types::qubit_t totalCounts = 0;
   for (const auto& [outcome, count] : counts) totalCounts += count;
 
   BOOST_TEST(totalCounts == shots);

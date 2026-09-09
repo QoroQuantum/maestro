@@ -36,6 +36,7 @@ Repository = "https://github.com/QoroQuantum/maestro"
 Issues = "https://github.com/QoroQuantum/maestro/issues"
 
 [project.optional-dependencies]
+aer = []  # Optional: install if you want Qiskit Aer support
 sinter = ["sinter>=1.14", "stim>=1.14"]
 
 [tool.scikit-build]
