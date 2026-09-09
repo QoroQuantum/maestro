@@ -37,6 +37,7 @@ Issues = "https://github.com/QoroQuantum/maestro/issues"
 
 [project.optional-dependencies]
 aer = []  # Optional: install if you want Qiskit Aer support
+sinter = ["sinter>=1.14", "stim>=1.14"]
 
 [tool.scikit-build]
 cmake.version = ">=3.15"
@@ -51,6 +52,7 @@ cmake.args = [
 
 [tool.scikit-build.cmake.define]
 COMPILE_TESTS = "OFF"
+SKBUILD = "ON"
 EIGEN5_INCLUDE_DIR = {env = "EIGEN5_INCLUDE_DIR"}
 QCSIM_INCLUDE_DIR = {env = "QCSIM_INCLUDE_DIR"}
 JSON_INCLUDE_DIR = {env = "JSON_INCLUDE_DIR"}
