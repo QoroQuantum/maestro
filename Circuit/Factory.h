@@ -69,6 +69,19 @@ class CircuitFactory {
   }
 
   /**
+   * @brief Construct a delay operation.
+   *
+   * @param qubit The target qubit.
+   * @param duration The physical delay duration in seconds.
+   * @return The delay operation.
+   * @sa Delay
+   */
+  static std::shared_ptr<IOperation<Time>> CreateDelay(
+      Types::qubit_t qubit = 0, Time duration = 0) {
+    return std::make_shared<Delay<Time>>(qubit, duration);
+  }
+
+  /**
    * @brief Construct a random operation.
    *
    * Generates a random 0 or 1 for each specified classical bit.
