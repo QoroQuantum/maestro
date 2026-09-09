@@ -126,11 +126,11 @@ std::shared_ptr<Circuits::Circuit<>> GenerateRandomCircuitWithMeasurements(
 }
 
 void CheckCountsAgainstStatevector(
-    const std::unordered_map<std::vector<bool>, Types::qubit_t>& counts,
-    const std::unordered_map<std::vector<bool>, Types::qubit_t>&
+    const std::unordered_map<std::vector<bool>, size_t>& counts,
+    const std::unordered_map<std::vector<bool>, size_t>&
         statevectorCounts,
     size_t shots) {
-  Types::qubit_t totalCounts = 0;
+  size_t totalCounts = 0;
   for (const auto& [outcome, count] : counts) totalCounts += count;
 
   BOOST_TEST(totalCounts == shots);
