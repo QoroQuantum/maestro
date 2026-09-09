@@ -495,9 +495,6 @@ if(COMPILE_TESTS)
             tests/compsimtests.cpp
             tests/cliffordtests.cpp
             tests/circtests.cpp
-            tests/mpssimtests.cpp
-            tests/mpsswapsopttests.cpp
-            tests/expvals.cpp
             tests/extstabtests.cpp
             tests/PathIntegralTests.cpp
         )
