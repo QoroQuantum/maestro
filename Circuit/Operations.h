@@ -506,7 +506,7 @@ class IOperation : public std::enable_shared_from_this<IOperation<Time>> {
    * Sets the delay due of the execution time of the operation.
    * @param d The delay of the operation.
    */
-  void SetDelay(Time d) { delay = d; }
+  virtual void SetDelay(Time d) { delay = d; }
 
   /**
    * @brief Checks if the operation is a Clifford one.

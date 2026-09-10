@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <complex>
+#include <limits>
 #include <memory>
 #include <random>
 #include <stdexcept>
@@ -374,6 +375,51 @@ BOOST_AUTO_TEST_CASE(DelaySampledCoherenceMatchesExact) {
 
   BOOST_CHECK_SMALL(std::abs(sampled_x - exact_x), 0.02);
   BOOST_CHECK_SMALL(std::abs(exact_x - std::exp(-duration / t2)), kTolerance);
+}
+
+BOOST_AUTO_TEST_CASE(DelayDurationValidation) {
+  // Valid construction
+  Circuits::Delay<double> delay(0, 1e-6);
+  BOOST_CHECK_CLOSE(delay.GetDuration(), 1e-6, 1e-12);
+
+  // Valid mutation via SetDuration
+  delay.SetDuration(2e-6);
+  BOOST_CHECK_CLOSE(delay.GetDuration(), 2e-6, 1e-12);
+  delay.SetDuration(0.0);
+  BOOST_CHECK_EQUAL(delay.GetDuration(), 0.0);
+
+  // Invalid mutation via SetDuration
+  BOOST_CHECK_THROW(delay.SetDuration(-1e-6), std::invalid_argument);
+  BOOST_CHECK_THROW(delay.SetDuration(std::numeric_limits<double>::infinity()),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(delay.SetDuration(-std::numeric_limits<double>::infinity()),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(delay.SetDuration(std::numeric_limits<double>::quiet_NaN()),
+                    std::invalid_argument);
+
+  // Valid mutation via SetDelay
+  delay.SetDelay(3e-6);
+  BOOST_CHECK_CLOSE(delay.GetDuration(), 3e-6, 1e-12);
+
+  // Invalid mutation via SetDelay
+  BOOST_CHECK_THROW(delay.SetDelay(-1e-6), std::invalid_argument);
+  BOOST_CHECK_THROW(delay.SetDelay(std::numeric_limits<double>::infinity()),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(delay.SetDelay(-std::numeric_limits<double>::infinity()),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(delay.SetDelay(std::numeric_limits<double>::quiet_NaN()),
+                    std::invalid_argument);
+
+  // Polymorphic validation via IOperation pointer
+  std::shared_ptr<Circuits::IOperation<double>> op =
+      std::make_shared<Circuits::Delay<double>>(0, 1e-6);
+  BOOST_CHECK_THROW(op->SetDelay(-1e-6), std::invalid_argument);
+  BOOST_CHECK_THROW(op->SetDelay(std::numeric_limits<double>::infinity()),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(op->SetDelay(-std::numeric_limits<double>::infinity()),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(op->SetDelay(std::numeric_limits<double>::quiet_NaN()),
+                    std::invalid_argument);
 }
 
 BOOST_AUTO_TEST_CASE(CorrelatedNoiseStationaryInitVariance) {
