@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-10
+
+### Added
+- **Native Delay & Idle Operation**: Added first-class `Delay` instruction across Circuit IR, Factory, Python bindings (`qc.delay`), and OpenQASM 2/3 parsers with duration validation in seconds.
+- **Idle Channel Decoherence**: Introduced idle channel simulation via `set_idle_noise(qubit, t1, t2, excited_population, detuning_hz)` to model thermal relaxation, phase decay, and coherent detuning rotation accumulated over idling intervals.
+- **Continuous OU Noise Integration**: Integrated continuous-time Ornstein-Uhlenbeck (OU) dephasing during delays, analytically propagating correlated frequency fluctuations across arbitrary idle durations.
+- **Multi-Band OU & 1/f Spectrum Noise**: Added multi-band OU dephasing support (`add_correlated_ou_band`, `set_multi_correlated_ou`, `set_all_multi_correlated_ou`), synthetic 1/f noise generation (`set_1_over_f_noise`), and stationary equilibrium initialization (`stationary_init`).
+- **Sinter Integration**: Added `maestro.sinter` module with `MaestroSinterSampler` and `MaestroCompiledSampler` implementing Sinter's sampling interface for Stim-based quantum error correction (QEC) benchmarking.
+- **GPU SVD Algorithm Selection**: Added configuration parameters in `SimulatorConfig` to select specialized GPU SVD solvers (`gesvd`, `gesvdj`, `gesvdp`, `gesvdr`) for MPS, MPO, and Tensor Network backends.
+
+### Changed
+- Python package version bumped to `0.3.1`.
+
+
 ## [0.3.0] - 2026-09-07
 
 ### Added
@@ -242,7 +256,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.2.13...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/QoroQuantum/maestro/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/QoroQuantum/maestro/compare/v0.2.18...v0.3.0
+[0.2.18]: https://github.com/QoroQuantum/maestro/compare/v0.2.17...v0.2.18
+[0.2.17]: https://github.com/QoroQuantum/maestro/compare/v0.2.13...v0.2.17
 [0.2.13]: https://github.com/QoroQuantum/maestro/compare/v0.2.12...v0.2.13
 [0.2.12]: https://github.com/QoroQuantum/maestro/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/QoroQuantum/maestro/compare/v0.2.10...v0.2.11

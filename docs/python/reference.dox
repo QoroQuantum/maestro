@@ -43,4 +43,11 @@
  * - `maestro.init_gpu()`: Load GPU acceleration library.
  * - `maestro.is_quest_available()`: Check if QuEST library is present.
  * - `maestro.init_quest()`: Load QuEST library.
+ *
+ * ---
+ *
+ * @section py_submodules Submodules
+ *
+ * - `maestro.circuits`: High-level `QuantumCircuit` builder supporting gate construction, measurements, expectation values, and idle `delay` operations.
+ * - `maestro.sinter`: Stim and Sinter QEC benchmarking interface providing `MaestroSinterSampler`, `MaestroCompiledSampler`, and `translate_stim_to_maestro`.
  */

@@ -24,6 +24,7 @@
  * | @subpage py_backends "Simulation Backends" | Statevector, MPS, Stabilizer, Tensor Networks, and tuning knobs |
  * | @subpage py_algorithms "Algorithms & Observables" | Expectation values, mirror fidelity, inner products, and time evolution |
  * | @subpage py_noise "Noise Simulation Manual" | Analytical, Monte Carlo, CPTP channels, thermal T1/T2, and correlated noise |
+ * | @subpage py_sinter "Sinter Integration (QEC Sampling)" | Stim / Sinter interface with MaestroCompiledSampler and MaestroSinterSampler |
  * | @subpage py_hpc "HPC Acceleration (GPU & QuEST)" | NVIDIA cuStateVec GPU acceleration and QuEST MPI distributed simulation |
  * | @subpage py_reference "Python API Reference" | Enumerations (`SimulatorType`, `SimulationType`) and module functions |
  *

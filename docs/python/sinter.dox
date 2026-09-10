@@ -1,0 +1,111 @@
+/**
+ * @page py_sinter Sinter Integration (QEC Sampling)
+ *
+ * @tableofcontents
+ *
+ * @section py_sinter_overview Overview
+ *
+ * Maestro provides seamless integration with [Stim](https://github.com/quantumlib/Stim) and
+ * [Sinter](https://github.com/quantumlib/Stim/tree/main/glue/sinter), the standard Python
+ * benchmarking frameworks for quantum error correction (QEC).
+ *
+ * Through `maestro.sinter`, you can execute Stim circuits and error correction benchmarks
+ * using Maestro's high-performance simulation engines (such as Matrix Product State or
+ * GPU-accelerated statevectors) as custom Sinter samplers.
+ *
+ * ---
+ *
+ * @section py_sinter_install Installation
+ *
+ * To use the Sinter integration, install the optional `sinter` extra:
+ *
+ * @code{.bash}
+ * pip install "qoro-maestro[sinter]"
+ * @endcode
+ *
+ * This installs `sinter>=1.14` and `stim>=1.14`.
+ *
+ * ---
+ *
+ * @section py_sinter_classes Core Classes and Functions
+ *
+ * | Class / Function | Description |
+ * |------------------|-------------|
+ * | `MaestroSinterSampler` | Implements `sinter.Sampler`. Passed to `sinter.collect()` as a custom sampler backend. |
+ * | `MaestroCompiledSampler` | Implements `sinter.CompiledSampler`. Holds compiled circuit execution plans for repeated batch sampling. |
+ * | `translate_stim_to_maestro(circuit)` | Converts a Stim circuit or circuit string into a Maestro `QuantumCircuit`. |
+ *
+ * ---
+ *
+ * @section py_sinter_example_collect Using with Sinter Collect
+ *
+ * You can pass `MaestroSinterSampler` into `sinter.collect` via the `custom_samplers` dictionary:
+ *
+ * @code{.py}
+ * import sinter
+ * import stim
+ * from maestro.sinter import MaestroSinterSampler
+ * import maestro
+ *
+ * # 1. Define a Stim surface code circuit
+ * surface_code_task = sinter.Task(
+ *     circuit=stim.Circuit.generated(
+ *         "surface_code:rotated_memory_z",
+ *         rounds=3,
+ *         distance=3,
+ *         after_clifford_depolarization=0.001,
+ *     ),
+ *     json_metadata={"d": 3, "r": 3, "p": 0.001},
+ * )
+ *
+ * # 2. Configure Maestro backend options (e.g. Matrix Product State)
+ * mps_config = maestro.SimulatorConfig(
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     max_bond_dimension=64,
+ * )
+ *
+ * # 3. Instantiate Maestro custom sampler
+ * custom_samplers = {
+ *     "maestro": MaestroSinterSampler(config=mps_config)
+ * }
+ *
+ * # 4. Collect error correction statistics
+ * stats = sinter.collect(
+ *     num_workers=4,
+ *     max_shots=100_000,
+ *     max_errors=100,
+ *     tasks=[surface_code_task],
+ *     decoders=["pymatching"],
+ *     custom_samplers=custom_samplers,
+ * )
+ *
+ * for sample in stats:
+ *     print(f"Errors: {sample.errors} / {sample.shots} (rate: {sample.errors / sample.shots:.4e})")
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_sinter_example_compiled Direct Sampling with MaestroCompiledSampler
+ *
+ * For direct shot sampling from Python without running a full Sinter task collection:
+ *
+ * @code{.py}
+ * import stim
+ * from maestro.sinter import MaestroCompiledSampler
+ * import maestro
+ *
+ * circuit = stim.Circuit("""
+ *     H 0
+ *     CX 0 1
+ *     M 0 1
+ *     DETECTOR(0, 0) rec[-1] rec[-2]
+ * """)
+ *
+ * sampler = MaestroCompiledSampler(circuit)
+ *
+ * # Sample detection events and observable flips as numpy boolean arrays
+ * det_samples, obs_samples = sampler.sample(shots=1000)
+ * print("Detection events shape:", det_samples.shape)  # (1000, num_detectors)
+ * print("Observable flips shape:", obs_samples.shape)  # (1000, num_observables)
+ * @endcode
+ */
