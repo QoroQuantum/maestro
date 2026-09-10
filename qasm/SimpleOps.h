@@ -265,6 +265,7 @@ struct QoperationStatement : public AbstractSyntaxTree {
     GateDecl,
     Uop,
     CondUop,
+    Delay,
   };
 
   OperationType opType = OperationType::Comment;
@@ -299,6 +300,10 @@ using ProgramType =
 using ResetType = ArgumentType;
 using MeasureType = boost::fusion::vector<ArgumentType, ArgumentType>;
 using BarrierType = MixedListType;
+struct DelayType {
+  double duration = 0.0;
+  MixedListType operands;
+};
 // using QopType = std::variant<UopType, ResetType, MeasureType, BarrierType>;
 using QopType = StatementType;
 using CondOpType = boost::fusion::vector<std::string, int, QopType>;
@@ -698,6 +703,51 @@ struct AddBarrierExpr : public AbstractSyntaxTree {
 };
 
 inline phx::function<AddBarrierExpr> AddBarrier;
+
+struct MakeDelayExpr {
+  template <typename, typename, typename>
+  struct result {
+    typedef DelayType type;
+  };
+
+  template <typename D, typename M, typename V>
+  DelayType operator()(const D &dur, const M &operands,
+                       const V &variables) const {
+    const auto &expr = boost::fusion::at_c<0>(dur);
+    const auto &unitOpt = boost::fusion::at_c<1>(dur);
+    double val = expr.Eval(variables);
+    double scale = unitOpt ? *unitOpt : 1.0;
+    if (scale < 0.0) {
+      throw std::invalid_argument(
+          "OpenQASM 'dt' unit delays require hardware timing context and are not "
+          "supported without a target waveform configuration.");
+    }
+    return DelayType{val * scale, operands};
+  }
+};
+
+inline phx::function<MakeDelayExpr> MakeDelay;
+
+struct AddDelayExpr : public AbstractSyntaxTree {
+  struct result {
+    typedef QoperationStatement type;
+  };
+
+  QoperationStatement operator()(const DelayType &delay,
+                                 const RegisterMap &qreg_map) const {
+    QoperationStatement stmt;
+    stmt.opType = QoperationStatement::OperationType::Delay;
+    stmt.parameters = {delay.duration};
+    for (const auto &operand : delay.operands) {
+      const std::vector<int> resolved =
+          ResolveRegisterOperand(operand, qreg_map, "quantum");
+      stmt.qubits.insert(stmt.qubits.end(), resolved.begin(), resolved.end());
+    }
+    return stmt;
+  }
+};
+
+inline phx::function<AddDelayExpr> AddDelay;
 
 struct AddOpaqueDeclExpr : public AbstractSyntaxTree {
   struct result {

@@ -1322,6 +1322,14 @@ struct Program {
         circuit->AddOperation(resetOp);
       } break;
 
+      case QoperationStatement::OperationType::Delay: {
+        double duration = stmt.parameters.empty() ? 0.0 : stmt.parameters[0];
+        for (auto q : stmt.qubits) {
+          circuit->AddOperation(Circuits::CircuitFactory<Time>::CreateDelay(
+              static_cast<Types::qubit_t>(q), static_cast<Time>(duration)));
+        }
+      } break;
+
       case QoperationStatement::OperationType::Uop: {
         if (stmt.gateType == Circuits::QuantumGateType::kNone &&
             stmt.qubitsDecl.empty()) {

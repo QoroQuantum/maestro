@@ -24,6 +24,7 @@
 #include <set>
 
 #include "Conditional.h"
+#include "Delay.h"
 #include "Operations.h"
 #include "QuantumChannelOperation.h"
 #include "QuantumGates.h"
@@ -142,6 +143,15 @@ class Circuit : public IOperation<Time> {
    * @sa IOperation
    */
   void AddOperation(const OperationPtr &op) { operations.push_back(op); }
+
+  /**
+   * @brief Adds a delay (idle) operation on the specified qubit.
+   * @param qubit The target qubit.
+   * @param duration The physical duration in seconds.
+   */
+  void Delay(Types::qubit_t qubit, Time duration) {
+    operations.push_back(std::make_shared<Circuits::Delay<Time>>(qubit, duration));
+  }
 
   /**
    * @brief Replaces an operation in the circuit.
@@ -1751,7 +1761,8 @@ class Circuit : public IOperation<Time> {
         // following gate that affects those qubits
 
         bool canExecute = op->GetType() == OperationType::kGate ||
-                          op->GetType() == OperationType::kQuantumChannel;
+                          op->GetType() == OperationType::kQuantumChannel ||
+                          op->GetType() == OperationType::kDelay;
 
         if (canExecute)  // a conditional gate cannot be executed, it needs
                          // something executed at each shot, either a
@@ -2942,6 +2953,21 @@ class ComparableCircuit : public Circuit<Time> {
                   right->GetChannel(),
                   approximateParamsCheck ? paramsEpsilon : 0.0))
             return false;
+        } break;
+        case OperationType::kDelay: {
+          const auto left =
+              std::static_pointer_cast<Delay<Time>>(
+                  BaseClass::GetOperations()[i]);
+          const auto right =
+              std::static_pointer_cast<Delay<Time>>(
+                  rhs.GetOperations()[i]);
+          if (left->GetQubit() != right->GetQubit()) return false;
+          if (approximateParamsCheck) {
+            if (std::abs(left->GetDuration() - right->GetDuration()) > paramsEpsilon)
+              return false;
+          } else if (left->GetDuration() != right->GetDuration()) {
+            return false;
+          }
         } break;
         case OperationType::kNoOp:
           break;
