@@ -44,7 +44,8 @@ enum class OperationType {
   kComposite, /**< a composite operation, contains other operations - should
                  not be used in the beginning, only the 'Circuit' is a
                  composite for now */
-  kQuantumChannel /**< a non-unitary CPTP operation on the simulator state */
+  kQuantumChannel, /**< a non-unitary CPTP operation on the simulator state */
+  kDelay          /**< a delay or idle period on one or more qubits */
 };
 
 // simulators keep track of the quantum state, but there are things that are not
@@ -505,7 +506,7 @@ class IOperation : public std::enable_shared_from_this<IOperation<Time>> {
    * Sets the delay due of the execution time of the operation.
    * @param d The delay of the operation.
    */
-  void SetDelay(Time d) { delay = d; }
+  virtual void SetDelay(Time d) { delay = d; }
 
   /**
    * @brief Checks if the operation is a Clifford one.

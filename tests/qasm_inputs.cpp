@@ -433,7 +433,6 @@ BOOST_AUTO_TEST_CASE(UnsupportedConstructsAreRejectedByName) {
       {"def foo(qubit q) { x q; }\n", "subroutine definitions"},
       {"let alias = q;\n", "register aliases"},
       {"duration d = 300ns;\n", "duration declarations"},
-      {"delay[300ns] q[0];\n", "delay instructions"},
       {"box { x q[0]; }\n", "box blocks"},
       {"array[int[32], 4] arr;\n", "array declarations"},
       {"output float result;\n", "output declarations"},

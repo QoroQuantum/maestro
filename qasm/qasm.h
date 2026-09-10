@@ -137,7 +137,6 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
         "let", "OpenQASM 3 register aliases ('let') are not supported.")(
         "duration",
         "OpenQASM 3 duration declarations ('duration') are not supported.")(
-        "delay", "OpenQASM 3 delay instructions ('delay') are not supported.")(
         "box", "OpenQASM 3 box blocks ('box') are not supported.")(
         "array", "OpenQASM 3 array declarations ('array') are not supported.")(
         "output",
@@ -158,6 +157,8 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
     // attribute is the offending spelling and the diagnostic can quote it.
     qasm3OnlyGates.add("phase", "phase")("cphase", "cphase")("gphase",
                                                              "gphase");
+
+    durationUnit.add("ns", 1e-9)("us", 1e-6)("ms", 1e-3)("s", 1.0)("dt", -1.0);
 
     comments %= *comment;
     includes %= *include;
@@ -361,6 +362,7 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
            measureNoTarget[qi::_val = qi::_1] |
            resetOp[qi::_val = AddReset(qi::_1, std::ref(qreg_map))] |
            barrierOp[qi::_val = AddBarrier(qi::_1, std::ref(qreg_map))] |
+           delayOp[qi::_val = AddDelay(qi::_1, std::ref(qreg_map))] |
            modifiedUop[qi::_val = AddModifiedGate(
                            qi::_1, std::ref(qreg_map), std::ref(opaqueGates),
                            std::ref(definedGates), std::ref(inputValues))]) >>
@@ -491,6 +493,13 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
         (qi::eps(phx::ref(isQasm3)) >>
          qi::omit[qi::lexeme[qi::lit("barrier") >> !qi::char_("a-zA-Z0-9_")]] >>
          qi::attr(MixedListType()));
+
+    delayOp =
+        (qi::omit[qi::lexeme[qi::lit("delay") >> (qi::space | &qi::char_("[("))]] >>
+         (('[' >> expression >> -durationUnit >> ']') |
+          ('(' >> expression >> -durationUnit >> ')')) >>
+         mixedList)[qi::_val = MakeDelay(qi::_1, qi::_2,
+                                         std::ref(inputValues))];
 
     // **************************************************************************************************************************************************************
 
@@ -765,6 +774,7 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
   qi::rule<Iterator, MeasureType(), Skipper> measureAssignOp;
   qi::rule<Iterator, QopType(), Skipper> measureNoTarget;
   qi::rule<Iterator, BarrierType(), Skipper> barrierOp;
+  qi::rule<Iterator, DelayType(), Skipper> delayOp;
 
   qi::rule<Iterator, std::vector<std::string>(), Skipper> idList;
 
@@ -797,6 +807,7 @@ struct QasmGrammar : qi::grammar<Iterator, Program(), Skipper> {
   // The stdgates.inc-only gate names backing `qasm2RejectedGate`; each maps
   // to its own spelling.
   qi::symbols<char, std::string> qasm3OnlyGates;
+  qi::symbols<char, double> durationUnit;
 
   int creg_counter = 0;
   int qreg_counter = 0;

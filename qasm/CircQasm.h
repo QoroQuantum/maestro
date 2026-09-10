@@ -186,6 +186,19 @@ class CircToQasm {
       case Circuits::OperationType::kNoOp:
         qasm += "barrier q;\n";
         break;
+      case Circuits::OperationType::kDelay: {
+        auto delayOp =
+            std::static_pointer_cast<Circuits::Delay<Time>>(operation);
+        auto qbit = delayOp->GetQubit();
+        auto dur = delayOp->GetDuration();
+        if (version == QasmVersion::V3) {
+          qasm += "delay[" + std::to_string(dur) + "s] q[" +
+                  std::to_string(qbit) + "];\n";
+        } else {
+          qasm += "delay(" + std::to_string(dur) + ") q[" +
+                  std::to_string(qbit) + "];\n";
+        }
+      } break;
       case Circuits::OperationType::kRandomGen:
         [[fallthrough]];
       case Circuits::OperationType::kConditionalRandomGen:

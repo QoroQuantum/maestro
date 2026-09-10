@@ -1140,6 +1140,16 @@ NB_MODULE(maestro, m) {
              s.AddOperation(
                  std::make_shared<Circuits::UGate<>>(q, theta, phi, lambda));
            })
+      .def("delay",
+           [](Circuits::Circuit<double> &s, Types::qubit_t q, double duration) {
+             s.Delay(q, duration);
+           }, "qubit"_a, "duration"_a,
+           "Append a delay idle operation on a qubit for a given duration in seconds.")
+      .def("delay",
+           [](Circuits::Circuit<double> &s, double duration, Types::qubit_t q) {
+             s.Delay(q, duration);
+           }, "duration"_a, "qubit"_a,
+           "Append a delay idle operation on a qubit for a given duration in seconds.")
 
       // Two Qubit Gates
       .def(
@@ -2250,7 +2260,7 @@ NB_MODULE(maestro, m) {
       // ── Correlated (time-correlated) noise ──
       .def("set_correlated_ar1", &noise::NoiseModel::set_correlated_ar1,
            "qubit"_a, "phi"_a, "sigma_eta"_a, "after_1q"_a = true,
-           "after_2q"_a = true,
+           "after_2q"_a = true, "stationary_init"_a = true,
            "Set AR(1) correlated dephasing on a qubit.\n\n"
            "After every gate, Rz(y[k]) is injected where:\n"
            "  y[k] = phi * y[k-1] + eta[k],  eta ~ N(0, sigma_eta^2)\n\n"
@@ -2259,11 +2269,12 @@ NB_MODULE(maestro, m) {
            "    phi: AR(1) autoregressive coefficient.\n"
            "    sigma_eta: Driving noise standard deviation.\n"
            "    after_1q: If True (default), inject after 1Q gates.\n"
-           "    after_2q: If True (default), inject after 2Q gates.\n\n"
+           "    after_2q: If True (default), inject after 2Q gates.\n"
+           "    stationary_init: If True (default), sample step 0 from stationary equilibrium.\n\n"
            "Example: nm.set_correlated_ar1(0, phi=0.135, sigma_eta=2.35e-3)")
       .def("set_correlated_ou", &noise::NoiseModel::set_correlated_ou,
            "qubit"_a, "sigma"_a, "alpha"_a, "gate_time"_a, "after_1q"_a = true,
-           "after_2q"_a = true,
+           "after_2q"_a = true, "stationary_init"_a = true,
            "Set correlated noise from Ornstein-Uhlenbeck parameters.\n\n"
            "OU: dX = -theta*X*dt + sigma*dW, discretized as AR(1).\n"
            "  theta = 1/(alpha * gate_time)\n"
@@ -2275,12 +2286,30 @@ NB_MODULE(maestro, m) {
            "    alpha: Correlation time in gate-time units.\n"
            "    gate_time: Gate duration in seconds.\n"
            "    after_1q: If True (default), inject after 1Q gates.\n"
-           "    after_2q: If True (default), inject after 2Q gates.\n\n"
+           "    after_2q: If True (default), inject after 2Q gates.\n"
+           "    stationary_init: If True (default), sample step 0 from stationary equilibrium.\n\n"
            "Example: nm.set_correlated_ou(0, sigma=15.0, alpha=0.5, "
            "gate_time=100e-9)")
+      .def("add_correlated_ou_band", &noise::NoiseModel::add_correlated_ou_band,
+           "qubit"_a, "sigma"_a, "alpha"_a, "gate_time"_a,
+           "after_1q"_a = true, "after_2q"_a = true, "stationary_init"_a = true,
+           "Append an OU fluctuator band to a qubit's band list.")
+      .def("set_multi_correlated_ou", &noise::NoiseModel::set_multi_correlated_ou,
+           "qubit"_a, "bands"_a, "gate_time"_a,
+           "after_1q"_a = true, "after_2q"_a = true, "stationary_init"_a = true,
+           "Batch multi-OU setter: clears existing bands and populates from a list of (sigma, alpha) pairs.")
+      .def("set_all_multi_correlated_ou", &noise::NoiseModel::set_all_multi_correlated_ou,
+           "num_qubits"_a, "bands"_a, "gate_time"_a,
+           "after_1q"_a = true, "after_2q"_a = true, "stationary_init"_a = true,
+           "Uniform multi-OU setter across qubits 0..num_qubits-1.")
+      .def("set_1_over_f_noise", &noise::NoiseModel::set_1_over_f_noise,
+           "qubit"_a, "total_power"_a, "f_min"_a, "f_max"_a, "num_bands"_a,
+           "gate_time"_a, "after_1q"_a = true, "after_2q"_a = true,
+           "stationary_init"_a = true,
+           "Synthesize 1/f noise spectrum via logarithmically spaced OU fluctuator bands.")
       .def("set_all_correlated_ou", &noise::NoiseModel::set_all_correlated_ou,
            "num_qubits"_a, "sigma"_a, "alpha"_a, "gate_time"_a,
-           "after_1q"_a = true, "after_2q"_a = true,
+           "after_1q"_a = true, "after_2q"_a = true, "stationary_init"_a = true,
            "Set identical OU correlated noise on qubits [0, num_qubits).\n\n"
            "Example: nm.set_all_correlated_ou(20, sigma=15.0, alpha=0.5, "
            "gate_time=100e-9)")
@@ -2302,6 +2331,19 @@ NB_MODULE(maestro, m) {
            "alpha=0.5, gate_time=100e-9)")
       .def("has_correlated", &noise::NoiseModel::has_correlated,
            "Return True if any correlated noise parameters have been set.")
+      // ── Idle noise ──
+      .def("set_idle_noise", &noise::NoiseModel::set_idle_noise,
+           "qubit"_a, "t1"_a, "t2"_a, "excited_population"_a = 0.0,
+           "detuning_hz"_a = 0.0,
+           "Configure idle dephasing/relaxation and detuning for delay instructions.\n\n"
+           "Args:\n"
+           "    qubit: Qubit index.\n"
+           "    t1: T1 relaxation time in seconds.\n"
+           "    t2: T2 dephasing time in seconds (T2 <= 2*T1).\n"
+           "    excited_population: Equilibrium |1> state population (default 0.0).\n"
+           "    detuning_hz: Coherent detuning frequency in Hz (default 0.0).\n")
+      .def("has_idle_noise", &noise::NoiseModel::has_idle_noise,
+           "Return True if any idle noise parameters have been set.")
       // ── T1 amplitude damping ──
       .def("set_t1", &noise::NoiseModel::set_t1, "qubit"_a, "gamma"_a,
            "Set per-gate T1 decay probability. Density-matrix/MPO execution "

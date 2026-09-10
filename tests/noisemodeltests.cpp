@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <complex>
+#include <limits>
 #include <memory>
 #include <random>
 #include <stdexcept>
@@ -310,6 +311,219 @@ BOOST_AUTO_TEST_CASE(ComputeDampingDoesNotCoverThermalModels) {
   noise::NoiseModel thermal;
   thermal.set_thermal_relaxation(0, 1e-6, 40e-6, 25e-6);
   BOOST_TEST(!thermal.compute_damping_covers_model());
+}
+
+BOOST_AUTO_TEST_CASE(DelayExactChannelDivisibility) {
+  constexpr double t1 = 50e-6;
+  constexpr double t2 = 30e-6;
+  constexpr double excited_population = 0.05;
+  constexpr double detuning_hz = 250e3;
+  constexpr double total_delay = 4e-6;
+
+  noise::NoiseModel noiseModel;
+  noiseModel.set_idle_noise(0, t1, t2, excited_population, detuning_hz);
+
+  // Circuit 1: single delay of 4us
+  auto c1 = HadamardCircuit();
+  c1->Delay(0, total_delay);
+  auto noisy1 = noise::inject_exact_noise(c1, noiseModel);
+  auto sim1 = MakeSimulator(Simulators::SimulationType::kDensityMatrix, 1);
+  Circuits::OperationState state1;
+  noisy1->Execute(sim1, state1);
+
+  // Circuit 2: two delays of 2us
+  auto c2 = HadamardCircuit();
+  c2->Delay(0, total_delay / 2.0);
+  c2->Delay(0, total_delay / 2.0);
+  auto noisy2 = noise::inject_exact_noise(c2, noiseModel);
+  auto sim2 = MakeSimulator(Simulators::SimulationType::kDensityMatrix, 1);
+  Circuits::OperationState state2;
+  noisy2->Execute(sim2, state2);
+
+  BOOST_CHECK_CLOSE(sim1->ExpectationValue("X"), sim2->ExpectationValue("X"), 1e-5);
+  BOOST_CHECK_CLOSE(sim1->ExpectationValue("Y"), sim2->ExpectationValue("Y"), 1e-5);
+  BOOST_CHECK_CLOSE(sim1->ExpectationValue("Z"), sim2->ExpectationValue("Z"), 1e-5);
+}
+
+BOOST_AUTO_TEST_CASE(DelaySampledCoherenceMatchesExact) {
+  constexpr double duration = 3e-6;
+  constexpr double t1 = 40e-6;
+  constexpr double t2 = 25e-6;
+  noise::NoiseModel noiseModel;
+  noiseModel.set_idle_noise(0, t1, t2);
+
+  auto c = HadamardCircuit();
+  c->Delay(0, duration);
+
+  auto noisy_exact = noise::inject_exact_noise(c, noiseModel);
+  auto sim_exact = MakeSimulator(Simulators::SimulationType::kDensityMatrix, 1);
+  Circuits::OperationState state_exact;
+  noisy_exact->Execute(sim_exact, state_exact);
+  double exact_x = sim_exact->ExpectationValue("X");
+
+  std::mt19937 rng(42);
+  size_t realizations = 10000;
+  double sampled_x_sum = 0.0;
+  for (size_t r = 0; r < realizations; ++r) {
+    auto noisy_sampled = noise::inject_noise(c, noiseModel, rng);
+    auto sim = MakeSimulator(Simulators::SimulationType::kStatevector, 1);
+    Circuits::OperationState state;
+    noisy_sampled->Execute(sim, state);
+    sampled_x_sum += sim->ExpectationValue("X");
+  }
+  double sampled_x = sampled_x_sum / static_cast<double>(realizations);
+
+  BOOST_CHECK_SMALL(std::abs(sampled_x - exact_x), 0.02);
+  BOOST_CHECK_SMALL(std::abs(exact_x - std::exp(-duration / t2)), kTolerance);
+}
+
+BOOST_AUTO_TEST_CASE(DelayDurationValidation) {
+  // Valid construction
+  Circuits::Delay<double> delay(0, 1e-6);
+  BOOST_CHECK_CLOSE(delay.GetDuration(), 1e-6, 1e-12);
+
+  // Valid mutation via SetDuration
+  delay.SetDuration(2e-6);
+  BOOST_CHECK_CLOSE(delay.GetDuration(), 2e-6, 1e-12);
+  delay.SetDuration(0.0);
+  BOOST_CHECK_EQUAL(delay.GetDuration(), 0.0);
+
+  // Invalid mutation via SetDuration
+  BOOST_CHECK_THROW(delay.SetDuration(-1e-6), std::invalid_argument);
+  BOOST_CHECK_THROW(delay.SetDuration(std::numeric_limits<double>::infinity()),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(delay.SetDuration(-std::numeric_limits<double>::infinity()),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(delay.SetDuration(std::numeric_limits<double>::quiet_NaN()),
+                    std::invalid_argument);
+
+  // Valid mutation via SetDelay
+  delay.SetDelay(3e-6);
+  BOOST_CHECK_CLOSE(delay.GetDuration(), 3e-6, 1e-12);
+
+  // Invalid mutation via SetDelay
+  BOOST_CHECK_THROW(delay.SetDelay(-1e-6), std::invalid_argument);
+  BOOST_CHECK_THROW(delay.SetDelay(std::numeric_limits<double>::infinity()),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(delay.SetDelay(-std::numeric_limits<double>::infinity()),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(delay.SetDelay(std::numeric_limits<double>::quiet_NaN()),
+                    std::invalid_argument);
+
+  // Polymorphic validation via IOperation pointer
+  std::shared_ptr<Circuits::IOperation<double>> op =
+      std::make_shared<Circuits::Delay<double>>(0, 1e-6);
+  BOOST_CHECK_THROW(op->SetDelay(-1e-6), std::invalid_argument);
+  BOOST_CHECK_THROW(op->SetDelay(std::numeric_limits<double>::infinity()),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(op->SetDelay(-std::numeric_limits<double>::infinity()),
+                    std::invalid_argument);
+  BOOST_CHECK_THROW(op->SetDelay(std::numeric_limits<double>::quiet_NaN()),
+                    std::invalid_argument);
+}
+
+BOOST_AUTO_TEST_CASE(CorrelatedNoiseStationaryInitVariance) {
+  constexpr double sigma = 10.0;
+  constexpr double alpha = 4.0;
+  constexpr double gate_time = 100e-9;
+  double theta = 1.0 / (alpha * gate_time);
+  double expected_var = sigma * sigma / (2.0 * theta);
+
+  noise::NoiseModel nm_stationary;
+  nm_stationary.set_correlated_ou(0, sigma, alpha, gate_time, true, true, true);
+
+  noise::NoiseModel nm_cold;
+  nm_cold.set_correlated_ou(0, sigma, alpha, gate_time, true, true, false);
+
+  auto circ = std::make_shared<Circuits::Circuit<double>>();
+  circ->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+
+  std::mt19937 rng(123);
+  constexpr size_t N = 5000;
+  double sum_stat = 0.0, sum_sq_stat = 0.0;
+  double sum_cold = 0.0, sum_sq_cold = 0.0;
+
+  for (size_t i = 0; i < N; ++i) {
+    auto out_stat = noise::inject_correlated_noise(circ, nm_stationary, rng);
+    auto out_cold = noise::inject_correlated_noise(circ, nm_cold, rng);
+
+    double angle_stat = 0.0;
+    for (const auto &op : out_stat->GetOperations()) {
+      if (auto rz = std::dynamic_pointer_cast<Circuits::RzGate<double>>(op))
+        angle_stat = rz->GetTheta();
+    }
+    sum_stat += angle_stat;
+    sum_sq_stat += angle_stat * angle_stat;
+
+    double angle_cold = 0.0;
+    for (const auto &op : out_cold->GetOperations()) {
+      if (auto rz = std::dynamic_pointer_cast<Circuits::RzGate<double>>(op))
+        angle_cold = rz->GetTheta();
+    }
+    sum_cold += angle_cold;
+    sum_sq_cold += angle_cold * angle_cold;
+  }
+
+  double var_stat = (sum_sq_stat - sum_stat * sum_stat / N) / (N - 1);
+  double var_cold = (sum_sq_cold - sum_cold * sum_cold / N) / (N - 1);
+
+  BOOST_CHECK_CLOSE(var_stat, expected_var, 10.0);
+
+  double phi = std::exp(-theta * gate_time);
+  double expected_cold_var = expected_var * (1.0 - phi * phi);
+  BOOST_CHECK_CLOSE(var_cold, expected_cold_var, 10.0);
+}
+
+BOOST_AUTO_TEST_CASE(MultiBandOUConfigurationAndSuperposition) {
+  constexpr double gate_time = 100e-9;
+  std::vector<std::pair<double, double>> bands = {
+      {10.0, 2.0},
+      {20.0, 5.0}
+  };
+
+  noise::NoiseModel nm;
+  nm.set_multi_correlated_ou(0, bands, gate_time, true, true, true);
+
+  const auto *crn = nm.get_correlated(0);
+  BOOST_REQUIRE(crn != nullptr);
+  BOOST_CHECK_EQUAL(crn->bands.size(), 2);
+
+  double var_b0 = 10.0 * 10.0 / (2.0 * (1.0 / (2.0 * gate_time)));
+  double var_b1 = 20.0 * 20.0 / (2.0 * (1.0 / (5.0 * gate_time)));
+  double total_expected_var = var_b0 + var_b1;
+
+  auto circ = std::make_shared<Circuits::Circuit<double>>();
+  circ->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+
+  std::mt19937 rng(999);
+  constexpr size_t N = 5000;
+  double sum = 0.0, sum_sq = 0.0;
+  for (size_t i = 0; i < N; ++i) {
+    auto out = noise::inject_correlated_noise(circ, nm, rng);
+    double angle = 0.0;
+    for (const auto &op : out->GetOperations()) {
+      if (auto rz = std::dynamic_pointer_cast<Circuits::RzGate<double>>(op))
+        angle = rz->GetTheta();
+    }
+    sum += angle;
+    sum_sq += angle * angle;
+  }
+  double measured_var = (sum_sq - sum * sum / N) / (N - 1);
+  BOOST_CHECK_CLOSE(measured_var, total_expected_var, 10.0);
+}
+
+BOOST_AUTO_TEST_CASE(OneOverFNoiseSynthesizer) {
+  noise::NoiseModel nm;
+  nm.set_1_over_f_noise(0, 1e-4, 1e3, 1e7, 4, 100e-9);
+
+  const auto *crn = nm.get_correlated(0);
+  BOOST_REQUIRE(crn != nullptr);
+  BOOST_CHECK_EQUAL(crn->bands.size(), 4);
+
+  for (size_t b = 1; b < crn->bands.size(); ++b) {
+    BOOST_CHECK_LT(crn->bands[b].phi, crn->bands[b - 1].phi);
+    BOOST_CHECK_GT(crn->bands[b].theta, crn->bands[b - 1].theta);
+  }
 }
 
 BOOST_AUTO_TEST_SUITE_END()
