@@ -211,6 +211,93 @@
  *
  * ---
  *
+ * @section py_noise_correlated Time-Correlated (OU & AR(1)) Dephasing
+ *
+ * Real quantum hardware experiences non-Markovian phase drift from background fluctuators.
+ * Maestro models continuous Ornstein-Uhlenbeck (OU) stochastic processes discretized as AR(1)
+ * autoregressive noise after each gate:
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # Set OU dephasing from physical parameters
+ * # sigma: diffusion rate (noise strength), alpha: correlation time in gate-time units
+ * nm.set_correlated_ou(
+ *     qubit=0,
+ *     sigma=15.0,
+ *     alpha=0.5,
+ *     gate_time=100e-9,
+ *     stationary_init=True,
+ * )
+ *
+ * # Uniform OU dephasing across all qubits
+ * nm.set_all_correlated_ou(num_qubits=5, sigma=15.0, alpha=0.5, gate_time=100e-9)
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_noise_multiband Multi-Band OU & 1/f Spectrum Noise
+ *
+ * To accurately reproduce true 1/f power spectral density over multiple decades of frequency,
+ * Maestro allows superposing multiple independent OU fluctuator bands on each qubit:
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # Append individual fluctuator bands
+ * nm.add_correlated_ou_band(qubit=0, sigma=10.0, alpha=0.1, gate_time=100e-9)
+ * nm.add_correlated_ou_band(qubit=0, sigma=5.0, alpha=1.0, gate_time=100e-9)
+ * nm.add_correlated_ou_band(qubit=0, sigma=2.0, alpha=10.0, gate_time=100e-9)
+ *
+ * # Batch set multiple (sigma, alpha) bands
+ * bands = [(10.0, 0.1), (5.0, 1.0), (2.0, 10.0)]
+ * nm.set_multi_correlated_ou(qubit=1, bands=bands, gate_time=100e-9)
+ *
+ * # Automatically synthesize a 1/f noise spectrum between f_min and f_max
+ * nm.set_1_over_f_noise(
+ *     qubit=2,
+ *     total_power=1e-3,
+ *     f_min=1e3,       # 1 kHz
+ *     f_max=1e7,       # 10 MHz
+ *     num_bands=6,
+ *     gate_time=100e-9,
+ *     stationary_init=True,
+ * )
+ * @endcode
+ *
+ * ---
+ *
+ * @section py_noise_idle Idle Channels & Delay Decoherence
+ *
+ * Real devices accumulate significant decoherence while idling. Maestro provides native
+ * idle channels configured via `set_idle_noise()` that act on `qc.delay(qubit, duration)`
+ * operations:
+ *
+ * @code{.py}
+ * nm = maestro.NoiseModel()
+ *
+ * # Configure idle relaxation, dephasing, and coherent detuning
+ * nm.set_idle_noise(
+ *     qubit=0,
+ *     t1=100e-6,              # 100 microseconds T1
+ *     t2=80e-6,               # 80 microseconds T2 (must be <= 2*T1)
+ *     excited_population=0.01,# 1% equilibrium thermal population
+ *     detuning_hz=5e3,        # 5 kHz coherent detuning
+ * )
+ *
+ * # Idle delays continuously integrate any active OU dephasing processes as well
+ * qc = QuantumCircuit()
+ * qc.h(0)
+ * qc.delay(0, 20e-6)          # 20 us idle wait
+ * qc.h(0)
+ * qc.measure_all()
+ *
+ * result = qc.full_noise_execute(nm, shots=1024)
+ * print(result["counts"])
+ * @endcode
+ *
+ * ---
+ *
  * @section py_noise_combined Combined Device-Level Simulation
  *
  * Run full device simulation with all active noise layers combined in physical sequence:

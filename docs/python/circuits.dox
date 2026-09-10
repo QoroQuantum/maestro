@@ -61,6 +61,23 @@
  * | CU | `qc.cu(ctrl, tgt, θ, φ, λ, γ)` | 4 angles |
  * | Toffoli | `qc.ccx(c1, c2, tgt)` | — |
  * | Fredkin | `qc.cswap(ctrl, q1, q2)` | — |
+ * | Delay | `qc.delay(qubit, duration)` | duration in seconds |
+ *
+ * ---
+ *
+ * @section py_circuit_delay Delay and Idle Operations
+ *
+ * Physical idling periods can be scheduled on specific qubits using `qc.delay()`.
+ * Durations are specified in seconds (e.g., `100e-9` for 100 ns, `50e-6` for 50 us).
+ *
+ * In noiseless simulation, delay acts as an identity. Under noisy simulation, it triggers
+ * idle thermal relaxation (T1/T2), continuous-time Ornstein-Uhlenbeck phase drift, and
+ * coherent detuning rotation according to the configured `NoiseModel` (see @ref py_noise).
+ *
+ * @code{.py}
+ * # Append 50 microseconds of idle time on qubit 0
+ * qc.delay(0, 50e-6)
+ * @endcode
  *
  * ---
  *
