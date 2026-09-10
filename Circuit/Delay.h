@@ -36,11 +36,7 @@ class Delay : public IOperation<Time> {
    */
   Delay(Types::qubit_t qubit = 0, Time duration = 0)
       : IOperation<Time>(duration), qubit_(qubit) {
-    if (std::isnan(static_cast<double>(duration)) ||
-        std::isinf(static_cast<double>(duration)) ||
-        duration < 0) {
-      throw std::invalid_argument("Delay duration must be finite and nonnegative");
-    }
+    ValidateDuration(duration);
   }
 
   /**
@@ -82,7 +78,15 @@ class Delay : public IOperation<Time> {
   /**
    * @brief Set the delay duration.
    */
-  void SetDuration(Time d) { IOperation<Time>::SetDelay(d); }
+  void SetDuration(Time d) {
+    ValidateDuration(d);
+    IOperation<Time>::SetDelay(d);
+  }
+
+  /**
+   * @brief Set the delay of the operation.
+   */
+  void SetDelay(Time d) override { SetDuration(d); }
 
   bool CanAffectQuantumState() const override { return false; }
   bool IsClifford() const override { return true; }
@@ -103,6 +107,14 @@ class Delay : public IOperation<Time> {
   }
 
  private:
+  static void ValidateDuration(Time d) {
+    if (std::isnan(static_cast<double>(d)) ||
+        std::isinf(static_cast<double>(d)) ||
+        d < 0) {
+      throw std::invalid_argument("Delay duration must be finite and nonnegative");
+    }
+  }
+
   Types::qubit_t qubit_ = 0;
 };
 
