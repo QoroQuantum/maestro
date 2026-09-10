@@ -176,15 +176,17 @@ jobs:
             ./b2 -j$(nproc) --with-program_options --with-json --with-container --with-serialization install
 
           CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
-            auditwheel repair -w {dest_dir} {wheel} &&
+            rm -rf /tmp/auditwheel_out &&
+            auditwheel repair -w /tmp/auditwheel_out {wheel} &&
             pip install wheel patchelf &&
-            for whl in {dest_dir}/*.whl; do
+            for whl in /tmp/auditwheel_out/*.whl; do
+              rm -rf /tmp/whl_fix &&
               wheel unpack -d /tmp/whl_fix "$whl" &&
-              patchelf --add-rpath '$ORIGIN' /tmp/whl_fix/*/maestro.cpython-*.so &&
-              rm "$whl" &&
+              find /tmp/whl_fix -name "maestro.cpython-*.so" -exec patchelf --add-rpath '$ORIGIN' {} + &&
               wheel pack -d {dest_dir} /tmp/whl_fix/* &&
-              rm -rf /tmp/whl_fix;
-            done
+              rm -rf /tmp/whl_fix "$whl";
+            done &&
+            rm -rf /tmp/auditwheel_out
 
           # ---- macOS ----
           CIBW_BEFORE_ALL_MACOS: >-
