@@ -19,6 +19,8 @@
 #define _SIMULATORS_FACTORY_H_
 
 #include "GpuLibStateVectorSim.h"
+#include "DistributedGpuLibrary.h"
+#include "DistributedMpiGpuLibrary.h"
 #include "GpuDensityMatrix.h"
 #include "GpuMPO.h"
 #include "GpuLibMPSSim.h"
@@ -61,6 +63,11 @@ class SimulatorsFactory {
       SimulationType method = SimulationType::kMatrixProductState);
 
 #ifdef __linux__
+  // Defined in the core library so Python's hidden-visibility extension
+  // shares the same plugin instances and native-state lifetime counters.
+  static std::shared_ptr<DistributedGpuLibrary> GetDistributedGpuLibrary();
+  static std::shared_ptr<DistributedMpiGpuLibrary> GetDistributedMpiGpuLibrary();
+  static void FinalizeDistributedMpiGpuBackend();
   static bool InitGpuLibrary();
   static bool InitGpuLibraryWithMute();
 
