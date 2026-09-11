@@ -607,7 +607,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         method != Simulators::SimulationType::kStabilizer
     // this is for the gpu simulator, as it doesn't support stabilizer
 #ifdef __linux__
-        && simType != Simulators::SimulatorType::kGpuSim
+        && !Simulators::IsGpuSimulator(simType)
 #endif
     ) {
       method = Simulators::SimulationType::kStabilizer;
@@ -648,7 +648,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     size_t nrThreads = GetMaxSimulators();
 
 #ifdef __linux__
-    if (simType == Simulators::SimulatorType::kGpuSim)
+    if (Simulators::IsGpuSimulator(simType))
       nrThreads = 1;
     else
 #endif
@@ -814,7 +814,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         method != Simulators::SimulationType::kStabilizer
     // this is for the gpu simulator, as it doesn't support stabilizer
 #ifdef __linux__
-        && simType != Simulators::SimulatorType::kGpuSim
+        && !Simulators::IsGpuSimulator(simType)
 #endif
     ) {
       method = Simulators::SimulationType::kStabilizer;
@@ -848,7 +848,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     size_t nrThreads = GetMaxSimulators();
 
 #ifdef __linux__
-    if (simType == Simulators::SimulatorType::kGpuSim)
+    if (Simulators::IsGpuSimulator(simType))
       nrThreads = 1;
     else
 #endif
@@ -1033,6 +1033,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         configuration.SetConfiguration(
             "gpu_device", std::to_string(simulator->GetGpuDevice()));
 
+      if (Simulators::IsDistributedGpuSimulator(simType)) {
+        configuration.SetConfiguration("distributed_devices",
+            simulator->GetConfiguration("distributed_shard_devices"));
+      }
       simulator->setGrowthFactorGate(growthFactorGate);
       simulator->setGrowthFactorSwap(growthFactorSwap);
       simulator->SetLookaheadDepth(lookaheadDepth);
@@ -1988,6 +1992,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       Simulators::SimulatorType &simType, Simulators::SimulationType &method,
       std::vector<bool> &executed, bool multithreading = false,
       bool dontRunCircuitStart = false) override {
+    // Distribution is an explicit execution choice. Timing-based backend
+    // selection must not replace it or diverge between MPI ranks.
+    if (Simulators::IsDistributedGpuSimulator(simType)) return nullptr;
     if (!optimizeSimulator) return nullptr;
 
     if ((!simulatorsEstimator || !simulatorsEstimator->IsInitialized()) &&
@@ -2579,6 +2586,32 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     distCirc = circuit->RemapToContinuous(qubitsMapOnHost, reverseQubitsMap,
                                           nrQubits, nrCbits);
+
+    if (simulator && Simulators::IsDistributedGpuSimulator(simulator->GetType())) {
+      // Distribution settings refer to register qubits. Keep their numbering
+      // and idle wires when the network creates a smaller per-host simulator.
+      // Classical results retain RemapToContinuous's independent mapping.
+      const size_t offset = circuit->GetMaxQubitIndex() < hostNrQubits
+          ? 0 : host->GetStartQubitId();
+      std::unordered_map<Types::qubit_t, Types::qubit_t> restoreQubits;
+      for (const auto& [original, compact] : qubitsMapOnHost) {
+        if (original < offset || original - offset >= hostNrQubits)
+          throw std::runtime_error("Circuit does not fit on the host!");
+        restoreQubits[compact] = original - offset;
+      }
+      distCirc = std::static_pointer_cast<Circuits::Circuit<Time>>(
+          distCirc->Remap(restoreQubits));
+      qubitsMapOnHost.clear();
+      for (size_t q = 0; q < hostNrQubits; ++q) qubitsMapOnHost[q] = q;
+      nrQubits = hostNrQubits;
+    } else if (pauliStrings) {
+      // Observables can mention idle qubits absent from the circuit. Allocate
+      // them in |0> and include them in the expectation remapping.
+      size_t width = 0;
+      for (const auto& pauli : *pauliStrings) width = std::max(width, pauli.size());
+      for (size_t q = 0; q < width; ++q)
+        if (!qubitsMapOnHost.count(q)) qubitsMapOnHost[q] = nrQubits++;
+    }
 
     assert(nrQubits == qubitsMapOnHost.size());
 

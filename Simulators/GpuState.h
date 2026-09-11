@@ -673,8 +673,10 @@ class GpuState : public ISimulator {
         if (algorithm == 'p') return backend->SetGesvdP(enabled);
         return backend->SetGesvdR(enabled);
       };
-      const auto applyGesvd = [](auto& backend) {
-        if (!backend) return true; // Applied after native object creation.
+      const auto applyGesvd = [enabled](auto& backend) {
+        // GESVD has no native flag. A false entry is an inactive selector,
+        // so replaying it must not clear a subsequently selected algorithm.
+        if (!enabled || !backend) return true;
         return backend->SetGesvdJ(false) && backend->SetGesvdP(false) &&
                backend->SetGesvdR(false);
       };

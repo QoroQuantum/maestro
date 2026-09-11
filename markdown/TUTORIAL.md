@@ -307,8 +307,14 @@ keys through `Configure(key, value)`:
 | MPO | `matrix_product_operator_use_gesvd` | `matrix_product_operator_use_gesvdj` | `matrix_product_operator_use_gesvdp` | `matrix_product_operator_use_gesvdr` |
 | Tensor network | `tensor_network_use_gesvd` | `tensor_network_use_gesvdj` | `tensor_network_use_gesvdp` | `tensor_network_use_gesvdr` |
 
-Values are `true`/`false` or `1`/`0`. Enabling an algorithm disables the other two
-for that backend; disabling the active algorithm restores the default GESVD.
+The current GPU plugin defaults to GESVDP for MPS, MPO and tensor networks.
+Maestro inherits the installed plugin's default unless an algorithm is selected.
+Values are `true`/`false` or `1`/`0`. Enabling an algorithm disables the other
+selectors for that backend. Clearing the active GESVDJ, GESVDP or GESVDR flag
+selects plain GESVD; it does not restore the construction default. Enable
+`*_use_gesvdp` explicitly to return to GESVDP. Setting `*_use_gesvd` to `true`
+clears all three native flags; setting it to `false` leaves the live selection
+unchanged.
 These settings can be applied before initialization or changed on a live
 simulator. Configuration replay, network recreation and supported clone
 operations preserve the latest selection.

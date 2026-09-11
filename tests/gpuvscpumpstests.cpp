@@ -2,6 +2,7 @@
  * (MPS) backend. */
 #ifdef __linux__
 
+#include <boost/math/distributions/binomial.hpp>
 #include <boost/test/unit_test.hpp>
 #include <boost/test/data/test_case.hpp>
 #include <boost/test/data/monomorphic.hpp>
@@ -298,6 +299,9 @@ BOOST_AUTO_TEST_CASE(all_gates_repeated_measurement_matches) {
   Types::qubits_vector allQubits(kNumQubits);
   std::iota(allQubits.begin(), allQubits.end(), 0);
 
+  const auto expected = qcsimMPS->AllProbabilities();
+  CheckAllClose(gpuMPS->AllProbabilities(), expected);
+
   constexpr size_t trials = 2000;
   std::unordered_map<std::vector<bool>, size_t> gpuCounts, qcsimCounts;
 
@@ -312,22 +316,38 @@ BOOST_AUTO_TEST_CASE(all_gates_repeated_measurement_matches) {
     ++qcsimCounts[qcsimMPS->MeasureMany(allQubits)];
   }
 
-  for (const auto& [key, cnt] : gpuCounts) {
-    const double val = static_cast<double>(cnt) / trials;
-    if (val < 0.03) continue;
-    double val2 = 0;
-    if (qcsimCounts.find(key) != qcsimCounts.end())
-      val2 = static_cast<double>(qcsimCounts[key]) / trials;
-    BOOST_CHECK_CLOSE(val, val2, val2 < 0.1 ? 66 : 33);
+  // Compare each backend with the exact distribution, rather than another
+  // noisy histogram. Bonferroni correction covers both tails, both backends,
+  // and every outcome: the total false-failure probability is at most 1e-6.
+  // Binomial quantiles round outwards, keeping the acceptance interval
+  // conservative even for rare outcomes. Include zero-count outcomes too.
+  constexpr double familyErrorRate = 1e-6;
+  const double tailProbability = familyErrorRate / (4 * expected.size());
+  for (size_t outcome = 0; outcome < expected.size(); ++outcome) {
+    std::vector<bool> key(kNumQubits);
+    for (size_t qubit = 0; qubit < kNumQubits; ++qubit)
+      key[qubit] = (outcome >> qubit) & 1U;
+
+    const boost::math::binomial_distribution<double> distribution(
+        trials, expected[outcome]);
+    const double lower = boost::math::quantile(distribution, tailProbability);
+    const double upper = boost::math::quantile(
+        boost::math::complement(distribution, tailProbability));
+    const auto checkCount = [&](const char* backend, size_t count) {
+      BOOST_TEST((count >= lower && count <= upper),
+                 backend << " outcome " << outcome << ": " << count
+                         << " counts; expected " << trials * expected[outcome]
+                         << ", accepted range [" << lower << ", " << upper
+                         << "]");
+    };
+    checkCount("GPU", gpuCounts[key]);
+    checkCount("CPU", qcsimCounts[key]);
   }
-  for (const auto& [key, cnt] : qcsimCounts) {
-    const double val = static_cast<double>(cnt) / trials;
-    if (val < 0.03) continue;
-    double val2 = 0;
-    if (gpuCounts.find(key) != gpuCounts.end())
-      val2 = static_cast<double>(gpuCounts[key]) / trials;
-    BOOST_CHECK_CLOSE(val, val2, val2 < 0.1 ? 66 : 33);
-  }
+
+  gpuMPS->RestoreState();
+  qcsimMPS->RestoreState();
+  CheckAllClose(gpuMPS->AllProbabilities(), expected);
+  CheckAllClose(qcsimMPS->AllProbabilities(), expected);
 }
 
 BOOST_DATA_TEST_CASE_F(QCSimVsGpuMPSFixture, RandomCircuitsMatch,

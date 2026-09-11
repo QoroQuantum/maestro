@@ -56,6 +56,7 @@ if(NOT "$ENV{NO_TESTS}" STREQUAL "")
 endif()
 
 option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
+option(MAESTRO_BUILD_MPI_GPU_TESTS "Build MPI GPU hardware tests (only tests link MPI)" OFF)
 option(MAESTRO_ENABLE_OPENMP "Enable OpenMP acceleration" ON)
 
 # Qiskit Aer is optional - disabled by default for easier builds.
@@ -556,6 +557,35 @@ if(COMPILE_TESTS)
             add_test(NAME sampling_order_gpu COMMAND sampling_order_tests --gpu)
             set_tests_properties(sampling_order_gpu PROPERTIES
                 SKIP_RETURN_CODE 77 LABELS "gpu;hardware")
+        endif()
+    endif()
+
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(distributed_gpu_error_tests tests/distributed_gpu/error_contract_tests.cpp)
+        target_link_libraries(distributed_gpu_error_tests PRIVATE ${CMAKE_DL_LIBS})
+        add_test(NAME distributed_gpu_error_contract COMMAND distributed_gpu_error_tests)
+        add_executable(distributed_gpu_tests tests/distributed_gpu/integration_tests.cpp)
+        target_link_libraries(distributed_gpu_tests PRIVATE maestro)
+        set_property(TARGET distributed_gpu_tests APPEND_STRING PROPERTY
+            LINK_FLAGS " -Wl,--disable-new-dtags")
+        add_test(NAME distributed_gpu_configuration COMMAND distributed_gpu_tests --config-only)
+        add_test(NAME distributed_gpu_missing_mpi_plugin COMMAND distributed_gpu_tests --missing-mpi-plugin)
+        set_tests_properties(distributed_gpu_missing_mpi_plugin PROPERTIES
+            ENVIRONMENT "MAESTRO_DIST_MPI_GPU_LIBRARY=/maestro-test-missing/libmaestro_gpu_distributed_mpi.so")
+        add_test(NAME distributed_gpu_single COMMAND distributed_gpu_tests)
+        add_test(NAME distributed_gpu_shared COMMAND distributed_gpu_tests --shared)
+        add_test(NAME distributed_gpu_two_devices COMMAND distributed_gpu_tests --two-gpus)
+        set_tests_properties(distributed_gpu_single distributed_gpu_shared distributed_gpu_two_devices
+            PROPERTIES SKIP_RETURN_CODE 77 LABELS "gpu;hardware;distributed" RUN_SERIAL TRUE TIMEOUT 180)
+        if(MAESTRO_BUILD_MPI_GPU_TESTS)
+            find_package(MPI REQUIRED COMPONENTS CXX)
+            target_compile_definitions(distributed_gpu_tests PRIVATE MAESTRO_MPI_GPU_TESTS)
+            target_link_libraries(distributed_gpu_tests PRIVATE MPI::MPI_CXX)
+            add_test(NAME distributed_gpu_mpi COMMAND ${MPIEXEC_EXECUTABLE}
+                ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}
+                $<TARGET_FILE:distributed_gpu_tests> --mpi ${MPIEXEC_POSTFLAGS})
+            set_tests_properties(distributed_gpu_mpi PROPERTIES
+                SKIP_RETURN_CODE 77 LABELS "gpu;hardware;distributed;mpi" RUN_SERIAL TRUE TIMEOUT 240)
         endif()
     endif()
 

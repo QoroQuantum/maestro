@@ -112,7 +112,7 @@ class Configuration {
       const bool enabled = ParseGpuSvdFlag(value);
       configMap[key] = enabled ? "true" : "false";
       if (enabled) {
-        for (char algorithm : {'j', 'p', 'r'}) {
+        for (const char* algorithm : {"", "j", "p", "r"}) {
           const auto otherKey = svdGroup + algorithm;
           const auto other = configMap.find(otherKey);
           // Do not introduce unused optional settings on older plugins, or
