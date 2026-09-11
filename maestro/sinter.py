@@ -407,7 +407,7 @@ def split_stim_prefix_suffix(
             if name in STIM_MEASURE_INSTRUCTIONS or name in STIM_NOISE_INSTRUCTIONS:
                 cut_idx = idx
                 break
-            if has_noise and name not in STIM_ANNOTATIONS and name not in ("R", "RZ"):
+            if has_external_noise and name not in STIM_ANNOTATIONS and name not in ("R", "RZ"):
                 cut_idx = idx
                 break
         prefix_str = "\n".join(p[3] for p in parsed[:cut_idx])
@@ -422,14 +422,12 @@ def split_stim_prefix_suffix(
 
     else:
         flat = list(circuit.flattened())
-        has_in_circuit_noise = any(inst.name in STIM_NOISE_INSTRUCTIONS for inst in flat)
-        has_noise = has_in_circuit_noise or has_external_noise
         cut_idx = len(flat)
         for idx, inst in enumerate(flat):
             if inst.name in STIM_MEASURE_INSTRUCTIONS or inst.name in STIM_NOISE_INSTRUCTIONS:
                 cut_idx = idx
                 break
-            if has_noise and inst.name not in STIM_ANNOTATIONS and inst.name not in ("R", "RZ"):
+            if has_external_noise and inst.name not in STIM_ANNOTATIONS and inst.name not in ("R", "RZ"):
                 cut_idx = idx
                 break
         prefix_c = stim.Circuit()
@@ -439,6 +437,60 @@ def split_stim_prefix_suffix(
         for inst in flat[cut_idx:]:
             suffix_c.append(inst)
         return prefix_c, suffix_c, cut_idx
+
+
+def count_nontrivial_prefix_gates(circuit: stim.Circuit | str | Any) -> tuple[int, int]:
+    """Count non-trivial (two-qubit, single-qubit) operations in a prefix circuit.
+
+    Trivial operations include resets to |0> (R, RZ), coordinates (QUBIT_COORDS,
+    SHIFT_COORDS), and ticks (TICK). Non-trivial operations include 2-qubit entangling
+    gates and 1-qubit gates/rotations or non-Z basis resets (RX, RY).
+
+    Returns:
+        A tuple of (num_2q_gates, num_1q_gates).
+    """
+    num_2q = 0
+    num_1q = 0
+
+    TWO_QUBIT_GATES = {"CX", "CNOT", "CY", "CZ", "SWAP"}
+    SINGLE_QUBIT_GATES = {
+        "H", "X", "Y", "Z", "S", "S_DAG", "SQRT_X", "SQRT_X_DAG",
+        "SQRT_Y", "SQRT_Y_DAG", "T", "T_DAG", "RX", "RY", "RZ",
+    }
+
+    if isinstance(circuit, str):
+        lines = circuit.strip().splitlines()
+        for line in lines:
+            name, args, targets = _parse_instruction_line(line)
+            if not name:
+                continue
+            if name in TWO_QUBIT_GATES:
+                num_2q += max(1, len(targets) // 2)
+            elif name in ("RX", "RY") and not args:
+                # RX and RY resets initialize to |+> and |i>, non-trivial basis prep
+                num_1q += len(targets)
+            elif name == "RZ" and not args:
+                # RZ without args is reset to |0>, trivial
+                continue
+            elif name in SINGLE_QUBIT_GATES:
+                num_1q += len(targets)
+    elif hasattr(circuit, "circuit_str"):
+        return count_nontrivial_prefix_gates(circuit.circuit_str)
+    else:
+        for inst in circuit.flattened():
+            name = inst.name
+            targets = [t.qubit_value for t in inst.targets_copy() if t.is_qubit_target]
+            args = inst.gate_args_copy()
+            if name in TWO_QUBIT_GATES:
+                num_2q += max(1, len(targets) // 2)
+            elif name in ("RX", "RY") and not args:
+                num_1q += len(targets)
+            elif name == "RZ" and not args:
+                continue
+            elif name in SINGLE_QUBIT_GATES:
+                num_1q += len(targets)
+
+    return num_2q, num_1q
 
 
 class NonCliffordTaskCircuit:
@@ -509,6 +561,7 @@ class MaestroSinterSampler(sinter.Sampler):
         decoder: str | sinter.Decoder | None = None,
         seed: int | None = None,
         enable_checkpoint: bool = True,
+        min_single_qubit_gates: int = 1,
     ):
         """Initialize the Maestro Sinter sampler.
 
@@ -521,6 +574,8 @@ class MaestroSinterSampler(sinter.Sampler):
             decoder: Optional default decoder (e.g. 'pymatching') to use for tasks.
             seed: Optional default random seed for reproducible sampling.
             enable_checkpoint: Whether to use prefix state checkpointing.
+            min_single_qubit_gates: Minimum non-trivial single-qubit gates required in prefix
+                to enable checkpointing (2-qubit gates always qualify).
         """
         self.chi = chi
         self.use_gpu = use_gpu
@@ -530,6 +585,7 @@ class MaestroSinterSampler(sinter.Sampler):
         self.decoder = decoder
         self.seed = seed
         self.enable_checkpoint = enable_checkpoint
+        self.min_single_qubit_gates = min_single_qubit_gates
 
     def compiled_sampler_for_task(self, task: sinter.Task) -> sinter.CompiledSampler:
         """Create a compiled sampler configured for the given task."""
@@ -543,6 +599,7 @@ class MaestroSinterSampler(sinter.Sampler):
             decoder=self.decoder,
             seed=self.seed,
             enable_checkpoint=self.enable_checkpoint,
+            min_single_qubit_gates=self.min_single_qubit_gates,
         )
 
 
@@ -560,6 +617,7 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
         decoder: str | sinter.Decoder | None = None,
         seed: int | None = None,
         enable_checkpoint: bool = True,
+        min_single_qubit_gates: int = 1,
     ):
         if not isinstance(task, sinter.Task):
             # If passed a circuit or circuit string directly
@@ -577,6 +635,7 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
         self.decoder = decoder
         self.seed = seed
         self.enable_checkpoint = enable_checkpoint
+        self.min_single_qubit_gates = min_single_qubit_gates
 
         # Compile measurement-to-detector converter
         self.converter = task.circuit.compile_m2d_converter()
@@ -627,11 +686,15 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
             else:
                 self.suffix_noise_model = suffix_in_circuit_noise
 
-            # Determine if prefix has any operations
+            # Only enable checkpointing if prefix contains actual non-trivial gates
+            # (e.g., 2-qubit gates or more than N single-qubit rotations/gates).
+            # If the prefix is trivial (only initial resets or coordinates), fall back to standard direct execution.
+            num_2q, num_1q = count_nontrivial_prefix_gates(prefix_c)
+            has_nontrivial_prefix = (num_2q > 0) or (num_1q >= self.min_single_qubit_gates)
+
             prefix_num_q = getattr(self.prefix_qc, "num_qubits", 0)
             suffix_num_q = getattr(self.suffix_qc, "num_qubits", 0)
-            has_prefix_ops = cut_idx > 0 and prefix_num_q > 0
-            if has_prefix_ops:
+            if has_nontrivial_prefix and cut_idx > 0 and prefix_num_q > 0:
                 try:
                     qubits_for_sim = max(self.num_qubits, prefix_num_q, suffix_num_q, 1)
                     self.checkpoint_sim = maestro.PrefixCheckpointedSimulator(
