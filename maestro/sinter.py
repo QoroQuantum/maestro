@@ -26,6 +26,48 @@ import maestro
 if TYPE_CHECKING:
     import sinter
 
+# Sinter does not export classify_discards_and_errors on its top-level module in all versions.
+# We import it from the internal decoder module with an inline fallback.
+try:
+    from sinter._decoding._stim_then_decode_sampler import classify_discards_and_errors
+except Exception:  # pragma: no cover
+    def classify_discards_and_errors(
+        *,
+        actual_obs: np.ndarray,
+        predictions: np.ndarray,
+        postselected_observables_mask: np.ndarray | None,
+        out_count_observable_error_combos: Any | None,
+        num_obs: int,
+    ) -> tuple[int, int]:
+        num_discards = 0
+
+        # Added bytes in predictions are used for signalling discards
+        if predictions.shape[1] == actual_obs.shape[1] + 1:
+            discard_mask = predictions[:, -1] != 0
+            predictions = predictions[:, :-1]
+            num_discards += int(np.count_nonzero(discard_mask))
+            discard_mask ^= True
+            actual_obs = actual_obs[discard_mask]
+            predictions = predictions[discard_mask]
+
+        # Mispredicted observables can be used for signalling discards
+        if postselected_observables_mask is not None:
+            discard_mask = np.any((actual_obs ^ predictions) & postselected_observables_mask, axis=1)
+            num_discards += int(np.count_nonzero(discard_mask))
+            discard_mask ^= True
+            actual_obs = actual_obs[discard_mask]
+            predictions = predictions[discard_mask]
+
+        fail_mask = np.any(actual_obs != predictions, axis=1)
+        if out_count_observable_error_combos is not None:
+            for k in np.flatnonzero(fail_mask):
+                mistakes = np.unpackbits(actual_obs[k] ^ predictions[k], count=num_obs, bitorder="little")
+                err_key = "obs_mistake_mask=" + "".join("_E"[b] for b in mistakes)
+                out_count_observable_error_combos[err_key] += 1
+
+        num_errors = int(np.count_nonzero(fail_mask))
+        return int(num_discards), int(num_errors)
+
 
 def _parse_instruction_line(line: str) -> tuple[str, list[float], list[int]]:
     """Parse a single line of Stim-like circuit format."""
@@ -129,23 +171,23 @@ def translate_stim_to_maestro(
             for q in targets:
                 qc.ry(q, -math.pi / 2.0)
 
-        # --- Non-Clifford single-qubit gates ---
+        # --- Parameterized single-qubit rotations & non-Clifford gates ---
         elif name == "T":
             for q in targets:
                 qc.t(q)
         elif name == "T_DAG":
             for q in targets:
                 qc.tdg(q)
-        elif name == "RX":
-            angle = args[0] if args else 0.0
+        elif name == "RX" and args:
+            angle = args[0]
             for q in targets:
                 qc.rx(q, angle)
-        elif name == "RY":
-            angle = args[0] if args else 0.0
+        elif name == "RY" and args:
+            angle = args[0]
             for q in targets:
                 qc.ry(q, angle)
-        elif name == "RZ":
-            angle = args[0] if args else 0.0
+        elif name == "RZ" and args:
+            angle = args[0]
             for q in targets:
                 qc.rz(q, angle)
 
@@ -163,7 +205,7 @@ def translate_stim_to_maestro(
             for i in range(0, len(targets), 2):
                 qc.swap(targets[i], targets[i + 1])
 
-        # --- Resets ---
+        # --- Resets (unparameterized) ---
         elif name in ("R", "RZ"):
             for q in targets:
                 qc.reset(q)
@@ -174,9 +216,10 @@ def translate_stim_to_maestro(
         elif name == "RY":
             for q in targets:
                 qc.reset(q)
-                qc.rx(q, math.pi / 2.0)
+                qc.h(q)
+                qc.s(q)
 
-        # --- Measurements ---
+        # --- Measurements and Measure-and-Resets ---
         elif name in ("M", "MZ"):
             for q in targets:
                 qc.measure([(q, meas_idx)])
@@ -197,6 +240,24 @@ def translate_stim_to_maestro(
                 qc.h(q)
                 qc.measure([(q, meas_idx)])
                 qc.reset(q)
+                qc.h(q)
+                meas_idx += 1
+        elif name == "MY":
+            for q in targets:
+                qc.sdg(q)
+                qc.h(q)
+                qc.measure([(q, meas_idx)])
+                qc.h(q)
+                qc.s(q)
+                meas_idx += 1
+        elif name == "MRY":
+            for q in targets:
+                qc.sdg(q)
+                qc.h(q)
+                qc.measure([(q, meas_idx)])
+                qc.reset(q)
+                qc.h(q)
+                qc.s(q)
                 meas_idx += 1
 
         # --- In-circuit Pauli noise channels ---
@@ -220,6 +281,13 @@ def translate_stim_to_maestro(
             if p > 0:
                 for q in targets:
                     nm.set_dephasing(q, p)
+        elif name == "Y_ERROR":
+            p = args[0] if args else 0.0
+            if p > 0:
+                e0 = [[math.sqrt(1.0 - p), 0.0], [0.0, math.sqrt(1.0 - p)]]
+                e1 = [[0.0, -1j * math.sqrt(p)], [1j * math.sqrt(p), 0.0]]
+                for q in targets:
+                    nm.set_kraus_channel([q], [e0, e1])
 
         # --- Annotations (skipped for simulation) ---
         elif name in (
@@ -228,10 +296,11 @@ def translate_stim_to_maestro(
             "OBSERVABLE_INCLUDE",
             "QUBIT_COORDS",
             "SHIFT_COORDS",
+            "MPAD",
         ):
             continue
         else:
-            pass
+            raise ValueError(f"Unsupported Stim instruction '{name}' for Maestro translation.")
 
     return qc, nm, meas_idx
 
@@ -247,12 +316,12 @@ class NonCliffordTaskCircuit:
         num_meas = 0
 
         for line in circuit_str.strip().splitlines():
-            name, _, targets = _parse_instruction_line(line)
-            if name in ("T", "T_DAG", "RX", "RY", "RZ") and name != "R":
-                # Skip non-Clifford gate in Clifford baseline representation
+            name, args, targets = _parse_instruction_line(line)
+            # Skip non-Clifford gates (T, T_DAG, or parameterized rotations) in Clifford baseline representation
+            if name in ("T", "T_DAG") or (name in ("RX", "RY", "RZ") and len(args) > 0):
                 continue
             self._clifford_lines.append(line)
-            if name in ("M", "MZ", "MR", "MRZ", "MX", "MRX"):
+            if name in ("M", "MZ", "MR", "MRZ", "MX", "MRX", "MY", "MRY"):
                 num_meas += len(targets)
             elif name == "DETECTOR":
                 num_dets += 1
@@ -294,6 +363,8 @@ class MaestroSinterSampler(sinter.Sampler):
         use_gpu: bool = False,
         noise_model: maestro.NoiseModel | None = None,
         device: str | None = None,
+        config: maestro.SimulatorConfig | None = None,
+        decoder: str | sinter.Decoder | None = None,
     ):
         """Initialize the Maestro Sinter sampler.
 
@@ -302,11 +373,15 @@ class MaestroSinterSampler(sinter.Sampler):
             use_gpu: Whether to use GPU acceleration.
             noise_model: Optional pre-calibrated Maestro NoiseModel.
             device: Optional target device string.
+            config: Optional pre-configured Maestro SimulatorConfig.
+            decoder: Optional default decoder (e.g. 'pymatching') to use for tasks.
         """
         self.chi = chi
         self.use_gpu = use_gpu
         self.noise_model = noise_model
         self.device = device
+        self.config = config
+        self.decoder = decoder
 
     def compiled_sampler_for_task(self, task: sinter.Task) -> sinter.CompiledSampler:
         """Create a compiled sampler configured for the given task."""
@@ -316,6 +391,8 @@ class MaestroSinterSampler(sinter.Sampler):
             use_gpu=self.use_gpu,
             noise_model=self.noise_model,
             device=self.device,
+            config=self.config,
+            decoder=self.decoder,
         )
 
 
@@ -324,17 +401,28 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
 
     def __init__(
         self,
-        task: sinter.Task,
+        task: sinter.Task | stim.Circuit | str,
         chi: int = 32,
         use_gpu: bool = False,
         noise_model: maestro.NoiseModel | None = None,
         device: str | None = None,
+        config: maestro.SimulatorConfig | None = None,
+        decoder: str | sinter.Decoder | None = None,
     ):
+        if not isinstance(task, sinter.Task):
+            # If passed a circuit or circuit string directly
+            if isinstance(task, str):
+                circuit = stim.Circuit(task)
+            else:
+                circuit = task
+            task = sinter.Task(circuit=circuit)
+
         self.task = task
         self.chi = chi
         self.use_gpu = use_gpu
         self.external_noise_model = noise_model
         self.device = device
+        self.decoder = decoder
 
         # Compile measurement-to-detector converter
         self.converter = task.circuit.compile_m2d_converter()
@@ -351,29 +439,42 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
             self.noise_model = in_circuit_noise
 
         # Configure simulator
-        self.config = maestro.SimulatorConfig()
-        self.config.simulation_type = maestro.SimulationType.MatrixProductState
-        self.config.max_bond_dimension = self.chi
-        if self.use_gpu:
-            self.config.simulator_type = maestro.SimulatorType.Gpu
+        if config is not None:
+            self.config = config
+        else:
+            self.config = maestro.SimulatorConfig()
+            self.config.simulation_type = maestro.SimulationType.MatrixProductState
+            self.config.max_bond_dimension = self.chi
+            if self.use_gpu:
+                self.config.simulator_type = maestro.SimulatorType.Gpu
 
         # Resolve decoder for task
+        decoder_to_use = self.decoder if self.decoder is not None else task.decoder
         self.compiled_decoder = None
-        if task.decoder is not None:
+        if decoder_to_use is not None and decoder_to_use != "maestro":
             decoder_obj = None
-            if task.decoder in sinter.BUILT_IN_DECODERS:
-                decoder_obj = sinter.BUILT_IN_DECODERS[task.decoder]
+            if isinstance(decoder_to_use, sinter.Decoder):
+                decoder_obj = decoder_to_use
+            elif decoder_to_use in sinter.BUILT_IN_DECODERS:
+                decoder_obj = sinter.BUILT_IN_DECODERS[decoder_to_use]
             if decoder_obj is not None and hasattr(decoder_obj, "compile_decoder_for_dem"):
-                try:
-                    self.compiled_decoder = decoder_obj.compile_decoder_for_dem(
-                        dem=task.detector_error_model
-                    )
-                except Exception:
-                    self.compiled_decoder = None
+                dem = task.detector_error_model
+                if dem is None and hasattr(task.circuit, "detector_error_model"):
+                    try:
+                        dem = task.circuit.detector_error_model(decompose_errors=True, approximate_disjoint_errors=True)
+                    except ValueError:
+                        try:
+                            dem = task.circuit.detector_error_model(approximate_disjoint_errors=True)
+                        except ValueError:
+                            dem = task.circuit.detector_error_model(approximate_disjoint_errors=True, flatten_loops=True)
+                if dem is not None:
+                    self.compiled_decoder = decoder_obj.compile_decoder_for_dem(dem=dem)
 
-    def sample(self, suggested_shots: int) -> sinter.AnonTaskStats:
+    def sample(self, suggested_shots: int = 1, shots: int | None = None) -> sinter.AnonTaskStats:
         """Sample shots on Maestro and return Sinter task statistics."""
-        shots = max(1, suggested_shots)
+        if shots is not None:
+            suggested_shots = shots
+        shots_to_run = max(1, suggested_shots)
         t0 = time.monotonic()
 
         # Execute simulation on Maestro
@@ -381,15 +482,15 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
             res = self.qc.full_noise_execute(
                 self.noise_model,
                 self.config,
-                shots=shots,
-                noise_realizations=shots,
+                shots=shots_to_run,
+                noise_realizations=shots_to_run,
             )
         else:
-            res = self.qc.execute(self.config, shots=shots)
+            res = self.qc.execute(self.config, shots=shots_to_run)
 
         counts = res.get("counts", {})
         if not counts:
-            meas_matrix = np.zeros((shots, self.num_measurements), dtype=np.bool_)
+            meas_matrix = np.zeros((shots_to_run, self.num_measurements), dtype=np.bool_)
         else:
             keys = list(counts.keys())
             weights = [counts[k] for k in keys]
@@ -409,28 +510,81 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
             separate_observables=True,
         )
 
+        # Discard any shots that contain a postselected detection event
+        if self.task.postselection_mask is not None:
+            discarded_flags = np.any(dets & self.task.postselection_mask, axis=1)
+            num_discards_1 = int(np.count_nonzero(discarded_flags))
+            if num_discards_1:
+                dets = dets[~discarded_flags, :]
+                actual_obs = actual_obs[~discarded_flags, :]
+        else:
+            num_discards_1 = 0
+
         # Classify discards and errors
-        num_discards = 0
         if self.compiled_decoder is not None:
             predictions = self.compiled_decoder.decode_shots_bit_packed(
                 bit_packed_detection_event_data=dets
             )
-            num_discards, num_errors = sinter.classify_discards_and_errors(
-                actual_obs=actual_obs,
-                predictions=predictions,
-                num_obs=self.task.circuit.num_observables,
-                postselected_observables_mask=self.task.postselected_observables_mask,
-                out_count_observable_error_combos=None,
-            )
         else:
-            # Perfectionist / uncorrected check: any actual observable flip is an error
-            num_errors = int(np.count_nonzero(np.any(actual_obs, axis=1)))
-            num_discards = 0
+            # Uncorrected check: baseline prediction is all zeros (no correction)
+            predictions = np.zeros_like(actual_obs)
+
+        num_discards_2, num_errors = classify_discards_and_errors(
+            actual_obs=actual_obs,
+            predictions=predictions,
+            num_obs=self.task.circuit.num_observables,
+            postselected_observables_mask=self.task.postselected_observables_mask,
+            out_count_observable_error_combos=None,
+        )
+        total_discards = num_discards_1 + num_discards_2
 
         t1 = time.monotonic()
         return sinter.AnonTaskStats(
-            shots=shots,
+            shots=shots_to_run,
             errors=num_errors,
-            discards=num_discards,
+            discards=total_discards,
             seconds=t1 - t0,
         )
+
+    def sample_detection_events(
+        self, shots: int = 1000
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Sample detection events and actual observables directly.
+
+        Args:
+            shots: Number of shots to sample.
+
+        Returns:
+            A tuple of (detection_events, actual_observables) as boolean numpy arrays.
+            detection_events shape: (shots, num_detectors)
+            actual_observables shape: (shots, num_observables)
+        """
+        shots_to_run = max(1, shots)
+        if self.noise_model is not None and self.noise_model.has_any():
+            res = self.qc.full_noise_execute(
+                self.noise_model,
+                self.config,
+                shots=shots_to_run,
+                noise_realizations=shots_to_run,
+            )
+        else:
+            res = self.qc.execute(self.config, shots=shots_to_run)
+
+        counts = res.get("counts", {})
+        if not counts:
+            meas_matrix = np.zeros((shots_to_run, self.num_measurements), dtype=np.bool_)
+        else:
+            keys = list(counts.keys())
+            weights = [counts[k] for k in keys]
+            unique_matrix = np.array(
+                [[int(c) for c in k[: self.num_measurements]] for k in keys],
+                dtype=np.bool_,
+            )
+            meas_matrix = np.repeat(unique_matrix, weights, axis=0)
+
+        dets, actual_obs = self.converter.convert(
+            measurements=meas_matrix,
+            bit_packed=False,
+            separate_observables=True,
+        )
+        return dets, actual_obs

@@ -38,3 +38,19 @@ def test_sinter_import_guard(monkeypatch):
         importlib.reload(ms)
 
     assert "Install qoro-maestro[sinter] to use the Sinter sampler." in str(exc_info.value)
+
+
+def test_simulator_config_pickle():
+    """Verify that SimulatorConfig can be pickled and unpickled across multiprocessing boundaries."""
+    import pickle
+    import maestro
+
+    cfg = maestro.SimulatorConfig()
+    cfg.simulation_type = maestro.SimulationType.MatrixProductState
+    cfg.max_bond_dimension = 64
+
+    data = pickle.dumps(cfg)
+    restored = pickle.loads(data)
+
+    assert restored.simulation_type == maestro.SimulationType.MatrixProductState
+    assert restored.max_bond_dimension == 64

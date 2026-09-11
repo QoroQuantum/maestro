@@ -31,15 +31,15 @@
  *
  * | Class / Function | Description |
  * |------------------|-------------|
- * | `MaestroSinterSampler` | Implements `sinter.Sampler`. Passed to `sinter.collect()` as a custom sampler backend. |
- * | `MaestroCompiledSampler` | Implements `sinter.CompiledSampler`. Holds compiled circuit execution plans for repeated batch sampling. |
- * | `translate_stim_to_maestro(circuit)` | Converts a Stim circuit or circuit string into a Maestro `QuantumCircuit`. |
+ * | `MaestroSinterSampler` | Implements `sinter.Sampler`. Passed to `sinter.collect()` as a custom sampler backend in `custom_decoders`. |
+ * | `MaestroCompiledSampler` | Implements `sinter.CompiledSampler`. Holds compiled circuit execution plans for repeated batch sampling or direct detection event generation. |
+ * | `translate_stim_to_maestro(circuit)` | Converts a Stim circuit or circuit string into a Maestro `QuantumCircuit` and `NoiseModel`. |
  *
  * ---
  *
  * @section py_sinter_example_collect Using with Sinter Collect
  *
- * You can pass `MaestroSinterSampler` into `sinter.collect` via the `custom_samplers` dictionary:
+ * You can pass `MaestroSinterSampler` into `sinter.collect` via the `custom_decoders` dictionary:
  *
  * @code{.py}
  * import sinter
@@ -59,14 +59,13 @@
  * )
  *
  * # 2. Configure Maestro backend options (e.g. Matrix Product State)
- * mps_config = maestro.SimulatorConfig(
- *     simulation_type=maestro.SimulationType.MatrixProductState,
- *     max_bond_dimension=64,
- * )
+ * mps_config = maestro.SimulatorConfig()
+ * mps_config.simulation_type = maestro.SimulationType.MatrixProductState
+ * mps_config.max_bond_dimension = 64
  *
- * # 3. Instantiate Maestro custom sampler
- * custom_samplers = {
- *     "maestro": MaestroSinterSampler(config=mps_config)
+ * # 3. Instantiate Maestro custom sampler (optionally pairing with a decoder like pymatching)
+ * custom_decoders = {
+ *     "maestro": MaestroSinterSampler(config=mps_config, decoder="pymatching")
  * }
  *
  * # 4. Collect error correction statistics
@@ -75,8 +74,8 @@
  *     max_shots=100_000,
  *     max_errors=100,
  *     tasks=[surface_code_task],
- *     decoders=["pymatching"],
- *     custom_samplers=custom_samplers,
+ *     decoders=["maestro"],
+ *     custom_decoders=custom_decoders,
  * )
  *
  * for sample in stats:
@@ -104,7 +103,7 @@
  * sampler = MaestroCompiledSampler(circuit)
  *
  * # Sample detection events and observable flips as numpy boolean arrays
- * det_samples, obs_samples = sampler.sample(shots=1000)
+ * det_samples, obs_samples = sampler.sample_detection_events(shots=1000)
  * print("Detection events shape:", det_samples.shape)  # (1000, num_detectors)
  * print("Observable flips shape:", obs_samples.shape)  # (1000, num_observables)
  * @endcode
