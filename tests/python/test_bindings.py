@@ -1728,6 +1728,81 @@ class TestQuestSimulator:
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
 
 
+class TestCompositeSimulator:
+    """Test Composite simulator validation and behavior.
+
+    Composite simulators partition circuits into subcircuits and simulate
+    them individually, then stitch results using tensor products / joins.
+    Currently, the underlying composite infrastructure only supports
+    Statevector simulation. These tests verify that non-Statevector
+    simulation types (such as MatrixProductState) are rejected with a clear error.
+    """
+
+    def test_composite_enum_exists(self):
+        """SimulatorType.CompositeQCSim enum value is exposed."""
+        assert hasattr(maestro.SimulatorType, 'CompositeQCSim')
+
+    def test_composite_rejects_mps_init(self):
+        """CompositeQCSim with MatrixProductState raises an error during config init."""
+        with pytest.raises(Exception, match="Composite simulators only support Statevector"):
+            maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.CompositeQCSim,
+                simulation_type=maestro.SimulationType.MatrixProductState,
+            )
+
+    def test_composite_rejects_stabilizer_init(self):
+        """CompositeQCSim with Stabilizer raises an error during config init."""
+        with pytest.raises(Exception, match="Composite simulators only support Statevector"):
+            maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.CompositeQCSim,
+                simulation_type=maestro.SimulationType.Stabilizer,
+            )
+
+    def test_composite_rejects_tensor_network_init(self):
+        """CompositeQCSim with TensorNetwork raises an error during config init."""
+        with pytest.raises(Exception, match="Composite simulators only support Statevector"):
+            maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.CompositeQCSim,
+                simulation_type=maestro.SimulationType.TensorNetwork,
+            )
+
+    def test_composite_rejects_mps_simulation_type_setter(self):
+        """Assigning simulation_type=MPS on a Composite config raises an error."""
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.CompositeQCSim,
+            simulation_type=maestro.SimulationType.Statevector,
+        )
+        with pytest.raises(Exception, match="Composite simulators only support Statevector"):
+            config.simulation_type = maestro.SimulationType.MatrixProductState
+
+    def test_composite_rejects_mps_simulator_type_setter(self):
+        """Assigning simulator_type=CompositeQCSim on an MPS config raises an error."""
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+        )
+        with pytest.raises(Exception, match="Composite simulators only support Statevector"):
+            config.simulator_type = maestro.SimulatorType.CompositeQCSim
+
+    def test_composite_accepts_statevector(self):
+        """CompositeQCSim with Statevector config initializes cleanly and executes."""
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.CompositeQCSim,
+            simulation_type=maestro.SimulationType.Statevector,
+        )
+        assert config.simulator_type == maestro.SimulatorType.CompositeQCSim
+        assert config.simulation_type == maestro.SimulationType.Statevector
+
+        result = maestro.simple_execute(
+            CLIFFORD_BELL_QASM,
+            shots=50,
+            config=config,
+        )
+        assert result is not None
+        assert 'counts' in result
+        assert sum(result['counts'].values()) == 50
+
+
 class TestGetStatevector:
     """Test the get_statevector function for extracting full complex amplitudes."""
 
