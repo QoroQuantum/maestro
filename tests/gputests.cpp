@@ -249,7 +249,7 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates) {
       if (itTN != resultsTN.end()) {
         BOOST_CHECK_PREDICATE(checkClose,
                               (static_cast<double>(count) /
-                               nrShots)(static_cast<double>(itMPS->second) /
+                               nrShots)(static_cast<double>(itTN->second) /
                                         nrShots)(precisionSamples));
       } else
         BOOST_TEST(false);

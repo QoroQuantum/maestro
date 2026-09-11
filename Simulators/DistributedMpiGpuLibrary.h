@@ -8,11 +8,7 @@ class DistributedMpiGpuLibrary : public DistributedGpuLibrary {
  public:
   using Communicator = DistributedGpuApi::MgdMpiCommunicator;
   using RuntimeInfo = DistributedGpuApi::MgdMpiRuntimeInfo;
-  static std::shared_ptr<DistributedMpiGpuLibrary> GetInstance() {
-    static auto lib = std::shared_ptr<DistributedMpiGpuLibrary>(
-        new DistributedMpiGpuLibrary());
-    return lib;
-  }
+  static std::shared_ptr<DistributedMpiGpuLibrary> GetInstance();
   void* CreateNative(int, int) override {
     throw std::logic_error("MPI GPU states require a communicator");
   }

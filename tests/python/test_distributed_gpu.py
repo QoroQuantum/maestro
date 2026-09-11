@@ -91,3 +91,18 @@ def test_execution(mpi):
         # not a second singleton hidden inside the Python extension.
         with pytest.raises(RuntimeError, match="finalized"):
             maestro.simple_execute(prefix + 'h q[0]; cx q[0],q[3];', shots=1, config=config)
+
+
+@pytest.mark.parametrize("library", ["/maestro-test-missing/plugin.so", "libc.so.6"])
+def test_availability_probe_does_not_throw(library):
+    """A fresh process isolates the singleton's cached library handle."""
+    import subprocess
+    import sys
+
+    if sys.platform != "linux":
+        pytest.skip("Distributed plugins are Linux-only")
+    env = dict(os.environ, MAESTRO_DIST_GPU_LIBRARY=library)
+    subprocess.run(
+        [sys.executable, "-c", "import maestro; assert maestro.is_distributed_gpu_available() is False"],
+        env=env, check=True, capture_output=True, text=True,
+    )

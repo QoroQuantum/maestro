@@ -566,9 +566,22 @@ if(COMPILE_TESTS)
         add_test(NAME distributed_gpu_error_contract COMMAND distributed_gpu_error_tests)
         add_executable(distributed_gpu_tests tests/distributed_gpu/integration_tests.cpp)
         target_link_libraries(distributed_gpu_tests PRIVATE maestro)
+        # Match Python's visibility boundary when checking singleton identity.
+        set_target_properties(distributed_gpu_tests PROPERTIES CXX_VISIBILITY_PRESET hidden)
+        add_executable(distributed_network_tests tests/distributed_gpu/network_mapping_tests.cpp)
+        target_link_libraries(distributed_network_tests PRIVATE maestro)
+        set_property(TARGET distributed_network_tests APPEND_STRING PROPERTY
+            LINK_FLAGS " -Wl,--disable-new-dtags")
+        add_test(NAME distributed_network_mapping COMMAND distributed_network_tests)
         set_property(TARGET distributed_gpu_tests APPEND_STRING PROPERTY
             LINK_FLAGS " -Wl,--disable-new-dtags")
         add_test(NAME distributed_gpu_configuration COMMAND distributed_gpu_tests --config-only)
+        add_test(NAME distributed_gpu_missing_probe COMMAND distributed_gpu_tests --unavailable-probe)
+        set_tests_properties(distributed_gpu_missing_probe PROPERTIES
+            ENVIRONMENT "MAESTRO_DIST_GPU_LIBRARY=/maestro-test-missing/plugin.so")
+        add_test(NAME distributed_gpu_incompatible_probe COMMAND distributed_gpu_tests --unavailable-probe)
+        set_tests_properties(distributed_gpu_incompatible_probe PROPERTIES
+            ENVIRONMENT "MAESTRO_DIST_GPU_LIBRARY=libc.so.6")
         add_test(NAME distributed_gpu_missing_mpi_plugin COMMAND distributed_gpu_tests --missing-mpi-plugin)
         set_tests_properties(distributed_gpu_missing_mpi_plugin PROPERTIES
             ENVIRONMENT "MAESTRO_DIST_MPI_GPU_LIBRARY=/maestro-test-missing/libmaestro_gpu_distributed_mpi.so")

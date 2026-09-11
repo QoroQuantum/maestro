@@ -1,5 +1,7 @@
 #include "../../Simulators/Factory.h"
+#include "../../Simulators/DistributedMpiGpuLibrary.h"
 #include "../../Network/SimpleDisconnectedNetwork.h"
+#include "../../Circuit/Factory.h"
 #include <iostream>
 #include <numeric>
 #include <cstdlib>
@@ -104,6 +106,12 @@ int main(int argc, char** argv) {
     }
     throw std::runtime_error("Missing MPI plugin was accepted");
   }
+  if (argc == 2 && std::string(argv[1]) == "--unavailable-probe") {
+    Require(!Factory::IsDistributedGpuAvailable(), "Probe must return false");
+    Reject([] { Factory::GetDistributedGpuLibrary()->RequireLoaded(); });
+    std::cout << "Unavailable plugin probe is non-throwing; loading retains diagnostics\n";
+    return 0;
+  }
   int code = 0;
 #ifdef MAESTRO_MPI_GPU_TESTS
   if (mpi) MPI_Init(&argc, &argv);
@@ -111,6 +119,10 @@ int main(int argc, char** argv) {
   if (mpi) return 77;
 #endif
   try {
+    Require(DistributedGpuLibrary::GetInstance() == Factory::GetDistributedGpuLibrary(),
+            "Local singleton differs across the core visibility boundary");
+    Require(DistributedMpiGpuLibrary::GetInstance() == Factory::GetDistributedMpiGpuLibrary(),
+            "MPI singleton differs across the core visibility boundary");
     const auto type =
         mpi ? SimulatorType::kDistMpiGpuSim : SimulatorType::kDistGpuSim;
     auto sim = Factory::CreateSimulator(type, SimulationType::kStatevector);
@@ -259,6 +271,36 @@ int main(int argc, char** argv) {
         network.GetSimulator()->ApplyX(0);
         Require(network.GetSimulator()->SampleCounts({0}, 4).at(1) == 4,
                 "Network configuration replay");
+        if (!mpi && !shared) {
+          const auto fullDevices = network.GetSimulator()->GetConfiguration("distributed_shard_devices");
+          for (size_t n : {size_t(2), size_t(1)}) {
+            network.CreateSimulator(type, SimulationType::kStatevector, n);
+            network.GetSimulator()->ApplyX(n - 1);
+            Require(std::abs(network.GetSimulator()->Amplitude(size_t{1} << (n - 1)) - 1.) < 1e-6,
+                    "Smaller automatic host simulation");
+          }
+          network.CreateSimulator(type, SimulationType::kStatevector);
+          Require(network.GetSimulator()->GetConfiguration("distributed_shard_devices") == fullDevices,
+                  "Full network placement was not restored");
+          auto clone = network.Clone();
+          Require(clone->GetSimulator()->GetConfiguration("distributed_shard_devices") == fullDevices,
+                  "Clone lost resolved network placement");
+
+          auto hosts = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
+              std::vector<Types::qubit_t>{3, 5}, std::vector<size_t>{3, 5});
+          hosts->CreateSimulator(type, SimulationType::kStatevector);
+          auto circuit = Circuits::CircuitFactory<>::CreateCircuit();
+          circuit->AddOperation(Circuits::CircuitFactory<>::CreateGate(
+              Circuits::QuantumGateType::kXGateType, 4));
+          auto amps = hosts->ExecuteOnHostAmplitudes(circuit, 1);
+          Require(amps.size() == 32 && std::abs(amps[2] - 1.) < 1e-6,
+                  "Global q4 did not map to host-local q1");
+          hosts->Configure("distributed_host_qubit_indexing", "local");
+          auto localClone = hosts->Clone();
+          amps = localClone->ExecuteOnHostAmplitudes(circuit, 1);
+          Require(amps.size() == 32 && std::abs(amps[16] - 1.) < 1e-6,
+                  "Clone lost explicit local host indexing");
+        }
       }
     }
   } catch (const std::exception& error) {

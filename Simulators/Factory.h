@@ -67,6 +67,7 @@ class SimulatorsFactory {
   // shares the same plugin instances and native-state lifetime counters.
   static std::shared_ptr<DistributedGpuLibrary> GetDistributedGpuLibrary();
   static std::shared_ptr<DistributedMpiGpuLibrary> GetDistributedMpiGpuLibrary();
+  static bool IsDistributedGpuAvailable() noexcept;
   static void FinalizeDistributedMpiGpuBackend();
   static bool InitGpuLibrary();
   static bool InitGpuLibraryWithMute();

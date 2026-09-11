@@ -624,7 +624,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     const size_t nrQubits = GetNumQubits() + GetNumNetworkEntangledQubits();
     const size_t nrCbitsResults = GetNumClassicalBits();
 
-    configuration.ApplyConfigurationFromSimulator(simulator);
+    CaptureSimulatorConfiguration();
 
     // do that only if the optimization for simulator is on and the estimator is
     // available, ortherwise an 'optimal' simulator won't be created
@@ -696,7 +696,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         job->network = BaseClass::getptr();
         job->curMaxBondDim = &curMaxBondDim;
 
-        job->config = configuration;
+        job->config = ExecutionConfiguration(simType, nrQubits);
         if (configuration.IsSet("seed")) {
           const uint64_t childSeed = Simulators::IState::DeriveSeed(
               std::stoull(configuration.GetConfiguration("seed")), jobStream++);
@@ -727,7 +727,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       job->network = BaseClass::getptr();
       job->curMaxBondDim = &curMaxBondDim;
 
-      job->config = configuration;
+      job->config = ExecutionConfiguration(simType, nrQubits);
 
       if (optSim) {
         optSim->SetMultithreading(true);
@@ -781,22 +781,26 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     size_t nrQubits = 0;
     size_t nrCbits = 0;
 
-    std::shared_ptr<Circuits::Circuit<Time>> optCircuit;
-    if (GetController()->GetOptimizeCircuit()) {
-      optCircuit =
-          std::static_pointer_cast<Circuits::Circuit<Time>>(circuit->Clone());
-      optCircuit->Optimize();
+    const bool distributed = simulator &&
+        Simulators::IsDistributedGpuSimulator(simulator->GetType());
+    auto mappingCircuit = circuit;
+    if (!distributed && GetController()->GetOptimizeCircuit()) {
+      mappingCircuit = std::static_pointer_cast<Circuits::Circuit<Time>>(circuit->Clone());
+      mappingCircuit->Optimize();
     }
     const auto reverseQubitsMap = MapCircuitOnHost(
-        GetController()->GetOptimizeCircuit() ? optCircuit : circuit, hostId,
-        nrQubits, nrCbits, true);
+        mappingCircuit, hostId, nrQubits, nrCbits, true);
+    // Resolve indexing before optimization can remove a wire that disambiguates
+    // local from global numbering (for example a cancelling pair on qubit 0).
+    if (distributed && distCirc && GetController()->GetOptimizeCircuit())
+      distCirc->Optimize();
     if (nrCbits == 0) nrCbits = nrQubits;
 
     if (!simulator || !distCirc) return {};
 
     auto simType = simulator->GetType();
 
-    configuration.ApplyConfigurationFromSimulator(simulator);
+    CaptureSimulatorConfiguration();
 
     if (distCirc->HasOpsAfterMeasurements() &&
         (
@@ -889,7 +893,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         job->network = BaseClass::getptr();
         job->curMaxBondDim = &curMaxBondDim;
 
-        job->config = configuration;
+        job->config = ExecutionConfiguration(simType, nrQubits);
         if (configuration.IsSet("seed")) {
           const uint64_t childSeed = Simulators::IState::DeriveSeed(
               std::stoull(configuration.GetConfiguration("seed")), jobStream++);
@@ -920,7 +924,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       job->network = BaseClass::getptr();
       job->curMaxBondDim = &curMaxBondDim;
 
-      job->config = configuration;
+      job->config = ExecutionConfiguration(simType, nrQubits);
 
       if (optSim) {
         optSim->SetMultithreading(true);
@@ -1020,11 +1024,12 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         Simulators::SimulatorsFactory::CreateSimulator(simType, simExecType);
 
     if (simulator) {
-      configuration.ApplyConfigurationToSimulator(simulator);
+      const size_t allocationQubits = nrQubits == 0
+          ? GetNumQubits() + GetNumNetworkEntangledQubits() : nrQubits;
+      ExecutionConfiguration(simType, allocationQubits)
+          .ApplyConfigurationToSimulator(simulator);
 
-      simulator->AllocateQubits(
-          nrQubits == 0 ? GetNumQubits() + GetNumNetworkEntangledQubits()
-                        : nrQubits);
+      simulator->AllocateQubits(allocationQubits);
       simulator->Initialize();
 
       // Pin the resolved default as well as explicit selections. Cloning or
@@ -1033,9 +1038,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         configuration.SetConfiguration(
             "gpu_device", std::to_string(simulator->GetGpuDevice()));
 
-      if (Simulators::IsDistributedGpuSimulator(simType)) {
-        configuration.SetConfiguration("distributed_devices",
-            simulator->GetConfiguration("distributed_shard_devices"));
+      if (Simulators::IsDistributedGpuSimulator(simType) && nrQubits == 0) {
+        resolvedDistributedDevices[simType] =
+            simulator->GetConfiguration("distributed_shard_devices");
       }
       simulator->setGrowthFactorGate(growthFactorGate);
       simulator->setGrowthFactorSwap(growthFactorSwap);
@@ -1055,6 +1060,19 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
    */
   void Configure(const char *key, const char *value) override {
     if (!key || !value) return;
+
+    if (std::string("distributed_host_qubit_indexing") == key) {
+      const std::string mode(value);
+      if (mode != "auto" && mode != "local" && mode != "global")
+        throw std::invalid_argument(
+            "distributed_host_qubit_indexing must be auto, local or global");
+      distributedHostQubitIndexing = mode;
+      return;
+    }
+
+    if (std::string("distributed_devices") == key ||
+        std::string("gpu_device") == key)
+      resolvedDistributedDevices.clear();
 
     if (std::string("max_simulators") == key)
       maxSimulators = std::stoull(value);
@@ -1962,6 +1980,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
                                                                       cbits);
     
     cloned->configuration = configuration;
+    cloned->distributedHostQubitIndexing = distributedHostQubitIndexing;
+    cloned->resolvedDistributedDevices = resolvedDistributedDevices;
 
     cloned->maxSimulators = maxSimulators;
 
@@ -2337,6 +2357,48 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   size_t GetCurrentMaxBondDimension() const override { return curMaxBondDim; }
 
  protected:
+  // Resolved placement is separate from user settings. Importing a smaller
+  // simulator must not turn its automatic shard subset into an explicit choice.
+  void CaptureSimulatorConfiguration() {
+    const auto requested = configuration.GetConfiguration("distributed_devices");
+    configuration.ApplyConfigurationFromSimulator(simulator);
+    if (simulator && Simulators::IsDistributedGpuSimulator(simulator->GetType()))
+      configuration.SetConfiguration("distributed_devices", requested);
+  }
+
+  Configuration<Time> ExecutionConfiguration(Simulators::SimulatorType type,
+                                             size_t qubits) const {
+    auto result = configuration;
+    const auto found = resolvedDistributedDevices.find(type);
+    if (!Simulators::IsDistributedGpuSimulator(type) ||
+        !configuration.GetConfiguration("distributed_devices").empty() ||
+        found == resolvedDistributedDevices.end())
+      return result;
+    auto devices = found->second;
+    // MPI shard count belongs to the communicator. Explicit global-qubit
+    // settings also constrain the shard count and must be validated unchanged.
+    if (type == Simulators::SimulatorType::kDistGpuSim &&
+        !configuration.IsSet("distributed_global_qubits")) {
+      size_t count = 1;
+      for (char c : devices) if (c == ',') ++count;
+      size_t bits = 0;
+      for (size_t n = count; n > 1; n >>= 1) ++bits;
+      while (count > 1 && bits >= qubits) {
+        count /= 2;
+        --bits;
+      }
+      size_t end = 0;
+      for (size_t i = 0; i < count; ++i) {
+        end = devices.find(',', end);
+        if (end == std::string::npos) break;
+        if (i + 1 < count) ++end;
+      }
+      devices = devices.substr(0, end);
+    }
+    result.SetConfiguration("distributed_devices", devices);
+    return result;
+  }
+
   void OptimizeMPSInitialQubitsMap(
       std::shared_ptr<Simulators::ISimulator> &sim,
       std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits) const {
@@ -2591,8 +2653,27 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       // Distribution settings refer to register qubits. Keep their numbering
       // and idle wires when the network creates a smaller per-host simulator.
       // Classical results retain RemapToContinuous's independent mapping.
-      const size_t offset = circuit->GetMaxQubitIndex() < hostNrQubits
-          ? 0 : host->GetStartQubitId();
+      if (!hostNrQubits)
+        throw std::runtime_error("Circuit does not fit on a host with no qubits!");
+      const size_t start = host->GetStartQubitId();
+      bool fitsLocal = true, fitsGlobal = true;
+      for (const auto& entry : qubitsMapOnHost) {
+        const auto q = entry.first;
+        fitsLocal = fitsLocal && q < hostNrQubits;
+        fitsGlobal = fitsGlobal && q >= start && q - start < hostNrQubits;
+      }
+      // Auto follows the host API's already-mapped precedence. Sparse local
+      // circuits in the overlap must explicitly select local indexing.
+      const bool global = distributedHostQubitIndexing == "global" ||
+          (distributedHostQubitIndexing == "auto" && fitsGlobal);
+      if (!(global ? fitsGlobal : fitsLocal))
+        throw std::runtime_error("Circuit does not fit on the host!");
+      const size_t offset = global ? start : 0;
+      if (pauliStrings)
+        for (const auto& pauli : *pauliStrings)
+          if (pauli.size() > hostNrQubits)
+            throw std::invalid_argument(
+                "Host Pauli strings use local indices and must fit the host");
       std::unordered_map<Types::qubit_t, Types::qubit_t> restoreQubits;
       for (const auto& [original, compact] : qubitsMapOnHost) {
         if (original < offset || original - offset >= hostNrQubits)
@@ -2637,6 +2718,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
                                                    used. */
 
   Configuration<Time> configuration;
+  std::string distributedHostQubitIndexing = "auto";
+  std::unordered_map<Simulators::SimulatorType, std::string>
+      resolvedDistributedDevices;
 
   size_t maxSimulators = QC::QubitRegisterCalculator<>::
       GetNumberOfThreads(); /**< The maximum number of simulators that can be

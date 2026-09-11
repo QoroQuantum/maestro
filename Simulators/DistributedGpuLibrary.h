@@ -14,11 +14,8 @@
 namespace Simulators {
 class DistributedGpuLibrary : public Utils::Library {
  public:
-  static std::shared_ptr<DistributedGpuLibrary> GetInstance() {
-    static auto lib =
-        std::shared_ptr<DistributedGpuLibrary>(new DistributedGpuLibrary());
-    return lib;
-  }
+  // Storage lives in the core library, including for hidden-visibility callers.
+  static std::shared_ptr<DistributedGpuLibrary> GetInstance();
   ~DistributedGpuLibrary() override {
     if (context && FreeLib) FreeLib();
   }
