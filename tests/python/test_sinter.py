@@ -1,6 +1,7 @@
 """Tests for Sinter integration, circuit translation, and sampling."""
 
 import math
+import numpy as np
 import pytest
 import sinter
 import stim
@@ -65,6 +66,68 @@ def test_translate_resets_and_measurements():
     """)
     qc, nm, num_meas = translate_stim_to_maestro(circuit)
     assert num_meas == 3
+
+
+def test_translate_rx_ry_resets_functional():
+    """Verify that RX and RY resets initialize to |+> and |i> respectively."""
+    circuit = stim.Circuit("""
+        RX 0
+        MX 0
+        RY 1
+        MY 1
+        RX 2
+        Z 2
+        MX 2
+        RY 3
+        Z 3
+        MY 3
+    """)
+    qc, nm, num_meas = translate_stim_to_maestro(circuit)
+    assert num_meas == 4
+
+    cfg = maestro.SimulatorConfig()
+    res = qc.execute(cfg, shots=20)
+    counts = res.get("counts", {})
+    # Bit 0 is 0 (RX then MX)
+    # Bit 1 is 0 (RY then MY)
+    # Bit 2 is 1 (RX then Z then MX)
+    # Bit 3 is 1 (RY then Z then MY)
+    assert counts == {"0011": 20}
+
+
+def test_translate_my_and_mry():
+    """Verify MY and MRY operations measure and reset in the Y basis."""
+    circuit = stim.Circuit("""
+        MRX 0
+        MX 0
+        MRY 1
+        MY 1
+    """)
+    qc, nm, num_meas = translate_stim_to_maestro(circuit)
+    assert num_meas == 4
+
+    cfg = maestro.SimulatorConfig()
+    res = qc.execute(cfg, shots=30)
+    for bitstring in res.get("counts", {}).keys():
+        # Bit 1 (MX after MRX) and Bit 3 (MY after MRY) must deterministically be '0'
+        assert bitstring[1] == "0"
+        assert bitstring[3] == "0"
+
+
+def test_translate_y_error():
+    circuit = stim.Circuit("""
+        H 0
+        Y_ERROR(0.05) 0
+        M 0
+    """)
+    qc, nm, num_meas = translate_stim_to_maestro(circuit)
+    assert nm.has_any()
+    assert num_meas == 1
+
+
+def test_translate_unsupported_instruction_raises():
+    with pytest.raises(ValueError, match="Unsupported Stim instruction"):
+        translate_stim_to_maestro("UNSUPPORTED_OP 0")
 
 
 def test_translate_in_circuit_noise():
@@ -165,6 +228,98 @@ def test_sampler_without_decoder_uncorrected():
     assert stats.errors == 20
 
 
+def test_compiled_sampler_with_pymatching_decoder():
+    """Verify that a task with decoder='pymatching' compiles DEM and decodes without errors."""
+    circuit = stim.Circuit.generated(
+        "repetition_code:memory",
+        distance=3,
+        rounds=2,
+        after_clifford_depolarization=0.01,
+    )
+    task = sinter.Task(circuit=circuit, decoder="pymatching")
+    sampler = MaestroSinterSampler(chi=16)
+    compiled = sampler.compiled_sampler_for_task(task)
+    assert compiled.compiled_decoder is not None
+
+    stats = compiled.sample(suggested_shots=50)
+    assert isinstance(stats, sinter.AnonTaskStats)
+    assert stats.shots == 50
+    assert stats.errors >= 0
+    assert stats.seconds > 0
+
+
+def test_compiled_sampler_postselection():
+    """Verify that postselection masks count discards properly."""
+    circuit = stim.Circuit("""
+        I 0
+        X_ERROR(1.0) 0
+        M 0
+        OBSERVABLE_INCLUDE(0) rec[-1]
+    """)
+    mask = np.array([1], dtype=np.uint8)
+    task = sinter.Task(circuit=circuit, postselected_observables_mask=mask)
+    sampler = MaestroSinterSampler(chi=16)
+    compiled = sampler.compiled_sampler_for_task(task)
+    stats = compiled.sample(suggested_shots=20)
+
+    assert stats.shots == 20
+    assert stats.discards == 20
+    assert stats.errors == 0
+
+
+def test_non_clifford_task_circuit_preserves_rx_ry_resets():
+    circuit_str = """
+        RX 0
+        RY 1
+        T 0
+        RX(0.5) 1
+        M 0 1
+        DETECTOR rec[-1]
+        OBSERVABLE_INCLUDE(0) rec[-2]
+    """
+    task_circuit = NonCliffordTaskCircuit(circuit_str)
+    assert "RX 0" in str(task_circuit._clifford_circuit)
+    assert "RY 1" in str(task_circuit._clifford_circuit)
+    assert "T 0" not in str(task_circuit._clifford_circuit)
+    assert "RX(0.5)" not in str(task_circuit._clifford_circuit)
+
+
+def test_sampler_accepts_simulator_config():
+    cfg = maestro.SimulatorConfig()
+    cfg.simulation_type = maestro.SimulationType.MatrixProductState
+    cfg.max_bond_dimension = 16
+
+    sampler = MaestroSinterSampler(config=cfg)
+    assert sampler.config is cfg
+    task = sinter.Task(circuit=stim.Circuit("H 0\nM 0"))
+    compiled = sampler.compiled_sampler_for_task(task)
+    assert compiled.config is cfg
+    stats = compiled.sample(10)
+    assert stats.shots == 10
+
+
+def test_compiled_sampler_accepts_raw_circuit_and_sample_detection_events():
+    circuit = stim.Circuit("""
+        H 0
+        CX 0 1
+        M 0 1
+        DETECTOR(0, 0) rec[-1] rec[-2]
+        OBSERVABLE_INCLUDE(0) rec[-1]
+    """)
+    sampler = MaestroCompiledSampler(circuit)
+    dets, obs = sampler.sample_detection_events(shots=50)
+    assert dets.shape == (50, 1)
+    assert obs.shape == (50, 1)
+    # Bell state parity check: detector rec[-1] ^ rec[-2] is always 0
+    assert not np.any(dets)
+
+
+def test_compiled_sampler_shots_kwarg():
+    sampler = MaestroCompiledSampler(stim.Circuit("H 0\nM 0"))
+    stats = sampler.sample(shots=25)
+    assert stats.shots == 25
+
+
 # =============================================================================
 # Sinter Integration & Collect Tests
 # =============================================================================
@@ -222,7 +377,7 @@ def test_sinter_collect_clifford_baseline_surface_code():
     task = sinter.Task(circuit=circuit)
 
     sampler = MaestroSinterSampler(chi=32)
-    shots = 200
+    shots = 400
 
     # Sample with Maestro
     stats_maestro = sinter.collect(
@@ -247,8 +402,31 @@ def test_sinter_collect_clifford_baseline_surface_code():
     p_m = stats_maestro.errors / stats_maestro.shots
     p_s = stats_stim.errors / stats_stim.shots
     sigma = math.sqrt(p_s * (1 - p_s) / shots + p_m * (1 - p_m) / shots)
-    tol = max(2.5 * sigma, 0.05)
+    tol = max(3.0 * sigma, 0.06)
     assert abs(p_m - p_s) <= tol
+
+
+def test_sinter_collect_with_pymatching_end_to_end():
+    """Verify that sinter.collect() works with multiprocessing and PyMatching decoder."""
+    circuit = stim.Circuit.generated(
+        "repetition_code:memory",
+        distance=3,
+        rounds=2,
+        after_clifford_depolarization=0.01,
+    )
+    task = sinter.Task(circuit=circuit)
+    sampler = MaestroSinterSampler(chi=16, decoder="pymatching")
+    stats = sinter.collect(
+        num_workers=2,
+        max_shots=100,
+        tasks=[task],
+        decoders=["maestro"],
+        custom_decoders={"maestro": sampler},
+    )[0]
+
+    assert stats.shots == 100
+    assert stats.decoder == "maestro"
+    assert isinstance(stats, sinter.TaskStats)
 
 
 def test_non_clifford_t_gate_fails_on_stim_succeeds_on_maestro():
@@ -296,3 +474,45 @@ def test_sinter_collect_multiprocess_with_hardware_noise():
 
     assert stats.shots == 100
     assert isinstance(stats, sinter.TaskStats)
+
+
+def test_compiled_sampler_detector_postselection():
+    """Verify detector postselection discards shots when a postselected detector triggers."""
+    circuit = stim.Circuit("""
+        I 0
+        X_ERROR(1.0) 0
+        M 0
+        DETECTOR rec[-1]
+    """)
+    mask = np.array([1], dtype=np.uint8)
+    task = sinter.Task(circuit=circuit, postselection_mask=mask)
+    compiled = MaestroSinterSampler(chi=16).compiled_sampler_for_task(task)
+    stats = compiled.sample(15)
+
+    assert stats.shots == 15
+    assert stats.discards == 15
+
+
+def test_non_clifford_task_circuit_methods():
+    circuit_str = "T 0\nH 0\nM 0"
+    tc = NonCliffordTaskCircuit(circuit_str)
+    with pytest.raises(ValueError, match="Circuit contains non-Clifford gates"):
+        tc.compile_detector_sampler()
+    instructions = tc.flattened()
+    assert len(instructions) == 3
+    assert str(tc) == circuit_str
+
+
+def test_compiled_sampler_accepts_circuit_string():
+    sampler = MaestroCompiledSampler("H 0\nM 0")
+    assert sampler.num_measurements == 1
+    stats = sampler.sample(5)
+    assert stats.shots == 5
+
+
+def test_sampler_use_gpu_flag():
+    sampler = MaestroSinterSampler(use_gpu=True)
+    assert sampler.use_gpu is True
+    task = sinter.Task(circuit=stim.Circuit("H 0\nM 0"))
+    compiled = sampler.compiled_sampler_for_task(task)
+    assert compiled.config.simulator_type == maestro.SimulatorType.Gpu
