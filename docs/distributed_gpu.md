@@ -79,7 +79,12 @@ Call `Configure(key, value)` before initialization for optional overrides:
 
 Allocation settings cannot change after initialization. `Clear()` releases the
 state and permits reconfiguration. Settings survive `Clear()` and cloning.
-Network recreation retains the resolved device group. MPI communicator handles
+Full-network recreation and cloning retain the resolved device group. Smaller
+local host simulations use a power-of-two prefix of an automatically selected
+group when necessary to leave at least one local qubit; they do not change the
+full-network placement. Explicit device lists and global-qubit settings remain
+constraints and incompatible smaller allocations fail. MPI groups retain their
+communicator's shard count. MPI communicator handles
 must remain valid for later network recreation or state initialization.
 
 `GetConfiguration("distributed_shard_devices")` returns the actual shard devices.
@@ -122,7 +127,31 @@ config.distributed_options = {
 
 `distributed_options` is also a constructor keyword and survives config
 pickling. `is_distributed_gpu_available()` probes local plugin/device presence;
-actual initialization can still fail, for example due to license or memory.
+it returns `False` without throwing for missing or incompatible plugins and
+unavailable devices. Actual initialization retains detailed error diagnostics
+and can still fail, for example due to license or memory.
+
+## Qubit numbering when executing on one host
+
+Distributed `ExecuteOnHost*` and `RepeatedExecuteOnHost` calls retain the host's
+entire register, including idle wires. Set the network-only option
+`network.Configure("distributed_host_qubit_indexing", "local")` or `"global"`
+when the circuit's coordinate system is known. Python accepts this option in
+`SimulatorConfig.distributed_options` as well. It does not apply to direct
+simulator initialization or change the other backends' host mapping.
+
+The default, `"auto"`, uses global numbering if **all affected qubits** fit the
+host's global range; otherwise it accepts local numbering if all fit
+`[0, host_qubits)`. Other circuits are rejected. Classification happens before
+circuit optimization. It cannot infer intent when both interpretations fit:
+for a host owning `[3,8)`, an isolated gate on qubit 4 means local slot 1 in
+`"auto"`/`"global"`, and local slot 4 in `"local"`. Use an explicit mode for
+sparse local circuits in overlapping ranges.
+
+Returned amplitude vectors and Pauli-string positions use host-local ordering
+in every mode. Pauli strings must fit the host's register. Classical bit IDs
+are independent of quantum indices and measurement results retain the original
+classical IDs. The indexing mode is preserved when cloning a network.
 
 ## MPI lifecycle and execution
 

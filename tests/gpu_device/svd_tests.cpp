@@ -48,6 +48,18 @@ void CheckConfiguration() {
     config.SetConfiguration(group + 'r', "false");
     Require(config.GetConfiguration(group + 'r') == "false",
             "clearing R failed");
+    config.SetConfiguration(group, "true");
+    Require(config.GetConfiguration(group) == "true", "set base GESVD failed");
+    config.SetConfiguration(group + 'p', "true");
+    Require(config.GetConfiguration(group) == "false",
+            "P did not clear base GESVD");
+    Require(config.GetConfiguration(group + 'p') == "true",
+            "P selection failed");
+    config.SetConfiguration(group, "true");
+    Require(config.GetConfiguration(group + 'p') == "false",
+            "base GESVD did not clear P");
+    Require(config.GetConfiguration(group) == "true",
+            "base GESVD selection failed");
   }
 }
 
@@ -110,12 +122,12 @@ void CheckSimulatorConfiguration() {
     const std::string group(entry.second);
     auto sim = Factory::CreateSimulator(SimulatorType::kGpuSim, entry.first);
     Require(bool(sim), "GPU simulator unavailable");
-    // Unconfigured simulators inherit the current plugin's GESVDP default.
+    // Unconfigured simulators inherit the current plugin's GESVD default.
     sim->AllocateQubits(4);
     sim->Initialize();
-    Require(sim->GetConfiguration((group + 'p').c_str()) == "true" &&
-                sim->GetConfiguration(group.c_str()) == "false",
-            "native GESVDP default was overridden");
+    Require(sim->GetConfiguration((group + 'p').c_str()) == "false" &&
+                sim->GetConfiguration(group.c_str()) == "true",
+            "native GESVD default was overridden");
     sim->Clear();
     sim->Configure(group.c_str(), "true");
     sim->Configure((group + 'j').c_str(), "true");
@@ -141,7 +153,7 @@ void CheckSimulatorConfiguration() {
     sim->Initialize();
     Require(sim->GetConfiguration((group + 'p').c_str()) == "true",
             "recreation lost P after GESVD -> P");
-    // Disabling P selects plain GESVD, not the construction default.
+    // Disabling P returns to the default GESVD.
     sim->Configure((group + 'p').c_str(), "false");
     Require(sim->GetConfiguration(group.c_str()) == "true",
             "clearing P did not select GESVD");

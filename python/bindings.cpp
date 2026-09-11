@@ -2265,9 +2265,8 @@ NB_MODULE(maestro, m) {
     Simulators::SimulatorsFactory::FinalizeDistributedMpiGpuBackend();
   }, "Terminal shutdown after all MPI GPU states are destroyed, before MPI.Finalize().");
   m.def("is_distributed_gpu_available", []() {
-    auto lib = Simulators::SimulatorsFactory::GetDistributedGpuLibrary();
-    return lib->Load() && lib->GetGpuDeviceCount() > 0;
-  }, "Probe the local distributed plugin and devices without license admission or state allocation.");
+    return Simulators::SimulatorsFactory::IsDistributedGpuAvailable();
+  }, "Non-throwing probe of the local distributed plugin and devices, without license admission or state allocation. Returns False for missing or incompatible plugins.");
 #endif
   // --- GPU Library Management ---
   m.def(

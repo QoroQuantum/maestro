@@ -57,6 +57,26 @@ std::shared_ptr<DistributedGpuLibrary> SimulatorsFactory::GetDistributedGpuLibra
   return DistributedGpuLibrary::GetInstance();
 }
 
+std::shared_ptr<DistributedGpuLibrary> DistributedGpuLibrary::GetInstance() {
+  static auto lib = std::shared_ptr<DistributedGpuLibrary>(new DistributedGpuLibrary());
+  return lib;
+}
+
+std::shared_ptr<DistributedMpiGpuLibrary> DistributedMpiGpuLibrary::GetInstance() {
+  static auto lib = std::shared_ptr<DistributedMpiGpuLibrary>(new DistributedMpiGpuLibrary());
+  return lib;
+}
+
+bool SimulatorsFactory::IsDistributedGpuAvailable() noexcept {
+  try {
+    auto lib = GetDistributedGpuLibrary();
+    return lib->Load() && lib->GetGpuDeviceCount() > 0;
+  } catch (...) {
+    // Initialization still exposes the full diagnostic; discovery is a probe.
+    return false;
+  }
+}
+
 std::shared_ptr<DistributedMpiGpuLibrary> SimulatorsFactory::GetDistributedMpiGpuLibrary() {
   return DistributedMpiGpuLibrary::GetInstance();
 }

@@ -73,15 +73,15 @@
  * For GPU MPS, MPO, and Tensor Network simulations, you can select the underlying cuSOLVER SVD algorithm
  * to balance precision against execution speed:
  *
- * - `mps_use_gesvd`: Standard QR-based SVD (`gesvd`).
+ * - `mps_use_gesvd`: Standard QR-based SVD (`gesvd`), the current GPU plugin default.
  * - `mps_use_gesvdj`: Jacobi-based SVD (`gesvdj`), optimal for small to medium bond dimensions.
- * - `mps_use_gesvdp`: Polar-decomposition SVD (`gesvdp`), the current GPU plugin default.
+ * - `mps_use_gesvdp`: Polar-decomposition SVD (`gesvdp`).
  * - `mps_use_gesvdr`: Randomized SVD (`gesvdr`) for fixed-rank truncation.
  *   Tensor Network execution falls back to GESVD when this is selected.
  *
  * Corresponding flags exist for MPO (`mpo_use_gesvd*`) and Tensor Networks (`tensor_network_use_gesvd*`).
  * All Python selection flags default to `False`, meaning no explicit override;
- * the installed GPU plugin supplies the default (currently GESVDP for all three).
+ * the installed GPU plugin supplies the default (currently GESVD for all three).
  * Set a flag to `True` to select that algorithm explicitly.
  *
  * ---
