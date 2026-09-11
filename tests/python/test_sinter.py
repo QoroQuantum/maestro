@@ -11,6 +11,7 @@ from maestro.sinter import (
     MaestroCompiledSampler,
     MaestroSinterSampler,
     NonCliffordTaskCircuit,
+    count_nontrivial_prefix_gates,
     split_stim_prefix_suffix,
     translate_stim_to_maestro,
 )
@@ -566,11 +567,16 @@ def test_split_stim_prefix_suffix_boundaries():
     assert cut_idx == 2
     assert len(prefix) > 0
 
-    # String circuit with in-circuit noise cuts before the first gate (H 0 at index 1)
+    # String circuit with in-circuit noise cuts at the noise channel (DEPOLARIZE1 at index 2)
     str_circ_noisy = "R 0\nH 0\nDEPOLARIZE1(0.01) 0\nM 0"
     prefix, suffix, cut_idx = split_stim_prefix_suffix(str_circ_noisy)
-    assert cut_idx == 1
-    assert prefix == "R 0"
+    assert cut_idx == 2
+    assert prefix == "R 0\nH 0"
+
+    # String circuit with external noise cuts before the first gate (H 0 at index 1)
+    prefix_ext, suffix_ext, cut_ext = split_stim_prefix_suffix(str_circ_noisy, has_external_noise=True)
+    assert cut_ext == 1
+    assert prefix_ext == "R 0"
 
     # String circuit without noise keeps deterministic gates in prefix (cuts at M 0 at index 2)
     str_circ_noiseless = "R 0\nH 0\nM 0"
@@ -643,4 +649,71 @@ def test_checkpoint_sinter_sample_task_stats():
     stats = compiled.sample(suggested_shots=100)
     assert stats.shots == 100
     assert stats.seconds > 0
+
+
+def test_count_nontrivial_prefix_gates():
+    """Verify counting non-trivial gates in prefix circuits."""
+    # Pure resets and coords: (0, 0)
+    c_trivial = stim.Circuit("""
+        QUBIT_COORDS(0, 0) 0
+        R 0 1 2
+        TICK
+    """)
+    assert count_nontrivial_prefix_gates(c_trivial) == (0, 0)
+
+    # 1-qubit gates: H, S
+    c_1q = stim.Circuit("""
+        R 0 1
+        H 0
+        S 1
+    """)
+    assert count_nontrivial_prefix_gates(c_1q) == (0, 2)
+
+    # 2-qubit gates: CX
+    c_2q = stim.Circuit("""
+        R 0 1
+        CX 0 1
+    """)
+    assert count_nontrivial_prefix_gates(c_2q) == (1, 0)
+
+    # String circuit
+    s_trivial = "QUBIT_COORDS(1, 1) 0\nR 0\nTICK"
+    assert count_nontrivial_prefix_gates(s_trivial) == (0, 0)
+    s_nontrivial = "R 0 1\nH 0\nCX 0 1"
+    assert count_nontrivial_prefix_gates(s_nontrivial) == (1, 1)
+
+
+def test_trivial_prefix_falls_back_to_direct_execution():
+    """Verify trivial prefix (only resets/coords) bypasses checkpoint simulator."""
+    c = stim.Circuit("""
+        QUBIT_COORDS(0, 0) 0
+        R 0 1
+        TICK
+        DEPOLARIZE1(0.01) 0
+        M 0 1
+        DETECTOR rec[-1]
+    """)
+    sampler = MaestroCompiledSampler(c, enable_checkpoint=True)
+    # Trivial prefix -> checkpoint_sim is None, falls back to direct execution
+    assert sampler.checkpoint_sim is None
+    stats = sampler.sample(suggested_shots=20)
+    assert stats.shots == 20
+
+
+def test_nontrivial_prefix_enables_checkpoint_simulator():
+    """Verify non-trivial prefix (with 2q or 1q gates) instantiates checkpoint simulator."""
+    c = stim.Circuit("""
+        R 0 1
+        H 0
+        CX 0 1
+        TICK
+        DEPOLARIZE1(0.01) 0
+        M 0 1
+        DETECTOR rec[-1]
+    """)
+    sampler = MaestroCompiledSampler(c, enable_checkpoint=True)
+    assert sampler.checkpoint_sim is not None
+    stats = sampler.sample(suggested_shots=20)
+    assert stats.shots == 20
+
 
