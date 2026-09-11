@@ -11,6 +11,7 @@ from maestro.sinter import (
     MaestroCompiledSampler,
     MaestroSinterSampler,
     NonCliffordTaskCircuit,
+    split_stim_prefix_suffix,
     translate_stim_to_maestro,
 )
 
@@ -516,3 +517,130 @@ def test_sampler_use_gpu_flag():
     task = sinter.Task(circuit=stim.Circuit("H 0\nM 0"))
     compiled = sampler.compiled_sampler_for_task(task)
     assert compiled.config.simulator_type == maestro.SimulatorType.Gpu
+
+
+# =============================================================================
+# Prefix State Checkpointing Tests
+# =============================================================================
+
+
+def test_split_stim_prefix_suffix_boundaries():
+    """Verify split_stim_prefix_suffix properly detects deterministic prefix boundary."""
+    # Repetition code has coordinates and initial resets
+    rep_circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
+    prefix, suffix, cut_idx = split_stim_prefix_suffix(rep_circuit)
+    assert cut_idx > 0
+    assert len(prefix) > 0
+    assert len(suffix) > 0
+    # Suffix must contain all measurements
+    assert suffix.num_measurements == rep_circuit.num_measurements
+
+    # Surface code has coordinates and resets
+    surf_circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=3, rounds=3)
+    prefix, suffix, cut_idx = split_stim_prefix_suffix(surf_circuit)
+    assert cut_idx > 0
+    assert len(prefix) > 0
+    assert suffix.num_measurements == surf_circuit.num_measurements
+
+    # Circuit with early measurement
+    early_meas_circ = stim.Circuit("""
+        R 0 1
+        H 0
+        M 0
+        H 1
+        M 1
+    """)
+    prefix, suffix, cut_idx = split_stim_prefix_suffix(early_meas_circ)
+    assert cut_idx == 2  # R and H are prefix (index 0, 1), M 0 is at index 2
+    assert suffix.num_measurements == 2
+
+    # Circuit with external noise model:
+    # 1. If circuit starts with gates (e.g. H 0), cut_idx must be 0
+    gate_circ = stim.Circuit("H 0\nM 0")
+    prefix, suffix, cut_idx = split_stim_prefix_suffix(gate_circ, has_external_noise=True)
+    assert cut_idx == 0
+    assert len(prefix) == 0
+
+    # 2. If circuit starts with R/TICK, cut point is at the first noisy gate (CX at index 2)
+    prefix, suffix, cut_idx = split_stim_prefix_suffix(rep_circuit, has_external_noise=True)
+    assert cut_idx == 2
+    assert len(prefix) > 0
+
+    # String circuit with in-circuit noise cuts before the first gate (H 0 at index 1)
+    str_circ_noisy = "R 0\nH 0\nDEPOLARIZE1(0.01) 0\nM 0"
+    prefix, suffix, cut_idx = split_stim_prefix_suffix(str_circ_noisy)
+    assert cut_idx == 1
+    assert prefix == "R 0"
+
+    # String circuit without noise keeps deterministic gates in prefix (cuts at M 0 at index 2)
+    str_circ_noiseless = "R 0\nH 0\nM 0"
+    prefix, suffix, cut_idx = split_stim_prefix_suffix(str_circ_noiseless)
+    assert cut_idx == 2
+    assert prefix == "R 0\nH 0"
+
+
+def test_checkpoint_zero_mismatch_repetition_code():
+    """Verify 0 mismatch between baseline and checkpointed simulation on repetition code."""
+    circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
+    seed = 42
+    shots = 200
+
+    sampler_base = MaestroCompiledSampler(circuit, seed=seed, enable_checkpoint=False)
+    dets_base, obs_base = sampler_base.sample_detection_events(shots=shots, seed=seed)
+
+    sampler_chk = MaestroCompiledSampler(circuit, seed=seed, enable_checkpoint=True)
+    assert sampler_chk.checkpoint_sim is not None
+    dets_chk, obs_chk = sampler_chk.sample_detection_events(shots=shots, seed=seed)
+
+    assert np.array_equal(dets_base, dets_chk)
+    assert np.array_equal(obs_base, obs_chk)
+
+
+def test_checkpoint_zero_mismatch_surface_code():
+    """Verify 0 mismatch between baseline and checkpointed simulation on rotated surface code."""
+    circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=3, rounds=3)
+    seed = 42
+    shots = 200
+
+    sampler_base = MaestroCompiledSampler(circuit, seed=seed, enable_checkpoint=False)
+    dets_base, obs_base = sampler_base.sample_detection_events(shots=shots, seed=seed)
+
+    sampler_chk = MaestroCompiledSampler(circuit, seed=seed, enable_checkpoint=True)
+    assert sampler_chk.checkpoint_sim is not None
+    dets_chk, obs_chk = sampler_chk.sample_detection_events(shots=shots, seed=seed)
+
+    assert np.array_equal(dets_base, dets_chk)
+    assert np.array_equal(obs_base, obs_chk)
+
+
+def test_checkpoint_with_external_noise_model():
+    """Verify clean execution with external NoiseModel when checkpointing is enabled."""
+    circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
+    nm = maestro.NoiseModel()
+    nm.set_all_t1(3, 0.0001)
+    nm.set_all_dephasing(3, 0.005)
+
+    sampler = MaestroCompiledSampler(
+        circuit, noise_model=nm, enable_checkpoint=True, seed=123
+    )
+    stats = sampler.sample(suggested_shots=50)
+    assert stats.shots == 50
+    assert stats.seconds > 0
+
+    dets, obs = sampler.sample_detection_events(shots=50, seed=123)
+    assert dets.shape[0] == 50
+    assert obs.shape[0] == 50
+
+
+def test_checkpoint_sinter_sample_task_stats():
+    """Verify Sinter task sampling works with checkpointed simulator."""
+    circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
+    task = sinter.Task(circuit=circuit)
+    sinter_sampler = MaestroSinterSampler(chi=16, enable_checkpoint=True, seed=99)
+    compiled = sinter_sampler.compiled_sampler_for_task(task)
+    assert compiled.checkpoint_sim is not None
+
+    stats = compiled.sample(suggested_shots=100)
+    assert stats.shots == 100
+    assert stats.seconds > 0
+

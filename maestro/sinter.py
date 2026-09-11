@@ -112,6 +112,7 @@ def translate_stim_to_maestro(
     qc = maestro.circuits.QuantumCircuit()
     nm = maestro.NoiseModel()
     meas_idx = 0
+    active_qubits: set[int] = set()
 
     if isinstance(circuit, str):
         lines = circuit.strip().splitlines()
@@ -127,6 +128,8 @@ def translate_stim_to_maestro(
             name, args, targets = _parse_instruction_line(line)
             if name:
                 instructions.append((name, args, targets))
+    elif isinstance(circuit, list):
+        instructions = circuit
     else:
         instructions = []
         for inst in circuit.flattened():
@@ -140,101 +143,133 @@ def translate_stim_to_maestro(
         if name == "I":
             for q in targets:
                 qc.rz(q, 0.0)
+                active_qubits.add(q)
         elif name == "X":
             for q in targets:
                 qc.x(q)
+                active_qubits.add(q)
         elif name == "Y":
             for q in targets:
                 qc.y(q)
+                active_qubits.add(q)
         elif name == "Z":
             for q in targets:
                 qc.z(q)
+                active_qubits.add(q)
         elif name == "H":
             for q in targets:
                 qc.h(q)
+                active_qubits.add(q)
         elif name in ("S", "SQRT_Z"):
             for q in targets:
                 qc.s(q)
+                active_qubits.add(q)
         elif name in ("S_DAG", "SQRT_Z_DAG"):
             for q in targets:
                 qc.sdg(q)
+                active_qubits.add(q)
         elif name == "SQRT_X":
             for q in targets:
                 qc.sx(q)
+                active_qubits.add(q)
         elif name == "SQRT_X_DAG":
             for q in targets:
                 qc.sxdg(q)
+                active_qubits.add(q)
         elif name == "SQRT_Y":
             for q in targets:
                 qc.ry(q, math.pi / 2.0)
+                active_qubits.add(q)
         elif name == "SQRT_Y_DAG":
             for q in targets:
                 qc.ry(q, -math.pi / 2.0)
+                active_qubits.add(q)
 
         # --- Parameterized single-qubit rotations & non-Clifford gates ---
         elif name == "T":
             for q in targets:
                 qc.t(q)
+                active_qubits.add(q)
         elif name == "T_DAG":
             for q in targets:
                 qc.tdg(q)
+                active_qubits.add(q)
         elif name == "RX" and args:
             angle = args[0]
             for q in targets:
                 qc.rx(q, angle)
+                active_qubits.add(q)
         elif name == "RY" and args:
             angle = args[0]
             for q in targets:
                 qc.ry(q, angle)
+                active_qubits.add(q)
         elif name == "RZ" and args:
             angle = args[0]
             for q in targets:
                 qc.rz(q, angle)
+                active_qubits.add(q)
 
         # --- Two-qubit Clifford gates ---
         elif name in ("CX", "CNOT"):
             for i in range(0, len(targets), 2):
                 qc.cx(targets[i], targets[i + 1])
+                active_qubits.add(targets[i])
+                active_qubits.add(targets[i + 1])
         elif name == "CY":
             for i in range(0, len(targets), 2):
                 qc.cy(targets[i], targets[i + 1])
+                active_qubits.add(targets[i])
+                active_qubits.add(targets[i + 1])
         elif name == "CZ":
             for i in range(0, len(targets), 2):
                 qc.cz(targets[i], targets[i + 1])
+                active_qubits.add(targets[i])
+                active_qubits.add(targets[i + 1])
         elif name == "SWAP":
             for i in range(0, len(targets), 2):
                 qc.swap(targets[i], targets[i + 1])
+                active_qubits.add(targets[i])
+                active_qubits.add(targets[i + 1])
 
         # --- Resets (unparameterized) ---
         elif name in ("R", "RZ"):
             for q in targets:
-                qc.reset(q)
+                if q in active_qubits:
+                    qc.reset(q)
         elif name == "RX":
             for q in targets:
-                qc.reset(q)
+                if q in active_qubits:
+                    qc.reset(q)
                 qc.h(q)
+                active_qubits.add(q)
         elif name == "RY":
             for q in targets:
-                qc.reset(q)
+                if q in active_qubits:
+                    qc.reset(q)
                 qc.h(q)
                 qc.s(q)
+                active_qubits.add(q)
 
         # --- Measurements and Measure-and-Resets ---
         elif name in ("M", "MZ"):
             for q in targets:
                 qc.measure([(q, meas_idx)])
                 meas_idx += 1
+                active_qubits.add(q)
         elif name in ("MR", "MRZ"):
             for q in targets:
                 qc.measure([(q, meas_idx)])
                 qc.reset(q)
                 meas_idx += 1
+                active_qubits.add(q)
         elif name == "MX":
             for q in targets:
                 qc.h(q)
                 qc.measure([(q, meas_idx)])
                 qc.h(q)
                 meas_idx += 1
+                active_qubits.add(q)
         elif name == "MRX":
             for q in targets:
                 qc.h(q)
@@ -242,6 +277,7 @@ def translate_stim_to_maestro(
                 qc.reset(q)
                 qc.h(q)
                 meas_idx += 1
+                active_qubits.add(q)
         elif name == "MY":
             for q in targets:
                 qc.sdg(q)
@@ -250,6 +286,7 @@ def translate_stim_to_maestro(
                 qc.h(q)
                 qc.s(q)
                 meas_idx += 1
+                active_qubits.add(q)
         elif name == "MRY":
             for q in targets:
                 qc.sdg(q)
@@ -259,6 +296,7 @@ def translate_stim_to_maestro(
                 qc.h(q)
                 qc.s(q)
                 meas_idx += 1
+                active_qubits.add(q)
 
         # --- In-circuit Pauli noise channels ---
         elif name == "DEPOLARIZE1":
@@ -305,6 +343,104 @@ def translate_stim_to_maestro(
     return qc, nm, meas_idx
 
 
+STIM_NOISE_INSTRUCTIONS = {
+    "DEPOLARIZE1",
+    "DEPOLARIZE2",
+    "X_ERROR",
+    "Y_ERROR",
+    "Z_ERROR",
+    "PAULI_CHANNEL_1",
+    "PAULI_CHANNEL_2",
+    "E",
+    "ELSE_CORRELATED_ERROR",
+}
+
+STIM_MEASURE_INSTRUCTIONS = {
+    "M",
+    "MZ",
+    "MX",
+    "MY",
+    "MR",
+    "MRZ",
+    "MRX",
+    "MRY",
+    "MPP",
+}
+
+STIM_ANNOTATIONS = {
+    "TICK",
+    "QUBIT_COORDS",
+    "DETECTOR",
+    "OBSERVABLE_INCLUDE",
+    "SHIFT_COORDS",
+    "MPAD",
+}
+
+
+def split_stim_prefix_suffix(
+    circuit: stim.Circuit | str | Any,
+    has_external_noise: bool = False,
+) -> tuple[Any, Any, int]:
+    """Split a Stim circuit into a deterministic prefix and suffix.
+
+    The prefix contains all deterministic operations prior to the first
+    noise channel or stochastic measurement.
+
+    Args:
+        circuit: A stim.Circuit, circuit string, or wrapper object.
+        has_external_noise: Whether an external noise model applies to gates.
+
+    Returns:
+        A tuple of (prefix_circuit, suffix_circuit, cut_index).
+    """
+    if isinstance(circuit, str):
+        lines = circuit.strip().splitlines()
+        parsed = []
+        for line in lines:
+            name, args, targets = _parse_instruction_line(line)
+            if name:
+                parsed.append((name, args, targets, line))
+        has_in_circuit_noise = any(n in STIM_NOISE_INSTRUCTIONS for n, _, _, _ in parsed)
+        has_noise = has_in_circuit_noise or has_external_noise
+        cut_idx = len(parsed)
+        for idx, (name, _, _, _) in enumerate(parsed):
+            if name in STIM_MEASURE_INSTRUCTIONS or name in STIM_NOISE_INSTRUCTIONS:
+                cut_idx = idx
+                break
+            if has_noise and name not in STIM_ANNOTATIONS and name not in ("R", "RZ"):
+                cut_idx = idx
+                break
+        prefix_str = "\n".join(p[3] for p in parsed[:cut_idx])
+        suffix_str = "\n".join(p[3] for p in parsed[cut_idx:])
+        return prefix_str, suffix_str, cut_idx
+
+    elif hasattr(circuit, "circuit_str"):
+        prefix_str, suffix_str, cut_idx = split_stim_prefix_suffix(
+            circuit.circuit_str, has_external_noise=has_external_noise
+        )
+        return circuit.__class__(prefix_str), circuit.__class__(suffix_str), cut_idx
+
+    else:
+        flat = list(circuit.flattened())
+        has_in_circuit_noise = any(inst.name in STIM_NOISE_INSTRUCTIONS for inst in flat)
+        has_noise = has_in_circuit_noise or has_external_noise
+        cut_idx = len(flat)
+        for idx, inst in enumerate(flat):
+            if inst.name in STIM_MEASURE_INSTRUCTIONS or inst.name in STIM_NOISE_INSTRUCTIONS:
+                cut_idx = idx
+                break
+            if has_noise and inst.name not in STIM_ANNOTATIONS and inst.name not in ("R", "RZ"):
+                cut_idx = idx
+                break
+        prefix_c = stim.Circuit()
+        for inst in flat[:cut_idx]:
+            prefix_c.append(inst)
+        suffix_c = stim.Circuit()
+        for inst in flat[cut_idx:]:
+            suffix_c.append(inst)
+        return prefix_c, suffix_c, cut_idx
+
+
 class NonCliffordTaskCircuit:
     """Wrapper around a Stim-like circuit that supports non-Clifford gates for Sinter tasks."""
 
@@ -318,33 +454,39 @@ class NonCliffordTaskCircuit:
         for line in circuit_str.strip().splitlines():
             name, args, targets = _parse_instruction_line(line)
             # Skip non-Clifford gates (T, T_DAG, or parameterized rotations) in Clifford baseline representation
-            if name in ("T", "T_DAG") or (name in ("RX", "RY", "RZ") and len(args) > 0):
+            if name in ("T", "T_DAG") or (name in ("RX", "RY", "RZ") and args):
                 continue
-            self._clifford_lines.append(line)
-            if name in ("M", "MZ", "MR", "MRZ", "MX", "MRX", "MY", "MRY"):
-                num_meas += len(targets)
-            elif name == "DETECTOR":
-                num_dets += 1
-            elif name == "OBSERVABLE_INCLUDE":
-                num_obs = max(num_obs, 1)
+            if name:
+                self._clifford_lines.append(line)
+                if name == "DETECTOR":
+                    num_dets += 1
+                elif name == "OBSERVABLE_INCLUDE":
+                    num_obs += 1
+                elif name in ("M", "MZ", "MX", "MY", "MR", "MRZ", "MRX", "MRY"):
+                    num_meas += len(targets)
 
         self._clifford_circuit = stim.Circuit("\n".join(self._clifford_lines))
-        self.num_detectors = self._clifford_circuit.num_detectors
-        self.num_observables = self._clifford_circuit.num_observables
-        self.num_measurements = self._clifford_circuit.num_measurements
+        self.num_detectors = num_dets
+        self.num_observables = num_obs
+        self.num_measurements = num_meas
 
-    def compile_m2d_converter(self):
+    @property
+    def num_qubits(self) -> int:
+        return self._clifford_circuit.num_qubits
+
+    def compile_m2d_converter(self) -> stim.CompiledMeasurementTracker:
         return self._clifford_circuit.compile_m2d_converter()
 
     def compile_detector_sampler(self):
         # Explicitly fails because of non-Clifford gates
         raise ValueError("Circuit contains non-Clifford gates; cannot compile Stim detector sampler.")
 
+    def detector_error_model(self, *args, **kwargs) -> stim.DetectorErrorModel:
+        return self._clifford_circuit.detector_error_model(*args, **kwargs)
+
     def flattened(self):
-        # Parse for translation
-        lines = self.circuit_str.strip().splitlines()
         instructions = []
-        for line in lines:
+        for line in self.circuit_str.strip().splitlines():
             name, args, targets = _parse_instruction_line(line)
             if name:
                 instructions.append((name, args, targets))
@@ -365,6 +507,8 @@ class MaestroSinterSampler(sinter.Sampler):
         device: str | None = None,
         config: maestro.SimulatorConfig | None = None,
         decoder: str | sinter.Decoder | None = None,
+        seed: int | None = None,
+        enable_checkpoint: bool = True,
     ):
         """Initialize the Maestro Sinter sampler.
 
@@ -375,6 +519,8 @@ class MaestroSinterSampler(sinter.Sampler):
             device: Optional target device string.
             config: Optional pre-configured Maestro SimulatorConfig.
             decoder: Optional default decoder (e.g. 'pymatching') to use for tasks.
+            seed: Optional default random seed for reproducible sampling.
+            enable_checkpoint: Whether to use prefix state checkpointing.
         """
         self.chi = chi
         self.use_gpu = use_gpu
@@ -382,6 +528,8 @@ class MaestroSinterSampler(sinter.Sampler):
         self.device = device
         self.config = config
         self.decoder = decoder
+        self.seed = seed
+        self.enable_checkpoint = enable_checkpoint
 
     def compiled_sampler_for_task(self, task: sinter.Task) -> sinter.CompiledSampler:
         """Create a compiled sampler configured for the given task."""
@@ -393,6 +541,8 @@ class MaestroSinterSampler(sinter.Sampler):
             device=self.device,
             config=self.config,
             decoder=self.decoder,
+            seed=self.seed,
+            enable_checkpoint=self.enable_checkpoint,
         )
 
 
@@ -408,6 +558,8 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
         device: str | None = None,
         config: maestro.SimulatorConfig | None = None,
         decoder: str | sinter.Decoder | None = None,
+        seed: int | None = None,
+        enable_checkpoint: bool = True,
     ):
         if not isinstance(task, sinter.Task):
             # If passed a circuit or circuit string directly
@@ -423,10 +575,13 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
         self.external_noise_model = noise_model
         self.device = device
         self.decoder = decoder
+        self.seed = seed
+        self.enable_checkpoint = enable_checkpoint
 
         # Compile measurement-to-detector converter
         self.converter = task.circuit.compile_m2d_converter()
         self.num_measurements = task.circuit.num_measurements
+        self.num_qubits = getattr(task.circuit, "num_qubits", 0)
 
         # Translate circuit to Maestro
         self.qc, in_circuit_noise, self.num_circuit_meas = translate_stim_to_maestro(task.circuit)
@@ -447,6 +602,43 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
             self.config.max_bond_dimension = self.chi
             if self.use_gpu:
                 self.config.simulator_type = maestro.SimulatorType.Gpu
+
+        if self.seed is not None:
+            self.config.seed = self.seed
+
+        # Prefix state checkpointing setup
+        self.checkpoint_sim = None
+        self.prefix_qc = None
+        self.suffix_qc = None
+        self.suffix_noise_model = None
+
+        if self.enable_checkpoint:
+            has_ext_noise = (
+                self.external_noise_model is not None and self.external_noise_model.has_any()
+            )
+            prefix_c, suffix_c, cut_idx = split_stim_prefix_suffix(
+                task.circuit, has_external_noise=has_ext_noise
+            )
+            self.prefix_qc, _, _ = translate_stim_to_maestro(prefix_c)
+            self.suffix_qc, suffix_in_circuit_noise, _ = translate_stim_to_maestro(suffix_c)
+
+            if self.external_noise_model is not None:
+                self.suffix_noise_model = self.external_noise_model
+            else:
+                self.suffix_noise_model = suffix_in_circuit_noise
+
+            # Determine if prefix has any operations
+            prefix_num_q = getattr(self.prefix_qc, "num_qubits", 0)
+            suffix_num_q = getattr(self.suffix_qc, "num_qubits", 0)
+            has_prefix_ops = cut_idx > 0 and prefix_num_q > 0
+            if has_prefix_ops:
+                try:
+                    qubits_for_sim = max(self.num_qubits, prefix_num_q, suffix_num_q, 1)
+                    self.checkpoint_sim = maestro.PrefixCheckpointedSimulator(
+                        self.prefix_qc, qubits_for_sim, self.config
+                    )
+                except Exception:
+                    self.checkpoint_sim = None
 
         # Resolve decoder for task
         decoder_to_use = self.decoder if self.decoder is not None else task.decoder
@@ -470,20 +662,33 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
                 if dem is not None:
                     self.compiled_decoder = decoder_obj.compile_decoder_for_dem(dem=dem)
 
-    def sample(self, suggested_shots: int = 1, shots: int | None = None) -> sinter.AnonTaskStats:
+    def sample(
+        self, suggested_shots: int = 1, shots: int | None = None, seed: int | None = None
+    ) -> sinter.AnonTaskStats:
         """Sample shots on Maestro and return Sinter task statistics."""
         if shots is not None:
             suggested_shots = shots
         shots_to_run = max(1, suggested_shots)
         t0 = time.monotonic()
+        run_seed = seed if seed is not None else self.seed
 
         # Execute simulation on Maestro
-        if self.noise_model is not None and self.noise_model.has_any():
+        if self.checkpoint_sim is not None:
+            res = self.checkpoint_sim.execute_suffix(
+                self.suffix_qc,
+                shots=shots_to_run,
+                noise_model=self.suffix_noise_model,
+                noise_realizations=shots_to_run,
+                seed=run_seed,
+                num_measurements=self.num_measurements,
+            )
+        elif self.noise_model is not None and self.noise_model.has_any():
             res = self.qc.full_noise_execute(
                 self.noise_model,
                 self.config,
                 shots=shots_to_run,
                 noise_realizations=shots_to_run,
+                seed=run_seed,
             )
         else:
             res = self.qc.execute(self.config, shots=shots_to_run)
@@ -547,12 +752,13 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
         )
 
     def sample_detection_events(
-        self, shots: int = 1000
+        self, shots: int = 1000, seed: int | None = None
     ) -> tuple[np.ndarray, np.ndarray]:
         """Sample detection events and actual observables directly.
 
         Args:
             shots: Number of shots to sample.
+            seed: Optional random seed for simulation.
 
         Returns:
             A tuple of (detection_events, actual_observables) as boolean numpy arrays.
@@ -560,12 +766,23 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
             actual_observables shape: (shots, num_observables)
         """
         shots_to_run = max(1, shots)
-        if self.noise_model is not None and self.noise_model.has_any():
+        run_seed = seed if seed is not None else self.seed
+        if self.checkpoint_sim is not None:
+            res = self.checkpoint_sim.execute_suffix(
+                self.suffix_qc,
+                shots=shots_to_run,
+                noise_model=self.suffix_noise_model,
+                noise_realizations=shots_to_run,
+                seed=run_seed,
+                num_measurements=self.num_measurements,
+            )
+        elif self.noise_model is not None and self.noise_model.has_any():
             res = self.qc.full_noise_execute(
                 self.noise_model,
                 self.config,
                 shots=shots_to_run,
                 noise_realizations=shots_to_run,
+                seed=run_seed,
             )
         else:
             res = self.qc.execute(self.config, shots=shots_to_run)
