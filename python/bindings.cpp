@@ -91,6 +91,8 @@ struct SimulatorConfig {
   std::optional<double> path_integral_threshold = std::nullopt;
   std::optional<uint64_t> seed = std::nullopt;
   std::optional<int> gpu_device = std::nullopt;
+  // Values use the same names and syntax as ISimulator::Configure.
+  std::unordered_map<std::string, std::string> distributed_options;
 
   SimulatorConfig() = default;
 
@@ -99,7 +101,8 @@ struct SimulatorConfig {
                   bool ds, int la, bool mnc,
                   std::optional<std::string> tm,
                   std::optional<uint64_t> random_seed,
-                  std::optional<int> device = std::nullopt)
+                  std::optional<int> device = std::nullopt,
+                  std::unordered_map<std::string, std::string> distribution = {})
       : simulator_type(st),
         simulation_type(set),
         max_bond_dimension(mb),
@@ -109,7 +112,7 @@ struct SimulatorConfig {
         disable_optimized_swapping(ds),
         lookahead_depth(la),
         mps_measure_no_collapse(mnc),
-        seed(random_seed), gpu_device(device) {
+        seed(random_seed), gpu_device(device), distributed_options(std::move(distribution)) {
     if (device && *device < 0)
       throw std::invalid_argument("gpu_device must be nonnegative");
   }
@@ -142,6 +145,9 @@ struct ScopedSimulator {
 // Helper to configure the simulation network
 std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     unsigned long int handle, const SimulatorConfig& config) {
+  if (Simulators::IsDistributedGpuSimulator(config.simulator_type) &&
+      config.simulation_type != Simulators::SimulationType::kStatevector)
+    throw std::invalid_argument("Distributed GPU supports only Statevector simulation");
   // QuEST only supports statevector simulation
   if (config.simulator_type == Simulators::SimulatorType::kQuestSim &&
       config.simulation_type != Simulators::SimulationType::kStatevector) {
@@ -159,6 +165,13 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
 
   if (!network) return nullptr;
 
+  for (const auto& [key, value] : config.distributed_options) {
+    if (key.compare(0, 12, "distributed_") != 0 && key.compare(0, 4, "mpi_") != 0)
+      throw std::invalid_argument("distributed_options accepts only distributed_* and mpi_* keys");
+    network->Configure(key.c_str(), value.c_str());
+  }
+  if (config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim && !config.seed)
+    network->Configure("seed", "0");
   if (config.gpu_device) {
     if (*config.gpu_device < 0)
       throw std::invalid_argument("gpu_device must be nonnegative");
@@ -268,7 +281,12 @@ std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("path_integral_threshold", val.c_str());
   }
 
-  network->CreateSimulator();
+  // Distribution must be selected before circuit mapping: its configured
+  // register and MPI control flow must not depend on the CPU optimizer.
+  if (Simulators::IsDistributedGpuSimulator(config.simulator_type))
+    network->CreateSimulator(config.simulator_type, config.simulation_type);
+  else
+    network->CreateSimulator();
 
   // Verify the simulator was actually created (e.g. GPU library may fail)
   if (!network->GetSimulator()) {
@@ -354,6 +372,16 @@ static bool uses_exact_quantum_channels(const SimulatorConfig& config) {
          (gpu &&
           (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
            config.simulation_type == Simulators::SimulationType::kMatrixProductOperator));
+}
+
+// All MPI ranks must submit the same stochastic circuit. Keep host-side
+// default noise streams aligned as well as the native measurement stream.
+static std::mt19937 MakeNoiseRng(const SimulatorConfig& config,
+                                 std::optional<unsigned int> seed) {
+  if (seed) return std::mt19937(*seed);
+  if (config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim)
+    return std::mt19937(0);
+  return std::mt19937(std::random_device{}());
 }
 
 static std::shared_ptr<Circuits::Circuit<double>> inject_noise_for_config(
@@ -905,6 +933,8 @@ NB_MODULE(maestro, m) {
 #endif
       .value("CompositeQCSim", Simulators::SimulatorType::kCompositeQCSim)
       .value("Gpu", Simulators::SimulatorType::kGpuSim)
+      .value("DistributedGpu", Simulators::SimulatorType::kDistGpuSim)
+      .value("DistributedMpiGpu", Simulators::SimulatorType::kDistMpiGpuSim)
       .value("QuestSim", Simulators::SimulatorType::kQuestSim)
       .export_values();
 
@@ -931,7 +961,8 @@ NB_MODULE(maestro, m) {
       .def(nb::init<Simulators::SimulatorType, Simulators::SimulationType,
                     std::optional<size_t>, std::optional<double>, bool, bool,
                     int, bool, std::optional<std::string>,
-                    std::optional<uint64_t>, std::optional<int>>(),
+                    std::optional<uint64_t>, std::optional<int>,
+                    std::unordered_map<std::string, std::string>>(),
            "simulator_type"_a = Simulators::SimulatorType::kQCSim,
            "simulation_type"_a = Simulators::SimulationType::kStatevector,
            "max_bond_dimension"_a = nb::none(),
@@ -940,7 +971,12 @@ NB_MODULE(maestro, m) {
            "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
            "mps_measure_no_collapse"_a = true,
            "truncation_mode"_a = nb::none(), "seed"_a = nb::none(),
-           "gpu_device"_a = nb::none())
+           "gpu_device"_a = nb::none(),
+           "distributed_options"_a = std::unordered_map<std::string, std::string>{})
+      .def_rw("distributed_options", &SimulatorConfig::distributed_options,
+              "Distribution settings passed to Configure before allocation. "
+              "Defaults: first global qubits, automatic Ex execution, visible GPUs. "
+              "MPI calls must match across ranks; mpi_communicator is mpi4py Comm.py2f().")
       .def_prop_rw("gpu_device",
           [](const SimulatorConfig& config) { return config.gpu_device; },
           [](SimulatorConfig& config, std::optional<int> device) {
@@ -1465,7 +1501,7 @@ NB_MODULE(maestro, m) {
              int shots, int noise_realizations,
              std::optional<unsigned int> seed) {
             if (!self) throw nb::value_error("Circuit is null.");
-            std::mt19937 rng(seed.value_or(std::random_device{}()));
+            auto rng = MakeNoiseRng(config, seed);
             const int batches =
                 std::min(shots, std::max(1, noise_realizations));
             const int base_batch = shots / batches;
@@ -1563,7 +1599,7 @@ NB_MODULE(maestro, m) {
             if (!self) throw nb::value_error("Circuit is null.");
             auto paulis = ParseObservables(observables);
 
-            std::mt19937 rng(seed.value_or(std::random_device{}()));
+            auto rng = MakeNoiseRng(config, seed);
             const size_t n_obs = paulis.size();
             std::vector<double> sum_vals(n_obs, 0.0);
 
@@ -1619,7 +1655,7 @@ NB_MODULE(maestro, m) {
                   "set_coherent_depolarizing(), set_coherent_rotation(), "
                   "etc.");
 
-            std::mt19937 rng(seed.value_or(std::random_device{}()));
+            auto rng = MakeNoiseRng(config, seed);
             const int batches =
                 std::min(shots, std::max(1, noise_realizations));
             const int base_batch = shots / batches;
@@ -1676,7 +1712,7 @@ NB_MODULE(maestro, m) {
                   "etc.");
 
             auto paulis = ParseObservables(observables);
-            std::mt19937 rng(seed.value_or(std::random_device{}()));
+            auto rng = MakeNoiseRng(config, seed);
             const size_t n_obs = paulis.size();
             std::vector<double> sum_vals(n_obs, 0.0);
 
@@ -1731,7 +1767,7 @@ NB_MODULE(maestro, m) {
             if (!noise_model.has_any())
               throw nb::value_error("NoiseModel has no noise configured.");
 
-            std::mt19937 rng(seed.value_or(std::random_device{}()));
+            auto rng = MakeNoiseRng(config, seed);
             const int batches =
                 std::min(shots, std::max(1, noise_realizations));
             const int base_batch = shots / batches;
@@ -1790,7 +1826,7 @@ NB_MODULE(maestro, m) {
               throw nb::value_error("NoiseModel has no noise configured.");
 
             auto paulis = ParseObservables(observables);
-            std::mt19937 rng(seed.value_or(std::random_device{}()));
+            auto rng = MakeNoiseRng(config, seed);
             const size_t n_obs = paulis.size();
             std::vector<double> sum_vals(n_obs, 0.0);
 
@@ -1847,7 +1883,7 @@ NB_MODULE(maestro, m) {
               throw nb::value_error(
                   "NoiseModel has no noise configured.");
 
-            std::mt19937 rng(seed.value_or(std::random_device{}()));
+            auto rng = MakeNoiseRng(config, seed);
             double sum_fid = 0.0;
             double sum_fid_sq = 0.0;
 
@@ -2007,6 +2043,15 @@ NB_MODULE(maestro, m) {
       []() { return Simulators::SimulatorsFactory::IsQuestLibraryAvailable(); },
       "Check whether the QuEST simulation library is loaded and available.");
 
+#ifdef __linux__
+  m.def("finalize_distributed_mpi_gpu", []() {
+    Simulators::SimulatorsFactory::FinalizeDistributedMpiGpuBackend();
+  }, "Terminal shutdown after all MPI GPU states are destroyed, before MPI.Finalize().");
+  m.def("is_distributed_gpu_available", []() {
+    auto lib = Simulators::SimulatorsFactory::GetDistributedGpuLibrary();
+    return lib->Load() && lib->GetGpuDeviceCount() > 0;
+  }, "Probe the local distributed plugin and devices without license admission or state allocation.");
+#endif
   // --- GPU Library Management ---
   m.def(
       "init_gpu",
@@ -2650,7 +2695,7 @@ NB_MODULE(maestro, m) {
         if (!circuit) throw nb::value_error("Circuit is null.");
         auto paulis = ParseObservables(observables);
 
-        std::mt19937 rng(seed.value_or(std::random_device{}()));
+        auto rng = MakeNoiseRng(config, seed);
         const size_t n_obs = paulis.size();
 
         // Accumulate expectation values across realizations
@@ -2703,7 +2748,7 @@ NB_MODULE(maestro, m) {
          int shots, int noise_realizations, std::optional<unsigned int> seed) {
         if (!circuit) throw nb::value_error("Circuit is null.");
 
-        std::mt19937 rng(seed.value_or(std::random_device{}()));
+        auto rng = MakeNoiseRng(config, seed);
         const int batches = std::min(shots, std::max(1, noise_realizations));
         const int base_batch = shots / batches;
         int leftover = shots % batches;
@@ -2760,7 +2805,7 @@ NB_MODULE(maestro, m) {
               "NoiseModel has no coherent noise set. Use "
               "set_coherent_depolarizing(), set_coherent_rotation(), etc.");
 
-        std::mt19937 rng(seed.value_or(std::random_device{}()));
+        auto rng = MakeNoiseRng(config, seed);
         const int batches = std::min(shots, std::max(1, noise_realizations));
         const int base_batch = shots / batches;
         int leftover = shots % batches;
@@ -2822,7 +2867,7 @@ NB_MODULE(maestro, m) {
               "set_coherent_depolarizing(), set_coherent_rotation(), etc.");
 
         auto paulis = ParseObservables(observables);
-        std::mt19937 rng(seed.value_or(std::random_device{}()));
+        auto rng = MakeNoiseRng(config, seed);
         const size_t n_obs = paulis.size();
 
         std::vector<double> sum_vals(n_obs, 0.0);
@@ -2886,7 +2931,7 @@ NB_MODULE(maestro, m) {
         if (!noise_model.has_any())
           throw nb::value_error("NoiseModel has no noise configured.");
 
-        std::mt19937 rng(seed.value_or(std::random_device{}()));
+        auto rng = MakeNoiseRng(config, seed);
         const int batches = std::min(shots, std::max(1, noise_realizations));
         const int base_batch = shots / batches;
         int leftover = shots % batches;
@@ -2951,7 +2996,7 @@ NB_MODULE(maestro, m) {
           throw nb::value_error("NoiseModel has no noise configured.");
 
         auto paulis = ParseObservables(observables);
-        std::mt19937 rng(seed.value_or(std::random_device{}()));
+        auto rng = MakeNoiseRng(config, seed);
         const size_t n_obs = paulis.size();
         std::vector<double> sum_vals(n_obs, 0.0);
 

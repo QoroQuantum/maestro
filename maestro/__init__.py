@@ -41,6 +41,7 @@ class NoiseModel(_raw_maestro.NoiseModel):
 _CONFIG_ATTRS = (
     "disable_optimized_swapping",
     "gpu_device",
+    "distributed_options",
     "lookahead_depth",
     "max_bond_dimension",
     "mpo_hermitize_after_truncation",

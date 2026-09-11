@@ -28,7 +28,10 @@ void CheckConfiguration() {
         "tensor_network_use_gesvd"}) {
     const std::string group(prefix);
     Configuration config;
+    config.SetConfiguration(group, "true");
     config.SetConfiguration(group + 'j', "true");
+    Require(config.GetConfiguration(group) == "false",
+            "J did not clear GESVD");
     config.SetConfiguration(group + 'p', "1");
     Require(config.GetConfiguration(group + 'j') == "false",
             "P did not clear J");
@@ -107,6 +110,14 @@ void CheckSimulatorConfiguration() {
     const std::string group(entry.second);
     auto sim = Factory::CreateSimulator(SimulatorType::kGpuSim, entry.first);
     Require(bool(sim), "GPU simulator unavailable");
+    // Unconfigured simulators inherit the current plugin's GESVDP default.
+    sim->AllocateQubits(4);
+    sim->Initialize();
+    Require(sim->GetConfiguration((group + 'p').c_str()) == "true" &&
+                sim->GetConfiguration(group.c_str()) == "false",
+            "native GESVDP default was overridden");
+    sim->Clear();
+    sim->Configure(group.c_str(), "true");
     sim->Configure((group + 'j').c_str(), "true");
     sim->Configure((group + 'p').c_str(), "true");
     sim->Configure("matrix_product_state_max_bond_dimension", "8");
@@ -117,6 +128,24 @@ void CheckSimulatorConfiguration() {
             "pre-init P not applied");
     Require(sim->GetConfiguration((group + 'j').c_str()) == "false",
             "stale J replayed");
+    // Exercise the previously broken live GESVD -> P transition and replay.
+    sim->Configure(group.c_str(), "true");
+    Require(sim->GetConfiguration(group.c_str()) == "true",
+            "explicit GESVD not selected");
+    sim->Configure((group + 'p').c_str(), "true");
+    sim->Configure(group.c_str(), "false");
+    Require(sim->GetConfiguration((group + 'p').c_str()) == "true",
+            "inactive GESVD selector cleared P");
+    sim->Clear();
+    sim->AllocateQubits(4);
+    sim->Initialize();
+    Require(sim->GetConfiguration((group + 'p').c_str()) == "true",
+            "recreation lost P after GESVD -> P");
+    // Disabling P selects plain GESVD, not the construction default.
+    sim->Configure((group + 'p').c_str(), "false");
+    Require(sim->GetConfiguration(group.c_str()) == "true",
+            "clearing P did not select GESVD");
+    sim->Configure((group + 'p').c_str(), "true");
     sim->ApplyH(0);
     sim->ApplyCX(0, 1);
     sim->Configure((group + 'r').c_str(), "true");
@@ -141,6 +170,7 @@ void CheckSimulatorConfiguration() {
             "SVD evolution changed Bell correlation");
 
     Network::SimpleDisconnectedNetwork<> network({4}, {4});
+    network.Configure(group.c_str(), "true");
     network.Configure((group + 'j').c_str(), "true");
     network.Configure((group + 'p').c_str(), "true");
     network.CreateSimulator(SimulatorType::kGpuSim, entry.first);

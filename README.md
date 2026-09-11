@@ -88,3 +88,5 @@ make doc
 ## License
 
 GPL-3.0 — see [LICENSE](./LICENSE) or <https://www.gnu.org/licenses/gpl-3.0.en.html>.
+
+Distributed GPU statevectors (local multi-GPU and MPI) are documented in [docs/distributed_gpu.md](docs/distributed_gpu.md).

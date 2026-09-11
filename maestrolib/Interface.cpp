@@ -269,6 +269,12 @@ __declspec(dllexport)
       response.emplace("simulator", "quest");
       break;
 #ifdef __linux__
+    case Simulators::SimulatorType::kDistGpuSim:
+      response.emplace("simulator", "distributed_gpu_simulator");
+      break;
+    case Simulators::SimulatorType::kDistMpiGpuSim:
+      response.emplace("simulator", "distributed_mpi_gpu_simulator");
+      break;
     case Simulators::SimulatorType::kGpuSim:
       response.emplace("simulator", "gpu_simulator");
       response.emplace("gpu_device", network->GetLastGpuDevice());
@@ -447,6 +453,12 @@ __declspec(dllexport)
       response.emplace("simulator", "composite_qcsim");
       break;
 #ifdef __linux__
+    case Simulators::SimulatorType::kDistGpuSim:
+      response.emplace("simulator", "distributed_gpu_simulator");
+      break;
+    case Simulators::SimulatorType::kDistMpiGpuSim:
+      response.emplace("simulator", "distributed_mpi_gpu_simulator");
+      break;
     case Simulators::SimulatorType::kGpuSim:
       response.emplace("simulator", "gpu_simulator");
       response.emplace("gpu_device", network->GetLastGpuDevice());
