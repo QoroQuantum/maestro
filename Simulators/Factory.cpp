@@ -37,6 +37,7 @@
 #include "QCSimSimulator.h"
 #include "Composite.h"
 #include "GpuSimulator.h"
+#include "DistributedGpuSimulator.h"
 #include "QuestSimulator.h"
 
 namespace Simulators {
@@ -50,6 +51,18 @@ GpuLibraryRegistry& GpuLibraries() {
   static GpuLibraryRegistry registry;
   return registry;
 }
+}
+
+std::shared_ptr<DistributedGpuLibrary> SimulatorsFactory::GetDistributedGpuLibrary() {
+  return DistributedGpuLibrary::GetInstance();
+}
+
+std::shared_ptr<DistributedMpiGpuLibrary> SimulatorsFactory::GetDistributedMpiGpuLibrary() {
+  return DistributedMpiGpuLibrary::GetInstance();
+}
+
+void SimulatorsFactory::FinalizeDistributedMpiGpuBackend() {
+  DistributedMpiGpuLibrary::GetInstance()->FinalizeBackend();
 }
 
 void SimulatorsFactory::SelectGpuDevice(int deviceId) {
@@ -192,6 +205,15 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
       return std::make_shared<Private::CompositeSimulator>(
           SimulatorType::kQCSim);
 #ifdef __linux__
+    case SimulatorType::kDistGpuSim:
+      if (m != SimulationType::kStatevector)
+        throw std::invalid_argument("Distributed GPU supports only statevector");
+      return std::make_shared<Private::DistributedGpuSimulator>();
+    case SimulatorType::kDistMpiGpuSim:
+      if (m != SimulationType::kStatevector)
+        throw std::invalid_argument("Distributed MPI GPU supports only statevector");
+      return std::make_shared<Private::DistributedMpiGpuSimulator>();
+
     case SimulatorType::kGpuSim:
       // Discovery does not initialize a device: configuration follows creation.
       if (GetGpuDeviceCount() == 0) return nullptr;
@@ -293,6 +315,15 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
       return std::make_unique<Private::CompositeSimulator>(
           SimulatorType::kQCSim);
 #ifdef __linux__
+    case SimulatorType::kDistGpuSim:
+      if (m != SimulationType::kStatevector)
+        throw std::invalid_argument("Distributed GPU supports only statevector");
+      return std::make_unique<Private::DistributedGpuSimulator>();
+    case SimulatorType::kDistMpiGpuSim:
+      if (m != SimulationType::kStatevector)
+        throw std::invalid_argument("Distributed MPI GPU supports only statevector");
+      return std::make_unique<Private::DistributedMpiGpuSimulator>();
+
     case SimulatorType::kGpuSim:
       // Discovery does not initialize a device: configuration follows creation.
       if (GetGpuDeviceCount() == 0) return nullptr;

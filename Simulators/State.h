@@ -79,8 +79,17 @@ enum class SimulatorType : int {
 #endif
   kCompositeQCSim, /**< composite qcsim simulator type */
   kGpuSim,         /**< gpu simulator type */
-  kQuestSim        /**< quest simulator type */
+  kQuestSim,       /**< quest simulator type */
+  kDistGpuSim,     /**< state distributed across local GPUs */
+  kDistMpiGpuSim   /**< state distributed across MPI ranks/GPUs */
 };
+
+inline bool IsDistributedGpuSimulator(SimulatorType type) {
+  return type == SimulatorType::kDistGpuSim || type == SimulatorType::kDistMpiGpuSim;
+}
+inline bool IsGpuSimulator(SimulatorType type) {
+  return type == SimulatorType::kGpuSim || IsDistributedGpuSimulator(type);
+}
 
 /**
  * @enum SimulationType
