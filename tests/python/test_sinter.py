@@ -711,5 +711,3 @@ def test_nontrivial_prefix_enables_checkpoint_simulator():
     assert sampler.checkpoint_sim is not None
     stats = sampler.sample(suggested_shots=20)
     assert stats.shots == 20
-
-

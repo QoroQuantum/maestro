@@ -29,5 +29,3 @@ def counts_to_measurements(counts, num_measurements, shots, *, storage_width=Non
     if sum(weights) != shots:
         raise ValueError(f'Maestro returned {sum(weights)} shots, expected {shots}')
     return np.repeat(np.asarray(rows, dtype=bool).reshape(len(rows), num_measurements), weights, axis=0)
-
-
