@@ -24,7 +24,40 @@ except ImportError:
     raise ImportError("Install qoro-maestro[sinter] to use the Sinter sampler.")
 
 import maestro
-from ._sinter_validation import counts_to_measurements, validate_shots
+
+def validate_shots(shots: int) -> int:
+    """Validate that shots is a positive integer."""
+    if isinstance(shots, bool) or not isinstance(shots, numbers.Integral) or shots <= 0:
+        raise ValueError("shots must be a positive integer")
+    return int(shots)
+
+
+def counts_to_measurements(
+    counts: dict[str, int],
+    num_measurements: int,
+    shots: int,
+    *,
+    storage_width: int | None = None,
+) -> np.ndarray:
+    """Strict Maestro bit order: character k is classical bit k."""
+    if not counts:
+        raise ValueError("Maestro returned an empty measurement histogram")
+    rows, weights = [], []
+    for bits, count in counts.items():
+        bits = bits.replace(" ", "")
+        if storage_width is not None and len(bits) == storage_width and storage_width > num_measurements:
+            if set(bits[num_measurements:]) - {"0"}:
+                raise ValueError("Nonzero data outside the declared measurement record")
+            bits = bits[:num_measurements]
+        if len(bits) != num_measurements or set(bits) - {"0", "1"}:
+            raise ValueError(f"Maestro measurement width/content mismatch: expected {num_measurements}")
+        if isinstance(count, bool) or not isinstance(count, numbers.Integral) or count < 0:
+            raise ValueError("Maestro counts must be nonnegative integers")
+        rows.append([b == "1" for b in bits])
+        weights.append(count)
+    if sum(weights) != shots:
+        raise ValueError(f"Maestro returned {sum(weights)} shots, expected {shots}")
+    return np.repeat(np.asarray(rows, dtype=bool).reshape(len(rows), num_measurements), weights, axis=0)
 
 CLEAN_CIRCUIT_API_VERSION = 1
 LOCAL_NOISE = {'DEPOLARIZE1', 'DEPOLARIZE2', 'X_ERROR', 'Y_ERROR', 'Z_ERROR',
