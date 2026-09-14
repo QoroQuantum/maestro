@@ -122,9 +122,8 @@ def test_translate_y_error():
         Y_ERROR(0.05) 0
         M 0
     """)
-    qc, nm, num_meas = translate_stim_to_maestro(circuit)
-    assert nm.has_any()
-    assert num_meas == 1
+    with pytest.raises(ValueError, match="Circuit-local noise"):
+        translate_stim_to_maestro(circuit)
 
 
 def test_translate_unsupported_instruction_raises():
@@ -142,10 +141,8 @@ def test_translate_in_circuit_noise():
         Z_ERROR(0.005) 1
         M 0 1
     """)
-    qc, nm, num_meas = translate_stim_to_maestro(circuit)
-    assert nm.has_any()
-    assert nm.has_any_2q_depolarizing()
-    assert num_meas == 2
+    with pytest.raises(ValueError, match="Circuit-local noise"):
+        translate_stim_to_maestro(circuit)
 
 
 def test_annotations_ignored():
@@ -179,7 +176,6 @@ def test_compiled_sampler_repetition_code():
         "repetition_code:memory",
         distance=3,
         rounds=2,
-        after_clifford_depolarization=0.01,
     )
     task = sinter.Task(circuit=circuit)
     sampler = MaestroSinterSampler(chi=16)
@@ -216,13 +212,14 @@ def test_compiled_sampler_with_external_noise_model():
 def test_sampler_without_decoder_uncorrected():
     circuit = stim.Circuit("""
         I 0
-        X_ERROR(1.0) 0
         M 0
         OBSERVABLE_INCLUDE(0) rec[-1]
     """)
     # When task.decoder is None, any observable flip is an uncorrected error
+    nm = maestro.NoiseModel()
+    nm.set_readout_error_symmetric(0, 1.0)
     task = sinter.Task(circuit=circuit)
-    sampler = MaestroSinterSampler(chi=16)
+    sampler = MaestroSinterSampler(chi=16, noise_model=nm)
     compiled = sampler.compiled_sampler_for_task(task)
     stats = compiled.sample(suggested_shots=20)
 
@@ -236,7 +233,6 @@ def test_compiled_sampler_with_pymatching_decoder():
         "repetition_code:memory",
         distance=3,
         rounds=2,
-        after_clifford_depolarization=0.01,
     )
     task = sinter.Task(circuit=circuit, decoder="pymatching")
     sampler = MaestroSinterSampler(chi=16)
@@ -254,13 +250,14 @@ def test_compiled_sampler_postselection():
     """Verify that postselection masks count discards properly."""
     circuit = stim.Circuit("""
         I 0
-        X_ERROR(1.0) 0
         M 0
         OBSERVABLE_INCLUDE(0) rec[-1]
     """)
     mask = np.array([1], dtype=np.uint8)
+    nm = maestro.NoiseModel()
+    nm.set_readout_error_symmetric(0, 1.0)
     task = sinter.Task(circuit=circuit, postselected_observables_mask=mask)
-    sampler = MaestroSinterSampler(chi=16)
+    sampler = MaestroSinterSampler(chi=16, noise_model=nm)
     compiled = sampler.compiled_sampler_for_task(task)
     stats = compiled.sample(suggested_shots=20)
 
@@ -295,7 +292,8 @@ def test_sampler_accepts_simulator_config():
     assert sampler.config is cfg
     task = sinter.Task(circuit=stim.Circuit("H 0\nM 0"))
     compiled = sampler.compiled_sampler_for_task(task)
-    assert compiled.config is cfg
+    assert compiled.config is not cfg
+    assert compiled.config.max_bond_dimension == cfg.max_bond_dimension
     stats = compiled.sample(10)
     assert stats.shots == 10
 
@@ -333,7 +331,6 @@ def test_sinter_collect_clifford_baseline_repetition_code():
         "repetition_code:memory",
         distance=3,
         rounds=3,
-        after_clifford_depolarization=0.02,
     )
     task = sinter.Task(circuit=circuit)
 
@@ -360,6 +357,7 @@ def test_sinter_collect_clifford_baseline_repetition_code():
     assert stats_maestro.shots == shots
     assert stats_stim.shots == shots
 
+    assert stats_maestro.errors == stats_stim.errors == 0
     p_m = stats_maestro.errors / stats_maestro.shots
     p_s = stats_stim.errors / stats_stim.shots
     # Standard deviation of the difference between two binomial proportions
@@ -374,7 +372,6 @@ def test_sinter_collect_clifford_baseline_surface_code():
         "surface_code:rotated_memory_z",
         distance=3,
         rounds=1,
-        after_clifford_depolarization=0.01,
     )
     task = sinter.Task(circuit=circuit)
 
@@ -401,6 +398,7 @@ def test_sinter_collect_clifford_baseline_surface_code():
     assert stats_maestro.shots == shots
     assert stats_stim.shots == shots
 
+    assert stats_maestro.errors == stats_stim.errors == 0
     p_m = stats_maestro.errors / stats_maestro.shots
     p_s = stats_stim.errors / stats_stim.shots
     sigma = math.sqrt(p_s * (1 - p_s) / shots + p_m * (1 - p_m) / shots)
@@ -414,7 +412,6 @@ def test_sinter_collect_with_pymatching_end_to_end():
         "repetition_code:memory",
         distance=3,
         rounds=2,
-        after_clifford_depolarization=0.01,
     )
     task = sinter.Task(circuit=circuit)
     sampler = MaestroSinterSampler(chi=16, decoder="pymatching")
@@ -482,13 +479,14 @@ def test_compiled_sampler_detector_postselection():
     """Verify detector postselection discards shots when a postselected detector triggers."""
     circuit = stim.Circuit("""
         I 0
-        X_ERROR(1.0) 0
         M 0
         DETECTOR rec[-1]
     """)
     mask = np.array([1], dtype=np.uint8)
+    nm = maestro.NoiseModel()
+    nm.set_readout_error_symmetric(0, 1.0)
     task = sinter.Task(circuit=circuit, postselection_mask=mask)
-    compiled = MaestroSinterSampler(chi=16).compiled_sampler_for_task(task)
+    compiled = MaestroSinterSampler(chi=16, noise_model=nm).compiled_sampler_for_task(task)
     stats = compiled.sample(15)
 
     assert stats.shots == 15
@@ -642,7 +640,7 @@ def test_checkpoint_sinter_sample_task_stats():
     """Verify Sinter task sampling works with checkpointed simulator."""
     circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
     task = sinter.Task(circuit=circuit)
-    sinter_sampler = MaestroSinterSampler(chi=16, enable_checkpoint=True, seed=99)
+    sinter_sampler = MaestroSinterSampler(chi=16, enable_checkpoint=True)
     compiled = sinter_sampler.compiled_sampler_for_task(task)
     assert compiled.checkpoint_sim is not None
 
@@ -689,7 +687,6 @@ def test_trivial_prefix_falls_back_to_direct_execution():
         QUBIT_COORDS(0, 0) 0
         R 0 1
         TICK
-        DEPOLARIZE1(0.01) 0
         M 0 1
         DETECTOR rec[-1]
     """)
@@ -707,7 +704,6 @@ def test_nontrivial_prefix_enables_checkpoint_simulator():
         H 0
         CX 0 1
         TICK
-        DEPOLARIZE1(0.01) 0
         M 0 1
         DETECTOR rec[-1]
     """)
@@ -715,5 +711,3 @@ def test_nontrivial_prefix_enables_checkpoint_simulator():
     assert sampler.checkpoint_sim is not None
     stats = sampler.sample(suggested_shots=20)
     assert stats.shots == 20
-
-

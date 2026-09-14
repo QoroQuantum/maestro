@@ -33,7 +33,7 @@
  * |------------------|-------------|
  * | `MaestroSinterSampler` | Implements `sinter.Sampler`. Passed to `sinter.collect()` as a custom sampler backend in `custom_decoders`. |
  * | `MaestroCompiledSampler` | Implements `sinter.CompiledSampler`. Holds compiled circuit execution plans for repeated batch sampling or direct detection event generation. |
- * | `translate_stim_to_maestro(circuit)` | Converts a Stim circuit or circuit string into a Maestro `QuantumCircuit` and `NoiseModel`. |
+ * | `translate_stim_to_maestro(circuit, qubit_order=None)` | Converts clean Stim circuits, extended gate strings or instruction tuples into `(QuantumCircuit, empty NoiseModel, measurement_count)`. |
  *
  * ---
  *
@@ -47,15 +47,17 @@
  * from maestro.sinter import MaestroSinterSampler
  * import maestro
  *
- * # 1. Define a Stim surface code circuit
- * surface_code_task = sinter.Task(
- *     circuit=stim.Circuit.generated(
+ * # 1. Define a decoder prior separately from the clean execution circuit
+ * prior = stim.Circuit.generated(
  *         "surface_code:rotated_memory_z",
  *         rounds=3,
  *         distance=3,
  *         after_clifford_depolarization=0.001,
- *     ),
- *     json_metadata={"d": 3, "r": 3, "p": 0.001},
+ * )
+ * surface_code_task = sinter.Task(
+ *     circuit=prior.without_noise(),
+ *     detector_error_model=prior.detector_error_model(decompose_errors=True),
+ *     json_metadata={"d": 3, "r": 3, "native_depolarizing": 0.001},
  * )
  *
  * # 2. Configure Maestro backend options (e.g. Matrix Product State)
@@ -63,9 +65,13 @@
  * mps_config.simulation_type = maestro.SimulationType.MatrixProductState
  * mps_config.max_bond_dimension = 64
  *
- * # 3. Instantiate Maestro custom sampler (optionally pairing with a decoder like pymatching)
+ * # 3. Choose a native physical noise model, independently of the decoder prior.
+ * # This is not an exact execution of the noise embedded in the prior.
+ * noise = maestro.NoiseModel()
+ * for q in range(prior.num_qubits):
+ *     noise.set_depolarizing(q, 0.001)
  * custom_decoders = {
- *     "maestro": MaestroSinterSampler(config=mps_config, decoder="pymatching")
+ *     "maestro": MaestroSinterSampler(config=mps_config, noise_model=noise, decoder="pymatching")
  * }
  *
  * # 4. Collect error correction statistics
@@ -83,6 +89,26 @@
  * @endcode
  *
  * ---
+ *
+ * @section py_sinter_contract Clean-circuit execution contract
+ *
+ * `CLEAN_CIRCUIT_API_VERSION = 1` identifies translation with explicit initial
+ * resets, measurement/reset basis handling, classical record ordering and
+ * optional qubit allocation order. Measurement character k is classical bit k.
+ * Unsupported embedded noise, measurement inversion and record-controlled
+ * operations raise ValueError instead of silently changing their meaning.
+ * Native `NoiseModel` execution remains supported. The previous translation of
+ * instruction-local noise into a global hardware model was lossy and is removed.
+ * No embedded-noise sampler or coherent conversion policy is included here.
+ *
+ * Counts must contain exactly the requested positive integer number of shots.
+ * Unexpected record widths and nonzero padding raise ValueError. A caller's
+ * SimulatorConfig is copied before sampling. Direct compiled samplers accept
+ * a seed (or config.seed); successive calls advance their random stream.
+ * An explicit per-call seed replays that call without consuming the stream.
+ * `MaestroSinterSampler` factories reject seed and config.seed because collect
+ * worker identities are unavailable for reproducible stream partitioning.
+ * Histograms do not preserve chronological shot order.
  *
  * @section py_sinter_example_compiled Direct Sampling with MaestroCompiledSampler
  *
