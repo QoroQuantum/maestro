@@ -18,7 +18,7 @@ jobs:
 
     # 1. INSTALL TOOLS
     - name: Install System Tools
-      run: sudo apt install -y libopenblas-dev ccache ninja-build
+      run: sudo apt install -y libopenblas-dev ccache ninja-build libopenmpi-dev openmpi-bin
 
     # 2. CACHE EXTERNAL LIBS (Boost/Eigen/QCSim/JSON/AER)
     - name: Cache Boost and Eigen
@@ -89,6 +89,8 @@ jobs:
         export AER_INCLUDE_DIR=$PWD/qiskit-aer/src/
 
         cmake . -G Ninja \
+          -DMAESTRO_BUILD_REQUEST_TESTS=ON \
+          -DMAESTRO_BUILD_MPI_WORKER=ON \
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
           -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
@@ -102,3 +104,8 @@ jobs:
       run: |
         ./bin/tests --log_level=test_suite \
           --run_test='!gpu_simulator_tests:!MPSSwapOptTests:!circuit_tests/RandomCircuitsTest*:!circuit_tests/RandomCircuitsOptimizationTest*:!mps_tests/RandomCircuitsTest*:!mps_tests/RandomCircuitsTest50*:!clifford_tests/RandomCircuitsTest*:!convsim_tests/RandomAerCircuitsTest*:!convsim_tests/RandomQcsimCircuitsTest*:!convsim_tests/RandomAerQcsimCircuitsTest*'
+
+    - name: Run native request contract and MPI tests
+      env:
+        HWLOC_COMPONENTS: -gl,-opencl
+      run: ctest --test-dir . --output-on-failure -R '^maestro_request_'

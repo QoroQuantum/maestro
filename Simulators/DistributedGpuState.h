@@ -77,7 +77,7 @@ class DistributedGpuState : public ISimulator {
     if (k == "distributed_snapshot_storage" && v != "host" && v != "gpu")
       throw std::invalid_argument(
           "distributed_snapshot_storage must be host or gpu");
-    if (k == "distributed_flags" && ParseUnsigned(v) > 15)
+    if (k == "distributed_flags" && ParseUnsigned(v) > 31)
       throw std::invalid_argument("Unsupported distribution flags");
     if (k == "distributed_max_queued_gates" &&
         (ParseUnsigned(v) < 1 || ParseUnsigned(v) > 65536))

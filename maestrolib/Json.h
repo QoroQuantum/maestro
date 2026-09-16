@@ -88,7 +88,7 @@ class JsonParserMaestro {
           else if (configValue.is_uint64())
             return std::to_string(configValue.as_uint64());
           else if (configValue.is_double())
-            return std::to_string(configValue.as_double());
+            return boost::json::serialize(configValue);
         } else if (configValue.is_bool()) {
           return configValue.as_bool() ? "true" : "false";
         }

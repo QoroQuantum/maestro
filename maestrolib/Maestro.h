@@ -24,12 +24,12 @@ class Maestro {
 
   // Add methods to expose functionality to Maestro here.
   // For example, methods to create circuits, simulators, run simulations, etc.
-  unsigned long int CreateSimpleSimulator(int nrQubits) {
+  unsigned long int CreateSimpleSimulator(int nrQubits, int nrCbits = -1) {
     if (nrQubits <= 0) return 0;
 
     const std::vector<Types::qubit_t> qubits{
         static_cast<Types::qubit_t>(nrQubits)};
-    const std::vector<size_t> cbits{static_cast<size_t>(nrQubits)};
+    const std::vector<size_t> cbits{static_cast<size_t>(nrCbits < 0 ? nrQubits : nrCbits)};
 
 #ifdef COMPOSER
     auto network = std::make_shared<Network::SimpleNetwork<>>(qubits, cbits);
