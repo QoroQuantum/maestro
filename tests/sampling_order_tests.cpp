@@ -39,12 +39,12 @@ void CheckSamples(ISimulator& sim, const std::vector<Types::qubit_t>& ids) {
         if (expected.back()) packed |= Types::qubit_t(1) << i;
       }
       for (size_t shots : {size_t(1), size_t(16)}) {
-        const auto small = sim.SampleCounts(qubits, shots);
+        const auto smallv = sim.SampleCounts(qubits, shots);
         const auto wide = sim.SampleCountsMany(qubits, shots);
         const std::string context = "basis=" + std::to_string(basis) +
             " first_qubit=" + std::to_string(qubits.front()) +
             " width=" + std::to_string(qubits.size()) + " shots=" + std::to_string(shots);
-        Require(small.size() == 1 && small.count(packed) && small.at(packed) == shots,
+        Require(smallv.size() == 1 && smallv.count(packed) && smallv.at(packed) == shots,
                 "packed sampling: " + context);
         Require(wide.size() == 1 && wide.count(expected) && wide.at(expected) == shots,
                 "vector sampling: " + context);
