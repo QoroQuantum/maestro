@@ -53,6 +53,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <random>
@@ -185,8 +186,8 @@ struct ConfiguredKrausChannel {
  *   - exact (density matrix / MPO): the CPTP channel, coherences decay by
  *     exactly exp(-duration/T2);
  *   - sampled (pure state / MPS): the stochastic reset+Z mixture below, which
- *     reproduces the same populations AND the same exp(-duration/T2)
- *     coherence decay.
+ *     reproduces the same populations; coherence agrees for T2 <= T1,
+ *     otherwise effective T2 is clamped to T1.
  *
  * Deriving both from one set of (duration, T1, T2) is what keeps the two
  * paths physically consistent. Configuring T1 and T2 separately via
@@ -218,8 +219,8 @@ struct ThermalRelaxation {
    *
    * This has a solution only when T2 <= T1. For T1 < T2 <= 2*T1 the reset
    * mixture already destroys more coherence than physics allows and no
-   * nonnegative p_z can compensate, so it is clamped to zero and the sampled
-   * path over-dephases (exp(-t/T1) instead of exp(-t/T2)). Aer's
+   * nonnegative p_z can compensate. Sampled execution clamps effective T2
+   * to T1 (p_z = 0) and over-dephases (exp(-t/T1) instead of exp(-t/T2)). Aer's
    * thermal_relaxation_error has the same limitation and switches to a Kraus
    * representation there; use a density-matrix or MPO backend, where the
    * exact channel is used instead, if that regime matters.
@@ -227,7 +228,11 @@ struct ThermalRelaxation {
   double phase_flip_probability() const {
     const double survival = 1.0 - decay_probability();
     if (survival <= 0.0) return 0.0;
-    const double coherence = std::isinf(t2) ? 1.0 : std::exp(-duration / t2);
+    // Approximate unsupported sampled thermal channels without changing the
+    // calibrated parameters or the exact channel stored on the NoiseModel.
+    const double effective_t2 = std::min(t2, t1);
+    const double coherence = std::isinf(effective_t2)
+                                 ? 1.0 : std::exp(-duration / effective_t2);
     const double ratio = coherence / survival;
     if (!std::isfinite(ratio) || ratio >= 1.0) return 0.0;
     return 0.5 * (1.0 - ratio);
@@ -1028,10 +1033,28 @@ class NoiseModel {
   }
 
   /**
-   * True if any configured thermal-relaxation layer sits in T1 < T2 <= 2*T1,
+   * Sorted unique qubits with thermal relaxation in T1 < T2 <= 2*T1,
    * where the sampled reset+Z mixture over-dephases. Density-matrix or MPO
-   * execution is required in that regime.
+   * execution is required for faithful evolution in that regime.
+   * Sampled execution instead approximates it with effective T2 = T1.
    */
+  std::vector<int> thermal_approximation_qubits() const {
+    std::vector<int> qubits;
+    for (const auto &entry : thermal_relaxation_params_)
+      if (!entry.second.sampled_realization_is_exact()) qubits.push_back(entry.first);
+    for (const auto &entry : thermal_relaxation_params_2q_)
+      if (!entry.second.sampled_realization_is_exact()) qubits.push_back(entry.first);
+    for (const auto &entry : idle_noise_) {
+      if (std::isfinite(entry.second.t1) && std::isfinite(entry.second.t2) &&
+          entry.second.t2 > entry.second.t1 * (1.0 + 1e-12))
+        qubits.push_back(entry.first);
+    }
+    std::sort(qubits.begin(), qubits.end());
+    qubits.erase(std::unique(qubits.begin(), qubits.end()), qubits.end());
+    return qubits;
+  }
+
+  /** True if any thermal layer requires the sampled T2 approximation. */
   bool has_thermal_in_sampled_overdephasing_regime() const {
     for (const auto &entry : thermal_relaxation_params_)
       if (!entry.second.sampled_realization_is_exact()) return true;
@@ -1047,8 +1070,8 @@ class NoiseModel {
   }
 
   /**
-   * True if sampled (circuit-rewrite) injection cannot realize the model:
-   * exact-only Kraus maps, or thermal relaxation with T2 > T1.
+   * True if sampled (circuit-rewrite) injection cannot faithfully realize the model:
+   * exact-only Kraus maps, or thermal relaxation approximated when T2 > T1.
    */
   bool requires_exact_quantum_channels() const {
     return has_additional_quantum_channels() ||
@@ -1212,7 +1235,7 @@ inline void inject_1q_pauli_exact_(
  * stochastic mixture (reset to |0>/|1> with the T1 probabilities, else a
  * phase flip sized so the surviving trajectories carry the whole
  * exp(-duration/T2) coherence decay). Both are driven from the same physical
- * (duration, T1, T2, excited population), so the two paths agree.
+ * (duration, T1, T2, excited population), so the two paths agree for T2 <= T1. Sampled execution clamps larger T2 to T1.
  */
 inline void inject_thermal_relaxation_(
     std::shared_ptr<Circuits::Circuit<double>> &out, const NoiseModel &nm,
@@ -1433,11 +1456,6 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(
     throw std::invalid_argument(
         "Generalized amplitude damping, correlated phase flips and arbitrary "
         "Kraus channels require a density-matrix or MPO exact-noise backend");
-  if (!exact_channels && nm.has_thermal_in_sampled_overdephasing_regime())
-    throw std::invalid_argument(
-        "Thermal relaxation with T2 > T1 cannot be realized by the sampled "
-        "reset+Z mixture (it over-dephases as exp(-t/T1)). Use a "
-        "density-matrix or MPO exact-noise backend");
 
   auto out = std::make_shared<Circuits::Circuit<double>>();
   std::uniform_real_distribution<double> dist(0.0, 1.0);
@@ -1498,7 +1516,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(
       // Reset, which gets the populations right but damps coherences by
       // (1-gamma) instead of sqrt(1-gamma) -- a first-order error. Use
       // set_thermal_relaxation() to specify T1 and T2 together and get
-      // matching coherence decay on both backend families.
+      // matching coherence decay on both backend families when T2 <= T1.
       double gamma = nm.get_t1_for_gate(static_cast<int>(q), is_2q);
       if (exact_channels) {
         if (gamma != 0.0)
@@ -1809,11 +1827,6 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
     throw std::invalid_argument(
         "Generalized amplitude damping, correlated phase flips and arbitrary "
         "Kraus channels require a density-matrix or MPO exact-noise backend");
-  if (!exact_channels && nm.has_thermal_in_sampled_overdephasing_regime())
-    throw std::invalid_argument(
-        "Thermal relaxation with T2 > T1 cannot be realized by the sampled "
-        "reset+Z mixture (it over-dephases as exp(-t/T1)). Use a "
-        "density-matrix or MPO exact-noise backend");
 
   auto out = std::make_shared<Circuits::Circuit<double>>();
   std::uniform_real_distribution<double> dist(0.0, 1.0);
