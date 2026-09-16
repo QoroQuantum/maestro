@@ -281,7 +281,7 @@ BOOST_AUTO_TEST_CASE(T1AndThermalRelaxationCannotStack) {
   BOOST_CHECK_THROW(thermalFirst.set_t1(0, 0.1), std::invalid_argument);
 }
 
-BOOST_AUTO_TEST_CASE(ThermalT2GreaterThanT1RequiresExactBackend) {
+BOOST_AUTO_TEST_CASE(ThermalT2GreaterThanT1UsesSampledApproximation) {
   constexpr double duration = 1e-6;
   constexpr double t1 = 10e-6;
   constexpr double t2 = 15e-6;  // T1 < T2 <= 2*T1
@@ -294,8 +294,12 @@ BOOST_AUTO_TEST_CASE(ThermalT2GreaterThanT1RequiresExactBackend) {
   BOOST_TEST(!noiseModel.compute_damping_covers_model());
 
   std::mt19937 rng(1);
-  BOOST_CHECK_THROW(noise::inject_noise(HadamardCircuit(), noiseModel, rng),
-                    std::invalid_argument);
+  BOOST_CHECK_NO_THROW(noise::inject_noise(HadamardCircuit(), noiseModel, rng));
+  noise::NoiseModel clamped;
+  clamped.set_thermal_relaxation(0, duration, t1, t1);
+  BOOST_CHECK_SMALL(SampledCoherence(noiseModel, 2000, 42) -
+                    SampledCoherence(clamped, 2000, 42), kTolerance);
+  BOOST_TEST(noiseModel.get_thermal_relaxation_params(0, false)->t2 == t2);
   BOOST_CHECK_NO_THROW(
       noise::inject_exact_noise(HadamardCircuit(), noiseModel));
 

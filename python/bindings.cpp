@@ -147,6 +147,27 @@ static bool uses_exact_quantum_channels(const SimulatorConfig& config) {
            config.simulation_type == Simulators::SimulationType::kMatrixProductOperator));
 }
 
+// Warn at the execution boundary, while holding the GIL, rather than once
+// per injected realization. The shared model retains its calibrated channels.
+static void warn_thermal_approximation(const noise::NoiseModel& noise_model,
+                                      const SimulatorConfig& config) {
+  if (uses_exact_quantum_channels(config) ||
+      noise_model.has_additional_quantum_channels()) return;
+  const auto qubits = noise_model.thermal_approximation_qubits();
+  if (qubits.empty()) return;
+  std::ostringstream message;
+  message << "Sampled thermal approximation for circuit qubits [";
+  for (size_t i = 0; i < qubits.size(); ++i) {
+    if (i) message << ", ";
+    message << qubits[i];
+  }
+  message << "]: effective T2 clamped to T1. Use density matrix or a supported "
+             "MPO backend to preserve calibrated T2. Kraus trajectories are "
+             "not supported by Maestro's current SV/MPS noise path.";
+  if (PyErr_WarnEx(PyExc_RuntimeWarning, message.str().c_str(), 1) < 0)
+    throw nb::python_error();
+}
+
 // All MPI ranks must submit the same stochastic circuit. Keep host-side
 // default noise streams aligned as well as the native measurement stream.
 static std::mt19937 MakeNoiseRng(const SimulatorConfig& config,
@@ -562,6 +583,43 @@ std::complex<double> inner_product_core(
   }
   return result;
 }
+// Fidelity to the ideal unitary circuit's pure state. Unlike inner_product,
+// retain the noisy forward resets/channels and read a probability, which is
+// supported by both pure-state and density-matrix/MPO backends.
+double noisy_fidelity_core(
+    const std::shared_ptr<Circuits::Circuit<double>>& ideal,
+    const std::shared_ptr<Circuits::Circuit<double>>& noisy,
+    const SimulatorConfig& config) {
+  auto combined = std::make_shared<Circuits::Circuit<double>>();
+  // Fidelity is evaluated before terminal readout, as in inner_product.
+  for (const auto& op : noisy->GetOperations()) {
+    if (op->GetType() != Circuits::OperationType::kMeasurement)
+      combined->AddOperation(op->Clone());
+  }
+  const auto& ideal_ops = ideal->GetOperations();
+  for (auto it = ideal_ops.rbegin(); it != ideal_ops.rend(); ++it) {
+    auto adj = adjoint_gate(*it);
+    if (adj) combined->AddOperation(adj);
+  }
+
+  const int num_qubits =
+      std::max(1, static_cast<int>(combined->GetMaxQubitIndex()) + 1);
+  ScopedSimulator sim(num_qubits);
+  if (sim.handle == 0)
+    throw std::runtime_error("Failed to create simulator handle.");
+  auto network = ConfigureNetwork(sim.handle, config);
+  if (!network) throw std::runtime_error("Failed to configure network.");
+  network->CreateSimulator(config.simulator_type, config.simulation_type);
+  auto simulator = network->GetSimulator();
+  if (!simulator)
+    throw std::runtime_error("noisy_fidelity: requested backend is unavailable.");
+  if (config.seed) simulator->SetSeed(*config.seed);
+  Circuits::OperationState state(num_qubits);
+  nb::gil_scoped_release release;
+  combined->ExecuteBD(simulator, state);
+  return simulator->Probability(0);
+}
+
 // Core Incremental Time Evolution Logic
 // Uses SaveState/RestoreState to avoid re-simulating from scratch at each
 // measurement point. Instead of building a fresh circuit with k Trotter steps
@@ -748,6 +806,7 @@ class PrefixCheckpointedSimulator {
     }
 
     const bool has_noise = (noise_model != nullptr) && noise_model->has_any();
+    if (has_noise) warn_thermal_approximation(*noise_model, config_);
 
     unsigned int initial_seed = seed.value_or(
         config_.seed.value_or(std::random_device{}()));
@@ -1466,6 +1525,7 @@ NB_MODULE(maestro, m) {
              int shots, int noise_realizations,
              std::optional<unsigned int> seed) {
             if (!self) throw nb::value_error("Circuit is null.");
+            warn_thermal_approximation(noise_model, config);
             auto rng = MakeNoiseRng(config, seed);
             const int batches =
                 std::min(shots, std::max(1, noise_realizations));
@@ -1564,6 +1624,7 @@ NB_MODULE(maestro, m) {
             if (!self) throw nb::value_error("Circuit is null.");
             auto paulis = ParseObservables(observables);
 
+            warn_thermal_approximation(noise_model, config);
             auto rng = MakeNoiseRng(config, seed);
             const size_t n_obs = paulis.size();
             std::vector<double> sum_vals(n_obs, 0.0);
@@ -1732,6 +1793,7 @@ NB_MODULE(maestro, m) {
             if (!noise_model.has_any())
               throw nb::value_error("NoiseModel has no noise configured.");
 
+            warn_thermal_approximation(noise_model, config);
             auto rng = MakeNoiseRng(config, seed);
             const int batches =
                 std::min(shots, std::max(1, noise_realizations));
@@ -1791,6 +1853,7 @@ NB_MODULE(maestro, m) {
               throw nb::value_error("NoiseModel has no noise configured.");
 
             auto paulis = ParseObservables(observables);
+            warn_thermal_approximation(noise_model, config);
             auto rng = MakeNoiseRng(config, seed);
             const size_t n_obs = paulis.size();
             std::vector<double> sum_vals(n_obs, 0.0);
@@ -1848,6 +1911,7 @@ NB_MODULE(maestro, m) {
               throw nb::value_error(
                   "NoiseModel has no noise configured.");
 
+            warn_thermal_approximation(noise_model, config);
             auto rng = MakeNoiseRng(config, seed);
             double sum_fid = 0.0;
             double sum_fid_sq = 0.0;
@@ -1855,9 +1919,11 @@ NB_MODULE(maestro, m) {
             auto start = std::chrono::high_resolution_clock::now();
             for (int r = 0; r < noise_realizations; ++r) {
               auto noisy =
-                  noise::inject_combined_noise(self, noise_model, rng);
-              auto ip = inner_product_core(self, noisy, config);
-              double fid = std::norm(ip);
+                  inject_combined_noise_for_config(self, noise_model, rng, config);
+              // Reset collapse must use a fresh seed for each realization.
+              SimulatorConfig realization_config = config;
+              realization_config.seed = rng();
+              double fid = noisy_fidelity_core(self, noisy, realization_config);
               sum_fid += fid;
               sum_fid_sq += fid * fid;
             }
@@ -1884,7 +1950,7 @@ NB_MODULE(maestro, m) {
           "noise_realizations"_a = 100,
           "config"_a = SimulatorConfig{},
           "seed"_a = nb::none(),
-          "Compute fidelity under noise via inner_product.\n\n"
+          "Compute fidelity to the ideal unitary circuit state under noise.\n\n"
           "Injects all configured noise types (correlated, coherent, "
           "crosstalk, T1, Pauli) and averages |<psi_ideal|psi_noisy>|^2 "
           "over noise realizations.\n\n"
@@ -2471,8 +2537,8 @@ NB_MODULE(maestro, m) {
            "or MPO execution in that regime.")
       .def("requires_exact_quantum_channels",
            &noise::NoiseModel::requires_exact_quantum_channels,
-           "Return True if sampled injection cannot realize this model "
-           "(exact-only Kraus maps, or thermal relaxation with T2 > T1).")
+           "Return True if sampled injection cannot faithfully realize this model "
+           "(exact-only Kraus maps, or T2 > T1 requiring approximation on sampled paths).")
       .def("compute_damping_covers_model",
            &noise::NoiseModel::compute_damping_covers_model,
            "Return True iff compute_damping() captures every layer that "
@@ -2659,6 +2725,7 @@ NB_MODULE(maestro, m) {
         if (!circuit) throw nb::value_error("Circuit is null.");
         auto paulis = ParseObservables(observables);
 
+        warn_thermal_approximation(noise_model, config);
         auto rng = MakeNoiseRng(config, seed);
         const size_t n_obs = paulis.size();
 
@@ -2712,6 +2779,7 @@ NB_MODULE(maestro, m) {
          int shots, int noise_realizations, std::optional<unsigned int> seed) {
         if (!circuit) throw nb::value_error("Circuit is null.");
 
+        warn_thermal_approximation(noise_model, config);
         auto rng = MakeNoiseRng(config, seed);
         const int batches = std::min(shots, std::max(1, noise_realizations));
         const int base_batch = shots / batches;
@@ -2895,6 +2963,7 @@ NB_MODULE(maestro, m) {
         if (!noise_model.has_any())
           throw nb::value_error("NoiseModel has no noise configured.");
 
+        warn_thermal_approximation(noise_model, config);
         auto rng = MakeNoiseRng(config, seed);
         const int batches = std::min(shots, std::max(1, noise_realizations));
         const int base_batch = shots / batches;
@@ -2960,6 +3029,7 @@ NB_MODULE(maestro, m) {
           throw nb::value_error("NoiseModel has no noise configured.");
 
         auto paulis = ParseObservables(observables);
+        warn_thermal_approximation(noise_model, config);
         auto rng = MakeNoiseRng(config, seed);
         const size_t n_obs = paulis.size();
         std::vector<double> sum_vals(n_obs, 0.0);
