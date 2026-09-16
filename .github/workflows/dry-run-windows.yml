@@ -68,7 +68,7 @@ jobs:
           Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
           Remove-Item Env:VCPKG_INSTALLATION_ROOT -ErrorAction SilentlyContinue
           vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON" >> $env:GITHUB_ENV
         env:
           VCPKG_BINARY_SOURCES: "clear;files,C:/vcpkg/binary-cache,readwrite"
 
@@ -78,7 +78,7 @@ jobs:
           if (-not (Test-Path "C:\vcpkg\scripts\buildsystems\vcpkg.cmake")) {
             Write-Error "Cache hit but vcpkg toolchain not found at C:\vcpkg. Ensure vcpkg is at C:\vcpkg on this runner."
           }
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" >> $env:GITHUB_ENV
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON" >> $env:GITHUB_ENV
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.4.1
@@ -90,6 +90,17 @@ jobs:
             delvewheel repair -w {dest_dir} --add-path "C:\vcpkg\installed\x64-windows\bin;build\cp312-cp312-win_amd64\bin;build\cp314-cp314-win_amd64\bin" {wheel}
           CIBW_BUILD: "cp312-* cp314-*"
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
+
+      - name: Test native request DLL consumers
+        shell: pwsh
+        run: |
+          $env:PATH = "C:\vcpkg\installed\x64-windows\bin;" + $env:PATH
+          $builds = @(Get-ChildItem build -Directory | Where-Object { Test-Path (Join-Path $_.FullName "CTestTestfile.cmake") })
+          if ($builds.Count -eq 0) { throw "No native request test builds found" }
+          foreach ($build in $builds) {
+            ctest --test-dir $build.FullName -C Release --output-on-failure -R '^maestro_request_(abi|api|cli)$'
+            if ($LASTEXITCODE -ne 0) { throw "Native request DLL test failed" }
+          }
 
       - name: Save vcpkg cache (even on failure)
         if: always() && steps.cache-vcpkg.outputs.cache-hit != 'true'
