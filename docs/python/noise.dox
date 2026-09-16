@@ -141,7 +141,15 @@
  * nm.set_thermal_relaxation_2q(qubit=0, gate_time_s=300e-9, t1_s=100e-6, t2_s=80e-6)
  * @endcode
  *
- * Note: Physical consistency requires T2 <= 2 * T1.
+ * Physical consistency requires T2 <= 2 * T1. Stored calibration is preserved
+ * independently of the selected execution backend. Density-matrix and supported
+ * MPO backends apply the original thermal channel. On sampled SV/MPS paths,
+ * T1 < T2 <= 2*T1 is approximated with effective T2 = T1; execution emits one
+ * RuntimeWarning listing affected circuit qubits. Use density matrix for faithful
+ * evolution in this range. Kraus trajectories are not supported by Maestro's
+ * current SV/MPS noise path. General exact-only Kraus channels still reject
+ * sampled execution. requires_exact_quantum_channels() describes faithful
+ * evolution; it remains true for the approximated thermal regime.
  *
  * ---
  *
