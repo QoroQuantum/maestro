@@ -12,7 +12,7 @@
 #ifndef __NOISE_ADD_H_
 #define __NOISE_ADD_H_
 
-#include "../python/noise.h"
+#include "NoiseModel.h"
 
 #include "Circuit/Circuit.h"
 
@@ -246,7 +246,7 @@ class NoiseAdd {
       if (batch_shots <= 0) continue;
 
       auto noisy = inject_combined(circuit, nm);
-      auto r = network->RepeatedExecuteOnHost(noisy, batch_shots);
+      auto r = network->RepeatedExecute(noisy, batch_shots);
 
       for (auto item : r) combined[item.first] += item.second;
     }

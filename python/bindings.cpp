@@ -17,7 +17,8 @@
 #include <string>
 #include <vector>
 
-#include "noise.h"
+#include "Noise/NoiseModel.h"
+#include "Execution/SimulatorConfig.h"
 
 // Domain Headers
 #include "Circuit/Circuit.h"
@@ -41,96 +42,8 @@ using namespace nb::literals;
 ///   1. Add the field here (with a default).
 ///   2. Wire it in ConfigureNetwork().
 ///   3. Expose it in the nanobind class binding below.
-struct SimulatorConfig {
-  Simulators::SimulatorType simulator_type = Simulators::SimulatorType::kQCSim;
-  Simulators::SimulationType simulation_type =
-      Simulators::SimulationType::kStatevector;
-  std::optional<size_t> max_bond_dimension = std::nullopt;
-  std::optional<double> singular_value_threshold = std::nullopt;
-  // "relative_max" (keep sigma_i > threshold * sigma_max, the historical QCSim/GPU
-  // convention) or "discarded_weight" (discard the smallest singular values until
-  // their cumulative squared weight reaches the threshold, matching Qiskit Aer's and
-  // ITensor's convention -- the default on every backend unless this is set). The
-  // Aer backend only ever implements discarded_weight and raises if relative_max is
-  // requested; QCSim and the GPU backend support switching between both.
-  std::optional<std::string> truncation_mode = std::nullopt;
-  bool use_double_precision = false;
-  bool disable_optimized_swapping = false;
-  int lookahead_depth = -1;
-  bool mps_measure_no_collapse = true;
-  std::optional<std::string> mpo_kraus_completeness_check = std::nullopt;
-  bool mpo_restore_trace_after_truncation = false;
-  bool mpo_hermitize_after_truncation = false;
-  // GPU SVD algorithm selection. At most one setting in each backend group
-  // should be true; configuring one clears the other choices in the backend.
-  bool mps_use_gesvd = false;
-  bool mps_use_gesvdj = false;
-  bool mps_use_gesvdp = false;
-  bool mps_use_gesvdr = false;
-  bool mpo_use_gesvd = false;
-  bool mpo_use_gesvdj = false;
-  bool mpo_use_gesvdp = false;
-  bool mpo_use_gesvdr = false;
-  bool tensor_network_use_gesvd = false;
-  bool tensor_network_use_gesvdj = false;
-  bool tensor_network_use_gesvdp = false;
-  bool tensor_network_use_gesvdr = false;
-
-  // true for double precision, false for single precision, nullopt for default
-  // this is a separate setting for qiskit aer, the use_double_precision above
-  // is for gpu mps and tensor network simulators
-  std::optional<bool> precision = std::nullopt;
-
-  // PauliPropagator truncation parameters
-  std::optional<double> pp_coefficient_threshold = std::nullopt;
-  std::optional<size_t> pp_pauli_weight_threshold = std::nullopt;
-  std::optional<int> pp_steps_between_trims = std::nullopt;
-  std::optional<int> pp_steps_between_deduplications = std::nullopt;
-
-  // path integral parameters
-  std::optional<double> path_integral_threshold = std::nullopt;
-  std::optional<uint64_t> seed = std::nullopt;
-  std::optional<int> gpu_device = std::nullopt;
-  // Values use the same names and syntax as ISimulator::Configure.
-  std::unordered_map<std::string, std::string> distributed_options;
-
-  SimulatorConfig() = default;
-
-  SimulatorConfig(Simulators::SimulatorType st, Simulators::SimulationType set,
-                  std::optional<size_t> mb, std::optional<double> sv, bool dp,
-                  bool ds, int la, bool mnc,
-                  std::optional<std::string> tm,
-                  std::optional<uint64_t> random_seed,
-                  std::optional<int> device = std::nullopt,
-                  std::unordered_map<std::string, std::string> distribution = {})
-      : simulator_type(st),
-        simulation_type(set),
-        max_bond_dimension(mb),
-        singular_value_threshold(sv),
-        truncation_mode(std::move(tm)),
-        use_double_precision(dp),
-        disable_optimized_swapping(ds),
-        lookahead_depth(la),
-        mps_measure_no_collapse(mnc),
-        seed(random_seed), gpu_device(device), distributed_options(std::move(distribution)) {
-    if (device && *device < 0)
-      throw std::invalid_argument("gpu_device must be nonnegative");
-    if ((st == Simulators::SimulatorType::kCompositeQCSim
-#ifndef NO_QISKIT_AER
-         || st == Simulators::SimulatorType::kCompositeQiskitAer
-#endif
-        ) &&
-        set != Simulators::SimulationType::kStatevector) {
-      throw std::invalid_argument(
-          "Composite simulators only support Statevector simulation type.");
-    }
-    if (st == Simulators::SimulatorType::kQuestSim &&
-        set != Simulators::SimulationType::kStatevector) {
-      throw std::invalid_argument(
-          "QuestSim only supports Statevector simulation type.");
-    }
-  }
-};
+using MaestroExecution::SimulatorConfig;
+using MaestroExecution::ConfigureNetwork;
 
 // ============================================================================
 // Internal Implementation Helpers (Hidden from Python)
@@ -155,171 +68,6 @@ struct ScopedSimulator {
   ScopedSimulator(const ScopedSimulator&) = delete;
   ScopedSimulator& operator=(const ScopedSimulator&) = delete;
 };
-
-// Helper to configure the simulation network
-std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
-    unsigned long int handle, const SimulatorConfig& config) {
-  if (Simulators::IsDistributedGpuSimulator(config.simulator_type) &&
-      config.simulation_type != Simulators::SimulationType::kStatevector)
-    throw std::invalid_argument("Distributed GPU supports only Statevector simulation");
-  // QuEST only supports statevector simulation
-  if (config.simulator_type == Simulators::SimulatorType::kQuestSim &&
-      config.simulation_type != Simulators::SimulationType::kStatevector) {
-    throw std::invalid_argument(
-        "QuestSim only supports Statevector simulation type.");
-  }
-
-  // Composite only supports statevector simulation
-  if ((config.simulator_type == Simulators::SimulatorType::kCompositeQCSim
-#ifndef NO_QISKIT_AER
-       || config.simulator_type == Simulators::SimulatorType::kCompositeQiskitAer
-#endif
-      ) &&
-      config.simulation_type != Simulators::SimulationType::kStatevector) {
-    throw std::invalid_argument(
-        "Composite simulators only support Statevector simulation type.");
-  }
-
-  if (RemoveAllOptimizationSimulatorsAndAdd(handle, (int)config.simulator_type,
-                                            (int)config.simulation_type) == 0) {
-    return nullptr;
-  }
-
-  auto* maestro = static_cast<Maestro*>(GetMaestroObject());
-  auto network = maestro->GetSimpleSimulator(handle);
-
-  if (!network) return nullptr;
-
-  for (const auto& [key, value] : config.distributed_options) {
-    if (key.compare(0, 12, "distributed_") != 0 && key.compare(0, 4, "mpi_") != 0)
-      throw std::invalid_argument("distributed_options accepts only distributed_* and mpi_* keys");
-    network->Configure(key.c_str(), value.c_str());
-  }
-  if (config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim && !config.seed)
-    network->Configure("seed", "0");
-  if (config.gpu_device) {
-    if (*config.gpu_device < 0)
-      throw std::invalid_argument("gpu_device must be nonnegative");
-    network->Configure("gpu_device", std::to_string(*config.gpu_device).c_str());
-  }
-
-  if (config.max_bond_dimension) {
-    auto val = std::to_string(*config.max_bond_dimension);
-    network->Configure("matrix_product_state_max_bond_dimension", val.c_str());
-  }
-  if (config.singular_value_threshold) {
-    std::ostringstream oss;
-    oss << std::setprecision(std::numeric_limits<double>::max_digits10)
-        << *config.singular_value_threshold;
-    auto val = oss.str();
-    network->Configure("matrix_product_state_truncation_threshold",
-                       val.c_str());
-  }
-  if (config.truncation_mode) {
-    network->Configure("matrix_product_state_truncation_mode",
-                       config.truncation_mode->c_str());
-  }
-  if (config.mpo_kraus_completeness_check)
-    network->Configure("matrix_product_operator_kraus_completeness_check",
-                       config.mpo_kraus_completeness_check->c_str());
-  if (config.mpo_restore_trace_after_truncation)
-    network->Configure("matrix_product_operator_restore_trace_after_truncation", "true");
-  if (config.mpo_hermitize_after_truncation)
-    network->Configure("matrix_product_operator_hermitize_after_truncation", "true");
-  const auto configure_svd = [&network](const char *backend, const char *method,
-                                        bool enabled) {
-    if (!enabled) return;
-    const std::string key = std::string(backend) + "_use_" + method;
-    network->Configure(key.c_str(), "true");
-  };
-  configure_svd("matrix_product_state", "gesvd", config.mps_use_gesvd);
-  configure_svd("matrix_product_state", "gesvdj", config.mps_use_gesvdj);
-  configure_svd("matrix_product_state", "gesvdp", config.mps_use_gesvdp);
-  configure_svd("matrix_product_state", "gesvdr", config.mps_use_gesvdr);
-  configure_svd("matrix_product_operator", "gesvd", config.mpo_use_gesvd);
-  configure_svd("matrix_product_operator", "gesvdj", config.mpo_use_gesvdj);
-  configure_svd("matrix_product_operator", "gesvdp", config.mpo_use_gesvdp);
-  configure_svd("matrix_product_operator", "gesvdr", config.mpo_use_gesvdr);
-  configure_svd("tensor_network", "gesvd", config.tensor_network_use_gesvd);
-  configure_svd("tensor_network", "gesvdj", config.tensor_network_use_gesvdj);
-  configure_svd("tensor_network", "gesvdp", config.tensor_network_use_gesvdp);
-  configure_svd("tensor_network", "gesvdr", config.tensor_network_use_gesvdr);
-  if (config.use_double_precision) {
-    network->Configure("use_double_precision", "1");
-  }
-
-  if (config.precision) {
-    network->Configure("precision", *config.precision ? "double" : "single");
-  }
-  if (config.seed) {
-    const auto value = std::to_string(*config.seed);
-    network->Configure("seed", value.c_str());
-  }
-
-  // Disable MPS swap optimization if requested
-  if (config.disable_optimized_swapping) {
-    network->SetInitialQubitsMapOptimization(false);
-    network->SetMPSOptimizeSwaps(false);
-  }
-
-  // Set the lookahead depth for swap optimization
-  network->SetLookaheadDepth(config.lookahead_depth);
-
-  if (!config.mps_measure_no_collapse) {
-    network->Configure("mps_sample_measure_algorithm", "mps_apply_measure");
-  } else {
-    network->Configure("mps_sample_measure_algorithm", "mps_probabilities");
-  }
-
-  // Create the configured backend. The desired simulator type is specified via
-  // RemoveAllOptimizationSimulatorsAndAdd above.
-  // PauliPropagator truncation settings are Configured before CreateSimulator;
-  // the state replays its config map once the propagator exists, so they are
-  // applied then. Note that both thresholds are only consulted during a
-  // truncation pass, so a trim or deduplication cadence must also be set.
-  if (config.pp_coefficient_threshold) {
-    std::ostringstream oss;
-    oss << std::setprecision(std::numeric_limits<double>::max_digits10)
-        << *config.pp_coefficient_threshold;
-    network->Configure("pauli_propagator_coefficient_threshold",
-                       oss.str().c_str());
-  }
-  if (config.pp_pauli_weight_threshold) {
-    network->Configure(
-        "pauli_propagator_pauli_weight_threshold",
-        std::to_string(*config.pp_pauli_weight_threshold).c_str());
-  }
-  if (config.pp_steps_between_trims) {
-    network->Configure("pauli_propagator_steps_between_trims",
-                       std::to_string(*config.pp_steps_between_trims).c_str());
-  }
-  if (config.pp_steps_between_deduplications) {
-    network->Configure(
-        "pauli_propagator_num_gates_between_deduplications",
-        std::to_string(*config.pp_steps_between_deduplications).c_str());
-  }
-  if (config.path_integral_threshold) {
-    std::ostringstream oss;
-    oss << std::setprecision(std::numeric_limits<double>::max_digits10)
-        << *config.path_integral_threshold;
-    auto val = oss.str();
-    network->Configure("path_integral_threshold", val.c_str());
-  }
-
-  // Distribution must be selected before circuit mapping: its configured
-  // register and MPI control flow must not depend on the CPU optimizer.
-  if (Simulators::IsDistributedGpuSimulator(config.simulator_type))
-    network->CreateSimulator(config.simulator_type, config.simulation_type);
-  else
-    network->CreateSimulator();
-
-  // Verify the simulator was actually created (e.g. GPU library may fail)
-  if (!network->GetSimulator()) {
-    return nullptr;
-  }
-
-  return network;
-}
 
 // Helper to parse observables from String (";" sep) or List[str]
 std::vector<std::string> ParseObservables(const nb::object& observables) {
@@ -1313,6 +1061,95 @@ NB_MODULE(maestro, m) {
       });
 
   nb::class_<Simulators::ISimulator>(m, "Simulator")
+      // Low-level operations from Interface.h, using Python-owned results.
+      .def("InitializeSimulator", &Simulators::ISimulator::Initialize)
+      .def("Initialize", &Simulators::ISimulator::Initialize)
+      .def("ResetSimulator", &Simulators::ISimulator::Reset)
+      .def("Reset", &Simulators::ISimulator::Reset)
+      .def("ConfigureSimulator", &Simulators::ISimulator::Configure,
+           "key"_a, "value"_a)
+      .def("Configure", &Simulators::ISimulator::Configure, "key"_a, "value"_a)
+      .def("GetConfiguration", &Simulators::ISimulator::GetConfiguration,
+           "key"_a)
+      .def("AllocateQubits", &Simulators::ISimulator::AllocateQubits,
+           "num_qubits"_a)
+      .def("GetNumberOfQubits", &Simulators::ISimulator::GetNumberOfQubits)
+      .def("ClearSimulator", &Simulators::ISimulator::Clear)
+      .def("Clear", &Simulators::ISimulator::Clear)
+      .def("Measure", &Simulators::ISimulator::Measure, "qubits"_a,
+           "Measure and collapse the selected qubits; the first listed qubit "
+           "is the least-significant result bit.")
+      .def("ApplyReset", &Simulators::ISimulator::ApplyReset, "qubits"_a)
+      .def("Probability", &Simulators::ISimulator::Probability, "outcome"_a)
+      .def("Amplitude", &Simulators::ISimulator::Amplitude, "outcome"_a)
+      .def("AllProbabilities", &Simulators::ISimulator::AllProbabilities)
+      .def("Probabilities", &Simulators::ISimulator::Probabilities,
+           "outcomes"_a, "Return probabilities for the given basis-state indices.")
+      .def("SampleCounts", &Simulators::ISimulator::SampleCounts,
+           "qubits"_a, "shots"_a = 1000,
+           "Sample without collapsing the state, returning {integer_outcome: "
+           "count}; the first listed qubit is the least-significant result bit.")
+      .def("GetSimulatorType", &Simulators::ISimulator::GetType)
+      .def("GetSimulationType", &Simulators::ISimulator::GetSimulationType)
+      .def("FlushSimulator", &Simulators::ISimulator::Flush)
+      .def("Flush", &Simulators::ISimulator::Flush)
+      .def("SaveStateToInternalDestructive",
+           &Simulators::ISimulator::SaveStateToInternalDestructive)
+      .def("RestoreInternalDestructiveSavedState",
+           &Simulators::ISimulator::RestoreInternalDestructiveSavedState)
+      .def("SaveState", &Simulators::ISimulator::SaveState)
+      .def("RestoreState", &Simulators::ISimulator::RestoreState)
+      .def("SetMultithreading", &Simulators::ISimulator::SetMultithreading,
+           "multithreading"_a = true)
+      .def("GetMultithreading", &Simulators::ISimulator::GetMultithreading)
+      .def("IsQcsim", &Simulators::ISimulator::IsQcsim)
+      .def("MeasureNoCollapse", &Simulators::ISimulator::MeasureNoCollapse)
+      .def("ApplyX", &Simulators::ISimulator::ApplyX, "qubit"_a)
+      .def("ApplyY", &Simulators::ISimulator::ApplyY, "qubit"_a)
+      .def("ApplyZ", &Simulators::ISimulator::ApplyZ, "qubit"_a)
+      .def("ApplyH", &Simulators::ISimulator::ApplyH, "qubit"_a)
+      .def("ApplyS", &Simulators::ISimulator::ApplyS, "qubit"_a)
+      .def("ApplySDG", &Simulators::ISimulator::ApplySDG, "qubit"_a)
+      .def("ApplyT", &Simulators::ISimulator::ApplyT, "qubit"_a)
+      .def("ApplyTDG", &Simulators::ISimulator::ApplyTDG, "qubit"_a)
+      .def("ApplySX", &Simulators::ISimulator::ApplySx, "qubit"_a)
+      .def("ApplySXDG", &Simulators::ISimulator::ApplySxDAG, "qubit"_a)
+      .def("ApplyK", &Simulators::ISimulator::ApplyK, "qubit"_a)
+      .def("ApplyP", &Simulators::ISimulator::ApplyP, "qubit"_a, "theta"_a)
+      .def("ApplyRx", &Simulators::ISimulator::ApplyRx, "qubit"_a, "theta"_a)
+      .def("ApplyRy", &Simulators::ISimulator::ApplyRy, "qubit"_a, "theta"_a)
+      .def("ApplyRz", &Simulators::ISimulator::ApplyRz, "qubit"_a, "theta"_a)
+      .def("ApplyU", &Simulators::ISimulator::ApplyU,
+           "qubit"_a, "theta"_a, "phi"_a, "lambda_"_a, "gamma"_a = 0.0)
+      .def("ApplyCX", &Simulators::ISimulator::ApplyCX,
+           "control_qubit"_a, "target_qubit"_a)
+      .def("ApplyCY", &Simulators::ISimulator::ApplyCY,
+           "control_qubit"_a, "target_qubit"_a)
+      .def("ApplyCZ", &Simulators::ISimulator::ApplyCZ,
+           "control_qubit"_a, "target_qubit"_a)
+      .def("ApplyCH", &Simulators::ISimulator::ApplyCH,
+           "control_qubit"_a, "target_qubit"_a)
+      .def("ApplyCSX", &Simulators::ISimulator::ApplyCSx,
+           "control_qubit"_a, "target_qubit"_a)
+      .def("ApplyCSXDG", &Simulators::ISimulator::ApplyCSxDAG,
+           "control_qubit"_a, "target_qubit"_a)
+      .def("ApplyCP", &Simulators::ISimulator::ApplyCP,
+           "control_qubit"_a, "target_qubit"_a, "theta"_a)
+      .def("ApplyCRx", &Simulators::ISimulator::ApplyCRx,
+           "control_qubit"_a, "target_qubit"_a, "theta"_a)
+      .def("ApplyCRy", &Simulators::ISimulator::ApplyCRy,
+           "control_qubit"_a, "target_qubit"_a, "theta"_a)
+      .def("ApplyCRz", &Simulators::ISimulator::ApplyCRz,
+           "control_qubit"_a, "target_qubit"_a, "theta"_a)
+      .def("ApplyCCX", &Simulators::ISimulator::ApplyCCX,
+           "control_qubit1"_a, "control_qubit2"_a, "target_qubit"_a)
+      .def("ApplySwap", &Simulators::ISimulator::ApplySwap,
+           "qubit1"_a, "qubit2"_a)
+      .def("ApplyCSwap", &Simulators::ISimulator::ApplyCSwap,
+           "control_qubit"_a, "qubit1"_a, "qubit2"_a)
+      .def("ApplyCU", &Simulators::ISimulator::ApplyCU,
+           "control_qubit"_a, "target_qubit"_a, "theta"_a, "phi"_a,
+           "lambda_"_a, "gamma"_a = 0.0)
       .def("set_seed", &Simulators::ISimulator::SetSeed, "seed"_a)
       .def("density_matrix_trace", &Simulators::ISimulator::DensityMatrixTrace)
       .def("density_matrix_purity", &Simulators::ISimulator::DensityMatrixPurity)
@@ -3321,4 +3158,3 @@ NB_MODULE(maestro, m) {
            "Execute suffix circuit from checkpointed prefix state.")
       .def_prop_ro("max_bond_dim", &PrefixCheckpointedSimulator::max_bond_dim);
 }
-

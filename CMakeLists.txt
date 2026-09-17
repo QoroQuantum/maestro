@@ -299,7 +299,7 @@ endif()
 # 5. Core Targets: libmaestro and maestroexe
 # ==============================================================================
 
-set(MAESTROSRC maestrolib/Interface.cpp)
+set(MAESTROSRC maestrolib/Interface.cpp Execution/Request.cpp)
 if(WIN32)
     list(APPEND MAESTROSRC maestrolib/dllmain.cpp)
 else()
@@ -310,6 +310,7 @@ set(MAESTROEXESRC maestroexe/maestroexe.cpp)
 
 # Define core library and executable
 add_library(maestro SHARED ${MAESTROSRC})
+target_include_directories(maestro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 set_target_properties(maestro PROPERTIES OUTPUT_NAME "maestro")
 
 add_executable(maestroexe ${MAESTROEXESRC})
@@ -683,4 +684,72 @@ else()
         COMMAND ${CMAKE_COMMAND} -E false
         COMMENT "Check for Doxygen"
         VERBATIM)
+endif()
+
+# Focused public native-API tests can be built without the full simulator suite.
+option(MAESTRO_BUILD_REQUEST_TESTS "Build the native JSON request contract tests" OFF)
+if(MAESTRO_BUILD_REQUEST_TESTS)
+    enable_testing()
+    add_executable(maestro_request_tests tests/request_api.cpp tests/request_noise.cpp tests/request_header.c)
+    target_link_libraries(maestro_request_tests PRIVATE maestro Boost::json)
+    add_test(NAME maestro_request_api COMMAND maestro_request_tests)
+    add_executable(maestro_request_abi_consumer tests/request_header.c)
+    target_compile_definitions(maestro_request_abi_consumer PRIVATE MAESTRO_ABI_CONSUMER_MAIN)
+    target_link_libraries(maestro_request_abi_consumer PRIVATE maestro)
+    add_test(NAME maestro_request_abi COMMAND maestro_request_abi_consumer)
+endif()
+
+# Standalone native JSON runner; MPI is linked only into its optional sibling.
+add_executable(maestro_request_worker maestroexe/request_worker.cpp)
+set_target_properties(maestro_request_worker PROPERTIES OUTPUT_NAME maestro-request)
+target_link_libraries(maestro_request_worker PRIVATE maestro Boost::json)
+option(MAESTRO_BUILD_MPI_WORKER "Build the native collective MPI request worker" OFF)
+if(MAESTRO_BUILD_MPI_WORKER)
+    find_package(MPI REQUIRED COMPONENTS CXX)
+    add_executable(maestro_mpi_worker maestroexe/request_worker.cpp)
+    set_target_properties(maestro_mpi_worker PROPERTIES OUTPUT_NAME maestro-mpi-worker)
+    target_compile_definitions(maestro_mpi_worker PRIVATE MAESTRO_REQUEST_MPI)
+    target_link_libraries(maestro_mpi_worker PRIVATE maestro Boost::json MPI::MPI_CXX)
+    install(TARGETS maestro_mpi_worker RUNTIME DESTINATION bin)
+endif()
+install(TARGETS maestro_request_worker RUNTIME DESTINATION bin)
+
+if(MAESTRO_BUILD_REQUEST_TESTS)
+    add_test(NAME maestro_request_cli COMMAND ${CMAKE_COMMAND}
+        -DWORKER=$<TARGET_FILE:maestro_request_worker> -DMODE=success
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/request_worker.cmake)
+    if(MAESTRO_BUILD_MPI_WORKER)
+        foreach(mode success failure)
+            add_test(NAME maestro_request_mpi_${mode} COMMAND ${CMAKE_COMMAND}
+                -DWORKER=$<TARGET_FILE:maestro_mpi_worker> -DMODE=${mode}
+                -DMPI_LAUNCHER=${MPIEXEC_EXECUTABLE} -DMPI_COUNT_FLAG=${MPIEXEC_NUMPROC_FLAG}
+                "-DMPI_PREFLAGS=${MPIEXEC_PREFLAGS}"
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/request_worker.cmake)
+            set_tests_properties(maestro_request_mpi_${mode} PROPERTIES PROCESSORS 2 TIMEOUT 40)
+        endforeach()
+    endif()
+    option(MAESTRO_RUN_GPU_REQUEST_TESTS "Run GPU request tests (requires plugin, license, CUDA device)" OFF)
+    if(MAESTRO_RUN_GPU_REQUEST_TESTS)
+        add_test(NAME maestro_request_gpu COMMAND ${CMAKE_COMMAND}
+            -DWORKER=$<TARGET_FILE:maestro_request_worker> -DMODE=gpu
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/request_worker.cmake)
+        set_tests_properties(maestro_request_gpu PROPERTIES TIMEOUT 40)
+    endif()
+endif()
+
+
+option(MAESTRO_RUN_MPI_GPU_REQUEST_TESTS "Run native MPI GPU request tests (requires rank-local devices, plugins, licensing and CUDA-aware MPI)" OFF)
+if(MAESTRO_RUN_MPI_GPU_REQUEST_TESTS)
+    if(NOT MAESTRO_BUILD_REQUEST_TESTS OR NOT MAESTRO_BUILD_MPI_WORKER)
+        message(FATAL_ERROR "MPI GPU request tests require MAESTRO_BUILD_REQUEST_TESTS and MAESTRO_BUILD_MPI_WORKER")
+    endif()
+    foreach(mode mpi_gpu mpi_gpu_noise mpi_gpu_failure)
+        add_test(NAME maestro_request_${mode} COMMAND ${CMAKE_COMMAND}
+            -DWORKER=$<TARGET_FILE:maestro_mpi_worker> -DMODE=${mode}
+            -DMPI_LAUNCHER=${MPIEXEC_EXECUTABLE} -DMPI_COUNT_FLAG=${MPIEXEC_NUMPROC_FLAG}
+            "-DMPI_PREFLAGS=${MPIEXEC_PREFLAGS}"
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/request_worker.cmake)
+        set_tests_properties(maestro_request_${mode} PROPERTIES
+            LABELS "mpi;gpu;hardware;request" PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 60)
+    endforeach()
 endif()

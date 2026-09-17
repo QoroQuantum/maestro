@@ -12,7 +12,29 @@
 #ifndef _MAESTRO_INTERFACE_H_
 #define _MAESTRO_INTERFACE_H_
 
+#ifdef __cplusplus
 extern "C" {
+#endif
+// Native request API, schema version 2. All returned strings (including errors)
+// are UTF-8 JSON owned by the caller and must be released with FreeResult.
+// No C++ exception crosses these entry points. Null means allocation failure.
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+char *MaestroRunRequestJson(const char *request);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+char *MaestroValidateRequestJson(const char *request);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+char *MaestroGetCapabilitiesJson(void);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+char *MaestroFinalizeDistributedMpiGpuJson(void);
+
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
@@ -306,6 +328,8 @@ __declspec(dllexport)
 #endif
     int ApplyCU(void *sim, int controlQubit, int targetQubit, double theta,
                 double phi, double lambda, double gamma);
+#ifdef __cplusplus
 }
+#endif
 
 #endif

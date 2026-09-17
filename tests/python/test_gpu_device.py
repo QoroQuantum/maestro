@@ -117,6 +117,8 @@ def test_json_gpu_placement():
     from pathlib import Path
 
     lib = ctypes.CDLL(str(Path(maestro.__file__).parent / "libmaestro.so"))
+    lib.GetMaestroObjectWithMute.argtypes = []
+    lib.GetMaestroObjectWithMute.restype = ctypes.c_void_p
     lib.CreateSimpleSimulator.argtypes = [ctypes.c_int]
     lib.CreateSimpleSimulator.restype = ctypes.c_ulong
     lib.RemoveAllOptimizationSimulatorsAndAdd.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_int]
@@ -124,6 +126,7 @@ def test_json_gpu_placement():
     lib.SimpleExecute.restype = ctypes.c_void_p
     lib.FreeResult.argtypes = [ctypes.c_void_p]
     lib.DestroySimpleSimulator.argtypes = [ctypes.c_ulong]
+    assert lib.GetMaestroObjectWithMute()
     handles = [lib.CreateSimpleSimulator(2) for _ in range(2)]
     try:
         for handle in handles:
