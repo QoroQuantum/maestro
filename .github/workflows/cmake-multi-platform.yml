@@ -95,7 +95,8 @@ jobs:
           -DCMAKE_C_COMPILER_LAUNCHER=ccache
 
     - name: Build
-      run: ninja
+      # Simulator translation units each need several GB during compilation.
+      run: ninja -j2
 
     - name: Show ccache stats
       run: ccache -s
