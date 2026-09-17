@@ -143,10 +143,54 @@
  *     maestro.SimulationType.Statevector
  * )
  *
- * # Get the raw simulator object
+ * # Get the simulator object and prepare a Bell state
  * sim = m.get_simulator(handle)
+ * sim.AllocateQubits(2)
+ * sim.InitializeSimulator()
+ * sim.ApplyH(0)
+ * sim.ApplyCX(0, 1)
+ * print(sim.SampleCounts([0, 1], shots=1024))  # {0: ..., 3: ...}
  *
  * # Clean up when finished
  * m.destroy_simulator(handle)
  * @endcode
+ *
+ * These methods operate directly on the selected simulator, without the
+ * single-host network used by `simple_execute` and `QuantumCircuit.execute`.
+ * Use the returned object only while its handle is alive; do not call its
+ * methods after `destroy_simulator(handle)`.
+ *
+ * `Simulator` exposes the low-level operations from `maestrolib/Interface.h`:
+ *
+ * | Category | Methods |
+ * |----------|---------|
+ * | Lifecycle | `AllocateQubits`, `GetNumberOfQubits`, `InitializeSimulator`, `ResetSimulator`, `ClearSimulator`, `FlushSimulator` |
+ * | Configuration | `ConfigureSimulator`, `GetConfiguration`, `GetSimulatorType`, `GetSimulationType`, `SetMultithreading`, `GetMultithreading`, `IsQcsim` |
+ * | Measurement and state queries | `Measure`, `MeasureNoCollapse`, `ApplyReset`, `Probability`, `Amplitude`, `AllProbabilities`, `Probabilities`, `SampleCounts` |
+ * | Saved state | `SaveState`, `RestoreState`, `SaveStateToInternalDestructive`, `RestoreInternalDestructiveSavedState` |
+ * | Single-qubit gates | `ApplyX`, `ApplyY`, `ApplyZ`, `ApplyH`, `ApplyS`, `ApplySDG`, `ApplyT`, `ApplyTDG`, `ApplySX`, `ApplySXDG`, `ApplyK`, `ApplyP`, `ApplyRx`, `ApplyRy`, `ApplyRz`, `ApplyU` |
+ * | Controlled gates | `ApplyCX`, `ApplyCY`, `ApplyCZ`, `ApplyCH`, `ApplyCSX`, `ApplyCSXDG`, `ApplyCP`, `ApplyCRx`, `ApplyCRy`, `ApplyCRz`, `ApplyCU`, `ApplyCCX` |
+ * | Swaps | `ApplySwap`, `ApplyCSwap` |
+ *
+ * `Initialize`, `Reset`, `Configure`, `Clear`, and `Flush` are shorter aliases
+ * for the corresponding methods ending in `Simulator`. Existing `set_seed`
+ * and density-matrix diagnostic methods remain available.
+ *
+ * Pass Python sequences for qubits or outcomes; array lengths are inferred.
+ * `Amplitude` returns a complex number, `AllProbabilities` and `Probabilities`
+ * return lists, and `SampleCounts` returns a dictionary of integer outcomes
+ * to counts (`shots=1000` by default). Python owns these results, so the C API's
+ * memory-release functions are unnecessary. `Probabilities` takes basis-state
+ * indices, whereas `Measure`, `ApplyReset`, and `SampleCounts` take qubit indices.
+ * Packed measurement outcomes use the first listed qubit as the least-significant
+ * bit. For `MeasureNoCollapse`, qubit 0 is the least-significant bit.
+ *
+ * Type queries return `SimulatorType` and `SimulationType` enum values; flag
+ * queries return booleans. Operations with no result return `None` and native
+ * exceptions propagate as Python exceptions. `ApplyU` and `ApplyCU` accept
+ * `theta`, `phi`, `lambda_`, and optional `gamma=0.0`.
+ *
+ * Backend-specific restrictions still apply. In particular, the destructive
+ * save/restore pair supports internal-state sampling for Aer: flush pending
+ * gates, save, call `MeasureNoCollapse`, then restore before applying more gates.
  */
