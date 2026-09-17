@@ -219,8 +219,22 @@ class Configuration {
   }
 
   void ApplyConfigurationToSimulator(const std::shared_ptr<Simulators::IState>& simulator) const {
-    for (const auto& [key, value] : configMap)
+    for (const auto& [key, value] : configMap) {
+      // Route the seed through SetSeed, whose contract is to seed EVERY random
+      // stream the simulator owns -- including the auxiliary one used for
+      // measurement-time readout error. Its default implementation still
+      // records the value with Configure, so this subsumes the plain call.
+      if (key == "seed") {
+        try {
+          simulator->SetSeed(std::stoull(value));
+          continue;
+        } catch (const std::exception&) {
+          // Not a number: fall through and let the simulator reject it.
+        }
+      }
+
       simulator->Configure(key.c_str(), value.c_str());
+    }
   }
 
   void ApplyConfigurationFromSimulator(const std::shared_ptr<Simulators::IState>& simulator) {
