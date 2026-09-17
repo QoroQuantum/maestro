@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "../Circuit/Circuit.h"
+#include "../Simulators/Configuration.h"
 #include "../Simulators/Factory.h"
 #include "../python/noise.h"
 
@@ -698,6 +699,54 @@ BOOST_AUTO_TEST_CASE(ReadoutRatesSurviveEnsureProperOrder) {
     ++seen;
   }
   BOOST_CHECK_EQUAL(seen, 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ReplacingNoisyMeasurementClearsReadoutRates) {
+  Circuits::Circuit<double> circuit;
+  auto noisy = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}});
+  noisy->SetReadout({{1.0, 1.0}});
+  circuit.AddOperation(noisy);
+  circuit.AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{1, 0}}));
+
+  circuit.EnsureProperOrderForMeasurements();
+
+  BOOST_REQUIRE_EQUAL(circuit.GetOperations().size(), 1u);
+  auto rebuilt = std::static_pointer_cast<Circuits::MeasurementOperation<>>(
+      circuit.GetOperations()[0]);
+  BOOST_CHECK_EQUAL(rebuilt->GetQubits()[0], 1u);
+  BOOST_CHECK(!rebuilt->HasReadout());
+  auto simulator = MakeSimulator(Simulators::SimulationType::kStatevector, 2);
+  Circuits::OperationState state(1);
+  rebuilt->Execute(simulator, state);
+  BOOST_CHECK_EQUAL(state.GetAllBits()[0], false);
+}
+
+BOOST_AUTO_TEST_CASE(ConfigurationSeedsReadoutWithoutChangingBackendSequence) {
+  for (const auto method : {Simulators::SimulationType::kStatevector,
+                            Simulators::SimulationType::kMatrixProductState,
+                            Simulators::SimulationType::kStabilizer,
+                            Simulators::SimulationType::kDensityMatrix,
+                            Simulators::SimulationType::kMatrixProductOperator}) {
+    auto direct = MakeSimulator(method, 2);
+    auto configured = MakeSimulator(method, 2);
+    direct->Configure("seed", "11");
+    Simulators::Configuration config;
+    config.SetConfiguration("seed", "11");
+    config.ApplyConfigurationToSimulator(configured);
+    for (auto simulator : {direct, configured}) {
+      simulator->ApplyH(0);
+      simulator->ApplyH(1);
+    }
+    BOOST_CHECK(direct->SampleCountsMany({0, 1}, 200) ==
+                configured->SampleCountsMany({0, 1}, 200));
+
+    auto again = MakeSimulator(method, 2);
+    config.ApplyConfigurationToSimulator(again);
+    for (int i = 0; i < 20; ++i)
+      BOOST_CHECK_EQUAL(configured->RandomUniform(), again->RandomUniform());
+  }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -886,3 +886,17 @@ def test_readout_reaches_final_data_measurement_of_repetition_code():
     assert rep.num_qubits == 5 and rep.num_measurements == 7
     errors, shots = _uncorrected_errors(str(rep), range(rep.num_qubits))
     assert errors == shots == 40
+
+
+def test_seeded_readout_is_independent_across_sinter_shots():
+    """Sinter uses one noise realization per shot; readout must not restart."""
+    nm = maestro.NoiseModel()
+    nm.set_readout_error_symmetric(0, 0.5)
+    sampler = MaestroCompiledSampler(
+        stim.Circuit("I 0\nM 0\nM 0\nOBSERVABLE_INCLUDE(0) rec[-1]"),
+        noise_model=nm, seed=11, enable_checkpoint=False)
+    first = sampler.sample(suggested_shots=128, seed=11)
+    second = sampler.sample(suggested_shots=128, seed=11)
+    assert first.shots == second.shots == 128
+    assert first.errors == second.errors
+    assert 32 < first.errors < 96

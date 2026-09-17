@@ -503,7 +503,10 @@ class Circuit : public IOperation<Time> {
           bits.insert(affectedBits[q]);
           measQubits[affectedBits[q]] = affectedQubits[q];
           measDelays[affectedBits[q]] = op2->GetDelay();
-          if (q < rates.size()) measReadout[affectedBits[q]] = rates[q];
+          if (q < rates.size())
+            measReadout[affectedBits[q]] = rates[q];
+          else
+            measReadout.erase(affectedBits[q]);
         }
       }
 
