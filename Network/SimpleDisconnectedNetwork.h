@@ -623,6 +623,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     ExecuteResults res;
     const size_t nrQubits = GetNumQubits() + GetNumNetworkEntangledQubits();
     const size_t nrCbitsResults = GetNumClassicalBits();
+    const size_t nrCbits = nrCbitsResults + GetNumNetworkEntangledQubits();
 
     CaptureSimulatorConfiguration();
 
@@ -638,7 +639,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     std::vector<bool> executed;
     auto optSim =
-        ChooseBestSimulator(distCirc, shots, nrQubits, nrQubits, nrCbitsResults,
+        ChooseBestSimulator(distCirc, shots, nrQubits, nrCbits, nrCbitsResults,
                             simType, method, executed);
 
     lastSimulatorType = simType;
@@ -689,7 +690,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         shots -= curCnt;
 
         auto job = std::make_shared<ExecuteJob<Time>>(
-            dcirc, res, curCnt, nrQubits, nrQubits, nrCbitsResults, simType,
+            dcirc, res, curCnt, nrQubits, nrCbits, nrCbitsResults, simType,
             method, resultsMutex);
         job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
 
@@ -720,7 +721,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       const size_t curCnt = shots;
 
       auto job = std::make_shared<ExecuteJob<Time>>(
-          dcirc, res, curCnt, nrQubits, nrQubits, nrCbitsResults, simType,
+          dcirc, res, curCnt, nrQubits, nrCbits, nrCbitsResults, simType,
           method, resultsMutex);
       job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
 
