@@ -342,34 +342,6 @@ std::vector<std::string> ParseObservables(const nb::object& observables) {
   return paulis;
 }
 
-// Apply classical readout error to a counts map (post-measurement channel).
-// For each shot in each bitstring, flip bits according to per-qubit rates.
-static void apply_readout_error_to_counts(
-    std::unordered_map<std::string, size_t>& counts,
-    const noise::NoiseModel& nm, std::mt19937& rng) {
-  if (!nm.has_readout_error()) return;
-
-  std::uniform_real_distribution<double> dist(0.0, 1.0);
-  std::unordered_map<std::string, size_t> new_counts;
-
-  for (const auto& [bitstring, count] : counts) {
-    for (size_t shot = 0; shot < count; ++shot) {
-      std::string noisy_bs = bitstring;
-      for (size_t i = 0; i < noisy_bs.size(); ++i) {
-        int qubit_idx = static_cast<int>(i);
-        const auto* re = nm.get_readout_error(qubit_idx);
-        if (!re) continue;
-        double r = dist(rng);
-        if (noisy_bs[i] == '0' && r < re->p_meas1_prep0)
-          noisy_bs[i] = '1';
-        else if (noisy_bs[i] == '1' && r < re->p_meas0_prep1)
-          noisy_bs[i] = '0';
-      }
-      new_counts[noisy_bs]++;
-    }
-  }
-  counts = std::move(new_counts);
-}
 
 // Density-matrix and QCSim MPO configurations can retain the full ensemble in
 // one state. Route their Markovian noise through circuit channel operations;
@@ -434,9 +406,11 @@ static std::shared_ptr<Circuits::Circuit<double>> inject_noise_for_config(
     const std::shared_ptr<Circuits::Circuit<double>>& circuit,
     const noise::NoiseModel& noise_model, std::mt19937& rng,
     const SimulatorConfig& config) {
-  if (uses_exact_quantum_channels(config))
-    return noise::inject_exact_noise(circuit, noise_model);
-  return noise::inject_noise(circuit, noise_model, rng);
+  auto noisy = uses_exact_quantum_channels(config)
+                   ? noise::inject_exact_noise(circuit, noise_model)
+                   : noise::inject_noise(circuit, noise_model, rng);
+  noise::attach_readout_error(noisy, noise_model);
+  return noisy;
 }
 
 static std::shared_ptr<Circuits::Circuit<double>>
@@ -444,9 +418,12 @@ inject_combined_noise_for_config(
     const std::shared_ptr<Circuits::Circuit<double>>& circuit,
     const noise::NoiseModel& noise_model, std::mt19937& rng,
     const SimulatorConfig& config) {
-  if (uses_exact_quantum_channels(config))
-    return noise::inject_combined_noise_exact(circuit, noise_model, rng);
-  return noise::inject_combined_noise(circuit, noise_model, rng);
+  auto noisy =
+      uses_exact_quantum_channels(config)
+          ? noise::inject_combined_noise_exact(circuit, noise_model, rng)
+          : noise::inject_combined_noise(circuit, noise_model, rng);
+  noise::attach_readout_error(noisy, noise_model);
+  return noisy;
 }
 
 // Core Execution Logic
@@ -1119,7 +1096,6 @@ class PrefixCheckpointedSimulator {
           }
         }
 
-        apply_readout_error_to_counts(combined, *noise_model, rng);
       }
     }
     auto end = std::chrono::high_resolution_clock::now();
@@ -1801,8 +1777,6 @@ NB_MODULE(maestro, m) {
             }
             auto end = std::chrono::high_resolution_clock::now();
 
-            // Apply readout error (classical post-measurement channel)
-            apply_readout_error_to_counts(combined, noise_model, rng);
 
             nb::dict py_counts;
             for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
@@ -2069,8 +2043,6 @@ NB_MODULE(maestro, m) {
             }
             auto end = std::chrono::high_resolution_clock::now();
 
-            // Apply readout error (classical post-measurement channel)
-            apply_readout_error_to_counts(combined, noise_model, rng);
 
             nb::dict py_counts;
             for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
@@ -2826,6 +2798,10 @@ NB_MODULE(maestro, m) {
       .def("set_readout_error", &noise::NoiseModel::set_readout_error,
            "qubit"_a, "p_meas1_prep0"_a, "p_meas0_prep1"_a,
            "Set asymmetric readout error on a qubit.\n\n"
+           "Applied when a measurement of this qubit writes its classical "
+           "bit, whatever bit index it targets, so mid-circuit and repeated "
+           "measurements are covered and classically-conditioned operations "
+           "downstream observe the noisy outcome.\n\n"
            "Args:\n"
            "    qubit: Qubit index.\n"
            "    p_meas1_prep0: P(measure 1 | state was 0) — false positive.\n"
@@ -2835,10 +2811,14 @@ NB_MODULE(maestro, m) {
            &noise::NoiseModel::set_readout_error_symmetric, "qubit"_a,
            "p_error"_a,
            "Set symmetric readout error (same rate for both directions).\n\n"
+           "Applied per measured qubit when the measurement writes its "
+           "classical bit.\n\n"
            "Example: nm.set_readout_error_symmetric(0, 0.01)")
       .def("set_all_readout_error", &noise::NoiseModel::set_all_readout_error,
            "num_qubits"_a, "p_error"_a,
-           "Set uniform symmetric readout error on qubits [0, num_qubits).")
+           "Set uniform symmetric readout error on qubits [0, num_qubits).\n\n"
+           "Applied per measured qubit when the measurement writes its "
+           "classical bit.")
       .def("has_readout_error", &noise::NoiseModel::has_readout_error,
            "Return True if any readout error parameters have been set.")
       // ── Two-qubit depolarizing ──
@@ -3054,8 +3034,6 @@ NB_MODULE(maestro, m) {
         }
         auto end = std::chrono::high_resolution_clock::now();
 
-        // Apply readout error (classical post-measurement channel)
-        apply_readout_error_to_counts(combined, noise_model, rng);
 
         nb::dict py_counts;
         for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
@@ -3238,8 +3216,6 @@ NB_MODULE(maestro, m) {
         }
         auto end = std::chrono::high_resolution_clock::now();
 
-        // Apply readout error (classical post-measurement channel)
-        apply_readout_error_to_counts(combined, noise_model, rng);
 
         nb::dict py_counts;
         for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
