@@ -227,13 +227,14 @@ int main() try {
   Near(Real(Call(request).at("expectation_values").at(0)), -1);
   request.erase("noise");
   request["operation"] = "incremental_evolve";
+  // An explicit value keeps the singleton outer array from copying the matrix.
   request["step_circuit"] = j::object{
       {"format", "instructions"},
       {"num_qubits", 1},
       {"source",
        j::array{j::object{{"name", "kraus"},
                           {"qubits", j::array{0}},
-                          {"operators", j::array{j::array{0, 1, 1, 0}}}}}}};
+                          {"operators", j::array{j::value(j::array{0, 1, 1, 0})}}}}}};
   request["steps"] = j::array{0, 1, 2};
   result = Call(request);
   Near(Real(result.at("expectation_values").at(0).at(0)), 1);
@@ -295,7 +296,12 @@ int main() try {
                                            {"global_qubits", j::array{1}},
                                            {"flags", 1},
                                            {"backend", "conventional"}}}};
+#ifdef __linux__
   Call(request, true, true);  // Logical shared-device validation needs no GPU.
+#else
+  Check(Call(request, false, true).at("error").at("code") == "unsupported_capability",
+        "Uncompiled distributed backend should be rejected");
+#endif
 
   request = Request("probabilities", 1, "");
   request["circuit"] = j::object{
@@ -384,7 +390,7 @@ int main() try {
   for (const auto& operation : j::array{
            j::object{{"name", "reset"}, {"qubits", j::array{0}}},
            j::object{{"name", "kraus"}, {"qubits", j::array{0}},
-                     {"operators", j::array{j::array{0, 1, 1, 0}}}}}) {
+                     {"operators", j::array{j::value(j::array{0, 1, 1, 0})}}}}) {
     request = Request("checkpoint_batch", 1, "", "density_matrix");
     request["circuit"] = j::object{{"format", "instructions"},
                                    {"num_qubits", 1},
