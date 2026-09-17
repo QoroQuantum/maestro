@@ -233,9 +233,15 @@ Use `noise.mode` = `combined` (default), `pauli`, `coherent`, or `analytical`.
 Combined mode is needed for gate-aware, relaxation, idle, correlated, and Kraus
 models. Placement follows the native model: ordinary single-qubit channels after
 applicable gates, gate-specific/pair channels after their applicable gates, idle
-noise on delays, and asymmetric readout errors on measured classical bits.
+noise on delays, and asymmetric readout errors when measurements write their
+classical bits. Readout rates follow the measured qubit, including permuted,
+partial, repeated and conditional measurements; subsequent classical conditions
+see the noisy result. Skipped measurements do not apply readout error.
 The only accepted explicit `placement` is `after_each_gate`; the channel kind
-still determines applicability. Readout requires unconditional measurement mappings.
+still determines applicability. Like Python's shared noise helpers, quantum-noise
+insertion acts on unconditional gates and delays; conditional gates retain their
+original conditional operation. Readout applies to both ordinary and conditional
+measurements.
 
 For execute/estimate, noise is injected into each realization before the resulting
 circuit reaches network optimization. The optimizer therefore sees inserted noise
@@ -253,7 +259,20 @@ finite realizations, analytical terminal-Pauli damping, and MPO truncation are
 reported as approximations. Analytical mode is estimator-only. Exact channels do
 not imply untruncated MPO evolution or remove stochastic coherent realizations.
 
-`noise.seed` is a uint32 (default lower 32 bits of the simulator seed).
+For thermal relaxation (including two-qubit gate and idle noise) with
+`T1 < T2 <= 2*T1`, sampled execution follows Python: it uses effective `T2 = T1`
+instead of rejecting the request. Results identify this approximation as
+`thermal_T2_clamped_to_T1` in `noise.approximations`. Execution emits one warning
+listing the affected qubits to stderr, which the local server retains in task
+logs; validation alone does not emit it. Exact density-matrix/MPO execution keeps
+the calibrated T2. Unphysical `T2 > 2*T1` and exact-only channels on sampled
+backends remain errors.
+
+An explicit simulator seed (`execution.seed` or `simulator.options.seed`,
+including zero) controls measurements and readout. Otherwise, an explicit
+`noise.seed` also seeds the simulator; if neither is supplied the default is 0.
+`noise.seed` is a uint32 (default lower 32 bits of the simulator seed) and drives
+circuit-noise injection independently of measurement/readout randomness.
 `realizations` defaults to 1 for exact channels and 64 otherwise. Execute divides
 its total shots between realizations; estimator standard errors describe variation
 between realizations, not hardware shot error. Repeating the same seeds/configuration
@@ -262,6 +281,12 @@ is not promised. Checkpoint suffixes consume sequential noise, readout and simul
 measurement streams. Changing, inserting or reordering an earlier suffix may change
 a later suffix's samples. The reproducibility unit is the entire ordered request;
 checkpoint restore restores quantum state, not random-generator state.
+
+Legacy `SimpleExecute` and `SimpleEstimate` also honor `config.seed`: a
+nonnegative JSON integer in the uint64 range. Invalid seed types/ranges return
+the legacy null-result failure. Repeating a seed reseeds an existing handle as
+well as a fresh worker; omitting it leaves the simulator's seed configuration
+unchanged.
 
 Fidelity operations use ideal inverse preparation. Delays are identity operations
 in that inverse; `noisy_fidelity` applies coherent gate noise only to the forward

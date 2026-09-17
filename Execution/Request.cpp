@@ -3,6 +3,7 @@
 #include <climits>
 #include <chrono>
 #include <cstring>
+#include <iostream>
 #include <memory>
 #include <random>
 #include "Request.h"
@@ -157,8 +158,8 @@ ParsedCircuit ParseCircuit(const json::object& object) {
           // The legacy instruction parser uses runtime_error for malformed
           // gates/measurements. Translate only this parsing boundary, never
           // exceptions from simulator execution or resource allocation.
-          throw Error("invalid_input", "Invalid instruction: " +
-                                           std::string(error.what()));
+          throw Error("invalid_input",
+                      "Invalid instruction: " + std::string(error.what()));
         }
         Require(parsed && parsed->GetOperations().size() == 1,
                 "Invalid instruction");
@@ -249,52 +250,35 @@ struct Context {
 CircuitPtr Inject(const CircuitPtr& circuit, const NoiseConfig& noise,
                   std::mt19937& rng) {
   if (!noise.enabled || noise.mode == "analytical") return circuit;
+  CircuitPtr noisy;
   if (noise.mode == "coherent")
-    return noise::inject_coherent_noise(circuit, noise.model, rng);
-  if (noise.mode == "pauli")
-    return noise.exact ? noise::inject_exact_noise(circuit, noise.model)
-                       : noise::inject_noise(circuit, noise.model, rng);
-  return noise.exact
-             ? noise::inject_combined_noise_exact(circuit, noise.model, rng)
-             : noise::inject_combined_noise(circuit, noise.model, rng);
+    noisy = noise::inject_coherent_noise(circuit, noise.model, rng);
+  else if (noise.mode == "pauli")
+    noisy = noise.exact ? noise::inject_exact_noise(circuit, noise.model)
+                        : noise::inject_noise(circuit, noise.model, rng);
+  else
+    noisy = noise.exact
+                ? noise::inject_combined_noise_exact(circuit, noise.model, rng)
+                : noise::inject_combined_noise(circuit, noise.model, rng);
+  // Use the same measurement-time path as Python, including conditional
+  // measurements and readout results consumed by subsequent classical control.
+  noise::attach_readout_error(noisy, noise.model);
+  return noisy;
 }
-std::vector<int> ReadoutMapping(const ParsedCircuit& input) {
-  std::vector<int> mapping(input.clbits, -1);
-  for (const auto& op : input.circuit->GetOperations()) {
-    if (op->GetType() == Circuits::OperationType::kMeasurement) {
-      const auto measure =
-          std::static_pointer_cast<Circuits::MeasurementOperation<>>(op);
-      for (size_t i = 0; i < measure->GetQubits().size(); ++i)
-        mapping.at(measure->GetBitsIndices()[i]) = measure->GetQubits()[i];
-    } else if (op->GetType() != Circuits::OperationType::kGate &&
-               op->GetType() != Circuits::OperationType::kReset &&
-               op->GetType() != Circuits::OperationType::kDelay)
-      Supported(false,
-                "Readout postprocessing requires explicit, unconditional "
-                "measurement mappings");
+void ValidateNoisyCircuit(const CircuitPtr& circuit) {
+  for (const auto& op : circuit->GetOperations()) {
+    const auto type = op->GetType();
+    Supported(type == Circuits::OperationType::kGate ||
+                  type == Circuits::OperationType::kConditionalGate ||
+                  type == Circuits::OperationType::kMeasurement ||
+                  type == Circuits::OperationType::kConditionalMeasurement ||
+                  type == Circuits::OperationType::kReset ||
+                  type == Circuits::OperationType::kDelay,
+              "Noise injection requires a flattened circuit of gates, "
+              "measurements, resets and delays");
   }
-  return mapping;
 }
 using Counts = std::map<std::string, uint64_t>;
-void Readout(Counts& counts, const NoiseConfig& noise,
-             const std::vector<int>& mapping, std::mt19937& rng) {
-  if (!noise.model.has_readout_error()) return;
-  Counts corrected;
-  std::uniform_real_distribution<double> random(0, 1);
-  for (const auto& entry : counts)
-    for (uint64_t shot = 0; shot < entry.second; ++shot) {
-      auto bits = entry.first;
-      for (size_t bit = 0; bit < bits.size(); ++bit) {
-        if (bit >= mapping.size() || mapping[bit] < 0) continue;
-        const auto* error = noise.model.get_readout_error(mapping[bit]);
-        if (error && random(rng) < (bits[bit] == '0' ? error->p_meas1_prep0
-                                                     : error->p_meas0_prep1))
-          bits[bit] = bits[bit] == '0' ? '1' : '0';
-      }
-      ++corrected[bits];
-    }
-  counts.swap(corrected);
-}
 json::object EncodeCounts(const Counts& counts) {
   json::object result;
   for (const auto& entry : counts) result[entry.first] = entry.second;
@@ -421,25 +405,11 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
   Require(depth <= 4, "Batch nesting exceeds four levels");
   Require(UInt(Field(request, "schema_version")) == SchemaVersion,
           "Unsupported native schema_version");
-  Keys(request, {"schema_version",
-                 "operation",
-                 "circuit",
-                 "simulator",
-                 "execution",
-                 "noise",
-                 "observables",
-                 "outputs",
-                 "basis_states",
-                 "target_state",
-                 "other_circuit",
-                 "step_circuit",
-                 "steps",
-                 "suffixes",
-                 "requests",
-                 "diagnostics",
-                 "maintenance",
-                 "keep_qubits",
-                 "max_output_elements"});
+  Keys(request,
+       {"schema_version", "operation", "circuit", "simulator", "execution",
+        "noise", "observables", "outputs", "basis_states", "target_state",
+        "other_circuit", "step_circuit", "steps", "suffixes", "requests",
+        "diagnostics", "maintenance", "keep_qubits", "max_output_elements"});
   const auto operation = String(Field(request, "operation"));
   Supported(operations.count(operation), "Unknown operation: " + operation);
   // A known field for another operation must not bypass nested validation or
@@ -456,8 +426,9 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
       {"diagnostics", {"diagnostics"}},
       {"maintenance", {"diagnostics"}},
       {"keep_qubits", {"diagnostics"}},
-      {"max_output_elements", {"statevector", "amplitudes", "probabilities",
-                               "diagnostics", "incremental_evolve"}}};
+      {"max_output_elements",
+       {"statevector", "amplitudes", "probabilities", "diagnostics",
+        "incremental_evolve"}}};
   for (const auto& entry : request) {
     const auto field = std::string(entry.key());
     const auto rule = operationFields.find(field);
@@ -495,6 +466,12 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
             "Specify seed only once");
     config.seed = UInt(Field(execution, "seed"));
   }
+  // An explicit simulator seed wins; otherwise the public noise seed also
+  // controls measurement/readout randomness, as in Python's noisy execution.
+  if (!execution.contains("seed") &&
+      !Sub(Sub(request, "simulator"), "options").contains("seed") &&
+      Sub(request, "noise").contains("seed"))
+    config.seed = UInt(Field(Sub(request, "noise"), "seed"));
   if (!config.seed) config.seed = 0;
   const auto input = ParseCircuit(Object(Field(request, "circuit")));
   Supported(!Simulators::IsDistributedGpuSimulator(config.simulator_type) ||
@@ -530,16 +507,7 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
   Supported(!noise.model.has_readout_error() || operation == "execute" ||
                 operation == "checkpoint_batch",
             "Readout noise applies to measurement counts only");
-  if (noise.enabled)
-    for (const auto& op : input.circuit->GetOperations())
-      Supported(op->GetType() == Circuits::OperationType::kGate ||
-                    op->GetType() == Circuits::OperationType::kMeasurement ||
-                    op->GetType() == Circuits::OperationType::kReset ||
-                    op->GetType() == Circuits::OperationType::kDelay,
-                "Noise injection requires a flattened circuit without "
-                "conditional operations");
-  const auto mapping = noise.model.has_readout_error() ? ReadoutMapping(input)
-                                                       : std::vector<int>{};
+  if (noise.enabled) ValidateNoisyCircuit(input.circuit);
   auto circuit =
       operation == "execute" || operation == "checkpoint_batch"
           ? input.circuit
@@ -580,14 +548,7 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
     for (const auto& suffix : suffixes) {
       additional.push_back(ParseCircuit(Object(suffix)));
       SameSize(input, additional.back());
-      if (noise.enabled)
-        for (const auto& op : additional.back().circuit->GetOperations())
-          Supported(
-              op->GetType() == Circuits::OperationType::kGate ||
-                  op->GetType() == Circuits::OperationType::kMeasurement ||
-                  op->GetType() == Circuits::OperationType::kReset ||
-                  op->GetType() == Circuits::OperationType::kDelay,
-              "Noisy suffix must be flattened");
+      if (noise.enabled) ValidateNoisyCircuit(additional.back().circuit);
     }
   }
   for (const auto& other : additional)
@@ -630,7 +591,7 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
   }
   if (operation == "diagnostics") {
     Supported(Mixed(config),
-            "Mixed-state diagnostics require density_matrix or MPO");
+              "Mixed-state diagnostics require density_matrix or MPO");
     if (request.contains("keep_qubits")) {
       bool partial = false;
       if (const auto* values = request.if_contains("diagnostics"))
@@ -677,6 +638,9 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
   const auto start = Clock::now();
   Context context(input, config);
   auto simulator = context.simulator();
+  // Validation remains silent; warn once per execution, not per realization.
+  if (!noise.thermal_approximation_warning.empty())
+    std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
   std::mt19937 rng(noise.seed);
   json::object result{{"schema_version", SchemaVersion},
                       {"operation", operation},
@@ -700,7 +664,6 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
       for (const auto& entry : raw)
         counts[Bits(entry.first, input.clbits)] += entry.second;
     }
-    Readout(counts, noise, mapping, rng);
     uint64_t total = 0;
     for (const auto& entry : counts) total += entry.second;
     if (total != shots)
@@ -848,8 +811,6 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
           ++counts[Bits(state.GetAllBits(), input.clbits)];
         }
       }
-      if (noise.model.has_readout_error())
-        Readout(counts, noise, ReadoutMapping(suffix), rng);
       outputs.emplace_back(
           json::object{{"counts", EncodeCounts(counts)}, {"shots", shots}});
     }
