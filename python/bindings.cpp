@@ -42,8 +42,8 @@ using namespace nb::literals;
 ///   1. Add the field here (with a default).
 ///   2. Wire it in ConfigureNetwork().
 ///   3. Expose it in the nanobind class binding below.
-using MaestroExecution::SimulatorConfig;
 using MaestroExecution::ConfigureNetwork;
+using MaestroExecution::SimulatorConfig;
 
 // ============================================================================
 // Internal Implementation Helpers (Hidden from Python)
@@ -90,45 +90,14 @@ std::vector<std::string> ParseObservables(const nb::object& observables) {
   return paulis;
 }
 
-// Apply classical readout error to a counts map (post-measurement channel).
-// For each shot in each bitstring, flip bits according to per-qubit rates.
-static void apply_readout_error_to_counts(
-    std::unordered_map<std::string, size_t>& counts,
-    const noise::NoiseModel& nm, std::mt19937& rng) {
-  if (!nm.has_readout_error()) return;
-
-  std::uniform_real_distribution<double> dist(0.0, 1.0);
-  std::unordered_map<std::string, size_t> new_counts;
-
-  for (const auto& [bitstring, count] : counts) {
-    for (size_t shot = 0; shot < count; ++shot) {
-      std::string noisy_bs = bitstring;
-      for (size_t i = 0; i < noisy_bs.size(); ++i) {
-        int qubit_idx = static_cast<int>(i);
-        const auto* re = nm.get_readout_error(qubit_idx);
-        if (!re) continue;
-        double r = dist(rng);
-        if (noisy_bs[i] == '0' && r < re->p_meas1_prep0)
-          noisy_bs[i] = '1';
-        else if (noisy_bs[i] == '1' && r < re->p_meas0_prep1)
-          noisy_bs[i] = '0';
-      }
-      new_counts[noisy_bs]++;
-    }
-  }
-  counts = std::move(new_counts);
-}
-
 // Density-matrix and QCSim MPO configurations can retain the full ensemble in
 // one state. Route their Markovian noise through circuit channel operations;
 // pure-state/MPS configurations retain the legacy trajectory implementation.
 static bool uses_exact_quantum_channels(const SimulatorConfig& config) {
   // Composite simulators still contain pure-state components and cannot
   // represent ensemble channels exactly as a single mixed state.
-  const bool qcsim =
-      config.simulator_type == Simulators::SimulatorType::kQCSim;
-  const bool gpu =
-      config.simulator_type == Simulators::SimulatorType::kGpuSim;
+  const bool qcsim = config.simulator_type == Simulators::SimulatorType::kQCSim;
+  const bool gpu = config.simulator_type == Simulators::SimulatorType::kGpuSim;
 #ifndef NO_QISKIT_AER
   const bool aer =
       config.simulator_type == Simulators::SimulatorType::kQiskitAer;
@@ -136,23 +105,25 @@ static bool uses_exact_quantum_channels(const SimulatorConfig& config) {
   const bool aer = false;
 #endif
 
-  return (qcsim &&
-          (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
-           config.simulation_type ==
-               Simulators::SimulationType::kMatrixProductOperator)) ||
-         (aer &&
-          config.simulation_type == Simulators::SimulationType::kDensityMatrix) ||
-         (gpu &&
-          (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
-           config.simulation_type == Simulators::SimulationType::kMatrixProductOperator));
+  return (qcsim && (config.simulation_type ==
+                        Simulators::SimulationType::kDensityMatrix ||
+                    config.simulation_type ==
+                        Simulators::SimulationType::kMatrixProductOperator)) ||
+         (aer && config.simulation_type ==
+                     Simulators::SimulationType::kDensityMatrix) ||
+         (gpu && (config.simulation_type ==
+                      Simulators::SimulationType::kDensityMatrix ||
+                  config.simulation_type ==
+                      Simulators::SimulationType::kMatrixProductOperator));
 }
 
 // Warn at the execution boundary, while holding the GIL, rather than once
 // per injected realization. The shared model retains its calibrated channels.
 static void warn_thermal_approximation(const noise::NoiseModel& noise_model,
-                                      const SimulatorConfig& config) {
+                                       const SimulatorConfig& config) {
   if (uses_exact_quantum_channels(config) ||
-      noise_model.has_additional_quantum_channels()) return;
+      noise_model.has_additional_quantum_channels())
+    return;
   const auto qubits = noise_model.thermal_approximation_qubits();
   if (qubits.empty()) return;
   std::ostringstream message;
@@ -178,13 +149,33 @@ static std::mt19937 MakeNoiseRng(const SimulatorConfig& config,
   return std::mt19937(std::random_device{}());
 }
 
+// Keep simulator randomness separate from circuit-noise injection. An explicit
+// config seed takes precedence; otherwise the public noise seed also seeds
+// measurement/readout. Every batch needs its own stream, even for one-shot
+// realizations (as used by Sinter). Preserve the synchronized MPI default.
+static SimulatorConfig NoiseExecutionConfig(const SimulatorConfig& config,
+                                            std::optional<unsigned int> seed,
+                                            uint64_t batch) {
+  auto execution_config = config;
+  if (!execution_config.seed && seed) execution_config.seed = *seed;
+  if (!execution_config.seed &&
+      config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim)
+    execution_config.seed = 0;
+  if (execution_config.seed)
+    execution_config.seed =
+        Simulators::IState::DeriveSeed(*execution_config.seed, batch);
+  return execution_config;
+}
+
 static std::shared_ptr<Circuits::Circuit<double>> inject_noise_for_config(
     const std::shared_ptr<Circuits::Circuit<double>>& circuit,
     const noise::NoiseModel& noise_model, std::mt19937& rng,
     const SimulatorConfig& config) {
-  if (uses_exact_quantum_channels(config))
-    return noise::inject_exact_noise(circuit, noise_model);
-  return noise::inject_noise(circuit, noise_model, rng);
+  auto noisy = uses_exact_quantum_channels(config)
+                   ? noise::inject_exact_noise(circuit, noise_model)
+                   : noise::inject_noise(circuit, noise_model, rng);
+  noise::attach_readout_error(noisy, noise_model);
+  return noisy;
 }
 
 static std::shared_ptr<Circuits::Circuit<double>>
@@ -192,9 +183,12 @@ inject_combined_noise_for_config(
     const std::shared_ptr<Circuits::Circuit<double>>& circuit,
     const noise::NoiseModel& noise_model, std::mt19937& rng,
     const SimulatorConfig& config) {
-  if (uses_exact_quantum_channels(config))
-    return noise::inject_combined_noise_exact(circuit, noise_model, rng);
-  return noise::inject_combined_noise(circuit, noise_model, rng);
+  auto noisy =
+      uses_exact_quantum_channels(config)
+          ? noise::inject_combined_noise_exact(circuit, noise_model, rng)
+          : noise::inject_combined_noise(circuit, noise_model, rng);
+  noise::attach_readout_error(noisy, noise_model);
+  return noisy;
 }
 
 // Core Execution Logic
@@ -612,7 +606,8 @@ double noisy_fidelity_core(
   network->CreateSimulator(config.simulator_type, config.simulation_type);
   auto simulator = network->GetSimulator();
   if (!simulator)
-    throw std::runtime_error("noisy_fidelity: requested backend is unavailable.");
+    throw std::runtime_error(
+        "noisy_fidelity: requested backend is unavailable.");
   if (config.seed) simulator->SetSeed(*config.seed);
   Circuits::OperationState state(num_qubits);
   nb::gil_scoped_release release;
@@ -722,7 +717,8 @@ nb::dict incremental_evolve_core(
     all_expectations.append(step_exp);
     steps_measured.append(target_step);
     bond_dim_evolution.append(current_max_bond_dim);
-    times_per_step.append(std::chrono::duration<double>(end_step - start_step).count());
+    times_per_step.append(
+        std::chrono::duration<double>(end_step - start_step).count());
   }
 
   auto end = std::chrono::high_resolution_clock::now();
@@ -749,13 +745,12 @@ nb::dict incremental_evolve_core(
 class PrefixCheckpointedSimulator {
  public:
   PrefixCheckpointedSimulator(
-      std::shared_ptr<Circuits::Circuit<double>> prefix_circuit,
-      int num_qubits,
+      std::shared_ptr<Circuits::Circuit<double>> prefix_circuit, int num_qubits,
       const SimulatorConfig& config = SimulatorConfig{})
-      : num_qubits_(std::max(1, num_qubits)),
-        config_(config) {
+      : num_qubits_(std::max(1, num_qubits)), config_(config) {
     if (prefix_circuit && num_qubits <= 0) {
-      num_qubits_ = std::max(1, static_cast<int>(prefix_circuit->GetMaxQubitIndex()) + 1);
+      num_qubits_ =
+          std::max(1, static_cast<int>(prefix_circuit->GetMaxQubitIndex()) + 1);
     }
     sim_ = std::make_unique<ScopedSimulator>(num_qubits_);
     if (sim_->handle == 0) {
@@ -791,15 +786,15 @@ class PrefixCheckpointedSimulator {
 
   nb::dict execute_suffix(
       std::shared_ptr<Circuits::Circuit<double>> suffix_circuit,
-      int shots = 1024,
-      const noise::NoiseModel* noise_model = nullptr,
+      int shots = 1024, const noise::NoiseModel* noise_model = nullptr,
       int noise_realizations = 64,
       std::optional<unsigned int> seed = std::nullopt,
       int num_measurements = 0) {
     if (!suffix_circuit) throw nb::value_error("suffix_circuit is null.");
     if (shots <= 0) shots = 1;
 
-    size_t total_cbits = std::max((size_t)num_qubits_, (size_t)num_measurements);
+    size_t total_cbits =
+        std::max((size_t)num_qubits_, (size_t)num_measurements);
     const auto cbits_set = suffix_circuit->GetBits();
     if (!cbits_set.empty()) {
       total_cbits = std::max(total_cbits, *cbits_set.rbegin() + 1);
@@ -808,8 +803,8 @@ class PrefixCheckpointedSimulator {
     const bool has_noise = (noise_model != nullptr) && noise_model->has_any();
     if (has_noise) warn_thermal_approximation(*noise_model, config_);
 
-    unsigned int initial_seed = seed.value_or(
-        config_.seed.value_or(std::random_device{}()));
+    unsigned int initial_seed =
+        seed.value_or(config_.seed.value_or(std::random_device{}()));
     std::mt19937 rng(initial_seed);
 
     if (seed) {
@@ -866,8 +861,6 @@ class PrefixCheckpointedSimulator {
             ++combined[bitstring];
           }
         }
-
-        apply_readout_error_to_counts(combined, *noise_model, rng);
       }
     }
     auto end = std::chrono::high_resolution_clock::now();
@@ -900,7 +893,6 @@ class PrefixCheckpointedSimulator {
 };
 
 }  // namespace
-
 
 // ============================================================================
 // Module Definition
@@ -955,21 +947,25 @@ NB_MODULE(maestro, m) {
            "singular_value_threshold"_a = nb::none(),
            "use_double_precision"_a = false,
            "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
-           "mps_measure_no_collapse"_a = true,
-           "truncation_mode"_a = nb::none(), "seed"_a = nb::none(),
-           "gpu_device"_a = nb::none(),
-           "distributed_options"_a = std::unordered_map<std::string, std::string>{})
+           "mps_measure_no_collapse"_a = true, "truncation_mode"_a = nb::none(),
+           "seed"_a = nb::none(), "gpu_device"_a = nb::none(),
+           "distributed_options"_a =
+               std::unordered_map<std::string, std::string>{})
       .def_rw("distributed_options", &SimulatorConfig::distributed_options,
               "Distribution settings passed to Configure before allocation. "
-              "Defaults: first global qubits, automatic Ex execution, visible GPUs. "
-              "MPI calls must match across ranks; mpi_communicator is mpi4py Comm.py2f().")
-      .def_prop_rw("gpu_device",
+              "Defaults: first global qubits, automatic Ex execution, visible "
+              "GPUs. "
+              "MPI calls must match across ranks; mpi_communicator is mpi4py "
+              "Comm.py2f().")
+      .def_prop_rw(
+          "gpu_device",
           [](const SimulatorConfig& config) { return config.gpu_device; },
           [](SimulatorConfig& config, std::optional<int> device) {
             if (device && *device < 0)
               throw std::invalid_argument("gpu_device must be nonnegative");
             config.gpu_device = device;
-          }, nb::for_setter(nb::arg("device").none()),
+          },
+          nb::for_setter(nb::arg("device").none()),
           "CUDA-visible device ordinal, or None to use the default.")
       .def_prop_rw(
           "simulator_type",
@@ -979,13 +975,16 @@ NB_MODULE(maestro, m) {
 #ifndef NO_QISKIT_AER
                  || st == Simulators::SimulatorType::kCompositeQiskitAer
 #endif
-                ) &&
-                config.simulation_type != Simulators::SimulationType::kStatevector) {
+                 ) &&
+                config.simulation_type !=
+                    Simulators::SimulationType::kStatevector) {
               throw std::invalid_argument(
-                  "Composite simulators only support Statevector simulation type.");
+                  "Composite simulators only support Statevector simulation "
+                  "type.");
             }
             if (st == Simulators::SimulatorType::kQuestSim &&
-                config.simulation_type != Simulators::SimulationType::kStatevector) {
+                config.simulation_type !=
+                    Simulators::SimulationType::kStatevector) {
               throw std::invalid_argument(
                   "QuestSim only supports Statevector simulation type.");
             }
@@ -995,14 +994,17 @@ NB_MODULE(maestro, m) {
           "simulation_type",
           [](const SimulatorConfig& config) { return config.simulation_type; },
           [](SimulatorConfig& config, Simulators::SimulationType set) {
-            if ((config.simulator_type == Simulators::SimulatorType::kCompositeQCSim
+            if ((config.simulator_type ==
+                     Simulators::SimulatorType::kCompositeQCSim
 #ifndef NO_QISKIT_AER
-                 || config.simulator_type == Simulators::SimulatorType::kCompositeQiskitAer
+                 || config.simulator_type ==
+                        Simulators::SimulatorType::kCompositeQiskitAer
 #endif
-                ) &&
+                 ) &&
                 set != Simulators::SimulationType::kStatevector) {
               throw std::invalid_argument(
-                  "Composite simulators only support Statevector simulation type.");
+                  "Composite simulators only support Statevector simulation "
+                  "type.");
             }
             if (config.simulator_type == Simulators::SimulatorType::kQuestSim &&
                 set != Simulators::SimulationType::kStatevector) {
@@ -1080,7 +1082,8 @@ NB_MODULE(maestro, m) {
             << ", mps_measure_no_collapse="
             << (c.mps_measure_no_collapse ? "True" : "False")
             << ", seed=" << (c.seed ? std::to_string(*c.seed) : "None")
-            << ", gpu_device=" << (c.gpu_device ? std::to_string(*c.gpu_device) : "None") << ")";
+            << ", gpu_device="
+            << (c.gpu_device ? std::to_string(*c.gpu_device) : "None") << ")";
         return oss.str();
       });
 
@@ -1090,8 +1093,8 @@ NB_MODULE(maestro, m) {
       .def("Initialize", &Simulators::ISimulator::Initialize)
       .def("ResetSimulator", &Simulators::ISimulator::Reset)
       .def("Reset", &Simulators::ISimulator::Reset)
-      .def("ConfigureSimulator", &Simulators::ISimulator::Configure,
-           "key"_a, "value"_a)
+      .def("ConfigureSimulator", &Simulators::ISimulator::Configure, "key"_a,
+           "value"_a)
       .def("Configure", &Simulators::ISimulator::Configure, "key"_a, "value"_a)
       .def("GetConfiguration", &Simulators::ISimulator::GetConfiguration,
            "key"_a)
@@ -1108,11 +1111,13 @@ NB_MODULE(maestro, m) {
       .def("Amplitude", &Simulators::ISimulator::Amplitude, "outcome"_a)
       .def("AllProbabilities", &Simulators::ISimulator::AllProbabilities)
       .def("Probabilities", &Simulators::ISimulator::Probabilities,
-           "outcomes"_a, "Return probabilities for the given basis-state indices.")
-      .def("SampleCounts", &Simulators::ISimulator::SampleCounts,
-           "qubits"_a, "shots"_a = 1000,
-           "Sample without collapsing the state, returning {integer_outcome: "
-           "count}; the first listed qubit is the least-significant result bit.")
+           "outcomes"_a,
+           "Return probabilities for the given basis-state indices.")
+      .def(
+          "SampleCounts", &Simulators::ISimulator::SampleCounts, "qubits"_a,
+          "shots"_a = 1000,
+          "Sample without collapsing the state, returning {integer_outcome: "
+          "count}; the first listed qubit is the least-significant result bit.")
       .def("GetSimulatorType", &Simulators::ISimulator::GetType)
       .def("GetSimulationType", &Simulators::ISimulator::GetSimulationType)
       .def("FlushSimulator", &Simulators::ISimulator::Flush)
@@ -1143,40 +1148,40 @@ NB_MODULE(maestro, m) {
       .def("ApplyRx", &Simulators::ISimulator::ApplyRx, "qubit"_a, "theta"_a)
       .def("ApplyRy", &Simulators::ISimulator::ApplyRy, "qubit"_a, "theta"_a)
       .def("ApplyRz", &Simulators::ISimulator::ApplyRz, "qubit"_a, "theta"_a)
-      .def("ApplyU", &Simulators::ISimulator::ApplyU,
-           "qubit"_a, "theta"_a, "phi"_a, "lambda_"_a, "gamma"_a = 0.0)
-      .def("ApplyCX", &Simulators::ISimulator::ApplyCX,
-           "control_qubit"_a, "target_qubit"_a)
-      .def("ApplyCY", &Simulators::ISimulator::ApplyCY,
-           "control_qubit"_a, "target_qubit"_a)
-      .def("ApplyCZ", &Simulators::ISimulator::ApplyCZ,
-           "control_qubit"_a, "target_qubit"_a)
-      .def("ApplyCH", &Simulators::ISimulator::ApplyCH,
-           "control_qubit"_a, "target_qubit"_a)
-      .def("ApplyCSX", &Simulators::ISimulator::ApplyCSx,
-           "control_qubit"_a, "target_qubit"_a)
+      .def("ApplyU", &Simulators::ISimulator::ApplyU, "qubit"_a, "theta"_a,
+           "phi"_a, "lambda_"_a, "gamma"_a = 0.0)
+      .def("ApplyCX", &Simulators::ISimulator::ApplyCX, "control_qubit"_a,
+           "target_qubit"_a)
+      .def("ApplyCY", &Simulators::ISimulator::ApplyCY, "control_qubit"_a,
+           "target_qubit"_a)
+      .def("ApplyCZ", &Simulators::ISimulator::ApplyCZ, "control_qubit"_a,
+           "target_qubit"_a)
+      .def("ApplyCH", &Simulators::ISimulator::ApplyCH, "control_qubit"_a,
+           "target_qubit"_a)
+      .def("ApplyCSX", &Simulators::ISimulator::ApplyCSx, "control_qubit"_a,
+           "target_qubit"_a)
       .def("ApplyCSXDG", &Simulators::ISimulator::ApplyCSxDAG,
            "control_qubit"_a, "target_qubit"_a)
-      .def("ApplyCP", &Simulators::ISimulator::ApplyCP,
-           "control_qubit"_a, "target_qubit"_a, "theta"_a)
-      .def("ApplyCRx", &Simulators::ISimulator::ApplyCRx,
-           "control_qubit"_a, "target_qubit"_a, "theta"_a)
-      .def("ApplyCRy", &Simulators::ISimulator::ApplyCRy,
-           "control_qubit"_a, "target_qubit"_a, "theta"_a)
-      .def("ApplyCRz", &Simulators::ISimulator::ApplyCRz,
-           "control_qubit"_a, "target_qubit"_a, "theta"_a)
-      .def("ApplyCCX", &Simulators::ISimulator::ApplyCCX,
-           "control_qubit1"_a, "control_qubit2"_a, "target_qubit"_a)
-      .def("ApplySwap", &Simulators::ISimulator::ApplySwap,
+      .def("ApplyCP", &Simulators::ISimulator::ApplyCP, "control_qubit"_a,
+           "target_qubit"_a, "theta"_a)
+      .def("ApplyCRx", &Simulators::ISimulator::ApplyCRx, "control_qubit"_a,
+           "target_qubit"_a, "theta"_a)
+      .def("ApplyCRy", &Simulators::ISimulator::ApplyCRy, "control_qubit"_a,
+           "target_qubit"_a, "theta"_a)
+      .def("ApplyCRz", &Simulators::ISimulator::ApplyCRz, "control_qubit"_a,
+           "target_qubit"_a, "theta"_a)
+      .def("ApplyCCX", &Simulators::ISimulator::ApplyCCX, "control_qubit1"_a,
+           "control_qubit2"_a, "target_qubit"_a)
+      .def("ApplySwap", &Simulators::ISimulator::ApplySwap, "qubit1"_a,
+           "qubit2"_a)
+      .def("ApplyCSwap", &Simulators::ISimulator::ApplyCSwap, "control_qubit"_a,
            "qubit1"_a, "qubit2"_a)
-      .def("ApplyCSwap", &Simulators::ISimulator::ApplyCSwap,
-           "control_qubit"_a, "qubit1"_a, "qubit2"_a)
-      .def("ApplyCU", &Simulators::ISimulator::ApplyCU,
-           "control_qubit"_a, "target_qubit"_a, "theta"_a, "phi"_a,
-           "lambda_"_a, "gamma"_a = 0.0)
+      .def("ApplyCU", &Simulators::ISimulator::ApplyCU, "control_qubit"_a,
+           "target_qubit"_a, "theta"_a, "phi"_a, "lambda_"_a, "gamma"_a = 0.0)
       .def("set_seed", &Simulators::ISimulator::SetSeed, "seed"_a)
       .def("density_matrix_trace", &Simulators::ISimulator::DensityMatrixTrace)
-      .def("density_matrix_purity", &Simulators::ISimulator::DensityMatrixPurity)
+      .def("density_matrix_purity",
+           &Simulators::ISimulator::DensityMatrixPurity)
       .def("density_matrix_trace_of_square",
            &Simulators::ISimulator::DensityMatrixTraceOfSquare)
       .def("density_matrix_overlap",
@@ -1630,7 +1635,8 @@ NB_MODULE(maestro, m) {
 
               auto noisy =
                   inject_noise_for_config(self, noise_model, rng, config);
-              nb::dict r = execute_core(noisy, config, batch_shots);
+              nb::dict r = execute_core(
+                  noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
               nb::dict counts = nb::cast<nb::dict>(r["counts"]);
               for (auto item : counts)
                 combined[nb::cast<std::string>(nb::str(item.first))] +=
@@ -1638,8 +1644,6 @@ NB_MODULE(maestro, m) {
             }
             auto end = std::chrono::high_resolution_clock::now();
 
-            // Apply readout error (classical post-measurement channel)
-            apply_readout_error_to_counts(combined, noise_model, rng);
 
             nb::dict py_counts;
             for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
@@ -1898,7 +1902,8 @@ NB_MODULE(maestro, m) {
 
               auto noisy = inject_combined_noise_for_config(
                   self, noise_model, rng, config);
-              nb::dict r = execute_core(noisy, config, batch_shots);
+              nb::dict r = execute_core(
+                  noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
               nb::dict counts = nb::cast<nb::dict>(r["counts"]);
               for (auto item : counts)
                 combined[nb::cast<std::string>(nb::str(item.first))] +=
@@ -1906,8 +1911,6 @@ NB_MODULE(maestro, m) {
             }
             auto end = std::chrono::high_resolution_clock::now();
 
-            // Apply readout error (classical post-measurement channel)
-            apply_readout_error_to_counts(combined, noise_model, rng);
 
             nb::dict py_counts;
             for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
@@ -2164,12 +2167,21 @@ NB_MODULE(maestro, m) {
       "Check whether the QuEST simulation library is loaded and available.");
 
 #ifdef __linux__
-  m.def("finalize_distributed_mpi_gpu", []() {
-    Simulators::SimulatorsFactory::FinalizeDistributedMpiGpuBackend();
-  }, "Terminal shutdown after all MPI GPU states are destroyed, before MPI.Finalize().");
-  m.def("is_distributed_gpu_available", []() {
-    return Simulators::SimulatorsFactory::IsDistributedGpuAvailable();
-  }, "Non-throwing probe of the local distributed plugin and devices, without license admission or state allocation. Returns False for missing or incompatible plugins.");
+  m.def(
+      "finalize_distributed_mpi_gpu",
+      []() {
+        Simulators::SimulatorsFactory::FinalizeDistributedMpiGpuBackend();
+      },
+      "Terminal shutdown after all MPI GPU states are destroyed, before "
+      "MPI.Finalize().");
+  m.def(
+      "is_distributed_gpu_available",
+      []() {
+        return Simulators::SimulatorsFactory::IsDistributedGpuAvailable();
+      },
+      "Non-throwing probe of the local distributed plugin and devices, without "
+      "license admission or state allocation. Returns False for missing or "
+      "incompatible plugins.");
 #endif
   // --- GPU Library Management ---
   m.def(
@@ -2195,7 +2207,8 @@ NB_MODULE(maestro, m) {
       "get_gpu_device_count",
       []() { return Simulators::SimulatorsFactory::GetGpuDeviceCount(); },
       "Number of CUDA-capable devices visible to the process, or 0 if the "
-      "GPU library cannot be loaded or none are visible; -1 on CUDA discovery errors. "
+      "GPU library cannot be loaded or none are visible; -1 on CUDA discovery "
+      "errors. "
       "Does not initialize a simulator.");
 
   // --- Probability / Amplitude Access ---
@@ -2434,7 +2447,8 @@ NB_MODULE(maestro, m) {
            "    sigma_eta: Driving noise standard deviation.\n"
            "    after_1q: If True (default), inject after 1Q gates.\n"
            "    after_2q: If True (default), inject after 2Q gates.\n"
-           "    stationary_init: If True (default), sample step 0 from stationary equilibrium.\n\n"
+           "    stationary_init: If True (default), sample step 0 from "
+           "stationary equilibrium.\n\n"
            "Example: nm.set_correlated_ar1(0, phi=0.135, sigma_eta=2.35e-3)")
       .def("set_correlated_ou", &noise::NoiseModel::set_correlated_ou,
            "qubit"_a, "sigma"_a, "alpha"_a, "gate_time"_a, "after_1q"_a = true,
@@ -2451,26 +2465,31 @@ NB_MODULE(maestro, m) {
            "    gate_time: Gate duration in seconds.\n"
            "    after_1q: If True (default), inject after 1Q gates.\n"
            "    after_2q: If True (default), inject after 2Q gates.\n"
-           "    stationary_init: If True (default), sample step 0 from stationary equilibrium.\n\n"
+           "    stationary_init: If True (default), sample step 0 from "
+           "stationary equilibrium.\n\n"
            "Example: nm.set_correlated_ou(0, sigma=15.0, alpha=0.5, "
            "gate_time=100e-9)")
       .def("add_correlated_ou_band", &noise::NoiseModel::add_correlated_ou_band,
-           "qubit"_a, "sigma"_a, "alpha"_a, "gate_time"_a,
-           "after_1q"_a = true, "after_2q"_a = true, "stationary_init"_a = true,
+           "qubit"_a, "sigma"_a, "alpha"_a, "gate_time"_a, "after_1q"_a = true,
+           "after_2q"_a = true, "stationary_init"_a = true,
            "Append an OU fluctuator band to a qubit's band list.")
-      .def("set_multi_correlated_ou", &noise::NoiseModel::set_multi_correlated_ou,
-           "qubit"_a, "bands"_a, "gate_time"_a,
-           "after_1q"_a = true, "after_2q"_a = true, "stationary_init"_a = true,
-           "Batch multi-OU setter: clears existing bands and populates from a list of (sigma, alpha) pairs.")
-      .def("set_all_multi_correlated_ou", &noise::NoiseModel::set_all_multi_correlated_ou,
-           "num_qubits"_a, "bands"_a, "gate_time"_a,
-           "after_1q"_a = true, "after_2q"_a = true, "stationary_init"_a = true,
+      .def("set_multi_correlated_ou",
+           &noise::NoiseModel::set_multi_correlated_ou, "qubit"_a, "bands"_a,
+           "gate_time"_a, "after_1q"_a = true, "after_2q"_a = true,
+           "stationary_init"_a = true,
+           "Batch multi-OU setter: clears existing bands and populates from a "
+           "list of (sigma, alpha) pairs.")
+      .def("set_all_multi_correlated_ou",
+           &noise::NoiseModel::set_all_multi_correlated_ou, "num_qubits"_a,
+           "bands"_a, "gate_time"_a, "after_1q"_a = true, "after_2q"_a = true,
+           "stationary_init"_a = true,
            "Uniform multi-OU setter across qubits 0..num_qubits-1.")
       .def("set_1_over_f_noise", &noise::NoiseModel::set_1_over_f_noise,
            "qubit"_a, "total_power"_a, "f_min"_a, "f_max"_a, "num_bands"_a,
            "gate_time"_a, "after_1q"_a = true, "after_2q"_a = true,
            "stationary_init"_a = true,
-           "Synthesize 1/f noise spectrum via logarithmically spaced OU fluctuator bands.")
+           "Synthesize 1/f noise spectrum via logarithmically spaced OU "
+           "fluctuator bands.")
       .def("set_all_correlated_ou", &noise::NoiseModel::set_all_correlated_ou,
            "num_qubits"_a, "sigma"_a, "alpha"_a, "gate_time"_a,
            "after_1q"_a = true, "after_2q"_a = true, "stationary_init"_a = true,
@@ -2496,16 +2515,18 @@ NB_MODULE(maestro, m) {
       .def("has_correlated", &noise::NoiseModel::has_correlated,
            "Return True if any correlated noise parameters have been set.")
       // ── Idle noise ──
-      .def("set_idle_noise", &noise::NoiseModel::set_idle_noise,
-           "qubit"_a, "t1"_a, "t2"_a, "excited_population"_a = 0.0,
-           "detuning_hz"_a = 0.0,
-           "Configure idle dephasing/relaxation and detuning for delay instructions.\n\n"
-           "Args:\n"
-           "    qubit: Qubit index.\n"
-           "    t1: T1 relaxation time in seconds.\n"
-           "    t2: T2 dephasing time in seconds (T2 <= 2*T1).\n"
-           "    excited_population: Equilibrium |1> state population (default 0.0).\n"
-           "    detuning_hz: Coherent detuning frequency in Hz (default 0.0).\n")
+      .def(
+          "set_idle_noise", &noise::NoiseModel::set_idle_noise, "qubit"_a,
+          "t1"_a, "t2"_a, "excited_population"_a = 0.0, "detuning_hz"_a = 0.0,
+          "Configure idle dephasing/relaxation and detuning for delay "
+          "instructions.\n\n"
+          "Args:\n"
+          "    qubit: Qubit index.\n"
+          "    t1: T1 relaxation time in seconds.\n"
+          "    t2: T2 dephasing time in seconds (T2 <= 2*T1).\n"
+          "    excited_population: Equilibrium |1> state population (default "
+          "0.0).\n"
+          "    detuning_hz: Coherent detuning frequency in Hz (default 0.0).\n")
       .def("has_idle_noise", &noise::NoiseModel::has_idle_noise,
            "Return True if any idle noise parameters have been set.")
       // ── T1 amplitude damping ──
@@ -2541,9 +2562,8 @@ NB_MODULE(maestro, m) {
            "gamma"_a, "excited_population"_a,
            "Set finite-temperature generalized amplitude damping after each "
            "gate on a qubit. Requires an exact density-matrix or MPO backend.")
-      .def("set_thermal_relaxation",
-           &noise::NoiseModel::set_thermal_relaxation, "qubit"_a,
-           "gate_time_s"_a, "t1_s"_a, "t2_s"_a,
+      .def("set_thermal_relaxation", &noise::NoiseModel::set_thermal_relaxation,
+           "qubit"_a, "gate_time_s"_a, "t1_s"_a, "t2_s"_a,
            "excited_population"_a = 0.0,
            "Set hardware-style T1/T2 thermal relaxation after each gate.\n\n"
            "This is the preferred way to specify decoherence. Because T1 and "
@@ -2557,13 +2577,11 @@ NB_MODULE(maestro, m) {
            "The physical constraint T2 <= 2*T1 is enforced.")
       .def("set_thermal_relaxation_2q",
            &noise::NoiseModel::set_thermal_relaxation_2q, "qubit"_a,
-           "gate_time_s"_a, "t1_s"_a, "t2_s"_a,
-           "excited_population"_a = 0.0,
+           "gate_time_s"_a, "t1_s"_a, "t2_s"_a, "excited_population"_a = 0.0,
            "Set T1/T2 thermal relaxation applied only after two-qubit "
            "gates, using the (longer) 2Q gate duration. When set, 2Q gates "
            "use this instead of the 'all gates' relaxation.")
-      .def("has_thermal_relaxation",
-           &noise::NoiseModel::has_thermal_relaxation,
+      .def("has_thermal_relaxation", &noise::NoiseModel::has_thermal_relaxation,
            "Return True if any T1/T2 thermal relaxation has been set.")
       .def("set_correlated_phase_flip",
            &noise::NoiseModel::set_correlated_phase_flip, "q1"_a, "q2"_a,
@@ -2572,13 +2590,12 @@ NB_MODULE(maestro, m) {
            "pair. correlation=0 is independent; correlation=1 is II/ZZ.")
       .def(
           "set_kraus_channel",
-          [](noise::NoiseModel &self,
-             const Types::qubits_vector &targets,
-             const std::vector<std::vector<std::vector<std::complex<double>>>>
-                 &operators) {
+          [](noise::NoiseModel& self, const Types::qubits_vector& targets,
+             const std::vector<std::vector<std::vector<std::complex<double>>>>&
+                 operators) {
             Simulators::QuantumChannel::KrausOperators kraus;
             kraus.reserve(operators.size());
-            for (const auto &operatorRows : operators) {
+            for (const auto& operatorRows : operators) {
               if (operatorRows.empty() || operatorRows.front().empty())
                 throw nb::value_error(
                     "Kraus operators must be nonempty matrices.");
@@ -2626,8 +2643,10 @@ NB_MODULE(maestro, m) {
            "or MPO execution in that regime.")
       .def("requires_exact_quantum_channels",
            &noise::NoiseModel::requires_exact_quantum_channels,
-           "Return True if sampled injection cannot faithfully realize this model "
-           "(exact-only Kraus maps, or T2 > T1 requiring approximation on sampled paths).")
+           "Return True if sampled injection cannot faithfully realize this "
+           "model "
+           "(exact-only Kraus maps, or T2 > T1 requiring approximation on "
+           "sampled paths).")
       .def("compute_damping_covers_model",
            &noise::NoiseModel::compute_damping_covers_model,
            "Return True iff compute_damping() captures every layer that "
@@ -2663,6 +2682,10 @@ NB_MODULE(maestro, m) {
       .def("set_readout_error", &noise::NoiseModel::set_readout_error,
            "qubit"_a, "p_meas1_prep0"_a, "p_meas0_prep1"_a,
            "Set asymmetric readout error on a qubit.\n\n"
+           "Applied when a measurement of this qubit writes its classical "
+           "bit, whatever bit index it targets, so mid-circuit and repeated "
+           "measurements are covered and classically-conditioned operations "
+           "downstream observe the noisy outcome.\n\n"
            "Args:\n"
            "    qubit: Qubit index.\n"
            "    p_meas1_prep0: P(measure 1 | state was 0) — false positive.\n"
@@ -2672,10 +2695,14 @@ NB_MODULE(maestro, m) {
            &noise::NoiseModel::set_readout_error_symmetric, "qubit"_a,
            "p_error"_a,
            "Set symmetric readout error (same rate for both directions).\n\n"
+           "Applied per measured qubit when the measurement writes its "
+           "classical bit.\n\n"
            "Example: nm.set_readout_error_symmetric(0, 0.01)")
       .def("set_all_readout_error", &noise::NoiseModel::set_all_readout_error,
            "num_qubits"_a, "p_error"_a,
-           "Set uniform symmetric readout error on qubits [0, num_qubits).")
+           "Set uniform symmetric readout error on qubits [0, num_qubits).\n\n"
+           "Applied per measured qubit when the measurement writes its "
+           "classical bit.")
       .def("has_readout_error", &noise::NoiseModel::has_readout_error,
            "Return True if any readout error parameters have been set.")
       // ── Two-qubit depolarizing ──
@@ -2738,7 +2765,8 @@ NB_MODULE(maestro, m) {
         out["time_taken"] = result["time_taken"];
         out["simulator"] = result["simulator"];
         out["method"] = result["method"];
-        if (result.contains("gpu_device")) out["gpu_device"] = result["gpu_device"];
+        if (result.contains("gpu_device"))
+          out["gpu_device"] = result["gpu_device"];
         return out;
       },
       "circuit"_a, "observables"_a, "noise_model"_a,
@@ -2785,7 +2813,8 @@ NB_MODULE(maestro, m) {
         out["time_taken"] = result["time_taken"];
         out["simulator"] = result["simulator"];
         out["method"] = result["method"];
-        if (result.contains("gpu_device")) out["gpu_device"] = result["gpu_device"];
+        if (result.contains("gpu_device"))
+          out["gpu_device"] = result["gpu_device"];
         return out;
       },
       "qasm_circuit"_a, "observables"_a, "noise_model"_a,
@@ -2849,7 +2878,8 @@ NB_MODULE(maestro, m) {
         out["time_taken"] = std::chrono::duration<double>(end - start).count();
         out["simulator"] = ideal_result["simulator"];
         out["method"] = ideal_result["method"];
-        if (ideal_result.contains("gpu_device")) out["gpu_device"] = ideal_result["gpu_device"];
+        if (ideal_result.contains("gpu_device"))
+          out["gpu_device"] = ideal_result["gpu_device"];
         out["noise_realizations"] = noise_realizations;
         return out;
       },
@@ -2883,16 +2913,14 @@ NB_MODULE(maestro, m) {
 
           auto noisy =
               inject_noise_for_config(circuit, noise_model, rng, config);
-          nb::dict r = execute_core(noisy, config, batch_shots);
+          nb::dict r = execute_core(
+              noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
           nb::dict counts = nb::cast<nb::dict>(r["counts"]);
           for (auto item : counts)
             combined[nb::cast<std::string>(nb::str(item.first))] +=
                 nb::cast<size_t>(item.second);
         }
         auto end = std::chrono::high_resolution_clock::now();
-
-        // Apply readout error (classical post-measurement channel)
-        apply_readout_error_to_counts(combined, noise_model, rng);
 
         nb::dict py_counts;
         for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
@@ -3020,7 +3048,8 @@ NB_MODULE(maestro, m) {
         out["time_taken"] = std::chrono::duration<double>(end - start).count();
         out["simulator"] = ideal_result["simulator"];
         out["method"] = ideal_result["method"];
-        if (ideal_result.contains("gpu_device")) out["gpu_device"] = ideal_result["gpu_device"];
+        if (ideal_result.contains("gpu_device"))
+          out["gpu_device"] = ideal_result["gpu_device"];
         out["noise_realizations"] = noise_realizations;
         out["noise_type"] = "coherent";
         return out;
@@ -3065,18 +3094,16 @@ NB_MODULE(maestro, m) {
           int batch_shots = base_batch + (b < leftover ? 1 : 0);
           if (batch_shots <= 0) continue;
 
-          auto noisy = inject_combined_noise_for_config(
-              circuit, noise_model, rng, config);
-          nb::dict r = execute_core(noisy, config, batch_shots);
+          auto noisy = inject_combined_noise_for_config(circuit, noise_model,
+                                                        rng, config);
+          nb::dict r = execute_core(
+              noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
           nb::dict counts = nb::cast<nb::dict>(r["counts"]);
           for (auto item : counts)
             combined[nb::cast<std::string>(nb::str(item.first))] +=
                 nb::cast<size_t>(item.second);
         }
         auto end = std::chrono::high_resolution_clock::now();
-
-        // Apply readout error (classical post-measurement channel)
-        apply_readout_error_to_counts(combined, noise_model, rng);
 
         nb::dict py_counts;
         for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
@@ -3125,8 +3152,8 @@ NB_MODULE(maestro, m) {
 
         auto start = std::chrono::high_resolution_clock::now();
         for (int r = 0; r < noise_realizations; ++r) {
-          auto noisy = inject_combined_noise_for_config(
-              circuit, noise_model, rng, config);
+          auto noisy = inject_combined_noise_for_config(circuit, noise_model,
+                                                        rng, config);
           nb::dict result = estimate_core(noisy, paulis, config);
           nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
           for (size_t i = 0; i < n_obs; ++i)
@@ -3149,7 +3176,8 @@ NB_MODULE(maestro, m) {
         out["time_taken"] = std::chrono::duration<double>(end - start).count();
         out["simulator"] = ideal_result["simulator"];
         out["method"] = ideal_result["method"];
-        if (ideal_result.contains("gpu_device")) out["gpu_device"] = ideal_result["gpu_device"];
+        if (ideal_result.contains("gpu_device"))
+          out["gpu_device"] = ideal_result["gpu_device"];
         out["noise_realizations"] = noise_realizations;
         out["noise_type"] = "combined";
         return out;
@@ -3173,11 +3201,9 @@ NB_MODULE(maestro, m) {
            nb::arg("config") = SimulatorConfig{},
            "Create a simulator checkpointed after executing prefix_circuit.")
       .def("execute_suffix", &PrefixCheckpointedSimulator::execute_suffix,
-           nb::arg("suffix_circuit"),
-           nb::arg("shots") = 1024,
+           nb::arg("suffix_circuit"), nb::arg("shots") = 1024,
            nb::arg("noise_model").none() = nb::none(),
-           nb::arg("noise_realizations") = 64,
-           nb::arg("seed") = nb::none(),
+           nb::arg("noise_realizations") = 64, nb::arg("seed") = nb::none(),
            nb::arg("num_measurements") = 0,
            "Execute suffix circuit from checkpointed prefix state.")
       .def_prop_ro("max_bond_dim", &PrefixCheckpointedSimulator::max_bond_dim);

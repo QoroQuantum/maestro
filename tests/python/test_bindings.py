@@ -3850,6 +3850,162 @@ class TestReadoutError:
         assert 0.2 < p_flip < 0.4, \
             f"Expected ~30% flips, got {p_flip:.4f}"
 
+    # --- Readout must follow the measured QUBIT, not the classical-bit index ---
+
+    @staticmethod
+    def _cfg(sim_type):
+        return maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim, simulation_type=sim_type)
+
+    @staticmethod
+    def _flip_ones_on(q):
+        """Qubit q reports every measured 1 as 0. Nothing else is noisy."""
+        nm = maestro.NoiseModel()
+        nm.set_readout_error(q, 0.0, 1.0)
+        nm.set_depolarizing(q, 1e-12)  # full_noise_execute requires has_any()
+        return nm
+
+    def _only_key(self, qc, nm, cfg, fn_name):
+        r = getattr(maestro, fn_name)(qc, nm, cfg, 200, 1, 7)
+        counts = dict(r["counts"])
+        assert len(counts) == 1, f"{fn_name}: expected deterministic counts, got {counts}"
+        return next(iter(counts))
+
+    @pytest.mark.parametrize("fn_name", ["noisy_execute", "full_noise_execute"])
+    def test_readout_swapped_qubit_to_bit_map(self, fn_name):
+        """x q0; measure q0->c1, q1->c0. Readout on q0 must flip c1, not c0."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure([(0, 1), (1, 0)])
+        cfg = self._cfg(maestro.SimulationType.Statevector)
+        assert self._only_key(qc, self._flip_ones_on(0), cfg, fn_name) == "00"
+
+    @pytest.mark.parametrize("fn_name", ["noisy_execute", "full_noise_execute"])
+    def test_readout_repeated_measurement_wide_register(self, fn_name):
+        """One qubit measured 3 times into c0..c2: every round gets q0's readout."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        for r in range(3):
+            qc.x(0)
+            qc.measure([(0, r)])
+            qc.reset(0)
+        cfg = self._cfg(maestro.SimulationType.Statevector)
+        assert self._only_key(qc, self._flip_ones_on(0), cfg, fn_name) == "000"
+
+    @pytest.mark.parametrize("fn_name", ["noisy_execute", "full_noise_execute"])
+    def test_readout_partial_measurement_of_high_qubit(self, fn_name):
+        """measure q2 -> c0 only: c0 gets q2's readout, not q0's."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(2)
+        qc.h(0)
+        qc.h(0)
+        qc.measure([(2, 0)])
+        cfg = self._cfg(maestro.SimulationType.Statevector)
+        assert self._only_key(qc, self._flip_ones_on(2), cfg, fn_name) == "000"
+
+    @pytest.mark.parametrize("fn_name", ["noisy_execute", "full_noise_execute"])
+    def test_readout_round_major_layout(self, fn_name):
+        """c[q*rounds + r] layout, 2 qubits x 2 rounds: q0's readout hits c0,c1."""
+        from maestro.circuits import QuantumCircuit
+        rounds = 2
+        qc = QuantumCircuit()
+        for r in range(rounds):
+            qc.x(0)
+            qc.x(1)
+            qc.measure([(0, 0 * rounds + r), (1, 1 * rounds + r)])
+            qc.reset(0)
+            qc.reset(1)
+        cfg = self._cfg(maestro.SimulationType.Statevector)
+        assert self._only_key(qc, self._flip_ones_on(0), cfg, fn_name) == "0011"
+
+    def test_readout_identity_map_still_correct(self):
+        """Control: measure_all identity mapping behaves as before."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.x(1)
+        qc.measure_all()
+        cfg = self._cfg(maestro.SimulationType.Statevector)
+        assert self._only_key(qc, self._flip_ones_on(0), cfg, "full_noise_execute") == "01"
+
+    def test_readout_on_density_matrix_backend(self):
+        """Exact-channel backends take the same measurement-time path."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure([(0, 1), (1, 0)])
+        cfg = self._cfg(maestro.SimulationType.DensityMatrix)
+        assert self._only_key(qc, self._flip_ones_on(0), cfg, "full_noise_execute") == "00"
+
+    def test_readout_is_reproducible_under_seed(self):
+        """Same SimulatorConfig.seed and injection seed -> identical noisy counts."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+        nm = maestro.NoiseModel()
+        nm.set_readout_error(0, 0.0, 0.5)
+        nm.set_depolarizing(0, 1e-12)
+        cfg = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Statevector, seed=11)
+        a = dict(maestro.full_noise_execute(qc, nm, cfg, 400, 1, 11)["counts"])
+        b = dict(maestro.full_noise_execute(qc, nm, cfg, 400, 1, 11)["counts"])
+        assert a == b
+        assert 120 < a.get("0", 0) < 280, a
+
+    @pytest.mark.parametrize("fn_name", ["noisy_execute", "full_noise_execute"])
+    @pytest.mark.parametrize("bound_method", [False, True])
+    @pytest.mark.parametrize("sim_type", [maestro.SimulationType.Statevector,
+                                          maestro.SimulationType.DensityMatrix])
+    @pytest.mark.parametrize("config_seed,public_seed", [
+        (None, 0), (None, 11), (0, None), (11, None), (11, 23)])
+    @pytest.mark.parametrize("realizations", [1, 128])
+    def test_seeded_readout_is_reproducible_and_independent(
+            self, fn_name, bound_method, sim_type, config_seed, public_seed,
+            realizations):
+        """Public seeds reach readout, and one-shot batches use distinct streams."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        qc.measure_all()
+        nm = maestro.NoiseModel()
+        nm.set_readout_error(0, 0.0, 0.5)
+        cfg = self._cfg(sim_type)
+        if config_seed is not None:
+            cfg.seed = config_seed
+
+        def run():
+            args = (nm, cfg, 128, realizations, public_seed)
+            result = (getattr(qc, fn_name)(*args) if bound_method else
+                      getattr(maestro, fn_name)(qc, *args))
+            return dict(result["counts"])
+
+        counts = run()
+        assert counts == run()
+        assert sum(counts.values()) == 128
+        assert 32 < counts.get("0", 0) < 96, counts
+        assert cfg.seed == config_seed
+
+    @pytest.mark.parametrize("fn_name", ["noisy_execute", "full_noise_execute"])
+    @pytest.mark.parametrize("conditional_measurement", [False, True])
+    def test_readout_is_applied_before_classical_control(
+            self, fn_name, conditional_measurement):
+        if conditional_measurement:
+            body = "x q[0]; measure q[0] -> c[0]; if (c == 1) measure q[1] -> c[1];"
+            noisy_qubit = 1
+        else:
+            body = "measure q[0] -> c[0]; if (c == 1) x q[1]; measure q[1] -> c[1];"
+            noisy_qubit = 0
+        qc = maestro.QasmToCirc().parse_and_translate(
+            'OPENQASM 2.0; include "qelib1.inc"; qreg q[2]; creg c[2]; ' + body)
+        nm = maestro.NoiseModel()
+        nm.set_readout_error(noisy_qubit, 1.0, 0.0)
+        cfg = self._cfg(maestro.SimulationType.Statevector)
+        result = getattr(maestro, fn_name)(qc, nm, cfg, 40, 1, 11)
+        assert dict(result["counts"]) == {"11": 40}
 
 class Test2QDepolarizing:
     """Test two-qubit depolarizing channel."""

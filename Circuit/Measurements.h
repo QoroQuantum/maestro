@@ -19,9 +19,22 @@
 #define _MEASUREMENTS_H_
 
 #include "Operations.h"
+#include <utility>
 #include <vector>
 
 namespace Circuits {
+
+/**
+ * @brief Classical readout-error rates for one measured qubit.
+ *
+ * Applied when the measurement writes its classical bit, using the rates of
+ * the qubit that was read -- never the classical-bit index. Zero rates mean
+ * no readout error.
+ */
+struct ReadoutRates {
+  double p_meas1_prep0 = 0.0;  ///< P(report 1 | measured 0)
+  double p_meas0_prep1 = 0.0;  ///< P(report 0 | measured 1)
+};
 
 /**
  * @class MeasurementOperation
@@ -129,7 +142,7 @@ class MeasurementOperation : public IOperation<Time> {
 
     auto res = sim->MeasureMany(qubits);
 
-    SetStateFromSample(res, state);
+    SetStateFromSample(res, state, sim.get());
   }
 
   /**
@@ -149,16 +162,40 @@ class MeasurementOperation : public IOperation<Time> {
 
     const auto res = sim->SampleCountsMany(qubits, 1).begin()->first;
 
-    SetStateFromSample(res, state);
+    SetStateFromSample(res, state, sim.get());
   }
 
+  /**
+   * @brief Writes sampled outcomes into the classical state, applying readout
+   * error per measured qubit.
+   *
+   * @param measurements One outcome per measured index.
+   * @param state The classical register to write.
+   * @param rng Simulator whose RandomUniform() drives the readout flips. When
+   * null, or when no readout rates are attached, outcomes are written
+   * unchanged. Callers that aggregate shots must call this once per shot while
+   * HasReadout() is true -- the flips are independent per shot.
+   */
   void SetStateFromSample(const std::vector<bool> &measurements,
-                          OperationState &state) const {
+                          OperationState &state,
+                          Simulators::ISimulator *rng = nullptr) const {
     if (qubits.empty()) return;
 
-    for (size_t index = 0; index < qubits.size(); ++index)
-      state.SetBit(bits[index],
-                   index < measurements.size() && measurements[index]);
+    for (size_t index = 0; index < qubits.size(); ++index) {
+      bool value = index < measurements.size() && measurements[index];
+
+      if (rng && index < readout.size()) {
+        const auto &rates = readout[index];
+        if (!value && rates.p_meas1_prep0 > 0.0 &&
+            rng->RandomUniform() < rates.p_meas1_prep0)
+          value = true;
+        else if (value && rates.p_meas0_prep1 > 0.0 &&
+                 rng->RandomUniform() < rates.p_meas0_prep1)
+          value = false;
+      }
+
+      state.SetBit(bits[index], value);
+    }
   }
 
   /**
@@ -172,8 +209,11 @@ class MeasurementOperation : public IOperation<Time> {
     for (size_t i = 0; i < qubits.size(); ++i)
       qs[i] = std::make_pair(qubits[i], bits[i]);
 
-    return std::make_shared<MeasurementOperation<Time>>(
+    auto copy = std::make_shared<MeasurementOperation<Time>>(
         qs, IOperation<Time>::GetDelay());
+    copy->readout = readout;
+
+    return copy;
   }
 
   /**
@@ -262,10 +302,43 @@ class MeasurementOperation : public IOperation<Time> {
     if (index < bits.size()) bits[index] = bit;
   }
 
+  /**
+   * @brief Attach readout-error rates, one entry per measured index.
+   *
+   * Entries beyond qubits.size() are dropped, missing entries are zero. An
+   * empty vector removes readout error from this operation.
+   * @param rates The per-index rates to attach.
+   */
+  void SetReadout(std::vector<ReadoutRates> rates) {
+    rates.resize(rates.empty() ? 0 : qubits.size());
+    readout = std::move(rates);
+  }
+
+  /**
+   * @brief Attach readout-error rates for a single measured index.
+   *
+   * Indices that are never set default to zero rates.
+   * @param index The measured index, not the classical bit.
+   * @param rates The rates of the qubit measured at that index.
+   */
+  void SetReadoutAt(size_t index, const ReadoutRates &rates) {
+    if (index >= qubits.size()) return;
+    if (readout.size() != qubits.size()) readout.resize(qubits.size());
+    readout[index] = rates;
+  }
+
+  /** @brief Per-index readout rates, empty when none are attached. */
+  const std::vector<ReadoutRates> &GetReadout() const { return readout; }
+
+  /** @brief True when readout rates are attached to this measurement. */
+  bool HasReadout() const { return !readout.empty(); }
+
  private:
   Types::qubits_vector qubits; /**< The qubits to be measured */
   std::vector<size_t>
       bits; /**< The classical bits where the measurement results are stored */
+  std::vector<ReadoutRates>
+      readout; /**< Per-index readout-error rates, empty means none */
 };
 
 }  // namespace Circuits

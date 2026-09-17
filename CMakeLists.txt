@@ -323,7 +323,9 @@ elseif(UNIX)
     set_target_properties(maestro PROPERTIES
         INSTALL_RPATH "$ORIGIN"
         INSTALL_RPATH_USE_LINK_PATH TRUE
-        BUILD_WITH_INSTALL_RPATH TRUE
+        # Build-tree C consumers also need paths to in-project Boost libraries.
+        # CMake applies the installed runtime paths during installation.
+        BUILD_WITH_INSTALL_RPATH FALSE
     )
 endif()
 

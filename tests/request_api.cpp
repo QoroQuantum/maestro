@@ -17,7 +17,8 @@ j::object Request(const char* operation, size_t n, const std::string& body,
                   const char* method = "statevector", size_t bits = 0) {
   j::object execution{{"seed", 123}};
   if (std::string(operation) == "execute" ||
-      std::string(operation) == "checkpoint_batch") execution["shots"] = 80;
+      std::string(operation) == "checkpoint_batch")
+    execution["shots"] = 80;
   return {{"schema_version", 2},
           {"operation", operation},
           {"circuit",
@@ -60,30 +61,40 @@ int main() try {
   Check(caps.at("schema_version").as_int64() == 2, "Wrong native schema");
 
   // Seeds remain meaningful across operations; shots configure sampling only.
-  for (const char* operation : {"estimate", "statevector", "amplitudes",
-       "probabilities", "state_probability", "inner_product", "mirror_fidelity",
-       "noisy_fidelity", "diagnostics", "incremental_evolve", "validate"}) {
-    auto document = Request(operation, 1, "", std::string(operation) == "diagnostics"
-        ? "density_matrix" : "statevector");
+  for (const char* operation :
+       {"estimate", "statevector", "amplitudes", "probabilities",
+        "state_probability", "inner_product", "mirror_fidelity",
+        "noisy_fidelity", "diagnostics", "incremental_evolve", "validate"}) {
+    auto document =
+        Request(operation, 1, "",
+                std::string(operation) == "diagnostics" ? "density_matrix"
+                                                        : "statevector");
     const std::string kind(operation);
     if (kind == "estimate" || kind == "incremental_evolve")
       document["observables"] = j::array{"Z"};
     if (kind == "state_probability") document["target_state"] = "0";
-    if (kind == "inner_product") document["other_circuit"] = document.at("circuit");
+    if (kind == "inner_product")
+      document["other_circuit"] = document.at("circuit");
     if (kind == "incremental_evolve") {
       document["step_circuit"] = document.at("circuit");
       document["steps"] = j::array{0, 1};
     }
-    if (kind == "noisy_fidelity") document["noise"] = j::object{
-        {"mode", "coherent"}, {"channels", j::array{j::object{
-            {"kind", "coherent_rotation"}, {"targets", j::array{0}},
-            {"rx", 0}, {"ry", 0}, {"rz", 0.1}}}}};
+    if (kind == "noisy_fidelity")
+      document["noise"] = j::object{
+          {"mode", "coherent"},
+          {"channels", j::array{j::object{{"kind", "coherent_rotation"},
+                                          {"targets", j::array{0}},
+                                          {"rx", 0},
+                                          {"ry", 0},
+                                          {"rz", 0.1}}}}};
     Call(document, true, true);
     document["execution"].as_object()["shots"] = 999;
     for (bool validate : {false, true}) {
-      const auto error = Call(document, false, validate).at("error").as_object();
+      const auto error =
+          Call(document, false, validate).at("error").as_object();
       Check(error.at("code") == "invalid_input" &&
-            std::string(error.at("message").as_string().c_str()) == "execution.shots does not apply to " + kind,
+                std::string(error.at("message").as_string().c_str()) ==
+                    "execution.shots does not apply to " + kind,
             "Irrelevant shots were not rejected with operation context");
     }
   }
@@ -184,12 +195,14 @@ int main() try {
   result = Call(request);
   Near(Real(result.at("results").at(0).at("counts").at("1")), 80);
   Near(Real(result.at("results").at(1).at("counts").at("0")), 80);
-  for (const auto& launch : j::array{nullptr, j::object{{"profile", "local"}, {"ranks", 2}}}) {
+  for (const auto& launch :
+       j::array{nullptr, j::object{{"profile", "local"}, {"ranks", 2}}}) {
     auto nested = request;
     nested["suffixes"].as_array()[0].as_object()["launch"] = launch;
     for (bool validate : {false, true}) {
       const auto error = Call(nested, false, validate).at("error").as_object();
-      Check(error.at("code") == "invalid_input" && error.at("message") == "Unknown field: launch",
+      Check(error.at("code") == "invalid_input" &&
+                error.at("message") == "Unknown field: launch",
             "Checkpoint suffix accepted launch metadata");
     }
   }
@@ -227,13 +240,15 @@ int main() try {
   Near(Real(Call(request).at("expectation_values").at(0)), -1);
   request.erase("noise");
   request["operation"] = "incremental_evolve";
+  // An explicit value keeps the singleton outer array from copying the matrix.
   request["step_circuit"] = j::object{
       {"format", "instructions"},
       {"num_qubits", 1},
       {"source",
-       j::array{j::object{{"name", "kraus"},
-                          {"qubits", j::array{0}},
-                          {"operators", j::array{j::array{0, 1, 1, 0}}}}}}};
+       j::array{j::object{
+           {"name", "kraus"},
+           {"qubits", j::array{0}},
+           {"operators", j::array{j::value(j::array{0, 1, 1, 0})}}}}}};
   request["steps"] = j::array{0, 1, 2};
   result = Call(request);
   Near(Real(result.at("expectation_values").at(0).at(0)), 1);
@@ -295,7 +310,13 @@ int main() try {
                                            {"global_qubits", j::array{1}},
                                            {"flags", 1},
                                            {"backend", "conventional"}}}};
+#ifdef __linux__
   Call(request, true, true);  // Logical shared-device validation needs no GPU.
+#else
+  Check(Call(request, false, true).at("error").at("code") ==
+            "unsupported_capability",
+        "Uncompiled distributed backend should be rejected");
+#endif
 
   request = Request("probabilities", 1, "");
   request["circuit"] = j::object{
@@ -362,43 +383,51 @@ int main() try {
   Call(batch, false, true);
   batch["requests"] = j::array{parameterized};
   batch["simulator"] = j::object{{"backend", "qcsim"}};
-  Call(batch, false, true); // Batch members must carry their own configuration.
+  Call(batch, false,
+       true);  // Batch members must carry their own configuration.
 
   // Parser failures are input errors in both validation and execution.
-  for (const auto& instruction : j::array{
-           j::object{{"name", "cx"}, {"qubits", j::array{0}}},
-           j::object{{"name", "x"}, {"qubits", j::array{0, 1}}},
-           j::object{{"name", "ccx"}, {"qubits", j::array{0, 1}}},
-           j::object{{"name", "unknown"}, {"qubits", j::array{0}}},
-           j::object{{"name", "measure"}, {"qubits", j::array{0, 1}},
-                     {"clbits", j::array{0}}}}) {
+  for (const auto& instruction :
+       j::array{j::object{{"name", "cx"}, {"qubits", j::array{0}}},
+                j::object{{"name", "x"}, {"qubits", j::array{0, 1}}},
+                j::object{{"name", "ccx"}, {"qubits", j::array{0, 1}}},
+                j::object{{"name", "unknown"}, {"qubits", j::array{0}}},
+                j::object{{"name", "measure"},
+                          {"qubits", j::array{0, 1}},
+                          {"clbits", j::array{0}}}}) {
     request = Request("execute", 3, "");
     request["circuit"] = j::object{{"format", "instructions"},
                                    {"num_qubits", 3},
                                    {"source", j::array{instruction}}};
     for (bool validate : {false, true})
       Check(Call(request, false, validate).at("error").at("code") ==
-                "invalid_input", "Instruction errors must be invalid_input");
+                "invalid_input",
+            "Instruction errors must be invalid_input");
   }
 
-  for (const auto& operation : j::array{
-           j::object{{"name", "reset"}, {"qubits", j::array{0}}},
-           j::object{{"name", "kraus"}, {"qubits", j::array{0}},
-                     {"operators", j::array{j::array{0, 1, 1, 0}}}}}) {
+  for (const auto& operation :
+       j::array{j::object{{"name", "reset"}, {"qubits", j::array{0}}},
+                j::object{
+                    {"name", "kraus"},
+                    {"qubits", j::array{0}},
+                    {"operators", j::array{j::value(j::array{0, 1, 1, 0})}}}}) {
     request = Request("checkpoint_batch", 1, "", "density_matrix");
     request["circuit"] = j::object{{"format", "instructions"},
                                    {"num_qubits", 1},
                                    {"source", j::array{operation}}};
-    request["suffixes"] = j::array{Request("execute", 1, "measure q->c;").at("circuit")};
+    request["suffixes"] =
+        j::array{Request("execute", 1, "measure q->c;").at("circuit")};
     const auto error = Call(request, false, true).at("error").as_object();
     Check(error.at("code") == "unsupported_capability" &&
-              error.at("message") == "checkpoint_batch prefix requires a unitary circuit",
+              error.at("message") ==
+                  "checkpoint_batch prefix requires a unitary circuit",
           "Checkpoint prefix error lost operation context");
   }
 
-  for (const auto* field : {"other_circuit", "step_circuit", "suffixes", "steps",
-                             "requests", "diagnostics", "maintenance", "keep_qubits",
-                             "basis_states", "target_state", "observables", "max_output_elements"}) {
+  for (const auto* field :
+       {"other_circuit", "step_circuit", "suffixes", "steps", "requests",
+        "diagnostics", "maintenance", "keep_qubits", "basis_states",
+        "target_state", "observables", "max_output_elements"}) {
     request = Request("execute", 1, "");
     request[field] = j::object{{"unknown_nested_field", true}};
     Check(Call(request, false, true).at("error").at("code") == "invalid_input",
@@ -408,11 +437,15 @@ int main() try {
   request["keep_qubits"] = j::array{0};
   Call(request, false, true);
   for (const auto& instruction : j::array{
-           j::object{{"name", "reset"}, {"qubits", j::array{0}}, {"duration", 1}},
-           j::object{{"name", "delay"}, {"qubits", j::array{0}}, {"duration", 1},
+           j::object{
+               {"name", "reset"}, {"qubits", j::array{0}}, {"duration", 1}},
+           j::object{{"name", "delay"},
+                     {"qubits", j::array{0}},
+                     {"duration", 1},
                      {"operators", j::array{}}}}) {
     request = Request("execute", 1, "");
-    request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 1},
+    request["circuit"] = j::object{{"format", "instructions"},
+                                   {"num_qubits", 1},
                                    {"source", j::array{instruction}}};
     Call(request, false, true);
   }
@@ -420,15 +453,22 @@ int main() try {
   // Checkpoint seeds promise repeatability of the entire ordered request, not
   // invariant per-branch samples after branches are moved or changed.
   request = Request("checkpoint_batch", 1, "");
-  request["suffixes"] = j::array{
-      Request("execute", 1, "x q[0]; measure q->c;").at("circuit"),
-      Request("execute", 1, "h q[0]; measure q->c;").at("circuit")};
-  request["noise"] = j::object{{"mode", "pauli"}, {"seed", 123}, {"realizations", 40},
-      {"channels", j::array{
-          j::object{{"kind", "bit_flip"}, {"targets", j::array{0}}, {"probability", 0.3}},
-          j::object{{"kind", "readout"}, {"targets", j::array{0}}, {"probability", 0.1}}}}};
+  request["suffixes"] =
+      j::array{Request("execute", 1, "x q[0]; measure q->c;").at("circuit"),
+               Request("execute", 1, "h q[0]; measure q->c;").at("circuit")};
+  request["noise"] =
+      j::object{{"mode", "pauli"},
+                {"seed", 123},
+                {"realizations", 40},
+                {"channels", j::array{j::object{{"kind", "bit_flip"},
+                                                {"targets", j::array{0}},
+                                                {"probability", 0.3}},
+                                      j::object{{"kind", "readout"},
+                                                {"targets", j::array{0}},
+                                                {"probability", 0.1}}}}};
   const auto checkpoint = Call(request).at("results");
-  Check(checkpoint == Call(request).at("results"), "Seeded checkpoint changed across repeats");
+  Check(checkpoint == Call(request).at("results"),
+        "Seeded checkpoint changed across repeats");
   for (const auto& suffix : checkpoint.as_array()) {
     int64_t count = 0;
     for (const auto& entry : suffix.at("counts").as_object())
@@ -437,14 +477,22 @@ int main() try {
   }
 
   request = Request("noisy_fidelity", 1, "");
-  request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 1},
+  request["circuit"] = j::object{
+      {"format", "instructions"},
+      {"num_qubits", 1},
       {"source", j::array{j::object{{"name", "h"}, {"qubits", j::array{0}}}}}};
-  request["noise"] = j::object{{"mode", "coherent"}, {"seed", 12}, {"realizations", 8},
-      {"channels", j::array{j::object{{"kind", "coherent_rotation"},
-          {"targets", j::array{0}}, {"rx", 0.2}, {"ry", 0.1}, {"rz", 0.3}}}}};
+  request["noise"] =
+      j::object{{"mode", "coherent"},
+                {"seed", 12},
+                {"realizations", 8},
+                {"channels", j::array{j::object{{"kind", "coherent_rotation"},
+                                                {"targets", j::array{0}},
+                                                {"rx", 0.2},
+                                                {"ry", 0.1},
+                                                {"rz", 0.3}}}}};
   const auto fidelity = Real(Call(request).at("fidelity"));
-  request["circuit"].as_object()["source"].as_array().push_back(
-      j::object{{"name", "delay"}, {"qubits", j::array{0}}, {"duration", 0.001}});
+  request["circuit"].as_object()["source"].as_array().push_back(j::object{
+      {"name", "delay"}, {"qubits", j::array{0}}, {"duration", 0.001}});
   Near(Real(Call(request).at("fidelity")), fidelity);
   request.erase("noise");
   request["operation"] = "mirror_fidelity";
@@ -452,9 +500,12 @@ int main() try {
 
   request = Request("execute", 1, "");
   request["launch"] = j::object{{"profile", "missing"}, {"ranks", 999}};
-  Check(Call(request, false, true).at("error").at("code") == "invalid_input", "Native validation ignored launch metadata");
+  Check(Call(request, false, true).at("error").at("code") == "invalid_input",
+        "Native validation ignored launch metadata");
   Call(request, false);
-  auto nested = j::object{{"schema_version", 2}, {"operation", "batch"}, {"requests", j::array{request}}};
+  auto nested = j::object{{"schema_version", 2},
+                          {"operation", "batch"},
+                          {"requests", j::array{request}}};
   Call(nested, false, true);
   TestRequestNoiseAndOptions();
 

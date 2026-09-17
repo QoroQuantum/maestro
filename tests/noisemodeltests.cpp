@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "../Circuit/Circuit.h"
+#include "../Simulators/Configuration.h"
 #include "../Simulators/Factory.h"
 #include "../python/noise.h"
 
@@ -53,10 +54,9 @@ std::shared_ptr<Circuits::Circuit<double>> HadamardCircuit() {
  * With the H first, this is exactly the coherence multiplier of whatever
  * noise the model injected after it.
  */
-double ExactCoherence(const noise::NoiseModel& noiseModel) {
+double ExactCoherence(const noise::NoiseModel &noiseModel) {
   const auto noisy = noise::inject_exact_noise(HadamardCircuit(), noiseModel);
-  auto simulator =
-      MakeSimulator(Simulators::SimulationType::kDensityMatrix, 1);
+  auto simulator = MakeSimulator(Simulators::SimulationType::kDensityMatrix, 1);
   Circuits::OperationState classicalState;
   noisy->Execute(simulator, classicalState);
   return simulator->ExpectationValue("X");
@@ -69,15 +69,14 @@ double ExactCoherence(const noise::NoiseModel& noiseModel) {
  * over many realizations reconstructs the channel the sampled path
  * represents.
  */
-double SampledCoherence(const noise::NoiseModel& noiseModel,
+double SampledCoherence(const noise::NoiseModel &noiseModel,
                         size_t realizations, unsigned int seed) {
   std::mt19937 rng(seed);
   const auto circuit = HadamardCircuit();
   double total = 0.0;
   for (size_t realization = 0; realization < realizations; ++realization) {
     const auto noisy = noise::inject_noise(circuit, noiseModel, rng);
-    auto simulator =
-        MakeSimulator(Simulators::SimulationType::kStatevector, 1);
+    auto simulator = MakeSimulator(Simulators::SimulationType::kStatevector, 1);
     Circuits::OperationState classicalState;
     noisy->Execute(simulator, classicalState);
     total += simulator->ExpectationValue("X");
@@ -120,8 +119,7 @@ BOOST_AUTO_TEST_CASE(ThermalRelaxationAgreesOnExactAndSampledBackends) {
   // probability calibrated for the reset model. The exact backend applies
   // amplitude damping instead, so it under-dephases by exp(t/2*T1).
   const double gamma = -std::expm1(-duration / t1);
-  const double pz =
-      0.5 * (1.0 - std::exp(-duration * (1.0 / t2 - 1.0 / t1)));
+  const double pz = 0.5 * (1.0 - std::exp(-duration * (1.0 / t2 - 1.0 / t1)));
   noise::NoiseModel legacy;
   legacy.set_t1(0, gamma);
   legacy.set_dephasing(0, pz);
@@ -130,8 +128,8 @@ BOOST_AUTO_TEST_CASE(ThermalRelaxationAgreesOnExactAndSampledBackends) {
   BOOST_TEST(legacyExact > expected,
              "the legacy split configuration under-dephases on the exact "
              "backend, which is why set_thermal_relaxation exists");
-  BOOST_CHECK_SMALL(
-      legacyExact - std::sqrt(1.0 - gamma) * (1.0 - 2.0 * pz), kTolerance);
+  BOOST_CHECK_SMALL(legacyExact - std::sqrt(1.0 - gamma) * (1.0 - 2.0 * pz),
+                    kTolerance);
 }
 
 /** Two-qubit gates use the 2Q relaxation when one is configured. */
@@ -143,9 +141,9 @@ BOOST_AUTO_TEST_CASE(ThermalRelaxation2QOverridesTheAllGatesChannel) {
   noiseModel.set_thermal_relaxation(0, 2e-8, t1, t2);
   noiseModel.set_thermal_relaxation_2q(0, 4e-7, t1, t2);
 
-  const auto* oneQubit =
+  const auto *oneQubit =
       noiseModel.get_thermal_relaxation_params(0, /*is_2q=*/false);
-  const auto* twoQubit =
+  const auto *twoQubit =
       noiseModel.get_thermal_relaxation_params(0, /*is_2q=*/true);
   BOOST_REQUIRE(oneQubit);
   BOOST_REQUIRE(twoQubit);
@@ -155,7 +153,7 @@ BOOST_AUTO_TEST_CASE(ThermalRelaxation2QOverridesTheAllGatesChannel) {
   // A qubit with no 2Q override falls back to the "all gates" relaxation.
   noise::NoiseModel fallback;
   fallback.set_thermal_relaxation(1, 2e-8, t1, t2);
-  const auto* fallbackParams =
+  const auto *fallbackParams =
       fallback.get_thermal_relaxation_params(1, /*is_2q=*/true);
   BOOST_REQUIRE(fallbackParams);
   BOOST_CHECK_CLOSE(fallbackParams->duration, 2e-8, 1e-9);
@@ -172,8 +170,8 @@ BOOST_AUTO_TEST_CASE(PhaseDampingIsExactOnBothBackends) {
   noise::NoiseModel noiseModel;
   noiseModel.set_phase_damping(0, gamma);
   BOOST_TEST(!noiseModel.has_additional_quantum_channels());
-  BOOST_CHECK_SMALL(
-      noiseModel.get_phase_damping_flip_probability(0) - 0.1, kTolerance);
+  BOOST_CHECK_SMALL(noiseModel.get_phase_damping_flip_probability(0) - 0.1,
+                    kTolerance);
 
   BOOST_CHECK_SMALL(ExactCoherence(noiseModel) - expected, kTolerance);
   BOOST_CHECK_SMALL(SampledCoherence(noiseModel, 4000, 999) - expected, 0.02);
@@ -200,8 +198,7 @@ BOOST_AUTO_TEST_CASE(ExactOnlyChannelsStillRejectSampledBackends) {
 BOOST_AUTO_TEST_CASE(SettersRejectUnphysicalParameters) {
   noise::NoiseModel noiseModel;
 
-  BOOST_CHECK_THROW(noiseModel.set_depolarizing(0, 1.5),
-                    std::invalid_argument);
+  BOOST_CHECK_THROW(noiseModel.set_depolarizing(0, 1.5), std::invalid_argument);
   BOOST_CHECK_THROW(noiseModel.set_depolarizing(0, -0.1),
                     std::invalid_argument);
   BOOST_CHECK_THROW(noiseModel.set_dephasing(0, 2.0), std::invalid_argument);
@@ -224,9 +221,9 @@ BOOST_AUTO_TEST_CASE(SettersRejectUnphysicalParameters) {
   // Degenerate OU parameters used to produce silent inf/nan.
   BOOST_CHECK_THROW(noiseModel.set_correlated_ou(0, 1.0, 0.0, 1e-7),
                     std::invalid_argument);
-  BOOST_CHECK_THROW(noiseModel.set_all_correlated_from_power(0, 1e-3, 0.5,
-                                                             1e-7),
-                    std::invalid_argument);
+  BOOST_CHECK_THROW(
+      noiseModel.set_all_correlated_from_power(0, 1e-3, 0.5, 1e-7),
+      std::invalid_argument);
 
   // Nothing above should have been recorded.
   BOOST_TEST(!noiseModel.has_any());
@@ -256,7 +253,7 @@ BOOST_AUTO_TEST_CASE(CoherentNoiseSignIsSystematicWithinARealization) {
     const auto noisy = noise::inject_coherent_noise(circuit, noiseModel, rng);
 
     std::vector<double> angles;
-    for (const auto& op : noisy->GetOperations()) {
+    for (const auto &op : noisy->GetOperations()) {
       const auto rz = std::dynamic_pointer_cast<Circuits::RzGate<>>(op);
       if (rz) angles.push_back(rz->GetTheta());
     }
@@ -298,7 +295,8 @@ BOOST_AUTO_TEST_CASE(ThermalT2GreaterThanT1UsesSampledApproximation) {
   noise::NoiseModel clamped;
   clamped.set_thermal_relaxation(0, duration, t1, t1);
   BOOST_CHECK_SMALL(SampledCoherence(noiseModel, 2000, 42) -
-                    SampledCoherence(clamped, 2000, 42), kTolerance);
+                        SampledCoherence(clamped, 2000, 42),
+                    kTolerance);
   BOOST_TEST(noiseModel.get_thermal_relaxation_params(0, false)->t2 == t2);
   BOOST_CHECK_NO_THROW(
       noise::inject_exact_noise(HadamardCircuit(), noiseModel));
@@ -344,9 +342,12 @@ BOOST_AUTO_TEST_CASE(DelayExactChannelDivisibility) {
   Circuits::OperationState state2;
   noisy2->Execute(sim2, state2);
 
-  BOOST_CHECK_CLOSE(sim1->ExpectationValue("X"), sim2->ExpectationValue("X"), 1e-5);
-  BOOST_CHECK_CLOSE(sim1->ExpectationValue("Y"), sim2->ExpectationValue("Y"), 1e-5);
-  BOOST_CHECK_CLOSE(sim1->ExpectationValue("Z"), sim2->ExpectationValue("Z"), 1e-5);
+  BOOST_CHECK_CLOSE(sim1->ExpectationValue("X"), sim2->ExpectationValue("X"),
+                    1e-5);
+  BOOST_CHECK_CLOSE(sim1->ExpectationValue("Y"), sim2->ExpectationValue("Y"),
+                    1e-5);
+  BOOST_CHECK_CLOSE(sim1->ExpectationValue("Z"), sim2->ExpectationValue("Z"),
+                    1e-5);
 }
 
 BOOST_AUTO_TEST_CASE(DelaySampledCoherenceMatchesExact) {
@@ -480,10 +481,7 @@ BOOST_AUTO_TEST_CASE(CorrelatedNoiseStationaryInitVariance) {
 
 BOOST_AUTO_TEST_CASE(MultiBandOUConfigurationAndSuperposition) {
   constexpr double gate_time = 100e-9;
-  std::vector<std::pair<double, double>> bands = {
-      {10.0, 2.0},
-      {20.0, 5.0}
-  };
+  std::vector<std::pair<double, double>> bands = {{10.0, 2.0}, {20.0, 5.0}};
 
   noise::NoiseModel nm;
   nm.set_multi_correlated_ou(0, bands, gate_time, true, true, true);
@@ -527,6 +525,226 @@ BOOST_AUTO_TEST_CASE(OneOverFNoiseSynthesizer) {
   for (size_t b = 1; b < crn->bands.size(); ++b) {
     BOOST_CHECK_LT(crn->bands[b].phi, crn->bands[b - 1].phi);
     BOOST_CHECK_GT(crn->bands[b].theta, crn->bands[b - 1].theta);
+  }
+}
+
+/**
+ * The auxiliary RNG on IState is what measurement-time readout flips draw
+ * from. It must be in [0,1), reproducible under SetSeed, and per-instance so
+ * the per-job clones in the multi-shot thread pool never share a stream.
+ */
+BOOST_AUTO_TEST_CASE(AuxiliaryRngIsSeededAndPerInstance) {
+  auto a = MakeSimulator(Simulators::SimulationType::kStatevector, 1);
+  auto b = MakeSimulator(Simulators::SimulationType::kStatevector, 1);
+  a->SetSeed(5);
+  b->SetSeed(5);
+
+  std::vector<double> va, vb;
+  for (int i = 0; i < 8; ++i) {
+    va.push_back(a->RandomUniform());
+    vb.push_back(b->RandomUniform());
+  }
+  for (const double v : va) {
+    BOOST_CHECK_GE(v, 0.0);
+    BOOST_CHECK_LT(v, 1.0);
+  }
+  BOOST_CHECK(va == vb);
+
+  auto c = MakeSimulator(Simulators::SimulationType::kStatevector, 1);
+  c->SetSeed(6);
+  std::vector<double> vc;
+  for (int i = 0; i < 8; ++i) vc.push_back(c->RandomUniform());
+  BOOST_CHECK(va != vc);
+}
+
+/**
+ * Readout error is a property of the QUBIT being read, applied when the
+ * measurement writes its bit -- not a post-pass over the counts string indexed
+ * by classical-bit position. Swap the qubit->bit map and only the bit holding
+ * qubit 0's outcome may flip.
+ */
+BOOST_AUTO_TEST_CASE(ReadoutFlipsFollowTheMeasuredQubitNotTheBitIndex) {
+  // x q0; measure q0 -> c1, q1 -> c0. q0 reads 1, q1 reads 0.
+  auto meas = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{0, 1}, {1, 0}});
+  // index 0 is qubit 0: always report a measured 1 as 0. index 1 (qubit 1):
+  // none.
+  meas->SetReadoutAt(0, Circuits::ReadoutRates{0.0, 1.0});
+  BOOST_CHECK(meas->HasReadout());
+
+  auto simulator = MakeSimulator(Simulators::SimulationType::kStatevector, 2);
+  simulator->SetSeed(3);
+  simulator->ApplyX(0);
+
+  Circuits::OperationState state;
+  state.AllocateBits(2);
+  meas->Execute(simulator, state);
+
+  const auto &bits = state.GetAllBits();
+  BOOST_REQUIRE_EQUAL(bits.size(), 2u);
+  BOOST_CHECK_EQUAL(bits[1], false);  // c1 held q0's 1 -> flipped to 0
+  BOOST_CHECK_EQUAL(bits[0], false);  // c0 held q1's 0, no readout on q1
+}
+
+/** Without a simulator handle (legacy callers) readout stays inert. */
+BOOST_AUTO_TEST_CASE(SetStateFromSampleWithoutRngIsUnchanged) {
+  auto meas = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}});
+  meas->SetReadoutAt(0, Circuits::ReadoutRates{1.0, 1.0});
+
+  Circuits::OperationState state;
+  state.AllocateBits(1);
+  meas->SetStateFromSample(std::vector<bool>{true}, state);
+
+  BOOST_CHECK_EQUAL(state.GetAllBits()[0], true);
+}
+
+/** Clone must carry the readout rates, index for index. */
+BOOST_AUTO_TEST_CASE(ReadoutRatesSurviveClone) {
+  auto meas = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{2, 0}, {5, 1}});
+  meas->SetReadoutAt(1, Circuits::ReadoutRates{0.1, 0.2});
+
+  auto copy =
+      std::static_pointer_cast<Circuits::MeasurementOperation<>>(meas->Clone());
+
+  BOOST_REQUIRE(copy->HasReadout());
+  BOOST_REQUIRE_EQUAL(copy->GetReadout().size(), 2u);
+  BOOST_CHECK_CLOSE(copy->GetReadout()[1].p_meas1_prep0, 0.1, 1e-9);
+  BOOST_CHECK_CLOSE(copy->GetReadout()[1].p_meas0_prep1, 0.2, 1e-9);
+  BOOST_CHECK_SMALL(copy->GetReadout()[0].p_meas1_prep0, 1e-12);
+}
+
+/**
+ * GetLastMeasurements merges trailing measurements into one op and sorts them
+ * by qubit. The readout rates must be permuted with their (qubit, bit) pair.
+ */
+BOOST_AUTO_TEST_CASE(ReadoutRatesSurviveGetLastMeasurements) {
+  auto circuit = std::make_shared<Circuits::Circuit<double>>();
+  circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+
+  auto m1 = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{3, 0}});
+  m1->SetReadoutAt(0, Circuits::ReadoutRates{0.3, 0.03});
+
+  auto m2 = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{1, 1}, {2, 2}});
+  m2->SetReadoutAt(0, Circuits::ReadoutRates{0.1, 0.01});
+  // index 1 (qubit 2) deliberately left at zero rates
+
+  circuit->AddOperation(m1);
+  circuit->AddOperation(m2);
+
+  const std::vector<bool> executed(circuit->GetOperations().size(), false);
+  auto merged = circuit->GetLastMeasurements(executed, /*sort=*/true);
+
+  const auto &qs = merged->GetQubits();
+  const auto &bs = merged->GetBitsIndices();
+  BOOST_REQUIRE_EQUAL(qs.size(), 3u);
+  BOOST_REQUIRE(merged->HasReadout());
+  const auto &r = merged->GetReadout();
+  BOOST_REQUIRE_EQUAL(r.size(), 3u);
+
+  // sorted by qubit: (1,c1,0.1/0.01), (2,c2,0/0), (3,c0,0.3/0.03)
+  BOOST_CHECK_EQUAL(qs[0], 1u);
+  BOOST_CHECK_EQUAL(bs[0], 1u);
+  BOOST_CHECK_CLOSE(r[0].p_meas1_prep0, 0.1, 1e-9);
+  BOOST_CHECK_EQUAL(qs[1], 2u);
+  BOOST_CHECK_EQUAL(bs[1], 2u);
+  BOOST_CHECK_SMALL(r[1].p_meas1_prep0, 1e-12);
+  BOOST_CHECK_EQUAL(qs[2], 3u);
+  BOOST_CHECK_EQUAL(bs[2], 0u);
+  BOOST_CHECK_CLOSE(r[2].p_meas1_prep0, 0.3, 1e-9);
+  BOOST_CHECK_CLOSE(r[2].p_meas0_prep1, 0.03, 1e-9);
+}
+
+/** No readout on any source op -> the merged op carries none either. */
+BOOST_AUTO_TEST_CASE(GetLastMeasurementsWithoutReadoutStaysClean) {
+  auto circuit = std::make_shared<Circuits::Circuit<double>>();
+  circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}, {1, 1}}));
+
+  const std::vector<bool> executed(1, false);
+  auto merged = circuit->GetLastMeasurements(executed, true);
+
+  BOOST_CHECK(!merged->HasReadout());
+}
+
+/**
+ * EnsureProperOrderForMeasurements splits a multi-qubit measurement into
+ * single-pair ops. Each rebuilt op must carry the rates of its own qubit.
+ */
+BOOST_AUTO_TEST_CASE(ReadoutRatesSurviveEnsureProperOrder) {
+  Circuits::Circuit<double> circuit;
+  auto m = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}, {1, 1}});
+  m->SetReadoutAt(0, Circuits::ReadoutRates{0.05, 0.5});
+  m->SetReadoutAt(1, Circuits::ReadoutRates{0.06, 0.6});
+  circuit.AddOperation(m);
+
+  circuit.EnsureProperOrderForMeasurements();
+
+  size_t seen = 0;
+  for (const auto &op : circuit.GetOperations()) {
+    if (op->GetType() != Circuits::OperationType::kMeasurement) continue;
+    auto meas = std::static_pointer_cast<Circuits::MeasurementOperation<>>(op);
+    BOOST_REQUIRE_EQUAL(meas->GetQubits().size(), 1u);
+    BOOST_REQUIRE(meas->HasReadout());
+    const auto q = meas->GetQubits()[0];
+    const auto &r = meas->GetReadout()[0];
+    if (q == 0) BOOST_CHECK_CLOSE(r.p_meas0_prep1, 0.5, 1e-9);
+    if (q == 1) BOOST_CHECK_CLOSE(r.p_meas0_prep1, 0.6, 1e-9);
+    ++seen;
+  }
+  BOOST_CHECK_EQUAL(seen, 2u);
+}
+
+BOOST_AUTO_TEST_CASE(ReplacingNoisyMeasurementClearsReadoutRates) {
+  Circuits::Circuit<double> circuit;
+  auto noisy = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}});
+  noisy->SetReadout({{1.0, 1.0}});
+  circuit.AddOperation(noisy);
+  circuit.AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{1, 0}}));
+
+  circuit.EnsureProperOrderForMeasurements();
+
+  BOOST_REQUIRE_EQUAL(circuit.GetOperations().size(), 1u);
+  auto rebuilt = std::static_pointer_cast<Circuits::MeasurementOperation<>>(
+      circuit.GetOperations()[0]);
+  BOOST_CHECK_EQUAL(rebuilt->GetQubits()[0], 1u);
+  BOOST_CHECK(!rebuilt->HasReadout());
+  auto simulator = MakeSimulator(Simulators::SimulationType::kStatevector, 2);
+  Circuits::OperationState state(1);
+  rebuilt->Execute(simulator, state);
+  BOOST_CHECK_EQUAL(state.GetAllBits()[0], false);
+}
+
+BOOST_AUTO_TEST_CASE(ConfigurationSeedsReadoutWithoutChangingBackendSequence) {
+  for (const auto method :
+       {Simulators::SimulationType::kStatevector,
+        Simulators::SimulationType::kMatrixProductState,
+        Simulators::SimulationType::kStabilizer,
+        Simulators::SimulationType::kDensityMatrix,
+        Simulators::SimulationType::kMatrixProductOperator}) {
+    auto direct = MakeSimulator(method, 2);
+    auto configured = MakeSimulator(method, 2);
+    direct->Configure("seed", "11");
+    Simulators::Configuration config;
+    config.SetConfiguration("seed", "11");
+    config.ApplyConfigurationToSimulator(configured);
+    for (auto simulator : {direct, configured}) {
+      simulator->ApplyH(0);
+      simulator->ApplyH(1);
+    }
+    BOOST_CHECK(direct->SampleCountsMany({0, 1}, 200) ==
+                configured->SampleCountsMany({0, 1}, 200));
+
+    auto again = MakeSimulator(method, 2);
+    config.ApplyConfigurationToSimulator(again);
+    for (int i = 0; i < 20; ++i)
+      BOOST_CHECK_EQUAL(configured->RandomUniform(), again->RandomUniform());
   }
 }
 

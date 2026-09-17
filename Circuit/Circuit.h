@@ -21,6 +21,7 @@
 
 #define _USE_MATH_DEFINES
 #include <math.h>
+#include <numeric>
 #include <set>
 
 #include "Conditional.h"
@@ -95,8 +96,8 @@ class Circuit : public IOperation<Time> {
    * @sa ISimulator
    * @sa OperationState
    */
-  void Execute(const std::shared_ptr<Simulators::ISimulator>& sim,
-               OperationState& state) const override {
+  void Execute(const std::shared_ptr<Simulators::ISimulator> &sim,
+               OperationState &state) const override {
     ExecuteBD(sim, state);
   }
 
@@ -112,11 +113,11 @@ class Circuit : public IOperation<Time> {
    * @sa OperationState
    */
   void ExecuteBD(const std::shared_ptr<Simulators::ISimulator> &sim,
-               OperationState &state, size_t* curMaxBondDim = nullptr) const {
+                 OperationState &state, size_t *curMaxBondDim = nullptr) const {
     state.Reset();
     if (!sim) return;
 
-    for (const auto& op : operations) {
+    for (const auto &op : operations) {
       op->Execute(sim, state);
       if (curMaxBondDim) {
         const auto bondDim = sim->GetCurrentMaxBondDimension();
@@ -150,7 +151,8 @@ class Circuit : public IOperation<Time> {
    * @param duration The physical duration in seconds.
    */
   void Delay(Types::qubit_t qubit, Time duration) {
-    operations.push_back(std::make_shared<Circuits::Delay<Time>>(qubit, duration));
+    operations.push_back(
+        std::make_shared<Circuits::Delay<Time>>(qubit, duration));
   }
 
   /**
@@ -469,14 +471,21 @@ class Circuit : public IOperation<Time> {
       std::unordered_set<size_t> bits;
       std::unordered_map<size_t, Types::qubit_t> measQubits;
       std::unordered_map<size_t, Time> measDelays;
+      // Only for bits whose source measurement carried readout rates.
+      std::unordered_map<size_t, ReadoutRates> measReadout;
 
       auto affectedBits = op->AffectedBits();
       auto affectedQubits = op->AffectedQubits();
+
+      const auto firstMeas =
+          std::static_pointer_cast<MeasurementOperation<Time>>(op);
+      const auto &firstRates = firstMeas->GetReadout();
 
       for (size_t q = 0; q < affectedQubits.size(); ++q) {
         bits.insert(affectedBits[q]);
         measQubits[affectedBits[q]] = affectedQubits[q];
         measDelays[affectedBits[q]] = op->GetDelay();
+        if (q < firstRates.size()) measReadout[affectedBits[q]] = firstRates[q];
       }
 
       size_t j = i + 1;
@@ -490,10 +499,15 @@ class Circuit : public IOperation<Time> {
         const auto meas =
             std::static_pointer_cast<MeasurementOperation<Time>>(op2);
         affectedBits = meas->GetBitsIndices();
+        const auto &rates = meas->GetReadout();
         for (size_t q = 0; q < affectedBits.size(); ++q) {
           bits.insert(affectedBits[q]);
           measQubits[affectedBits[q]] = affectedQubits[q];
           measDelays[affectedBits[q]] = op2->GetDelay();
+          if (q < rates.size())
+            measReadout[affectedBits[q]] = rates[q];
+          else
+            measReadout.erase(affectedBits[q]);
         }
       }
 
@@ -511,9 +525,13 @@ class Circuit : public IOperation<Time> {
           const auto condbits = condop->AffectedBits();
           for (const auto bit : condbits)
             if (bits.find(bit) != bits.end()) {
-              newops.emplace_back(std::make_shared<MeasurementOperation<Time>>(
+              auto rebuilt = std::make_shared<MeasurementOperation<Time>>(
                   std::vector{std::make_pair(measQubits[bit], bit)},
-                  measDelays[bit]));
+                  measDelays[bit]);
+              const auto rateit = measReadout.find(bit);
+              if (rateit != measReadout.end())
+                rebuilt->SetReadout({rateit->second});
+              newops.emplace_back(rebuilt);
               bits.erase(bit);
             }
         }
@@ -521,10 +539,13 @@ class Circuit : public IOperation<Time> {
       }
 
       // now add the measurements that were left in any order
-      for (auto bit : bits)
-        newops.emplace_back(std::make_shared<MeasurementOperation<Time>>(
-            std::vector{std::make_pair(measQubits[bit], bit)},
-            measDelays[bit]));
+      for (auto bit : bits) {
+        auto rebuilt = std::make_shared<MeasurementOperation<Time>>(
+            std::vector{std::make_pair(measQubits[bit], bit)}, measDelays[bit]);
+        const auto rateit = measReadout.find(bit);
+        if (rateit != measReadout.end()) rebuilt->SetReadout({rateit->second});
+        newops.emplace_back(rebuilt);
+      }
     }
 
     operations.swap(newops);
@@ -1710,8 +1731,8 @@ class Circuit : public IOperation<Time> {
    * @sa OperationState
    */
   std::vector<bool> ExecuteNonMeasurements(
-      const std::shared_ptr<Simulators::ISimulator> &sim,
-      OperationState &state, size_t* curMaxBondDim = nullptr) const {
+      const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state,
+      size_t *curMaxBondDim = nullptr) const {
     std::vector<bool> executedOps;
     executedOps.reserve(operations.size());
 
@@ -1802,10 +1823,13 @@ class Circuit : public IOperation<Time> {
 
       if (!executed) {
         executionStopped = true;
-        if (sim && sim->GetSimulationType() ==
-                       Simulators::SimulationType::kMatrixProductState && sim->SupportsMPSSwapOptimization() && 
+        if (sim &&
+            sim->GetSimulationType() ==
+                Simulators::SimulationType::kMatrixProductState &&
+            sim->SupportsMPSSwapOptimization() &&
             op->GetType() != OperationType::kRandomGen &&
-            op->GetType() != OperationType::kConditionalRandomGen && op->GetType() != OperationType::kNoOp)
+            op->GetType() != OperationType::kConditionalRandomGen &&
+            op->GetType() != OperationType::kNoOp)
           sim->SetGatesCounter(sim->GetGatesCounter() + 1);
       }
       if (executionStopped) executedOps.emplace_back(executed);
@@ -1831,7 +1855,8 @@ class Circuit : public IOperation<Time> {
    */
   void ExecuteMeasurements(const std::shared_ptr<Simulators::ISimulator> &sim,
                            OperationState &state,
-                           const std::vector<bool> &executedOps, size_t* curMaxBondDim = nullptr) const {
+                           const std::vector<bool> &executedOps,
+                           size_t *curMaxBondDim = nullptr) const {
     state.Reset();
     if (!sim) return;
 
@@ -1852,14 +1877,15 @@ class Circuit : public IOperation<Time> {
     // sim->Flush();
   }
 
-
   /**
-   * @brief Returns a new circuit with the operations that were not yet executed.
-   * 
+   * @brief Returns a new circuit with the operations that were not yet
+   * executed.
+   *
    * The parameter is modified to reflect the newly created circuit, which
    * contains only the operations that were not yet executed.
-   * 
-   * @param executedOps A vector of bools indicating which operations were executed.
+   *
+   * @param executedOps A vector of bools indicating which operations were
+   * executed.
    * @return A new circuit with the operations that were not yet executed.
    */
   std::shared_ptr<Circuits::Circuit<Time>> RemoveExecutedOperations(
@@ -1882,15 +1908,16 @@ class Circuit : public IOperation<Time> {
     return std::make_shared<Circuit<Time>>(newops);
   }
 
-
-
   // used internally to optimize measurements in the case of having measurements
   // only at the end of the circuit
   std::shared_ptr<MeasurementOperation<Time>> GetLastMeasurements(
       const std::vector<bool> &executedOps, bool sort = true) const {
     const size_t dif = operations.size() - executedOps.size();
     std::vector<std::pair<Types::qubit_t, size_t>> measurements;
+    std::vector<ReadoutRates> readout;
+    bool anyReadout = false;
     measurements.reserve(dif);
+    readout.reserve(dif);
 
     for (size_t i = dif; i < operations.size(); ++i)
       if (!executedOps[i - dif] &&
@@ -1899,18 +1926,41 @@ class Circuit : public IOperation<Time> {
             std::static_pointer_cast<MeasurementOperation<Time>>(operations[i]);
         const auto &qubits = measOp->GetQubits();
         const auto &bits = measOp->GetBitsIndices();
+        const auto &rates = measOp->GetReadout();
 
-        for (size_t j = 0; j < qubits.size(); ++j)
+        for (size_t j = 0; j < qubits.size(); ++j) {
           measurements.emplace_back(qubits[j], bits[j]);
+          readout.push_back(j < rates.size() ? rates[j] : ReadoutRates{});
+        }
+
+        anyReadout = anyReadout || measOp->HasReadout();
       }
 
     // qiskit aer expects sometimes to have them in sorted order, so...
-    if (sort)
-      std::sort(
-          measurements.begin(), measurements.end(),
-          [](const auto &p1, const auto &p2) { return p1.first < p2.first; });
+    // Sort an index permutation, so the readout rates follow their own pair.
+    if (sort) {
+      std::vector<size_t> order(measurements.size());
+      std::iota(order.begin(), order.end(), 0);
+      std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+        return measurements[a].first < measurements[b].first;
+      });
 
-    return std::make_shared<MeasurementOperation<Time>>(measurements);
+      std::vector<std::pair<Types::qubit_t, size_t>> sortedMeas;
+      std::vector<ReadoutRates> sortedReadout;
+      sortedMeas.reserve(order.size());
+      sortedReadout.reserve(order.size());
+      for (const auto idx : order) {
+        sortedMeas.push_back(measurements[idx]);
+        sortedReadout.push_back(readout[idx]);
+      }
+      measurements.swap(sortedMeas);
+      readout.swap(sortedReadout);
+    }
+
+    auto merged = std::make_shared<MeasurementOperation<Time>>(measurements);
+    if (anyReadout) merged->SetReadout(std::move(readout));
+
+    return merged;
   }
 
   /**
@@ -2512,7 +2562,6 @@ class Circuit : public IOperation<Time> {
    */
   iterator end() noexcept { return operations.end(); }
 
-
   /**
    * @brief Get the begin iterator for the operations.
    *
@@ -2955,15 +3004,14 @@ class ComparableCircuit : public Circuit<Time> {
             return false;
         } break;
         case OperationType::kDelay: {
-          const auto left =
-              std::static_pointer_cast<Delay<Time>>(
-                  BaseClass::GetOperations()[i]);
+          const auto left = std::static_pointer_cast<Delay<Time>>(
+              BaseClass::GetOperations()[i]);
           const auto right =
-              std::static_pointer_cast<Delay<Time>>(
-                  rhs.GetOperations()[i]);
+              std::static_pointer_cast<Delay<Time>>(rhs.GetOperations()[i]);
           if (left->GetQubit() != right->GetQubit()) return false;
           if (approximateParamsCheck) {
-            if (std::abs(left->GetDuration() - right->GetDuration()) > paramsEpsilon)
+            if (std::abs(left->GetDuration() - right->GetDuration()) >
+                paramsEpsilon)
               return false;
           } else if (left->GetDuration() != right->GetDuration()) {
             return false;
