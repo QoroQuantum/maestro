@@ -24,6 +24,8 @@
 #include <Eigen/Eigen>
 #include <cmath>
 #include <complex>
+#include <cstdint>
+#include <random>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -38,7 +40,8 @@
 #include "SimulatorObserver.h"
 
 namespace Circuits {
-template <typename Time> class IOperation;
+template <typename Time>
+class IOperation;
 }
 
 namespace Simulators {
@@ -85,7 +88,8 @@ enum class SimulatorType : int {
 };
 
 inline bool IsDistributedGpuSimulator(SimulatorType type) {
-  return type == SimulatorType::kDistGpuSim || type == SimulatorType::kDistMpiGpuSim;
+  return type == SimulatorType::kDistGpuSim ||
+         type == SimulatorType::kDistMpiGpuSim;
 }
 inline bool IsGpuSimulator(SimulatorType type) {
   return type == SimulatorType::kGpuSim || IsDistributedGpuSimulator(type);
@@ -96,14 +100,14 @@ inline bool IsGpuSimulator(SimulatorType type) {
  * @brief The type of simulation.
  */
 enum class SimulationType : int {
-  kStatevector,        /**< statevector simulation type */
-  kMatrixProductState, /**< matrix product state simulation type */
-  kStabilizer,         /**< Clifford gates simulation type */
-  kTensorNetwork,      /**< Tensor network simulation type */
-  kPauliPropagator,    /**< Pauli propagator simulation type */
-  kExtendedStabilizer, /**< Extended stabilizer simulation type */
-  kPathIntegral,       /**< Path integral simulation type */
-  kDensityMatrix,      /**< Density matrix simulation type */
+  kStatevector,           /**< statevector simulation type */
+  kMatrixProductState,    /**< matrix product state simulation type */
+  kStabilizer,            /**< Clifford gates simulation type */
+  kTensorNetwork,         /**< Tensor network simulation type */
+  kPauliPropagator,       /**< Pauli propagator simulation type */
+  kExtendedStabilizer,    /**< Extended stabilizer simulation type */
+  kPathIntegral,          /**< Path integral simulation type */
+  kDensityMatrix,         /**< Density matrix simulation type */
   kMatrixProductOperator, /**< Matrix product operator simulation type */
   kOther /**< other simulation type, could occur for the aer simulator, which
             also has unitary and superop methods */
@@ -127,9 +131,20 @@ class IState {
 
   /** Seed every random stream owned by this simulator. */
   virtual void SetSeed(uint64_t seed) {
+    auxRng.seed(DeriveSeed(seed, kAuxRngStream));
     const std::string value = std::to_string(seed);
     Configure("seed", value.c_str());
   }
+
+  /**
+   * @brief Uniform random number in [0, 1) from the auxiliary stream.
+   *
+   * Used for classical post-processing that happens during execution, such as
+   * readout-error flips applied when a measurement writes its bit. Each
+   * simulator instance owns its own stream, so the per-job clones in the
+   * multi-shot thread pool never share state. Deterministic after SetSeed.
+   */
+  double RandomUniform() { return auxUniform(auxRng); }
 
   static uint64_t DeriveSeed(uint64_t seed, uint64_t stream) {
     uint64_t value = seed + 0x9e3779b97f4a7c15ULL * (stream + 1);
@@ -355,13 +370,15 @@ class IState {
    * with lookahead depth > 0.
    */
   virtual void SetUpcomingGates(
-      const std::vector<std::shared_ptr<Circuits::IOperation<double>>> & /*gates*/) {}
+      const std::vector<std::shared_ptr<Circuits::IOperation<double>>>
+          & /*gates*/) {}
 
   /**
    * @brief Returns the gates counter.
    *
-   * Usually does nothing, except for MPS simulators that support swap optimization.
-   * 
+   * Usually does nothing, except for MPS simulators that support swap
+   * optimization.
+   *
    * @return The number of gates executed in the circuit.
    */
   virtual long long int GetGatesCounter() const { return 0; }
@@ -369,27 +386,32 @@ class IState {
   /**
    * @brief Sets the gates counter.
    *
-   * Usually does nothing, except for MPS simulators that support swap optimization.
-   * 
-   * @param counter The position in the circuit from where the execution should continue.
+   * Usually does nothing, except for MPS simulators that support swap
+   * optimization.
+   *
+   * @param counter The position in the circuit from where the execution should
+   * continue.
    */
   virtual void SetGatesCounter(long long int /*counter*/) {}
 
   /**
    * @brief Increments the gates counter.
    *
-   * Usually does nothing, except for MPS simulators that support swap optimization. Increments the position in the circuit from where the
-   * execution should continue. Useful for classically controlled gates, for the case when the controlled gate is not executed.
+   * Usually does nothing, except for MPS simulators that support swap
+   * optimization. Increments the position in the circuit from where the
+   * execution should continue. Useful for classically controlled gates, for the
+   * case when the controlled gate is not executed.
    */
   virtual void IncrementGatesCounter() {}
 
-  // the following four functions are also for MPS swaps optimizations, might be removed in the future
+  // the following four functions are also for MPS swaps optimizations, might be
+  // removed in the future
 
   virtual double getGrowthFactorSwap() const { return 0.; }
   virtual double getGrowthFactorGate() const { return 0.; }
 
-  virtual void setGrowthFactorSwap(double factor) { }
-  virtual void setGrowthFactorGate(double factor) { }
+  virtual void setGrowthFactorSwap(double factor) {}
+  virtual void setGrowthFactorGate(double factor) {}
 
   /**
    * @brief Configures the state.
@@ -490,36 +512,45 @@ class IState {
         "This simulator does not support exact quantum-channel evolution");
   }
 
-  /** Mixed-state diagnostics. Implemented by density-matrix and MPO backends. */
+  /** Mixed-state diagnostics. Implemented by density-matrix and MPO backends.
+   */
   virtual std::complex<double> DensityMatrixTrace() const {
-    throw std::runtime_error("This simulator does not expose a density-matrix trace");
+    throw std::runtime_error(
+        "This simulator does not expose a density-matrix trace");
   }
   virtual double DensityMatrixPurity() const {
-    throw std::runtime_error("This simulator does not expose density-matrix purity");
+    throw std::runtime_error(
+        "This simulator does not expose density-matrix purity");
   }
   virtual std::complex<double> DensityMatrixTraceOfSquare() const {
     throw std::runtime_error("This simulator does not expose Tr(rho^2)");
   }
   virtual std::complex<double> DensityMatrixOverlap(const IState &) const {
-    throw std::runtime_error("This simulator does not support density-matrix overlap");
+    throw std::runtime_error(
+        "This simulator does not support density-matrix overlap");
   }
   virtual double DensityMatrixHermiticityResidual() const {
-    throw std::runtime_error("This simulator does not expose a Hermiticity residual");
+    throw std::runtime_error(
+        "This simulator does not expose a Hermiticity residual");
   }
   virtual bool IsDensityMatrixHermitian(double = 1e-10) const {
-    throw std::runtime_error("This simulator does not expose a Hermiticity test");
+    throw std::runtime_error(
+        "This simulator does not expose a Hermiticity test");
   }
   virtual Eigen::MatrixXcd PartialTrace(const Types::qubits_vector &) const {
     throw std::runtime_error("This simulator does not support partial trace");
   }
   virtual double FidelityWithStatevector(const Eigen::VectorXcd &) const {
-    throw std::runtime_error("This simulator does not support mixed-state fidelity");
+    throw std::runtime_error(
+        "This simulator does not support mixed-state fidelity");
   }
   virtual void RestoreDensityMatrixTrace() {
-    throw std::runtime_error("This simulator cannot restore density-matrix trace");
+    throw std::runtime_error(
+        "This simulator cannot restore density-matrix trace");
   }
   virtual void HermitizeDensityMatrix() {
-    throw std::runtime_error("This simulator cannot hermitize its density matrix");
+    throw std::runtime_error(
+        "This simulator cannot hermitize its density matrix");
   }
   virtual void TrimMatrixProductOperator() {
     throw std::runtime_error("This simulator is not a matrix-product operator");
@@ -529,16 +560,14 @@ class IState {
   }
 
   /** Apply an arbitrary CPTP map supplied in Kraus form. */
-  void ApplyKrausChannel(
-      const Types::qubits_vector &targets,
-      const QuantumChannel::KrausOperators &krausOperators) {
+  void ApplyKrausChannel(const Types::qubits_vector &targets,
+                         const QuantumChannel::KrausOperators &krausOperators) {
     ApplyQuantumChannel(targets, QuantumChannel(krausOperators));
   }
 
   /** Alias matching the channel terminology used by QCSim's dense backend. */
-  void ApplyChannel(
-      const Types::qubits_vector &targets,
-      const QuantumChannel::KrausOperators &krausOperators) {
+  void ApplyChannel(const Types::qubits_vector &targets,
+                    const QuantumChannel::KrausOperators &krausOperators) {
     ApplyKrausChannel(targets, krausOperators);
   }
 
@@ -559,8 +588,7 @@ class IState {
   }
 
   void ApplyBitPhaseFlipNoise(Types::qubit_t qubit, double probability) {
-    ApplyQuantumChannel({qubit},
-                        QuantumChannel::BitPhaseFlip(probability));
+    ApplyQuantumChannel({qubit}, QuantumChannel::BitPhaseFlip(probability));
   }
 
   void ApplyPhaseFlipNoise(Types::qubit_t qubit, double probability) {
@@ -573,8 +601,7 @@ class IState {
   }
 
   /** Depolarizing noise using total nonidentity-Pauli probability p. */
-  void ApplyDepolarizingNoise(Types::qubit_t qubit,
-                              double errorProbability) {
+  void ApplyDepolarizingNoise(Types::qubit_t qubit, double errorProbability) {
     ApplyQuantumChannel({qubit},
                         QuantumChannel::Depolarizing(errorProbability));
   }
@@ -582,8 +609,8 @@ class IState {
   /** Depolarizing replacement `(1-p)rho + p I/2`, fully mixed at p=1. */
   void ApplyDepolarizingMixingNoise(Types::qubit_t qubit,
                                     double mixingProbability) {
-    ApplyQuantumChannel(
-        {qubit}, QuantumChannel::DepolarizingMixing(mixingProbability));
+    ApplyQuantumChannel({qubit},
+                        QuantumChannel::DepolarizingMixing(mixingProbability));
   }
 
   void ApplyAmplitudeDamping(Types::qubit_t qubit, double gamma) {
@@ -602,10 +629,8 @@ class IState {
       throw std::invalid_argument(
           "T1-relaxation duration must be finite and nonnegative");
     if (std::isnan(t1) || t1 <= 0.0)
-      throw std::invalid_argument(
-          "T1 must be positive (infinity is allowed)");
-    const double gamma =
-        std::isinf(t1) ? 0.0 : -std::expm1(-duration / t1);
+      throw std::invalid_argument("T1 must be positive (infinity is allowed)");
+    const double gamma = std::isinf(t1) ? 0.0 : -std::expm1(-duration / t1);
     ApplyAmplitudeDamping(qubit, gamma);
   }
 
@@ -616,7 +641,8 @@ class IState {
 
   /**
    * Pure phase damping for a physical duration and T_phi.
-   * gamma=1-exp(-2 duration/T_phi), so coherences decay as exp(-duration/T_phi).
+   * gamma=1-exp(-2 duration/T_phi), so coherences decay as
+   * exp(-duration/T_phi).
    */
   void ApplyPhaseDampingFromTime(Types::qubit_t qubit, double duration,
                                  double tPhi) {
@@ -633,47 +659,40 @@ class IState {
 
   void ApplyGeneralizedAmplitudeDamping(Types::qubit_t qubit, double gamma,
                                         double excitedStatePopulation) {
-    ApplyQuantumChannel(
-        {qubit}, QuantumChannel::GeneralizedAmplitudeDamping(
-                      gamma, excitedStatePopulation));
+    ApplyQuantumChannel({qubit}, QuantumChannel::GeneralizedAmplitudeDamping(
+                                     gamma, excitedStatePopulation));
   }
 
-  void ApplyThermalRelaxation(Types::qubit_t qubit, double duration,
-                              double t1, double t2,
-                              double excitedStatePopulation = 0.0) {
-    ApplyQuantumChannel(
-        {qubit}, QuantumChannel::ThermalRelaxation(
-                      duration, t1, t2, excitedStatePopulation));
+  void ApplyThermalRelaxation(Types::qubit_t qubit, double duration, double t1,
+                              double t2, double excitedStatePopulation = 0.0) {
+    ApplyQuantumChannel({qubit}, QuantumChannel::ThermalRelaxation(
+                                     duration, t1, t2, excitedStatePopulation));
   }
 
   void ApplyCorrelatedPhaseFlipNoise(Types::qubit_t qubit0,
                                      Types::qubit_t qubit1,
                                      double probability) {
-    ApplyQuantumChannel(
-        {qubit0, qubit1},
-        QuantumChannel::CorrelatedPhaseFlip(probability));
+    ApplyQuantumChannel({qubit0, qubit1},
+                        QuantumChannel::CorrelatedPhaseFlip(probability));
   }
 
   void ApplyCorrelatedPhaseFlipNoise(Types::qubit_t qubit0,
-                                     Types::qubit_t qubit1,
-                                     double probability,
+                                     Types::qubit_t qubit1, double probability,
                                      double correlation) {
-    ApplyQuantumChannel(
-        {qubit0, qubit1},
-        QuantumChannel::CorrelatedPhaseFlip(probability, correlation));
+    ApplyQuantumChannel({qubit0, qubit1}, QuantumChannel::CorrelatedPhaseFlip(
+                                              probability, correlation));
   }
 
   void ApplyTwoQubitDepolarizingNoise(Types::qubit_t qubit0,
                                       Types::qubit_t qubit1,
                                       double errorProbability) {
-    ApplyQuantumChannel(
-        {qubit0, qubit1},
-        QuantumChannel::TwoQubitDepolarizing(errorProbability));
+    ApplyQuantumChannel({qubit0, qubit1},
+                        QuantumChannel::TwoQubitDepolarizing(errorProbability));
   }
 
-  void ApplyTwoQubitDepolarizingMixingNoise(
-      Types::qubit_t qubit0, Types::qubit_t qubit1,
-      double mixingProbability) {
+  void ApplyTwoQubitDepolarizingMixingNoise(Types::qubit_t qubit0,
+                                            Types::qubit_t qubit1,
+                                            double mixingProbability) {
     ApplyQuantumChannel(
         {qubit0, qubit1},
         QuantumChannel::TwoQubitDepolarizingMixing(mixingProbability));
@@ -711,7 +730,7 @@ class IState {
    * For most simulator is the same as calling Amplitude(0), but for some
    * simulators it can be optimized to be faster than calling Amplitude(0).
    * This for now is done for qcsim mps and gpu mps.
-   * 
+   *
    * @sa IState::Amplitude
    * @sa IState::Probability
    *
@@ -970,11 +989,13 @@ class IState {
   /**
    * @brief Returns the maximum bond dimension reached.
    *
-   * Returns the maximum bond dimension reached during execution, if applicable (mps simulator, either qcsim or gpu).
+   * Returns the maximum bond dimension reached during execution, if applicable
+   * (mps simulator, either qcsim or gpu).
    */
   virtual size_t GetCurrentMaxBondDimension() const { return 0; }
 
-  virtual const std::unordered_map<std::string, std::string>& GetConfigMap() const = 0;
+  virtual const std::unordered_map<std::string, std::string> &GetConfigMap()
+      const = 0;
 
  protected:
   /**
@@ -1006,12 +1027,18 @@ class IState {
     }
   }
 
-
  private:
+  /** Stream id for the auxiliary RNG. Large so it cannot collide with the
+   *  small per-job / per-sub-simulator stream ids passed to DeriveSeed. */
+  static constexpr uint64_t kAuxRngStream = 0x52454144ULL;  // 'READ'
+
   std::unordered_set<std::shared_ptr<ISimulatorObserver>>
       observers; /**< The registered observers. */
   bool notifyObservers =
       true; /**< A flag to indicate if observers should be notified. */
+  std::mt19937_64 auxRng{
+      std::random_device{}()}; /**< Auxiliary stream, see RandomUniform. */
+  std::uniform_real_distribution<double> auxUniform{0.0, 1.0};
 };
 
 }  // namespace Simulators

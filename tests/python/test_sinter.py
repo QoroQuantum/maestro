@@ -847,3 +847,56 @@ def test_external_noise_keeps_plain_rz_reset_in_prefix():
 def test_record_padding_is_explicitly_unsupported(source):
     with pytest.raises(ValueError, match="MPAD"):
         translate_stim_to_maestro(source)
+
+
+def _uncorrected_errors(circuit_text, readout_qubits, shots=40):
+    """Observable flips count as errors (no decoder). Readout rate 1.0 on the
+    given qubits, nothing else noisy, so every expectation below is exact."""
+    nm = maestro.NoiseModel()
+    for q in readout_qubits:
+        nm.set_readout_error_symmetric(q, 1.0)
+    task = sinter.Task(circuit=stim.Circuit(circuit_text))
+    sampler = MaestroSinterSampler(chi=16, noise_model=nm)
+    stats = sampler.compiled_sampler_for_task(task).sample(suggested_shots=shots)
+    return stats.errors, stats.shots
+
+
+def test_readout_reaches_measurement_records_beyond_qubit_count():
+    """M 0; M 0 -> the observable is record 1, an index with no qubit 1 behind
+    it. Readout on qubit 0 must still flip it."""
+    errors, shots = _uncorrected_errors(
+        "I 0\nM 0\nM 0\nOBSERVABLE_INCLUDE(0) rec[-1]", [0])
+    assert errors == shots == 40
+
+
+def test_readout_follows_qubit_when_record_order_is_swapped():
+    """M 1; M 0 -> record 1 holds qubit 0's measurement."""
+    circuit = "I 0\nI 1\nM 1\nM 0\nOBSERVABLE_INCLUDE(0) rec[-1]"
+    errors, _ = _uncorrected_errors(circuit, [0])
+    assert errors == 40, "readout on q0 must flip q0's record"
+    errors, _ = _uncorrected_errors(circuit, [1])
+    assert errors == 0, "readout on q1 must not touch q0's record"
+
+
+def test_readout_reaches_final_data_measurement_of_repetition_code():
+    """repetition_code:memory d=3 r=2 has 5 qubits and 7 measurement records;
+    the observable is record 6, qubit 4's final measurement. With readout 1.0
+    on every qubit it must flip on every shot."""
+    rep = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
+    assert rep.num_qubits == 5 and rep.num_measurements == 7
+    errors, shots = _uncorrected_errors(str(rep), range(rep.num_qubits))
+    assert errors == shots == 40
+
+
+def test_seeded_readout_is_independent_across_sinter_shots():
+    """Sinter uses one noise realization per shot; readout must not restart."""
+    nm = maestro.NoiseModel()
+    nm.set_readout_error_symmetric(0, 0.5)
+    sampler = MaestroCompiledSampler(
+        stim.Circuit("I 0\nM 0\nM 0\nOBSERVABLE_INCLUDE(0) rec[-1]"),
+        noise_model=nm, seed=11, enable_checkpoint=False)
+    first = sampler.sample(suggested_shots=128, seed=11)
+    second = sampler.sample(suggested_shots=128, seed=11)
+    assert first.shots == second.shots == 128
+    assert first.errors == second.errors
+    assert 32 < first.errors < 96

@@ -16,13 +16,11 @@
 #include <string>
 #include <unordered_map>
 
-
 #include "State.h"
 #include <charconv>
 #include <stdexcept>
 
 namespace Simulators {
-
 
 class Configuration {
  public:
@@ -78,8 +76,10 @@ class Configuration {
    */
   static int ParseGpuDevice(const std::string& value) {
     int device = -1;
-    const auto result = std::from_chars(value.data(), value.data() + value.size(), device);
-    if (result.ec != std::errc() || result.ptr != value.data() + value.size() || device < 0)
+    const auto result =
+        std::from_chars(value.data(), value.data() + value.size(), device);
+    if (result.ec != std::errc() || result.ptr != value.data() + value.size() ||
+        device < 0)
       throw std::invalid_argument("gpu_device must be a nonnegative integer");
     return device;
   }
@@ -87,9 +87,9 @@ class Configuration {
   // Keep mutually exclusive GPU SVD flags consistent before they are replayed
   // from an unordered map into a new simulator (including network clones/jobs).
   static std::string GpuSvdSettingGroup(const std::string& key) {
-    for (const char* group : {"matrix_product_state_use_gesvd",
-                              "matrix_product_operator_use_gesvd",
-                              "tensor_network_use_gesvd"}) {
+    for (const char* group :
+         {"matrix_product_state_use_gesvd", "matrix_product_operator_use_gesvd",
+          "tensor_network_use_gesvd"}) {
       const size_t length = std::char_traits<char>::length(group);
       if (key == group) return group;
       if (key.size() == length + 1 && key.compare(0, length, group) == 0 &&
@@ -117,7 +117,8 @@ class Configuration {
           const auto other = configMap.find(otherKey);
           // Do not introduce unused optional settings on older plugins, or
           // invalidate iterators while an existing map is being replayed.
-          if (otherKey != key && other != configMap.end()) other->second = "false";
+          if (otherKey != key && other != configMap.end())
+            other->second = "false";
         }
       }
       return;
@@ -202,33 +203,49 @@ class Configuration {
   }
 
   static bool CanBeAppliedOnInitializedSimulator(const std::string& key) {
-    if (key == "gpu_device" || key == "method" || key == "use_double_precision" ||
-        key == "precision" ||
+    if (key == "gpu_device" || key == "method" ||
+        key == "use_double_precision" || key == "precision" ||
         key == "max_parallel_threads" || key == "parallel_state_update" ||
         key == "statevector_parallel_threshold")
       return false;
-    
+
     return true;
   }
 
   static bool IgnoredSetting(const std::string& key) {
-    if (key == "max_simulators" || key == "method")
-      return true;
+    if (key == "max_simulators" || key == "method") return true;
 
     return false;
   }
 
-  void ApplyConfigurationToSimulator(const std::shared_ptr<Simulators::IState>& simulator) const {
-    for (const auto& [key, value] : configMap)
+  void ApplyConfigurationToSimulator(
+      const std::shared_ptr<Simulators::IState>& simulator) const {
+    for (const auto& [key, value] : configMap) {
+      // Route the seed through SetSeed, whose contract is to seed EVERY random
+      // stream the simulator owns -- including the auxiliary one used for
+      // measurement-time readout error. Its default implementation still
+      // records the value with Configure, so this subsumes the plain call.
+      if (key == "seed") {
+        try {
+          simulator->SetSeed(std::stoull(value));
+          continue;
+        } catch (const std::exception&) {
+          // Not a number: fall through and let the simulator reject it.
+        }
+      }
+
       simulator->Configure(key.c_str(), value.c_str());
+    }
   }
 
-  void ApplyConfigurationFromSimulator(const std::shared_ptr<Simulators::IState>& simulator) {
+  void ApplyConfigurationFromSimulator(
+      const std::shared_ptr<Simulators::IState>& simulator) {
     if (!simulator) return;
     ApplyConfigurationFromMap(simulator->GetConfigMap());
   }
 
-  void ApplyConfigurationFromMap(const std::unordered_map<std::string, std::string>& config) {
+  void ApplyConfigurationFromMap(
+      const std::unordered_map<std::string, std::string>& config) {
     for (const auto& [key, value] : config) SetConfiguration(key, value);
   }
 
@@ -238,18 +255,16 @@ class Configuration {
 
   bool WasApplied(const std::string& key, const std::string& value) const {
     auto it = configMap.find(key);
-    if (it != configMap.end())
-      return it->second == value;
+    if (it != configMap.end()) return it->second == value;
 
     return false;
   }
 
-  private:
+ private:
   std::unordered_map<std::string, std::string>
       configMap; /**< The configuration map. */
 };
 
-}
+}  // namespace Simulators
 
 #endif
-

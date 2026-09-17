@@ -77,7 +77,8 @@ class ExecuteJob {
       OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
 
       if (optimiseMultipleShots) {
-        executedGates = dcirc->ExecuteNonMeasurements(optSim, state, &curMaxBondDimLocal);
+        executedGates =
+            dcirc->ExecuteNonMeasurements(optSim, state, &curMaxBondDimLocal);
 
         if (!specialOptimizationForStatevector && !specialOptimizationForMPS &&
             curCnt > 1)
@@ -86,12 +87,14 @@ class ExecuteJob {
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
         if (method == Simulators::SimulationType::kMatrixProductState &&
             network->GetMPSOptimizeSwaps()) {
-          //auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
-          //circ->ConvertForCutting();
+          // auto circ =
+          // std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+          // circ->ConvertForCutting();
           optSim->SetUpcomingGates(dcirc->GetOperations());
         }
       }
-    } else if (method == Simulators::SimulationType::kMatrixProductState && network->GetMPSOptimizeSwaps()) {
+    } else if (method == Simulators::SimulationType::kMatrixProductState &&
+               network->GetMPSOptimizeSwaps()) {
       auto circ =
           std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
       circ->ConvertForCutting();
@@ -134,6 +137,25 @@ class ExecuteJob {
       const auto sampleres = optSim->SampleCountsMany(qbits, curCnt);
 
       for (const auto &[mstate, cnt] : sampleres) {
+        if (measurementsOp->HasReadout()) {
+          // Readout flips are independent per shot, so the aggregated sample
+          // has to be expanded and each shot given its own draw. Costs
+          // O(shots) instead of O(distinct outcomes), but only when a readout
+          // error is actually configured.
+          for (size_t shot = 0; shot < cnt; ++shot) {
+            measurementsOp->SetStateFromSample(mstate, state, optSim.get());
+
+            auto bits = state.GetAllBits();
+            bits.resize(nrResultCbits, false);
+
+            ++localRes[bits];
+
+            state.Reset();
+          }
+
+          continue;
+        }
+
         measurementsOp->SetStateFromSample(mstate, state);
 
         auto bits = state.GetAllBits();
@@ -160,7 +182,8 @@ class ExecuteJob {
           optSim->RestoreState();
           optSim->SetGatesCounter(0);
         }
-        dcirc->ExecuteMeasurements(optSim, state, executed, &curMaxBondDimLocal);
+        dcirc->ExecuteMeasurements(optSim, state, executed,
+                                   &curMaxBondDimLocal);
       } else {
         dcirc->ExecuteBD(optSim, state, &curMaxBondDimLocal);
         if (i < curCnt1) {
@@ -180,8 +203,8 @@ class ExecuteJob {
     const std::lock_guard lock(resultsMutex);
     for (const auto &r : localRes) res[r.first] += r.second;
 
-    if (curMaxBondDim && curMaxBondDimLocal > *curMaxBondDim) 
-        *curMaxBondDim = curMaxBondDimLocal;
+    if (curMaxBondDim && curMaxBondDimLocal > *curMaxBondDim)
+      *curMaxBondDim = curMaxBondDimLocal;
   }
 
   void DoWorkNoLock() {
@@ -201,7 +224,6 @@ class ExecuteJob {
         method == Simulators::SimulationType::kMatrixProductState &&
         hasMeasurementsOnlyAtEnd;
 
-    
     if (optSim) {
       optSim->SetMultithreading(true);
 
@@ -215,7 +237,8 @@ class ExecuteJob {
         OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
 
         if (optimiseMultipleShots) {
-          executedGates = dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
+          executedGates =
+              dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
 
           if (!specialOptimizationForStatevector &&
               !specialOptimizationForMPS && curCnt > 1)
@@ -223,8 +246,9 @@ class ExecuteJob {
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
           if (method == Simulators::SimulationType::kMatrixProductState &&
               network->GetMPSOptimizeSwaps()) {
-            //auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
-            //circ->ConvertForCutting();
+            // auto circ =
+            // std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+            // circ->ConvertForCutting();
             optSim->SetUpcomingGates(dcirc->GetOperations());
           }
         }
@@ -239,23 +263,26 @@ class ExecuteJob {
           }
         }
         if (needToExecuteGates && optimiseMultipleShots) {
-          executedGates = dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
+          executedGates =
+              dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
           if (!specialOptimizationForStatevector &&
               !specialOptimizationForMPS && curCnt > 1)
             optSim->SaveState();
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
           if (method == Simulators::SimulationType::kMatrixProductState &&
               network->GetMPSOptimizeSwaps()) {
-            //auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
-            //circ->ConvertForCutting();
+            // auto circ =
+            // std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+            // circ->ConvertForCutting();
             optSim->SetUpcomingGates(dcirc->GetOperations());
           }
         } else {
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
           if (method == Simulators::SimulationType::kMatrixProductState &&
               network->GetMPSOptimizeSwaps()) {
-            //auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
-            //circ->ConvertForCutting();
+            // auto circ =
+            // std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+            // circ->ConvertForCutting();
             optSim->SetUpcomingGates(dcirc->GetOperations());
           }
         }
@@ -282,17 +309,20 @@ class ExecuteJob {
       OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
 
       if (optimiseMultipleShots) {
-        executedGates = dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
+        executedGates =
+            dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
 
         if (!specialOptimizationForStatevector && !specialOptimizationForMPS &&
             curCnt > 1)
           optSim->SaveState();
 
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
-        if (method == Simulators::SimulationType::kMatrixProductState && network->GetMPSOptimizeSwaps()) {
-            //auto circ = std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
-            //circ->ConvertForCutting();
-            optSim->SetUpcomingGates(dcirc->GetOperations());
+        if (method == Simulators::SimulationType::kMatrixProductState &&
+            network->GetMPSOptimizeSwaps()) {
+          // auto circ =
+          // std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
+          // circ->ConvertForCutting();
+          optSim->SetUpcomingGates(dcirc->GetOperations());
         }
       }
     }
@@ -327,6 +357,23 @@ class ExecuteJob {
       const auto sampleres = optSim->SampleCountsMany(qbits, curCnt);
 
       for (const auto &[mstate, cnt] : sampleres) {
+        if (measurementsOp->HasReadout()) {
+          // See the threaded variant above: flips are per shot, so the
+          // aggregated sample must be expanded.
+          for (size_t shot = 0; shot < cnt; ++shot) {
+            measurementsOp->SetStateFromSample(mstate, state, optSim.get());
+
+            auto bits = state.GetAllBits();
+            bits.resize(nrResultCbits, false);
+
+            ++res[bits];
+
+            state.Reset();
+          }
+
+          continue;
+        }
+
         measurementsOp->SetStateFromSample(mstate, state);
 
         auto bits = state.GetAllBits();
@@ -372,7 +419,7 @@ class ExecuteJob {
 
   size_t GetJobCount() const { return curCnt; }
 
-private:
+ private:
   void OptimizeMPSInitialQubitsMap(
       std::shared_ptr<Simulators::ISimulator> &sim,
       std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits) const {
@@ -384,8 +431,8 @@ private:
       if (network->GetMPSOptimizationQubitsNumberThreshold() <= nrQubits) {
         const auto bondDimThreshold =
             network->GetMPSOptimizationBondDimensionThreshold();
-        const auto maxBondDimValue =
-            config.GetConfigurationAsInt("matrix_product_state_max_bond_dimension");
+        const auto maxBondDimValue = config.GetConfigurationAsInt(
+            "matrix_product_state_max_bond_dimension");
 
         if (maxBondDimValue == 0 ||
             static_cast<int>(bondDimThreshold) <= maxBondDimValue) {
@@ -398,7 +445,7 @@ private:
           dummySim.setGrowthFactorSwap(network->getGrowthFactorSwap());
           if (maxBondDimValue != 0)
             dummySim.SetMaxBondDimension(maxBondDimValue);
-          
+
           if (network->GetInitialQubitsMapOptimization()) {
             const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
             sim->SetInitialQubitsMap(optimalMap);
@@ -440,9 +487,8 @@ private:
             if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
               lookaheadHeuristicDepthLocal =
                   layers.size() < 10 || nrQubits <= 10 ? 0
-                                             : layers.size() < 20
-                                                 ? lookaheadDepthLocal - 1
-                                                 : lookaheadDepthLocal - 2;
+                  : layers.size() < 20                 ? lookaheadDepthLocal - 1
+                                       : lookaheadDepthLocal - 2;
 
             if (lookaheadHeuristicDepthLocal < 0)
               lookaheadHeuristicDepthLocal = 0;
@@ -459,7 +505,7 @@ private:
     }
   }
 
-public:
+ public:
   std::shared_ptr<Circuits::Circuit<Time>> dcirc;
   ExecuteResults &res;
   const size_t curCnt;
@@ -475,12 +521,12 @@ public:
   std::shared_ptr<Simulators::ISimulator> optSim;
   std::vector<bool> executedGates;
 
-  // relevant only if the simulator is not passed or the simulator doesn't have the proper number of qubits,
-  // otherwise the simulator is already configured
+  // relevant only if the simulator is not passed or the simulator doesn't have
+  // the proper number of qubits, otherwise the simulator is already configured
   Configuration<Time> config;
 
   std::shared_ptr<Network::INetwork<Time>> network;
-  size_t* curMaxBondDim = nullptr;
+  size_t *curMaxBondDim = nullptr;
 };
 
 }  // namespace Network
