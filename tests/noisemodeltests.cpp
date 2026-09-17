@@ -54,10 +54,9 @@ std::shared_ptr<Circuits::Circuit<double>> HadamardCircuit() {
  * With the H first, this is exactly the coherence multiplier of whatever
  * noise the model injected after it.
  */
-double ExactCoherence(const noise::NoiseModel& noiseModel) {
+double ExactCoherence(const noise::NoiseModel &noiseModel) {
   const auto noisy = noise::inject_exact_noise(HadamardCircuit(), noiseModel);
-  auto simulator =
-      MakeSimulator(Simulators::SimulationType::kDensityMatrix, 1);
+  auto simulator = MakeSimulator(Simulators::SimulationType::kDensityMatrix, 1);
   Circuits::OperationState classicalState;
   noisy->Execute(simulator, classicalState);
   return simulator->ExpectationValue("X");
@@ -70,15 +69,14 @@ double ExactCoherence(const noise::NoiseModel& noiseModel) {
  * over many realizations reconstructs the channel the sampled path
  * represents.
  */
-double SampledCoherence(const noise::NoiseModel& noiseModel,
+double SampledCoherence(const noise::NoiseModel &noiseModel,
                         size_t realizations, unsigned int seed) {
   std::mt19937 rng(seed);
   const auto circuit = HadamardCircuit();
   double total = 0.0;
   for (size_t realization = 0; realization < realizations; ++realization) {
     const auto noisy = noise::inject_noise(circuit, noiseModel, rng);
-    auto simulator =
-        MakeSimulator(Simulators::SimulationType::kStatevector, 1);
+    auto simulator = MakeSimulator(Simulators::SimulationType::kStatevector, 1);
     Circuits::OperationState classicalState;
     noisy->Execute(simulator, classicalState);
     total += simulator->ExpectationValue("X");
@@ -121,8 +119,7 @@ BOOST_AUTO_TEST_CASE(ThermalRelaxationAgreesOnExactAndSampledBackends) {
   // probability calibrated for the reset model. The exact backend applies
   // amplitude damping instead, so it under-dephases by exp(t/2*T1).
   const double gamma = -std::expm1(-duration / t1);
-  const double pz =
-      0.5 * (1.0 - std::exp(-duration * (1.0 / t2 - 1.0 / t1)));
+  const double pz = 0.5 * (1.0 - std::exp(-duration * (1.0 / t2 - 1.0 / t1)));
   noise::NoiseModel legacy;
   legacy.set_t1(0, gamma);
   legacy.set_dephasing(0, pz);
@@ -131,8 +128,8 @@ BOOST_AUTO_TEST_CASE(ThermalRelaxationAgreesOnExactAndSampledBackends) {
   BOOST_TEST(legacyExact > expected,
              "the legacy split configuration under-dephases on the exact "
              "backend, which is why set_thermal_relaxation exists");
-  BOOST_CHECK_SMALL(
-      legacyExact - std::sqrt(1.0 - gamma) * (1.0 - 2.0 * pz), kTolerance);
+  BOOST_CHECK_SMALL(legacyExact - std::sqrt(1.0 - gamma) * (1.0 - 2.0 * pz),
+                    kTolerance);
 }
 
 /** Two-qubit gates use the 2Q relaxation when one is configured. */
@@ -144,9 +141,9 @@ BOOST_AUTO_TEST_CASE(ThermalRelaxation2QOverridesTheAllGatesChannel) {
   noiseModel.set_thermal_relaxation(0, 2e-8, t1, t2);
   noiseModel.set_thermal_relaxation_2q(0, 4e-7, t1, t2);
 
-  const auto* oneQubit =
+  const auto *oneQubit =
       noiseModel.get_thermal_relaxation_params(0, /*is_2q=*/false);
-  const auto* twoQubit =
+  const auto *twoQubit =
       noiseModel.get_thermal_relaxation_params(0, /*is_2q=*/true);
   BOOST_REQUIRE(oneQubit);
   BOOST_REQUIRE(twoQubit);
@@ -156,7 +153,7 @@ BOOST_AUTO_TEST_CASE(ThermalRelaxation2QOverridesTheAllGatesChannel) {
   // A qubit with no 2Q override falls back to the "all gates" relaxation.
   noise::NoiseModel fallback;
   fallback.set_thermal_relaxation(1, 2e-8, t1, t2);
-  const auto* fallbackParams =
+  const auto *fallbackParams =
       fallback.get_thermal_relaxation_params(1, /*is_2q=*/true);
   BOOST_REQUIRE(fallbackParams);
   BOOST_CHECK_CLOSE(fallbackParams->duration, 2e-8, 1e-9);
@@ -173,8 +170,8 @@ BOOST_AUTO_TEST_CASE(PhaseDampingIsExactOnBothBackends) {
   noise::NoiseModel noiseModel;
   noiseModel.set_phase_damping(0, gamma);
   BOOST_TEST(!noiseModel.has_additional_quantum_channels());
-  BOOST_CHECK_SMALL(
-      noiseModel.get_phase_damping_flip_probability(0) - 0.1, kTolerance);
+  BOOST_CHECK_SMALL(noiseModel.get_phase_damping_flip_probability(0) - 0.1,
+                    kTolerance);
 
   BOOST_CHECK_SMALL(ExactCoherence(noiseModel) - expected, kTolerance);
   BOOST_CHECK_SMALL(SampledCoherence(noiseModel, 4000, 999) - expected, 0.02);
@@ -201,8 +198,7 @@ BOOST_AUTO_TEST_CASE(ExactOnlyChannelsStillRejectSampledBackends) {
 BOOST_AUTO_TEST_CASE(SettersRejectUnphysicalParameters) {
   noise::NoiseModel noiseModel;
 
-  BOOST_CHECK_THROW(noiseModel.set_depolarizing(0, 1.5),
-                    std::invalid_argument);
+  BOOST_CHECK_THROW(noiseModel.set_depolarizing(0, 1.5), std::invalid_argument);
   BOOST_CHECK_THROW(noiseModel.set_depolarizing(0, -0.1),
                     std::invalid_argument);
   BOOST_CHECK_THROW(noiseModel.set_dephasing(0, 2.0), std::invalid_argument);
@@ -225,9 +221,9 @@ BOOST_AUTO_TEST_CASE(SettersRejectUnphysicalParameters) {
   // Degenerate OU parameters used to produce silent inf/nan.
   BOOST_CHECK_THROW(noiseModel.set_correlated_ou(0, 1.0, 0.0, 1e-7),
                     std::invalid_argument);
-  BOOST_CHECK_THROW(noiseModel.set_all_correlated_from_power(0, 1e-3, 0.5,
-                                                             1e-7),
-                    std::invalid_argument);
+  BOOST_CHECK_THROW(
+      noiseModel.set_all_correlated_from_power(0, 1e-3, 0.5, 1e-7),
+      std::invalid_argument);
 
   // Nothing above should have been recorded.
   BOOST_TEST(!noiseModel.has_any());
@@ -257,7 +253,7 @@ BOOST_AUTO_TEST_CASE(CoherentNoiseSignIsSystematicWithinARealization) {
     const auto noisy = noise::inject_coherent_noise(circuit, noiseModel, rng);
 
     std::vector<double> angles;
-    for (const auto& op : noisy->GetOperations()) {
+    for (const auto &op : noisy->GetOperations()) {
       const auto rz = std::dynamic_pointer_cast<Circuits::RzGate<>>(op);
       if (rz) angles.push_back(rz->GetTheta());
     }
@@ -299,7 +295,8 @@ BOOST_AUTO_TEST_CASE(ThermalT2GreaterThanT1UsesSampledApproximation) {
   noise::NoiseModel clamped;
   clamped.set_thermal_relaxation(0, duration, t1, t1);
   BOOST_CHECK_SMALL(SampledCoherence(noiseModel, 2000, 42) -
-                    SampledCoherence(clamped, 2000, 42), kTolerance);
+                        SampledCoherence(clamped, 2000, 42),
+                    kTolerance);
   BOOST_TEST(noiseModel.get_thermal_relaxation_params(0, false)->t2 == t2);
   BOOST_CHECK_NO_THROW(
       noise::inject_exact_noise(HadamardCircuit(), noiseModel));
@@ -345,9 +342,12 @@ BOOST_AUTO_TEST_CASE(DelayExactChannelDivisibility) {
   Circuits::OperationState state2;
   noisy2->Execute(sim2, state2);
 
-  BOOST_CHECK_CLOSE(sim1->ExpectationValue("X"), sim2->ExpectationValue("X"), 1e-5);
-  BOOST_CHECK_CLOSE(sim1->ExpectationValue("Y"), sim2->ExpectationValue("Y"), 1e-5);
-  BOOST_CHECK_CLOSE(sim1->ExpectationValue("Z"), sim2->ExpectationValue("Z"), 1e-5);
+  BOOST_CHECK_CLOSE(sim1->ExpectationValue("X"), sim2->ExpectationValue("X"),
+                    1e-5);
+  BOOST_CHECK_CLOSE(sim1->ExpectationValue("Y"), sim2->ExpectationValue("Y"),
+                    1e-5);
+  BOOST_CHECK_CLOSE(sim1->ExpectationValue("Z"), sim2->ExpectationValue("Z"),
+                    1e-5);
 }
 
 BOOST_AUTO_TEST_CASE(DelaySampledCoherenceMatchesExact) {
@@ -481,10 +481,7 @@ BOOST_AUTO_TEST_CASE(CorrelatedNoiseStationaryInitVariance) {
 
 BOOST_AUTO_TEST_CASE(MultiBandOUConfigurationAndSuperposition) {
   constexpr double gate_time = 100e-9;
-  std::vector<std::pair<double, double>> bands = {
-      {10.0, 2.0},
-      {20.0, 5.0}
-  };
+  std::vector<std::pair<double, double>> bands = {{10.0, 2.0}, {20.0, 5.0}};
 
   noise::NoiseModel nm;
   nm.set_multi_correlated_ou(0, bands, gate_time, true, true, true);
@@ -570,7 +567,8 @@ BOOST_AUTO_TEST_CASE(ReadoutFlipsFollowTheMeasuredQubitNotTheBitIndex) {
   // x q0; measure q0 -> c1, q1 -> c0. q0 reads 1, q1 reads 0.
   auto meas = std::make_shared<Circuits::MeasurementOperation<>>(
       std::vector<std::pair<Types::qubit_t, size_t>>{{0, 1}, {1, 0}});
-  // index 0 is qubit 0: always report a measured 1 as 0. index 1 (qubit 1): none.
+  // index 0 is qubit 0: always report a measured 1 as 0. index 1 (qubit 1):
+  // none.
   meas->SetReadoutAt(0, Circuits::ReadoutRates{0.0, 1.0});
   BOOST_CHECK(meas->HasReadout());
 
@@ -724,11 +722,12 @@ BOOST_AUTO_TEST_CASE(ReplacingNoisyMeasurementClearsReadoutRates) {
 }
 
 BOOST_AUTO_TEST_CASE(ConfigurationSeedsReadoutWithoutChangingBackendSequence) {
-  for (const auto method : {Simulators::SimulationType::kStatevector,
-                            Simulators::SimulationType::kMatrixProductState,
-                            Simulators::SimulationType::kStabilizer,
-                            Simulators::SimulationType::kDensityMatrix,
-                            Simulators::SimulationType::kMatrixProductOperator}) {
+  for (const auto method :
+       {Simulators::SimulationType::kStatevector,
+        Simulators::SimulationType::kMatrixProductState,
+        Simulators::SimulationType::kStabilizer,
+        Simulators::SimulationType::kDensityMatrix,
+        Simulators::SimulationType::kMatrixProductOperator}) {
     auto direct = MakeSimulator(method, 2);
     auto configured = MakeSimulator(method, 2);
     direct->Configure("seed", "11");

@@ -96,8 +96,8 @@ class Circuit : public IOperation<Time> {
    * @sa ISimulator
    * @sa OperationState
    */
-  void Execute(const std::shared_ptr<Simulators::ISimulator>& sim,
-               OperationState& state) const override {
+  void Execute(const std::shared_ptr<Simulators::ISimulator> &sim,
+               OperationState &state) const override {
     ExecuteBD(sim, state);
   }
 
@@ -113,11 +113,11 @@ class Circuit : public IOperation<Time> {
    * @sa OperationState
    */
   void ExecuteBD(const std::shared_ptr<Simulators::ISimulator> &sim,
-               OperationState &state, size_t* curMaxBondDim = nullptr) const {
+                 OperationState &state, size_t *curMaxBondDim = nullptr) const {
     state.Reset();
     if (!sim) return;
 
-    for (const auto& op : operations) {
+    for (const auto &op : operations) {
       op->Execute(sim, state);
       if (curMaxBondDim) {
         const auto bondDim = sim->GetCurrentMaxBondDimension();
@@ -151,7 +151,8 @@ class Circuit : public IOperation<Time> {
    * @param duration The physical duration in seconds.
    */
   void Delay(Types::qubit_t qubit, Time duration) {
-    operations.push_back(std::make_shared<Circuits::Delay<Time>>(qubit, duration));
+    operations.push_back(
+        std::make_shared<Circuits::Delay<Time>>(qubit, duration));
   }
 
   /**
@@ -540,8 +541,7 @@ class Circuit : public IOperation<Time> {
       // now add the measurements that were left in any order
       for (auto bit : bits) {
         auto rebuilt = std::make_shared<MeasurementOperation<Time>>(
-            std::vector{std::make_pair(measQubits[bit], bit)},
-            measDelays[bit]);
+            std::vector{std::make_pair(measQubits[bit], bit)}, measDelays[bit]);
         const auto rateit = measReadout.find(bit);
         if (rateit != measReadout.end()) rebuilt->SetReadout({rateit->second});
         newops.emplace_back(rebuilt);
@@ -1731,8 +1731,8 @@ class Circuit : public IOperation<Time> {
    * @sa OperationState
    */
   std::vector<bool> ExecuteNonMeasurements(
-      const std::shared_ptr<Simulators::ISimulator> &sim,
-      OperationState &state, size_t* curMaxBondDim = nullptr) const {
+      const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state,
+      size_t *curMaxBondDim = nullptr) const {
     std::vector<bool> executedOps;
     executedOps.reserve(operations.size());
 
@@ -1823,10 +1823,13 @@ class Circuit : public IOperation<Time> {
 
       if (!executed) {
         executionStopped = true;
-        if (sim && sim->GetSimulationType() ==
-                       Simulators::SimulationType::kMatrixProductState && sim->SupportsMPSSwapOptimization() && 
+        if (sim &&
+            sim->GetSimulationType() ==
+                Simulators::SimulationType::kMatrixProductState &&
+            sim->SupportsMPSSwapOptimization() &&
             op->GetType() != OperationType::kRandomGen &&
-            op->GetType() != OperationType::kConditionalRandomGen && op->GetType() != OperationType::kNoOp)
+            op->GetType() != OperationType::kConditionalRandomGen &&
+            op->GetType() != OperationType::kNoOp)
           sim->SetGatesCounter(sim->GetGatesCounter() + 1);
       }
       if (executionStopped) executedOps.emplace_back(executed);
@@ -1852,7 +1855,8 @@ class Circuit : public IOperation<Time> {
    */
   void ExecuteMeasurements(const std::shared_ptr<Simulators::ISimulator> &sim,
                            OperationState &state,
-                           const std::vector<bool> &executedOps, size_t* curMaxBondDim = nullptr) const {
+                           const std::vector<bool> &executedOps,
+                           size_t *curMaxBondDim = nullptr) const {
     state.Reset();
     if (!sim) return;
 
@@ -1873,14 +1877,15 @@ class Circuit : public IOperation<Time> {
     // sim->Flush();
   }
 
-
   /**
-   * @brief Returns a new circuit with the operations that were not yet executed.
-   * 
+   * @brief Returns a new circuit with the operations that were not yet
+   * executed.
+   *
    * The parameter is modified to reflect the newly created circuit, which
    * contains only the operations that were not yet executed.
-   * 
-   * @param executedOps A vector of bools indicating which operations were executed.
+   *
+   * @param executedOps A vector of bools indicating which operations were
+   * executed.
    * @return A new circuit with the operations that were not yet executed.
    */
   std::shared_ptr<Circuits::Circuit<Time>> RemoveExecutedOperations(
@@ -1902,8 +1907,6 @@ class Circuit : public IOperation<Time> {
 
     return std::make_shared<Circuit<Time>>(newops);
   }
-
-
 
   // used internally to optimize measurements in the case of having measurements
   // only at the end of the circuit
@@ -2559,7 +2562,6 @@ class Circuit : public IOperation<Time> {
    */
   iterator end() noexcept { return operations.end(); }
 
-
   /**
    * @brief Get the begin iterator for the operations.
    *
@@ -3002,15 +3004,14 @@ class ComparableCircuit : public Circuit<Time> {
             return false;
         } break;
         case OperationType::kDelay: {
-          const auto left =
-              std::static_pointer_cast<Delay<Time>>(
-                  BaseClass::GetOperations()[i]);
+          const auto left = std::static_pointer_cast<Delay<Time>>(
+              BaseClass::GetOperations()[i]);
           const auto right =
-              std::static_pointer_cast<Delay<Time>>(
-                  rhs.GetOperations()[i]);
+              std::static_pointer_cast<Delay<Time>>(rhs.GetOperations()[i]);
           if (left->GetQubit() != right->GetQubit()) return false;
           if (approximateParamsCheck) {
-            if (std::abs(left->GetDuration() - right->GetDuration()) > paramsEpsilon)
+            if (std::abs(left->GetDuration() - right->GetDuration()) >
+                paramsEpsilon)
               return false;
           } else if (left->GetDuration() != right->GetDuration()) {
             return false;
