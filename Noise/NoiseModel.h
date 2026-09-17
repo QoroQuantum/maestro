@@ -116,10 +116,14 @@ struct QubitNoise {
   /// Damping factor a single-qubit Pauli operator acquires from this channel.
   double damping_for(char pauli) const {
     switch (toupper(pauli)) {
-      case 'X': return 1.0 - 2.0 * (py + pz);
-      case 'Y': return 1.0 - 2.0 * (px + pz);
-      case 'Z': return 1.0 - 2.0 * (px + py);
-      default:  return 1.0;  // Identity
+      case 'X':
+        return 1.0 - 2.0 * (py + pz);
+      case 'Y':
+        return 1.0 - 2.0 * (px + pz);
+      case 'Z':
+        return 1.0 - 2.0 * (px + py);
+      default:
+        return 1.0;  // Identity
     }
   }
 
@@ -137,12 +141,15 @@ struct CoherentNoise {
 struct OUBand {
   double phi = 0.0;        ///< AR(1) coefficient phi = exp(-theta * gate_time)
   double sigma_eta = 0.0;  ///< Driving noise std dev
-  double sigma_stat = 0.0; ///< Stationary std dev sigma_stat = sigma_eta / sqrt(1 - phi^2)
-  double theta = 0.0;      ///< 1 / (alpha * gate_time) for continuous OU integration
+  double sigma_stat =
+      0.0;  ///< Stationary std dev sigma_stat = sigma_eta / sqrt(1 - phi^2)
+  double theta =
+      0.0;  ///< 1 / (alpha * gate_time) for continuous OU integration
   double gate_time = 0.0;  ///< Gate duration in seconds
-  bool stationary_init = true; ///< Seed from Gaussian equilibrium N(0, sigma_stat^2) at step 0
-  bool inject_after_1q = true; ///< Inject after 1Q gates (default: yes)
-  bool inject_after_2q = true; ///< Inject after 2Q gates (default: yes)
+  bool stationary_init =
+      true;  ///< Seed from Gaussian equilibrium N(0, sigma_stat^2) at step 0
+  bool inject_after_1q = true;  ///< Inject after 1Q gates (default: yes)
+  bool inject_after_2q = true;  ///< Inject after 2Q gates (default: yes)
 };
 
 /// Per-qubit time-correlated (multi-band OU / 1/f) dephasing noise parameters.
@@ -154,16 +161,20 @@ struct CorrelatedNoise {
   // Backward-compatibility accessors for single-band / band 0 callers
   double phi() const { return bands.empty() ? 0.0 : bands[0].phi; }
   double sigma_eta() const { return bands.empty() ? 0.0 : bands[0].sigma_eta; }
-  double sigma_stat() const { return bands.empty() ? 0.0 : bands[0].sigma_stat; }
-  bool stationary_init() const { return bands.empty() ? true : bands[0].stationary_init; }
+  double sigma_stat() const {
+    return bands.empty() ? 0.0 : bands[0].sigma_stat;
+  }
+  bool stationary_init() const {
+    return bands.empty() ? true : bands[0].stationary_init;
+  }
 };
 
 /// Per-qubit idle channel parameters (for delay / idle periods).
 struct IdleNoise {
-  double t1 = 0.0;                 ///< T1 relaxation time in seconds
-  double t2 = 0.0;                 ///< T2 dephasing time in seconds
-  double excited_population = 0.0; ///< Equilibrium |1> population
-  double detuning_hz = 0.0;        ///< Coherent detuning frequency in Hz
+  double t1 = 0.0;                  ///< T1 relaxation time in seconds
+  double t2 = 0.0;                  ///< T2 dephasing time in seconds
+  double excited_population = 0.0;  ///< Equilibrium |1> population
+  double detuning_hz = 0.0;         ///< Coherent detuning frequency in Hz
 };
 
 /// Per-qubit readout error parameters (classical post-measurement channel).
@@ -197,10 +208,10 @@ struct ConfiguredKrausChannel {
  * under-dephases by exp(t/2T1) per gate.
  */
 struct ThermalRelaxation {
-  double duration = 0.0;             ///< Gate duration in seconds
-  double t1 = 0.0;                   ///< T1 in seconds (may be infinite)
-  double t2 = 0.0;                   ///< T2 in seconds (may be infinite)
-  double excited_population = 0.0;   ///< Equilibrium population of |1>
+  double duration = 0.0;            ///< Gate duration in seconds
+  double t1 = 0.0;                  ///< T1 in seconds (may be infinite)
+  double t2 = 0.0;                  ///< T2 in seconds (may be infinite)
+  double excited_population = 0.0;  ///< Equilibrium population of |1>
 
   /// Probability the qubit is reset to |0> during this gate.
   double reset_to_zero_probability() const {
@@ -231,8 +242,8 @@ struct ThermalRelaxation {
     // Approximate unsupported sampled thermal channels without changing the
     // calibrated parameters or the exact channel stored on the NoiseModel.
     const double effective_t2 = std::min(t2, t1);
-    const double coherence = std::isinf(effective_t2)
-                                 ? 1.0 : std::exp(-duration / effective_t2);
+    const double coherence =
+        std::isinf(effective_t2) ? 1.0 : std::exp(-duration / effective_t2);
     const double ratio = coherence / survival;
     if (!std::isfinite(ratio) || ratio >= 1.0) return 0.0;
     return 0.5 * (1.0 - ratio);
@@ -257,13 +268,14 @@ struct ThermalRelaxation {
 
 /**
  * @class NoiseModel
- * @brief Maps qubit indices to noise parameters for realistic device simulation.
+ * @brief Maps qubit indices to noise parameters for realistic device
+ * simulation.
  *
  * Supports seven noise categories, all combinable on the same model:
  *   1. **Pauli (incoherent)**: stochastic X/Y/Z gate injection or analytical
  *      damping. Configured via set_depolarizing(), set_dephasing(), etc.
- *   2. **Coherent**: sampled coherent over/under-rotation injection. Configured via
- *      set_coherent_depolarizing(), set_coherent_rotation(), etc.
+ *   2. **Coherent**: sampled coherent over/under-rotation injection. Configured
+ * via set_coherent_depolarizing(), set_coherent_rotation(), etc.
  *   3. **Correlated (time-correlated)**: non-Markovian dephasing via
  *      per-qubit AR(1) processes. Configured via set_correlated_ou(),
  *      set_correlated_ar1(), set_all_correlated_from_power(), etc.
@@ -271,16 +283,18 @@ struct ThermalRelaxation {
  *      approximation on pure-state circuit-rewrite paths.
  *   5. **Spectator-Z crosstalk**: parasitic Rz rotations on neighboring
  *      spectator qubits (not a genuine two-qubit ZZ interaction).
- *   6. **Readout error**: per-qubit classical bit flips attached to measurements
- *      by attach_readout_error(), so downstream classical control sees them.
+ *   6. **Readout error**: per-qubit classical bit flips attached to
+ * measurements by attach_readout_error(), so downstream classical control sees
+ * them.
  *   7. **Additional CPTP channels**: phase damping and T1/T2 thermal
  *      relaxation (exact or sampled), plus generalized amplitude damping,
  *      correlated phase flips and caller-supplied Kraus maps. The last three
  *      require a density-matrix/MPO path; thermal with T2 > T1 does too.
  *
  * Use inject_combined_noise() to apply all configured layers in a single pass,
- * or use the individual inject_noise/inject_coherent_noise/inject_correlated_noise
- * functions for specific noise types.
+ * or use the individual
+ * inject_noise/inject_coherent_noise/inject_correlated_noise functions for
+ * specific noise types.
  *
  * Usage:
  *   NoiseModel nm;
@@ -382,8 +396,8 @@ class NoiseModel {
   // ── Correlated (time-correlated) noise setters ──
 
   static OUBand make_ou_band_(double sigma, double alpha, double gate_time,
-                              bool stationary_init = true,
-                              bool after_1q = true, bool after_2q = true) {
+                              bool stationary_init = true, bool after_1q = true,
+                              bool after_2q = true) {
     if (!std::isfinite(sigma) || sigma < 0.0)
       throw std::invalid_argument(
           "OU diffusion coefficient must be finite and nonnegative");
@@ -391,16 +405,16 @@ class NoiseModel {
       throw std::invalid_argument(
           "OU correlation time (alpha) must be finite and positive");
     if (!std::isfinite(gate_time) || gate_time <= 0.0)
-      throw std::invalid_argument(
-          "OU gate time must be finite and positive");
+      throw std::invalid_argument("OU gate time must be finite and positive");
     double theta = 1.0 / (alpha * gate_time);
     double phi = std::exp(-theta * gate_time);
-    double sigma_stat_sq = sigma * sigma / (2.0 * theta);  // stationary variance
+    double sigma_stat_sq =
+        sigma * sigma / (2.0 * theta);  // stationary variance
     double sigma_eta_sq = sigma_stat_sq * (1.0 - phi * phi);
     double sigma_eta = std::sqrt(std::max(sigma_eta_sq, 0.0));
     double sigma_stat = std::sqrt(std::max(sigma_stat_sq, 0.0));
-    return OUBand{phi, sigma_eta, sigma_stat, theta, gate_time,
-                  stationary_init, after_1q, after_2q};
+    return OUBand{phi,       sigma_eta,       sigma_stat, theta,
+                  gate_time, stationary_init, after_1q,   after_2q};
   }
 
   /**
@@ -411,7 +425,8 @@ class NoiseModel {
    * @param sigma_eta Driving noise standard deviation.
    * @param after_1q If true (default), inject after 1Q gates too.
    * @param after_2q If true (default), inject after 2Q gates too.
-   * @param stationary_init If true (default), sample step 0 from stationary distribution.
+   * @param stationary_init If true (default), sample step 0 from stationary
+   * distribution.
    */
   void set_correlated_ar1(int q, double phi, double sigma_eta,
                           bool after_1q = true, bool after_2q = true,
@@ -421,8 +436,8 @@ class NoiseModel {
                             ? sigma_eta / std::sqrt(one_minus_phi2)
                             : sigma_eta;
     double theta = (phi > 0.0 && phi < 1.0) ? -std::log(phi) : 1.0;
-    OUBand band{phi, sigma_eta, sigma_stat, theta, 1.0, stationary_init,
-                after_1q, after_2q};
+    OUBand band{phi, sigma_eta,       sigma_stat, theta,
+                1.0, stationary_init, after_1q,   after_2q};
     correlated_[q] = CorrelatedNoise{{band}, after_1q, after_2q};
   }
 
@@ -441,11 +456,12 @@ class NoiseModel {
    * @param gate_time Gate duration in seconds.
    * @param after_1q If true (default), inject after 1Q gates too.
    * @param after_2q If true (default), inject after 2Q gates too.
-   * @param stationary_init If true (default), sample step 0 from stationary distribution.
+   * @param stationary_init If true (default), sample step 0 from stationary
+   * distribution.
    */
-  void set_correlated_ou(int q, double sigma, double alpha,
-                         double gate_time, bool after_1q = true,
-                         bool after_2q = true, bool stationary_init = true) {
+  void set_correlated_ou(int q, double sigma, double alpha, double gate_time,
+                         bool after_1q = true, bool after_2q = true,
+                         bool stationary_init = true) {
     OUBand band = make_ou_band_(sigma, alpha, gate_time, stationary_init,
                                 after_1q, after_2q);
     correlated_[q] = CorrelatedNoise{{band}, after_1q, after_2q};
@@ -471,7 +487,8 @@ class NoiseModel {
   }
 
   /**
-   * Batch multi-OU setter: clears existing bands and populates from a list of (sigma, alpha) pairs.
+   * Batch multi-OU setter: clears existing bands and populates from a list of
+   * (sigma, alpha) pairs.
    */
   void set_multi_correlated_ou(
       int q, const std::vector<std::pair<double, double>> &bands,
@@ -480,9 +497,8 @@ class NoiseModel {
     std::vector<OUBand> ou_bands;
     ou_bands.reserve(bands.size());
     for (const auto &[sigma, alpha] : bands) {
-      ou_bands.push_back(
-          make_ou_band_(sigma, alpha, gate_time, stationary_init,
-                        after_1q, after_2q));
+      ou_bands.push_back(make_ou_band_(sigma, alpha, gate_time, stationary_init,
+                                       after_1q, after_2q));
     }
     correlated_[q] = CorrelatedNoise{std::move(ou_bands), after_1q, after_2q};
   }
@@ -514,13 +530,13 @@ class NoiseModel {
   }
 
   /**
-   * Synthesize 1/f noise spectrum by logarithmically spacing num_bands fluctuator corner
-   * frequencies between f_min and f_max with equal power allocation per decade.
+   * Synthesize 1/f noise spectrum by logarithmically spacing num_bands
+   * fluctuator corner frequencies between f_min and f_max with equal power
+   * allocation per decade.
    */
-  void set_1_over_f_noise(int q, double total_power, double f_min,
-                          double f_max, int num_bands, double gate_time,
-                          bool after_1q = true, bool after_2q = true,
-                          bool stationary_init = true) {
+  void set_1_over_f_noise(int q, double total_power, double f_min, double f_max,
+                          int num_bands, double gate_time, bool after_1q = true,
+                          bool after_2q = true, bool stationary_init = true) {
     if (num_bands <= 0)
       throw std::invalid_argument("Number of bands must be positive");
     if (!std::isfinite(total_power) || total_power < 0.0)
@@ -536,14 +552,13 @@ class NoiseModel {
     bands.reserve(num_bands);
     double power_per_band = total_power / num_bands;
     for (int b = 0; b < num_bands; ++b) {
-      double f_b = (num_bands == 1)
-                       ? std::sqrt(f_min * f_max)
-                       : f_min * std::pow(f_max / f_min,
-                                          static_cast<double>(b) /
-                                              (num_bands - 1.0));
+      double f_b =
+          (num_bands == 1)
+              ? std::sqrt(f_min * f_max)
+              : f_min * std::pow(f_max / f_min,
+                                 static_cast<double>(b) / (num_bands - 1.0));
       double alpha_b = 1.0 / (2.0 * M_PI * f_b * gate_time);
-      double sigma_b =
-          std::sqrt(power_per_band / (M_PI * alpha_b * gate_time));
+      double sigma_b = std::sqrt(power_per_band / (M_PI * alpha_b * gate_time));
       bands.emplace_back(sigma_b, alpha_b);
     }
     set_multi_correlated_ou(q, bands, gate_time, after_1q, after_2q,
@@ -567,8 +582,7 @@ class NoiseModel {
    * @param after_1q If true (default), inject after 1Q gates too.
    */
   void set_all_correlated_from_power(int n, double power, double alpha,
-                                     double gate_time,
-                                     bool after_1q = true,
+                                     double gate_time, bool after_1q = true,
                                      bool after_2q = true) {
     if (n <= 0)
       throw std::invalid_argument(
@@ -580,8 +594,7 @@ class NoiseModel {
       throw std::invalid_argument(
           "OU correlation time (alpha) must be finite and positive");
     if (!std::isfinite(gate_time) || gate_time <= 0.0)
-      throw std::invalid_argument(
-          "OU gate time must be finite and positive");
+      throw std::invalid_argument("OU gate time must be finite and positive");
     double sigma = std::sqrt(power / (n * M_PI * alpha * gate_time));
     set_all_correlated_ou(n, sigma, alpha, gate_time, after_1q, after_2q);
   }
@@ -597,12 +610,15 @@ class NoiseModel {
   // ── Idle noise setters ──
 
   /**
-   * Set idle dephasing, relaxation, and detuning for delay instructions on a qubit.
+   * Set idle dephasing, relaxation, and detuning for delay instructions on a
+   * qubit.
    *
    * @param q Qubit index.
    * @param t1 T1 relaxation time in seconds (may be infinity).
-   * @param t2 T2 dephasing time in seconds (may be infinity, must satisfy T2 <= 2*T1).
-   * @param excited_population Equilibrium population of |1> state (default: 0.0).
+   * @param t2 T2 dephasing time in seconds (may be infinity, must satisfy T2 <=
+   * 2*T1).
+   * @param excited_population Equilibrium population of |1> state (default:
+   * 0.0).
    * @param detuning_hz Coherent detuning frequency in Hz (default: 0.0).
    */
   void set_idle_noise(int q, double t1, double t2,
@@ -612,11 +628,9 @@ class NoiseModel {
     checked_time_constant_(t2, "Idle T2");
     checked_probability_(excited_population, "Idle excited population");
     if (std::isfinite(t1) && std::isfinite(t2) && t2 > 2.0 * t1 * (1.0 + 1e-12))
-      throw std::invalid_argument(
-          "T2 must satisfy T2 <= 2*T1 for idle noise");
+      throw std::invalid_argument("T2 must satisfy T2 <= 2*T1 for idle noise");
     if (!std::isfinite(detuning_hz))
-      throw std::invalid_argument(
-          "Idle detuning_hz must be finite");
+      throw std::invalid_argument("Idle detuning_hz must be finite");
     idle_noise_[q] = IdleNoise{t1, t2, excited_population, detuning_hz};
   }
 
@@ -705,8 +719,8 @@ class NoiseModel {
   void set_t1_from_time(int q, double gate_time_s, double t1_time_s) {
     checked_duration_(gate_time_s, "T1 gate time");
     checked_time_constant_(t1_time_s, "T1");
-    t1_[q] = std::isinf(t1_time_s) ? 0.0
-                                   : -std::expm1(-gate_time_s / t1_time_s);
+    t1_[q] =
+        std::isinf(t1_time_s) ? 0.0 : -std::expm1(-gate_time_s / t1_time_s);
     EnsureNoT1ThermalStack();
   }
 
@@ -738,13 +752,11 @@ class NoiseModel {
   }
 
   /** Pure phase damping with coherence exp(-gate_time/T_phi). */
-  void set_phase_damping_from_time(int q, double gate_time_s,
-                                   double t_phi_s) {
+  void set_phase_damping_from_time(int q, double gate_time_s, double t_phi_s) {
     checked_duration_(gate_time_s, "Phase-damping gate time");
     checked_time_constant_(t_phi_s, "T_phi");
-    const double gamma = std::isinf(t_phi_s)
-                             ? 0.0
-                             : -std::expm1(-2.0 * gate_time_s / t_phi_s);
+    const double gamma =
+        std::isinf(t_phi_s) ? 0.0 : -std::expm1(-2.0 * gate_time_s / t_phi_s);
     set_phase_damping(q, gamma);
   }
 
@@ -768,8 +780,7 @@ class NoiseModel {
    * The physical constraint T2 <= 2*T1 is enforced by QuantumChannel.
    */
   void set_thermal_relaxation(int q, double gate_time_s, double t1_s,
-                              double t2_s,
-                              double excited_population = 0.0) {
+                              double t2_s, double excited_population = 0.0) {
     // Constructing the channel validates duration, T1, T2, T2 <= 2*T1 and
     // complete positivity, so an invalid configuration is rejected here
     // rather than at injection time, on either backend.
@@ -787,8 +798,7 @@ class NoiseModel {
    * the usual case, since 2Q gates are longer than 1Q gates.
    */
   void set_thermal_relaxation_2q(int q, double gate_time_s, double t1_s,
-                                 double t2_s,
-                                 double excited_population = 0.0) {
+                                 double t2_s, double excited_population = 0.0) {
     thermal_relaxation_2q_.insert_or_assign(
         q, Simulators::QuantumChannel::ThermalRelaxation(
                gate_time_s, t1_s, t2_s, excited_population));
@@ -858,9 +868,8 @@ class NoiseModel {
   void set_t1_2q_from_time(int q, double gate_time_s, double t1_time_s) {
     checked_duration_(gate_time_s, "2Q T1 gate time");
     checked_time_constant_(t1_time_s, "T1");
-    t1_2q_[q] = std::isinf(t1_time_s)
-                    ? 0.0
-                    : -std::expm1(-gate_time_s / t1_time_s);
+    t1_2q_[q] =
+        std::isinf(t1_time_s) ? 0.0 : -std::expm1(-gate_time_s / t1_time_s);
     EnsureNoT1ThermalStack();
   }
 
@@ -936,7 +945,8 @@ class NoiseModel {
   /**
    * Set two-qubit depolarizing channel applied after CX/CZ gates on (q1, q2).
    * Channel: Λ(ρ) = (1-p)ρ + p/15 · Σ_{P∈{I,X,Y,Z}⊗2 \ {II}} PρP†
-   * Stored symmetrically: set_2q_depolarizing(a,b,p) == set_2q_depolarizing(b,a,p).
+   * Stored symmetrically: set_2q_depolarizing(a,b,p) ==
+   * set_2q_depolarizing(b,a,p).
    */
   void set_2q_depolarizing(int q1, int q2, double p) {
     if (q1 == q2)
@@ -977,7 +987,7 @@ class NoiseModel {
   }
 
   const Simulators::QuantumChannel *get_correlated_phase_flip(int q1,
-                                                               int q2) const {
+                                                              int q2) const {
     const auto first = correlated_phase_flip_.find(q1);
     if (first == correlated_phase_flip_.end()) return nullptr;
     const auto second = first->second.find(q2);
@@ -1042,9 +1052,11 @@ class NoiseModel {
   std::vector<int> thermal_approximation_qubits() const {
     std::vector<int> qubits;
     for (const auto &entry : thermal_relaxation_params_)
-      if (!entry.second.sampled_realization_is_exact()) qubits.push_back(entry.first);
+      if (!entry.second.sampled_realization_is_exact())
+        qubits.push_back(entry.first);
     for (const auto &entry : thermal_relaxation_params_2q_)
-      if (!entry.second.sampled_realization_is_exact()) qubits.push_back(entry.first);
+      if (!entry.second.sampled_realization_is_exact())
+        qubits.push_back(entry.first);
     for (const auto &entry : idle_noise_) {
       if (std::isfinite(entry.second.t1) && std::isfinite(entry.second.t2) &&
           entry.second.t2 > entry.second.t1 * (1.0 + 1e-12))
@@ -1071,8 +1083,9 @@ class NoiseModel {
   }
 
   /**
-   * True if sampled (circuit-rewrite) injection cannot faithfully realize the model:
-   * exact-only Kraus maps, or thermal relaxation approximated when T2 > T1.
+   * True if sampled (circuit-rewrite) injection cannot faithfully realize the
+   * model: exact-only Kraus maps, or thermal relaxation approximated when T2 >
+   * T1.
    */
   bool requires_exact_quantum_channels() const {
     return has_additional_quantum_channels() ||
@@ -1090,8 +1103,8 @@ class NoiseModel {
     return noise_1q_.empty() && noise_2q_.empty() && depol_2q_.empty() &&
            t1_.empty() && t1_2q_.empty() && !has_thermal_relaxation() &&
            phase_damping_.empty() && coherent_.empty() && correlated_.empty() &&
-           idle_noise_.empty() &&
-           crosstalk_.empty() && !has_additional_quantum_channels();
+           idle_noise_.empty() && crosstalk_.empty() &&
+           !has_additional_quantum_channels();
   }
 
   /**
@@ -1104,8 +1117,7 @@ class NoiseModel {
     for (const auto &entry : t1_) qubits.insert(entry.first);
     for (const auto &entry : t1_2q_) qubits.insert(entry.first);
     for (const auto &entry : thermal_relaxation_) qubits.insert(entry.first);
-    for (const auto &entry : thermal_relaxation_2q_)
-      qubits.insert(entry.first);
+    for (const auto &entry : thermal_relaxation_2q_) qubits.insert(entry.first);
     for (const int q : qubits) {
       if (get_t1(q) != 0.0 && get_thermal_relaxation(q) != nullptr)
         throw std::invalid_argument(
@@ -1165,10 +1177,9 @@ class NoiseModel {
 
   /// True if any noise of any type has been configured.
   bool has_any() const {
-    return !noise_.empty() || !coherent_.empty() ||
-           !correlated_.empty() || !idle_noise_.empty() ||
-           !t1_.empty() || !t1_2q_.empty() || !crosstalk_.empty() ||
-           !readout_.empty() || !depol_2q_.empty() ||
+    return !noise_.empty() || !coherent_.empty() || !correlated_.empty() ||
+           !idle_noise_.empty() || !t1_.empty() || !t1_2q_.empty() ||
+           !crosstalk_.empty() || !readout_.empty() || !depol_2q_.empty() ||
            !noise_1q_.empty() || !noise_2q_.empty() ||
            !phase_damping_.empty() || has_thermal_relaxation() ||
            has_additional_quantum_channels();
@@ -1197,8 +1208,7 @@ class NoiseModel {
   /// build an equivalent reset+Z mixture instead of rejecting the model.
   std::unordered_map<int, ThermalRelaxation> thermal_relaxation_params_;
   std::unordered_map<int, ThermalRelaxation> thermal_relaxation_params_2q_;
-  std::unordered_map<
-      int, std::unordered_map<int, Simulators::QuantumChannel>>
+  std::unordered_map<int, std::unordered_map<int, Simulators::QuantumChannel>>
       correlated_phase_flip_;
   std::vector<ConfiguredKrausChannel> kraus_channels_;
 };
@@ -1223,10 +1233,9 @@ inline void inject_1q_pauli_exact_(
     std::shared_ptr<Circuits::Circuit<double>> &out, Types::qubit_t q,
     const QubitNoise &qn) {
   if (qn.px == 0.0 && qn.py == 0.0 && qn.pz == 0.0) return;
-  out->AddOperation(
-      std::make_shared<Circuits::QuantumChannelOperation<>>(
-          Types::qubits_vector{q},
-          Simulators::QuantumChannel::Pauli(qn.px, qn.py, qn.pz)));
+  out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
+      Types::qubits_vector{q},
+      Simulators::QuantumChannel::Pauli(qn.px, qn.py, qn.pz)));
 }
 
 /**
@@ -1236,7 +1245,8 @@ inline void inject_1q_pauli_exact_(
  * stochastic mixture (reset to |0>/|1> with the T1 probabilities, else a
  * phase flip sized so the surviving trajectories carry the whole
  * exp(-duration/T2) coherence decay). Both are driven from the same physical
- * (duration, T1, T2, excited population), so the two paths agree for T2 <= T1. Sampled execution clamps larger T2 to T1.
+ * (duration, T1, T2, excited population), so the two paths agree for T2 <= T1.
+ * Sampled execution clamps larger T2 to T1.
  */
 inline void inject_thermal_relaxation_(
     std::shared_ptr<Circuits::Circuit<double>> &out, const NoiseModel &nm,
@@ -1245,14 +1255,12 @@ inline void inject_thermal_relaxation_(
   const int qi = static_cast<int>(q);
   if (exact_channels) {
     if (const auto *channel = nm.get_thermal_relaxation_for_gate(qi, is_2q))
-      out->AddOperation(
-          std::make_shared<Circuits::QuantumChannelOperation<>>(
-              Types::qubits_vector{q}, *channel));
+      out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
+          Types::qubits_vector{q}, *channel));
     return;
   }
 
-  const ThermalRelaxation *params =
-      nm.get_thermal_relaxation_params(qi, is_2q);
+  const ThermalRelaxation *params = nm.get_thermal_relaxation_params(qi, is_2q);
   if (!params) return;
 
   const double reset0 = params->reset_to_zero_probability();
@@ -1289,9 +1297,8 @@ inline void inject_phase_damping_(
   const int qi = static_cast<int>(q);
   if (exact_channels) {
     if (const auto *channel = nm.get_phase_damping(qi))
-      out->AddOperation(
-          std::make_shared<Circuits::QuantumChannelOperation<>>(
-              Types::qubits_vector{q}, *channel));
+      out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
+          Types::qubits_vector{q}, *channel));
     return;
   }
 
@@ -1307,26 +1314,22 @@ inline void inject_additional_exact_channels_(
   for (const Types::qubit_t q : affected) {
     const int qi = static_cast<int>(q);
     if (const auto *channel = nm.get_generalized_amplitude_damping(qi))
-      out->AddOperation(
-          std::make_shared<Circuits::QuantumChannelOperation<>>(
-              Types::qubits_vector{q}, *channel));
+      out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
+          Types::qubits_vector{q}, *channel));
 
-    for (const ConfiguredKrausChannel &configured :
-         nm.get_kraus_channels())
+    for (const ConfiguredKrausChannel &configured : nm.get_kraus_channels())
       if (configured.targets.size() == 1 && configured.targets[0] == q)
-        out->AddOperation(
-            std::make_shared<Circuits::QuantumChannelOperation<>>(
-                configured.targets, configured.channel));
+        out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
+            configured.targets, configured.channel));
   }
 
   if (affected.size() != 2) return;
   const Types::qubit_t q0 = affected[0];
   const Types::qubit_t q1 = affected[1];
-  if (const auto *channel = nm.get_correlated_phase_flip(
-          static_cast<int>(q0), static_cast<int>(q1)))
-    out->AddOperation(
-        std::make_shared<Circuits::QuantumChannelOperation<>>(
-            Types::qubits_vector{q0, q1}, *channel));
+  if (const auto *channel = nm.get_correlated_phase_flip(static_cast<int>(q0),
+                                                         static_cast<int>(q1)))
+    out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
+        Types::qubits_vector{q0, q1}, *channel));
 
   for (const ConfiguredKrausChannel &configured : nm.get_kraus_channels()) {
     if (configured.targets.size() != 2) continue;
@@ -1334,9 +1337,8 @@ inline void inject_additional_exact_channels_(
         (configured.targets[0] == q0 && configured.targets[1] == q1) ||
         (configured.targets[0] == q1 && configured.targets[1] == q0);
     if (sameTargetSet)
-      out->AddOperation(
-          std::make_shared<Circuits::QuantumChannelOperation<>>(
-              configured.targets, configured.channel));
+      out->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
+          configured.targets, configured.channel));
   }
 }
 
@@ -1345,10 +1347,10 @@ inline void inject_additional_exact_channels_(
  * Samples from 15 non-identity two-qubit Paulis each with probability p/15.
  * Total error probability = p.  With probability (1-p), identity is applied.
  */
-inline void inject_2q_depol_(
-    std::shared_ptr<Circuits::Circuit<double>> &out,
-    Types::qubit_t q1, Types::qubit_t q2, double p,
-    std::uniform_real_distribution<double> &dist, std::mt19937 &rng) {
+inline void inject_2q_depol_(std::shared_ptr<Circuits::Circuit<double>> &out,
+                             Types::qubit_t q1, Types::qubit_t q2, double p,
+                             std::uniform_real_distribution<double> &dist,
+                             std::mt19937 &rng) {
   if (p <= 0) return;
   double r = dist(rng);
   if (r >= p) return;  // identity (no error)
@@ -1366,10 +1368,17 @@ inline void inject_2q_depol_(
 
   auto apply_pauli = [&](Types::qubit_t q, int pauli_id) {
     switch (pauli_id) {
-      case 1: out->AddOperation(std::make_shared<Circuits::XGate<>>(q)); break;
-      case 2: out->AddOperation(std::make_shared<Circuits::YGate<>>(q)); break;
-      case 3: out->AddOperation(std::make_shared<Circuits::ZGate<>>(q)); break;
-      default: break;  // Identity
+      case 1:
+        out->AddOperation(std::make_shared<Circuits::XGate<>>(q));
+        break;
+      case 2:
+        out->AddOperation(std::make_shared<Circuits::YGate<>>(q));
+        break;
+      case 3:
+        out->AddOperation(std::make_shared<Circuits::ZGate<>>(q));
+        break;
+      default:
+        break;  // Identity
     }
   };
   apply_pauli(q1, pa);
@@ -1389,8 +1398,9 @@ inline void inject_2q_depol_(
  *
  * Returns {y(tau), Delta Phi}. If tau <= 1e-15, returns {y0, 0.0}.
  */
-inline std::pair<double, double> integrate_ou_band_delay_(
-    const OUBand &band, double y0, double tau, std::mt19937 &rng) {
+inline std::pair<double, double> integrate_ou_band_delay_(const OUBand &band,
+                                                          double y0, double tau,
+                                                          std::mt19937 &rng) {
   if (tau <= 1e-15) {
     return {y0, 0.0};
   }
@@ -1418,11 +1428,13 @@ inline std::pair<double, double> integrate_ou_band_delay_(
         tau * x * x * ((1.0 / 3.0) - 0.25 * x + (7.0 / 60.0) * x * x);
     V_phi = (2.0 * sigma_stat * sigma_stat / (tg * tg * theta)) * bracket;
     double om_e1_approx = x * (1.0 - 0.5 * x);
-    V_yphi = (sigma_stat * sigma_stat / (tg * theta)) * (om_e1_approx * om_e1_approx);
+    V_yphi = (sigma_stat * sigma_stat / (tg * theta)) *
+             (om_e1_approx * om_e1_approx);
   } else {
     m_phi = (y0 / (tg * theta)) * (1.0 - e1);
     double bracket = x - 2.0 * (1.0 - e1) + 0.5 * (1.0 - e2);
-    V_phi = (2.0 * sigma_stat * sigma_stat / (tg * tg * theta * theta)) * bracket;
+    V_phi =
+        (2.0 * sigma_stat * sigma_stat / (tg * tg * theta * theta)) * bracket;
     double om_e1 = 1.0 - e1;
     V_yphi = (sigma_stat * sigma_stat / (tg * theta)) * (om_e1 * om_e1);
   }
@@ -1434,8 +1446,10 @@ inline std::pair<double, double> integrate_ou_band_delay_(
   double sigma_y = std::sqrt(std::max(0.0, V_yy));
   double y_tau = m_y + sigma_y * xi1;
 
-  double V_cond = (V_yy > 1e-20) ? std::max(0.0, V_phi - (V_yphi * V_yphi) / V_yy) : V_phi;
-  double m_cond = (sigma_y > 1e-12) ? (m_phi + (V_yphi / sigma_y) * xi1) : m_phi;
+  double V_cond =
+      (V_yy > 1e-20) ? std::max(0.0, V_phi - (V_yphi * V_yphi) / V_yy) : V_phi;
+  double m_cond =
+      (sigma_y > 1e-12) ? (m_phi + (V_yphi / sigma_y) * xi1) : m_phi;
   double delta_phi = m_cond + std::sqrt(std::max(0.0, V_cond)) * xi2;
 
   return {y_tau, delta_phi};
@@ -1480,11 +1494,12 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(
                     Simulators::QuantumChannel::ThermalRelaxation(
                         tau, idle->t1, idle->t2, idle->excited_population)));
           } else {
-            ThermalRelaxation tr{tau, idle->t1, idle->t2, idle->excited_population};
+            ThermalRelaxation tr{tau, idle->t1, idle->t2,
+                                 idle->excited_population};
             double p_decay = tr.decay_probability();
             if (p_decay > 0.0 && dist(rng) < p_decay) {
-              out->AddOperation(std::make_shared<Circuits::Reset<>>(
-                  Types::qubits_vector{q}));
+              out->AddOperation(
+                  std::make_shared<Circuits::Reset<>>(Types::qubits_vector{q}));
               if (idle->excited_population > 0.0 &&
                   dist(rng) < idle->excited_population) {
                 out->AddOperation(std::make_shared<Circuits::XGate<>>(q));
@@ -1526,8 +1541,8 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(
                   Types::qubits_vector{q},
                   Simulators::QuantumChannel::AmplitudeDamping(gamma)));
       } else if (gamma > 0 && dist(rng) < gamma) {
-          out->AddOperation(std::make_shared<Circuits::Reset<>>(
-              Types::qubits_vector{q}));
+        out->AddOperation(
+            std::make_shared<Circuits::Reset<>>(Types::qubits_vector{q}));
       }
 
       // T1/T2 thermal relaxation (exact channel or equivalent reset+Z sample)
@@ -1566,15 +1581,14 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(
     }
 
     // Additional exact CPTP channels.
-    if (exact_channels)
-      inject_additional_exact_channels_(out, nm, affected);
+    if (exact_channels) inject_additional_exact_channels_(out, nm, affected);
 
     // Two-qubit depolarizing (correlated 2Q Pauli channel)
     if (is_2q) {
       auto q1 = affected[0];
       auto q2 = affected[1];
-      double p2q = nm.get_2q_depolarizing(
-          static_cast<int>(q1), static_cast<int>(q2));
+      double p2q =
+          nm.get_2q_depolarizing(static_cast<int>(q1), static_cast<int>(q2));
       if (exact_channels) {
         if (p2q != 0.0)
           out->AddOperation(
@@ -1753,14 +1767,15 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_correlated_noise(
         double phase_total = 0.0;
         for (size_t b = 0; b < cn->bands.size(); ++b) {
           const auto &band = cn->bands[b];
-          auto [y_tau, delta_phi] = integrate_ou_band_delay_(
-              band, bands_state[b], tau, rng);
+          auto [y_tau, delta_phi] =
+              integrate_ou_band_delay_(band, bands_state[b], tau, rng);
           bands_state[b] = y_tau;
           phase_total += delta_phi;
         }
 
         if (std::abs(phase_total) > 1e-18) {
-          out->AddOperation(std::make_shared<Circuits::RzGate<>>(q, phase_total));
+          out->AddOperation(
+              std::make_shared<Circuits::RzGate<>>(q, phase_total));
         }
       }
       continue;
@@ -1798,8 +1813,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_correlated_noise(
 
       // Inject Rz(y_total)
       if (std::abs(y_total) > 1e-18) {
-        out->AddOperation(
-            std::make_shared<Circuits::RzGate<>>(q, y_total));
+        out->AddOperation(std::make_shared<Circuits::RzGate<>>(q, y_total));
       }
     }
   }
@@ -1832,8 +1846,9 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
   auto out = std::make_shared<Circuits::Circuit<double>>();
   std::uniform_real_distribution<double> dist(0.0, 1.0);
   std::normal_distribution<double> normal_dist(0.0, 1.0);
-  CoherentSigns coherent_signs(rng);            // systematic, per realization
-  std::unordered_map<int, std::vector<double>> corr_state;   // multi-band state per qubit
+  CoherentSigns coherent_signs(rng);  // systematic, per realization
+  std::unordered_map<int, std::vector<double>>
+      corr_state;  // multi-band state per qubit
 
   for (const auto &op : circ->GetOperations()) {
     out->AddOperation(op->Clone());
@@ -1860,13 +1875,14 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
           double phase_total = 0.0;
           for (size_t b = 0; b < crn->bands.size(); ++b) {
             const auto &band = crn->bands[b];
-            auto [y_tau, delta_phi] = integrate_ou_band_delay_(
-                band, bands_state[b], tau, rng);
+            auto [y_tau, delta_phi] =
+                integrate_ou_band_delay_(band, bands_state[b], tau, rng);
             bands_state[b] = y_tau;
             phase_total += delta_phi;
           }
           if (std::abs(phase_total) > 1e-18) {
-            out->AddOperation(std::make_shared<Circuits::RzGate<>>(q, phase_total));
+            out->AddOperation(
+                std::make_shared<Circuits::RzGate<>>(q, phase_total));
           }
         }
 
@@ -1880,11 +1896,12 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
                     Simulators::QuantumChannel::ThermalRelaxation(
                         tau, idle->t1, idle->t2, idle->excited_population)));
           } else {
-            ThermalRelaxation tr{tau, idle->t1, idle->t2, idle->excited_population};
+            ThermalRelaxation tr{tau, idle->t1, idle->t2,
+                                 idle->excited_population};
             double p_decay = tr.decay_probability();
             if (p_decay > 0.0 && dist(rng) < p_decay) {
-              out->AddOperation(std::make_shared<Circuits::Reset<>>(
-                  Types::qubits_vector{q}));
+              out->AddOperation(
+                  std::make_shared<Circuits::Reset<>>(Types::qubits_vector{q}));
               if (idle->excited_population > 0.0 &&
                   dist(rng) < idle->excited_population) {
                 out->AddOperation(std::make_shared<Circuits::XGate<>>(q));
@@ -1939,7 +1956,8 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
       double y_total = 0.0;
       for (size_t b = 0; b < crn->bands.size(); ++b) {
         const auto &band = crn->bands[b];
-        double y_b = band.phi * bands_state[b] + band.sigma_eta * normal_dist(rng);
+        double y_b =
+            band.phi * bands_state[b] + band.sigma_eta * normal_dist(rng);
         bands_state[b] = y_b;
         if (!is_multiq && !band.inject_after_1q) continue;
         if (is_multiq && !band.inject_after_2q) continue;
@@ -1947,8 +1965,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
       }
 
       if (std::abs(y_total) > 1e-18) {
-        out->AddOperation(
-            std::make_shared<Circuits::RzGate<>>(q, y_total));
+        out->AddOperation(std::make_shared<Circuits::RzGate<>>(q, y_total));
       }
     }
 
@@ -1964,8 +1981,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
       const auto *xt = nm.get_crosstalk_neighbors(static_cast<int>(q));
       if (!xt) continue;
       for (const auto &[neighbor, strength] : *xt) {
-        if (!is_affected(neighbor))
-          spectator_rotations[neighbor] += strength;
+        if (!is_affected(neighbor)) spectator_rotations[neighbor] += strength;
       }
     }
     for (const auto &[spectator, total] : spectator_rotations) {
@@ -1983,8 +1999,8 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
                   Types::qubits_vector{q},
                   Simulators::QuantumChannel::AmplitudeDamping(gamma)));
       } else if (gamma > 0 && dist(rng) < gamma) {
-          out->AddOperation(std::make_shared<Circuits::Reset<>>(
-              Types::qubits_vector{q}));
+        out->AddOperation(
+            std::make_shared<Circuits::Reset<>>(Types::qubits_vector{q}));
       }
 
       // T1/T2 thermal relaxation and phase damping. Both are driven from the
@@ -2027,15 +2043,14 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(
     }
 
     // ── 7. Additional exact CPTP channels ──
-    if (exact_channels)
-      inject_additional_exact_channels_(out, nm, affected);
+    if (exact_channels) inject_additional_exact_channels_(out, nm, affected);
 
     // ── 8. Two-qubit depolarizing (correlated 2Q Pauli channel) ──
     if (is_2q) {
       auto q1 = affected[0];
       auto q2 = affected[1];
-      double p2q = nm.get_2q_depolarizing(
-          static_cast<int>(q1), static_cast<int>(q2));
+      double p2q =
+          nm.get_2q_depolarizing(static_cast<int>(q1), static_cast<int>(q2));
       if (exact_channels) {
         if (p2q != 0.0)
           out->AddOperation(
@@ -2114,8 +2129,7 @@ inline void attach_readout_error(
  * Kraus and two-qubit correlated layers, while retaining sampled unitary
  * trajectories for coherent and temporally correlated layers.
  */
-inline std::shared_ptr<Circuits::Circuit<double>>
-inject_combined_noise_exact(
+inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_exact(
     const std::shared_ptr<Circuits::Circuit<double>> &circ,
     const NoiseModel &nm, std::mt19937 &rng) {
   return inject_combined_noise_impl_(circ, nm, rng, true);
