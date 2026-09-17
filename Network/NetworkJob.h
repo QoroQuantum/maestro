@@ -134,6 +134,25 @@ class ExecuteJob {
       const auto sampleres = optSim->SampleCountsMany(qbits, curCnt);
 
       for (const auto &[mstate, cnt] : sampleres) {
+        if (measurementsOp->HasReadout()) {
+          // Readout flips are independent per shot, so the aggregated sample
+          // has to be expanded and each shot given its own draw. Costs
+          // O(shots) instead of O(distinct outcomes), but only when a readout
+          // error is actually configured.
+          for (size_t shot = 0; shot < cnt; ++shot) {
+            measurementsOp->SetStateFromSample(mstate, state, optSim.get());
+
+            auto bits = state.GetAllBits();
+            bits.resize(nrResultCbits, false);
+
+            ++localRes[bits];
+
+            state.Reset();
+          }
+
+          continue;
+        }
+
         measurementsOp->SetStateFromSample(mstate, state);
 
         auto bits = state.GetAllBits();
@@ -327,6 +346,23 @@ class ExecuteJob {
       const auto sampleres = optSim->SampleCountsMany(qbits, curCnt);
 
       for (const auto &[mstate, cnt] : sampleres) {
+        if (measurementsOp->HasReadout()) {
+          // See the threaded variant above: flips are per shot, so the
+          // aggregated sample must be expanded.
+          for (size_t shot = 0; shot < cnt; ++shot) {
+            measurementsOp->SetStateFromSample(mstate, state, optSim.get());
+
+            auto bits = state.GetAllBits();
+            bits.resize(nrResultCbits, false);
+
+            ++res[bits];
+
+            state.Reset();
+          }
+
+          continue;
+        }
+
         measurementsOp->SetStateFromSample(mstate, state);
 
         auto bits = state.GetAllBits();
