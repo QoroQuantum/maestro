@@ -56,6 +56,7 @@ struct NoiseConfig {
   uint32_t seed = 0;
   size_t realizations = 1;
   json::array approximations;
+  std::string thermal_approximation_warning;
 };
 inline NoiseConfig ParseNoise(const json::object& object,
                               const SimulatorConfig& config, size_t qubits) {
@@ -270,8 +271,27 @@ inline NoiseConfig ParseNoise(const json::object& object,
                 "coherent mode accepts only coherent channels");
   }
   result.model.EnsureNoT1ThermalStack();
-  Supported(result.exact || !result.model.requires_exact_quantum_channels(),
+  Supported(result.exact || !result.model.has_additional_quantum_channels(),
             "This noise model requires exact density-matrix/MPO evolution");
+  // Match Python's sampled thermal policy without altering calibrated channels
+  // used by exact density-matrix/MPO evolution.
+  if (!result.exact) {
+    const auto qubits = result.model.thermal_approximation_qubits();
+    if (!qubits.empty()) {
+      result.approximations.emplace_back("thermal_T2_clamped_to_T1");
+      std::ostringstream message;
+      message << "Sampled thermal approximation for circuit qubits [";
+      for (size_t i = 0; i < qubits.size(); ++i) {
+        if (i) message << ", ";
+        message << qubits[i];
+      }
+      message
+          << "]: effective T2 clamped to T1. Use density matrix or a supported "
+             "MPO backend to preserve calibrated T2. Kraus trajectories are "
+             "not supported by Maestro's current SV/MPS noise path.";
+      result.thermal_approximation_warning = message.str();
+    }
+  }
   if (!result.exact && result.model.has_t1())
     result.approximations.emplace_back("sampled_T1_reset");
   if (!result.exact && result.mode != "analytical")

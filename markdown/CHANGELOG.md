@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Native JSON requests accept sampled thermal relaxation with `T1 < T2 <= 2*T1`, using effective `T2 = T1` with a warning and approximation metadata, matching Python. Exact density-matrix/MPO execution preserves calibrated T2.
+- Native readout noise applies at measurement time, including conditional measurements and noisy outcomes consumed by classical control.
+- Native measurement/readout randomness follows the explicit simulator seed or falls back to `noise.seed`, independently of circuit-noise injection.
+- Legacy `SimpleExecute` and `SimpleEstimate` honor `config.seed`, including zero and the full uint64 range, and reject invalid seeds.
+
 ## [0.3.1] - 2026-09-10
 
 ### Added

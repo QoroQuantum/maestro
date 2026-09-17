@@ -2,6 +2,7 @@
 #include "../maestrolib/Interface.h"
 #include <boost/json.hpp>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -48,6 +49,62 @@ j::object Call(const j::object& request, bool success = true,
 double Real(const j::value& value) { return value.to_number<double>(); }
 void Near(double actual, double expected) {
   Check(std::abs(actual - expected) < 1e-9, "Numerical mismatch");
+}
+
+void TestLegacySeeds() {
+  GetMaestroObjectWithMute();
+  auto* capabilities = MaestroGetCapabilitiesJson();
+  Check(capabilities != nullptr, "Cannot discover legacy backend ID");
+  const auto catalog = j::parse(capabilities);
+  FreeResult(capabilities);
+  int backend = -1;
+  for (const auto& entry : catalog.at("backends").as_array())
+    if (entry.at("name") == "qcsim")
+      backend = entry.at("legacy_id").to_number<int>();
+  Check(backend >= 0, "Missing QCSim backend");
+  const char* circuit =
+      "OPENQASM 2.0; qreg q[2]; creg c[2]; "
+      "h q[0]; h q[1]; measure q->c;";
+  for (int method : {0, 1}) {
+    struct Simulator {
+      unsigned long handle = CreateSimpleSimulator(2);
+      ~Simulator() { DestroySimpleSimulator(handle); }
+    } simulator;
+    Check(simulator.handle != 0, "Cannot create legacy simulator");
+    Check(RemoveAllOptimizationSimulatorsAndAdd(simulator.handle, backend,
+                                                method) == 1,
+          "Cannot configure legacy simulator");
+    auto run = [&](const j::value& seed) {
+      const auto options =
+          j::serialize(j::object{{"shots", 512}, {"seed", seed}});
+      auto* raw = SimpleExecute(simulator.handle, circuit, options.c_str());
+      Check(raw != nullptr, "Legacy seeded execution failed");
+      const auto result = j::parse(raw);
+      FreeResult(raw);
+      return result.at("counts");
+    };
+    for (uint64_t seed : {uint64_t{0}, uint64_t{123}, UINT64_MAX}) {
+      const auto counts = run(seed);
+      Check(counts == run(seed), "Legacy execution ignored config.seed");
+      Check(counts != run(seed ^ 1),
+            "Different legacy seeds reused one stream");
+      Check(counts == run(seed),
+            "Legacy reseeding failed on an existing handle");
+    }
+    for (const auto& seed : j::array{-1, 1.5, "123", true, nullptr}) {
+      const auto options =
+          j::serialize(j::object{{"shots", 10}, {"seed", seed}});
+      auto* result = SimpleExecute(simulator.handle, circuit, options.c_str());
+      const bool rejected = result == nullptr;
+      if (result) FreeResult(result);
+      Check(rejected, "Malformed legacy seed was accepted");
+      result = SimpleEstimate(simulator.handle, circuit, "ZI", options.c_str());
+      const bool estimateRejected = result == nullptr;
+      if (result) FreeResult(result);
+      Check(estimateRejected, "Legacy estimator accepted a malformed seed");
+    }
+    run(123);
+  }
 }
 
 int main() try {
@@ -508,6 +565,7 @@ int main() try {
                           {"requests", j::array{request}}};
   Call(nested, false, true);
   TestRequestNoiseAndOptions();
+  TestLegacySeeds();
 
   std::cout << "Native request API: " << checks << " checks passed\n";
   return 0;

@@ -27,6 +27,24 @@
 static std::atomic_bool isInitialized{false};
 static std::unique_ptr<Maestro> maestroInstance;
 
+// Legacy configuration uses JSON integers, including zero and the full uint64
+// range. Reject malformed seeds without throwing across this C ABI.
+static bool ConfigureLegacySeed(Network::INetwork<> &network,
+                                const boost::json::value &config) {
+  if (!config.is_object()) return true;
+  const auto *value = config.as_object().if_contains("seed");
+  if (!value) return true;
+  uint64_t seed;
+  if (value->is_uint64())
+    seed = value->as_uint64();
+  else if (value->is_int64() && value->as_int64() >= 0)
+    seed = static_cast<uint64_t>(value->as_int64());
+  else
+    return false;
+  network.Configure("seed", std::to_string(seed).c_str());
+  return true;
+}
+
 extern "C" {
 #ifdef _WIN32
 __declspec(dllexport)
@@ -153,6 +171,7 @@ __declspec(dllexport)
   size_t nrShots = 1;  // default value
 
   const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
+  if (!ConfigureLegacySeed(*network, configJson)) return nullptr;
 
   if (configJson.is_object()) {
     const auto configObject = configJson.as_object();
@@ -169,8 +188,8 @@ __declspec(dllexport)
   }
 
   bool configured = false;
-  const std::string gpuDevice = Json::JsonParserMaestro<>::GetConfigString(
-      "gpu_device", configJson);
+  const std::string gpuDevice =
+      Json::JsonParserMaestro<>::GetConfigString("gpu_device", configJson);
   if (!gpuDevice.empty()) {
     Simulators::Configuration::ParseGpuDevice(gpuDevice);
     configured = true;
@@ -352,10 +371,11 @@ __declspec(dllexport)
   }
 
   const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
+  if (!ConfigureLegacySeed(*network, configJson)) return nullptr;
 
   bool configured = false;
-  const std::string gpuDevice = Json::JsonParserMaestro<>::GetConfigString(
-      "gpu_device", configJson);
+  const std::string gpuDevice =
+      Json::JsonParserMaestro<>::GetConfigString("gpu_device", configJson);
   if (!gpuDevice.empty()) {
     Simulators::Configuration::ParseGpuDevice(gpuDevice);
     configured = true;
