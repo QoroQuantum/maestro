@@ -150,6 +150,24 @@ static std::mt19937 MakeNoiseRng(const SimulatorConfig& config,
   return std::mt19937(std::random_device{}());
 }
 
+// Keep simulator randomness separate from circuit-noise injection. An explicit
+// config seed takes precedence; otherwise the public noise seed also seeds
+// measurement/readout. Every batch needs its own stream, even for one-shot
+// realizations (as used by Sinter). Preserve the synchronized MPI default.
+static SimulatorConfig NoiseExecutionConfig(
+    const SimulatorConfig& config, std::optional<unsigned int> seed,
+    uint64_t batch) {
+  auto execution_config = config;
+  if (!execution_config.seed && seed) execution_config.seed = *seed;
+  if (!execution_config.seed &&
+      config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim)
+    execution_config.seed = 0;
+  if (execution_config.seed)
+    execution_config.seed =
+        Simulators::IState::DeriveSeed(*execution_config.seed, batch);
+  return execution_config;
+}
+
 static std::shared_ptr<Circuits::Circuit<double>> inject_noise_for_config(
     const std::shared_ptr<Circuits::Circuit<double>>& circuit,
     const noise::NoiseModel& noise_model, std::mt19937& rng,
@@ -1606,7 +1624,8 @@ NB_MODULE(maestro, m) {
 
               auto noisy =
                   inject_noise_for_config(self, noise_model, rng, config);
-              nb::dict r = execute_core(noisy, config, batch_shots);
+              nb::dict r = execute_core(
+                  noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
               nb::dict counts = nb::cast<nb::dict>(r["counts"]);
               for (auto item : counts)
                 combined[nb::cast<std::string>(nb::str(item.first))] +=
@@ -1872,7 +1891,8 @@ NB_MODULE(maestro, m) {
 
               auto noisy = inject_combined_noise_for_config(
                   self, noise_model, rng, config);
-              nb::dict r = execute_core(noisy, config, batch_shots);
+              nb::dict r = execute_core(
+                  noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
               nb::dict counts = nb::cast<nb::dict>(r["counts"]);
               for (auto item : counts)
                 combined[nb::cast<std::string>(nb::str(item.first))] +=
@@ -2863,7 +2883,8 @@ NB_MODULE(maestro, m) {
 
           auto noisy =
               inject_noise_for_config(circuit, noise_model, rng, config);
-          nb::dict r = execute_core(noisy, config, batch_shots);
+          nb::dict r = execute_core(
+              noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
           nb::dict counts = nb::cast<nb::dict>(r["counts"]);
           for (auto item : counts)
             combined[nb::cast<std::string>(nb::str(item.first))] +=
@@ -3045,7 +3066,8 @@ NB_MODULE(maestro, m) {
 
           auto noisy = inject_combined_noise_for_config(
               circuit, noise_model, rng, config);
-          nb::dict r = execute_core(noisy, config, batch_shots);
+          nb::dict r = execute_core(
+              noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
           nb::dict counts = nb::cast<nb::dict>(r["counts"]);
           for (auto item : counts)
             combined[nb::cast<std::string>(nb::str(item.first))] +=
