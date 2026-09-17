@@ -221,6 +221,11 @@ class Configuration {
   void ApplyConfigurationToSimulator(
       const std::shared_ptr<Simulators::IState>& simulator) const {
     for (const auto& [key, value] : configMap) {
+      // Networks retain GPU placement when an optimizer selects a CPU backend.
+      // Replay it only to GPU simulators; Aer rejects this plugin-specific key.
+      if (key == "gpu_device" && !IsGpuSimulator(simulator->GetType()))
+        continue;
+
       // Route the seed through SetSeed, whose contract is to seed EVERY random
       // stream the simulator owns -- including the auxiliary one used for
       // measurement-time readout error. Its default implementation still

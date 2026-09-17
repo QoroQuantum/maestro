@@ -182,16 +182,24 @@ class IRemapper : public std::enable_shared_from_this<IRemapper<Time>> {
               bits;
           const auto qbits = op->AffectedQubits();
           const auto cbits = op->AffectedBits();
+          const auto measurement =
+              std::static_pointer_cast<Circuits::MeasurementOperation<Time>>(op);
+          std::unordered_map<size_t, std::vector<Circuits::ReadoutRates>> rates;
 
           for (size_t q = 0; q < qbits.size(); ++q) {
             const size_t host = network->GetHostIdForAnyQubit(qbits[q]);
             bits[host].push_back({qbits[q], cbits[q]});
+            if (measurement->HasReadout())
+              rates[host].push_back(measurement->GetReadout()[q]);
           }
 
-          for (const auto &hostQubits : bits)
-            newDistributedCircuit->AddOperation(
-                std::make_shared<Circuits::MeasurementOperation<Time>>(
-                    hostQubits.second));
+          for (const auto &hostQubits : bits) {
+            auto split = std::make_shared<Circuits::MeasurementOperation<Time>>(
+                hostQubits.second);
+            if (measurement->HasReadout())
+              split->SetReadout(std::move(rates[hostQubits.first]));
+            newDistributedCircuit->AddOperation(split);
+          }
         } break;
         case Circuits::OperationType::kConditionalMeasurement: {
           std::unordered_map<size_t,
@@ -203,16 +211,24 @@ class IRemapper : public std::enable_shared_from_this<IRemapper<Time>> {
 
           const auto qbits = condOp->GetOperation()->AffectedQubits();
           const auto cbits = condOp->GetOperation()->AffectedBits();
+          const auto measurement =
+              std::static_pointer_cast<Circuits::MeasurementOperation<Time>>(
+                  condOp->GetOperation());
+          std::unordered_map<size_t, std::vector<Circuits::ReadoutRates>> rates;
 
           for (size_t q = 0; q < qbits.size(); ++q) {
             const size_t host = network->GetHostIdForAnyQubit(qbits[q]);
             bits[host].push_back({qbits[q], cbits[q]});
+            if (measurement->HasReadout())
+              rates[host].push_back(measurement->GetReadout()[q]);
           }
 
           for (const auto &hostQubits : bits) {
             auto measOp =
                 std::make_shared<Circuits::MeasurementOperation<Time>>(
                     hostQubits.second);
+            if (measurement->HasReadout())
+              measOp->SetReadout(std::move(rates[hostQubits.first]));
             newDistributedCircuit->AddOperation(
                 std::make_shared<Circuits::ConditionalMeasurement<Time>>(
                     measOp,

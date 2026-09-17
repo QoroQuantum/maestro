@@ -25,6 +25,8 @@
 #include <vector>
 
 #include "../Circuit/Circuit.h"
+#include "../Network/SimpleDisconnectedNetwork.h"
+#include "../Noise/NoiseAdd.h"
 #include "../Simulators/Configuration.h"
 #include "../Simulators/Factory.h"
 #include "../python/noise.h"
@@ -746,6 +748,96 @@ BOOST_AUTO_TEST_CASE(ConfigurationSeedsReadoutWithoutChangingBackendSequence) {
     for (int i = 0; i < 20; ++i)
       BOOST_CHECK_EQUAL(configured->RandomUniform(), again->RandomUniform());
   }
+}
+
+BOOST_AUTO_TEST_CASE(ConfigurationKeepsGpuPlacementOutOfCpuBackends) {
+  std::vector<Simulators::SimulatorType> backends{
+      Simulators::SimulatorType::kQCSim};
+#ifndef NO_QISKIT_AER
+  backends.push_back(Simulators::SimulatorType::kQiskitAer);
+#endif
+  for (const auto backend : backends) {
+    auto simulator = Simulators::SimulatorsFactory::CreateSimulator(
+        backend, Simulators::SimulationType::kMatrixProductState);
+    Simulators::Configuration configuration;
+    configuration.SetConfiguration("gpu_device", "0");
+    configuration.SetConfiguration("seed", "42");
+    configuration.ApplyConfigurationToSimulator(simulator);
+    simulator->AllocateQubits(1);
+    simulator->Initialize();
+    simulator->ApplyX(0);
+    const auto counts = simulator->SampleCountsMany({0}, 16);
+    BOOST_CHECK_EQUAL(counts.at(std::vector<bool>{true}), 16u);
+    BOOST_CHECK_EQUAL(configuration.GetConfiguration("gpu_device"), "0");
+    BOOST_CHECK(simulator->GetConfiguration("gpu_device").empty());
+  }
+}
+
+BOOST_AUTO_TEST_CASE(NoiseAddReadoutUsesMeasurementQubits) {
+  auto circuit = std::make_shared<Circuits::Circuit<>>();
+  circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{0, 1}, {1, 0}}));
+  auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
+      Types::qubits_vector{2}, std::vector<size_t>{2});
+  network->CreateSimulator(Simulators::SimulatorType::kQCSim,
+                           Simulators::SimulationType::kStatevector);
+  noise::NoiseModel model;
+  model.set_readout_error_symmetric(0, 1.0);
+  noise::NoiseAdd add;
+  add.seed(42);
+  const auto counts = add.noisy_execute(circuit, network, 0, model, 128, 16);
+  BOOST_REQUIRE_EQUAL(counts.size(), 1u);
+  BOOST_CHECK_EQUAL(counts.at(std::vector<bool>{false, true}), 128u);
+  BOOST_CHECK(!std::static_pointer_cast<Circuits::MeasurementOperation<>>(
+                   circuit->GetOperations()[0])->HasReadout());
+}
+
+BOOST_AUTO_TEST_CASE(NoiseAddSeedReproducesRunsAndAdvancesRealizations) {
+  auto circuit = std::make_shared<Circuits::Circuit<>>();
+  for (Types::qubit_t q = 0; q < 4; ++q)
+    circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(q));
+  circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{
+          {0, 0}, {1, 1}, {2, 2}, {3, 3}}));
+  for (const std::string configured : {"", "0", "18446744073709551615"}) {
+    auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
+        Types::qubits_vector{4}, std::vector<size_t>{4});
+    network->SetMaxSimulators(1);
+    if (!configured.empty()) network->Configure("seed", configured.c_str());
+    network->CreateSimulator(Simulators::SimulatorType::kQCSim,
+                             Simulators::SimulationType::kStatevector);
+    noise::NoiseModel model;
+    noise::NoiseAdd add;
+    add.seed(123);
+    const auto first = add.full_noise_execute(circuit, network, 0, model, 128, 128);
+    BOOST_CHECK_GE(first.size(), 12u);
+    const auto second = add.full_noise_execute(circuit, network, 0, model, 128, 128);
+    BOOST_CHECK(first != second);
+    add.seed(123);
+    BOOST_CHECK(first == add.full_noise_execute(circuit, network, 0, model, 128, 128));
+    BOOST_CHECK_EQUAL(network->GetSimulator()->GetConfiguration("seed"), configured);
+  }
+}
+
+BOOST_AUTO_TEST_CASE(NoiseAddReportsThermalApproximationOncePerCall) {
+  auto circuit = HadamardCircuit();
+  auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
+      Types::qubits_vector{1}, std::vector<size_t>{1});
+  network->CreateSimulator(Simulators::SimulatorType::kQCSim,
+                           Simulators::SimulationType::kStatevector);
+  noise::NoiseModel model;
+  model.set_thermal_relaxation(0, 1.0, 10.0, 15.0);
+  noise::NoiseAdd add;
+  int warnings = 0;
+  add.set_warning_handler([&](const std::string& message) {
+    BOOST_CHECK(message.find("T2 clamped to T1") != std::string::npos);
+    ++warnings;
+  });
+  add.noisy_estimate_montecarlo(circuit, network, 0, {"X"}, model, 16);
+  BOOST_CHECK_EQUAL(warnings, 1);
+  add.set_exact_channels(true);
+  add.inject(circuit, model);
+  BOOST_CHECK_EQUAL(warnings, 1);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
