@@ -271,7 +271,10 @@ struct ThermalRelaxation {
  *      approximation on pure-state circuit-rewrite paths.
  *   5. **Spectator-Z crosstalk**: parasitic Rz rotations on neighboring
  *      spectator qubits (not a genuine two-qubit ZZ interaction).
- *   6. **Readout error**: classical post-measurement bit-flip channel.
+ *   6. **Readout error**: classical bit-flip applied when each measurement
+ *      writes its bit, using the rates of the measured qubit. Attached to the
+ *      injected circuit by attach_readout_error(); classically-conditioned
+ *      operations downstream observe the noisy outcome.
  *   7. **Additional CPTP channels**: phase damping and T1/T2 thermal
  *      relaxation (exact or sampled), plus generalized amplitude damping,
  *      correlated phase flips and caller-supplied Kraus maps. The last three
@@ -2053,6 +2056,59 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise(
     const std::shared_ptr<Circuits::Circuit<double>> &circ,
     const NoiseModel &nm, std::mt19937 &rng) {
   return inject_combined_noise_impl_(circ, nm, rng, false);
+}
+
+/**
+ * Attach the model's per-qubit readout rates to every measurement in the
+ * circuit, so the flip happens when the bit is written -- using the rates of
+ * the qubit that was read, whatever classical bit it lands in.
+ *
+ * Readout rates are keyed by qubit while a counts bitstring is keyed by
+ * classical bit; the two only coincide for measure_all()-style identity maps
+ * on a register no wider than the qubit count. Attaching to the operation is
+ * what makes mid-circuit, repeated, permuted and partial measurements correct.
+ *
+ * Idempotent. Measurements wrapped in a ConditionalMeasurement are covered.
+ * Call once on the noise-injected circuit; the rates then travel with the
+ * operation through Clone/Remap and the circuit's measurement merging and
+ * reordering.
+ */
+inline void attach_readout_error(
+    const std::shared_ptr<Circuits::Circuit<double>> &circuit,
+    const NoiseModel &nm) {
+  if (!circuit || !nm.has_readout_error()) return;
+
+  auto attach = [&](Circuits::MeasurementOperation<> &m) {
+    const auto &qs = m.GetQubits();
+    std::vector<Circuits::ReadoutRates> rates(qs.size());
+    bool any = false;
+
+    for (size_t k = 0; k < qs.size(); ++k) {
+      const auto *re = nm.get_readout_error(static_cast<int>(qs[k]));
+      if (!re) continue;
+      rates[k] = Circuits::ReadoutRates{re->p_meas1_prep0, re->p_meas0_prep1};
+      any = any || re->p_meas1_prep0 > 0.0 || re->p_meas0_prep1 > 0.0;
+    }
+
+    if (any) m.SetReadout(std::move(rates));
+  };
+
+  for (const auto &op : circuit->GetOperations()) {
+    switch (op->GetType()) {
+      case Circuits::OperationType::kMeasurement:
+        attach(*std::static_pointer_cast<Circuits::MeasurementOperation<>>(op));
+        break;
+      case Circuits::OperationType::kConditionalMeasurement: {
+        auto cond =
+            std::static_pointer_cast<Circuits::IConditionalOperation<>>(op);
+        attach(*std::static_pointer_cast<Circuits::MeasurementOperation<>>(
+            cond->GetOperation()));
+        break;
+      }
+      default:
+        break;
+    }
+  }
 }
 
 /**
