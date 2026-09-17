@@ -227,9 +227,8 @@ class TestQasmParser:
             parser.parse_and_translate("OPENQASM 3.0;\nqubit q;\nx q[1];\n")
 
 
-@pytest.mark.skip(reason="ISimulator is not yet exposed as a nanobind type")
 class TestSimulatorOperations:
-    """Test simulator gate operations (requires ISimulator binding)"""
+    """Test direct simulator gate operations through the ISimulator binding."""
 
     def test_qubit_allocation(self):
         """Test qubit allocation and initialization"""
