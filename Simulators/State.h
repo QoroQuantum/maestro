@@ -24,6 +24,8 @@
 #include <Eigen/Eigen>
 #include <cmath>
 #include <complex>
+#include <cstdint>
+#include <random>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -127,9 +129,20 @@ class IState {
 
   /** Seed every random stream owned by this simulator. */
   virtual void SetSeed(uint64_t seed) {
+    auxRng.seed(DeriveSeed(seed, kAuxRngStream));
     const std::string value = std::to_string(seed);
     Configure("seed", value.c_str());
   }
+
+  /**
+   * @brief Uniform random number in [0, 1) from the auxiliary stream.
+   *
+   * Used for classical post-processing that happens during execution, such as
+   * readout-error flips applied when a measurement writes its bit. Each
+   * simulator instance owns its own stream, so the per-job clones in the
+   * multi-shot thread pool never share state. Deterministic after SetSeed.
+   */
+  double RandomUniform() { return auxUniform(auxRng); }
 
   static uint64_t DeriveSeed(uint64_t seed, uint64_t stream) {
     uint64_t value = seed + 0x9e3779b97f4a7c15ULL * (stream + 1);
@@ -1008,10 +1021,17 @@ class IState {
 
 
  private:
+  /** Stream id for the auxiliary RNG. Large so it cannot collide with the
+   *  small per-job / per-sub-simulator stream ids passed to DeriveSeed. */
+  static constexpr uint64_t kAuxRngStream = 0x52454144ULL;  // 'READ'
+
   std::unordered_set<std::shared_ptr<ISimulatorObserver>>
       observers; /**< The registered observers. */
   bool notifyObservers =
       true; /**< A flag to indicate if observers should be notified. */
+  std::mt19937_64 auxRng{
+      std::random_device{}()}; /**< Auxiliary stream, see RandomUniform. */
+  std::uniform_real_distribution<double> auxUniform{0.0, 1.0};
 };
 
 }  // namespace Simulators

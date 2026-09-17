@@ -530,4 +530,174 @@ BOOST_AUTO_TEST_CASE(OneOverFNoiseSynthesizer) {
   }
 }
 
+/**
+ * The auxiliary RNG on IState is what measurement-time readout flips draw
+ * from. It must be in [0,1), reproducible under SetSeed, and per-instance so
+ * the per-job clones in the multi-shot thread pool never share a stream.
+ */
+BOOST_AUTO_TEST_CASE(AuxiliaryRngIsSeededAndPerInstance) {
+  auto a = MakeSimulator(Simulators::SimulationType::kStatevector, 1);
+  auto b = MakeSimulator(Simulators::SimulationType::kStatevector, 1);
+  a->SetSeed(5);
+  b->SetSeed(5);
+
+  std::vector<double> va, vb;
+  for (int i = 0; i < 8; ++i) {
+    va.push_back(a->RandomUniform());
+    vb.push_back(b->RandomUniform());
+  }
+  for (const double v : va) {
+    BOOST_CHECK_GE(v, 0.0);
+    BOOST_CHECK_LT(v, 1.0);
+  }
+  BOOST_CHECK(va == vb);
+
+  auto c = MakeSimulator(Simulators::SimulationType::kStatevector, 1);
+  c->SetSeed(6);
+  std::vector<double> vc;
+  for (int i = 0; i < 8; ++i) vc.push_back(c->RandomUniform());
+  BOOST_CHECK(va != vc);
+}
+
+/**
+ * Readout error is a property of the QUBIT being read, applied when the
+ * measurement writes its bit -- not a post-pass over the counts string indexed
+ * by classical-bit position. Swap the qubit->bit map and only the bit holding
+ * qubit 0's outcome may flip.
+ */
+BOOST_AUTO_TEST_CASE(ReadoutFlipsFollowTheMeasuredQubitNotTheBitIndex) {
+  // x q0; measure q0 -> c1, q1 -> c0. q0 reads 1, q1 reads 0.
+  auto meas = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{0, 1}, {1, 0}});
+  // index 0 is qubit 0: always report a measured 1 as 0. index 1 (qubit 1): none.
+  meas->SetReadoutAt(0, Circuits::ReadoutRates{0.0, 1.0});
+  BOOST_CHECK(meas->HasReadout());
+
+  auto simulator = MakeSimulator(Simulators::SimulationType::kStatevector, 2);
+  simulator->SetSeed(3);
+  simulator->ApplyX(0);
+
+  Circuits::OperationState state;
+  state.AllocateBits(2);
+  meas->Execute(simulator, state);
+
+  const auto &bits = state.GetAllBits();
+  BOOST_REQUIRE_EQUAL(bits.size(), 2u);
+  BOOST_CHECK_EQUAL(bits[1], false);  // c1 held q0's 1 -> flipped to 0
+  BOOST_CHECK_EQUAL(bits[0], false);  // c0 held q1's 0, no readout on q1
+}
+
+/** Without a simulator handle (legacy callers) readout stays inert. */
+BOOST_AUTO_TEST_CASE(SetStateFromSampleWithoutRngIsUnchanged) {
+  auto meas = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}});
+  meas->SetReadoutAt(0, Circuits::ReadoutRates{1.0, 1.0});
+
+  Circuits::OperationState state;
+  state.AllocateBits(1);
+  meas->SetStateFromSample(std::vector<bool>{true}, state);
+
+  BOOST_CHECK_EQUAL(state.GetAllBits()[0], true);
+}
+
+/** Clone must carry the readout rates, index for index. */
+BOOST_AUTO_TEST_CASE(ReadoutRatesSurviveClone) {
+  auto meas = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{2, 0}, {5, 1}});
+  meas->SetReadoutAt(1, Circuits::ReadoutRates{0.1, 0.2});
+
+  auto copy =
+      std::static_pointer_cast<Circuits::MeasurementOperation<>>(meas->Clone());
+
+  BOOST_REQUIRE(copy->HasReadout());
+  BOOST_REQUIRE_EQUAL(copy->GetReadout().size(), 2u);
+  BOOST_CHECK_CLOSE(copy->GetReadout()[1].p_meas1_prep0, 0.1, 1e-9);
+  BOOST_CHECK_CLOSE(copy->GetReadout()[1].p_meas0_prep1, 0.2, 1e-9);
+  BOOST_CHECK_SMALL(copy->GetReadout()[0].p_meas1_prep0, 1e-12);
+}
+
+/**
+ * GetLastMeasurements merges trailing measurements into one op and sorts them
+ * by qubit. The readout rates must be permuted with their (qubit, bit) pair.
+ */
+BOOST_AUTO_TEST_CASE(ReadoutRatesSurviveGetLastMeasurements) {
+  auto circuit = std::make_shared<Circuits::Circuit<double>>();
+  circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+
+  auto m1 = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{3, 0}});
+  m1->SetReadoutAt(0, Circuits::ReadoutRates{0.3, 0.03});
+
+  auto m2 = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{1, 1}, {2, 2}});
+  m2->SetReadoutAt(0, Circuits::ReadoutRates{0.1, 0.01});
+  // index 1 (qubit 2) deliberately left at zero rates
+
+  circuit->AddOperation(m1);
+  circuit->AddOperation(m2);
+
+  const std::vector<bool> executed(circuit->GetOperations().size(), false);
+  auto merged = circuit->GetLastMeasurements(executed, /*sort=*/true);
+
+  const auto &qs = merged->GetQubits();
+  const auto &bs = merged->GetBitsIndices();
+  BOOST_REQUIRE_EQUAL(qs.size(), 3u);
+  BOOST_REQUIRE(merged->HasReadout());
+  const auto &r = merged->GetReadout();
+  BOOST_REQUIRE_EQUAL(r.size(), 3u);
+
+  // sorted by qubit: (1,c1,0.1/0.01), (2,c2,0/0), (3,c0,0.3/0.03)
+  BOOST_CHECK_EQUAL(qs[0], 1u);
+  BOOST_CHECK_EQUAL(bs[0], 1u);
+  BOOST_CHECK_CLOSE(r[0].p_meas1_prep0, 0.1, 1e-9);
+  BOOST_CHECK_EQUAL(qs[1], 2u);
+  BOOST_CHECK_EQUAL(bs[1], 2u);
+  BOOST_CHECK_SMALL(r[1].p_meas1_prep0, 1e-12);
+  BOOST_CHECK_EQUAL(qs[2], 3u);
+  BOOST_CHECK_EQUAL(bs[2], 0u);
+  BOOST_CHECK_CLOSE(r[2].p_meas1_prep0, 0.3, 1e-9);
+  BOOST_CHECK_CLOSE(r[2].p_meas0_prep1, 0.03, 1e-9);
+}
+
+/** No readout on any source op -> the merged op carries none either. */
+BOOST_AUTO_TEST_CASE(GetLastMeasurementsWithoutReadoutStaysClean) {
+  auto circuit = std::make_shared<Circuits::Circuit<double>>();
+  circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}, {1, 1}}));
+
+  const std::vector<bool> executed(1, false);
+  auto merged = circuit->GetLastMeasurements(executed, true);
+
+  BOOST_CHECK(!merged->HasReadout());
+}
+
+/**
+ * EnsureProperOrderForMeasurements splits a multi-qubit measurement into
+ * single-pair ops. Each rebuilt op must carry the rates of its own qubit.
+ */
+BOOST_AUTO_TEST_CASE(ReadoutRatesSurviveEnsureProperOrder) {
+  Circuits::Circuit<double> circuit;
+  auto m = std::make_shared<Circuits::MeasurementOperation<>>(
+      std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}, {1, 1}});
+  m->SetReadoutAt(0, Circuits::ReadoutRates{0.05, 0.5});
+  m->SetReadoutAt(1, Circuits::ReadoutRates{0.06, 0.6});
+  circuit.AddOperation(m);
+
+  circuit.EnsureProperOrderForMeasurements();
+
+  size_t seen = 0;
+  for (const auto &op : circuit.GetOperations()) {
+    if (op->GetType() != Circuits::OperationType::kMeasurement) continue;
+    auto meas = std::static_pointer_cast<Circuits::MeasurementOperation<>>(op);
+    BOOST_REQUIRE_EQUAL(meas->GetQubits().size(), 1u);
+    BOOST_REQUIRE(meas->HasReadout());
+    const auto q = meas->GetQubits()[0];
+    const auto &r = meas->GetReadout()[0];
+    if (q == 0) BOOST_CHECK_CLOSE(r.p_meas0_prep1, 0.5, 1e-9);
+    if (q == 1) BOOST_CHECK_CLOSE(r.p_meas0_prep1, 0.6, 1e-9);
+    ++seen;
+  }
+  BOOST_CHECK_EQUAL(seen, 2u);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
