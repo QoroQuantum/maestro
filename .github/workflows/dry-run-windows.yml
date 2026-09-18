@@ -45,7 +45,7 @@ jobs:
           path: |
             C:/vcpkg/installed
             C:/vcpkg/binary-cache
-          key: vcpkg-windows-x64-deps1
+          key: vcpkg-windows-x64-deps2-lapack
           restore-keys: |
             vcpkg-windows-x64-
 
@@ -68,7 +68,7 @@ jobs:
           Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
           Remove-Item Env:VCPKG_INSTALLATION_ROOT -ErrorAction SilentlyContinue
           # Reconcile restored caches too; always use the same vcpkg as CMake.
-          & "C:/vcpkg/vcpkg.exe" install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
+          & "C:/vcpkg/vcpkg.exe" install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows lapack-reference:x64-windows
           if ($LASTEXITCODE -ne 0) { throw "vcpkg dependency installation failed" }
         env:
           VCPKG_BINARY_SOURCES: "clear;files,C:/vcpkg/binary-cache,readwrite"
@@ -118,7 +118,7 @@ jobs:
           path: |
             C:/vcpkg/installed
             C:/vcpkg/binary-cache
-          key: vcpkg-windows-x64-deps1
+          key: vcpkg-windows-x64-deps2-lapack
 
       - name: List built wheels
         run: dir wheelhouse\

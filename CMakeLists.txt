@@ -260,6 +260,17 @@ if(QAER)
             message(FATAL_ERROR "Couldn't find BLAS libraries")
         endif()
     endif()
+
+    set(MAESTRO_LINALG_LIBRARIES ${BLAS_LIBRARIES})
+    if(WIN32)
+        # vcpkg builds OpenBLAS without LAPACK. Aer also needs the LAPACK
+        # eigensolver and SVD routines, provided by lapack-reference.
+        find_package(lapack CONFIG REQUIRED)
+        if(NOT TARGET lapack)
+            message(FATAL_ERROR "The LAPACK package must provide the lapack target")
+        endif()
+        list(PREPEND MAESTRO_LINALG_LIBRARIES lapack)
+    endif()
 endif()
 
 # --- Boost ---
@@ -409,7 +420,7 @@ if(SIMD_FLAGS)
 endif()
 
 if(QAER AND BLAS_FOUND)
-    target_link_libraries(maestro PUBLIC ${BLAS_LIBRARIES})
+    target_link_libraries(maestro PUBLIC ${MAESTRO_LINALG_LIBRARIES})
 endif()
 
 # OpenMP target configuration
@@ -582,7 +593,7 @@ if(COMPILE_TESTS)
     endif()
 
     if(QAER AND BLAS_FOUND)
-        target_link_libraries(tests PUBLIC ${BLAS_LIBRARIES})
+        target_link_libraries(tests PUBLIC ${MAESTRO_LINALG_LIBRARIES})
     endif()
 
     if(OpenMP_CXX_FOUND)
