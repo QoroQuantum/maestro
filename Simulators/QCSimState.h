@@ -698,8 +698,9 @@ class QCSimState : public ISimulator {
       if (std::string(key) == "matrix_product_state_max_bond_dimension") {
         mpsSimulator->setLimitBondDimension(configuration.GetConfigurationAsInt(key));
       } else if (std::string(key) == "matrix_product_state_truncation_threshold") {
-          const double threshold = configuration.GetConfigurationAsDouble(key);
-          if (threshold > 0.) mpsSimulator->setLimitEntanglement(threshold);
+        const double threshold = configuration.GetConfigurationAsDouble(key);
+        // Zero must also replace any previously configured cutoff.
+        if (threshold >= 0.) mpsSimulator->setLimitEntanglement(threshold);
       } else if (std::string(key) == "matrix_product_state_truncation_mode") {
         // "relative_max" -> RelativeToMax, "discarded_weight" -> DiscardedWeight (the
         // default -- see QC::TensorNetworks::MPSSimulatorInterface::TruncationMode).
@@ -721,7 +722,8 @@ class QCSimState : public ISimulator {
           std::string(key) == "matrix_product_state_truncation_threshold" ||
           std::string(key) == "matrix_product_operator_truncation_threshold") {
         const double threshold = configuration.GetConfigurationAsDouble(key);
-        if (threshold > 0.) mpoSimulator->setLimitEntanglement(threshold);
+        // Zero must also replace any previously configured cutoff.
+        if (threshold >= 0.) mpoSimulator->setLimitEntanglement(threshold);
       } else if (
           std::string(key) == "matrix_product_state_truncation_mode" ||
           std::string(key) == "matrix_product_operator_truncation_mode") {

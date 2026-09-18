@@ -760,7 +760,8 @@ class GpuState : public ISimulator {
       // TruncationMode in maestro-gpu-simulators' lib/truncationmode.hpp and its use in
       // mpsimpl.cu/mpo.cu/tensornet.cu.
       const double singularValueThreshold = std::stod(value);
-      if (singularValueThreshold > 0.) {
+      // Zero must also replace any previously configured cutoff.
+      if (singularValueThreshold >= 0.) {
         if (mps) mps->SetCutoff(singularValueThreshold);
         if (tn) tn->SetCutoff(singularValueThreshold);
         if (mpo) mpo->SetCutoff(singularValueThreshold);
