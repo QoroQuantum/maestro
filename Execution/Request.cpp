@@ -229,7 +229,10 @@ struct Context {
         throw Error("backend_unavailable",
                     "Requested fixed backend/method is unavailable; fallback "
                     "is disabled");
-      if (config.native_options.count("gpu_device") &&
+      // Distributed placement is validated during backend initialization;
+      // MPI and multi-device states report -1 instead of one GPU ordinal.
+      if (!Simulators::IsDistributedGpuSimulator(config.simulator_type) &&
+          config.native_options.count("gpu_device") &&
           network->GetSimulator()->GetGpuDevice() !=
               std::stoi(config.native_options.at("gpu_device")))
         throw Error("backend_unavailable",
@@ -472,7 +475,6 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
       !Sub(Sub(request, "simulator"), "options").contains("seed") &&
       Sub(request, "noise").contains("seed"))
     config.seed = UInt(Field(Sub(request, "noise"), "seed"));
-  if (!config.seed) config.seed = 0;
   const auto input = ParseCircuit(Object(Field(request, "circuit")));
   Supported(!Simulators::IsDistributedGpuSimulator(config.simulator_type) ||
                 input.qubits < 63,
@@ -487,7 +489,7 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
   if (const auto* devices = distribution.if_contains("devices"))
     Require(Array(*devices).size() < (uint64_t{1} << input.qubits),
             "Distribution requires at least one local qubit");
-  const auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits);
+  auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits);
   for (const auto& op : input.circuit->GetOperations())
     Supported(op->GetType() != Circuits::OperationType::kQuantumChannel ||
                   Mixed(config),
@@ -636,6 +638,13 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
             {"backend", BackendName(config.simulator_type)},
             {"method", MethodName(config.simulation_type)}};
   const auto start = Clock::now();
+  // Resolve an omitted seed only after validation. MPI execution obtains one
+  // shared random seed, while validation needs neither entropy nor collectives.
+  if (!config.seed) {
+    config.seed = Simulators::GenerateRandomSeed(config.simulator_type,
+                                                 config.distributed_options);
+    noise.seed = static_cast<uint32_t>(*config.seed);
+  }
   Context context(input, config);
   auto simulator = context.simulator();
   // Validation remains silent; warn once per execution, not per realization.

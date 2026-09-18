@@ -335,9 +335,15 @@ inline SimulatorConfig ParseConfig(const json::object& simulator) {
         value;
   }
   const auto flags = UInt(distribution, "flags", 0);
-  Require((flags & 10) != 10, "fixed and pinned layouts are mutually exclusive");
-  Supported(!(flags & 17) || (config.simulator_type != Backend::kDistMpiGpuSim && String(distribution, "backend", "ex") == "conventional"), "Shared-device and host-staging flags require the conventional local backend");
-  Supported(config.simulator_type != Backend::kDistMpiGpuSim || !(flags & 4), "MPI does not support the local full-mesh topology flag");
+  Require((flags & 10) != 10,
+          "fixed and pinned layouts are mutually exclusive");
+  Supported(!(flags & 17) ||
+                (config.simulator_type != Backend::kDistMpiGpuSim &&
+                 String(distribution, "backend", "ex") == "conventional"),
+            "Shared-device and host-staging flags require the conventional "
+            "local backend");
+  Supported(config.simulator_type != Backend::kDistMpiGpuSim || !(flags & 4),
+            "MPI does not support the local full-mesh topology flag");
   if (const auto* devices = distribution.if_contains("devices")) {
     const auto count = Array(*devices).size();
     Require(count > 0 && count <= 32 && !(count & (count - 1)),
@@ -354,8 +360,7 @@ inline SimulatorConfig ParseConfig(const json::object& simulator) {
       Require((size_t{1} << Array(*globals).size()) == count,
               "global_qubits count must equal log2(shards)");
   }
-  if (config.simulator_type == Backend::kDistMpiGpuSim && !config.seed)
-    config.seed = 0;
+  // Omitted seeds stay unset; execution resolves them after validation.
   if (config.native_options.count("use_double_precision") &&
       Simulators::IsDistributedGpuSimulator(config.simulator_type)) {
     Require(!config.native_options.count("precision"),

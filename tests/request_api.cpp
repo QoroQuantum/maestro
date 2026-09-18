@@ -10,6 +10,7 @@ namespace j = boost::json;
 extern "C" int maestro_request_c_header_test(void);
 static unsigned checks = 0;
 void TestRequestNoiseAndOptions();
+void TestRequestSeedParsing();
 void Check(bool condition, const char* message) {
   ++checks;
   if (!condition) throw std::runtime_error(message);
@@ -105,6 +106,56 @@ void TestLegacySeeds() {
     }
     run(123);
   }
+}
+
+void TestNativeRandomSeeds() {
+  auto request =
+      Request("execute", 4, "h q[0]; h q[1]; h q[2]; h q[3]; measure q->c;");
+  request["execution"] = j::object{{"shots", 4096}};
+  for (bool noisy : {false, true}) {
+    if (noisy)
+      request["noise"] =
+          j::object{{"realizations", 16},
+                    {"channels", j::array{j::object{{"kind", "readout"},
+                                                    {"targets", j::array{0}},
+                                                    {"probability", 0.3}}}}};
+    const auto first = Call(request);
+    const auto second = Call(request);
+    Check(first.at("seed") != second.at("seed"),
+          "Omitted native seeds reused a fixed seed");
+    Check(first.at("counts") != second.at("counts"),
+          "Independent unseeded requests reused their measurement stream");
+    if (noisy)
+      Check(first.at("noise").at("seed").to_number<uint32_t>() ==
+                static_cast<uint32_t>(first.at("seed").to_number<uint64_t>()),
+            "Default noise seed did not follow the generated execution seed");
+    request["execution"].as_object()["seed"] = first.at("seed");
+    Check(Call(request).at("counts") == first.at("counts"),
+          "Returned random seed cannot reproduce native sampling/readout");
+    for (uint64_t seed : {uint64_t{0}, UINT64_MAX}) {
+      request["execution"].as_object()["seed"] = seed;
+      const auto seeded = Call(request);
+      Check(seeded.at("seed").to_number<uint64_t>() == seed,
+            "Explicit native seed was replaced");
+      Check(seeded.at("counts") == Call(request).at("counts"),
+            "Explicit native seed no longer reproduces results");
+    }
+    request["execution"].as_object().erase("seed");
+  }
+  const auto batch = Call(j::object{{"schema_version", 2},
+                                    {"operation", "batch"},
+                                    {"requests", j::array{request, request}}});
+  const auto& children = batch.at("results").as_array();
+  Check(children[0].at("seed") != children[1].at("seed"),
+        "Batch members must resolve omitted seeds independently");
+
+#ifdef __linux__
+  // Unseeded MPI validation is usable without loading/initializing MPI.
+  request.erase("noise");
+  request["simulator"].as_object()["backend"] = "distributed_mpi_gpu";
+  Check(Call(request, true, true).at("valid").as_bool(),
+        "Unseeded MPI validation attempted execution");
+#endif
 }
 
 int main() try {
@@ -566,6 +617,8 @@ int main() try {
   Call(nested, false, true);
   TestRequestNoiseAndOptions();
   TestLegacySeeds();
+  TestNativeRandomSeeds();
+  TestRequestSeedParsing();
 
   std::cout << "Native request API: " << checks << " checks passed\n";
   return 0;

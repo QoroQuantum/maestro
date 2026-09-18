@@ -6,6 +6,8 @@
 #include <numeric>
 #include <cstdlib>
 #include <cmath>
+#include <array>
+#include <optional>
 #ifdef MAESTRO_MPI_GPU_TESTS
 #include <mpi.h>
 #endif
@@ -79,12 +81,74 @@ void MixedGates(ISimulator& sim) {
   sim.ApplyGenericTwoQubitGate(0, 2, two);
   sim.Flush();
 }
+#ifdef MAESTRO_MPI_GPU_TESTS
+void RequireEveryRank(bool condition, const char* message) {
+  int local = condition, all = 0;
+  MPI_Allreduce(&local, &all, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+  Require(all != 0, message);
+}
+
+void DirectMpiRandomSeeds(bool p2p) {
+  auto create = [&](std::optional<uint64_t> seed = std::nullopt) {
+    auto sim = Factory::CreateSimulator(SimulatorType::kDistMpiGpuSim,
+                                        SimulationType::kStatevector);
+    if (p2p) sim->Configure("mpi_p2p_bits", "1");
+    if (seed) sim->SetSeed(*seed);
+    sim->AllocateQubits(4);
+    sim->Initialize();
+    return sim;
+  };
+  auto sample = [](const std::shared_ptr<ISimulator>& sim) {
+    for (size_t q = 0; q < 4; ++q) sim->ApplyH(q);
+    std::array<uint64_t, 16 + 128> outcomes{};
+    for (const auto& [value, count] : sim->SampleCounts({0, 1, 2, 3}, 4096))
+      outcomes.at(value) = count;
+    // Exercise the wrapper's auxiliary stream separately from backend sampling.
+    Circuits::MeasurementOperation<> readout({{0, 0}});
+    readout.SetReadout({{0.3, 0.2}});
+    Circuits::OperationState bits(1);
+    for (size_t shot = 0; shot < 128; ++shot) {
+      readout.SetStateFromSample({shot % 2 != 0}, bits, sim.get());
+      outcomes[16 + shot] = bits.GetBit(0);
+    }
+    return outcomes;
+  };
+  std::optional<uint64_t> previous;
+  for (int run = 0; run < 2; ++run) {
+    // No network or request configuration may supply a seed on this path.
+    auto sim = create();
+    const auto configured = sim->GetConfiguration("seed");
+    RequireEveryRank(!configured.empty(), "Direct MPI seed was not retained");
+    const uint64_t seed = std::stoull(configured);
+    uint64_t minimum = 0, maximum = 0;
+    MPI_Allreduce(&seed, &minimum, 1, MPI_UINT64_T, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&seed, &maximum, 1, MPI_UINT64_T, MPI_MAX, MPI_COMM_WORLD);
+    Require(minimum == maximum, "Direct MPI seed differs across ranks");
+    RequireEveryRank(!previous || *previous != seed,
+                     "Direct MPI construction reused a fixed seed");
+    const auto outcomes = sample(sim);
+    auto minima = outcomes, maxima = outcomes;
+    MPI_Allreduce(outcomes.data(), minima.data(), outcomes.size(), MPI_UINT64_T,
+                  MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(outcomes.data(), maxima.data(), outcomes.size(), MPI_UINT64_T,
+                  MPI_MAX, MPI_COMM_WORLD);
+    Require(minima == maxima,
+            "Direct MPI sampling/readout differs across ranks");
+    sim.reset();
+    auto replay = create(seed);
+    RequireEveryRank(sample(replay) == outcomes,
+                     "Direct MPI seed did not replay sampling and readout");
+    previous = seed;
+  }
+}
+#endif
 int main(int argc, char** argv) {
   bool mpi = false, shared = false, two = false, configOnly = false,
-       p2p = false;
+       p2p = false, seedsOnly = false;
   for (int i = 1; i < argc; ++i) {
     const std::string arg(argv[i]);
-    mpi |= arg == "--mpi";
+    mpi |= arg == "--mpi" || arg == "--mpi-seeds-only";
+    seedsOnly |= arg == "--mpi-seeds-only";
     p2p |= arg == "--p2p";
     shared |= arg == "--shared";
     two |= arg == "--two-gpus";
@@ -109,7 +173,8 @@ int main(int argc, char** argv) {
   if (argc == 2 && std::string(argv[1]) == "--unavailable-probe") {
     Require(!Factory::IsDistributedGpuAvailable(), "Probe must return false");
     Reject([] { Factory::GetDistributedGpuLibrary()->RequireLoaded(); });
-    std::cout << "Unavailable plugin probe is non-throwing; loading retains diagnostics\n";
+    std::cout << "Unavailable plugin probe is non-throwing; loading retains "
+                 "diagnostics\n";
     return 0;
   }
   int code = 0;
@@ -119,9 +184,11 @@ int main(int argc, char** argv) {
   if (mpi) return 77;
 #endif
   try {
-    Require(DistributedGpuLibrary::GetInstance() == Factory::GetDistributedGpuLibrary(),
+    Require(DistributedGpuLibrary::GetInstance() ==
+                Factory::GetDistributedGpuLibrary(),
             "Local singleton differs across the core visibility boundary");
-    Require(DistributedMpiGpuLibrary::GetInstance() == Factory::GetDistributedMpiGpuLibrary(),
+    Require(DistributedMpiGpuLibrary::GetInstance() ==
+                Factory::GetDistributedMpiGpuLibrary(),
             "MPI singleton differs across the core visibility boundary");
     const auto type =
         mpi ? SimulatorType::kDistMpiGpuSim : SimulatorType::kDistGpuSim;
@@ -163,6 +230,15 @@ int main(int argc, char** argv) {
         std::cout << "SKIP: required plugin/GPU devices unavailable\n";
         code = 77;
       } else {
+#ifdef MAESTRO_MPI_GPU_TESTS
+        if (seedsOnly) {
+          DirectMpiRandomSeeds(p2p);
+          Factory::FinalizeDistributedMpiGpuBackend();
+          MPI_Finalize();
+          std::cout << "Direct MPI random seed regression passed\n";
+          return 0;
+        }
+#endif
         for (const char* precision : {"single", "double"}) {
           for (const char* flags : {"0", "2", "8"}) {
             sim->Clear();
@@ -272,18 +348,23 @@ int main(int argc, char** argv) {
         Require(network.GetSimulator()->SampleCounts({0}, 4).at(1) == 4,
                 "Network configuration replay");
         if (!mpi && !shared) {
-          const auto fullDevices = network.GetSimulator()->GetConfiguration("distributed_shard_devices");
+          const auto fullDevices = network.GetSimulator()->GetConfiguration(
+              "distributed_shard_devices");
           for (size_t n : {size_t(2), size_t(1)}) {
             network.CreateSimulator(type, SimulationType::kStatevector, n);
             network.GetSimulator()->ApplyX(n - 1);
-            Require(std::abs(network.GetSimulator()->Amplitude(size_t{1} << (n - 1)) - 1.) < 1e-6,
+            Require(std::abs(network.GetSimulator()->Amplitude(size_t{1}
+                                                               << (n - 1)) -
+                             1.) < 1e-6,
                     "Smaller automatic host simulation");
           }
           network.CreateSimulator(type, SimulationType::kStatevector);
-          Require(network.GetSimulator()->GetConfiguration("distributed_shard_devices") == fullDevices,
+          Require(network.GetSimulator()->GetConfiguration(
+                      "distributed_shard_devices") == fullDevices,
                   "Full network placement was not restored");
           auto clone = network.Clone();
-          Require(clone->GetSimulator()->GetConfiguration("distributed_shard_devices") == fullDevices,
+          Require(clone->GetSimulator()->GetConfiguration(
+                      "distributed_shard_devices") == fullDevices,
                   "Clone lost resolved network placement");
 
           auto hosts = std::make_shared<Network::SimpleDisconnectedNetwork<>>(

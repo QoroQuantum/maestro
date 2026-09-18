@@ -26,6 +26,16 @@ class DistributedMpiGpuLibrary : public DistributedGpuLibrary {
     Check(gather(comm, device, devices.data(), devices.size()),
           "GatherMpiDevices");
   }
+  uint64_t GenerateSeed(const Communicator* comm) {
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+    RequireRuntime();
+    // Resolve on demand so explicit-seed execution also supports older plugins.
+    if (!generateSeed)
+      generateSeed = Resolve<decltype(generateSeed)>("GenerateMpiSeed");
+    uint64_t seed = 0;
+    Check(generateSeed(comm, &seed), "GenerateMpiSeed");
+    return seed;
+  }
   void* CreateMpiNative(const Communicator* comm, int device,
                         unsigned p2pBits) {
     std::lock_guard<std::recursive_mutex> lock(mutex);
@@ -76,6 +86,7 @@ class DistributedMpiGpuLibrary : public DistributedGpuLibrary {
   }
   int (*getInfo)(const Communicator*, RuntimeInfo*) = nullptr;
   int (*gather)(const Communicator*, int32_t, int32_t*, uint32_t) = nullptr;
+  int (*generateSeed)(const Communicator*, uint64_t*) = nullptr;
   int (*validate)(const Communicator*, const char*) = nullptr;
   void* (*create)(void*, const Communicator*, int32_t, uint32_t) = nullptr;
   int (*finalize)() = nullptr;

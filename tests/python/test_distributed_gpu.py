@@ -83,6 +83,28 @@ def test_execution(mpi):
         assert abs(amps[8] - 1) < 1e-5
         if mpi:
             assert len(set(MPI.COMM_WORLD.allgather(str(sorted(bell["counts"].items()))))) == 1
+            # Omitted seeds must be fresh across calls and identical across
+            # ranks, for both measurements and stochastic readout/noise.
+            config.seed = None
+            sampled = prefix + 'h q[0]; h q[1]; h q[2]; h q[3]; measure q -> c;'
+            qc = maestro.circuits.QuantumCircuit()
+            for q in range(4):
+                qc.h(q)
+            qc.measure_all()
+            noise = maestro.NoiseModel()
+            noise.set_readout_error_symmetric(0, 0.3)
+            for run in (
+                lambda: maestro.simple_execute(sampled, shots=4096, config=config),
+                lambda: qc.noisy_execute(noise, shots=4096, noise_realizations=8,
+                                         config=config),
+            ):
+                first, second = run()["counts"], run()["counts"]
+                assert first != second
+                for counts in (first, second):
+                    assert all(value == counts for value in MPI.COMM_WORLD.allgather(counts))
+                config.seed = 0
+                assert run()["counts"] == run()["counts"]
+                config.seed = None
     finally:
         if mpi:
             maestro.finalize_distributed_mpi_gpu()

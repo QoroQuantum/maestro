@@ -209,6 +209,8 @@
  * The public `seed` controls circuit-noise injection and, unless
  * `SimulatorConfig.seed` is set, simulator measurement and readout randomness.
  * An explicit configuration seed takes precedence for simulator randomness.
+ * Without a seed, calls use fresh random streams. MPI ranks share a randomly
+ * generated default seed; explicit seeds, including zero, must match on all ranks.
  * Each noise realization derives a distinct simulator seed, so seeded runs
  * remain reproducible without repeating readout draws across batches.
  *
