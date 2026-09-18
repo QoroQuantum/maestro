@@ -3,13 +3,20 @@ name: Dry Run - Windows Wheel Build
 on:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build_windows_wheel:
     name: Build Windows wheel (dry run)
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - uses: actions/checkout@v5
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
 
       - name: Cache cibuildwheel virtualenv
         uses: actions/cache@v5
@@ -45,7 +52,7 @@ jobs:
           path: |
             C:/vcpkg/installed
             C:/vcpkg/binary-cache
-          key: vcpkg-windows-x64-deps1
+          key: vcpkg-windows-x64-deps2-lapack
           restore-keys: |
             vcpkg-windows-x64-
 
@@ -63,35 +70,47 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
-        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
+        id: install-dependencies
         run: |
           Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
           Remove-Item Env:VCPKG_INSTALLATION_ROOT -ErrorAction SilentlyContinue
-          vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON" >> $env:GITHUB_ENV
+          # Reconcile restored caches too; always use the same vcpkg as CMake.
+          & "C:/vcpkg/vcpkg.exe" install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows lapack-reference:x64-windows
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg dependency installation failed" }
         env:
           VCPKG_BINARY_SOURCES: "clear;files,C:/vcpkg/binary-cache,readwrite"
 
-      - name: Set CMake env (cache hit)
-        if: steps.cache-vcpkg.outputs.cache-hit == 'true'
+      - name: Save vcpkg cache
+        if: steps.install-dependencies.outcome == 'success' && steps.cache-vcpkg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            C:/vcpkg/installed
+            C:/vcpkg/binary-cache
+          key: vcpkg-windows-x64-deps2-lapack
+
+      - name: Set CMake env
         run: |
           if (-not (Test-Path "C:\vcpkg\scripts\buildsystems\vcpkg.cmake")) {
-            Write-Error "Cache hit but vcpkg toolchain not found at C:\vcpkg. Ensure vcpkg is at C:\vcpkg on this runner."
+            throw "vcpkg toolchain not found at C:\vcpkg. Ensure vcpkg is at C:\vcpkg on this runner."
           }
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON" >> $env:GITHUB_ENV
+          # Let CMake discover and validate the installed OpenBLAS library.
+          echo "CMAKE_GENERATOR=Visual Studio 17 2022" >> $env:GITHUB_ENV
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON -DVCPKG_TARGET_TRIPLET=x64-windows -DAER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
 
       - name: Clone Qiskit Aer
         run: |
           if (-not (Test-Path "C:\qiskit-aer")) {
             git clone --depth 1 https://github.com/QoroQuantum/qiskit-aer.git C:\qiskit-aer
           }
-          echo "AER_INCLUDE_DIR=C:\qiskit-aer\src" >> $env:GITHUB_ENV
+          echo "AER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.4.1
         env:
+          CIBW_TEST_COMMAND_WINDOWS: 'python -c "import maestro"'
           CIBW_ARCHS_WINDOWS: "AMD64"
-          CIBW_ENVIRONMENT_WINDOWS: "CMAKE_BUILD_PARALLEL_LEVEL=8 AER_INCLUDE_DIR=C:\\qiskit-aer\\src"
+          CIBW_ENVIRONMENT_WINDOWS: "CMAKE_BUILD_PARALLEL_LEVEL=8 AER_INCLUDE_DIR=C:/qiskit-aer/src"
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
             pip install delvewheel &&
             delvewheel repair -w {dest_dir} --add-path "C:\vcpkg\installed\x64-windows\bin;build\cp312-cp312-win_amd64\bin;build\cp314-cp314-win_amd64\bin" {wheel}
@@ -108,15 +127,6 @@ jobs:
             ctest --test-dir $build.FullName -C Release --output-on-failure -R '^maestro_request_(abi|api|cli)$'
             if ($LASTEXITCODE -ne 0) { throw "Native request DLL test failed" }
           }
-
-      - name: Save vcpkg cache (even on failure)
-        if: always() && steps.cache-vcpkg.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            C:/vcpkg/installed
-            C:/vcpkg/binary-cache
-          key: vcpkg-windows-x64-deps1
 
       - name: List built wheels
         run: dir wheelhouse\
