@@ -63,24 +63,23 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
-        if: steps.cache-vcpkg.outputs.cache-hit != 'true'
+        id: install-dependencies
         run: |
           Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
           Remove-Item Env:VCPKG_INSTALLATION_ROOT -ErrorAction SilentlyContinue
-          vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
-          $blasLib = "C:/vcpkg/installed/x64-windows/lib/openblas.lib"
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON -DBLAS_LIBRARIES=$blasLib -DBLAS_FOUND=TRUE -DAER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
+          # Reconcile restored caches too; always use the same vcpkg as CMake.
+          & "C:/vcpkg/vcpkg.exe" install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg dependency installation failed" }
         env:
           VCPKG_BINARY_SOURCES: "clear;files,C:/vcpkg/binary-cache,readwrite"
 
-      - name: Set CMake env (cache hit)
-        if: steps.cache-vcpkg.outputs.cache-hit == 'true'
+      - name: Set CMake env
         run: |
           if (-not (Test-Path "C:\vcpkg\scripts\buildsystems\vcpkg.cmake")) {
-            Write-Error "Cache hit but vcpkg toolchain not found at C:\vcpkg. Ensure vcpkg is at C:\vcpkg on this runner."
+            throw "vcpkg toolchain not found at C:\vcpkg. Ensure vcpkg is at C:\vcpkg on this runner."
           }
-          $blasLib = "C:/vcpkg/installed/x64-windows/lib/openblas.lib"
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON -DBLAS_LIBRARIES=$blasLib -DBLAS_FOUND=TRUE -DAER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
+          # Let CMake discover and validate the installed OpenBLAS library.
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON -DVCPKG_TARGET_TRIPLET=x64-windows -DAER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
 
       - name: Clone Qiskit Aer
         run: |
@@ -92,6 +91,7 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.4.1
         env:
+          CIBW_TEST_COMMAND_WINDOWS: 'python -c "import maestro"'
           CIBW_ARCHS_WINDOWS: "AMD64"
           CIBW_ENVIRONMENT_WINDOWS: "CMAKE_BUILD_PARALLEL_LEVEL=8 AER_INCLUDE_DIR=C:/qiskit-aer/src"
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
@@ -112,7 +112,7 @@ jobs:
           }
 
       - name: Save vcpkg cache (even on failure)
-        if: always() && steps.cache-vcpkg.outputs.cache-hit != 'true'
+        if: always() && steps.install-dependencies.outcome == 'success' && steps.cache-vcpkg.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: |

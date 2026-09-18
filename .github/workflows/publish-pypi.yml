@@ -147,12 +147,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies (Windows)
-        if: runner.os == 'Windows' && steps.cache-vcpkg.outputs.cache-hit != 'true'
+        if: runner.os == 'Windows'
+        id: install-dependencies
         run: |
           # In-process removal: the earlier unset only reaches later steps.
           Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
           Remove-Item Env:VCPKG_INSTALLATION_ROOT -ErrorAction SilentlyContinue
-          vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
+          # Reconcile restored caches too; always use the same vcpkg as CMake.
+          & "C:/vcpkg/vcpkg.exe" install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg dependency installation failed" }
         env:
           VCPKG_BINARY_SOURCES: "clear;files,C:/vcpkg/binary-cache,readwrite"
 
@@ -160,12 +163,10 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           if (-not (Test-Path "$env:VCPKG_TOOLCHAIN")) {
-            Write-Error "vcpkg toolchain not found at $env:VCPKG_TOOLCHAIN. Ensure vcpkg is at C:\vcpkg on this runner."
+            throw "vcpkg toolchain not found at $env:VCPKG_TOOLCHAIN. Ensure vcpkg is at C:\vcpkg on this runner."
           }
-          # Pass BLAS_LIBRARIES directly: vcpkg's openblas port uses module mode (FindOpenBLAS.cmake),
-          # not config mode, so find_package(OpenBLAS CONFIG) returns nothing. Hardcode the known path.
-          $blasLib = "C:/vcpkg/installed/x64-windows/lib/openblas.lib"
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_TOOLCHAIN -DBLAS_LIBRARIES=$blasLib -DBLAS_FOUND=TRUE -DAER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
+          # Let CMake discover and validate the installed OpenBLAS library.
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_TOOLCHAIN -DVCPKG_TARGET_TRIPLET=x64-windows -DAER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
 
       - name: Clone Qiskit Aer (Windows)
         if: runner.os == 'Windows'
@@ -222,6 +223,7 @@ jobs:
           CIBW_ARCHS_MACOS: auto
 
           # ---- Windows ----
+          CIBW_TEST_COMMAND_WINDOWS: 'python -c "import maestro"'
           CIBW_ARCHS_WINDOWS: "AMD64"
           CIBW_ENVIRONMENT_WINDOWS: "CMAKE_BUILD_PARALLEL_LEVEL=8 AER_INCLUDE_DIR=C:/qiskit-aer/src"
           CIBW_REPAIR_WHEEL_COMMAND_WINDOWS: >-
@@ -233,7 +235,7 @@ jobs:
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
 
       - name: Save vcpkg cache (Windows, even on failure)
-        if: runner.os == 'Windows' && always() && steps.cache-vcpkg.outputs.cache-hit != 'true'
+        if: runner.os == 'Windows' && always() && steps.install-dependencies.outcome == 'success' && steps.cache-vcpkg.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: ${{ env.VCPKG_CACHE_PATHS }}
