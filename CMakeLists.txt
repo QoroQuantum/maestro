@@ -729,6 +729,16 @@ endif()
 add_executable(maestro_request_worker maestroexe/request_worker.cpp)
 set_target_properties(maestro_request_worker PROPERTIES OUTPUT_NAME maestro-request)
 target_link_libraries(maestro_request_worker PRIVATE maestro Boost::json)
+if(APPLE)
+    set_target_properties(maestro_request_worker PROPERTIES
+        INSTALL_RPATH "@loader_path/..;@loader_path/../lib"
+    )
+elseif(UNIX)
+    set_target_properties(maestro_request_worker PROPERTIES
+        INSTALL_RPATH "$ORIGIN/..:$ORIGIN/../lib"
+    )
+endif()
+
 option(MAESTRO_BUILD_MPI_WORKER "Build the native collective MPI request worker" OFF)
 if(MAESTRO_BUILD_MPI_WORKER)
     find_package(MPI REQUIRED COMPONENTS CXX)
@@ -736,9 +746,22 @@ if(MAESTRO_BUILD_MPI_WORKER)
     set_target_properties(maestro_mpi_worker PROPERTIES OUTPUT_NAME maestro-mpi-worker)
     target_compile_definitions(maestro_mpi_worker PRIVATE MAESTRO_REQUEST_MPI)
     target_link_libraries(maestro_mpi_worker PRIVATE maestro Boost::json MPI::MPI_CXX)
-    install(TARGETS maestro_mpi_worker RUNTIME DESTINATION bin)
+    if(APPLE)
+        set_target_properties(maestro_mpi_worker PROPERTIES
+            INSTALL_RPATH "@loader_path/..;@loader_path/../lib"
+        )
+    elseif(UNIX)
+        set_target_properties(maestro_mpi_worker PROPERTIES
+            INSTALL_RPATH "$ORIGIN/..:$ORIGIN/../lib"
+        )
+    endif()
+    if(NOT SKBUILD)
+        install(TARGETS maestro_mpi_worker RUNTIME DESTINATION bin)
+    endif()
 endif()
-install(TARGETS maestro_request_worker RUNTIME DESTINATION bin)
+if(NOT SKBUILD)
+    install(TARGETS maestro_request_worker RUNTIME DESTINATION bin)
+endif()
 
 if(MAESTRO_BUILD_REQUEST_TESTS)
     add_test(NAME maestro_request_cli COMMAND ${CMAKE_COMMAND}
