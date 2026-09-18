@@ -39,6 +39,11 @@ endif()
 if(POLICY CMP0167)
     cmake_policy(SET CMP0167 OLD)
 endif()
+# Suppress CMP0146 (FindCUDA) deprecation warning in third-party dependencies (e.g. Eigen)
+if(POLICY CMP0146)
+    cmake_policy(SET CMP0146 OLD)
+endif()
+set(CMAKE_WARN_DEPRECATED OFF CACHE BOOL "Suppress deprecation warnings" FORCE)
 # Honor uppercase <PACKAGENAME>_ROOT variables (e.g., BOOST_ROOT)
 if(POLICY CMP0144)
     cmake_policy(SET CMP0144 NEW)
@@ -169,20 +174,29 @@ if(QAER)
 
     if(NOT DEFINED AER_INCLUDE_DIR OR AER_INCLUDE_DIR STREQUAL "")
         set(AER_INCLUDE_DIR "$ENV{AER_INCLUDE_DIR}")
-        if(NOT AER_INCLUDE_DIR)
-            message(STATUS "AER_INCLUDE_DIR not set, fetching Qiskit Aer from QoroQuantum/qiskit-aer...")
-            FetchContent_Declare(
-                qiskit_aer
-                GIT_REPOSITORY https://github.com/QoroQuantum/qiskit-aer.git
-                GIT_TAG 0ab9bb4a531cf2df93c255e3424bb481d2735297
-            )
-            FetchContent_GetProperties(qiskit_aer)
-            if(NOT qiskit_aer_POPULATED)
-                FetchContent_Populate(qiskit_aer)
-            endif()
-            set(AER_INCLUDE_DIR ${qiskit_aer_SOURCE_DIR}/src)
-            message(STATUS "Qiskit Aer fetched to: ${AER_INCLUDE_DIR}")
+    endif()
+    if(AER_INCLUDE_DIR)
+        file(TO_CMAKE_PATH "${AER_INCLUDE_DIR}" AER_INCLUDE_DIR)
+        if(EXISTS "${AER_INCLUDE_DIR}/src/framework/linalg/vector.hpp")
+            set(AER_INCLUDE_DIR "${AER_INCLUDE_DIR}/src")
         endif()
+    endif()
+
+    if(NOT AER_INCLUDE_DIR OR NOT EXISTS "${AER_INCLUDE_DIR}/framework/linalg/vector.hpp")
+        message(STATUS "AER_INCLUDE_DIR not set or does not contain framework/linalg/vector.hpp (${AER_INCLUDE_DIR}), fetching Qiskit Aer from QoroQuantum/qiskit-aer...")
+        FetchContent_Declare(
+            qiskit_aer
+            GIT_REPOSITORY https://github.com/QoroQuantum/qiskit-aer.git
+            GIT_TAG 0ab9bb4a531cf2df93c255e3424bb481d2735297
+        )
+        FetchContent_GetProperties(qiskit_aer)
+        if(NOT qiskit_aer_POPULATED)
+            FetchContent_Populate(qiskit_aer)
+        endif()
+        set(AER_INCLUDE_DIR ${qiskit_aer_SOURCE_DIR}/src)
+        message(STATUS "Qiskit Aer fetched to: ${AER_INCLUDE_DIR}")
+    else()
+        message(STATUS "Using Qiskit Aer include directory: ${AER_INCLUDE_DIR}")
     endif()
 
     if(APPLE AND NOT OpenBLAS_ROOT AND "$ENV{OpenBLAS_ROOT}" STREQUAL "")
@@ -245,6 +259,17 @@ if(QAER)
         if(NOT BLAS_FOUND)
             message(FATAL_ERROR "Couldn't find BLAS libraries")
         endif()
+    endif()
+
+    set(MAESTRO_LINALG_LIBRARIES ${BLAS_LIBRARIES})
+    if(WIN32)
+        # vcpkg builds OpenBLAS without LAPACK. Aer also needs the LAPACK
+        # eigensolver and SVD routines, provided by lapack-reference.
+        find_package(lapack CONFIG REQUIRED)
+        if(NOT TARGET lapack)
+            message(FATAL_ERROR "The LAPACK package must provide the lapack target")
+        endif()
+        list(PREPEND MAESTRO_LINALG_LIBRARIES lapack)
     endif()
 endif()
 
@@ -360,6 +385,9 @@ set(MAESTROEXESRC maestroexe/maestroexe.cpp)
 # Define core library and executable
 add_library(maestro SHARED ${MAESTROSRC})
 target_include_directories(maestro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(QAER)
+    target_include_directories(maestro PUBLIC ${AER_INCLUDE_DIR} ${JSON_INCLUDE_DIR})
+endif()
 set_target_properties(maestro PROPERTIES OUTPUT_NAME "maestro")
 
 add_executable(maestroexe ${MAESTROEXESRC})
@@ -392,7 +420,7 @@ if(SIMD_FLAGS)
 endif()
 
 if(QAER AND BLAS_FOUND)
-    target_link_libraries(maestro PUBLIC ${BLAS_LIBRARIES})
+    target_link_libraries(maestro PUBLIC ${MAESTRO_LINALG_LIBRARIES})
 endif()
 
 # OpenMP target configuration
@@ -565,7 +593,7 @@ if(COMPILE_TESTS)
     endif()
 
     if(QAER AND BLAS_FOUND)
-        target_link_libraries(tests PUBLIC ${BLAS_LIBRARIES})
+        target_link_libraries(tests PUBLIC ${MAESTRO_LINALG_LIBRARIES})
     endif()
 
     if(OpenMP_CXX_FOUND)
