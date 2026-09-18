@@ -162,7 +162,10 @@ jobs:
           if (-not (Test-Path "$env:VCPKG_TOOLCHAIN")) {
             Write-Error "vcpkg toolchain not found at $env:VCPKG_TOOLCHAIN. Ensure vcpkg is at C:\vcpkg on this runner."
           }
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_TOOLCHAIN" >> $env:GITHUB_ENV
+          # Pass BLAS_LIBRARIES directly: vcpkg's openblas port uses module mode (FindOpenBLAS.cmake),
+          # not config mode, so find_package(OpenBLAS CONFIG) returns nothing. Hardcode the known path.
+          $blasLib = "C:/vcpkg/installed/x64-windows/lib/openblas.lib"
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_TOOLCHAIN -DBLAS_LIBRARIES=$blasLib -DBLAS_FOUND=TRUE" >> $env:GITHUB_ENV
 
       - name: Clone Qiskit Aer (Windows)
         if: runner.os == 'Windows'

@@ -68,7 +68,8 @@ jobs:
           Remove-Item Env:VCPKG_ROOT -ErrorAction SilentlyContinue
           Remove-Item Env:VCPKG_INSTALLATION_ROOT -ErrorAction SilentlyContinue
           vcpkg install boost-json:x64-windows boost-program-options:x64-windows boost-container:x64-windows boost-serialization:x64-windows openblas:x64-windows
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON" >> $env:GITHUB_ENV
+          $blasLib = "C:/vcpkg/installed/x64-windows/lib/openblas.lib"
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON -DBLAS_LIBRARIES=$blasLib -DBLAS_FOUND=TRUE" >> $env:GITHUB_ENV
         env:
           VCPKG_BINARY_SOURCES: "clear;files,C:/vcpkg/binary-cache,readwrite"
 
@@ -78,7 +79,8 @@ jobs:
           if (-not (Test-Path "C:\vcpkg\scripts\buildsystems\vcpkg.cmake")) {
             Write-Error "Cache hit but vcpkg toolchain not found at C:\vcpkg. Ensure vcpkg is at C:\vcpkg on this runner."
           }
-          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON" >> $env:GITHUB_ENV
+          $blasLib = "C:/vcpkg/installed/x64-windows/lib/openblas.lib"
+          echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON -DBLAS_LIBRARIES=$blasLib -DBLAS_FOUND=TRUE" >> $env:GITHUB_ENV
 
       - name: Clone Qiskit Aer
         run: |
