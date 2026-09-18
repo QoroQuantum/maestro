@@ -4,6 +4,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      skip_ci:
+        description: "Skip CI tests / build (cmake-multi-platform)"
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -20,9 +25,10 @@ env:
   MACOS_DYLD_PATH: $(brew --prefix)/lib:$(brew --prefix openblas)/lib:$(brew --prefix libomp)/lib
 
 jobs:
-  # Run CI tests first — must pass before any publishing happens
+  # Run CI tests first — must pass before any publishing happens (unless skipped)
   ci:
     name: Run CI tests
+    if: ${{ !inputs.skip_ci }}
     uses: ./.github/workflows/cmake-multi-platform.yml
 
   # Single source of the version being published, for both triggers: a release
@@ -51,6 +57,7 @@ jobs:
   build_sdist:
     name: Build source distribution
     needs: [ci, version]
+    if: always() && !cancelled() && (needs.ci.result == 'success' || needs.ci.result == 'skipped') && needs.version.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -64,6 +71,7 @@ jobs:
   build_wheels:
     name: Build wheels (${{ matrix.os }}, ${{ matrix.cibw_build }})
     needs: [ci, version]
+    if: always() && !cancelled() && (needs.ci.result == 'success' || needs.ci.result == 'skipped') && needs.version.result == 'success'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
