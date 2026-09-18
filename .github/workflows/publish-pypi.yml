@@ -9,6 +9,10 @@ on:
         description: "Skip CI tests / build (cmake-multi-platform)"
         type: boolean
         default: false
+      from_run_id:
+        description: "Optional: existing run ID to publish artifacts from (skips building)"
+        type: string
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -28,7 +32,7 @@ jobs:
   # Run CI tests first — must pass before any publishing happens (unless skipped)
   ci:
     name: Run CI tests
-    if: ${{ !inputs.skip_ci }}
+    if: ${{ !inputs.skip_ci && !inputs.from_run_id }}
     uses: ./.github/workflows/cmake-multi-platform.yml
 
   # Single source of the version being published, for both triggers: a release
@@ -57,7 +61,7 @@ jobs:
   build_sdist:
     name: Build source distribution
     needs: [ci, version]
-    if: always() && !cancelled() && (needs.ci.result == 'success' || needs.ci.result == 'skipped') && needs.version.result == 'success'
+    if: always() && !cancelled() && !inputs.from_run_id && (needs.ci.result == 'success' || needs.ci.result == 'skipped') && needs.version.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -71,7 +75,7 @@ jobs:
   build_wheels:
     name: Build wheels (${{ matrix.os }}, ${{ matrix.cibw_build }})
     needs: [ci, version]
-    if: always() && !cancelled() && (needs.ci.result == 'success' || needs.ci.result == 'skipped') && needs.version.result == 'success'
+    if: always() && !cancelled() && !inputs.from_run_id && (needs.ci.result == 'success' || needs.ci.result == 'skipped') && needs.version.result == 'success'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -266,14 +270,34 @@ jobs:
   upload_pypi:
     name: Upload to PyPI
     needs: [build_sdist, build_wheels]
+    if: always() && !cancelled() && (inputs.from_run_id != '' || (needs.build_sdist.result == 'success' && needs.build_wheels.result == 'success'))
     runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/p/qoro-maestro
     permissions:
       id-token: write
+      actions: read
+      contents: read
     steps:
-      - uses: actions/download-artifact@v7
+      - name: Download artifacts from existing run
+        if: ${{ inputs.from_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p raw_artifacts dist
+          gh run download "${{ inputs.from_run_id }}" -p "maestro*" -D raw_artifacts
+          find raw_artifacts -type f \( -name "*.whl" -o -name "*.tar.gz" \) -exec mv -f {} dist/ \;
+          rm -rf raw_artifacts
+          ls -la dist/
+          if [ -z "$(ls -A dist/*.whl 2>/dev/null)" ]; then
+            echo "::error::No wheels found in artifacts downloaded from run ${{ inputs.from_run_id }}"
+            exit 1
+          fi
+
+      - name: Download artifacts from current run
+        if: ${{ !inputs.from_run_id }}
+        uses: actions/download-artifact@v7
         with:
           pattern: maestro-*
           path: dist
@@ -292,6 +316,7 @@ jobs:
   github_release:
     name: Ensure GitHub release exists
     needs: [version, upload_pypi]
+    if: always() && !cancelled() && needs.version.result == 'success' && needs.upload_pypi.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
