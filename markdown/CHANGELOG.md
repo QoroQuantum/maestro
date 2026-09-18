@@ -7,11 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-18
+
+### Added
+- **Native Qiskit Aer Integration**: Enabled Qiskit Aer backend by default in CMake (`ENABLE_QISKIT_AER=ON`), automatically fetching the fork from `https://github.com/QoroQuantum/qiskit-aer` and linking against OpenBLAS. Exposed `SimulatorType.QiskitAer` and `SimulatorType.CompositeQiskitAer` in the Python bindings.
+
 ### Fixed
 - Native JSON requests accept sampled thermal relaxation with `T1 < T2 <= 2*T1`, using effective `T2 = T1` with a warning and approximation metadata, matching Python. Exact density-matrix/MPO execution preserves calibrated T2.
 - Native readout noise applies at measurement time, including conditional measurements and noisy outcomes consumed by classical control.
 - Native measurement/readout randomness follows the explicit simulator seed or falls back to `noise.seed`, independently of circuit-noise injection.
 - Legacy `SimpleExecute` and `SimpleEstimate` honor `config.seed`, including zero and the full uint64 range, and reject invalid seeds.
+
+### Changed
+- Python package version bumped to `0.3.2`.
 
 ## [0.3.1] - 2026-09-10
 
@@ -262,7 +270,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/QoroQuantum/maestro/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/QoroQuantum/maestro/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/QoroQuantum/maestro/compare/v0.2.18...v0.3.0
 [0.2.18]: https://github.com/QoroQuantum/maestro/compare/v0.2.17...v0.2.18

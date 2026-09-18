@@ -59,20 +59,15 @@ option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
 option(MAESTRO_BUILD_MPI_GPU_TESTS "Build MPI GPU hardware tests (only tests link MPI)" OFF)
 option(MAESTRO_ENABLE_OPENMP "Enable OpenMP acceleration" ON)
 
-# Qiskit Aer is optional - disabled by default for easier builds.
-# Enabled only if AER_INCLUDE_DIR is explicitly provided.
-set(QAER False)
-if(NOT "$ENV{NO_QISKIT_AER}" STREQUAL "")
+# Qiskit Aer simulator backend (enabled by default unless explicitly disabled)
+option(ENABLE_QISKIT_AER "Enable Qiskit Aer simulator backend" ON)
+if(NOT "$ENV{NO_QISKIT_AER}" STREQUAL "" OR NOT ENABLE_QISKIT_AER)
     add_definitions(-DNO_QISKIT_AER)
     set(QAER False)
-    message(STATUS "Qiskit Aer support explicitly disabled via NO_QISKIT_AER")
-elseif(NOT "$ENV{AER_INCLUDE_DIR}" STREQUAL "")
-    set(QAER True)
-    message(STATUS "Qiskit Aer support enabled (AER_INCLUDE_DIR is set)")
+    message(STATUS "Qiskit Aer support explicitly disabled")
 else()
-    add_definitions(-DNO_QISKIT_AER)
-    set(QAER False)
-    message(STATUS "Qiskit Aer support disabled by default. Set AER_INCLUDE_DIR to enable.")
+    set(QAER True)
+    message(STATUS "Qiskit Aer support enabled")
 endif()
 
 # ==============================================================================
@@ -163,18 +158,43 @@ if(QAER)
                 GIT_REPOSITORY https://github.com/nlohmann/json.git
                 GIT_TAG v3.11.2
             )
-            FetchContent_MakeAvailable(json)
+            FetchContent_GetProperties(json)
+            if(NOT json_POPULATED)
+                FetchContent_Populate(json)
+            endif()
             set(JSON_INCLUDE_DIR ${json_SOURCE_DIR}/single_include)
             message(STATUS "nlohmann/json fetched to: ${JSON_INCLUDE_DIR}")
         endif()
     endif()
 
-    if(NOT DEFINED AER_INCLUDE_DIR)
+    if(NOT DEFINED AER_INCLUDE_DIR OR AER_INCLUDE_DIR STREQUAL "")
         set(AER_INCLUDE_DIR "$ENV{AER_INCLUDE_DIR}")
         if(NOT AER_INCLUDE_DIR)
-            message(WARNING "AER_INCLUDE_DIR not set but Aer support is enabled. Disabling Aer support.")
-            add_definitions(-DNO_QISKIT_AER)
-            set(QAER False)
+            message(STATUS "AER_INCLUDE_DIR not set, fetching Qiskit Aer from QoroQuantum/qiskit-aer...")
+            FetchContent_Declare(
+                qiskit_aer
+                GIT_REPOSITORY https://github.com/QoroQuantum/qiskit-aer.git
+                GIT_TAG 0ab9bb4a531cf2df93c255e3424bb481d2735297
+            )
+            FetchContent_GetProperties(qiskit_aer)
+            if(NOT qiskit_aer_POPULATED)
+                FetchContent_Populate(qiskit_aer)
+            endif()
+            set(AER_INCLUDE_DIR ${qiskit_aer_SOURCE_DIR}/src)
+            message(STATUS "Qiskit Aer fetched to: ${AER_INCLUDE_DIR}")
+        endif()
+    endif()
+
+    if(APPLE AND NOT OpenBLAS_ROOT AND "$ENV{OpenBLAS_ROOT}" STREQUAL "")
+        find_program(BREW_CMD brew)
+        if(BREW_CMD)
+            execute_process(COMMAND ${BREW_CMD} --prefix openblas
+                            OUTPUT_VARIABLE OPENBLAS_BREW_PREFIX
+                            OUTPUT_STRIP_TRAILING_WHITESPACE)
+            if(OPENBLAS_BREW_PREFIX)
+                list(PREPEND CMAKE_PREFIX_PATH "${OPENBLAS_BREW_PREFIX}")
+                set(OpenBLAS_ROOT "${OPENBLAS_BREW_PREFIX}")
+            endif()
         endif()
     endif()
 
