@@ -17,6 +17,8 @@ def test_maestro_package_exports():
 
 
 def test_sinter_exports():
+    pytest.importorskip("sinter")
+    pytest.importorskip("stim")
     import maestro.sinter
     from maestro.sinter import MaestroSinterSampler, MaestroCompiledSampler
 

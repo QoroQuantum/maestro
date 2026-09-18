@@ -36,9 +36,10 @@ No distribution configuration is needed for ordinary execution:
   devices by rank within each shared-memory host, modulo its visible device
   count. With per-rank `CUDA_VISIBLE_DEVICES`, each rank can use ordinal 0.
   More ranks than local GPUs share GPUs; this adds no physical memory capacity.
-- MPI's default seed is 0. An explicit seed must match on all ranks. Python
-  stochastic noise generation also uses a rank-consistent default; circuits,
-  noise settings and explicit noise seeds must match.
+- Omitted MPI seeds are generated randomly and shared across the communicator.
+  Python stochastic noise generation also uses a shared random default. Circuits,
+  noise settings and explicit seeds (including zero) must match on every rank.
+  Random defaults require a distributed plugin exporting `GenerateMpiSeed`.
 
 The number of MPI ranks must be a power of two, at most 32. At least one qubit
 must remain local. All backends support fewer than 63 total qubits; GPU memory

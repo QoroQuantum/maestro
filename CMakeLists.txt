@@ -600,7 +600,10 @@ if(COMPILE_TESTS)
             add_test(NAME distributed_gpu_mpi COMMAND ${MPIEXEC_EXECUTABLE}
                 ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}
                 $<TARGET_FILE:distributed_gpu_tests> --mpi ${MPIEXEC_POSTFLAGS})
-            set_tests_properties(distributed_gpu_mpi PROPERTIES
+            add_test(NAME distributed_gpu_mpi_seeds COMMAND ${MPIEXEC_EXECUTABLE}
+                ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}
+                $<TARGET_FILE:distributed_gpu_tests> --mpi-seeds-only ${MPIEXEC_POSTFLAGS})
+            set_tests_properties(distributed_gpu_mpi distributed_gpu_mpi_seeds PROPERTIES
                 SKIP_RETURN_CODE 77 LABELS "gpu;hardware;distributed;mpi" RUN_SERIAL TRUE TIMEOUT 240)
         endif()
     endif()
@@ -692,7 +695,8 @@ endif()
 option(MAESTRO_BUILD_REQUEST_TESTS "Build the native JSON request contract tests" OFF)
 if(MAESTRO_BUILD_REQUEST_TESTS)
     enable_testing()
-    add_executable(maestro_request_tests tests/request_api.cpp tests/request_noise.cpp tests/request_header.c)
+    add_executable(maestro_request_tests tests/request_api.cpp tests/request_noise.cpp tests/request_options.cpp tests/request_header.c)
+    target_include_directories(maestro_request_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(maestro_request_tests PRIVATE maestro Boost::json)
     add_test(NAME maestro_request_api COMMAND maestro_request_tests)
     add_executable(maestro_request_abi_consumer tests/request_header.c)
@@ -721,6 +725,8 @@ if(MAESTRO_BUILD_REQUEST_TESTS)
         -DWORKER=$<TARGET_FILE:maestro_request_worker> -DMODE=success
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/request_worker.cmake)
     if(MAESTRO_BUILD_MPI_WORKER)
+        add_executable(maestro_request_mpi_seed_tests tests/request_mpi_seeds.cpp)
+        target_link_libraries(maestro_request_mpi_seed_tests PRIVATE maestro Boost::json MPI::MPI_CXX)
         foreach(mode success failure)
             add_test(NAME maestro_request_mpi_${mode} COMMAND ${CMAKE_COMMAND}
                 -DWORKER=$<TARGET_FILE:maestro_mpi_worker> -DMODE=${mode}
@@ -745,6 +751,11 @@ if(MAESTRO_RUN_MPI_GPU_REQUEST_TESTS)
     if(NOT MAESTRO_BUILD_REQUEST_TESTS OR NOT MAESTRO_BUILD_MPI_WORKER)
         message(FATAL_ERROR "MPI GPU request tests require MAESTRO_BUILD_REQUEST_TESTS and MAESTRO_BUILD_MPI_WORKER")
     endif()
+    add_test(NAME maestro_request_mpi_gpu_seeds COMMAND ${MPIEXEC_EXECUTABLE}
+        ${MPIEXEC_NUMPROC_FLAG} 2 ${MPIEXEC_PREFLAGS}
+        $<TARGET_FILE:maestro_request_mpi_seed_tests> ${MPIEXEC_POSTFLAGS})
+    set_tests_properties(maestro_request_mpi_gpu_seeds PROPERTIES
+        LABELS "mpi;gpu;hardware;request" PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 180)
     foreach(mode mpi_gpu mpi_gpu_noise mpi_gpu_failure)
         add_test(NAME maestro_request_${mode} COMMAND ${CMAKE_COMMAND}
             -DWORKER=$<TARGET_FILE:maestro_mpi_worker> -DMODE=${mode}

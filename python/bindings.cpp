@@ -139,28 +139,29 @@ static void warn_thermal_approximation(const noise::NoiseModel& noise_model,
     throw nb::python_error();
 }
 
-// All MPI ranks must submit the same stochastic circuit. Keep host-side
-// default noise streams aligned as well as the native measurement stream.
+// All MPI ranks must submit the same stochastic circuit. Resolve an omitted
+// public seed once per call and share it with measurement/readout execution.
 static std::mt19937 MakeNoiseRng(const SimulatorConfig& config,
-                                 std::optional<unsigned int> seed) {
+                                 std::optional<unsigned int>& seed) {
+  if (!seed &&
+      config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim)
+    seed = static_cast<unsigned int>(
+        config.seed ? *config.seed
+                    : Simulators::GenerateRandomSeed(
+                          config.simulator_type, config.distributed_options));
   if (seed) return std::mt19937(*seed);
-  if (config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim)
-    return std::mt19937(0);
   return std::mt19937(std::random_device{}());
 }
 
 // Keep simulator randomness separate from circuit-noise injection. An explicit
 // config seed takes precedence; otherwise the public noise seed also seeds
 // measurement/readout. Every batch needs its own stream, even for one-shot
-// realizations (as used by Sinter). Preserve the synchronized MPI default.
+// realizations (as used by Sinter).
 static SimulatorConfig NoiseExecutionConfig(const SimulatorConfig& config,
                                             std::optional<unsigned int> seed,
                                             uint64_t batch) {
   auto execution_config = config;
   if (!execution_config.seed && seed) execution_config.seed = *seed;
-  if (!execution_config.seed &&
-      config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim)
-    execution_config.seed = 0;
   if (execution_config.seed)
     execution_config.seed =
         Simulators::IState::DeriveSeed(*execution_config.seed, batch);

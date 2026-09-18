@@ -180,8 +180,9 @@ SVD selectors are rejected. Small floating-point thresholds retain their precisi
 Tensor options apply to MPS/MPO/TN; GPU algorithm selectors require their named
 GPU method. Precision is `single`/`double`; `use_double_precision` is a boolean.
 Truncation is `relative_max` or `discarded_weight`. GPU SVD choices within each
-family are mutually exclusive. Seeds default to 0; specify the simulator seed
-once, through `execution.seed` or the options object.
+family are mutually exclusive. Omitted seeds are generated randomly for each
+request. Specify an explicit simulator seed once, through `execution.seed` or
+the options object, to reproduce a run; zero is a valid explicit seed.
 
 For maintainers: `SimulatorConfig` has two active construction paths. Python
 bindings populate typed option fields. The native parser populates typed network
@@ -270,7 +271,11 @@ backends remain errors.
 
 An explicit simulator seed (`execution.seed` or `simulator.options.seed`,
 including zero) controls measurements and readout. Otherwise, an explicit
-`noise.seed` also seeds the simulator; if neither is supplied the default is 0.
+`noise.seed` also seeds the simulator; if neither is supplied, execution generates
+a fresh random uint64 seed and reports it in the result's `seed` field. Reusing
+that seed with the same request reproduces the run. MPI ranks share the generated
+seed through their communicator; validation alone does not generate a seed or
+require MPI initialization.
 `noise.seed` is a uint32 (default lower 32 bits of the simulator seed) and drives
 circuit-noise injection independently of measurement/readout randomness.
 `realizations` defaults to 1 for exact channels and 64 otherwise. Execute divides
@@ -344,7 +349,10 @@ Set `MAESTRO_RUN_GPU_REQUEST_TESTS=ON` only when the
 local GPU plugin/license/device are available; it tests two logical shards on one
 GPU. Separately, `MAESTRO_RUN_MPI_GPU_REQUEST_TESTS=ON` requires both request tests
 and the MPI worker. Its ideal, noisy and failing requests use the actual
-`distributed_mpi_gpu` backend across two ranks, with no CPU fallback. Configure
+`distributed_mpi_gpu` backend across two ranks, with no CPU fallback. It also checks
+that omitted native seeds are fresh and shared across ranks, reported seeds replay
+sampling and readout, explicit zero is preserved, and batch children receive
+independent seeds. The parser's unset-seed regression runs in the CPU suite. Configure
 rank-local device 0 visibility, the MPI GPU plugin/license and CUDA-aware MPI;
 use `MPIEXEC_PREFLAGS` for site launcher/binding arguments. This opt-in suite is
 not enabled on ordinary CPU CI runners. On systems where hwloc probes unavailable

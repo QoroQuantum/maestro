@@ -1,11 +1,11 @@
 """Tests for Sinter integration, circuit translation, and sampling."""
 
 import math
-import numpy as np
 import pytest
-import sinter
-import stim
+sinter = pytest.importorskip("sinter")
+stim = pytest.importorskip("stim")
 
+import numpy as np
 import maestro
 from maestro.sinter import (
     MaestroCompiledSampler,

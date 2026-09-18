@@ -4,6 +4,7 @@
 #include "Configuration.h"
 #include "DistributedGpuLibStateVectorSim.h"
 #include "DistributedMpiGpuLibStateVectorSim.h"
+#include "RandomSeed.h"
 #include <charconv>
 #include <limits>
 #include <numeric>
@@ -407,8 +408,12 @@ class DistributedGpuState : public ISimulator {
           Option("distributed_transfer_workspace_bytes", 16ULL * 1024 * 1024)};
       next->SetExExecutionConfig(&execution);
     }
-    // Identical explicit/default seeds keep MPI rank streams aligned.
-    if (configuration.IsSet("seed") || mpi) next->SetSeed(Option("seed", 0));
+    // Direct simulator construction also needs matching auxiliary/readout and
+    // backend streams across ranks when the caller omits a seed.
+    if (mpi && !configuration.IsSet("seed"))
+      SetSeed(GenerateRandomSeed(SimulatorType::kDistMpiGpuSim,
+                                 configuration.GetConfigMap()));
+    if (configuration.IsSet("seed")) next->SetSeed(Option("seed", 0));
     if (values)
       next->CreateWithState(n, values);
     else

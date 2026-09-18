@@ -15,13 +15,14 @@
 #include "NoiseModel.h"
 
 #include "../Network/Network.h"
+#include "../Simulators/RandomSeed.h"
 
 #include <functional>
 #include <iostream>
 #include <optional>
 #include <sstream>
 
-#define MAESTRO_NOISE_ADD_VERSION 2
+#define MAESTRO_NOISE_ADD_VERSION 3
 
 namespace noise {
 
@@ -266,9 +267,11 @@ class NoiseAdd {
       const auto configured = simulator->GetConfiguration("seed");
       if (!configured.empty()) base_seed = std::stoull(configured);
       if (simulator->GetType() == Simulators::SimulatorType::kDistMpiGpuSim) {
-        if (!base_seed) base_seed = 0;
+        if (!base_seed)
+          base_seed = Simulators::GenerateRandomSeed(simulator->GetType(),
+                                                     simulator->GetConfigMap());
         if (!public_seed && !mpi_noise_seeded) {
-          rng.seed(0);
+          rng.seed(static_cast<uint32_t>(*base_seed));
           mpi_noise_seeded = true;
         }
       }

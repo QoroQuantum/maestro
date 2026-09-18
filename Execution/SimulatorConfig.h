@@ -8,23 +8,26 @@
 #include <unordered_map>
 #include "maestrolib/Interface.h"
 #include "maestrolib/Maestro.h"
+#include "Simulators/RandomSeed.h"
 
 namespace MaestroExecution {
 struct SimulatorConfig {
   // Python exposes these typed fields directly. Native requests also use typed
-  // network controls, but store most validated backend options in native_options
-  // below. Both representations are active and meet in ConfigureNetwork.
+  // network controls, but store most validated backend options in
+  // native_options below. Both representations are active and meet in
+  // ConfigureNetwork.
   Simulators::SimulatorType simulator_type = Simulators::SimulatorType::kQCSim;
   Simulators::SimulationType simulation_type =
       Simulators::SimulationType::kStatevector;
   std::optional<size_t> max_bond_dimension = std::nullopt;
   std::optional<double> singular_value_threshold = std::nullopt;
-  // "relative_max" (keep sigma_i > threshold * sigma_max, the historical QCSim/GPU
-  // convention) or "discarded_weight" (discard the smallest singular values until
-  // their cumulative squared weight reaches the threshold, matching Qiskit Aer's and
-  // ITensor's convention -- the default on every backend unless this is set). The
-  // Aer backend only ever implements discarded_weight and raises if relative_max is
-  // requested; QCSim and the GPU backend support switching between both.
+  // "relative_max" (keep sigma_i > threshold * sigma_max, the historical
+  // QCSim/GPU convention) or "discarded_weight" (discard the smallest singular
+  // values until their cumulative squared weight reaches the threshold,
+  // matching Qiskit Aer's and ITensor's convention -- the default on every
+  // backend unless this is set). The Aer backend only ever implements
+  // discarded_weight and raises if relative_max is requested; QCSim and the GPU
+  // backend support switching between both.
   std::optional<std::string> truncation_mode = std::nullopt;
   bool use_double_precision = false;
   bool disable_optimized_swapping = false;
@@ -68,20 +71,21 @@ struct SimulatorConfig {
 
   // Native requests use fixed selection; Python's legacy automatic path keeps
   // its historical default. Extra options are validated by the request parser.
-  std::vector<std::pair<Simulators::SimulatorType, Simulators::SimulationType>> optimization_candidates;
+  std::vector<std::pair<Simulators::SimulatorType, Simulators::SimulationType>>
+      optimization_candidates;
   bool fixed_backend = false;
   bool optimize_circuit = true;
   std::unordered_map<std::string, std::string> native_options;
 
   SimulatorConfig() = default;
 
-  SimulatorConfig(Simulators::SimulatorType st, Simulators::SimulationType set,
-                  std::optional<size_t> mb, std::optional<double> sv, bool dp,
-                  bool ds, int la, bool mnc,
-                  std::optional<std::string> tm,
-                  std::optional<uint64_t> random_seed,
-                  std::optional<int> device = std::nullopt,
-                  std::unordered_map<std::string, std::string> distribution = {})
+  SimulatorConfig(
+      Simulators::SimulatorType st, Simulators::SimulationType set,
+      std::optional<size_t> mb, std::optional<double> sv, bool dp, bool ds,
+      int la, bool mnc, std::optional<std::string> tm,
+      std::optional<uint64_t> random_seed,
+      std::optional<int> device = std::nullopt,
+      std::unordered_map<std::string, std::string> distribution = {})
       : simulator_type(st),
         simulation_type(set),
         max_bond_dimension(mb),
@@ -91,14 +95,16 @@ struct SimulatorConfig {
         disable_optimized_swapping(ds),
         lookahead_depth(la),
         mps_measure_no_collapse(mnc),
-        seed(random_seed), gpu_device(device), distributed_options(std::move(distribution)) {
+        seed(random_seed),
+        gpu_device(device),
+        distributed_options(std::move(distribution)) {
     if (device && *device < 0)
       throw std::invalid_argument("gpu_device must be nonnegative");
     if ((st == Simulators::SimulatorType::kCompositeQCSim
 #ifndef NO_QISKIT_AER
          || st == Simulators::SimulatorType::kCompositeQiskitAer
 #endif
-        ) &&
+         ) &&
         set != Simulators::SimulationType::kStatevector) {
       throw std::invalid_argument(
           "Composite simulators only support Statevector simulation type.");
@@ -116,7 +122,8 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     unsigned long int handle, const SimulatorConfig& config) {
   if (Simulators::IsDistributedGpuSimulator(config.simulator_type) &&
       config.simulation_type != Simulators::SimulationType::kStatevector)
-    throw std::invalid_argument("Distributed GPU supports only Statevector simulation");
+    throw std::invalid_argument(
+        "Distributed GPU supports only Statevector simulation");
   // QuEST only supports statevector simulation
   if (config.simulator_type == Simulators::SimulatorType::kQuestSim &&
       config.simulation_type != Simulators::SimulationType::kStatevector) {
@@ -127,9 +134,10 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
   // Composite only supports statevector simulation
   if ((config.simulator_type == Simulators::SimulatorType::kCompositeQCSim
 #ifndef NO_QISKIT_AER
-       || config.simulator_type == Simulators::SimulatorType::kCompositeQiskitAer
+       ||
+       config.simulator_type == Simulators::SimulatorType::kCompositeQiskitAer
 #endif
-      ) &&
+       ) &&
       config.simulation_type != Simulators::SimulationType::kStatevector) {
     throw std::invalid_argument(
         "Composite simulators only support Statevector simulation type.");
@@ -142,10 +150,12 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
 
   if (!config.optimization_candidates.empty()) {
     const auto& first = config.optimization_candidates.front();
-    RemoveAllOptimizationSimulatorsAndAdd(handle, static_cast<int>(first.first), static_cast<int>(first.second));
+    RemoveAllOptimizationSimulatorsAndAdd(handle, static_cast<int>(first.first),
+                                          static_cast<int>(first.second));
     for (size_t i = 1; i < config.optimization_candidates.size(); ++i)
-      AddOptimizationSimulator(handle, static_cast<int>(config.optimization_candidates[i].first),
-                               static_cast<int>(config.optimization_candidates[i].second));
+      AddOptimizationSimulator(
+          handle, static_cast<int>(config.optimization_candidates[i].first),
+          static_cast<int>(config.optimization_candidates[i].second));
   }
   auto* maestro = static_cast<Maestro*>(GetMaestroObject());
   auto network = maestro->GetSimpleSimulator(handle);
@@ -158,16 +168,23 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure(key.c_str(), value.c_str());
 
   for (const auto& [key, value] : config.distributed_options) {
-    if (key.compare(0, 12, "distributed_") != 0 && key.compare(0, 4, "mpi_") != 0)
-      throw std::invalid_argument("distributed_options accepts only distributed_* and mpi_* keys");
+    if (key.compare(0, 12, "distributed_") != 0 &&
+        key.compare(0, 4, "mpi_") != 0)
+      throw std::invalid_argument(
+          "distributed_options accepts only distributed_* and mpi_* keys");
     network->Configure(key.c_str(), value.c_str());
   }
-  if (config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim && !config.seed)
-    network->Configure("seed", "0");
+  if (config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim &&
+      !config.seed)
+    network->Configure("seed", std::to_string(Simulators::GenerateRandomSeed(
+                                                  config.simulator_type,
+                                                  config.distributed_options))
+                                   .c_str());
   if (config.gpu_device) {
     if (*config.gpu_device < 0)
       throw std::invalid_argument("gpu_device must be nonnegative");
-    network->Configure("gpu_device", std::to_string(*config.gpu_device).c_str());
+    network->Configure("gpu_device",
+                       std::to_string(*config.gpu_device).c_str());
   }
 
   if (config.max_bond_dimension) {
@@ -190,10 +207,12 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("matrix_product_operator_kraus_completeness_check",
                        config.mpo_kraus_completeness_check->c_str());
   if (config.mpo_restore_trace_after_truncation)
-    network->Configure("matrix_product_operator_restore_trace_after_truncation", "true");
+    network->Configure("matrix_product_operator_restore_trace_after_truncation",
+                       "true");
   if (config.mpo_hermitize_after_truncation)
-    network->Configure("matrix_product_operator_hermitize_after_truncation", "true");
-  const auto configure_svd = [&network](const char *backend, const char *method,
+    network->Configure("matrix_product_operator_hermitize_after_truncation",
+                       "true");
+  const auto configure_svd = [&network](const char* backend, const char* method,
                                         bool enabled) {
     if (!enabled) return;
     const std::string key = std::string(backend) + "_use_" + method;
@@ -277,7 +296,8 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
 
   // Distribution must be selected before circuit mapping: its configured
   // register and MPI control flow must not depend on the CPU optimizer.
-  if (config.fixed_backend || Simulators::IsDistributedGpuSimulator(config.simulator_type))
+  if (config.fixed_backend ||
+      Simulators::IsDistributedGpuSimulator(config.simulator_type))
     network->CreateSimulator(config.simulator_type, config.simulation_type);
   else
     network->CreateSimulator();
