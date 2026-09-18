@@ -80,24 +80,21 @@ This will compile the C++ core and install the `maestro` Python package.
 
 ### Advanced Build Options
 
-#### Enable Qiskit Aer Support
+#### Qiskit Aer Support
 
-Qiskit Aer support is optional. To enable it:
+Qiskit Aer support is enabled by default. CMake automatically fetches the bug-fixed fork from `https://github.com/QoroQuantum/qiskit-aer` during the build if not already present.
 
-1. **Install BLAS** (e.g., `libopenblas-dev`).
-2. **Provide Aer Source** and install:
-
-   ```bash
-   export AER_INCLUDE_DIR=/path/to/qiskit-aer/src
-   pip install .
-   ```
-
-   Or using `build.sh`:
-
-   ```bash
-   export AER_INCLUDE_DIR=/path/to/qiskit-aer/src
-   ./build.sh
-   ```
+- **Requirements**: BLAS library (e.g. `openblas`, `libopenblas-dev`, or Accelerate framework on macOS).
+- **Custom Aer Source**: You can point to a local checkout using `AER_INCLUDE_DIR`:
+  ```bash
+  export AER_INCLUDE_DIR=/path/to/qiskit-aer/src
+  pip install .
+  ```
+- **Disable Aer**: If you wish to build without Qiskit Aer:
+  ```bash
+  export NO_QISKIT_AER=1
+  pip install .
+  ```
 
 #### Custom Dependency Paths
 

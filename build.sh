@@ -95,7 +95,7 @@ if [ -z "${NO_QISKIT_AER}" ]; then
 
 	if [ ! -d qiskit-aer ]
 	then
-		git clone https://github.com/InvictusWingsSRL/qiskit-aer.git
+		git clone https://github.com/QoroQuantum/qiskit-aer.git
 	fi
 fi
 
