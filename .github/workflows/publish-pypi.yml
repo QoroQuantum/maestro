@@ -214,7 +214,7 @@ jobs:
 
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-
             DYLD_FALLBACK_LIBRARY_PATH=${{ env.MACOS_DYLD_PATH }}
-            delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}
+            delocate-wheel --require-archs {delocate_archs} --exclude libomp.dylib -w {dest_dir} -v {wheel}
 
           CIBW_ARCHS_MACOS: auto
 
