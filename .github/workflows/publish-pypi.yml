@@ -5,6 +5,10 @@ on:
     types: [published]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   VIRTUALENV_VERSION: "20.27.1"
   VCPKG_CACHE_KEY: vcpkg-windows-x64-deps2-lapack
@@ -65,7 +69,7 @@ jobs:
       fail-fast: false
       # Windows builds one CPython per job; Linux and macOS build all five in one.
       matrix:
-        os: [windows-latest]
+        os: [windows-2022]
         cibw_build: ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*"]
         include:
           - os: ubuntu-latest
@@ -75,6 +79,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      - name: Add msbuild to PATH (Windows)
+        if: runner.os == 'Windows'
+        uses: microsoft/setup-msbuild@v2
 
       - name: Cache cibuildwheel virtualenv
         uses: actions/cache@v5
@@ -159,6 +167,13 @@ jobs:
         env:
           VCPKG_BINARY_SOURCES: "clear;files,C:/vcpkg/binary-cache,readwrite"
 
+      - name: Save vcpkg cache (Windows)
+        if: runner.os == 'Windows' && steps.install-dependencies.outcome == 'success' && steps.cache-vcpkg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ env.VCPKG_CACHE_PATHS }}
+          key: ${{ env.VCPKG_CACHE_KEY }}
+
       - name: Set CMake env (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -166,6 +181,7 @@ jobs:
             throw "vcpkg toolchain not found at $env:VCPKG_TOOLCHAIN. Ensure vcpkg is at C:\vcpkg on this runner."
           }
           # Let CMake discover and validate the installed OpenBLAS library.
+          echo "CMAKE_GENERATOR=Visual Studio 17 2022" >> $env:GITHUB_ENV
           echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_TOOLCHAIN -DVCPKG_TARGET_TRIPLET=x64-windows -DAER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
 
       - name: Clone Qiskit Aer (Windows)
@@ -233,13 +249,6 @@ jobs:
           # ---- Common ----
           CIBW_BUILD: "${{ matrix.cibw_build }}"
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
-
-      - name: Save vcpkg cache (Windows, even on failure)
-        if: runner.os == 'Windows' && always() && steps.install-dependencies.outcome == 'success' && steps.cache-vcpkg.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: ${{ env.VCPKG_CACHE_PATHS }}
-          key: ${{ env.VCPKG_CACHE_KEY }}
 
       - uses: actions/upload-artifact@v6
         with:

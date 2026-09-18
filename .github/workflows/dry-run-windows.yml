@@ -3,13 +3,20 @@ name: Dry Run - Windows Wheel Build
 on:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build_windows_wheel:
     name: Build Windows wheel (dry run)
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - uses: actions/checkout@v5
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
 
       - name: Cache cibuildwheel virtualenv
         uses: actions/cache@v5
@@ -73,12 +80,22 @@ jobs:
         env:
           VCPKG_BINARY_SOURCES: "clear;files,C:/vcpkg/binary-cache,readwrite"
 
+      - name: Save vcpkg cache
+        if: steps.install-dependencies.outcome == 'success' && steps.cache-vcpkg.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            C:/vcpkg/installed
+            C:/vcpkg/binary-cache
+          key: vcpkg-windows-x64-deps2-lapack
+
       - name: Set CMake env
         run: |
           if (-not (Test-Path "C:\vcpkg\scripts\buildsystems\vcpkg.cmake")) {
             throw "vcpkg toolchain not found at C:\vcpkg. Ensure vcpkg is at C:\vcpkg on this runner."
           }
           # Let CMake discover and validate the installed OpenBLAS library.
+          echo "CMAKE_GENERATOR=Visual Studio 17 2022" >> $env:GITHUB_ENV
           echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake -DMAESTRO_BUILD_REQUEST_TESTS=ON -DVCPKG_TARGET_TRIPLET=x64-windows -DAER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
 
       - name: Clone Qiskit Aer
@@ -110,15 +127,6 @@ jobs:
             ctest --test-dir $build.FullName -C Release --output-on-failure -R '^maestro_request_(abi|api|cli)$'
             if ($LASTEXITCODE -ne 0) { throw "Native request DLL test failed" }
           }
-
-      - name: Save vcpkg cache (even on failure)
-        if: always() && steps.install-dependencies.outcome == 'success' && steps.cache-vcpkg.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: |
-            C:/vcpkg/installed
-            C:/vcpkg/binary-cache
-          key: vcpkg-windows-x64-deps2-lapack
 
       - name: List built wheels
         run: dir wheelhouse\
