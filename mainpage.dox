@@ -21,7 +21,7 @@
  * | **Unified Abstraction** | Write circuits once (OpenQASM 2.0 / Python builder) and execute across any backend |
  * | **Multi-Paradigm Simulation** | Statevector, Matrix Product State (MPS), Clifford Stabilizer, Tensor Network, and Pauli Propagation |
  * | **GPU Acceleration** | NVIDIA cuStateVec and custom CUDA acceleration for statevector and tensor networks |
- * | **Distributed HPC** | MPI distributed statevectors via QuEST and composite p-block execution |
+ * | **Distributed & HPC** | Multi-GPU and MPI-distributed GPU statevectors, QuEST clusters, and partitioned CPU p-block composite execution |
  * | **Comprehensive Noise Suite** | Analytical, Monte Carlo, CPTP quantum channels, thermal T1/T2, crosstalk, and coherent errors |
  * | **Python & C++ APIs** | Nanobind-based Python API and C++ header interface |
  *
@@ -45,8 +45,9 @@
  *     subgraph Backends["Simulation Engines"]
  *         CPU["CPU — SV · MPS · Stabilizer · TN · Pauli Prop"]
  *         GPU["GPU — cuStateVec · CUDA MPS · CUDA TN"]
- *         QUEST["QuEST — Distributed MPI Statevector"]
- *         COMP["Composite — p-block Distributed State"]
+ *         DISTGPU["Dist GPU — Multi-GPU & MPI Statevectors"]
+ *         QUEST["QuEST — Statevector Library"]
+ *         COMP["Composite — CPU p-block Partitioned Simulation"]
  *     end
  *
  *     subgraph Noise["Noise Engine"]
@@ -60,6 +61,7 @@
  *     IR --> PE
  *     PE --> CPU
  *     PE --> GPU
+ *     PE --> DISTGPU
  *     PE --> QUEST
  *     PE --> COMP
  *     IR --> Noise
@@ -69,6 +71,7 @@
  *     style Backends fill:#0f3460,stroke:#7c3aed,color:#e0e0e0
  *     style Noise fill:#2d132c,stroke:#e94560,color:#fff
  *     style GPU fill:#533483,stroke:#e94560,color:#fff
+ *     style DISTGPU fill:#3d1a78,stroke:#e94560,color:#fff
  *     style QUEST fill:#1e5631,stroke:#4ecca3,color:#fff
  * </div>
  * @endhtmlonly
@@ -82,7 +85,7 @@
  * | @ref python_guide "Python User Guide" | Full Python SDK guide, circuits, backends, algorithms, and reference |
  * | @ref py_noise "Noise Simulation Manual" | Hardware-realistic noise models, thermal relaxation, and CPTP channels |
  * | @ref md_markdown_2TUTORIAL "C++ Developer Tutorial" | Complete C++ workflow, memory management, and compilation |
- * | @ref py_hpc "HPC & Hardware Acceleration" | NVIDIA GPU cuStateVec setup and QuEST MPI cluster deployment |
+ * | @ref py_hpc "HPC & Hardware Acceleration" | NVIDIA GPU (single, multi-GPU & MPI cluster) and QuEST deployment |
  * | @ref core "C++ API Reference" | C++ module groups, class hierarchies, and structs |
  *
  * ---

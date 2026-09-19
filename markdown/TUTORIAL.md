@@ -143,7 +143,7 @@ For Python development, please see the comprehensive **Python User Guide** (`pyt
 - **Backend Selection:** Statevector, MPS, Stabilizer, and Tensor Networks (`py_backends`).
 - **Observables & Metrics:** Expectation values, mirror fidelity, and time evolution (`py_algorithms`).
 - **Noise Modeling:** Hardware relaxation, CPTP channels, and Monte Carlo simulation (`py_noise`).
-- **HPC Accelerators:** GPU acceleration and QuEST MPI clusters (`py_hpc`).
+- **HPC Accelerators:** Single-GPU, multi-GPU, and MPI distributed clusters (`py_hpc`).
 
 ### Sampling-order regression tests
 
@@ -247,6 +247,10 @@ itself. A simulator's device cannot be inferred from the shared library pointer.
 Legacy synchronous simulator estimators inherit the network's device through a
 scoped thread-local default; custom estimators creating simulators on additional
 threads must propagate configuration to those threads explicitly.
+
+For statevectors distributed across multiple GPUs on a single host or across
+MPI cluster nodes, see the dedicated guide in [docs/distributed_gpu.md](docs/distributed_gpu.md)
+and the Python HPC guide (`py_hpc`).
 
 GPU loader regression tests need no GPU:
 

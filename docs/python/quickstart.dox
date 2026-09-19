@@ -64,6 +64,8 @@
  * | `lookahead_depth` | `int` | `-1` | Swap optimization lookahead depth |
  * | `mps_measure_no_collapse` | `bool` | `True` | Use probability-based MPS sampling |
  * | `seed` | `int` or `None` | `None` | Seed all backend and Maestro sampling RNGs. Parallel jobs derive deterministic, distinct child streams. |
+ * | `gpu_device` | `int` or `None` | `None` | CUDA-visible device ordinal for single-GPU execution |
+ * | `distributed_options` | `dict[str, str]` | `{}` | Distribution controls for `DistributedGpu` and `DistributedMpiGpu` backends (e.g. `distributed_devices`, `distributed_global_qubits`, `mpi_communicator`, `mpi_p2p_bits`). See @ref py_hpc for details. |
  *
  * @note When no `config` is passed, a default `SimulatorConfig()` is used
  * (QCSim + Statevector with all defaults). You can also modify fields
