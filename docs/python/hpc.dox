@@ -1,11 +1,11 @@
 /**
- * @page py_hpc HPC Acceleration (GPU & QuEST)
+ * @page py_hpc HPC Acceleration (GPU, Multi-GPU & MPI Clusters)
  *
  * @tableofcontents
  *
- * @section py_gpu GPU Backend (NVIDIA cuStateVec & Custom Kernels)
+ * @section py_gpu Single-GPU Backend (NVIDIA cuStateVec & Custom Kernels)
  *
- * Maestro supports hardware-accelerated simulation on NVIDIA GPUs through cuStateVec and
+ * Maestro supports hardware-accelerated simulation on a single NVIDIA GPU through cuStateVec and
  * custom CUDA kernels.
  *
  * @subsection py_gpu_avail Availability & Initialization
@@ -19,7 +19,7 @@
  *     maestro.init_gpu()
  * @endcode
  *
- * @subsection py_gpu_usage GPU Simulation
+ * @subsection py_gpu_usage Single-GPU Simulation
  *
  * @code{.py}
  * # GPU Statevector
@@ -40,7 +40,104 @@
  *
  * ---
  *
- * @section py_quest QuEST Backend (MPI Distributed Simulation)
+ * @section py_dist_gpu Distributed GPU Simulation (Multi-GPU & MPI Clusters)
+ *
+ * For large statevector simulations exceeding single-GPU memory limits, Maestro supports two
+ * dynamically loaded distributed plugins from `maestro-gpu-distributed` (Linux only):
+ *
+ * | Python Simulator Type | C++ Simulator Type | Plugin Library | Description |
+ * |-----------------------|--------------------|----------------|-------------|
+ * | `SimulatorType.DistributedGpu` | `kDistGpuSim` | `libmaestro_gpu_distributed.so` | State distributed across local GPUs in a single node |
+ * | `SimulatorType.DistributedMpiGpu` | `kDistMpiGpuSim` | `libmaestro_gpu_distributed_mpi.so` | State distributed across MPI ranks and GPUs (single or multi-node) |
+ *
+ * Both plugins support **Statevector simulation only** (`SimulationType.Statevector`). Other simulation
+ * methods will raise an exception.
+ *
+ * @subsection py_dist_gpu_prereq Prerequisites & Plugin Loading
+ *
+ * - Put the plugin `.so` files and their dependencies on the runtime library search path (`LD_LIBRARY_PATH`),
+ *   or set `MAESTRO_DIST_GPU_LIBRARY` and `MAESTRO_DIST_MPI_GPU_LIBRARY` to their absolute paths.
+ * - For MPI execution, a CUDA-aware MPI implementation (such as OpenMPI or MPICH with CUDA support) is required.
+ * - The number of MPI ranks must be a power of two, at most 32, leaving at least one qubit local.
+ * - Licensed builds require `MAESTRO_LICENSE_KEY` or the plugin's cached activation.
+ *
+ * @subsection py_dist_gpu_local Local Multi-GPU Execution
+ *
+ * Probe availability with `is_distributed_gpu_available()`, which checks plugin and device presence without allocating state:
+ *
+ * @code{.py}
+ * import maestro
+ *
+ * if maestro.is_distributed_gpu_available():
+ *     config = maestro.SimulatorConfig(
+ *         simulator_type=maestro.SimulatorType.DistributedGpu,
+ *         simulation_type=maestro.SimulationType.Statevector,
+ *         distributed_options={
+ *             "distributed_devices": "0,1",  # Comma-separated device ordinals
+ *         },
+ *     )
+ *     result = maestro.simple_execute(qasm, shots=1000, config=config)
+ *     print(result["counts"])
+ * @endcode
+ *
+ * @subsection py_dist_gpu_mpi Distributed MPI GPU Execution
+ *
+ * MPI execution follows the SPMD (Single Program, Multiple Data) pattern: the application runs
+ * **the identical Maestro script on every rank** via `mpirun`. All simulator invocations must occur
+ * in matching order with identical arguments across ranks. Ordinary outputs are replicated on every rank;
+ * output and display logic should be guarded by rank zero.
+ *
+ * Run with an MPI launcher:
+ * @code{.sh}
+ * mpirun -n 2 python mpi_sim.py
+ * @endcode
+ *
+ * In `mpi_sim.py`:
+ * @code{.py}
+ * import mpi4py
+ * mpi4py.rc.thread_level = "serialized"
+ * from mpi4py import MPI
+ * import maestro
+ *
+ * config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.DistributedMpiGpu,
+ *     simulation_type=maestro.SimulationType.Statevector,
+ * )
+ *
+ * try:
+ *     result = maestro.simple_execute(qasm, shots=1000, config=config)
+ *     if MPI.COMM_WORLD.rank == 0:
+ *         print("Counts:", result["counts"])
+ * finally:
+ *     # Terminal backend cleanup must run after state destruction and before MPI finalization
+ *     maestro.finalize_distributed_mpi_gpu()
+ * @endcode
+ *
+ * @note Set `mpi4py.rc.thread_level = "serialized"` prior to importing `MPI` to ensure thread-level compatibility with CUDA-aware MPI transports.
+ *
+ * @subsection py_dist_gpu_options Configuration Options (`distributed_options`)
+ *
+ * Pass optional overrides as string key-value pairs in `SimulatorConfig.distributed_options`:
+ *
+ * | Key | Description | Example Values |
+ * |-----|-------------|----------------|
+ * | `distributed_devices` | Comma-separated GPU ordinals. For MPI, entries are relative to the owning rank | `"0,1"`, `"0"` |
+ * | `distributed_global_qubits` | Ordered comma-separated global logical qubits | `"0"`, `"0,1"` |
+ * | `distributed_backend` | Distribution engine | `"ex"` (default), `"conventional"` |
+ * | `distributed_flags` | Bitmask: 1 permits local shared device testing, 2 fixed layout, 4 fullmesh topology, 8 pinned layout | `"0"` (default), `"8"` |
+ * | `distributed_max_queued_gates` | Gate queue limit for Ex engine (1–65536) | `"2048"` |
+ * | `distributed_transfer_workspace_bytes` | Transfer workspace in bytes (1 MiB–1 GiB) | `"67108864"` |
+ * | `distributed_snapshot_storage` | Snapshot storage location | `"gpu"` (default), `"host"` |
+ * | `mpi_communicator` | Fortran communicator handle from mpi4py `Comm.py2f()` | `str(MPI.COMM_WORLD.py2f())` |
+ * | `mpi_p2p_bits` | Number of low rank bits identifying intra-host peers | `"0"` (default) |
+ * | `precision` | Precision override | `"single"` (default), `"double"` |
+ * | `seed` | Explicit 64-bit random seed (omitted seeds are generated collectively) | `"42"` |
+ *
+ * For full architecture details, consult the dedicated guide at `docs/distributed_gpu.md`.
+ *
+ * ---
+ *
+ * @section py_quest QuEST Backend (External Library Wrapper)
  *
  * Maestro integrates the QuEST engine for distributed statevector simulation across cluster nodes.
  *
@@ -70,7 +167,9 @@
  * @code{.py}
  * import maestro
  *
- * if maestro.is_gpu_available() and maestro.init_gpu():
+ * if maestro.is_distributed_gpu_available():
+ *     backend = maestro.SimulatorType.DistributedGpu
+ * elif maestro.is_gpu_available() and maestro.init_gpu():
  *     backend = maestro.SimulatorType.Gpu
  * elif maestro.is_quest_available() and maestro.init_quest():
  *     backend = maestro.SimulatorType.QuestSim

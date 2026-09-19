@@ -61,6 +61,8 @@
  * | GPU Pauli Propagator | kGpuSim | kPauliPropagator | GPU |
  * | QuEST | kQuestSim | kStatevector | CPU |
  * | Composite (p-block) | kCompositeQCSim | kStatevector | CPU |
+ * | Distributed GPU Statevector | kDistGpuSim | kStatevector | Multi-GPU (Local) |
+ * | Distributed MPI GPU Statevector | kDistMpiGpuSim | kStatevector | MPI / Multi-Node GPU |
  *
  * ### Key classes
  * - @ref Simulators::IState — quantum state management (allocation, measurement, probabilities)
@@ -78,13 +80,13 @@
 /**
  * @defgroup simulators_gpu GPU Backends
  * @ingroup simulators
- * @brief GPU-accelerated simulation backends.
+ * @brief GPU-accelerated and distributed GPU simulation backends (cuStateVec, CUDA MPS/TN, multi-GPU and MPI clusters).
  */
 
 /**
- * @defgroup simulators_composite Composite / Distributed Backends
+ * @defgroup simulators_composite Composite / Partitioned Backends
  * @ingroup simulators
- * @brief P-block composite simulation for distributed quantum computing.
+ * @brief P-block composite simulation for partitioned quantum computing.
  */
 
 /**

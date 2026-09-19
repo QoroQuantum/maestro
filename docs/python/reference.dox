@@ -10,15 +10,17 @@
  * | Enum Value | Description | Shared Library |
  * |------------|-------------|----------------|
  * | `SimulatorType.QCSim` | Built-in QCSim CPU simulator engine | Built-in |
- * | `SimulatorType.CompositeQCSim` | Distributed composite CPU simulator | Built-in |
+ * | `SimulatorType.CompositeQCSim` | Partitioned p-block composite CPU simulator | Built-in |
  * | `SimulatorType.QuestSim` | QuEST statevector simulator | `libmaestroquest` |
  * | `SimulatorType.Gpu` | GPU-accelerated simulator | `libmaestro_gpu_simulators` |
+ * | `SimulatorType.DistributedGpu` | Statevector distributed across local GPUs (Linux only) | `libmaestro_gpu_distributed.so` |
+ * | `SimulatorType.DistributedMpiGpu` | Statevector distributed across MPI ranks and GPUs (Linux only) | `libmaestro_gpu_distributed_mpi.so` |
  *
  * @subsection py_enum_simmethod SimulationType
  *
  * | Enum Value | Description | Supported Backends |
  * |------------|-------------|--------------------|
- * | `SimulationType.Statevector` | Exact statevector simulation | QCSim, Aer, GPU, QuEST |
+ * | `SimulationType.Statevector` | Exact statevector simulation | QCSim, Aer, GPU, DistributedGpu, DistributedMpiGpu, QuEST |
  * | `SimulationType.MatrixProductState` | MPS / tensor-train simulation | QCSim, Aer, GPU |
  * | `SimulationType.Stabilizer` | Polynomial-time Clifford simulation | QCSim, Aer |
  * | `SimulationType.TensorNetwork` | Tensor network contraction | QCSim, Aer, GPU |
@@ -41,6 +43,8 @@
  * - `maestro.coherent_execute(circuit, noise_model, shots=1024, noise_realizations=64, seed=None, config=None)`: Coherent systematic rotation noisy execution.
  * - `maestro.is_gpu_available()`: Check if GPU acceleration library is present.
  * - `maestro.init_gpu()`: Load GPU acceleration library.
+ * - `maestro.is_distributed_gpu_available()`: Non-throwing probe of local distributed GPU plugin and devices (Linux only).
+ * - `maestro.finalize_distributed_mpi_gpu()`: Terminal shutdown of MPI GPU distributed backend before MPI finalization (Linux only).
  * - `maestro.is_quest_available()`: Check if QuEST library is present.
  * - `maestro.init_quest()`: Load QuEST library.
  *

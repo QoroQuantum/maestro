@@ -113,18 +113,22 @@
  *
  * @section py_backend_table Backend Compatibility Matrix
  *
- * | SimulationType | QCSim | Qiskit Aer | GPU | QuEST |
- * |----------------|-------|------------|-----|-------|
- * | `Statevector` | Yes | Yes | Yes | Yes |
- * | `MatrixProductState` | Yes | Yes | Yes | No |
- * | `Stabilizer` | Yes | Yes | No | No |
- * | `TensorNetwork` | Yes | Yes | Yes | No |
- * | `PauliPropagator` | Yes | No | Yes | No |
- * | `ExtendedStabilizer` | No | Yes | No | No |
+ * | SimulationType | QCSim | Qiskit Aer | GPU | DistGpu | DistMpiGpu | QuEST |
+ * |----------------|-------|------------|-----|---------|------------|-------|
+ * | `Statevector` | Yes | Yes | Yes | Yes | Yes | Yes |
+ * | `MatrixProductState` | Yes | Yes | Yes | No | No | No |
+ * | `Stabilizer` | Yes | Yes | No | No | No | No |
+ * | `TensorNetwork` | Yes | Yes | Yes | No | No | No |
+ * | `PauliPropagator` | Yes | No | Yes | No | No | No |
+ * | `ExtendedStabilizer` | No | Yes | No | No | No | No |
  *
- * **Distributed Execution:**
- * - QCSim and Qiskit Aer support p-block composite simulation via `CompositeQCSim` / `CompositeQiskitAer`.
- * - QuEST natively supports MPI-distributed statevector simulation across cluster nodes.
+ * **Distributed & Partitioned Execution:**
+ * - `DistributedGpu`: Statevector distributed across local GPUs in a single node via `libmaestro_gpu_distributed.so`.
+ * - `DistributedMpiGpu`: Statevector distributed across MPI ranks and GPUs (single or multi-node) via `libmaestro_gpu_distributed_mpi.so` and CUDA-aware MPI.
+ * - `CompositeQCSim` / `CompositeQiskitAer`: CPU-based p-block composite simulation for partitioned circuits (not MPI-based).
+ * - `QuestSim`: QuEST engine wrapper for MPI-distributed statevector simulation across cluster nodes.
+ *
+ * See @ref py_hpc for setup, configuration, and execution examples for distributed GPU and MPI workloads.
  *
  * ---
  *
