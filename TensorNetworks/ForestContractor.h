@@ -53,6 +53,8 @@ class ForestContractor : public BaseContractor {
             it->signature == plan.signature) {
           plans.splice(plans.begin(), plans, it);
           ++planCacheHits;
+          if (!plans.front().preparationAttempted)
+            PreparePlan(network, plans.front());
           return ExecutePlan(network, plans.front());
         }
       }
@@ -133,7 +135,7 @@ class ForestContractor : public BaseContractor {
       plan.bytes = PlanBytes(plan);
       if (plan.bytes <= planCacheByteLimit) {
         while (!plans.empty() && cachedBytes > planCacheByteLimit - plan.bytes)
-          EvictLastPlan();
+          if (!DropLastPreparedPlan()) EvictLastPlan();
         cachedBytes += plan.bytes;
         plans.push_front(std::move(plan));
       }
@@ -141,19 +143,39 @@ class ForestContractor : public BaseContractor {
     return result;
   }
 
-  // Cache metadata only. Tensor values belong to the network and are always
-  // recomputed, so the same plan can serve new amplitudes and measurement data.
+  // The cache holds metadata; the separate workspace holds reusable storage.
+  // Tensor values are recomputed for every evaluation, including cache hits.
   void SetPlanCacheByteLimit(size_t bytes) {
     planCacheByteLimit = bytes;
-    while (!plans.empty() && cachedBytes > bytes) EvictLastPlan();
+    while (!plans.empty() && cachedBytes > bytes)
+      if (!DropLastPreparedPlan()) EvictLastPlan();
+    for (auto &plan : plans)
+      if (!plan.prepared) plan.preparationAttempted = false;
+    if (plans.empty()) ClearWorkspace();
   }
   size_t GetPlanCacheByteLimit() const { return planCacheByteLimit; }
+  size_t GetCachedPlanBytes() const { return cachedBytes; }
   size_t GetCachedPlanCount() const { return plans.size(); }
   size_t GetPlanCacheHits() const { return planCacheHits; }
+  size_t GetPreparedPlanCount() const {
+    return std::count_if(plans.begin(), plans.end(),
+                         [](const auto &plan) { return bool(plan.prepared); });
+  }
+  // Per-contractor retained output storage. Zero disables buffer retention,
+  // while still allowing prepared execution with fresh result allocations.
+  void SetWorkspaceByteLimit(size_t bytes) {
+    workspaceByteLimit = bytes;
+    if (GetWorkspaceBytes() > bytes) ClearWorkspace();
+  }
+  size_t GetWorkspaceByteLimit() const { return workspaceByteLimit; }
+  size_t GetWorkspaceBytes() const {
+    return workspace.capacity() * sizeof(Complex);
+  }
   void ClearPlanCache() {
     plans.clear();
     cachedBytes = 0;
     planCacheHits = 0;
+    ClearWorkspace();
   }
 
   std::shared_ptr<ITensorContractor> Clone() const override {
@@ -161,12 +183,22 @@ class ForestContractor : public BaseContractor {
     cloned->maxTensorRank = maxTensorRank;
     cloned->enableMultithreading = enableMultithreading;
     cloned->planCacheByteLimit = planCacheByteLimit;
+    cloned->workspaceByteLimit = workspaceByteLimit;
     // Clones start with an independent empty cache, avoiding metadata copies
     // for each simulator/trajectory clone.
     return cloned;
   }
 
  private:
+  using Complex = std::complex<double>;
+  struct PreparedStep {
+    Utils::detail::TensorContractionPlan contraction;
+    size_t outputOffset = 0;
+  };
+  struct PreparedPlan {
+    std::vector<PreparedStep> steps;
+    size_t bytes = 0, workspaceSize = 0;
+  };
   struct Step {
     size_t left = 0, right = 0;
     std::vector<std::pair<size_t, size_t>> axes;
@@ -176,6 +208,9 @@ class ForestContractor : public BaseContractor {
     std::vector<Step> steps;
     size_t fingerprint = 0, resultSlot = 0, maxRank = 0;
     size_t axisBytes = 0, bytes = 0;
+    // Immutable after construction, including when the contractor is copied.
+    std::shared_ptr<const PreparedPlan> prepared;
+    bool preparationAttempted = false;
   };
   struct Candidate {
     Eigen::Index a, b;
@@ -254,6 +289,7 @@ class ForestContractor : public BaseContractor {
       append(index);
       append(static_cast<size_t>(node->GetId()));
       append(node->GetRank());
+      append(node->tensor->IsDummy());
       for (auto dimension : node->tensor->GetDims()) append(dimension);
       append(node->connections.size());
       for (auto connection : node->connections)
@@ -269,6 +305,7 @@ class ForestContractor : public BaseContractor {
   }
 
   double ExecutePlan(const TensorNetwork &network, const CachedPlan &plan) {
+    if (plan.prepared) return ExecutePrepared(network, plan);
     std::vector<std::shared_ptr<const Utils::Tensor<>>> values;
     values.reserve(plan.inputs.size());
     for (auto index : plan.inputs)
@@ -283,18 +320,169 @@ class ForestContractor : public BaseContractor {
     return std::real((*values[plan.resultSlot])[size_t(0)]);
   }
 
+  // Build only on reuse. Keep the lightweight order cache if prepared metadata
+  // would exceed the budget, and check offset-table sizes before allocation.
+  void PreparePlan(const TensorNetwork &network, CachedPlan &plan) {
+    plan.preparationAttempted = true;
+    // Prepared metadata may replace older prepared metadata, but must not
+    // evict contraction orders. This protects multi-qubit query workloads.
+    size_t limit = planCacheByteLimit - cachedBytes;
+    for (const auto &cached : plans)
+      if (cached.prepared) limit += cached.prepared->bytes;
+    size_t bytes = sizeof(PreparedPlan) + 2 * sizeof(void *);
+    if (!Utils::detail::TensorAddBytes(bytes, plan.steps.size(),
+                                       sizeof(PreparedStep), limit))
+      return;
+    auto prepared = std::make_shared<PreparedPlan>();
+    prepared->steps.reserve(plan.steps.size());
+    bytes = sizeof(PreparedPlan) + 2 * sizeof(void *);
+    if (!Utils::detail::TensorAddBytes(bytes, prepared->steps.capacity(),
+                                       sizeof(PreparedStep), limit))
+      return;
+
+    std::vector<const std::vector<size_t> *> dimensions;
+    dimensions.reserve(plan.inputs.size());
+    for (auto index : plan.inputs) {
+      const auto &tensor = network.GetTensors()[index]->tensor;
+      if (tensor->IsDummy()) return;
+      dimensions.push_back(&tensor->GetDims());
+    }
+    const size_t none = std::numeric_limits<size_t>::max();
+    std::vector<size_t> active(plan.inputs.size(), none), free, capacities;
+    for (const auto &step : plan.steps) {
+      prepared->steps.emplace_back();
+      auto &item = prepared->steps.back();
+      if (!item.contraction.Prepare(*dimensions[step.left],
+                                    *dimensions[step.right], step.axes,
+                                    limit - bytes))
+        return;
+      bytes += item.contraction.ExtraBytes();
+      dimensions[step.left] = &item.contraction.GetDims();
+      dimensions[step.right] = nullptr;
+      const size_t size = item.contraction.GetSize();
+      size_t buffer;
+      if (free.empty()) {
+        buffer = capacities.size();
+        capacities.push_back(size);
+      } else {
+        const auto best =
+            std::min_element(free.begin(), free.end(), [&](size_t a, size_t b) {
+              const bool fitA = capacities[a] >= size,
+                         fitB = capacities[b] >= size;
+              if (fitA != fitB) return fitA;
+              return fitA ? capacities[a] < capacities[b]
+                          : capacities[a] > capacities[b];
+            });
+        buffer = *best;
+        free.erase(best);
+        capacities[buffer] = std::max(capacities[buffer], size);
+      }
+      item.outputOffset = buffer;
+      // Choose the destination before releasing either live input.
+      if (active[step.left] != none) free.push_back(active[step.left]);
+      if (active[step.right] != none) free.push_back(active[step.right]);
+      active[step.left] = buffer;
+      active[step.right] = none;
+    }
+    // Place non-overlapping buffers in one arena, retaining only the offsets.
+    size_t arenaSize = 0;
+    bool fits = true;
+    for (auto &capacity : capacities) {
+      const size_t size = capacity;
+      capacity = arenaSize;
+      if (!Utils::detail::TensorAddBytes(
+              arenaSize, size, 1,
+              std::numeric_limits<size_t>::max() / sizeof(Complex))) {
+        fits = false;
+        break;
+      }
+    }
+    if (fits) {
+      prepared->workspaceSize = arenaSize;
+      for (auto &step : prepared->steps)
+        step.outputOffset = capacities[step.outputOffset];
+    }
+    prepared->bytes = bytes;
+    while (cachedBytes > planCacheByteLimit - bytes)
+      if (!DropLastPreparedPlan()) return;
+    plan.prepared = std::move(prepared);
+    plan.bytes += bytes;
+    cachedBytes += bytes;
+  }
+
+  bool PrepareWorkspace(size_t size) {
+    if (!size || size > workspaceByteLimit / sizeof(Complex)) return false;
+    if (workspace.size() < size) {
+      // Exact construction avoids vector growth retaining more than requested.
+      std::vector<Complex> replacement(size);
+      if (replacement.capacity() > workspaceByteLimit / sizeof(Complex))
+        return false;
+      workspace.swap(replacement);
+    }
+    return true;
+  }
+  void ClearWorkspace() { std::vector<Complex>().swap(workspace); }
+
+  double ExecutePrepared(const TensorNetwork &network, const CachedPlan &plan) {
+    const auto &prepared = *plan.prepared;
+    const bool reuse = PrepareWorkspace(prepared.workspaceSize);
+    std::vector<const Complex *> values;
+    values.reserve(plan.inputs.size());
+    for (auto index : plan.inputs)
+      values.push_back(&(*network.GetTensors()[index]->tensor)[size_t(0)]);
+    std::vector<std::unique_ptr<Complex[]>> owned(reuse ? 0
+                                                        : plan.inputs.size());
+    for (size_t i = 0; i < plan.steps.size(); ++i) {
+      const auto &step = plan.steps[i];
+      const auto &item = prepared.steps[i];
+      std::unique_ptr<Complex[]> fresh;
+      Complex *dest;
+      if (reuse)
+        dest = workspace.data() + item.outputOffset;
+      else {
+        fresh.reset(new Complex[item.contraction.GetSize()]);
+        dest = fresh.get();
+      }
+      item.contraction.Execute(values[step.left], values[step.right], dest,
+                               enableMultithreading);
+      if (!reuse) {
+        owned[step.left] = std::move(fresh);
+        owned[step.right].reset();
+      }
+      values[step.left] = dest;
+      values[step.right] = nullptr;
+    }
+    maxTensorRank = plan.maxRank;
+    return values[plan.resultSlot][0].real();
+  }
+
   static size_t PlanBytes(const CachedPlan &plan) {
     return sizeof(CachedPlan) + 2 * sizeof(void *) + plan.axisBytes +
            (plan.signature.capacity() + plan.inputs.capacity()) *
                sizeof(size_t) +
-           plan.steps.capacity() * sizeof(Step);
+           plan.steps.capacity() * sizeof(Step) +
+           (plan.prepared ? plan.prepared->bytes : 0);
   }
   void EvictLastPlan() {
     cachedBytes -= plans.back().bytes;
     plans.pop_back();
   }
+  bool DropLastPreparedPlan() {
+    for (auto it = plans.rbegin(); it != plans.rend(); ++it)
+      if (it->prepared) {
+        cachedBytes -= it->prepared->bytes;
+        it->bytes -= it->prepared->bytes;
+        it->prepared.reset();
+        // Do not repeatedly promote/demote the same plan at a tight budget.
+        // A budget change or a new order-cache entry allows another attempt.
+        return true;
+      }
+    return false;
+  }
   size_t planCacheByteLimit = 8 * 1024 * 1024;
   size_t cachedBytes = 0, planCacheHits = 0;
+  size_t workspaceByteLimit = 16 * 1024 * 1024;
+  std::vector<Complex> workspace;
   std::list<CachedPlan> plans;
 };
 

@@ -533,22 +533,8 @@ class Tensor {
   Tensor<T, Storage> ContractImpl(const Tensor<T, Storage> &other,
                                   const Pairs &indices, bool allow) const {
     detail::TensorAxisMask usedA(dims.size()), usedB(other.dims.size());
-    for (const auto &pair : indices) {
-      if (pair.first >= dims.size() || pair.second >= other.dims.size())
-        throw std::invalid_argument("Contraction axis is out of range");
-      if (usedA[pair.first] || usedB[pair.second])
-        throw std::invalid_argument("Contraction axes must be unique");
-      if (dims[pair.first] != other.dims[pair.second])
-        throw std::invalid_argument("Contracted dimensions must match");
-      usedA[pair.first] = usedB[pair.second] = 1;
-    }
-    std::vector<size_t> newdims;
-    newdims.reserve(dims.size() + other.dims.size() - 2 * indices.size());
-    for (size_t i = 0; i < dims.size(); ++i)
-      if (!usedA[i]) newdims.push_back(dims[i]);
-    for (size_t i = 0; i < other.dims.size(); ++i)
-      if (!usedB[i]) newdims.push_back(other.dims[i]);
-    if (newdims.empty()) newdims.push_back(1);
+    const auto newdims = detail::TensorContractionDimensions(
+        dims, other.dims, indices, usedA, usedB);
 
     Tensor<T, Storage> result(newdims, IsDummy() || other.IsDummy());
     if (result.IsDummy()) return result;
@@ -557,33 +543,13 @@ class Tensor {
                                           indices))
       return result;
 
-    std::vector<size_t> stridesA(dims.size()), stridesB(other.dims.size());
-    size_t stride = 1;
-    for (size_t i = 0; i < dims.size(); ++i) {
-      stridesA[i] = stride;
-      stride = detail::TensorSizeProduct(stride, dims[i]);
-    }
-    stride = 1;
-    for (size_t i = 0; i < other.dims.size(); ++i) {
-      stridesB[i] = stride;
-      stride = detail::TensorSizeProduct(stride, other.dims[i]);
-    }
     detail::TensorAxisPattern fa, fb, ka, kb;
-    for (size_t i = 0; i < dims.size(); ++i)
-      if (!usedA[i]) fa.Add(dims[i], stridesA[i]);
-    for (size_t i = 0; i < other.dims.size(); ++i)
-      if (!usedB[i]) fb.Add(other.dims[i], stridesB[i]);
-    // The reduction's order is free to change. Order by left-hand storage to
-    // expose contiguous blocks, preserving the pairing with the right operand.
-    std::vector<std::pair<size_t, size_t>> ordered(indices.begin(),
-                                                   indices.end());
-    std::sort(ordered.begin(), ordered.end());
-    for (const auto &pair : ordered) {
-      ka.Add(dims[pair.first], stridesA[pair.first]);
-      kb.Add(other.dims[pair.second], stridesB[pair.second]);
-    }
+    detail::TensorContractionPatterns(dims, other.dims, usedA, usedB, indices,
+                                      fa, fb, ka, kb);
     detail::TensorDenseContraction<T>(values, other.values, result.values, fa,
-                                      fb, ka, kb, allow);
+                                      fb, ka, kb, allow,
+                                      detail::TensorGateSize(dims, other.dims,
+                                                            indices.size()));
     return result;
   }
 
