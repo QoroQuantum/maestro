@@ -1,7 +1,141 @@
 // Shared request/configuration checks require no MPI or GPU hardware.
 #include "../Execution/Options.h"
+#include "../Circuit/Factory.h"
+#include <atomic>
 
 void Check(bool, const char*);
+
+namespace {
+// Count actual gate execution through cloning, mapping and worker jobs. This
+// catches repeated evolution without a wall-clock performance assertion.
+class CountedX : public Circuits::XGate<> {
+ public:
+  CountedX(size_t qubit, std::shared_ptr<std::atomic<size_t>> calls)
+      : XGate(qubit), calls(std::move(calls)) {}
+
+  void Execute(const std::shared_ptr<Simulators::ISimulator>& sim,
+               Circuits::OperationState& state) const override {
+    ++*calls;
+    XGate::Execute(sim, state);
+  }
+
+  std::shared_ptr<Circuits::IOperation<>> Clone() const override {
+    return std::make_shared<CountedX>(*this);
+  }
+
+ private:
+  std::shared_ptr<std::atomic<size_t>> calls;
+};
+
+// RepeatedExecute uses a distribution remapper; a single host needs no
+// remapping, while still exercising the production network job dispatch.
+class SingleHostRemapper : public Distribution::IRemapper<> {
+ public:
+  std::shared_ptr<Circuits::Circuit<>> Remap(
+      const std::shared_ptr<Network::INetwork<>>&,
+      const std::shared_ptr<Circuits::Circuit<>>& circuit) override {
+    return circuit;
+  }
+  unsigned int GetNumberOfOperationsForDistribution() const override {
+    return 0;
+  }
+  unsigned int GetNumberOfDistributions() const override { return 0; }
+  Distribution::RemapperType GetType() const override {
+    return Distribution::RemapperType::kLayersRemapper;
+  }
+};
+}  // namespace
+
+void TestFixedBackendShotReuse() {
+  using namespace MaestroExecution;
+  using CF = Circuits::CircuitFactory<>;
+  using Gate = Circuits::QuantumGateType;
+  GetMaestroObjectWithMute();
+  constexpr size_t shots = 128;
+
+  for (const char* method : {"statevector", "matrix_product_state",
+                             "density_matrix", "matrix_product_operator"})
+    for (bool onHost : {true, false})
+      for (size_t workers : {size_t{1}, size_t{2}})
+        for (int scenario : {0, 1, 2, 3}) {
+          struct NetworkHandle {
+            unsigned long handle = CreateSimpleSimulator(2);
+            ~NetworkHandle() { DestroySimpleSimulator(handle); }
+          } owner;
+          Check(owner.handle != 0, "Cannot create network for shot reuse");
+          // Exercise the native parser's default fixed selection and the same
+          // ConfigureNetwork path used by native requests.
+          auto config = ParseConfig(
+              json::object{{"backend", "qcsim"}, {"method", method}});
+          config.seed = 123;
+          config.optimize_circuit = false;
+          auto network = ConfigureNetwork(owner.handle, config);
+          Check(network && !network->GetOptimizeSimulator(),
+                "Fixed selection unexpectedly enabled backend optimization");
+          network->SetMaxSimulators(workers);
+          if (!onHost)
+            network->GetController()->SetRemapper(
+                std::make_shared<SingleHostRemapper>());
+
+          auto prefix = std::make_shared<std::atomic<size_t>>(0);
+          auto suffix = std::make_shared<std::atomic<size_t>>(0);
+          auto circuit = CF::CreateCircuit();
+          circuit->AddOperation(std::make_shared<CountedX>(0, prefix));
+          if (scenario == 1 || scenario == 3) {
+            if (scenario == 1) {
+              circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+              circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+            } else {
+              circuit->AddOperation(CF::CreateRandom({0}, 123));
+            }
+            circuit->AddOperation(CF::CreateSimpleConditionalGate(
+                CF::CreateGate(Gate::kXGateType, 1), 0));
+            circuit->AddOperation(std::make_shared<CountedX>(1, suffix));
+            circuit->AddOperation(CF::CreateMeasurement({{1, 1}}));
+          } else {
+            if (scenario == 2) {
+              circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+              circuit->AddOperation(CF::CreateGate(Gate::kCXGateType, 0, 1));
+              circuit->AddOperation(CF::CreateReset({0}));
+              circuit->AddOperation(std::make_shared<CountedX>(0, suffix));
+            }
+            circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
+          }
+
+          const size_t jobs =
+              scenario == 0 && config.simulation_type == Method::kStatevector
+                  ? 1
+                  : network->GetMaxSimulators();
+          for (int repeat = 0; repeat < 2; ++repeat) {
+            *prefix = 0;
+            *suffix = 0;
+            const auto counts =
+                onHost ? network->RepeatedExecuteOnHost(circuit, 0, shots)
+                       : network->RepeatedExecute(circuit, shots);
+            Check(prefix->load() == jobs,
+                  "Fixed backend re-executed the common prefix per shot");
+            Check(
+                suffix->load() == (scenario ? shots : 0),
+                "Measurement-dependent operations were not executed per shot");
+            Check(
+                network->GetLastSimulatorType() == Backend::kQCSim &&
+                    network->GetLastSimulationType() == config.simulation_type,
+                "Shot reuse changed the fixed backend or method");
+            size_t total = 0;
+            for (const auto& [bits, count] : counts) {
+              Check(bits.size() == 2, "Shot reuse changed classical width");
+              Check((scenario == 1 || scenario == 3)
+                        ? bits[0] != bits[1]
+                        : bits[0] && (scenario == 2 || !bits[1]),
+                    "Shot reuse changed measurement/reset/conditional results");
+              total += count;
+            }
+            Check(total == shots, "Shot reuse lost counts");
+            Check(counts.size() == (scenario ? 2 : 1),
+                  "Independent shots reused one measurement/reset outcome");
+          }
+        }
+}
 
 void TestRequestSeedParsing() {
   for (const char* backend : {

@@ -59,6 +59,12 @@ fail; they do not return a substitute backend's calculation. `selection:"automat
 and optional `candidates:[{backend,method},...]` retain optimizer selection for
 ideal execute/estimate. Results identify the backend/method actually used.
 
+Fixed selection preserves multi-shot reuse: eligible circuits evolve once per
+execution job and sample repeatedly. Circuits with intermediate measurements,
+resets, or classical conditions reuse only their independent prefix and execute
+the dependent operations for each shot. Selecting a fixed backend does not force
+the whole circuit to run again for every shot.
+
 `num_clbits` defaults to `num_qubits` and can differ. Counts list classical bit 0
 first; Pauli observables and `target_state` list qubit 0 first. Integer basis
 indices use qubit 0 as the least significant bit. Complex numbers are `[real,imag]`.
@@ -280,8 +286,13 @@ require MPI initialization.
 circuit-noise injection independently of measurement/readout randomness.
 `realizations` defaults to 1 for exact channels and 64 otherwise. Execute divides
 its total shots between realizations; estimator standard errors describe variation
-between realizations, not hardware shot error. Repeating the same seeds/configuration
-is deterministic within the same backend/runtime; cross-backend bitwise identity
+between realizations, not hardware shot error. Multi-shot reuse stays within each
+injected realization. Injected Pauli/coherent errors remain fixed for that
+realization; resets on evolved qubits, measurement outcomes, and readout flips
+remain per-shot operations. Exact channels evolve the density matrix/MPO before
+sampling. Selecting a fixed backend preserves these rules.
+Repeating the same seeds/configuration is deterministic within the same
+backend/runtime; cross-backend bitwise identity
 is not promised. Checkpoint suffixes consume sequential noise, readout and simulator
 measurement streams. Changing, inserting or reordering an earlier suffix may change
 a later suffix's samples. The reproducibility unit is the entire ordered request;

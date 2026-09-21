@@ -12,6 +12,7 @@ static unsigned checks = 0;
 void TestRequestNoiseAndOptions();
 void TestRequestSeedParsing();
 void TestNetworkBondDefaults();
+void TestFixedBackendShotReuse();
 void Check(bool condition, const char* message) {
   ++checks;
   if (!condition) throw std::runtime_error(message);
@@ -161,6 +162,7 @@ void TestNativeRandomSeeds() {
 
 int main() try {
   Check(maestro_request_c_header_test(), "C header/ABI ownership check failed");
+  TestFixedBackendShotReuse();
   char* capabilities = MaestroGetCapabilitiesJson();
   Check(capabilities != nullptr, "Missing capabilities");
   auto caps = j::parse(capabilities).as_object();

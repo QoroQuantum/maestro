@@ -692,7 +692,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         auto job = std::make_shared<ExecuteJob<Time>>(
             dcirc, res, curCnt, nrQubits, nrCbits, nrCbitsResults, simType,
             method, resultsMutex);
-        job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
+        job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
 
         job->network = BaseClass::getptr();
         job->curMaxBondDim = &curMaxBondDim;
@@ -723,7 +723,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       auto job = std::make_shared<ExecuteJob<Time>>(
           dcirc, res, curCnt, nrQubits, nrCbits, nrCbitsResults, simType,
           method, resultsMutex);
-      job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
+      job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
 
       job->network = BaseClass::getptr();
       job->curMaxBondDim = &curMaxBondDim;
@@ -889,7 +889,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         auto job = std::make_shared<ExecuteJob<Time>>(
             dcirc, res, curCnt, nrQubits, nrCbits, nrCbits, simType, method,
             resultsMutex);
-        job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
+        job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
 
         job->network = BaseClass::getptr();
         job->curMaxBondDim = &curMaxBondDim;
@@ -920,7 +920,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       auto job = std::make_shared<ExecuteJob<Time>>(
           dcirc, res, curCnt, nrQubits, nrCbits, nrCbits, simType, method,
           resultsMutex);
-      job->optimiseMultipleShotsExecution = GetOptimizeSimulator();
+      job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
 
       job->network = BaseClass::getptr();
       job->curMaxBondDim = &curMaxBondDim;
@@ -1868,6 +1868,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
    * If set, allows changing the simulator with an optimized one.
    * States/amplitudes are not available in such a case, disable if you need
    * them.
+   * Multiple shots still reuse the executable prefix with a fixed backend;
+   * the existing single-shot path is retained for state queries.
    *
    * @param optimize If true, the simulator will be optimized if possible.
    */
