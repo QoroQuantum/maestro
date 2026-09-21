@@ -14,6 +14,7 @@
 #pragma once
 
 #ifndef _TENSOR_H_
+#define _TENSOR_H_ 1
 
 #include <complex>
 #include <initializer_list>
@@ -28,6 +29,7 @@
 #include <boost/serialization/vector.hpp>
 
 #include "QubitRegisterCalculator.h"
+#include "TensorContraction.h"
 
 namespace Utils {
 
@@ -41,14 +43,7 @@ class Tensor {
  protected:
   Storage values;
   std::vector<size_t> dims;
-  mutable size_t sz;
-
-  constexpr static size_t OmpLimit = 1024;
-  constexpr static int divSchedule = 2;
-
-  static int GetNumberOfThreads() {
-    return QC::QubitRegisterCalculator<>::GetNumberOfThreads();
-  }
+  mutable size_t sz = 0;
 
  public:
   friend class boost::serialization::access;
@@ -130,9 +125,12 @@ class Tensor {
   }
 
   size_t GetSize() const {
-    if (!sz)
-      sz = std::accumulate(dims.begin(), dims.end(), 1,
-                           std::multiplies<size_t>());
+    if (!sz) {
+      size_t count = 1;
+      for (auto dimension : dims)
+        count = detail::TensorSizeProduct(count, dimension);
+      sz = count;
+    }
 
     return sz;
   }
@@ -519,223 +517,77 @@ class Tensor {
   Tensor<T, Storage> Contract(const Tensor<T, Storage> &other, size_t ind1,
                               size_t ind2,
                               bool allowMultithreading = true) const {
-    assert(dims[ind1] == other.dims[ind2]);
-
-    std::vector<size_t> newdims;
-
-    const size_t newsize = dims.size() + other.dims.size() - 2;
-    if (newsize == 0)
-      newdims.resize(1, 1);
-    else {
-      newdims.reserve(newsize);
-
-      for (size_t i = 0; i < dims.size(); ++i)
-        if (i != ind1) newdims.push_back(dims[i]);
-
-      for (size_t i = 0; i < other.dims.size(); ++i)
-        if (i != ind2) newdims.push_back(other.dims[i]);
-    }
-
-    Tensor<T, Storage> result(newdims, IsDummy());
-
-    if (!IsDummy()) {
-      const size_t sz = result.GetSize();
-
-      if (!allowMultithreading || sz < OmpLimit) {
-        std::vector<size_t> indices1(dims.size());
-        std::vector<size_t> indices2(other.dims.size());
-
-        for (size_t offset = 0; offset < sz; ++offset) {
-          const std::vector<size_t> indicesres = result.IndexFromOffset(offset);
-
-          size_t pos = 0;
-          for (size_t i = 0; i < dims.size(); ++i)
-            if (i != ind1) {
-              indices1[i] = indicesres[pos];
-              ++pos;
-            }
-
-          for (size_t i = 0; i < other.dims.size(); ++i)
-            if (i != ind2) {
-              indices2[i] = indicesres[pos];
-              ++pos;
-            }
-
-          // contracting more than one index would require creating a dummy
-          // tensor to iterate over all the indices that are contracted
-          for (size_t i = 0; i < dims[ind1]; ++i) {
-            indices1[ind1] = indices2[ind2] = i;
-
-            result[offset] =
-                result[offset] + values[GetOffset(indices1)] * other[indices2];
-          }
-        }
-      } else {
-        const auto processor_count = GetNumberOfThreads();
-
-#pragma omp parallel for num_threads(processor_count) \
-    schedule(static, OmpLimit / divSchedule)
-        for (long long int offset = 0; offset < static_cast<long long int>(sz);
-             ++offset) {
-          const std::vector<size_t> indicesres = result.IndexFromOffset(offset);
-          std::vector<size_t> indices1(dims.size());
-          std::vector<size_t> indices2(other.dims.size());
-
-          size_t pos = 0;
-          for (size_t i = 0; i < dims.size(); ++i)
-            if (i != ind1) {
-              indices1[i] = indicesres[pos];
-              ++pos;
-            }
-
-          for (size_t i = 0; i < other.dims.size(); ++i)
-            if (i != ind2) {
-              indices2[i] = indicesres[pos];
-              ++pos;
-            }
-
-          // contracting more than one index would require creating a dummy
-          // tensor to iterate over all the indices that are contracted
-          for (size_t i = 0; i < dims[ind1]; ++i) {
-            indices1[ind1] = indices2[ind2] = i;
-
-            result[offset] =
-                result[offset] + values[GetOffset(indices1)] * other[indices2];
-          }
-        }
-      }
-    }
-
-    return result;
+    const std::array<std::pair<size_t, size_t>, 1> indices{{{ind1, ind2}}};
+    return ContractImpl(other, indices, allowMultithreading);
   }
 
   Tensor<T, Storage> Contract(
       const Tensor<T, Storage> &other,
       const std::vector<std::pair<size_t, size_t>> &indices,
       bool allowMultithreading = true) const {
+    return ContractImpl(other, indices, allowMultithreading);
+  }
+
+ private:
+  template <class Pairs>
+  Tensor<T, Storage> ContractImpl(const Tensor<T, Storage> &other,
+                                  const Pairs &indices, bool allow) const {
+    detail::TensorAxisMask usedA(dims.size()), usedB(other.dims.size());
+    for (const auto &pair : indices) {
+      if (pair.first >= dims.size() || pair.second >= other.dims.size())
+        throw std::invalid_argument("Contraction axis is out of range");
+      if (usedA[pair.first] || usedB[pair.second])
+        throw std::invalid_argument("Contraction axes must be unique");
+      if (dims[pair.first] != other.dims[pair.second])
+        throw std::invalid_argument("Contracted dimensions must match");
+      usedA[pair.first] = usedB[pair.second] = 1;
+    }
     std::vector<size_t> newdims;
-    std::vector<size_t> contractDims;
+    newdims.reserve(dims.size() + other.dims.size() - 2 * indices.size());
+    for (size_t i = 0; i < dims.size(); ++i)
+      if (!usedA[i]) newdims.push_back(dims[i]);
+    for (size_t i = 0; i < other.dims.size(); ++i)
+      if (!usedB[i]) newdims.push_back(other.dims[i]);
+    if (newdims.empty()) newdims.push_back(1);
 
-    std::unordered_set<size_t> indicesSet1;
-    std::unordered_set<size_t> indicesSet2;
+    Tensor<T, Storage> result(newdims, IsDummy() || other.IsDummy());
+    if (result.IsDummy()) return result;
+    if (detail::TensorSmallContraction<T>(values, other.values, result.values,
+                                          dims, other.dims, usedA, usedB,
+                                          indices))
+      return result;
 
-    for (const auto &index : indices) {
-      assert(dims[index.first] == other.dims[index.second]);
-
-      indicesSet1.insert(index.first);
-      indicesSet2.insert(index.second);
-      contractDims.push_back(dims[index.first]);
+    std::vector<size_t> stridesA(dims.size()), stridesB(other.dims.size());
+    size_t stride = 1;
+    for (size_t i = 0; i < dims.size(); ++i) {
+      stridesA[i] = stride;
+      stride = detail::TensorSizeProduct(stride, dims[i]);
     }
-
-    const size_t newsize = dims.size() + other.dims.size() - 2 * indices.size();
-    if (newsize == 0)
-      newdims.resize(1, 1);
-    else {
-      newdims.reserve(newsize);
-
-      for (size_t i = 0; i < dims.size(); ++i)
-        if (indicesSet1.find(i) == indicesSet1.end())
-          newdims.push_back(dims[i]);
-
-      for (size_t i = 0; i < other.dims.size(); ++i)
-        if (indicesSet2.find(i) == indicesSet2.end())
-          newdims.push_back(other.dims[i]);
+    stride = 1;
+    for (size_t i = 0; i < other.dims.size(); ++i) {
+      stridesB[i] = stride;
+      stride = detail::TensorSizeProduct(stride, other.dims[i]);
     }
-
-    Tensor<T, Storage> result(newdims, IsDummy());
-
-    if (!IsDummy()) {
-      const Tensor<T, Storage> dummy(contractDims,
-                                     true);  // used for incrementing the index
-      const size_t sz = result.GetSize();
-
-      if (!allowMultithreading || sz < OmpLimit) {
-        std::vector<size_t> dummyIndices(
-            contractDims.size(), 0);  // the dummy index to be incremented - use
-                                      // the values to complete the real indices
-        std::vector<size_t> indices1(dims.size());
-        std::vector<size_t> indices2(other.dims.size());
-
-        for (size_t offset = 0; offset < sz; ++offset) {
-          const std::vector<size_t> indicesres = result.IndexFromOffset(offset);
-
-          size_t pos = 0;
-          for (size_t i = 0; i < dims.size(); ++i)
-            if (indicesSet1.find(i) == indicesSet1.end()) {
-              indices1[i] = indicesres[pos];
-              ++pos;
-            }
-
-          for (size_t i = 0; i < other.dims.size(); ++i)
-            if (indicesSet2.find(i) == indicesSet2.end()) {
-              indices2[i] = indicesres[pos];
-              ++pos;
-            }
-
-          // contracting more than one index requires creating a dummy tensor to
-          // iterate over all the indices that are contracted
-          do {
-            for (size_t i = 0; i < dummyIndices.size(); ++i)
-              indices1[indices[i].first] = indices2[indices[i].second] =
-                  dummyIndices[i];
-
-            // trying to fix a linux compile bug
-            const T &val1 = values[GetOffset(indices1)];
-            const T &val2 = other[indices2];
-            auto mulRes = val1 * val2;
-            result[offset] = result[offset] + std::move(mulRes);
-          } while (dummy.IncrementIndex(dummyIndices));
-        }
-      } else {
-        const auto processor_count = GetNumberOfThreads();
-
-#pragma omp parallel for num_threads(processor_count) \
-    schedule(static, OmpLimit / divSchedule)
-        for (long long int offset = 0; offset < static_cast<long long int>(sz);
-             ++offset) {
-          const std::vector<size_t> indicesres = result.IndexFromOffset(offset);
-          std::vector<size_t> indices1(dims.size());
-          std::vector<size_t> indices2(other.dims.size());
-
-          size_t pos = 0;
-          for (size_t i = 0; i < dims.size(); ++i)
-            if (indicesSet1.find(i) == indicesSet1.end()) {
-              indices1[i] = indicesres[pos];
-              ++pos;
-            }
-
-          for (size_t i = 0; i < other.dims.size(); ++i)
-            if (indicesSet2.find(i) == indicesSet2.end()) {
-              indices2[i] = indicesres[pos];
-              ++pos;
-            }
-
-          // contracting more than one index requires creating a dummy tensor to
-          // iterate over all the indices that are contracted
-          std::vector<size_t> dummyIndices(
-              contractDims.size(),
-              0);  // the dummy index to be incremented - use the values to
-                   // complete the real indices
-
-          do {
-            for (size_t i = 0; i < dummyIndices.size(); ++i)
-              indices1[indices[i].first] = indices2[indices[i].second] =
-                  dummyIndices[i];
-
-            // trying to fix a linux compile bug
-            const T &val1 = values[GetOffset(indices1)];
-            const T &val2 = other[indices2];
-
-            auto mulRes = val1 * val2;
-            result[offset] = result[offset] + std::move(mulRes);
-          } while (dummy.IncrementIndex(dummyIndices));
-        }
-      }
+    detail::TensorAxisPattern fa, fb, ka, kb;
+    for (size_t i = 0; i < dims.size(); ++i)
+      if (!usedA[i]) fa.Add(dims[i], stridesA[i]);
+    for (size_t i = 0; i < other.dims.size(); ++i)
+      if (!usedB[i]) fb.Add(other.dims[i], stridesB[i]);
+    // The reduction's order is free to change. Order by left-hand storage to
+    // expose contiguous blocks, preserving the pairing with the right operand.
+    std::vector<std::pair<size_t, size_t>> ordered(indices.begin(),
+                                                   indices.end());
+    std::sort(ordered.begin(), ordered.end());
+    for (const auto &pair : ordered) {
+      ka.Add(dims[pair.first], stridesA[pair.first]);
+      kb.Add(other.dims[pair.second], stridesB[pair.second]);
     }
-
+    detail::TensorDenseContraction<T>(values, other.values, result.values, fa,
+                                      fb, ka, kb, allow);
     return result;
   }
 
+ public:
   T Trace() const {
     assert(dims.size() > 0);
 
