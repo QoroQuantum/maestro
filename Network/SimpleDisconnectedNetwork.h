@@ -61,7 +61,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
                             const std::vector<size_t> &cbits = {}) {
     configuration.SetConfiguration("use_double_precision", "0");
 
-	simulatorsForOptimizations.insert(
+    simulatorsForOptimizations.insert(
         {Simulators::SimulatorType::kQCSim,
          Simulators::SimulationType::kStatevector});
     simulatorsForOptimizations.insert(
@@ -95,7 +95,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 #endif
 
 #ifdef __linux__
-    { // GPU candidates are resolved lazily when simulation is requested.
+    {  // GPU candidates are resolved lazily when simulation is requested.
       simulatorsForOptimizations.insert(
           {Simulators::SimulatorType::kGpuSim,
            Simulators::SimulationType::kStatevector});
@@ -653,7 +653,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       nrThreads = 1;
     else
 #endif
-        if (((method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral) &&
+        if (((method == Simulators::SimulationType::kStatevector ||
+              method == Simulators::SimulationType::kPathIntegral) &&
              !distCirc->HasOpsAfterMeasurements()) ||
             simType == Simulators::SimulatorType::kQuestSim)
       nrThreads = 1;
@@ -692,15 +693,18 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         auto job = std::make_shared<ExecuteJob<Time>>(
             dcirc, res, curCnt, nrQubits, nrCbits, nrCbitsResults, simType,
             method, resultsMutex);
-        job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
+        job->optimiseMultipleShotsExecution =
+            curCnt > 1 || GetOptimizeSimulator();
 
         job->network = BaseClass::getptr();
         job->curMaxBondDim = &curMaxBondDim;
 
         job->config = ExecutionConfiguration(simType, nrQubits);
+        job->randomStream = jobStream++;
         if (configuration.IsSet("seed")) {
           const uint64_t childSeed = Simulators::IState::DeriveSeed(
-              std::stoull(configuration.GetConfiguration("seed")), jobStream++);
+              std::stoull(configuration.GetConfiguration("seed")),
+              job->randomStream);
           job->config.SetConfiguration("seed", std::to_string(childSeed));
         }
 
@@ -723,7 +727,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       auto job = std::make_shared<ExecuteJob<Time>>(
           dcirc, res, curCnt, nrQubits, nrCbits, nrCbitsResults, simType,
           method, resultsMutex);
-      job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
+      job->optimiseMultipleShotsExecution =
+          curCnt > 1 || GetOptimizeSimulator();
 
       job->network = BaseClass::getptr();
       job->curMaxBondDim = &curMaxBondDim;
@@ -782,15 +787,16 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     size_t nrQubits = 0;
     size_t nrCbits = 0;
 
-    const bool distributed = simulator &&
-        Simulators::IsDistributedGpuSimulator(simulator->GetType());
+    const bool distributed = simulator && Simulators::IsDistributedGpuSimulator(
+                                              simulator->GetType());
     auto mappingCircuit = circuit;
     if (!distributed && GetController()->GetOptimizeCircuit()) {
-      mappingCircuit = std::static_pointer_cast<Circuits::Circuit<Time>>(circuit->Clone());
+      mappingCircuit =
+          std::static_pointer_cast<Circuits::Circuit<Time>>(circuit->Clone());
       mappingCircuit->Optimize();
     }
-    const auto reverseQubitsMap = MapCircuitOnHost(
-        mappingCircuit, hostId, nrQubits, nrCbits, true);
+    const auto reverseQubitsMap =
+        MapCircuitOnHost(mappingCircuit, hostId, nrQubits, nrCbits, true);
     // Resolve indexing before optimization can remove a wire that disambiguates
     // local from global numbering (for example a cancelling pair on qubit 0).
     if (distributed && distCirc && GetController()->GetOptimizeCircuit())
@@ -889,15 +895,18 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         auto job = std::make_shared<ExecuteJob<Time>>(
             dcirc, res, curCnt, nrQubits, nrCbits, nrCbits, simType, method,
             resultsMutex);
-        job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
+        job->optimiseMultipleShotsExecution =
+            curCnt > 1 || GetOptimizeSimulator();
 
         job->network = BaseClass::getptr();
         job->curMaxBondDim = &curMaxBondDim;
 
         job->config = ExecutionConfiguration(simType, nrQubits);
+        job->randomStream = jobStream++;
         if (configuration.IsSet("seed")) {
           const uint64_t childSeed = Simulators::IState::DeriveSeed(
-              std::stoull(configuration.GetConfiguration("seed")), jobStream++);
+              std::stoull(configuration.GetConfiguration("seed")),
+              job->randomStream);
           job->config.SetConfiguration("seed", std::to_string(childSeed));
         }
 
@@ -920,7 +929,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       auto job = std::make_shared<ExecuteJob<Time>>(
           dcirc, res, curCnt, nrQubits, nrCbits, nrCbits, simType, method,
           resultsMutex);
-      job->optimiseMultipleShotsExecution = curCnt > 1 || GetOptimizeSimulator();
+      job->optimiseMultipleShotsExecution =
+          curCnt > 1 || GetOptimizeSimulator();
 
       job->network = BaseClass::getptr();
       job->curMaxBondDim = &curMaxBondDim;
@@ -1025,8 +1035,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         Simulators::SimulatorsFactory::CreateSimulator(simType, simExecType);
 
     if (simulator) {
-      const size_t allocationQubits = nrQubits == 0
-          ? GetNumQubits() + GetNumNetworkEntangledQubits() : nrQubits;
+      const size_t allocationQubits =
+          nrQubits == 0 ? GetNumQubits() + GetNumNetworkEntangledQubits()
+                        : nrQubits;
       ExecutionConfiguration(simType, allocationQubits)
           .ApplyConfigurationToSimulator(simulator);
 
@@ -1981,7 +1992,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     const auto cloned =
         std::make_shared<SimpleDisconnectedNetwork<Time, Controller>>(qubits,
                                                                       cbits);
-    
+
     cloned->configuration = configuration;
     cloned->distributedHostQubitIndexing = distributedHostQubitIndexing;
     cloned->resolvedDistributedDevices = resolvedDistributedDevices;
@@ -1990,11 +2001,18 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     cloned->optimizeSimulator = optimizeSimulator;
     cloned->simulatorsForOptimizations = simulatorsForOptimizations;
+    cloned->GetController()->SetOptimizeCircuit(
+        GetController()->GetOptimizeCircuit());
+    cloned->GetController()->SetOptimizeRotationGates(
+        GetController()->GetOptimizeRotationGates());
 
+    cloned->SetInitialQubitsMapOptimization(GetInitialQubitsMapOptimization());
     cloned->SetMPSOptimizeSwaps(GetMPSOptimizeSwaps());
 
-    cloned->SetMPSOptimizationBondDimensionThreshold(GetMPSOptimizationBondDimensionThreshold());
-    cloned->SetMPSOptimizationQubitsNumberThreshold(GetMPSOptimizationQubitsNumberThreshold());
+    cloned->SetMPSOptimizationBondDimensionThreshold(
+        GetMPSOptimizationBondDimensionThreshold());
+    cloned->SetMPSOptimizationQubitsNumberThreshold(
+        GetMPSOptimizationQubitsNumberThreshold());
 
     cloned->SetLookaheadDepth(GetLookaheadDepth());
     cloned->SetLookaheadDepthWithHeuristic(GetLookaheadDepthWithHeuristic());
@@ -2090,9 +2108,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       simulatorTypes.emplace_back(Simulators::SimulatorType::kQCSim,
                                   Simulators::SimulationType::kPauliPropagator);
 
-    if (OptimizationSimulatorExists(
-            Simulators::SimulatorType::kQCSim,
-            Simulators::SimulationType::kPathIntegral))
+    if (OptimizationSimulatorExists(Simulators::SimulatorType::kQCSim,
+                                    Simulators::SimulationType::kPathIntegral))
       simulatorTypes.emplace_back(Simulators::SimulatorType::kQCSim,
                                   Simulators::SimulationType::kPathIntegral);
 
@@ -2123,17 +2140,23 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 #endif
 
 #ifdef __linux__
-    const int gpuDevice = configuration.IsSet("gpu_device")
-        ? Simulators::Configuration::ParseGpuDevice(configuration.GetConfiguration("gpu_device"))
-        : Simulators::SimulatorsFactory::ResolveGpuDevice();
+    const int gpuDevice =
+        configuration.IsSet("gpu_device")
+            ? Simulators::Configuration::ParseGpuDevice(
+                  configuration.GetConfiguration("gpu_device"))
+            : Simulators::SimulatorsFactory::ResolveGpuDevice();
     Simulators::SimulatorsFactory::ScopedGpuDevice gpuDeviceScope(gpuDevice);
     const bool hasGpuCandidate = std::any_of(
         simulatorsForOptimizations.begin(), simulatorsForOptimizations.end(),
-        [](const auto& candidate) { return candidate.first == Simulators::SimulatorType::kGpuSim; });
+        [](const auto &candidate) {
+          return candidate.first == Simulators::SimulatorType::kGpuSim;
+        });
     if (configuration.IsSet("gpu_device") && hasGpuCandidate &&
         !Simulators::SimulatorsFactory::IsGpuLibraryAvailable(gpuDevice))
-      throw std::runtime_error("Unable to initialize requested GPU device " + std::to_string(gpuDevice));
-    if (hasGpuCandidate && Simulators::SimulatorsFactory::IsGpuLibraryAvailable(gpuDevice)) {
+      throw std::runtime_error("Unable to initialize requested GPU device " +
+                               std::to_string(gpuDevice));
+    if (hasGpuCandidate &&
+        Simulators::SimulatorsFactory::IsGpuLibraryAvailable(gpuDevice)) {
       if (OptimizationSimulatorExists(Simulators::SimulatorType::kGpuSim,
                                       Simulators::SimulationType::kStatevector))
         simulatorTypes.emplace_back(Simulators::SimulatorType::kGpuSim,
@@ -2163,7 +2186,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       simulatorTypes.emplace_back(Simulators::SimulatorType::kQuestSim,
                                   Simulators::SimulationType::kStatevector);
 
-
     // Honor a singleton optimization set (e.g. density_matrix) even if it is
     // not in the hardcoded candidate list. Skip backends that cannot actually
     // be constructed, such as GPU MPS when the GPU library is missing: the
@@ -2171,7 +2193,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (simulatorTypes.empty() && simulatorsForOptimizations.size() == 1) {
       const auto candidate = *simulatorsForOptimizations.begin();
       if (candidate.first == Simulators::SimulatorType::kGpuSim &&
-          !Simulators::SimulatorsFactory::IsGpuLibraryAvailable()) return nullptr;
+          !Simulators::SimulatorsFactory::IsGpuLibraryAvailable())
+        return nullptr;
       if (Simulators::SimulatorsFactory::CreateSimulator(candidate.first,
                                                          candidate.second))
         simulatorTypes.push_back(candidate);
@@ -2190,7 +2213,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         simType = candidateType;
         method = candidateMethod;
         configuration.ApplyConfigurationToSimulator(sim);
-        
+
         if (method == Simulators::SimulationType::kMatrixProductState) {
           sim->AllocateQubits(nrQubits);
           sim->Initialize();
@@ -2210,7 +2233,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           sim->SetMultithreading(true);
           Estimators::SimulatorsEstimatorInterface<
               Time>::ExecuteUpToMeasurements(dcirc, nrQubits, nrCbits,
-                                             nrResultCbits, sim, executed, &curMaxBondDim);
+                                             nrResultCbits, sim, executed,
+                                             &curMaxBondDim);
         }
         sim->SetMultithreading(multithreading || GetMaxSimulators() == 1);
 
@@ -2227,17 +2251,18 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         configuration.GetConfigurationAsDouble(
             "matrix_product_state_truncation_threshold");
 
-    const std::string truncationMode = configuration.GetConfiguration(
-        "matrix_product_state_truncation_mode");
+    const std::string truncationMode =
+        configuration.GetConfiguration("matrix_product_state_truncation_mode");
 
-    const std::string mpsSample = configuration.GetConfiguration(
-        "mps_sample_measure_algorithm");
+    const std::string mpsSample =
+        configuration.GetConfiguration("mps_sample_measure_algorithm");
 
     std::shared_ptr<Simulators::ISimulator> sim =
         simulatorsEstimator->ChooseBestSimulator(
             simulatorTypes, dcirc, counts, nrQubits, nrCbits, nrResultCbits,
             simType, method, executed, maxBondDim, singularValueThreshold,
-            truncationMode, mpsSample, GetMaxSimulators(), pauliStrings, multithreading);
+            truncationMode, mpsSample, GetMaxSimulators(), pauliStrings,
+            multithreading);
 
     if (sim) {
       sim->AllocateQubits(nrQubits);
@@ -2253,7 +2278,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       if (!dontRunCircuitStart) {
         sim->SetMultithreading(true);
         Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(
-            dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed, &curMaxBondDim);
+            dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed,
+            &curMaxBondDim);
       }
       sim->SetMultithreading(multithreading || GetMaxSimulators() == 1);
     }
@@ -2328,7 +2354,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     lookaheadDepthWithHeuristic = depth;
 
-    if (simulator && lookaheadDepthWithHeuristic != std::numeric_limits<int>::max())
+    if (simulator &&
+        lookaheadDepthWithHeuristic != std::numeric_limits<int>::max())
       simulator->SetLookaheadDepthWithHeuristic(depth);
   }
 
@@ -2363,9 +2390,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   // Resolved placement is separate from user settings. Importing a smaller
   // simulator must not turn its automatic shard subset into an explicit choice.
   void CaptureSimulatorConfiguration() {
-    const auto requested = configuration.GetConfiguration("distributed_devices");
+    const auto requested =
+        configuration.GetConfiguration("distributed_devices");
     configuration.ApplyConfigurationFromSimulator(simulator);
-    if (simulator && Simulators::IsDistributedGpuSimulator(simulator->GetType()))
+    if (simulator &&
+        Simulators::IsDistributedGpuSimulator(simulator->GetType()))
       configuration.SetConfiguration("distributed_devices", requested);
   }
 
@@ -2383,7 +2412,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (type == Simulators::SimulatorType::kDistGpuSim &&
         !configuration.IsSet("distributed_global_qubits")) {
       size_t count = 1;
-      for (char c : devices) if (c == ',') ++count;
+      for (char c : devices)
+        if (c == ',') ++count;
       size_t bits = 0;
       for (size_t n = count; n > 1; n >>= 1) ++bits;
       while (count > 1 && bits >= qubits) {
@@ -2410,11 +2440,12 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         (optimizeInitialQubitsMap || mpsOptimizeSwaps) &&
         sim->SupportsMPSSwapOptimization()) {
       if (mpsOptimizationQubitsNumberThreshold <= nrQubits) {
-        const auto maxBondDimValue =
-            configuration.GetConfigurationAsInt("matrix_product_state_max_bond_dimension");
+        const auto maxBondDimValue = configuration.GetConfigurationAsInt(
+            "matrix_product_state_max_bond_dimension");
 
         if (maxBondDimValue <= 0 ||
-            static_cast<int>(mpsOptimizationBondDimensionThreshold) <= maxBondDimValue) {
+            static_cast<int>(mpsOptimizationBondDimensionThreshold) <=
+                maxBondDimValue) {
           // need to be sure the circuit is correctly converted
           dcirc->ConvertForCutting();  // convert the three qubit gates
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();
@@ -2451,7 +2482,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
               }
               avgTwoQubitGatesPerLayer /= layers.size();
 
-              int lookaheadVal = static_cast<int>(4. * avgTwoQubitGatesPerLayer);
+              int lookaheadVal =
+                  static_cast<int>(4. * avgTwoQubitGatesPerLayer);
               if (lookaheadVal > 15) lookaheadVal = 15;
 
               lookaheadDepthLocal =
@@ -2466,9 +2498,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
               lookaheadHeuristicDepthLocal =
                   layers.size() < 10 || nrQubits <= 10 ? 0
-                  : layers.size() < 20 ? lookaheadDepthLocal - 1
+                  : layers.size() < 20                 ? lookaheadDepthLocal - 1
                                        : lookaheadDepthLocal - 2;
-            
+
             if (lookaheadHeuristicDepthLocal < 0)
               lookaheadHeuristicDepthLocal = 0;
 
@@ -2652,33 +2684,36 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     distCirc = circuit->RemapToContinuous(qubitsMapOnHost, reverseQubitsMap,
                                           nrQubits, nrCbits);
 
-    if (simulator && Simulators::IsDistributedGpuSimulator(simulator->GetType())) {
+    if (simulator &&
+        Simulators::IsDistributedGpuSimulator(simulator->GetType())) {
       // Distribution settings refer to register qubits. Keep their numbering
       // and idle wires when the network creates a smaller per-host simulator.
       // Classical results retain RemapToContinuous's independent mapping.
       if (!hostNrQubits)
-        throw std::runtime_error("Circuit does not fit on a host with no qubits!");
+        throw std::runtime_error(
+            "Circuit does not fit on a host with no qubits!");
       const size_t start = host->GetStartQubitId();
       bool fitsLocal = true, fitsGlobal = true;
-      for (const auto& entry : qubitsMapOnHost) {
+      for (const auto &entry : qubitsMapOnHost) {
         const auto q = entry.first;
         fitsLocal = fitsLocal && q < hostNrQubits;
         fitsGlobal = fitsGlobal && q >= start && q - start < hostNrQubits;
       }
       // Auto follows the host API's already-mapped precedence. Sparse local
       // circuits in the overlap must explicitly select local indexing.
-      const bool global = distributedHostQubitIndexing == "global" ||
+      const bool global =
+          distributedHostQubitIndexing == "global" ||
           (distributedHostQubitIndexing == "auto" && fitsGlobal);
       if (!(global ? fitsGlobal : fitsLocal))
         throw std::runtime_error("Circuit does not fit on the host!");
       const size_t offset = global ? start : 0;
       if (pauliStrings)
-        for (const auto& pauli : *pauliStrings)
+        for (const auto &pauli : *pauliStrings)
           if (pauli.size() > hostNrQubits)
             throw std::invalid_argument(
                 "Host Pauli strings use local indices and must fit the host");
       std::unordered_map<Types::qubit_t, Types::qubit_t> restoreQubits;
-      for (const auto& [original, compact] : qubitsMapOnHost) {
+      for (const auto &[original, compact] : qubitsMapOnHost) {
         if (original < offset || original - offset >= hostNrQubits)
           throw std::runtime_error("Circuit does not fit on the host!");
         restoreQubits[compact] = original - offset;
@@ -2692,7 +2727,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       // Observables can mention idle qubits absent from the circuit. Allocate
       // them in |0> and include them in the expectation remapping.
       size_t width = 0;
-      for (const auto& pauli : *pauliStrings) width = std::max(width, pauli.size());
+      for (const auto &pauli : *pauliStrings)
+        width = std::max(width, pauli.size());
       for (size_t q = 0; q < width; ++q)
         if (!qubitsMapOnHost.count(q)) qubitsMapOnHost[q] = nrQubits++;
     }

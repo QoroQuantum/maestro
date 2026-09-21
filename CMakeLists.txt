@@ -820,6 +820,16 @@ if(MAESTRO_BUILD_REQUEST_TESTS)
     add_test(NAME maestro_request_abi COMMAND maestro_request_abi_consumer)
 endif()
 
+# Worker and noise regressions also run in builds containing only request tests.
+if(COMPILE_TESTS OR MAESTRO_BUILD_REQUEST_TESTS)
+    enable_testing()
+    add_executable(network_job_tests tests/network_job_tests.cpp)
+    target_link_libraries(network_job_tests PRIVATE maestro Boost::json)
+    add_test(NAME network_jobs COMMAND network_job_tests)
+    set_tests_properties(network_jobs PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=2;OPENBLAS_NUM_THREADS=1")
+endif()
+
 # Standalone native JSON runner; MPI is linked only into its optional sibling.
 add_executable(maestro_request_worker maestroexe/request_worker.cpp)
 set_target_properties(maestro_request_worker PROPERTIES OUTPUT_NAME maestro-request)

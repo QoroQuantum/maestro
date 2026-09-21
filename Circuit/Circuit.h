@@ -229,6 +229,70 @@ class Circuit : public IOperation<Time> {
   }
 
   /**
+   * @brief Whether an execution needs entropy for classical random operations.
+   */
+  bool HasUnseededRandomOperations() const {
+    for (const auto &op : operations) {
+      if (op->GetType() == OperationType::kRandomGen &&
+          !std::static_pointer_cast<Random<Time>>(op)->HasExplicitSeed())
+        return true;
+      if (op->GetType() == OperationType::kConditionalRandomGen &&
+          !std::static_pointer_cast<Random<Time>>(
+               std::static_pointer_cast<ConditionalRandomGen<Time>>(op)
+                   ->GetOperation())
+               ->HasExplicitSeed())
+        return true;
+      if (op->GetType() == OperationType::kComposite &&
+          std::static_pointer_cast<Circuit<Time>>(op)
+              ->HasUnseededRandomOperations())
+        return true;
+    }
+    return false;
+  }
+
+  /**
+   * @brief Copy a circuit for one execution job, isolating classical RNGs.
+   *
+   * Gates and measurements can be shared, but Random operations own mutable
+   * generators. Conditional generators and nested circuits need isolation too.
+   * Deriving streams by position makes the result independent of scheduling.
+   */
+  std::shared_ptr<Circuit<Time>> CloneForExecution(
+      uint64_t stream, uint64_t defaultSeed = 0) const {
+    OperationsVector newops;
+    newops.reserve(operations.size());
+    for (size_t i = 0; i < operations.size(); ++i) {
+      const auto &op = operations[i];
+      switch (op->GetType()) {
+        case OperationType::kRandomGen:
+          newops.push_back(
+              std::static_pointer_cast<Random<Time>>(op)->CloneForExecution(
+                  Simulators::IState::DeriveSeed(stream, i), defaultSeed));
+          break;
+        case OperationType::kConditionalRandomGen: {
+          auto copy =
+              std::static_pointer_cast<ConditionalRandomGen<Time>>(op->Clone());
+          copy->SetOperation(
+              std::static_pointer_cast<Random<Time>>(copy->GetOperation())
+                  ->CloneForExecution(Simulators::IState::DeriveSeed(stream, i),
+                                      defaultSeed));
+          newops.push_back(std::move(copy));
+          break;
+        }
+        case OperationType::kComposite:
+          newops.push_back(
+              std::static_pointer_cast<Circuit<Time>>(op)->CloneForExecution(
+                  Simulators::IState::DeriveSeed(stream, i), defaultSeed));
+          break;
+        default:
+          newops.push_back(op);
+          break;
+      }
+    }
+    return std::make_shared<Circuit<Time>>(newops);
+  }
+
+  /**
    * @brief Get a shared pointer to a clone of this object, but without cloning
    * the operations.
    *
@@ -286,7 +350,19 @@ class Circuit : public IOperation<Time> {
     nrCbits = 0;
 
     for (const auto &op : operations) {
-      const auto affectedBits = op->AffectedBits();
+      auto affectedBits = op->AffectedBits();
+      // Conditional operations expose their predicate through AffectedBits().
+      // Their output bits must also be allocated and mapped before Remap(),
+      // including outputs that are never referenced by another instruction.
+      if (op->IsConditional()) {
+        const auto conditional =
+            std::static_pointer_cast<IConditionalOperation<Time>>(op);
+        if (const auto operation = conditional->GetOperation()) {
+          const auto writtenBits = operation->AffectedBits();
+          affectedBits.insert(affectedBits.end(), writtenBits.begin(),
+                              writtenBits.end());
+        }
+      }
       const auto affectedQubits = op->AffectedQubits();
 
       for (const auto qubit : affectedQubits) {
@@ -1915,6 +1991,7 @@ class Circuit : public IOperation<Time> {
     const size_t dif = operations.size() - executedOps.size();
     std::vector<std::pair<Types::qubit_t, size_t>> measurements;
     std::vector<ReadoutRates> readout;
+    std::unordered_map<size_t, size_t> lastWrite;
     bool anyReadout = false;
     measurements.reserve(dif);
     readout.reserve(dif);
@@ -1929,6 +2006,7 @@ class Circuit : public IOperation<Time> {
         const auto &rates = measOp->GetReadout();
 
         for (size_t j = 0; j < qubits.size(); ++j) {
+          lastWrite[bits[j]] = measurements.size();
           measurements.emplace_back(qubits[j], bits[j]);
           readout.push_back(j < rates.size() ? rates[j] : ReadoutRates{});
         }
@@ -1936,15 +2014,21 @@ class Circuit : public IOperation<Time> {
         anyReadout = anyReadout || measOp->HasReadout();
       }
 
-    // qiskit aer expects sometimes to have them in sorted order, so...
-    // Sort an index permutation, so the readout rates follow their own pair.
-    if (sort) {
-      std::vector<size_t> order(measurements.size());
-      std::iota(order.begin(), order.end(), 0);
+    // Only the final write to each classical bit is observable in a terminal
+    // measurement batch. Drop overwritten writes before sorting for a backend,
+    // otherwise sorting can change which qubit (and readout rate) wins.
+    std::vector<size_t> order;
+    order.reserve(lastWrite.size());
+    for (size_t i = 0; i < measurements.size(); ++i)
+      if (lastWrite.at(measurements[i].second) == i) order.push_back(i);
+
+    // Keep each surviving readout rate attached to its measurement pair.
+    if (sort)
       std::sort(order.begin(), order.end(), [&](size_t a, size_t b) {
         return measurements[a].first < measurements[b].first;
       });
 
+    if (sort || order.size() != measurements.size()) {
       std::vector<std::pair<Types::qubit_t, size_t>> sortedMeas;
       std::vector<ReadoutRates> sortedReadout;
       sortedMeas.reserve(order.size());

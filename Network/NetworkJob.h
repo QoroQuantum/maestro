@@ -17,6 +17,7 @@
 #include "../Utils/ThreadsPool.h"
 
 #include "../Simulators/MPSDummySimulator.h"
+#include "../Simulators/RandomSeed.h"
 
 #include "Network.h"
 
@@ -47,6 +48,8 @@ class ExecuteJob {
 
   void DoWork() {
     if (curCnt == 0) return;
+
+    PrepareCircuitForExecution();
 
     Circuits::OperationState state;
     state.AllocateBits(nrCbits);
@@ -209,6 +212,8 @@ class ExecuteJob {
 
   void DoWorkNoLock() {
     if (curCnt == 0) return;
+
+    PrepareCircuitForExecution();
 
     Circuits::OperationState state;
     state.AllocateBits(nrCbits);
@@ -420,6 +425,19 @@ class ExecuteJob {
   size_t GetJobCount() const { return curCnt; }
 
  private:
+  void PrepareCircuitForExecution() {
+    const uint64_t stream = config.IsSet("seed")
+                                ? std::stoull(config.GetConfiguration("seed"))
+                                : randomStream;
+    // Only unseeded instructions need fresh entropy. For MPI the helper shares
+    // it across ranks, so classical controls follow the same execution path.
+    const uint64_t defaultSeed =
+        !config.IsSet("seed") && dcirc->HasUnseededRandomOperations()
+            ? Simulators::GenerateRandomSeed(simType, config.GetConfigMap())
+            : 0;
+    dcirc = dcirc->CloneForExecution(stream, defaultSeed);
+  }
+
   void OptimizeMPSInitialQubitsMap(
       std::shared_ptr<Simulators::ISimulator> &sim,
       std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits) const {
@@ -518,6 +536,8 @@ class ExecuteJob {
   std::mutex &resultsMutex;
 
   bool optimiseMultipleShotsExecution = true;
+  // Distinguishes jobs even when the caller did not configure a simulator seed.
+  uint64_t randomStream = 0;
   std::shared_ptr<Simulators::ISimulator> optSim;
   std::vector<bool> executedGates;
 

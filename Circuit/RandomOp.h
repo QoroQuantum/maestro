@@ -34,6 +34,15 @@ template <typename Time = Types::time_type>
 class Random : public IOperation<Time> {
  public:
   /**
+   * @brief Construct a generator with a fresh random seed.
+   *
+   * An execution seed, when supplied, controls this generator in network jobs.
+   */
+  Random(const std::vector<size_t> &ind = {}) : Random(ind, GenerateSeed()) {
+    explicitlySeeded = false;
+  }
+
+  /**
    * @brief Construct a new Random object.
    *
    * Constructs a new Random object.
@@ -41,7 +50,7 @@ class Random : public IOperation<Time> {
    * @param seed The seed used for the random number generator.
    * @param delay The excution time.
    */
-  Random(const std::vector<size_t> &ind = {}, size_t seed = 0, Time delay = 0)
+  Random(const std::vector<size_t> &ind, size_t seed, Time delay = 0)
       : IOperation<Time>(delay), indices(ind), s(seed) {
     Seed(seed);
   }
@@ -90,9 +99,12 @@ class Random : public IOperation<Time> {
    */
   void Seed(size_t sd) {
     s = sd;
+    explicitlySeeded = true;
     std::seed_seq seed{uint32_t(s & 0xffffffff), uint32_t(s >> 32)};
     rng.seed(seed);
   }
+
+  bool HasExplicitSeed() const { return explicitlySeeded; }
 
   /**
    * @brief Get a shared pointer to a clone of this object.
@@ -101,8 +113,26 @@ class Random : public IOperation<Time> {
    * @return A shared pointer to this object.
    */
   std::shared_ptr<IOperation<Time>> Clone() const override {
-    return std::make_shared<Random<Time>>(GetBitsIndices(), s,
-                                          IOperation<Time>::GetDelay());
+    auto copy = std::make_shared<Random<Time>>(GetBitsIndices(), s,
+                                               IOperation<Time>::GetDelay());
+    copy->explicitlySeeded = explicitlySeeded;
+    return copy;
+  }
+
+  /**
+   * @brief Clone the generator for an independent execution stream.
+   *
+   * Combine an explicit instruction seed (including zero) with the stream ID.
+   * For an unseeded instruction, use defaultSeed instead: zero when the stream
+   * comes from an execution seed, or fresh entropy for an unseeded execution.
+   * Ordinary Clone() and Seed() retain their original seed semantics.
+   */
+  std::shared_ptr<Random<Time>> CloneForExecution(
+      uint64_t stream, uint64_t defaultSeed = 0) const {
+    auto copy = std::static_pointer_cast<Random<Time>>(Clone());
+    copy->Seed(Simulators::IState::DeriveSeed(
+        explicitlySeeded ? s : defaultSeed, stream));
+    return copy;
   }
 
   /**
@@ -162,6 +192,11 @@ class Random : public IOperation<Time> {
   }
 
  private:
+  static size_t GenerateSeed() {
+    std::random_device entropy;
+    return std::uniform_int_distribution<size_t>{}(entropy);
+  }
+
   std::vector<size_t> indices; /**< The indices of the classical bits to be set
                                   when the random values are generated */
   mutable std::mt19937_64 rng; /**< The random number generator */
@@ -169,6 +204,7 @@ class Random : public IOperation<Time> {
       dist_bool; /**< The distribution used to generate random bits - only 0 and
                     1 values */
   size_t s;      /**< The seed used for the random number generator */
+  bool explicitlySeeded = false;
 };
 
 }  // namespace Circuits
