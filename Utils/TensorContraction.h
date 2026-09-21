@@ -9,6 +9,7 @@
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 #include <valarray>
 #include <vector>
 
@@ -70,6 +71,7 @@ struct TensorAxisPattern {
 // (including ordinary matrix layouts) require no offset table.
 class TensorAxisOffsets {
  public:
+  TensorAxisOffsets() = default;
   explicit TensorAxisOffsets(const TensorAxisPattern &pattern)
       : stride(pattern.Stride()) {
     if (pattern.Linear()) return;
@@ -85,11 +87,89 @@ class TensorAxisOffsets {
   size_t operator[](size_t i) const {
     return offsets.empty() ? i * stride : offsets[i];
   }
+  size_t Bytes() const { return offsets.capacity() * sizeof(size_t); }
 
  private:
-  size_t stride;
+  size_t stride = 0;
   std::vector<size_t> offsets;
 };
+
+template <class Pairs>
+std::vector<size_t> TensorContractionDimensions(const std::vector<size_t> &da,
+                                                const std::vector<size_t> &db,
+                                                const Pairs &pairs,
+                                                TensorAxisMask &usedA,
+                                                TensorAxisMask &usedB) {
+  for (const auto &pair : pairs) {
+    if (pair.first >= da.size() || pair.second >= db.size())
+      throw std::invalid_argument("Contraction axis is out of range");
+    if (usedA[pair.first] || usedB[pair.second])
+      throw std::invalid_argument("Contraction axes must be unique");
+    if (da[pair.first] != db[pair.second])
+      throw std::invalid_argument("Contracted dimensions must match");
+    usedA[pair.first] = usedB[pair.second] = 1;
+  }
+  std::vector<size_t> dimensions;
+  dimensions.reserve(da.size() + db.size() - 2 * pairs.size());
+  for (size_t i = 0; i < da.size(); ++i)
+    if (!usedA[i]) dimensions.push_back(da[i]);
+  for (size_t i = 0; i < db.size(); ++i)
+    if (!usedB[i]) dimensions.push_back(db[i]);
+  if (dimensions.empty()) dimensions.push_back(1);
+  return dimensions;
+}
+
+template <class Pairs>
+void TensorContractionPatterns(const std::vector<size_t> &da,
+                               const std::vector<size_t> &db,
+                               const TensorAxisMask &usedA,
+                               const TensorAxisMask &usedB, const Pairs &pairs,
+                               TensorAxisPattern &fa, TensorAxisPattern &fb,
+                               TensorAxisPattern &ka, TensorAxisPattern &kb) {
+  std::vector<size_t> sa(da.size()), sb(db.size());
+  size_t stride = 1;
+  for (size_t i = 0; i < da.size(); ++i) {
+    sa[i] = stride;
+    stride = TensorSizeProduct(stride, da[i]);
+    if (!usedA[i]) fa.Add(da[i], sa[i]);
+  }
+  stride = 1;
+  for (size_t i = 0; i < db.size(); ++i) {
+    sb[i] = stride;
+    stride = TensorSizeProduct(stride, db[i]);
+    if (!usedB[i]) fb.Add(db[i], sb[i]);
+  }
+  // Favor contiguous left-hand reduction axes, preserving the axis pairing.
+  std::vector<std::pair<size_t, size_t>> ordered(pairs.begin(), pairs.end());
+  std::sort(ordered.begin(), ordered.end());
+  for (const auto &pair : ordered) {
+    ka.Add(da[pair.first], sa[pair.first]);
+    kb.Add(db[pair.second], sb[pair.second]);
+  }
+}
+
+// Positive sizes denote a gate on the right, negative sizes one on the left.
+// The existing stack kernel continues to handle two small binary tensors.
+inline int TensorGateSize(const std::vector<size_t> &da,
+                          const std::vector<size_t> &db, size_t pairs) {
+  if (pairs != 1 && pairs != 2) return 0;
+  auto isGate = [pairs](const auto &dims) {
+    return dims.size() == 2 * pairs &&
+           std::all_of(dims.begin(), dims.end(),
+                       [](size_t d) { return d == 2; });
+  };
+  if (da.size() > 4 && isGate(db)) return 1 << pairs;
+  if (db.size() > 4 && isGate(da)) return -(1 << pairs);
+  return 0;
+}
+
+// Subtraction/division checks prevent overflow before optional allocations.
+inline bool TensorAddBytes(size_t &used, size_t count, size_t elementSize,
+                           size_t limit) {
+  if (used > limit || count > (limit - used) / elementSize) return false;
+  used += count * elementSize;
+  return true;
+}
 
 // A full reduction can be as large as both inputs. An odometer avoids adding
 // input-sized index arrays just to compute one scalar.
@@ -166,7 +246,8 @@ constexpr bool TensorEigenStorage =
      std::is_same_v<T, std::complex<float>> ||
      std::is_same_v<T, std::complex<double>>) &&
     (std::is_same_v<Storage, std::valarray<T>> ||
-     std::is_same_v<Storage, std::vector<T>>);
+     std::is_same_v<Storage, std::vector<T>> ||
+     std::is_same_v<Storage, const T *> || std::is_same_v<Storage, T *>);
 
 template <class T, class Storage>
 T TensorScalarContraction(const Storage &a, const Storage &b,
@@ -251,20 +332,76 @@ bool TensorSmallContraction(const Storage &a, const Storage &b, Storage &out,
   return true;
 }
 
-template <class T, class Storage>
-void TensorDenseContraction(const Storage &a, const Storage &b, Storage &out,
-                            const TensorAxisPattern &fa,
-                            const TensorAxisPattern &fb,
-                            const TensorAxisPattern &ka,
-                            const TensorAxisPattern &kb, bool allow) {
+template <size_t G, class T, size_t... X>
+T TensorGateProduct(const std::array<T, G> &values, const T *coefficients,
+                    std::index_sequence<X...>) {
+  return ((values[X] * coefficients[X]) + ...);
+}
+
+template <size_t G, bool SmallLeft, class T, class Input, class Output>
+void TensorGateContraction(const Input &a, const Input &b, Output &out,
+                           size_t count, const TensorAxisOffsets &af,
+                           const TensorAxisOffsets &bf,
+                           const TensorAxisOffsets &ac,
+                           const TensorAxisOffsets &bc, bool allow) {
+  const auto &big = SmallLeft ? b : a;
+  const auto &gate = SmallLeft ? a : b;
+  const auto &free = SmallLeft ? bf : af;
+  const auto &contract = SmallLeft ? bc : ac;
+  const auto &gateFree = SmallLeft ? af : bf;
+  const auto &gateContract = SmallLeft ? ac : bc;
+  std::array<T, G * G> coefficients;
+  std::array<size_t, G> offsets;
+  for (size_t x = 0; x < G; ++x) {
+    offsets[x] = contract[x];
+    for (size_t j = 0; j < G; ++j)
+      coefficients[j * G + x] = gate[gateFree[j] + gateContract[x]];
+  }
+  const int threads =
+      TensorContractionThreads(count, double(count) * G * G, allow);
+  TensorParallelRanges(count, threads, [&](size_t begin, size_t end, size_t) {
+    for (size_t i = begin; i < end; ++i) {
+      const size_t base = free[i];
+      std::array<T, G> values;
+      for (size_t x = 0; x < G; ++x) values[x] = big[base + offsets[x]];
+      for (size_t j = 0; j < G; ++j)
+        out[SmallLeft ? j + G * i : i + count * j] = TensorGateProduct<G>(
+            values, coefficients.data() + j * G, std::make_index_sequence<G>{});
+    }
+  });
+}
+
+// Shared execution for one-off contractions and prepared network plans.
+template <class T, class Input, class Output>
+void TensorExecuteContraction(
+    const Input &a, const Input &b, Output &out, const TensorAxisPattern &fa,
+    const TensorAxisPattern &fb, const TensorAxisPattern &ka,
+    const TensorAxisPattern &kb, const TensorAxisOffsets &af,
+    const TensorAxisOffsets &bf, const TensorAxisOffsets &ac,
+    const TensorAxisOffsets &bc, int gateSize, bool allow) {
   const size_t m = fa.count, n = fb.count, k = ka.count;
   if (m == 1 && n == 1) {
     out[0] = TensorScalarContraction<T>(a, b, ka, kb, allow);
     return;
   }
-  const TensorAxisOffsets af(fa), bf(fb), ac(ka), bc(kb);
   const double work = double(m) * double(n) * double(k);
-  if constexpr (TensorEigenStorage<T, Storage>) {
+  if constexpr (TensorEigenStorage<T, Input> && TensorEigenStorage<T, Output>) {
+    switch (gateSize) {
+      case 2:
+        TensorGateContraction<2, false, T>(a, b, out, m, af, bf, ac, bc, allow);
+        return;
+      case 4:
+        TensorGateContraction<4, false, T>(a, b, out, m, af, bf, ac, bc, allow);
+        return;
+      case -2:
+        TensorGateContraction<2, true, T>(a, b, out, n, af, bf, ac, bc, allow);
+        return;
+      case -4:
+        TensorGateContraction<4, true, T>(a, b, out, n, af, bf, ac, bc, allow);
+        return;
+      default:
+        break;
+    }
     // Small/skinny products have too little reuse to amortize GEMM packing.
     if (m >= 8 && n >= 8 && k >= 8) {
       using Matrix = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
@@ -334,6 +471,82 @@ void TensorDenseContraction(const Storage &a, const Storage &b, Storage &out,
     }
   });
 }
+
+template <class T, class Storage>
+void TensorDenseContraction(const Storage &a, const Storage &b, Storage &out,
+                            const TensorAxisPattern &fa,
+                            const TensorAxisPattern &fb,
+                            const TensorAxisPattern &ka,
+                            const TensorAxisPattern &kb, bool allow,
+                            int gateSize = 0) {
+  if (fa.count == 1 && fb.count == 1) {
+    out[0] = TensorScalarContraction<T>(a, b, ka, kb, allow);
+    return;
+  }
+  const TensorAxisOffsets af(fa), bf(fb), ac(ka), bc(kb);
+  TensorExecuteContraction<T>(a, b, out, fa, fb, ka, kb, af, bf, ac, bc,
+                              gateSize, allow);
+}
+
+// Internal prepared metadata. Execute requires validated shapes and distinct
+// live input/output storage; ForestContractor enforces these at plan reuse.
+class TensorContractionPlan {
+ public:
+  template <class Pairs>
+  bool Prepare(const std::vector<size_t> &da, const std::vector<size_t> &db,
+               const Pairs &pairs, size_t byteLimit) {
+    TensorContractionPlan candidate;
+    if (!candidate.Initialize(da, db, pairs, byteLimit)) return false;
+    *this = std::move(candidate);
+    return true;
+  }
+  const std::vector<size_t> &GetDims() const { return dimensions; }
+  size_t GetSize() const { return size; }
+  size_t ExtraBytes() const {
+    return dimensions.capacity() * sizeof(size_t) +
+           (fa.axes.capacity() + fb.axes.capacity() + ka.axes.capacity() +
+            kb.axes.capacity()) *
+               sizeof(TensorAxis) +
+           af.Bytes() + bf.Bytes() + ac.Bytes() + bc.Bytes();
+  }
+  template <class T>
+  void Execute(const T *a, const T *b, T *out, bool allow) const {
+    TensorExecuteContraction<T>(a, b, out, fa, fb, ka, kb, af, bf, ac, bc,
+                                gateSize, allow);
+  }
+
+ private:
+  template <class Pairs>
+  bool Initialize(const std::vector<size_t> &da, const std::vector<size_t> &db,
+                  const Pairs &pairs, size_t byteLimit) {
+    TensorAxisMask usedA(da.size()), usedB(db.size());
+    dimensions = TensorContractionDimensions(da, db, pairs, usedA, usedB);
+    if (std::find(da.begin(), da.end(), 0) != da.end() ||
+        std::find(db.begin(), db.end(), 0) != db.end())
+      return false;
+    TensorContractionPatterns(da, db, usedA, usedB, pairs, fa, fb, ka, kb);
+    size = TensorSizeProduct(fa.count, fb.count);
+    gateSize = TensorGateSize(da, db, pairs.size());
+    size_t bytes = ExtraBytes();
+    if (bytes > byteLimit) return false;
+    // A scalar reduction uses cursors, never input-sized offset tables.
+    if (fa.count == 1 && fb.count == 1) return true;
+    for (const auto *pattern : {&fa, &fb, &ka, &kb})
+      if (!pattern->Linear() &&
+          !TensorAddBytes(bytes, pattern->count, sizeof(size_t), byteLimit))
+        return false;
+    af = TensorAxisOffsets(fa);
+    bf = TensorAxisOffsets(fb);
+    ac = TensorAxisOffsets(ka);
+    bc = TensorAxisOffsets(kb);
+    return ExtraBytes() <= byteLimit;
+  }
+  std::vector<size_t> dimensions;
+  TensorAxisPattern fa, fb, ka, kb;
+  TensorAxisOffsets af, bf, ac, bc;
+  size_t size = 0;
+  int gateSize = 0;
+};
 
 }  // namespace detail
 }  // namespace Utils

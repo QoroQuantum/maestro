@@ -152,6 +152,91 @@ BOOST_AUTO_TEST_CASE(matrix_tiles_and_packing) {
   CheckEqual(Reference(a, b, {{2, 0}}), a.Contract(b, 2, 0, true));
 }
 
+BOOST_AUTO_TEST_CASE(small_gates_on_large_tensors) {
+  std::mt19937_64 rng(9123);
+  for (size_t rank : {5, 8, 12})
+    for (size_t half : {1, 2})
+      for (size_t trial = 0; trial < 12; ++trial) {
+        std::vector<size_t> da(rank, 2), db(half * 2, 2), aa(rank),
+            bb(half * 2);
+        std::iota(aa.begin(), aa.end(), 0);
+        std::iota(bb.begin(), bb.end(), 0);
+        std::shuffle(aa.begin(), aa.end(), rng);
+        std::shuffle(bb.begin(), bb.end(), rng);
+        Pairs pairs, reversed;
+        for (size_t i = 0; i < half; ++i) {
+          pairs.emplace_back(aa[i], bb[i]);
+          reversed.emplace_back(bb[i], aa[i]);
+        }
+        // Nonbinary free axes must also preserve the output layout.
+        if (trial % 3 == 0) da[aa[half]] = 3;
+        if (trial % 3 == 1) da[aa[half]] = 1;
+        const auto a = RandomTensor(da, rng), b = RandomTensor(db, rng);
+        const auto expected = Reference(a, b, pairs);
+        const auto swapped = Reference(b, a, reversed);
+        for (bool threaded : {false, true}) {
+          CheckEqual(expected, a.Contract(b, pairs, threaded));
+          CheckEqual(swapped, b.Contract(a, reversed, threaded));
+        }
+      }
+  auto a = RandomTensor<double, std::vector<double>>({2, 3, 2, 2, 2}, rng);
+  auto b = RandomTensor<double, std::vector<double>>({2, 2}, rng);
+  CheckEqual(Reference(a, b, {{2, 1}}), a.Contract(b, 2, 1));
+  auto c = RandomTensor<std::complex<float>>({2, 2, 2, 2, 2}, rng);
+  auto d = RandomTensor<std::complex<float>>({2, 2, 2, 2}, rng);
+  const Pairs pairs{{1, 3}, {4, 0}};
+  CheckEqual(Reference(c, d, pairs), c.Contract(d, pairs), 1e-5);
+  auto e = RandomTensor<int, std::vector<int>>({2, 3, 2, 2, 2}, rng);
+  auto f = RandomTensor<int, std::vector<int>>({2, 2}, rng);
+  CheckEqual(Reference(e, f, {{2, 1}}), e.Contract(f, 2, 1), 0);
+  auto g = RandomTensor<Complex, std::deque<Complex>>({2, 3, 2, 2, 2}, rng);
+  auto h = RandomTensor<Complex, std::deque<Complex>>({2, 2}, rng);
+  CheckEqual(Reference(g, h, {{2, 1}}), g.Contract(h, 2, 1));
+}
+
+BOOST_AUTO_TEST_CASE(prepared_metadata_numerics_and_budget) {
+  std::mt19937_64 rng(721);
+  struct Case {
+    std::vector<size_t> a, b;
+    Pairs pairs;
+  };
+  const std::vector<Case> cases{
+      {{2, 2, 2, 2}, {2, 2, 2, 2}, {{3, 0}, {2, 1}}},
+      {{2, 3, 2, 2, 2}, {2, 2}, {{3, 1}}},
+      {{2, 2, 2, 2}, {2, 3, 2, 2, 2}, {{3, 0}, {0, 4}}},
+      {{35, 9}, {9, 131}, {{1, 0}}},
+      {{3, 9, 4, 5}, {7, 3, 9, 5}, {{3, 3}, {1, 2}, {0, 1}}},
+      {{2, 3, 4}, {4, 2, 3}, {{2, 0}, {0, 1}, {1, 2}}},
+      {{1, 1}, {1}, {{1, 0}}},
+      {{2, 3}, {4, 2}, {}}};
+  for (const auto &item : cases) {
+    auto a = RandomTensor(item.a, rng), b = RandomTensor(item.b, rng);
+    Utils::detail::TensorContractionPlan plan;
+    BOOST_REQUIRE(plan.Prepare(item.a, item.b, item.pairs, 1024 * 1024));
+    Tensor result(plan.GetDims());
+    for (size_t pass = 0; pass < 3; ++pass) {
+      for (bool threaded : {false, true}) {
+        plan.Execute(&a[size_t(0)], &b[size_t(0)], &result[size_t(0)],
+                     threaded);
+        CheckEqual(Reference(a, b, item.pairs), result);
+      }
+      b = RandomTensor(item.b, rng);
+    }
+  }
+  Utils::detail::TensorContractionPlan plan;
+  // An irregular 2^30-element offset table must be rejected before allocation.
+  BOOST_CHECK(!plan.Prepare({size_t(1) << 20, 2, size_t(1) << 10}, {2, 2},
+                            Pairs{{1, 0}}, 1024));
+  // A huge irregular scalar reduction needs only rank-sized metadata.
+  BOOST_CHECK(plan.Prepare({size_t(1) << 15, size_t(1) << 15},
+                           {size_t(1) << 15, size_t(1) << 15},
+                           Pairs{{0, 1}, {1, 0}}, 1024));
+  BOOST_CHECK_LE(plan.ExtraBytes(), 1024);
+  BOOST_CHECK_THROW(plan.Prepare({2, 2}, {2, 2}, Pairs{{0, 0}, {0, 1}}, 1024),
+                    std::invalid_argument);
+  BOOST_CHECK(!plan.Prepare({0, 2}, {2}, Pairs{{1, 0}}, 1024));
+}
+
 BOOST_AUTO_TEST_CASE(scalar_reductions_and_nonconjugating_product) {
   std::mt19937_64 rng(95);
   auto a = RandomTensor(std::vector<size_t>(18, 2), rng);
@@ -352,6 +437,101 @@ BOOST_AUTO_TEST_CASE(cache_evicts_old_plans) {
   BOOST_CHECK_EQUAL(contractor->GetPlanCacheHits(), hits + 1);
   net.Probability(0);
   BOOST_CHECK_EQUAL(contractor->GetPlanCacheHits(), hits + 1);
+}
+
+BOOST_AUTO_TEST_CASE(prepared_cache_workspace_limits_and_reuse) {
+  TensorNetworks::TensorNetwork net(6);
+  auto contractor = std::make_shared<TensorNetworks::ForestContractor>();
+  net.SetContractor(contractor);
+  QC::Gates::HadamardGate<> h;
+  QC::Gates::CNOTGate<> cx;
+  net.AddGate(h, 0);
+  for (size_t q = 1; q < 6; ++q) net.AddGate(cx, (q - 1) / 2, q);
+  BOOST_CHECK_SMALL(net.Probability(0) - .5, 1e-12);
+  BOOST_CHECK_EQUAL(contractor->GetPreparedPlanCount(), 0);
+  BOOST_CHECK_EQUAL(contractor->GetWorkspaceBytes(), 0);
+  const size_t orderBytes = contractor->GetCachedPlanBytes();
+  // Keep the order cached, with too little space to prepare its metadata.
+  contractor->SetPlanCacheByteLimit(orderBytes);
+  BOOST_CHECK_SMALL(net.Probability(0) - .5, 1e-12);
+  BOOST_CHECK_EQUAL(contractor->GetPreparedPlanCount(), 0);
+  BOOST_CHECK_EQUAL(contractor->GetCachedPlanBytes(), orderBytes);
+  contractor->SetPlanCacheByteLimit(1024 * 1024);
+  BOOST_CHECK_SMALL(net.Probability(0) - .5, 1e-12);
+  BOOST_CHECK_EQUAL(contractor->GetPreparedPlanCount(), 1);
+  BOOST_CHECK_GT(contractor->GetWorkspaceBytes(), 0);
+  BOOST_CHECK_LE(contractor->GetCachedPlanBytes(),
+                 contractor->GetPlanCacheByteLimit());
+  BOOST_CHECK_LE(contractor->GetWorkspaceBytes(),
+                 contractor->GetWorkspaceByteLimit());
+  // Alternate queries/plans and overwrite input values while reusing storage.
+  for (size_t q = 0; q < 6; ++q)
+    for (size_t pass = 0; pass < 3; ++pass)
+      BOOST_CHECK_SMALL(net.Probability(q, pass % 2 == 0) - .5, 1e-12);
+  const auto workspaceBytes = contractor->GetWorkspaceBytes();
+  contractor->SetWorkspaceByteLimit(workspaceBytes);
+  BOOST_CHECK_SMALL(net.Probability(0) - .5, 1e-12);
+  BOOST_CHECK_EQUAL(contractor->GetWorkspaceBytes(), workspaceBytes);
+  contractor->SetWorkspaceByteLimit(1);
+  BOOST_CHECK_EQUAL(contractor->GetWorkspaceBytes(), 0);
+  for (size_t pass = 0; pass < 3; ++pass)
+    BOOST_CHECK_SMALL(net.Probability(0) - .5, 1e-12);
+  BOOST_CHECK_EQUAL(contractor->GetWorkspaceBytes(), 0);
+  contractor->SetWorkspaceByteLimit(0);
+  BOOST_CHECK_SMALL(net.Probability(1) - .5, 1e-12);
+  contractor->SetWorkspaceByteLimit(4096);
+  BOOST_CHECK_SMALL(net.Probability(0) - .5, 1e-12);
+  BOOST_CHECK_GT(contractor->GetWorkspaceBytes(), 0);
+  auto clone = std::dynamic_pointer_cast<TensorNetworks::ForestContractor>(
+      contractor->Clone());
+  BOOST_REQUIRE(clone);
+  BOOST_CHECK_EQUAL(clone->GetWorkspaceByteLimit(), 4096);
+  BOOST_CHECK_EQUAL(clone->GetWorkspaceBytes(), 0);
+  BOOST_CHECK_EQUAL(clone->GetPreparedPlanCount(), 0);
+  net.Clear();
+  BOOST_CHECK_SMALL(net.Probability(0) - 1, 1e-15);
+  BOOST_CHECK_SMALL(net.Probability(0) - 1, 1e-15);
+  QC::Gates::PauliXGate<> x;
+  net.AddGate(x, 0);
+  BOOST_CHECK_SMALL(net.Probability(0), 1e-15);
+  BOOST_CHECK_SMALL(net.Probability(0, false) - 1, 1e-15);
+  contractor->ClearPlanCache();
+  BOOST_CHECK_EQUAL(contractor->GetCachedPlanBytes(), 0);
+  BOOST_CHECK_EQUAL(contractor->GetWorkspaceBytes(), 0);
+  BOOST_CHECK_EQUAL(contractor->GetPreparedPlanCount(), 0);
+}
+
+BOOST_AUTO_TEST_CASE(prepared_metadata_preserves_order_cache_under_pressure) {
+  TensorNetworks::TensorNetwork net(8);
+  auto contractor = std::make_shared<TensorNetworks::ForestContractor>();
+  net.SetContractor(contractor);
+  QC::Gates::HadamardGate<> h;
+  QC::Gates::CNOTGate<> cx;
+  net.AddGate(h, 0);
+  for (size_t q = 1; q < 8; ++q) net.AddGate(cx, (q - 1) / 2, q);
+  for (size_t q = 0; q < 8; ++q)
+    BOOST_CHECK_SMALL(net.Probability(q) - .5, 1e-12);
+  const auto orderBytes = contractor->GetCachedPlanBytes();
+  BOOST_CHECK_EQUAL(contractor->GetCachedPlanCount(), 8);
+  net.Probability(0);
+  const auto onePrepared = contractor->GetCachedPlanBytes() - orderBytes;
+  BOOST_REQUIRE_GT(onePrepared, 0);
+  contractor->SetPlanCacheByteLimit(orderBytes + onePrepared);
+  auto hits = contractor->GetPlanCacheHits();
+  for (size_t pass = 0; pass < 3; ++pass)
+    for (size_t q = 0; q < 8; ++q) {
+      BOOST_CHECK_SMALL(net.Probability(q) - .5, 1e-12);
+      BOOST_CHECK_EQUAL(contractor->GetPlanCacheHits(), ++hits);
+      BOOST_CHECK_EQUAL(contractor->GetCachedPlanCount(), 8);
+      BOOST_CHECK_LE(contractor->GetCachedPlanBytes(),
+                     contractor->GetPlanCacheByteLimit());
+    }
+  contractor->SetPlanCacheByteLimit(orderBytes);
+  BOOST_CHECK_EQUAL(contractor->GetPreparedPlanCount(), 0);
+  BOOST_CHECK_EQUAL(contractor->GetCachedPlanCount(), 8);
+  BOOST_CHECK_EQUAL(contractor->GetCachedPlanBytes(), orderBytes);
+  for (size_t q = 0; q < 8; ++q) net.Probability(q);
+  BOOST_CHECK_EQUAL(contractor->GetPlanCacheHits(), hits + 8);
 }
 
 BOOST_AUTO_TEST_CASE(random_nonlocal_complex_networks) {
