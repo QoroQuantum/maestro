@@ -528,6 +528,24 @@ endif()
 if(COMPILE_TESTS)
     enable_testing()
 
+    # Focused CPU tensor tests use baseline compiler ISA settings. They also
+    # build without OpenMP and do not require the Aer/GPU simulator backends.
+    add_executable(tensor_contraction_tests tests/tensor_contraction_tests.cpp)
+    target_compile_definitions(tensor_contraction_tests PRIVATE
+        MAESTRO_TENSOR_TEST_MAIN BOOST_ALL_NO_LIB NOMINMAX)
+    if(NOT Boost_USE_STATIC_LIBS)
+        target_compile_definitions(tensor_contraction_tests PRIVATE BOOST_SERIALIZATION_DYN_LINK)
+    endif()
+    target_link_libraries(tensor_contraction_tests PRIVATE Boost::serialization)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(tensor_contraction_tests PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    add_test(NAME tensor_contractions COMMAND tensor_contraction_tests)
+    if(WIN32 AND NOT Boost_USE_STATIC_LIBS)
+        string(REPLACE ";" "\\;" tensor_test_path "$<TARGET_FILE_DIR:Boost::serialization>;$ENV{PATH}")
+        set_tests_properties(tensor_contractions PROPERTIES ENVIRONMENT "PATH=${tensor_test_path}")
+    endif()
+
     set(TESTSSRC
         tests/aertests.cpp
         tests/densitymatrixtests.cpp
