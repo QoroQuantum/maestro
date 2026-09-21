@@ -76,13 +76,21 @@ class CircuitFactory {
    * @return The delay operation.
    * @sa Delay
    */
-  static std::shared_ptr<IOperation<Time>> CreateDelay(
-      Types::qubit_t qubit = 0, Time duration = 0) {
+  static std::shared_ptr<IOperation<Time>> CreateDelay(Types::qubit_t qubit = 0,
+                                                       Time duration = 0) {
     return std::make_shared<Delay<Time>>(qubit, duration);
   }
 
   /**
-   * @brief Construct a random operation.
+   * @brief Construct a random operation without an explicit seed.
+   */
+  static std::shared_ptr<IOperation<Time>> CreateRandom(
+      const std::vector<size_t> &bits = {}) {
+    return std::make_shared<Random<Time>>(bits);
+  }
+
+  /**
+   * @brief Construct a random operation with an explicit seed, including zero.
    *
    * Generates a random 0 or 1 for each specified classical bit.
    *
@@ -92,7 +100,7 @@ class CircuitFactory {
    * @sa Random
    */
   static std::shared_ptr<IOperation<Time>> CreateRandom(
-      const std::vector<size_t> &bits = {}, size_t seed = 0) {
+      const std::vector<size_t> &bits, size_t seed) {
     return std::make_shared<Random<Time>>(bits, seed);
   }
 

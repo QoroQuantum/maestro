@@ -65,13 +65,12 @@ class Reset : public IOperation<Time> {
     // apply X to flip those qubits.
     for (size_t qi = 0; qi < resetTargets.size() && qi < qubits.size(); ++qi) {
       if (resetTargets[qi]) {
-        xgate.SetQubit(qubits[qi]);
-        xgate.Execute(sim, state);
+        // Jobs can share this instruction; only mutate their own simulator.
+        sim->ApplyX(qubits[qi]);
 
         if (sim->SupportsMPSSwapOptimization()) {
           const auto counter = sim->GetGatesCounter();
-          if (counter > 0)
-            sim->SetGatesCounter(counter - 1);
+          if (counter > 0) sim->SetGatesCounter(counter - 1);
         }
       }
     }
@@ -189,8 +188,6 @@ class Reset : public IOperation<Time> {
  private:
   Types::qubits_vector qubits;    /**< The qubits to be reset */
   std::vector<bool> resetTargets; /**< The values to reset the qubits to */
-  mutable XGate<Time> xgate;      /**< The X gate used to change the qubit state
-                                     after its measurement, if needed */
 };
 
 }  // namespace Circuits
