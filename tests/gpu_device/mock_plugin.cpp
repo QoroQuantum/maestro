@@ -8,6 +8,7 @@ namespace {
 bool initialized = false;
 int initializations = 0;
 int cleanups = 0;
+int validations = 0;
 std::atomic<int> live{0};
 std::atomic<int> creations[3]{};
 thread_local int current = 0;
@@ -26,7 +27,15 @@ State* Checked(void* obj) {
 }
 }  // namespace
 extern "C" {
-int ValidateLicense(const char*) { return 1; }
+int ValidateLicense(const char*) {
+  ++validations;
+  const char* failure = std::getenv("MAESTRO_TEST_LICENSE_FAILURE");
+  return !failure || std::strcmp(failure, "load") != 0;
+}
+const char* GetLicenseError() {
+  const char* failure = std::getenv("MAESTRO_TEST_LICENSE_FAILURE");
+  return failure && *failure ? "license expired (test diagnostic)" : "";
+}
 int GetGpuDeviceCount() { return 3; }
 int cudaGetDevice(int* device) {
   *device = current;
@@ -45,6 +54,8 @@ int SetGpuDevice(int device) {
 }
 void* InitLib() {
   ++initializations;
+  const char* failure = std::getenv("MAESTRO_TEST_LICENSE_FAILURE");
+  if (failure && std::strcmp(failure, "init") == 0) return nullptr;
   initialized = true;
   return &initialized;
 }
@@ -58,6 +69,7 @@ int MockCreationsOnDevice(int device) { return creations[device]; }
 int MockSelectedDevice() { return selected; }
 int MockCleanups() { return cleanups; }
 int MockInitializations() { return initializations; }
+int MockValidations() { return validations; }
 int MockLiveStates() { return live; }
 void* CreateStateVector(void*) {
   if (!initialized) std::abort();

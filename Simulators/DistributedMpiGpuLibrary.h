@@ -40,12 +40,27 @@ class DistributedMpiGpuLibrary : public DistributedGpuLibrary {
                         unsigned p2pBits) {
     std::lock_guard<std::recursive_mutex> lock(mutex);
     RequireRuntime();
-    Check(validate(comm, std::getenv("MAESTRO_LICENSE_KEY")),
-          "ValidateMpiLicenseRuntime");
-    if (!context) context = InitLib();
-    // The plugin coordinates invalid context/license admission across ranks.
+    if (!initializationAttempted) {
+      initializationAttempted = true;
+      if (validate(comm, std::getenv("MAESTRO_LICENSE_KEY")) != 1) {
+        const char* detail = GetLastError();
+        initializationError = detail && *detail ? detail : "license validation failed";
+        throw std::runtime_error("MPI GPU backend unavailable: " + initializationError);
+      }
+      context = InitLib();
+      if (!context) {
+        const char* detail = GetLastError();
+        initializationError = detail && *detail ? detail : "InitLib failed";
+      }
+    }
+    // Every rank enters, even when InitLib returned null. This agrees on
+    // library availability before any vendor collective construction.
     auto obj = create(context, comm, device, p2pBits);
-    if (!obj) Fail("CreateMpiStateVectorRuntime");
+    if (!obj) {
+      if (!initializationError.empty())
+        throw std::runtime_error("MPI GPU backend unavailable: " + initializationError);
+      Fail("CreateMpiStateVectorRuntime");
+    }
     ++liveStates;
     return obj;
   }
@@ -91,6 +106,8 @@ class DistributedMpiGpuLibrary : public DistributedGpuLibrary {
   void* (*create)(void*, const Communicator*, int32_t, uint32_t) = nullptr;
   int (*finalize)() = nullptr;
   bool finalized = false, runtimeLoaded = false;
+  bool initializationAttempted = false;
+  std::string initializationError;
 };
 }  // namespace Simulators
 #endif

@@ -192,6 +192,10 @@ int main(int argc, char** argv) {
             "MPI singleton differs across the core visibility boundary");
     const auto type =
         mpi ? SimulatorType::kDistMpiGpuSim : SimulatorType::kDistGpuSim;
+    if (!mpi && !configOnly && !Factory::IsDistributedGpuAvailable()) {
+      std::cout << "SKIP: required plugin/GPU devices unavailable\n";
+      return 77;
+    }
     auto sim = Factory::CreateSimulator(type, SimulationType::kStatevector);
     Require(bool(sim), "Missing simulator");
     Require(bool(Factory::CreateSimulator(SimulatorType::kDistMpiGpuSim,

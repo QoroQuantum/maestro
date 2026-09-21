@@ -1,4 +1,4 @@
-// Exercise the production distributed-host mapping on CPU, without a plugin.
+// Exercise the production distributed-host mapping on CPU with a loader fixture.
 // Gate targets and full complex states are checked independently of measurement
 // remapping: applying the same wrong permutation to both must not pass.
 #include "../../Network/SimpleDisconnectedNetwork.h"
@@ -44,8 +44,8 @@ class TestNetwork : public Network::SimpleDisconnectedNetwork<> {
     result.circuit = distCirc;
     return result;
   }
-  // The distributed factory is deliberately lazy; this selects the real mapping
-  // branch without requiring CUDA. Execution jobs below use a CPU statevector.
+  // CTest supplies a CPU-only plugin for availability checks. This selects the
+  // real mapping branch; execution jobs below use a CPU statevector.
   void CreateSimulator(Type type = Type::kDistGpuSim,
                        Method method = Method::kStatevector, size_t = 0) override {
     simulator = Factory::CreateSimulator(type, method);

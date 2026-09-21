@@ -712,6 +712,26 @@ if(COMPILE_TESTS)
             OUTPUT_NAME maestro_gpu_simulators
             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/mock_gpu")
 
+        add_library(mock_distributed_gpu_plugin SHARED tests/distributed_gpu/mock_plugin.cpp)
+        add_dependencies(distributed_gpu_tests mock_distributed_gpu_plugin)
+        add_dependencies(distributed_network_tests mock_distributed_gpu_plugin)
+        set_tests_properties(distributed_gpu_configuration distributed_network_mapping PROPERTIES
+            ENVIRONMENT "MAESTRO_DIST_GPU_LIBRARY=$<TARGET_FILE:mock_distributed_gpu_plugin>")
+        add_executable(gpu_licensing_tests tests/gpu_device/licensing_tests.cpp)
+        target_link_libraries(gpu_licensing_tests PRIVATE maestro)
+        set_property(TARGET gpu_licensing_tests APPEND_STRING PROPERTY
+            LINK_FLAGS " -Wl,--disable-new-dtags")
+        add_dependencies(gpu_licensing_tests mock_gpu_plugin mock_distributed_gpu_plugin)
+        foreach(backend gpu distributed mpi)
+            foreach(outcome valid load init)
+                add_test(NAME licensing_${backend}_${outcome} COMMAND ${CMAKE_COMMAND} -E env
+                    "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:mock_gpu_plugin>:$<TARGET_FILE_DIR:maestro>:$ENV{LD_LIBRARY_PATH}"
+                    "MAESTRO_DIST_GPU_LIBRARY=$<TARGET_FILE:mock_distributed_gpu_plugin>"
+                    "MAESTRO_DIST_MPI_GPU_LIBRARY=$<TARGET_FILE:mock_distributed_gpu_plugin>"
+                    $<TARGET_FILE:gpu_licensing_tests> ${backend} ${outcome})
+            endforeach()
+        endforeach()
+
         add_executable(gpu_registry_tests tests/gpu_device/registry_tests.cpp)
         target_link_libraries(gpu_registry_tests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
         add_test(NAME gpu_registry COMMAND gpu_registry_tests $<TARGET_FILE:mock_gpu_plugin>)

@@ -228,6 +228,7 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
     case SimulatorType::kDistGpuSim:
       if (m != SimulationType::kStatevector)
         throw std::invalid_argument("Distributed GPU supports only statevector");
+      if (!IsDistributedGpuAvailable()) return nullptr;
       return std::make_shared<Private::DistributedGpuSimulator>();
     case SimulatorType::kDistMpiGpuSim:
       if (m != SimulationType::kStatevector)
@@ -235,8 +236,9 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
       return std::make_shared<Private::DistributedMpiGpuSimulator>();
 
     case SimulatorType::kGpuSim:
-      // Discovery does not initialize a device: configuration follows creation.
-      if (GetGpuDeviceCount() == 0) return nullptr;
+      // Library initialization is checked before advertising the backend;
+      // device resources remain lazy and configuration follows creation.
+      if (GetGpuDeviceCount() <= 0) return nullptr;
       if ((m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
            m == SimulationType::kDensityMatrix ||
@@ -338,6 +340,7 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
     case SimulatorType::kDistGpuSim:
       if (m != SimulationType::kStatevector)
         throw std::invalid_argument("Distributed GPU supports only statevector");
+      if (!IsDistributedGpuAvailable()) return nullptr;
       return std::make_unique<Private::DistributedGpuSimulator>();
     case SimulatorType::kDistMpiGpuSim:
       if (m != SimulationType::kStatevector)
@@ -345,8 +348,9 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
       return std::make_unique<Private::DistributedMpiGpuSimulator>();
 
     case SimulatorType::kGpuSim:
-      // Discovery does not initialize a device: configuration follows creation.
-      if (GetGpuDeviceCount() == 0) return nullptr;
+      // Library initialization is checked before advertising the backend;
+      // device resources remain lazy and configuration follows creation.
+      if (GetGpuDeviceCount() <= 0) return nullptr;
       if ((m == SimulationType::kStatevector ||
            m == SimulationType::kMatrixProductState ||
            m == SimulationType::kDensityMatrix ||

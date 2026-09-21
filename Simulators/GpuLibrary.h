@@ -85,7 +85,7 @@ class GpuLibrary : public Utils::Library {
   bool Load(const char *libName) noexcept {
     auto lock = LockInitialization();
     if (GetHandle()) {
-      if (loadedPath == libName) return true;
+      if (loadedPath == libName) return licenseValidated && !initializationFailed;
       if (!IsMuted())
         std::cerr << "GpuLibrary: singleton already loaded from " << loadedPath
                   << "; cannot load " << libName << std::endl;
@@ -93,6 +93,18 @@ class GpuLibrary : public Utils::Library {
     }
     if (!Utils::Library::Init(libName)) return false;
     loadedPath = libName;
+    fGetLicenseError = (const char *(*)())GetFunction("GetLicenseError");
+    fValidateLicense = (int (*)(const char *))GetFunction("ValidateLicense");
+    if (!fValidateLicense) {
+      std::cerr << "GpuLibrary: GPU backend unavailable: missing ValidateLicense"
+                << std::endl;
+      return false;
+    }
+    if (fValidateLicense(std::getenv("MAESTRO_LICENSE_KEY")) != 1) {
+      ReportUnavailable("license validation failed");
+      return false;
+    }
+    licenseValidated = true;
     fGetGpuDeviceCount = (int (*)())GetFunction("GetGpuDeviceCount");
     fSetGpuDevice = (int (*)(int))GetFunction("SetGpuDevice");
     fGetStateVectorGpuId = (int (*)(void*))GetFunction("GetStateVectorGpuId");
@@ -109,7 +121,7 @@ class GpuLibrary : public Utils::Library {
   int DiscoverDevices(const char *path) {
     auto lock = LockInitialization();
     SetMute(true);
-    return Load(path) ? GetGpuDeviceCount() : 0;
+    return Init(path) ? GetGpuDeviceCount() : 0;
   }
 
   bool InitializeForDevice(const char *path, int device, bool mute = false) {
@@ -139,32 +151,6 @@ class GpuLibrary : public Utils::Library {
     if (!Load(libName)) return false;
     if (IsValid()) return true;
     {
-      // Validate license before initializing the library.
-      // The license key is read from the MAESTRO_LICENSE_KEY env var.
-      // If not set, nullptr is passed to attempt cached/offline validation.
-      fValidateLicense = (int (*)(const char *))GetFunction("ValidateLicense");
-      if (!fValidateLicense) {
-        if (!IsMuted())
-          std::cerr << "GpuLibrary: License validation symbol not found. "
-                       "The GPU library must export ValidateLicense."
-                    << std::endl;
-        return false;
-      }
-      const char *licenseKey = std::getenv("MAESTRO_LICENSE_KEY");
-      int licenseStatus = fValidateLicense(licenseKey);
-      if (licenseStatus != 1) {
-        if (!IsMuted()) {
-          std::cerr << "GpuLibrary: License validation failed. ";
-          if (!licenseKey)
-            std::cerr << "Set MAESTRO_LICENSE_KEY environment variable "
-                         "or activate the license first."
-                      << std::endl;
-          else
-            std::cerr << "Check that your license key is correct." << std::endl;
-        }
-        return false;
-      }
-
       FreeLib = (void (*)())GetFunction("FreeLib");
       if (!fSetGpuDevice || !FreeLib) {
         if (!IsMuted())
@@ -1168,9 +1154,10 @@ class GpuLibrary : public Utils::Library {
           CheckFunction((void *)fPauliPropRestoreState, __LINE__);
 
           return true;
-        } else if (!IsMuted())
-          std::cerr << "GpuLibrary: Unable to initialize gpu library"
-                    << std::endl;
+        } else {
+          initializationFailed = true;
+          ReportUnavailable("initialization failed");
+        }
       } else if (!IsMuted())
         std::cerr << "GpuLibrary: Unable to get initialization function for "
                      "gpu library"
@@ -1191,6 +1178,13 @@ class GpuLibrary : public Utils::Library {
   }
 
   bool IsValid() const { return LibraryHandle != nullptr; }
+
+  void ReportUnavailable(const char* operation) const {
+    const char* detail = fGetLicenseError ? fGetLicenseError() : nullptr;
+    std::cerr << "GpuLibrary: GPU backend unavailable: " << operation;
+    if (detail && *detail) std::cerr << ": " << detail;
+    std::cerr << std::endl;
+  }
 
   // Number of CUDA-capable devices visible to the process, or 0 if none are
   // visible / the loaded library doesn't support device queries. A negative
@@ -4327,6 +4321,9 @@ class GpuLibrary : public Utils::Library {
  private:
   std::recursive_mutex initializationMutex;
   std::string loadedPath;
+  bool licenseValidated = false;
+  bool initializationFailed = false;
+  const char* (*fGetLicenseError)() = nullptr;
   void *LibraryHandle = nullptr;
 
   int (*fValidateLicense)(const char *) = nullptr;
