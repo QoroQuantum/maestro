@@ -210,11 +210,109 @@ void TestReadoutExecution() {
     }
   }
 }
+
+void TestFixedBackendNoisyShots() {
+  // A sampled noise realization is chosen at injection time. Multiplying its
+  // shots must preserve that choice, while different realizations remain
+  // independent. Basis-state circuits make this comparison exact, with the
+  // single-shot execution path as the reference.
+  for (const char* method : {"statevector", "matrix_product_state"}) {
+    for (const auto& channel : j::array{
+             Channel("bit_flip", {{"probability", 0.5}}),
+             Channel("t1", {{"gamma", 0.5}}),
+             Channel(
+                 "thermal_relaxation",
+                 {{"duration", std::log(2.0)}, {"t1", 1.0}, {"t2", 1.0}})}) {
+      for (size_t realizations : {size_t{1}, size_t{64}}) {
+        auto request = Request("execute", 1, "x q[0]; measure q->c;", method);
+        request["noise"] = j::object{{"seed", 23},
+                                     {"realizations", realizations},
+                                     {"channels", j::array{channel}}};
+        request["execution"].as_object()["shots"] = realizations;
+        const auto reference = Call(request).at("counts").as_object();
+        request["execution"].as_object()["shots"] = 32 * realizations;
+        const auto result = Call(request);
+        const auto& counts = result.at("counts").as_object();
+        Check(counts.size() == reference.size(),
+              "Shot reuse changed the sampled noise realizations");
+        for (const auto& entry : reference)
+          Near(Real(counts.at(entry.key())), 32 * Real(entry.value()));
+        Check(counts.size() == (realizations == 1 ? 1 : 2),
+              "Distinct noise realizations reused one injected error");
+        Check(result.at("noise").at("realizations").to_number<size_t>() ==
+                  realizations,
+              "Shot reuse changed the realization count");
+        Check(result.at("counts") == Call(request).at("counts"),
+              "Seeded noisy shots are not reproducible");
+      }
+    }
+  }
+
+  // A sampled relaxation reset on one half of a Bell pair must not freeze the
+  // other half's outcome across shots. Exact channels must retain the same
+  // marginal. Exercise both gate relaxation and delay/idle injection.
+  for (const char* method : {"statevector", "matrix_product_state",
+                             "density_matrix", "matrix_product_operator"}) {
+    for (bool idle : {false, true}) {
+      auto request =
+          Request("execute", 2, "h q[0]; cx q[0],q[1]; measure q->c;", method);
+      auto channel = Channel("t1_2q", {{"gamma", 1.0}});
+      if (idle) {
+        channel = Channel("idle", {{"t1", 1.0}, {"t2", 1.0}});
+        request["circuit"] = j::object{
+            {"format", "instructions"},
+            {"num_qubits", 2},
+            {"source",
+             j::array{j::object{{"name", "h"}, {"qubits", j::array{0}}},
+                      j::object{{"name", "cx"}, {"qubits", j::array{0, 1}}},
+                      j::object{{"name", "delay"},
+                                {"qubits", j::array{0}},
+                                {"duration", 1000.0}},
+                      j::object{{"name", "measure"},
+                                {"qubits", j::array{0, 1}},
+                                {"clbits", j::array{0, 1}}}}}};
+      }
+      request["execution"].as_object()["shots"] = 4096;
+      request["noise"] = j::object{
+          {"seed", 23}, {"realizations", 1}, {"channels", j::array{channel}}};
+      const auto result = Call(request);
+      const auto& counts = result.at("counts").as_object();
+      Check(
+          counts.size() == 2 && counts.contains("00") && counts.contains("01"),
+          "Relaxation reset froze or changed an entangled shot outcome");
+      Check(std::abs(Real(counts.at("00")) / 4096 - 0.5) < 0.05,
+            "Relaxation reset outcomes were not independent per shot");
+      Near(Real(counts.at("00")) + Real(counts.at("01")), 4096);
+    }
+  }
+
+  // Exact Kraus evolution may be reused, but its sampled measurement still
+  // has to drive the conditional separately on every shot.
+  for (const char* method : {"density_matrix", "matrix_product_operator"}) {
+    auto request = Request(
+        "execute", 2,
+        "x q[0]; measure q[0]->c[0]; if(c==1) x q[1]; measure q[1]->c[1];",
+        method);
+    request["execution"].as_object()["shots"] = 4096;
+    request["noise"] =
+        j::object{{"evaluation", "exact"},
+                  {"realizations", 1},
+                  {"channels", j::array{Channel("t1", {{"gamma", 0.25}})}}};
+    const auto result = Call(request);
+    const auto& counts = result.at("counts").as_object();
+    Check(counts.size() == 2 && counts.contains("00") && counts.contains("11"),
+          "Exact noisy measurements lost their classical dependency");
+    Check(std::abs(Real(counts.at("00")) / 4096 - 0.25) < 0.05,
+          "Exact channel shot distribution changed");
+    Near(Real(counts.at("00")) + Real(counts.at("11")), 4096);
+  }
+}
 }  // namespace
 
 void TestRequestNoiseAndOptions() {
   TestReadoutExecution();
   TestThermalApproximation();
+  TestFixedBackendNoisyShots();
   const double duration = 0.3, t1 = 1, t2 = 0.6, excited = 0.1;
   auto thermal =
       Channel("thermal_relaxation", {{"duration", duration},

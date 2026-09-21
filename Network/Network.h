@@ -814,6 +814,7 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
    * If set, allows changing the simulator with an optimized one.
    * States/amplitudes are not available in such a case, disable if you need
    * them.
+   * Disabling backend selection does not disable reuse across multiple shots.
    *
    * @param optimize If true, the simulator will be optimized if possible.
    */
