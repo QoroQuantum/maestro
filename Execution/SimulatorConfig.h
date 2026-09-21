@@ -19,6 +19,8 @@ struct SimulatorConfig {
   Simulators::SimulatorType simulator_type = Simulators::SimulatorType::kQCSim;
   Simulators::SimulationType simulation_type =
       Simulators::SimulationType::kStatevector;
+  // Unset uses the backend default; GPU MPS/MPO resolve to 128 in the network
+  // configuration so initial-layout planning and execution share the cap.
   std::optional<size_t> max_bond_dimension = std::nullopt;
   std::optional<double> singular_value_threshold = std::nullopt;
   // "relative_max" (keep sigma_i > threshold * sigma_max, the historical
@@ -190,6 +192,20 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
   if (config.max_bond_dimension) {
     auto val = std::to_string(*config.max_bond_dimension);
     network->Configure("matrix_product_state_max_bond_dimension", val.c_str());
+  } else if (config.simulator_type == Simulators::SimulatorType::kGpuSim &&
+             (config.simulation_type ==
+                  Simulators::SimulationType::kMatrixProductState ||
+              config.simulation_type ==
+                  Simulators::SimulationType::kMatrixProductOperator) &&
+             !config.native_options.count(
+                 "matrix_product_state_max_bond_dimension") &&
+             !(config.simulation_type ==
+                   Simulators::SimulationType::kMatrixProductOperator &&
+               config.native_options.count(
+                   "matrix_product_operator_max_bond_dimension"))) {
+    // Match GpuState and the GPU library before the network's initial-layout
+    // planner runs. Explicit native options already applied above take priority.
+    network->Configure("matrix_product_state_max_bond_dimension", "128");
   }
   if (config.singular_value_threshold) {
     std::ostringstream oss;

@@ -11,6 +11,7 @@ extern "C" int maestro_request_c_header_test(void);
 static unsigned checks = 0;
 void TestRequestNoiseAndOptions();
 void TestRequestSeedParsing();
+void TestNetworkBondDefaults();
 void Check(bool condition, const char* message) {
   ++checks;
   if (!condition) throw std::runtime_error(message);
@@ -619,6 +620,7 @@ int main() try {
   TestLegacySeeds();
   TestNativeRandomSeeds();
   TestRequestSeedParsing();
+  TestNetworkBondDefaults();
 
   std::cout << "Native request API: " << checks << " checks passed\n";
   return 0;
