@@ -33,7 +33,6 @@ struct MgdDistributionConfig {
 using SetGpuDeviceFn = int (*)(int deviceId);
 using GetGpuDeviceCountFn = int (*)(void);
 using ValidateLicenseFn = int (*)(const char *licenseKey);
-using CheckLicenseFn = int (*)(void *state);
 using InitLibFn = void *(*)(void);
 using FreeLibFn = void (*)(void);
 using CreateStateVectorFn = void *(*)(void *lib);

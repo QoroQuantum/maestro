@@ -26,11 +26,6 @@ class DistributedGpuLibStateVectorSim {
     return std::make_unique<DistributedGpuLibStateVectorSim>(
         lib, lib->CloneNative(obj));
   }
-  int CheckLicense() const {
-    auto result = lib->CheckLicense(obj);
-    lib->Check(result, "CheckLicense");
-    return result;
-  }
   int GetBackend() const {
     auto result = lib->GetBackend(obj);
     if (result < 0) lib->Fail("GetBackend");

@@ -22,6 +22,7 @@ class DistributedGpuLibrary : public Utils::Library {
   bool Load() {
     std::lock_guard<std::recursive_mutex> lock(mutex);
     if (loaded) return true;
+    if (!loadError.empty()) return false;
     const char* path = std::getenv(mpi ? "MAESTRO_DIST_MPI_GPU_LIBRARY"
                                        : "MAESTRO_DIST_GPU_LIBRARY");
     if (!path || !*path)
@@ -45,10 +46,6 @@ class DistributedGpuLibrary : public Utils::Library {
     if (!ValidateLicense)
       throw std::runtime_error(
           "Distributed GPU plugin missing ValidateLicense");
-    CheckLicense = reinterpret_cast<DistributedGpuApi::CheckLicenseFn>(
-        GetFunction("CheckLicense"));
-    if (!CheckLicense)
-      throw std::runtime_error("Distributed GPU plugin missing CheckLicense");
     InitLib =
         reinterpret_cast<DistributedGpuApi::InitLibFn>(GetFunction("InitLib"));
     if (!InitLib)
@@ -448,18 +445,20 @@ class DistributedGpuLibrary : public Utils::Library {
           "Distributed GPU plugin missing ApplyTwoQubitMatrixWithLayout");
     if (GetApiVersion() != 1)
       throw std::runtime_error("Unsupported distributed GPU API version");
+    // MPI admission needs the application's communicator and is deferred to
+    // collective library initialization in CreateMpiNative.
+    if (!mpi) {
+      if (ValidateLicense(std::getenv("MAESTRO_LICENSE_KEY")) != 1)
+        return Unavailable("license validation failed");
+      context = InitLib();
+      if (!context) return Unavailable("initialization failed");
+    }
     loaded = true;
     return true;
   }
   virtual void* CreateNative(int device, int backend) {
     std::lock_guard<std::recursive_mutex> lock(mutex);
     RequireLoaded();
-    if (!context) {
-      Check(ValidateLicense(std::getenv("MAESTRO_LICENSE_KEY")),
-            "ValidateLicense");
-      context = InitLib();
-      if (!context) Fail("InitLib");
-    }
     Check(SetGpuDevice(device), "SetGpuDevice");
     auto obj = CreateStateVectorWithBackend(context, backend);
     if (!obj) Fail("CreateStateVectorWithBackend");
@@ -479,10 +478,12 @@ class DistributedGpuLibrary : public Utils::Library {
     return copy;
   }
   void RequireLoaded() {
-    if (!Load())
+    if (!Load()) {
+      if (!loadError.empty()) throw std::runtime_error(loadError);
       throw std::runtime_error(
           "Unable to load distributed GPU plugin; set MAESTRO_DIST_GPU_LIBRARY "
           "or MAESTRO_DIST_MPI_GPU_LIBRARY");
+    }
   }
   [[noreturn]] void Fail(const char* operation) const {
     const char* error = GetLastError ? GetLastError() : nullptr;
@@ -496,7 +497,6 @@ class DistributedGpuLibrary : public Utils::Library {
   DistributedGpuApi::SetGpuDeviceFn SetGpuDevice = nullptr;
   DistributedGpuApi::GetGpuDeviceCountFn GetGpuDeviceCount = nullptr;
   DistributedGpuApi::ValidateLicenseFn ValidateLicense = nullptr;
-  DistributedGpuApi::CheckLicenseFn CheckLicense = nullptr;
   DistributedGpuApi::InitLibFn InitLib = nullptr;
   DistributedGpuApi::FreeLibFn FreeLib = nullptr;
   DistributedGpuApi::CreateStateVectorFn CreateStateVector = nullptr;
@@ -591,12 +591,20 @@ class DistributedGpuLibrary : public Utils::Library {
       ApplyTwoQubitMatrixWithLayout = nullptr;
 
  protected:
+  bool Unavailable(const char* operation) {
+    const char* detail = GetLastError ? GetLastError() : nullptr;
+    loadError = std::string("Distributed GPU backend unavailable: ") + operation;
+    if (detail && *detail) loadError += std::string(": ") + detail;
+    std::cerr << loadError << std::endl;
+    return false;
+  }
   explicit DistributedGpuLibrary(bool mpi = false) : mpi(mpi) {}
   std::recursive_mutex mutex;
   std::atomic_size_t liveStates{0};
   void* context = nullptr;
   bool mpi;
   bool loaded = false;
+  std::string loadError;
 };
 }  // namespace Simulators
 #endif
