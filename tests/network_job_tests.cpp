@@ -8,6 +8,7 @@
 #include <atomic>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <thread>
 
 namespace {
@@ -799,6 +800,95 @@ void HostSimulatorReuse() {
     }
 }
 
+void QCSimWorkerRandomStreams() {
+  // Each shot writes 64 independent quantum measurements into classical bits.
+  // Reusing a planner's RNG in multiple workers duplicates entire bitstrings.
+  auto circuit = CF::CreateCircuit();
+  for (size_t bit = 0; bit < 64; ++bit) {
+    circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+    circuit->AddOperation(CF::CreateMeasurement({{0, bit}}));
+  }
+  for (auto method : {Method::kDensityMatrix, Method::kExtendedStabilizer})
+    for (bool onHost : {false, true})
+      for (bool seeded : {false, true}) {
+        auto network = MakeNetwork(Backend::kQCSim, method, 64);
+        network->SetOptimizeSimulator(true);
+        if (seeded) network->Configure("seed", "0");
+        if (!onHost)
+          network->GetController()->SetRemapper(
+              std::make_shared<SingleHostRemapper>());
+        const auto run = [&] {
+          return onHost ? network->RepeatedExecuteOnHost(circuit, 0, 257)
+                        : network->RepeatedExecute(circuit, 257);
+        };
+        const auto first = run();
+        Check(first.size() == 257,
+              "QCSim workers duplicated quantum RNG streams");
+        for (const auto& [bits, count] : first)
+          Check(count == 1, "QCSim workers repeated a 64-bit measurement");
+        Check((first == run()) == seeded,
+              "QCSim worker streams mishandled an omitted or zero seed");
+      }
+}
+
+void QCSimSamplingRandomStreams() {
+  const auto create = [] {
+    auto sim = Simulators::SimulatorsFactory::CreateSimulator(
+        Backend::kQCSim, Method::kExtendedStabilizer);
+    sim->AllocateQubits(3);
+    sim->Initialize();
+    sim->ApplyX(0);
+    sim->SaveState();  // A checkpoint distinct from the sampled superposition.
+    sim->ApplyX(0);
+    for (size_t q = 0; q < 3; ++q) sim->ApplyH(q);
+    return sim;
+  };
+  const auto sequence = [](const auto& sim, int api) {
+    std::vector<std::vector<bool>> results;
+    for (size_t shot = 0; shot < 128; ++shot) {
+      if (api == 1) {
+        results.push_back(sim->SampleCountsMany({2, 0, 1}, 1).begin()->first);
+      } else if (api == 3) {
+        results.push_back(sim->MeasureNoCollapseMany());
+      } else {
+        const auto packed = api == 0
+            ? sim->SampleCounts({2, 0, 1}, 1).begin()->first
+            : sim->MeasureNoCollapse();
+        results.push_back({bool(packed & 1), bool(packed & 2), bool(packed & 4)});
+      }
+    }
+    return results;
+  };
+  for (int api = 0; api < 4; ++api) {
+    auto sim = create();
+    const auto unseeded = sequence(sim, api);
+    Check(std::set<std::vector<bool>>(unseeded.begin(), unseeded.end()).size() > 1,
+          "Unseeded extended-stabilizer sampling replayed one outcome");
+    for (uint64_t seed : {uint64_t{0}, UINT64_MAX}) {
+      sim->SetSeed(seed);
+      const auto first = sequence(sim, api);
+      Check(first != sequence(sim, api),
+            "Extended-stabilizer sampling did not advance its RNG");
+      sim->SetSeed(seed);
+      Check(first == sequence(sim, api),
+            "Extended-stabilizer sampling did not replay an explicit seed");
+    }
+    Check(std::abs(sim->ExpectationValue("XXX") - 1.) < 1e-12,
+          "Extended-stabilizer sampling changed the quantum state");
+    sim->RestoreState();
+    Check(std::abs(sim->Probability(1) - 1.) < 1e-12,
+          "Extended-stabilizer sampling changed the saved checkpoint");
+  }
+  auto sim = create();
+  sim->SetSeed(0);
+  const auto first = sim->SampleCounts({2, 0, 1}, 1024);
+  Check(first != sim->SampleCounts({2, 0, 1}, 1024),
+        "Extended-stabilizer sampling replayed an entire batch");
+  sim->SetSeed(0);
+  Check(first == sim->SampleCounts({2, 0, 1}, 1024),
+        "Extended-stabilizer batch sampling ignored reseeding");
+}
+
 void SharedReset() {
   // Reset descriptions are shared by jobs. Resetting several targets to |1>
   // must not mutate an instruction-owned X gate's target between threads.
@@ -842,6 +932,8 @@ int main() try {
   MeasurementJobs();
   NoiseClonePolicy();
   ConditionalOutputMapping();
+  QCSimWorkerRandomStreams();
+  QCSimSamplingRandomStreams();
   SharedReset();
   std::cout << checks << " network job checks passed\n";
   return 0;

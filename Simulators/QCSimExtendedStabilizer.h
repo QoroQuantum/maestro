@@ -16,6 +16,7 @@
 #define _QCSIM_EXTENDED_STABILIZER_H 1
 
 #include <memory>
+#include <cstdint>
 #include <random>
 #include <string>
 #include <utility>
@@ -72,6 +73,15 @@ class QCSimExtendedStabilizer {
   std::unique_ptr<QCSimExtendedStabilizer> Clone() const {
     return std::unique_ptr<QCSimExtendedStabilizer>(
         new QCSimExtendedStabilizer(simulator->Clone()));
+  }
+
+  // A backend Clone is a complete snapshot, including its RNG position.
+  // Sampling and execution workers instead get a seed from their owner's stream.
+  std::unique_ptr<QCSimExtendedStabilizer> CloneWithSeed(uint64_t seed) const {
+    auto clone = simulator->Clone();
+    clone->SetSeed(seed);
+    return std::unique_ptr<QCSimExtendedStabilizer>(
+        new QCSimExtendedStabilizer(std::move(clone)));
   }
 
   const std::vector<QC::ExtendedFrame>& GetFrames() const noexcept {
