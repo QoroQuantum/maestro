@@ -117,13 +117,8 @@ class Circuit : public IOperation<Time> {
     state.Reset();
     if (!sim) return;
 
-    for (const auto &op : operations) {
-      op->Execute(sim, state);
-      if (curMaxBondDim) {
-        const auto bondDim = sim->GetCurrentMaxBondDimension();
-        if (bondDim > *curMaxBondDim) *curMaxBondDim = bondDim;
-      }
-    }
+    for (const auto &op : operations)
+      ExecuteOperation(op, sim, state, curMaxBondDim);
     // sim->Flush();
   }
 
@@ -350,19 +345,7 @@ class Circuit : public IOperation<Time> {
     nrCbits = 0;
 
     for (const auto &op : operations) {
-      auto affectedBits = op->AffectedBits();
-      // Conditional operations expose their predicate through AffectedBits().
-      // Their output bits must also be allocated and mapped before Remap(),
-      // including outputs that are never referenced by another instruction.
-      if (op->IsConditional()) {
-        const auto conditional =
-            std::static_pointer_cast<IConditionalOperation<Time>>(op);
-        if (const auto operation = conditional->GetOperation()) {
-          const auto writtenBits = operation->AffectedBits();
-          affectedBits.insert(affectedBits.end(), writtenBits.begin(),
-                              writtenBits.end());
-        }
-      }
+      const auto affectedBits = GetReferencedBits(op);
       const auto affectedQubits = op->AffectedQubits();
 
       for (const auto qubit : affectedQubits) {
@@ -673,7 +656,7 @@ class Circuit : public IOperation<Time> {
   size_t GetMaxCbitIndex() const {
     size_t mx = 0;
     for (const auto &op : operations) {
-      const auto cbits = op->AffectedBits();
+      const auto cbits = GetReferencedBits(op);
       for (auto q : cbits)
         if (q > mx) mx = q;
     }
@@ -691,7 +674,7 @@ class Circuit : public IOperation<Time> {
   size_t GetMinCbitIndex() const {
     size_t mn = std::numeric_limits<size_t>::max();
     for (const auto &op : operations) {
-      const auto cbits = op->AffectedBits();
+      const auto cbits = GetReferencedBits(op);
       for (auto q : cbits)
         if (q < mn) mn = q;
     }
@@ -728,7 +711,7 @@ class Circuit : public IOperation<Time> {
   std::set<size_t> GetBits() const {
     std::set<size_t> cbits;
     for (const auto &op : operations) {
-      const auto bits = op->AffectedBits();
+      const auto bits = GetReferencedBits(op);
       cbits.insert(bits.begin(), bits.end());
     }
 
@@ -1406,6 +1389,9 @@ class Circuit : public IOperation<Time> {
    * Moves the measurements and resets closer to the beginning of the circuit.
    */
   void MoveMeasurementsAndResets() {
+    // The dependency planner does not inspect nested controls or measurements.
+    // In particular, a classical-only composite has no qubit queue to drain.
+    if (HasCompositeOperations()) return;
     OperationsVector newops;
     newops.reserve(operations.size());
 
@@ -1421,7 +1407,7 @@ class Circuit : public IOperation<Time> {
     for (const auto &op : operations) {
       std::unordered_set<OperationPtr> dependencies;
 
-      const auto cbits = op->AffectedBits();
+      const auto cbits = GetReferencedBits(op);
       for (auto c : cbits) {
         const auto lastOp = lastOps[c];
         if (lastOp) dependencies.insert(lastOp);
@@ -1719,6 +1705,12 @@ class Circuit : public IOperation<Time> {
     return std::make_shared<Circuit<Time>>(newops);
   }
 
+  bool HasCompositeOperations() const {
+    return std::any_of(operations.begin(), operations.end(), [](const auto &op) {
+      return op->GetType() == OperationType::kComposite;
+    });
+  }
+
   /**
    * @brief Checks if the circuit has measurements that are followed by
    * operations that affect the measured qubits.
@@ -1735,6 +1727,10 @@ class Circuit : public IOperation<Time> {
     std::unordered_set<Types::qubit_t> resetQubits;
 
     for (const auto &op : operations) {
+      // Prefix execution and terminal-measurement extraction treat composites
+      // as opaque operations. Run them per shot, including gate-only composites,
+      // until those optimizations can inspect their contents consistently.
+      if (op->GetType() == OperationType::kComposite) return true;
       const auto qubits = op->AffectedQubits();
 
       if (op->GetType() == OperationType::kMeasurement) {
@@ -1942,13 +1938,8 @@ class Circuit : public IOperation<Time> {
     const size_t dif = operations.size() - executedOps.size();
 
     for (size_t i = dif; i < operations.size(); ++i)
-      if (!executedOps[i - dif]) {
-        operations[i]->Execute(sim, state);
-        if (curMaxBondDim) {
-          const auto bondDim = sim->GetCurrentMaxBondDimension();
-          if (bondDim > *curMaxBondDim) *curMaxBondDim = bondDim;
-        }
-      }
+      if (!executedOps[i - dif])
+        ExecuteOperation(operations[i], sim, state, curMaxBondDim);
 
     // sim->Flush();
   }
@@ -2758,6 +2749,41 @@ class Circuit : public IOperation<Time> {
   }
 
  private:
+  // A conditional's AffectedBits() is deliberately predicate-only. Register
+  // sizing, mapping and dependencies also need the wrapped operation's outputs.
+  // Nested circuits collect their referenced bits through GetBits().
+  static std::vector<size_t> GetReferencedBits(const OperationPtr &op) {
+    auto bits = op->AffectedBits();
+    if (op->IsConditional()) {
+      const auto conditional =
+          std::static_pointer_cast<IConditionalOperation<Time>>(op);
+      if (const auto operation = conditional->GetOperation()) {
+        const auto outputs = GetReferencedBits(operation);
+        bits.insert(bits.end(), outputs.begin(), outputs.end());
+      }
+    }
+    return bits;
+  }
+
+  static void ExecuteOperation(
+      const OperationPtr &op,
+      const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state,
+      size_t *curMaxBondDim) {
+    if (op->GetType() == OperationType::kComposite) {
+      // Reset classical bits once at the start of the shot, not when entering
+      // a nested circuit: its conditions and writes share the enclosing state.
+      const auto circuit = std::static_pointer_cast<Circuit<Time>>(op);
+      for (const auto &nested : circuit->GetOperations())
+        ExecuteOperation(nested, sim, state, curMaxBondDim);
+      return;
+    }
+    op->Execute(sim, state);
+    if (curMaxBondDim) {
+      const auto bondDim = sim->GetCurrentMaxBondDimension();
+      if (bondDim > *curMaxBondDim) *curMaxBondDim = bondDim;
+    }
+  }
+
   /**
    * @brief Replaces the swap gate and three qubit gates with other operations
    *

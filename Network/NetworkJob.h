@@ -445,7 +445,7 @@ class ExecuteJob {
             Simulators::SimulationType::kMatrixProductState &&
         (network->GetInitialQubitsMapOptimization() ||
          network->GetMPSOptimizeSwaps()) &&
-        sim->SupportsMPSSwapOptimization()) {
+        sim->SupportsMPSSwapOptimization() && !dcirc->HasCompositeOperations()) {
       if (network->GetMPSOptimizationQubitsNumberThreshold() <= nrQubits) {
         const auto bondDimThreshold =
             network->GetMPSOptimizationBondDimensionThreshold();

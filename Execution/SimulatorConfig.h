@@ -315,6 +315,14 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
   if (config.fixed_backend ||
       Simulators::IsDistributedGpuSimulator(config.simulator_type))
     network->CreateSimulator(config.simulator_type, config.simulation_type);
+  else if (config.simulator_type == Simulators::SimulatorType::kGpuSim &&
+           (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
+            config.simulation_type ==
+                Simulators::SimulationType::kMatrixProductOperator))
+    // Automatic selection retains this CPU simulator when the GPU is absent.
+    // MPO preserves mixed states and exact channels without a dense allocation.
+    network->CreateSimulator(Simulators::SimulatorType::kQCSim,
+                             Simulators::SimulationType::kMatrixProductOperator);
   else
     network->CreateSimulator();
 

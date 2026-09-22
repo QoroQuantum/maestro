@@ -840,10 +840,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     ExecuteResults res;
 
-    // since it's going to execute on multiple threads, free the memory from the
-    // network's simulator and state, it's going to use other ones, created in
-    // the threads
-    simulator->Clear();
+    // Backend selection can allocate a replacement. Fixed single-worker jobs
+    // retain the existing simulator; release it below if workers are needed.
+    if (GetOptimizeSimulator() && !distributed) simulator->Clear();
     GetState().Clear();
 
     curMaxBondDim = 0;
@@ -876,9 +875,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
     std::mutex resultsMutex;
 
-    const auto dcirc = distCirc;
+    auto dcirc = distCirc;
 
     if (nrThreads > 1) {
+      simulator->Clear();
       // this rounds up, rounding down is better
       // const size_t cntPerThread = static_cast<size_t>((shots - 1) / nrThreads
       // + 1);
@@ -941,6 +941,19 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
         optSim->SetMultithreading(true);
         job->optSim = optSim;
         job->executedGates = executed;
+      } else if (simulator && method == saveMethod && simType == saveSimType) {
+        optSim = simulator;
+        job->optSim = optSim;
+        if (optSim->GetNumberOfQubits() == nrQubits) {
+          // Host execution always starts from zero, even when the previous
+          // invocation retained its state for an expectation/state query.
+          optSim->Reset();
+          optSim->SetGatesCounter(0);
+          job->config.ApplyConfigurationToSimulator(optSim);
+          OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
+        }
+        // DoWorkNoLock reallocates/reinitializes when the host width changed.
+        job->executedGates.resize(dcirc->size(), false);
       }
 
       job->DoWorkNoLock();
@@ -2438,7 +2451,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (sim->GetSimulationType() ==
             Simulators::SimulationType::kMatrixProductState &&
         (optimizeInitialQubitsMap || mpsOptimizeSwaps) &&
-        sim->SupportsMPSSwapOptimization()) {
+        sim->SupportsMPSSwapOptimization() && !dcirc->HasCompositeOperations()) {
       if (mpsOptimizationQubitsNumberThreshold <= nrQubits) {
         const auto maxBondDimValue = configuration.GetConfigurationAsInt(
             "matrix_product_state_max_bond_dimension");
@@ -2643,11 +2656,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           if (q > mxq) mxq = q;
           if (q < mnq) mnq = q;
         }
-        const auto cbits = op->AffectedBits();
-        for (auto b : cbits) {
-          if (b > mxb) mxb = b;
-          if (b < mnb) mnb = b;
-        }
+      }
+      for (auto b : circuit->GetBits()) {
+        if (b > mxb) mxb = b;
+        if (b < mnb) mnb = b;
       }
 
       if (mnq > mxq) mnq = 0;
