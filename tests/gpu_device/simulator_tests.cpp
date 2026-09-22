@@ -65,6 +65,16 @@ int main() {
     }
     Require(one->GetGpuDevice() == 1 && zero->GetGpuDevice() == 0,
             "configuration did not reach native GPU objects");
+    one->SetSeed(11);
+    std::vector<double> readoutDraws;
+    for (size_t i = 0; i < 32; ++i)
+      readoutDraws.push_back(one->RandomUniform());
+    for (int repeat = 0; repeat < 2; ++repeat) {
+      one->Configure("seed", "11");
+      for (const auto expected : readoutDraws)
+        Require(one->RandomUniform() == expected,
+                "GPU Configure(seed) did not restart the readout stream");
+    }
     auto clone = one->Clone();
     Require(clone->GetGpuDevice() == 1, "cloned native state moved GPU");
     Require(clone->GetConfiguration("gpu_device") == "1", "clone lost device");

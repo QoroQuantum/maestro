@@ -739,6 +739,7 @@ class GpuState : public ISimulator {
 
     if (std::string("seed") == key) {
       const uint64_t seed = std::stoull(value);
+      SeedAuxiliaryRng(seed);
       nextSeedStream = 0;
       if (state) state->SetSeed(seed);
       if (densityMatrix) densityMatrix->SetSeed(seed);

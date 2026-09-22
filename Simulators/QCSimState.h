@@ -678,6 +678,7 @@ class QCSimState : public ISimulator {
 
     if (std::string("seed") == key) {
       const uint64_t seed = std::stoull(value);
+      SeedAuxiliaryRng(seed);
       nextSeedStream = 0;
       rng.seed(seed);
       if (state) SeedBackend(state.get(), seed);

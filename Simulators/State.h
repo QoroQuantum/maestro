@@ -131,7 +131,7 @@ class IState {
 
   /** Seed every random stream owned by this simulator. */
   virtual void SetSeed(uint64_t seed) {
-    auxRng.seed(DeriveSeed(seed, kAuxRngStream));
+    SeedAuxiliaryRng(seed);
     const std::string value = std::to_string(seed);
     Configure("seed", value.c_str());
   }
@@ -142,7 +142,8 @@ class IState {
    * Used for classical post-processing that happens during execution, such as
    * readout-error flips applied when a measurement writes its bit. Each
    * simulator instance owns its own stream, so the per-job clones in the
-   * multi-shot thread pool never share state. Deterministic after SetSeed.
+   * multi-shot thread pool never share state. Deterministic after SetSeed or
+   * Configure("seed") on the built-in backends.
    */
   double RandomUniform() { return auxUniform(auxRng); }
 
@@ -998,6 +999,12 @@ class IState {
       const = 0;
 
  protected:
+  /** Shared by SetSeed and backend Configure("seed") implementations. */
+  void SeedAuxiliaryRng(uint64_t seed) {
+    auxRng.seed(DeriveSeed(seed, kAuxRngStream));
+    auxUniform.reset();
+  }
+
   /**
    * @brief Stops notifying observers.
    *

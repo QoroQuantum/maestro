@@ -212,6 +212,7 @@ class CompositeSimulator : public ISimulator {
 
     if (std::string("seed") == key) {
       const uint64_t seed = std::stoull(value);
+      SeedAuxiliaryRng(seed);
       for (auto &[id, simulator] : simulators)
         simulator->SetSeed(DeriveSeed(seed, id));
     } else {
