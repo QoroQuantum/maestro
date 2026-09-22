@@ -1332,7 +1332,9 @@ class QCSimSimulator : public QCSimState {
     if (densityMatrix) cloned->densityMatrix = densityMatrix->Clone();
 
     if (extendedStabilizer)
-      cloned->extendedStabilizer = extendedStabilizer->Clone();
+      cloned->extendedStabilizer = configuration.IsSet("seed")
+          ? extendedStabilizer->Clone()
+          : extendedStabilizer->CloneWithSeed(rng());
 
     for (const auto& [key, value] : configuration.GetConfigMap())
       cloned->Configure(key.c_str(), value.c_str());
@@ -1341,6 +1343,12 @@ class QCSimSimulator : public QCSimState {
       cloned->SetSeed(DeriveSeed(
           std::stoull(configuration.GetConfiguration("seed")),
           nextSeedStream++));
+    else {
+      // These backend clones preserve their RNGs as part of a full snapshot.
+      // Execution workers need independent streams even without a public seed.
+      // Leave the configuration unset so generated seeds do not become sticky.
+      if (cloned->densityMatrix) cloned->densityMatrix->SetSeed(rng());
+    }
 
     return cloned;
   }

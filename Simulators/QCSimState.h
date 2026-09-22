@@ -1594,7 +1594,7 @@ class QCSimState : public ISimulator {
         ++result[packed];
       }
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
-      auto sampler = extendedStabilizer->Clone();
+      auto sampler = extendedStabilizer->CloneWithSeed(rng());
       sampler->SaveState();
       for (size_t shot = 0; shot < shots; ++shot) {
         sampler->RestoreState();
@@ -1811,7 +1811,7 @@ class QCSimState : public ISimulator {
         ++result[packed];
       }
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
-      auto sampler = extendedStabilizer->Clone();
+      auto sampler = extendedStabilizer->CloneWithSeed(rng());
       sampler->SaveState();
       for (size_t shot = 0; shot < shots; ++shot) {
         sampler->RestoreState();
@@ -2141,7 +2141,7 @@ class QCSimState : public ISimulator {
       return result;
     }
     else if (simulationType == SimulationType::kExtendedStabilizer) {
-      auto sampler = extendedStabilizer->Clone();
+      auto sampler = extendedStabilizer->CloneWithSeed(rng());
       Types::qubit_t result = 0;
       for (size_t qubit = 0; qubit < nrQubits; ++qubit)
         if (sampler->Measure(qubit)) result |= 1ULL << qubit;
@@ -2224,7 +2224,7 @@ class QCSimState : public ISimulator {
         res[i] = measured.at(static_cast<Eigen::Index>(i));
       return res;
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
-      auto sampler = extendedStabilizer->Clone();
+      auto sampler = extendedStabilizer->CloneWithSeed(rng());
       std::vector<bool> res(nrQubits);
       for (size_t i = 0; i < nrQubits; ++i) res[i] = sampler->Measure(i);
       return res;
