@@ -161,8 +161,8 @@ class ForestContractor : public BaseContractor {
     return std::count_if(plans.begin(), plans.end(),
                          [](const auto &plan) { return bool(plan.prepared); });
   }
-  // Per-contractor retained output storage. Zero disables buffer retention,
-  // while still allowing prepared execution with fresh result allocations.
+  // Per-contractor retained output and packing storage. Zero disables buffer
+  // retention, while still allowing prepared execution with fresh allocations.
   void SetWorkspaceByteLimit(size_t bytes) {
     workspaceByteLimit = bytes;
     if (GetWorkspaceBytes() > bytes) ClearWorkspace();
@@ -197,7 +197,7 @@ class ForestContractor : public BaseContractor {
   };
   struct PreparedPlan {
     std::vector<PreparedStep> steps;
-    size_t bytes = 0, workspaceSize = 0;
+    size_t bytes = 0, workspaceSize = 0, packingSize = 0;
   };
   struct Step {
     size_t left = 0, right = 0;
@@ -357,6 +357,8 @@ class ForestContractor : public BaseContractor {
                                     limit - bytes))
         return;
       bytes += item.contraction.ExtraBytes();
+      prepared->packingSize =
+          std::max(prepared->packingSize, item.contraction.GetPackingSize());
       dimensions[step.left] = &item.contraction.GetDims();
       dimensions[step.right] = nullptr;
       const size_t size = item.contraction.GetSize();
@@ -403,6 +405,7 @@ class ForestContractor : public BaseContractor {
         step.outputOffset = capacities[step.outputOffset];
     }
     prepared->bytes = bytes;
+    if (bytes > planCacheByteLimit) return;
     while (cachedBytes > planCacheByteLimit - bytes)
       if (!DropLastPreparedPlan()) return;
     plan.prepared = std::move(prepared);
@@ -425,7 +428,17 @@ class ForestContractor : public BaseContractor {
 
   double ExecutePrepared(const TensorNetwork &network, const CachedPlan &plan) {
     const auto &prepared = *plan.prepared;
-    const bool reuse = PrepareWorkspace(prepared.workspaceSize);
+    // Sequential steps share one packing area after the live output buffers.
+    // If it exceeds the limit, retain output reuse and pack into fresh buffers.
+    size_t size = prepared.workspaceSize;
+    const bool reusePacking =
+        size && prepared.packingSize &&
+        Utils::detail::TensorAddBytes(size, prepared.packingSize, 1,
+                                      workspaceByteLimit / sizeof(Complex)) &&
+        PrepareWorkspace(size);
+    const bool reuse = reusePacking || PrepareWorkspace(prepared.workspaceSize);
+    Complex *packing =
+        reusePacking ? workspace.data() + prepared.workspaceSize : nullptr;
     std::vector<const Complex *> values;
     values.reserve(plan.inputs.size());
     for (auto index : plan.inputs)
@@ -444,7 +457,7 @@ class ForestContractor : public BaseContractor {
         dest = fresh.get();
       }
       item.contraction.Execute(values[step.left], values[step.right], dest,
-                               enableMultithreading);
+                               enableMultithreading, packing);
       if (!reuse) {
         owned[step.left] = std::move(fresh);
         owned[step.right].reset();
