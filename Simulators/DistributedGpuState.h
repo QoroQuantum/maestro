@@ -32,7 +32,7 @@ class DistributedGpuState : public ISimulator {
     if (!key || !value)
       throw std::invalid_argument("Null distributed GPU configuration");
     const std::string k(key), v(value);
-    if (configuration.WasApplied(k, v)) return;
+    if (k != "seed" && configuration.WasApplied(k, v)) return;
     static const std::unordered_set<std::string> distributionKeys{
         "distributed_devices",
         "distributed_global_qubits",
@@ -62,6 +62,7 @@ class DistributedGpuState : public ISimulator {
     if (k == "gpu_device") Configuration::ParseGpuDevice(v);
     if (k == "seed") {
       auto seed = ParseUnsigned(v);
+      SeedAuxiliaryRng(seed);
       if (state) state->SetSeed(seed);
     }
     if (k == "precision" && v != "single" && v != "double")

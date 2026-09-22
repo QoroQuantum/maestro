@@ -574,7 +574,13 @@ class IndividualSimulator : public ISimulator {
    * @param value The value of the configuration.
    */
   void Configure(const char *key, const char *value) override {
-    simulator->Configure(key, value);
+    if (std::string("seed") == key) {
+      const uint64_t seed = std::stoull(value);
+      SeedAuxiliaryRng(seed);
+      simulator->SetSeed(seed);
+    } else {
+      simulator->Configure(key, value);
+    }
   }
 
   /**

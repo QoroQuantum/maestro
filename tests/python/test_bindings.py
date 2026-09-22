@@ -2971,6 +2971,43 @@ class TestCoherentEstimate:
 class TestCoherentExecute:
     """Test coherent_execute (shot-based coherent noise)."""
 
+    @pytest.mark.parametrize("bound_method", [False, True])
+    @pytest.mark.parametrize("method", [maestro.SimulationType.Statevector,
+                                       maestro.SimulationType.DensityMatrix])
+    @pytest.mark.parametrize("config_seed,public_seed", [
+        (None, 0), (None, 11), (0, 23), (11, None), ((1 << 63) + 11, 23)])
+    @pytest.mark.parametrize("realizations", [1, 128])
+    def test_seeded_coherent_measurements_are_reproducible_and_independent(
+            self, bound_method, method, config_seed, public_seed, realizations):
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.measure_all()
+        nm = maestro.NoiseModel()
+        # Either sign of a Z rotation leaves these measurement probabilities
+        # at 1/2, exposing replayed measurement draws across one-shot batches.
+        nm.set_coherent_rotation(0, 0.0, 0.0, 0.2)
+        cfg = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=method, seed=config_seed)
+
+        def run(seed=public_seed):
+            args = (nm, cfg, 128, realizations, seed)
+            result = (qc.coherent_execute(*args) if bound_method else
+                      maestro.coherent_execute(qc, *args))
+            assert result["noise_realizations"] == realizations
+            return dict(result["counts"])
+
+        counts = run()
+        assert counts == run()
+        assert sum(counts.values()) == 128
+        assert 32 < counts.get("0", 0) < 96, counts
+        if config_seed is not None:
+            # A different injection seed must not replace the explicit
+            # simulator seed, even when it is zero or wider than 32 bits.
+            assert counts == run(97)
+        assert cfg.seed == config_seed
+
     def test_returns_counts(self):
         """coherent_execute returns valid counts."""
         from maestro.circuits import QuantumCircuit

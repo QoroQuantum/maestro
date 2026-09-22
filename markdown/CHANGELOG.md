@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Python `coherent_execute` now seeds measurement execution from the public seed
+  unless `SimulatorConfig.seed` overrides it, and derives a separate simulator
+  stream for each realization.
+- Direct simulator `Configure("seed", ...)` calls seed readout randomness as well
+  as quantum sampling. Reapplying the same seed restarts both streams.
+
+### Removed
+
+- Removed `NoiseAdd::apply_readout_error_to_counts` (`MAESTRO_NOISE_ADD_VERSION`
+  is now 4). Attach readout rates with `noise::attach_readout_error` before
+  execution, or use the noisy/full execution helpers. Composer must be updated
+  together with Maestro to remove its bindings to this method.
+
 ## [0.3.2] - 2026-09-18
 
 ### Added

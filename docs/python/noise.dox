@@ -213,6 +213,10 @@
  * generated default seed; explicit seeds, including zero, must match on all ranks.
  * Each noise realization derives a distinct simulator seed, so seeded runs
  * remain reproducible without repeating readout draws across batches.
+ * `coherent_execute` follows the same seed precedence and per-realization
+ * derivation for quantum measurements; it continues to apply coherent noise only.
+ * Direct simulator `Configure("seed", ...)` and `set_seed(...)` both restart
+ * measurement and readout random streams, including when the seed is unchanged.
  *
  * Readout errors model classical measurement confusion matrices:
  *

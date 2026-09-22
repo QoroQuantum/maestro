@@ -131,13 +131,18 @@ class QuestState : public ISimulator {
    * @brief Configures the state.
    *
    * This function is called to configure the simulator.
-   * Quest only supports statevector, so this is a no-op.
+   * Quest only supports statevector; seed configures sampling and readout.
    *
    * @param key The key of the configuration option.
    * @param value The value of the configuration.
    */
   void Configure(const char *key, const char *value) override {
-    // Quest only supports statevector, nothing to configure
+    if (std::string("seed") == key) {
+      const uint64_t seed = std::stoull(value);
+      SeedAuxiliaryRng(seed);
+      rng.seed(seed);
+      configuration.SetConfiguration(key, value);
+    }
   }
 
   /**
@@ -149,7 +154,7 @@ class QuestState : public ISimulator {
    */
   std::string GetConfiguration(const char *key) const override {
     if (std::string("method") == key) return "statevector";
-    return "";
+    return configuration.GetConfiguration(key);
   }
 
   /**

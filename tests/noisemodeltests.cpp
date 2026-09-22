@@ -559,6 +559,46 @@ BOOST_AUTO_TEST_CASE(AuxiliaryRngIsSeededAndPerInstance) {
   BOOST_CHECK(va != vc);
 }
 
+BOOST_AUTO_TEST_CASE(DirectConfigurationReplaysReadout) {
+  std::vector<Simulators::SimulatorType> backends{
+      Simulators::SimulatorType::kQCSim,
+      Simulators::SimulatorType::kCompositeQCSim};
+#ifndef NO_QISKIT_AER
+  backends.push_back(Simulators::SimulatorType::kQiskitAer);
+  backends.push_back(Simulators::SimulatorType::kCompositeQiskitAer);
+#endif
+#ifdef __linux__
+  // Configuring the wrapper requires no MPI runtime or GPU allocation.
+  backends.push_back(Simulators::SimulatorType::kDistMpiGpuSim);
+#endif
+  Circuits::MeasurementOperation<> measurement({{0, 0}});
+  measurement.SetReadout({{0.4, 0.6}});
+  for (const auto backend : backends) {
+    auto simulator = Simulators::SimulatorsFactory::CreateSimulator(
+        backend, Simulators::SimulationType::kStatevector);
+    BOOST_REQUIRE(simulator);
+    const auto sample = [&] {
+      Circuits::OperationState bits(1);
+      std::vector<bool> values;
+      for (size_t shot = 0; shot < 128; ++shot) {
+        measurement.SetStateFromSample({shot % 2 != 0}, bits, simulator.get());
+        values.push_back(bits.GetBit(0));
+      }
+      return values;
+    };
+    for (uint64_t seed : {uint64_t{0}, uint64_t{11}, UINT64_MAX}) {
+      simulator->SetSeed(seed);
+      const auto expected = sample();
+      for (int repeat = 0; repeat < 2; ++repeat) {
+        simulator->Configure("seed", std::to_string(seed).c_str());
+        BOOST_CHECK(sample() == expected);
+      }
+      simulator->Configure("seed", std::to_string(seed ^ 1).c_str());
+      BOOST_CHECK(sample() != expected);
+    }
+  }
+}
+
 /**
  * Readout error is a property of the QUBIT being read, applied when the
  * measurement writes its bit -- not a post-pass over the counts string indexed
@@ -745,8 +785,11 @@ BOOST_AUTO_TEST_CASE(ConfigurationSeedsReadoutWithoutChangingBackendSequence) {
 
     auto again = MakeSimulator(method, 2);
     config.ApplyConfigurationToSimulator(again);
-    for (int i = 0; i < 20; ++i)
-      BOOST_CHECK_EQUAL(configured->RandomUniform(), again->RandomUniform());
+    for (int i = 0; i < 20; ++i) {
+      const auto expected = configured->RandomUniform();
+      BOOST_CHECK_EQUAL(direct->RandomUniform(), expected);
+      BOOST_CHECK_EQUAL(again->RandomUniform(), expected);
+    }
   }
 }
 

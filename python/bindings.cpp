@@ -1790,7 +1790,8 @@ NB_MODULE(maestro, m) {
 
               auto noisy =
                   noise::inject_coherent_noise(self, noise_model, rng);
-              nb::dict r = execute_core(noisy, config, batch_shots);
+              nb::dict r = execute_core(
+                  noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
               nb::dict counts = nb::cast<nb::dict>(r["counts"]);
               for (auto item : counts)
                 combined[nb::cast<std::string>(nb::str(item.first))] +=
@@ -2968,7 +2969,8 @@ NB_MODULE(maestro, m) {
           if (batch_shots <= 0) continue;
 
           auto noisy = noise::inject_coherent_noise(circuit, noise_model, rng);
-          nb::dict r = execute_core(noisy, config, batch_shots);
+          nb::dict r = execute_core(
+              noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
           nb::dict counts = nb::cast<nb::dict>(r["counts"]);
           for (auto item : counts)
             combined[nb::cast<std::string>(nb::str(item.first))] +=

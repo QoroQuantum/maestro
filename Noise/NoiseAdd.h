@@ -22,7 +22,7 @@
 #include <optional>
 #include <sstream>
 
-#define MAESTRO_NOISE_ADD_VERSION 3
+#define MAESTRO_NOISE_ADD_VERSION 4
 
 namespace noise {
 
@@ -75,35 +75,6 @@ class NoiseAdd {
       const NoiseModel& nm) {
     WarnThermalApproximation(nm);
     return Inject(circ, nm, Layer::Combined);
-  }
-
-  // Legacy utility for identity qubit-to-bit mappings only. Noisy execution
-  // attaches rates to measurements instead; never apply this to those counts.
-  void apply_readout_error_to_counts(
-      Circuits::Circuit<>::ExecuteResults& counts,
-      const noise::NoiseModel& nm) {
-    if (!nm.has_readout_error()) return;
-
-    std::uniform_real_distribution<double> dist(0.0, 1.0);
-    Circuits::Circuit<>::ExecuteResults new_counts;
-
-    for (const auto& [bitstring, count] : counts) {
-      for (size_t shot = 0; shot < count; ++shot) {
-        auto noisy_bs = bitstring;
-        for (size_t i = 0; i < noisy_bs.size(); ++i) {
-          int qubit_idx = static_cast<int>(i);
-          const auto* re = nm.get_readout_error(qubit_idx);
-          if (!re) continue;
-          double r = dist(rng);
-          if (!noisy_bs[i] && r < re->p_meas1_prep0)
-            noisy_bs[i] = true;
-          else if (noisy_bs[i] && r < re->p_meas0_prep1)
-            noisy_bs[i] = false;
-        }
-        new_counts[noisy_bs]++;
-      }
-    }
-    counts = std::move(new_counts);
   }
 
   // Noise draws and simulator draws have independent streams. Re-seeding
