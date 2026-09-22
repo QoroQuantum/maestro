@@ -5,6 +5,30 @@ import pytest
 import maestro
 
 
+@pytest.mark.parametrize(
+    "method",
+    [maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState],
+)
+@pytest.mark.parametrize("predicate,expected_bit", [("!c[3]", "1"), ("c[3]", "0")])
+def test_checkpoint_suffix_sizes_conditional_destinations(
+    method, predicate, expected_bit
+):
+    prefix = maestro.circuits.QuantumCircuit()
+    prefix.x(0)
+    suffix = maestro.QasmToCirc().parse_and_translate(
+        "OPENQASM 3.0; qubit[1] q; bit[18] c; "
+        f"if ({predicate}) {{ c[17] = measure q[0]; }}"
+    )
+    config = maestro.SimulatorConfig(simulation_type=method)
+    checkpoint = maestro.PrefixCheckpointedSimulator(prefix, 1, config)
+    expected = {"0" * 17 + expected_bit: 8}
+    assert checkpoint.execute_suffix(suffix, shots=8)["counts"] == expected
+    assert (
+        checkpoint.execute_suffix(suffix, shots=8, num_measurements=18)["counts"]
+        == expected
+    )
+
+
 class TestEnums:
     """Test that enums are properly exposed"""
 
@@ -1440,8 +1464,13 @@ class TestGpuSimulator:
                 maestro.SimulationType.Stabilizer.value,
             )
 
-    def test_gpu_density_matrix_exact_noise_or_mpo_fallback(self):
-        """Exact-only noise works on GPU density or its QCSim MPO fallback."""
+    @pytest.mark.parametrize("method", [
+        maestro.SimulationType.DensityMatrix,
+        maestro.SimulationType.MatrixProductOperator,
+    ])
+    @pytest.mark.parametrize("shots", [1, 64])
+    def test_gpu_exact_noise_or_mpo_fallback(self, method, shots):
+        """GPU mixed-state methods retain exact channels in the CPU fallback."""
         from maestro.circuits import QuantumCircuit
         circuit = QuantumCircuit()
         circuit.x(0)
@@ -1449,10 +1478,34 @@ class TestGpuSimulator:
 
         noise_model = maestro.NoiseModel()
         noise_model.set_generalized_amplitude_damping(0, 1.0, 0.0)
+        config = self._gpu_density_config()
+        config.simulation_type = method
         result = maestro.noisy_execute(
-            circuit, noise_model, config=self._gpu_density_config(),
-            shots=64, noise_realizations=1, seed=1)
-        assert result['counts'] == {'0': 64}
+            circuit, noise_model, config=config,
+            shots=shots, noise_realizations=1, seed=1)
+        assert result['counts'] == {'0': shots}
+
+    @pytest.mark.parametrize("method", [
+        maestro.SimulationType.DensityMatrix,
+        maestro.SimulationType.MatrixProductOperator,
+    ])
+    @pytest.mark.parametrize("gamma", [0.2, 0.65])
+    @pytest.mark.parametrize("excited_population", [0.0, 0.3])
+    def test_gpu_mixed_state_noise_expectations(
+            self, method, gamma, excited_population):
+        """Partial damping must retain an ensemble, including thermal excitation."""
+        circuit = maestro.circuits.QuantumCircuit()
+        circuit.x(0)
+        noise = maestro.NoiseModel()
+        noise.set_generalized_amplitude_damping(0, gamma, excited_population)
+        config = self._gpu_density_config()
+        config.simulation_type = method
+        result = maestro.noisy_estimate_montecarlo(
+            circuit, ["I", "X", "Y", "Z"], noise, config=config,
+            noise_realizations=1, seed=0)
+        # Starting from |1>, P(1) = 1 - gamma + gamma * excited_population.
+        assert result["expectation_values"] == pytest.approx(
+            [1.0, 0.0, 0.0, 2 * gamma * (1 - excited_population) - 1], abs=1e-8)
 
     def test_gpu_execute_returns_result(self):
         """simple_execute with GPU type returns a valid result dict."""

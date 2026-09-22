@@ -432,6 +432,373 @@ void ConditionalOutputMapping() {
     }
 }
 
+void NestedCircuitJobs() {
+  // Keep the flat circuit as an independent execution reference. Include gates
+  // after nested measurements, and classical data crossing a circuit boundary.
+  for (int scenario = 0; scenario < 4; ++scenario) {
+    auto inner = CF::CreateCircuit();
+    auto outer = CF::CreateCircuit();
+    auto flat = CF::CreateCircuit();
+    if (scenario == 2) {
+      auto prepare = CF::CreateGate(Gate::kXGateType, 1);
+      auto measure = CF::CreateMeasurement({{1, 1}});
+      outer->AddOperations({prepare, measure});
+      flat->AddOperations({prepare, measure});
+      inner->AddOperation(CF::CreateSimpleConditionalGate(
+          CF::CreateGate(Gate::kXGateType, 0), 1));
+    } else if (scenario == 3) {
+      inner->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+      inner->AddOperation(CF::CreateMeasurement({{0, 0}}));
+      inner->AddOperation(CF::CreateSimpleConditionalGate(
+          CF::CreateGate(Gate::kXGateType, 1), 0));
+      inner->AddOperation(CF::CreateReset({0}));
+    } else {
+      inner->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    }
+    if (scenario == 0 || scenario == 2)
+      inner->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    outer->AddOperation(CF::CreateCircuit({inner}));
+    flat->AddCircuit(inner);
+    if (scenario == 1 || scenario == 3) {
+      const auto measurement = CF::CreateMeasurement({{0, 0}, {1, 1}});
+      outer->AddOperation(measurement);
+      flat->AddOperation(measurement);
+    }
+
+    for (auto method : {Method::kStatevector, Method::kMatrixProductState,
+                        Method::kDensityMatrix, Method::kMatrixProductOperator})
+      for (bool locked : {false, true}) {
+        auto network = MakeNetwork(Backend::kQCSim, method);
+        network->SetInitialQubitsMapOptimization(true);
+        network->SetMPSOptimizeSwaps(true);
+        network->Configure("matrix_product_state_max_bond_dimension", "16");
+        network->SetMPSOptimizationQubitsNumberThreshold(0);
+        network->SetMPSOptimizationBondDimensionThreshold(0);
+        network->SetLookaheadDepth(0);
+        const auto run = [&](const std::shared_ptr<Circuit>& circuit,
+                             bool reuse) {
+          Counts counts;
+          std::mutex mutex;
+          Network::ExecuteJob<> job(circuit, counts, 128, 2, 2, 2,
+                                    Backend::kQCSim, method, mutex);
+          job.network = network;
+          job.config.SetConfiguration("seed", "123");
+          job.optimiseMultipleShotsExecution = reuse;
+          if (locked)
+            job.DoWork();
+          else
+            job.DoWorkNoLock();
+          return counts;
+        };
+        const auto expected = run(flat, false);
+        Check(run(outer, true) == expected,
+              "Nested multishot execution differs from the flat circuit");
+        Check(run(outer, false) == expected,
+              "Nested execution cleared the enclosing classical state");
+      }
+
+    for (bool onHost : {false, true})
+      for (size_t workers : {size_t{1}, size_t{2}})
+        for (bool optimize : {false, true}) {
+          auto network =
+              MakeNetwork(Backend::kQCSim, Method::kMatrixProductState);
+          network->SetMaxSimulators(workers);
+          network->SetOptimizeSimulator(optimize);
+          network->Configure("seed", "123");
+          network->GetController()->SetRemapper(
+              std::make_shared<SingleHostRemapper>());
+          const auto run = [&](const std::shared_ptr<Circuit>& circuit) {
+            return onHost ? network->RepeatedExecuteOnHost(circuit, 0, 128)
+                          : network->RepeatedExecute(circuit, 128);
+          };
+          Check(run(outer) == run(flat),
+                "Network dispatcher skipped or misexecuted a nested circuit");
+        }
+  }
+
+  // A nested random stream must advance per shot, with both boundaries
+  // retaining the classical state. CloneForExecution must still isolate its
+  // generators.
+  auto nested = CF::CreateCircuit({CF::CreateCircuit({RandomCircuit(true)})});
+  const auto counts = RunRandomJobs(nested, true, true, true);
+  Check(counts == RunRandomJobs(nested, true, true, true),
+        "Nested random execution is not reproducible");
+  for (const auto& worker : counts) {
+    Check(worker.size() == 128, "Nested random generator was not run per shot");
+    for (const auto& [bits, count] : worker)
+      Check(bits[0] == bits[1] && count == 1,
+            "Nested random-controlled gate lost its classical input");
+  }
+
+  // A composite containing only classical operations has no qubit queue for
+  // MoveMeasurementsAndResets. The composite backend must still complete it.
+  std::vector<size_t> bits(64);
+  std::iota(bits.begin(), bits.end(), 0);
+  const auto classical =
+      CF::CreateCircuit({CF::CreateCircuit({CF::CreateRandom(bits, 123)})});
+  for (bool onHost : {false, true}) {
+    auto network =
+        MakeNetwork(Backend::kCompositeQCSim, Method::kStatevector, 64);
+    network->SetMaxSimulators(1);
+    network->GetController()->SetRemapper(
+        std::make_shared<SingleHostRemapper>());
+    const auto counts = onHost
+                            ? network->RepeatedExecuteOnHost(classical, 0, 128)
+                            : network->RepeatedExecute(classical, 128);
+    Check(counts.size() == 128,
+          "Classical-only composite was not executed on the composite backend");
+  }
+}
+
+void NestedClassicalDataflow() {
+  // A Boolean oracle keeps these checks independent of the flat executor.
+  // Exercise both outcomes of each condition, readout flips, reset-to-one,
+  // overwritten predicate bits, sparse destinations and empty composites.
+  std::vector<Backend> backends{Backend::kQCSim};
+#ifndef NO_QISKIT_AER
+  backends.push_back(Backend::kQiskitAer);
+#endif
+  for (unsigned scenario = 0; scenario < 16; ++scenario) {
+    const bool initial0 = scenario & 1, initial1 = scenario & 2;
+    const bool flip = scenario & 4, resetToOne = scenario & 8;
+    auto flat = CF::CreateCircuit();
+    if (initial0) flat->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    if (initial1) flat->AddOperation(CF::CreateGate(Gate::kXGateType, 1));
+    auto first = std::static_pointer_cast<Circuits::MeasurementOperation<>>(
+        CF::CreateMeasurement({{0, 17}}));
+    if (flip) first->SetReadout({{1, 1}});
+    flat->AddOperation(first);
+    flat->AddOperation(CF::CreateSimpleConditionalGate(
+        CF::CreateGate(Gate::kXGateType, 1), 17));
+    flat->AddOperation(CF::CreateMeasurement({{1, 3}}));
+    flat->AddOperation(CF::CreateConditionalMeasurement(
+        std::static_pointer_cast<Circuits::MeasurementOperation<>>(
+            CF::CreateMeasurement({{0, 0}})),
+        std::make_shared<Circuits::EqualCondition>(std::vector<size_t>{3},
+                                                   std::vector<bool>{true})));
+    flat->AddOperation(std::make_shared<Circuits::Reset<>>(
+        Types::qubits_vector{0}, 0, std::vector<bool>{resetToOne}));
+    flat->AddOperation(CF::CreateMeasurement({{0, 3}}));
+    flat->AddOperation(CF::CreateSimpleConditionalGate(
+        CF::CreateGate(Gate::kXGateType, 1), 0));
+    flat->AddOperation(CF::CreateMeasurement({{1, 1}}));
+
+    std::vector<bool> expected(18, false);
+    expected[17] = initial0 != flip;
+    const bool measured1 = initial1 != expected[17];
+    expected[0] = measured1 && initial0;
+    expected[3] = resetToOne;
+    expected[1] = measured1 != expected[0];
+    const auto& ops = flat->GetOperations();
+    for (size_t cut : {size_t{0}, ops.size() / 2, ops.size()}) {
+      auto nested = CF::CreateCircuit(
+          {CF::CreateCircuit(
+               Circuit::OperationsVector(ops.begin(), ops.begin() + cut)),
+           CF::CreateCircuit({CF::CreateCircuit(
+               Circuit::OperationsVector(ops.begin() + cut, ops.end()))})});
+      for (auto backend : backends)
+        for (auto method :
+             {Method::kStatevector, Method::kMatrixProductState,
+              Method::kDensityMatrix, Method::kMatrixProductOperator}) {
+          if (backend != Backend::kQCSim &&
+              method == Method::kMatrixProductOperator)
+            continue;
+          auto network = MakeNetwork(backend, method, 18);
+          for (bool locked : {false, true})
+            for (bool reuse : {false, true}) {
+              Counts counts;
+              std::mutex mutex;
+              Network::ExecuteJob<> job(nested, counts, 17, 2, 18, 18, backend,
+                                        method, mutex);
+              job.network = network;
+              job.config.SetConfiguration("seed", "0");
+              job.optimiseMultipleShotsExecution = reuse;
+              if (locked)
+                job.DoWork();
+              else
+                job.DoWorkNoLock();
+              Check(
+                  counts == Counts{{expected, 17}},
+                  "Nested classical dataflow differs from the Boolean oracle");
+            }
+        }
+    }
+  }
+}
+
+void NestedShotBoundaries() {
+  auto circuit = CF::CreateCircuit({CF::CreateCircuit(
+      {CF::CreateGate(Gate::kXGateType, 0), CF::CreateMeasurement({{0, 0}})})});
+  circuit->AddOperation(
+      CF::CreateSimpleConditionalGate(CF::CreateGate(Gate::kXGateType, 1), 0));
+  circuit->AddOperation(CF::CreateMeasurement({{1, 1}}));
+  for (bool onHost : {false, true})
+    for (bool optimize : {false, true})
+      for (size_t workers : {size_t{1}, size_t{3}, size_t{8}}) {
+        auto network =
+            MakeNetwork(Backend::kQCSim, Method::kMatrixProductState);
+        network->SetMaxSimulators(workers);
+        network->SetOptimizeSimulator(optimize);
+        network->GetController()->SetRemapper(
+            std::make_shared<SingleHostRemapper>());
+        for (size_t shots : {size_t{0}, size_t{1}, size_t{2}, size_t{5},
+                             size_t{7}, size_t{257}}) {
+          const auto counts =
+              onHost ? network->RepeatedExecuteOnHost(circuit, 0, shots)
+                     : network->RepeatedExecute(circuit, shots);
+          const Counts expected =
+              shots ? Counts{{{true, true}, shots}} : Counts{};
+          Check(counts == expected,
+                "Nested worker dispatch lost or duplicated shots");
+        }
+      }
+}
+
+class MappingNetwork : public Net {
+ public:
+  using Net::MapCircuitOnHost;
+  using Net::Net;
+};
+
+void ConditionalBitHelpers() {
+  for (bool random : {false, true})
+    for (bool nested : {false, true}) {
+      auto circuit = CF::CreateCircuit();
+      auto condition = std::make_shared<Circuits::EqualCondition>(
+          std::vector<size_t>{3}, std::vector<bool>{false});
+      std::shared_ptr<Circuits::IOperation<>> conditional;
+      if (random)
+        conditional = CF::CreateConditionalRandomGen(
+            std::static_pointer_cast<Circuits::Random<>>(
+                CF::CreateRandom({0, 17}, 123)),
+            condition);
+      else
+        conditional = CF::CreateConditionalMeasurement(
+            std::static_pointer_cast<Circuits::MeasurementOperation<>>(
+                CF::CreateMeasurement({{0, 0}, {1, 17}})),
+            condition);
+      circuit->AddOperation(conditional);
+      if (nested) circuit = CF::CreateCircuit({circuit});
+      Check(conditional->AffectedBits() == std::vector<size_t>{3},
+            "Conditional predicate bits changed meaning");
+      Check(circuit->GetBits() == std::set<size_t>{0, 3, 17} &&
+                circuit->AffectedBits() == std::vector<size_t>({0, 3, 17}) &&
+                circuit->GetMinCbitIndex() == 0 &&
+                circuit->GetMaxCbitIndex() == 17,
+            "Circuit bit helpers omitted conditional destinations");
+      Circuit::BitMapping qubits, reverseBits;
+      size_t nq = 0, nc = 0;
+      const auto mapped =
+          circuit->RemapToContinuous(qubits, reverseBits, nq, nc);
+      Check(nc == 3 && mapped->GetBits() == std::set<size_t>{0, 1, 2},
+            "Mapping omitted a nested conditional destination");
+      auto network = std::make_shared<MappingNetwork>(Types::qubits_vector{2},
+                                                      std::vector<size_t>{20});
+      network->MapCircuitOnHost(circuit, 0, nq, nc, false);
+      Check(nc == 18, "Shared host mapping omitted conditional destinations");
+    }
+}
+
+class ObservedX : public Circuits::XGate<> {
+ public:
+  explicit ObservedX(std::shared_ptr<Simulators::ISimulator>& observed)
+      : XGate(0), observed(observed) {}
+  void Execute(const std::shared_ptr<Simulators::ISimulator>& sim,
+               Circuits::OperationState& state) const override {
+    observed = sim;
+    XGate::Execute(sim, state);
+  }
+  std::shared_ptr<Circuits::IOperation<>> Clone() const override {
+    return std::make_shared<ObservedX>(*this);
+  }
+
+ private:
+  std::shared_ptr<Simulators::ISimulator>& observed;
+};
+
+void HostSimulatorReuse() {
+  std::vector<Backend> backends{Backend::kQCSim};
+#ifndef NO_QISKIT_AER
+  backends.push_back(Backend::kQiskitAer);
+#endif
+  for (auto backend : backends)
+    for (auto method :
+         {Method::kStatevector, Method::kMatrixProductState,
+          Method::kDensityMatrix, Method::kMatrixProductOperator}) {
+      if (backend != Backend::kQCSim &&
+          method == Method::kMatrixProductOperator)
+        continue;
+      auto network = MakeNetwork(backend, method);
+      network->SetMaxSimulators(1);
+      network->Configure("seed", "123");
+      network->CreateSimulator(backend, method, 2);
+      std::shared_ptr<Simulators::ISimulator> observed;
+      auto circuit = CF::CreateCircuit();
+      circuit->AddOperation(std::make_shared<ObservedX>(observed));
+      circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
+      // Both an already-sized simulator and one resized from the whole network
+      // must be reused, and every invocation must begin in the zero state.
+      for (size_t shots : {size_t{8}, size_t{8}, size_t{1}}) {
+        const auto existing = network->GetSimulator();
+        existing->ApplyX(0);
+        const auto counts = network->RepeatedExecuteOnHost(circuit, 0, shots);
+        Check(observed == existing,
+              "Single-worker host execution replaced its simulator");
+        Check(counts == Counts{{{true, false}, shots}},
+              "Reused host simulator retained a previous quantum state");
+      }
+      // ExecuteOnHost retains a simulator with the caller's register width.
+      network->CreateSimulator(backend, method, 2);
+      // Exercise consecutive same-sized calls, then a change of register width.
+      for (int repeat = 0; repeat < 2; ++repeat) {
+        const auto existing = network->GetSimulator();
+        network->ExecuteOnHost(circuit, 0);
+        Check(observed == existing && network->GetState().GetAllBits() ==
+                                          std::vector<bool>({true, false}),
+              "ExecuteOnHost failed to reset/reuse its simulator");
+      }
+      auto smaller = CF::CreateCircuit();
+      smaller->AddOperation(std::make_shared<ObservedX>(observed));
+      smaller->AddOperation(CF::CreateMeasurement({{0, 0}}));
+      const auto existing = network->GetSimulator();
+      const auto counts = network->RepeatedExecuteOnHost(smaller, 0, 8);
+      Check(observed == existing && counts == Counts{{{true, false}, 8}},
+            "Host simulator reuse failed after changing the register width");
+
+      auto random = CF::CreateCircuit();
+      random->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+      random->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
+      network->CreateSimulator(backend, method, 2);
+      const auto seeded = network->RepeatedExecuteOnHost(random, 0, 128);
+      Check(seeded == network->RepeatedExecuteOnHost(random, 0, 128),
+            "Simulator reuse changed the configured sampling seed");
+
+      // Readout has its own RNG. Retaining a measured state must preserve
+      // neither that RNG's position nor quantum/classical state on a new call.
+      const auto makeSeeded = [&] {
+        auto result = MakeNetwork(backend, method);
+        result->SetMaxSimulators(1);
+        result->Configure("seed", "0");
+        result->CreateSimulator(backend, method, 2);
+        return result;
+      };
+      auto measured =
+          std::static_pointer_cast<Circuits::MeasurementOperation<>>(
+              CF::CreateMeasurement({{0, 0}, {1, 1}}));
+      measured->SetReadout({{0.2, 0.35}, {0.4, 0.1}});
+      auto noisy =
+          CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 0), measured});
+      const auto fresh = makeSeeded()->RepeatedExecuteOnHost(noisy, 0, 257);
+      auto reused = makeSeeded();
+      reused->ExecuteOnHost(
+          CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 1), measured}),
+          0);
+      Check(fresh.size() == 4 &&
+                reused->RepeatedExecuteOnHost(noisy, 0, 257) == fresh,
+            "Host reuse leaked retained state or readout RNG position");
+    }
+}
+
 void SharedReset() {
   // Reset descriptions are shared by jobs. Resetting several targets to |1>
   // must not mutate an instruction-owned X gate's target between threads.
@@ -465,6 +832,11 @@ void SharedReset() {
 }  // namespace
 
 int main() try {
+  NestedCircuitJobs();
+  NestedClassicalDataflow();
+  NestedShotBoundaries();
+  ConditionalBitHelpers();
+  HostSimulatorReuse();
   RandomJobs();
   RandomSeedPolicy();
   MeasurementJobs();

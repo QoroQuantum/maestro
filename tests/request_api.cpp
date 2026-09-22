@@ -12,6 +12,7 @@ static unsigned checks = 0;
 void TestRequestNoiseAndOptions();
 void TestRequestSeedParsing();
 void TestNetworkBondDefaults();
+void TestAutomaticGpuMixedStateFallback();
 void TestFixedBackendShotReuse();
 void Check(bool condition, const char* message) {
   ++checks;
@@ -623,6 +624,7 @@ int main() try {
   TestNativeRandomSeeds();
   TestRequestSeedParsing();
   TestNetworkBondDefaults();
+  TestAutomaticGpuMixedStateFallback();
 
   std::cout << "Native request API: " << checks << " checks passed\n";
   return 0;

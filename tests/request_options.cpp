@@ -208,3 +208,52 @@ void TestNetworkBondDefaults() {
     checkNetwork(config, "");
   }
 }
+
+void TestAutomaticGpuMixedStateFallback() {
+  using namespace MaestroExecution;
+  using CF = Circuits::CircuitFactory<>;
+  GetMaestroObjectWithMute();
+
+  for (const auto method :
+       {Method::kDensityMatrix, Method::kMatrixProductOperator})
+    for (size_t workers : {size_t{1}, size_t{2}}) {
+      struct NetworkHandle {
+        unsigned long handle = CreateSimpleSimulator(1);
+        ~NetworkHandle() { DestroySimpleSimulator(handle); }
+      } owner;
+      SimulatorConfig config;
+      config.simulator_type = Backend::kGpuSim;
+      config.simulation_type = method;
+      config.seed = 123;
+      config.optimize_circuit = false;
+      const auto network = ConfigureNetwork(owner.handle, config);
+      Check(network && network->GetSimulator()->GetType() == Backend::kQCSim &&
+                network->GetSimulator()->GetSimulationType() ==
+                    Method::kMatrixProductOperator,
+            "Automatic GPU mixed-state execution needs a channel-capable CPU "
+            "fallback");
+
+      // Exercise the CPU placeholder even on machines with a working GPU.
+      // An unavailable automatic candidate leaves this same simulator in use.
+      network->SetOptimizeSimulator(false);
+      network->SetMaxSimulators(workers);
+      auto circuit = CF::CreateCircuit();
+      circuit->AddOperation(
+          CF::CreateGate(Circuits::QuantumGateType::kXGateType, 0));
+      circuit->AddOperation(
+          std::make_shared<Circuits::QuantumChannelOperation<>>(
+              Types::qubits_vector{0},
+              Simulators::QuantumChannel::GeneralizedAmplitudeDamping(1.0,
+                                                                      0.0)));
+      circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+      for (size_t shots : {size_t{1}, size_t{64}}) {
+        const auto counts = network->RepeatedExecuteOnHost(circuit, 0, shots);
+        Check(counts == Circuits::Circuit<>::ExecuteResults{{{false}, shots}},
+              "GPU CPU fallback did not execute the exact noise channel");
+        Check(network->GetLastSimulatorType() == Backend::kQCSim &&
+                  network->GetLastSimulationType() ==
+                      Method::kMatrixProductOperator,
+              "GPU fallback changed the mixed-state representation");
+      }
+    }
+}
