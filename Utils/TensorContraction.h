@@ -67,6 +67,12 @@ struct TensorAxisPattern {
   size_t Stride() const { return axes.empty() ? 0 : axes[0].stride; }
 };
 
+inline bool TensorMatrixContiguous(const TensorAxisPattern &rows,
+                                    const TensorAxisPattern &columns) {
+  return rows.Linear() && rows.Stride() == 1 && columns.Linear() &&
+         columns.Stride() == rows.count;
+}
+
 // Irregular axes are decoded once, not in each multiply-add. Linear patterns
 // (including ordinary matrix layouts) require no offset table.
 class TensorAxisOffsets {
@@ -378,7 +384,8 @@ void TensorExecuteContraction(
     const TensorAxisPattern &fb, const TensorAxisPattern &ka,
     const TensorAxisPattern &kb, const TensorAxisOffsets &af,
     const TensorAxisOffsets &bf, const TensorAxisOffsets &ac,
-    const TensorAxisOffsets &bc, int gateSize, bool allow) {
+    const TensorAxisOffsets &bc, int gateSize, bool allow,
+    T *packing = nullptr) {
   const size_t m = fa.count, n = fb.count, k = ka.count;
   if (m == 1 && n == 1) {
     out[0] = TensorScalarContraction<T>(a, b, ka, kb, allow);
@@ -407,19 +414,29 @@ void TensorExecuteContraction(
       using Matrix = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
       const T *ap = &a[0], *bp = &b[0];
       Matrix packedA, packedB;
-      if (!(fa.Linear() && fa.Stride() == 1 && ka.Linear() &&
-            ka.Stride() == m)) {
-        packedA.resize(m, k);
+      if (!TensorMatrixContiguous(fa, ka)) {
+        T *packed = packing;
+        if (packed)
+          packing += m * k;
+        else {
+          packedA.resize(m, k);
+          packed = packedA.data();
+        }
         for (size_t x = 0; x < k; ++x)
-          for (size_t i = 0; i < m; ++i) packedA(i, x) = a[af[i] + ac[x]];
-        ap = packedA.data();
+          for (size_t i = 0; i < m; ++i)
+            packed[i + m * x] = a[af[i] + ac[x]];
+        ap = packed;
       }
-      if (!(kb.Linear() && kb.Stride() == 1 && fb.Linear() &&
-            fb.Stride() == k)) {
-        packedB.resize(k, n);
+      if (!TensorMatrixContiguous(kb, fb)) {
+        T *packed = packing;
+        if (!packed) {
+          packedB.resize(k, n);
+          packed = packedB.data();
+        }
         for (size_t j = 0; j < n; ++j)
-          for (size_t x = 0; x < k; ++x) packedB(x, j) = b[bf[j] + bc[x]];
-        bp = packedB.data();
+          for (size_t x = 0; x < k; ++x)
+            packed[x + k * j] = b[bf[j] + bc[x]];
+        bp = packed;
       }
       // Bounded row tiles keep Eigen's GEMM serial. Our outer work partition
       // owns parallelism, without changing process-wide Eigen thread settings.
@@ -502,6 +519,19 @@ class TensorContractionPlan {
   }
   const std::vector<size_t> &GetDims() const { return dimensions; }
   size_t GetSize() const { return size; }
+  // Optional GEMM scratch in elements. Overflow disables retained packing.
+  size_t GetPackingSize() const {
+    const size_t m = fa.count, n = fb.count, k = ka.count;
+    if (gateSize || m < 8 || n < 8 || k < 8) return 0;
+    size_t count = 0;
+    const size_t limit = std::numeric_limits<size_t>::max();
+    if ((!TensorMatrixContiguous(fa, ka) &&
+         !TensorAddBytes(count, m, k, limit)) ||
+        (!TensorMatrixContiguous(kb, fb) &&
+         !TensorAddBytes(count, k, n, limit)))
+      return limit;
+    return count;
+  }
   size_t ExtraBytes() const {
     return dimensions.capacity() * sizeof(size_t) +
            (fa.axes.capacity() + fb.axes.capacity() + ka.axes.capacity() +
@@ -509,10 +539,13 @@ class TensorContractionPlan {
                sizeof(TensorAxis) +
            af.Bytes() + bf.Bytes() + ac.Bytes() + bc.Bytes();
   }
+  // Scratch, if supplied, holds GetPackingSize() elements and must not alias
+  // live inputs or outputs. Values are packed anew on every execution.
   template <class T>
-  void Execute(const T *a, const T *b, T *out, bool allow) const {
+  void Execute(const T *a, const T *b, T *out, bool allow,
+               T *packing = nullptr) const {
     TensorExecuteContraction<T>(a, b, out, fa, fb, ka, kb, af, bf, ac, bc,
-                                gateSize, allow);
+                                gateSize, allow, packing);
   }
 
  private:

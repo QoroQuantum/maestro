@@ -237,6 +237,50 @@ BOOST_AUTO_TEST_CASE(prepared_metadata_numerics_and_budget) {
   BOOST_CHECK(!plan.Prepare({0, 2}, {2}, Pairs{{1, 0}}, 1024));
 }
 
+BOOST_AUTO_TEST_CASE(prepared_packing_workspace_reuse) {
+  std::mt19937_64 rng(58031);
+  struct Case {
+    std::vector<size_t> a, b;
+    Pairs pairs;
+    size_t packingSize;
+  };
+  const std::vector<Case> cases{
+      {{16, 16}, {16, 16}, {{1, 0}}, 0},
+      {{8, 16}, {8, 16}, {{0, 0}}, 128},
+      {{16, 8}, {16, 8}, {{1, 1}}, 128},
+      {{2, 8, 8}, {2, 8, 8}, {{1, 1}}, 256},
+      {{8, 8, 8, 8}, {8, 8, 8, 8}, {{1, 0}, {3, 2}}, 8192}};
+  const Complex canary(12345, -6789);
+  for (const auto &item : cases) {
+    Utils::detail::TensorContractionPlan plan;
+    BOOST_REQUIRE(plan.Prepare(item.a, item.b, item.pairs, 1024 * 1024));
+    BOOST_REQUIRE_EQUAL(plan.GetPackingSize(), item.packingSize);
+    std::vector<Complex> packing(item.packingSize + 2, canary);
+    Tensor result(plan.GetDims());
+    // Reuse the same scratch with new values in both inputs on every pass.
+    for (size_t pass = 0; pass < 3; ++pass) {
+      const auto a = RandomTensor(item.a, rng), b = RandomTensor(item.b, rng);
+      const auto expected = Reference(a, b, item.pairs);
+      for (bool threaded : {false, true}) {
+        plan.Execute(&a[size_t(0)], &b[size_t(0)], &result[size_t(0)],
+                     threaded, packing.data() + 1);
+        CheckEqual(expected, result);
+        BOOST_CHECK(packing.front() == canary);
+        BOOST_CHECK(packing.back() == canary);
+        plan.Execute(&a[size_t(0)], &b[size_t(0)], &result[size_t(0)],
+                     threaded);
+        CheckEqual(expected, result);
+      }
+    }
+  }
+  // Each input size fits, but their combined packing space overflows. The
+  // optional scratch must be rejected without allocating any tensor values.
+  const size_t large = size_t(1) << (std::numeric_limits<size_t>::digits - 4);
+  Utils::detail::TensorContractionPlan plan;
+  BOOST_REQUIRE(plan.Prepare({large, 8}, {8, large}, Pairs{{0, 1}}, 1024));
+  BOOST_CHECK_EQUAL(plan.GetPackingSize(), std::numeric_limits<size_t>::max());
+}
+
 BOOST_AUTO_TEST_CASE(scalar_reductions_and_nonconjugating_product) {
   std::mt19937_64 rng(95);
   auto a = RandomTensor(std::vector<size_t>(18, 2), rng);
@@ -499,6 +543,73 @@ BOOST_AUTO_TEST_CASE(prepared_cache_workspace_limits_and_reuse) {
   BOOST_CHECK_EQUAL(contractor->GetCachedPlanBytes(), 0);
   BOOST_CHECK_EQUAL(contractor->GetWorkspaceBytes(), 0);
   BOOST_CHECK_EQUAL(contractor->GetPreparedPlanCount(), 0);
+}
+
+BOOST_AUTO_TEST_CASE(prepared_packing_workspace_limits_and_reuse) {
+  constexpr size_t count = 9;
+  TensorNetworks::TensorNetwork net(count);
+  auto contractor = std::make_shared<TensorNetworks::ForestContractor>();
+  net.SetContractor(contractor);
+  net.SetMultithreading(false);
+  QC::QubitRegister<> state(count);
+  state.SetMultithreading(false);
+  std::mt19937_64 rng(213087);
+  QC::Gates::CNOTGate<> cx;
+  auto entangle = [&](size_t control, size_t target) {
+    net.AddGate(cx, control, target);
+    state.ApplyGate(cx, target, control);
+  };
+  // A grid produces irregular GEMMs with packing in several prepared steps.
+  for (size_t layer = 0; layer < 4; ++layer) {
+    for (size_t q = 0; q < count; ++q) {
+      const double theta = .031 * (1 + rng() % 80);
+      const Complex phase = std::polar(1.0, .047 * (1 + rng() % 80));
+      Eigen::MatrixXcd matrix(2, 2);
+      matrix << std::cos(theta), -std::sin(theta) * std::conj(phase),
+          std::sin(theta) * phase, std::cos(theta);
+      QC::Gates::SingleQubitGate<> rotation(matrix);
+      net.AddGate(rotation, q);
+      state.ApplyGate(rotation, q);
+    }
+    for (size_t y = 0; y < 3; ++y)
+      for (size_t x = layer % 2; x + 1 < 3; x += 2)
+        entangle(y * 3 + x, y * 3 + x + 1);
+    for (size_t x = 0; x < 3; ++x)
+      for (size_t y = layer % 2; y + 1 < 3; y += 2)
+        entangle(y * 3 + x, (y + 1) * 3 + x);
+  }
+  const double p0 = QubitZero(state, count, 4);
+  auto checkQueries = [&]() {
+    for (bool threaded : {false, true}) {
+      net.SetMultithreading(threaded);
+      for (bool zero : {true, false})
+        BOOST_CHECK_SMALL(net.Probability(4, zero) - (zero ? p0 : 1 - p0),
+                          1e-11);
+    }
+    BOOST_CHECK_LE(contractor->GetWorkspaceBytes(),
+                   contractor->GetWorkspaceByteLimit());
+  };
+  BOOST_CHECK_SMALL(net.Probability(4) - p0, 1e-11);
+  checkQueries();
+  BOOST_REQUIRE_EQUAL(contractor->GetPreparedPlanCount(), 1);
+  const size_t fullBytes = contractor->GetWorkspaceBytes();
+  BOOST_REQUIRE_GT(fullBytes, 0);
+  // One byte below the combined size must retain output reuse, while packing
+  // falls back to temporary buffers. Restore both exact limits afterward.
+  contractor->SetWorkspaceByteLimit(fullBytes - 1);
+  checkQueries();
+  const size_t outputBytes = contractor->GetWorkspaceBytes();
+  BOOST_REQUIRE_GT(outputBytes, 0);
+  BOOST_REQUIRE_LT(outputBytes, fullBytes);
+  contractor->SetWorkspaceByteLimit(outputBytes);
+  checkQueries();
+  BOOST_CHECK_EQUAL(contractor->GetWorkspaceBytes(), outputBytes);
+  contractor->SetWorkspaceByteLimit(0);
+  checkQueries();
+  BOOST_CHECK_EQUAL(contractor->GetWorkspaceBytes(), 0);
+  contractor->SetWorkspaceByteLimit(fullBytes);
+  checkQueries();
+  BOOST_CHECK_EQUAL(contractor->GetWorkspaceBytes(), fullBytes);
 }
 
 BOOST_AUTO_TEST_CASE(prepared_metadata_preserves_order_cache_under_pressure) {
