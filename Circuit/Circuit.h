@@ -1719,7 +1719,8 @@ class Circuit : public IOperation<Time> {
    * affect the measured qubits.
    *
    * @return True if the circuit has measurements that are followed by
-   * operations that affect the measured qubits, false otherwise.
+   * operations that affect the measured qubits, or has a reset that is not
+   * the first operation on its qubit, false otherwise.
    */
   bool HasOpsAfterMeasurements() const {
     std::unordered_set<Types::qubit_t> measuredQubits;
@@ -1785,7 +1786,10 @@ class Circuit : public IOperation<Time> {
       }
     }
 
-    return false;
+    // A trailing mid-circuit reset still has to run. ExecuteNonMeasurements
+    // defers it like a measurement, and the terminal-measurement path would
+    // drop it (e.g. sampled T1 noise before an expectation value).
+    return !resetQubits.empty();
   }
 
   /**
