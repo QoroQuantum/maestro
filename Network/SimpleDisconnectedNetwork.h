@@ -744,8 +744,14 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           // use the already created simulator
           optSim = simulator;
           job->optSim = optSim;
-          OptimizeMPSInitialQubitsMap(optSim, dcirc,
-                                      optSim->GetNumberOfQubits());
+          if (optSim->GetNumberOfQubits() == nrQubits) {
+            // An expectation query retains its final state. A new execution
+            // must start from zero, just like the host execution path.
+            optSim->Reset();
+            optSim->SetGatesCounter(0);
+            job->config.ApplyConfigurationToSimulator(optSim);
+            OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
+          }
           job->executedGates.resize(dcirc->size(),
                                     false);  // no gates executed yet
           simulator = nullptr;
@@ -2645,6 +2651,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     std::unordered_map<Types::qubit_t, Types::qubit_t> reverseQubitsMap;
 
     if (!useSeparateSimForHosts) {
+      // A circuit already using this host's qubit IDs still replaces the
+      // previous circuit (and must be available on the first invocation).
+      distCirc = circuit;
       size_t mxq = 0;
       size_t mnq = std::numeric_limits<size_t>::max();
       size_t mxb = 0;
@@ -2799,8 +2808,13 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
  private:
   Utils::ThreadsPool<ExecuteJob<Time>>
       threadsPool; /**< The threads pool for the execution of the circuits. */
+
+ protected:
+  // Derived execution loops must retain the final state for state queries.
   bool recreateIfNeeded =
       true; /**< The flag to recreate the simulator if needed. */
+
+ private:
   std::unordered_map<Types::qubit_t, Types::qubit_t>
       qubitsMapOnHost; /**< The map with the qubits mapping when executing on a
                           host. Relevant only when computing expectation values.

@@ -130,6 +130,36 @@ void TestThermalApproximation() {
           "Exact-only channel accepted with a sampled thermal approximation");
   }
 }
+void TestNoisyEstimateResetStreams() {
+  for (const char* method : {"statevector", "matrix_product_state"})
+    for (const char* kind : {"t1", "t1_2q"})
+      for (int seedMode = 0; seedMode < 6; ++seedMode) {
+        auto request = Estimate("h q[0]; cx q[0],q[1];", {"ZI", "IZ"},
+                                Channel(kind, {{"gamma", 0.5}}, {1}),
+                                method, 2);
+        auto& execution = request["execution"].as_object();
+        auto& noise = request["noise"].as_object();
+        execution.erase("seed");
+        noise.erase("seed");
+        noise["realizations"] = 2000;
+        if (seedMode == 1 || seedMode == 2 || seedMode == 5)
+          execution["seed"] = seedMode == 1 ? 0 : 5;
+        if (seedMode == 3 || seedMode == 4 || seedMode == 5)
+          noise["seed"] = seedMode == 3 ? 0 : 23;
+
+        const auto result = Call(request);
+        const auto& values = result.at("expectation_values").as_array();
+        Check(std::abs(Real(values[0])) < 0.1 &&
+                  std::abs(Real(values[1]) - 0.5) < 0.1,
+              "Native noise estimates reused injected errors or reset outcomes");
+        if (seedMode == 0) {
+          Check(result.at("seed") != Call(request).at("seed"),
+                "Unseeded native estimates reused the same seed");
+          execution["seed"] = result.at("seed");
+        }
+        SameExpectations(result, Call(request));
+      }
+}
 }  // namespace
 
 namespace {
@@ -313,6 +343,7 @@ void TestRequestNoiseAndOptions() {
   TestReadoutExecution();
   TestThermalApproximation();
   TestFixedBackendNoisyShots();
+  TestNoisyEstimateResetStreams();
   const double duration = 0.3, t1 = 1, t2 = 0.6, excited = 0.1;
   auto thermal =
       Channel("thermal_relaxation", {{"duration", duration},

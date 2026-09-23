@@ -238,15 +238,22 @@ class IRemapper : public std::enable_shared_from_this<IRemapper<Time>> {
         case Circuits::OperationType::kReset: {
           std::unordered_map<size_t, Types::qubits_vector> bits;
           const auto qbits = op->AffectedQubits();
+          const auto reset = std::static_pointer_cast<Circuits::Reset<Time>>(op);
+          const auto &resetTargets = reset->GetResetTargets();
+          std::unordered_map<size_t, std::vector<bool>> targets;
 
-          for (const auto q : qbits) {
-            const size_t host = network->GetHostIdForAnyQubit(q);
-            bits[host].emplace_back(q);
+          for (size_t q = 0; q < qbits.size(); ++q) {
+            const size_t host = network->GetHostIdForAnyQubit(qbits[q]);
+            bits[host].emplace_back(qbits[q]);
+            if (!resetTargets.empty())
+              targets[host].push_back(q < resetTargets.size() && resetTargets[q]);
           }
 
           for (const auto &hostQubits : bits)
             newDistributedCircuit->AddOperation(
-                std::make_shared<Circuits::Reset<Time>>(hostQubits.second));
+                std::make_shared<Circuits::Reset<Time>>(
+                    hostQubits.second, reset->GetDelay(),
+                    targets[hostQubits.first]));
         } break;
         case Circuits::OperationType::kRandomGen: {
           std::unordered_map<size_t, std::vector<size_t>> bits;
