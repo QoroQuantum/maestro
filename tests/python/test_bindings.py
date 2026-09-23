@@ -2737,6 +2737,42 @@ class TestNoisyEstimateMonteCarlo:
                           r2['expectation_values']):
             assert abs(v1 - v2) < 1e-12
 
+    @pytest.mark.parametrize("method", [
+        maestro.SimulationType.Statevector,
+        maestro.SimulationType.MatrixProductState])
+    def test_sampled_t1_after_last_gate_is_applied(self, method):
+        """Sampled T1 injects a reset after the final gate; it must run.
+
+        The exact expectation is <Z> = 1 - 2 * (1 - gamma) = -0.4.
+        """
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+
+        nm = maestro.NoiseModel()
+        nm.set_t1(0, 0.3)
+
+        result = maestro.noisy_estimate_montecarlo(
+            qc, ['Z'], nm, noise_realizations=2000, seed=5,
+            config=maestro.SimulatorConfig(simulation_type=method))
+        assert result['ideal_expectation_values'][0] == pytest.approx(-1.0)
+        # Standard error is about 0.02 over 2000 realizations.
+        assert result['expectation_values'][0] == pytest.approx(-0.4, abs=0.1)
+
+    def test_trailing_reset_affects_expectation(self):
+        """A reset with no later measurement is not a terminal measurement."""
+        parser = maestro.QasmToCirc()
+        circ = parser.parse_and_translate("""
+        OPENQASM 2.0;
+        include "qelib1.inc";
+        qreg q[2];
+        x q[0];
+        x q[1];
+        reset q[0];
+        """)
+        values = circ.estimate(['ZI', 'IZ'])['expectation_values']
+        assert values == pytest.approx([1.0, -1.0])
+
 
 class TestNoisyExecute:
     """Test noisy_execute (Monte Carlo noise injection)."""
@@ -2803,6 +2839,31 @@ class TestNoisyExecute:
         r1 = maestro.noisy_execute(qc, nm, shots=500, seed=99)
         r2 = maestro.noisy_execute(qc, nm, shots=500, seed=99)
         assert r1['counts'] == r2['counts']
+
+    def test_config_seed_reproduces_noise_injection(self):
+        """SimulatorConfig(seed=...) alone must also fix injected noise."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        for q in range(3):
+            qc.x(q)
+        qc.measure_all()
+
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(3, 0.3)
+
+        def run(config_seed):
+            cfg = maestro.SimulatorConfig(seed=config_seed)
+            counts = [dict(maestro.noisy_execute(
+                qc, nm, config=cfg, shots=200,
+                noise_realizations=200)['counts']) for _ in range(2)]
+            counts += [dict(qc.noisy_execute(
+                nm, config=cfg, shots=200,
+                noise_realizations=200)['counts'])]
+            return counts
+
+        first = run(7)
+        assert first[0] == first[1] == first[2]
+        assert first[0] != run(8)[0]
 
 
 # ============================================================================

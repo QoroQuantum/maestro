@@ -139,16 +139,18 @@ static void warn_thermal_approximation(const noise::NoiseModel& noise_model,
     throw nb::python_error();
 }
 
-// All MPI ranks must submit the same stochastic circuit. Resolve an omitted
-// public seed once per call and share it with measurement/readout execution.
+// An omitted public seed falls back to the config seed, as in the JSON API, so
+// SimulatorConfig(seed=...) alone reproduces the injected noise. All MPI ranks
+// must submit the same stochastic circuit, so MPI resolves an unseeded call
+// once and shares it with measurement/readout execution.
 static std::mt19937 MakeNoiseRng(const SimulatorConfig& config,
                                  std::optional<unsigned int>& seed) {
-  if (!seed &&
-      config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim)
-    seed = static_cast<unsigned int>(
-        config.seed ? *config.seed
-                    : Simulators::GenerateRandomSeed(
-                          config.simulator_type, config.distributed_options));
+  if (!seed && config.seed)
+    seed = static_cast<unsigned int>(*config.seed);
+  else if (!seed &&
+           config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim)
+    seed = static_cast<unsigned int>(Simulators::GenerateRandomSeed(
+        config.simulator_type, config.distributed_options));
   if (seed) return std::mt19937(*seed);
   return std::mt19937(std::random_device{}());
 }

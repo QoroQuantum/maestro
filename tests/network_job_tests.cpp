@@ -919,6 +919,36 @@ void SharedReset() {
     if (error) std::rethrow_exception(error);
   Check(wrong.load() == 0, "Shared reset changed another worker's X target");
 }
+
+void TrailingReset() {
+  // Sampled T1 noise injects resets after the last gate. Without a later
+  // measurement they must still run instead of being deferred and dropped.
+  auto circuit = CF::CreateCircuit();
+  circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+  circuit->AddOperation(std::make_shared<Circuits::Reset<>>(
+      Types::qubits_vector{0}));
+  Check(circuit->HasOpsAfterMeasurements(),
+        "Trailing reset allowed terminal-measurement execution");
+
+  auto leading = CF::CreateCircuit();
+  leading->AddOperation(std::make_shared<Circuits::Reset<>>(
+      Types::qubits_vector{0}));
+  leading->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+  leading->AddOperation(CF::CreateMeasurement({{0, 0}}));
+  Check(!leading->HasOpsAfterMeasurements(),
+        "Initial reset disabled terminal-measurement execution");
+
+  for (const auto method :
+       {Method::kStatevector, Method::kMatrixProductState}) {
+    auto network = MakeNetwork(Backend::kQCSim, method);
+    network->SetOptimizeSimulator(true);
+    const auto values =
+        network->ExecuteOnHostExpectations(circuit, 0, {"Z", "IZ"});
+    Check(values.size() == 2 && std::abs(values[0] - 1.0) < 1e-12 &&
+              std::abs(values[1] - 1.0) < 1e-12,
+          "Trailing reset was skipped before an expectation value");
+  }
+}
 }  // namespace
 
 int main() try {
@@ -935,6 +965,7 @@ int main() try {
   QCSimWorkerRandomStreams();
   QCSimSamplingRandomStreams();
   SharedReset();
+  TrailingReset();
   std::cout << checks << " network job checks passed\n";
   return 0;
 } catch (const std::exception& error) {

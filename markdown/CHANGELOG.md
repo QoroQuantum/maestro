@@ -14,6 +14,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream for each realization.
 - Direct simulator `Configure("seed", ...)` calls seed readout randomness as well
   as quantum sampling. Reapplying the same seed restarts both streams.
+- A reset with no later measurement on its qubit is no longer dropped by the
+  terminal-measurement execution path. Expectation values and state queries
+  previously ignored such resets, so sampled T1/thermal-relaxation noise after
+  the last gate had no effect on `noisy_estimate_montecarlo` or native
+  `estimate` requests on pure-state methods.
+- Python noisy execution and estimation (`noisy_execute`,
+  `noisy_estimate_montecarlo`, `noisy_fidelity`, and the `coherent_*` and
+  `full_noise_*` variants) fall back to `SimulatorConfig.seed` for noise injection when no `seed`
+  argument is given, matching the native JSON API. Previously a configured
+  simulator seed alone did not make the injected noise reproducible.
+
+### Changed
+
+- QCSim pinned to `3ea2ea1`, which seeds unseeded MPS/MPO simulators with
+  `std::random_device` entropy as well as the clock.
 
 ### Removed
 
