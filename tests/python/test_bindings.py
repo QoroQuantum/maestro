@@ -2773,6 +2773,83 @@ class TestNoisyEstimateMonteCarlo:
         values = circ.estimate(['ZI', 'IZ'])['expectation_values']
         assert values == pytest.approx([1.0, -1.0])
 
+    @pytest.mark.parametrize("fn_name", [
+        "noisy_estimate_montecarlo", "full_noise_estimate"])
+    @pytest.mark.parametrize("bound_method", [False, True])
+    @pytest.mark.parametrize("method", [
+        maestro.SimulationType.Statevector,
+        maestro.SimulationType.MatrixProductState])
+    @pytest.mark.parametrize("config_seed,public_seed", [
+        (None, 0), (None, 5), (0, None), (5, None), (5, 23)])
+    def test_entangled_reset_realizations_are_independent_and_reproducible(
+            self, fn_name, bound_method, method, config_seed, public_seed):
+        """Resetting one Bell qubit must leave the other maximally mixed."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        # Always inject the trailing reset so only its collapse is random.
+        nm.set_t1(1, 1.0)
+        cfg = maestro.SimulatorConfig(
+            simulation_type=method, seed=config_seed)
+
+        def run(injection_seed=public_seed):
+            args = (['ZI', 'IZ'], nm)
+            kwargs = dict(noise_realizations=1000, config=cfg,
+                          seed=injection_seed)
+            return (getattr(qc, fn_name)(*args, **kwargs) if bound_method else
+                    getattr(maestro, fn_name)(qc, *args, **kwargs))
+
+        first = run()
+        values = first['expectation_values']
+        assert values == run()['expectation_values']
+        # Standard error of <ZI> is about 0.032 over 1000 realizations.
+        assert values[0] == pytest.approx(0.0, abs=0.15)
+        assert values[1] == pytest.approx(1.0)
+        assert first['ideal_expectation_values'] == pytest.approx([0.0, 0.0])
+        assert cfg.seed == config_seed
+        if config_seed is not None:
+            # With deterministic injection, the config seed alone controls
+            # collapse, even when a different public noise seed is supplied.
+            assert values == run(99)['expectation_values']
+
+    @pytest.mark.parametrize("fn_name", [
+        "noisy_estimate_montecarlo", "full_noise_estimate"])
+    @pytest.mark.parametrize("bound_method", [False, True])
+    @pytest.mark.parametrize("method", [
+        maestro.SimulationType.Statevector,
+        maestro.SimulationType.MatrixProductState])
+    def test_unseeded_entangled_reset_realizations(
+            self, fn_name, bound_method, method):
+        """Unseeded injection and collapse sample afresh across calls."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+
+        nm = maestro.NoiseModel()
+        nm.set_t1(1, 0.5)
+        cfg = maestro.SimulatorConfig(simulation_type=method)
+
+        def run(realizations):
+            args = (['ZI', 'IZ'], nm)
+            kwargs = dict(noise_realizations=realizations, config=cfg)
+            result = (getattr(qc, fn_name)(*args, **kwargs) if bound_method else
+                      getattr(maestro, fn_name)(qc, *args, **kwargs))
+            return result['expectation_values']
+
+        # Local noise cannot bias q0. Qubit 1 resets in half the trajectories.
+        # This tolerance exceeds six standard errors for 2000 realizations.
+        assert run(2000) == pytest.approx([0.0, 0.5], abs=0.1)
+
+        # Compare sequences rather than individual outcomes or rounded means,
+        # which can coincide by chance even with independent random streams.
+        streams = [[tuple(run(1)) for _ in range(64)] for _ in range(2)]
+        assert streams[0] != streams[1]
+        assert cfg.seed is None
+
 
 class TestNoisyExecute:
     """Test noisy_execute (Monte Carlo noise injection)."""

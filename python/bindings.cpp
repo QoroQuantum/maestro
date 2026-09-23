@@ -157,8 +157,8 @@ static std::mt19937 MakeNoiseRng(const SimulatorConfig& config,
 
 // Keep simulator randomness separate from circuit-noise injection. An explicit
 // config seed takes precedence; otherwise the public noise seed also seeds
-// measurement/readout. Every batch needs its own stream, even for one-shot
-// realizations (as used by Sinter).
+// measurement/readout and reset collapse. Every batch needs its own stream,
+// including one-shot executions and expectation-value realizations.
 static SimulatorConfig NoiseExecutionConfig(const SimulatorConfig& config,
                                             std::optional<unsigned int> seed,
                                             uint64_t batch) {
@@ -1729,7 +1729,8 @@ NB_MODULE(maestro, m) {
             for (int r = 0; r < noise_realizations; ++r) {
               auto noisy =
                   inject_noise_for_config(self, noise_model, rng, config);
-              nb::dict result = estimate_core(noisy, paulis, config);
+              nb::dict result = estimate_core(
+                  noisy, paulis, NoiseExecutionConfig(config, seed, r));
               nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
               for (size_t i = 0; i < n_obs; ++i)
                 sum_vals[i] += nb::cast<double>(ev[i]);
@@ -1958,7 +1959,8 @@ NB_MODULE(maestro, m) {
             for (int r = 0; r < noise_realizations; ++r) {
               auto noisy = inject_combined_noise_for_config(
                   self, noise_model, rng, config);
-              nb::dict result = estimate_core(noisy, paulis, config);
+              nb::dict result = estimate_core(
+                  noisy, paulis, NoiseExecutionConfig(config, seed, r));
               nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
               for (size_t i = 0; i < n_obs; ++i)
                 sum_vals[i] += nb::cast<double>(ev[i]);
@@ -2858,7 +2860,8 @@ NB_MODULE(maestro, m) {
         for (int r = 0; r < noise_realizations; ++r) {
           auto noisy =
               inject_noise_for_config(circuit, noise_model, rng, config);
-          nb::dict result = estimate_core(noisy, paulis, config);
+          nb::dict result = estimate_core(
+              noisy, paulis, NoiseExecutionConfig(config, seed, r));
           nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
           for (size_t i = 0; i < n_obs; ++i)
             sum_vals[i] += nb::cast<double>(ev[i]);
@@ -3159,7 +3162,8 @@ NB_MODULE(maestro, m) {
         for (int r = 0; r < noise_realizations; ++r) {
           auto noisy = inject_combined_noise_for_config(circuit, noise_model,
                                                         rng, config);
-          nb::dict result = estimate_core(noisy, paulis, config);
+          nb::dict result = estimate_core(
+              noisy, paulis, NoiseExecutionConfig(config, seed, r));
           nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
           for (size_t i = 0; i < n_obs; ++i)
             sum_vals[i] += nb::cast<double>(ev[i]);

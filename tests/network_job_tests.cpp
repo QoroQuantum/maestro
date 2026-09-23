@@ -949,6 +949,81 @@ void TrailingReset() {
           "Trailing reset was skipped before an expectation value");
   }
 }
+
+void DistributedSimulatorReuse() {
+  std::vector<Backend> backends{Backend::kQCSim};
+#ifndef NO_QISKIT_AER
+  backends.push_back(Backend::kQiskitAer);
+#endif
+  for (auto backend : backends)
+    for (auto method : {Method::kStatevector, Method::kMatrixProductState,
+                        Method::kDensityMatrix, Method::kMatrixProductOperator}) {
+      if (backend != Backend::kQCSim &&
+          method == Method::kMatrixProductOperator)
+        continue;
+      auto network = MakeNetwork(backend, method);
+      network->SetMaxSimulators(1);
+      network->GetController()->SetRemapper(
+          std::make_shared<SingleHostRemapper>());
+      network->Configure("seed", "0");
+      auto flip = CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 0)});
+      auto bell = CF::CreateCircuit();
+      bell->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+      bell->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+      for (int repeat = 0; repeat < 8; ++repeat) {
+        const auto values = network->ExecuteExpectations(flip, {"ZI", "IZ"});
+        Check(values.size() == 2 && std::abs(values[0] + 1.0) < 1e-12 &&
+                  std::abs(values[1] - 1.0) < 1e-12,
+              "Distributed expectation retained the previous quantum state");
+        const auto entangled = network->ExecuteExpectations(bell, {"ZI", "IZ"});
+        Check(entangled.size() == 2 && std::abs(entangled[0]) < 1e-12 &&
+                  std::abs(entangled[1]) < 1e-12,
+              "Distributed expectation realizations did not start from zero");
+      }
+    }
+}
+
+void NoiseEstimateResetStreams() {
+  auto circuit = CF::CreateCircuit();
+  circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+  circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+  noise::NoiseModel model;
+  model.set_t1(1, 0.5);
+  const std::vector<std::string> paulis{"ZI", "IZ"};
+
+  for (auto method : {Method::kStatevector, Method::kMatrixProductState})
+    for (bool combined : {false, true})
+      for (const std::string configured : {"", "23"})
+        for (const auto seed : {std::optional<unsigned int>{},
+                                std::optional<unsigned int>{0},
+                                std::optional<unsigned int>{5}}) {
+          auto network = MakeNetwork(Backend::kQCSim, method);
+          network->SetOptimizeSimulator(true);
+          if (!configured.empty())
+            network->Configure("seed", configured.c_str());
+          noise::NoiseAdd add;
+          if (seed) add.seed(*seed);
+          auto run = [&]() {
+            return combined
+                       ? add.full_noise_estimate(circuit, network, 0,
+                                                 paulis, model, 2000)
+                       : add.noisy_estimate_montecarlo(
+                             circuit, network, 0, paulis, model, 2000);
+          };
+
+          const auto values = run();
+          Check(values.size() == 2 && std::abs(values[0]) < 0.1 &&
+                    std::abs(values[1] - 0.5) < 0.1,
+                "C++ noise estimates reused injected errors or reset outcomes");
+          if (seed) {
+            add.seed(*seed);
+            Check(values == run(),
+                  "Reseeding C++ noise did not reproduce reset trajectories");
+          }
+          Check(network->GetSimulator()->GetConfiguration("seed") == configured,
+                "Noise estimation replaced the caller's simulator seed");
+        }
+}
 }  // namespace
 
 int main() try {
@@ -957,6 +1032,7 @@ int main() try {
   NestedShotBoundaries();
   ConditionalBitHelpers();
   HostSimulatorReuse();
+  DistributedSimulatorReuse();
   RandomJobs();
   RandomSeedPolicy();
   MeasurementJobs();
@@ -966,6 +1042,7 @@ int main() try {
   QCSimSamplingRandomStreams();
   SharedReset();
   TrailingReset();
+  NoiseEstimateResetStreams();
   std::cout << checks << " network job checks passed\n";
   return 0;
 } catch (const std::exception& error) {

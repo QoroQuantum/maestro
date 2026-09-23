@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Distributed expectation queries reset reused simulators before a new circuit,
+  preventing state from leaking between Composer noise realizations when
+  automatic simulator selection is disabled.
+- Distributed reset splitting preserves target states and execution delays.
+- Host mapping selects the current circuit even when its qubit IDs already fit
+  the host, avoiding stale or missing circuits in Composer's NetQASM path.
 - Python `coherent_execute` now seeds measurement execution from the public seed
   unless `SimulatorConfig.seed` overrides it, and derives a separate simulator
   stream for each realization.
@@ -24,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `full_noise_*` variants) fall back to `SimulatorConfig.seed` for noise injection when no `seed`
   argument is given, matching the native JSON API. Previously a configured
   simulator seed alone did not make the injected noise reproducible.
+- Python `noisy_estimate_montecarlo` and `full_noise_estimate` use a separate
+  simulator seed for each realization. Resets of entangled qubits now sample
+  independent collapse outcomes while remaining reproducible from a public
+  seed or `SimulatorConfig.seed`.
 
 ### Changed
 
