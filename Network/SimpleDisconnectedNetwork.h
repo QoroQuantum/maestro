@@ -169,11 +169,23 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       numQubits = simulator->GetNumberOfQubits();
     }
 
+    // Execute continues from the caller's prepared quantum state. Repeated
+    // shots and expectation queries still start from zero, even for one shot.
+    const auto reset = resetBeforeExecution;
     recreateIfNeeded = false;
+    resetBeforeExecution = false;
 
-    const auto res = RepeatedExecute(circuit, 1);
+    ExecuteResults res;
+    try {
+      res = RepeatedExecute(circuit, 1);
+    } catch (...) {
+      recreateIfNeeded = recreate;
+      resetBeforeExecution = reset;
+      throw;
+    }
 
     recreateIfNeeded = recreate;
+    resetBeforeExecution = reset;
 
     // put the results in the state
     if (!res.empty()) {
@@ -745,12 +757,14 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           optSim = simulator;
           job->optSim = optSim;
           if (optSim->GetNumberOfQubits() == nrQubits) {
-            // An expectation query retains its final state. A new execution
-            // must start from zero, just like the host execution path.
-            optSim->Reset();
-            optSim->SetGatesCounter(0);
+            if (resetBeforeExecution) {
+              optSim->Reset();
+              optSim->SetGatesCounter(0);
+            }
             job->config.ApplyConfigurationToSimulator(optSim);
-            OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
+            // An initial mapping is only valid for a freshly reset register.
+            if (resetBeforeExecution)
+              OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
           }
           job->executedGates.resize(dcirc->size(),
                                     false);  // no gates executed yet
@@ -2810,6 +2824,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       threadsPool; /**< The threads pool for the execution of the circuits. */
 
  protected:
+  // Only Execute() preserves a prepared input state. Derived shot loops must
+  // honor this independently of retaining the final simulator for queries.
+  bool resetBeforeExecution = true;
+
   // Derived execution loops must retain the final state for state queries.
   bool recreateIfNeeded =
       true; /**< The flag to recreate the simulator if needed. */
