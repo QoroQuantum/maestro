@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-24
+
 ### Fixed
 
+- Linux wheels import again. The 0.3.2 wheels failed with
+  `ImportError: libgfortran-83c28eba.so.5.0.0` because the bundled OpenBLAS
+  could not locate its own bundled dependencies.
 - Distributed expectation queries reset reused simulators before a new circuit,
   preventing state from leaking between Composer noise realizations when
   automatic simulator selection is disabled.
@@ -310,7 +315,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/QoroQuantum/maestro/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/QoroQuantum/maestro/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/QoroQuantum/maestro/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/QoroQuantum/maestro/compare/v0.2.18...v0.3.0
