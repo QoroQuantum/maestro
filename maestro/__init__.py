@@ -39,6 +39,8 @@ class NoiseModel(_raw_maestro.NoiseModel):
 
 
 _CONFIG_ATTRS = (
+    "enable_causal_cone_reduction",
+    "causal_cone_statevector_threshold",
     "disable_optimized_swapping",
     "gpu_device",
     "distributed_options",
