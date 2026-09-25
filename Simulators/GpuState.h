@@ -156,16 +156,15 @@ class GpuState : public ISimulator {
       } else if (simulationType == SimulationType::kPauliPropagator) {
         pp = SimulatorsFactory::CreateGpuPauliPropagatorSimulatorUnique(gpuDevice);
         if (pp) {
-          // ensure the config settings are applied, they need to be applied
-          // after the simulator is created but before the state is created
-          for (const auto& [key, value] : configuration.GetConfigMap())
-            if (key != "method") Configure(key.c_str(), value.c_str());
-
           const bool res = pp->CreateSimulator(nrQubits);
           if (!res)
             throw std::runtime_error(
                 "GpuState::Initialize: Failed to create "
                 "and initialize the Pauli propagator state.");
+
+          // Pauli settings require the native handle created above.
+          for (const auto& [key, value] : configuration.GetConfigMap())
+            if (key != "method") Configure(key.c_str(), value.c_str());
 
           pp->SetWillUseSampling(true);  // TODO: check setting
           if (!pp->AllocateMemory(0.9))
@@ -833,6 +832,8 @@ class GpuState : public ISimulator {
                  key) {
         const int numGatesBetweenDeduplications = std::stoi(value);
         pp->SetNumGatesBetweenDeduplications(numGatesBetweenDeduplications);
+        if (!configuration.IsSet("pauli_propagator_steps_between_trims"))
+          pp->SetNumGatesBetweenTruncations(numGatesBetweenDeduplications);
       }
     }
   }
