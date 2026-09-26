@@ -7,7 +7,7 @@ on:
   workflow_call:
 
 env:
-  QCSIM_VERSION: "3ea2ea1df008fd4dc615ec557c96c158d5d3c64b"
+  QCSIM_VERSION: "87fa91414571ee24db2551690cf6b15fdd73d93b"
 
 jobs:
   build:
