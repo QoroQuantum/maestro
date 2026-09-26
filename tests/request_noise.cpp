@@ -123,7 +123,8 @@ void TestThermalApproximation() {
            Channel("generalized_amplitude_damping",
                    {{"gamma", 0.2}, {"excited_population", 0.1}}),
            Channel("correlated_phase_flip", {{"probability", 0.2}}, {0, 1}),
-           Channel("kraus", {{"operators", j::array{j::array{1, 0, 0, 1}}}})}) {
+           Channel("kraus", {{"operators",
+                              j::array{j::value(j::array{1, 0, 0, 1})}}})}) {
     request["noise"].as_object()["channels"] = j::array{thermal, channel};
     Check(Call(request, false, true).at("error").at("code") ==
               "unsupported_capability",

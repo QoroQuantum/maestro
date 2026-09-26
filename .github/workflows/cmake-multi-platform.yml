@@ -2,12 +2,15 @@ name: Compiling and testing on Ubuntu
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
   workflow_call:
 
 env:
   QCSIM_VERSION: "87fa91414571ee24db2551690cf6b15fdd73d93b"
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
   build:
@@ -40,11 +43,12 @@ jobs:
           qiskit-aer
         key: ${{ runner.os }}-git-deps-qcsim${{ env.QCSIM_VERSION }}-v3
 
-    # 3. SETUP CCACHE
-    - name: Cache ccache
-      uses: actions/cache@v5
+    # 3. SETUP CCACHE (only main saves; PRs and releases restore main's cache)
+    - name: Restore ccache
+      id: restore-ccache
+      uses: actions/cache/restore@v5
       with:
-        path: ~/.ccache
+        path: .ccache
         key: ccache-${{ runner.os }}-${{ github.sha }}
         restore-keys: |
           ccache-${{ runner.os }}-
@@ -100,7 +104,14 @@ jobs:
 
     - name: Show ccache stats
       run: ccache -s
-      
+
+    - name: Save ccache
+      if: github.ref == 'refs/heads/main' && steps.restore-ccache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: .ccache
+        key: ccache-${{ runner.os }}-${{ github.sha }}
+
     - name: Run tests
       run: |
         ./bin/tests --log_level=test_suite \

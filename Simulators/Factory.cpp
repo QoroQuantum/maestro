@@ -153,6 +153,15 @@ bool SimulatorsFactory::InitQuestLibrary() {
   return false;
 }
 
+bool SimulatorsFactory::IsQuestLibraryAvailable() {
+  return questLibrary && questLibrary->IsValid();
+}
+
+std::shared_ptr<QuestLibSim> SimulatorsFactory::GetQuestLibrary() {
+  if (!questLibrary || !questLibrary->IsValid()) return nullptr;
+  return questLibrary;
+}
+
 bool SimulatorsFactory::InitQuestLibraryWithMute() {
   if (!questLibrary) {
     questLibrary = std::make_shared<QuestLibSim>();

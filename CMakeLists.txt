@@ -476,8 +476,6 @@ if(BUILD_PYTHON_BINDINGS)
 
         if(WIN32)
             set_target_properties(maestro_py PROPERTIES ARCHIVE_OUTPUT_NAME "maestro_py")
-            target_sources(maestro_py PRIVATE Simulators/Factory.cpp)
-            target_link_libraries(maestro_py PRIVATE Boost::serialization)
         endif()
 
         target_link_libraries(maestro_py PRIVATE maestro)
