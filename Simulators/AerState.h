@@ -221,8 +221,22 @@ class AerState : public ISimulator {
       throw std::invalid_argument(
           "Aer backend only supports the discarded_weight truncation mode");
 
+    // Shared configurations can contain settings Aer does not support. Only
+    // record settings after Aer accepts them, so rejected values are not
+    // replayed by Clone() and cannot change the reported simulation type.
+    if (std::string("seed") != key &&
+        std::string("use_double_precision") != key &&
+        std::string("matrix_product_state_truncation_mode") != key &&
+        std::string("matrix_product_operator_truncation_mode") != key) {
+      try {
+        state->configure(key, value);
+      } catch (const std::exception &) {
+        return;
+      }
+    }
+
     if (!configuration.WasApplied(key, value))
-        configuration.SetConfiguration(key, value);
+      configuration.SetConfiguration(key, value);
 
     if (std::string("seed") == key) {
       const uint64_t seed = std::stoull(value);
@@ -249,15 +263,6 @@ class AerState : public ISimulator {
       else
         simulationType = SimulationType::kOther;
     }
-     
-    // Already validated above; this key is a no-op once accepted (Aer has no
-    // other mode to switch to), so don't forward it to state->configure().
-    if (std::string("matrix_product_state_truncation_mode") == key ||
-        std::string("matrix_product_operator_truncation_mode") == key)
-      return;
-
-    if (std::string("use_double_precision") != key)
-        state->configure(key, value);
   }
 
   /**
