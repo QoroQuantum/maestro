@@ -1051,12 +1051,11 @@ class TestPauliPropagatorTruncation:
     @pytest.mark.parametrize(
         "knob", ["pp_coefficient_threshold", "pp_max_pauli_weight"]
     )
-    def test_threshold_without_cadence_is_inert(self, knob):
-        """Thresholds are only consulted during a truncation pass."""
+    def test_default_deduplication_cadence_applies_thresholds(self, knob):
+        """Without a cadence, the default deduplication pass applies the
+        thresholds."""
         value = 0.99 if knob == "pp_coefficient_threshold" else 0
-        assert self._estimate_xx(**{knob: value}) == pytest.approx(
-            self.UNTRUNCATED, abs=1e-9
-        )
+        assert self._estimate_xx(**{knob: value}) == pytest.approx(0.0, abs=1e-9)
 
     def test_weight_threshold_at_qubit_count_is_ignored(self):
         """A threshold at or above the qubit count disables weight filtering."""

@@ -1358,14 +1358,11 @@ NB_MODULE(maestro, m) {
       config_class, "pp_coefficient_threshold",
       &SimulatorConfig::pp_coefficient_threshold,
       "Pauli propagation: truncation passes drop strings whose |coefficient| "
-      "is at most this value. Only applies when pp_gates_between_trims or "
-      "pp_gates_between_deduplications is set.");
+      "is at most this value.");
   BindConfigField(
       config_class, "pp_max_pauli_weight", &SimulatorConfig::pp_max_pauli_weight,
       "Pauli propagation: truncation passes drop strings acting on more "
-      "qubits than this; a value at or above the qubit count keeps them all. "
-      "Only applies when pp_gates_between_trims or "
-      "pp_gates_between_deduplications is set.");
+      "qubits than this; a value at or above the qubit count keeps them all.");
   BindConfigField(
       config_class, "pp_gates_between_trims",
       &SimulatorConfig::pp_gates_between_trims,
@@ -1377,7 +1374,8 @@ NB_MODULE(maestro, m) {
       &SimulatorConfig::pp_gates_between_deduplications,
       "Pauli propagation: every this many operations, merge repeated strings "
       "and then apply both thresholds; takes precedence over a trim due on "
-      "the same operation. Must be positive.");
+      "the same operation. Must be positive. Unset, PauliPropagator "
+      "simulations use 10.");
   BindConfigField(config_class, "path_integral_threshold",
                   &SimulatorConfig::path_integral_threshold,
                   "Trim threshold for PathIntegral simulation; None disables "

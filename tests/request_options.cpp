@@ -209,6 +209,34 @@ void TestNetworkBondDefaults() {
   }
 }
 
+void TestPauliPropagatorDedupDefault() {
+  using namespace MaestroExecution;
+  GetMaestroObjectWithMute();
+  const char* const key = "pauli_propagator_num_gates_between_deduplications";
+  const auto cadence = [key](const SimulatorConfig& config) {
+    struct NetworkHandle {
+      unsigned long handle = CreateSimpleSimulator(2);
+      ~NetworkHandle() { DestroySimpleSimulator(handle); }
+    } owner;
+    Check(owner.handle != 0, "Cannot create network for cadence configuration");
+    const auto network = ConfigureNetwork(owner.handle, config);
+    Check(bool(network), "Cannot configure network cadence");
+    return network->GetSimulator()->GetConfiguration(key);
+  };
+
+  SimulatorConfig config;
+  config.simulation_type = Method::kPauliPropagator;
+  Check(cadence(config) == "10",
+        "PauliPropagator did not get the default deduplication cadence");
+  config.pp_gates_between_deduplications = 3;
+  Check(cadence(config) == "3", "An explicit cadence was replaced");
+  config.pp_gates_between_deduplications.reset();
+  config.native_options[key] = "4";
+  Check(cadence(config) == "4", "A native-option cadence was replaced");
+  Check(cadence(SimulatorConfig{}).empty(),
+        "A statevector simulation got a deduplication cadence");
+}
+
 void TestAutomaticGpuMixedStateFallback() {
   using namespace MaestroExecution;
   using CF = Circuits::CircuitFactory<>;
