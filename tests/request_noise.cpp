@@ -134,9 +134,9 @@ void TestNoisyEstimateResetStreams() {
   for (const char* method : {"statevector", "matrix_product_state"})
     for (const char* kind : {"t1", "t1_2q"})
       for (int seedMode = 0; seedMode < 6; ++seedMode) {
-        auto request = Estimate("h q[0]; cx q[0],q[1];", {"ZI", "IZ"},
-                                Channel(kind, {{"gamma", 0.5}}, {1}),
-                                method, 2);
+        auto request =
+            Estimate("h q[0]; cx q[0],q[1];", {"ZI", "IZ"},
+                     Channel(kind, {{"gamma", 0.5}}, {1}), method, 2);
         auto& execution = request["execution"].as_object();
         auto& noise = request["noise"].as_object();
         execution.erase("seed");
@@ -149,9 +149,10 @@ void TestNoisyEstimateResetStreams() {
 
         const auto result = Call(request);
         const auto& values = result.at("expectation_values").as_array();
-        Check(std::abs(Real(values[0])) < 0.1 &&
-                  std::abs(Real(values[1]) - 0.5) < 0.1,
-              "Native noise estimates reused injected errors or reset outcomes");
+        Check(
+            std::abs(Real(values[0])) < 0.1 &&
+                std::abs(Real(values[1]) - 0.5) < 0.1,
+            "Native noise estimates reused injected errors or reset outcomes");
         if (seedMode == 0) {
           Check(result.at("seed") != Call(request).at("seed"),
                 "Unseeded native estimates reused the same seed");

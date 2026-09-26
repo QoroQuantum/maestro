@@ -66,7 +66,8 @@ class SimulatorsFactory {
   // Defined in the core library so Python's hidden-visibility extension
   // shares the same plugin instances and native-state lifetime counters.
   static std::shared_ptr<DistributedGpuLibrary> GetDistributedGpuLibrary();
-  static std::shared_ptr<DistributedMpiGpuLibrary> GetDistributedMpiGpuLibrary();
+  static std::shared_ptr<DistributedMpiGpuLibrary>
+  GetDistributedMpiGpuLibrary();
   static bool IsDistributedGpuAvailable() noexcept;
   static void FinalizeDistributedMpiGpuBackend();
   static bool InitGpuLibrary();
@@ -88,30 +89,36 @@ class SimulatorsFactory {
     ~ScopedGpuDevice();
     ScopedGpuDevice(const ScopedGpuDevice&) = delete;
     ScopedGpuDevice& operator=(const ScopedGpuDevice&) = delete;
+
    private:
     int previous;
   };
 
-  static std::unique_ptr<GpuLibStateVectorSim> CreateGpuLibStateVectorSim(int deviceId = -1) {
+  static std::unique_ptr<GpuLibStateVectorSim> CreateGpuLibStateVectorSim(
+      int deviceId = -1) {
     auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
     auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
 
-    return std::make_unique<GpuLibStateVectorSim>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    return std::make_unique<GpuLibStateVectorSim>(
+        gpuLibrary, gpuLibrary->GetCreationDevice());
   }
 
-  static std::unique_ptr<GpuDensityMatrix> CreateGpuDensityMatrix(int deviceId = -1) {
+  static std::unique_ptr<GpuDensityMatrix> CreateGpuDensityMatrix(
+      int deviceId = -1) {
     auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
     auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->HasDensityMatrixAPI()) return nullptr;
-    return std::make_unique<GpuDensityMatrix>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    return std::make_unique<GpuDensityMatrix>(gpuLibrary,
+                                              gpuLibrary->GetCreationDevice());
   }
 
   static std::unique_ptr<GpuMPO> CreateGpuMPO(int deviceId = -1) {
     auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
     auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->HasMPOAPI()) return nullptr;
-    return std::make_unique<GpuMPO>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    return std::make_unique<GpuMPO>(gpuLibrary,
+                                    gpuLibrary->GetCreationDevice());
   }
 
   static std::unique_ptr<GpuLibMPSSim> CreateGpuLibMPSSim(int deviceId = -1) {
@@ -119,30 +126,36 @@ class SimulatorsFactory {
     auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
 
-    return std::make_unique<GpuLibMPSSim>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    return std::make_unique<GpuLibMPSSim>(gpuLibrary,
+                                          gpuLibrary->GetCreationDevice());
   }
 
-  static std::unique_ptr<GpuLibTNSim> CreateGpuLibTensorNetSim(int deviceId = -1) {
+  static std::unique_ptr<GpuLibTNSim> CreateGpuLibTensorNetSim(
+      int deviceId = -1) {
     auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
     auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
 
-    return std::make_unique<GpuLibTNSim>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    return std::make_unique<GpuLibTNSim>(gpuLibrary,
+                                         gpuLibrary->GetCreationDevice());
   }
 
-  static std::shared_ptr<GpuStabilizer> CreateGpuStabilizerSimulator(int deviceId = -1) {
+  static std::shared_ptr<GpuStabilizer> CreateGpuStabilizerSimulator(
+      int deviceId = -1) {
     auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
     auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
-    return std::make_shared<GpuStabilizer>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    return std::make_shared<GpuStabilizer>(gpuLibrary,
+                                           gpuLibrary->GetCreationDevice());
   }
 
-  static std::shared_ptr<GpuPauliPropagator>
-  CreateGpuPauliPropagatorSimulator(int deviceId = -1) {
+  static std::shared_ptr<GpuPauliPropagator> CreateGpuPauliPropagatorSimulator(
+      int deviceId = -1) {
     auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
     auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
-    return std::make_shared<GpuPauliPropagator>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    return std::make_shared<GpuPauliPropagator>(
+        gpuLibrary, gpuLibrary->GetCreationDevice());
   }
 
   static std::unique_ptr<GpuPauliPropagator>
@@ -150,7 +163,8 @@ class SimulatorsFactory {
     auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
     auto gpuLibrary = GetGpuLibrary(deviceId);
     if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
-    return std::make_unique<GpuPauliPropagator>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    return std::make_unique<GpuPauliPropagator>(
+        gpuLibrary, gpuLibrary->GetCreationDevice());
   }
 
  private:

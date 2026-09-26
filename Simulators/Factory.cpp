@@ -51,19 +51,23 @@ GpuLibraryRegistry& GpuLibraries() {
   static GpuLibraryRegistry registry;
   return registry;
 }
-}
+}  // namespace
 
-std::shared_ptr<DistributedGpuLibrary> SimulatorsFactory::GetDistributedGpuLibrary() {
+std::shared_ptr<DistributedGpuLibrary>
+SimulatorsFactory::GetDistributedGpuLibrary() {
   return DistributedGpuLibrary::GetInstance();
 }
 
 std::shared_ptr<DistributedGpuLibrary> DistributedGpuLibrary::GetInstance() {
-  static auto lib = std::shared_ptr<DistributedGpuLibrary>(new DistributedGpuLibrary());
+  static auto lib =
+      std::shared_ptr<DistributedGpuLibrary>(new DistributedGpuLibrary());
   return lib;
 }
 
-std::shared_ptr<DistributedMpiGpuLibrary> DistributedMpiGpuLibrary::GetInstance() {
-  static auto lib = std::shared_ptr<DistributedMpiGpuLibrary>(new DistributedMpiGpuLibrary());
+std::shared_ptr<DistributedMpiGpuLibrary>
+DistributedMpiGpuLibrary::GetInstance() {
+  static auto lib =
+      std::shared_ptr<DistributedMpiGpuLibrary>(new DistributedMpiGpuLibrary());
   return lib;
 }
 
@@ -77,7 +81,8 @@ bool SimulatorsFactory::IsDistributedGpuAvailable() noexcept {
   }
 }
 
-std::shared_ptr<DistributedMpiGpuLibrary> SimulatorsFactory::GetDistributedMpiGpuLibrary() {
+std::shared_ptr<DistributedMpiGpuLibrary>
+SimulatorsFactory::GetDistributedMpiGpuLibrary() {
   return DistributedMpiGpuLibrary::GetInstance();
 }
 
@@ -86,7 +91,8 @@ void SimulatorsFactory::FinalizeDistributedMpiGpuBackend() {
 }
 
 void SimulatorsFactory::SelectGpuDevice(int deviceId) {
-  if (deviceId < 0) throw std::invalid_argument("gpu_device must be nonnegative");
+  if (deviceId < 0)
+    throw std::invalid_argument("gpu_device must be nonnegative");
   requestedGpuDeviceId = deviceId;
 }
 
@@ -108,9 +114,7 @@ std::shared_ptr<GpuLibrary> SimulatorsFactory::GetGpuLibrary(int deviceId) {
   return GpuLibraries().Acquire(ResolveGpuDevice(deviceId));
 }
 
-bool SimulatorsFactory::InitGpuLibrary() {
-  return bool(GetGpuLibrary());
-}
+bool SimulatorsFactory::InitGpuLibrary() { return bool(GetGpuLibrary()); }
 
 bool SimulatorsFactory::InitGpuLibraryWithMute() {
   return bool(GpuLibraries().Acquire(ResolveGpuDevice(), true));
@@ -227,12 +231,14 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
 #ifdef __linux__
     case SimulatorType::kDistGpuSim:
       if (m != SimulationType::kStatevector)
-        throw std::invalid_argument("Distributed GPU supports only statevector");
+        throw std::invalid_argument(
+            "Distributed GPU supports only statevector");
       if (!IsDistributedGpuAvailable()) return nullptr;
       return std::make_shared<Private::DistributedGpuSimulator>();
     case SimulatorType::kDistMpiGpuSim:
       if (m != SimulationType::kStatevector)
-        throw std::invalid_argument("Distributed MPI GPU supports only statevector");
+        throw std::invalid_argument(
+            "Distributed MPI GPU supports only statevector");
       return std::make_shared<Private::DistributedMpiGpuSimulator>();
 
     case SimulatorType::kGpuSim:
@@ -246,7 +252,8 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
            m == SimulationType::kTensorNetwork ||
            m == SimulationType::kPauliPropagator)) {
         auto sim = std::make_shared<Private::GpuSimulator>();
-        sim->Configure("gpu_device", std::to_string(ResolveGpuDevice()).c_str());
+        sim->Configure("gpu_device",
+                       std::to_string(ResolveGpuDevice()).c_str());
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");
         else if (m == SimulationType::kMatrixProductOperator)
@@ -339,12 +346,14 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
 #ifdef __linux__
     case SimulatorType::kDistGpuSim:
       if (m != SimulationType::kStatevector)
-        throw std::invalid_argument("Distributed GPU supports only statevector");
+        throw std::invalid_argument(
+            "Distributed GPU supports only statevector");
       if (!IsDistributedGpuAvailable()) return nullptr;
       return std::make_unique<Private::DistributedGpuSimulator>();
     case SimulatorType::kDistMpiGpuSim:
       if (m != SimulationType::kStatevector)
-        throw std::invalid_argument("Distributed MPI GPU supports only statevector");
+        throw std::invalid_argument(
+            "Distributed MPI GPU supports only statevector");
       return std::make_unique<Private::DistributedMpiGpuSimulator>();
 
     case SimulatorType::kGpuSim:
@@ -358,7 +367,8 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
            m == SimulationType::kTensorNetwork ||
            m == SimulationType::kPauliPropagator)) {
         auto sim = std::make_unique<Private::GpuSimulator>();
-        sim->Configure("gpu_device", std::to_string(ResolveGpuDevice()).c_str());
+        sim->Configure("gpu_device",
+                       std::to_string(ResolveGpuDevice()).c_str());
         if (m == SimulationType::kMatrixProductState)
           sim->Configure("method", "matrix_product_state");
         else if (m == SimulationType::kMatrixProductOperator)
