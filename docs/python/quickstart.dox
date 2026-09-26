@@ -56,16 +56,25 @@
  * |-----------|------|---------|-------------|
  * | `simulator_type` | `SimulatorType` | `QCSim` | Simulation backend |
  * | `simulation_type` | `SimulationType` | `Statevector` | Simulation method |
- * | `max_bond_dimension` | `int` or `None` | `None` | MPS/MPO bond dimension limit. For GPU MPS/MPO, `None` uses 128 for both planning and execution. Other backends retain their own defaults. |
- * | `singular_value_threshold` | `float` or `None` | `None` | MPS truncation threshold |
- * | `truncation_mode` | `str` or `None` | `None` (backend default: `"discarded_weight"`) | How `singular_value_threshold` is interpreted: `"discarded_weight"` (Qiskit Aer/ITensor convention — discard the smallest singular values until their cumulative squared weight reaches the threshold) or `"relative_max"` (discard singular values below `threshold * sigma_max`). Only the QCSim and GPU backends support `"relative_max"`; Aer raises `ValueError` if it's requested. |
- * | `use_double_precision` | `bool` | `False` | GPU double precision flag |
- * | `disable_optimized_swapping` | `bool` | `False` | Disable MPS swap optimization |
- * | `lookahead_depth` | `int` | `-1` | Swap optimization lookahead depth |
- * | `mps_measure_no_collapse` | `bool` | `True` | Use probability-based MPS sampling |
+ * | `max_bond_dimension` | `int` or `None` | `None` | Bond dimension limit for MPS, MPO and GPU tensor networks. For GPU MPS/MPO, `None` uses 128 for both planning and execution. Other backends retain their own defaults. |
+ * | `singular_value_threshold` | `float` or `None` | `None` | Truncation threshold for MPS, MPO and GPU tensor networks, read according to `truncation_mode` |
+ * | `truncation_mode` | `str` or `None` | `None` (backend default: `"discarded_weight"`) | How `singular_value_threshold` is interpreted: `"discarded_weight"` (Qiskit Aer/ITensor convention — discard the smallest singular values until their cumulative squared weight reaches the threshold) or `"relative_max"` (discard singular values below `threshold * sigma_max`). Because the first compares squared weights, the same threshold truncates much harder under it. Only the QCSim and GPU backends support `"relative_max"`; Aer raises `ValueError` if it's requested. |
+ * | `precision` | `str` or `None` | `None` | `"single"` or `"double"` for Qiskit Aer and the GPU simulators; `None` keeps each backend's default. Other backends ignore it; QCSim always uses double precision. |
+ * | `disable_optimized_swapping` | `bool` | `False` | Disable swap-cost and initial qubit-map optimisation |
+ * | `lookahead_depth` | `int` | `-1` | Swap optimization lookahead depth; `-1` uses the default |
+ * | `mps_sampling` | `str` | `"probabilities"` | MPS shot sampling: `"probabilities"` samples without collapsing the state, `"apply_measure"` measures and restores it per shot |
  * | `seed` | `int` or `None` | `None` | Seed all backend and Maestro sampling RNGs. Parallel jobs derive deterministic, distinct child streams. |
  * | `gpu_device` | `int` or `None` | `None` | CUDA-visible device ordinal for single-GPU execution |
  * | `distributed_options` | `dict[str, str]` | `{}` | Distribution controls for `DistributedGpu` and `DistributedMpiGpu` backends (e.g. `distributed_devices`, `distributed_global_qubits`, `mpi_communicator`, `mpi_p2p_bits`). See @ref py_hpc for details. |
+ * | `mps_svd_solver`, `mpo_svd_solver`, `tensor_network_svd_solver` | `str` or `None` | `None` | GPU SVD solver: `"gesvd"`, `"gesvdj"`, `"gesvdp"` or `"gesvdr"` (see @ref py_mps_gpu_svd) |
+ * | `mpo_kraus_completeness_check` | `str` or `None` | `None` | MPO handling of incomplete Kraus sets: `"ignore"`, `"warn"` or `"strict"` |
+ * | `mpo_restore_trace_after_truncation`, `mpo_hermitize_after_truncation` | `bool` | `False` | Renormalise the CPU MPO after each truncation |
+ * | `pp_coefficient_threshold` | `float` or `None` | `None` | Pauli propagation: drop strings whose \|coefficient\| is at most this |
+ * | `pp_max_pauli_weight` | `int` or `None` | `None` | Pauli propagation: drop strings acting on more qubits than this |
+ * | `pp_gates_between_trims`, `pp_gates_between_deduplications` | `int` or `None` | `None` | Pauli propagation: how often (in primitive operations) to apply the two thresholds; a deduplication pass also merges repeated strings. The thresholds do nothing unless one is set. |
+ * | `path_integral_threshold` | `float` or `None` | `None` | PathIntegral trim threshold |
+ *
+ * The constructor takes every parameter by keyword only.
  *
  * @note When no `config` is passed, a default `SimulatorConfig()` is used
  * (QCSim + Statevector with all defaults). You can also modify fields

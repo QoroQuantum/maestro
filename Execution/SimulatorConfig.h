@@ -1,16 +1,55 @@
 // Shared native configuration. This header has no Python dependency.
 #pragma once
+#include <algorithm>
 #include <iomanip>
 #include <limits>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include "maestrolib/Interface.h"
 #include "maestrolib/Maestro.h"
 #include "Simulators/RandomSeed.h"
 
 namespace MaestroExecution {
+inline const std::vector<std::string>& TruncationModes() {
+  static const std::vector<std::string> values{"relative_max",
+                                               "discarded_weight"};
+  return values;
+}
+inline const std::vector<std::string>& Precisions() {
+  static const std::vector<std::string> values{"single", "double"};
+  return values;
+}
+inline const std::vector<std::string>& SvdSolvers() {
+  static const std::vector<std::string> values{"gesvd", "gesvdj", "gesvdp",
+                                               "gesvdr"};
+  return values;
+}
+inline const std::vector<std::string>& MpsSamplingModes() {
+  static const std::vector<std::string> values{"probabilities",
+                                               "apply_measure"};
+  return values;
+}
+inline const std::vector<std::string>& KrausCompletenessChecks() {
+  static const std::vector<std::string> values{"ignore", "warn", "strict"};
+  return values;
+}
+
+inline void RequireOneOf(const std::optional<std::string>& value,
+                         const std::vector<std::string>& allowed,
+                         const char* name) {
+  if (!value ||
+      std::find(allowed.begin(), allowed.end(), *value) != allowed.end())
+    return;
+  std::string message = std::string(name) + " must be one of";
+  for (size_t i = 0; i < allowed.size(); ++i)
+    message += (i ? ", '" : " '") + allowed[i] + "'";
+  throw std::invalid_argument(message + "; got '" + *value + "'.");
+}
+
 struct SimulatorConfig {
   // Python exposes these typed fields directly. Native requests also use typed
   // network controls, but store most validated backend options in
@@ -21,9 +60,10 @@ struct SimulatorConfig {
       Simulators::SimulationType::kStatevector;
   // Unset uses the backend default; GPU MPS/MPO resolve to 128 in the network
   // configuration so initial-layout planning and execution share the cap.
+  // The three truncation settings also apply to MPO and GPU tensor networks.
   std::optional<size_t> max_bond_dimension = std::nullopt;
   std::optional<double> singular_value_threshold = std::nullopt;
-  // "relative_max" (keep sigma_i > threshold * sigma_max, the historical
+  // "relative_max" (keep sigma_i >= threshold * sigma_max, the historical
   // QCSim/GPU convention) or "discarded_weight" (discard the smallest singular
   // values until their cumulative squared weight reaches the threshold,
   // matching Qiskit Aer's and ITensor's convention -- the default on every
@@ -31,38 +71,27 @@ struct SimulatorConfig {
   // discarded_weight and raises if relative_max is requested; QCSim and the GPU
   // backend support switching between both.
   std::optional<std::string> truncation_mode = std::nullopt;
-  bool use_double_precision = false;
+  // "single" or "double" for Qiskit Aer and the GPU simulators; unset keeps
+  // each backend's default. Other backends ignore it.
+  std::optional<std::string> precision = std::nullopt;
   bool disable_optimized_swapping = false;
   int lookahead_depth = -1;
-  bool mps_measure_no_collapse = true;
+  // "probabilities" (no collapse) or "apply_measure" (measure and restore).
+  std::string mps_sampling = "probabilities";
   std::optional<std::string> mpo_kraus_completeness_check = std::nullopt;
   bool mpo_restore_trace_after_truncation = false;
   bool mpo_hermitize_after_truncation = false;
-  // GPU SVD algorithm selection. At most one setting in each backend group
-  // should be true; configuring one clears the other choices in the backend.
-  bool mps_use_gesvd = false;
-  bool mps_use_gesvdj = false;
-  bool mps_use_gesvdp = false;
-  bool mps_use_gesvdr = false;
-  bool mpo_use_gesvd = false;
-  bool mpo_use_gesvdj = false;
-  bool mpo_use_gesvdp = false;
-  bool mpo_use_gesvdr = false;
-  bool tensor_network_use_gesvd = false;
-  bool tensor_network_use_gesvdj = false;
-  bool tensor_network_use_gesvdp = false;
-  bool tensor_network_use_gesvdr = false;
+  // GPU SVD solver per backend: "gesvd", "gesvdj", "gesvdp" or "gesvdr"; unset
+  // keeps the GPU library's default.
+  std::optional<std::string> mps_svd_solver = std::nullopt;
+  std::optional<std::string> mpo_svd_solver = std::nullopt;
+  std::optional<std::string> tensor_network_svd_solver = std::nullopt;
 
-  // true for double precision, false for single precision, nullopt for default
-  // this is a separate setting for qiskit aer, the use_double_precision above
-  // is for gpu mps and tensor network simulators
-  std::optional<bool> precision = std::nullopt;
-
-  // PauliPropagator truncation parameters
+  // PauliPropagator truncation; the thresholds apply only on a set cadence.
   std::optional<double> pp_coefficient_threshold = std::nullopt;
-  std::optional<size_t> pp_pauli_weight_threshold = std::nullopt;
-  std::optional<int> pp_steps_between_trims = std::nullopt;
-  std::optional<int> pp_steps_between_deduplications = std::nullopt;
+  std::optional<size_t> pp_max_pauli_weight = std::nullopt;
+  std::optional<int> pp_gates_between_trims = std::nullopt;
+  std::optional<int> pp_gates_between_deduplications = std::nullopt;
 
   // path integral parameters
   std::optional<double> path_integral_threshold = std::nullopt;
@@ -79,49 +108,71 @@ struct SimulatorConfig {
   bool optimize_circuit = true;
   std::unordered_map<std::string, std::string> native_options;
 
-  SimulatorConfig() = default;
-
-  SimulatorConfig(
-      Simulators::SimulatorType st, Simulators::SimulationType set,
-      std::optional<size_t> mb, std::optional<double> sv, bool dp, bool ds,
-      int la, bool mnc, std::optional<std::string> tm,
-      std::optional<uint64_t> random_seed,
-      std::optional<int> device = std::nullopt,
-      std::unordered_map<std::string, std::string> distribution = {})
-      : simulator_type(st),
-        simulation_type(set),
-        max_bond_dimension(mb),
-        singular_value_threshold(sv),
-        truncation_mode(std::move(tm)),
-        use_double_precision(dp),
-        disable_optimized_swapping(ds),
-        lookahead_depth(la),
-        mps_measure_no_collapse(mnc),
-        seed(random_seed),
-        gpu_device(device),
-        distributed_options(std::move(distribution)) {
-    if (device && *device < 0)
-      throw std::invalid_argument("gpu_device must be nonnegative");
-    if ((st == Simulators::SimulatorType::kCompositeQCSim
+  // Throws std::invalid_argument for an unsupported combination or value.
+  void Validate() const {
+    if ((simulator_type == Simulators::SimulatorType::kCompositeQCSim
 #ifndef NO_QISKIT_AER
-         || st == Simulators::SimulatorType::kCompositeQiskitAer
+         || simulator_type == Simulators::SimulatorType::kCompositeQiskitAer
 #endif
          ) &&
-        set != Simulators::SimulationType::kStatevector) {
+        simulation_type != Simulators::SimulationType::kStatevector)
       throw std::invalid_argument(
           "Composite simulators only support Statevector simulation type.");
-    }
-    if (st == Simulators::SimulatorType::kQuestSim &&
-        set != Simulators::SimulationType::kStatevector) {
+    if (simulator_type == Simulators::SimulatorType::kQuestSim &&
+        simulation_type != Simulators::SimulationType::kStatevector)
       throw std::invalid_argument(
           "QuestSim only supports Statevector simulation type.");
-    }
+    if (gpu_device && *gpu_device < 0)
+      throw std::invalid_argument("gpu_device must be nonnegative");
+    RequireOneOf(truncation_mode, TruncationModes(), "truncation_mode");
+    RequireOneOf(precision, Precisions(), "precision");
+    RequireOneOf(mps_sampling, MpsSamplingModes(), "mps_sampling");
+    RequireOneOf(mpo_kraus_completeness_check, KrausCompletenessChecks(),
+                 "mpo_kraus_completeness_check");
+    RequireOneOf(mps_svd_solver, SvdSolvers(), "mps_svd_solver");
+    RequireOneOf(mpo_svd_solver, SvdSolvers(), "mpo_svd_solver");
+    RequireOneOf(tensor_network_svd_solver, SvdSolvers(),
+                 "tensor_network_svd_solver");
+    // The propagator takes these modulo a gate index.
+    for (const auto& [cadence, name] :
+         {std::pair{pp_gates_between_trims, "pp_gates_between_trims"},
+          std::pair{pp_gates_between_deduplications,
+                    "pp_gates_between_deduplications"}})
+      if (cadence && *cadence < 1)
+        throw std::invalid_argument(std::string(name) + " must be positive");
+    for (const auto& entry : distributed_options)
+      if (entry.first.compare(0, 12, "distributed_") != 0 &&
+          entry.first.compare(0, 4, "mpi_") != 0)
+        throw std::invalid_argument(
+            "distributed_options accepts only distributed_* and mpi_* keys");
   }
 };
+
+// Native Configure keys for typed options without a one-to-one key. Precision
+// sets both keys: GpuState reads use_double_precision, the others precision.
+inline std::vector<std::pair<std::string, std::string>> TypedNativeOptions(
+    const SimulatorConfig& config) {
+  std::vector<std::pair<std::string, std::string>> options;
+  for (const auto& [backend, solver] :
+       {std::pair{"matrix_product_state", config.mps_svd_solver},
+        std::pair{"matrix_product_operator", config.mpo_svd_solver},
+        std::pair{"tensor_network", config.tensor_network_svd_solver}})
+    if (solver) options.emplace_back(std::string(backend) + "_use_" + *solver,
+                                     "true");
+  if (config.precision) {
+    options.emplace_back("precision", *config.precision);
+    options.emplace_back("use_double_precision",
+                         *config.precision == "double" ? "1" : "0");
+  }
+  options.emplace_back("mps_sample_measure_algorithm",
+                       "mps_" + config.mps_sampling);
+  return options;
+}
 
 // Helper to configure the simulation network
 inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     unsigned long int handle, const SimulatorConfig& config) {
+  config.Validate();
   if (Simulators::IsDistributedGpuSimulator(config.simulator_type) &&
       config.simulation_type != Simulators::SimulationType::kStatevector)
     throw std::invalid_argument(
@@ -169,13 +220,8 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
   for (const auto& [key, value] : config.native_options)
     network->Configure(key.c_str(), value.c_str());
 
-  for (const auto& [key, value] : config.distributed_options) {
-    if (key.compare(0, 12, "distributed_") != 0 &&
-        key.compare(0, 4, "mpi_") != 0)
-      throw std::invalid_argument(
-          "distributed_options accepts only distributed_* and mpi_* keys");
+  for (const auto& [key, value] : config.distributed_options)
     network->Configure(key.c_str(), value.c_str());
-  }
   if (config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim &&
       !config.seed)
     network->Configure("seed", std::to_string(Simulators::GenerateRandomSeed(
@@ -228,31 +274,8 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
   if (config.mpo_hermitize_after_truncation)
     network->Configure("matrix_product_operator_hermitize_after_truncation",
                        "true");
-  const auto configure_svd = [&network](const char* backend, const char* method,
-                                        bool enabled) {
-    if (!enabled) return;
-    const std::string key = std::string(backend) + "_use_" + method;
-    network->Configure(key.c_str(), "true");
-  };
-  configure_svd("matrix_product_state", "gesvd", config.mps_use_gesvd);
-  configure_svd("matrix_product_state", "gesvdj", config.mps_use_gesvdj);
-  configure_svd("matrix_product_state", "gesvdp", config.mps_use_gesvdp);
-  configure_svd("matrix_product_state", "gesvdr", config.mps_use_gesvdr);
-  configure_svd("matrix_product_operator", "gesvd", config.mpo_use_gesvd);
-  configure_svd("matrix_product_operator", "gesvdj", config.mpo_use_gesvdj);
-  configure_svd("matrix_product_operator", "gesvdp", config.mpo_use_gesvdp);
-  configure_svd("matrix_product_operator", "gesvdr", config.mpo_use_gesvdr);
-  configure_svd("tensor_network", "gesvd", config.tensor_network_use_gesvd);
-  configure_svd("tensor_network", "gesvdj", config.tensor_network_use_gesvdj);
-  configure_svd("tensor_network", "gesvdp", config.tensor_network_use_gesvdp);
-  configure_svd("tensor_network", "gesvdr", config.tensor_network_use_gesvdr);
-  if (config.use_double_precision) {
-    network->Configure("use_double_precision", "1");
-  }
-
-  if (config.precision) {
-    network->Configure("precision", *config.precision ? "double" : "single");
-  }
+  for (const auto& [key, value] : TypedNativeOptions(config))
+    network->Configure(key.c_str(), value.c_str());
   if (config.seed) {
     const auto value = std::to_string(*config.seed);
     network->Configure("seed", value.c_str());
@@ -267,13 +290,6 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
   // Set the lookahead depth for swap optimization
   network->SetLookaheadDepth(config.lookahead_depth);
 
-  if (config.native_options.count("mps_sample_measure_algorithm")) {
-    // Already configured above.
-  } else if (!config.mps_measure_no_collapse) {
-    network->Configure("mps_sample_measure_algorithm", "mps_apply_measure");
-  } else {
-    network->Configure("mps_sample_measure_algorithm", "mps_probabilities");
-  }
 
   // Create the configured backend. The desired simulator type is specified via
   // RemoveAllOptimizationSimulatorsAndAdd above.
@@ -288,19 +304,18 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("pauli_propagator_coefficient_threshold",
                        oss.str().c_str());
   }
-  if (config.pp_pauli_weight_threshold) {
-    network->Configure(
-        "pauli_propagator_pauli_weight_threshold",
-        std::to_string(*config.pp_pauli_weight_threshold).c_str());
+  if (config.pp_max_pauli_weight) {
+    network->Configure("pauli_propagator_pauli_weight_threshold",
+                       std::to_string(*config.pp_max_pauli_weight).c_str());
   }
-  if (config.pp_steps_between_trims) {
+  if (config.pp_gates_between_trims) {
     network->Configure("pauli_propagator_steps_between_trims",
-                       std::to_string(*config.pp_steps_between_trims).c_str());
+                       std::to_string(*config.pp_gates_between_trims).c_str());
   }
-  if (config.pp_steps_between_deduplications) {
+  if (config.pp_gates_between_deduplications) {
     network->Configure(
         "pauli_propagator_num_gates_between_deduplications",
-        std::to_string(*config.pp_steps_between_deduplications).c_str());
+        std::to_string(*config.pp_gates_between_deduplications).c_str());
   }
   if (config.path_integral_threshold) {
     std::ostringstream oss;

@@ -792,12 +792,12 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
         if self.checkpoint_sim is not None:
             res = self.checkpoint_sim.execute_suffix(
                 self.suffix_qc, shots=shots, noise_model=self.suffix_noise_model,
-                noise_realizations=shots, seed=run_seed,
+                noise_realizations=shots, noise_seed=run_seed,
                 num_measurements=self.num_measurements)
         elif self.noise_model is not None and self.noise_model.has_any():
             res = self.qc.full_noise_execute(
                 self.noise_model, self.config, shots=shots,
-                noise_realizations=shots, seed=run_seed)
+                noise_realizations=shots, noise_seed=run_seed)
         else:
             res = self.qc.execute(self.config, shots=shots)
         return counts_to_measurements(res.get("counts", {}), self.num_measurements, shots,

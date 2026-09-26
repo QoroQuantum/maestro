@@ -468,9 +468,10 @@ class NoiseModel {
   }
 
   /**
-   * Add an additional OU fluctuator band to a qubit's band list.
+   * Append an OU fluctuator band to a qubit's band list, keeping the bands
+   * already set on it.
    */
-  void add_correlated_ou_band(int q, double sigma, double alpha,
+  void set_correlated_ou_band(int q, double sigma, double alpha,
                               double gate_time, bool after_1q = true,
                               bool after_2q = true,
                               bool stationary_init = true) {

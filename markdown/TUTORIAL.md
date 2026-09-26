@@ -329,15 +329,17 @@ sim->Configure("matrix_product_state_use_gesvdp", "true");
 sim->Configure("matrix_product_state_use_gesvdr", "true");
 ```
 
-Python exposes the same choices as `SimulatorConfig` boolean properties:
+Python selects one solver per backend with `mps_svd_solver`, `mpo_svd_solver`
+and `tensor_network_svd_solver`, each `"gesvd"`, `"gesvdj"`, `"gesvdp"` or
+`"gesvdr"`:
 
 ```python
 config = maestro.SimulatorConfig(
     simulator_type=maestro.SimulatorType.Gpu,
     simulation_type=maestro.SimulationType.MatrixProductState,
     gpu_device=0,
+    mps_svd_solver="gesvdp",
 )
-config.mps_use_gesvdp = True
 ```
 
 The corresponding GPU wrapper classes expose `SetGesvdP`, `GetGesvdP`,

@@ -18,19 +18,30 @@ def test_gpu_device_config():
         config.gpu_device = -1
 
 
-def test_gpu_svd_config():
-    """All GPU SVD selections are available through SimulatorConfig."""
-    names = [
-        "mps_use_gesvd", "mps_use_gesvdj", "mps_use_gesvdp", "mps_use_gesvdr",
-        "mpo_use_gesvd", "mpo_use_gesvdj", "mpo_use_gesvdp", "mpo_use_gesvdr",
-        "tensor_network_use_gesvd", "tensor_network_use_gesvdj",
-        "tensor_network_use_gesvdp", "tensor_network_use_gesvdr",
-    ]
+SVD_SOLVER_FIELDS = ["mps_svd_solver", "mpo_svd_solver", "tensor_network_svd_solver"]
+
+
+@pytest.mark.parametrize("field", SVD_SOLVER_FIELDS)
+def test_gpu_svd_config(field):
+    """All GPU SVD solvers are selectable through SimulatorConfig."""
     config = maestro.SimulatorConfig()
-    for name in names:
-        assert getattr(config, name) is False
-        setattr(config, name, True)
-        assert getattr(config, name) is True
+    assert getattr(config, field) is None
+    for solver in ("gesvd", "gesvdj", "gesvdp", "gesvdr"):
+        setattr(config, field, solver)
+        assert getattr(config, field) == solver
+        assert getattr(maestro.SimulatorConfig(**{field: solver}), field) == solver
+    setattr(config, field, None)
+    assert getattr(config, field) is None
+
+
+@pytest.mark.parametrize("field", SVD_SOLVER_FIELDS)
+def test_gpu_svd_config_rejects_unknown_solver(field):
+    with pytest.raises(ValueError, match=field):
+        maestro.SimulatorConfig(**{field: "gesvdx"})
+    config = maestro.SimulatorConfig(**{field: "gesvdj"})
+    with pytest.raises(ValueError, match=field):
+        setattr(config, field, "gesvdx")
+    assert getattr(config, field) == "gesvdj"
 
 
 @pytest.mark.parametrize("method", [

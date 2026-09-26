@@ -216,6 +216,28 @@ int main() try {
   Near(Real(result.at("counts").at("10")), 80);
   Check(result.at("execution_metadata").at("method") == "statevector",
         "Fixed backend method changed");
+
+  // Typed options are reported under the native keys they configure.
+  auto mps = Request("execute", 2, "h q[0]; measure q -> c;",
+                     "matrix_product_state");
+  const auto sampling = [](const j::object& response) {
+    return response.at("execution_metadata")
+        .at("configured_options")
+        .at("mps_sample_measure_algorithm");
+  };
+  Check(sampling(Call(mps)) == "mps_probabilities",
+        "Default MPS sampling was not reported");
+  mps["simulator"].as_object()["options"] =
+      j::object{{"mps_sampling", "apply_measure"}};
+  Check(sampling(Call(mps)) == "mps_apply_measure",
+        "Configured MPS sampling was not reported");
+  mps["simulator"].as_object()["options"] =
+      j::object{{"mps_sampling", "collapse"}};
+  Call(mps, false);
+  mps["simulator"].as_object()["options"] =
+      j::object{{"mps_measure_no_collapse", true}};
+  Call(mps, false);
+
   request["operation"] = "statevector";
   request["execution"].as_object().erase("shots");
   result = Call(request);

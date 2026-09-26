@@ -238,7 +238,7 @@ inline NoiseConfig ParseNoise(const json::object& object,
                                     number("gate_time"), after1, after2,
                                     stationary);
           else if (kind == "correlated_ou_band")
-            model.add_correlated_ou_band(q, number("sigma"), number("alpha"),
+            model.set_correlated_ou_band(q, number("sigma"), number("alpha"),
                                          number("gate_time"), after1, after2,
                                          stationary);
           else if (kind == "multi_correlated_ou") {
