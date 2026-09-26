@@ -213,12 +213,12 @@ struct Context {
   unsigned long handle = 0;
   std::shared_ptr<Network::INetwork<double>> network;
   explicit Context(const ParsedCircuit& circuit,
-                   const SimulatorConfig& config) {
+                   const SimulatorConfig& config, bool for_expectations = false) {
     auto* maestro = static_cast<Maestro*>(GetMaestroObjectWithMute());
     if (!maestro) throw Error("native_failure", "Cannot initialize Maestro");
     handle = maestro->CreateSimpleSimulator(circuit.qubits, circuit.clbits);
     try {
-      network = ConfigureNetwork(handle, config);
+      network = ConfigureNetwork(handle, config, for_expectations);
       if (!network || !network->GetSimulator())
         throw Error("backend_unavailable",
                     "Requested backend could not be created");
@@ -645,7 +645,7 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
                                                  config.distributed_options);
     noise.seed = static_cast<uint32_t>(*config.seed);
   }
-  Context context(input, config);
+  Context context(input, config, operation == "estimate");
   auto simulator = context.simulator();
   // Validation remains silent; warn once per execution, not per realization.
   if (!noise.thermal_approximation_warning.empty())

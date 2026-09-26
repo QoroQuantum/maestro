@@ -28,6 +28,7 @@ namespace bdata = boost::unit_test::data;
 
 #include "../Circuit/Circuit.h"
 #include "../Circuit/Factory.h"
+#include "../Circuit/CausalCone.h"
 #include "../Simulators/Factory.h"  // project being tested
 
 #include "../Network/SimpleDisconnectedNetwork.h"
@@ -543,6 +544,183 @@ BOOST_DATA_TEST_CASE_F(ExpvalTestFixture, NetworkExpectationTest,
     resetRandomCirc->Execute(qcsimStatevector, state);
     randomCirc->Clear();
   }
+}
+
+BOOST_AUTO_TEST_CASE(CausalConeExtractionTest) {
+  auto circuit = Circuits::CircuitFactory<>::CreateCircuit();
+  // Sub-cluster 1 on qubits 0 and 1
+  circuit->AddOperation(Circuits::CircuitFactory<>::CreateGate(
+      Circuits::QuantumGateType::kHadamardGateType, 0));
+  circuit->AddOperation(Circuits::CircuitFactory<>::CreateGate(
+      Circuits::QuantumGateType::kCXGateType, 0, 1));
+
+  // Sub-cluster 2 on qubits 8 and 9 (disjoint)
+  circuit->AddOperation(Circuits::CircuitFactory<>::CreateGate(
+      Circuits::QuantumGateType::kHadamardGateType, 8));
+  circuit->AddOperation(Circuits::CircuitFactory<>::CreateGate(
+      Circuits::QuantumGateType::kCXGateType, 8, 9));
+
+  // Observable 1: "ZZIIIIIIII" (only qubits 0 and 1 active)
+  std::string pauli1 = "ZZIIIIIIII";
+  auto cone1 = Circuits::ExtractObservableCone(circuit, pauli1);
+
+  BOOST_CHECK_EQUAL(cone1.GetNumberOfQubits(), 2);
+  BOOST_CHECK_EQUAL(cone1.active_qubits_map[0], 0);
+  BOOST_CHECK_EQUAL(cone1.active_qubits_map[1], 1);
+  BOOST_CHECK_EQUAL(cone1.active_qubits_map[8],
+                    Circuits::ReducedObservableCone<>::inactive_qubit);
+  BOOST_CHECK_EQUAL(cone1.reduced_pauli_string, "ZZ");
+  BOOST_CHECK_EQUAL(cone1.reduced_circuit->GetOperations().size(), 2);
+  BOOST_CHECK_EQUAL(cone1.reduced_circuit->GetMaxQubitIndex(), 1);
+
+  // Observable 2: "IIIIIIIIZZ" (only qubits 8 and 9 active)
+  std::string pauli2 = "IIIIIIIIZZ";
+  auto cone2 = Circuits::ExtractObservableCone(circuit, pauli2);
+
+  BOOST_CHECK_EQUAL(cone2.GetNumberOfQubits(), 2);
+  BOOST_CHECK_EQUAL(cone2.active_qubits_map[8], 0);
+  BOOST_CHECK_EQUAL(cone2.active_qubits_map[9], 1);
+  BOOST_CHECK_EQUAL(cone2.active_qubits_map[0],
+                    Circuits::ReducedObservableCone<>::inactive_qubit);
+  BOOST_CHECK_EQUAL(cone2.reduced_pauli_string, "ZZ");
+  BOOST_CHECK_EQUAL(cone2.reduced_circuit->GetOperations().size(), 2);
+  BOOST_CHECK_EQUAL(cone2.reduced_circuit->GetMaxQubitIndex(), 1);
+}
+
+BOOST_AUTO_TEST_CASE(NetworkCausalConeTest) {
+  std::vector<Types::qubit_t> hostQubits = {50};
+  std::vector<size_t> hostCbits = {50};
+  auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(hostQubits, hostCbits);
+  network->CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState);
+
+  auto circuit = Circuits::CircuitFactory<>::CreateCircuit();
+  // Cluster on 0, 1: creates (|00> + |11>) / sqrt(2)
+  circuit->AddOperation(Circuits::CircuitFactory<>::CreateGate(
+      Circuits::QuantumGateType::kHadamardGateType, 0));
+  circuit->AddOperation(Circuits::CircuitFactory<>::CreateGate(
+      Circuits::QuantumGateType::kCXGateType, 0, 1));
+
+  // Cluster on 20, 21: creates (|00> + |11>) / sqrt(2)
+  circuit->AddOperation(Circuits::CircuitFactory<>::CreateGate(
+      Circuits::QuantumGateType::kHadamardGateType, 20));
+  circuit->AddOperation(Circuits::CircuitFactory<>::CreateGate(
+      Circuits::QuantumGateType::kCXGateType, 20, 21));
+
+  std::string pauli1 = "ZZ" + std::string(48, 'I');
+  std::string pauli2 = std::string(20, 'I') + "XX" + std::string(28, 'I');
+  std::string pauli3 = "XX" + std::string(48, 'I');
+
+  auto vals = network->ExecuteOnHostExpectations(circuit, 0, {pauli1, pauli2, pauli3});
+  BOOST_CHECK_SMALL(vals[0] - 1.0, 1e-12);
+  BOOST_CHECK_SMALL(vals[1] - 1.0, 1e-12);
+  BOOST_CHECK_SMALL(vals[2] - 1.0, 1e-12);
+
+  // Verify disabling causal cone reduction yields the same expectations
+  network->Configure("enable_causal_cone_reduction", "false");
+  auto valsDisabled = network->ExecuteOnHostExpectations(circuit, 0, {pauli1, pauli2, pauli3});
+  BOOST_CHECK_CLOSE(valsDisabled[0], 1.0, 1e-6);
+  BOOST_CHECK_CLOSE(valsDisabled[1], 1.0, 1e-6);
+  BOOST_CHECK_CLOSE(valsDisabled[2], 1.0, 1e-6);
+}
+
+BOOST_AUTO_TEST_CASE(CausalConeHundredQubitsTest) {
+  using F = Circuits::CircuitFactory<>;
+  using G = Circuits::QuantumGateType;
+  auto circuit = F::CreateCircuit();
+  for (size_t q = 0; q < 100; q += 2) {
+    circuit->AddOperation(F::CreateGate(G::kHadamardGateType, q));
+    circuit->AddOperation(F::CreateGate(G::kCXGateType, q, q + 1));
+  }
+  auto cone = Circuits::ExtractObservableCone(circuit, "ZZ" + std::string(98, 'I'));
+  BOOST_CHECK_EQUAL(cone.GetNumberOfQubits(), 2);
+  BOOST_CHECK_EQUAL(cone.reduced_circuit->GetMaxQubitIndex(), 1);
+  BOOST_CHECK_EQUAL(cone.reduced_circuit->size(), 2);
+  BOOST_CHECK_EQUAL(cone.active_qubits_map[99], decltype(cone)::inactive_qubit);
+}
+
+BOOST_AUTO_TEST_CASE(CausalConeBackendEquivalenceTest) {
+  using F = Circuits::CircuitFactory<>;
+  using G = Circuits::QuantumGateType;
+  using S = Simulators::SimulationType;
+  for (auto method : {S::kStabilizer, S::kPauliPropagator, S::kStatevector}) {
+    auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
+        std::vector<Types::qubit_t>{6}, std::vector<size_t>{6});
+    network->SetOptimizeSimulator(false); // Exercise the requested backend.
+    network->CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+    for (int trial = 0; trial < 10; ++trial) {
+      auto circuit = F::CreateCircuit();
+      for (size_t q = 0; q < 6; ++q) {
+        circuit->AddOperation(F::CreateGate(G::kHadamardGateType, q));
+        circuit->AddOperation(F::CreateGate(G::kSGateType, q));
+        if (method != S::kStabilizer)
+          circuit->AddOperation(F::CreateGate(G::kRyGateType, q, 0, 0,
+                                             0.13 * (trial + q)));
+      }
+      circuit->AddOperation(F::CreateGate(G::kCXGateType, 4, 2));
+      circuit->AddOperation(F::CreateGate(G::kCXGateType, 2, 0));
+      // This later gate is outside Z0's backward cone, despite touching q4.
+      circuit->AddOperation(F::CreateGate(G::kCXGateType, 4, 5));
+      auto cone = Circuits::ExtractObservableCone(circuit, "ZIIIII");
+      BOOST_CHECK_EQUAL(cone.GetNumberOfQubits(), 3);
+      BOOST_CHECK_EQUAL(cone.active_qubits_map[0], 0);
+      BOOST_CHECK_EQUAL(cone.active_qubits_map[2], 1);
+      BOOST_CHECK_EQUAL(cone.active_qubits_map[4], 2);
+      BOOST_CHECK_EQUAL(cone.active_qubits_map[5], decltype(cone)::inactive_qubit);
+      const std::vector<std::string> observables{
+          "ZIIIII", "YIIIII", "IIXIII", "IIIIII", "ZZZZZZ"};
+      network->Configure("enable_causal_cone_reduction", "false");
+      auto full = network->ExecuteOnHostExpectations(circuit, 0, observables);
+      network->Configure("enable_causal_cone_reduction", "true");
+      auto reduced = network->ExecuteOnHostExpectations(circuit, 0, observables);
+      for (size_t i = 0; i < full.size(); ++i)
+        BOOST_CHECK_SMALL(full[i] - reduced[i], 1e-12);
+      BOOST_CHECK(network->GetLastSimulationType() == method);
+    }
+  }
+}
+
+BOOST_AUTO_TEST_CASE(CausalConeNonunitaryFallbackTest) {
+  using F = Circuits::CircuitFactory<>;
+  using G = Circuits::QuantumGateType;
+  for (bool noise : {false, true}) {
+    auto circuit = F::CreateCircuit();
+    if (noise) {
+      circuit->AddOperation(F::CreateGate(G::kXGateType, 0));
+      circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(
+          Types::qubits_vector{0}, Simulators::QuantumChannel::AmplitudeDamping(0.25)));
+    } else {
+      circuit->AddOperation(F::CreateGate(G::kXGateType, 1));
+      circuit->AddOperation(F::CreateMeasurement({{1, 2}}));
+      circuit->AddOperation(F::CreateSimpleConditionalGate(
+          F::CreateGate(G::kXGateType, 0), 2));
+    }
+    BOOST_CHECK(!Circuits::SupportsObservableCone(circuit));
+    auto cone = Circuits::ExtractObservableCone(circuit, "ZII");
+    BOOST_CHECK(cone.reduced_circuit == circuit);
+    BOOST_CHECK_EQUAL(cone.GetNumberOfQubits(), 3);
+    auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
+        std::vector<Types::qubit_t>{3}, std::vector<size_t>{3});
+    network->SetOptimizeSimulator(false);
+    network->CreateSimulator(Simulators::SimulatorType::kQCSim,
+        noise ? Simulators::SimulationType::kDensityMatrix
+              : Simulators::SimulationType::kStatevector);
+    for (bool enabled : {false, true}) {
+      network->Configure("enable_causal_cone_reduction", enabled ? "true" : "false");
+      auto result = network->ExecuteOnHostExpectations(circuit, 0, {"ZII"});
+      BOOST_CHECK_SMALL(result[0] - (noise ? -0.5 : -1.), 1e-12);
+    }
+  }
+}
+
+BOOST_AUTO_TEST_CASE(CausalConeIdentityAndIdleQubitTest) {
+  auto circuit = Circuits::CircuitFactory<>::CreateCircuit();
+  auto identity = Circuits::ExtractObservableCone(circuit, "IIII");
+  BOOST_CHECK_EQUAL(identity.GetNumberOfQubits(), 0);
+  BOOST_CHECK(identity.reduced_circuit->GetOperations().empty());
+  auto idle = Circuits::ExtractObservableCone(circuit, "IIIZ");
+  BOOST_CHECK_EQUAL(idle.GetNumberOfQubits(), 1);
+  BOOST_CHECK_EQUAL(idle.active_qubits_map[3], 0);
+  BOOST_CHECK_EQUAL(idle.reduced_pauli_string, "Z");
 }
 
 BOOST_AUTO_TEST_SUITE_END()

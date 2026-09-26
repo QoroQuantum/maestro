@@ -258,7 +258,7 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
   if (sim.handle == 0)
     throw std::runtime_error("Failed to create simulator handle.");
 
-  auto network = ConfigureNetwork(sim.handle, config);
+  auto network = ConfigureNetwork(sim.handle, config, true);
   if (!network) throw std::runtime_error("Failed to configure network.");
 
   std::vector<double> expectations;
@@ -1063,6 +1063,10 @@ NB_MODULE(maestro, m) {
       .def_rw("path_integral_threshold",
               &SimulatorConfig::path_integral_threshold)
       .def_rw("seed", &SimulatorConfig::seed)
+      .def_rw("enable_causal_cone_reduction",
+              &SimulatorConfig::enable_causal_cone_reduction)
+      .def_rw("causal_cone_statevector_threshold",
+              &SimulatorConfig::causal_cone_statevector_threshold)
       .def("__repr__", [](const SimulatorConfig& c) {
         std::ostringstream oss;
         oss << "SimulatorConfig("
@@ -1084,6 +1088,10 @@ NB_MODULE(maestro, m) {
             << ", lookahead_depth=" << c.lookahead_depth
             << ", mps_measure_no_collapse="
             << (c.mps_measure_no_collapse ? "True" : "False")
+            << ", enable_causal_cone_reduction="
+            << (c.enable_causal_cone_reduction ? "True" : "False")
+            << ", causal_cone_statevector_threshold="
+            << c.causal_cone_statevector_threshold
             << ", seed=" << (c.seed ? std::to_string(*c.seed) : "None")
             << ", gpu_device="
             << (c.gpu_device ? std::to_string(*c.gpu_device) : "None") << ")";

@@ -77,6 +77,8 @@ struct SimulatorConfig {
       optimization_candidates;
   bool fixed_backend = false;
   bool optimize_circuit = true;
+  bool enable_causal_cone_reduction = true;
+  size_t causal_cone_statevector_threshold = 20;
   std::unordered_map<std::string, std::string> native_options;
 
   SimulatorConfig() = default;
@@ -121,7 +123,8 @@ struct SimulatorConfig {
 
 // Helper to configure the simulation network
 inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
-    unsigned long int handle, const SimulatorConfig& config) {
+    unsigned long int handle, const SimulatorConfig& config,
+    bool for_expectations = false) {
   if (Simulators::IsDistributedGpuSimulator(config.simulator_type) &&
       config.simulation_type != Simulators::SimulationType::kStatevector)
     throw std::invalid_argument(
@@ -166,6 +169,11 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
 
   network->SetOptimizeSimulator(!config.fixed_backend);
   network->GetController()->SetOptimizeCircuit(config.optimize_circuit);
+  network->Configure("enable_causal_cone_reduction",
+                     config.enable_causal_cone_reduction ? "true" : "false");
+  network->Configure(
+      "causal_cone_statevector_threshold",
+      std::to_string(config.causal_cone_statevector_threshold).c_str());
   for (const auto& [key, value] : config.native_options)
     network->Configure(key.c_str(), value.c_str());
 
@@ -310,11 +318,19 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     network->Configure("path_integral_threshold", val.c_str());
   }
 
+  // Expectation execution sizes its register after extracting the cone. Keep
+  // the topology intact but initialize only a one-qubit backend here; ordinary
+  // execution will resize it if reduction is disabled or unsupported.
+  const size_t initial_qubits =
+      for_expectations && !Simulators::IsDistributedGpuSimulator(config.simulator_type)
+          ? 1 : 0;
+
   // Distribution must be selected before circuit mapping: its configured
   // register and MPI control flow must not depend on the CPU optimizer.
   if (config.fixed_backend ||
       Simulators::IsDistributedGpuSimulator(config.simulator_type))
-    network->CreateSimulator(config.simulator_type, config.simulation_type);
+    network->CreateSimulator(config.simulator_type, config.simulation_type,
+                             initial_qubits);
   else if (config.simulator_type == Simulators::SimulatorType::kGpuSim &&
            (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
             config.simulation_type ==
@@ -322,9 +338,11 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
     // Automatic selection retains this CPU simulator when the GPU is absent.
     // MPO preserves mixed states and exact channels without a dense allocation.
     network->CreateSimulator(Simulators::SimulatorType::kQCSim,
-                             Simulators::SimulationType::kMatrixProductOperator);
+                             Simulators::SimulationType::kMatrixProductOperator, initial_qubits);
   else
-    network->CreateSimulator();
+    network->CreateSimulator(Simulators::SimulatorType::kQCSim,
+                             Simulators::SimulationType::kMatrixProductState,
+                             initial_qubits);
 
   // Verify the simulator was actually created (e.g. GPU library may fail)
   if (!network->GetSimulator()) {

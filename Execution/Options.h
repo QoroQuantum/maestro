@@ -94,6 +94,10 @@ inline const std::vector<Option>& Options() {
       {"disable_optimized_swapping", "", "boolean", "mps"},
       {"lookahead_depth", "", "lookahead", "mps"},
       {"optimize_circuit", "", "boolean", "all"},
+      {"enable_causal_cone_reduction", "enable_causal_cone_reduction",
+       "boolean", "all"},
+      {"causal_cone_statevector_threshold",
+       "causal_cone_statevector_threshold", "integer", "all"},
       {"max_simulators", "max_simulators", "positive_integer", "all"},
       {"mpo_kraus_completeness_check",
        "matrix_product_operator_kraus_completeness_check", "string", "mpo"},
@@ -263,6 +267,10 @@ inline SimulatorConfig ParseConfig(const json::object& simulator) {
       config.mps_measure_no_collapse = Boolean(value);
     else if (name == "seed")
       config.seed = UInt(value);
+    else if (name == "enable_causal_cone_reduction")
+      config.enable_causal_cone_reduction = Boolean(value);
+    else if (name == "causal_cone_statevector_threshold")
+      config.causal_cone_statevector_threshold = UInt(value);
     else
       config.native_options[native] = Scalar(value);
   }

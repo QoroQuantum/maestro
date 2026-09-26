@@ -164,6 +164,14 @@ void TestNativeRandomSeeds() {
 int main() try {
   Check(maestro_request_c_header_test(), "C header/ABI ownership check failed");
   TestFixedBackendShotReuse();
+  // Fixed statevector must never allocate the 118-qubit source register.
+  auto largeCone = Request("estimate", 118,
+                           "ry(0.7) q[0]; cx q[0],q[1]; h q[117];");
+  largeCone["observables"] = j::array{std::string("Z") + std::string(117, 'I')};
+  const auto largeConeResult = Call(largeCone);
+  Near(Real(largeConeResult.at("expectation_values").at(0)), std::cos(0.7));
+  Check(largeConeResult.at("execution_metadata").at("method") == "statevector",
+        "Cone reduction changed the explicitly selected backend");
   char* capabilities = MaestroGetCapabilitiesJson();
   Check(capabilities != nullptr, "Missing capabilities");
   auto caps = j::parse(capabilities).as_object();
@@ -186,9 +194,9 @@ int main() try {
       document["observables"] = j::array{"Z"};
     if (kind == "state_probability") document["target_state"] = "0";
     if (kind == "inner_product")
-      document["other_circuit"] = document.at("circuit");
+      document["other_circuit"] = j::value(document.at("circuit"));
     if (kind == "incremental_evolve") {
-      document["step_circuit"] = document.at("circuit");
+      document["step_circuit"] = j::value(document.at("circuit"));
       document["steps"] = j::array{0, 1};
     }
     if (kind == "noisy_fidelity")
@@ -286,7 +294,7 @@ int main() try {
        Real(sampled.at("expectation_values").at(0)));
 
   request = Request("inner_product", 2, "h q[0]; cx q[0],q[1];");
-  request["other_circuit"] = request.at("circuit");
+  request["other_circuit"] = j::value(request.at("circuit"));
   Near(Real(Call(request).at("inner_product").at(0)), 1);
   request["operation"] = "mirror_fidelity";
   request.erase("other_circuit");

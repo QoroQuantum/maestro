@@ -22,6 +22,7 @@
 #include "NetworkJob.h"
 
 #include "../Simulators/MPSDummySimulator.h"
+#include "../Circuit/CausalCone.h"
 
 #include "Configuration.h"
 
@@ -369,49 +370,108 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       }
     } restoreGuard(recreateIfNeeded, &pauliStrings);
 
-    pauliStrings = &paulis;
-    const auto res = RepeatedExecuteOnHost(circuit, hostId, 1);
-
-    // put the results in the state
-    if (!res.empty()) {
-      const auto &first = *res.begin();
-      GetState().SetResultsInOrder(first.first);
+    size_t total_qubits = 0;
+    if (simulator) {
+      total_qubits = std::max(total_qubits, simulator->GetNumberOfQubits());
     }
-
-    // for (const auto& m : qubitsMapOnHost)
-    //	std::cout << "Mapping qubit " << m.first << " to " << m.second <<
-    // std::endl;
-
-    const size_t offsetBase = qubitsMapOnHost.size();
+    if (circuit) {
+      total_qubits = std::max(total_qubits, circuit->GetMaxQubitIndex() + 1);
+    }
+    total_qubits = std::max(total_qubits, GetNumQubits());
 
     std::vector<double> expectations(paulis.size(), 1.);
-    if (simulator) {
-      // translate the pauli strings to the mapped order of qubits
-      const size_t numOps = simulator->GetNumberOfQubits();
 
-      // convert the pauli strings to the actual qubits order
-      for (size_t i = 0; i < paulis.size(); ++i) {
-        std::string translated(std::max(numOps, paulis[i].size()), 'I');
+    bool hostExecuted = false;
+    auto ensureHostExecuted = [&]() {
+      if (!hostExecuted) {
+        pauliStrings = &paulis;
+        const auto res = RepeatedExecuteOnHost(circuit, hostId, 1);
+        if (!res.empty()) {
+          const auto &first = *res.begin();
+          GetState().SetResultsInOrder(first.first);
+        }
+        hostExecuted = true;
+      }
+    };
 
-        size_t offset = offsetBase;
+    const bool canReduce = enableCausalConeReduction && resetBeforeExecution &&
+        !Simulators::IsDistributedGpuSimulator(simType) &&
+        Circuits::SupportsObservableCone(circuit);
+    for (size_t i = 0; i < paulis.size(); ++i) {
+      bool reduced = false;
+      if (canReduce) {
+        auto cone = Circuits::ExtractObservableCone(circuit, paulis[i]);
+        if (cone.GetNumberOfQubits() < total_qubits) {
+          reduced = true;
+          size_t redQubits = cone.GetNumberOfQubits();
+          if (redQubits == 0) {
+            expectations[i] = 1.;
+            continue;
+          }
+          auto redSimType = simType;
+          auto redMethod = method;
 
-        for (size_t j = 0; j < paulis[i].size(); ++j) {
-          auto pos = qubitsMapOnHost.find(j);
-          if (pos != qubitsMapOnHost.end())
-            translated[pos->second] = paulis[i][j];
-          else {
-            translated[offset] = paulis[i][j];
-            ++offset;
+          const bool isClifford = cone.reduced_circuit->IsClifford();
+
+          if (GetOptimizeSimulator() && isClifford) {
+            redSimType = Simulators::SimulatorType::kQCSim;
+            redMethod = Simulators::SimulationType::kStabilizer;
+          } else if (GetOptimizeSimulator() && causalConeStatevectorThreshold > 0 &&
+                     redQubits <= causalConeStatevectorThreshold) {
+            redSimType = Simulators::SimulatorType::kQCSim;
+            redMethod = Simulators::SimulationType::kStatevector;
+          }
+
+          auto redSim = Simulators::SimulatorsFactory::CreateSimulator(
+              redSimType, redMethod);
+          if (redSim) {
+            ExecutionConfiguration(redSimType, redQubits)
+                .ApplyConfigurationToSimulator(redSim);
+            redSim->AllocateQubits(redQubits);
+            redSim->Initialize();
+            redSim->setGrowthFactorGate(growthFactorGate);
+            redSim->setGrowthFactorSwap(growthFactorSwap);
+            redSim->SetLookaheadDepth(lookaheadDepth);
+            redSim->SetLookaheadDepthWithHeuristic(lookaheadDepthWithHeuristic);
+
+            Circuits::OperationState redState;
+            redState.AllocateBits(redQubits);
+            cone.reduced_circuit->Execute(redSim, redState);
+            expectations[i] = redSim->ExpectationValue(cone.reduced_pauli_string);
+            lastSimulatorType = redSim->GetType();
+            lastMethod = redSim->GetSimulationType();
+            lastGpuDevice = redSim->GetGpuDevice();
+          } else {
+            reduced = false;
           }
         }
-
-        // std::cout << "Translated pauli string: " << translated << std::endl;
-
-        expectations[i] = simulator->ExpectationValue(translated);
       }
-    } else {
-      throw std::runtime_error(
-          "ExecuteOnHostExpectations: no simulator available after execution.");
+
+      if (!reduced) {
+        ensureHostExecuted();
+        if (simulator) {
+          const size_t numOps = simulator->GetNumberOfQubits();
+          const size_t offsetBase = qubitsMapOnHost.size();
+          std::string translated(std::max(numOps, paulis[i].size()), 'I');
+
+          size_t offset = offsetBase;
+
+          for (size_t j = 0; j < paulis[i].size(); ++j) {
+            auto pos = qubitsMapOnHost.find(j);
+            if (pos != qubitsMapOnHost.end())
+              translated[pos->second] = paulis[i][j];
+            else {
+              translated[offset] = paulis[i][j];
+              ++offset;
+            }
+          }
+
+          expectations[i] = simulator->ExpectationValue(translated);
+        } else {
+          throw std::runtime_error(
+              "ExecuteOnHostExpectations: no simulator available after execution.");
+        }
+      }
     }
 
     if (recreate && (!simulator || simType != simulator->GetType() ||
@@ -1133,6 +1193,20 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       configuration.SetConfiguration(key, value);
       return;
     }
+    if (std::string("enable_causal_cone_reduction") == key) {
+      const std::string val(value);
+      enableCausalConeReduction =
+          (val == "true" || val == "1" || val == "True" || val == "on");
+      configuration.SetConfiguration(key, value);
+      return;
+    }
+
+    if (std::string("causal_cone_statevector_threshold") == key) {
+      causalConeStatevectorThreshold = std::stoull(value);
+      configuration.SetConfiguration(key, value);
+      return;
+    }
+
     configuration.SetConfiguration(key, value);
 
     if (simulator) simulator->Configure(key, value);
@@ -2858,6 +2932,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   double growthFactorSwap = 1.;
   double growthFactorGate = 0.7;
   size_t curMaxBondDim = 0;
+
+  bool enableCausalConeReduction = true; /**< The flag to enable causal cone reduction. */
+  size_t causalConeStatevectorThreshold =
+      20; /**< Statevector threshold for causal cone reduction. */
 };
 
 }  // namespace Network
