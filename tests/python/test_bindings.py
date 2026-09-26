@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Unit tests for Maestro nanobind Python bindings using pytest"""
 
+import pickle
+
 import pytest
 import maestro
 
@@ -421,23 +423,12 @@ class TestSimpleExecute:
 
     def test_invalid_truncation_mode_is_rejected(self):
         """Typos must not silently fall back to the backend default mode."""
-        qasm_bell = """
-        OPENQASM 2.0;
-        include "qelib1.inc";
-        qreg q[2];
-        creg c[2];
-        h q[0];
-        cx q[0], q[1];
-        measure q -> c;
-        """
-
-        config = maestro.SimulatorConfig(
-            simulation_type=maestro.SimulationType.MatrixProductState,
-            singular_value_threshold=1e-10,
-            truncation_mode="typo",
-        )
-        with pytest.raises(ValueError, match="truncation mode"):
-            maestro.simple_execute(qasm_bell, config=config)
+        with pytest.raises(ValueError, match="truncation_mode"):
+            maestro.SimulatorConfig(
+                simulation_type=maestro.SimulationType.MatrixProductState,
+                singular_value_threshold=1e-10,
+                truncation_mode="typo",
+            )
 
     def test_simple_execute_ghz_state(self):
         """Test simple_execute with GHZ state"""
@@ -1029,10 +1020,8 @@ class TestPauliPropagatorTruncation:
         config = maestro.SimulatorConfig(
             simulator_type=maestro.SimulatorType.QCSim,
             simulation_type=maestro.SimulationType.PauliPropagator,
+            **knobs,
         )
-        # Maestro binds these as properties, not constructor arguments.
-        for name, value in knobs.items():
-            setattr(config, name, value)
         result = maestro.simple_estimate(
             GENERAL_NO_MEASURE_QASM, "XX", config=config
         )
@@ -1044,23 +1033,23 @@ class TestPauliPropagatorTruncation:
     def test_trim_cadence_applies_coefficient_threshold(self):
         """A trim cadence activates the coefficient threshold."""
         assert self._estimate_xx(
-            pp_coefficient_threshold=0.99, pp_steps_between_trims=1
+            pp_coefficient_threshold=0.99, pp_gates_between_trims=1
         ) == pytest.approx(0.0, abs=1e-9)
 
     def test_deduplication_cadence_applies_coefficient_threshold(self):
         """A deduplication cadence activates it too, on QCSim as on GPU."""
         assert self._estimate_xx(
-            pp_coefficient_threshold=0.99, pp_steps_between_deduplications=1
+            pp_coefficient_threshold=0.99, pp_gates_between_deduplications=1
         ) == pytest.approx(0.0, abs=1e-9)
 
     def test_cadence_applies_weight_threshold(self):
         """Weight 0 keeps only the identity string, discarding the rest."""
         assert self._estimate_xx(
-            pp_pauli_weight_threshold=0, pp_steps_between_trims=1
+            pp_max_pauli_weight=0, pp_gates_between_trims=1
         ) == pytest.approx(0.0, abs=1e-9)
 
     @pytest.mark.parametrize(
-        "knob", ["pp_coefficient_threshold", "pp_pauli_weight_threshold"]
+        "knob", ["pp_coefficient_threshold", "pp_max_pauli_weight"]
     )
     def test_threshold_without_cadence_is_inert(self, knob):
         """Thresholds are only consulted during a truncation pass."""
@@ -1072,7 +1061,7 @@ class TestPauliPropagatorTruncation:
     def test_weight_threshold_at_qubit_count_is_ignored(self):
         """A threshold at or above the qubit count disables weight filtering."""
         assert self._estimate_xx(
-            pp_pauli_weight_threshold=2, pp_steps_between_trims=1
+            pp_max_pauli_weight=2, pp_gates_between_trims=1
         ) == pytest.approx(self.UNTRUNCATED, abs=1e-9)
 
     @pytest.mark.parametrize(
@@ -1085,8 +1074,19 @@ class TestPauliPropagatorTruncation:
         size_t, which converts to 0 and discards every Pauli string.
         """
         assert self._estimate_xx(
-            pp_pauli_weight_threshold=threshold, pp_steps_between_trims=1
+            pp_max_pauli_weight=threshold, pp_gates_between_trims=1
         ) == pytest.approx(self.UNTRUNCATED, abs=1e-9)
+
+    @pytest.mark.parametrize(
+        "knob", ["pp_gates_between_trims", "pp_gates_between_deduplications"]
+    )
+    def test_nonpositive_cadence_is_rejected(self, knob):
+        with pytest.raises(ValueError, match=knob):
+            maestro.SimulatorConfig(**{knob: 0})
+        config = maestro.SimulatorConfig(**{knob: 3})
+        with pytest.raises(ValueError, match=knob):
+            setattr(config, knob, 0)
+        assert getattr(config, knob) == 3
 
 
 class TestExtendedStabilizerSimulation:
@@ -1258,22 +1258,22 @@ class TestSimulatorTypeIsHonored:
 
 
 class TestDoublePrecision:
-    """Test the use_double_precision parameter.
+    """Test the precision parameter.
 
-    On CPU (QCSim), this flag has no effect (CPU already uses float64).
+    On CPU (QCSim), this setting has no effect (CPU already uses float64).
     These tests verify the parameter is accepted without errors and results
     remain correct. GPU-specific precision tests require Linux + CUDA.
     """
 
     def test_simple_execute_accepts_double_precision(self):
-        """simple_execute accepts use_double_precision without error."""
+        """simple_execute accepts precision="double" without error."""
         result = maestro.simple_execute(
             CLIFFORD_BELL_QASM,
             shots=100,
             config=maestro.SimulatorConfig(
                 simulator_type=maestro.SimulatorType.QCSim,
                 simulation_type=maestro.SimulationType.Statevector,
-                use_double_precision=True
+                precision="double"
             ),
         )
         assert result is not None
@@ -1281,29 +1281,29 @@ class TestDoublePrecision:
         total = sum(result['counts'].values())
         assert total == 100
 
-    def test_simple_execute_double_precision_false(self):
-        """simple_execute with use_double_precision=False (default) works."""
+    def test_simple_execute_single_precision(self):
+        """simple_execute with precision="single" works."""
         result = maestro.simple_execute(
             CLIFFORD_BELL_QASM,
             shots=100,
             config=maestro.SimulatorConfig(
                 simulator_type=maestro.SimulatorType.QCSim,
                 simulation_type=maestro.SimulationType.Statevector,
-                use_double_precision=False
+                precision="single"
             ),
         )
         assert result is not None
         assert 'counts' in result
 
     def test_simple_estimate_accepts_double_precision(self):
-        """simple_estimate accepts use_double_precision without error."""
+        """simple_estimate accepts precision="double" without error."""
         result = maestro.simple_estimate(
             CLIFFORD_BELL_NO_MEASURE_QASM,
             "ZZ",
             config=maestro.SimulatorConfig(
                 simulator_type=maestro.SimulatorType.QCSim,
                 simulation_type=maestro.SimulationType.Statevector,
-                use_double_precision=True
+                precision="double"
             ),
         )
         assert result is not None
@@ -1311,7 +1311,7 @@ class TestDoublePrecision:
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
 
     def test_simple_estimate_mps_double_precision(self):
-        """simple_estimate with MPS + use_double_precision produces correct results."""
+        """simple_estimate with MPS + precision="double" produces correct results."""
         result = maestro.simple_estimate(
             CLIFFORD_BELL_NO_MEASURE_QASM,
             "ZZ;XX;YY",
@@ -1319,7 +1319,7 @@ class TestDoublePrecision:
                 simulator_type=maestro.SimulatorType.QCSim,
                 simulation_type=maestro.SimulationType.MatrixProductState,
                 max_bond_dimension=4,
-                use_double_precision=True
+                precision="double"
             ),
         )
         assert result is not None
@@ -1331,7 +1331,7 @@ class TestDoublePrecision:
         assert exp_vals[2] == pytest.approx(-1.0, abs=1e-5)
 
     def test_circuit_execute_accepts_double_precision(self):
-        """Circuit.execute() accepts use_double_precision parameter."""
+        """Circuit.execute() accepts precision="double" parameter."""
         from maestro.circuits import QuantumCircuit
         qc = QuantumCircuit()
         qc.h(0)
@@ -1344,14 +1344,14 @@ class TestDoublePrecision:
                 simulator_type=maestro.SimulatorType.QCSim,
                 simulation_type=maestro.SimulationType.MatrixProductState,
                 max_bond_dimension=4,
-                use_double_precision=True
+                precision="double"
             ),
         )
         assert result is not None
         assert 'counts' in result
 
     def test_circuit_estimate_accepts_double_precision(self):
-        """Circuit.estimate() accepts use_double_precision parameter."""
+        """Circuit.estimate() accepts precision="double" parameter."""
         from maestro.circuits import QuantumCircuit
         qc = QuantumCircuit()
         qc.h(0)
@@ -1363,35 +1363,35 @@ class TestDoublePrecision:
                 simulator_type=maestro.SimulatorType.QCSim,
                 simulation_type=maestro.SimulationType.MatrixProductState,
                 max_bond_dimension=4,
-                use_double_precision=True
+                precision="double"
             ),
         )
         assert result is not None
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
 
     def test_qasm_execute_accepts_double_precision(self):
-        """QASM-based simple_execute accepts use_double_precision."""
+        """QASM-based simple_execute accepts precision="double"."""
         result = maestro.simple_execute(
             GENERAL_QASM,
             shots=100,
             config=maestro.SimulatorConfig(
                 simulator_type=maestro.SimulatorType.QCSim,
                 simulation_type=maestro.SimulationType.Statevector,
-                use_double_precision=True
+                precision="double"
             ),
         )
         assert result is not None
         assert 'counts' in result
 
     def test_qasm_estimate_accepts_double_precision(self):
-        """QASM-based simple_estimate accepts use_double_precision."""
+        """QASM-based simple_estimate accepts precision="double"."""
         result = maestro.simple_estimate(
             GENERAL_NO_MEASURE_QASM,
             "ZZ",
             config=maestro.SimulatorConfig(
                 simulator_type=maestro.SimulatorType.QCSim,
                 simulation_type=maestro.SimulationType.Statevector,
-                use_double_precision=True
+                precision="double"
             ),
         )
         assert result is not None
@@ -1421,7 +1421,7 @@ class TestGpuSimulator:
         return maestro.SimulatorConfig(
             simulator_type=maestro.SimulatorType.Gpu,
             simulation_type=maestro.SimulationType.DensityMatrix,
-            use_double_precision=True,
+            precision="double",
         )
 
     @staticmethod
@@ -1482,7 +1482,7 @@ class TestGpuSimulator:
         config.simulation_type = method
         result = maestro.noisy_execute(
             circuit, noise_model, config=config,
-            shots=shots, noise_realizations=1, seed=1)
+            shots=shots, noise_realizations=1, noise_seed=1)
         assert result['counts'] == {'0': shots}
 
     @pytest.mark.parametrize("method", [
@@ -1502,7 +1502,7 @@ class TestGpuSimulator:
         config.simulation_type = method
         result = maestro.noisy_estimate_montecarlo(
             circuit, ["I", "X", "Y", "Z"], noise, config=config,
-            noise_realizations=1, seed=0)
+            noise_realizations=1, noise_seed=0)
         # Starting from |1>, P(1) = 1 - gamma + gamma * excited_population.
         assert result["expectation_values"] == pytest.approx(
             [1.0, 0.0, 0.0, 2 * gamma * (1 - excited_population) - 1], abs=1e-8)
@@ -1578,7 +1578,7 @@ class TestGpuSimulator:
         assert result['expectation_values'][0] == pytest.approx(1.0, abs=1e-5)
 
     def test_gpu_with_double_precision(self):
-        """GPU + use_double_precision flag is accepted."""
+        """GPU + precision="double" flag is accepted."""
         result = maestro.simple_estimate(
             CLIFFORD_BELL_NO_MEASURE_QASM,
             "ZZ;XX",
@@ -1586,7 +1586,7 @@ class TestGpuSimulator:
                 simulator_type=maestro.SimulatorType.Gpu,
                 simulation_type=maestro.SimulationType.MatrixProductState,
                 max_bond_dimension=4,
-                use_double_precision=True
+                precision="double"
             ),
         )
         assert result is not None
@@ -2645,7 +2645,7 @@ class TestNoisyEstimateMonteCarlo:
         nm.set_all_depolarizing(2, 0.05)
 
         result = maestro.noisy_estimate_montecarlo(
-            qc, ['ZZ', 'XX'], nm, noise_realizations=10, seed=42)
+            qc, ['ZZ', 'XX'], nm, noise_realizations=10, noise_seed=42)
 
         assert 'expectation_values' in result
         assert 'ideal_expectation_values' in result
@@ -2664,7 +2664,7 @@ class TestNoisyEstimateMonteCarlo:
         nm = maestro.NoiseModel()  # no noise set
 
         result = maestro.noisy_estimate_montecarlo(
-            qc, ['ZZ', 'XX'], nm, noise_realizations=5, seed=42)
+            qc, ['ZZ', 'XX'], nm, noise_realizations=5, noise_seed=42)
 
         for noisy, ideal in zip(
                 result['expectation_values'],
@@ -2682,7 +2682,7 @@ class TestNoisyEstimateMonteCarlo:
         nm.set_all_depolarizing(2, 0.05)
 
         result = maestro.noisy_estimate_montecarlo(
-            qc, ['ZZ'], nm, noise_realizations=200, seed=42)
+            qc, ['ZZ'], nm, noise_realizations=200, noise_seed=42)
 
         noisy = abs(result['expectation_values'][0])
         ideal = abs(result['ideal_expectation_values'][0])
@@ -2709,9 +2709,9 @@ class TestNoisyEstimateMonteCarlo:
             deep.cx(0, 1)  # cancels to identity but each gate adds noise
 
         r_shallow = maestro.noisy_estimate_montecarlo(
-            shallow, ['ZZ'], nm, noise_realizations=200, seed=42)
+            shallow, ['ZZ'], nm, noise_realizations=200, noise_seed=42)
         r_deep = maestro.noisy_estimate_montecarlo(
-            deep, ['ZZ'], nm, noise_realizations=200, seed=42)
+            deep, ['ZZ'], nm, noise_realizations=200, noise_seed=42)
 
         # Both have same ideal (Bell state), but deep should be noisier
         assert abs(r_deep['expectation_values'][0]) < \
@@ -2729,9 +2729,9 @@ class TestNoisyEstimateMonteCarlo:
         nm.set_all_depolarizing(2, 0.05)
 
         r1 = maestro.noisy_estimate_montecarlo(
-            qc, ['ZZ', 'XX'], nm, noise_realizations=50, seed=123)
+            qc, ['ZZ', 'XX'], nm, noise_realizations=50, noise_seed=123)
         r2 = maestro.noisy_estimate_montecarlo(
-            qc, ['ZZ', 'XX'], nm, noise_realizations=50, seed=123)
+            qc, ['ZZ', 'XX'], nm, noise_realizations=50, noise_seed=123)
 
         for v1, v2 in zip(r1['expectation_values'],
                           r2['expectation_values']):
@@ -2753,7 +2753,7 @@ class TestNoisyEstimateMonteCarlo:
         nm.set_t1(0, 0.3)
 
         result = maestro.noisy_estimate_montecarlo(
-            qc, ['Z'], nm, noise_realizations=2000, seed=5,
+            qc, ['Z'], nm, noise_realizations=2000, noise_seed=5,
             config=maestro.SimulatorConfig(simulation_type=method))
         assert result['ideal_expectation_values'][0] == pytest.approx(-1.0)
         # Standard error is about 0.02 over 2000 realizations.
@@ -2798,7 +2798,7 @@ class TestNoisyEstimateMonteCarlo:
         def run(injection_seed=public_seed):
             args = (['ZI', 'IZ'], nm)
             kwargs = dict(noise_realizations=1000, config=cfg,
-                          seed=injection_seed)
+                          noise_seed=injection_seed)
             return (getattr(qc, fn_name)(*args, **kwargs) if bound_method else
                     getattr(maestro, fn_name)(qc, *args, **kwargs))
 
@@ -2879,7 +2879,7 @@ class TestNoisyExecute:
         qc.measure_all()
 
         nm = maestro.NoiseModel()  # no noise
-        result = maestro.noisy_execute(qc, nm, shots=100, seed=42)
+        result = maestro.noisy_execute(qc, nm, shots=100, noise_seed=42)
         counts = result['counts']
         # X gate on |0⟩ → |1⟩, always
         assert counts.get('1', 0) == 100
@@ -2894,7 +2894,7 @@ class TestNoisyExecute:
         nm = maestro.NoiseModel()
         nm.set_depolarizing(0, 0.3)  # heavy noise
 
-        result = maestro.noisy_execute(qc, nm, shots=1000, seed=123)
+        result = maestro.noisy_execute(qc, nm, shots=1000, noise_seed=123)
         counts = result['counts']
         # Should see both '0' and '1' outcomes due to noise
         assert len(counts) >= 1  # at minimum we get results
@@ -2913,8 +2913,8 @@ class TestNoisyExecute:
         nm = maestro.NoiseModel()
         nm.set_depolarizing(0, 0.1)
 
-        r1 = maestro.noisy_execute(qc, nm, shots=500, seed=99)
-        r2 = maestro.noisy_execute(qc, nm, shots=500, seed=99)
+        r1 = maestro.noisy_execute(qc, nm, shots=500, noise_seed=99)
+        r2 = maestro.noisy_execute(qc, nm, shots=500, noise_seed=99)
         assert r1['counts'] == r2['counts']
 
     def test_config_seed_reproduces_noise_injection(self):
@@ -3006,7 +3006,7 @@ class TestCoherentEstimate:
         nm.set_all_coherent_depolarizing(2, 0.01)
 
         result = maestro.coherent_estimate(
-            qc, ['ZZ', 'XX'], nm, noise_realizations=10, seed=42)
+            qc, ['ZZ', 'XX'], nm, noise_realizations=10, noise_seed=42)
 
         assert 'expectation_values' in result
         assert 'ideal_expectation_values' in result
@@ -3028,7 +3028,7 @@ class TestCoherentEstimate:
         nm.set_all_coherent_depolarizing(2, 0.0)  # zero noise
 
         result = maestro.coherent_estimate(
-            qc, ['ZZ', 'XX'], nm, noise_realizations=5, seed=42)
+            qc, ['ZZ', 'XX'], nm, noise_realizations=5, noise_seed=42)
 
         for noisy, ideal in zip(
                 result['expectation_values'],
@@ -3048,7 +3048,7 @@ class TestCoherentEstimate:
         # Use XX observable — Z rotations commute with ZZ so ZZ is unaffected,
         # but XX is genuinely damped by Rz coherent noise.
         result = maestro.coherent_estimate(
-            qc, ['XX'], nm, noise_realizations=200, seed=42)
+            qc, ['XX'], nm, noise_realizations=200, noise_seed=42)
 
         noisy = abs(result['expectation_values'][0])
         ideal = abs(result['ideal_expectation_values'][0])
@@ -3066,13 +3066,34 @@ class TestCoherentEstimate:
         nm.set_all_coherent_depolarizing(2, 0.02)
 
         r1 = maestro.coherent_estimate(
-            qc, ['ZZ', 'XX'], nm, noise_realizations=50, seed=123)
+            qc, ['ZZ', 'XX'], nm, noise_realizations=50, noise_seed=123)
         r2 = maestro.coherent_estimate(
-            qc, ['ZZ', 'XX'], nm, noise_realizations=50, seed=123)
+            qc, ['ZZ', 'XX'], nm, noise_realizations=50, noise_seed=123)
 
         for v1, v2 in zip(r1['expectation_values'],
                           r2['expectation_values']):
             assert abs(v1 - v2) < 1e-12
+
+    @pytest.mark.parametrize("bound_method", [False, True])
+    def test_same_noise_seed_reproduces_bound_and_module(self, bound_method):
+        """A noise_seed fixes coherent_estimate, including trailing resets."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.reset(1)
+
+        nm = maestro.NoiseModel()
+        nm.set_all_coherent_depolarizing(2, 0.05)
+
+        def run():
+            args = (['XI', 'ZI'], nm)
+            kwargs = dict(noise_realizations=20, noise_seed=9)
+            result = (qc.coherent_estimate(*args, **kwargs) if bound_method
+                      else maestro.coherent_estimate(qc, *args, **kwargs))
+            return result['expectation_values']
+
+        assert run() == run()
 
     def test_depth_dependence(self):
         """Deeper circuit should show more coherent noise effect."""
@@ -3096,9 +3117,9 @@ class TestCoherentEstimate:
 
         # Use XX — Z rotations commute with ZZ so won't show depth effect.
         r_shallow = maestro.coherent_estimate(
-            shallow, ['XX'], nm, noise_realizations=200, seed=42)
+            shallow, ['XX'], nm, noise_realizations=200, noise_seed=42)
         r_deep = maestro.coherent_estimate(
-            deep, ['XX'], nm, noise_realizations=200, seed=42)
+            deep, ['XX'], nm, noise_realizations=200, noise_seed=42)
 
         # Deep should be noisier
         assert abs(r_deep['expectation_values'][0]) < \
@@ -3175,7 +3196,7 @@ class TestCoherentExecute:
         nm = maestro.NoiseModel()
         nm.set_all_coherent_depolarizing(1, 0.0)  # zero noise
 
-        result = maestro.coherent_execute(qc, nm, shots=100, seed=42)
+        result = maestro.coherent_execute(qc, nm, shots=100, noise_seed=42)
         counts = result['counts']
         assert counts.get('1', 0) == 100
 
@@ -3190,7 +3211,7 @@ class TestCoherentExecute:
         nm.set_coherent_depolarizing(0, 0.3)  # heavy noise
 
         result = maestro.coherent_execute(
-            qc, nm, shots=1000, seed=123,
+            qc, nm, shots=1000, noise_seed=123,
             config=maestro.SimulatorConfig(
                 simulation_type=maestro.SimulationType.Statevector,
             ),
@@ -3209,8 +3230,8 @@ class TestCoherentExecute:
         nm = maestro.NoiseModel()
         nm.set_coherent_depolarizing(0, 0.1)
 
-        r1 = maestro.coherent_execute(qc, nm, shots=500, seed=99)
-        r2 = maestro.coherent_execute(qc, nm, shots=500, seed=99)
+        r1 = maestro.coherent_execute(qc, nm, shots=500, noise_seed=99)
+        r2 = maestro.coherent_execute(qc, nm, shots=500, noise_seed=99)
         assert r1['counts'] == r2['counts']
 
     def test_requires_coherent_noise(self):
@@ -3277,7 +3298,7 @@ class TestCircuitBoundNoisyMethods:
         nm.set_all_depolarizing(2, 0.05)
 
         result = qc.noisy_estimate_montecarlo(
-            ['ZZ'], nm, noise_realizations=50, seed=42)
+            ['ZZ'], nm, noise_realizations=50, noise_seed=42)
         assert 'expectation_values' in result
         assert 'noise_realizations' in result
         assert result['noise_realizations'] == 50
@@ -3310,7 +3331,7 @@ class TestCircuitBoundNoisyMethods:
         nm.set_all_coherent_depolarizing(2, 0.01)
 
         result = qc.coherent_estimate(
-            ['XX', 'ZZ'], nm, noise_realizations=50, seed=42)
+            ['XX', 'ZZ'], nm, noise_realizations=50, noise_seed=42)
         assert 'expectation_values' in result
         assert 'noise_type' in result
         assert result['noise_type'] == 'coherent'
@@ -3426,7 +3447,7 @@ class TestNoisePhysicalAccuracy:
         # Monte Carlo (converges to analytical)
         mc = maestro.noisy_estimate_montecarlo(
             qc, ['ZZ', 'XX', 'ZI'], nm,
-            noise_realizations=2000, seed=42)
+            noise_realizations=2000, noise_seed=42)
 
         for i, obs in enumerate(['ZZ', 'XX', 'ZI']):
             a = analytical['expectation_values'][i]
@@ -3484,9 +3505,9 @@ class TestNoisePhysicalAccuracy:
             deep.x(0)
 
         r_shallow = maestro.noisy_estimate_montecarlo(
-            shallow, ['Z'], nm, noise_realizations=500, seed=42)
+            shallow, ['Z'], nm, noise_realizations=500, noise_seed=42)
         r_deep = maestro.noisy_estimate_montecarlo(
-            deep, ['Z'], nm, noise_realizations=500, seed=42)
+            deep, ['Z'], nm, noise_realizations=500, noise_seed=42)
 
         # Both should give ⟨Z⟩ < 0 (X|0⟩ = |1⟩ → ⟨Z⟩ = -1 ideally)
         # But deeper circuit should be noisier (closer to 0)
@@ -3542,7 +3563,7 @@ class TestNoisePhysicalAccuracy:
 
         # Get coherent-averaged
         coherent = maestro.coherent_estimate(
-            qc, ['XX'], nm, noise_realizations=500, seed=42)
+            qc, ['XX'], nm, noise_realizations=500, noise_seed=42)
         coherent_xx = coherent['expectation_values'][0]
 
         # Coherent noise should reduce magnitude
@@ -3570,7 +3591,7 @@ class TestNoisePhysicalAccuracy:
         nm.set_depolarizing(0, p)
 
         result = maestro.noisy_execute(qc, nm, shots=5000,
-                                       noise_realizations=200, seed=42)
+                                       noise_realizations=200, noise_seed=42)
         counts = result['counts']
         total = sum(counts.values())
 
@@ -3623,7 +3644,7 @@ class TestT1AmplitudeDamping:
         nm.set_t1(0, 0.3)  # high gamma to see effect clearly
 
         result = qc.full_noise_execute(
-            nm, shots=5000, noise_realizations=100, seed=42
+            nm, shots=5000, noise_realizations=100, noise_seed=42
         )
         counts = result['counts']
         total = sum(counts.values())
@@ -3675,7 +3696,7 @@ class TestCrosstalk:
         nm.set_all_depolarizing(n, 1e-12)
 
         result = qc.full_noise_execute(
-            nm, shots=5000, noise_realizations=50, seed=42
+            nm, shots=5000, noise_realizations=50, noise_seed=42
         )
         counts = result['counts']
         total = sum(counts.values())
@@ -3817,7 +3838,7 @@ class TestCombinedNoiseExecution:
         nm.set_all_depolarizing(2, 0.05)
 
         result = qc.full_noise_estimate(
-            ['XX'], nm, noise_realizations=50, seed=42
+            ['XX'], nm, noise_realizations=50, noise_seed=42
         )
         noisy_xx = result['expectation_values'][0]
         ideal_xx = result['ideal_expectation_values'][0]
@@ -3851,13 +3872,63 @@ class TestCombinedNoiseExecution:
         nm.set_all_coherent_depolarizing(2, 0.01)
         nm.set_all_depolarizing(2, 0.01)
 
-        r1 = qc.full_noise_estimate(['ZZ', 'XX'], nm, noise_realizations=20, seed=123)
-        r2 = qc.full_noise_estimate(['ZZ', 'XX'], nm, noise_realizations=20, seed=123)
+        r1 = qc.full_noise_estimate(['ZZ', 'XX'], nm, noise_realizations=20, noise_seed=123)
+        r2 = qc.full_noise_estimate(['ZZ', 'XX'], nm, noise_realizations=20, noise_seed=123)
 
         for i in range(2):
             assert r1['expectation_values'][i] == pytest.approx(
                 r2['expectation_values'][i], abs=1e-10
             )
+
+    @staticmethod
+    def _flipped_register():
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        for q in range(3):
+            qc.x(q)
+        qc.measure_all()
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(3, 0.3)
+        return qc, nm
+
+    @pytest.mark.parametrize("shots,noise_realizations,match", [
+        (0, 1, "shots"), (8, 0, "noise_realizations"),
+        (8, -1, "noise_realizations")])
+    def test_full_noise_execute_rejects_nonpositive_counts(
+            self, shots, noise_realizations, match):
+        qc, nm = self._flipped_register()
+        with pytest.raises(ValueError, match=match):
+            maestro.full_noise_execute(
+                qc, nm, shots=shots, noise_realizations=noise_realizations)
+
+    @pytest.mark.parametrize("noise_realizations", [0, -1])
+    def test_full_noise_estimate_rejects_nonpositive_realizations(
+            self, noise_realizations):
+        qc, nm = self._flipped_register()
+        with pytest.raises(ValueError, match="noise_realizations"):
+            maestro.full_noise_estimate(
+                qc, ['ZII'], nm, noise_realizations=noise_realizations)
+
+    def test_noise_seed_must_fit_in_32_bits(self):
+        """The same limit as the native request API's noise.seed."""
+        qc, nm = self._flipped_register()
+        assert sum(qc.full_noise_execute(
+            nm, shots=16, noise_seed=2**32 - 1)['counts'].values()) == 16
+        with pytest.raises(ValueError, match="32 bits"):
+            qc.full_noise_execute(nm, shots=16, noise_seed=2**32)
+
+    def test_wide_config_seed_seeds_noise_from_its_low_32_bits(self):
+        """As in the native request API, an omitted noise seed is config.seed
+        masked to 32 bits."""
+        qc, nm = self._flipped_register()
+        config = maestro.SimulatorConfig(seed=2**40 + 5)
+
+        def run(**kwargs):
+            return dict(qc.full_noise_execute(
+                nm, config=config, shots=256, noise_realizations=64,
+                **kwargs)['counts'])
+
+        assert run() == run(noise_seed=5)
 
     def test_module_level_full_noise_execute(self):
         """Module-level maestro.full_noise_execute works."""
@@ -3936,10 +4007,10 @@ class TestCombinedNoisePhysics:
         nm_high.set_all_coherent_depolarizing(2, 0.02)
 
         r_low = qc.full_noise_estimate(
-            ['XX'], nm_low, noise_realizations=50, seed=42
+            ['XX'], nm_low, noise_realizations=50, noise_seed=42
         )
         r_high = qc.full_noise_estimate(
-            ['XX'], nm_high, noise_realizations=50, seed=42
+            ['XX'], nm_high, noise_realizations=50, noise_seed=42
         )
 
         # ⟨XX⟩ should be closer to ideal (1.0) for low noise
@@ -3972,9 +4043,9 @@ class TestCombinedNoisePhysics:
         nm_both.set_all_coherent_depolarizing(5, p)
 
         reps = 50
-        r_p = qc.full_noise_estimate(['XXXXX'], nm_pauli, noise_realizations=reps, seed=42)
-        r_c = qc.full_noise_estimate(['XXXXX'], nm_coh, noise_realizations=reps, seed=42)
-        r_b = qc.full_noise_estimate(['XXXXX'], nm_both, noise_realizations=reps, seed=42)
+        r_p = qc.full_noise_estimate(['XXXXX'], nm_pauli, noise_realizations=reps, noise_seed=42)
+        r_c = qc.full_noise_estimate(['XXXXX'], nm_coh, noise_realizations=reps, noise_seed=42)
+        r_b = qc.full_noise_estimate(['XXXXX'], nm_both, noise_realizations=reps, noise_seed=42)
 
         xx_combined = abs(r_b['expectation_values'][0])
         xx_pauli = abs(r_p['expectation_values'][0])
@@ -4034,7 +4105,7 @@ class TestReadoutError:
         # Need some noise to pass has_any for full_noise_execute
         nm.set_depolarizing(0, 1e-12)
 
-        result = qc.full_noise_execute(nm, shots=100, noise_realizations=1, seed=42)
+        result = qc.full_noise_execute(nm, shots=100, noise_realizations=1, noise_seed=42)
         counts = result['counts']
         # All shots should report '1' due to readout flip
         assert counts.get('1', 0) == 100, \
@@ -4051,7 +4122,7 @@ class TestReadoutError:
         nm.set_readout_error(0, 0.0, 0.0)
         nm.set_depolarizing(0, 1e-12)
 
-        result = qc.full_noise_execute(nm, shots=100, noise_realizations=1, seed=42)
+        result = qc.full_noise_execute(nm, shots=100, noise_realizations=1, noise_seed=42)
         counts = result['counts']
         assert counts.get('1', 0) == 100
 
@@ -4070,7 +4141,7 @@ class TestReadoutError:
         nm.set_depolarizing(0, 1e-12)
 
         result = qc.full_noise_execute(
-            nm, shots=5000, noise_realizations=1, seed=42)
+            nm, shots=5000, noise_realizations=1, noise_seed=42)
         counts = result['counts']
         total = sum(counts.values())
         p_flip = counts.get('0', 0) / total
@@ -4274,7 +4345,7 @@ class Test2QDepolarizing:
         nm_clean.set_depolarizing(0, 1e-12)
 
         r_clean = qc.full_noise_execute(
-            nm_clean, shots=5000, noise_realizations=10, seed=42)
+            nm_clean, shots=5000, noise_realizations=10, noise_seed=42)
         p_bell_clean = (
             r_clean['counts'].get('00', 0) + r_clean['counts'].get('11', 0)
         ) / sum(r_clean['counts'].values())
@@ -4285,7 +4356,7 @@ class Test2QDepolarizing:
         nm_noisy.set_depolarizing(0, 1e-12)
 
         r_noisy = qc.full_noise_execute(
-            nm_noisy, shots=5000, noise_realizations=50, seed=42)
+            nm_noisy, shots=5000, noise_realizations=50, noise_seed=42)
         p_bell_noisy = (
             r_noisy['counts'].get('00', 0) + r_noisy['counts'].get('11', 0)
         ) / sum(r_noisy['counts'].values())
@@ -4309,7 +4380,7 @@ class Test2QDepolarizing:
         nm.set_depolarizing(0, 1e-12)
 
         result = qc.full_noise_execute(
-            nm, shots=1000, noise_realizations=10, seed=42)
+            nm, shots=1000, noise_realizations=10, noise_seed=42)
         counts = result['counts']
         p_one = counts.get('1', 0) / sum(counts.values())
         # Should be ~100% since 2Q noise doesn't apply to 1Q gates
@@ -4368,7 +4439,7 @@ class TestGateTypeSpecificNoise:
         qc_2q.measure_all()
 
         result = qc_2q.full_noise_execute(
-            nm, shots=1000, noise_realizations=10, seed=42)
+            nm, shots=1000, noise_realizations=10, noise_seed=42)
         counts = result['counts']
         total = sum(counts.values())
         # CX|00⟩ = |00⟩. With only 1Q noise (not applying to 2Q gates),
@@ -4390,7 +4461,7 @@ class TestGateTypeSpecificNoise:
         qc.measure_all()
 
         result = qc.full_noise_execute(
-            nm, shots=1000, noise_realizations=10, seed=42)
+            nm, shots=1000, noise_realizations=10, noise_seed=42)
         counts = result['counts']
         total = sum(counts.values())
         p_one = counts.get('1', 0) / total
@@ -4422,9 +4493,9 @@ class TestGateTypeSpecificNoise:
         nm_2q.set_all_2q_gate_depolarizing(2, 0.10)
 
         r1 = qc.full_noise_execute(
-            nm_1q, shots=5000, noise_realizations=50, seed=42)
+            nm_1q, shots=5000, noise_realizations=50, noise_seed=42)
         r2 = qc.full_noise_execute(
-            nm_2q, shots=5000, noise_realizations=50, seed=42)
+            nm_2q, shots=5000, noise_realizations=50, noise_seed=42)
 
         t1 = sum(r1['counts'].values())
         t2 = sum(r2['counts'].values())
@@ -4506,7 +4577,7 @@ class TestCorrelatedNoiseExecution:
         nm.set_all_correlated_ou(2, sigma=15.0, alpha=0.5, gate_time=100e-9)
 
         result = qc.full_noise_execute(
-            nm, shots=1000, noise_realizations=10, seed=42)
+            nm, shots=1000, noise_realizations=10, noise_seed=42)
 
         assert 'counts' in result
         assert 'time_taken' in result
@@ -4524,7 +4595,7 @@ class TestCorrelatedNoiseExecution:
         nm.set_all_correlated_ou(2, sigma=15.0, alpha=0.5, gate_time=100e-9)
 
         result = qc.full_noise_estimate(
-            'ZZ', nm, noise_realizations=20, seed=42)
+            'ZZ', nm, noise_realizations=20, noise_seed=42)
 
         assert 'expectation_values' in result
         assert 'ideal_expectation_values' in result
@@ -4540,7 +4611,7 @@ class TestCorrelatedNoiseExecution:
         nm = maestro.NoiseModel()
         nm.set_all_correlated_ou(2, sigma=15.0, alpha=0.5, gate_time=100e-9)
 
-        result = qc.noisy_fidelity(nm, noise_realizations=20, seed=42)
+        result = qc.noisy_fidelity(nm, noise_realizations=20, noise_seed=42)
 
         assert 'fidelity' in result
         assert 'infidelity' in result
@@ -4569,7 +4640,7 @@ class TestCorrelatedNoiseExecution:
         nm = maestro.NoiseModel()
         nm.set_all_coherent_depolarizing(2, 0.01)
 
-        result = qc.noisy_fidelity(nm, noise_realizations=20, seed=42)
+        result = qc.noisy_fidelity(nm, noise_realizations=20, noise_seed=42)
         assert 0.0 <= result['fidelity'] <= 1.0
 
     def test_noisy_fidelity_seed_reproducibility(self):
@@ -4582,8 +4653,8 @@ class TestCorrelatedNoiseExecution:
         nm = maestro.NoiseModel()
         nm.set_all_correlated_ou(2, sigma=15.0, alpha=0.5, gate_time=100e-9)
 
-        r1 = qc.noisy_fidelity(nm, noise_realizations=20, seed=12345)
-        r2 = qc.noisy_fidelity(nm, noise_realizations=20, seed=12345)
+        r1 = qc.noisy_fidelity(nm, noise_realizations=20, noise_seed=12345)
+        r2 = qc.noisy_fidelity(nm, noise_realizations=20, noise_seed=12345)
 
         assert r1['fidelity'] == pytest.approx(r2['fidelity'], abs=1e-15)
 
@@ -4598,9 +4669,9 @@ class TestCorrelatedNoiseExecution:
         nm.set_all_correlated_ou(2, sigma=15.0, alpha=0.5, gate_time=100e-9)
 
         r1 = qc.full_noise_estimate('ZZ', nm, noise_realizations=20,
-                                     seed=12345)
+                                     noise_seed=12345)
         r2 = qc.full_noise_estimate('ZZ', nm, noise_realizations=20,
-                                     seed=12345)
+                                     noise_seed=12345)
 
         assert r1['expectation_values'] == r2['expectation_values']
 
@@ -4618,7 +4689,7 @@ class TestCorrelatedNoisePhysics:
         nm = maestro.NoiseModel()
         nm.set_all_correlated_ou(2, sigma=0.0, alpha=0.5, gate_time=100e-9)
 
-        result = qc.noisy_fidelity(nm, noise_realizations=10, seed=42)
+        result = qc.noisy_fidelity(nm, noise_realizations=10, noise_seed=42)
         assert result['fidelity'] == pytest.approx(1.0, abs=1e-10)
 
     def test_stronger_noise_reduces_fidelity(self):
@@ -4636,9 +4707,9 @@ class TestCorrelatedNoisePhysics:
         nm_strong.set_all_correlated_ou(
             2, sigma=50.0, alpha=0.5, gate_time=100e-9)
 
-        r_weak = qc.noisy_fidelity(nm_weak, noise_realizations=50, seed=42)
+        r_weak = qc.noisy_fidelity(nm_weak, noise_realizations=50, noise_seed=42)
         r_strong = qc.noisy_fidelity(nm_strong, noise_realizations=50,
-                                      seed=42)
+                                      noise_seed=42)
 
         assert r_strong['fidelity'] < r_weak['fidelity'], \
             f"Stronger noise should reduce fidelity: " \
@@ -4664,7 +4735,7 @@ class TestCorrelatedNoisePhysics:
             N, sigma=500.0, alpha=0.5, gate_time=100e-9)
 
         result = qc.full_noise_estimate(
-            obs, nm, noise_realizations=100, seed=42)
+            obs, nm, noise_realizations=100, noise_seed=42)
 
         ideal_z = result['ideal_expectation_values'][0]
         noisy_z = result['expectation_values'][0]
@@ -4695,7 +4766,7 @@ class TestCorrelatedNoisePhysics:
             max_bond_dimension=8)
 
         result = qc.noisy_fidelity(
-            nm, noise_realizations=10, config=mps_config, seed=42)
+            nm, noise_realizations=10, config=mps_config, noise_seed=42)
 
         assert 'fidelity' in result
         assert 0.0 <= result['fidelity'] <= 1.0
@@ -4721,9 +4792,9 @@ class TestCorrelatedNoisePhysics:
             2, sigma=50.0, alpha=0.5, gate_time=100e-9, after_1q=False)
 
         r_all = qc.noisy_fidelity(
-            nm_all, noise_realizations=50, seed=42)
+            nm_all, noise_realizations=50, noise_seed=42)
         r_2q = qc.noisy_fidelity(
-            nm_2q_only, noise_realizations=50, seed=42)
+            nm_2q_only, noise_realizations=50, noise_seed=42)
 
         # Less noise injection → higher fidelity
         assert r_2q['fidelity'] >= r_all['fidelity'], \
@@ -4745,7 +4816,7 @@ class TestCorrelatedNoisePhysics:
         nm.set_all_coherent_depolarizing(2, 0.001)
 
         result = qc.full_noise_execute(nm, shots=1000,
-                                        noise_realizations=10, seed=42)
+                                        noise_realizations=10, noise_seed=42)
         assert 'counts' in result
         total = sum(result['counts'].values())
         assert total == 1000
@@ -5118,6 +5189,114 @@ class TestSimulatorSeed:
         assert self.run(1) != self.run(2)
 
 
+# Every SimulatorConfig field, in constructor and __repr__ order, set to a
+# non-default value.
+NON_DEFAULT_CONFIG_FIELDS = {
+    "simulator_type": maestro.SimulatorType.Gpu,
+    "simulation_type": maestro.SimulationType.MatrixProductState,
+    "max_bond_dimension": 32,
+    "singular_value_threshold": 1e-7,
+    "truncation_mode": "relative_max",
+    "precision": "single",
+    "seed": 2**40 + 3,
+    "gpu_device": 1,
+    "distributed_options": {"distributed_flags": "8"},
+    "disable_optimized_swapping": True,
+    "lookahead_depth": 7,
+    "mps_sampling": "apply_measure",
+    "mps_svd_solver": "gesvdj",
+    "mpo_svd_solver": "gesvdp",
+    "tensor_network_svd_solver": "gesvdr",
+    "mpo_kraus_completeness_check": "strict",
+    "mpo_restore_trace_after_truncation": True,
+    "mpo_hermitize_after_truncation": True,
+    "pp_coefficient_threshold": 0.1 + 0.2,
+    "pp_max_pauli_weight": 3,
+    "pp_gates_between_trims": 2,
+    "pp_gates_between_deduplications": 5,
+    "path_integral_threshold": 1e-9,
+}
+
+
+def expected_config_repr(fields):
+    enums = {"simulator_type", "simulation_type"}
+    return "SimulatorConfig(" + ", ".join(
+        f"{name}={str(value) if name in enums else repr(value)}"
+        for name, value in fields.items()) + ")"
+
+
+class TestSimulatorConfigFields:
+    INVALID_CHOICES = [
+        ("truncation_mode", "typo"),
+        ("precision", "half"),
+        ("mps_sampling", "collapse"),
+        ("mps_svd_solver", "gesvdx"),
+        ("mpo_svd_solver", "gesvdx"),
+        ("tensor_network_svd_solver", "gesvdx"),
+        ("mpo_kraus_completeness_check", "loud"),
+    ]
+
+    def test_constructor_is_keyword_only(self):
+        with pytest.raises(TypeError):
+            maestro.SimulatorConfig(maestro.SimulatorType.QCSim)
+        with pytest.raises(TypeError):
+            maestro.SimulatorConfig(maestro.SimulatorType.QCSim,
+                                    maestro.SimulationType.Statevector)
+
+    def test_constructor_accepts_every_field(self):
+        config = maestro.SimulatorConfig(**NON_DEFAULT_CONFIG_FIELDS)
+        for name, value in NON_DEFAULT_CONFIG_FIELDS.items():
+            assert getattr(config, name) == value, name
+
+    def test_repr_lists_every_field_in_order(self):
+        config = maestro.SimulatorConfig(**NON_DEFAULT_CONFIG_FIELDS)
+        text = repr(config)
+        assert len(NON_DEFAULT_CONFIG_FIELDS) == 23
+        assert text == expected_config_repr(NON_DEFAULT_CONFIG_FIELDS)
+        assert "simulator_type=SimulatorType.Gpu, " in text
+        assert "singular_value_threshold=1e-07, " in text
+        assert "pp_coefficient_threshold=0.30000000000000004, " in text
+        assert "mps_sampling='apply_measure', " in text
+
+    def test_default_repr(self):
+        text = repr(maestro.SimulatorConfig())
+        assert text.startswith(
+            "SimulatorConfig(simulator_type=SimulatorType.QCSim, "
+            "simulation_type=SimulationType.Statevector, ")
+        assert "precision=None, " in text
+        assert "mps_sampling='probabilities', " in text
+        assert text.endswith(")")
+        names = [part.split("=")[0]
+                 for part in text[len("SimulatorConfig("):-1].split(", ")]
+        assert names == list(NON_DEFAULT_CONFIG_FIELDS)
+
+    def test_pickle_round_trips_every_field(self):
+        config = maestro.SimulatorConfig(**NON_DEFAULT_CONFIG_FIELDS)
+        restored = pickle.loads(pickle.dumps(config))
+        assert repr(restored) == repr(config)
+
+    @pytest.mark.parametrize("field,value", INVALID_CHOICES)
+    def test_constructor_rejects_invalid_choice(self, field, value):
+        with pytest.raises(ValueError, match=field):
+            maestro.SimulatorConfig(**{field: value})
+
+    @pytest.mark.parametrize("field,value", INVALID_CHOICES)
+    def test_failed_setter_leaves_config_unchanged(self, field, value):
+        config = maestro.SimulatorConfig(**NON_DEFAULT_CONFIG_FIELDS)
+        before = repr(config)
+        with pytest.raises(ValueError, match=field):
+            setattr(config, field, value)
+        assert repr(config) == before
+
+    def test_rejects_foreign_distributed_option_keys(self):
+        with pytest.raises(ValueError, match="distributed_options"):
+            maestro.SimulatorConfig(distributed_options={"seed": "1"})
+        config = maestro.SimulatorConfig()
+        with pytest.raises(ValueError, match="distributed_options"):
+            config.distributed_options = {"seed": "1"}
+        assert config.distributed_options == {}
+
+
 class TestIdleAndMultiBandNoise:
     def test_quantum_circuit_delay(self):
         from maestro.circuits import QuantumCircuit
@@ -5154,8 +5333,8 @@ class TestIdleAndMultiBandNoise:
         nm = maestro.NoiseModel()
         assert not nm.has_correlated()
 
-        nm.add_correlated_ou_band(0, sigma=10.0, alpha=2.0, gate_time=100e-9, stationary_init=True)
-        nm.add_correlated_ou_band(0, sigma=20.0, alpha=5.0, gate_time=100e-9, stationary_init=True)
+        nm.set_correlated_ou_band(0, sigma=10.0, alpha=2.0, gate_time=100e-9, stationary_init=True)
+        nm.set_correlated_ou_band(0, sigma=20.0, alpha=5.0, gate_time=100e-9, stationary_init=True)
         assert nm.has_correlated()
 
         nm.set_multi_correlated_ou(1, [(10.0, 2.0), (20.0, 5.0)], gate_time=100e-9)
@@ -5221,7 +5400,7 @@ class TestIdleAndMultiBandNoise:
         qc.delay(0, 0.0)
 
         # Zero-duration delay must accumulate exactly zero phase
-        res = qc.full_noise_estimate("X", nm, noise_realizations=50, seed=42)
+        res = qc.full_noise_estimate("X", nm, noise_realizations=50, noise_seed=42)
         val = res["expectation_values"][0]
         assert abs(val - 1.0) < 1e-6
 
@@ -5229,7 +5408,7 @@ class TestIdleAndMultiBandNoise:
         qc_long = QuantumCircuit()
         qc_long.h(0)
         qc_long.delay(0, 10e-6)
-        res_long = qc_long.full_noise_estimate("X", nm, noise_realizations=50, seed=42)
+        res_long = qc_long.full_noise_estimate("X", nm, noise_realizations=50, noise_seed=42)
         val_long = res_long["expectation_values"][0]
         assert val_long < 0.97
 
@@ -5257,5 +5436,5 @@ class TestIdleAndMultiBandNoise:
     def test_multi_band_ou_per_band_gate_flags(self):
         nm = maestro.NoiseModel()
         nm.set_correlated_ou(0, sigma=20.0, alpha=2.0, gate_time=100e-9, after_1q=False, after_2q=True)
-        nm.add_correlated_ou_band(0, sigma=30.0, alpha=5.0, gate_time=100e-9, after_1q=True, after_2q=True)
+        nm.set_correlated_ou_band(0, sigma=30.0, alpha=5.0, gate_time=100e-9, after_1q=True, after_2q=True)
         assert nm.has_correlated()

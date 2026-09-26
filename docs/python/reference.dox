@@ -37,10 +37,16 @@
  * - `maestro.inner_product(circuit1, circuit2, config=None)`: Compute complex inner product <psi1|psi2>.
  * - `maestro.incremental_evolve(init_circuit, trotter_step, measure_at_steps, observables, config=None)`: Fast persistent incremental Trotter evolution.
  * - `maestro.noisy_estimate(circuit, observables, noise_model, config=None)`: Zero-overhead analytical noisy estimation.
- * - `maestro.noisy_estimate_montecarlo(circuit, observables, noise_model, noise_realizations=100, seed=None, config=None)`: Gate-by-gate Monte Carlo noisy estimation.
- * - `maestro.noisy_execute(circuit, noise_model, shots=1024, noise_realizations=64, seed=None, config=None)`: Gate-by-gate Monte Carlo noisy execution.
- * - `maestro.coherent_estimate(circuit, observables, noise_model, noise_realizations=100, seed=None, config=None)`: Coherent systematic rotation noisy estimation.
- * - `maestro.coherent_execute(circuit, noise_model, shots=1024, noise_realizations=64, seed=None, config=None)`: Coherent systematic rotation noisy execution.
+ * - `maestro.noisy_estimate_montecarlo(circuit, observables, noise_model, noise_realizations=100, config=None, noise_seed=None)`: Gate-by-gate Monte Carlo noisy estimation.
+ * - `maestro.noisy_execute(circuit, noise_model, config=None, shots=1024, noise_realizations=64, noise_seed=None)`: Gate-by-gate Monte Carlo noisy execution.
+ * - `maestro.coherent_estimate(circuit, observables, noise_model, noise_realizations=100, config=None, noise_seed=None)`: Coherent systematic rotation noisy estimation.
+ * - `maestro.coherent_execute(circuit, noise_model, config=None, shots=1024, noise_realizations=64, noise_seed=None)`: Coherent systematic rotation noisy execution.
+ *
+ * `noise_seed` seeds the injected noise and must fit in 32 bits; when it is unset,
+ * the low 32 bits of `config.seed` are used.
+ * In the estimate functions `noise_realizations` is the number of independent noise
+ * samples averaged; in the execute functions it is the number of batches the shots
+ * are split into, so at most `shots` batches run.
  * - `maestro.is_gpu_available()`: Check if GPU acceleration library is present.
  * - `maestro.init_gpu()`: Load GPU acceleration library.
  * - `maestro.is_distributed_gpu_available()`: Non-throwing probe of local distributed GPU plugin and devices (Linux only).

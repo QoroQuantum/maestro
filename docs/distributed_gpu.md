@@ -30,7 +30,7 @@ No distribution configuration is needed for ordinary execution:
 - Layout policy is **automatic** (`distributed_flags=0`). The plugin handles
   placement internally; Maestro does not insert explicit storage swaps.
 - Precision is single; set `precision="double"` in C++, or
-  `SimulatorConfig.precision=True` / `use_double_precision=True` in Python.
+  `SimulatorConfig(precision="double")` in Python.
 - Ex uses its default queue and transfer workspace unless configured.
 - MPI uses `MPI_COMM_WORLD`, one shard per rank, and `p2p_bits=0`. It assigns
   devices by rank within each shared-memory host, modulo its visible device

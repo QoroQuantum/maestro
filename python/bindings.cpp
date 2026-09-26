@@ -139,31 +139,39 @@ static void warn_thermal_approximation(const noise::NoiseModel& noise_model,
     throw nb::python_error();
 }
 
-// An omitted public seed falls back to the config seed, as in the JSON API, so
-// SimulatorConfig(seed=...) alone reproduces the injected noise. All MPI ranks
-// must submit the same stochastic circuit, so MPI resolves an unseeded call
-// once and shares it with measurement/readout execution.
+// The noise seed is 32 bits, as in the JSON API's noise.seed.
+static void RequireNoiseSeed(std::optional<uint64_t> noise_seed) {
+  if (noise_seed && *noise_seed > UINT32_MAX)
+    throw nb::value_error("noise_seed must fit in 32 bits");
+}
+
+// An omitted noise seed falls back to the config seed's low 32 bits, as in the
+// JSON API, so SimulatorConfig(seed=...) alone reproduces the injected noise.
+// All MPI ranks must submit the same stochastic circuit, so MPI resolves an
+// unseeded call once and shares it with measurement/readout execution.
 static std::mt19937 MakeNoiseRng(const SimulatorConfig& config,
-                                 std::optional<unsigned int>& seed) {
-  if (!seed && config.seed)
-    seed = static_cast<unsigned int>(*config.seed);
-  else if (!seed &&
+                                 std::optional<uint64_t>& noise_seed) {
+  RequireNoiseSeed(noise_seed);
+  if (!noise_seed && config.seed)
+    noise_seed = *config.seed & UINT32_MAX;
+  else if (!noise_seed &&
            config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim)
-    seed = static_cast<unsigned int>(Simulators::GenerateRandomSeed(
-        config.simulator_type, config.distributed_options));
-  if (seed) return std::mt19937(*seed);
+    noise_seed = Simulators::GenerateRandomSeed(config.simulator_type,
+                                                config.distributed_options) &
+                 UINT32_MAX;
+  if (noise_seed) return std::mt19937(static_cast<uint32_t>(*noise_seed));
   return std::mt19937(std::random_device{}());
 }
 
 // Keep simulator randomness separate from circuit-noise injection. An explicit
-// config seed takes precedence; otherwise the public noise seed also seeds
+// config seed takes precedence; otherwise the noise seed also seeds
 // measurement/readout and reset collapse. Every batch needs its own stream,
 // including one-shot executions and expectation-value realizations.
 static SimulatorConfig NoiseExecutionConfig(const SimulatorConfig& config,
-                                            std::optional<unsigned int> seed,
+                                            std::optional<uint64_t> noise_seed,
                                             uint64_t batch) {
   auto execution_config = config;
-  if (!execution_config.seed && seed) execution_config.seed = *seed;
+  if (!execution_config.seed && noise_seed) execution_config.seed = *noise_seed;
   if (execution_config.seed)
     execution_config.seed =
         Simulators::IState::DeriveSeed(*execution_config.seed, batch);
@@ -791,7 +799,7 @@ class PrefixCheckpointedSimulator {
       std::shared_ptr<Circuits::Circuit<double>> suffix_circuit,
       int shots = 1024, const noise::NoiseModel* noise_model = nullptr,
       int noise_realizations = 64,
-      std::optional<unsigned int> seed = std::nullopt,
+      std::optional<uint64_t> noise_seed = std::nullopt,
       int num_measurements = 0) {
     if (!suffix_circuit) throw nb::value_error("suffix_circuit is null.");
     if (shots <= 0) shots = 1;
@@ -806,12 +814,12 @@ class PrefixCheckpointedSimulator {
     const bool has_noise = (noise_model != nullptr) && noise_model->has_any();
     if (has_noise) warn_thermal_approximation(*noise_model, config_);
 
-    unsigned int initial_seed =
-        seed.value_or(config_.seed.value_or(std::random_device{}()));
-    std::mt19937 rng(initial_seed);
+    RequireNoiseSeed(noise_seed);
+    std::mt19937 rng(static_cast<uint32_t>(noise_seed.value_or(
+        config_.seed.value_or(std::random_device{}()))));
 
-    if (seed) {
-      simulator_->SetSeed(*seed);
+    if (noise_seed) {
+      simulator_->SetSeed(*noise_seed);
     }
 
     std::unordered_map<std::string, size_t> combined;
@@ -895,6 +903,249 @@ class PrefixCheckpointedSimulator {
   size_t max_bond_dim_ = 0;
 };
 
+using CircuitPtr = std::shared_ptr<Circuits::Circuit<double>>;
+using NoiseInjector = CircuitPtr (*)(const CircuitPtr&,
+                                     const noise::NoiseModel&, std::mt19937&,
+                                     const SimulatorConfig&);
+
+static CircuitPtr inject_coherent_for_config(const CircuitPtr& circuit,
+                                             const noise::NoiseModel& noise_model,
+                                             std::mt19937& rng,
+                                             const SimulatorConfig&) {
+  return noise::inject_coherent_noise(circuit, noise_model, rng);
+}
+
+static void require_realizations(int noise_realizations) {
+  if (noise_realizations < 1)
+    throw nb::value_error("noise_realizations must be >= 1.");
+}
+
+// Shots are split across min(shots, noise_realizations) batches, each with its
+// own injected noise; the result reports the number of batches used.
+static nb::dict execute_noise_batches(const CircuitPtr& circuit,
+                                      const noise::NoiseModel& noise_model,
+                                      const SimulatorConfig& config, int shots,
+                                      int noise_realizations,
+                                      std::optional<uint64_t> noise_seed,
+                                      NoiseInjector inject,
+                                      const char* noise_type) {
+  if (shots < 1) throw nb::value_error("shots must be >= 1.");
+  require_realizations(noise_realizations);
+  auto rng = MakeNoiseRng(config, noise_seed);
+  const int batches = std::min(shots, noise_realizations);
+  const int base_batch = shots / batches;
+  const int leftover = shots % batches;
+
+  std::unordered_map<std::string, size_t> combined;
+  auto start = std::chrono::high_resolution_clock::now();
+  for (int b = 0; b < batches; ++b) {
+    auto noisy = inject(circuit, noise_model, rng, config);
+    nb::dict r = execute_core(noisy, NoiseExecutionConfig(config, noise_seed, b),
+                              base_batch + (b < leftover ? 1 : 0));
+    for (auto item : nb::cast<nb::dict>(r["counts"]))
+      combined[nb::cast<std::string>(nb::str(item.first))] +=
+          nb::cast<size_t>(item.second);
+  }
+  auto end = std::chrono::high_resolution_clock::now();
+
+  nb::dict py_counts;
+  for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
+
+  nb::dict out;
+  out["counts"] = py_counts;
+  out["time_taken"] = std::chrono::duration<double>(end - start).count();
+  out["simulator"] = (int)config.simulator_type;
+  out["method"] = (int)config.simulation_type;
+  out["noise_realizations"] = batches;
+  if (noise_type) out["noise_type"] = noise_type;
+  return out;
+}
+
+// Averages expectation values over noise_realizations independent injections.
+static nb::dict estimate_noise_realizations(
+    const CircuitPtr& circuit, const nb::object& observables,
+    const noise::NoiseModel& noise_model, int noise_realizations,
+    const SimulatorConfig& config, std::optional<uint64_t> noise_seed,
+    NoiseInjector inject, const char* noise_type) {
+  require_realizations(noise_realizations);
+  auto paulis = ParseObservables(observables);
+  auto rng = MakeNoiseRng(config, noise_seed);
+  const size_t n_obs = paulis.size();
+  std::vector<double> sum_vals(n_obs, 0.0);
+
+  auto start = std::chrono::high_resolution_clock::now();
+  for (int r = 0; r < noise_realizations; ++r) {
+    auto noisy = inject(circuit, noise_model, rng, config);
+    nb::dict result = estimate_core(
+        noisy, paulis, NoiseExecutionConfig(config, noise_seed, r));
+    nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
+    for (size_t i = 0; i < n_obs; ++i) sum_vals[i] += nb::cast<double>(ev[i]);
+  }
+  auto end = std::chrono::high_resolution_clock::now();
+
+  nb::dict ideal_result = estimate_core(circuit, paulis, config);
+  nb::list noisy_vals, ideal_vals;
+  nb::list ideal_ev = nb::cast<nb::list>(ideal_result["expectation_values"]);
+  for (size_t i = 0; i < n_obs; ++i) {
+    noisy_vals.append(sum_vals[i] / noise_realizations);
+    ideal_vals.append(nb::cast<double>(ideal_ev[i]));
+  }
+
+  nb::dict out;
+  out["expectation_values"] = noisy_vals;
+  out["ideal_expectation_values"] = ideal_vals;
+  out["time_taken"] = std::chrono::duration<double>(end - start).count();
+  out["simulator"] = ideal_result["simulator"];
+  out["method"] = ideal_result["method"];
+  if (ideal_result.contains("gpu_device"))
+    out["gpu_device"] = ideal_result["gpu_device"];
+  out["noise_realizations"] = noise_realizations;
+  if (noise_type) out["noise_type"] = noise_type;
+  return out;
+}
+
+static void require_circuit(const CircuitPtr& circuit) {
+  if (!circuit) throw nb::value_error("Circuit is null.");
+}
+
+static void require_coherent(const noise::NoiseModel& noise_model) {
+  if (!noise_model.has_coherent())
+    throw nb::value_error(
+        "NoiseModel has no coherent noise set. Use "
+        "set_coherent_depolarizing(), set_coherent_rotation(), etc.");
+}
+
+static void require_any_noise(const noise::NoiseModel& noise_model) {
+  if (!noise_model.has_any())
+    throw nb::value_error("NoiseModel has no noise configured.");
+}
+
+static nb::dict NoisyExecute(const CircuitPtr& circuit,
+                             const noise::NoiseModel& noise_model,
+                             const SimulatorConfig& config, int shots,
+                             int noise_realizations,
+                             std::optional<uint64_t> noise_seed) {
+  require_circuit(circuit);
+  warn_thermal_approximation(noise_model, config);
+  return execute_noise_batches(circuit, noise_model, config, shots,
+                               noise_realizations, noise_seed,
+                               inject_noise_for_config, nullptr);
+}
+
+static nb::dict CoherentExecute(const CircuitPtr& circuit,
+                                const noise::NoiseModel& noise_model,
+                                const SimulatorConfig& config, int shots,
+                                int noise_realizations,
+                                std::optional<uint64_t> noise_seed) {
+  require_circuit(circuit);
+  require_coherent(noise_model);
+  return execute_noise_batches(circuit, noise_model, config, shots,
+                               noise_realizations, noise_seed,
+                               inject_coherent_for_config, "coherent");
+}
+
+static nb::dict FullNoiseExecute(const CircuitPtr& circuit,
+                                 const noise::NoiseModel& noise_model,
+                                 const SimulatorConfig& config, int shots,
+                                 int noise_realizations,
+                                 std::optional<uint64_t> noise_seed) {
+  require_circuit(circuit);
+  require_any_noise(noise_model);
+  warn_thermal_approximation(noise_model, config);
+  return execute_noise_batches(circuit, noise_model, config, shots,
+                               noise_realizations, noise_seed,
+                               inject_combined_noise_for_config, "combined");
+}
+
+static nb::dict NoisyEstimateMonteCarlo(const CircuitPtr& circuit,
+                                        const nb::object& observables,
+                                        const noise::NoiseModel& noise_model,
+                                        int noise_realizations,
+                                        const SimulatorConfig& config,
+                                        std::optional<uint64_t> noise_seed) {
+  require_circuit(circuit);
+  warn_thermal_approximation(noise_model, config);
+  return estimate_noise_realizations(circuit, observables, noise_model,
+                                     noise_realizations, config, noise_seed,
+                                     inject_noise_for_config, nullptr);
+}
+
+static nb::dict CoherentEstimate(const CircuitPtr& circuit,
+                                 const nb::object& observables,
+                                 const noise::NoiseModel& noise_model,
+                                 int noise_realizations,
+                                 const SimulatorConfig& config,
+                                 std::optional<uint64_t> noise_seed) {
+  require_circuit(circuit);
+  require_coherent(noise_model);
+  return estimate_noise_realizations(circuit, observables, noise_model,
+                                     noise_realizations, config, noise_seed,
+                                     inject_coherent_for_config, "coherent");
+}
+
+static nb::dict FullNoiseEstimate(const CircuitPtr& circuit,
+                                  const nb::object& observables,
+                                  const noise::NoiseModel& noise_model,
+                                  int noise_realizations,
+                                  const SimulatorConfig& config,
+                                  std::optional<uint64_t> noise_seed) {
+  require_circuit(circuit);
+  require_any_noise(noise_model);
+  warn_thermal_approximation(noise_model, config);
+  return estimate_noise_realizations(circuit, observables, noise_model,
+                                     noise_realizations, config, noise_seed,
+                                     inject_combined_noise_for_config,
+                                     "combined");
+}
+
+template <typename T>
+struct IsOptional : std::false_type {};
+template <typename T>
+struct IsOptional<std::optional<T>> : std::true_type {};
+
+// A property whose setter validates the whole config before committing, so an
+// invalid value leaves the config unchanged.
+template <typename T>
+void BindConfigField(nb::class_<SimulatorConfig>& cls, const char* name,
+                     T SimulatorConfig::*member, const char* doc) {
+  cls.def_prop_rw(
+      name, [member](const SimulatorConfig& c) -> T { return c.*member; },
+      [member](SimulatorConfig& c, T value) {
+        SimulatorConfig next = c;
+        next.*member = std::move(value);
+        next.Validate();
+        c = std::move(next);
+      },
+      nb::for_setter(nb::arg("value").none(IsOptional<T>::value)), doc);
+}
+
+// Constructor keywords and __repr__ order.
+const char* const kConfigFields[] = {
+    "simulator_type",
+    "simulation_type",
+    "max_bond_dimension",
+    "singular_value_threshold",
+    "truncation_mode",
+    "precision",
+    "seed",
+    "gpu_device",
+    "distributed_options",
+    "disable_optimized_swapping",
+    "lookahead_depth",
+    "mps_sampling",
+    "mps_svd_solver",
+    "mpo_svd_solver",
+    "tensor_network_svd_solver",
+    "mpo_kraus_completeness_check",
+    "mpo_restore_trace_after_truncation",
+    "mpo_hermitize_after_truncation",
+    "pp_coefficient_threshold",
+    "pp_max_pauli_weight",
+    "pp_gates_between_trims",
+    "pp_gates_between_deduplications",
+    "path_integral_threshold",
+};
+
 }  // namespace
 
 // ============================================================================
@@ -935,160 +1186,216 @@ NB_MODULE(maestro, m) {
       .export_values();
 
   // --- SimulatorConfig ---
-  nb::class_<SimulatorConfig>(
+  const SimulatorConfig defaults;
+  auto config_class = nb::class_<SimulatorConfig>(
       m, "SimulatorConfig",
       "Configuration for the quantum simulator backend. Create once and "
-      "reuse across execute/estimate/statevector calls.")
-      .def(nb::init<Simulators::SimulatorType, Simulators::SimulationType,
-                    std::optional<size_t>, std::optional<double>, bool, bool,
-                    int, bool, std::optional<std::string>,
-                    std::optional<uint64_t>, std::optional<int>,
-                    std::unordered_map<std::string, std::string>>(),
-           "simulator_type"_a = Simulators::SimulatorType::kQCSim,
-           "simulation_type"_a = Simulators::SimulationType::kStatevector,
-           "max_bond_dimension"_a = nb::none(),
-           "singular_value_threshold"_a = nb::none(),
-           "use_double_precision"_a = false,
-           "disable_optimized_swapping"_a = false, "lookahead_depth"_a = -1,
-           "mps_measure_no_collapse"_a = true, "truncation_mode"_a = nb::none(),
-           "seed"_a = nb::none(), "gpu_device"_a = nb::none(),
-           "distributed_options"_a =
-               std::unordered_map<std::string, std::string>{})
-      .def_rw("distributed_options", &SimulatorConfig::distributed_options,
-              "Distribution settings passed to Configure before allocation. "
-              "Defaults: first global qubits, automatic Ex execution, visible "
-              "GPUs. "
-              "MPI calls must match across ranks; mpi_communicator is mpi4py "
-              "Comm.py2f().")
-      .def_prop_rw(
-          "gpu_device",
-          [](const SimulatorConfig& config) { return config.gpu_device; },
-          [](SimulatorConfig& config, std::optional<int> device) {
-            if (device && *device < 0)
-              throw std::invalid_argument("gpu_device must be nonnegative");
-            config.gpu_device = device;
-          },
-          nb::for_setter(nb::arg("device").none()),
-          "CUDA-visible device ordinal, or None to use the default.")
-      .def_prop_rw(
-          "simulator_type",
-          [](const SimulatorConfig& config) { return config.simulator_type; },
-          [](SimulatorConfig& config, Simulators::SimulatorType st) {
-            if ((st == Simulators::SimulatorType::kCompositeQCSim
-#ifndef NO_QISKIT_AER
-                 || st == Simulators::SimulatorType::kCompositeQiskitAer
-#endif
-                 ) &&
-                config.simulation_type !=
-                    Simulators::SimulationType::kStatevector) {
-              throw std::invalid_argument(
-                  "Composite simulators only support Statevector simulation "
-                  "type.");
-            }
-            if (st == Simulators::SimulatorType::kQuestSim &&
-                config.simulation_type !=
-                    Simulators::SimulationType::kStatevector) {
-              throw std::invalid_argument(
-                  "QuestSim only supports Statevector simulation type.");
-            }
-            config.simulator_type = st;
-          })
-      .def_prop_rw(
-          "simulation_type",
-          [](const SimulatorConfig& config) { return config.simulation_type; },
-          [](SimulatorConfig& config, Simulators::SimulationType set) {
-            if ((config.simulator_type ==
-                     Simulators::SimulatorType::kCompositeQCSim
-#ifndef NO_QISKIT_AER
-                 || config.simulator_type ==
-                        Simulators::SimulatorType::kCompositeQiskitAer
-#endif
-                 ) &&
-                set != Simulators::SimulationType::kStatevector) {
-              throw std::invalid_argument(
-                  "Composite simulators only support Statevector simulation "
-                  "type.");
-            }
-            if (config.simulator_type == Simulators::SimulatorType::kQuestSim &&
-                set != Simulators::SimulationType::kStatevector) {
-              throw std::invalid_argument(
-                  "QuestSim only supports Statevector simulation type.");
-            }
-            config.simulation_type = set;
-          })
-      .def_rw("max_bond_dimension", &SimulatorConfig::max_bond_dimension)
-      .def_rw("singular_value_threshold",
-              &SimulatorConfig::singular_value_threshold)
-      .def_rw("truncation_mode", &SimulatorConfig::truncation_mode,
-              "'relative_max' or 'discarded_weight' (the default on every "
-              "backend). Only QCSim and the GPU backend support "
-              "'relative_max'; Aer raises if it's requested.")
-      .def_rw("use_double_precision", &SimulatorConfig::use_double_precision)
-      .def_rw("precision", &SimulatorConfig::precision)
-      .def_rw("disable_optimized_swapping",
-              &SimulatorConfig::disable_optimized_swapping)
-      .def_rw("lookahead_depth", &SimulatorConfig::lookahead_depth)
-      .def_rw("mps_measure_no_collapse",
-              &SimulatorConfig::mps_measure_no_collapse)
-      .def_rw("mpo_kraus_completeness_check",
-              &SimulatorConfig::mpo_kraus_completeness_check)
-      .def_rw("mpo_restore_trace_after_truncation",
-              &SimulatorConfig::mpo_restore_trace_after_truncation)
-      .def_rw("mpo_hermitize_after_truncation",
-              &SimulatorConfig::mpo_hermitize_after_truncation)
-      .def_rw("mps_use_gesvd", &SimulatorConfig::mps_use_gesvd)
-      .def_rw("mps_use_gesvdj", &SimulatorConfig::mps_use_gesvdj)
-      .def_rw("mps_use_gesvdp", &SimulatorConfig::mps_use_gesvdp)
-      .def_rw("mps_use_gesvdr", &SimulatorConfig::mps_use_gesvdr)
-      .def_rw("mpo_use_gesvd", &SimulatorConfig::mpo_use_gesvd)
-      .def_rw("mpo_use_gesvdj", &SimulatorConfig::mpo_use_gesvdj)
-      .def_rw("mpo_use_gesvdp", &SimulatorConfig::mpo_use_gesvdp)
-      .def_rw("mpo_use_gesvdr", &SimulatorConfig::mpo_use_gesvdr)
-      .def_rw("tensor_network_use_gesvd",
-              &SimulatorConfig::tensor_network_use_gesvd)
-      .def_rw("tensor_network_use_gesvdj",
-              &SimulatorConfig::tensor_network_use_gesvdj)
-      .def_rw("tensor_network_use_gesvdp",
-              &SimulatorConfig::tensor_network_use_gesvdp)
-      .def_rw("tensor_network_use_gesvdr",
-              &SimulatorConfig::tensor_network_use_gesvdr)
-      .def_rw("pp_coefficient_threshold",
-              &SimulatorConfig::pp_coefficient_threshold)
-      .def_rw("pp_pauli_weight_threshold",
-              &SimulatorConfig::pp_pauli_weight_threshold)
-      .def_rw("pp_steps_between_trims",
-              &SimulatorConfig::pp_steps_between_trims)
-      .def_rw("pp_steps_between_deduplications",
-              &SimulatorConfig::pp_steps_between_deduplications)
-      .def_rw("path_integral_threshold",
-              &SimulatorConfig::path_integral_threshold)
-      .def_rw("seed", &SimulatorConfig::seed)
-      .def("__repr__", [](const SimulatorConfig& c) {
-        std::ostringstream oss;
-        oss << "SimulatorConfig("
-            << "simulator_type=" << (int)c.simulator_type
-            << ", simulation_type=" << (int)c.simulation_type
-            << ", max_bond_dimension="
-            << (c.max_bond_dimension ? std::to_string(*c.max_bond_dimension)
-                                     : "None")
-            << ", singular_value_threshold="
-            << (c.singular_value_threshold
-                    ? std::to_string(*c.singular_value_threshold)
-                    : "None")
-            << ", truncation_mode="
-            << (c.truncation_mode ? "'" + *c.truncation_mode + "'" : "None")
-            << ", use_double_precision="
-            << (c.use_double_precision ? "True" : "False")
-            << ", disable_optimized_swapping="
-            << (c.disable_optimized_swapping ? "True" : "False")
-            << ", lookahead_depth=" << c.lookahead_depth
-            << ", mps_measure_no_collapse="
-            << (c.mps_measure_no_collapse ? "True" : "False")
-            << ", seed=" << (c.seed ? std::to_string(*c.seed) : "None")
-            << ", gpu_device="
-            << (c.gpu_device ? std::to_string(*c.gpu_device) : "None") << ")";
-        return oss.str();
-      });
+      "reuse across execute/estimate/statevector calls. Every field is a "
+      "keyword argument of the constructor.");
+  config_class.def(
+      "__init__",
+      [](SimulatorConfig* self, Simulators::SimulatorType simulator_type,
+         Simulators::SimulationType simulation_type,
+         std::optional<size_t> max_bond_dimension,
+         std::optional<double> singular_value_threshold,
+         std::optional<std::string> truncation_mode,
+         std::optional<std::string> precision, std::optional<uint64_t> seed,
+         std::optional<int> gpu_device,
+         std::unordered_map<std::string, std::string> distributed_options,
+         bool disable_optimized_swapping, int lookahead_depth,
+         std::string mps_sampling, std::optional<std::string> mps_svd_solver,
+         std::optional<std::string> mpo_svd_solver,
+         std::optional<std::string> tensor_network_svd_solver,
+         std::optional<std::string> mpo_kraus_completeness_check,
+         bool mpo_restore_trace_after_truncation,
+         bool mpo_hermitize_after_truncation,
+         std::optional<double> pp_coefficient_threshold,
+         std::optional<size_t> pp_max_pauli_weight,
+         std::optional<int> pp_gates_between_trims,
+         std::optional<int> pp_gates_between_deduplications,
+         std::optional<double> path_integral_threshold) {
+        SimulatorConfig config;
+        config.simulator_type = simulator_type;
+        config.simulation_type = simulation_type;
+        config.max_bond_dimension = max_bond_dimension;
+        config.singular_value_threshold = singular_value_threshold;
+        config.truncation_mode = std::move(truncation_mode);
+        config.precision = std::move(precision);
+        config.seed = seed;
+        config.gpu_device = gpu_device;
+        config.distributed_options = std::move(distributed_options);
+        config.disable_optimized_swapping = disable_optimized_swapping;
+        config.lookahead_depth = lookahead_depth;
+        config.mps_sampling = std::move(mps_sampling);
+        config.mps_svd_solver = std::move(mps_svd_solver);
+        config.mpo_svd_solver = std::move(mpo_svd_solver);
+        config.tensor_network_svd_solver = std::move(tensor_network_svd_solver);
+        config.mpo_kraus_completeness_check =
+            std::move(mpo_kraus_completeness_check);
+        config.mpo_restore_trace_after_truncation =
+            mpo_restore_trace_after_truncation;
+        config.mpo_hermitize_after_truncation = mpo_hermitize_after_truncation;
+        config.pp_coefficient_threshold = pp_coefficient_threshold;
+        config.pp_max_pauli_weight = pp_max_pauli_weight;
+        config.pp_gates_between_trims = pp_gates_between_trims;
+        config.pp_gates_between_deduplications =
+            pp_gates_between_deduplications;
+        config.path_integral_threshold = path_integral_threshold;
+        config.Validate();
+        new (self) SimulatorConfig(std::move(config));
+      },
+      nb::kw_only(), "simulator_type"_a = defaults.simulator_type,
+      "simulation_type"_a = defaults.simulation_type,
+      "max_bond_dimension"_a = nb::none(),
+      "singular_value_threshold"_a = nb::none(),
+      "truncation_mode"_a = nb::none(), "precision"_a = nb::none(),
+      "seed"_a = nb::none(), "gpu_device"_a = nb::none(),
+      "distributed_options"_a = defaults.distributed_options,
+      "disable_optimized_swapping"_a = defaults.disable_optimized_swapping,
+      "lookahead_depth"_a = defaults.lookahead_depth,
+      "mps_sampling"_a = defaults.mps_sampling,
+      "mps_svd_solver"_a = nb::none(), "mpo_svd_solver"_a = nb::none(),
+      "tensor_network_svd_solver"_a = nb::none(),
+      "mpo_kraus_completeness_check"_a = nb::none(),
+      "mpo_restore_trace_after_truncation"_a =
+          defaults.mpo_restore_trace_after_truncation,
+      "mpo_hermitize_after_truncation"_a =
+          defaults.mpo_hermitize_after_truncation,
+      "pp_coefficient_threshold"_a = nb::none(),
+      "pp_max_pauli_weight"_a = nb::none(),
+      "pp_gates_between_trims"_a = nb::none(),
+      "pp_gates_between_deduplications"_a = nb::none(),
+      "path_integral_threshold"_a = nb::none());
+
+  BindConfigField(config_class, "simulator_type",
+                  &SimulatorConfig::simulator_type,
+                  "Simulator backend, a SimulatorType.");
+  BindConfigField(config_class, "simulation_type",
+                  &SimulatorConfig::simulation_type,
+                  "Simulation method, a SimulationType.");
+  BindConfigField(
+      config_class, "max_bond_dimension", &SimulatorConfig::max_bond_dimension,
+      "Largest bond dimension kept when truncating MPS, MPO and GPU "
+      "tensor-network states. None uses the backend default (128 for GPU MPS "
+      "and MPO).");
+  BindConfigField(
+      config_class, "singular_value_threshold",
+      &SimulatorConfig::singular_value_threshold,
+      "SVD truncation threshold for MPS, MPO and GPU tensor-network states, "
+      "read according to truncation_mode. Under 'relative_max' it is a ratio "
+      "of singular values; under 'discarded_weight' it bounds the discarded "
+      "normalised squared weight, so the same number truncates much harder "
+      "(1e-8 drops singular values up to about 1e-4 of the spectrum's norm). "
+      "None uses the backend default.");
+  BindConfigField(
+      config_class, "truncation_mode", &SimulatorConfig::truncation_mode,
+      "'relative_max' drops singular values below singular_value_threshold "
+      "times the largest; 'discarded_weight' (the default on every backend) "
+      "drops the smallest until their cumulative normalised squared weight "
+      "reaches the threshold. Only QCSim and the GPU "
+      "backend support 'relative_max'; Aer raises if it is requested.");
+  BindConfigField(
+      config_class, "precision", &SimulatorConfig::precision,
+      "'single' or 'double' floating point for Qiskit Aer and the GPU "
+      "simulators. None keeps each backend's default. Other backends ignore "
+      "it; QCSim always computes in double precision.");
+  BindConfigField(
+      config_class, "seed", &SimulatorConfig::seed,
+      "Seed for simulation randomness: measurement, readout and reset. The "
+      "noisy functions also seed their injected noise from its low 32 bits "
+      "when their noise_seed is unset. None seeds from system entropy.");
+  BindConfigField(config_class, "gpu_device", &SimulatorConfig::gpu_device,
+                  "CUDA-visible device ordinal, or None to use the default.");
+  BindConfigField(
+      config_class, "distributed_options",
+      &SimulatorConfig::distributed_options,
+      "Distribution settings passed to Configure before allocation. Keys "
+      "start with 'distributed_' or 'mpi_'. Defaults: first global qubits, "
+      "automatic Ex execution, visible GPUs. MPI calls must match across "
+      "ranks; mpi_communicator is mpi4py Comm.py2f().");
+  BindConfigField(
+      config_class, "disable_optimized_swapping",
+      &SimulatorConfig::disable_optimized_swapping,
+      "Turn off swap-cost optimisation and the initial qubit-map "
+      "optimisation.");
+  BindConfigField(config_class, "lookahead_depth",
+                  &SimulatorConfig::lookahead_depth,
+                  "Lookahead depth for swap optimisation; -1 uses Maestro's "
+                  "default.");
+  BindConfigField(
+      config_class, "mps_sampling", &SimulatorConfig::mps_sampling,
+      "How QCSim and Aer MPS simulations sample shots; the GPU MPS simulator "
+      "ignores it. 'probabilities' (the default) samples without collapsing "
+      "the state; 'apply_measure' measures, collapses and restores it for "
+      "every shot. Both draw from the same distribution, but consume the "
+      "random stream differently, so one seed gives different counts.");
+  BindConfigField(
+      config_class, "mps_svd_solver", &SimulatorConfig::mps_svd_solver,
+      "GPU SVD solver for MPS truncation: 'gesvd', 'gesvdj' (Jacobi), "
+      "'gesvdp' (polar) or 'gesvdr' (randomised). None keeps the GPU "
+      "library's default.");
+  BindConfigField(config_class, "mpo_svd_solver",
+                  &SimulatorConfig::mpo_svd_solver,
+                  "GPU SVD solver for MPO truncation; the choices of "
+                  "mps_svd_solver.");
+  BindConfigField(config_class, "tensor_network_svd_solver",
+                  &SimulatorConfig::tensor_network_svd_solver,
+                  "GPU SVD solver for tensor-network truncation; the choices "
+                  "of mps_svd_solver.");
+  BindConfigField(
+      config_class, "mpo_kraus_completeness_check",
+      &SimulatorConfig::mpo_kraus_completeness_check,
+      "How the MPO simulator treats Kraus operators that do not sum to the "
+      "identity: 'ignore', 'warn' or 'strict' (raise). None uses the "
+      "default.");
+  BindConfigField(config_class, "mpo_restore_trace_after_truncation",
+                  &SimulatorConfig::mpo_restore_trace_after_truncation,
+                  "Rescale the CPU MPO to unit trace after each truncation.");
+  BindConfigField(config_class, "mpo_hermitize_after_truncation",
+                  &SimulatorConfig::mpo_hermitize_after_truncation,
+                  "Make the CPU MPO Hermitian again after each truncation.");
+  BindConfigField(
+      config_class, "pp_coefficient_threshold",
+      &SimulatorConfig::pp_coefficient_threshold,
+      "Pauli propagation: truncation passes drop strings whose |coefficient| "
+      "is at most this value. Only applies when pp_gates_between_trims or "
+      "pp_gates_between_deduplications is set.");
+  BindConfigField(
+      config_class, "pp_max_pauli_weight", &SimulatorConfig::pp_max_pauli_weight,
+      "Pauli propagation: truncation passes drop strings acting on more "
+      "qubits than this; a value at or above the qubit count keeps them all. "
+      "Only applies when pp_gates_between_trims or "
+      "pp_gates_between_deduplications is set.");
+  BindConfigField(
+      config_class, "pp_gates_between_trims",
+      &SimulatorConfig::pp_gates_between_trims,
+      "Pauli propagation: apply both thresholds every this many operations, "
+      "counting each primitive operation a gate decomposes into. Must be "
+      "positive.");
+  BindConfigField(
+      config_class, "pp_gates_between_deduplications",
+      &SimulatorConfig::pp_gates_between_deduplications,
+      "Pauli propagation: every this many operations, merge repeated strings "
+      "and then apply both thresholds; takes precedence over a trim due on "
+      "the same operation. Must be positive.");
+  BindConfigField(config_class, "path_integral_threshold",
+                  &SimulatorConfig::path_integral_threshold,
+                  "Trim threshold for PathIntegral simulation; None disables "
+                  "trimming.");
+  nb::list config_fields;
+  for (const char* name : kConfigFields) config_fields.append(name);
+  config_class.attr("_fields") = nb::tuple(config_fields);
+  config_class.def("__repr__", [](nb::handle self) {
+    std::string out = "SimulatorConfig(";
+    for (size_t i = 0; i < std::size(kConfigFields); ++i) {
+      const std::string name = kConfigFields[i];
+      nb::object value = nb::getattr(self, name.c_str());
+      const bool is_enum = name == "simulator_type" || name == "simulation_type";
+      out += (i ? ", " : "") + name + "=" +
+             nb::cast<std::string>(is_enum ? nb::str(value) : nb::repr(value));
+    }
+    return out + ")";
+  });
 
   nb::class_<Simulators::ISimulator>(m, "Simulator")
       // Low-level operations from Interface.h, using Python-owned results.
@@ -1614,56 +1921,10 @@ NB_MODULE(maestro, m) {
           "'has_readout_error'.")
 
       // ---- Bound Methods for Noisy Execution ----
-      .def(
-          "noisy_execute",
-          [](std::shared_ptr<Circuits::Circuit<double>> self,
-             const noise::NoiseModel &noise_model,
-             const SimulatorConfig &config,
-             int shots, int noise_realizations,
-             std::optional<unsigned int> seed) {
-            if (!self) throw nb::value_error("Circuit is null.");
-            warn_thermal_approximation(noise_model, config);
-            auto rng = MakeNoiseRng(config, seed);
-            const int batches =
-                std::min(shots, std::max(1, noise_realizations));
-            const int base_batch = shots / batches;
-            int leftover = shots % batches;
-
-            std::unordered_map<std::string, size_t> combined;
-
-            auto start = std::chrono::high_resolution_clock::now();
-            for (int b = 0; b < batches; ++b) {
-              int batch_shots = base_batch + (b < leftover ? 1 : 0);
-              if (batch_shots <= 0) continue;
-
-              auto noisy =
-                  inject_noise_for_config(self, noise_model, rng, config);
-              nb::dict r = execute_core(
-                  noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
-              nb::dict counts = nb::cast<nb::dict>(r["counts"]);
-              for (auto item : counts)
-                combined[nb::cast<std::string>(nb::str(item.first))] +=
-                    nb::cast<size_t>(item.second);
-            }
-            auto end = std::chrono::high_resolution_clock::now();
-
-
-            nb::dict py_counts;
-            for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
-
-            nb::dict out;
-            out["counts"] = py_counts;
-            out["time_taken"] =
-                std::chrono::duration<double>(end - start).count();
-            out["simulator"] = (int)config.simulator_type;
-            out["method"] = (int)config.simulation_type;
-            out["noise_realizations"] = batches;
-            return out;
-          },
-          "noise_model"_a,
+      .def("noisy_execute", &NoisyExecute, "noise_model"_a,
           "config"_a = SimulatorConfig{},
           "shots"_a = 1024,
-          "noise_realizations"_a = 64, "seed"_a = nb::none(),
+          "noise_realizations"_a = 64, "noise_seed"_a = nb::none(),
           "Execute with exact Pauli/T1 channels for density-matrix/MPO "
           "methods, or sampled trajectories for pure-state methods.\n\n"
           "Example: qc.noisy_execute(nm, shots=1000)")
@@ -1710,288 +1971,42 @@ NB_MODULE(maestro, m) {
           "or MPO method, when the magnitude of the noise matters."
           "\n\n"
           "Example: qc.noisy_estimate(['ZZ', 'XX'], nm)")
-      .def(
-          "noisy_estimate_montecarlo",
-          [](std::shared_ptr<Circuits::Circuit<double>> self,
-             const nb::object &observables,
-             const noise::NoiseModel &noise_model, int noise_realizations,
-             const SimulatorConfig &config,
-             std::optional<unsigned int> seed) {
-            if (!self) throw nb::value_error("Circuit is null.");
-            auto paulis = ParseObservables(observables);
-
-            warn_thermal_approximation(noise_model, config);
-            auto rng = MakeNoiseRng(config, seed);
-            const size_t n_obs = paulis.size();
-            std::vector<double> sum_vals(n_obs, 0.0);
-
-            auto start = std::chrono::high_resolution_clock::now();
-            for (int r = 0; r < noise_realizations; ++r) {
-              auto noisy =
-                  inject_noise_for_config(self, noise_model, rng, config);
-              nb::dict result = estimate_core(
-                  noisy, paulis, NoiseExecutionConfig(config, seed, r));
-              nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
-              for (size_t i = 0; i < n_obs; ++i)
-                sum_vals[i] += nb::cast<double>(ev[i]);
-            }
-            auto end = std::chrono::high_resolution_clock::now();
-
-            nb::dict ideal_result = estimate_core(self, paulis, config);
-            nb::list noisy_vals, ideal_vals;
-            nb::list ideal_ev =
-                nb::cast<nb::list>(ideal_result["expectation_values"]);
-            for (size_t i = 0; i < n_obs; ++i) {
-              noisy_vals.append(sum_vals[i] / noise_realizations);
-              ideal_vals.append(nb::cast<double>(ideal_ev[i]));
-            }
-
-            nb::dict out;
-            out["expectation_values"] = noisy_vals;
-            out["ideal_expectation_values"] = ideal_vals;
-            out["time_taken"] =
-                std::chrono::duration<double>(end - start).count();
-            out["simulator"] = ideal_result["simulator"];
-            out["method"] = ideal_result["method"];
-            if (ideal_result.contains("gpu_device")) out["gpu_device"] = ideal_result["gpu_device"];
-            out["noise_realizations"] = noise_realizations;
-            return out;
-          },
+      .def("noisy_estimate_montecarlo", &NoisyEstimateMonteCarlo,
           "observables"_a, "noise_model"_a,
           "noise_realizations"_a = 100,
           "config"_a = SimulatorConfig{},
-          "seed"_a = nb::none(),
+          "noise_seed"_a = nb::none(),
           "Gate-by-gate Monte Carlo noisy estimation.\n\n"
           "Example: qc.noisy_estimate_montecarlo(['ZZ'], nm, "
           "noise_realizations=200)")
-      .def(
-          "coherent_execute",
-          [](std::shared_ptr<Circuits::Circuit<double>> self,
-             const noise::NoiseModel &noise_model,
-             const SimulatorConfig &config,
-             int shots, int noise_realizations,
-             std::optional<unsigned int> seed) {
-            if (!self) throw nb::value_error("Circuit is null.");
-            if (!noise_model.has_coherent())
-              throw nb::value_error(
-                  "NoiseModel has no coherent noise set. Use "
-                  "set_coherent_depolarizing(), set_coherent_rotation(), "
-                  "etc.");
-
-            auto rng = MakeNoiseRng(config, seed);
-            const int batches =
-                std::min(shots, std::max(1, noise_realizations));
-            const int base_batch = shots / batches;
-            int leftover = shots % batches;
-
-            std::unordered_map<std::string, size_t> combined;
-
-            auto start = std::chrono::high_resolution_clock::now();
-            for (int b = 0; b < batches; ++b) {
-              int batch_shots = base_batch + (b < leftover ? 1 : 0);
-              if (batch_shots <= 0) continue;
-
-              auto noisy =
-                  noise::inject_coherent_noise(self, noise_model, rng);
-              nb::dict r = execute_core(
-                  noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
-              nb::dict counts = nb::cast<nb::dict>(r["counts"]);
-              for (auto item : counts)
-                combined[nb::cast<std::string>(nb::str(item.first))] +=
-                    nb::cast<size_t>(item.second);
-            }
-            auto end = std::chrono::high_resolution_clock::now();
-
-            nb::dict py_counts;
-            for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
-
-            nb::dict out;
-            out["counts"] = py_counts;
-            out["time_taken"] =
-                std::chrono::duration<double>(end - start).count();
-            out["simulator"] = (int)config.simulator_type;
-            out["method"] = (int)config.simulation_type;
-            out["noise_realizations"] = batches;
-            out["noise_type"] = "coherent";
-            return out;
-          },
-          "noise_model"_a,
+      .def("coherent_execute", &CoherentExecute, "noise_model"_a,
           "config"_a = SimulatorConfig{},
           "shots"_a = 1024,
-          "noise_realizations"_a = 64, "seed"_a = nb::none(),
+          "noise_realizations"_a = 64, "noise_seed"_a = nb::none(),
           "Execute with sampled coherent over/under-rotation errors.\n\n"
           "Example: qc.coherent_execute(nm, shots=1000)")
-      .def(
-          "coherent_estimate",
-          [](std::shared_ptr<Circuits::Circuit<double>> self,
-             const nb::object &observables,
-             const noise::NoiseModel &noise_model, int noise_realizations,
-             const SimulatorConfig &config,
-             std::optional<unsigned int> seed) {
-            if (!self) throw nb::value_error("Circuit is null.");
-            if (!noise_model.has_coherent())
-              throw nb::value_error(
-                  "NoiseModel has no coherent noise set. Use "
-                  "set_coherent_depolarizing(), set_coherent_rotation(), "
-                  "etc.");
-
-            auto paulis = ParseObservables(observables);
-            auto rng = MakeNoiseRng(config, seed);
-            const size_t n_obs = paulis.size();
-            std::vector<double> sum_vals(n_obs, 0.0);
-
-            auto start = std::chrono::high_resolution_clock::now();
-            for (int r = 0; r < noise_realizations; ++r) {
-              auto noisy =
-                  noise::inject_coherent_noise(self, noise_model, rng);
-              nb::dict result = estimate_core(noisy, paulis, config);
-              nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
-              for (size_t i = 0; i < n_obs; ++i)
-                sum_vals[i] += nb::cast<double>(ev[i]);
-            }
-            auto end = std::chrono::high_resolution_clock::now();
-
-            nb::dict ideal_result = estimate_core(self, paulis, config);
-            nb::list noisy_vals, ideal_vals;
-            nb::list ideal_ev =
-                nb::cast<nb::list>(ideal_result["expectation_values"]);
-            for (size_t i = 0; i < n_obs; ++i) {
-              noisy_vals.append(sum_vals[i] / noise_realizations);
-              ideal_vals.append(nb::cast<double>(ideal_ev[i]));
-            }
-
-            nb::dict out;
-            out["expectation_values"] = noisy_vals;
-            out["ideal_expectation_values"] = ideal_vals;
-            out["time_taken"] =
-                std::chrono::duration<double>(end - start).count();
-            out["simulator"] = ideal_result["simulator"];
-            out["method"] = ideal_result["method"];
-            if (ideal_result.contains("gpu_device")) out["gpu_device"] = ideal_result["gpu_device"];
-            out["noise_realizations"] = noise_realizations;
-            out["noise_type"] = "coherent";
-            return out;
-          },
+      .def("coherent_estimate", &CoherentEstimate,
           "observables"_a, "noise_model"_a,
           "noise_realizations"_a = 100,
           "config"_a = SimulatorConfig{},
-          "seed"_a = nb::none(),
+          "noise_seed"_a = nb::none(),
           "Estimate expectation values with coherent noise.\n\n"
           "Example: qc.coherent_estimate(['ZZ', 'XX'], nm, "
           "noise_realizations=200)")
       // ---- Combined Noise (all layers) ----
-      .def(
-          "full_noise_execute",
-          [](std::shared_ptr<Circuits::Circuit<double>> self,
-             const noise::NoiseModel &noise_model,
-             const SimulatorConfig &config,
-             int shots, int noise_realizations,
-             std::optional<unsigned int> seed) {
-            if (!self) throw nb::value_error("Circuit is null.");
-            if (!noise_model.has_any())
-              throw nb::value_error("NoiseModel has no noise configured.");
-
-            warn_thermal_approximation(noise_model, config);
-            auto rng = MakeNoiseRng(config, seed);
-            const int batches =
-                std::min(shots, std::max(1, noise_realizations));
-            const int base_batch = shots / batches;
-            int leftover = shots % batches;
-
-            std::unordered_map<std::string, size_t> combined;
-
-            auto start = std::chrono::high_resolution_clock::now();
-            for (int b = 0; b < batches; ++b) {
-              int batch_shots = base_batch + (b < leftover ? 1 : 0);
-              if (batch_shots <= 0) continue;
-
-              auto noisy = inject_combined_noise_for_config(
-                  self, noise_model, rng, config);
-              nb::dict r = execute_core(
-                  noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
-              nb::dict counts = nb::cast<nb::dict>(r["counts"]);
-              for (auto item : counts)
-                combined[nb::cast<std::string>(nb::str(item.first))] +=
-                    nb::cast<size_t>(item.second);
-            }
-            auto end = std::chrono::high_resolution_clock::now();
-
-
-            nb::dict py_counts;
-            for (const auto &[k, v] : combined) py_counts[k.c_str()] = v;
-
-            nb::dict out;
-            out["counts"] = py_counts;
-            out["time_taken"] =
-                std::chrono::duration<double>(end - start).count();
-            out["simulator"] = (int)config.simulator_type;
-            out["method"] = (int)config.simulation_type;
-            out["noise_realizations"] = batches;
-            out["noise_type"] = "combined";
-            return out;
-          },
-          "noise_model"_a,
+      .def("full_noise_execute", &FullNoiseExecute, "noise_model"_a,
           "config"_a = SimulatorConfig{},
           "shots"_a = 1024,
-          "noise_realizations"_a = 64, "seed"_a = nb::none(),
+          "noise_realizations"_a = 64, "noise_seed"_a = nb::none(),
           "Execute with combined noise: coherent + crosstalk + T1 + Pauli.\n\n"
           "DM/MPO methods use exact channels for T1 and Pauli layers; "
           "trajectory-only layers remain sampled.\n"
           "Example: qc.full_noise_execute(nm, shots=1000)")
-      .def(
-          "full_noise_estimate",
-          [](std::shared_ptr<Circuits::Circuit<double>> self,
-             const nb::object &observables,
-             const noise::NoiseModel &noise_model, int noise_realizations,
-             const SimulatorConfig &config,
-             std::optional<unsigned int> seed) {
-            if (!self) throw nb::value_error("Circuit is null.");
-            if (!noise_model.has_any())
-              throw nb::value_error("NoiseModel has no noise configured.");
-
-            auto paulis = ParseObservables(observables);
-            warn_thermal_approximation(noise_model, config);
-            auto rng = MakeNoiseRng(config, seed);
-            const size_t n_obs = paulis.size();
-            std::vector<double> sum_vals(n_obs, 0.0);
-
-            auto start = std::chrono::high_resolution_clock::now();
-            for (int r = 0; r < noise_realizations; ++r) {
-              auto noisy = inject_combined_noise_for_config(
-                  self, noise_model, rng, config);
-              nb::dict result = estimate_core(
-                  noisy, paulis, NoiseExecutionConfig(config, seed, r));
-              nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
-              for (size_t i = 0; i < n_obs; ++i)
-                sum_vals[i] += nb::cast<double>(ev[i]);
-            }
-            auto end = std::chrono::high_resolution_clock::now();
-
-            nb::dict ideal_result = estimate_core(self, paulis, config);
-            nb::list noisy_vals, ideal_vals;
-            nb::list ideal_ev =
-                nb::cast<nb::list>(ideal_result["expectation_values"]);
-            for (size_t i = 0; i < n_obs; ++i) {
-              noisy_vals.append(sum_vals[i] / noise_realizations);
-              ideal_vals.append(nb::cast<double>(ideal_ev[i]));
-            }
-
-            nb::dict out;
-            out["expectation_values"] = noisy_vals;
-            out["ideal_expectation_values"] = ideal_vals;
-            out["time_taken"] =
-                std::chrono::duration<double>(end - start).count();
-            out["simulator"] = ideal_result["simulator"];
-            out["method"] = ideal_result["method"];
-            if (ideal_result.contains("gpu_device")) out["gpu_device"] = ideal_result["gpu_device"];
-            out["noise_realizations"] = noise_realizations;
-            out["noise_type"] = "combined";
-            return out;
-          },
+      .def("full_noise_estimate", &FullNoiseEstimate,
           "observables"_a, "noise_model"_a,
           "noise_realizations"_a = 100,
           "config"_a = SimulatorConfig{},
-          "seed"_a = nb::none(),
+          "noise_seed"_a = nb::none(),
           "Estimate with combined noise (coherent + crosstalk + T1 + Pauli).\n\n"
           "Example: qc.full_noise_estimate(['ZZ', 'XX'], nm)")
       // ---- Noisy Fidelity (inner-product) ----
@@ -2000,17 +2015,13 @@ NB_MODULE(maestro, m) {
           [](std::shared_ptr<Circuits::Circuit<double>> self,
              const noise::NoiseModel &noise_model, int noise_realizations,
              const SimulatorConfig &config,
-             std::optional<unsigned int> seed) {
-            if (!self) throw nb::value_error("Circuit is null.");
-            if (noise_realizations <= 0)
-              throw nb::value_error(
-                  "noise_realizations must be >= 1.");
-            if (!noise_model.has_any())
-              throw nb::value_error(
-                  "NoiseModel has no noise configured.");
+             std::optional<uint64_t> noise_seed) {
+            require_circuit(self);
+            require_realizations(noise_realizations);
+            require_any_noise(noise_model);
 
             warn_thermal_approximation(noise_model, config);
-            auto rng = MakeNoiseRng(config, seed);
+            auto rng = MakeNoiseRng(config, noise_seed);
             double sum_fid = 0.0;
             double sum_fid_sq = 0.0;
 
@@ -2019,8 +2030,9 @@ NB_MODULE(maestro, m) {
               auto noisy =
                   inject_combined_noise_for_config(self, noise_model, rng, config);
               // Reset collapse must use a fresh seed for each realization.
-              SimulatorConfig realization_config = config;
-              realization_config.seed = rng();
+              auto realization_config =
+                  NoiseExecutionConfig(config, noise_seed, r);
+              if (!realization_config.seed) realization_config.seed = rng();
               double fid = noisy_fidelity_core(self, noisy, realization_config);
               sum_fid += fid;
               sum_fid_sq += fid * fid;
@@ -2047,7 +2059,7 @@ NB_MODULE(maestro, m) {
           "noise_model"_a,
           "noise_realizations"_a = 100,
           "config"_a = SimulatorConfig{},
-          "seed"_a = nb::none(),
+          "noise_seed"_a = nb::none(),
           "Compute fidelity to the ideal unitary circuit state under noise.\n\n"
           "Injects all configured noise types (correlated, coherent, "
           "crosstalk, T1, Pauli) and averages |<psi_ideal|psi_noisy>|^2 "
@@ -2475,10 +2487,11 @@ NB_MODULE(maestro, m) {
            "stationary equilibrium.\n\n"
            "Example: nm.set_correlated_ou(0, sigma=15.0, alpha=0.5, "
            "gate_time=100e-9)")
-      .def("add_correlated_ou_band", &noise::NoiseModel::add_correlated_ou_band,
+      .def("set_correlated_ou_band", &noise::NoiseModel::set_correlated_ou_band,
            "qubit"_a, "sigma"_a, "alpha"_a, "gate_time"_a, "after_1q"_a = true,
            "after_2q"_a = true, "stationary_init"_a = true,
-           "Append an OU fluctuator band to a qubit's band list.")
+           "Append an OU fluctuator band to a qubit's band list, keeping the "
+           "bands already set on it.")
       .def("set_multi_correlated_ou",
            &noise::NoiseModel::set_multi_correlated_ou, "qubit"_a, "bands"_a,
            "gate_time"_a, "after_1q"_a = true, "after_2q"_a = true,
@@ -2841,107 +2854,20 @@ NB_MODULE(maestro, m) {
 
   // --- Gate-by-gate Monte Carlo Noisy Estimation ---
   m.def(
-      "noisy_estimate_montecarlo",
-      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const nb::object& observables, const noise::NoiseModel& noise_model,
-         int noise_realizations, const SimulatorConfig& config,
-         std::optional<unsigned int> seed) {
-        if (!circuit) throw nb::value_error("Circuit is null.");
-        auto paulis = ParseObservables(observables);
-
-        warn_thermal_approximation(noise_model, config);
-        auto rng = MakeNoiseRng(config, seed);
-        const size_t n_obs = paulis.size();
-
-        // Accumulate expectation values across realizations
-        std::vector<double> sum_vals(n_obs, 0.0);
-
-        auto start = std::chrono::high_resolution_clock::now();
-        for (int r = 0; r < noise_realizations; ++r) {
-          auto noisy =
-              inject_noise_for_config(circuit, noise_model, rng, config);
-          nb::dict result = estimate_core(
-              noisy, paulis, NoiseExecutionConfig(config, seed, r));
-          nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
-          for (size_t i = 0; i < n_obs; ++i)
-            sum_vals[i] += nb::cast<double>(ev[i]);
-        }
-        auto end = std::chrono::high_resolution_clock::now();
-
-        // Also run noiseless for reference
-        nb::dict ideal_result = estimate_core(circuit, paulis, config);
-
-        nb::list noisy_vals, ideal_vals;
-        nb::list ideal_ev =
-            nb::cast<nb::list>(ideal_result["expectation_values"]);
-        for (size_t i = 0; i < n_obs; ++i) {
-          noisy_vals.append(sum_vals[i] / noise_realizations);
-          ideal_vals.append(nb::cast<double>(ideal_ev[i]));
-        }
-
-        nb::dict out;
-        out["expectation_values"] = noisy_vals;
-        out["ideal_expectation_values"] = ideal_vals;
-        out["time_taken"] = std::chrono::duration<double>(end - start).count();
-        out["simulator"] = ideal_result["simulator"];
-        out["method"] = ideal_result["method"];
-        if (ideal_result.contains("gpu_device"))
-          out["gpu_device"] = ideal_result["gpu_device"];
-        out["noise_realizations"] = noise_realizations;
-        return out;
-      },
+      "noisy_estimate_montecarlo", &NoisyEstimateMonteCarlo,
       "circuit"_a, "observables"_a, "noise_model"_a,
       "noise_realizations"_a = 100, "config"_a = SimulatorConfig{},
-      "seed"_a = nb::none(),
+      "noise_seed"_a = nb::none(),
       "Gate-by-gate Monte Carlo noisy estimation. Injects random Pauli "
       "errors after every gate and averages expectation values over "
       "noise_realizations independent samples. More accurate than "
       "analytical noisy_estimate for deep circuits.");
 
   m.def(
-      "noisy_execute",
-      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const noise::NoiseModel& noise_model, const SimulatorConfig& config,
-         int shots, int noise_realizations, std::optional<unsigned int> seed) {
-        if (!circuit) throw nb::value_error("Circuit is null.");
-
-        warn_thermal_approximation(noise_model, config);
-        auto rng = MakeNoiseRng(config, seed);
-        const int batches = std::min(shots, std::max(1, noise_realizations));
-        const int base_batch = shots / batches;
-        int leftover = shots % batches;
-
-        std::unordered_map<std::string, size_t> combined;
-
-        auto start = std::chrono::high_resolution_clock::now();
-        for (int b = 0; b < batches; ++b) {
-          int batch_shots = base_batch + (b < leftover ? 1 : 0);
-          if (batch_shots <= 0) continue;
-
-          auto noisy =
-              inject_noise_for_config(circuit, noise_model, rng, config);
-          nb::dict r = execute_core(
-              noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
-          nb::dict counts = nb::cast<nb::dict>(r["counts"]);
-          for (auto item : counts)
-            combined[nb::cast<std::string>(nb::str(item.first))] +=
-                nb::cast<size_t>(item.second);
-        }
-        auto end = std::chrono::high_resolution_clock::now();
-
-        nb::dict py_counts;
-        for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
-
-        nb::dict out;
-        out["counts"] = py_counts;
-        out["time_taken"] = std::chrono::duration<double>(end - start).count();
-        out["simulator"] = (int)config.simulator_type;
-        out["method"] = (int)config.simulation_type;
-        out["noise_realizations"] = batches;
-        return out;
-      },
+      "noisy_execute", &NoisyExecute,
       "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
-      "shots"_a = 1024, "noise_realizations"_a = 64, "seed"_a = nb::none(),
+      "shots"_a = 1024, "noise_realizations"_a = 64,
+      "noise_seed"_a = nb::none(),
       "Execute with exact Pauli/T1 channels for density-matrix/MPO methods, "
       "or sampled trajectories for pure-state methods. Shots are distributed "
       "evenly across 'noise_realizations' batches.");
@@ -2951,52 +2877,10 @@ NB_MODULE(maestro, m) {
   // =========================================================================
 
   m.def(
-      "coherent_execute",
-      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const noise::NoiseModel& noise_model, const SimulatorConfig& config,
-         int shots, int noise_realizations, std::optional<unsigned int> seed) {
-        if (!circuit) throw nb::value_error("Circuit is null.");
-        if (!noise_model.has_coherent())
-          throw nb::value_error(
-              "NoiseModel has no coherent noise set. Use "
-              "set_coherent_depolarizing(), set_coherent_rotation(), etc.");
-
-        auto rng = MakeNoiseRng(config, seed);
-        const int batches = std::min(shots, std::max(1, noise_realizations));
-        const int base_batch = shots / batches;
-        int leftover = shots % batches;
-
-        std::unordered_map<std::string, size_t> combined;
-
-        auto start = std::chrono::high_resolution_clock::now();
-        for (int b = 0; b < batches; ++b) {
-          int batch_shots = base_batch + (b < leftover ? 1 : 0);
-          if (batch_shots <= 0) continue;
-
-          auto noisy = noise::inject_coherent_noise(circuit, noise_model, rng);
-          nb::dict r = execute_core(
-              noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
-          nb::dict counts = nb::cast<nb::dict>(r["counts"]);
-          for (auto item : counts)
-            combined[nb::cast<std::string>(nb::str(item.first))] +=
-                nb::cast<size_t>(item.second);
-        }
-        auto end = std::chrono::high_resolution_clock::now();
-
-        nb::dict py_counts;
-        for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
-
-        nb::dict out;
-        out["counts"] = py_counts;
-        out["time_taken"] = std::chrono::duration<double>(end - start).count();
-        out["simulator"] = (int)config.simulator_type;
-        out["method"] = (int)config.simulation_type;
-        out["noise_realizations"] = batches;
-        out["noise_type"] = "coherent";
-        return out;
-      },
+      "coherent_execute", &CoherentExecute,
       "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
-      "shots"_a = 1024, "noise_realizations"_a = 64, "seed"_a = nb::none(),
+      "shots"_a = 1024, "noise_realizations"_a = 64,
+      "noise_seed"_a = nb::none(),
       "Execute a circuit with sampled coherent over/under-rotation errors. "
       "After every gate, Rx/Ry/Rz rotations are injected with random ± "
       "signs. Each of 'noise_realizations' batches uses a different sign "
@@ -3012,59 +2896,10 @@ NB_MODULE(maestro, m) {
   // =========================================================================
 
   m.def(
-      "coherent_estimate",
-      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const nb::object& observables, const noise::NoiseModel& noise_model,
-         int noise_realizations, const SimulatorConfig& config,
-         std::optional<unsigned int> seed) {
-        if (!circuit) throw nb::value_error("Circuit is null.");
-        if (!noise_model.has_coherent())
-          throw nb::value_error(
-              "NoiseModel has no coherent noise set. Use "
-              "set_coherent_depolarizing(), set_coherent_rotation(), etc.");
-
-        auto paulis = ParseObservables(observables);
-        auto rng = MakeNoiseRng(config, seed);
-        const size_t n_obs = paulis.size();
-
-        std::vector<double> sum_vals(n_obs, 0.0);
-
-        auto start = std::chrono::high_resolution_clock::now();
-        for (int r = 0; r < noise_realizations; ++r) {
-          auto noisy = noise::inject_coherent_noise(circuit, noise_model, rng);
-          nb::dict result = estimate_core(noisy, paulis, config);
-          nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
-          for (size_t i = 0; i < n_obs; ++i)
-            sum_vals[i] += nb::cast<double>(ev[i]);
-        }
-        auto end = std::chrono::high_resolution_clock::now();
-
-        // Also run noiseless for reference
-        nb::dict ideal_result = estimate_core(circuit, paulis, config);
-
-        nb::list noisy_vals, ideal_vals;
-        nb::list ideal_ev =
-            nb::cast<nb::list>(ideal_result["expectation_values"]);
-        for (size_t i = 0; i < n_obs; ++i) {
-          noisy_vals.append(sum_vals[i] / noise_realizations);
-          ideal_vals.append(nb::cast<double>(ideal_ev[i]));
-        }
-
-        nb::dict out;
-        out["expectation_values"] = noisy_vals;
-        out["ideal_expectation_values"] = ideal_vals;
-        out["time_taken"] = std::chrono::duration<double>(end - start).count();
-        out["simulator"] = ideal_result["simulator"];
-        out["method"] = ideal_result["method"];
-        if (ideal_result.contains("gpu_device"))
-          out["gpu_device"] = ideal_result["gpu_device"];
-        out["noise_realizations"] = noise_realizations;
-        out["noise_type"] = "coherent";
-        return out;
-      },
+      "coherent_estimate", &CoherentEstimate,
       "circuit"_a, "observables"_a, "noise_model"_a,
       "noise_realizations"_a = 100, "config"_a = SimulatorConfig{},
-      "seed"_a = nb::none(),
+      "noise_seed"_a = nb::none(),
       "Estimate expectation values with coherent noise (rotation errors). "
       "Injects systematic Rx/Ry/Rz rotations after every gate and averages "
       "expectation values over noise_realizations independent sign samples. "
@@ -3081,52 +2916,10 @@ NB_MODULE(maestro, m) {
   // =========================================================================
 
   m.def(
-      "full_noise_execute",
-      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const noise::NoiseModel& noise_model, const SimulatorConfig& config,
-         int shots, int noise_realizations, std::optional<unsigned int> seed) {
-        if (!circuit) throw nb::value_error("Circuit is null.");
-        if (!noise_model.has_any())
-          throw nb::value_error("NoiseModel has no noise configured.");
-
-        warn_thermal_approximation(noise_model, config);
-        auto rng = MakeNoiseRng(config, seed);
-        const int batches = std::min(shots, std::max(1, noise_realizations));
-        const int base_batch = shots / batches;
-        int leftover = shots % batches;
-
-        std::unordered_map<std::string, size_t> combined;
-
-        auto start = std::chrono::high_resolution_clock::now();
-        for (int b = 0; b < batches; ++b) {
-          int batch_shots = base_batch + (b < leftover ? 1 : 0);
-          if (batch_shots <= 0) continue;
-
-          auto noisy = inject_combined_noise_for_config(circuit, noise_model,
-                                                        rng, config);
-          nb::dict r = execute_core(
-              noisy, NoiseExecutionConfig(config, seed, b), batch_shots);
-          nb::dict counts = nb::cast<nb::dict>(r["counts"]);
-          for (auto item : counts)
-            combined[nb::cast<std::string>(nb::str(item.first))] +=
-                nb::cast<size_t>(item.second);
-        }
-        auto end = std::chrono::high_resolution_clock::now();
-
-        nb::dict py_counts;
-        for (const auto& [k, v] : combined) py_counts[k.c_str()] = v;
-
-        nb::dict out;
-        out["counts"] = py_counts;
-        out["time_taken"] = std::chrono::duration<double>(end - start).count();
-        out["simulator"] = (int)config.simulator_type;
-        out["method"] = (int)config.simulation_type;
-        out["noise_realizations"] = batches;
-        out["noise_type"] = "combined";
-        return out;
-      },
+      "full_noise_execute", &FullNoiseExecute,
       "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
-      "shots"_a = 1024, "noise_realizations"_a = 64, "seed"_a = nb::none(),
+      "shots"_a = 1024, "noise_realizations"_a = 64,
+      "noise_seed"_a = nb::none(),
       "Execute a circuit with combined noise (coherent + crosstalk + T1 + "
       "Pauli). Density-matrix/MPO methods apply Markovian T1 and Pauli layers "
       "as exact channels; trajectory-only layers remain sampled.\n\n"
@@ -3143,57 +2936,10 @@ NB_MODULE(maestro, m) {
   // =========================================================================
 
   m.def(
-      "full_noise_estimate",
-      [](std::shared_ptr<Circuits::Circuit<double>> circuit,
-         const nb::object& observables, const noise::NoiseModel& noise_model,
-         int noise_realizations, const SimulatorConfig& config,
-         std::optional<unsigned int> seed) {
-        if (!circuit) throw nb::value_error("Circuit is null.");
-        if (!noise_model.has_any())
-          throw nb::value_error("NoiseModel has no noise configured.");
-
-        auto paulis = ParseObservables(observables);
-        warn_thermal_approximation(noise_model, config);
-        auto rng = MakeNoiseRng(config, seed);
-        const size_t n_obs = paulis.size();
-        std::vector<double> sum_vals(n_obs, 0.0);
-
-        auto start = std::chrono::high_resolution_clock::now();
-        for (int r = 0; r < noise_realizations; ++r) {
-          auto noisy = inject_combined_noise_for_config(circuit, noise_model,
-                                                        rng, config);
-          nb::dict result = estimate_core(
-              noisy, paulis, NoiseExecutionConfig(config, seed, r));
-          nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
-          for (size_t i = 0; i < n_obs; ++i)
-            sum_vals[i] += nb::cast<double>(ev[i]);
-        }
-        auto end = std::chrono::high_resolution_clock::now();
-
-        nb::dict ideal_result = estimate_core(circuit, paulis, config);
-        nb::list noisy_vals, ideal_vals;
-        nb::list ideal_ev =
-            nb::cast<nb::list>(ideal_result["expectation_values"]);
-        for (size_t i = 0; i < n_obs; ++i) {
-          noisy_vals.append(sum_vals[i] / noise_realizations);
-          ideal_vals.append(nb::cast<double>(ideal_ev[i]));
-        }
-
-        nb::dict out;
-        out["expectation_values"] = noisy_vals;
-        out["ideal_expectation_values"] = ideal_vals;
-        out["time_taken"] = std::chrono::duration<double>(end - start).count();
-        out["simulator"] = ideal_result["simulator"];
-        out["method"] = ideal_result["method"];
-        if (ideal_result.contains("gpu_device"))
-          out["gpu_device"] = ideal_result["gpu_device"];
-        out["noise_realizations"] = noise_realizations;
-        out["noise_type"] = "combined";
-        return out;
-      },
+      "full_noise_estimate", &FullNoiseEstimate,
       "circuit"_a, "observables"_a, "noise_model"_a,
       "noise_realizations"_a = 100, "config"_a = SimulatorConfig{},
-      "seed"_a = nb::none(),
+      "noise_seed"_a = nb::none(),
       "Estimate expectation values with combined noise (coherent + crosstalk "
       "+ T1 + Pauli). All configured noise layers are applied per gate.\n\n"
       "Example:\n"
@@ -3212,7 +2958,7 @@ NB_MODULE(maestro, m) {
       .def("execute_suffix", &PrefixCheckpointedSimulator::execute_suffix,
            nb::arg("suffix_circuit"), nb::arg("shots") = 1024,
            nb::arg("noise_model").none() = nb::none(),
-           nb::arg("noise_realizations") = 64, nb::arg("seed") = nb::none(),
+           nb::arg("noise_realizations") = 64, nb::arg("noise_seed") = nb::none(),
            nb::arg("num_measurements") = 0,
            "Execute suffix circuit from checkpointed prefix state.")
       .def_prop_ro("max_bond_dim", &PrefixCheckpointedSimulator::max_bond_dim);

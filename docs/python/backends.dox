@@ -73,16 +73,24 @@
  * For GPU MPS, MPO, and Tensor Network simulations, you can select the underlying cuSOLVER SVD algorithm
  * to balance precision against execution speed:
  *
- * - `mps_use_gesvd`: Standard QR-based SVD (`gesvd`), the current GPU plugin default.
- * - `mps_use_gesvdj`: Jacobi-based SVD (`gesvdj`), optimal for small to medium bond dimensions.
- * - `mps_use_gesvdp`: Polar-decomposition SVD (`gesvdp`).
- * - `mps_use_gesvdr`: Randomized SVD (`gesvdr`) for fixed-rank truncation.
+ * `mps_svd_solver`, `mpo_svd_solver` and `tensor_network_svd_solver` each take one of:
+ *
+ * - `"gesvd"`: Standard QR-based SVD, the current GPU plugin default.
+ * - `"gesvdj"`: Jacobi-based SVD, optimal for small to medium bond dimensions.
+ * - `"gesvdp"`: Polar-decomposition SVD.
+ * - `"gesvdr"`: Randomized SVD for fixed-rank truncation.
  *   Tensor Network execution falls back to GESVD when this is selected.
  *
- * Corresponding flags exist for MPO (`mpo_use_gesvd*`) and Tensor Networks (`tensor_network_use_gesvd*`).
- * All Python selection flags default to `False`, meaning no explicit override;
- * the installed GPU plugin supplies the default (currently GESVD for all three).
- * Set a flag to `True` to select that algorithm explicitly.
+ * The default `None` leaves the choice to the installed GPU plugin (currently GESVD
+ * for all three).
+ *
+ * @code{.py}
+ * gpu_config = maestro.SimulatorConfig(
+ *     simulator_type=maestro.SimulatorType.Gpu,
+ *     simulation_type=maestro.SimulationType.MatrixProductState,
+ *     mps_svd_solver="gesvdj",
+ * )
+ * @endcode
  *
  * ---
  *

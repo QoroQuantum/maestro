@@ -144,20 +144,18 @@ still requiring a runtime plugin/license/device probe. Distributed engines suppo
 statevectors only. `mps` and `mpo` are aliases for the full method names.
 
 Options go under `simulator.options`; the native-name alias is also accepted.
-Unknown options, duplicate aliases, incompatible families, and conflicting true
-SVD selectors are rejected. Small floating-point thresholds retain their precision.
+Unknown options, duplicate aliases, incompatible families, and invalid values
+are rejected. Small floating-point thresholds retain their precision.
 
 | Name | Native alias | Type | Applicability |
 |---|---|---|---|
 | `max_bond_dimension` | `matrix_product_state_max_bond_dimension` | positive_integer | tensor |
 | `singular_value_threshold` | `matrix_product_state_truncation_threshold` | nonnegative | tensor |
 | `truncation_mode` | `matrix_product_state_truncation_mode` | string | tensor |
-| `use_double_precision` | `use_double_precision` | boolean | gpu |
-| `precision` | `precision` | string | precision |
+| `precision` | `` | string | precision |
 | `gpu_device` | `gpu_device` | integer | device |
 | `seed` | `seed` | integer | all |
-| `mps_measure_no_collapse` | `` | boolean | mps |
-| `mps_sample_measure_algorithm` | `mps_sample_measure_algorithm` | string | mps |
+| `mps_sampling` | `` | string | mps |
 | `disable_optimized_swapping` | `` | boolean | mps |
 | `lookahead_depth` | `` | lookahead | mps |
 | `optimize_circuit` | `` | boolean | all |
@@ -165,28 +163,20 @@ SVD selectors are rejected. Small floating-point thresholds retain their precisi
 | `mpo_kraus_completeness_check` | `matrix_product_operator_kraus_completeness_check` | string | mpo |
 | `mpo_restore_trace_after_truncation` | `matrix_product_operator_restore_trace_after_truncation` | boolean | cpu_mpo |
 | `mpo_hermitize_after_truncation` | `matrix_product_operator_hermitize_after_truncation` | boolean | cpu_mpo |
-| `mps_use_gesvd` | `matrix_product_state_use_gesvd` | boolean | gpu_mps |
-| `mps_use_gesvdj` | `matrix_product_state_use_gesvdj` | boolean | gpu_mps |
-| `mps_use_gesvdp` | `matrix_product_state_use_gesvdp` | boolean | gpu_mps |
-| `mps_use_gesvdr` | `matrix_product_state_use_gesvdr` | boolean | gpu_mps |
-| `mpo_use_gesvd` | `matrix_product_operator_use_gesvd` | boolean | gpu_mpo |
-| `mpo_use_gesvdj` | `matrix_product_operator_use_gesvdj` | boolean | gpu_mpo |
-| `mpo_use_gesvdp` | `matrix_product_operator_use_gesvdp` | boolean | gpu_mpo |
-| `mpo_use_gesvdr` | `matrix_product_operator_use_gesvdr` | boolean | gpu_mpo |
-| `tensor_network_use_gesvd` | `tensor_network_use_gesvd` | boolean | gpu_tn |
-| `tensor_network_use_gesvdj` | `tensor_network_use_gesvdj` | boolean | gpu_tn |
-| `tensor_network_use_gesvdp` | `tensor_network_use_gesvdp` | boolean | gpu_tn |
-| `tensor_network_use_gesvdr` | `tensor_network_use_gesvdr` | boolean | gpu_tn |
+| `mps_svd_solver` | `` | string | gpu_mps |
+| `mpo_svd_solver` | `` | string | gpu_mpo |
+| `tensor_network_svd_solver` | `` | string | gpu_tn |
 | `pp_coefficient_threshold` | `pauli_propagator_coefficient_threshold` | nonnegative | pp |
-| `pp_pauli_weight_threshold` | `pauli_propagator_pauli_weight_threshold` | integer | pp |
-| `pp_steps_between_trims` | `pauli_propagator_steps_between_trims` | positive_integer | pp |
-| `pp_steps_between_deduplications` | `pauli_propagator_num_gates_between_deduplications` | positive_integer | pp |
+| `pp_max_pauli_weight` | `pauli_propagator_pauli_weight_threshold` | integer | pp |
+| `pp_gates_between_trims` | `pauli_propagator_steps_between_trims` | positive_integer | pp |
+| `pp_gates_between_deduplications` | `pauli_propagator_num_gates_between_deduplications` | positive_integer | pp |
 | `path_integral_threshold` | `path_integral_threshold` | nonnegative | path |
 
-Tensor options apply to MPS/MPO/TN; GPU algorithm selectors require their named
-GPU method. Precision is `single`/`double`; `use_double_precision` is a boolean.
-Truncation is `relative_max` or `discarded_weight`. GPU SVD choices within each
-family are mutually exclusive. Omitted seeds are generated randomly for each
+Tensor options apply to MPS/MPO/TN; GPU solver selectors require their named
+GPU method. Precision is `single` or `double` and applies to Aer and the GPU
+backends. Truncation is `relative_max` or `discarded_weight`. `mps_sampling` is
+`probabilities` or `apply_measure`, and each SVD solver option is `gesvd`,
+`gesvdj`, `gesvdp` or `gesvdr`. Omitted seeds are generated randomly for each
 request. Specify an explicit simulator seed once, through `execution.seed` or
 the options object, to reproduce a run; zero is a valid explicit seed.
 

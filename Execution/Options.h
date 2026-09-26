@@ -84,13 +84,10 @@ inline const std::vector<Option>& Options() {
        "nonnegative", "tensor"},
       {"truncation_mode", "matrix_product_state_truncation_mode", "string",
        "tensor"},
-      {"use_double_precision", "use_double_precision", "boolean", "gpu"},
-      {"precision", "precision", "string", "precision"},
+      {"precision", "", "string", "precision"},
       {"gpu_device", "gpu_device", "integer", "device"},
       {"seed", "seed", "integer", "all"},
-      {"mps_measure_no_collapse", "", "boolean", "mps"},
-      {"mps_sample_measure_algorithm", "mps_sample_measure_algorithm", "string",
-       "mps"},
+      {"mps_sampling", "", "string", "mps"},
       {"disable_optimized_swapping", "", "boolean", "mps"},
       {"lookahead_depth", "", "lookahead", "mps"},
       {"optimize_circuit", "", "boolean", "all"},
@@ -103,36 +100,16 @@ inline const std::vector<Option>& Options() {
       {"mpo_hermitize_after_truncation",
        "matrix_product_operator_hermitize_after_truncation", "boolean",
        "cpu_mpo"},
-      {"mps_use_gesvd", "matrix_product_state_use_gesvd", "boolean", "gpu_mps"},
-      {"mps_use_gesvdj", "matrix_product_state_use_gesvdj", "boolean",
-       "gpu_mps"},
-      {"mps_use_gesvdp", "matrix_product_state_use_gesvdp", "boolean",
-       "gpu_mps"},
-      {"mps_use_gesvdr", "matrix_product_state_use_gesvdr", "boolean",
-       "gpu_mps"},
-      {"mpo_use_gesvd", "matrix_product_operator_use_gesvd", "boolean",
-       "gpu_mpo"},
-      {"mpo_use_gesvdj", "matrix_product_operator_use_gesvdj", "boolean",
-       "gpu_mpo"},
-      {"mpo_use_gesvdp", "matrix_product_operator_use_gesvdp", "boolean",
-       "gpu_mpo"},
-      {"mpo_use_gesvdr", "matrix_product_operator_use_gesvdr", "boolean",
-       "gpu_mpo"},
-      {"tensor_network_use_gesvd", "tensor_network_use_gesvd", "boolean",
-       "gpu_tn"},
-      {"tensor_network_use_gesvdj", "tensor_network_use_gesvdj", "boolean",
-       "gpu_tn"},
-      {"tensor_network_use_gesvdp", "tensor_network_use_gesvdp", "boolean",
-       "gpu_tn"},
-      {"tensor_network_use_gesvdr", "tensor_network_use_gesvdr", "boolean",
-       "gpu_tn"},
+      {"mps_svd_solver", "", "string", "gpu_mps"},
+      {"mpo_svd_solver", "", "string", "gpu_mpo"},
+      {"tensor_network_svd_solver", "", "string", "gpu_tn"},
       {"pp_coefficient_threshold", "pauli_propagator_coefficient_threshold",
        "nonnegative", "pp"},
-      {"pp_pauli_weight_threshold", "pauli_propagator_pauli_weight_threshold",
+      {"pp_max_pauli_weight", "pauli_propagator_pauli_weight_threshold",
        "integer", "pp"},
-      {"pp_steps_between_trims", "pauli_propagator_steps_between_trims",
+      {"pp_gates_between_trims", "pauli_propagator_steps_between_trims",
        "positive_integer", "pp"},
-      {"pp_steps_between_deduplications",
+      {"pp_gates_between_deduplications",
        "pauli_propagator_num_gates_between_deduplications", "positive_integer",
        "pp"},
       {"path_integral_threshold", "path_integral_threshold", "nonnegative",
@@ -149,13 +126,12 @@ inline bool Applies(const Option& option, const SimulatorConfig& config) {
   const bool mps = method == Method::kMatrixProductState;
   const bool mpo = method == Method::kMatrixProductOperator;
   if (family == "all") return true;
-  if (family == "gpu") return gpu || distributed;
   if (family == "device") return gpu || distributed;
   if (family == "precision") {
 #ifndef NO_QISKIT_AER
     if (backend == Backend::kQiskitAer) return true;
 #endif
-    return distributed;
+    return gpu || distributed;
   }
   if (family == "tensor") return mps || mpo || method == Method::kTensorNetwork;
   if (family == "mps") return mps;
@@ -193,7 +169,13 @@ inline SimulatorConfig ParseConfig(const json::object& simulator) {
                 !Simulators::IsDistributedGpuSimulator(config.simulator_type),
             "Distributed backends require fixed selection");
   std::set<std::string> seen;
-  std::map<std::string, unsigned> svd;
+  const auto choice = [](const json::value& value,
+                         const std::vector<std::string>& allowed,
+                         const std::string& key) {
+    auto text = String(value);
+    RequireOneOf(text, allowed, key.c_str());
+    return text;
+  };
   for (const auto& entry : Sub(simulator, "options")) {
     const std::string key(entry.key());
     const Option* match = nullptr;
@@ -227,9 +209,7 @@ inline SimulatorConfig ParseConfig(const json::object& simulator) {
     if (name == "max_simulators")
       Require(UInt(value) <= 1024, "max_simulators exceeds 1024");
     if (name == "truncation_mode") {
-      const auto mode = String(value);
-      Require(mode == "relative_max" || mode == "discarded_weight",
-              "Unknown truncation_mode");
+      const auto mode = choice(value, TruncationModes(), key);
 #ifndef NO_QISKIT_AER
       Supported(config.simulator_type != Backend::kQiskitAer ||
                     mode == "discarded_weight",
@@ -237,38 +217,32 @@ inline SimulatorConfig ParseConfig(const json::object& simulator) {
 #endif
     }
     if (name == "mpo_kraus_completeness_check")
-      Require(String(value) == "ignore" || String(value) == "warn" ||
-                  String(value) == "strict",
-              "Unknown MPO completeness check mode");
-    if (name == "precision")
-      Require(String(value) == "single" || String(value) == "double",
-              "Invalid precision");
-    if (name == "mps_sample_measure_algorithm")
-      Require(String(value) == "mps_apply_measure" ||
-                  String(value) == "mps_probabilities",
-              "Invalid MPS measurement algorithm");
-    if (native.find("_use_gesvd") != std::string::npos && Boolean(value))
-      Require(++svd[native.substr(0, native.find("_use_"))] == 1,
-              "Conflicting SVD algorithms");
-    // Network controls use typed fields; other settings keep the validated
-    // native Configure key/value. Keep both paths in SimulatorConfig.h in sync
-    // when changing serialization or an option's meaning.
+      choice(value, KrausCompletenessChecks(), key);
+    // Network controls and reshaped options use typed fields; other settings
+    // keep the validated native Configure key/value. Keep both paths in
+    // SimulatorConfig.h in sync when changing serialization or an option's
+    // meaning.
     if (name == "disable_optimized_swapping")
       config.disable_optimized_swapping = Boolean(value);
     else if (name == "lookahead_depth")
       config.lookahead_depth = static_cast<int>(value.as_int64());
     else if (name == "optimize_circuit")
       config.optimize_circuit = Boolean(value);
-    else if (name == "mps_measure_no_collapse")
-      config.mps_measure_no_collapse = Boolean(value);
+    else if (name == "mps_sampling")
+      config.mps_sampling = choice(value, MpsSamplingModes(), key);
+    else if (name == "precision")
+      config.precision = choice(value, Precisions(), key);
+    else if (name == "mps_svd_solver")
+      config.mps_svd_solver = choice(value, SvdSolvers(), key);
+    else if (name == "mpo_svd_solver")
+      config.mpo_svd_solver = choice(value, SvdSolvers(), key);
+    else if (name == "tensor_network_svd_solver")
+      config.tensor_network_svd_solver = choice(value, SvdSolvers(), key);
     else if (name == "seed")
       config.seed = UInt(value);
     else
       config.native_options[native] = Scalar(value);
   }
-  Require(!(seen.count("mps_measure_no_collapse") &&
-            seen.count("mps_sample_measure_algorithm")),
-          "Use only one MPS measurement option");
   const auto& distribution = Sub(simulator, "distribution");
   if (distribution.contains("global_qubits"))
     Require(Array(Field(distribution, "global_qubits")).size() <= 5,
@@ -361,15 +335,6 @@ inline SimulatorConfig ParseConfig(const json::object& simulator) {
               "global_qubits count must equal log2(shards)");
   }
   // Omitted seeds stay unset; execution resolves them after validation.
-  if (config.native_options.count("use_double_precision") &&
-      Simulators::IsDistributedGpuSimulator(config.simulator_type)) {
-    Require(!config.native_options.count("precision"),
-            "Specify only one precision option");
-    config.native_options["precision"] =
-        config.native_options.at("use_double_precision") == "true" ? "double"
-                                                                   : "single";
-    config.native_options.erase("use_double_precision");
-  }
   if (const auto* candidates = simulator.if_contains("candidates")) {
     Supported(!config.fixed_backend,
               "Candidate lists require automatic selection");

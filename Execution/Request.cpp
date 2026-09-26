@@ -346,6 +346,8 @@ json::object Metadata(Context& context, const SimulatorConfig& config,
     options[entry.first] = entry.second;
   for (const auto& entry : config.distributed_options)
     options[entry.first] = entry.second;
+  for (const auto& [key, value] : TypedNativeOptions(config))
+    options[key] = value;
   options["seed"] = config.seed.value_or(0);
   result["configured_options"] = std::move(options);
   if (Simulators::IsGpuSimulator(simulator->GetType()))

@@ -138,7 +138,7 @@ def test_random_circuits_simple_vs_direct(method, num_qubits, depth, seed):
     config = maestro.SimulatorConfig(
         simulator_type=maestro.SimulatorType.QCSim,
         simulation_type=method,
-        use_double_precision=True,
+        precision="double",
         max_bond_dimension=1 << num_qubits,
         singular_value_threshold=0.0,
         seed=seed,

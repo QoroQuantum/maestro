@@ -82,7 +82,7 @@
  * result = maestro.noisy_estimate_montecarlo(
  *     qc, ["ZZ", "XX"], nm,
  *     noise_realizations=200,
- *     seed=42
+ *     noise_seed=42
  * )
  *
  * print("Expectation values:", result["expectation_values"])
@@ -97,7 +97,7 @@
  *     qc, nm,
  *     shots=1024,
  *     noise_realizations=64,
- *     seed=42
+ *     noise_seed=42
  * )
  * print("Counts:", result["counts"])
  * @endcode
@@ -270,9 +270,9 @@
  * nm = maestro.NoiseModel()
  *
  * # Append individual fluctuator bands
- * nm.add_correlated_ou_band(qubit=0, sigma=10.0, alpha=0.1, gate_time=100e-9)
- * nm.add_correlated_ou_band(qubit=0, sigma=5.0, alpha=1.0, gate_time=100e-9)
- * nm.add_correlated_ou_band(qubit=0, sigma=2.0, alpha=10.0, gate_time=100e-9)
+ * nm.set_correlated_ou_band(qubit=0, sigma=10.0, alpha=0.1, gate_time=100e-9)
+ * nm.set_correlated_ou_band(qubit=0, sigma=5.0, alpha=1.0, gate_time=100e-9)
+ * nm.set_correlated_ou_band(qubit=0, sigma=2.0, alpha=10.0, gate_time=100e-9)
  *
  * # Batch set multiple (sigma, alpha) bands
  * bands = [(10.0, 0.1), (5.0, 1.0), (2.0, 10.0)]
