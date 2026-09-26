@@ -176,7 +176,8 @@ Tensor options apply to MPS/MPO/TN; GPU solver selectors require their named
 GPU method. Precision is `single` or `double` and applies to Aer and the GPU
 backends. Truncation is `relative_max` or `discarded_weight`. `mps_sampling` is
 `probabilities` or `apply_measure`, and each SVD solver option is `gesvd`,
-`gesvdj`, `gesvdp` or `gesvdr`. Omitted seeds are generated randomly for each
+`gesvdj`, `gesvdp` or `gesvdr`. Pauli propagation without a deduplication cadence
+deduplicates every 10 operations. Omitted seeds are generated randomly for each
 request. Specify an explicit simulator seed once, through `execution.seed` or
 the options object, to reproduce a run; zero is a valid explicit seed.
 

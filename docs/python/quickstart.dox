@@ -71,7 +71,7 @@
  * | `mpo_restore_trace_after_truncation`, `mpo_hermitize_after_truncation` | `bool` | `False` | Renormalise the CPU MPO after each truncation |
  * | `pp_coefficient_threshold` | `float` or `None` | `None` | Pauli propagation: drop strings whose \|coefficient\| is at most this |
  * | `pp_max_pauli_weight` | `int` or `None` | `None` | Pauli propagation: drop strings acting on more qubits than this |
- * | `pp_gates_between_trims`, `pp_gates_between_deduplications` | `int` or `None` | `None` | Pauli propagation: how often (in primitive operations) to apply the two thresholds; a deduplication pass also merges repeated strings. The thresholds do nothing unless one is set. |
+ * | `pp_gates_between_trims`, `pp_gates_between_deduplications` | `int` or `None` | `None` | Pauli propagation: how often (in primitive operations) to apply the two thresholds; a deduplication pass also merges repeated strings. Unset, PauliPropagator simulations deduplicate every 10 operations. |
  * | `path_integral_threshold` | `float` or `None` | `None` | PathIntegral trim threshold |
  *
  * The constructor takes every parameter by keyword only.
