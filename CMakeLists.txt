@@ -141,7 +141,7 @@ if(NOT DEFINED QCSIM_INCLUDE_DIR)
         FetchContent_Declare(
             qcsim
             GIT_REPOSITORY https://github.com/aromanro/QCSim.git
-            GIT_TAG 3ea2ea1df008fd4dc615ec557c96c158d5d3c64b
+            GIT_TAG 87fa91414571ee24db2551690cf6b15fdd73d93b
         )
         FetchContent_GetProperties(qcsim)
         if(NOT qcsim_POPULATED)
