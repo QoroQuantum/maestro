@@ -4,7 +4,7 @@
 # =============================================================================
 
 PROJECT_NAME           = "Maestro"
-PROJECT_NUMBER         = "0.3.3"
+PROJECT_NUMBER         = "0.3.4"
 PROJECT_BRIEF          = "Unified interface for quantum circuit simulation"
 PROJECT_LOGO           = markdown/favicon.ico
 PROJECT_ICON           = markdown/favicon.ico
