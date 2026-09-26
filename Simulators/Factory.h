@@ -32,6 +32,12 @@
 
 #include "Simulator.h"
 
+#ifdef _WIN32
+#define MAESTRO_FACTORY_EXPORT __declspec(dllexport)
+#else
+#define MAESTRO_FACTORY_EXPORT
+#endif
+
 namespace Simulators {
 
 /**
@@ -48,7 +54,7 @@ class SimulatorsFactory {
    * @param t The type of simulator to create.
    * @return The simulator wrapped in a shared pointer.
    */
-  static std::shared_ptr<ISimulator> CreateSimulator(
+  MAESTRO_FACTORY_EXPORT static std::shared_ptr<ISimulator> CreateSimulator(
       SimulatorType t = SimulatorType::kQCSim,
       SimulationType method = SimulationType::kMatrixProductState);
 
@@ -58,7 +64,8 @@ class SimulatorsFactory {
    * @param t The type of simulator to create.
    * @return The simulator wrapped in a unique pointer.
    */
-  static std::unique_ptr<ISimulator> CreateSimulatorUnique(
+  MAESTRO_FACTORY_EXPORT static std::unique_ptr<ISimulator>
+  CreateSimulatorUnique(
       SimulatorType t = SimulatorType::kQCSim,
       SimulationType method = SimulationType::kMatrixProductState);
 
@@ -181,16 +188,10 @@ class SimulatorsFactory {
 
   static int GetGpuDeviceCount() { return 0; }
 #endif
-  static bool InitQuestLibrary();
-  static bool InitQuestLibraryWithMute();
-  static bool IsQuestLibraryAvailable() {
-    return questLibrary && questLibrary->IsValid();
-  }
-
-  static std::shared_ptr<QuestLibSim> GetQuestLibrary() {
-    if (!questLibrary || !questLibrary->IsValid()) return nullptr;
-    return questLibrary;
-  }
+  MAESTRO_FACTORY_EXPORT static bool InitQuestLibrary();
+  MAESTRO_FACTORY_EXPORT static bool InitQuestLibraryWithMute();
+  MAESTRO_FACTORY_EXPORT static bool IsQuestLibraryAvailable();
+  MAESTRO_FACTORY_EXPORT static std::shared_ptr<QuestLibSim> GetQuestLibrary();
 
   static std::shared_ptr<PathIntegralSimulator> CreatePathIntegralSimulator() {
     return std::make_shared<PathIntegralSimulator>();
