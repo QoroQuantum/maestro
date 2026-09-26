@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-26
+
+### Changed
+
+- **Breaking:** `SimulatorConfig` takes keyword arguments only and has one name
+  per option, in Python and in the native JSON API:
+  - `use_double_precision` → `precision` (`"single"` or `"double"`, Qiskit Aer
+    and the GPU backends)
+  - `mps_measure_no_collapse` / `mps_sample_measure_algorithm` → `mps_sampling`
+    (`"probabilities"` or `"apply_measure"`)
+  - `{mps,mpo,tensor_network}_use_gesvd{,j,p,r}` → `mps_svd_solver`,
+    `mpo_svd_solver`, `tensor_network_svd_solver` (`"gesvd"`, `"gesvdj"`,
+    `"gesvdp"` or `"gesvdr"`)
+  - `pp_pauli_weight_threshold` → `pp_max_pauli_weight`
+  - `pp_steps_between_trims` / `pp_steps_between_deduplications` →
+    `pp_gates_between_trims` / `pp_gates_between_deduplications`
+- **Breaking:** the noisy execution and estimation functions take `noise_seed`
+  instead of `seed`, and `config` now comes before `shots`/`noise_realizations`.
+  `noise_seed` must fit in 32 bits; when it is unset, the low 32 bits of
+  `config.seed` are used. Zero shots or zero realisations are rejected.
+- **Breaking:** `NoiseModel.add_correlated_ou_band` is renamed
+  `set_correlated_ou_band`.
+- Pauli propagation deduplicates every 10 operations when
+  `pp_gates_between_deduplications` is unset. Deduplication alone leaves
+  results unchanged; an explicit cadence still takes precedence.
+
+### Fixed
+
+- Pickled noise models keep their correlated OU bands.
+- Each noise realisation gets its own seed.
+- Qiskit Aer ignores configuration settings it rejects instead of throwing, and
+  no longer records them, so a cloned simulator does not replay them and they
+  cannot change its reported simulation type.
+- GPU Pauli propagation applies its settings after creating the native state,
+  so thresholds and cadences take effect. A deduplication cadence also sets the
+  truncation cadence unless one is given.
+
 ## [0.3.3] - 2026-09-24
 
 ### Fixed
@@ -315,7 +352,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.4...HEAD
+[0.3.4]: https://github.com/QoroQuantum/maestro/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/QoroQuantum/maestro/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/QoroQuantum/maestro/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/QoroQuantum/maestro/compare/v0.3.0...v0.3.1
