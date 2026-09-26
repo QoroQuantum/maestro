@@ -21,6 +21,7 @@ namespace utf = boost::unit_test;
 #undef min
 #undef max
 
+#include "../Simulators/Configuration.h"
 #include "../Simulators/Factory.h"  // project being tested
 #include "../python/noise.h"
 
@@ -198,6 +199,79 @@ BOOST_AUTO_TEST_CASE(rejected_truncation_mode_does_not_linger_in_configuration) 
   // Aer actually supports right afterward.
   BOOST_CHECK_NO_THROW(
       mps->Configure("matrix_product_state_truncation_mode", "discarded_weight"));
+}
+
+BOOST_AUTO_TEST_CASE(unsupported_shared_settings_are_ignored) {
+  for (const auto method : {Simulators::SimulationType::kStatevector,
+                            Simulators::SimulationType::kMatrixProductState,
+                            Simulators::SimulationType::kStabilizer,
+                            Simulators::SimulationType::kDensityMatrix}) {
+    auto aer = Simulators::SimulatorsFactory::CreateSimulator(
+        Simulators::SimulatorType::kQiskitAer, method);
+    BOOST_TEST_CONTEXT("method=" << aer->GetConfiguration("method")) {
+      aer->AllocateQubits(2);
+      for (const bool initialized : {false, true}) {
+        if (initialized) aer->Initialize();
+        for (const char* enabled : {"true", "false"}) {
+          Simulators::Configuration config;
+          config.SetConfiguration("enable_causal_cone_reduction", enabled);
+          config.SetConfiguration("causal_cone_statevector_threshold", "20");
+          config.SetConfiguration("fusion_enable", "false");
+          BOOST_CHECK_NO_THROW(config.ApplyConfigurationToSimulator(aer));
+          BOOST_TEST(aer->GetConfiguration("fusion_enable") == "false");
+          BOOST_TEST(
+              aer->GetConfigMap().count("enable_causal_cone_reduction") == 0U);
+          BOOST_TEST(aer->GetConfigMap().count(
+                         "causal_cone_statevector_threshold") == 0U);
+        }
+      }
+
+      aer->ApplyH(0);
+      aer->ApplyCX(0, 1);
+      BOOST_CHECK_SMALL(aer->Probability(0) - 0.5, 1e-10);
+      BOOST_CHECK_SMALL(aer->Probability(3) - 0.5, 1e-10);
+      auto clone = aer->Clone();
+      BOOST_CHECK_SMALL(clone->Probability(0) - 0.5, 1e-10);
+      BOOST_CHECK_SMALL(clone->Probability(3) - 0.5, 1e-10);
+    }
+  }
+}
+
+BOOST_AUTO_TEST_CASE(aer_rejected_values_preserve_accepted_configuration) {
+  auto aer = Simulators::SimulatorsFactory::CreateSimulator(
+      Simulators::SimulatorType::kQiskitAer,
+      Simulators::SimulationType::kMatrixProductState);
+  aer->Configure("matrix_product_state_max_bond_dimension", "8");
+  aer->Configure("matrix_product_state_truncation_threshold", "0.01");
+  aer->Configure("precision", "double");
+
+  for (const char* value : {"invalid", "999999999999999999999999999999"}) {
+    BOOST_CHECK_NO_THROW(
+        aer->Configure("matrix_product_state_max_bond_dimension", value));
+    BOOST_TEST(aer->GetConfiguration(
+                   "matrix_product_state_max_bond_dimension") == "8");
+  }
+  BOOST_CHECK_NO_THROW(
+      aer->Configure("matrix_product_state_truncation_threshold", "invalid"));
+  BOOST_TEST(aer->GetConfiguration(
+                 "matrix_product_state_truncation_threshold") == "0.01");
+  BOOST_CHECK_NO_THROW(aer->Configure("precision", "invalid"));
+  BOOST_TEST(aer->GetConfiguration("precision") == "double");
+  BOOST_CHECK_NO_THROW(aer->Configure("method", "invalid"));
+  BOOST_TEST(aer->GetConfiguration("method") == "matrix_product_state");
+
+  aer->Configure("matrix_product_state_max_bond_dimension", "4");
+  aer->AllocateQubits(1);
+  aer->Initialize();
+  // Aer also rejects otherwise valid method changes after initialization.
+  BOOST_CHECK_NO_THROW(aer->Configure("method", "statevector"));
+  BOOST_TEST(aer->GetConfiguration("method") == "matrix_product_state");
+  aer->ApplyX(0);
+  auto clone = aer->Clone();
+  BOOST_TEST(clone->GetConfiguration(
+                 "matrix_product_state_max_bond_dimension") == "4");
+  BOOST_TEST(clone->GetConfiguration("method") == "matrix_product_state");
+  BOOST_CHECK_SMALL(clone->Probability(1) - 1.0, 1e-10);
 }
 
 BOOST_AUTO_TEST_SUITE_END()
