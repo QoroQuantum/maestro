@@ -473,6 +473,7 @@ if(BUILD_PYTHON_BINDINGS)
 
         nanobind_add_module(maestro_py
             python/bindings.cpp
+            python/bindings/causal_cone.cpp
             python/bindings/execution.cpp
             python/bindings/fidelity.cpp
             python/bindings/evolution.cpp

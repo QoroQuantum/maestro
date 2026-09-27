@@ -49,6 +49,7 @@ const char* const kConfigFields[] = {
     "pp_gates_between_trims",
     "pp_gates_between_deduplications",
     "path_integral_threshold",
+    "enable_causal_cone_reduction",
 };
 
 void bind_config(nb::module_& m) {
@@ -110,7 +111,8 @@ void bind_config(nb::module_& m) {
          std::optional<size_t> pp_max_pauli_weight,
          std::optional<int> pp_gates_between_trims,
          std::optional<int> pp_gates_between_deduplications,
-         std::optional<double> path_integral_threshold) {
+         std::optional<double> path_integral_threshold,
+         bool enable_causal_cone_reduction) {
         SimulatorConfig config;
         config.simulator_type = simulator_type;
         config.simulation_type = simulation_type;
@@ -138,6 +140,7 @@ void bind_config(nb::module_& m) {
         config.pp_gates_between_deduplications =
             pp_gates_between_deduplications;
         config.path_integral_threshold = path_integral_threshold;
+        config.enable_causal_cone_reduction = enable_causal_cone_reduction;
         config.Validate();
         new (self) SimulatorConfig(std::move(config));
       },
@@ -162,7 +165,9 @@ void bind_config(nb::module_& m) {
       "pp_max_pauli_weight"_a = nb::none(),
       "pp_gates_between_trims"_a = nb::none(),
       "pp_gates_between_deduplications"_a = nb::none(),
-      "path_integral_threshold"_a = nb::none());
+      "path_integral_threshold"_a = nb::none(),
+      "enable_causal_cone_reduction"_a =
+          defaults.enable_causal_cone_reduction);
 
   BindConfigField(config_class, "simulator_type",
                   &SimulatorConfig::simulator_type,
@@ -277,6 +282,10 @@ void bind_config(nb::module_& m) {
                   &SimulatorConfig::path_integral_threshold,
                   "Trim threshold for PathIntegral simulation; None disables "
                   "trimming.");
+  BindConfigField(config_class, "enable_causal_cone_reduction",
+                  &SimulatorConfig::enable_causal_cone_reduction,
+                  "Optionally reduce the circuit to the backward causal cone of "
+                  "the requested observables before allocating the simulator backend.");
   nb::list config_fields;
   for (const char* name : kConfigFields) config_fields.append(name);
   config_class.attr("_fields") = nb::tuple(config_fields);

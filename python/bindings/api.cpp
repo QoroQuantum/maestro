@@ -62,7 +62,10 @@ void bind_api(nb::module_& m) {
          const nb::object& obs, const SimulatorConfig& config) {
         return estimate_core(circuit, ParseObservables(obs), config);
       },
-      "circuit"_a, "observables"_a, "config"_a = SimulatorConfig{});
+      "circuit"_a, "observables"_a, "config"_a = SimulatorConfig{},
+      "Estimate Pauli expectations using the configured backend. Set "
+      "config.enable_causal_cone_reduction=True to reduce the circuit to the "
+      "backward causal cone before allocating the simulator.");
 
   // Variant B: QASM String
   m.def(
@@ -76,7 +79,10 @@ void bind_api(nb::module_& m) {
         }
         return estimate_core(circuit, ParseObservables(obs), config);
       },
-      "qasm_circuit"_a, "observables"_a, "config"_a = SimulatorConfig{});
+      "qasm_circuit"_a, "observables"_a, "config"_a = SimulatorConfig{},
+      "Estimate Pauli expectations using the configured backend. Set "
+      "config.enable_causal_cone_reduction=True to reduce the circuit to the "
+      "backward causal cone before allocating the simulator.");
 
   // 3. incremental_evolve
   // Runs time evolution incrementally: executes init_circuit once, then

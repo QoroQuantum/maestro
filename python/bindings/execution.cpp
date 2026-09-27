@@ -1,5 +1,6 @@
 #include "core.h"
 #include "runtime.h"
+#include "causal_cone.h"
 
 namespace maestro_bindings {
 
@@ -80,7 +81,11 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
                        const SimulatorConfig& config) {
   if (!circuit) throw nb::value_error("Circuit is null.");
 
-  const auto& paulis = observables;
+  auto paulis = observables;
+  if (config.enable_causal_cone_reduction) {
+    nb::gil_scoped_release release;
+    ReduceCausalCone(circuit, paulis);
+  }
 
   int num_qubits = static_cast<int>(circuit->GetMaxQubitIndex()) + 1;
   for (const auto& p : paulis)
