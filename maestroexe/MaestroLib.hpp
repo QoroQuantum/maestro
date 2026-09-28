@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../Utils/Library.h"
+#include "../maestrolib/InterfaceTypes.h"
 
 class MaestroLibrary : public Utils::Library {
  public:
@@ -116,6 +117,26 @@ class MaestroLibrary : public Utils::Library {
           CheckFunction((void*)fGetSimulatorType, __LINE__);
           fGetSimulationType = (int (*)(void*))GetFunction("GetSimulationType");
           CheckFunction((void*)fGetSimulationType, __LINE__);
+          // Optional exports preserve loading compatibility with older
+          // libraries.
+          fGetGateFusionMaxQubits =
+              reinterpret_cast<decltype(fGetGateFusionMaxQubits)>(
+                  GetFunction("GetGateFusionMaxQubits"));
+          fIsGateFusionEnabled =
+              reinterpret_cast<decltype(fIsGateFusionEnabled)>(
+                  GetFunction("IsGateFusionEnabled"));
+          fGetGateFusionStatistics =
+              reinterpret_cast<decltype(fGetGateFusionStatistics)>(
+                  GetFunction("GetGateFusionStatistics"));
+          fApplyGenericOneQubitGate =
+              reinterpret_cast<decltype(fApplyGenericOneQubitGate)>(
+                  GetFunction("ApplyGenericOneQubitGate"));
+          fApplyGenericTwoQubitGate =
+              reinterpret_cast<decltype(fApplyGenericTwoQubitGate)>(
+                  GetFunction("ApplyGenericTwoQubitGate"));
+          fApplyGenericThreeQubitGate =
+              reinterpret_cast<decltype(fApplyGenericThreeQubitGate)>(
+                  GetFunction("ApplyGenericThreeQubitGate"));
           fFlushSimulator = (int (*)(void*))GetFunction("FlushSimulator");
           CheckFunction((void*)fFlushSimulator, __LINE__);
           fSaveStateToInternalDestructive =
@@ -500,6 +521,40 @@ class MaestroLibrary : public Utils::Library {
     return -1;
   }
 
+  unsigned GetGateFusionMaxQubits(void* sim) {
+    return maestro && sim && fGetGateFusionMaxQubits
+               ? fGetGateFusionMaxQubits(sim)
+               : 0;
+  }
+  int IsGateFusionEnabled(void* sim) {
+    return maestro && sim && fIsGateFusionEnabled ? fIsGateFusionEnabled(sim)
+                                                  : 0;
+  }
+  int GetGateFusionStatistics(void* sim,
+                              MaestroGateFusionStatistics* statistics) {
+    return maestro && sim && fGetGateFusionStatistics
+               ? fGetGateFusionStatistics(sim, statistics)
+               : 0;
+  }
+  int ApplyGenericOneQubitGate(void* sim, unsigned long q0,
+                               const double* matrix) {
+    return maestro && sim && fApplyGenericOneQubitGate
+               ? fApplyGenericOneQubitGate(sim, q0, matrix)
+               : 0;
+  }
+  int ApplyGenericTwoQubitGate(void* sim, unsigned long q0, unsigned long q1,
+                               const double* matrix) {
+    return maestro && sim && fApplyGenericTwoQubitGate
+               ? fApplyGenericTwoQubitGate(sim, q0, q1, matrix)
+               : 0;
+  }
+  int ApplyGenericThreeQubitGate(void* sim, unsigned long q0, unsigned long q1,
+                                 unsigned long q2, const double* matrix) {
+    return maestro && sim && fApplyGenericThreeQubitGate
+               ? fApplyGenericThreeQubitGate(sim, q0, q1, q2, matrix)
+               : 0;
+  }
+
   int FlushSimulator(void* sim) {
     if (maestro && sim && fFlushSimulator)
       return fFlushSimulator(sim);
@@ -866,6 +921,16 @@ class MaestroLibrary : public Utils::Library {
                                            unsigned long int);
   int (*fGetSimulatorType)(void*);
   int (*fGetSimulationType)(void*);
+  unsigned (*fGetGateFusionMaxQubits)(void*) = nullptr;
+  int (*fIsGateFusionEnabled)(void*) = nullptr;
+  int (*fGetGateFusionStatistics)(void*,
+                                  MaestroGateFusionStatistics*) = nullptr;
+  int (*fApplyGenericOneQubitGate)(void*, unsigned long,
+                                   const double*) = nullptr;
+  int (*fApplyGenericTwoQubitGate)(void*, unsigned long, unsigned long,
+                                   const double*) = nullptr;
+  int (*fApplyGenericThreeQubitGate)(void*, unsigned long, unsigned long,
+                                     unsigned long, const double*) = nullptr;
   int (*fFlushSimulator)(void*);
   int (*fSaveStateToInternalDestructive)(void*);
   int (*fRestoreInternalDestructiveSavedState)(void*);

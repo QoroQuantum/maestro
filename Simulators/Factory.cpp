@@ -42,6 +42,16 @@
 
 namespace Simulators {
 
+std::unique_ptr<ISimulator> SimulatorsFactory::CreateImmediateSimulatorUnique(SimulatorType type) {
+  if (type == SimulatorType::kQCSim)
+    return std::make_unique<Private::ImmediateQCSimSimulator>();
+#ifndef NO_QISKIT_AER
+  if (type == SimulatorType::kQiskitAer)
+    return std::make_unique<Private::AerSimulator>();
+#endif
+  throw std::invalid_argument("Unsupported composite child backend");
+}
+
 #ifdef __linux__
 std::atomic_int SimulatorsFactory::requestedGpuDeviceId{0};
 thread_local int SimulatorsFactory::scopedGpuDeviceId = -1;
@@ -231,7 +241,7 @@ std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
       return sim;
     }
     case SimulatorType::kCompositeQiskitAer:
-      return std::make_shared<Private::CompositeSimulator>(
+      return std::make_shared<Private::ImmediateCompositeSimulator>(
           SimulatorType::kQiskitAer);
 #endif
     case SimulatorType::kCompositeQCSim:
@@ -346,7 +356,7 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
       return sim;
     }
     case SimulatorType::kCompositeQiskitAer:
-      return std::make_unique<Private::CompositeSimulator>(
+      return std::make_unique<Private::ImmediateCompositeSimulator>(
           SimulatorType::kQiskitAer);
 #endif
     case SimulatorType::kCompositeQCSim:

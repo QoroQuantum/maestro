@@ -136,6 +136,7 @@ class MPSDummySimulator {
   }
 
   void ApplyGate(const std::shared_ptr<Circuits::IOperation<>>& gate) {
+    if (gate->GetType() != Circuits::OperationType::kGate) return;
     const auto qbits = gate->AffectedQubits();
 
     if (qbits.size() == 1) {
@@ -267,7 +268,9 @@ class MPSDummySimulator {
       long long int currentGateIndex, int lookaheadDepth,
       int lookaheadDepthWithHeuristic, double currentCost, double& bestCost,
       bool useSameDummy = false) {
-    if (currentGateIndex >= static_cast<long long int>(upcomingGates.size())) {
+    if (currentGateIndex >= static_cast<long long int>(upcomingGates.size()) ||
+        upcomingGates[currentGateIndex]->GetType() !=
+            Circuits::OperationType::kGate) {
       if (currentCost < bestCost) bestCost = currentCost;
       return;
     }
@@ -275,10 +278,14 @@ class MPSDummySimulator {
     // skip the 1 qubit gates, advance to the next 2-qubit gate
     while (currentGateIndex <
                static_cast<long long int>(upcomingGates.size()) &&
+           upcomingGates[currentGateIndex]->GetType() ==
+               Circuits::OperationType::kGate &&
            upcomingGates[currentGateIndex]->AffectedQubits().size() < 2)
       ++currentGateIndex;
 
-    if (currentGateIndex >= static_cast<long long int>(upcomingGates.size())) {
+    if (currentGateIndex >= static_cast<long long int>(upcomingGates.size()) ||
+        upcomingGates[currentGateIndex]->GetType() !=
+            Circuits::OperationType::kGate) {
       if (currentCost < bestCost) bestCost = currentCost;
       return;
     }
@@ -323,11 +330,15 @@ class MPSDummySimulator {
       ++currentGateIndex;
       while (currentGateIndex <
                  static_cast<long long int>(upcomingGates.size()) &&
+             upcomingGates[currentGateIndex]->GetType() ==
+                 Circuits::OperationType::kGate &&
              upcomingGates[currentGateIndex]->AffectedQubits().size() < 2)
         ++currentGateIndex;
 
       if (currentGateIndex >=
-          static_cast<long long int>(upcomingGates.size())) {
+              static_cast<long long int>(upcomingGates.size()) ||
+          upcomingGates[currentGateIndex]->GetType() !=
+              Circuits::OperationType::kGate) {
         if (currentCost < bestCost) bestCost = currentCost;
         return;
       }
@@ -370,11 +381,15 @@ class MPSDummySimulator {
       ++currentGateIndex;
       while (currentGateIndex <
                  static_cast<long long int>(upcomingGates.size()) &&
+             upcomingGates[currentGateIndex]->GetType() ==
+                 Circuits::OperationType::kGate &&
              upcomingGates[currentGateIndex]->AffectedQubits().size() < 2)
         ++currentGateIndex;
 
       if (currentGateIndex >=
-          static_cast<long long int>(upcomingGates.size())) {
+              static_cast<long long int>(upcomingGates.size()) ||
+          upcomingGates[currentGateIndex]->GetType() !=
+              Circuits::OperationType::kGate) {
         if (currentCost < bestCost) bestCost = currentCost;
         return;
       }

@@ -8,6 +8,7 @@
 #include <fstream>
 
 #include "Simulator.hpp"
+#include "../Simulators/State.h"
 
 static std::string _get_env_var(const char* envs) {
   std::string val;
@@ -32,7 +33,33 @@ static std::string _get_env_var(const char* envs) {
   return val;
 }
 
-static std::string GetConfigJson(int num_shots, int maxBondDim) {
+// CLI selection uses the historical option numbers; the native enum omits
+// Aer entries in builds without Aer, so translate at the ABI boundary.
+static int BackendId(int option) {
+  using Backend = Simulators::SimulatorType;
+  switch (option) {
+#ifndef NO_QISKIT_AER
+    case 0:
+      return static_cast<int>(Backend::kQiskitAer);
+    case 2:
+      return static_cast<int>(Backend::kCompositeQiskitAer);
+#endif
+    case 1:
+      return static_cast<int>(Backend::kQCSim);
+    case 3:
+      return static_cast<int>(Backend::kCompositeQCSim);
+    case 4:
+      return static_cast<int>(Backend::kGpuSim);
+    case 5:
+      return static_cast<int>(Backend::kQuestSim);
+    default:
+      throw std::invalid_argument(
+          "Requested backend is unavailable in this build");
+  }
+}
+
+static std::string GetConfigJson(int num_shots, int maxBondDim,
+                                 bool gateFusion) {
   std::string config = "{\"shots\": ";
 
   config += std::to_string(num_shots);
@@ -41,7 +68,8 @@ static std::string GetConfigJson(int num_shots, int maxBondDim) {
     config += ", \"matrix_product_state_max_bond_dimension\": " +
               std::to_string(maxBondDim);
 
-  config += "}";
+  config +=
+      gateFusion ? ", \"gate_fusion\": true}" : ", \"gate_fusion\": false}";
 
   return config;
 }
@@ -58,6 +86,9 @@ int main(int argc, char** argv) {
         "Specify the number of qubits")(
         "shots,s", boost::program_options::value<int>(),
         "Specify the number of shots for execution")(
+        "gate-fusion",
+        boost::program_options::value<bool>()->default_value(true),
+        "Enable Maestro gate fusion on supported simulators")(
         "mbd,m", boost::program_options::value<int>(),
         "Specify the max bond dimension for the MPS simulator")(
         "simulator,r", boost::program_options::value<std::string>(),
@@ -97,7 +128,11 @@ int main(int argc, char** argv) {
     int nrQubits = 64;
     int nrShots = 1;
     int maxBondDim = 0;
+#ifdef NO_QISKIT_AER
+    int simulatorType = 1;
+#else
     int simulatorType = 0;
+#endif
     int simulationType = 0;
 
     if (vars.count("nrqubits")) {
@@ -259,35 +294,36 @@ int main(int argc, char** argv) {
           (simulatorType == 1 &&
            simulationType == 4))  // qcsim also supports pauli propagation
         simulator.RemoveAllOptimizationSimulatorsAndAdd(
-            static_cast<int>(simulatorType), static_cast<int>(simulationType));
+            BackendId(simulatorType), static_cast<int>(simulationType));
       else {
         simulator.RemoveAllOptimizationSimulatorsAndAdd(
-            static_cast<int>(simulatorType), 0);
-        simulator.AddOptimizationSimulator(static_cast<int>(simulatorType), 1);
-        simulator.AddOptimizationSimulator(static_cast<int>(simulatorType), 2);
+            BackendId(simulatorType), 0);
+        simulator.AddOptimizationSimulator(BackendId(simulatorType), 1);
+        simulator.AddOptimizationSimulator(BackendId(simulatorType), 2);
       }
     } else if (simulatorType <
                4)  // composite, ignore exec type and set statevector
     {
-      simulator.RemoveAllOptimizationSimulatorsAndAdd(
-          static_cast<int>(simulatorType), 0);
+      simulator.RemoveAllOptimizationSimulatorsAndAdd(BackendId(simulatorType),
+                                                      0);
     } else if (simulatorType == 4)  // gpu
     {
       if (simulationType < 2 || simulationType == 3 ||
           simulationType ==
               4)  // statevector or mps, or tensor or pauli propagation
         simulator.RemoveAllOptimizationSimulatorsAndAdd(
-            static_cast<int>(simulatorType), static_cast<int>(simulationType));
+            BackendId(simulatorType), static_cast<int>(simulationType));
       else  // other types are not supported yet on gpu, set statevector
         simulator.RemoveAllOptimizationSimulatorsAndAdd(
-            static_cast<int>(simulatorType), 0);
+            BackendId(simulatorType), 0);
     } else if (simulatorType == 5)  // quest, only supports statevector for now
     {
-      simulator.RemoveAllOptimizationSimulatorsAndAdd(
-          static_cast<int>(simulatorType), 0);
+      simulator.RemoveAllOptimizationSimulatorsAndAdd(BackendId(simulatorType),
+                                                      0);
     }
 
-    static std::string configStr = GetConfigJson(nrShots, maxBondDim);
+    static std::string configStr =
+        GetConfigJson(nrShots, maxBondDim, vars["gate-fusion"].as<bool>());
 
     std::string result;
     if (!qasmStr.empty()) {

@@ -221,6 +221,12 @@ class Configuration {
   void ApplyConfigurationToSimulator(
       const std::shared_ptr<Simulators::IState>& simulator) const {
     for (const auto& [key, value] : configMap) {
+      if (key == "gate_fusion" &&
+          simulator->GetType() != SimulatorType::kQCSim &&
+          simulator->GetType() != SimulatorType::kCompositeQCSim &&
+          !IsGpuSimulator(simulator->GetType()))
+        continue;
+
       // Networks retain GPU placement when an optimizer selects a CPU backend.
       // Replay it only to GPU simulators; Aer rejects this plugin-specific key.
       if (key == "gpu_device" && !IsGpuSimulator(simulator->GetType()))

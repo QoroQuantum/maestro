@@ -61,6 +61,8 @@ class GpuLibrary : public Utils::Library {
   GpuLibrary() noexcept = default;
 
  public:
+  enum { MATRIX_ROW_MAJOR = 0, MATRIX_COLUMN_MAJOR = 1 };
+
   static std::shared_ptr<GpuLibrary> GetInstance() {
     static const auto instance = std::shared_ptr<GpuLibrary>(new GpuLibrary());
     return instance;
@@ -321,6 +323,26 @@ class GpuLibrary : public Utils::Library {
                               double))GetFunction("ApplyCU");
           CheckFunction((void *)fApplyCU, __LINE__);
 
+          // Optional on older plugins; fusion checks the complete matrix API.
+          fApplyOneQubitMatrix =
+              reinterpret_cast<int (*)(void *, int, const double *)>(
+                  GetFunction("ApplyOneQubitMatrix"));
+          fApplyOneQubitMatrixWithLayout =
+              reinterpret_cast<int (*)(void *, int, const double *, int)>(
+                  GetFunction("ApplyOneQubitMatrixWithLayout"));
+          fApplyTwoQubitMatrix =
+              reinterpret_cast<int (*)(void *, int, int, const double *)>(
+                  GetFunction("ApplyTwoQubitMatrix"));
+          fApplyTwoQubitMatrixWithLayout =
+              reinterpret_cast<int (*)(void *, int, int, const double *, int)>(
+                  GetFunction("ApplyTwoQubitMatrixWithLayout"));
+          fApplyThreeQubitMatrix =
+              reinterpret_cast<int (*)(void *, int, int, int, const double *)>(
+                  GetFunction("ApplyThreeQubitMatrix"));
+          fApplyThreeQubitMatrixWithLayout = reinterpret_cast<int (*)(
+              void *, int, int, int, const double *, int)>(
+              GetFunction("ApplyThreeQubitMatrixWithLayout"));
+
           // density matrix api functions
 #define LOAD_DM(name, type)                                                   \
   f##name = reinterpret_cast<type>(GetFunction(#name));                       \
@@ -451,6 +473,8 @@ class GpuLibrary : public Utils::Library {
           LOAD_MPO(MPOGetMaxExtent, long int (*)(void *));
           LOAD_MPO(MPOGetBondDimensions,
                    int (*)(void *, long long int *));
+          // Optional read-only routing map (older plugins use local routing).
+          fMPOGetQubitsMap = reinterpret_cast<int (*)(void*, long long*, int)>(GetFunction("MPOGetQubitsMap"));
           LOAD_MPO(MPOSetCallbackContext, int (*)(void *, void *));
           LOAD_MPO(MPOSetMeetingPositionCallback,
                    int (*)(void *, int64_t (*)(void *, const int64_t *)));
@@ -609,6 +633,8 @@ class GpuLibrary : public Utils::Library {
               (int (*)(void *, long long int *))GetFunction(
                   "MPSGetBondDimensions");
           CheckFunction((void *)fMPSGetBondDimensions, __LINE__);
+          // Optional read-only routing map (older plugins use local routing).
+          fMPSGetQubitsMap = reinterpret_cast<int (*)(void*, long long*, int)>(GetFunction("MPSGetQubitsMap"));
           fMPSSetCallbackContext =
               (int (*)(void *, void *))GetFunction("MPSSetCallbackContext");
           CheckFunction((void *)fMPSSetCallbackContext, __LINE__);
@@ -1225,6 +1251,13 @@ class GpuLibrary : public Utils::Library {
     return obj && fPauliPropGetGpuId ? fPauliPropGetGpuId(obj) : -1;
   }
 
+  bool HasStatevectorMatrixAPI() const {
+    return IsValid() && fApplyOneQubitMatrix &&
+           fApplyOneQubitMatrixWithLayout && fApplyTwoQubitMatrix &&
+           fApplyTwoQubitMatrixWithLayout && fApplyThreeQubitMatrix &&
+           fApplyThreeQubitMatrixWithLayout;
+  }
+
   bool HasDensityMatrixAPI() const {
     return IsValid() && fCreateDensityMatrix && fDestroyDensityMatrix &&
            fDMCreate && fDMCreateWithState && fDMReset && fDMIsCreated &&
@@ -1811,6 +1844,37 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
+  // Host interleaved complex doubles. Target i is matrix basis bit i.
+  bool ApplyOneQubitMatrix(void *obj, int q0, const double *matrix) {
+    return obj && fApplyOneQubitMatrix &&
+           fApplyOneQubitMatrix(obj, q0, matrix) == 1;
+  }
+  bool ApplyOneQubitMatrixWithLayout(void *obj, int q0, const double *matrix,
+                                     int layout) {
+    return obj && fApplyOneQubitMatrixWithLayout &&
+           fApplyOneQubitMatrixWithLayout(obj, q0, matrix, layout) == 1;
+  }
+  bool ApplyTwoQubitMatrix(void *obj, int q0, int q1, const double *matrix) {
+    return obj && fApplyTwoQubitMatrix &&
+           fApplyTwoQubitMatrix(obj, q0, q1, matrix) == 1;
+  }
+  bool ApplyTwoQubitMatrixWithLayout(void *obj, int q0, int q1,
+                                     const double *matrix, int layout) {
+    return obj && fApplyTwoQubitMatrixWithLayout &&
+           fApplyTwoQubitMatrixWithLayout(obj, q0, q1, matrix, layout) == 1;
+  }
+  bool ApplyThreeQubitMatrix(void *obj, int q0, int q1, int q2,
+                             const double *matrix) {
+    return obj && fApplyThreeQubitMatrix &&
+           fApplyThreeQubitMatrix(obj, q0, q1, q2, matrix) == 1;
+  }
+  bool ApplyThreeQubitMatrixWithLayout(void *obj, int q0, int q1, int q2,
+                                       const double *matrix, int layout) {
+    return obj && fApplyThreeQubitMatrixWithLayout &&
+           fApplyThreeQubitMatrixWithLayout(obj, q0, q1, q2, matrix, layout) ==
+               1;
+  }
+
  public:
   // density matrix functions
   void *CreateDensityMatrix() {
@@ -2050,6 +2114,9 @@ class GpuLibrary : public Utils::Library {
     return obj && fMPOGetBondDimensions &&
            fMPOGetBondDimensions(obj, bondDims) == 1;
   }
+  bool MPOGetQubitsMap(void* obj, long long* map, int size) const {
+    return obj && fMPOGetQubitsMap && fMPOGetQubitsMap(obj, map, size) == 1;
+  }
   bool MPOSetCallbackContext(void *obj, void *context) {
     return obj && fMPOSetCallbackContext &&
            fMPOSetCallbackContext(obj, context) == 1;
@@ -2275,6 +2342,7 @@ class GpuLibrary : public Utils::Library {
   int (*fMPOSetMaxExtent)(void *, long int) = nullptr;
   long int (*fMPOGetMaxExtent)(void *) = nullptr;
   int (*fMPOGetBondDimensions)(void *, long long int *) = nullptr;
+  int (*fMPOGetQubitsMap)(void*, long long*, int) = nullptr;
   int (*fMPOSetCallbackContext)(void *, void *) = nullptr;
   int (*fMPOSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
   int (*fMPOSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;
@@ -2586,6 +2654,9 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
+  bool MPSGetQubitsMap(void* obj, long long* map, int size) const {
+    return obj && fMPSGetQubitsMap && fMPSGetQubitsMap(obj, map, size) == 1;
+  }
   bool MPSSetCallbackContext(void *obj, void *context) {
     if (LibraryHandle)
       return fMPSSetCallbackContext(obj, context) == 1;
@@ -4404,6 +4475,16 @@ class GpuLibrary : public Utils::Library {
   int (*fApplySwap)(void *, int, int) = nullptr;
   int (*fApplyCSwap)(void *, int, int, int) = nullptr;
   int (*fApplyCU)(void *, int, int, double, double, double, double) = nullptr;
+  int (*fApplyOneQubitMatrix)(void *, int, const double *) = nullptr;
+  int (*fApplyOneQubitMatrixWithLayout)(void *, int, const double *,
+                                        int) = nullptr;
+  int (*fApplyTwoQubitMatrix)(void *, int, int, const double *) = nullptr;
+  int (*fApplyTwoQubitMatrixWithLayout)(void *, int, int, const double *,
+                                        int) = nullptr;
+  int (*fApplyThreeQubitMatrix)(void *, int, int, int,
+                                const double *) = nullptr;
+  int (*fApplyThreeQubitMatrixWithLayout)(void *, int, int, int, const double *,
+                                          int) = nullptr;
   // mps functions
   void *(*fCreateMPS)(void *) = nullptr;
   void (*fDestroyMPS)(void *) = nullptr;
@@ -4439,6 +4520,7 @@ class GpuLibrary : public Utils::Library {
   long int (*fMPSGetMaxExtent)(void *) = nullptr;
   int (*fMPSGetNrQubits)(void *) = nullptr;
   int (*fMPSGetBondDimensions)(void *, long long int *) = nullptr;
+  int (*fMPSGetQubitsMap)(void*, long long*, int) = nullptr;
   int (*fMPSSetCallbackContext)(void *, void *) = nullptr;
   int (*fMPSSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
   int (*fMPSSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;

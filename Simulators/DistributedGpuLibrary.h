@@ -443,6 +443,13 @@ class DistributedGpuLibrary : public Utils::Library {
     if (!ApplyTwoQubitMatrixWithLayout)
       throw std::runtime_error(
           "Distributed GPU plugin missing ApplyTwoQubitMatrixWithLayout");
+    // Additive API: older plugins still support one- and two-qubit matrices.
+    ApplyThreeQubitMatrix =
+        reinterpret_cast<DistributedGpuApi::ApplyThreeQubitMatrixFn>(
+            GetFunction("ApplyThreeQubitMatrix"));
+    ApplyThreeQubitMatrixWithLayout =
+        reinterpret_cast<DistributedGpuApi::ApplyThreeQubitMatrixWithLayoutFn>(
+            GetFunction("ApplyThreeQubitMatrixWithLayout"));
     if (GetApiVersion() != 1)
       throw std::runtime_error("Unsupported distributed GPU API version");
     // MPI admission needs the application's communicator and is deferred to
@@ -589,6 +596,13 @@ class DistributedGpuLibrary : public Utils::Library {
   DistributedGpuApi::ApplyTwoQubitMatrixFn ApplyTwoQubitMatrix = nullptr;
   DistributedGpuApi::ApplyTwoQubitMatrixWithLayoutFn
       ApplyTwoQubitMatrixWithLayout = nullptr;
+  DistributedGpuApi::ApplyThreeQubitMatrixFn ApplyThreeQubitMatrix = nullptr;
+  DistributedGpuApi::ApplyThreeQubitMatrixWithLayoutFn
+      ApplyThreeQubitMatrixWithLayout = nullptr;
+
+  bool HasThreeQubitMatrixAPI() const {
+    return ApplyThreeQubitMatrix && ApplyThreeQubitMatrixWithLayout;
+  }
 
  protected:
   bool Unavailable(const char* operation) {

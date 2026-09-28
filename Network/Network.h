@@ -840,6 +840,10 @@ class INetwork : public std::enable_shared_from_this<INetwork<Time>> {
 
   // Device used by the last execution, which may differ from a recreated simulator.
   virtual int GetLastGpuDevice() const { return -1; }
+  virtual unsigned GetLastGateFusionMaxQubits() const { return 0; }
+  virtual bool WasGateFusionEnabled() const { return false; }
+  // Requested setting, independent of the selected backend capability.
+  virtual bool GetGateFusion() const { return true; }
 
   /**
    * @brief Get the last used simulation type.

@@ -12,28 +12,67 @@
 #ifndef _MAESTRO_INTERFACE_H_
 #define _MAESTRO_INTERFACE_H_
 
+#include "InterfaceTypes.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+// Fusion queries do not flush. Width zero means Maestro fusion is unsupported.
+// Statistics are cumulative for this simulator, including restored executions.
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    unsigned GetGateFusionMaxQubits(void *sim);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int IsGateFusionEnabled(void *sim);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int GetGateFusionStatistics(void *sim,
+                                MaestroGateFusionStatistics *statistics);
+
+// Matrix buffers contain row-major, interleaved real/imaginary doubles:
+// 8, 32 or 128 doubles for a 2x2, 4x4 or 8x8 matrix. The first target is
+// the least-significant local matrix bit. Return 1 on success, 0 on error;
+// no exception crosses these entry points. Buffers are copied during the call.
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int ApplyGenericOneQubitGate(void *sim, unsigned long qubit,
+                                 const double *matrix);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int ApplyGenericTwoQubitGate(void *sim, unsigned long qubit0,
+                                 unsigned long qubit1, const double *matrix);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int ApplyGenericThreeQubitGate(void *sim, unsigned long qubit0,
+                                   unsigned long qubit1, unsigned long qubit2,
+                                   const double *matrix);
+
 // Native request API, schema version 2. All returned strings (including errors)
 // are UTF-8 JSON owned by the caller and must be released with FreeResult.
 // No C++ exception crosses these entry points. Null means allocation failure.
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-char *MaestroRunRequestJson(const char *request);
+    char *MaestroRunRequestJson(const char *request);
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-char *MaestroValidateRequestJson(const char *request);
+    char *MaestroValidateRequestJson(const char *request);
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-char *MaestroGetCapabilitiesJson(void);
+    char *MaestroGetCapabilitiesJson(void);
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
-char *MaestroFinalizeDistributedMpiGpuJson(void);
+    char *MaestroFinalizeDistributedMpiGpuJson(void);
 
 #ifdef _WIN32
 __declspec(dllexport)

@@ -22,6 +22,7 @@
 #include "Network.h"
 
 #include "Configuration.h"
+#include <functional>
 
 namespace Network {
 
@@ -29,6 +30,7 @@ template <typename Time = Types::time_type>
 class ExecuteJob {
  public:
   using ExecuteResults = typename Circuits::Circuit<Time>::ExecuteResults;
+  std::function<void(const Simulators::ISimulator &)> onSimulatorReady;
 
   ExecuteJob() = delete;
 
@@ -90,20 +92,22 @@ class ExecuteJob {
         executedGates =
             dcirc->ExecuteNonMeasurements(optSim, state, &curMaxBondDimLocal);
 
-        if (!specialOptimizationForStatevector && !specialOptimizationForMPS &&
-            curCnt > 1)
-          optSim->SaveState();
-
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
-        if (method == Simulators::SimulationType::kMatrixProductState &&
+        if ((method == Simulators::SimulationType::kMatrixProductState ||
+             method == Simulators::SimulationType::kMatrixProductOperator) &&
             network->GetMPSOptimizeSwaps()) {
           // auto circ =
           // std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
           // circ->ConvertForCutting();
           optSim->SetUpcomingGates(dcirc->GetOperations());
         }
+        // The snapshot must describe the suffix executed by every shot.
+        if (!specialOptimizationForStatevector && !specialOptimizationForMPS &&
+            curCnt > 1)
+          optSim->SaveState();
       }
-    } else if (method == Simulators::SimulationType::kMatrixProductState &&
+    } else if ((method == Simulators::SimulationType::kMatrixProductState ||
+                method == Simulators::SimulationType::kMatrixProductOperator) &&
                network->GetMPSOptimizeSwaps()) {
       auto circ =
           std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
@@ -111,6 +115,7 @@ class ExecuteJob {
       optSim->SetUpcomingGates(circ->GetOperations());
     }
 
+    if (onSimulatorReady) onSimulatorReady(*optSim);
     std::shared_ptr<Circuits::MeasurementOperation<Time>> measurementsOp;
 
     const std::vector<bool> executed = std::move(executedGates);
@@ -252,17 +257,18 @@ class ExecuteJob {
           executedGates =
               dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
 
-          if (!specialOptimizationForStatevector &&
-              !specialOptimizationForMPS && curCnt > 1)
-            optSim->SaveState();
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
-          if (method == Simulators::SimulationType::kMatrixProductState &&
+          if ((method == Simulators::SimulationType::kMatrixProductState ||
+               method == Simulators::SimulationType::kMatrixProductOperator) &&
               network->GetMPSOptimizeSwaps()) {
             // auto circ =
             // std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
             // circ->ConvertForCutting();
             optSim->SetUpcomingGates(dcirc->GetOperations());
           }
+          if (!specialOptimizationForStatevector &&
+              !specialOptimizationForMPS && curCnt > 1)
+            optSim->SaveState();
         }
       } else if (executedGates.size() == dcirc->size()) {
         // special case for when the simulator is passed from the network
@@ -277,20 +283,22 @@ class ExecuteJob {
         if (needToExecuteGates && optimiseMultipleShots) {
           executedGates =
               dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
-          if (!specialOptimizationForStatevector &&
-              !specialOptimizationForMPS && curCnt > 1)
-            optSim->SaveState();
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
-          if (method == Simulators::SimulationType::kMatrixProductState &&
+          if ((method == Simulators::SimulationType::kMatrixProductState ||
+               method == Simulators::SimulationType::kMatrixProductOperator) &&
               network->GetMPSOptimizeSwaps()) {
             // auto circ =
             // std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
             // circ->ConvertForCutting();
             optSim->SetUpcomingGates(dcirc->GetOperations());
           }
+          if (!specialOptimizationForStatevector &&
+              !specialOptimizationForMPS && curCnt > 1)
+            optSim->SaveState();
         } else {
           dcirc = dcirc->RemoveExecutedOperations(executedGates);
-          if (method == Simulators::SimulationType::kMatrixProductState &&
+          if ((method == Simulators::SimulationType::kMatrixProductState ||
+               method == Simulators::SimulationType::kMatrixProductOperator) &&
               network->GetMPSOptimizeSwaps()) {
             // auto circ =
             // std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
@@ -300,7 +308,8 @@ class ExecuteJob {
         }
       } else {
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
-        if (method == Simulators::SimulationType::kMatrixProductState &&
+        if ((method == Simulators::SimulationType::kMatrixProductState ||
+             method == Simulators::SimulationType::kMatrixProductOperator) &&
             network->GetMPSOptimizeSwaps()) {
           auto circ =
               std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
@@ -323,22 +332,22 @@ class ExecuteJob {
       if (optimiseMultipleShots) {
         executedGates =
             dcirc->ExecuteNonMeasurements(optSim, state, curMaxBondDim);
-
-        if (!specialOptimizationForStatevector && !specialOptimizationForMPS &&
-            curCnt > 1)
-          optSim->SaveState();
-
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
-        if (method == Simulators::SimulationType::kMatrixProductState &&
+        if ((method == Simulators::SimulationType::kMatrixProductState ||
+             method == Simulators::SimulationType::kMatrixProductOperator) &&
             network->GetMPSOptimizeSwaps()) {
           // auto circ =
           // std::static_pointer_cast<Circuits::Circuit<Time>>(dcirc->Clone());
           // circ->ConvertForCutting();
           optSim->SetUpcomingGates(dcirc->GetOperations());
         }
+        if (!specialOptimizationForStatevector && !specialOptimizationForMPS &&
+            curCnt > 1)
+          optSim->SaveState();
       }
     }
 
+    if (onSimulatorReady) onSimulatorReady(*optSim);
     std::shared_ptr<Circuits::MeasurementOperation<Time>> measurementsOp;
 
     const std::vector<bool> executed = std::move(executedGates);
@@ -448,22 +457,42 @@ class ExecuteJob {
   void OptimizeMPSInitialQubitsMap(
       std::shared_ptr<Simulators::ISimulator> &sim,
       std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits) const {
-    if (sim->GetSimulationType() ==
-            Simulators::SimulationType::kMatrixProductState &&
+    if ((sim->GetSimulationType() ==
+             Simulators::SimulationType::kMatrixProductState ||
+         sim->GetSimulationType() ==
+             Simulators::SimulationType::kMatrixProductOperator) &&
         (network->GetInitialQubitsMapOptimization() ||
          network->GetMPSOptimizeSwaps()) &&
-        sim->SupportsMPSSwapOptimization() && !dcirc->HasCompositeOperations()) {
+        sim->SupportsMPSSwapOptimization() &&
+        !dcirc->HasCompositeOperations()) {
       if (network->GetMPSOptimizationQubitsNumberThreshold() <= nrQubits) {
         const auto bondDimThreshold =
             network->GetMPSOptimizationBondDimensionThreshold();
         const auto maxBondDimValue = config.GetConfigurationAsInt(
-            "matrix_product_state_max_bond_dimension");
+            sim->GetSimulationType() ==
+                        Simulators::SimulationType::kMatrixProductOperator &&
+                    config.IsSet("matrix_product_operator_max_bond_dimension")
+                ? "matrix_product_operator_max_bond_dimension"
+                : "matrix_product_state_max_bond_dimension");
 
         if (maxBondDimValue == 0 ||
             static_cast<int>(bondDimThreshold) <= maxBondDimValue) {
           // need to be sure the circuit is correctly converted
           dcirc->ConvertForCutting();  // convert the three qubit gates
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();
+          // Finalize source ordering before preparing fusion. Routing layers
+          // are only a cost model and must never replace executable operations.
+          auto ordered = Circuits::Circuit<Time>::LayersToCircuit(layers);
+          dcirc->SetOperations(ordered->GetOperations());
+          sim->SetUpcomingGates(dcirc->GetOperations());
+          if (sim->IsGateFusionEnabled() &&
+              !sim->GetUpcomingRoutingOperations().empty()) {
+            Circuits::Circuit<Time> routingCircuit;
+            for (const auto &op : sim->GetUpcomingRoutingOperations())
+              if (op->GetType() == Circuits::OperationType::kGate)
+                routingCircuit.AddOperation(op);
+            layers = routingCircuit.ToMultipleQubitsLayersNoClone();
+          }
 
           Simulators::MPSDummySimulator dummySim(nrQubits);
           dummySim.setGrowthFactorGate(network->getGrowthFactorGate());
@@ -475,8 +504,6 @@ class ExecuteJob {
             const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
             sim->SetInitialQubitsMap(optimalMap);
           }
-
-          dcirc = Circuits::Circuit<Time>::LayersToCircuit(layers);
 
           if (network->GetMPSOptimizeSwaps()) {
             // TODO: come up with something better!

@@ -43,8 +43,9 @@ class SimulatorsEstimatorInterface {
       Simulators::SimulatorType &simType, Simulators::SimulationType &method,
       std::vector<bool> &executed, const long long int maxBondDim,
       const double singularValueThreshold, const std::string &truncationMode,
-      const std::string &mpsSample,
-      size_t maxSimulators, const std::vector<std::string> *paulis, bool multithreading = false) const = 0;
+      const std::string &mpsSample, size_t maxSimulators,
+      const std::vector<std::string> *paulis,
+      bool multithreading = false) const = 0;
 
   static void ExecuteUpToMeasurements(
       const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits,
@@ -65,8 +66,19 @@ class SimulatorsEstimatorInterface {
 
     executed = dcirc->ExecuteNonMeasurements(sim, state, curMaxBondDim);
 
-    if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
+    if (!specialOptimizationForStatevector && !specialOptimizationForMPS) {
+      // Workers continue from this suffix, including when they receive a
+      // clone of the estimator's simulator and its saved routing context.
+      // RemoveExecutedOperations rewrites its mask. Preserve the caller's
+      // mask, whose indices still describe dcirc, for the execution workers.
+      auto suffixMask = executed;
+      if (suffixMask.empty())
+        sim->SetUpcomingGates({});  // The whole prefix was executed.
+      else
+        sim->SetUpcomingGates(
+            dcirc->RemoveExecutedOperations(suffixMask)->GetOperations());
       sim->SaveState();
+    }
   }
 };
 

@@ -15,6 +15,7 @@
 #ifndef _SIMPLE_NETWORK_H_
 #define _SIMPLE_NETWORK_H_
 
+#include <atomic>
 #include "QubitRegister.h"
 #include "SimpleController.h"
 #include "SimpleHost.h"
@@ -657,6 +658,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     lastSimulatorType = simType;
     lastMethod = method;
     lastGpuDevice = -1;
+    lastFusionWidth = 0;
+    lastFusionEnabled = false;
 
     size_t nrThreads = GetMaxSimulators();
 
@@ -713,6 +716,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             curCnt > 1 || GetOptimizeSimulator();
 
         job->network = BaseClass::getptr();
+        job->onSimulatorReady = [this](const Simulators::ISimulator &actual) {
+          lastFusionWidth.store(actual.GetGateFusionMaxQubits());
+          lastFusionEnabled.store(actual.IsGateFusionEnabled());
+        };
         job->curMaxBondDim = &curMaxBondDim;
 
         job->config = ExecutionConfiguration(simType, nrQubits);
@@ -747,6 +754,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           curCnt > 1 || GetOptimizeSimulator();
 
       job->network = BaseClass::getptr();
+      job->onSimulatorReady = [this](const Simulators::ISimulator &actual) {
+        lastFusionWidth.store(actual.GetGateFusionMaxQubits());
+        lastFusionEnabled.store(actual.IsGateFusionEnabled());
+      };
       job->curMaxBondDim = &curMaxBondDim;
 
       job->config = ExecutionConfiguration(simType, nrQubits);
@@ -878,6 +889,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     lastSimulatorType = simType;
     lastMethod = method;
     lastGpuDevice = -1;
+    lastFusionWidth = 0;
+    lastFusionEnabled = false;
 
     size_t nrThreads = GetMaxSimulators();
 
@@ -927,6 +940,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             curCnt > 1 || GetOptimizeSimulator();
 
         job->network = BaseClass::getptr();
+        job->onSimulatorReady = [this](const Simulators::ISimulator &actual) {
+          lastFusionWidth.store(actual.GetGateFusionMaxQubits());
+          lastFusionEnabled.store(actual.IsGateFusionEnabled());
+        };
         job->curMaxBondDim = &curMaxBondDim;
 
         job->config = ExecutionConfiguration(simType, nrQubits);
@@ -961,6 +978,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           curCnt > 1 || GetOptimizeSimulator();
 
       job->network = BaseClass::getptr();
+      job->onSimulatorReady = [this](const Simulators::ISimulator &actual) {
+        lastFusionWidth.store(actual.GetGateFusionMaxQubits());
+        lastFusionEnabled.store(actual.IsGateFusionEnabled());
+      };
       job->curMaxBondDim = &curMaxBondDim;
 
       job->config = ExecutionConfiguration(simType, nrQubits);
@@ -1114,6 +1135,19 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   void Configure(const char *key, const char *value) override {
     if (!key || !value) return;
 
+    if (std::string("gate_fusion") == key) {
+      const std::string setting(value);
+      if (setting != "true" && setting != "false" && setting != "0" &&
+          setting != "1")
+        throw std::invalid_argument("gate_fusion must be true, false, 1 or 0");
+      configuration.SetConfiguration(key, value);
+      if (simulator &&
+          (simulator->GetType() == Simulators::SimulatorType::kQCSim ||
+           simulator->GetType() == Simulators::SimulatorType::kCompositeQCSim ||
+           Simulators::IsGpuSimulator(simulator->GetType())))
+        simulator->Configure(key, value);
+      return;
+    }
     if (std::string("distributed_host_qubit_indexing") == key) {
       const std::string mode(value);
       if (mode != "auto" && mode != "local" && mode != "global")
@@ -1866,6 +1900,23 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
    * @return The simulator type that was used last time.
    */
   int GetLastGpuDevice() const override { return lastGpuDevice; }
+  unsigned GetLastGateFusionMaxQubits() const override {
+    return lastFusionWidth.load();
+  }
+  bool WasGateFusionEnabled() const override {
+    return lastFusionEnabled.load();
+  }
+  bool GetGateFusion() const override {
+    if (simulator) {
+      const auto &options = simulator->GetConfigMap();
+      const auto found = options.find("gate_fusion");
+      if (found != options.end())
+        return found->second == "true" || found->second == "1";
+    }
+    if (!configuration.IsSet("gate_fusion")) return true;
+    const auto value = configuration.GetConfiguration("gate_fusion");
+    return value == "true" || value == "1";
+  }
 
   Simulators::SimulatorType GetLastSimulatorType() const override {
     return lastSimulatorType;
@@ -2476,13 +2527,21 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   void OptimizeMPSInitialQubitsMap(
       std::shared_ptr<Simulators::ISimulator> &sim,
       std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits) const {
-    if (sim->GetSimulationType() ==
-            Simulators::SimulationType::kMatrixProductState &&
+    if ((sim->GetSimulationType() ==
+             Simulators::SimulationType::kMatrixProductState ||
+         sim->GetSimulationType() ==
+             Simulators::SimulationType::kMatrixProductOperator) &&
         (optimizeInitialQubitsMap || mpsOptimizeSwaps) &&
-        sim->SupportsMPSSwapOptimization() && !dcirc->HasCompositeOperations()) {
+        sim->SupportsMPSSwapOptimization() &&
+        !dcirc->HasCompositeOperations()) {
       if (mpsOptimizationQubitsNumberThreshold <= nrQubits) {
         const auto maxBondDimValue = configuration.GetConfigurationAsInt(
-            "matrix_product_state_max_bond_dimension");
+            sim->GetSimulationType() ==
+                        Simulators::SimulationType::kMatrixProductOperator &&
+                    configuration.IsSet(
+                        "matrix_product_operator_max_bond_dimension")
+                ? "matrix_product_operator_max_bond_dimension"
+                : "matrix_product_state_max_bond_dimension");
 
         if (maxBondDimValue <= 0 ||
             static_cast<int>(mpsOptimizationBondDimensionThreshold) <=
@@ -2490,6 +2549,18 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
           // need to be sure the circuit is correctly converted
           dcirc->ConvertForCutting();  // convert the three qubit gates
           auto layers = dcirc->ToMultipleQubitsLayersNoClone();
+          // Finalize source ordering before preparing fusion. Routing layers
+          // are only a cost model and must never replace executable operations.
+          auto ordered = Circuits::Circuit<Time>::LayersToCircuit(layers);
+          dcirc->SetOperations(ordered->GetOperations());
+          sim->SetUpcomingGates(dcirc->GetOperations());
+          if (sim->IsGateFusionEnabled()) {
+            Circuits::Circuit<Time> routingCircuit;
+            for (const auto &op : sim->GetUpcomingRoutingOperations())
+              if (op->GetType() == Circuits::OperationType::kGate)
+                routingCircuit.AddOperation(op);
+            layers = routingCircuit.ToMultipleQubitsLayersNoClone();
+          }
 
           Simulators::MPSDummySimulator dummySim(nrQubits);
           dummySim.setGrowthFactorGate(growthFactorGate);
@@ -2503,8 +2574,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
             sim->SetInitialQubitsMap(optimalMap);
           }
 
-          auto optCirc = Circuits::Circuit<Time>::LayersToCircuit(layers);
-          dcirc->SetOperations(optCirc->GetOperations());
 
           if (mpsOptimizeSwaps) {
             // TODO: come up with something better!
@@ -2793,6 +2862,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
   typename BaseClass::SimulatorsSet simulatorsForOptimizations;
 
   int lastGpuDevice = -1;
+  std::atomic<unsigned> lastFusionWidth{0};
+  std::atomic<bool> lastFusionEnabled{false};
   Simulators::SimulatorType lastSimulatorType =
       Simulators::SimulatorType::kQCSim; /**< The last simulator type used. */
   Simulators::SimulationType lastMethod =

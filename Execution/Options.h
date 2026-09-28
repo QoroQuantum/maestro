@@ -91,6 +91,7 @@ inline const std::vector<Option>& Options() {
       {"disable_optimized_swapping", "", "boolean", "mps"},
       {"lookahead_depth", "", "lookahead", "mps"},
       {"optimize_circuit", "", "boolean", "all"},
+      {"gate_fusion", "", "boolean", "all"},
       {"max_simulators", "max_simulators", "positive_integer", "all"},
       {"mpo_kraus_completeness_check",
        "matrix_product_operator_kraus_completeness_check", "string", "mpo"},
@@ -234,6 +235,8 @@ inline SimulatorConfig ParseConfig(const json::object& simulator) {
       config.lookahead_depth = static_cast<int>(value.as_int64());
     else if (name == "optimize_circuit")
       config.optimize_circuit = Boolean(value);
+    else if (name == "gate_fusion")
+      config.gate_fusion = Boolean(value);
     else if (name == "mps_sampling")
       config.mps_sampling = choice(value, MpsSamplingModes(), key);
     else if (name == "precision")

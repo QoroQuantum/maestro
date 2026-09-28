@@ -69,6 +69,10 @@ class SimulatorsFactory {
       SimulatorType t = SimulatorType::kQCSim,
       SimulationType method = SimulationType::kMatrixProductState);
 
+  // Internal immediate children for composite simulation. No fusion adapter.
+  MAESTRO_FACTORY_EXPORT static std::unique_ptr<ISimulator>
+  CreateImmediateSimulatorUnique(SimulatorType type);
+
 #ifdef __linux__
   // Defined in the core library so Python's hidden-visibility extension
   // shares the same plugin instances and native-state lifetime counters.

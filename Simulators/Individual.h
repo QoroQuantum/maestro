@@ -25,7 +25,7 @@ namespace Simulators {
 // for good but during development this should be good enough
 namespace Private {
 
-class CompositeSimulator;
+class ImmediateCompositeSimulator;
 
 /**
  * @class IndividualSimulator
@@ -36,7 +36,7 @@ class CompositeSimulator;
  * implementation.
  */
 class IndividualSimulator : public ISimulator {
-  friend class CompositeSimulator;
+  friend class ImmediateCompositeSimulator;
 
  public:
   /**
@@ -52,8 +52,8 @@ class IndividualSimulator : public ISimulator {
                           Simulators::SimulatorType::kQiskitAer
 #endif
                       ) noexcept
-      : simulator(SimulatorsFactory::CreateSimulatorUnique(
-            type, Simulators::SimulationType::kStatevector)) {
+      : simulator(SimulatorsFactory::CreateImmediateSimulatorUnique(
+            type)) {
   }
 
   /**
@@ -852,6 +852,12 @@ class IndividualSimulator : public ISimulator {
   }
 
 
+  void ApplyGenericThreeQubitGate(Types::qubit_t q0, Types::qubit_t q1,
+                                  Types::qubit_t q2, const Matrix8cd& gate) override {
+    simulator->ApplyGenericThreeQubitGate(qubitsMap.at(q0), qubitsMap.at(q1),
+                                         qubitsMap.at(q2), gate);
+  }
+
   /**
    * @brief Applies a phase shift gate to the qubit
    *
@@ -1310,7 +1316,7 @@ class IndividualSimulator : public ISimulator {
     if (GetType() == SimulatorType::kQCSim) {
       // qcsim - convert 'simulator' to qcsim simulator and access 'state' (from
       // there the statevector is accessible)
-      QCSimSimulator *qcsim = dynamic_cast<QCSimSimulator *>(simulator.get());
+      ImmediateQCSimSimulator *qcsim = dynamic_cast<ImmediateQCSimSimulator *>(simulator.get());
       prob = 1. - qcsim->uniformZeroOne(qcsim->rng);
     }
 #ifndef NO_QISKIT_AER
@@ -1347,7 +1353,7 @@ class IndividualSimulator : public ISimulator {
     if (GetType() == SimulatorType::kQCSim) {
       // qcsim - convert 'simulator' to qcsim simulator and access 'state' (from
       // there the statevector is accessible)
-      QCSimSimulator *qcsim = dynamic_cast<QCSimSimulator *>(simulator.get());
+      ImmediateQCSimSimulator *qcsim = dynamic_cast<ImmediateQCSimSimulator *>(simulator.get());
 
       alias = std::unique_ptr<Utils::Alias>(
           new Utils::Alias(qcsim->state->getRegisterStorage()));

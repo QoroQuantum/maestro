@@ -186,6 +186,36 @@ class Simulator : protected MaestroLibrary {
     return -1;
   }
 
+  unsigned GetGateFusionMaxQubits() {
+    return simulatorPtr ? MaestroLibrary::GetGateFusionMaxQubits(simulatorPtr)
+                        : 0;
+  }
+  int IsGateFusionEnabled() {
+    return simulatorPtr ? MaestroLibrary::IsGateFusionEnabled(simulatorPtr) : 0;
+  }
+  int GetGateFusionStatistics(MaestroGateFusionStatistics *statistics) {
+    return simulatorPtr ? MaestroLibrary::GetGateFusionStatistics(simulatorPtr,
+                                                                  statistics)
+                        : 0;
+  }
+  int ApplyGenericOneQubitGate(unsigned long q0, const double *matrix) {
+    return simulatorPtr ? MaestroLibrary::ApplyGenericOneQubitGate(simulatorPtr,
+                                                                   q0, matrix)
+                        : 0;
+  }
+  int ApplyGenericTwoQubitGate(unsigned long q0, unsigned long q1,
+                               const double *matrix) {
+    return simulatorPtr ? MaestroLibrary::ApplyGenericTwoQubitGate(
+                              simulatorPtr, q0, q1, matrix)
+                        : 0;
+  }
+  int ApplyGenericThreeQubitGate(unsigned long q0, unsigned long q1,
+                                 unsigned long q2, const double *matrix) {
+    return simulatorPtr ? MaestroLibrary::ApplyGenericThreeQubitGate(
+                              simulatorPtr, q0, q1, q2, matrix)
+                        : 0;
+  }
+
   int FlushSimulator() {
     if (simulatorPtr) return MaestroLibrary::FlushSimulator(simulatorPtr);
     return 0;
