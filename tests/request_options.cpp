@@ -285,3 +285,102 @@ void TestAutomaticGpuMixedStateFallback() {
       }
     }
 }
+
+void TestGateFusionConfiguration() {
+  using namespace MaestroExecution;
+  GetMaestroObjectWithMute();
+  for (const bool fusion : {false, true}) {
+    const auto config = ParseConfig(
+        json::object{{"backend", "qcsim"},
+                     {"method", "matrix_product_state"},
+                     {"options", json::object{{"gate_fusion", fusion}}}});
+    Check(config.gate_fusion == fusion, "Fusion option parser");
+    struct NetworkHandle {
+      unsigned long handle = CreateSimpleSimulator(2);
+      ~NetworkHandle() { DestroySimpleSimulator(handle); }
+    } owner;
+    const auto network = ConfigureNetwork(owner.handle, config);
+    Check(network && network->GetSimulator()->IsGateFusionEnabled() == fusion,
+          "Fusion option did not reach the simulator");
+  }
+  bool rejected = false;
+  try {
+    ParseConfig(
+        json::object{{"backend", "qcsim"},
+                     {"options", json::object{{"gate_fusion", "false"}}}});
+  } catch (const std::exception&) {
+    rejected = true;
+  }
+  Check(rejected, "Non-boolean fusion option accepted");
+}
+
+void TestFusionPublicInterfaces() {
+  using namespace MaestroExecution;
+  auto* maestro = static_cast<Maestro*>(GetMaestroObjectWithMute());
+  const auto backend = static_cast<int>(Simulators::SimulatorType::kQCSim);
+  const char* circuit =
+      "OPENQASM 2.0; qreg q[2]; creg c[2]; h q[0]; rz(0.17) q[0]; measure "
+      "q->c;";
+  for (const bool estimate : {false, true}) {
+    const auto handle = CreateSimpleSimulator(2);
+    RemoveAllOptimizationSimulatorsAndAdd(handle, backend, 0);
+    const auto network = maestro->GetSimpleSimulator(handle);
+    network->SetOptimizeSimulator(false);
+    for (const char* setting : {"false", "true", "false"}) {
+      const std::string config =
+          std::string("{\"shots\":2,\"gate_fusion\":") + setting + "}";
+      char* output = estimate
+                         ? SimpleEstimate(handle, circuit, "ZI", config.c_str())
+                         : SimpleExecute(handle, circuit, config.c_str());
+      Check(output != nullptr, "Legacy fusion execution failed");
+      FreeResult(output);
+      Check(network->GetSimulator()->IsGateFusionEnabled() ==
+                (std::string(setting) == "true"),
+            "Legacy JSON fusion setting was ignored");
+    }
+    char* invalid = estimate ? SimpleEstimate(handle, circuit, "ZI",
+                                              "{\"gate_fusion\":\"false\"}")
+                             : SimpleExecute(handle, circuit,
+                                             "{\"gate_fusion\":\"false\"}");
+    Check(!invalid, "Legacy API accepted a nonboolean fusion setting");
+    DestroySimpleSimulator(handle);
+  }
+  for (int width : {1, 2, 3}) {
+    const auto handle = CreateSimulator(backend, 0);
+    void* sim = GetSimulator(handle);
+    AllocateQubits(sim, 3);
+    InitializeSimulator(sim);
+    Check(GetGateFusionMaxQubits(sim) == 3 && IsGateFusionEnabled(sim),
+          "C fusion capability");
+    ApplyH(sim, 2);
+    ApplyH(sim, 2);
+    MaestroGateFusionStatistics stats{};
+    Check(GetGateFusionStatistics(sim, &stats) && stats.submittedGates == 2 &&
+              stats.backendGates == 0,
+          "C statistics query must not flush");
+    double matrix[128]{};
+    const auto dim = 1 << width;
+    for (int col = 0; col < dim; ++col)
+      matrix[2 * (((col + 1) % dim) * dim + col) + 1] = 1;
+    const int ok = width == 1 ? ApplyGenericOneQubitGate(sim, 2, matrix)
+                   : width == 2
+                       ? ApplyGenericTwoQubitGate(sim, 2, 0, matrix)
+                       : ApplyGenericThreeQubitGate(sim, 2, 0, 1, matrix);
+    Check(ok == 1, "C matrix submission");
+    matrix[2 * dim + 1] = 0;
+    double* amplitude = Amplitude(sim, 4);
+    Check(amplitude && std::abs(amplitude[0]) < 1e-12 &&
+              std::abs(amplitude[1] - 1) < 1e-12,
+          "C matrix layout/order/ownership");
+    FreeDoubleVector(amplitude);
+    Check(!ApplyGenericOneQubitGate(sim, 3, matrix), "C invalid target");
+    Check(!ApplyGenericTwoQubitGate(sim, 0, 0, matrix), "C repeated target");
+    Check(!ApplyGenericOneQubitGate(sim, 0, nullptr), "C null matrix");
+    matrix[0] = std::numeric_limits<double>::quiet_NaN();
+    Check(!ApplyGenericOneQubitGate(sim, 0, matrix), "C nonfinite matrix");
+    Check(ConfigureSimulator(sim, "gate_fusion", "false") &&
+              !IsGateFusionEnabled(sim),
+          "C fusion toggle");
+    DestroySimulator(handle);
+  }
+}

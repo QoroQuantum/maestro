@@ -86,6 +86,11 @@ class GpuMPO {
   bool GetUseOptimalMeetingPosition() const {
     return lib->MPOGetUseOptimalMeetingPosition(obj);
   }
+  std::vector<long long> GetQubitsMap() const {
+    std::vector<long long> map(lib->MPOGetNrQubits(obj));
+    if (!lib->MPOGetQubitsMap(obj, map.data(), static_cast<int>(map.size()))) return {};
+    return map;
+  }
   bool SetCallbackContext(void* context) {
     return lib->MPOSetCallbackContext(obj, context);
   }

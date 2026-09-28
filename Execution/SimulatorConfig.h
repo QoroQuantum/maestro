@@ -110,6 +110,7 @@ struct SimulatorConfig {
       optimization_candidates;
   bool fixed_backend = false;
   bool optimize_circuit = true;
+  bool gate_fusion = true;
   std::unordered_map<std::string, std::string> native_options;
 
   // Throws std::invalid_argument for an unsupported combination or value.
@@ -219,6 +220,7 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(
 
   if (!network) return nullptr;
 
+  network->Configure("gate_fusion", config.gate_fusion ? "true" : "false");
   network->SetOptimizeSimulator(!config.fixed_backend);
   network->GetController()->SetOptimizeCircuit(config.optimize_circuit);
   for (const auto& [key, value] : config.native_options)

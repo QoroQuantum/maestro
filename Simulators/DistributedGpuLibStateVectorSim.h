@@ -436,6 +436,27 @@ class DistributedGpuLibStateVectorSim {
     return result;
   }
 
+  int ApplyThreeQubitMatrix(int qubit0, int qubit1, int qubit2,
+                            const double *matrix) const {
+    if (!lib->ApplyThreeQubitMatrix)
+      throw std::runtime_error(
+          "Update the distributed GPU plugin to apply three-qubit matrices");
+    auto result =
+        lib->ApplyThreeQubitMatrix(obj, qubit0, qubit1, qubit2, matrix);
+    lib->Check(result, "ApplyThreeQubitMatrix");
+    return result;
+  }
+  int ApplyThreeQubitMatrixWithLayout(int qubit0, int qubit1, int qubit2,
+                                      const double *matrix, int layout) const {
+    if (!lib->ApplyThreeQubitMatrixWithLayout)
+      throw std::runtime_error(
+          "Update the distributed GPU plugin to apply three-qubit matrices");
+    auto result = lib->ApplyThreeQubitMatrixWithLayout(obj, qubit0, qubit1,
+                                                       qubit2, matrix, layout);
+    lib->Check(result, "ApplyThreeQubitMatrixWithLayout");
+    return result;
+  }
+
  protected:
   std::shared_ptr<DistributedGpuLibrary> lib;
   void *obj;

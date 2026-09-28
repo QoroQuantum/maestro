@@ -349,6 +349,13 @@ json::object Metadata(Context& context, const SimulatorConfig& config,
   for (const auto& [key, value] : TypedNativeOptions(config))
     options[key] = value;
   options["seed"] = config.seed.value_or(0);
+  options["gate_fusion"] = config.gate_fusion;
+  result["gate_fusion"] = json::object{
+      {"requested", config.gate_fusion},
+      {"enabled", executed ? context.network->WasGateFusionEnabled()
+                           : simulator->IsGateFusionEnabled()},
+      {"max_qubits", executed ? context.network->GetLastGateFusionMaxQubits()
+                              : simulator->GetGateFusionMaxQubits()}};
   result["configured_options"] = std::move(options);
   if (Simulators::IsGpuSimulator(simulator->GetType()))
     result["gpu_device"] = simulator->GetGpuDevice();

@@ -119,7 +119,10 @@ class Circuit : public IOperation<Time> {
 
     for (const auto &op : operations)
       ExecuteOperation(op, sim, state, curMaxBondDim);
-    // sim->Flush();
+    if (sim->IsGateFusionEnabled()) sim->Flush();
+    if (curMaxBondDim)
+      *curMaxBondDim =
+          std::max(*curMaxBondDim, sim->GetExecutedMaxBondDimension());
   }
 
   /**
@@ -1706,9 +1709,10 @@ class Circuit : public IOperation<Time> {
   }
 
   bool HasCompositeOperations() const {
-    return std::any_of(operations.begin(), operations.end(), [](const auto &op) {
-      return op->GetType() == OperationType::kComposite;
-    });
+    return std::any_of(operations.begin(), operations.end(),
+                       [](const auto &op) {
+                         return op->GetType() == OperationType::kComposite;
+                       });
   }
 
   /**
@@ -1729,8 +1733,9 @@ class Circuit : public IOperation<Time> {
 
     for (const auto &op : operations) {
       // Prefix execution and terminal-measurement extraction treat composites
-      // as opaque operations. Run them per shot, including gate-only composites,
-      // until those optimizations can inspect their contents consistently.
+      // as opaque operations. Run them per shot, including gate-only
+      // composites, until those optimizations can inspect their contents
+      // consistently.
       if (op->GetType() == OperationType::kComposite) return true;
       const auto qubits = op->AffectedQubits();
 
@@ -1840,11 +1845,7 @@ class Circuit : public IOperation<Time> {
 
         if (executed) {
           if (sim) {
-            op->Execute(sim, state);
-            if (curMaxBondDim) {
-              const auto bondDim = sim->GetCurrentMaxBondDimension();
-              if (bondDim > *curMaxBondDim) *curMaxBondDim = bondDim;
-            }
+            ExecuteOperation(op, sim, state, curMaxBondDim);
           }
         } else
           measuredQubits.insert(qubits.begin(), qubits.end());
@@ -1880,11 +1881,7 @@ class Circuit : public IOperation<Time> {
 
         if (canExecute) {
           if (sim) {
-            op->Execute(sim, state);
-            if (curMaxBondDim) {
-              const auto bondDim = sim->GetCurrentMaxBondDimension();
-              if (bondDim > *curMaxBondDim) *curMaxBondDim = bondDim;
-            }
+            ExecuteOperation(op, sim, state, curMaxBondDim);
           }
           executed = true;
         } else {
@@ -1899,19 +1896,26 @@ class Circuit : public IOperation<Time> {
 
       if (!executed) {
         executionStopped = true;
-        if (sim &&
-            sim->GetSimulationType() ==
-                Simulators::SimulationType::kMatrixProductState &&
-            sim->SupportsMPSSwapOptimization() &&
-            op->GetType() != OperationType::kRandomGen &&
-            op->GetType() != OperationType::kConditionalRandomGen &&
-            op->GetType() != OperationType::kNoOp)
+        if (sim && sim->IsGateFusionEnabled())
+          sim->IncrementGatesCounter();
+        else if (sim &&
+                 sim->GetSimulationType() ==
+                     Simulators::SimulationType::kMatrixProductState &&
+                 sim->SupportsMPSSwapOptimization() &&
+                 op->GetType() != OperationType::kRandomGen &&
+                 op->GetType() != OperationType::kConditionalRandomGen &&
+                 op->GetType() != OperationType::kNoOp)
           sim->SetGatesCounter(sim->GetGatesCounter() + 1);
       }
       if (executionStopped) executedOps.emplace_back(executed);
     }
 
-    // if (sim) sim->Flush();
+    if (sim) {
+      if (sim->IsGateFusionEnabled()) sim->Flush();
+      if (curMaxBondDim)
+        *curMaxBondDim =
+            std::max(*curMaxBondDim, sim->GetExecutedMaxBondDimension());
+    }
 
     return executedOps;
   }
@@ -1945,7 +1949,10 @@ class Circuit : public IOperation<Time> {
       if (!executedOps[i - dif])
         ExecuteOperation(operations[i], sim, state, curMaxBondDim);
 
-    // sim->Flush();
+    if (sim->IsGateFusionEnabled()) sim->Flush();
+    if (curMaxBondDim)
+      *curMaxBondDim =
+          std::max(*curMaxBondDim, sim->GetExecutedMaxBondDimension());
   }
 
   /**
@@ -2773,17 +2780,31 @@ class Circuit : public IOperation<Time> {
       const OperationPtr &op,
       const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state,
       size_t *curMaxBondDim) {
+    const bool boundary =
+        sim->IsGateFusionEnabled() && op->GetType() != OperationType::kGate;
+    const auto sourcePosition = sim->GetGatesCounter();
+    if (boundary) sim->Flush();
     if (op->GetType() == OperationType::kComposite) {
       // Reset classical bits once at the start of the shot, not when entering
       // a nested circuit: its conditions and writes share the enclosing state.
       const auto circuit = std::static_pointer_cast<Circuit<Time>>(op);
       for (const auto &nested : circuit->GetOperations())
         ExecuteOperation(nested, sim, state, curMaxBondDim);
+      if (boundary) {
+        sim->Flush();
+        sim->SetGatesCounter(sourcePosition + 1);
+      }
       return;
     }
     op->Execute(sim, state);
+    // A circuit boundary is one source operation, even if it invokes no
+    // simulator primitive (delay/classical op) or several (reset/conditional).
+    if (boundary) {
+      sim->Flush();
+      sim->SetGatesCounter(sourcePosition + 1);
+    }
     if (curMaxBondDim) {
-      const auto bondDim = sim->GetCurrentMaxBondDimension();
+      const auto bondDim = sim->GetExecutedMaxBondDimension();
       if (bondDim > *curMaxBondDim) *curMaxBondDim = bondDim;
     }
   }

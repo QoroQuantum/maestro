@@ -12,6 +12,8 @@ static unsigned checks = 0;
 void TestRequestNoiseAndOptions();
 void TestRequestSeedParsing();
 void TestNetworkBondDefaults();
+void TestGateFusionConfiguration();
+void TestFusionPublicInterfaces();
 void TestPauliPropagatorDedupDefault();
 void TestAutomaticGpuMixedStateFallback();
 void TestFixedBackendShotReuse();
@@ -160,6 +162,63 @@ void TestNativeRandomSeeds() {
   Check(Call(request, true, true).at("valid").as_bool(),
         "Unseeded MPI validation attempted execution");
 #endif
+}
+
+void TestFusionMetadata() {
+  for (bool enabled : {false, true}) {
+    for (const char* method :
+         {"statevector", "matrix_product_state", "stabilizer"}) {
+      auto request = Request(
+          "execute", 2,
+          "h q[0]; measure q[0]->c[0]; if(c==1) x q[1]; measure q[1]->c[1];",
+          method);
+      request["simulator"].as_object()["options"] =
+          j::object{{"gate_fusion", enabled},
+                    {"max_simulators", 2},
+                    {"optimize_circuit", false}};
+      auto metadata = Call(request).at("execution_metadata").as_object();
+      const unsigned width = std::string(method) == "statevector"  ? 3
+                             : std::string(method) == "stabilizer" ? 0
+                                                                   : 2;
+      Check(metadata.at("configured_options").at("gate_fusion").as_bool() ==
+                enabled,
+            "Requested fusion missing from native metadata");
+      Check(metadata.at("gate_fusion").at("requested").as_bool() == enabled &&
+                metadata.at("gate_fusion").at("enabled").as_bool() ==
+                    (enabled && width != 0) &&
+                metadata.at("gate_fusion")
+                        .at("max_qubits")
+                        .to_number<unsigned>() == width,
+            "Effective fusion metadata mismatch");
+    }
+  }
+  for (bool enabled : {false, true}) {
+    for (const char* method : {"density_matrix", "matrix_product_operator"}) {
+      auto request = Request("estimate", 1, "x q[0]; rz(0.17) q[0];", method);
+      request["simulator"].as_object()["selection"] = "automatic";
+      request["simulator"].as_object()["options"] =
+          j::object{{"gate_fusion", enabled}};
+      request["observables"] = j::array{"Z"};
+      const auto result = Call(request);
+      Near(Real(result.at("expectation_values").as_array()[0]), -1);
+      Check(result.at("execution_metadata")
+                    .at("gate_fusion")
+                    .at("enabled")
+                    .as_bool() == enabled,
+            "Estimator fusion metadata");
+    }
+  }
+  auto request = Request("execute", 1, "x q[0]; measure q->c;");
+  request["simulator"].as_object()["selection"] = "automatic";
+  request["simulator"].as_object()["candidates"] =
+      j::array{j::object{{"backend", "qcsim"}, {"method", "stabilizer"}}};
+  const auto metadata = Call(request).at("execution_metadata").as_object();
+  Check(metadata.at("method") == "stabilizer" &&
+            !metadata.at("gate_fusion").at("enabled").as_bool() &&
+            metadata.at("gate_fusion").at("max_qubits").to_number<unsigned>() ==
+                0,
+        "Fusion metadata describes recreated simulator instead of executed "
+        "backend");
 }
 
 int main() try {
@@ -647,6 +706,9 @@ int main() try {
   TestNativeRandomSeeds();
   TestRequestSeedParsing();
   TestNetworkBondDefaults();
+  TestGateFusionConfiguration();
+  TestFusionPublicInterfaces();
+  TestFusionMetadata();
   TestPauliPropagatorDedupDefault();
   TestAutomaticGpuMixedStateFallback();
 

@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 namespace Simulators::DistributedGpuApi {
+enum { MGD_MATRIX_ROW_MAJOR = 0, MGD_MATRIX_COLUMN_MAJOR = 1 };
 // MPI-independent declarations from include/gpusim_mpi_runtime.h.
 struct MgdMpiCommunicator {
   uint32_t struct_size;
@@ -154,4 +155,10 @@ using ApplyTwoQubitMatrixWithLayoutFn = int (*)(void *obj, int qubit0,
                                                 int qubit1,
                                                 const double *matrix,
                                                 int layout);
+using ApplyThreeQubitMatrixFn = int (*)(void *obj, int qubit0, int qubit1,
+                                        int qubit2, const double *matrix);
+using ApplyThreeQubitMatrixWithLayoutFn = int (*)(void *obj, int qubit0,
+                                                  int qubit1, int qubit2,
+                                                  const double *matrix,
+                                                  int layout);
 }  // namespace Simulators::DistributedGpuApi

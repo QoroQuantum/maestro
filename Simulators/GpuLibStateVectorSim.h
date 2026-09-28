@@ -389,6 +389,30 @@ class GpuLibStateVectorSim {
     return false;
   }
 
+  // Default matrices are row-major; WithLayout also accepts column-major.
+  bool ApplyOneQubitMatrix(int q0, const double *matrix) {
+    return obj && lib->ApplyOneQubitMatrix(obj, q0, matrix);
+  }
+  bool ApplyOneQubitMatrixWithLayout(int q0, const double *matrix, int layout) {
+    return obj && lib->ApplyOneQubitMatrixWithLayout(obj, q0, matrix, layout);
+  }
+  bool ApplyTwoQubitMatrix(int q0, int q1, const double *matrix) {
+    return obj && lib->ApplyTwoQubitMatrix(obj, q0, q1, matrix);
+  }
+  bool ApplyTwoQubitMatrixWithLayout(int q0, int q1, const double *matrix,
+                                     int layout) {
+    return obj &&
+           lib->ApplyTwoQubitMatrixWithLayout(obj, q0, q1, matrix, layout);
+  }
+  bool ApplyThreeQubitMatrix(int q0, int q1, int q2, const double *matrix) {
+    return obj && lib->ApplyThreeQubitMatrix(obj, q0, q1, q2, matrix);
+  }
+  bool ApplyThreeQubitMatrixWithLayout(int q0, int q1, int q2,
+                                       const double *matrix, int layout) {
+    return obj && lib->ApplyThreeQubitMatrixWithLayout(obj, q0, q1, q2, matrix,
+                                                       layout);
+  }
+
  private:
   GpuDeviceContext lib;
   void *obj;

@@ -26,6 +26,7 @@
 #include "Maestro.h"
 #include "Simulators/Factory.h"
 #include "Simulators/Simulator.h"
+#include "Simulators/GenericGateValidation.h"
 #include "Simulators/PathIntegralSimulator.h"
 #include "qasm/QasmCirc.h"
 #include "Network/SimpleDisconnectedNetwork.h"
@@ -1144,6 +1145,7 @@ const char* const kConfigFields[] = {
     "pp_gates_between_trims",
     "pp_gates_between_deduplications",
     "path_integral_threshold",
+    "gate_fusion",
 };
 
 }  // namespace
@@ -1151,6 +1153,22 @@ const char* const kConfigFields[] = {
 // ============================================================================
 // Module Definition
 // ============================================================================
+
+template <int Dimension>
+static Eigen::Matrix<std::complex<double>, Dimension, Dimension>
+PythonGateMatrix(const std::vector<std::vector<std::complex<double>>>& values) {
+  if (values.size() != Dimension)
+    throw std::invalid_argument("Generic gate matrix has the wrong dimensions");
+  Eigen::Matrix<std::complex<double>, Dimension, Dimension> matrix;
+  for (int row = 0; row < Dimension; ++row) {
+    if (values[row].size() != Dimension)
+      throw std::invalid_argument(
+          "Generic gate matrix has the wrong dimensions");
+    for (int col = 0; col < Dimension; ++col)
+      matrix(row, col) = values[row][col];
+  }
+  return matrix;
+}
 
 NB_MODULE(maestro, m) {
   m.doc() = "Python bindings for Maestro Quantum Simulator";
@@ -1213,7 +1231,7 @@ NB_MODULE(maestro, m) {
          std::optional<size_t> pp_max_pauli_weight,
          std::optional<int> pp_gates_between_trims,
          std::optional<int> pp_gates_between_deduplications,
-         std::optional<double> path_integral_threshold) {
+         std::optional<double> path_integral_threshold, bool gate_fusion) {
         SimulatorConfig config;
         config.simulator_type = simulator_type;
         config.simulation_type = simulation_type;
@@ -1241,6 +1259,7 @@ NB_MODULE(maestro, m) {
         config.pp_gates_between_deduplications =
             pp_gates_between_deduplications;
         config.path_integral_threshold = path_integral_threshold;
+        config.gate_fusion = gate_fusion;
         config.Validate();
         new (self) SimulatorConfig(std::move(config));
       },
@@ -1253,8 +1272,8 @@ NB_MODULE(maestro, m) {
       "distributed_options"_a = defaults.distributed_options,
       "disable_optimized_swapping"_a = defaults.disable_optimized_swapping,
       "lookahead_depth"_a = defaults.lookahead_depth,
-      "mps_sampling"_a = defaults.mps_sampling,
-      "mps_svd_solver"_a = nb::none(), "mpo_svd_solver"_a = nb::none(),
+      "mps_sampling"_a = defaults.mps_sampling, "mps_svd_solver"_a = nb::none(),
+      "mpo_svd_solver"_a = nb::none(),
       "tensor_network_svd_solver"_a = nb::none(),
       "mpo_kraus_completeness_check"_a = nb::none(),
       "mpo_restore_trace_after_truncation"_a =
@@ -1265,8 +1284,12 @@ NB_MODULE(maestro, m) {
       "pp_max_pauli_weight"_a = nb::none(),
       "pp_gates_between_trims"_a = nb::none(),
       "pp_gates_between_deduplications"_a = nb::none(),
-      "path_integral_threshold"_a = nb::none());
+      "path_integral_threshold"_a = nb::none(),
+      "gate_fusion"_a = defaults.gate_fusion);
 
+  BindConfigField(config_class, "gate_fusion", &SimulatorConfig::gate_fusion,
+                  "Fuse compatible gates on supported backends (default True). "
+                  "Truncated MPS/MPO results can change.");
   BindConfigField(config_class, "simulator_type",
                   &SimulatorConfig::simulator_type,
                   "Simulator backend, a SimulatorType.");
@@ -1395,7 +1418,52 @@ NB_MODULE(maestro, m) {
     return out + ")";
   });
 
+  nb::class_<Simulators::GateFusionStatistics>(m, "GateFusionStatistics")
+      .def_ro("submittedGates",
+              &Simulators::GateFusionStatistics::submittedGates)
+      .def_ro("backendGates", &Simulators::GateFusionStatistics::backendGates)
+      .def_ro("fusedBlocks", &Simulators::GateFusionStatistics::fusedBlocks);
+
   nb::class_<Simulators::ISimulator>(m, "Simulator")
+      .def("GetGateFusionMaxQubits",
+           &Simulators::ISimulator::GetGateFusionMaxQubits)
+      .def("IsGateFusionEnabled", &Simulators::ISimulator::IsGateFusionEnabled)
+      .def("GetGateFusionStatistics",
+           &Simulators::ISimulator::GetGateFusionStatistics)
+      .def(
+          "ApplyGenericOneQubitGate",
+          [](Simulators::ISimulator& sim, Types::qubit_t q0,
+             const std::vector<std::vector<std::complex<double>>>& values) {
+            const auto matrix = PythonGateMatrix<2>(values);
+            Simulators::ValidateGenericGate(sim, {q0}, matrix);
+            sim.ApplyGenericOneQubitGate(q0, matrix);
+          },
+          "qubit0"_a, "matrix"_a,
+          "Apply a 2x2 matrix; the first target is the least-significant local "
+          "bit.")
+      .def(
+          "ApplyGenericTwoQubitGate",
+          [](Simulators::ISimulator& sim, Types::qubit_t q0, Types::qubit_t q1,
+             const std::vector<std::vector<std::complex<double>>>& values) {
+            const auto matrix = PythonGateMatrix<4>(values);
+            Simulators::ValidateGenericGate(sim, {q0, q1}, matrix);
+            sim.ApplyGenericTwoQubitGate(q0, q1, matrix);
+          },
+          "qubit0"_a, "qubit1"_a, "matrix"_a,
+          "Apply a 4x4 matrix; the first target is the least-significant local "
+          "bit.")
+      .def(
+          "ApplyGenericThreeQubitGate",
+          [](Simulators::ISimulator& sim, Types::qubit_t q0, Types::qubit_t q1,
+             Types::qubit_t q2,
+             const std::vector<std::vector<std::complex<double>>>& values) {
+            const auto matrix = PythonGateMatrix<8>(values);
+            Simulators::ValidateGenericGate(sim, {q0, q1, q2}, matrix);
+            sim.ApplyGenericThreeQubitGate(q0, q1, q2, matrix);
+          },
+          "qubit0"_a, "qubit1"_a, "qubit2"_a, "matrix"_a,
+          "Apply a 8x8 matrix; the first target is the least-significant local "
+          "bit.")
       // Low-level operations from Interface.h, using Python-owned results.
       .def("InitializeSimulator", &Simulators::ISimulator::Initialize)
       .def("Initialize", &Simulators::ISimulator::Initialize)

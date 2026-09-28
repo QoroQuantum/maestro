@@ -94,8 +94,14 @@ must remain valid for later network recreation or state initialization.
 The latter flushes queued gates and is collective in MPI. `GetGpuDevice()` returns
 -1 for a multi-device state and every MPI state; this is not an error.
 
-Generic Eigen matrices are passed with explicit column-major layout and
-low-bit-first target ordering. Failed gates, snapshots, observations and
+Generic one-, two-, and three-qubit Eigen matrices are passed with explicit
+column-major layout and low-bit-first target ordering. Three-qubit matrices
+require a plugin exporting `ApplyThreeQubitMatrixWithLayout`.
+Maestro gate fusion defaults to enabled up to three qubits on the conventional
+backend (two with an older plugin). Ex local and Ex MPI retain the library's
+own caching and fusion, with no additional Maestro fusion. All backends expose
+the generic matrix APIs regardless of the fusion setting.
+Failed gates, snapshots, observations and
 measurements throw with the plugin diagnostic; measurement failure sentinels
 are never converted into successful outcomes. `Flush()` synchronizes queued
 execution. Destructive saves suspend observations until restoration.

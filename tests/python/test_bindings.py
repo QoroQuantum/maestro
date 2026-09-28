@@ -5214,6 +5214,7 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "pp_gates_between_trims": 2,
     "pp_gates_between_deduplications": 5,
     "path_integral_threshold": 1e-9,
+    "gate_fusion": False,
 }
 
 
@@ -5250,7 +5251,7 @@ class TestSimulatorConfigFields:
     def test_repr_lists_every_field_in_order(self):
         config = maestro.SimulatorConfig(**NON_DEFAULT_CONFIG_FIELDS)
         text = repr(config)
-        assert len(NON_DEFAULT_CONFIG_FIELDS) == 23
+        assert len(NON_DEFAULT_CONFIG_FIELDS) == 24
         assert text == expected_config_repr(NON_DEFAULT_CONFIG_FIELDS)
         assert "simulator_type=SimulatorType.Gpu, " in text
         assert "singular_value_threshold=1e-07, " in text

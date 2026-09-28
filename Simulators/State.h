@@ -321,6 +321,10 @@ class IState {
    */
   virtual bool SupportsMPSSwapOptimization() const { return false; }
 
+  // True when external meeting-position lookahead can use an upcoming list.
+  // Requires a live MPS/MPO, enabled lookahead and an authoritative qubit map.
+  virtual bool IsRoutingLookaheadEnabled() const { return false; }
+
   /**
    * @brief Sets the initial qubits map, if possible.
    *
@@ -373,6 +377,15 @@ class IState {
   virtual void SetUpcomingGates(
       const std::vector<std::shared_ptr<Circuits::IOperation<double>>>
           & /*gates*/) {}
+
+  // Prepared interactions used by initial-layout optimization. Empty means
+  // that the caller should retain its original circuit view.
+  virtual const std::vector<std::shared_ptr<Circuits::IOperation<double>>>
+      &GetUpcomingRoutingOperations() const {
+    static const std::vector<std::shared_ptr<Circuits::IOperation<double>>>
+        empty;
+    return empty;
+  }
 
   /**
    * @brief Returns the gates counter.
@@ -994,6 +1007,10 @@ class IState {
    * (mps simulator, either qcsim or gpu).
    */
   virtual size_t GetCurrentMaxBondDimension() const { return 0; }
+  // Internal telemetry must not synchronize a pending gate after every call.
+  virtual size_t GetExecutedMaxBondDimension() const {
+    return GetCurrentMaxBondDimension();
+  }
 
   virtual const std::unordered_map<std::string, std::string> &GetConfigMap()
       const = 0;

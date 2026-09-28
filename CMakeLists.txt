@@ -141,7 +141,7 @@ if(NOT DEFINED QCSIM_INCLUDE_DIR)
         FetchContent_Declare(
             qcsim
             GIT_REPOSITORY https://github.com/aromanro/QCSim.git
-            GIT_TAG 14b143ad51e851c033dae76062da4b06ac7c7cb1
+            GIT_TAG 42409782cb2b443e38a551a708bf4751bb6fed08
         )
         FetchContent_GetProperties(qcsim)
         if(NOT qcsim_POPULATED)
@@ -812,6 +812,9 @@ if(MAESTRO_BUILD_REQUEST_TESTS)
     target_include_directories(maestro_request_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(maestro_request_tests PRIVATE maestro Boost::json)
     add_test(NAME maestro_request_api COMMAND maestro_request_tests)
+    add_executable(fusion_interface_wrapper_tests tests/fusion_interface_wrappers.cpp)
+    target_link_libraries(fusion_interface_wrapper_tests PRIVATE maestro ${CMAKE_DL_LIBS})
+    add_test(NAME fusion_interface_wrappers COMMAND fusion_interface_wrapper_tests $<TARGET_FILE:maestro>)
     add_executable(maestro_request_abi_consumer tests/request_header.c)
     target_compile_definitions(maestro_request_abi_consumer PRIVATE MAESTRO_ABI_CONSUMER_MAIN)
     target_link_libraries(maestro_request_abi_consumer PRIVATE maestro)
@@ -911,4 +914,24 @@ if(MAESTRO_RUN_MPI_GPU_REQUEST_TESTS)
         set_tests_properties(maestro_request_${mode} PROPERTIES
             LABELS "mpi;gpu;hardware;request" PROCESSORS 2 RUN_SERIAL TRUE TIMEOUT 60)
     endforeach()
+endif()
+
+if(COMPILE_TESTS)
+    add_executable(gate_fusion_tests tests/gate_fusion_tests.cpp)
+    target_include_directories(gate_fusion_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(gate_fusion_tests PRIVATE maestro)
+    add_test(NAME gate_fusion_tests COMMAND gate_fusion_tests)
+    add_executable(fusion_routing_tests tests/fusion_routing_tests.cpp)
+    target_include_directories(fusion_routing_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(fusion_routing_tests PRIVATE maestro)
+    add_test(NAME fusion_routing_tests COMMAND fusion_routing_tests)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME gate_fusion_gpu COMMAND gate_fusion_tests --gpu)
+        add_test(NAME gate_fusion_distributed COMMAND gate_fusion_tests --distributed)
+        set_tests_properties(gate_fusion_gpu gate_fusion_distributed PROPERTIES
+            SKIP_RETURN_CODE 77 LABELS "gpu;hardware" RUN_SERIAL TRUE TIMEOUT 180)
+    endif()
+    add_executable(gate_fusion_benchmark EXCLUDE_FROM_ALL tests/gate_fusion_benchmark.cpp)
+    target_include_directories(gate_fusion_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(gate_fusion_benchmark PRIVATE maestro)
 endif()

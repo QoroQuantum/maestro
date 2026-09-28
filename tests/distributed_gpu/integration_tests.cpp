@@ -79,6 +79,14 @@ void MixedGates(ISimulator& sim) {
   two(3, 2) = -1.;
   two(1, 3) = std::complex<double>(0, -1);
   sim.ApplyGenericTwoQubitGate(0, 2, two);
+  Eigen::Matrix<std::complex<double>, 8, 8> three;
+  const double pi = std::acos(-1.);
+  for (int row = 0; row < 8; ++row)
+    for (int col = 0; col < 8; ++col)
+      three(row, col) = std::polar(
+          1. / std::sqrt(8.), 2 * pi * row * col / 8 + .17 * row + .29 * col);
+  sim.ApplyGenericThreeQubitGate(3, 0, 2, three);
+  sim.ApplyGenericThreeQubitGate(2, 3, 0, three.adjoint());
   sim.Flush();
 }
 #ifdef MAESTRO_MPI_GPU_TESTS
@@ -198,6 +206,20 @@ int main(int argc, char** argv) {
     }
     auto sim = Factory::CreateSimulator(type, SimulationType::kStatevector);
     Require(bool(sim), "Missing simulator");
+    Require(!sim->IsGateFusionEnabled() && sim->GetGateFusionMaxQubits() == 0,
+            "Ex must retain library-owned fusion");
+    sim->Configure("gate_fusion", "true");
+    Require(!sim->IsGateFusionEnabled(),
+            "Maestro fusion must remain off for Ex");
+    if (configOnly) {
+      // The loader fixture deliberately omits the additive three-qubit API.
+      sim->Configure("distributed_backend", "conventional");
+      Require(sim->IsGateFusionEnabled() && sim->GetGateFusionMaxQubits() == 2,
+              "Older conventional plugins must keep two-qubit fusion");
+      sim->Configure("distributed_backend", "ex");
+      Require(!sim->IsGateFusionEnabled() && sim->GetGateFusionMaxQubits() == 0,
+              "Changing to Ex must disable Maestro fusion");
+    }
     Require(bool(Factory::CreateSimulator(SimulatorType::kDistMpiGpuSim,
                                           SimulationType::kStatevector)),
             "MPI simulator must be available in every build");
@@ -259,6 +281,11 @@ int main(int argc, char** argv) {
             sim->SetSeed(42);
             sim->AllocateQubits(4);
             sim->Initialize();
+            const bool maestroFusion = shared && !mpi;
+            Require(sim->IsGateFusionEnabled() == maestroFusion,
+                    "Wrong effective distributed fusion setting");
+            Require(sim->GetGateFusionMaxQubits() == (maestroFusion ? 3u : 0u),
+                    "Wrong distributed fusion width");
 #ifdef MAESTRO_MPI_GPU_TESTS
             if (mpi)
               Reject([&] { Factory::FinalizeDistributedMpiGpuBackend(); });
@@ -286,9 +313,18 @@ int main(int argc, char** argv) {
             cpu->Initialize();
             MixedGates(*sim);
             MixedGates(*cpu);
+            const auto stats = sim->GetGateFusionStatistics();
+            Require(
+                maestroFusion ? stats.fusedBlocks > 0 : stats.fusedBlocks == 0,
+                "Distributed fusion did not follow backend selection");
             const double eps =
                 std::string(precision) == "double" ? 1e-10 : 2e-5;
             Compare(*sim, *cpu, eps);
+            sim->Reset();
+            sim->Configure("gate_fusion", "false");
+            MixedGates(*sim);
+            Compare(*sim, *cpu, eps);
+            sim->Configure("gate_fusion", "true");
             sim->SaveState();
             sim->ApplyX(0);
             sim->RestoreState();

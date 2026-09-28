@@ -159,6 +159,7 @@ are rejected. Small floating-point thresholds retain their precision.
 | `disable_optimized_swapping` | `` | boolean | mps |
 | `lookahead_depth` | `` | lookahead | mps |
 | `optimize_circuit` | `` | boolean | all |
+| `gate_fusion` | `` | boolean | all |
 | `max_simulators` | `max_simulators` | positive_integer | all |
 | `mpo_kraus_completeness_check` | `matrix_product_operator_kraus_completeness_check` | string | mpo |
 | `mpo_restore_trace_after_truncation` | `matrix_product_operator_restore_trace_after_truncation` | boolean | cpu_mpo |
@@ -180,6 +181,10 @@ backends. Truncation is `relative_max` or `discarded_weight`. `mps_sampling` is
 deduplicates every 10 operations. Omitted seeds are generated randomly for each
 request. Specify an explicit simulator seed once, through `execution.seed` or
 the options object, to reproduce a run; zero is a valid explicit seed.
+
+`gate_fusion` defaults to `true` on eligible methods and is independent of
+`optimize_circuit`. Unsupported methods and Aer retain their existing behavior.
+See [gate fusion](gate_fusion.md) for capabilities, routing, and truncation effects.
 
 For maintainers: `SimulatorConfig` has two active construction paths. Python
 bindings populate typed option fields. The native parser populates typed network
@@ -360,3 +365,9 @@ use `MPIEXEC_PREFLAGS` for site launcher/binding arguments. This opt-in suite is
 not enabled on ordinary CPU CI runners. On systems where hwloc probes unavailable
 graphical displays, an appropriate
 site test profile can set `HWLOC_COMPONENTS=-gl,-opencl`.
+
+Fusion status is returned under `execution_metadata.gate_fusion`:
+`{"requested":true,"enabled":true,"max_qubits":3}`. The requested boolean is
+also echoed in `execution_metadata.configured_options.gate_fusion`. `enabled`
+and `max_qubits` describe Maestro fusion on the backend actually executed,
+including automatic method selection; they do not describe native Aer/Ex fusion.

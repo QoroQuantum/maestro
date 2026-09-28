@@ -193,6 +193,11 @@ class GpuLibMPSSim {
     return bondDims;
   }
 
+  std::vector<long long> GetQubitsMap() const {
+    std::vector<long long> map(GetNrQubits());
+    if (!lib->MPSGetQubitsMap(obj, map.data(), static_cast<int>(map.size()))) return {};
+    return map;
+  }
   bool SetCallbackContext(void *context) {
     if (obj) return lib->MPSSetCallbackContext(obj, context);
     return false;

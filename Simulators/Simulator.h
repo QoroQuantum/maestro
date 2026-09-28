@@ -19,6 +19,11 @@
 #include "State.h"
 
 namespace Simulators {
+struct GateFusionStatistics {
+  uint64_t submittedGates = 0;
+  uint64_t backendGates = 0;
+  uint64_t fusedBlocks = 0;
+};
 
 /**
  * @class ISimulator
@@ -32,6 +37,17 @@ namespace Simulators {
  */
 class ISimulator : public IState, std::enable_shared_from_this<ISimulator> {
  public:
+  using Matrix8cd = Eigen::Matrix<std::complex<double>, 8, 8>;
+
+  // Opt in to Maestro fusion; immediate implementations keep the default.
+  virtual unsigned GetGateFusionMaxQubits() const { return 0; }
+  virtual bool IsGateFusionEnabled() const { return false; }
+  virtual GateFusionStatistics GetGateFusionStatistics() const { return {}; }
+  virtual void ApplyGenericThreeQubitGate(Types::qubit_t, Types::qubit_t,
+                                          Types::qubit_t, const Matrix8cd&) {
+    throw std::runtime_error("Generic three-qubit gates are unsupported");
+  }
+
   // Native CUDA device, or -1 for CPU/uninitialized simulators.
   virtual int GetGpuDevice() const { return -1; }
 

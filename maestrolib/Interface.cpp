@@ -13,6 +13,7 @@
 #endif
 
 #include "../Simulators/Factory.h"
+#include "../Simulators/GenericGateValidation.h"
 
 #include "Maestro.h"
 
@@ -45,7 +46,102 @@ static bool ConfigureLegacySeed(Network::INetwork<> &network,
   return true;
 }
 
+// A missing legacy option uses the default, just like a fresh SimulatorConfig.
+static bool ConfigureLegacyFusion(Network::INetwork<> &network,
+                                  const boost::json::value &config) {
+  bool enabled = true;
+  if (config.is_object()) {
+    if (const auto *value = config.as_object().if_contains("gate_fusion")) {
+      if (!value->is_bool()) return false;
+      enabled = value->as_bool();
+    }
+  }
+  network.Configure("gate_fusion", enabled ? "true" : "false");
+  return true;
+}
+
+template <int Dimension>
+static Eigen::Matrix<std::complex<double>, Dimension, Dimension> ReadGateMatrix(
+    const double *buffer) {
+  if (!buffer) throw std::invalid_argument("Null generic gate matrix");
+  Eigen::Matrix<std::complex<double>, Dimension, Dimension> matrix;
+  for (int row = 0; row < Dimension; ++row)
+    for (int col = 0; col < Dimension; ++col) {
+      const auto index = 2 * (row * Dimension + col);
+      matrix(row, col) = {buffer[index], buffer[index + 1]};
+    }
+  return matrix;
+}
+
 extern "C" {
+unsigned GetGateFusionMaxQubits(void *sim) {
+  if (!sim) return 0;
+  try {
+    return static_cast<Simulators::ISimulator *>(sim)->GetGateFusionMaxQubits();
+  } catch (...) {
+    return 0;
+  }
+}
+int IsGateFusionEnabled(void *sim) {
+  if (!sim) return 0;
+  try {
+    return static_cast<Simulators::ISimulator *>(sim)->IsGateFusionEnabled();
+  } catch (...) {
+    return 0;
+  }
+}
+int GetGateFusionStatistics(void *sim,
+                            MaestroGateFusionStatistics *statistics) {
+  if (!sim || !statistics) return 0;
+  try {
+    const auto value =
+        static_cast<Simulators::ISimulator *>(sim)->GetGateFusionStatistics();
+    *statistics = {value.submittedGates, value.backendGates, value.fusedBlocks};
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+int ApplyGenericOneQubitGate(void *sim, unsigned long q0,
+                             const double *buffer) {
+  if (!sim || !buffer) return 0;
+  try {
+    auto &simulator = *static_cast<Simulators::ISimulator *>(sim);
+    const auto matrix = ReadGateMatrix<2>(buffer);
+    Simulators::ValidateGenericGate(simulator, {q0}, matrix);
+    simulator.ApplyGenericOneQubitGate(q0, matrix);
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+int ApplyGenericTwoQubitGate(void *sim, unsigned long q0, unsigned long q1,
+                             const double *buffer) {
+  if (!sim || !buffer) return 0;
+  try {
+    auto &simulator = *static_cast<Simulators::ISimulator *>(sim);
+    const auto matrix = ReadGateMatrix<4>(buffer);
+    Simulators::ValidateGenericGate(simulator, {q0, q1}, matrix);
+    simulator.ApplyGenericTwoQubitGate(q0, q1, matrix);
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+int ApplyGenericThreeQubitGate(void *sim, unsigned long q0, unsigned long q1,
+                               unsigned long q2, const double *buffer) {
+  if (!sim || !buffer) return 0;
+  try {
+    auto &simulator = *static_cast<Simulators::ISimulator *>(sim);
+    const auto matrix = ReadGateMatrix<8>(buffer);
+    Simulators::ValidateGenericGate(simulator, {q0, q1, q2}, matrix);
+    simulator.ApplyGenericThreeQubitGate(q0, q1, q2, matrix);
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
@@ -171,6 +267,7 @@ __declspec(dllexport)
   size_t nrShots = 1;  // default value
 
   const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
+  if (!ConfigureLegacyFusion(*network, configJson)) return nullptr;
   if (!ConfigureLegacySeed(*network, configJson)) return nullptr;
 
   if (configJson.is_object()) {
@@ -264,6 +361,10 @@ __declspec(dllexport)
 
   response.emplace("counts", std::move(jsonResult));
   response.emplace("time_taken", timeStr);
+  response.emplace("gate_fusion",
+                   boost::json::object{
+                       {"enabled", network->WasGateFusionEnabled()},
+                       {"max_qubits", network->GetLastGateFusionMaxQubits()}});
 
   auto simulatorType = network->GetLastSimulatorType();
 
@@ -371,6 +472,7 @@ __declspec(dllexport)
   }
 
   const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
+  if (!ConfigureLegacyFusion(*network, configJson)) return nullptr;
   if (!ConfigureLegacySeed(*network, configJson)) return nullptr;
 
   bool configured = false;
@@ -449,6 +551,10 @@ __declspec(dllexport)
 
   response.emplace("expectation_values", std::move(jsonExpectations));
   response.emplace("time_taken", timeStr);
+  response.emplace("gate_fusion",
+                   boost::json::object{
+                       {"enabled", network->WasGateFusionEnabled()},
+                       {"max_qubits", network->GetLastGateFusionMaxQubits()}});
 
   auto simulatorType = network->GetLastSimulatorType();
 
