@@ -24,6 +24,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish }}
 
 env:
+  AER_VERSION: "80bd205b8b224e6db7d8c651473fda5cf346426c"
   VIRTUALENV_VERSION: "20.27.1"
   VCPKG_CACHE_KEY: vcpkg-windows-x64-deps2-lapack
   VCPKG_CACHE_PATHS: |
@@ -210,12 +211,17 @@ jobs:
           echo "CMAKE_GENERATOR=Ninja" >> $env:GITHUB_ENV
           echo "CMAKE_ARGS=-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_TOOLCHAIN -DMAESTRO_BUILD_REQUEST_TESTS=ON -DVCPKG_TARGET_TRIPLET=x64-windows -DAER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
 
-      - name: Clone Qiskit Aer (Windows)
+      - name: Check out pinned Qiskit Aer (Windows)
         if: runner.os == 'Windows'
         run: |
           if (-not (Test-Path "C:\qiskit-aer")) {
             git clone --depth 1 https://github.com/QoroQuantum/qiskit-aer.git C:\qiskit-aer
+            if ($LASTEXITCODE -ne 0) { throw "Qiskit Aer clone failed" }
           }
+          git -C C:\qiskit-aer fetch --depth 1 origin $env:AER_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Qiskit Aer fetch failed" }
+          git -C C:\qiskit-aer checkout --detach $env:AER_VERSION
+          if ($LASTEXITCODE -ne 0) { throw "Qiskit Aer checkout failed" }
           echo "AER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
 
       - name: Build wheels
@@ -230,6 +236,8 @@ jobs:
             (which yum >/dev/null 2>&1 && yum install -y openblas-devel || which dnf >/dev/null 2>&1 && dnf install -y openblas-devel || (apt-get update && apt-get install -y libopenblas-dev)) &&
             dnf install -y epel-release && dnf install -y ccache &&
             git clone --depth 1 https://github.com/QoroQuantum/qiskit-aer.git /tmp/qiskit-aer &&
+            git -C /tmp/qiskit-aer fetch --depth 1 origin "${{ env.AER_VERSION }}" &&
+            git -C /tmp/qiskit-aer checkout --detach "${{ env.AER_VERSION }}" &&
             curl -L https://archives.boost.io/release/1.90.0/source/boost_1_90_0.tar.gz -o /tmp/boost.tgz &&
             tar -xzf /tmp/boost.tgz -C /tmp &&
             cd /tmp/boost_1_90_0 &&
@@ -262,7 +270,9 @@ jobs:
           # ---- macOS ----
           CIBW_BEFORE_ALL_MACOS: >-
             brew install boost openblas libomp ccache &&
-            git clone --depth 1 https://github.com/QoroQuantum/qiskit-aer.git /tmp/qiskit-aer
+            git clone --depth 1 https://github.com/QoroQuantum/qiskit-aer.git /tmp/qiskit-aer &&
+            git -C /tmp/qiskit-aer fetch --depth 1 origin "${{ env.AER_VERSION }}" &&
+            git -C /tmp/qiskit-aer checkout --detach "${{ env.AER_VERSION }}"
 
           CIBW_ENVIRONMENT_MACOS: >-
             MACOSX_DEPLOYMENT_TARGET=14.0
