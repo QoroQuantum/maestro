@@ -755,8 +755,20 @@ class QCSimState : public ISimulator {
       }
     }
 
+    if (std::string(key) == "pauli_propagator_workers") {
+      const auto workers = configuration.GetConfigurationAsUnsigned(key);
+      if (workers > 1024) throw std::invalid_argument("pauli_propagator_workers exceeds 1024");
+      pauliWorkerCount = static_cast<size_t>(workers);
+      if (pp && enableMultithreading) pp->EnableParallel(pauliWorkerCount);
+    }
     if (pp) {
-      if (std::string(key) == "pauli_propagator_coefficient_threshold") {
+      if (std::string(key) == "pauli_propagator_sampling_cache_nodes") {
+#ifdef QCSIM_PAULI_PROPAGATOR_BATCH_API
+        pp->SetSamplingCacheMaxNodes(configuration.GetConfigurationAsUnsigned(key));
+#else
+        throw std::runtime_error("Pauli sampling cache requires an updated QCSim dependency");
+#endif
+      } else if (std::string(key) == "pauli_propagator_coefficient_threshold") {
         pp->SetCoefficientThreshold(configuration.GetConfigurationAsDouble(key));
       } else if (std::string(key) == "pauli_propagator_pauli_weight_threshold") {
         pp->SetPauliWeightThreshold(
@@ -1215,9 +1227,22 @@ class QCSimState : public ISimulator {
     if (simulationType == SimulationType::kMatrixProductState)
       return mpsSimulator->getBasisStateProbability(
           static_cast<unsigned int>(outcome));
-    else if (simulationType == SimulationType::kStabilizer)
-      return cliffordSimulator->getBasisStateProbability(
-          static_cast<unsigned int>(outcome));
+    else if (simulationType == SimulationType::kStabilizer) {
+      if constexpr (std::numeric_limits<size_t>::digits >=
+                    std::numeric_limits<Types::qubit_t>::digits) {
+        return cliffordSimulator->getBasisStateProbability(
+            static_cast<size_t>(outcome));
+      } else {
+        const size_t n = cliffordSimulator->getNrQubits();
+        if (n < std::numeric_limits<Types::qubit_t>::digits &&
+            (outcome >> n) != 0) return 0.0;
+        std::vector<bool> bits(n);
+        for (size_t q = 0; q < n &&
+             q < std::numeric_limits<Types::qubit_t>::digits; ++q)
+          bits[q] = ((outcome >> q) & 1) != 0;
+        return cliffordSimulator->getBasisStateProbability(bits);
+      }
+    }
     else if (simulationType == SimulationType::kTensorNetwork)
       return tensorNetwork->getBasisStateProbability(outcome);
     else if (simulationType == SimulationType::kPauliPropagator)
@@ -1433,6 +1458,15 @@ class QCSimState : public ISimulator {
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
     if (qubits.empty() || shots == 0) return {};
 
+    if (simulationType == SimulationType::kStabilizer) {
+      const auto selected = CliffordSamplingQubits(qubits);
+      const auto counts = cliffordSimulator->SampleCounts(selected, shots);
+      std::unordered_map<Types::qubit_t, Types::qubit_t> result;
+      for (const auto& item : counts) result.emplace(item.first, item.second);
+      NotifyObservers(qubits);
+      return result;
+    }
+
     if (qubits.size() > sizeof(size_t) * 8)
       std::cerr
           << "Warning: The number of qubits to measure is larger than the "
@@ -1512,14 +1546,6 @@ class QCSimState : public ISimulator {
           mpsSimulator->setState(savedState);
         }
       }
-    } else if (simulationType == SimulationType::kStabilizer) {
-      cliffordSimulator->SaveState();
-      for (size_t shot = 0; shot < shots; ++shot) {
-        const size_t meas = Measure(qubits);
-        ++result[meas];
-        cliffordSimulator->RestoreState();
-      }
-      cliffordSimulator->ClearSavedState();
     } else if (simulationType == SimulationType::kTensorNetwork) {
       tensorNetwork->SaveState();
       for (size_t shot = 0; shot < shots; ++shot) {
@@ -1530,16 +1556,25 @@ class QCSimState : public ISimulator {
       tensorNetwork->ClearSavedState();
     } else if (simulationType == SimulationType::kPauliPropagator) {
       std::vector<int> qubitsInt(qubits.begin(), qubits.end());
-      for (size_t shot = 0; shot < shots; ++shot) {
-        const auto res = pp->Sample(qubitsInt);
-
+      if (qubits.size() > 64)
+        throw std::invalid_argument("Use SampleCountsMany for more than 64 measured qubits");
+#ifdef QCSIM_PAULI_PROPAGATOR_BATCH_API
+      const auto counts = pp->SampleCounts(qubitsInt, shots);
+      for (const auto& [bits, count] : counts) {
         size_t meas = 0;
-        for (size_t i = 0; i < qubits.size(); ++i) {
-          if (res[i]) meas |= (1ULL << i);
-        }
-
+        for (size_t i = 0; i < bits.size(); ++i)
+          if (bits[i]) meas |= (1ULL << i);
+        result[meas] += count;
+      }
+#else
+      for (size_t shot = 0; shot < shots; ++shot) {
+        const auto bits = pp->Sample(qubitsInt);
+        size_t meas = 0;
+        for (size_t i = 0; i < bits.size(); ++i)
+          if (bits[i]) meas |= (1ULL << i);
         ++result[meas];
       }
+#endif
     } else if (simulationType == SimulationType::kPathIntegral) {
       if (nrQubits < 64) {
         if (shots > 1) {
@@ -1664,6 +1699,15 @@ class QCSimState : public ISimulator {
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
     if (qubits.empty() || shots == 0) return {};
 
+    if (simulationType == SimulationType::kStabilizer) {
+      const auto selected = CliffordSamplingQubits(qubits);
+      const auto counts = cliffordSimulator->SampleCountsMany(selected, shots);
+      std::unordered_map<std::vector<bool>, Types::qubit_t> result;
+      for (const auto& item : counts) result.emplace(item.first, item.second);
+      NotifyObservers(qubits);
+      return result;
+    }
+
     std::unordered_map<std::vector<bool>, Types::qubit_t> result;
 
     DontNotify();
@@ -1723,14 +1767,6 @@ class QCSimState : public ISimulator {
           mpsSimulator->setState(savedState);
         }
       }
-    } else if (simulationType == SimulationType::kStabilizer) {
-      cliffordSimulator->SaveState();
-      for (size_t shot = 0; shot < shots; ++shot) {
-        const auto meas = MeasureMany(qubits);
-        ++result[meas];
-        cliffordSimulator->RestoreState();
-      }
-      cliffordSimulator->ClearSavedState();
     } else if (simulationType == SimulationType::kTensorNetwork) {
       tensorNetwork->SaveState();
       for (size_t shot = 0; shot < shots; ++shot) {
@@ -1741,10 +1777,12 @@ class QCSimState : public ISimulator {
       tensorNetwork->ClearSavedState();
     } else if (simulationType == SimulationType::kPauliPropagator) {
       std::vector<int> qubitsInt(qubits.begin(), qubits.end());
-      for (size_t shot = 0; shot < shots; ++shot) {
-        const auto meas = pp->Sample(qubitsInt);
-        ++result[meas];
-      }
+#ifdef QCSIM_PAULI_PROPAGATOR_BATCH_API
+      const auto counts = pp->SampleCounts(qubitsInt, shots);
+      for (const auto& [bits, count] : counts) result[bits] += count;
+#else
+      for (size_t shot = 0; shot < shots; ++shot) ++result[pp->Sample(qubitsInt)];
+#endif
     } else if (simulationType == SimulationType::kPathIntegral) {
       if (nrQubits < 64) {
         if (shots > 1) {
@@ -2074,7 +2112,7 @@ class QCSimState : public ISimulator {
     if (densityMatrix) densityMatrix->SetMultithreading(multithreading);
     if (pp) {
       if (multithreading)
-        pp->EnableParallel();
+        pp->EnableParallel(pauliWorkerCount);
       else
         pp->DisableParallel();
     }
@@ -2268,6 +2306,17 @@ class QCSimState : public ISimulator {
   }
 
  protected:
+  std::vector<size_t> CliffordSamplingQubits(const Types::qubits_vector& qubits) const {
+    std::vector<size_t> selected;
+    selected.reserve(qubits.size());
+    for (const auto q : qubits) {
+      if (q >= cliffordSimulator->getNrQubits())
+        throw std::out_of_range("Qubit index out of range");
+      selected.push_back(static_cast<size_t>(q));
+    }
+    return selected;
+  }
+
   const char* MaxBondDimensionConfigKey() const {
     return simulationType == SimulationType::kMatrixProductOperator &&
                    configuration.IsSet(
@@ -2341,6 +2390,7 @@ class QCSimState : public ISimulator {
 
   size_t nrQubits = 0; /**< The number of allocated qubits. */
 
+  size_t pauliWorkerCount = 0;  // Pool workers; zero selects hardware concurrency.
   bool enableMultithreading = true;    /**< The multithreading flag. */
 
   int lookaheadDepth = 0;

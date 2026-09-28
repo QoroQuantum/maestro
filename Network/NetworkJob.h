@@ -48,6 +48,10 @@ class ExecuteJob {
 
   void DoWork() {
     if (curCnt == 0) return;
+    // This job already occupies an outer shot worker.
+    if (optSim && method == Simulators::SimulationType::kPauliPropagator &&
+        optSim->GetType() == Simulators::SimulatorType::kQCSim)
+      optSim->SetMultithreading(false);
 
     PrepareCircuitForExecution();
 
@@ -72,6 +76,9 @@ class ExecuteJob {
     if (!optSim) {
       optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
       if (!optSim) return;
+      if (method == Simulators::SimulationType::kPauliPropagator &&
+          optSim->GetType() == Simulators::SimulatorType::kQCSim)
+        optSim->SetMultithreading(false);
       config.ApplyConfigurationToSimulator(optSim);
 
       optSim->AllocateQubits(nrQubits);

@@ -170,9 +170,18 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
     clone->SetParallelThresholdForSum(GetParallelThresholdForSum());
     clone->SetStepsBetweenDeduplication(StepsBetweenDeduplication());
     clone->SetStepsBetweenTrims(StepsBetweenTrims());
+#ifdef QCSIM_PAULI_PROPAGATOR_BATCH_API
+    clone->ShareOperationsFrom(*this);
+#else
     clone->SetOperations(GetOperations());
+#endif
     clone->SetSavePosition(GetSavePosition());
+#ifdef QCSIM_PAULI_PROPAGATOR_BATCH_API
+    clone->SetSamplingCacheMaxNodes(GetSamplingCacheMaxNodes());
+    if (IsParallelEnabled()) clone->EnableParallel(GetThreadCount());
+#else
     if (IsParallelEnabled()) clone->EnableParallel();
+#endif
 
     return clone;
   }

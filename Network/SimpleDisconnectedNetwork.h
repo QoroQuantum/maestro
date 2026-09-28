@@ -678,6 +678,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     auto dcirc = distCirc;
 
     if (nrThreads > 1) {
+      // Clones are owned by outer shot workers; avoid constructing inner pools.
+      if (optSim && method == Simulators::SimulationType::kPauliPropagator &&
+          optSim->GetType() == Simulators::SimulatorType::kQCSim)
+        optSim->SetMultithreading(false);
       // since it's going to execute on multiple threads, free the memory from
       // the network's simulator and state, it's going to use other ones,
       // created in the threads if optimization already exists, it will be
@@ -898,6 +902,10 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     auto dcirc = distCirc;
 
     if (nrThreads > 1) {
+      // Clones are owned by outer shot workers; avoid constructing inner pools.
+      if (optSim && method == Simulators::SimulationType::kPauliPropagator &&
+          optSim->GetType() == Simulators::SimulatorType::kQCSim)
+        optSim->SetMultithreading(false);
       simulator->Clear();
       // this rounds up, rounding down is better
       // const size_t cntPerThread = static_cast<size_t>((shots - 1) / nrThreads

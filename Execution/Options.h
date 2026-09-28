@@ -103,6 +103,9 @@ inline const std::vector<Option>& Options() {
       {"mps_svd_solver", "", "string", "gpu_mps"},
       {"mpo_svd_solver", "", "string", "gpu_mpo"},
       {"tensor_network_svd_solver", "", "string", "gpu_tn"},
+      {"pp_workers", "pauli_propagator_workers", "integer", "cpu_pp"},
+      {"pp_sampling_cache_nodes", "pauli_propagator_sampling_cache_nodes",
+       "integer", "cpu_pp"},
       {"pp_coefficient_threshold", "pauli_propagator_coefficient_threshold",
        "nonnegative", "pp"},
       {"pp_max_pauli_weight", "pauli_propagator_pauli_weight_threshold",
@@ -140,6 +143,7 @@ inline bool Applies(const Option& option, const SimulatorConfig& config) {
   if (family == "gpu_mps") return gpu && mps;
   if (family == "gpu_mpo") return gpu && mpo;
   if (family == "gpu_tn") return gpu && method == Method::kTensorNetwork;
+  if (family == "cpu_pp") return method == Method::kPauliPropagator && backend == Backend::kQCSim;
   if (family == "pp") return method == Method::kPauliPropagator;
   if (family == "path") return method == Method::kPathIntegral;
   return false;
@@ -206,6 +210,8 @@ inline SimulatorConfig ParseConfig(const json::object& simulator) {
       String(value);
     if (name == "gpu_device")
       Require(UInt(value) <= INT_MAX, "gpu_device is too large");
+    if (name == "pp_workers")
+      Require(UInt(value) <= 1024, "pp_workers exceeds 1024");
     if (name == "max_simulators")
       Require(UInt(value) <= 1024, "max_simulators exceeds 1024");
     if (name == "truncation_mode") {

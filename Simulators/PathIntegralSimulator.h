@@ -13,6 +13,8 @@
 #define _PATH_INTEGRAL_SIMULATOR_H_
 
 #include <optional>
+#include <type_traits>
+#include <utility>
 
 #include "PathIntegral.h"
 #include "../Circuit/Circuit.h"
@@ -21,6 +23,8 @@ namespace Simulators {
 
 	class PathIntegralSimulator {
 		public:
+          using AmplitudeMap = std::remove_reference_t<decltype(
+              std::declval<QC::PathIntegral::PathIntegralSimulator&>().GetAmplitudes())>;
 		  void SetSeed(uint64_t seed) { simulator.SetSeed(seed); }
 		  void SetTrimValue(double val) { simulator.SetTrimValue(val); }
 
@@ -192,8 +196,7 @@ namespace Simulators {
 
           void PropagateStep(
               const QC::Gates::AppliedGate<>& gate,
-              std::unordered_map<QC::PathIntegral::FastVectorBool, std::complex<double>,
-              QC::PathIntegral::FastVectorBoolHash>& currentAmplitudes)
+              AmplitudeMap& currentAmplitudes)
           {
             simulator.PropagateStep(gate, currentAmplitudes);
           }
@@ -262,8 +265,7 @@ namespace Simulators {
             return clone;
           }
 
-          std::unordered_map<QC::PathIntegral::FastVectorBool, std::complex<double>,
-                             QC::PathIntegral::FastVectorBoolHash>&
+          AmplitudeMap&
               Amplitudes()
           {
             return simulator.GetAmplitudes();
