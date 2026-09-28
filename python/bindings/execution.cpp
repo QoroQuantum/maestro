@@ -82,9 +82,15 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
   if (!circuit) throw nb::value_error("Circuit is null.");
 
   auto paulis = observables;
+  std::chrono::duration<double> reduction_duration(0.0);
   if (config.enable_causal_cone_reduction) {
-    nb::gil_scoped_release release;
-    ReduceCausalCone(circuit, paulis);
+    auto red_start = std::chrono::high_resolution_clock::now();
+    {
+      nb::gil_scoped_release release;
+      ReduceCausalCone(circuit, paulis);
+    }
+    auto red_end = std::chrono::high_resolution_clock::now();
+    reduction_duration = red_end - red_start;
   }
 
   int num_qubits = static_cast<int>(circuit->GetMaxQubitIndex()) + 1;
@@ -114,7 +120,8 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit,
 
   nb::dict py_result;
   py_result["expectation_values"] = exp_vals;
-  py_result["time_taken"] = std::chrono::duration<double>(end - start).count();
+  py_result["time_taken"] =
+      std::chrono::duration<double>(end - start + reduction_duration).count();
   py_result["simulator"] = (int)network->GetLastSimulatorType();
   py_result["method"] = (int)network->GetLastSimulationType();
   if (network->GetLastGpuDevice() >= 0)

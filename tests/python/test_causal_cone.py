@@ -156,3 +156,55 @@ def test_non_clifford_cones_against_full_statevector(seed):
             ),
         )
         assert result["expectation_values"] == pytest.approx(expected, abs=1e-9)
+
+
+def test_seeded_noisy_estimation_with_spectator_qubit_noise():
+    """Verify that causal cone reduction preserves noisy estimation results.
+
+    Tests that full_noise_estimate produces identical expectation values and
+    ideal values with and without causal cone reduction when noise is configured
+    on both active qubits and spectator qubits (including crosstalk to a spectator).
+    """
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.ry(1, 0.4)
+    # Spectator qubit 2 does not interact with the observables' causal cone.
+    circuit.x(2)
+    circuit.rz(2, 0.5)
+
+    nm = maestro.NoiseModel()
+    nm.set_depolarizing(0, 0.02)
+    nm.set_depolarizing(1, 0.02)
+    # Noise explicitly associated with spectator qubit 2.
+    nm.set_depolarizing(2, 0.05)
+    nm.set_crosstalk(0, 2, 0.02)
+
+    observables = ["ZZI", "XXI"]
+    cfg_full = maestro.SimulatorConfig(enable_causal_cone_reduction=False)
+    cfg_reduced = maestro.SimulatorConfig(enable_causal_cone_reduction=True)
+
+    seed = 42
+    realizations = 25
+    res_full = circuit.full_noise_estimate(
+        observables,
+        nm,
+        noise_realizations=realizations,
+        config=cfg_full,
+        noise_seed=seed,
+    )
+    res_reduced = circuit.full_noise_estimate(
+        observables,
+        nm,
+        noise_realizations=realizations,
+        config=cfg_reduced,
+        noise_seed=seed,
+    )
+
+    assert res_reduced["expectation_values"] == pytest.approx(
+        res_full["expectation_values"], abs=1e-10
+    )
+    assert res_reduced["ideal_expectation_values"] == pytest.approx(
+        res_full["ideal_expectation_values"], abs=1e-10
+    )
+    assert res_reduced["time_taken"] >= 0
