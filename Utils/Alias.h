@@ -13,13 +13,20 @@
 #define _ALIAS_H_
 
 #include <complex>
+#include <cmath>
+#include <stdexcept>
 #include <vector>
 
 #include <Eigen/Eigen>
 
 #include "PathIntegral.h"
+#include <type_traits>
+#include <utility>
 
 namespace Utils {
+
+using PathIntegralAmplitudeMap = std::remove_reference_t<decltype(
+    std::declval<QC::PathIntegral::PathIntegralSimulator&>().GetAmplitudes())>;
 
 
 class AliasEntry {
@@ -33,6 +40,16 @@ class AliasEntry {
 
 class AliasBase {
  protected:
+  // Path-integral pruning can leave a non-unit norm. Sample conditionally
+  // on the finite, positive retained mass, just as direct measurement does.
+  static double PathIntegralMass(const PathIntegralAmplitudeMap &amplitudes) {
+    double total = 0.;
+    for (const auto &entry : amplitudes) total += std::norm(entry.second);
+    if (!(total > 0.) || !std::isfinite(total))
+      throw std::domain_error("Path integral sampling requires finite positive probability mass");
+    return total;
+  }
+
   /*
   void SetAliasTable(std::vector<double>& probabilities)
   {
@@ -163,8 +180,8 @@ class Alias : public AliasBase {
     SetAliasTable(under, over);
   }
 
-  Alias(const std::unordered_map<QC::PathIntegral::FastVectorBool, std::complex<double>,
-        QC::PathIntegral::FastVectorBoolHash> &amplitudesMap) {
+  Alias(const PathIntegralAmplitudeMap &amplitudesMap) {
+    const double total = PathIntegralMass(amplitudesMap);
     std::vector<AliasEntry> under;
     std::vector<AliasEntry> over;
 
@@ -177,7 +194,7 @@ class Alias : public AliasBase {
     //size_t maxState = 0;
     long long int i = 0;
     for (const auto &valPair : amplitudesMap) {
-      const double prob = std::norm(valPair.second) * amplitudesMap.size();
+      const double prob = (std::norm(valPair.second) / total) * amplitudesMap.size();
       const size_t state = valPair.first.getWords()[0];
       if (prob < 1.)
         under.emplace_back(prob, i);
@@ -215,9 +232,8 @@ class AliasBig : public AliasBase {
  public:
   AliasBig() = delete;
 
-  AliasBig(const std::unordered_map<
-        QC::PathIntegral::FastVectorBool, std::complex<double>,
-        QC::PathIntegral::FastVectorBoolHash> &amplitudesMap) {
+  AliasBig(const PathIntegralAmplitudeMap &amplitudesMap) {
+    const double total = PathIntegralMass(amplitudesMap);
     std::vector<AliasEntry> under;
     std::vector<AliasEntry> over;
 
@@ -230,13 +246,13 @@ class AliasBig : public AliasBase {
     // size_t maxState = 0;
     long long int i = 0;
     for (const auto &valPair : amplitudesMap) {
-      const double prob = std::norm(valPair.second) * amplitudesMap.size();
+      const double prob = (std::norm(valPair.second) / total) * amplitudesMap.size();
       if (prob < 1.)
         under.emplace_back(prob, i);
       else
         over.emplace_back(prob, i);
 
-      statesTable.emplace_back(std::move(valPair.first.toVector()));
+      statesTable.emplace_back(valPair.first);
       ++i;
     }
 

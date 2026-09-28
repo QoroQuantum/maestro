@@ -1278,6 +1278,7 @@ class QCSimSimulator : public QCSimState {
     cloned->nrQubits = nrQubits;
 
     cloned->enableMultithreading = enableMultithreading;
+    cloned->pauliWorkerCount = pauliWorkerCount;
 
     cloned->lookaheadDepth = lookaheadDepth;
     cloned->lookaheadDepthWithHeuristic = lookaheadDepthWithHeuristic;

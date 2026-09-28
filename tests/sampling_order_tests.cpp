@@ -61,6 +61,44 @@ void Backend(SimulatorType type, SimulationType method, const char* algorithm = 
   CheckSamples(*sim, {0,1,2});
 }
 
+void CliffordWideSampling() {
+  auto sim = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim,
+                                               SimulationType::kStabilizer);
+  sim->AllocateQubits(65);
+  sim->Initialize();
+  for (unsigned bit : {32, 63}) {
+    const Types::qubit_t outcome = Types::qubit_t(1) << bit;
+    Require(sim->Probability(outcome) == 0.0, "high outcome bits must not alias zero");
+    sim->ApplyX(bit);
+    Require(sim->Probability(outcome) == 1.0 && sim->Probability(0) == 0.0,
+            "high outcome bits must reach the Clifford backend");
+    sim->ApplyX(bit);
+  }
+  sim->SaveState();
+  sim->ApplyX(64); sim->ApplyH(0); sim->ApplyCX(0, 63);
+  const Types::qubits_vector selected{64, 63, 0, 63};
+  sim->SetSeed(891);
+  const auto packed = sim->SampleCounts(selected, 128);
+  Require(packed.size() == 2 && packed.count(1) && packed.count(15) &&
+          packed.at(1) + packed.at(15) == 128, "wide ordered marginal counts");
+  sim->SetSeed(891);
+  Require(sim->SampleCounts(selected, 128) == packed, "warm seeded Clifford counts");
+  sim->SetSeed(891);
+  const auto many = sim->SampleCountsMany(selected, 128);
+  Require(many.size() == 2 && many.at(std::vector<bool>{true,false,false,false}) == packed.at(1) &&
+          many.at(std::vector<bool>{true,true,true,true}) == packed.at(15), "packed/vector counts agree");
+  bool rejected = false;
+  try { sim->SampleCounts(Types::qubits_vector(65, 0), 1); }
+  catch (const std::invalid_argument&) { rejected = true; }
+  Require(rejected, "reject packed outcomes wider than size_t");
+  rejected = false;
+  try { sim->SampleCountsMany({65}, 1); }
+  catch (const std::out_of_range&) { rejected = true; }
+  Require(rejected, "reject invalid measured qubits");
+  sim->RestoreState();
+  Require(sim->Probability(0) == 1.0, "sampling must preserve the caller's saved state");
+}
+
 void Individual(SimulatorType type) {
   for (const std::vector<Types::qubit_t>& ids :
        {std::vector<Types::qubit_t>{0,1,2}, {5,7,9}, {9,5,7}}) {
@@ -99,6 +137,7 @@ int main(int argc, char** argv) {
                              SimulationType::kExtendedStabilizer, SimulationType::kPauliPropagator,
                              SimulationType::kPathIntegral})
       run("QCSim method " + std::to_string(int(method)), [&] { Backend(SimulatorType::kQCSim, method); });
+    run("QCSim Clifford wide probabilities and marginal sampling", CliffordWideSampling);
     run("QCSim MPS collapse sampler", [&] { Backend(SimulatorType::kQCSim, SimulationType::kMatrixProductState, "mps_apply_measure"); });
     run("Composite QCSim", [&] { Backend(SimulatorType::kCompositeQCSim, SimulationType::kStatevector); });
     run("Individual QCSim mappings", [&] { Individual(SimulatorType::kQCSim); });
