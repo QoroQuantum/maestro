@@ -10,7 +10,6 @@ on:
 
 env:
   QCSIM_VERSION: "14b143ad51e851c033dae76062da4b06ac7c7cb1"
-  AER_VERSION: "80bd205b8b224e6db7d8c651473fda5cf346426c"
   CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
@@ -42,7 +41,7 @@ jobs:
           QCSim
           json
           qiskit-aer
-        key: ${{ runner.os }}-git-deps-qcsim${{ env.QCSIM_VERSION }}-aer${{ env.AER_VERSION }}-v3
+        key: ${{ runner.os }}-git-deps-qcsim${{ env.QCSIM_VERSION }}-v3
 
     # 3. SETUP CCACHE (only main saves; PRs and releases restore main's cache)
     - name: Restore ccache
@@ -76,15 +75,13 @@ jobs:
         ./bootstrap.sh --prefix=.
         ./b2 -j$(nproc) --with-program_options --with-url --with-container --with-json --with-serialization install
 
-    # 5. DOWNLOAD DEPENDENCIES AND CHECK OUT PINNED REVISIONS
+    # 5. DOWNLOAD DYNAMIC DEPENDENCIES (shallow clones, only if not cached)
     - name: Download Dependencies (QCSim, JSON, AER)
       run: |
         if [ ! -d QCSim ]; then git clone https://github.com/aromanro/QCSim.git; fi
         cd QCSim && git checkout ${{ env.QCSIM_VERSION }} && cd ..
         [ -d json ] || git clone --depth 1 --branch v3.11.2 https://github.com/nlohmann/json.git
         [ -d qiskit-aer ] || git clone --depth 1 https://github.com/QoroQuantum/qiskit-aer.git
-        git -C qiskit-aer fetch --depth 1 origin "$AER_VERSION"
-        git -C qiskit-aer checkout --detach "$AER_VERSION"
 
     # 6. BUILD WITH CCACHE + NINJA
     - name: Run CMake
