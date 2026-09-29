@@ -61,6 +61,8 @@ class GpuLibStateVectorSim {
     return false;
   }
 
+  bool Synchronize() { return lib->StateVectorSynchronize(obj); }
+
   bool Reset() {
     if (obj) return lib->Reset(obj);
 

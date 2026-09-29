@@ -1674,7 +1674,15 @@ class ImmediateGpuState : public ISimulator {
    * the gpu simulator applies them right away, so this has no effect on it, but
    * qiskit aer does not.
    */
-  void Flush() override {}
+  // Gate calls only queue work on the device; flushing waits for it, so a
+  // flushed state is complete (e.g. for timing or cross-stream use).
+  void Flush() override {
+    const bool done = state              ? state->Synchronize()
+                      : densityMatrix    ? densityMatrix->Synchronize()
+                                         : true;
+    if (!done)
+      throw std::runtime_error("GpuState::Flush: device synchronization failed");
+  }
 
   /**
    * @brief Saves the state to internal storage.
