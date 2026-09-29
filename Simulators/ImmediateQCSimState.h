@@ -92,8 +92,10 @@ class ImmediateQCSimState : public ISimulator {
 
         const size_t nQ = bondDims.size() + 1;
 
-        if (!dummySim || dummySim->getNrQubits() != nQ) {
-          dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
+        if (!dummySim || dummySim->getNrQubits() != nQ ||
+            dummySim->IsOperatorChain() != (simulationType == SimulationType::kMatrixProductOperator)) {
+          dummySim = std::make_unique<Simulators::MPSDummySimulator>(
+              nQ, simulationType == SimulationType::kMatrixProductOperator);
           dummySim->SetMaxBondDimension(
               configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey()));
           dummySim->setGrowthFactorGate(growthFactorGate);
@@ -551,9 +553,10 @@ class ImmediateQCSimState : public ISimulator {
       else
         mpoSimulator->SetInitialQubitsMap(initialMap);
 
-      if (!dummySim || dummySim->getNrQubits() != initialMap.size()) {
-        dummySim =
-            std::make_unique<Simulators::MPSDummySimulator>(initialMap.size());
+      if (!dummySim || dummySim->getNrQubits() != initialMap.size() ||
+          dummySim->IsOperatorChain() != (simulationType == SimulationType::kMatrixProductOperator)) {
+        dummySim = std::make_unique<Simulators::MPSDummySimulator>(
+            initialMap.size(), simulationType == SimulationType::kMatrixProductOperator);
         dummySim->SetMaxBondDimension(
             configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey()));
       }

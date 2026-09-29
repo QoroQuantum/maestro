@@ -88,8 +88,8 @@ inline const std::vector<Option>& Options() {
       {"gpu_device", "gpu_device", "integer", "device"},
       {"seed", "seed", "integer", "all"},
       {"mps_sampling", "", "string", "mps"},
-      {"disable_optimized_swapping", "", "boolean", "mps"},
-      {"lookahead_depth", "", "lookahead", "mps"},
+      {"disable_optimized_swapping", "", "boolean", "routing"},
+      {"lookahead_depth", "", "lookahead", "routing"},
       {"optimize_circuit", "", "boolean", "all"},
       {"gate_fusion", "", "boolean", "all"},
       {"max_simulators", "max_simulators", "positive_integer", "all"},
@@ -139,6 +139,8 @@ inline bool Applies(const Option& option, const SimulatorConfig& config) {
   }
   if (family == "tensor") return mps || mpo || method == Method::kTensorNetwork;
   if (family == "mps") return mps;
+  // swap routing of the tensor-network chains (MPS and MPO)
+  if (family == "routing") return mps || mpo;
   if (family == "mpo") return mpo;
   if (family == "cpu_mpo") return mpo && backend == Backend::kQCSim;
   if (family == "gpu_mps") return gpu && mps;

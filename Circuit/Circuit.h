@@ -1814,6 +1814,33 @@ class Circuit : public IOperation<Time> {
   std::vector<bool> ExecuteNonMeasurements(
       const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state,
       size_t *curMaxBondDim = nullptr) const {
+    // With gate fusion, the look-ahead routing of an MPS/MPO follows the
+    // simulator's upcoming operations in order, and stepping over an operation
+    // that is deferred to the shots breaks that plan for the rest of this
+    // prefix. Plan the order that actually runs instead: the operations
+    // executed here first, then the deferred ones.
+    bool planExecutionOrder = sim && sim->IsGateFusionEnabled() &&
+                              sim->IsRoutingLookaheadEnabled() &&
+                              sim->GetGatesCounter() == 0;
+    std::vector<bool> mask;
+    if (planExecutionOrder) {
+      OperationState dryState(state);
+      mask = ExecuteNonMeasurements(nullptr, dryState);
+      planExecutionOrder =
+          std::find(mask.begin(), mask.end(), true) != mask.end() &&
+          std::find(mask.begin(), mask.end(), false) != mask.end();
+    }
+    if (planExecutionOrder) {
+      const size_t dif = operations.size() - mask.size();
+      OperationsVector ordered(operations.begin(), operations.begin() + dif);
+      ordered.reserve(operations.size());
+      for (size_t i = dif; i < operations.size(); ++i)
+        if (mask[i - dif]) ordered.emplace_back(operations[i]);
+      for (size_t i = dif; i < operations.size(); ++i)
+        if (!mask[i - dif]) ordered.emplace_back(operations[i]);
+      sim->SetUpcomingGates(ordered);
+    }
+
     std::vector<bool> executedOps;
     executedOps.reserve(operations.size());
 
@@ -1896,11 +1923,16 @@ class Circuit : public IOperation<Time> {
 
       if (!executed) {
         executionStopped = true;
-        if (sim && sim->IsGateFusionEnabled())
-          sim->IncrementGatesCounter();
+        if (sim && sim->IsGateFusionEnabled()) {
+          // with the execution order planned, deferred operations are at the
+          // end of the upcoming operations and are not stepped over here
+          if (!planExecutionOrder) sim->IncrementGatesCounter();
+        }
         else if (sim &&
-                 sim->GetSimulationType() ==
-                     Simulators::SimulationType::kMatrixProductState &&
+                 (sim->GetSimulationType() ==
+                      Simulators::SimulationType::kMatrixProductState ||
+                  sim->GetSimulationType() ==
+                      Simulators::SimulationType::kMatrixProductOperator) &&
                  sim->SupportsMPSSwapOptimization() &&
                  op->GetType() != OperationType::kRandomGen &&
                  op->GetType() != OperationType::kConditionalRandomGen &&

@@ -36,7 +36,11 @@ class MPSDummySimulator {
   using MatrixClass = QC::TensorNetworks::MPSSimulatorInterface::MatrixClass;
   using GateClass = QC::TensorNetworks::MPSSimulatorInterface::GateClass;
 
-  MPSDummySimulator(size_t N) : nrQubits(N), maxVirtualExtent(0) {
+  // operatorChain selects the MPO model: every site carries an operator
+  // (ket and bra legs, physical dimension 4) instead of a qubit state.
+  explicit MPSDummySimulator(size_t N, bool operatorChain = false)
+      : nrQubits(N), maxVirtualExtent(0) {
+    physExtent = operatorChain ? 4 : 2;
     InitQubitsMap();
 
     SetMaxBondDimension(0);
@@ -47,6 +51,7 @@ class MPSDummySimulator {
         new MPSDummySimulator(nrQubits, LightweightInitTag{}));
     clone->qubitsMap = qubitsMap;
     clone->qubitsMapInv = qubitsMapInv;
+    clone->physExtent = physExtent;
     clone->maxVirtualExtent = maxVirtualExtent;
     clone->bondCost = bondCost;
     clone->maxBondDim = maxBondDim;
@@ -61,6 +66,7 @@ class MPSDummySimulator {
   }
 
   size_t getNrQubits() const { return nrQubits; }
+  bool IsOperatorChain() const { return physExtent == 4; }
 
   double getGrowthFactorSwap() const { return growthFactorSwap; }
   double getGrowthFactorGate() const { return growthFactorGate; }
@@ -348,6 +354,7 @@ class MPSDummySimulator {
                               currentCost, bestCost);
     } else {
       MPSDummySimulator dummySim(nrQubits, LightweightInitTag{});
+      dummySim.physExtent = physExtent;
       dummySim.maxVirtualExtent = maxVirtualExtent;
       dummySim.maxBondDim = maxBondDim;
       dummySim.currentBondDim = currentBondDim;
@@ -872,7 +879,7 @@ class MPSDummySimulator {
   std::vector<IndexType> qubitsMap;
   std::vector<IndexType> qubitsMapInv;
 
-  static constexpr size_t physExtent = 2;
+  size_t physExtent = 2;  // 2 for an MPS, 4 for an MPO (operator sites)
   IndexType maxVirtualExtent = 0;
   std::vector<double> bondCost;
   std::vector<double> maxBondDim;
@@ -898,17 +905,17 @@ class MPSDummySimulator {
     //    ---
     //    | |
 
-    // the left and right dimensions stay the same and also the physical legs have dimension 2
+    // the left and right dimensions stay the same and also the physical legs have dimension d (2 for an MPS, 4 for an MPO)
 
     // then the swap or the other gate is applied, getting a result that looks graphically as above, but of course with different values inside the tensor
     // swap is special, just swaps the values for (0, 1) and (1, 0) in
     // the physical legs, while other gates can change all values in the tensor
     
-    // then the tensor is reshaped into a matrix, having dimensions 2 * leftDim x 2 * rightNeighborDim on this matrix SVD is applied, to separate out the
+    // then the tensor is reshaped into a matrix, having dimensions d * leftDim x d * rightNeighborDim on this matrix SVD is applied, to separate out the
     // qubits tensors again, and the bond dimension is the number of singular
     // values kept after truncation (if done), or the number of non-zero
     // singular values if no truncation is done. The bond dimension can be at
-    // most min(2 * min(leftDim, rightNeighborDim), maxBondDim[bond]) and the minimum is obviously 1
+    // most min(d * min(leftDim, rightNeighborDim), maxBondDim[bond]) and the minimum is obviously 1
 
 
     const IndexType leftBond = bond - 1;
@@ -918,8 +925,17 @@ class MPSDummySimulator {
     const double leftDim = leftBond >= 0 ? currentBondDim[leftBond] : 1;
     const double rightNeighborDim = rightNeigborBond < static_cast<IndexType>(currentBondDim.size()) ? currentBondDim[rightNeigborBond] : 1;
     
-    double newMaxDim = (swap && leftDim == rightNeighborDim) ? betweenDim : 2. * std::min(leftDim, rightNeighborDim);
-    newMaxDim = std::min(newMaxDim, betweenDim * schmidtRank);
+    // an MPO site has physical dimension 4, and a gate acts on it as
+    // rho -> U rho U^dagger, whose operator Schmidt rank is the square of the
+    // gate's (the swap special case still holds, it only relabels the sites)
+    const double rank = IsOperatorChain()
+                            ? static_cast<double>(schmidtRank) * schmidtRank
+                            : static_cast<double>(schmidtRank);
+    double newMaxDim = (swap && leftDim == rightNeighborDim)
+                           ? betweenDim
+                           : static_cast<double>(physExtent) *
+                                 std::min(leftDim, rightNeighborDim);
+    newMaxDim = std::min(newMaxDim, betweenDim * rank);
 
     const double growthFactor = swap ? growthFactorSwap : growthFactorGate;
 

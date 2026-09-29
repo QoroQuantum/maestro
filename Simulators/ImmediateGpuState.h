@@ -525,9 +525,10 @@ class ImmediateGpuState : public ISimulator {
         mps->SetInitialQubitsMap(initialMap);
       else
         mpo->SetInitialQubitsMap(initialMap);
-      if (!dummySim || dummySim->getNrQubits() != initialMap.size()) {
-        dummySim =
-            std::make_unique<Simulators::MPSDummySimulator>(initialMap.size());
+      if (!dummySim || dummySim->getNrQubits() != initialMap.size() ||
+          dummySim->IsOperatorChain() != (simulationType == SimulationType::kMatrixProductOperator)) {
+        dummySim = std::make_unique<Simulators::MPSDummySimulator>(
+            initialMap.size(), simulationType == SimulationType::kMatrixProductOperator);
         dummySim->SetMaxBondDimension(
             configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey()));
       }
@@ -1992,8 +1993,10 @@ class ImmediateGpuState : public ISimulator {
         lookaheadDepth == std::numeric_limits<int>::max())
       return -1;
 
-    if (!dummySim || dummySim->getNrQubits() != nQ) {
-      dummySim = std::make_unique<Simulators::MPSDummySimulator>(nQ);
+    if (!dummySim || dummySim->getNrQubits() != nQ ||
+        dummySim->IsOperatorChain() != (simulationType == SimulationType::kMatrixProductOperator)) {
+      dummySim = std::make_unique<Simulators::MPSDummySimulator>(
+          nQ, simulationType == SimulationType::kMatrixProductOperator);
       dummySim->SetMaxBondDimension(
           configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey()));
       dummySim->setGrowthFactorGate(growthFactorGate);

@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include "FusionGate.h"
 
 namespace Simulators::Private {
@@ -114,6 +115,7 @@ class FusionState : public ISimulator {
     sourceIndex_ = 0;
     sources_.clear();
     routing_.clear();
+    boundaryRouting_.clear();
     backendRoutingInstalled_ = false;
     saved_.reset();
     destructiveSaved_.reset();
@@ -502,6 +504,20 @@ class FusionState : public ISimulator {
     }
     if (planValid_) {
       const auto index = static_cast<size_t>(sourceIndex_);
+      const auto boundary = boundaryRouting_.find(index);
+      if (boundary != boundaryRouting_.end() &&
+          sources_[index]->GetType() ==
+              Circuits::OperationType::kConditionalGate) {
+        // A conditional gate that fires is a boundary of the plan: apply it on
+        // its own, at its routing position, and keep the plan.
+        Flush();
+        immediate_->SetGatesCounter(static_cast<long long>(boundary->second));
+        gate.Apply(*immediate_);
+        ++stats_.backendGates;
+        ++sourceIndex_;
+        NotifyObservers(gate.qubits);
+        return;
+      }
       const auto original =
           index < sources_.size()
               ? std::dynamic_pointer_cast<Circuits::IQuantumGate<>>(
@@ -558,12 +574,14 @@ class FusionState : public ISimulator {
     cache_.Clear();
     planned_.clear();
     routing_.clear();
+    boundaryRouting_.clear();
     planValid_ = false;
   }
   void InvalidatePlan() {
     planValid_ = false;
     planned_.clear();
     routing_.clear();
+    boundaryRouting_.clear();
     if (IsGateFusionEnabled() && backendRoutingInstalled_) {
       immediate_->SetUpcomingGates({});
       backendRoutingInstalled_ = false;
@@ -572,6 +590,7 @@ class FusionState : public ISimulator {
   void RebuildPlan() {
     planned_.clear();
     routing_.clear();
+    boundaryRouting_.clear();
     planIndex_ = 0;
     planValid_ = false;
     if (!IsGateFusionEnabled()) {
@@ -591,6 +610,7 @@ class FusionState : public ISimulator {
   void PreparePlan() {
     planned_.clear();
     routing_.clear();
+    boundaryRouting_.clear();
     planIndex_ = 0;
     planValid_ = IsRoutingLookaheadEnabled();
     Cache planner(GetGateFusionMaxQubits(), false);
@@ -610,6 +630,7 @@ class FusionState : public ISimulator {
           planner.Submit(primitives[j], (uint64_t(i) << 4) | j, emit);
       } else {
         planner.Flush(emit);
+        boundaryRouting_[i] = routing_.size();
         routing_.push_back(sources_[i]);
       }
     }
@@ -650,6 +671,8 @@ class FusionState : public ISimulator {
   std::vector<Operation> sources_;
   std::vector<Operation> routing_;
   std::vector<Planned> planned_;
+  // routing position of every non-gate source operation of the current plan
+  std::unordered_map<size_t, size_t> boundaryRouting_;
   size_t planIndex_ = 0;
   bool planValid_ = false;
   bool backendRoutingInstalled_ = false;
