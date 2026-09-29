@@ -465,7 +465,14 @@ class ExecuteJob {
          network->GetMPSOptimizeSwaps()) &&
         sim->SupportsMPSSwapOptimization() &&
         !dcirc->HasCompositeOperations()) {
-      if (network->GetMPSOptimizationQubitsNumberThreshold() <= nrQubits) {
+      // an MPO site carries a two-qubit (operator) physical index, so its
+      // bonds grow like those of an MPS twice as long
+      const size_t routedQubits =
+          sim->GetSimulationType() ==
+                  Simulators::SimulationType::kMatrixProductOperator
+              ? 2 * nrQubits
+              : nrQubits;
+      if (network->GetMPSOptimizationQubitsNumberThreshold() <= routedQubits) {
         const auto bondDimThreshold =
             network->GetMPSOptimizationBondDimensionThreshold();
         const auto maxBondDimValue = config.GetConfigurationAsInt(
@@ -494,7 +501,9 @@ class ExecuteJob {
             layers = routingCircuit.ToMultipleQubitsLayersNoClone();
           }
 
-          Simulators::MPSDummySimulator dummySim(nrQubits);
+          Simulators::MPSDummySimulator dummySim(
+              nrQubits, sim->GetSimulationType() ==
+                            Simulators::SimulationType::kMatrixProductOperator);
           dummySim.setGrowthFactorGate(network->getGrowthFactorGate());
           dummySim.setGrowthFactorSwap(network->getGrowthFactorSwap());
           if (maxBondDimValue != 0)
@@ -527,7 +536,7 @@ class ExecuteJob {
               if (lookaheadVal > 15) lookaheadVal = 15;
 
               lookaheadDepthLocal =
-                  layers.size() < 8 || nrQubits <= 10 ? 0
+                  layers.size() < 8 || routedQubits <= 10 ? 0
                   : layers.size() < 15 ? static_cast<int>(lookaheadVal)
                   : layers.size() < 25 ? static_cast<int>(1.5 * lookaheadVal)
                                        : 2 * lookaheadVal;
@@ -538,7 +547,7 @@ class ExecuteJob {
 
             if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
               lookaheadHeuristicDepthLocal =
-                  layers.size() < 10 || nrQubits <= 10 ? 0
+                  layers.size() < 10 || routedQubits <= 10 ? 0
                   : layers.size() < 20                 ? lookaheadDepthLocal - 1
                                        : lookaheadDepthLocal - 2;
 

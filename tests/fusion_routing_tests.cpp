@@ -195,14 +195,98 @@ static void CallbackFallback() {
     Check(raw.callbacks == 1, "exception fallback callback never ran");
 }
 
+static void PrepareChain(RecordingSimulator& sim, const char* method,
+                         bool fusion, size_t qubits) {
+  sim.Configure("method", method);
+  sim.Configure("gate_fusion", fusion ? "true" : "false");
+  sim.SetMultithreading(false);
+  sim.AllocateQubits(qubits);
+  sim.Initialize();
+  sim.SetLookaheadDepth(4);
+}
+
+// Gates that depend on a mid-circuit measurement are deferred to the shots
+// while the rest of the prefix still runs. With fusion, stepping over them
+// used to drop the look-ahead routing for the remainder of the prefix.
+static void DeferredGatesKeepRouting() {
+  for (const char* method :
+       {"matrix_product_state", "matrix_product_operator"}) {
+    std::vector<double> reference;
+    for (bool fusion : {false, true}) {
+      auto raw = std::make_shared<RecordingImmediate>();
+      auto sim = std::make_shared<RecordingSimulator>(raw);
+      PrepareChain(*sim, method, fusion, 6);
+      std::vector<Op> operations;
+      for (Types::qubit_t q = 0; q < 6; ++q)
+        operations.push_back(CF::CreateGate(Kind::kHadamardGateType, q));
+      operations.push_back(CF::CreateGate(Kind::kCXGateType, 0, 5));
+      operations.push_back(CF::CreateMeasurement({{0, 0}}));
+      operations.push_back(CF::CreateGate(Kind::kCXGateType, 0, 4));  // deferred
+      operations.push_back(CF::CreateGate(Kind::kCXGateType, 1, 5));
+      operations.push_back(CF::CreateGate(Kind::kCZGateType, 2, 5));
+      operations.push_back(CF::CreateGate(Kind::kCXGateType, 3, 1));
+      auto circuit = CF::CreateCircuit(operations);
+      sim->SetUpcomingGates(circuit->GetOperations());
+      Circuits::OperationState state;
+      state.AllocateBits(1);
+      const auto executed = circuit->ExecuteNonMeasurements(sim, state);
+      // the mask starts at the measurement, the first operation not executed
+      Check(executed == std::vector<bool>{false, false, true, true, true},
+            "unexpected executed mask");
+      if (fusion && sim->IsRoutingLookaheadEnabled())
+        Check(!raw->installed.empty(),
+              "a deferred gate dropped the look-ahead routing");
+      const auto probabilities = sim->AllProbabilities();
+      if (!fusion)
+        reference = probabilities;
+      else
+        for (size_t i = 0; i < reference.size(); ++i)
+          Check(std::abs(reference[i] - probabilities[i]) < 1e-10,
+                "planned execution order changed the prefix state");
+    }
+  }
+}
+
+// A conditional gate that fires is applied as a plan boundary and keeps the
+// look-ahead routing of the rest of the shot.
+static void FiringConditionalKeepsRouting() {
+  for (const char* method :
+       {"matrix_product_state", "matrix_product_operator"}) {
+    auto raw = std::make_shared<RecordingImmediate>();
+    auto sim = std::make_shared<RecordingSimulator>(raw);
+    PrepareChain(*sim, method, true, 6);
+    sim->ApplyX(0);
+    const auto flip = std::static_pointer_cast<Circuits::IGateOperation<>>(
+        CF::CreateGate(Kind::kXGateType, 3));
+    auto suffix = CF::CreateCircuit(
+        {CF::CreateMeasurement({{0, 0}}),
+         CF::CreateConditionalGate(flip, CF::CreateEqualCondition({0}, {true})),
+         CF::CreateGate(Kind::kCXGateType, 1, 5),
+         CF::CreateGate(Kind::kCXGateType, 2, 4)});
+    sim->SetUpcomingGates(suffix->GetOperations());
+    Circuits::OperationState state;
+    state.AllocateBits(1);
+    suffix->ExecuteMeasurements(sim, state,
+                                std::vector<bool>(suffix->size(), false));
+    if (sim->IsRoutingLookaheadEnabled())
+      Check(!raw->installed.empty(),
+            "a firing conditional gate dropped the look-ahead routing");
+    Check(std::abs(sim->Probability(9) - 1.) < 1e-10,
+          "the conditional gate was not applied");
+  }
+}
+
 int main() {
   try {
     BoundaryPlanning();
     MultishotNetwork();
     FlushScopeAndRoutingSettings();
     CallbackFallback();
-    std::cout << "Routing reuse, multishot snapshots, observers, flush scope "
-                 "and callback fallback passed\n";
+    DeferredGatesKeepRouting();
+    FiringConditionalKeepsRouting();
+    std::cout << "Routing reuse, multishot snapshots, observers, flush scope, "
+                 "callback fallback, deferred gates and conditional gates "
+                 "passed\n";
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';
     return 1;

@@ -1045,4 +1045,27 @@ BOOST_DATA_TEST_CASE(NetworkOptimizedSwapsVsUnoptimizedOnHost,
   BOOST_CHECK_LT(totalVariation, 0.5);
 }
 
+// The operator-chain (MPO) model has physical dimension 4 per site and gates
+// act with the squared Schmidt rank, so bonds are allowed to grow faster.
+BOOST_AUTO_TEST_CASE(DummyOperatorChainModel) {
+  constexpr size_t nrQubits = 6;
+  Simulators::MPSDummySimulator mps(nrQubits);
+  Simulators::MPSDummySimulator mpo(nrQubits, true);
+  BOOST_CHECK(!mps.IsOperatorChain());
+  BOOST_CHECK(mpo.IsOperatorChain());
+  BOOST_CHECK(mpo.Clone()->IsOperatorChain());
+
+  const std::vector<double> mpsCaps{2, 4, 8, 4, 2};
+  const std::vector<double> mpoCaps{4, 16, 64, 16, 4};
+  BOOST_CHECK(mps.getMaxBondDimensions() == mpsCaps);
+  BOOST_CHECK(mpo.getMaxBondDimensions() == mpoCaps);
+
+  const auto cx = Circuits::CircuitFactory<>::CreateGate(
+      Circuits::QuantumGateType::kCXGateType, 2, 3);
+  mps.ApplyGate(cx);
+  mpo.ApplyGate(cx);
+  BOOST_CHECK_GT(mpo.getCurrentBondDimensions()[2],
+                 mps.getCurrentBondDimensions()[2]);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
