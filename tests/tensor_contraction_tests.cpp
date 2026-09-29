@@ -433,6 +433,51 @@ BOOST_AUTO_TEST_CASE(network_reference_and_repeated_conditioning) {
   }
 }
 
+BOOST_AUTO_TEST_CASE(network_clone_keeps_gates_and_saved_state_independent) {
+  TensorNetworks::TensorNetwork net(1);
+  net.SetContractor(std::make_shared<TensorNetworks::ForestContractor>());
+  net.SetMultithreading(false);
+  net.SaveState();
+  QC::Gates::HadamardGate<> h;
+  net.AddGate(h, 0);
+
+  auto clone = net.Clone();
+  auto sibling = net.Clone();
+  clone->AddGate(h, 0);
+  BOOST_CHECK_SMALL(clone->Probability(0) - 1, 1e-12);
+  BOOST_CHECK_SMALL(net.Probability(0) - .5, 1e-12);
+  BOOST_CHECK_SMALL(sibling->Probability(0) - .5, 1e-12);
+  BOOST_CHECK(!clone->GetMultithreading());
+
+  // A destructive restore makes the clone's saved nodes active again.
+  clone->RestoreSavedStateDestructive();
+  QC::Gates::PauliXGate<> x;
+  clone->AddGate(x, 0);
+  BOOST_CHECK_SMALL(clone->Probability(0), 1e-12);
+  net.RestoreState();
+  sibling->RestoreState();
+  BOOST_CHECK_SMALL(net.Probability(0) - 1, 1e-12);
+  BOOST_CHECK_SMALL(sibling->Probability(0) - 1, 1e-12);
+}
+
+BOOST_AUTO_TEST_CASE(network_clone_measurements_preserve_bell_state) {
+  TensorNetworks::TensorNetwork net(2);
+  net.SetContractor(std::make_shared<TensorNetworks::ForestContractor>());
+  QC::Gates::HadamardGate<> h;
+  QC::Gates::CNOTGate<> cx;
+  net.AddGate(h, 0);
+  net.AddGate(cx, 0, 1);
+  auto sibling = net.Clone();
+  for (size_t shot = 0; shot < 32; ++shot) {
+    auto clone = net.Clone();
+    clone->SetSeed(shot);
+    const bool outcome = clone->Measure(0);
+    BOOST_CHECK_EQUAL(clone->Measure(1), outcome);
+    BOOST_CHECK_SMALL(net.Probability(0) - .5, 1e-12);
+    BOOST_CHECK_SMALL(sibling->Probability(1) - .5, 1e-12);
+  }
+}
+
 BOOST_AUTO_TEST_CASE(cache_values_topology_limits_and_clone) {
   TensorNetworks::TensorNetwork net(3);
   auto contractor = std::make_shared<TensorNetworks::ForestContractor>();

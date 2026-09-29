@@ -424,7 +424,13 @@ class TensorNetwork {
   std::unique_ptr<TensorNetwork> Clone() const {
     auto cloned = std::make_unique<TensorNetwork>(0);
 
-    cloned->tensors = tensors;  // all tensors in the network
+    // Gates and measurements mutate node connections and replace their tensor
+    // pointers. Each clone must own its nodes, including saved nodes that can
+    // become active after a destructive restore. Tensor data can remain shared:
+    // operations on existing nodes produce new tensors instead of editing it.
+    cloned->tensors.reserve(tensors.size());
+    for (const auto &node : tensors)
+      cloned->tensors.push_back(node->CloneWithoutTensorCopy());
 
     cloned->lastTensors =
         lastTensors;  // the indices of the last tensors in the network
@@ -444,7 +450,9 @@ class TensorNetwork {
                                             the qubits in that group */
 
     cloned->savedTensorsNr = savedTensorsNr;
-    cloned->saveTensors = saveTensors;  // all tensors in the network
+    cloned->saveTensors.reserve(saveTensors.size());
+    for (const auto &node : saveTensors)
+      cloned->saveTensors.push_back(node->CloneWithoutTensorCopy());
 
     cloned->saveLastTensors =
         saveLastTensors;  // the indices of the last tensors in the network
@@ -466,6 +474,7 @@ class TensorNetwork {
         saveQubitsGroups; /**< A map between qubits group ids and the qubits in
                              that group */
 
+    cloned->enableMultithreading = enableMultithreading;
     if (contractor) cloned->contractor = contractor->Clone();
 
     return cloned;
