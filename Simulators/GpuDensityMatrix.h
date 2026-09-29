@@ -61,6 +61,7 @@ class GpuDensityMatrix {
         obj, n, states.data(), weights.data(),
         static_cast<int>(states.size()));
   }
+  bool Synchronize() { return lib->DMSynchronize(obj); }
   void Reset() {
     if (!lib->DMReset(obj))
       throw std::runtime_error("GPU density-matrix reset failed");

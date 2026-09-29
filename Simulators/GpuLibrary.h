@@ -116,6 +116,10 @@ class GpuLibrary : public Utils::Library {
     fMPOGetGpuId = (int (*)(void*))GetFunction("MPOGetGpuId");
     fGetStabilizerGpuId = (int (*)(void*))GetFunction("GetStabilizerGpuId");
     fPauliPropGetGpuId = (int (*)(void*))GetFunction("PauliPropGetGpuId");
+    // optional: older libraries do not export them
+    fStateVectorSynchronize =
+        (int (*)(void*))GetFunction("StateVectorSynchronize");
+    fDMSynchronize = (int (*)(void*))GetFunction("DMSynchronize");
 
     return true;
   }
@@ -1231,6 +1235,14 @@ class GpuLibrary : public Utils::Library {
 
   int GetStateVectorGpuId(void* obj) const {
     return obj && fGetStateVectorGpuId ? fGetStateVectorGpuId(obj) : -1;
+  }
+  // Wait until the queued work of the object has finished on the device. A
+  // library without the entry point cannot be waited for; report success.
+  bool StateVectorSynchronize(void* obj) const {
+    return !obj || !fStateVectorSynchronize || fStateVectorSynchronize(obj) == 1;
+  }
+  bool DMSynchronize(void* obj) const {
+    return !obj || !fDMSynchronize || fDMSynchronize(obj) == 1;
   }
   int MPSGetGpuId(void* obj) const {
     return obj && fMPSGetGpuId ? fMPSGetGpuId(obj) : -1;
@@ -4403,6 +4415,8 @@ class GpuLibrary : public Utils::Library {
 
   inline static thread_local int creationDevice = 0;
   int (*fGetStateVectorGpuId)(void*) = nullptr;
+  int (*fStateVectorSynchronize)(void*) = nullptr;
+  int (*fDMSynchronize)(void*) = nullptr;
   int (*fMPSGetGpuId)(void*) = nullptr;
   int (*fTNGetGpuId)(void*) = nullptr;
   int (*fDMGetGpuId)(void*) = nullptr;
