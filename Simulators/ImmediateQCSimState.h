@@ -2144,6 +2144,8 @@ class ImmediateQCSimState : public ISimulator {
     if (cliffordSimulator) cliffordSimulator->SetMultithreading(multithreading);
     if (tensorNetwork) tensorNetwork->SetMultithreading(multithreading);
     if (densityMatrix) densityMatrix->SetMultithreading(multithreading);
+    if (mpsSimulator) mpsSimulator->SetMultithreading(multithreading);
+    if (mpoSimulator) mpoSimulator->SetMultithreading(multithreading);
     if (pp) {
       if (multithreading)
         pp->EnableParallel(pauliWorkerCount);
