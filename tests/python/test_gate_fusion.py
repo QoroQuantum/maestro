@@ -6,7 +6,7 @@ import pytest
 
 
 def test_config_default_constructor_and_pickle():
-    assert maestro.SimulatorConfig().gate_fusion is True
+    assert maestro.SimulatorConfig().gate_fusion is None
     config = maestro.SimulatorConfig(gate_fusion=False)
     assert "gate_fusion=False" in repr(config)
     assert pickle.loads(pickle.dumps(config)).gate_fusion is False
@@ -25,7 +25,8 @@ def test_direct_toggle_flushes_pending_gates(method):
     handle = owner.create_simulator(maestro.SimulatorType.QCSim, method)
     sim = owner.get_simulator(handle)
     try:
-        assert sim.GetConfiguration("gate_fusion") == "true"
+        assert sim.GetConfiguration("gate_fusion") == "auto"
+        sim.Configure("gate_fusion", "true")
         sim.AllocateQubits(2)
         sim.InitializeSimulator()
         sim.ApplyH(0)
@@ -68,6 +69,8 @@ def test_effective_capability_and_statistics():
             sim.AllocateQubits(3)
             sim.Initialize()
             assert sim.GetGateFusionMaxQubits() == width
+            assert sim.GetConfiguration("gate_fusion") == "auto"
+            sim.Configure("gate_fusion", "true")
             assert sim.GetConfiguration("gate_fusion") == "true"
             assert sim.IsGateFusionEnabled() == bool(width)
             if width:

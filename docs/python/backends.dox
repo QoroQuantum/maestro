@@ -7,8 +7,10 @@
  *
  * Maestro provides a uniform interface to multiple quantum simulation algorithms and engines.
  * You can explicitly select the simulator backend and method via `SimulatorConfig`.
- * Gate fusion defaults to enabled on supported QCSim and GPU methods. Use
- * `SimulatorConfig(gate_fusion=False)` to disable it. MPS, MPO, and CPU tensor
+ * Gate fusion defaults to enabled on supported QCSim and GPU methods, except
+ * for CPU statevectors below 11 qubits and CPU density matrices below 5, where
+ * it costs more than it saves. Use `SimulatorConfig(gate_fusion=False)` or
+ * `gate_fusion=True` to force it off or on. MPS, MPO, and CPU tensor
  * network fusion is limited to two qubits; QCSim statevector, density matrix,
  * and composite statevector fusion can use three, as can single-device GPU
  * statevector and conventional distributed GPU. Distributed Ex local and Ex

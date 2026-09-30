@@ -17,8 +17,14 @@ class FusionState : public ISimulator {
     return stats_;
   }
 
+  // An explicit gate_fusion setting always wins. Without one, fusion is on
+  // from the backend's minimum register size; below it the fusion cache and
+  // dense kernels cost more than the gates they replace.
   bool IsGateFusionEnabled() const override {
-    return enabled_ && GetGateFusionMaxQubits() != 0;
+    if (GetGateFusionMaxQubits() == 0) return false;
+    if (requested_) return *requested_;
+    const auto qubits = GetNumberOfQubits();
+    return qubits == 0 || qubits >= DefaultGateFusionMinQubits();
   }
   void Configure(const char* key, const char* value) override {
     const std::string name(key), setting(value);
@@ -30,10 +36,14 @@ class FusionState : public ISimulator {
                           : std::nullopt;
     if (name == "gate_fusion") {
       if (setting != "true" && setting != "false" && setting != "1" &&
-          setting != "0")
-        throw std::invalid_argument("gate_fusion must be true, false, 1 or 0");
+          setting != "0" && setting != "auto")
+        throw std::invalid_argument(
+            "gate_fusion must be true, false, 1, 0 or auto");
       Flush();
-      enabled_ = setting == "true" || setting == "1";
+      if (setting == "auto")
+        requested_.reset();
+      else
+        requested_ = setting == "true" || setting == "1";
     } else {
       Flush();
       immediate_->Configure(key, value);
@@ -46,13 +56,13 @@ class FusionState : public ISimulator {
       RebuildPlan();
   }
   std::string GetConfiguration(const char* key) const override {
-    if (std::string(key) == "gate_fusion") return enabled_ ? "true" : "false";
+    if (std::string(key) == "gate_fusion") return RequestedSetting();
     return immediate_->GetConfiguration(key);
   }
   const std::unordered_map<std::string, std::string>& GetConfigMap()
       const override {
     config_ = immediate_->GetConfigMap();
-    config_["gate_fusion"] = enabled_ ? "true" : "false";
+    config_["gate_fusion"] = RequestedSetting();
     return config_;
   }
   void SetSeed(uint64_t seed) override {
@@ -436,6 +446,8 @@ class FusionState : public ISimulator {
  protected:
   // QCSim's destructive save/restore hooks are no-ops. Backends that move
   // their storage opt in so the routing context follows that storage.
+  // Smallest register for which fusion is on when gate_fusion is not set.
+  virtual size_t DefaultGateFusionMinQubits() const { return 0; }
   virtual bool UsesDestructiveStateStorage() const { return false; }
   virtual bool InitializationPreservesSnapshots() const { return false; }
   // Backends where a dense matrix costs more than native structured gates
@@ -450,7 +462,7 @@ class FusionState : public ISimulator {
   void CloneInto(FusionState& copy) {
     Flush();
     copy.immediate_ = immediate_->Clone();
-    copy.enabled_ = enabled_;
+    copy.requested_ = requested_;
     copy.stats_ = stats_;
     copy.ready_ = ready_;
     copy.sources_ = sources_;
@@ -675,7 +687,10 @@ class FusionState : public ISimulator {
     if (planValid_) ++planIndex_;
   }
   GateFusionStatistics stats_;
-  bool enabled_ = true;
+  const char* RequestedSetting() const {
+    return !requested_ ? "auto" : *requested_ ? "true" : "false";
+  }
+  std::optional<bool> requested_;  // unset: the backend default
   bool ready_ = false;
   Cache cache_;
   long long sourceIndex_ = 0;

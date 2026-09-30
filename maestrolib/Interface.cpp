@@ -49,14 +49,14 @@ static bool ConfigureLegacySeed(Network::INetwork<> &network,
 // A missing legacy option uses the default, just like a fresh SimulatorConfig.
 static bool ConfigureLegacyFusion(Network::INetwork<> &network,
                                   const boost::json::value &config) {
-  bool enabled = true;
+  const char *setting = "auto";
   if (config.is_object()) {
     if (const auto *value = config.as_object().if_contains("gate_fusion")) {
       if (!value->is_bool()) return false;
-      enabled = value->as_bool();
+      setting = value->as_bool() ? "true" : "false";
     }
   }
-  network.Configure("gate_fusion", enabled ? "true" : "false");
+  network.Configure("gate_fusion", setting);
   return true;
 }
 

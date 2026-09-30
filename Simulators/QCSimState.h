@@ -19,6 +19,22 @@ class QCSimState : public FusionState {
         return 0;
     }
   }
+
+ protected:
+  // Measured break-even of fused against native execution (geometric mean
+  // over random, QAOA, QFT, quantum-volume and GHZ circuits). Below it the
+  // state fits in cache, so fusing saves no memory passes and the dense
+  // kernels cost more than the native gates they replace.
+  size_t DefaultGateFusionMinQubits() const override {
+    switch (GetSimulationType()) {
+      case SimulationType::kStatevector:
+        return 11;
+      case SimulationType::kDensityMatrix:
+        return 5;
+      default:
+        return 0;
+    }
+  }
 };
 }  // namespace Simulators::Private
 #endif

@@ -26,22 +26,32 @@ generic gate API reports an error.
 
 ## Configuration
 
-Direct C++ and low-level simulator interfaces accept
-`Configure("gate_fusion", "false")` on fusion-aware adapters. Use `"true"` to
-enable it again. Switching flushes pending gates first. The network interface
-accepts the same setting and forwards it only to the appropriate adapters.
-Enabling the setting never enables fusion on an unsupported method.
-`GetConfiguration("gate_fusion")` reports this requested setting;
-`IsGateFusionEnabled()` reports whether the selected backend can actually use it.
+When `gate_fusion` is not set, each backend uses its default: fusion is on,
+except for CPU (QCSim) statevectors below 11 qubits and CPU density matrices
+below 5 qubits. Those states fit in cache, so fusing saves no passes over
+memory, and the fusion cache and dense kernels cost more than the native gates
+they replace. The cut-offs are the measured break-even over random, QAOA, QFT,
+quantum-volume and GHZ circuits. MPS, MPO, tensor network, composite, GPU and
+distributed backends keep fusing at every size.
 
-In Python:
+An explicit setting always wins. Direct C++ and low-level simulator interfaces
+accept `Configure("gate_fusion", "true")` or `"false"` on fusion-aware
+adapters, and `"auto"` to return to the default. Switching flushes pending
+gates first. The network interface accepts the same values and forwards them
+only to the appropriate adapters. Enabling the setting never enables fusion on
+an unsupported method. `GetConfiguration("gate_fusion")` reports the requested
+setting (`"auto"` when none was given); `IsGateFusionEnabled()` reports whether
+fusion is actually in effect for the current backend and register size.
+
+In Python, `SimulatorConfig.gate_fusion` is `None` by default (the backend
+default); `True` or `False` force it:
 
 ```python
 config = maestro.SimulatorConfig(gate_fusion=False)
 ```
 
-Native requests accept `simulator.options.gate_fusion` as a boolean. This is
-independent of `optimize_circuit`.
+Native requests accept `simulator.options.gate_fusion` as a boolean; omitting it
+uses the default. This is independent of `optimize_circuit`.
 
 MPS/MPO fusion changes when truncation occurs and can change approximate
 results at a finite bond dimension or nonzero cutoff. Disable fusion when
@@ -187,14 +197,15 @@ unsupported operations raise Python exceptions; the C entry points return 0.
 Generic operators need not be unitary; backend support still applies.
 
 Legacy C `SimpleExecute` and `SimpleEstimate` accept a JSON boolean
-`gate_fusion`, defaulting to true on each call, and reject other value types.
-Their results include `gate_fusion.enabled` and `gate_fusion.max_qubits` for the
-backend actually used. The legacy CLI accepts `--gate-fusion=false` or
-`--gate-fusion=true` (the default).
+`gate_fusion` and reject other value types; without it, each call uses the
+backend default. Their results include `gate_fusion.enabled` and
+`gate_fusion.max_qubits` for the backend actually used. The legacy CLI accepts
+`--gate-fusion=false` or `--gate-fusion=true`; without the flag it uses the
+backend default.
 
-Native request results include `execution_metadata.gate_fusion` with `requested`,
-`enabled` and `max_qubits`, and echo the boolean in
-`execution_metadata.configured_options.gate_fusion`. Execution workers capture
+Native request results include `execution_metadata.gate_fusion` with `requested`
+(`null` when the request did not set it), `enabled` and `max_qubits`, and echo
+an explicit boolean in `execution_metadata.configured_options.gate_fusion`. Execution workers capture
 capability before simulator recreation, including when automatic selection
 chooses an unsupported method. Width describes capability independently of the
 requested switch; it is zero when Maestro fusion is unsupported.

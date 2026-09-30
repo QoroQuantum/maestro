@@ -1138,8 +1138,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (std::string("gate_fusion") == key) {
       const std::string setting(value);
       if (setting != "true" && setting != "false" && setting != "0" &&
-          setting != "1")
-        throw std::invalid_argument("gate_fusion must be true, false, 1 or 0");
+          setting != "1" && setting != "auto")
+        throw std::invalid_argument(
+            "gate_fusion must be true, false, 1, 0 or auto");
       configuration.SetConfiguration(key, value);
       if (simulator &&
           (simulator->GetType() == Simulators::SimulatorType::kQCSim ||
@@ -1911,11 +1912,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       const auto &options = simulator->GetConfigMap();
       const auto found = options.find("gate_fusion");
       if (found != options.end())
-        return found->second == "true" || found->second == "1";
+        return found->second != "false" && found->second != "0";
     }
     if (!configuration.IsSet("gate_fusion")) return true;
     const auto value = configuration.GetConfiguration("gate_fusion");
-    return value == "true" || value == "1";
+    return value != "false" && value != "0";
   }
 
   Simulators::SimulatorType GetLastSimulatorType() const override {

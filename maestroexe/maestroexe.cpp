@@ -1,3 +1,4 @@
+#include <optional>
 #include <iostream>
 #include <boost/program_options.hpp>
 #include <algorithm>
@@ -58,8 +59,9 @@ static int BackendId(int option) {
   }
 }
 
+// An absent gateFusion leaves the backend default in place.
 static std::string GetConfigJson(int num_shots, int maxBondDim,
-                                 bool gateFusion) {
+                                 std::optional<bool> gateFusion) {
   std::string config = "{\"shots\": ";
 
   config += std::to_string(num_shots);
@@ -68,10 +70,10 @@ static std::string GetConfigJson(int num_shots, int maxBondDim,
     config += ", \"matrix_product_state_max_bond_dimension\": " +
               std::to_string(maxBondDim);
 
-  config +=
-      gateFusion ? ", \"gate_fusion\": true}" : ", \"gate_fusion\": false}";
+  if (gateFusion)
+    config += *gateFusion ? ", \"gate_fusion\": true" : ", \"gate_fusion\": false";
 
-  return config;
+  return config + "}";
 }
 
 int main(int argc, char** argv) {
@@ -87,8 +89,10 @@ int main(int argc, char** argv) {
         "shots,s", boost::program_options::value<int>(),
         "Specify the number of shots for execution")(
         "gate-fusion",
-        boost::program_options::value<bool>()->default_value(true),
-        "Enable Maestro gate fusion on supported simulators")(
+        boost::program_options::value<bool>(),
+        "Force Maestro gate fusion on or off on supported simulators "
+        "(default: on, except for small CPU statevectors and density "
+        "matrices)")(
         "mbd,m", boost::program_options::value<int>(),
         "Specify the max bond dimension for the MPS simulator")(
         "simulator,r", boost::program_options::value<std::string>(),
@@ -323,7 +327,10 @@ int main(int argc, char** argv) {
     }
 
     static std::string configStr =
-        GetConfigJson(nrShots, maxBondDim, vars["gate-fusion"].as<bool>());
+        GetConfigJson(nrShots, maxBondDim,
+                      vars.count("gate-fusion")
+                          ? std::optional<bool>(vars["gate-fusion"].as<bool>())
+                          : std::nullopt);
 
     std::string result;
     if (!qasmStr.empty()) {

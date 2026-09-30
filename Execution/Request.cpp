@@ -349,9 +349,11 @@ json::object Metadata(Context& context, const SimulatorConfig& config,
   for (const auto& [key, value] : TypedNativeOptions(config))
     options[key] = value;
   options["seed"] = config.seed.value_or(0);
-  options["gate_fusion"] = config.gate_fusion;
+  const json::value requestedFusion =
+      config.gate_fusion ? json::value(*config.gate_fusion) : json::value();
+  if (config.gate_fusion) options["gate_fusion"] = *config.gate_fusion;
   result["gate_fusion"] = json::object{
-      {"requested", config.gate_fusion},
+      {"requested", requestedFusion},
       {"enabled", executed ? context.network->WasGateFusionEnabled()
                            : simulator->IsGateFusionEnabled()},
       {"max_qubits", executed ? context.network->GetLastGateFusionMaxQubits()

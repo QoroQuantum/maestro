@@ -350,7 +350,12 @@ void TestFusionPublicInterfaces() {
     void* sim = GetSimulator(handle);
     AllocateQubits(sim, 3);
     InitializeSimulator(sim);
-    Check(GetGateFusionMaxQubits(sim) == 3 && IsGateFusionEnabled(sim),
+    // A three-qubit statevector is below the default fusion threshold; an
+    // explicit setting turns fusion on.
+    Check(GetGateFusionMaxQubits(sim) == 3 && !IsGateFusionEnabled(sim),
+          "C default fusion threshold");
+    Check(ConfigureSimulator(sim, "gate_fusion", "true") &&
+              IsGateFusionEnabled(sim),
           "C fusion capability");
     ApplyH(sim, 2);
     ApplyH(sim, 2);

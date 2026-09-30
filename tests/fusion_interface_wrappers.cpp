@@ -14,7 +14,10 @@ int main(int argc, char** argv) {
                             0));
   sim.AllocateQubits(3);
   Check(sim.InitializeSimulator());
-  Check(sim.GetGateFusionMaxQubits() == 3 && sim.IsGateFusionEnabled());
+  // Three qubits are below the default statevector fusion threshold.
+  Check(sim.GetGateFusionMaxQubits() == 3 && !sim.IsGateFusionEnabled());
+  Check(sim.ConfigureSimulator("gate_fusion", "true"));
+  Check(sim.IsGateFusionEnabled());
   double one[8] = {0, 0, 1, 0, 1, 0, 0, 0};
   Check(sim.ApplyGenericOneQubitGate(0, one));
   double two[32]{};

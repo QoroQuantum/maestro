@@ -182,7 +182,9 @@ deduplicates every 10 operations. Omitted seeds are generated randomly for each
 request. Specify an explicit simulator seed once, through `execution.seed` or
 the options object, to reproduce a run; zero is a valid explicit seed.
 
-`gate_fusion` defaults to `true` on eligible methods and is independent of
+`gate_fusion` forces fusion on or off on eligible methods. When omitted, fusion
+is on except for CPU statevectors below 11 qubits and CPU density matrices below
+5 qubits, where it costs more than it saves. It is independent of
 `optimize_circuit`. Unsupported methods and Aer retain their existing behavior.
 See [gate fusion](gate_fusion.md) for capabilities, routing, and truncation effects.
 
@@ -367,7 +369,8 @@ graphical displays, an appropriate
 site test profile can set `HWLOC_COMPONENTS=-gl,-opencl`.
 
 Fusion status is returned under `execution_metadata.gate_fusion`:
-`{"requested":true,"enabled":true,"max_qubits":3}`. The requested boolean is
-also echoed in `execution_metadata.configured_options.gate_fusion`. `enabled`
+`{"requested":true,"enabled":true,"max_qubits":3}`. `requested` is `null` when
+the request did not set `gate_fusion`; an explicit boolean is also echoed in
+`execution_metadata.configured_options.gate_fusion`. `enabled`
 and `max_qubits` describe Maestro fusion on the backend actually executed,
 including automatic method selection; they do not describe native Aer/Ex fusion.

@@ -533,8 +533,8 @@ void Capabilities() {
                            method == Method::kTensorNetwork;
     Check(sim->IsGateFusionEnabled() == supported,
           "incorrect default capability");
-    Check(sim->GetConfiguration("gate_fusion") == "true",
-          "fusion default is off");
+    Check(sim->GetConfiguration("gate_fusion") == "auto",
+          "fusion default is not automatic");
     bool rejected = false;
     try {
       sim->Configure("gate_fusion", "invalid");
@@ -551,6 +551,70 @@ void Capabilities() {
           "Aer fusion changed");
   }
 #endif
+}
+// Without an explicit setting, small CPU statevectors and density matrices
+// run unfused; an explicit setting always wins, and "auto" restores the default.
+void DefaultThreshold() {
+  struct Case {
+    Method method;
+    size_t below, from;
+  };
+  for (const auto& c : {Case{Method::kStatevector, 10, 11},
+                        Case{Method::kDensityMatrix, 4, 5}}) {
+    for (size_t n : {c.below, c.from}) {
+      auto sim = SimulatorsFactory::CreateSimulator(Backend::kQCSim, c.method);
+      Check(sim->IsGateFusionEnabled(), "unallocated default capability");
+      sim->AllocateQubits(n);
+      sim->Initialize();
+      const bool expected = n >= c.from;
+      Check(sim->IsGateFusionEnabled() == expected, "default fusion threshold");
+      Check(sim->GetConfiguration("gate_fusion") == "auto" &&
+                sim->GetConfigMap().at("gate_fusion") == "auto",
+            "default setting is not reported as automatic");
+      sim->ApplyH(0);
+      sim->ApplyCX(0, 1);
+      sim->ApplyRz(1, .3);
+      Check(std::abs(sim->Probability(0) - .5) < 1e-12 &&
+                std::abs(sim->Probability(3) - .5) < 1e-12,
+            "default fusion changed the result");
+      const auto stats = sim->GetGateFusionStatistics();
+      Check(expected ? stats.fusedBlocks == 1 && stats.backendGates == 1
+                     : stats.fusedBlocks == 0 && stats.backendGates == 3,
+            "default fusion did not follow the threshold");
+      auto clone = sim->Clone();
+      Check(clone->IsGateFusionEnabled() == expected &&
+                clone->GetConfiguration("gate_fusion") == "auto",
+            "clone lost the automatic setting");
+      // Explicit settings win on either side of the threshold.
+      for (const char* setting : {"true", "false", "1", "0"}) {
+        sim->Configure("gate_fusion", setting);
+        const bool on = std::string(setting) == "true" ||
+                        std::string(setting) == "1";
+        Check(sim->IsGateFusionEnabled() == on &&
+                  sim->GetConfiguration("gate_fusion") ==
+                      (on ? "true" : "false"),
+              "explicit fusion setting ignored");
+      }
+      sim->Configure("gate_fusion", "auto");
+      Check(sim->IsGateFusionEnabled() == expected,
+            "auto did not restore the default");
+      // The default follows the register size.
+      sim->Clear();
+      sim->AllocateQubits(expected ? c.below : c.from);
+      sim->Initialize();
+      Check(sim->IsGateFusionEnabled() != expected,
+            "default did not follow the new register size");
+    }
+  }
+  // Tensor-network methods keep fusing at any size: a merge saves an SVD.
+  for (auto method :
+       {Method::kMatrixProductState, Method::kMatrixProductOperator,
+        Method::kTensorNetwork}) {
+    auto sim = SimulatorsFactory::CreateSimulator(Backend::kQCSim, method);
+    sim->AllocateQubits(2);
+    sim->Initialize();
+    Check(sim->IsGateFusionEnabled(), "small tensor network default");
+  }
 }
 void CircuitBoundaries() {
   using CF = Circuits::CircuitFactory<>;
@@ -984,6 +1048,7 @@ int main(int argc, char** argv) {
       return 0;
     }
     Capabilities();
+    DefaultThreshold();
     CircuitBoundaries();
     SamplingAndObservers();
     std::cout

@@ -208,6 +208,44 @@ void TestFusionMetadata() {
             "Estimator fusion metadata");
     }
   }
+  // Without the option, small CPU statevectors and density matrices default
+  // to unfused; the request reports that nothing was requested. An explicit
+  // request in between must not leak into the next default one.
+  struct Default {
+    const char* method;
+    size_t qubits;
+    bool enabled;
+  };
+  for (const auto& c : {Default{"statevector", 2, false},
+                        Default{"statevector", 11, true},
+                        Default{"density_matrix", 4, false},
+                        Default{"density_matrix", 5, true},
+                        Default{"matrix_product_state", 2, true}}) {
+    // Every qubit is used: only the qubits a circuit touches are simulated.
+    auto request = Request("execute", c.qubits,
+                           "h q; cx q[0],q[1]; measure q->c;", c.method);
+    const auto unset = Call(request).at("execution_metadata").as_object();
+    Check(unset.at("gate_fusion").at("requested").is_null() &&
+              !unset.at("configured_options").as_object().contains(
+                  "gate_fusion") &&
+              unset.at("gate_fusion").at("enabled").as_bool() == c.enabled,
+          "Default fusion does not follow the register-size threshold");
+    request["simulator"].as_object()["options"] =
+        j::object{{"gate_fusion", !c.enabled}};
+    Check(Call(request)
+                  .at("execution_metadata")
+                  .at("gate_fusion")
+                  .at("enabled")
+                  .as_bool() == !c.enabled,
+          "Explicit fusion setting did not override the default");
+    request["simulator"].as_object().erase("options");
+    Check(Call(request)
+                  .at("execution_metadata")
+                  .at("gate_fusion")
+                  .at("enabled")
+                  .as_bool() == c.enabled,
+          "Explicit fusion setting leaked into a default request");
+  }
   auto request = Request("execute", 1, "x q[0]; measure q->c;");
   request["simulator"].as_object()["selection"] = "automatic";
   request["simulator"].as_object()["candidates"] =

@@ -1231,7 +1231,8 @@ NB_MODULE(maestro, m) {
          std::optional<size_t> pp_max_pauli_weight,
          std::optional<int> pp_gates_between_trims,
          std::optional<int> pp_gates_between_deduplications,
-         std::optional<double> path_integral_threshold, bool gate_fusion) {
+         std::optional<double> path_integral_threshold,
+         std::optional<bool> gate_fusion) {
         SimulatorConfig config;
         config.simulator_type = simulator_type;
         config.simulation_type = simulation_type;
@@ -1285,11 +1286,14 @@ NB_MODULE(maestro, m) {
       "pp_gates_between_trims"_a = nb::none(),
       "pp_gates_between_deduplications"_a = nb::none(),
       "path_integral_threshold"_a = nb::none(),
-      "gate_fusion"_a = defaults.gate_fusion);
+      "gate_fusion"_a = nb::none());
 
   BindConfigField(config_class, "gate_fusion", &SimulatorConfig::gate_fusion,
-                  "Fuse compatible gates on supported backends (default True). "
-                  "Truncated MPS/MPO results can change.");
+                  "Fuse compatible gates on supported backends. None (the "
+                  "default) uses each backend's default: on, except for CPU "
+                  "statevectors below 11 qubits and CPU density matrices "
+                  "below 5, where fusion costs more than it saves. True or "
+                  "False force it. Truncated MPS/MPO results can change.");
   BindConfigField(config_class, "simulator_type",
                   &SimulatorConfig::simulator_type,
                   "Simulator backend, a SimulatorType.");
