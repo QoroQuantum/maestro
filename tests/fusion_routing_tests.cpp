@@ -73,7 +73,10 @@ static void BoundaryPlanning() {
         for (int i = 0; i < n; ++i) {
           sim.ApplyCX(0, 3);
           sim.Measure({0});
+          const auto flushes = raw->flushes;
           sim.IncrementGatesCounter();  // delay/classical boundary
+          Check(raw->flushes == flushes,
+                "moving the gate counter synchronized the backend");
         }
         Check(raw->installs == installs && raw->copied == copies,
               "ordinary boundaries reinstalled the prepared operation list");
@@ -169,6 +172,39 @@ static void FlushScopeAndRoutingSettings() {
   raw->SetLookaheadDepth(3);
   Check(!raw->IsRoutingLookaheadEnabled(),
         "setting depth overrode explicit routing disable");
+}
+
+// Circuit boundaries only emit pending fused blocks. Waiting for the backend
+// (a device sync on GPU) is left to reads of the state.
+static void FusedBoundariesDoNotWait() {
+  for (const char* method : {"statevector", "matrix_product_state"}) {
+    auto raw = std::make_shared<RecordingImmediate>();
+    auto sim = std::make_shared<RecordingSimulator>(raw);
+    sim->Configure("method", method);
+    sim->Configure("gate_fusion", "true");
+    sim->SetMultithreading(false);
+    sim->AllocateQubits(4);
+    sim->Initialize();
+    const auto x = [](Types::qubit_t q) {
+      return std::static_pointer_cast<Circuits::IGateOperation<>>(
+          CF::CreateGate(Kind::kXGateType, q));
+    };
+    auto circuit = CF::CreateCircuit(
+        {CF::CreateGate(Kind::kHadamardGateType, 0),
+         CF::CreateGate(Kind::kCXGateType, 0, 1), CF::CreateDelay(1),
+         CF::CreateNoOp(),
+         CF::CreateConditionalGate(x(2), CF::CreateEqualCondition({1}, {true})),
+         CF::CreateConditionalGate(x(2),
+                                   CF::CreateEqualCondition({0}, {false})),
+         CF::CreateCircuit({CF::CreateGate(Kind::kXGateType, 3)})});
+    Circuits::OperationState state;
+    state.AllocateBits(2);
+    circuit->Execute(sim, state);
+    Check(raw->flushes == 0, "a fused circuit boundary waited for the backend");
+    Check(std::abs(sim->Probability(12) - .5) < 1e-10 &&
+              std::abs(sim->Probability(15) - .5) < 1e-10,
+          "boundaries changed the fused circuit's result");
+  }
 }
 
 // Exercise the exception barrier using an operation whose routing inspection
@@ -281,12 +317,13 @@ int main() {
     BoundaryPlanning();
     MultishotNetwork();
     FlushScopeAndRoutingSettings();
+    FusedBoundariesDoNotWait();
     CallbackFallback();
     DeferredGatesKeepRouting();
     FiringConditionalKeepsRouting();
     std::cout << "Routing reuse, multishot snapshots, observers, flush scope, "
-                 "callback fallback, deferred gates and conditional gates "
-                 "passed\n";
+                 "fused boundaries, callback fallback, deferred gates and "
+                 "conditional gates passed\n";
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';
     return 1;

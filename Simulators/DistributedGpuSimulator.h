@@ -29,6 +29,8 @@ class DistributedFusionSimulator : public FusionSimulator<FusionState> {
   }
 
  protected:
+  // A dense matrix on a global qubit forces an exchange even when the fused
+  // structured gates were all diagonal.
   bool PreserveStructuredGates() const override { return true; }
   bool UsesDestructiveStateStorage() const override { return true; }
 };

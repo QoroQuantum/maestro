@@ -139,7 +139,10 @@ documented target order, wrap the immediate simulator in `FusionSimulator`, and
 override `GetGateFusionMaxQubits()` with two or three for eligible methods.
 Other methods return zero. The default interface remains opt-out.
 Override `PreserveStructuredGates()` where native structured kernels should be
-kept for groups consisting solely of diagonal/permutation gates. Backends with
+kept for groups consisting solely of diagonal/permutation gates. Only the
+distributed statevector does this: a dense matrix on a global qubit needs an
+amplitude exchange even when the fused gates were all diagonal. On the other
+backends, merging such gates measured faster or equal. Backends with
 external circuit lookahead expose `IsRoutingLookaheadEnabled()` independently.
 
 Build `gate_fusion_tests` and run it through CTest. It covers independent dense

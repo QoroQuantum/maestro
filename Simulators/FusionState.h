@@ -60,8 +60,11 @@ class FusionState : public ISimulator {
     SeedAuxiliaryRng(seed);
     immediate_->SetSeed(seed);
   }
-  void Flush() override {
+  void FlushPendingGates() override {
     cache_.Flush([this](const auto& block) { Emit(block); });
+  }
+  void Flush() override {
+    FlushPendingGates();
     // Distributed backends cannot synchronize until a native state exists.
     if (ready_) immediate_->Flush();
   }
@@ -87,7 +90,9 @@ class FusionState : public ISimulator {
   void SetGatesCounter(long long counter) override {
     if (counter < 0) throw std::invalid_argument("Negative circuit position");
     if (counter == sourceIndex_) return;
-    Flush();
+    // Moving the counter only needs the pending blocks emitted at the old
+    // position; it does not need the backend to finish its queued work.
+    FlushPendingGates();
     // Advancing over a classical operation does not change the prepared
     // quantum blocks. Arbitrary jumps use local routing until explicitly
     // prepared again, rather than rescanning the suffix on every skipped gate.
@@ -433,8 +438,10 @@ class FusionState : public ISimulator {
   // their storage opt in so the routing context follows that storage.
   virtual bool UsesDestructiveStateStorage() const { return false; }
   virtual bool InitializationPreservesSnapshots() const { return false; }
-  // Backends with specialized diagonal/permutation paths can decline merges
-  // of exclusively structured gates without changing the cache algorithm.
+  // Backends where a dense matrix costs more than native structured gates
+  // (e.g. communication on distributed global qubits) can decline merges of
+  // exclusively diagonal/permutation gates without changing the cache
+  // algorithm. Elsewhere merging them measured faster or equal.
   virtual bool PreserveStructuredGates() const { return false; }
   using Cache = GateFusion<FusionGate>;
   using Operation = std::shared_ptr<Circuits::IOperation<double>>;
@@ -480,7 +487,7 @@ class FusionState : public ISimulator {
     ++stats_.submittedGates;
     const auto width = GetGateFusionMaxQubits();
     if (gate.kind == FusionGate::Kind::kNone && gate.qubits.size() > width) {
-      Flush();
+      FlushPendingGates();
       InvalidatePlan();
       gate.Apply(*immediate_);
       ++stats_.backendGates;
@@ -494,7 +501,7 @@ class FusionState : public ISimulator {
              .isApprox(Eigen::MatrixXcd::Identity(gate.generic.rows(),
                                                   gate.generic.rows()),
                        1e-10)) {
-      Flush();
+      FlushPendingGates();
       InvalidatePlan();
       gate.Apply(*immediate_);
       ++stats_.backendGates;
@@ -510,7 +517,7 @@ class FusionState : public ISimulator {
               Circuits::OperationType::kConditionalGate) {
         // A conditional gate that fires is a boundary of the plan: apply it on
         // its own, at its routing position, and keep the plan.
-        Flush();
+        FlushPendingGates();
         immediate_->SetGatesCounter(static_cast<long long>(boundary->second));
         gate.Apply(*immediate_);
         ++stats_.backendGates;
@@ -528,12 +535,16 @@ class FusionState : public ISimulator {
     }
     const auto source = static_cast<uint64_t>(sourceIndex_++);
     if (cache_.Empty()) cache_.SetWidth(width);
-    const auto primitives = gate.Expand(width);
-    for (size_t i = 0; i < primitives.size(); ++i)
-      cache_.Submit(
-          primitives[i], (source << 4) | i,
-          [this](const auto& block) { Emit(block); },
-          PreserveStructuredGates() && primitives[i].IsStructured());
+    const auto emit = [this](const auto& block) { Emit(block); };
+    if (gate.qubits.size() <= width)  // Expand would return {gate}
+      cache_.Submit(gate, source << 4, emit,
+                    PreserveStructuredGates() && gate.IsStructured());
+    else {
+      const auto primitives = gate.Expand(width);
+      for (size_t i = 0; i < primitives.size(); ++i)
+        cache_.Submit(primitives[i], (source << 4) | i, emit,
+                      PreserveStructuredGates() && primitives[i].IsStructured());
+    }
     NotifyObservers(gate.qubits);
   }
   void ConsumeBoundary(Circuits::OperationType type) {

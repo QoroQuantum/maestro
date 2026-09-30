@@ -43,6 +43,9 @@ class ISimulator : public IState, std::enable_shared_from_this<ISimulator> {
   virtual unsigned GetGateFusionMaxQubits() const { return 0; }
   virtual bool IsGateFusionEnabled() const { return false; }
   virtual GateFusionStatistics GetGateFusionStatistics() const { return {}; }
+  // Emits gates held back for fusion without waiting for the backend to
+  // execute them. Flush() also waits; reads of the state flush on their own.
+  virtual void FlushPendingGates() {}
   virtual void ApplyGenericThreeQubitGate(Types::qubit_t, Types::qubit_t,
                                           Types::qubit_t, const Matrix8cd&) {
     throw std::runtime_error("Generic three-qubit gates are unsupported");

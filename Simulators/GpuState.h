@@ -20,9 +20,6 @@ class GpuState : public FusionState {
   }
 
  protected:
-  bool PreserveStructuredGates() const override {
-    return GetSimulationType() == SimulationType::kStatevector;
-  }
   bool UsesDestructiveStateStorage() const override {
     return GetSimulationType() == SimulationType::kStatevector;
   }
