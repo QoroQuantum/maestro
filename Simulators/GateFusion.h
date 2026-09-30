@@ -56,28 +56,50 @@ class GateFusion {
                                 const Types::qubits_vector& from,
                                 const Types::qubits_vector& to) {
     if (from == to) return matrix;
-    const size_t dim = size_t{1} << to.size();
-    std::vector<size_t> bits;
-    size_t mask = 0;
-    for (auto q : from) {
-      const auto pos = std::find(to.begin(), to.end(), q);
-      if (pos == to.end()) throw std::logic_error("Invalid fusion embedding");
-      const auto bit = size_t{1} << (pos - to.begin());
-      bits.push_back(bit);
-      mask |= bit;
-    }
-    auto local = [&](size_t index) {
-      size_t result = 0;
-      for (size_t i = 0; i < bits.size(); ++i)
-        if (index & bits[i]) result |= size_t{1} << i;
-      return result;
-    };
+    const size_t dim = size_t{1} << to.size(), sub = size_t{1} << from.size();
+    std::vector<size_t> offsets(sub);
+    const size_t mask = Offsets(from, to, offsets.data());
+    // Only entries whose bits outside `from` agree are non-zero.
     Eigen::MatrixXcd result = Eigen::MatrixXcd::Zero(dim, dim);
-    for (size_t row = 0; row < dim; ++row)
-      for (size_t col = 0; col < dim; ++col)
-        if ((row & ~mask) == (col & ~mask))
-          result(row, col) = matrix(local(row), local(col));
+    for (size_t base = 0; base < dim; ++base) {
+      if (base & mask) continue;
+      for (size_t col = 0; col < sub; ++col)
+        for (size_t row = 0; row < sub; ++row)
+          result(base | offsets[row], base | offsets[col]) = matrix(row, col);
+    }
     return result;
+  }
+
+  // matrix <- embed(gate on `order`) * matrix, without forming the embedding:
+  // the gate acts on the row index bits of `order` within `to`, costing
+  // dim^2 * 2^k instead of dim^3 multiply-adds.
+  static void ApplyLeft(const Eigen::MatrixXcd& gate,
+                        const Types::qubits_vector& order,
+                        const Types::qubits_vector& to,
+                        Eigen::MatrixXcd& matrix) {
+    const size_t k = order.size(), sub = size_t{1} << k;
+    if (k > 3) throw std::logic_error("Fused gates act on at most 3 qubits");
+    size_t offsets[8] = {};
+    const size_t mask = Offsets(order, to, offsets);
+    // Explicit real arithmetic: std::complex multiplication goes through a
+    // NaN/Inf-checking library call without -ffast-math.
+    double gr[64], gi[64];
+    for (size_t r = 0; r < sub; ++r)
+      for (size_t l = 0; l < sub; ++l) {
+        gr[r * sub + l] = gate(r, l).real();
+        gi[r * sub + l] = gate(r, l).imag();
+      }
+    auto* data = matrix.data();
+    switch (matrix.rows() * 4 + k) {  // fixed sizes let the loops unroll
+      case 2 * 4 + 1: return ApplyLeftFixed<1, 2>(gr, gi, offsets, mask, data);
+      case 4 * 4 + 1: return ApplyLeftFixed<1, 4>(gr, gi, offsets, mask, data);
+      case 4 * 4 + 2: return ApplyLeftFixed<2, 4>(gr, gi, offsets, mask, data);
+      case 8 * 4 + 1: return ApplyLeftFixed<1, 8>(gr, gi, offsets, mask, data);
+      case 8 * 4 + 2: return ApplyLeftFixed<2, 8>(gr, gi, offsets, mask, data);
+      case 8 * 4 + 3: return ApplyLeftFixed<3, 8>(gr, gi, offsets, mask, data);
+      default:
+        throw std::logic_error("Fused blocks act on at most 3 qubits");
+    }
   }
 
   template <class Emit>
@@ -139,39 +161,57 @@ class GateFusion {
       overlapping = std::move(retained);
     }
 
-    Block next{support,
-               {},
-               gate,
-               {source, source, 1},
-               preserveStructure && overlapping.empty()};
-    if (!overlapping.empty()) {
-      if (matrices_) {
-        const auto dim = size_t{1} << support.size();
-        next.matrix = Eigen::MatrixXcd::Identity(dim, dim);
-      }
+    if (overlapping.empty()) {
+      for (auto q : support) owners_[q] = source;
+      blocks_.emplace(source, Block{std::move(support), {}, gate,
+                                    {source, source, 1}, preserveStructure});
+      return;
+    }
+    // A merged block is emitted through its matrix, never as `original`.
+    Block next{{}, {}, Gate{}, {source, source, 1}, false};
+    {
+      // Start from the first block's matrix and left-apply the other
+      // (disjoint, hence commuting) blocks and the new gate as small gates,
+      // instead of multiplying full dense embeddings into an identity.
+      bool first = true;
       for (auto id : overlapping) {
         const auto& old = blocks_.at(id);
         next.sources.first = std::min(next.sources.first, old.sources.first);
         next.sources.count += old.sources.count;
-        if (matrices_) {
-          const auto matrix =
-              old.IsSingle() ? old.original.Matrix() : old.matrix;
-          const auto& order =
-              old.IsSingle() ? old.original.Targets() : old.targets;
-          next.matrix = (Embed(matrix, order, support) * next.matrix).eval();
-        }
+        if (!matrices_) continue;
+        if (old.IsSingle()) {
+          const auto order = old.original.Targets();
+          if (first)
+            next.matrix = Embed(old.original.Matrix(), order, support);
+          else
+            ApplyLeft(old.original.Matrix(), order, support, next.matrix);
+        } else if (first)
+          next.matrix = Embed(old.matrix, old.targets, support);
+        else
+          ApplyLeft(old.matrix, old.targets, support, next.matrix);
+        first = false;
       }
       if (matrices_)
-        next.matrix =
-            (Embed(gate.Matrix(), gate.Targets(), support) * next.matrix)
-                .eval();
+        ApplyLeft(gate.Matrix(), gate.Targets(), support, next.matrix);
     }
     // Compute the replacement before removing anything, so allocation/matrix
-    // errors cannot lose pending operations.
-    for (auto id : overlapping) Remove(id);
+    // errors cannot lose pending operations. The merged block keeps the key
+    // of the oldest overlapping block (keys are each block's first source),
+    // and every qubit of the merged blocks is in `support`, so owner entries
+    // are overwritten instead of erased and reinserted.
     const auto id = next.sources.first;
-    blocks_.emplace(id, std::move(next));
     for (auto q : support) owners_[q] = id;
+    next.targets = std::move(support);
+    bool reuse = false;
+    for (auto old : overlapping)
+      if (old == id)
+        reuse = true;
+      else
+        blocks_.erase(old);
+    if (reuse)
+      blocks_.at(id) = std::move(next);
+    else  // a source older than every merged block
+      blocks_.emplace(id, std::move(next));
   }
 
   template <class Emit>
@@ -183,6 +223,47 @@ class GateFusion {
   void Remove(uint64_t id) {
     for (auto q : blocks_.at(id).targets) owners_.erase(q);
     blocks_.erase(id);
+  }
+  // Row offset of every local index of `from` within `to`; returns the mask.
+  static size_t Offsets(const Types::qubits_vector& from,
+                        const Types::qubits_vector& to, size_t* offsets) {
+    const size_t sub = size_t{1} << from.size();
+    size_t mask = 0;
+    std::fill(offsets, offsets + sub, 0);
+    for (size_t i = 0; i < from.size(); ++i) {
+      const auto pos = std::find(to.begin(), to.end(), from[i]);
+      if (pos == to.end()) throw std::logic_error("Invalid fusion embedding");
+      const size_t bit = size_t{1} << (pos - to.begin());
+      mask |= bit;
+      for (size_t l = 0; l < sub; ++l)
+        if (l & (size_t{1} << i)) offsets[l] |= bit;
+    }
+    return mask;
+  }
+  template <size_t K, size_t D>
+  static void ApplyLeftFixed(const double* gr, const double* gi,
+                             const size_t* offsets, size_t mask,
+                             std::complex<double>* data) {
+    constexpr size_t S = size_t{1} << K;
+    for (size_t col = 0; col < D; ++col) {
+      auto* column = data + col * D;
+      for (size_t base = 0; base < D; ++base) {
+        if (base & mask) continue;
+        double inr[S], ini[S];
+        for (size_t l = 0; l < S; ++l) {
+          inr[l] = column[base | offsets[l]].real();
+          ini[l] = column[base | offsets[l]].imag();
+        }
+        for (size_t r = 0; r < S; ++r) {
+          double re = 0, im = 0;
+          for (size_t l = 0; l < S; ++l) {
+            re += gr[r * S + l] * inr[l] - gi[r * S + l] * ini[l];
+            im += gr[r * S + l] * ini[l] + gi[r * S + l] * inr[l];
+          }
+          column[base | offsets[r]] = {re, im};
+        }
+      }
+    }
   }
   template <class Emit>
   void EmitOne(uint64_t id, Emit& emit) {

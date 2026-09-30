@@ -104,7 +104,82 @@ void Algebra() {
     Check(emitted == 2,
           "width conflict prematurely flushed a compatible single-qubit gate");
   }
+  {
+    // Merges reuse the oldest block's entry; a source older than every block
+    // it merges with takes the fallback path. Both must keep the blocks, the
+    // qubit owners and the matrices consistent.
+    GateFusion<Gate> cache(3);
+    std::vector<GateFusion<Gate>::Sources> emitted;
+    Vec actual = Vec::Zero(16), expected = actual;
+    actual[0] = expected[0] = 1;
+    auto emit = [&](const auto& block) {
+      auto gate = block.IsSingle()
+                      ? block.original
+                      : Gate{Kind::kNone, block.targets, {}, block.matrix};
+      actual = ApplyDense(actual, gate);
+      emitted.push_back(block.sources);
+    };
+    const std::vector<std::pair<Gate, uint64_t>> submissions{
+        {{Kind::kHadamardGateType, {0}, {}, {}}, 20},
+        {{Kind::kHadamardGateType, {1}, {}, {}}, 30},
+        {{Kind::kCXGateType, {0, 1}, {}, {}}, 5},   // older than both blocks
+        {{Kind::kRyGateType, {2}, {.4}, {}}, 40},
+        {{Kind::kCZGateType, {1, 2}, {}, {}}, 50},  // merges into key 5
+        {{Kind::kXGateType, {3}, {}, {}}, 60},
+        {{Kind::kCXGateType, {3, 0}, {}, {}}, 70}};  // too wide: emits key 5
+    for (const auto& [gate, source] : submissions) {
+      expected = ApplyDense(expected, gate);
+      cache.Submit(gate, source, emit);
+    }
+    Check(emitted.size() == 1 && emitted[0].first == 5 &&
+              emitted[0].count == 5,
+          "merged block lost its sources");
+    cache.Flush(emit);
+    Check(cache.Empty() && emitted.size() == 2 && emitted[1].first == 60 &&
+              emitted[1].count == 2,
+          "in-place merge left stale blocks or owners");
+    Close(actual, expected, "in-place merge algebra");
+  }
   std::mt19937 rng(19);
+  // The in-place left application must equal the dense embedded product for
+  // every gate size, target order and block size.
+  for (size_t blockQubits = 1; blockQubits <= 3; ++blockQubits)
+    for (size_t k = 1; k <= blockQubits; ++k)
+      for (int trial = 0; trial < 20; ++trial) {
+        Types::qubits_vector to{4, 1, 7};
+        to.resize(blockQubits);
+        auto order = to;
+        std::shuffle(order.begin(), order.end(), rng);
+        order.resize(k);
+        const auto gate = Unitary(size_t{1} << k, rng);
+        const Eigen::MatrixXcd start =
+            Unitary(size_t{1} << blockQubits, rng);
+        Eigen::MatrixXcd actual = start;
+        GateFusion<Gate>::ApplyLeft(gate, order, to, actual);
+        const Eigen::MatrixXcd expected =
+            GateFusion<Gate>::Embed(gate, order, to) * start;
+        Check((actual - expected).norm() < 1e-12, "fusion left application");
+        Vec basis = Vec::Zero(size_t{1} << 8);
+        for (size_t col = 0; col < (size_t{1} << blockQubits); ++col) {
+          // Embed agrees with independent bit-index application.
+          size_t index = 0;
+          for (size_t b = 0; b < blockQubits; ++b)
+            if (col & (size_t{1} << b)) index |= size_t{1} << to[b];
+          basis.setZero();
+          basis[index] = 1;
+          const Vec applied =
+              ApplyDense(basis, Gate{Kind::kNone, order, {}, gate});
+          const Eigen::MatrixXcd embedded =
+              GateFusion<Gate>::Embed(gate, order, to);
+          for (size_t row = 0; row < (size_t{1} << blockQubits); ++row) {
+            size_t out = 0;
+            for (size_t b = 0; b < blockQubits; ++b)
+              if (row & (size_t{1} << b)) out |= size_t{1} << to[b];
+            Check(std::abs(applied[out] - embedded(row, col)) < 1e-12,
+                  "fusion embedding");
+          }
+        }
+      }
   for (unsigned width : {2u, 3u}) {
     GateFusion<Gate> cache(width), planner(width, false);
     Vec actual = Vec::Zero(32), expected = actual;
@@ -711,6 +786,112 @@ void StructuredDistributedGates() {
   }
 }
 
+Vec Collapse(Vec v, size_t q, bool bit) {
+  for (Eigen::Index i = 0; i < v.size(); ++i)
+    if (bool((size_t(i) >> q) & 1) != bit) v[i] = 0;
+  return v / v.norm();
+}
+
+// Conventional is the only distributed backend that Maestro fuses for. Several
+// shards share one GPU (flag 1), so global qubits and every layout policy run
+// without multiple devices. Random circuits mix structured, parametric and
+// generic gates up to three qubits, with measurements on local and global
+// qubits in between.
+void ConventionalShardedFusion() {
+  const size_t n = 7;
+  const std::vector<Kind> one{
+      Kind::kHadamardGateType, Kind::kXGateType,   Kind::kYGateType,
+      Kind::kZGateType,        Kind::kSGateType,   Kind::kSdgGateType,
+      Kind::kTGateType,        Kind::kTdgGateType, Kind::kSxGateType,
+      Kind::kSxDagGateType,    Kind::kKGateType,   Kind::kPhaseGateType,
+      Kind::kRxGateType,       Kind::kRyGateType,  Kind::kRzGateType,
+      Kind::kUGateType,        Kind::kNone};
+  const std::vector<Kind> two{
+      Kind::kCXGateType,  Kind::kCYGateType,  Kind::kCZGateType,
+      Kind::kCPGateType,  Kind::kCRxGateType, Kind::kCRyGateType,
+      Kind::kCRzGateType, Kind::kCHGateType,  Kind::kCSxGateType,
+      Kind::kCSxDagGateType, Kind::kCUGateType, Kind::kSwapGateType,
+      Kind::kNone};
+  const std::vector<Kind> three{Kind::kCCXGateType, Kind::kCSwapGateType,
+                                Kind::kNone};
+  // Two-qubit gates are drawn twice as often as one- or three-qubit gates.
+  const std::vector<const std::vector<Kind>*> pools{&one, &two, &two, &three};
+  for (size_t shards : {2, 4, 8}) {
+    size_t globalBits = 0;
+    while ((size_t{1} << globalBits) < shards) ++globalBits;
+    std::string devices = "0", lowGlobals, highGlobals;
+    for (size_t s = 1; s < shards; ++s) devices += ",0";
+    for (size_t g = 0; g < globalBits; ++g) {
+      lowGlobals += (g ? "," : "") + std::to_string(g);
+      highGlobals += (g ? "," : "") + std::to_string(n - 1 - g);
+    }
+    for (int policy : {0, 2, 8})
+      for (bool fp64 : {false, true})
+        for (const auto& globals : {lowGlobals, highGlobals})
+          for (bool fusion : {false, true}) {
+            const std::string name =
+                "conventional shards=" + std::to_string(shards) +
+                " flags=" + std::to_string(policy) + " globals=" + globals +
+                (fp64 ? " fp64" : " fp32") + (fusion ? " fused" : " plain");
+            auto sim = SimulatorsFactory::CreateSimulator(Backend::kDistGpuSim,
+                                                          Method::kStatevector);
+            sim->Configure("distributed_backend", "conventional");
+            sim->Configure("distributed_devices", devices.c_str());
+            sim->Configure("distributed_flags",
+                           std::to_string(policy | 1).c_str());
+            sim->Configure("distributed_global_qubits", globals.c_str());
+            sim->Configure("use_double_precision", fp64 ? "true" : "false");
+            sim->Configure("gate_fusion", fusion ? "true" : "false");
+            sim->AllocateQubits(n);
+            sim->Initialize();
+            sim->SetSeed(7);
+            Check(sim->GetGateFusionMaxQubits() == 3 &&
+                      sim->IsGateFusionEnabled() == fusion,
+                  name + ": fusion capability");
+            const auto layout = sim->GetConfiguration("distributed_qubit_layout");
+            Vec expected = Vec::Zero(size_t{1} << n);
+            expected[0] = 1;
+            std::mt19937 rng(1234 + shards);
+            std::uniform_real_distribution<double> angle(-3.1, 3.1);
+            const double eps = fp64 ? 1e-9 : 2e-4;
+            for (int i = 0; i < 150; ++i) {
+              if (i == 50 || i == 100) {
+                // One local and one global measurement per checkpoint.
+                for (size_t q : {size_t(n / 2),
+                                 size_t(globals == lowGlobals ? 0 : n - 1)}) {
+                  const bool bit = sim->Measure({q}) & 1;
+                  expected = Collapse(expected, q, bit);
+                }
+                Close(State(*sim), expected, name + " after measurement", eps);
+              }
+              const auto* kinds = pools[rng() % pools.size()];
+              Gate gate;
+              gate.kind = (*kinds)[rng() % kinds->size()];
+              std::vector<Types::qubit_t> qs(n);
+              std::iota(qs.begin(), qs.end(), 0);
+              std::shuffle(qs.begin(), qs.end(), rng);
+              const size_t arity =
+                  kinds == &one ? 1 : kinds == &two ? 2 : 3;
+              gate.qubits.assign(qs.begin(), qs.begin() + arity);
+              for (auto& p : gate.params) p = angle(rng);
+              if (gate.kind == Kind::kNone)
+                gate.generic = Unitary(size_t{1} << arity, rng);
+              gate.Apply(*sim);
+              expected = ApplyDense(expected, gate);
+            }
+            Close(State(*sim), expected, name, eps);
+            const auto stats = sim->GetGateFusionStatistics();
+            Check(fusion ? stats.fusedBlocks > 0 &&
+                               stats.backendGates < stats.submittedGates
+                         : stats.fusedBlocks == 0,
+                  name + ": fusion statistics");
+            if (policy == 8)
+              Check(sim->GetConfiguration("distributed_qubit_layout") == layout,
+                    name + ": pinned layout changed");
+          }
+  }
+}
+
 void DistributedMatrices() {
   auto lib = SimulatorsFactory::GetDistributedGpuLibrary();
   lib->RequireLoaded();
@@ -787,6 +968,7 @@ int main(int argc, char** argv) {
       if (!SimulatorsFactory::IsDistributedGpuAvailable()) return 77;
       DistributedMatrices();
       StructuredDistributedGates();
+      ConventionalShardedFusion();
       std::cout << "Distributed matrix wrappers and fusion selection passed\n";
       return 0;
     }

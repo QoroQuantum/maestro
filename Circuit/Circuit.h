@@ -119,7 +119,7 @@ class Circuit : public IOperation<Time> {
 
     for (const auto &op : operations)
       ExecuteOperation(op, sim, state, curMaxBondDim);
-    if (sim->IsGateFusionEnabled()) sim->Flush();
+    if (sim->IsGateFusionEnabled()) sim->FlushPendingGates();
     if (curMaxBondDim)
       *curMaxBondDim =
           std::max(*curMaxBondDim, sim->GetExecutedMaxBondDimension());
@@ -1943,7 +1943,7 @@ class Circuit : public IOperation<Time> {
     }
 
     if (sim) {
-      if (sim->IsGateFusionEnabled()) sim->Flush();
+      if (sim->IsGateFusionEnabled()) sim->FlushPendingGates();
       if (curMaxBondDim)
         *curMaxBondDim =
             std::max(*curMaxBondDim, sim->GetExecutedMaxBondDimension());
@@ -1981,7 +1981,7 @@ class Circuit : public IOperation<Time> {
       if (!executedOps[i - dif])
         ExecuteOperation(operations[i], sim, state, curMaxBondDim);
 
-    if (sim->IsGateFusionEnabled()) sim->Flush();
+    if (sim->IsGateFusionEnabled()) sim->FlushPendingGates();
     if (curMaxBondDim)
       *curMaxBondDim =
           std::max(*curMaxBondDim, sim->GetExecutedMaxBondDimension());
@@ -2815,7 +2815,7 @@ class Circuit : public IOperation<Time> {
     const bool boundary =
         sim->IsGateFusionEnabled() && op->GetType() != OperationType::kGate;
     const auto sourcePosition = sim->GetGatesCounter();
-    if (boundary) sim->Flush();
+    if (boundary) sim->FlushPendingGates();
     if (op->GetType() == OperationType::kComposite) {
       // Reset classical bits once at the start of the shot, not when entering
       // a nested circuit: its conditions and writes share the enclosing state.
@@ -2823,7 +2823,7 @@ class Circuit : public IOperation<Time> {
       for (const auto &nested : circuit->GetOperations())
         ExecuteOperation(nested, sim, state, curMaxBondDim);
       if (boundary) {
-        sim->Flush();
+        sim->FlushPendingGates();
         sim->SetGatesCounter(sourcePosition + 1);
       }
       return;
@@ -2832,7 +2832,7 @@ class Circuit : public IOperation<Time> {
     // A circuit boundary is one source operation, even if it invokes no
     // simulator primitive (delay/classical op) or several (reset/conditional).
     if (boundary) {
-      sim->Flush();
+      sim->FlushPendingGates();
       sim->SetGatesCounter(sourcePosition + 1);
     }
     if (curMaxBondDim) {

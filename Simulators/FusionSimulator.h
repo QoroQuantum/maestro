@@ -116,7 +116,7 @@ class FusionSimulator : public State {
     this->SubmitGate({FusionGate::Kind::kNone, {a, b, c}, {}, m});
   }
   void ApplyNop() override {
-    this->Flush();
+    this->FlushPendingGates();
     this->immediate_->ApplyNop();
     this->ConsumeBoundary(Circuits::OperationType::kNoOp);
     this->NotifyObservers({});
