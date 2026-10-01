@@ -515,6 +515,40 @@ int main() try {
   request["diagnostics"] = j::array{"unknown"};
   Call(request, false, true);
 
+  // Trim and recanonicalize serve MPS and MPO; the mixed-state diagnostics
+  // and maintenance stay with density matrices and MPOs.
+  for (const char* method :
+       {"matrix_product_state", "matrix_product_operator"}) {
+    request = Request("diagnostics", 3, "h q[0]; cx q[0],q[1]; cx q[1],q[2];",
+                      method);
+    request["maintenance"] = j::array{"recanonicalize", "trim"};
+    Call(request, true, true);
+    result = Call(request);
+    Check(result.contains("trace") ==
+              (std::string(method) == "matrix_product_operator"),
+          "Default diagnostics do not follow the method");
+  }
+  request =
+      Request("diagnostics", 2, "h q[0]; cx q[0],q[1];", "matrix_product_state");
+  for (const auto& field :
+       {j::object{{"diagnostics", j::array{"trace"}}},
+        j::object{{"maintenance", j::array{"hermitize"}}}}) {
+    auto invalid = request;
+    for (const auto& [key, value] : field) invalid[key] = value;
+    Check(Call(invalid, false, true).at("error").at("code") ==
+              "unsupported_capability",
+          "MPS accepted a mixed-state diagnostic");
+  }
+  request = Request("diagnostics", 2, "h q[0];", "density_matrix");
+  request["maintenance"] = j::array{"trim"};
+  Check(Call(request, false, true).at("error").at("code") ==
+            "unsupported_capability",
+        "A density matrix accepted trim");
+  request = Request("diagnostics", 2, "h q[0];");
+  Check(Call(request, false, true).at("error").at("code") ==
+            "unsupported_capability",
+        "A statevector accepted diagnostics");
+
   request = Request("estimate", 1, "x q[0];");
   request["observables"] = j::array{"Z"};
   request["simulator"].as_object()["selection"] = "automatic";

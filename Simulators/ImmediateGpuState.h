@@ -1193,13 +1193,23 @@ class ImmediateGpuState : public ISimulator {
       throw std::runtime_error("Hermitization is only available for GPU MPO");
     mpo->Hermitize();
   }
-  void TrimMatrixProductOperator() override {
-    if (!mpo) throw std::runtime_error("GPU MPO is not initialized");
-    mpo->Trim();
+  void Trim() override {
+    if (mps) {
+      if (!mps->Trim()) throw std::runtime_error("GPU MPS trim failed");
+    } else if (mpo)
+      mpo->Trim();
+    else
+      throw std::runtime_error("Trim is only available for GPU MPS and MPO");
   }
-  void ReCanonicalizeMatrixProductOperator() override {
-    if (!mpo) throw std::runtime_error("GPU MPO is not initialized");
-    mpo->ReCanonicalize();
+  void ReCanonicalize() override {
+    if (mps) {
+      if (!mps->ReCanonicalize())
+        throw std::runtime_error("GPU MPS canonicalization failed");
+    } else if (mpo)
+      mpo->ReCanonicalize();
+    else
+      throw std::runtime_error(
+          "Canonicalization is only available for GPU MPS and MPO");
   }
 
   /**

@@ -66,8 +66,8 @@ BOOST_AUTO_TEST_CASE(updated_diagnostics_compression_and_noise_api) {
   BOOST_REQUIRE_EQUAL(reduced.rows(), 2);
   BOOST_CHECK_SMALL(std::abs(reduced(0, 0) - 0.5), 1e-5);
   mpo->Configure("matrix_product_operator_kraus_completeness_check", "warn");
-  mpo->ReCanonicalizeMatrixProductOperator();
-  mpo->TrimMatrixProductOperator();
+  mpo->ReCanonicalize();
+  mpo->Trim();
 }
 
 BOOST_AUTO_TEST_CASE(factory_and_unitary_evolution) {

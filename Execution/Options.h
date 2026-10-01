@@ -69,6 +69,10 @@ inline bool Mixed(const SimulatorConfig& config) {
   return config.simulation_type == Method::kDensityMatrix ||
          config.simulation_type == Method::kMatrixProductOperator;
 }
+inline bool MatrixProductChain(const SimulatorConfig& config) {
+  return config.simulation_type == Method::kMatrixProductState ||
+         config.simulation_type == Method::kMatrixProductOperator;
+}
 
 struct Option {
   const char* name;

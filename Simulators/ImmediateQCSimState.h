@@ -1236,13 +1236,22 @@ class ImmediateQCSimState : public ISimulator {
       throw std::runtime_error("Hermitization is only available for QCSim MPO");
     mpoSimulator->Hermitize();
   }
-  void TrimMatrixProductOperator() override {
-    if (!mpoSimulator) throw std::runtime_error("QCSim MPO is not initialized");
-    mpoSimulator->Trim();
+  void Trim() override {
+    if (mpsSimulator)
+      mpsSimulator->Trim();
+    else if (mpoSimulator)
+      mpoSimulator->Trim();
+    else
+      throw std::runtime_error("Trim is only available for QCSim MPS and MPO");
   }
-  void ReCanonicalizeMatrixProductOperator() override {
-    if (!mpoSimulator) throw std::runtime_error("QCSim MPO is not initialized");
-    mpoSimulator->ReCanonicalize();
+  void ReCanonicalize() override {
+    if (mpsSimulator)
+      mpsSimulator->ReCanonicalize();
+    else if (mpoSimulator)
+      mpoSimulator->ReCanonicalize();
+    else
+      throw std::runtime_error(
+          "Canonicalization is only available for QCSim MPS and MPO");
   }
 
   /**

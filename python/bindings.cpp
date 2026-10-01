@@ -1577,9 +1577,8 @@ NB_MODULE(maestro, m) {
            &Simulators::ISimulator::RestoreDensityMatrixTrace)
       .def("hermitize_density_matrix",
            &Simulators::ISimulator::HermitizeDensityMatrix)
-      .def("trim_mpo", &Simulators::ISimulator::TrimMatrixProductOperator)
-      .def("recanonicalize_mpo",
-           &Simulators::ISimulator::ReCanonicalizeMatrixProductOperator);
+      .def("trim", &Simulators::ISimulator::Trim)
+      .def("recanonicalize", &Simulators::ISimulator::ReCanonicalize);
 
   // --- Maestro Class ---
   nb::class_<Maestro>(m, "Maestro")

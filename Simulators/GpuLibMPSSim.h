@@ -79,6 +79,12 @@ class GpuLibMPSSim {
 
   bool SetSeed(uint64_t seed) { return obj && lib->MPSSetSeed(obj, seed); }
 
+  // Explicit compression with the current cutoff, truncation mode and maximum
+  // extent: Trim re-splits over-cap bonds, ReCanonicalize repairs the chain.
+  bool Trim() { return obj && lib->MPSTrim(obj); }
+
+  bool ReCanonicalize() { return obj && lib->MPSReCanonicalize(obj); }
+
   bool SetInitialQubitsMap(const std::vector<long long int> &initialMap) {
     if (obj) return lib->MPSSetInitialQubitsMap(obj, initialMap);
 

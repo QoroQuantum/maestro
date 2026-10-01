@@ -331,13 +331,13 @@ class FusionState : public ISimulator {
     Flush();
     immediate_->HermitizeDensityMatrix();
   }
-  void TrimMatrixProductOperator() override {
+  void Trim() override {
     Flush();
-    immediate_->TrimMatrixProductOperator();
+    immediate_->Trim();
   }
-  void ReCanonicalizeMatrixProductOperator() override {
+  void ReCanonicalize() override {
     Flush();
-    immediate_->ReCanonicalizeMatrixProductOperator();
+    immediate_->ReCanonicalize();
   }
   void SetMultithreading(bool value = true) override {
     Flush();

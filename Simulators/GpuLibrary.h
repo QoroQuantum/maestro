@@ -120,6 +120,8 @@ class GpuLibrary : public Utils::Library {
     fStateVectorSynchronize =
         (int (*)(void*))GetFunction("StateVectorSynchronize");
     fDMSynchronize = (int (*)(void*))GetFunction("DMSynchronize");
+    fMPSTrim = (int (*)(void*))GetFunction("MPSTrim");
+    fMPSReCanonicalize = (int (*)(void*))GetFunction("MPSReCanonicalize");
 
     return true;
   }
@@ -2482,6 +2484,24 @@ class GpuLibrary : public Utils::Library {
     return false;
   }
 
+  // Optional: older libraries do not export the explicit MPS compression.
+  bool HasMPSCompressionAPI() const {
+    return IsValid() && fMPSTrim && fMPSReCanonicalize;
+  }
+
+  bool MPSTrim(void *obj) {
+    if (!fMPSTrim)
+      throw std::runtime_error("GpuLibrary: this library cannot trim an mps");
+    return obj && fMPSTrim(obj) == 1;
+  }
+
+  bool MPSReCanonicalize(void *obj) {
+    if (!fMPSReCanonicalize)
+      throw std::runtime_error(
+          "GpuLibrary: this library cannot recanonicalize an mps");
+    return obj && fMPSReCanonicalize(obj) == 1;
+  }
+
   bool MPSSetInitialQubitsMap(void *obj,
                               const std::vector<long long int> &initialMap) {
     if (LibraryHandle)
@@ -4509,6 +4529,8 @@ class GpuLibrary : public Utils::Library {
   int (*fMPSCreateWithBasisStateBits)(void *, unsigned int,
                                       const unsigned char *) = nullptr;
   int (*fMPSReset)(void *) = nullptr;
+  int (*fMPSTrim)(void *) = nullptr;
+  int (*fMPSReCanonicalize)(void *) = nullptr;
   int (*fMPSSetInitialQubitsMap)(void *, const long long int *,
                                  int) = nullptr;
   int (*fMPSSetUseOptimalMeetingPosition)(void *, int) = nullptr;

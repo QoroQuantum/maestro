@@ -238,8 +238,8 @@ BOOST_AUTO_TEST_CASE(MixedStateDiagnosticsCompressionAndPolicies) {
 
   mpo->Configure("matrix_product_operator_kraus_completeness_check", "warn");
   BOOST_TEST(mpo->GetConfiguration("matrix_product_operator_kraus_completeness_check") == "warn");
-  mpo->ReCanonicalizeMatrixProductOperator();
-  mpo->TrimMatrixProductOperator();
+  mpo->ReCanonicalize();
+  mpo->Trim();
   BOOST_CHECK_SMALL(std::abs(mpo->DensityMatrixTrace() - std::complex<double>(1., 0.)),
                     1e-7);
 }

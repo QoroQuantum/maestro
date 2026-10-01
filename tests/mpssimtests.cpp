@@ -789,4 +789,69 @@ BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, SampleCountsManyTest,
   state.Reset();
 }
 
+// Trim and ReCanonicalize act on whichever matrix-product simulator is active:
+// without a bond limit they keep the state, with one they enforce it.
+BOOST_AUTO_TEST_CASE(TrimAndReCanonicalizeMatrixProductState) {
+  constexpr size_t nrQubits = 6;
+  std::vector<Simulators::SimulatorType> types{
+      Simulators::SimulatorType::kQCSim};
+#ifdef __linux__
+  if (Simulators::SimulatorsFactory::InitGpuLibraryWithMute() &&
+      Simulators::SimulatorsFactory::GetGpuLibrary()->HasMPSCompressionAPI())
+    types.push_back(Simulators::SimulatorType::kGpuSim);
+  else
+    BOOST_TEST_MESSAGE("GPU MPS compression is unavailable; skipping GPU");
+#endif
+  for (const auto type : types) {
+    auto mps = Simulators::SimulatorsFactory::CreateSimulator(
+        type, Simulators::SimulationType::kMatrixProductState);
+    BOOST_REQUIRE(mps);
+    mps->Configure("use_double_precision", "true");
+    mps->Configure("matrix_product_state_truncation_threshold", "0");
+    mps->AllocateQubits(nrQubits);
+    mps->Initialize();
+    std::mt19937 g(7);
+    std::uniform_real_distribution<double> angle(-M_PI, M_PI);
+    for (int layer = 0; layer < 4; ++layer) {
+      for (Types::qubit_t q = 0; q < nrQubits; ++q) mps->ApplyRy(q, angle(g));
+      for (Types::qubit_t q = layer % 2; q + 1 < nrQubits; q += 2)
+        mps->ApplyCX(q, q + 1);
+    }
+    const auto expected = mps->AllProbabilities();
+
+    mps->ReCanonicalize();
+    mps->Trim();
+    const auto kept = mps->AllProbabilities();
+    BOOST_REQUIRE_EQUAL(kept.size(), expected.size());
+    for (size_t i = 0; i < expected.size(); ++i)
+      BOOST_CHECK_SMALL(kept[i] - expected[i], 1e-9);
+
+    // The reported maximum is the peak reached during execution, so the
+    // truncation is checked on the state itself.
+    BOOST_REQUIRE_GT(mps->GetCurrentMaxBondDimension(), 2);
+    mps->Configure("matrix_product_state_max_bond_dimension", "2");
+    mps->Trim();
+    const auto truncated = mps->AllProbabilities();
+    BOOST_CHECK_CLOSE(
+        std::accumulate(truncated.begin(), truncated.end(), 0.), 1., 1e-6);
+    double change = 0;
+    for (size_t i = 0; i < expected.size(); ++i)
+      change = std::max(change, std::abs(truncated[i] - expected[i]));
+    BOOST_CHECK_MESSAGE(change > 1e-3, "trim did not apply the bond limit");
+    // The trimmed state already respects the limit.
+    mps->ReCanonicalize();
+    const auto repaired = mps->AllProbabilities();
+    for (size_t i = 0; i < expected.size(); ++i)
+      BOOST_CHECK_SMALL(repaired[i] - truncated[i], 1e-9);
+  }
+
+  auto statevector = Simulators::SimulatorsFactory::CreateSimulator(
+      Simulators::SimulatorType::kQCSim,
+      Simulators::SimulationType::kStatevector);
+  statevector->AllocateQubits(2);
+  statevector->Initialize();
+  BOOST_CHECK_THROW(statevector->Trim(), std::runtime_error);
+  BOOST_CHECK_THROW(statevector->ReCanonicalize(), std::runtime_error);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

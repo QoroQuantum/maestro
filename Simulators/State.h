@@ -566,11 +566,15 @@ class IState {
     throw std::runtime_error(
         "This simulator cannot hermitize its density matrix");
   }
-  virtual void TrimMatrixProductOperator() {
-    throw std::runtime_error("This simulator is not a matrix-product operator");
+  /** Compress a matrix-product state or operator to its configured limits. */
+  virtual void Trim() {
+    throw std::runtime_error(
+        "This simulator is not a matrix-product state or operator");
   }
-  virtual void ReCanonicalizeMatrixProductOperator() {
-    throw std::runtime_error("This simulator is not a matrix-product operator");
+  /** Restore the canonical form of a matrix-product state or operator. */
+  virtual void ReCanonicalize() {
+    throw std::runtime_error(
+        "This simulator is not a matrix-product state or operator");
   }
 
   /** Apply an arbitrary CPTP map supplied in Kraus form. */

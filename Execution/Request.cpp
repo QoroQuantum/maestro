@@ -603,8 +603,8 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
       if (state[q] == '1') target |= uint64_t{1} << q;
   }
   if (operation == "diagnostics") {
-    Supported(Mixed(config),
-              "Mixed-state diagnostics require density_matrix or MPO");
+    Supported(Mixed(config) || MatrixProductChain(config),
+              "Diagnostics require density_matrix, MPS or MPO");
     if (request.contains("keep_qubits")) {
       bool partial = false;
       if (const auto* values = request.if_contains("diagnostics"))
@@ -620,6 +620,8 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
                                       "partial_trace"}
                     .count(name),
                 "Unknown diagnostic");
+        Supported(Mixed(config),
+                  "Mixed-state diagnostics require density_matrix or MPO");
         if (name == "partial_trace") {
           const auto& keep = Array(Field(request, "keep_qubits"));
           Require(
@@ -637,9 +639,12 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
         Require(name == "restore_trace" || name == "hermitize" ||
                     name == "trim" || name == "recanonicalize",
                 "Unknown maintenance action");
-        Supported((name != "trim" && name != "recanonicalize") ||
-                      config.simulation_type == Method::kMatrixProductOperator,
-                  "This maintenance action requires MPO");
+        if (name == "trim" || name == "recanonicalize")
+          Supported(MatrixProductChain(config),
+                    "This maintenance action requires MPS or MPO");
+        else
+          Supported(Mixed(config),
+                    "This maintenance action requires density_matrix or MPO");
       }
   }
   if (validate || operation == "validate")
@@ -731,8 +736,8 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
     if (operation == "state_probability")
       result["probability"] = simulator->Probability(target);
     else if (operation == "diagnostics") {
-      Supported(Mixed(config),
-                "Mixed-state diagnostics require density_matrix or MPO");
+      Supported(Mixed(config) || MatrixProductChain(config),
+                "Diagnostics require density_matrix, MPS or MPO");
       if (const auto* actions = request.if_contains("maintenance"))
         for (const auto& action : Array(*actions)) {
           const auto name = String(action);
@@ -741,13 +746,15 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
           else if (name == "hermitize")
             simulator->HermitizeDensityMatrix();
           else if (name == "trim")
-            simulator->TrimMatrixProductOperator();
+            simulator->Trim();
           else if (name == "recanonicalize")
-            simulator->ReCanonicalizeMatrixProductOperator();
+            simulator->ReCanonicalize();
           else
             throw Error("invalid_input", "Unknown maintenance action");
         }
-      json::array defaults{"trace", "purity"};
+      // a pure MPS has no mixed-state diagnostics to report by default
+      json::array defaults;
+      if (Mixed(config)) defaults = {"trace", "purity"};
       const auto* queries = request.if_contains("diagnostics");
       for (const auto& value : queries ? Array(*queries) : defaults) {
         const auto name = String(value);

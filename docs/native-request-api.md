@@ -114,7 +114,7 @@ they cannot override the simulator or specify their own launch profiles.
 | `statevector`, `amplitudes` | optional `basis_states` | Pure-state amplitudes; these two names have the same output shape |
 | `probabilities` | optional `basis_states` | Selected or full basis probabilities |
 | `state_probability` | `target_state` | Probability of a q0-first bitstring |
-| `diagnostics` | `diagnostics`, `maintenance`, `keep_qubits` | Mixed-state diagnostics/reduced density matrix |
+| `diagnostics` | `diagnostics`, `maintenance`, `keep_qubits` | Mixed-state diagnostics/reduced density matrix; MPS/MPO maintenance |
 | `inner_product` | `other_circuit` | Complex overlap of two unitary preparations |
 | `mirror_fidelity` | — | Fidelity of the preparation followed by its inverse |
 | `noisy_fidelity` | coherent `noise` | Ideal-versus-noisy unitary fidelity across realizations |
@@ -132,9 +132,12 @@ pure-state overlap is advertised for density matrices/MPOs. Individual methods m
 have narrower numerical-query support and return a native error.
 
 Diagnostics are `trace`, `purity` (defaults), `trace_of_square`,
-`hermiticity_residual`, `is_hermitian`, and `partial_trace`. The latter requires
-unique `keep_qubits` and returns `{dimension,row_major}`. Maintenance accepts
-`restore_trace`, `hermitize`, and MPO-only `trim`/`recanonicalize`.
+`hermiticity_residual`, `is_hermitian`, and `partial_trace`, for density
+matrices and MPOs. The latter requires unique `keep_qubits` and returns
+`{dimension,row_major}`. Maintenance accepts `restore_trace` and `hermitize`
+(density matrix and MPO) and `trim`/`recanonicalize` (MPS and MPO). An MPS
+accepts the operation for maintenance only and reports no diagnostics by
+default.
 
 ## Configuration
 
