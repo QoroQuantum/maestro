@@ -580,6 +580,7 @@ if(COMPILE_TESTS)
         tests/noisemodeltests.cpp
         tests/PathIntegralTests.cpp
         tests/netwsimtests.cpp
+        tests/fusionnetwtests.cpp
         tests/mpsnetwtests.cpp
         tests/tests.cpp
     )
