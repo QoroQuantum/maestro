@@ -1068,4 +1068,81 @@ BOOST_AUTO_TEST_CASE(DummyOperatorChainModel) {
                  mps.getCurrentBondDimensions()[2]);
 }
 
+// Layering moves operations on idle qubits forward. Measurements writing a
+// classical bit must still follow earlier writes to it and the conditional
+// operations reading its previous value.
+BOOST_AUTO_TEST_CASE(LayersKeepClassicalBitOrder) {
+  using CF = Circuits::CircuitFactory<>;
+  using Kind = Circuits::QuantumGateType;
+  const auto x = [](Types::qubit_t q) {
+    return std::static_pointer_cast<Circuits::IGateOperation<>>(
+        CF::CreateGate(Kind::kXGateType, q));
+  };
+  auto circuit = CF::CreateCircuit(
+      {CF::CreateGate(Kind::kXGateType, 2), CF::CreateGate(Kind::kCXGateType, 2, 3),
+       CF::CreateGate(Kind::kCXGateType, 3, 2),
+       CF::CreateMeasurement({{3, 0}}),
+       CF::CreateSimpleConditionalGate(x(1), 0),
+       CF::CreateMeasurement({{0, 0}}),
+       CF::CreateMeasurement({{1, 1}})});
+  const auto ops = circuit->GetOperations();
+  const auto position = [&](const auto& op) {
+    return std::find(ops.begin(), ops.end(), op) - ops.begin();
+  };
+  const auto check = [&](const auto& layers, bool cloned, const char* name) {
+    std::vector<std::shared_ptr<Circuits::IOperation<>>> flat;
+    for (const auto& layer : layers)
+      for (const auto& op : layer->GetOperations()) flat.push_back(op);
+    BOOST_REQUIRE_EQUAL(flat.size(), ops.size());
+    // the classical bit 0 is written, read, written again
+    std::vector<Circuits::OperationType> bitZero;
+    for (size_t i = 0; i < flat.size(); ++i) {
+      const auto bits = flat[i]->AffectedBits();
+      if (std::find(bits.begin(), bits.end(), 0) != bits.end())
+        bitZero.push_back(flat[i]->GetType());
+    }
+    const std::vector<Circuits::OperationType> expected{
+        Circuits::OperationType::kMeasurement,
+        Circuits::OperationType::kConditionalGate,
+        Circuits::OperationType::kMeasurement};
+    BOOST_CHECK_MESSAGE(bitZero == expected,
+                        name << " reordered the uses of a classical bit");
+    if (!cloned) {
+      // the last write to bit 0 measures qubit 0
+      for (auto it = flat.rbegin(); it != flat.rend(); ++it) {
+        const auto bits = (*it)->AffectedBits();
+        if ((*it)->GetType() == Circuits::OperationType::kMeasurement &&
+            std::find(bits.begin(), bits.end(), 0) != bits.end()) {
+          BOOST_CHECK_MESSAGE(position(*it) == 5,
+                              name << " changed the last write to a bit");
+          break;
+        }
+      }
+    }
+  };
+  check(circuit->ToLayers(), true, "ToLayers");
+  check(circuit->ToLayersNoClone(), false, "ToLayersNoClone");
+  check(circuit->ToMultipleQubitsLayers(), true, "ToMultipleQubitsLayers");
+  check(circuit->ToMultipleQubitsLayersNoClone(), false,
+        "ToMultipleQubitsLayersNoClone");
+
+  // Through the network the optimized MPS executes the layered order.
+  for (auto method : {Simulators::SimulationType::kMatrixProductState,
+                      Simulators::SimulationType::kMatrixProductOperator}) {
+    auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
+        std::vector<Types::qubit_t>{4}, std::vector<size_t>{2});
+    network->SetMPSOptimizeSwaps(true);
+    network->SetInitialQubitsMapOptimization(true);
+    network->SetMPSOptimizationQubitsNumberThreshold(0);
+    network->SetMPSOptimizationBondDimensionThreshold(0);
+    network->RemoveAllOptimizationSimulatorsAndAdd(
+        Simulators::SimulatorType::kQCSim, method);
+    network->CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+    // qubit 3 is 1, so the conditional X sets qubit 1; qubit 0 stays 0
+    const auto counts = network->RepeatedExecuteOnHost(circuit, 0, 100);
+    BOOST_REQUIRE_EQUAL(counts.size(), 1);
+    BOOST_CHECK(counts.begin()->first == std::vector<bool>({false, true}));
+  }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

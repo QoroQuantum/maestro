@@ -372,6 +372,28 @@ BOOST_DATA_TEST_CASE_F(NetwSimTestFixture,
 }
 
 
+// A host circuit narrower than the network gets its own simulator, and the
+// network simulator is recreated afterwards. That must keep the results the
+// execution stored in the classical state.
+BOOST_AUTO_TEST_CASE(ExecuteOnHostKeepsMeasurementResults) {
+  for (auto method : {Simulators::SimulationType::kStatevector,
+                      Simulators::SimulationType::kMatrixProductState}) {
+    auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(
+        std::vector<Types::qubit_t>{4}, std::vector<size_t>{8});
+    network->CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+    auto circuit = Circuits::CircuitFactory<>::CreateCircuit(
+        {Circuits::CircuitFactory<>::CreateGate(
+             Circuits::QuantumGateType::kXGateType, 1),
+         Circuits::CircuitFactory<>::CreateMeasurement({{1, 4}, {0, 5}})});
+
+    network->ExecuteOnHost(circuit, 0);
+    const auto bits = network->GetState().GetAllBits();
+    BOOST_REQUIRE_GE(bits.size(), 6);
+    BOOST_TEST(bits[4]);
+    BOOST_TEST(!bits[5]);
+  }
+}
+
 BOOST_DATA_TEST_CASE_F(NetwSimTestFixture,
                        RandomMixedCircuitSampleCountsMatchStatevectorProbabilities,
                        bdata::xrange(5), trial) {

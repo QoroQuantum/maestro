@@ -199,7 +199,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
          (simulator && (simType != simulator->GetType() ||
                         method != simulator->GetSimulationType() ||
                         simulator->GetNumberOfQubits() != numQubits))))
-      CreateSimulator(simType, method);
+      RecreateSimulatorKeepingResults(simType, method);
   }
 
   /**
@@ -244,7 +244,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
          (simulator && (simType != simulator->GetType() ||
                         method != simulator->GetSimulationType() ||
                         simulator->GetNumberOfQubits() != numQubits))))
-      CreateSimulator(simType, method);
+      RecreateSimulatorKeepingResults(simType, method);
   }
 
   /**
@@ -322,7 +322,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (recreate && (!simulator || simType != simulator->GetType() ||
                      method != simulator->GetSimulationType() ||
                      simulator->GetNumberOfQubits() != numQubits))
-      CreateSimulator(simType, method);
+      RecreateSimulatorKeepingResults(simType, method);
 
     return expectations;
   }
@@ -418,7 +418,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (recreate && (!simulator || simType != simulator->GetType() ||
                      method != simulator->GetSimulationType() ||
                      simulator->GetNumberOfQubits() != numQubits))
-      CreateSimulator(simType, method);
+      RecreateSimulatorKeepingResults(simType, method);
 
     return expectations;
   }
@@ -507,7 +507,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (recreate && (!simulator || simType != simulator->GetType() ||
                      method != simulator->GetSimulationType() ||
                      simulator->GetNumberOfQubits() != numQubits))
-      CreateSimulator(simType, method);
+      RecreateSimulatorKeepingResults(simType, method);
 
     return amplitudes;
   }
@@ -563,7 +563,7 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (recreate && (!simulator || simType != simulator->GetType() ||
                      method != simulator->GetSimulationType() ||
                      simulator->GetNumberOfQubits() != numQubits))
-      CreateSimulator(simType, method);
+      RecreateSimulatorKeepingResults(simType, method);
 
     return result;
   }
@@ -2490,6 +2490,15 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
     if (simulator &&
         Simulators::IsDistributedGpuSimulator(simulator->GetType()))
       configuration.SetConfiguration("distributed_devices", requested);
+  }
+
+  // Recreating the network simulator after a single execution must not drop
+  // the classical results that execution stored in the network state.
+  void RecreateSimulatorKeepingResults(Simulators::SimulatorType simType,
+                                       Simulators::SimulationType method) {
+    const auto results = GetState().GetAllBits();
+    CreateSimulator(simType, method);
+    GetState().SetResultsInOrder(results);
   }
 
   Configuration<Time> ExecutionConfiguration(Simulators::SimulatorType type,

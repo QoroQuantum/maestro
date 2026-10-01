@@ -2361,6 +2361,9 @@ class Circuit : public IOperation<Time> {
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
     std::unordered_map<size_t, size_t> classicalBitLayer;
+    // The last layer reading each bit: a later write (a measurement) must not
+    // move ahead of a read of the old value or of an earlier write.
+    std::unordered_map<size_t, size_t> classicalBitReadLayer;
 
     for (const auto &op : GetOperations()) {
       // check the instruction, see if a new layer is needed
@@ -2386,6 +2389,11 @@ class Circuit : public IOperation<Time> {
           const auto bits = op->AffectedBits();
           for (const auto bit : bits)
             maxLevel = std::max(maxLevel, classicalBitLayer[bit]);
+        } else {
+          // the bits are written: keep the order of the writes and reads
+          for (const auto bit : op->AffectedBits())
+            maxLevel = std::max(maxLevel, std::max(classicalBitLayer[bit],
+                                                   classicalBitReadLayer[bit]));
         }
 
         // now set all the qubits in the instruction to the max level
@@ -2399,13 +2407,12 @@ class Circuit : public IOperation<Time> {
 
         layers[layerIdx]->AddOperation(op->Clone());
 
-        const auto writtenBits = op->AffectedBits();
-        if (!writtenBits.empty() && !op->IsConditional()) {
-          const size_t writtenLevel = maxLevel > 0 ? maxLevel : 1;
-          for (const auto bit : writtenBits)
-            classicalBitLayer[bit] =
-                std::max(classicalBitLayer[bit], writtenLevel);
-        }
+        const auto usedBits = op->AffectedBits();
+        const size_t usedLevel = maxLevel > 0 ? maxLevel : 1;
+        auto &bitLayers =
+            op->IsConditional() ? classicalBitReadLayer : classicalBitLayer;
+        for (const auto bit : usedBits)
+          bitLayers[bit] = std::max(bitLayers[bit], usedLevel);
       } else
         // add the instruction to the last layer
         layers.back()->AddOperation(op->Clone());
@@ -2429,6 +2436,9 @@ class Circuit : public IOperation<Time> {
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
     std::unordered_map<size_t, size_t> classicalBitLayer;
+    // The last layer reading each bit: a later write (a measurement) must not
+    // move ahead of a read of the old value or of an earlier write.
+    std::unordered_map<size_t, size_t> classicalBitReadLayer;
 
     for (const auto &op : GetOperations()) {
       // check the instruction, see if a new layer is needed
@@ -2454,6 +2464,11 @@ class Circuit : public IOperation<Time> {
           const auto bits = op->AffectedBits();
           for (const auto bit : bits)
             maxLevel = std::max(maxLevel, classicalBitLayer[bit]);
+        } else {
+          // the bits are written: keep the order of the writes and reads
+          for (const auto bit : op->AffectedBits())
+            maxLevel = std::max(maxLevel, std::max(classicalBitLayer[bit],
+                                                   classicalBitReadLayer[bit]));
         }
 
         // now set all the qubits in the instruction to the max level
@@ -2467,13 +2482,12 @@ class Circuit : public IOperation<Time> {
 
         layers[layerIdx]->AddOperation(op);
 
-        const auto writtenBits = op->AffectedBits();
-        if (!writtenBits.empty() && !op->IsConditional()) {
-          const size_t writtenLevel = maxLevel > 0 ? maxLevel : 1;
-          for (const auto bit : writtenBits)
-            classicalBitLayer[bit] =
-                std::max(classicalBitLayer[bit], writtenLevel);
-        }
+        const auto usedBits = op->AffectedBits();
+        const size_t usedLevel = maxLevel > 0 ? maxLevel : 1;
+        auto &bitLayers =
+            op->IsConditional() ? classicalBitReadLayer : classicalBitLayer;
+        for (const auto bit : usedBits)
+          bitLayers[bit] = std::max(bitLayers[bit], usedLevel);
       } else
         // add the instruction to the last layer
         layers.back()->AddOperation(op);
@@ -2499,6 +2513,9 @@ class Circuit : public IOperation<Time> {
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> qubitsUsed;
     std::unordered_map<size_t, size_t> classicalBitLayer;
+    // The last layer reading each bit: a later write (a measurement) must not
+    // move ahead of a read of the old value or of an earlier write.
+    std::unordered_map<size_t, size_t> classicalBitReadLayer;
 
     for (const auto &op : GetOperations()) {
       // check the instruction, see if a new layer is needed
@@ -2524,6 +2541,11 @@ class Circuit : public IOperation<Time> {
           const auto bits = op->AffectedBits();
           for (const auto bit : bits)
             maxLevel = std::max(maxLevel, classicalBitLayer[bit]);
+        } else {
+          // the bits are written: keep the order of the writes and reads
+          for (const auto bit : op->AffectedBits())
+            maxLevel = std::max(maxLevel, std::max(classicalBitLayer[bit],
+                                                   classicalBitReadLayer[bit]));
         }
 
         // now set all the qubits in the instruction to the max level
@@ -2537,13 +2559,12 @@ class Circuit : public IOperation<Time> {
 
         layers[layerIdx]->AddOperation(op->Clone());
 
-        const auto writtenBits = op->AffectedBits();
-        if (!writtenBits.empty() && !op->IsConditional()) {
-          const size_t writtenLevel = maxLevel > 0 ? maxLevel : 1;
-          for (const auto bit : writtenBits)
-            classicalBitLayer[bit] =
-                std::max(classicalBitLayer[bit], writtenLevel);
-        }
+        const auto usedBits = op->AffectedBits();
+        const size_t usedLevel = maxLevel > 0 ? maxLevel : 1;
+        auto &bitLayers =
+            op->IsConditional() ? classicalBitReadLayer : classicalBitLayer;
+        for (const auto bit : usedBits)
+          bitLayers[bit] = std::max(bitLayers[bit], usedLevel);
       } else
         // add the instruction to the last layer
         layers.back()->AddOperation(op->Clone());
@@ -2573,6 +2594,9 @@ class Circuit : public IOperation<Time> {
     // written to, so that conditional operations reading those bits are placed
     // in the same layer or later.
     std::unordered_map<size_t, size_t> classicalBitLayer;
+    // Likewise the last layer reading each bit: a later write (a measurement)
+    // must not move ahead of a read of the old value or of an earlier write.
+    std::unordered_map<size_t, size_t> classicalBitReadLayer;
 
     for (const auto &op : GetOperations()) {
       // check the instruction, see if a new layer is needed
@@ -2600,6 +2624,11 @@ class Circuit : public IOperation<Time> {
           const auto bits = op->AffectedBits();
           for (const auto bit : bits)
             maxLevel = std::max(maxLevel, classicalBitLayer[bit]);
+        } else {
+          // the bits are written: keep the order of the writes and reads
+          for (const auto bit : op->AffectedBits())
+            maxLevel = std::max(maxLevel, std::max(classicalBitLayer[bit],
+                                                   classicalBitReadLayer[bit]));
         }
 
         // now set all the qubits in the instruction to the max level
@@ -2614,14 +2643,14 @@ class Circuit : public IOperation<Time> {
         layers[layerIdx]->AddOperation(op);
 
         // Record the layer for classical bits written by measurements / resets
-        // so that later conditional ops respect the dependency.
-        const auto writtenBits = op->AffectedBits();
-        if (!writtenBits.empty() && !op->IsConditional()) {
-          const size_t writtenLevel = maxLevel > 0 ? maxLevel : 1;
-          for (const auto bit : writtenBits)
-            classicalBitLayer[bit] =
-                std::max(classicalBitLayer[bit], writtenLevel);
-        }
+        // so that later conditional ops respect the dependency, and the layer
+        // of the bits read by conditional ops so that later writes do.
+        const auto usedBits = op->AffectedBits();
+        const size_t usedLevel = maxLevel > 0 ? maxLevel : 1;
+        auto &bitLayers =
+            op->IsConditional() ? classicalBitReadLayer : classicalBitLayer;
+        for (const auto bit : usedBits)
+          bitLayers[bit] = std::max(bitLayers[bit], usedLevel);
       } else
         // add the instruction to the last layer
         layers.back()->AddOperation(op);
