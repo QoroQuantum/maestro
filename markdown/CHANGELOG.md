@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-10-02
+
+### Added
+
+- Gate fusion for the QCSim and GPU backends, controlled by `gate_fusion`
+  in `SimulatorConfig` and exposed through the simulator, network, C and
+  native request interfaces with fusion statistics (see `docs/gate_fusion.md`).
+  `SimulatorConfig.gate_fusion` is optional: `None` means unset, and
+  `GetConfiguration("gate_fusion")` then reports `"auto"`.
+- Native MPO queries on the QCSim and GPU backends: bit-vector probabilities,
+  density matrix elements, dense density-matrix output, complex Pauli
+  expectations and local operators `A rho A†`, through `IState`, the C
+  interface, the Python bindings and the native request API.
+- `trim()` and `recanonicalize()` for matrix-product states, and the `trim`
+  and `recanonicalize` maintenance actions for MPS in the request API.
+- Swap optimization (look-ahead routing) for MPOs, and
+  `disable_optimized_swapping` and `lookahead_depth` for MPO requests.
+
+### Changed
+
+- **Breaking:** the Python methods `trim_mpo` and `recanonicalize_mpo` are
+  renamed `trim` and `recanonicalize`; they now work on MPS as well as MPO.
+- When `gate_fusion` is not set, QCSim statevectors below 11 qubits and density
+  matrices below 5 qubits run unfused, as fusion is slower there. An explicit
+  `true` or `false` still forces fusion on or off at any size.
+- MPO `max_bond_dimension` accepts zero for unlimited, and the trace-restore
+  and hermitize options now apply to GPU MPO too.
+- `precision` and `use_double_precision` are aliases kept in sync. Qiskit Aer
+  honours single precision for initialization and state export, and the
+  network no longer forces single precision.
+- Faster CPU fused circuits, from the vectorized dense gate kernels and a
+  cheaper fusion cache.
+- The GPU diagnostics operation accepts an MPS for maintenance. An MPS reports
+  no diagnostics by default.
+
+### Fixed
+
+- Circuit layering no longer moves a measurement ahead of an earlier write to
+  the same classical bit, or ahead of a conditional gate still reading it.
+  Routed MPS/MPO runs returned wrong distributions for circuits that write a
+  bit twice.
+- Single-shot network calls keep the shot's classical bits when the executed
+  circuit is narrower than the network allocation; `ExecuteOnHost` reported all
+  zeros.
+- MPS look-ahead routing survives gate fusion, so fused MPS circuits with
+  mid-circuit measurements no longer fall back to local routing.
+- `FlushSimulator` waits for queued GPU statevector and density-matrix work, and
+  fusion boundaries no longer stall the GPU.
+- Multithreading flags are forwarded to QCSim MPS and MPO simulators.
+- Tensor network clones are isolated from the original.
+- GPU, distributed GPU, Aer and composite simulators ignore a precision set
+  after initialization instead of throwing. A new precision takes effect after
+  `Clear` and the next `Initialize`.
+- CI build installs apt packages after refreshing the package index.
+
+### Dependencies
+
+- QCSim pin bumped to 1edb647: vectorized dense gate kernels, MPS
+  recanonicalization fixes, MPO long-chain scaling, MPS sampling and input
+  validation fixes, and Windows compile fixes.
+
 ## [0.3.4] - 2026-09-26
 
 ### Changed
@@ -352,7 +413,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.5...HEAD
+[0.3.5]: https://github.com/QoroQuantum/maestro/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/QoroQuantum/maestro/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/QoroQuantum/maestro/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/QoroQuantum/maestro/compare/v0.3.1...v0.3.2
