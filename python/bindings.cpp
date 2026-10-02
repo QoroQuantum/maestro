@@ -1486,6 +1486,22 @@ NB_MODULE(maestro, m) {
       .def("Measure", &Simulators::ISimulator::Measure, "qubits"_a,
            "Measure and collapse the selected qubits; the first listed qubit "
            "is the least-significant result bit.")
+      .def("MeasureMany", &Simulators::ISimulator::MeasureMany, "qubits"_a)
+      .def("MeasureNoCollapseMany",
+           &Simulators::ISimulator::MeasureNoCollapseMany)
+      .def(
+          "SampleCountsMany",
+          [](Simulators::ISimulator& sim, const Types::qubits_vector& qubits,
+             size_t shots) {
+            nb::dict result;
+            for (const auto& entry : sim.SampleCountsMany(qubits, shots)) {
+              nb::list bits;
+              for (bool bit : entry.first) bits.append(bit);
+              result[nb::tuple(bits)] = entry.second;
+            }
+            return result;
+          },
+          "qubits"_a, "shots"_a = 1000)
       .def("ApplyReset", &Simulators::ISimulator::ApplyReset, "qubits"_a)
       .def("Probability", &Simulators::ISimulator::Probability, "outcome"_a)
       .def("Amplitude", &Simulators::ISimulator::Amplitude, "outcome"_a)
@@ -1559,6 +1575,19 @@ NB_MODULE(maestro, m) {
       .def("ApplyCU", &Simulators::ISimulator::ApplyCU, "control_qubit"_a,
            "target_qubit"_a, "theta"_a, "phi"_a, "lambda_"_a, "gamma"_a = 0.0)
       .def("set_seed", &Simulators::ISimulator::SetSeed, "seed"_a)
+      .def("probability_bits", &Simulators::ISimulator::ProbabilityBits,
+           "bits"_a)
+      .def("density_matrix_element_bits",
+           &Simulators::ISimulator::DensityMatrixElementBits, "row"_a, "col"_a)
+      .def("get_density_matrix", &Simulators::ISimulator::GetDensityMatrix,
+           "normalized"_a = true)
+      .def("expectation_value_complex",
+           &Simulators::ISimulator::ExpectationValueComplex, "pauli"_a,
+           "normalized"_a = true)
+      .def("apply_operator", &Simulators::ISimulator::ApplyOperator, "qubits"_a,
+           "matrix"_a, "normalize"_a = false)
+      .def("move_at_beginning_of_chain",
+           &Simulators::ISimulator::MoveAtBeginningOfChain, "qubits"_a)
       .def("density_matrix_trace", &Simulators::ISimulator::DensityMatrixTrace)
       .def("density_matrix_purity",
            &Simulators::ISimulator::DensityMatrixPurity)

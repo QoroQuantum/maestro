@@ -156,7 +156,7 @@ struct SimulatorConfig {
 };
 
 // Native Configure keys for typed options without a one-to-one key. Precision
-// sets both keys: GpuState reads use_double_precision, the others precision.
+// sets both precision aliases for compatibility with existing callers.
 inline std::vector<std::pair<std::string, std::string>> TypedNativeOptions(
     const SimulatorConfig& config) {
   std::vector<std::pair<std::string, std::string>> options;

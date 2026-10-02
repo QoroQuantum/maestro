@@ -43,6 +43,7 @@
 #include "../Utils/Alias.h"
 
 #include "MPSDummySimulator.h"
+#include "MPOValidation.h"
 #include "Configuration.h"
 
 namespace Simulators {
@@ -669,6 +670,26 @@ class ImmediateQCSimState : public ISimulator {
         simulationType = SimulationType::kExtendedStabilizer;
     }
 
+    if (simulationType == SimulationType::kMatrixProductOperator &&
+        (std::string(key) == "matrix_product_state_max_bond_dimension" ||
+         std::string(key) == "matrix_product_operator_max_bond_dimension")) {
+      const auto limit = std::stoll(value);
+      if (limit < 0) throw std::invalid_argument("Negative MPO bond dimension");
+      if (mpoSimulator) {
+        if (limit == 0)
+          mpoSimulator->dontLimitBondDimension();
+        else
+          mpoSimulator->setLimitBondDimension(limit);
+      }
+      const std::string limitValue(value);
+      configuration.SetConfiguration("matrix_product_state_max_bond_dimension",
+                                     limitValue);
+      configuration.SetConfiguration(
+          "matrix_product_operator_max_bond_dimension", limitValue);
+      if (dummySim) dummySim->SetMaxBondDimension(limit);
+      return;
+    }
+
     if (!configuration.WasApplied(key, value))
       configuration.SetConfiguration(key, value);
 
@@ -803,6 +824,18 @@ class ImmediateQCSimState : public ISimulator {
    * @return The configuration value as a string.
    */
   std::string GetConfiguration(const char *key) const override {
+    if (!key) return {};
+    if (std::string(key) == "precision") return "double";
+    if (std::string(key) == "use_double_precision") return "1";
+    if (mpoSimulator) {
+      if (std::string(key) ==
+          "matrix_product_operator_restore_trace_after_truncation")
+        return mpoSimulator->getRestoreTraceAfterTruncation() ? "true"
+                                                              : "false";
+      if (std::string(key) ==
+          "matrix_product_operator_hermitize_after_truncation")
+        return mpoSimulator->getHermitizeAfterTruncation() ? "true" : "false";
+    }
     if (std::string("method") == key) {
       switch (simulationType) {
         case SimulationType::kStatevector:
@@ -901,6 +934,9 @@ class ImmediateQCSimState : public ISimulator {
    * least significant bit.
    */
   size_t Measure(const Types::qubits_vector &qubits) override {
+    if (mpoSimulator && qubits.size() > sizeof(size_t) * 8)
+      throw std::invalid_argument(
+          "Use MeasureMany for more than 64 measured qubits");
     // TODO: this is inefficient, maybe implement it better in qcsim
     // for now it has the possibility of measuring a qubits interval, but not a
     // list of qubits
@@ -1153,6 +1189,55 @@ class ImmediateQCSimState : public ISimulator {
     NotifyObservers(targets);
   }
 
+  double ProbabilityBits(const std::vector<bool> &bits) override {
+    if (!mpoSimulator) return IState::ProbabilityBits(bits);
+    MPOValidation::Bits(bits, nrQubits);
+    return mpoSimulator->getBasisStateProbability(bits);
+  }
+  std::complex<double> DensityMatrixElementBits(
+      const std::vector<bool> &row,
+      const std::vector<bool> &col) const override {
+    if (!mpoSimulator) return IState::DensityMatrixElementBits(row, col);
+    MPOValidation::Bits(row, nrQubits);
+    MPOValidation::Bits(col, nrQubits);
+    return mpoSimulator->getBasisStateMatrixElement(row, col);
+  }
+  Eigen::MatrixXcd GetDensityMatrix(bool normalized = true) const override {
+    if (!mpoSimulator) return IState::GetDensityMatrix(normalized);
+    if (nrQubits > 13)
+      throw std::invalid_argument(
+          "MPO dense output supports at most 13 qubits");
+    return normalized ? mpoSimulator->getDensityMatrix()
+                      : mpoSimulator->getUnnormalizedDensityMatrix();
+  }
+  std::complex<double> ExpectationValueComplex(
+      const std::string &pauli, bool normalized = true) const override {
+    if (!mpoSimulator)
+      return IState::ExpectationValueComplex(pauli, normalized);
+    MPOValidation::Pauli(pauli, nrQubits);
+    return normalized ? mpoSimulator->ExpectationValue(pauli)
+                      : mpoSimulator->UnnormalizedExpectationValue(pauli);
+  }
+  void ApplyOperator(const Types::qubits_vector &qubits,
+                     const Eigen::MatrixXcd &matrix,
+                     bool normalize = false) override {
+    if (!mpoSimulator) return IState::ApplyOperator(qubits, matrix, normalize);
+    const auto selected = MPOValidation::Operator(qubits, matrix, nrQubits);
+    const QC::Gates::AppliedGate<> op(matrix, selected[0],
+                                      selected.size() == 2 ? selected[1] : 0);
+    if (normalize)
+      mpoSimulator->ApplyOperatorAndNormalize(op);
+    else
+      mpoSimulator->ApplyOperator(op);
+    NotifyObservers(qubits);
+  }
+  void MoveAtBeginningOfChain(const Types::qubits_vector &qubits) override {
+    if (!mpoSimulator) return IState::MoveAtBeginningOfChain(qubits);
+    const auto selected = MPOValidation::Qubits(qubits, nrQubits);
+    mpoSimulator->MoveAtBeginningOfChain(
+        std::set<Eigen::Index>(selected.begin(), selected.end()));
+  }
+
   std::complex<double> DensityMatrixTrace() const override {
     if (densityMatrix) return densityMatrix->Trace();
     if (mpoSimulator) return mpoSimulator->Trace();
@@ -1293,9 +1378,16 @@ class ImmediateQCSimState : public ISimulator {
       return pathIntegralSimulator->Probability(outcome);
     else if (simulationType == SimulationType::kDensityMatrix)
       return densityMatrix->getBasisStateProbability(outcome);
-    else if (simulationType == SimulationType::kMatrixProductOperator)
-      return mpoSimulator->getBasisStateProbability(outcome);
-    else if (simulationType == SimulationType::kExtendedStabilizer)
+    else if (simulationType == SimulationType::kMatrixProductOperator) {
+      if (nrQubits < sizeof(Types::qubit_t) * 8 &&
+          outcome >= (Types::qubit_t{1} << nrQubits))
+        throw std::out_of_range("MPO basis state is out of range");
+      std::vector<bool> bits(nrQubits);
+      for (size_t q = 0; q < std::min(nrQubits, sizeof(Types::qubit_t) * 8);
+           ++q)
+        bits[q] = ((outcome >> q) & 1) != 0;
+      return ProbabilityBits(bits);
+    } else if (simulationType == SimulationType::kExtendedStabilizer)
       return ExtendedStabilizerBasisProbability(outcome);
 
     return state->getBasisStateProbability(static_cast<unsigned int>(outcome));
@@ -1466,7 +1558,7 @@ class ImmediateQCSimState : public ISimulator {
         result[i] = densityMatrix->getBasisStateProbability(qubits[i]);
     } else if (simulationType == SimulationType::kMatrixProductOperator) {
       for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
-        result[i] = mpoSimulator->getBasisStateProbability(qubits[i]);
+        result[i] = Probability(qubits[i]);
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
       for (int i = 0; i < static_cast<int>(qubits.size()); ++i)
         result[i] = ExtendedStabilizerBasisProbability(qubits[i]);
@@ -1498,6 +1590,13 @@ class ImmediateQCSimState : public ISimulator {
    */
   std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    if (mpoSimulator && qubits.size() > sizeof(Types::qubit_t) * 8)
+      throw std::invalid_argument(
+          "Use SampleCountsMany for more than 64 measured qubits");
+    if (mpoSimulator)
+      for (auto q : qubits)
+        if (q >= nrQubits)
+          throw std::out_of_range("MPO sampled qubit is out of range");
     if (qubits.empty() || shots == 0) return {};
 
     if (simulationType == SimulationType::kStabilizer) {
@@ -1742,6 +1841,10 @@ class ImmediateQCSimState : public ISimulator {
    */
   std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    if (mpoSimulator)
+      for (auto q : qubits)
+        if (q >= nrQubits)
+          throw std::out_of_range("MPO sampled qubit is out of range");
     if (qubits.empty() || shots == 0) return {};
 
     if (simulationType == SimulationType::kStabilizer) {
@@ -2208,6 +2311,9 @@ class ImmediateQCSimState : public ISimulator {
    * least significant bit.
    */
   Types::qubit_t MeasureNoCollapse() override {
+    if (mpoSimulator && nrQubits > sizeof(Types::qubit_t) * 8)
+      throw std::invalid_argument(
+          "Use MeasureNoCollapseMany for more than 64 qubits");
     if (GetNumberOfQubits() > sizeof(Types::qubit_t) * 8)
       std::cerr
           << "Warning: The number of qubits to measure is larger than the "

@@ -13,6 +13,7 @@
 #define _MAESTRO_INTERFACE_H_
 
 #include "InterfaceTypes.h"
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -367,6 +368,63 @@ __declspec(dllexport)
 #endif
     int ApplyCU(void *sim, int controlQubit, int targetQubit, double theta,
                 double phi, double lambda, double gamma);
+// MPO extensions. Return 1 on success, 0 on invalid arguments/backend failure.
+// Bit vectors are q0-first; matrices are column-major interleaved doubles.
+// GetDensityMatrix capacity counts doubles. SampleCountsBits capacity counts
+// histogram entries and must be >= shots; outcomes needs capacity*width bytes,
+// counts needs capacity entries. Each outcome follows the supplied qubit order.
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroProbabilityBits(void *sim, const unsigned char *bits,
+                               size_t width, double *result);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroDensityMatrixElementBits(void *sim, const unsigned char *row,
+                                        const unsigned char *col, size_t width,
+                                        double *real, double *imag);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroDensityMatrixTrace(void *sim, double *real, double *imag);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroExpectationValueComplex(void *sim, const char *pauli,
+                                       int normalized, double *real,
+                                       double *imag);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroGetDensityMatrix(void *sim, int normalized, double *interleaved,
+                                size_t capacity);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroApplyOperator(void *sim, const unsigned long int *qubits,
+                             size_t count, const double *interleaved,
+                             int normalize);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroMoveAtBeginningOfChain(void *sim,
+                                      const unsigned long int *qubits,
+                                      size_t count);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroSampleCountsBits(void *sim, const unsigned long int *qubits,
+                                size_t width, size_t shots,
+                                unsigned char *outcomes,
+                                unsigned long long *counts, size_t capacity,
+                                size_t *written);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroMeasureBits(void *sim, const unsigned long int *qubits,
+                           size_t width, unsigned char *outcomes);
+
 #ifdef __cplusplus
 }
 #endif

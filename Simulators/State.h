@@ -526,6 +526,37 @@ class IState {
         "This simulator does not support exact quantum-channel evolution");
   }
 
+  /** MPO extensions: bit vectors are q0-first; matrices use logical basis
+   * order. Element queries return the raw operator. Dense output and complex
+   * Pauli expectations are trace-normalized unless normalized is false.
+   * ApplyOperator computes A rho A^dagger; normalize also restores unit trace.
+   */
+  virtual double ProbabilityBits(const std::vector<bool> &) {
+    throw std::runtime_error("This simulator does not support ProbabilityBits");
+  }
+  virtual std::complex<double> DensityMatrixElementBits(
+      const std::vector<bool> &, const std::vector<bool> &) const {
+    throw std::runtime_error(
+        "This simulator does not support DensityMatrixElementBits");
+  }
+  virtual Eigen::MatrixXcd GetDensityMatrix(bool = true) const {
+    throw std::runtime_error(
+        "This simulator does not support GetDensityMatrix");
+  }
+  virtual std::complex<double> ExpectationValueComplex(const std::string &,
+                                                       bool = true) const {
+    throw std::runtime_error(
+        "This simulator does not support ExpectationValueComplex");
+  }
+  virtual void ApplyOperator(const Types::qubits_vector &,
+                             const Eigen::MatrixXcd &, bool = false) {
+    throw std::runtime_error("This simulator does not support ApplyOperator");
+  }
+  virtual void MoveAtBeginningOfChain(const Types::qubits_vector &) {
+    throw std::runtime_error(
+        "This simulator does not support MoveAtBeginningOfChain");
+  }
+
   /** Mixed-state diagnostics. Implemented by density-matrix and MPO backends.
    */
   virtual std::complex<double> DensityMatrixTrace() const {

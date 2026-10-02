@@ -255,7 +255,8 @@ BOOST_AUTO_TEST_CASE(aer_rejected_values_preserve_accepted_configuration) {
       aer->Configure("matrix_product_state_truncation_threshold", "invalid"));
   BOOST_TEST(aer->GetConfiguration(
                  "matrix_product_state_truncation_threshold") == "0.01");
-  BOOST_CHECK_NO_THROW(aer->Configure("precision", "invalid"));
+  BOOST_CHECK_THROW(aer->Configure("precision", "invalid"),
+                    std::invalid_argument);
   BOOST_TEST(aer->GetConfiguration("precision") == "double");
   BOOST_CHECK_NO_THROW(aer->Configure("method", "invalid"));
   BOOST_TEST(aer->GetConfiguration("method") == "matrix_product_state");

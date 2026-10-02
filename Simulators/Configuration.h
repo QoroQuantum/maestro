@@ -105,7 +105,25 @@ class Configuration {
     throw std::invalid_argument("GPU SVD flags must be true, false, 1 or 0");
   }
 
+  static bool ParsePrecision(const std::string& key, const std::string& value) {
+    if (key == "precision") {
+      if (value == "double") return true;
+      if (value == "single") return false;
+      throw std::invalid_argument("precision must be single or double");
+    }
+    if (value == "true" || value == "1") return true;
+    if (value == "false" || value == "0") return false;
+    throw std::invalid_argument(
+        "use_double_precision must be true, false, 1 or 0");
+  }
+
   void SetConfiguration(const std::string& key, const std::string& value) {
+    if (key == "precision" || key == "use_double_precision") {
+      const bool useDouble = ParsePrecision(key, value);
+      configMap["precision"] = useDouble ? "double" : "single";
+      configMap["use_double_precision"] = useDouble ? "1" : "0";
+      return;
+    }
     if (key == "gpu_device") ParseGpuDevice(value);
     const auto svdGroup = GpuSvdSettingGroup(key);
     if (!svdGroup.empty()) {

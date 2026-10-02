@@ -486,8 +486,36 @@ class GpuLibrary : public Utils::Library {
                    int (*)(void *, int64_t (*)(void *, const int64_t *)));
           LOAD_MPO(MPOSetBondDimensionsCallback,
                    int (*)(void *, void (*)(void *, const int64_t *)));
-          LOAD_MPO(MPOReCanonicalize, int (*)(void *, int));
-          LOAD_MPO(MPOTrim, int (*)(void *, double, long int, int));
+          LOAD_MPO(MPOSampleBits, int (*)(void *, unsigned int, unsigned int,
+                                          const int *, unsigned char *));
+          LOAD_MPO(MPOGetMapForSample, void *(*)());
+          LOAD_MPO(MPOFreeMapForSample, int (*)(void *));
+          LOAD_MPO(MPOSampleHistogram,
+                   int (*)(void *, long int, long int, unsigned int *, void *));
+          LOAD_MPO(MPOGetElementBits,
+                   int (*)(void *, const unsigned char *, const unsigned char *,
+                           double *, double *));
+          LOAD_MPO(MPOBasisStateProbabilityBits,
+                   double (*)(void *, const unsigned char *));
+          LOAD_MPO(MPOExpectationValueComplex,
+                   int (*)(void *, const char *, int, double *, double *));
+          LOAD_MPO(MPOUnnormalizedExpectationValue,
+                   int (*)(void *, const char *, int, double *, double *));
+          LOAD_MPO(MPOGetDensityMatrix, int (*)(void *, double *));
+          LOAD_MPO(MPOGetUnnormalizedDensityMatrix, int (*)(void *, double *));
+          LOAD_MPO(MPOTraceComplex, int (*)(void *, double *, double *));
+          LOAD_MPO(MPOSetRestoreTraceAfterTruncation, int (*)(void *, int));
+          LOAD_MPO(MPOGetRestoreTraceAfterTruncation, int (*)(void *));
+          LOAD_MPO(MPOSetHermitizeAfterTruncation, int (*)(void *, int));
+          LOAD_MPO(MPOGetHermitizeAfterTruncation, int (*)(void *));
+          LOAD_MPO(MPOMoveAtBeginningOfChain,
+                   int (*)(void *, const int *, int));
+          LOAD_MPO(MPOApplyOperator,
+                   int (*)(void *, int, const int *, const double *));
+          LOAD_MPO(MPOApplyOperatorAndNormalize,
+                   int (*)(void *, int, const int *, const double *));
+          LOAD_MPO(MPOReCanonicalize, int (*)(void *));
+          LOAD_MPO(MPOTrim, int (*)(void *, double, long int));
           LOAD_MPO(MPOSaveState, int (*)(void *));
           LOAD_MPO(MPORestoreState, int (*)(void *));
           LOAD_MPO(MPOCleanSavedState, int (*)(void *));
@@ -1293,26 +1321,33 @@ class GpuLibrary : public Utils::Library {
            fDMApplyCU;
   }
   bool HasMPOAPI() const {
-    return IsValid() && fCreateMPO && fDestroyMPO &&
-           fMPOCreate && fMPOCreateWithState && fMPOReset && fMPOIsCreated &&
-           fMPOSetDataType &&
-           fMPOSaveState && fMPORestoreState && fMPOCleanSavedState &&
-           fMPOClone && fMPOSetSeed && fMPOMeasureQubitCollapse &&
-           fMPOSampleAll &&
+    return IsValid() && fCreateMPO && fDestroyMPO && fMPOSampleBits &&
+           fMPOGetMapForSample && fMPOFreeMapForSample && fMPOSampleHistogram &&
+           fMPOGetElementBits && fMPOBasisStateProbabilityBits &&
+           fMPOExpectationValueComplex && fMPOUnnormalizedExpectationValue &&
+           fMPOGetDensityMatrix && fMPOGetUnnormalizedDensityMatrix &&
+           fMPOTraceComplex && fMPOSetRestoreTraceAfterTruncation &&
+           fMPOGetRestoreTraceAfterTruncation &&
+           fMPOSetHermitizeAfterTruncation && fMPOGetHermitizeAfterTruncation &&
+           fMPOMoveAtBeginningOfChain && fMPOApplyOperator &&
+           fMPOApplyOperatorAndNormalize && fMPOCreate && fMPOCreateWithState &&
+           fMPOReset && fMPOIsCreated && fMPOSetDataType && fMPOSaveState &&
+           fMPORestoreState && fMPOCleanSavedState && fMPOClone &&
+           fMPOSetSeed && fMPOMeasureQubitCollapse && fMPOSampleAll &&
            fMPOBasisStateProbability && fMPOAllProbabilities &&
            fMPOExpectationValue && fMPOPartialTrace &&
            fMPOHilbertSchmidtOverlap && fMPOFidelityWithStatevector &&
            fMPOTrace && fMPOPurity && fMPOHermiticityResidual &&
            fMPOIsHermitian && fMPOTraceOfSquare && fMPORestoreTrace &&
-           fMPOHermitize && fMPOReCanonicalize && fMPOTrim &&
-           fMPOApplyKraus && fMPOApplyReset &&
-           fMPOApplyX && fMPOApplyY && fMPOApplyZ && fMPOApplyH &&
-           fMPOApplyS && fMPOApplySDG && fMPOApplyT && fMPOApplyTDG &&
-           fMPOApplySX && fMPOApplySXDG && fMPOApplyK && fMPOApplyP &&
-           fMPOApplyRx && fMPOApplyRy && fMPOApplyRz && fMPOApplyU &&
-           fMPOApplyCX && fMPOApplyCY && fMPOApplyCZ && fMPOApplyCH &&
-           fMPOApplyCSX && fMPOApplyCSXDG && fMPOApplyCP && fMPOApplyCRx &&
-           fMPOApplyCRy && fMPOApplyCRz && fMPOApplySwap && fMPOApplyCU;
+           fMPOHermitize && fMPOReCanonicalize && fMPOTrim && fMPOApplyKraus &&
+           fMPOApplyReset && fMPOApplyX && fMPOApplyY && fMPOApplyZ &&
+           fMPOApplyH && fMPOApplyS && fMPOApplySDG && fMPOApplyT &&
+           fMPOApplyTDG && fMPOApplySX && fMPOApplySXDG && fMPOApplyK &&
+           fMPOApplyP && fMPOApplyRx && fMPOApplyRy && fMPOApplyRz &&
+           fMPOApplyU && fMPOApplyCX && fMPOApplyCY && fMPOApplyCZ &&
+           fMPOApplyCH && fMPOApplyCSX && fMPOApplyCSXDG && fMPOApplyCP &&
+           fMPOApplyCRx && fMPOApplyCRy && fMPOApplyCRz && fMPOApplySwap &&
+           fMPOApplyCU;
   }
 
   // statevector functions
@@ -2145,8 +2180,121 @@ class GpuLibrary : public Utils::Library {
     return obj && fMPOSetBondDimensionsCallback &&
            fMPOSetBondDimensionsCallback(obj, callback) == 1;
   }
-  MPO_BOOL1(MPOReCanonicalize, int)
-  bool MPOTrim(void *obj, double cutoff, long int maxExtent, int center) { return obj && fMPOTrim && fMPOTrim(obj, cutoff, maxExtent, center) == 1; }
+  int MPOSampleBits(void *obj, unsigned int shots, unsigned int n,
+                    const int *qubits, unsigned char *out) const {
+    if (!fMPOSampleBits)
+      throw std::runtime_error("GpuLibrary: MPOSampleBits is unavailable");
+    return fMPOSampleBits(obj, shots, n, qubits, out);
+  }
+  void *MPOGetMapForSample() const {
+    if (!fMPOGetMapForSample)
+      throw std::runtime_error("GpuLibrary: MPOGetMapForSample is unavailable");
+    return fMPOGetMapForSample();
+  }
+  int MPOFreeMapForSample(void *map) const {
+    if (!fMPOFreeMapForSample)
+      throw std::runtime_error(
+          "GpuLibrary: MPOFreeMapForSample is unavailable");
+    return fMPOFreeMapForSample(map);
+  }
+  int MPOSampleHistogram(void *obj, long int shots, long int n,
+                         unsigned int *qubits, void *map) const {
+    if (!fMPOSampleHistogram)
+      throw std::runtime_error("GpuLibrary: MPOSampleHistogram is unavailable");
+    return fMPOSampleHistogram(obj, shots, n, qubits, map);
+  }
+  int MPOGetElementBits(void *obj, const unsigned char *row,
+                        const unsigned char *col, double *re,
+                        double *im) const {
+    if (!fMPOGetElementBits)
+      throw std::runtime_error("GpuLibrary: MPOGetElementBits is unavailable");
+    return fMPOGetElementBits(obj, row, col, re, im);
+  }
+  double MPOBasisStateProbabilityBits(void *obj,
+                                      const unsigned char *bits) const {
+    if (!fMPOBasisStateProbabilityBits)
+      throw std::runtime_error(
+          "GpuLibrary: MPOBasisStateProbabilityBits is unavailable");
+    return fMPOBasisStateProbabilityBits(obj, bits);
+  }
+  int MPOExpectationValueComplex(void *obj, const char *pauli, int n,
+                                 double *re, double *im) const {
+    if (!fMPOExpectationValueComplex)
+      throw std::runtime_error(
+          "GpuLibrary: MPOExpectationValueComplex is unavailable");
+    return fMPOExpectationValueComplex(obj, pauli, n, re, im);
+  }
+  int MPOUnnormalizedExpectationValue(void *obj, const char *pauli, int n,
+                                      double *re, double *im) const {
+    if (!fMPOUnnormalizedExpectationValue)
+      throw std::runtime_error(
+          "GpuLibrary: MPOUnnormalizedExpectationValue is unavailable");
+    return fMPOUnnormalizedExpectationValue(obj, pauli, n, re, im);
+  }
+  int MPOGetDensityMatrix(void *obj, double *out) const {
+    if (!fMPOGetDensityMatrix)
+      throw std::runtime_error(
+          "GpuLibrary: MPOGetDensityMatrix is unavailable");
+    return fMPOGetDensityMatrix(obj, out);
+  }
+  int MPOGetUnnormalizedDensityMatrix(void *obj, double *out) const {
+    if (!fMPOGetUnnormalizedDensityMatrix)
+      throw std::runtime_error(
+          "GpuLibrary: MPOGetUnnormalizedDensityMatrix is unavailable");
+    return fMPOGetUnnormalizedDensityMatrix(obj, out);
+  }
+  int MPOTraceComplex(void *obj, double *re, double *im) const {
+    if (!fMPOTraceComplex)
+      throw std::runtime_error("GpuLibrary: MPOTraceComplex is unavailable");
+    return fMPOTraceComplex(obj, re, im);
+  }
+  int MPOSetRestoreTraceAfterTruncation(void *obj, int enable) const {
+    if (!fMPOSetRestoreTraceAfterTruncation)
+      throw std::runtime_error(
+          "GpuLibrary: MPOSetRestoreTraceAfterTruncation is unavailable");
+    return fMPOSetRestoreTraceAfterTruncation(obj, enable);
+  }
+  int MPOGetRestoreTraceAfterTruncation(void *obj) const {
+    if (!fMPOGetRestoreTraceAfterTruncation)
+      throw std::runtime_error(
+          "GpuLibrary: MPOGetRestoreTraceAfterTruncation is unavailable");
+    return fMPOGetRestoreTraceAfterTruncation(obj);
+  }
+  int MPOSetHermitizeAfterTruncation(void *obj, int enable) const {
+    if (!fMPOSetHermitizeAfterTruncation)
+      throw std::runtime_error(
+          "GpuLibrary: MPOSetHermitizeAfterTruncation is unavailable");
+    return fMPOSetHermitizeAfterTruncation(obj, enable);
+  }
+  int MPOGetHermitizeAfterTruncation(void *obj) const {
+    if (!fMPOGetHermitizeAfterTruncation)
+      throw std::runtime_error(
+          "GpuLibrary: MPOGetHermitizeAfterTruncation is unavailable");
+    return fMPOGetHermitizeAfterTruncation(obj);
+  }
+  int MPOMoveAtBeginningOfChain(void *obj, const int *qubits, int n) const {
+    if (!fMPOMoveAtBeginningOfChain)
+      throw std::runtime_error(
+          "GpuLibrary: MPOMoveAtBeginningOfChain is unavailable");
+    return fMPOMoveAtBeginningOfChain(obj, qubits, n);
+  }
+  int MPOApplyOperator(void *obj, int n, const int *qubits,
+                       const double *matrix) const {
+    if (!fMPOApplyOperator)
+      throw std::runtime_error("GpuLibrary: MPOApplyOperator is unavailable");
+    return fMPOApplyOperator(obj, n, qubits, matrix);
+  }
+  int MPOApplyOperatorAndNormalize(void *obj, int n, const int *qubits,
+                                   const double *matrix) const {
+    if (!fMPOApplyOperatorAndNormalize)
+      throw std::runtime_error(
+          "GpuLibrary: MPOApplyOperatorAndNormalize is unavailable");
+    return fMPOApplyOperatorAndNormalize(obj, n, qubits, matrix);
+  }
+  MPO_BOOL0(MPOReCanonicalize)
+  bool MPOTrim(void *obj, double cutoff, long int maxExtent) {
+    return obj && fMPOTrim && fMPOTrim(obj, cutoff, maxExtent) == 1;
+  }
   MPO_BOOL0(MPOSaveState) MPO_BOOL0(MPORestoreState)
   MPO_BOOL0(MPOCleanSavedState)
   void *MPOClone(void *obj) {
@@ -2360,8 +2508,34 @@ class GpuLibrary : public Utils::Library {
   int (*fMPOSetCallbackContext)(void *, void *) = nullptr;
   int (*fMPOSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
   int (*fMPOSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;
-  int (*fMPOReCanonicalize)(void *, int) = nullptr;
-  int (*fMPOTrim)(void *, double, long int, int) = nullptr;
+  int (*fMPOSampleBits)(void *, unsigned int, unsigned int, const int *,
+                        unsigned char *) = nullptr;
+  void *(*fMPOGetMapForSample)() = nullptr;
+  int (*fMPOFreeMapForSample)(void *) = nullptr;
+  int (*fMPOSampleHistogram)(void *, long int, long int, unsigned int *,
+                             void *) = nullptr;
+  int (*fMPOGetElementBits)(void *, const unsigned char *,
+                            const unsigned char *, double *,
+                            double *) = nullptr;
+  double (*fMPOBasisStateProbabilityBits)(void *,
+                                          const unsigned char *) = nullptr;
+  int (*fMPOExpectationValueComplex)(void *, const char *, int, double *,
+                                     double *) = nullptr;
+  int (*fMPOUnnormalizedExpectationValue)(void *, const char *, int, double *,
+                                          double *) = nullptr;
+  int (*fMPOGetDensityMatrix)(void *, double *) = nullptr;
+  int (*fMPOGetUnnormalizedDensityMatrix)(void *, double *) = nullptr;
+  int (*fMPOTraceComplex)(void *, double *, double *) = nullptr;
+  int (*fMPOSetRestoreTraceAfterTruncation)(void *, int) = nullptr;
+  int (*fMPOGetRestoreTraceAfterTruncation)(void *) = nullptr;
+  int (*fMPOSetHermitizeAfterTruncation)(void *, int) = nullptr;
+  int (*fMPOGetHermitizeAfterTruncation)(void *) = nullptr;
+  int (*fMPOMoveAtBeginningOfChain)(void *, const int *, int) = nullptr;
+  int (*fMPOApplyOperator)(void *, int, const int *, const double *) = nullptr;
+  int (*fMPOApplyOperatorAndNormalize)(void *, int, const int *,
+                                       const double *) = nullptr;
+  int (*fMPOReCanonicalize)(void *) = nullptr;
+  int (*fMPOTrim)(void *, double, long int) = nullptr;
   int (*fMPOSaveState)(void *) = nullptr;
   int (*fMPORestoreState)(void *) = nullptr;
   int (*fMPOCleanSavedState)(void *) = nullptr;

@@ -101,10 +101,9 @@ inline const std::vector<Option>& Options() {
        "matrix_product_operator_kraus_completeness_check", "string", "mpo"},
       {"mpo_restore_trace_after_truncation",
        "matrix_product_operator_restore_trace_after_truncation", "boolean",
-       "cpu_mpo"},
+       "mpo"},
       {"mpo_hermitize_after_truncation",
-       "matrix_product_operator_hermitize_after_truncation", "boolean",
-       "cpu_mpo"},
+       "matrix_product_operator_hermitize_after_truncation", "boolean", "mpo"},
       {"mps_svd_solver", "", "string", "gpu_mps"},
       {"mpo_svd_solver", "", "string", "gpu_mpo"},
       {"tensor_network_svd_solver", "", "string", "gpu_tn"},
@@ -137,7 +136,9 @@ inline bool Applies(const Option& option, const SimulatorConfig& config) {
   if (family == "device") return gpu || distributed;
   if (family == "precision") {
 #ifndef NO_QISKIT_AER
-    if (backend == Backend::kQiskitAer) return true;
+    if (backend == Backend::kQiskitAer ||
+        backend == Backend::kCompositeQiskitAer)
+      return true;
 #endif
     return gpu || distributed;
   }
@@ -206,7 +207,12 @@ inline SimulatorConfig ParseConfig(const json::object& simulator) {
     else if (type == "integer")
       UInt(value);
     else if (type == "positive_integer")
-      Require(UInt(value) > 0, key + " must be positive");
+      Require(UInt(value) > 0 ||
+                  (name == "max_bond_dimension" &&
+                   (config.simulator_type == Backend::kGpuSim ||
+                    config.simulator_type == Backend::kQCSim) &&
+                   config.simulation_type == Method::kMatrixProductOperator),
+              key + " must be positive (MPO accepts zero for unlimited)");
     else if (type == "nonnegative")
       Require(Number(value) >= 0, key + " must be nonnegative");
     else if (type == "lookahead")

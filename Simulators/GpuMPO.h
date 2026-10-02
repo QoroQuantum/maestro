@@ -9,7 +9,10 @@
 #ifdef __linux__
 
 #include <memory>
+#include <limits>
+#include <unordered_map>
 #include <complex>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -102,13 +105,15 @@ class GpuMPO {
     return lib->MPOSetBondDimensionsCallback(obj, callback);
   }
   bool IsCreated() const { return lib->MPOIsCreated(obj); }
+  bool IsDoublePrecision() const { return lib->MPOIsDoublePrecision(obj); }
   void SetDataType(bool useDouble) {
     if (!lib->MPOSetDataType(obj, useDouble))
       throw std::runtime_error(
           "GPU matrix-product-operator precision configuration failed");
   }
   void SetCutoff(double singularValueThreshold) {
-    lib->MPOSetCutoff(obj, singularValueThreshold);
+    if (!lib->MPOSetCutoff(obj, singularValueThreshold))
+      throw std::runtime_error("GPU MPO cutoff configuration failed");
   }
   double GetCutoff() const { return lib->MPOGetCutoff(obj); }
   // mode: 0 = RelativeToMax, 1 = DiscardedWeight (default). See
@@ -130,7 +135,10 @@ class GpuMPO {
   bool GetGesvdR() const { return lib->MPOGetGesvdR(obj); }
   int GetLastSvdAlgo() const { return lib->MPOGetLastSvdAlgo(obj); }
 
-  void SetMaxExtent(long int chi) { lib->MPOSetMaxExtent(obj, chi); }
+  void SetMaxExtent(long int chi) {
+    if (!lib->MPOSetMaxExtent(obj, chi))
+      throw std::runtime_error("GPU MPO bond cap configuration failed");
+  }
   long int GetMaxExtent() const { return lib->MPOGetMaxExtent(obj); }
   std::vector<long long int> GetBondDimensions(size_t nrQubits) const {
     if (nrQubits < 2) return {};
@@ -138,11 +146,13 @@ class GpuMPO {
     if (!lib->MPOGetBondDimensions(obj, bondDims.data())) return {};
     return bondDims;
   }
-  void ReCanonicalize(int centerSite = 0) {
-    if (!lib->MPOReCanonicalize(obj, centerSite)) throw std::runtime_error("GPU MPO canonicalization failed");
+  void ReCanonicalize() {
+    if (!lib->MPOReCanonicalize(obj))
+      throw std::runtime_error("GPU MPO canonicalization failed");
   }
-  void Trim(double cutoff = -1., long int maxExtent = -1, int centerSite = 0) {
-    if (!lib->MPOTrim(obj, cutoff, maxExtent, centerSite)) throw std::runtime_error("GPU MPO trim failed");
+  void Trim(double cutoff = -1., long int maxExtent = -1) {
+    if (!lib->MPOTrim(obj, cutoff, maxExtent))
+      throw std::runtime_error("GPU MPO trim failed");
   }
   bool Measure(unsigned int q) { return lib->MPOMeasureQubitCollapse(obj, q); }
   bool MeasureNoCollapse(unsigned int q) { return lib->MPOMeasureQubitNoCollapse(obj, q); }
@@ -186,6 +196,9 @@ class GpuMPO {
   bool SetKrausCompletenessCheck(int mode) { return lib->MPOSetKrausCompletenessCheck(obj, mode); }
   int GetKrausCompletenessCheck() const { return lib->MPOGetKrausCompletenessCheck(obj); }
   std::vector<std::complex<double>> PartialTrace(const std::vector<int>& qubits) const {
+    if (qubits.size() > 13)
+      throw std::invalid_argument(
+          "GPU MPO partial trace supports at most 13 qubits");
     const size_t dim = size_t{1} << qubits.size();
     std::vector<double> raw(2 * dim * dim);
     if (!lib->MPOPartialTrace(obj, qubits.data(), static_cast<int>(qubits.size()), raw.data())) throw std::runtime_error("GPU MPO partial trace failed");
@@ -203,6 +216,112 @@ class GpuMPO {
     if (!lib->MPOFidelityWithStatevector(obj, state, &result)) throw std::runtime_error("GPU MPO fidelity failed");
     return result;
   }
+  // Bit vectors are in logical-qubit order. Histogram entries instead follow
+  // the caller's qubit order (indices must be distinct).
+  double ProbabilityBits(const std::vector<unsigned char>& bits) const {
+    ValidateBits(bits);
+    const double probability =
+        lib->MPOBasisStateProbabilityBits(obj, bits.data());
+    if (!std::isfinite(probability))
+      throw std::runtime_error(
+          "GPU MPO probability requires a safely positive trace");
+    return probability;
+  }
+  std::complex<double> GetElementBits(
+      const std::vector<unsigned char>& row,
+      const std::vector<unsigned char>& col) const {
+    ValidateBits(row);
+    ValidateBits(col);
+    double re = 0., im = 0.;
+    if (!lib->MPOGetElementBits(obj, row.data(), col.data(), &re, &im))
+      throw std::runtime_error("GPU MPO element query failed");
+    return {re, im};
+  }
+  std::complex<double> TraceComplex() const {
+    double re = 0., im = 0.;
+    if (!lib->MPOTraceComplex(obj, &re, &im))
+      throw std::runtime_error("GPU MPO complex trace failed");
+    return {re, im};
+  }
+  std::complex<double> ExpectationValueComplex(const std::string& pauli,
+                                               bool normalized = true) const {
+    double re = 0., im = 0.;
+    const bool ok = normalized
+                        ? lib->MPOExpectationValueComplex(
+                              obj, pauli.c_str(), pauli.size(), &re, &im)
+                        : lib->MPOUnnormalizedExpectationValue(
+                              obj, pauli.c_str(), pauli.size(), &re, &im);
+    if (!ok) throw std::runtime_error("GPU MPO complex expectation failed");
+    return {re, im};
+  }
+  std::vector<std::complex<double>> GetDensityMatrix(
+      bool normalized = true) const {
+    const int n = lib->MPOGetNrQubits(obj);
+    if (n < 0 || n > 13)
+      throw std::invalid_argument(
+          "GPU MPO dense output supports at most 13 qubits");
+    const size_t count = size_t{1} << (2 * n);
+    std::vector<double> raw(2 * count);
+    const bool ok = normalized
+                        ? lib->MPOGetDensityMatrix(obj, raw.data())
+                        : lib->MPOGetUnnormalizedDensityMatrix(obj, raw.data());
+    if (!ok) throw std::runtime_error("GPU MPO density matrix query failed");
+    std::vector<std::complex<double>> result(count);
+    for (size_t i = 0; i < count; ++i) result[i] = {raw[2 * i], raw[2 * i + 1]};
+    return result;
+  }
+  bool SetRestoreTraceAfterTruncation(bool enable) {
+    return lib->MPOSetRestoreTraceAfterTruncation(obj, enable) == 1;
+  }
+  bool GetRestoreTraceAfterTruncation() const {
+    return lib->MPOGetRestoreTraceAfterTruncation(obj) == 1;
+  }
+  bool SetHermitizeAfterTruncation(bool enable) {
+    return lib->MPOSetHermitizeAfterTruncation(obj, enable) == 1;
+  }
+  bool GetHermitizeAfterTruncation() const {
+    return lib->MPOGetHermitizeAfterTruncation(obj) == 1;
+  }
+  void MoveAtBeginningOfChain(const std::vector<int>& qubits) {
+    if (!lib->MPOMoveAtBeginningOfChain(obj, qubits.data(), qubits.size()))
+      throw std::runtime_error("GPU MPO chain routing failed");
+  }
+  bool ApplyOperator(const std::vector<int>& qubits, const double* matrix,
+                     bool normalize = false) {
+    return normalize ? lib->MPOApplyOperatorAndNormalize(
+                           obj, qubits.size(), qubits.data(), matrix) == 1
+                     : lib->MPOApplyOperator(obj, qubits.size(), qubits.data(),
+                                             matrix) == 1;
+  }
+  std::vector<unsigned char> SampleBits(unsigned int shots,
+                                        const std::vector<int>& qubits) {
+    if (!shots || qubits.empty()) return {};
+    if (qubits.size() > std::numeric_limits<unsigned int>::max() ||
+        qubits.size() > std::numeric_limits<size_t>::max() / shots)
+      throw std::length_error("GPU MPO sample buffer too large");
+    std::vector<unsigned char> result(size_t(shots) * qubits.size());
+    if (!lib->MPOSampleBits(obj, shots, qubits.size(), qubits.data(),
+                            result.data()))
+      throw std::runtime_error("GPU MPO bit sampling failed");
+    return result;
+  }
+  std::unordered_map<std::vector<bool>, int64_t> SampleHistogram(
+      size_t shots, std::vector<unsigned int> qubits) {
+    if (!shots || qubits.empty()) return {};
+    if (shots > std::numeric_limits<unsigned int>::max() ||
+        shots > static_cast<size_t>(std::numeric_limits<long int>::max()) ||
+        qubits.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+      throw std::invalid_argument("GPU MPO sampling size exceeds API limits");
+    using Map = std::unordered_map<std::vector<bool>, int64_t>;
+    auto deleter = [this](Map* map) { lib->MPOFreeMapForSample(map); };
+    std::unique_ptr<Map, decltype(deleter)> map(
+        static_cast<Map*>(lib->MPOGetMapForSample()), deleter);
+    if (!map || !lib->MPOSampleHistogram(obj, shots, qubits.size(),
+                                         qubits.data(), map.get()))
+      throw std::runtime_error("GPU MPO histogram sampling failed");
+    return *map;
+  }
+
   void SaveState() {
     if (!lib->MPOSaveState(obj))
       throw std::runtime_error("GPU matrix-product-operator state save failed");
@@ -282,6 +401,13 @@ class GpuMPO {
 #undef GPU_MPO_CHECK
 
  private:
+  void ValidateBits(const std::vector<unsigned char>& bits) const {
+    if (bits.size() != static_cast<size_t>(lib->MPOGetNrQubits(obj)))
+      throw std::invalid_argument("GPU MPO bit vector width " +
+                                  std::to_string(bits.size()) +
+                                  " does not match register width " +
+                                  std::to_string(lib->MPOGetNrQubits(obj)));
+  }
   GpuDeviceContext lib;
   void* obj = nullptr;
 };

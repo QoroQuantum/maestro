@@ -222,6 +222,15 @@ struct Context {
       if (!network || !network->GetSimulator())
         throw Error("backend_unavailable",
                     "Requested backend could not be created");
+      // A single-host network reserves an internal entanglement qubit.
+      // Native MPO queries describe only the declared logical register;
+      // bit-vector and dense queries must not include that unused ancilla.
+      if (config.simulation_type ==
+              Simulators::SimulationType::kMatrixProductOperator &&
+          network->GetSimulator()->GetNumberOfQubits() != circuit.qubits)
+        network->CreateSimulator(network->GetSimulator()->GetType(),
+                                 network->GetSimulator()->GetSimulationType(),
+                                 circuit.qubits);
       if (config.fixed_backend &&
           (network->GetSimulator()->GetType() != config.simulator_type ||
            network->GetSimulator()->GetSimulationType() !=
@@ -419,11 +428,30 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
   Require(depth <= 4, "Batch nesting exceeds four levels");
   Require(UInt(Field(request, "schema_version")) == SchemaVersion,
           "Unsupported native schema_version");
-  Keys(request,
-       {"schema_version", "operation", "circuit", "simulator", "execution",
-        "noise", "observables", "outputs", "basis_states", "target_state",
-        "other_circuit", "step_circuit", "steps", "suffixes", "requests",
-        "diagnostics", "maintenance", "keep_qubits", "max_output_elements"});
+  Keys(request, {"schema_version",
+                 "operation",
+                 "circuit",
+                 "simulator",
+                 "execution",
+                 "noise",
+                 "observables",
+                 "outputs",
+                 "basis_states",
+                 "target_state",
+                 "other_circuit",
+                 "step_circuit",
+                 "steps",
+                 "suffixes",
+                 "requests",
+                 "diagnostics",
+                 "maintenance",
+                 "keep_qubits",
+                 "max_output_elements",
+                 "operators",
+                 "move_qubits",
+                 "pauli",
+                 "row_state",
+                 "col_state"});
   const auto operation = String(Field(request, "operation"));
   Supported(operations.count(operation), "Unknown operation: " + operation);
   // A known field for another operation must not bypass nested validation or
@@ -440,6 +468,12 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
       {"diagnostics", {"diagnostics"}},
       {"maintenance", {"diagnostics"}},
       {"keep_qubits", {"diagnostics"}},
+      {"operators", {"diagnostics"}},
+      {"move_qubits", {"diagnostics"}},
+      {"pauli", {"diagnostics"}},
+      {"row_state", {"diagnostics"}},
+      {"col_state", {"diagnostics"}},
+
       {"max_output_elements",
        {"statevector", "amplitudes", "probabilities", "diagnostics",
         "incremental_evolve"}}};
@@ -590,19 +624,83 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
   json::array basis;
   if (amplitudes || operation == "probabilities")
     basis = Basis(request, input.qubits, limit);
+  const bool nativeMpo =
+      (config.simulator_type == Simulators::SimulatorType::kGpuSim ||
+       config.simulator_type == Simulators::SimulatorType::kQCSim) &&
+      config.simulation_type ==
+          Simulators::SimulationType::kMatrixProductOperator;
+  auto readBits = [&](const char* field) {
+    const auto value = String(Field(request, field));
+    Require(value.size() == input.qubits &&
+                value.find_first_not_of("01") == std::string::npos,
+            std::string(field) +
+                " must be a q0-first bitstring of num_qubits characters");
+    std::vector<bool> bits;
+    for (char bit : value) bits.push_back(bit == '1');
+    return bits;
+  };
   uint64_t target = 0;
+  std::vector<bool> targetBits;
+  struct LocalOperator {
+    Types::qubits_vector qubits;
+    Eigen::MatrixXcd matrix;
+    bool normalize;
+  };
+  std::vector<LocalOperator> localOperators;
+  Types::qubits_vector moveQubits;
   if (operation == "state_probability") {
-    Supported(input.qubits < 63,
-              "Basis-index state probability supports fewer than 63 qubits");
+    Supported(nativeMpo || input.qubits < 63,
+              "Wide state probability requires CPU or GPU MPO");
     const auto state = String(Field(request, "target_state"));
     Require(
         state.size() == input.qubits &&
             state.find_first_not_of("01") == std::string::npos,
         "target_state must be a q0-first bitstring of num_qubits characters");
-    for (size_t q = 0; q < state.size(); ++q)
+    targetBits = readBits("target_state");
+    for (size_t q = 0; q < std::min(size_t{64}, state.size()); ++q)
       if (state[q] == '1') target |= uint64_t{1} << q;
   }
   if (operation == "diagnostics") {
+    auto readQubits = [&](const json::value& value) {
+      Types::qubits_vector qubits;
+      std::set<uint64_t> unique;
+      for (const auto& q : Array(value)) {
+        const auto index = UInt(q);
+        Require(index < input.qubits && unique.insert(index).second,
+                "Invalid MPO target qubit");
+        qubits.push_back(index);
+      }
+      Require(!qubits.empty(), "MPO operation requires qubits");
+      return qubits;
+    };
+    if (const auto* value = request.if_contains("move_qubits")) {
+      Supported(nativeMpo, "Chain routing requires CPU or GPU MPO");
+      moveQubits = readQubits(*value);
+    }
+    if (const auto* values = request.if_contains("operators")) {
+      Supported(nativeMpo, "Local operators require CPU or GPU MPO");
+      for (const auto& value : Array(*values)) {
+        const auto& op = Object(value);
+        Keys(op, {"qubits", "matrix", "normalize"});
+        auto qubits = readQubits(Field(op, "qubits"));
+        Require(qubits.size() <= 2, "Operators require one or two qubits");
+        const size_t dim = size_t{1} << qubits.size();
+        const auto& entries = Array(Field(op, "matrix"));
+        Require(entries.size() == dim * dim,
+                "Operator matrix must be flat row-major");
+        Eigen::MatrixXcd matrix(dim, dim);
+        for (size_t r = 0; r < dim; ++r)
+          for (size_t c = 0; c < dim; ++c)
+            matrix(r, c) = Complex(entries[r * dim + c]);
+        bool normalize = false;
+        if (const auto* flag = op.if_contains("normalize")) {
+          Require(flag->is_bool(), "normalize must be boolean");
+          normalize = flag->as_bool();
+        }
+        localOperators.push_back(
+            {std::move(qubits), std::move(matrix), normalize});
+      }
+    }
     Supported(Mixed(config) || MatrixProductChain(config),
               "Diagnostics require density_matrix, MPS or MPO");
     if (request.contains("keep_qubits")) {
@@ -612,16 +710,48 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
           partial |= String(value) == "partial_trace";
       Require(partial, "keep_qubits requires the partial_trace diagnostic");
     }
+    std::set<std::string> requestedDiagnostics;
+    if (const auto* values = request.if_contains("diagnostics"))
+      for (const auto& value : Array(*values))
+        requestedDiagnostics.insert(String(value));
+    for (const char* field : {"row_state", "col_state"})
+      Require(!request.contains(field) || requestedDiagnostics.count("element"),
+              std::string(field) + " requires the element diagnostic");
+    Require(!request.contains("pauli") ||
+                requestedDiagnostics.count("expectation_complex") ||
+                requestedDiagnostics.count("unnormalized_expectation"),
+            "pauli requires a complex expectation diagnostic");
     if (const auto* values = request.if_contains("diagnostics"))
       for (const auto& value : Array(*values)) {
         const auto name = String(value);
         Require(std::set<std::string>{"trace", "purity", "trace_of_square",
                                       "hermiticity_residual", "is_hermitian",
-                                      "partial_trace"}
+                                      "partial_trace", "density_matrix",
+                                      "unnormalized_density_matrix", "element",
+                                      "expectation_complex",
+                                      "unnormalized_expectation"}
                     .count(name),
                 "Unknown diagnostic");
         Supported(Mixed(config),
                   "Mixed-state diagnostics require density_matrix or MPO");
+        if (name == "density_matrix" || name == "unnormalized_density_matrix") {
+          Supported(nativeMpo, "Dense MPO output requires CPU or GPU MPO");
+          Require(input.qubits <= 13 &&
+                      (uint64_t{1} << (2 * input.qubits)) <= limit,
+                  "Dense matrix exceeds output bound");
+        } else if (name == "element") {
+          Supported(nativeMpo,
+                    "Bit-vector matrix elements require CPU or GPU MPO");
+          readBits("row_state");
+          readBits("col_state");
+        } else if (name == "expectation_complex" ||
+                   name == "unnormalized_expectation") {
+          Supported(nativeMpo, "Complex expectations require CPU or GPU MPO");
+          const auto pauli = String(Field(request, "pauli"));
+          Require(pauli.size() == input.qubits &&
+                      pauli.find_first_not_of("IXYZ") == std::string::npos,
+                  "pauli must contain one I/X/Y/Z per qubit");
+        }
         if (name == "partial_trace") {
           const auto& keep = Array(Field(request, "keep_qubits"));
           Require(
@@ -734,8 +864,12 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
   } else if (query) {
     Prepare(context, Inject(circuit, noise, rng), input.clbits);
     if (operation == "state_probability")
-      result["probability"] = simulator->Probability(target);
+      result["probability"] = nativeMpo ? simulator->ProbabilityBits(targetBits)
+                                        : simulator->Probability(target);
     else if (operation == "diagnostics") {
+      for (const auto& op : localOperators)
+        simulator->ApplyOperator(op.qubits, op.matrix, op.normalize);
+      if (!moveQubits.empty()) simulator->MoveAtBeginningOfChain(moveQubits);
       Supported(Mixed(config) || MatrixProductChain(config),
                 "Diagnostics require density_matrix, MPS or MPO");
       if (const auto* actions = request.if_contains("maintenance"))
@@ -768,7 +902,24 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
           result[name] = simulator->DensityMatrixHermiticityResidual();
         else if (name == "is_hermitian")
           result[name] = simulator->IsDensityMatrixHermitian();
-        else if (name == "partial_trace") {
+        else if (name == "element")
+          result[name] = Complex(simulator->DensityMatrixElementBits(
+              readBits("row_state"), readBits("col_state")));
+        else if (name == "expectation_complex" ||
+                 name == "unnormalized_expectation")
+          result[name] = Complex(simulator->ExpectationValueComplex(
+              String(Field(request, "pauli")), name == "expectation_complex"));
+        else if (name == "density_matrix" ||
+                 name == "unnormalized_density_matrix") {
+          const auto matrix =
+              simulator->GetDensityMatrix(name == "density_matrix");
+          json::array entries;
+          for (Eigen::Index row = 0; row < matrix.rows(); ++row)
+            for (Eigen::Index col = 0; col < matrix.cols(); ++col)
+              entries.emplace_back(Complex(matrix(row, col)));
+          result[name] = json::object{{"dimension", matrix.rows()},
+                                      {"row_major", entries}};
+        } else if (name == "partial_trace") {
           Types::qubits_vector keep;
           std::set<uint64_t> unique;
           for (const auto& q : Array(Field(request, "keep_qubits"))) {

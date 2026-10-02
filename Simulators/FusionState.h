@@ -295,6 +295,38 @@ class FusionState : public ISimulator {
     Synchronize();
     return immediate_->MeasureNoCollapseMany();
   }
+  double ProbabilityBits(const std::vector<bool>& bits) override {
+    Synchronize();
+    return immediate_->ProbabilityBits(bits);
+  }
+  std::complex<double> DensityMatrixElementBits(
+      const std::vector<bool>& row,
+      const std::vector<bool>& col) const override {
+    Synchronize();
+    return immediate_->DensityMatrixElementBits(row, col);
+  }
+  Eigen::MatrixXcd GetDensityMatrix(bool normalized = true) const override {
+    Synchronize();
+    return immediate_->GetDensityMatrix(normalized);
+  }
+  std::complex<double> ExpectationValueComplex(
+      const std::string& pauli, bool normalized = true) const override {
+    Synchronize();
+    return immediate_->ExpectationValueComplex(pauli, normalized);
+  }
+  void ApplyOperator(const Types::qubits_vector& qubits,
+                     const Eigen::MatrixXcd& matrix,
+                     bool normalize = false) override {
+    Flush();
+    immediate_->ApplyOperator(qubits, matrix, normalize);
+    InvalidatePlan();
+    NotifyObservers(qubits);
+  }
+  void MoveAtBeginningOfChain(const Types::qubits_vector& qubits) override {
+    Flush();
+    immediate_->MoveAtBeginningOfChain(qubits);
+    RebuildPlan();
+  }
   std::complex<double> DensityMatrixTrace() const override {
     Synchronize();
     return immediate_->DensityMatrixTrace();

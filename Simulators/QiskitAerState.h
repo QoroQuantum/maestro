@@ -59,6 +59,34 @@ class QiskitAerState : public AER::AerState {
     return fakeState->state_;
   }
 
+  // AerState's buffer export extracts double-precision result storage even
+  // when the actual state stores floats. Convert the concrete float state
+  // before clearing it so saved states and clones retain their amplitudes.
+  AER::Vector<complex_t> move_to_vector() override {
+    flush_ops();
+    const auto single = std::dynamic_pointer_cast<
+        AER::Statevector::State<AER::QV::QubitVector<float>>>(get_state());
+    if (!single) return AER::AerState::move_to_vector();
+    auto values = single->move_to_vector();
+    AER::Vector<complex_t> result(values.size(), false);
+    for (size_t i = 0; i < values.size(); ++i) result[i] = values[i];
+    clear();
+    return result;
+  }
+
+  AER::cmatrix_t move_to_matrix() override {
+    flush_ops();
+    const auto single = std::dynamic_pointer_cast<
+        AER::DensityMatrix::State<AER::QV::DensityMatrix<float>>>(get_state());
+    if (!single) return AER::AerState::move_to_matrix();
+    auto values = single->move_to_matrix();
+    AER::cmatrix_t result(values.GetRows(), values.GetColumns());
+    for (size_t i = 0; i < values.GetRows() * values.GetColumns(); ++i)
+      result.data()[i] = values.data()[i];
+    clear();
+    return result;
+  }
+
   double expval_pauli(const reg_t &qubits, const std::string &pauli) {
     if (qubits.empty() || pauli.empty()) return 1.;
 

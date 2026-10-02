@@ -32,6 +32,15 @@ class DistributedGpuState : public ISimulator {
     if (!key || !value)
       throw std::invalid_argument("Null distributed GPU configuration");
     const std::string k(key), v(value);
+    if (k == "precision" || k == "use_double_precision") {
+      const bool useDouble = Configuration::ParsePrecision(k, v);
+      if (state && state->IsDoublePrecision() != useDouble)
+        throw std::logic_error(
+            "Distributed GPU precision must be configured before "
+            "initialization");
+      configuration.SetConfiguration(k, v);
+      return;
+    }
     if (k != "seed" && configuration.WasApplied(k, v)) return;
     static const std::unordered_set<std::string> distributionKeys{
         "distributed_devices",
@@ -65,11 +74,6 @@ class DistributedGpuState : public ISimulator {
       SeedAuxiliaryRng(seed);
       if (state) state->SetSeed(seed);
     }
-    if (k == "precision" && v != "single" && v != "double")
-      throw std::invalid_argument("precision must be single or double");
-    if (k == "use_double_precision" && v != "0" && v != "1" && v != "false" &&
-        v != "true")
-      throw std::invalid_argument("use_double_precision must be a boolean");
     if (k == "distributed_devices" || k == "distributed_global_qubits")
       ParseList(v);
     if (k == "distributed_flags" || k == "distributed_max_queued_gates" ||
@@ -96,6 +100,13 @@ class DistributedGpuState : public ISimulator {
   std::string GetConfiguration(const char* key) const override {
     const std::string k(key);
     if (k == "method") return "statevector";
+    if (k == "precision" || k == "use_double_precision") {
+      const bool useDouble =
+          state ? state->IsDoublePrecision()
+                : configuration.GetConfiguration("precision") == "double";
+      return k == "precision" ? (useDouble ? "double" : "single")
+                              : (useDouble ? "1" : "0");
+    }
     if (state && (k == "distributed_shard_devices" ||
                   k == "distributed_configured_global_qubits" ||
                   k == "distributed_qubit_layout")) {

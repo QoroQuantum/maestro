@@ -68,6 +68,7 @@ class GpuDensityMatrix {
   }
   bool SetSeed(uint64_t seed) { return lib->DMSetSeed(obj, seed); }
   bool IsCreated() const { return lib->DMIsCreated(obj); }
+  bool IsDoublePrecision() const { return lib->DMIsDoublePrecision(obj); }
   void SetDataType(bool useDouble) {
     if (!lib->DMSetDataType(obj, useDouble))
       throw std::runtime_error(

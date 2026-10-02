@@ -936,3 +936,12 @@ if(COMPILE_TESTS)
     target_include_directories(gate_fusion_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(gate_fusion_benchmark PRIVATE maestro)
 endif()
+
+if(COMPILE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(gpu_mpo_api_tests tests/gpu_mpo_api_tests.cpp)
+    target_link_libraries(gpu_mpo_api_tests PRIVATE maestro Boost::json)
+    add_test(NAME cpu_mpo_api COMMAND gpu_mpo_api_tests --cpu)
+    add_test(NAME gpu_mpo_api COMMAND gpu_mpo_api_tests)
+    set_tests_properties(gpu_mpo_api PROPERTIES
+        SKIP_RETURN_CODE 77 LABELS "gpu;hardware" RUN_SERIAL TRUE TIMEOUT 180)
+endif()

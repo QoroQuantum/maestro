@@ -102,6 +102,9 @@ class ImmediateCompositeSimulator : public ISimulator {
 #endif
 
       sim->SetMultithreading(enableMultithreading);
+      if (config.IsSet("precision"))
+        sim->Configure("precision",
+                       config.GetConfiguration("precision").c_str());
       sim->Initialize();
       sim->GetQubitsMap()[q] = 0;
       simulators[q] = std::move(sim);
@@ -208,6 +211,16 @@ class ImmediateCompositeSimulator : public ISimulator {
     // don't allow chaning the method, it should stay statevector
     if (std::string("method") == key) return;
 
+    if (std::string(key) == "precision" ||
+        std::string(key) == "use_double_precision") {
+      Configuration::ParsePrecision(key, value);
+      // Children validate live allocation changes before the parent records
+      // the value for future children created by Reset or Initialize.
+      for (auto &[id, simulator] : simulators) simulator->Configure(key, value);
+      config.SetConfiguration(key, value);
+      return;
+    }
+
     config.SetConfiguration(key, value);
 
     if (std::string("seed") == key) {
@@ -228,6 +241,16 @@ class ImmediateCompositeSimulator : public ISimulator {
    * @return The configuration value as a string.
    */
   std::string GetConfiguration(const char *key) const override {
+    if (std::string(key) == "precision" ||
+        std::string(key) == "use_double_precision") {
+      if (!simulators.empty())
+        return simulators.begin()->second->GetConfiguration(key);
+      const bool useDouble = type == SimulatorType::kQCSim ||
+                             !config.IsSet("precision") ||
+                             config.GetConfiguration("precision") == "double";
+      return std::string(key) == "precision" ? (useDouble ? "double" : "single")
+                                             : (useDouble ? "1" : "0");
+    }
     if (simulators.empty()) return "";
 
     return config.GetConfiguration(key);

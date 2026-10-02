@@ -60,8 +60,6 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
    */
   SimpleDisconnectedNetwork(const std::vector<Types::qubit_t> &qubits = {},
                             const std::vector<size_t> &cbits = {}) {
-    configuration.SetConfiguration("use_double_precision", "0");
-
     simulatorsForOptimizations.insert(
         {Simulators::SimulatorType::kQCSim,
          Simulators::SimulationType::kStatevector});

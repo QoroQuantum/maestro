@@ -114,7 +114,7 @@ class AerState : public ISimulator {
     if (simulationType == SimulationType::kDensityMatrix)
       InitializeDensityMatrixFromStatevector(num_qubits, amplitudes.data());
     else
-      state->initialize_statevector(num_qubits, amplitudes.data(), true);
+      InitializeStatevectorBuffer(num_qubits, amplitudes.data());
   }
 
   /**
@@ -133,7 +133,7 @@ class AerState : public ISimulator {
   avoid_init_allocator<std::complex<double>>>& amplitudes) override
   {
           Clear();
-          state->initialize_statevector(num_qubits, amplitudes.data(), true);
+          InitializeStatevectorBuffer(num_qubits, amplitudes.data());
   }
   */
 
@@ -154,8 +154,7 @@ class AerState : public ISimulator {
     if (simulationType == SimulationType::kDensityMatrix)
       InitializeDensityMatrixFromStatevector(num_qubits, amplitudes.data());
     else
-      state->initialize_statevector(num_qubits, amplitudes.move_to_buffer(),
-                                    false);
+      InitializeStatevectorBuffer(num_qubits, amplitudes.data());
   }
 
   /**
@@ -175,7 +174,7 @@ class AerState : public ISimulator {
     if (simulationType == SimulationType::kDensityMatrix)
       InitializeDensityMatrixFromStatevector(num_qubits, amplitudes.data());
     else
-      state->initialize_statevector(num_qubits, amplitudes.data(), true);
+      InitializeStatevectorBuffer(num_qubits, amplitudes.data());
   }
 
   /**
@@ -200,6 +199,24 @@ class AerState : public ISimulator {
    * @param value The value of the configuration.
    */
   void Configure(const char* key, const char* value) override {
+    if (!key || !value) throw std::invalid_argument("Null Aer configuration");
+    if (std::string(key) == "precision" ||
+        std::string(key) == "use_double_precision") {
+      const bool useDouble = Configuration::ParsePrecision(key, value);
+      const std::string precision = useDouble ? "double" : "single";
+      if (state->is_initialized()) {
+        const auto selected = configuration.IsSet("precision")
+                                  ? configuration.GetConfiguration("precision")
+                                  : "double";
+        if (selected != precision)
+          throw std::logic_error(
+              "Aer precision must be configured before initialization");
+      } else {
+        state->configure("precision", precision);
+      }
+      configuration.SetConfiguration("precision", precision);
+      return;
+    }
     if (std::string("seed") != key && configuration.WasApplied(key, value) &&
         state->is_initialized())
       return;
@@ -273,6 +290,17 @@ class AerState : public ISimulator {
    * @return The configuration value as a string.
    */
   std::string GetConfiguration(const char *key) const override {
+    if (!key) return {};
+    if (std::string(key) == "precision" ||
+        std::string(key) == "use_double_precision") {
+      const bool fixedDouble =
+          simulationType == SimulationType::kMatrixProductState;
+      const bool useDouble =
+          fixedDouble || !configuration.IsSet("precision") ||
+          configuration.GetConfiguration("precision") == "double";
+      return std::string(key) == "precision" ? (useDouble ? "double" : "single")
+                                             : (useDouble ? "1" : "0");
+    }
     if (std::string("method") == key) {
       switch (simulationType) {
         case SimulationType::kStatevector:
@@ -728,14 +756,12 @@ class AerState : public ISimulator {
     if (simulationType == SimulationType::kDensityMatrix) {
       const size_t numQubits = static_cast<size_t>(
           log2(savedDensityMatrix.GetRows()));
-      state->initialize_density_matrix(numQubits, savedDensityMatrix.data(),
-                                       true, true);
+      InitializeDensityMatrixBuffer(numQubits, savedDensityMatrix.data());
       return;
     }
 
     const size_t numQubits = static_cast<size_t>(log2(savedAmplitudes.size()));
-    state->initialize_statevector(numQubits, savedAmplitudes.move_to_buffer(),
-                                  false);
+    InitializeStatevectorBuffer(numQubits, savedAmplitudes.data());
   }
 
   /**
@@ -760,10 +786,9 @@ class AerState : public ISimulator {
         simulationType == SimulationType::kDensityMatrix) {
       SaveStateToInternalDestructive();
       if (simulationType == SimulationType::kDensityMatrix)
-        state->initialize_density_matrix(numQubits, savedDensityMatrix.data(),
-                                         true, true);
+        InitializeDensityMatrixBuffer(numQubits, savedDensityMatrix.data());
       else
-        state->initialize_statevector(numQubits, savedAmplitudes.data(), true);
+        InitializeStatevectorBuffer(numQubits, savedAmplitudes.data());
       return;
     }
 
@@ -832,7 +857,7 @@ class AerState : public ISimulator {
         // this is a hack until I figure it out
         Clear();
         numQubits = static_cast<size_t>(log2(savedAmplitudes.size()));
-        state->initialize_statevector(numQubits, savedAmplitudes.data(), true);
+        InitializeStatevectorBuffer(numQubits, savedAmplitudes.data());
 
         return;
       } break;
@@ -840,8 +865,7 @@ class AerState : public ISimulator {
         Clear();
         numQubits = static_cast<size_t>(
             log2(savedDensityMatrix.GetRows()));
-        state->initialize_density_matrix(numQubits, savedDensityMatrix.data(),
-                                         true, true);
+        InitializeDensityMatrixBuffer(numQubits, savedDensityMatrix.data());
 
         return;
       } break;
@@ -1073,6 +1097,42 @@ class AerState : public ISimulator {
   }
 
  protected:
+  void InitializeStatevectorBuffer(size_t numQubits,
+                                   std::complex<double> *amplitudes) {
+    if (GetConfiguration("precision") == "double") {
+      state->initialize_statevector(numQubits, amplitudes, true);
+      return;
+    }
+    AllocateQubits(numQubits);
+    Initialize();
+    AER::Operations::Op op;
+    op.type = AER::Operations::OpType::set_statevec;
+    op.name = "set_statevector";
+    op.params.assign(amplitudes, amplitudes + (size_t{1} << numQubits));
+    for (size_t q = 0; q < numQubits; ++q) op.qubits.push_back(q);
+    state->buffer_op(std::move(op));
+    Flush();
+  }
+
+  void InitializeDensityMatrixBuffer(size_t numQubits,
+                                     std::complex<double> *values) {
+    if (GetConfiguration("precision") == "double") {
+      state->initialize_density_matrix(numQubits, values, true, true);
+      return;
+    }
+    AllocateQubits(numQubits);
+    Initialize();
+    const size_t dimension = size_t{1} << numQubits;
+    AER::Operations::Op op;
+    op.type = AER::Operations::OpType::set_densmat;
+    op.name = "set_density_matrix";
+    op.mats.emplace_back(dimension, dimension);
+    std::copy(values, values + dimension * dimension, op.mats.back().data());
+    for (size_t q = 0; q < numQubits; ++q) op.qubits.push_back(q);
+    state->buffer_op(std::move(op));
+    Flush();
+  }
+
   void InitializeDensityMatrixFromStatevector(
       size_t numQubits, const std::complex<double>* amplitudes) {
     const size_t dimension = 1ULL << numQubits;
@@ -1082,8 +1142,7 @@ class AerState : public ISimulator {
         densityMatrix(row, column) =
             amplitudes[row] * std::conj(amplitudes[column]);
 
-    state->initialize_density_matrix(numQubits, densityMatrix.data(), true,
-                                     true);
+    InitializeDensityMatrixBuffer(numQubits, densityMatrix.data());
   }
 
   SimulationType simulationType =

@@ -20,6 +20,7 @@
 #ifdef INCLUDED_BY_FACTORY
 
 #include "MPSDummySimulator.h"
+#include "MPOValidation.h"
 
 #include <cstdint>
 #include <iomanip>
@@ -694,16 +695,39 @@ class ImmediateGpuState : public ISimulator {
       }
     }
 
-    if (std::string("use_double_precision") == key && densityMatrix &&
-        densityMatrix->IsCreated())
-      throw std::runtime_error(
-          "GpuState::Configure: Density-matrix precision must be configured "
-          "before initialization.");
-
-    if (std::string("use_double_precision") == key && mpo && mpo->IsCreated())
-      throw std::runtime_error(
-          "GpuState::Configure: Matrix-product-operator precision must be "
-          "configured before initialization.");
+    if (std::string(key) == "precision" ||
+        std::string(key) == "use_double_precision") {
+      const bool useDouble = Configuration::ParsePrecision(key, value);
+      const auto apply = [useDouble](auto *backend, bool created) {
+        if (!backend) return;
+        if (created) {
+          if (backend->IsDoublePrecision() != useDouble)
+            throw std::logic_error(
+                "GPU precision must be configured before initialization");
+          return;
+        }
+        if (!backend->SetDataType(useDouble))
+          throw std::runtime_error("GPU precision configuration failed");
+      };
+      apply(state.get(), state && state->GetNrQubits() > 0);
+      apply(mps.get(), mps && mps->IsCreated());
+      apply(tn.get(), tn && tn->IsCreated());
+      // Density-matrix and MPO setters throw on native API failure.
+      const auto applyDensity = [useDouble](auto *backend) {
+        if (!backend) return;
+        if (backend->IsCreated()) {
+          if (backend->IsDoublePrecision() != useDouble)
+            throw std::logic_error(
+                "GPU precision must be configured before initialization");
+        } else {
+          backend->SetDataType(useDouble);
+        }
+      };
+      applyDensity(densityMatrix.get());
+      applyDensity(mpo.get());
+      configuration.SetConfiguration(key, value);
+      return;
+    }
 
     if (!configuration.WasApplied(key, value))
       configuration.SetConfiguration(key, value);
@@ -767,10 +791,11 @@ class ImmediateGpuState : public ISimulator {
           if (!configuration.WasApplied(alias, bondDimension))
             configuration.SetConfiguration(alias, bondDimension);
       }
+      if (mpo) mpo->SetMaxExtent(chi);
       if (chi > 0) {
         if (mps) mps->SetMaxExtent(chi);
         if (tn) tn->SetMaxExtent(chi);
-        if (mpo) mpo->SetMaxExtent(chi);
+
         if (dummySim) dummySim->SetMaxBondDimension(chi);
       }
 
@@ -785,14 +810,18 @@ class ImmediateGpuState : public ISimulator {
         mode = 2;
       if (mpo && mode >= 0 && !mpo->SetKrausCompletenessCheck(mode))
         throw std::runtime_error("Invalid GPU MPO Kraus completeness mode");
-    } else if (std::string("use_double_precision") == key) {
-      const bool useDoublePrecision =
-          (std::string("1") == value || std::string("true") == value);
-      if (mps) mps->SetDataType(useDoublePrecision);
-      if (tn) tn->SetDataType(useDoublePrecision);
-      if (state) state->SetDataType(useDoublePrecision);
-      if (densityMatrix) densityMatrix->SetDataType(useDoublePrecision);
-      if (mpo) mpo->SetDataType(useDoublePrecision);
+    } else if (std::string(
+                   "matrix_product_operator_restore_trace_after_truncation") ==
+               key) {
+      if (mpo && !mpo->SetRestoreTraceAfterTruncation(
+                     std::string(value) == "true" || std::string(value) == "1"))
+        throw std::runtime_error("GPU MPO truncation configuration failed");
+    } else if (std::string(
+                   "matrix_product_operator_hermitize_after_truncation") ==
+               key) {
+      if (mpo && !mpo->SetHermitizeAfterTruncation(
+                     std::string(value) == "true" || std::string(value) == "1"))
+        throw std::runtime_error("GPU MPO truncation configuration failed");
     }
 
     if (pp) {
@@ -825,6 +854,28 @@ class ImmediateGpuState : public ISimulator {
    * @return The configuration value as a string.
    */
   std::string GetConfiguration(const char *key) const override {
+    if (!key) return {};
+    if (std::string(key) == "precision" ||
+        std::string(key) == "use_double_precision") {
+      const bool useDouble =
+          state           ? state->IsDoublePrecision()
+          : mps           ? mps->IsDoublePrecision()
+          : tn            ? tn->IsDoublePrecision()
+          : densityMatrix ? densityMatrix->IsDoublePrecision()
+          : mpo           ? mpo->IsDoublePrecision()
+                : configuration.GetConfiguration("precision") == "double";
+      return std::string(key) == "precision" ? (useDouble ? "double" : "single")
+                                             : (useDouble ? "1" : "0");
+    }
+    if (mpo) {
+      if (std::string(key) ==
+          "matrix_product_operator_restore_trace_after_truncation")
+        return mpo->GetRestoreTraceAfterTruncation() ? "true" : "false";
+      if (std::string(key) ==
+          "matrix_product_operator_hermitize_after_truncation")
+        return mpo->GetHermitizeAfterTruncation() ? "true" : "false";
+    }
+
     if (!key) return {};
     const auto svdGroup = Configuration::GpuSvdSettingGroup(key);
     if (!svdGroup.empty()) {
@@ -935,6 +986,9 @@ class ImmediateGpuState : public ISimulator {
    * least significant bit.
    */
   size_t Measure(const Types::qubits_vector &qubits) override {
+    if (mpo && qubits.size() > sizeof(size_t) * 8)
+      throw std::invalid_argument(
+          "Use MeasureMany for more than 64 measured qubits");
     // TODO: this is inefficient, maybe implement it better in gpu sim
     // for now it has the possibility of measuring a qubits interval, but not a
     // list of qubits
@@ -1104,9 +1158,54 @@ class ImmediateGpuState : public ISimulator {
     NotifyObservers(targets);
   }
 
+  double ProbabilityBits(const std::vector<bool> &bits) override {
+    if (!mpo) return IState::ProbabilityBits(bits);
+    return mpo->ProbabilityBits(
+        std::vector<unsigned char>(bits.begin(), bits.end()));
+  }
+  std::complex<double> DensityMatrixElementBits(
+      const std::vector<bool> &row,
+      const std::vector<bool> &col) const override {
+    if (!mpo) return IState::DensityMatrixElementBits(row, col);
+    return mpo->GetElementBits(
+        std::vector<unsigned char>(row.begin(), row.end()),
+        std::vector<unsigned char>(col.begin(), col.end()));
+  }
+  Eigen::MatrixXcd GetDensityMatrix(bool normalized = true) const override {
+    if (!mpo) return IState::GetDensityMatrix(normalized);
+    const auto values = mpo->GetDensityMatrix(normalized);
+    const Eigen::Index dim = Eigen::Index{1} << nrQubits;
+    return Eigen::Map<const Eigen::MatrixXcd>(values.data(), dim, dim);
+  }
+  std::complex<double> ExpectationValueComplex(
+      const std::string &pauli, bool normalized = true) const override {
+    if (!mpo) return IState::ExpectationValueComplex(pauli, normalized);
+    MPOValidation::Pauli(pauli, nrQubits);
+    return mpo->ExpectationValueComplex(pauli, normalized);
+  }
+  void ApplyOperator(const Types::qubits_vector &qubits,
+                     const Eigen::MatrixXcd &matrix,
+                     bool normalize = false) override {
+    if (!mpo) return IState::ApplyOperator(qubits, matrix, normalize);
+    const auto selected = MPOValidation::Operator(qubits, matrix, nrQubits);
+    std::vector<double> raw(2 * matrix.size());
+    for (Eigen::Index i = 0; i < matrix.size(); ++i) {
+      raw[2 * i] = matrix.data()[i].real();
+      raw[2 * i + 1] = matrix.data()[i].imag();
+    }
+    if (!mpo->ApplyOperator(selected, raw.data(), normalize))
+      throw std::runtime_error("GPU MPO operator application failed");
+    NotifyObservers(qubits);
+  }
+  void MoveAtBeginningOfChain(const Types::qubits_vector &qubits) override {
+    if (!mpo) return IState::MoveAtBeginningOfChain(qubits);
+    const auto selected = MPOValidation::Qubits(qubits, nrQubits);
+    if (selected.empty()) return;
+    mpo->MoveAtBeginningOfChain(selected);
+  }
   std::complex<double> DensityMatrixTrace() const override {
     if (densityMatrix) return densityMatrix->Trace();
-    if (mpo) return mpo->Trace();
+    if (mpo) return mpo->TraceComplex();
     throw std::runtime_error(
         "GPU mixed-state diagnostics require density_matrix or "
         "matrix_product_operator");
@@ -1228,10 +1327,17 @@ class ImmediateGpuState : public ISimulator {
       return state->BasisStateProbability(outcome);
     else if (simulationType == SimulationType::kDensityMatrix)
       return densityMatrix->Probability(outcome);
-    else if (simulationType == SimulationType::kMatrixProductOperator)
-      return mpo->Probability(outcome);
-    else if (simulationType == SimulationType::kMatrixProductState ||
-             simulationType == SimulationType::kTensorNetwork) {
+    else if (simulationType == SimulationType::kMatrixProductOperator) {
+      if (nrQubits < sizeof(Types::qubit_t) * 8 &&
+          outcome >= (Types::qubit_t{1} << nrQubits))
+        throw std::out_of_range("GPU MPO basis state is out of range");
+      std::vector<bool> bits(nrQubits);
+      for (size_t q = 0; q < std::min(nrQubits, sizeof(Types::qubit_t) * 8);
+           ++q)
+        bits[q] = ((outcome >> q) & 1) != 0;
+      return ProbabilityBits(bits);
+    } else if (simulationType == SimulationType::kMatrixProductState ||
+               simulationType == SimulationType::kTensorNetwork) {
       const auto ampl = Amplitude(outcome);
       return std::norm(ampl);
     } else if (simulationType == SimulationType::kPauliPropagator) {
@@ -1316,7 +1422,12 @@ class ImmediateGpuState : public ISimulator {
    */
   std::vector<double> AllProbabilities() override {
     if (nrQubits == 0) return {};
-    const size_t numStates = 1ULL << nrQubits;
+    if (nrQubits >= std::numeric_limits<size_t>::digits ||
+        (mpo && nrQubits >= 63))
+      throw std::length_error(
+          "Full probability enumeration exceeds the basis-index API; query "
+          "selected bit vectors");
+    const size_t numStates = size_t{1} << nrQubits;
     std::vector<double> result(numStates);
 
     if (simulationType == SimulationType::kStatevector)
@@ -1365,7 +1476,7 @@ class ImmediateGpuState : public ISimulator {
         result[i] = densityMatrix->Probability(qubits[i]);
     } else if (simulationType == SimulationType::kMatrixProductOperator) {
       for (size_t i = 0; i < qubits.size(); ++i)
-        result[i] = mpo->Probability(qubits[i]);
+        result[i] = Probability(qubits[i]);
     } else if (simulationType == SimulationType::kMatrixProductState ||
                simulationType == SimulationType::kTensorNetwork) {
       for (size_t i = 0; i < qubits.size(); ++i) {
@@ -1398,6 +1509,19 @@ class ImmediateGpuState : public ISimulator {
    */
   std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    if (mpo) {
+      if (qubits.size() > sizeof(Types::qubit_t) * 8)
+        throw std::invalid_argument(
+            "Use SampleCountsMany for more than 64 measured qubits");
+      std::unordered_map<Types::qubit_t, Types::qubit_t> result;
+      for (const auto &entry : SampleCountsMany(qubits, shots)) {
+        Types::qubit_t value = 0;
+        for (size_t i = 0; i < entry.first.size(); ++i)
+          if (entry.first[i]) value |= Types::qubit_t{1} << i;
+        result[value] += entry.second;
+      }
+      return result;
+    }
     if (qubits.empty() || shots == 0) return {};
 
     if (qubits.size() > sizeof(Types::qubit_t) * 8)
@@ -1432,20 +1556,6 @@ class ImmediateGpuState : public ISimulator {
         Notify();
         throw std::runtime_error(
             "GpuState::SampleCounts: Density-matrix sampling failed.");
-      }
-      for (auto outcome : samples) {
-        Types::qubit_t translatedOutcome = 0;
-        for (size_t i = 0; i < qubits.size(); ++i)
-          if (outcome & (1ULL << qubits[i])) translatedOutcome |= 1ULL << i;
-        ++result[translatedOutcome];
-      }
-    } else if (simulationType == SimulationType::kMatrixProductOperator) {
-      std::vector<long int> samples(shots);
-      if (!mpo->SampleAll(shots, samples.data())) {
-        Notify();
-        throw std::runtime_error(
-            "GpuState::SampleCounts: Matrix-product-operator sampling "
-            "failed.");
       }
       for (auto outcome : samples) {
         Types::qubit_t translatedOutcome = 0;
@@ -1525,6 +1635,30 @@ class ImmediateGpuState : public ISimulator {
    */
   std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    if (mpo) {
+      std::vector<unsigned int> selected;
+      for (auto q : qubits) {
+        if (q >= nrQubits ||
+            q > static_cast<size_t>(std::numeric_limits<int>::max()))
+          throw std::out_of_range("GPU MPO sampled qubit is out of range");
+        selected.push_back(static_cast<unsigned int>(q));
+      }
+      if (qubits.empty() || shots == 0) return {};
+      std::sort(selected.begin(), selected.end());
+      selected.erase(std::unique(selected.begin(), selected.end()),
+                     selected.end());
+      const auto counts = mpo->SampleHistogram(shots, std::move(selected));
+      const auto positions = SampleBitPositions(qubits);
+      std::unordered_map<std::vector<bool>, Types::qubit_t> result;
+      for (const auto &entry : counts) {
+        std::vector<bool> bits(qubits.size());
+        for (size_t i = 0; i < bits.size(); ++i)
+          bits[i] = entry.first[positions[i]];
+        result[std::move(bits)] += entry.second;
+      }
+      NotifyObservers(qubits);
+      return result;
+    }
     if (qubits.empty() || shots == 0) return {};
 
     std::unordered_map<std::vector<bool>, Types::qubit_t> result;
@@ -1547,20 +1681,6 @@ class ImmediateGpuState : public ISimulator {
         Notify();
         throw std::runtime_error(
             "GpuState::SampleCountsMany: Density-matrix sampling failed.");
-      }
-      std::vector<bool> outcomeVec(qubits.size());
-      for (auto outcome : samples) {
-        for (size_t i = 0; i < qubits.size(); ++i)
-          outcomeVec[i] = ((outcome >> qubits[i]) & 1) != 0;
-        ++result[outcomeVec];
-      }
-    } else if (simulationType == SimulationType::kMatrixProductOperator) {
-      std::vector<long int> samples(shots);
-      if (!mpo->SampleAll(shots, samples.data())) {
-        Notify();
-        throw std::runtime_error(
-            "GpuState::SampleCountsMany: Matrix-product-operator sampling "
-            "failed.");
       }
       std::vector<bool> outcomeVec(qubits.size());
       for (auto outcome : samples) {
@@ -1838,6 +1958,9 @@ class ImmediateGpuState : public ISimulator {
    * significant bit.
    */
   Types::qubit_t MeasureNoCollapse() override {
+    if (mpo && nrQubits > sizeof(Types::qubit_t) * 8)
+      throw std::invalid_argument(
+          "Use MeasureNoCollapseMany for more than 64 qubits");
     if (simulationType == SimulationType::kStatevector)
       return state->MeasureAllQubitsNoCollapse();
     else if (simulationType == SimulationType::kDensityMatrix) {
@@ -1908,15 +2031,10 @@ class ImmediateGpuState : public ISimulator {
         result[i] = ((samples.front() >> i) & 1) != 0;
       return result;
     } else if (simulationType == SimulationType::kMatrixProductOperator) {
-      std::vector<long int> samples(1);
-      if (!mpo->SampleAll(1, samples.data()))
-        throw std::runtime_error(
-            "GpuState::MeasureNoCollapseMany: Matrix-product-operator "
-            "sampling failed.");
-      std::vector<bool> result(nrQubits, false);
-      for (size_t i = 0; i < nrQubits; ++i)
-        result[i] = ((samples.front() >> i) & 1) != 0;
-      return result;
+      std::vector<int> qubits(nrQubits);
+      std::iota(qubits.begin(), qubits.end(), 0);
+      const auto bits = mpo->SampleBits(1, qubits);
+      return std::vector<bool>(bits.begin(), bits.end());
     } else if (simulationType == SimulationType::kMatrixProductState ||
                simulationType == SimulationType::kTensorNetwork ||
                simulationType == SimulationType::kPauliPropagator) {

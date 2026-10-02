@@ -74,6 +74,152 @@ static Eigen::Matrix<std::complex<double>, Dimension, Dimension> ReadGateMatrix(
 }
 
 extern "C" {
+int MaestroProbabilityBits(void *sim, const unsigned char *bits, size_t width,
+                           double *result) {
+  if (!sim) return 0;
+  try {
+    auto &state = *static_cast<Simulators::ISimulator *>(sim);
+    if (!bits || !result || width != state.GetNumberOfQubits()) return 0;
+    *result = state.ProbabilityBits(std::vector<bool>(bits, bits + width));
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+int MaestroDensityMatrixElementBits(void *sim, const unsigned char *row,
+                                    const unsigned char *col, size_t width,
+                                    double *real, double *imag) {
+  if (!sim) return 0;
+  try {
+    auto &state = *static_cast<Simulators::ISimulator *>(sim);
+    if (!row || !col || !real || !imag || width != state.GetNumberOfQubits())
+      return 0;
+    const auto value =
+        state.DensityMatrixElementBits(std::vector<bool>(row, row + width),
+                                       std::vector<bool>(col, col + width));
+    *real = value.real();
+    *imag = value.imag();
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+int MaestroDensityMatrixTrace(void *sim, double *real, double *imag) {
+  if (!sim) return 0;
+  try {
+    auto &state = *static_cast<Simulators::ISimulator *>(sim);
+    if (!real || !imag) return 0;
+    const auto value = state.DensityMatrixTrace();
+    *real = value.real();
+    *imag = value.imag();
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+int MaestroExpectationValueComplex(void *sim, const char *pauli, int normalized,
+                                   double *real, double *imag) {
+  if (!sim) return 0;
+  try {
+    auto &state = *static_cast<Simulators::ISimulator *>(sim);
+    if (!pauli || !real || !imag) return 0;
+    const auto value = state.ExpectationValueComplex(pauli, normalized != 0);
+    *real = value.real();
+    *imag = value.imag();
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+int MaestroGetDensityMatrix(void *sim, int normalized, double *interleaved,
+                            size_t capacity) {
+  if (!sim) return 0;
+  try {
+    auto &state = *static_cast<Simulators::ISimulator *>(sim);
+    if (!interleaved) return 0;
+    const auto n = state.GetNumberOfQubits();
+    if (n > 13 || capacity < (size_t{2} << (2 * n))) return 0;
+    const auto matrix = state.GetDensityMatrix(normalized != 0);
+    for (Eigen::Index i = 0; i < matrix.size(); ++i) {
+      interleaved[2 * i] = matrix.data()[i].real();
+      interleaved[2 * i + 1] = matrix.data()[i].imag();
+    }
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+int MaestroApplyOperator(void *sim, const unsigned long int *qubits,
+                         size_t count, const double *interleaved,
+                         int normalize) {
+  if (!sim) return 0;
+  try {
+    auto &state = *static_cast<Simulators::ISimulator *>(sim);
+    if (!qubits || !interleaved || count < 1 || count > 2) return 0;
+    const size_t dim = size_t{1} << count;
+    Eigen::MatrixXcd matrix(dim, dim);
+    for (size_t i = 0; i < dim * dim; ++i)
+      matrix.data()[i] = {interleaved[2 * i], interleaved[2 * i + 1]};
+    state.ApplyOperator(Types::qubits_vector(qubits, qubits + count), matrix,
+                        normalize != 0);
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+int MaestroMoveAtBeginningOfChain(void *sim, const unsigned long int *qubits,
+                                  size_t count) {
+  if (!sim) return 0;
+  try {
+    auto &state = *static_cast<Simulators::ISimulator *>(sim);
+    if (!qubits || !count) return 0;
+    state.MoveAtBeginningOfChain(Types::qubits_vector(qubits, qubits + count));
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+int MaestroSampleCountsBits(void *sim, const unsigned long int *qubits,
+                            size_t width, size_t shots, unsigned char *outcomes,
+                            unsigned long long *counts, size_t capacity,
+                            size_t *written) {
+  if (!sim) return 0;
+  try {
+    auto &state = *static_cast<Simulators::ISimulator *>(sim);
+    if (!written) return 0;
+    *written = 0;
+    if (!shots || !width) return 1;
+    if (!qubits || !outcomes || !counts ||
+        width > std::numeric_limits<size_t>::max() / shots || capacity < shots)
+      return 0;
+    const auto result = state.SampleCountsMany(
+        Types::qubits_vector(qubits, qubits + width), shots);
+    for (const auto &entry : result) {
+      for (size_t i = 0; i < width; ++i)
+        outcomes[*written * width + i] = entry.first[i];
+      counts[*written] = entry.second;
+      ++*written;
+    }
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+int MaestroMeasureBits(void *sim, const unsigned long int *qubits, size_t width,
+                       unsigned char *outcomes) {
+  if (!sim) return 0;
+  try {
+    auto &state = *static_cast<Simulators::ISimulator *>(sim);
+    if (!qubits || !outcomes || !width) return 0;
+    const auto result =
+        state.MeasureMany(Types::qubits_vector(qubits, qubits + width));
+    for (size_t i = 0; i < width; ++i) outcomes[i] = result[i];
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+
 unsigned GetGateFusionMaxQubits(void *sim) {
   if (!sim) return 0;
   try {
@@ -1031,9 +1177,13 @@ __declspec(dllexport)
 #endif
     int ConfigureSimulator(void *sim, const char *key, const char *value) {
   if (!sim || !key || !value) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->Configure(key, value);
-  return 1;
+  try {
+    auto simulator = static_cast<Simulators::ISimulator *>(sim);
+    simulator->Configure(key, value);
+    return 1;
+  } catch (...) {
+    return 0;
+  }
 }
 
 #ifdef _WIN32
