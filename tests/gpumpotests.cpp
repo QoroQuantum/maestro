@@ -170,8 +170,10 @@ BOOST_AUTO_TEST_CASE(channel_bond_dimension_state_management_and_clone) {
     return;
   }
   BOOST_TEST(mpo->SupportsQuantumChannels());
-  BOOST_CHECK_THROW(mpo->Configure("use_double_precision", "false"),
-                    std::runtime_error);
+  // The data type is fixed after initialization; a reapplied precision is
+  // ignored.
+  BOOST_CHECK_NO_THROW(mpo->Configure("use_double_precision", "false"));
+  BOOST_TEST(mpo->GetConfiguration("precision") == "double");
 
   mpo->ApplyH(0);
   mpo->ApplyCX(0, 1);
@@ -202,7 +204,7 @@ BOOST_AUTO_TEST_CASE(channel_bond_dimension_state_management_and_clone) {
 
   auto clone = mpo->Clone();
   BOOST_REQUIRE(clone);
-  BOOST_TEST(clone->GetConfiguration("use_double_precision") == "true");
+  BOOST_TEST(clone->GetConfiguration("precision") == "double");
   BOOST_TEST(clone->GetCurrentMaxBondDimension() ==
              mpo->GetCurrentMaxBondDimension());
   CheckClose(clone->AllProbabilities(), mpo->AllProbabilities());

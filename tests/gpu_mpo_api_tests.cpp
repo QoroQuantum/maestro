@@ -137,8 +137,10 @@ void Wide(bool fusion) {
 void Diagnostics(bool fusion) {
   auto sim = Create(2, fusion);
   sim->Configure("use_double_precision", "true");
-  if (backend == SimulatorType::kGpuSim)
-    Reject([&] { sim->Configure("use_double_precision", "false"); });
+  // Ignored after initialization: the data type stays double.
+  sim->Configure("use_double_precision", "false");
+  Check(sim->GetConfiguration("precision") == "double",
+        "live precision change was applied");
   sim->Configure("matrix_product_operator_restore_trace_after_truncation",
                  "true");
   sim->Configure("matrix_product_operator_hermitize_after_truncation", "true");
@@ -245,14 +247,16 @@ void Precision(SimulatorType type, SimulationType method, bool useDouble,
   Check(ConfigureSimulator(sim.get(), "precision", precision) == 1,
         "C precision reapplication failed");
   Check(ConfigureSimulator(sim.get(), "precision",
-                           useDouble ? "single" : "double") == 0,
-        "C live precision change was accepted");
+                           useDouble ? "single" : "double") == 1,
+        "C live precision change was rejected");
+  Check(sim->GetConfiguration("precision") == precision,
+        "C live precision change was applied");
   Check(ConfigureSimulator(sim.get(), "precision", "invalid") == 0,
         "C invalid precision was accepted");
   sim->Configure("use_double_precision", useDouble ? "1" : "0");
-  Reject([&] { sim->Configure("precision", useDouble ? "single" : "double"); });
+  sim->Configure("precision", useDouble ? "single" : "double");
   Check(sim->GetConfiguration("precision") == precision,
-        "failed change poisoned dtype");
+        "ignored change altered dtype");
   const double theta = .713;
   sim->ApplyRy(0, theta);
   sim->ApplyCX(0, 2);

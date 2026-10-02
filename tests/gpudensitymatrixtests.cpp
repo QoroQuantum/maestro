@@ -148,8 +148,10 @@ BOOST_AUTO_TEST_CASE(channel_state_management_and_clone) {
     return;
   }
   BOOST_TEST(density->SupportsQuantumChannels());
-  BOOST_CHECK_THROW(density->Configure("use_double_precision", "false"),
-                    std::runtime_error);
+  // The data type is fixed after initialization; a reapplied precision is
+  // ignored.
+  BOOST_CHECK_NO_THROW(density->Configure("use_double_precision", "false"));
+  BOOST_TEST(density->GetConfiguration("precision") == "double");
   density->ApplyX(0);
   density->ApplyQuantumChannel(
       {0}, Simulators::QuantumChannel::AmplitudeDamping(0.25));
@@ -169,7 +171,7 @@ BOOST_AUTO_TEST_CASE(channel_state_management_and_clone) {
 
   auto clone = density->Clone();
   BOOST_REQUIRE(clone);
-  BOOST_TEST(clone->GetConfiguration("use_double_precision") == "true");
+  BOOST_TEST(clone->GetConfiguration("precision") == "double");
   CheckClose(clone->AllProbabilities(), density->AllProbabilities());
   clone->ApplyX(1);
   BOOST_CHECK(clone->AllProbabilities() != density->AllProbabilities());

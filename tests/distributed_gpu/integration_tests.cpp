@@ -302,11 +302,12 @@ int main(int argc, char** argv) {
             if (two || mpi)
               Require(sim->GetGpuDevice() == -1,
                       "Distributed placement must not report one GPU");
-            Reject([&] {
-              sim->Configure("precision", std::string(precision) == "single"
-                                              ? "double"
-                                              : "single");
-            });
+            // Ignored after initialization: the data type stays as allocated.
+            sim->Configure("precision", std::string(precision) == "single"
+                                            ? "double"
+                                            : "single");
+            Require(sim->GetConfiguration("precision") == precision,
+                    "Live precision change was applied");
             auto cpu = Factory::CreateSimulator(SimulatorType::kQCSim,
                                                 SimulationType::kStatevector);
             cpu->AllocateQubits(4);

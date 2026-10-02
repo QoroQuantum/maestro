@@ -698,33 +698,21 @@ class ImmediateGpuState : public ISimulator {
     if (std::string(key) == "precision" ||
         std::string(key) == "use_double_precision") {
       const bool useDouble = Configuration::ParsePrecision(key, value);
-      const auto apply = [useDouble](auto *backend, bool created) {
-        if (!backend) return;
-        if (created) {
-          if (backend->IsDoublePrecision() != useDouble)
-            throw std::logic_error(
-                "GPU precision must be configured before initialization");
-          return;
-        }
-        if (!backend->SetDataType(useDouble))
-          throw std::runtime_error("GPU precision configuration failed");
-      };
-      apply(state.get(), state && state->GetNrQubits() > 0);
-      apply(mps.get(), mps && mps->IsCreated());
-      apply(tn.get(), tn && tn->IsCreated());
+      // The data type is fixed once a backend is allocated. A precision
+      // reapplied afterwards (e.g. by a configuration replay) is ignored; a
+      // new one takes effect after Clear and the next Initialize.
+      if ((state && state->GetNrQubits() > 0) || (mps && mps->IsCreated()) ||
+          (tn && tn->IsCreated()) ||
+          (densityMatrix && densityMatrix->IsCreated()) ||
+          (mpo && mpo->IsCreated()))
+        return;
+      if ((state && !state->SetDataType(useDouble)) ||
+          (mps && !mps->SetDataType(useDouble)) ||
+          (tn && !tn->SetDataType(useDouble)))
+        throw std::runtime_error("GPU precision configuration failed");
       // Density-matrix and MPO setters throw on native API failure.
-      const auto applyDensity = [useDouble](auto *backend) {
-        if (!backend) return;
-        if (backend->IsCreated()) {
-          if (backend->IsDoublePrecision() != useDouble)
-            throw std::logic_error(
-                "GPU precision must be configured before initialization");
-        } else {
-          backend->SetDataType(useDouble);
-        }
-      };
-      applyDensity(densityMatrix.get());
-      applyDensity(mpo.get());
+      if (densityMatrix) densityMatrix->SetDataType(useDouble);
+      if (mpo) mpo->SetDataType(useDouble);
       configuration.SetConfiguration(key, value);
       return;
     }

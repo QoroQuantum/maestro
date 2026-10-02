@@ -204,16 +204,9 @@ class AerState : public ISimulator {
         std::string(key) == "use_double_precision") {
       const bool useDouble = Configuration::ParsePrecision(key, value);
       const std::string precision = useDouble ? "double" : "single";
-      if (state->is_initialized()) {
-        const auto selected = configuration.IsSet("precision")
-                                  ? configuration.GetConfiguration("precision")
-                                  : "double";
-        if (selected != precision)
-          throw std::logic_error(
-              "Aer precision must be configured before initialization");
-      } else {
-        state->configure("precision", precision);
-      }
+      // Fixed once initialized; a reapplied precision is ignored until Clear.
+      if (state->is_initialized()) return;
+      state->configure("precision", precision);
       configuration.SetConfiguration("precision", precision);
       return;
     }

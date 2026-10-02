@@ -445,7 +445,8 @@ MPO, distributed GPU statevector, and Aer statevector/density matrix (including
 composite Aer) retain the selected precision through initialization and saved-state
 restoration, and cloning where supported. GPU tensor-network cloning remains
 unsupported.
-Reapplying the current precision is allowed after initialization; changing it
-requires clearing the state first. `GetConfiguration` reports the active native
+After initialization the precision is fixed: a precision setting applied then
+(for example by a configuration replay) is ignored, and a new one takes effect
+only after clearing the state. `GetConfiguration` reports the active native
 GPU precision. QCSim and Aer MPS always compute in double precision. When omitted,
 backend defaults remain GPU single precision and Aer/QCSim double precision.

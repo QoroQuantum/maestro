@@ -214,9 +214,9 @@ class ImmediateCompositeSimulator : public ISimulator {
     if (std::string(key) == "precision" ||
         std::string(key) == "use_double_precision") {
       Configuration::ParsePrecision(key, value);
-      // Children validate live allocation changes before the parent records
-      // the value for future children created by Reset or Initialize.
-      for (auto &[id, simulator] : simulators) simulator->Configure(key, value);
+      // Fixed once the children exist; a reapplied precision is ignored until
+      // Clear, so later children cannot end up with a different one.
+      if (!simulators.empty()) return;
       config.SetConfiguration(key, value);
       return;
     }

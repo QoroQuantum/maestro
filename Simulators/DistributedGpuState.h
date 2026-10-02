@@ -33,11 +33,9 @@ class DistributedGpuState : public ISimulator {
       throw std::invalid_argument("Null distributed GPU configuration");
     const std::string k(key), v(value);
     if (k == "precision" || k == "use_double_precision") {
-      const bool useDouble = Configuration::ParsePrecision(k, v);
-      if (state && state->IsDoublePrecision() != useDouble)
-        throw std::logic_error(
-            "Distributed GPU precision must be configured before "
-            "initialization");
+      Configuration::ParsePrecision(k, v);
+      // Fixed once allocated; a reapplied precision is ignored until Clear.
+      if (state) return;
       configuration.SetConfiguration(k, v);
       return;
     }

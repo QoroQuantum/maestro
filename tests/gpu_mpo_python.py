@@ -102,11 +102,8 @@ for selected_method in methods:
         sim.ApplyX(1)
         sim.RestoreState()
         assert abs(sim.Probability(3) - expected) < tolerance
-        try:
-            sim.Configure("precision", "double" if precision == "single" else "single")
-        except Exception:
-            pass
-        else:
-            raise AssertionError("Changing allocated precision must fail")
+        # Ignored after allocation: the data type stays as allocated.
+        sim.Configure("precision", "double" if precision == "single" else "single")
+        assert sim.GetConfiguration("precision") == precision
         del sim, owner
 print("PASS", "Composer" if composer else "Maestro", "Python precision forwarding")
