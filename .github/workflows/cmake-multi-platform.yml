@@ -9,7 +9,7 @@ on:
   workflow_call:
 
 env:
-  QCSIM_VERSION: "cc82b4c229905dfd01decb2aed3b9ca63d9e23a9"
+  QCSIM_VERSION: "1edb647e9a8e15b1f7ec401993ad4f2877c7dccb"
   CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
