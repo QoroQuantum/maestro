@@ -22,9 +22,10 @@ on:
         type: boolean
         default: true
 
+# Dry runs cancel each other; publishing runs are never cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ (github.event_name != 'workflow_dispatch' || (inputs.publish && !inputs.windows_only)) && 'publish' || 'dry' }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && (!inputs.publish || inputs.windows_only) }}
 
 env:
   VIRTUALENV_VERSION: "20.27.1"
