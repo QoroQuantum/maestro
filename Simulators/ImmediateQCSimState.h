@@ -783,13 +783,8 @@ class ImmediateQCSimState : public ISimulator {
     }
     if (pp) {
       if (std::string(key) == "pauli_propagator_sampling_cache_nodes") {
-#ifdef QCSIM_PAULI_PROPAGATOR_BATCH_API
         pp->SetSamplingCacheMaxNodes(
             configuration.GetConfigurationAsUnsigned(key));
-#else
-        throw std::runtime_error(
-            "Pauli sampling cache requires an updated QCSim dependency");
-#endif
       } else if (std::string(key) == "pauli_propagator_coefficient_threshold") {
         pp->SetCoefficientThreshold(
             configuration.GetConfigurationAsDouble(key));
@@ -1700,7 +1695,6 @@ class ImmediateQCSimState : public ISimulator {
       if (qubits.size() > 64)
         throw std::invalid_argument(
             "Use SampleCountsMany for more than 64 measured qubits");
-#ifdef QCSIM_PAULI_PROPAGATOR_BATCH_API
       const auto counts = pp->SampleCounts(qubitsInt, shots);
       for (const auto &[bits, count] : counts) {
         size_t meas = 0;
@@ -1708,15 +1702,6 @@ class ImmediateQCSimState : public ISimulator {
           if (bits[i]) meas |= (1ULL << i);
         result[meas] += count;
       }
-#else
-      for (size_t shot = 0; shot < shots; ++shot) {
-        const auto bits = pp->Sample(qubitsInt);
-        size_t meas = 0;
-        for (size_t i = 0; i < bits.size(); ++i)
-          if (bits[i]) meas |= (1ULL << i);
-        ++result[meas];
-      }
-#endif
     } else if (simulationType == SimulationType::kPathIntegral) {
       if (nrQubits < 64) {
         if (shots > 1) {
@@ -1920,13 +1905,8 @@ class ImmediateQCSimState : public ISimulator {
       tensorNetwork->ClearSavedState();
     } else if (simulationType == SimulationType::kPauliPropagator) {
       std::vector<int> qubitsInt(qubits.begin(), qubits.end());
-#ifdef QCSIM_PAULI_PROPAGATOR_BATCH_API
       const auto counts = pp->SampleCounts(qubitsInt, shots);
       for (const auto &[bits, count] : counts) result[bits] += count;
-#else
-      for (size_t shot = 0; shot < shots; ++shot)
-        ++result[pp->Sample(qubitsInt)];
-#endif
     } else if (simulationType == SimulationType::kPathIntegral) {
       if (nrQubits < 64) {
         if (shots > 1) {

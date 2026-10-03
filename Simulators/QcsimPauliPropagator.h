@@ -55,6 +55,7 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
   static double GetSamplingCost(
       const std::shared_ptr<Circuits::Circuit<>>& circuit,
       size_t nrQubitsSampled, size_t samples) {
+    if (nrQubitsSampled == 0) return 0.0;
     return samples * GetCost(circuit) * exp2(nrQubitsSampled - 1);
   }
 

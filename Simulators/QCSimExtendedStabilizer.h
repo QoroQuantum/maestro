@@ -137,8 +137,6 @@ class QCSimExtendedStabilizer {
 
   void ApplySXDG(size_t qubit) { simulator->ApplySxDag(qubit); }
 
-  void ApplySxDAG(size_t qubit) { ApplySXDG(qubit); }
-
   void ApplyCX(size_t controlQubit, size_t targetQubit) {
     simulator->ApplyCX(targetQubit, controlQubit);
   }
@@ -203,24 +201,12 @@ class QCSimExtendedStabilizer {
     simulator->ApplyCRx(targetQubit, controlQubit, angle);
   }
 
-  void ApplyCRx(size_t controlQubit, size_t targetQubit, double angle) {
-    ApplyCRX(controlQubit, targetQubit, angle);
-  }
-
   void ApplyCRY(size_t controlQubit, size_t targetQubit, double angle) {
     simulator->ApplyCRy(targetQubit, controlQubit, angle);
   }
 
-  void ApplyCRy(size_t controlQubit, size_t targetQubit, double angle) {
-    ApplyCRY(controlQubit, targetQubit, angle);
-  }
-
   void ApplyCRZ(size_t controlQubit, size_t targetQubit, double angle) {
     simulator->ApplyCRz(targetQubit, controlQubit, angle);
-  }
-
-  void ApplyCRz(size_t controlQubit, size_t targetQubit, double angle) {
-    ApplyCRZ(controlQubit, targetQubit, angle);
   }
 
   void ApplyCP(size_t controlQubit, size_t targetQubit, double lambda) {
@@ -239,16 +225,8 @@ class QCSimExtendedStabilizer {
     simulator->ApplyCSx(targetQubit, controlQubit);
   }
 
-  void ApplyCSx(size_t controlQubit, size_t targetQubit) {
-    ApplyCSX(controlQubit, targetQubit);
-  }
-
   void ApplyCSXDAG(size_t controlQubit, size_t targetQubit) {
     simulator->ApplyCSxDag(targetQubit, controlQubit);
-  }
-
-  void ApplyCSxDAG(size_t controlQubit, size_t targetQubit) {
-    ApplyCSXDAG(controlQubit, targetQubit);
   }
 
   void ApplyCSwap(size_t controlQubit, size_t targetQubit1,
