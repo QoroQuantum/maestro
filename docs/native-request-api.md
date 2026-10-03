@@ -189,7 +189,6 @@ the options object, to reproduce a run; zero is a valid explicit seed.
 is on except for CPU statevectors below 11 qubits and CPU density matrices below
 5 qubits, where it costs more than it saves. It is independent of
 `optimize_circuit`. Unsupported methods and Aer retain their existing behavior.
-See [gate fusion](gate_fusion.md) for capabilities, routing, and truncation effects.
 
 For maintainers: `SimulatorConfig` has two active construction paths. Python
 bindings populate typed option fields. The native parser populates typed network

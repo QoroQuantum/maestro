@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Gate fusion for the QCSim and GPU backends, controlled by `gate_fusion`
   in `SimulatorConfig` and exposed through the simulator, network, C and
-  native request interfaces with fusion statistics (see `docs/gate_fusion.md`).
+  native request interfaces with fusion statistics.
   `SimulatorConfig.gate_fusion` is optional: `None` means unset, and
   `GetConfiguration("gate_fusion")` then reports `"auto"`.
 - Native MPO queries on the QCSim and GPU backends: bit-vector probabilities,

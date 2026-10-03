@@ -9,7 +9,7 @@ on:
   workflow_call:
 
 env:
-  QCSIM_VERSION: "1edb647e9a8e15b1f7ec401993ad4f2877c7dccb"
+  QCSIM_VERSION: "3a7574172b559a6e468f72b529018e06f8282e2d"
   CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
@@ -80,7 +80,7 @@ jobs:
     # 5. DOWNLOAD DYNAMIC DEPENDENCIES (shallow clones, only if not cached)
     - name: Download Dependencies (QCSim, JSON, AER)
       run: |
-        if [ ! -d QCSim ]; then git clone https://github.com/aromanro/QCSim.git; fi
+        if [ ! -d QCSim ]; then git clone https://github.com/QoroQuantum/QCSim.git; fi
         cd QCSim && git checkout ${{ env.QCSIM_VERSION }} && cd ..
         [ -d json ] || git clone --depth 1 --branch v3.11.2 https://github.com/nlohmann/json.git
         [ -d qiskit-aer ] || git clone --depth 1 https://github.com/QoroQuantum/qiskit-aer.git

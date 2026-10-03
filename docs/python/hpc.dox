@@ -133,8 +133,6 @@
  * | `precision` | Precision override | `"single"` (default), `"double"` |
  * | `seed` | Explicit 64-bit random seed (omitted seeds are generated collectively) | `"42"` |
  *
- * For full architecture details, consult the dedicated guide at `docs/distributed_gpu.md`.
- *
  * ---
  *
  * @section py_quest QuEST Backend (External Library Wrapper)

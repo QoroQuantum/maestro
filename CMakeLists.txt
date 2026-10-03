@@ -140,8 +140,8 @@ if(NOT DEFINED QCSIM_INCLUDE_DIR)
         message(STATUS "QCSIM_INCLUDE_DIR not set, fetching QCSim...")
         FetchContent_Declare(
             qcsim
-            GIT_REPOSITORY https://github.com/aromanro/QCSim.git
-            GIT_TAG 1edb647e9a8e15b1f7ec401993ad4f2877c7dccb
+            GIT_REPOSITORY https://github.com/QoroQuantum/QCSim.git
+            GIT_TAG 3a7574172b559a6e468f72b529018e06f8282e2d
         )
         FetchContent_GetProperties(qcsim)
         if(NOT qcsim_POPULATED)

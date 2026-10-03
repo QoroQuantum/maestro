@@ -249,8 +249,7 @@ scoped thread-local default; custom estimators creating simulators on additional
 threads must propagate configuration to those threads explicitly.
 
 For statevectors distributed across multiple GPUs on a single host or across
-MPI cluster nodes, see the dedicated guide in [docs/distributed_gpu.md](docs/distributed_gpu.md)
-and the Python HPC guide (`py_hpc`).
+MPI cluster nodes, see the Python HPC guide (`py_hpc`).
 
 GPU loader regression tests need no GPU:
 
