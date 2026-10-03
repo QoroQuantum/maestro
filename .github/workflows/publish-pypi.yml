@@ -5,10 +5,6 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
-      windows_only:
-        description: "Dry run: build only Windows wheels (skips Linux/macOS and PyPI upload)"
-        type: boolean
-        default: false
       skip_ci:
         description: "Skip CI tests / build (cmake-multi-platform)"
         type: boolean
@@ -24,8 +20,8 @@ on:
 
 # Dry runs cancel each other; publishing runs are never cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ (github.event_name != 'workflow_dispatch' || (inputs.publish && !inputs.windows_only)) && 'publish' || 'dry' }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && (!inputs.publish || inputs.windows_only) }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ (github.event_name != 'workflow_dispatch' || inputs.publish) && 'publish' || 'dry' }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && !inputs.publish }}
 
 env:
   VIRTUALENV_VERSION: "20.27.1"
@@ -41,7 +37,7 @@ jobs:
   # CI tests run alongside the builds and must pass before upload (unless skipped)
   ci:
     name: Run CI tests
-    if: ${{ !inputs.skip_ci && !inputs.from_run_id && !inputs.windows_only }}
+    if: ${{ !inputs.skip_ci && !inputs.from_run_id }}
     uses: ./.github/workflows/cmake-multi-platform.yml
 
   # Single source of the version being published, for both triggers: a release
@@ -70,7 +66,7 @@ jobs:
   build_sdist:
     name: Build source distribution
     needs: [version]
-    if: always() && !cancelled() && !inputs.from_run_id && !inputs.windows_only && needs.version.result == 'success'
+    if: always() && !cancelled() && !inputs.from_run_id && needs.version.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -84,7 +80,7 @@ jobs:
   build_wheels:
     name: Build wheels (${{ matrix.os }}, ${{ matrix.cibw_build }})
     needs: [version]
-    if: always() && !cancelled() && !inputs.from_run_id && needs.version.result == 'success' && (!inputs.windows_only || matrix.os == 'windows-2022')
+    if: always() && !cancelled() && !inputs.from_run_id && needs.version.result == 'success'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -314,7 +310,7 @@ jobs:
   upload_pypi:
     name: Upload to PyPI
     needs: [ci, build_sdist, build_wheels]
-    if: always() && !cancelled() && !inputs.windows_only && (github.event_name != 'workflow_dispatch' || inputs.publish) && (inputs.from_run_id != '' || ((needs.ci.result == 'success' || needs.ci.result == 'skipped') && needs.build_sdist.result == 'success' && needs.build_wheels.result == 'success'))
+    if: always() && !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.publish) && (inputs.from_run_id != '' || ((needs.ci.result == 'success' || needs.ci.result == 'skipped') && needs.build_sdist.result == 'success' && needs.build_wheels.result == 'success'))
     runs-on: ubuntu-latest
     environment:
       name: pypi
