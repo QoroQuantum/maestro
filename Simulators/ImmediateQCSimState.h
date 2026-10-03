@@ -706,9 +706,7 @@ class ImmediateQCSimState : public ISimulator {
       if (pp) SeedBackend(pp.get(), seed);
       if (pathIntegralSimulator) pathIntegralSimulator->SetSeed(seed);
       if (densityMatrix) SeedBackend(densityMatrix.get(), seed);
-      if (extendedStabilizer)
-        extendedStabilizer->SetRandomSeed(
-            static_cast<std::mt19937::result_type>(seed));
+      if (extendedStabilizer) SeedBackend(extendedStabilizer.get(), seed);
       return;
     }
 
@@ -1774,15 +1772,10 @@ class ImmediateQCSimState : public ISimulator {
         ++result[packed];
       }
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
+      const std::vector<size_t> selected(qubits.begin(), qubits.end());
       auto sampler = extendedStabilizer->CloneWithSeed(rng());
-      sampler->SaveState();
-      for (size_t shot = 0; shot < shots; ++shot) {
-        sampler->RestoreState();
-        Types::qubit_t packed = 0;
-        for (size_t i = 0; i < qubits.size(); ++i)
-          if (sampler->Measure(qubits[i])) packed |= 1ULL << i;
-        ++result[packed];
-      }
+      for (const auto &item : sampler->SampleCounts(selected, shots))
+        result[item.first] += item.second;
     } else {
       if (shots > 1) {
         const auto &statev = state->getRegisterStorage();
@@ -2001,15 +1994,10 @@ class ImmediateQCSimState : public ISimulator {
         ++result[packed];
       }
     } else if (simulationType == SimulationType::kExtendedStabilizer) {
+      const std::vector<size_t> selected(qubits.begin(), qubits.end());
       auto sampler = extendedStabilizer->CloneWithSeed(rng());
-      sampler->SaveState();
-      for (size_t shot = 0; shot < shots; ++shot) {
-        sampler->RestoreState();
-        std::vector<bool> packed(qubits.size(), false);
-        for (size_t i = 0; i < qubits.size(); ++i)
-          packed[i] = sampler->Measure(qubits[i]);
-        ++result[packed];
-      }
+      for (const auto &item : sampler->SampleCountsMany(selected, shots))
+        result[item.first] += item.second;
     } else {
       if (shots > 1) {
         const auto &statev = state->getRegisterStorage();
@@ -2257,6 +2245,8 @@ class ImmediateQCSimState : public ISimulator {
     enableMultithreading = multithreading;
     if (state) state->SetMultithreading(multithreading);
     if (cliffordSimulator) cliffordSimulator->SetMultithreading(multithreading);
+    if (extendedStabilizer)
+      extendedStabilizer->SetMultithreading(multithreading);
     if (tensorNetwork) tensorNetwork->SetMultithreading(multithreading);
     if (densityMatrix) densityMatrix->SetMultithreading(multithreading);
     if (mpsSimulator) mpsSimulator->SetMultithreading(multithreading);

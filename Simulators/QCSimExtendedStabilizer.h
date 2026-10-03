@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -44,6 +45,15 @@ class QCSimExtendedStabilizer {
     simulator->SetRandomSeed(seed);
   }
 
+  // Uses all 64 bits, as SetSeed does for the other QCSim backends.
+  void SetSeed(uint64_t seed) { simulator->SetSeed(seed); }
+
+  void SetMultithreading(bool enable = true) {
+    simulator->SetMultithreading(enable);
+  }
+
+  bool GetMultithreading() const { return simulator->GetMultithreading(); }
+
   void ApplyH(size_t qubit) { simulator->ApplyH(qubit); }
 
   void ApplyS(size_t qubit) { simulator->ApplyS(qubit); }
@@ -64,6 +74,18 @@ class QCSimExtendedStabilizer {
 
   double ExpectationValue(const std::string& pauliString) const {
     return simulator->ExpectationValue(pauliString);
+  }
+
+  // Counts preserve the live and saved state and draw the same random numbers
+  // as restoring the state and measuring the qubits in order for each shot.
+  std::unordered_map<size_t, size_t> SampleCounts(
+      const std::vector<size_t>& qubits, size_t shots) {
+    return simulator->SampleCounts(qubits, shots);
+  }
+
+  std::unordered_map<std::vector<bool>, size_t> SampleCountsMany(
+      const std::vector<size_t>& qubits, size_t shots) {
+    return simulator->SampleCountsMany(qubits, shots);
   }
 
   void SaveState() { simulator->SaveState(); }
@@ -159,52 +181,26 @@ class QCSimExtendedStabilizer {
 
   void ApplyTDG(size_t qubit) { ApplyRZ(qubit, -kPi / 4.0); }
 
+  // QCSim applies these gates in one pass each, without the rotation
+  // decompositions; at Clifford angles they only update the stabilizer basis.
   void ApplyU(size_t qubit, double theta, double phi, double lambda,
               double gamma = 0.0) {
     // A global phase has no observable effect for a non-controlled U gate.
     (void)gamma;
-    ApplyRZ(qubit, lambda);
-    ApplyRY(qubit, theta);
-    ApplyRZ(qubit, phi);
+    simulator->ApplyU(qubit, theta, phi, lambda);
   }
 
   void ApplyCH(size_t controlQubit, size_t targetQubit) {
-    ApplyH(targetQubit);
-    ApplySDG(targetQubit);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyH(targetQubit);
-    ApplyT(targetQubit);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyT(targetQubit);
-    ApplyH(targetQubit);
-    ApplyS(targetQubit);
-    ApplyX(targetQubit);
-    ApplyS(controlQubit);
+    simulator->ApplyCH(targetQubit, controlQubit);
   }
 
   void ApplyCU(size_t controlQubit, size_t targetQubit, double theta,
                double phi, double lambda, double gamma = 0.0) {
-    if (gamma != 0.0) ApplyP(controlQubit, gamma);
-
-    const double lambdaPlusPhiHalf = 0.5 * (lambda + phi);
-    const double halfTheta = 0.5 * theta;
-    ApplyP(targetQubit, 0.5 * (lambda - phi));
-    ApplyP(controlQubit, lambdaPlusPhiHalf);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyU(targetQubit, -halfTheta, 0.0, -lambdaPlusPhiHalf);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyU(targetQubit, halfTheta, phi, 0.0);
+    simulator->ApplyCU(targetQubit, controlQubit, theta, phi, lambda, gamma);
   }
 
   void ApplyCRX(size_t controlQubit, size_t targetQubit, double angle) {
-    const double halfAngle = angle * 0.5;
-
-    ApplyH(targetQubit);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyRZ(targetQubit, -halfAngle);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyRZ(targetQubit, halfAngle);
-    ApplyH(targetQubit);
+    simulator->ApplyCRx(targetQubit, controlQubit, angle);
   }
 
   void ApplyCRx(size_t controlQubit, size_t targetQubit, double angle) {
@@ -212,11 +208,7 @@ class QCSimExtendedStabilizer {
   }
 
   void ApplyCRY(size_t controlQubit, size_t targetQubit, double angle) {
-    const double halfAngle = angle * 0.5;
-    ApplyRY(targetQubit, halfAngle);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyRY(targetQubit, -halfAngle);
-    ApplyCX(controlQubit, targetQubit);
+    simulator->ApplyCRy(targetQubit, controlQubit, angle);
   }
 
   void ApplyCRy(size_t controlQubit, size_t targetQubit, double angle) {
@@ -224,12 +216,7 @@ class QCSimExtendedStabilizer {
   }
 
   void ApplyCRZ(size_t controlQubit, size_t targetQubit, double angle) {
-    const double halfAngle = angle * 0.5;
-
-    ApplyRZ(targetQubit, halfAngle);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyRZ(targetQubit, -halfAngle);
-    ApplyCX(controlQubit, targetQubit);
+    simulator->ApplyCRz(targetQubit, controlQubit, angle);
   }
 
   void ApplyCRz(size_t controlQubit, size_t targetQubit, double angle) {
@@ -237,34 +224,19 @@ class QCSimExtendedStabilizer {
   }
 
   void ApplyCP(size_t controlQubit, size_t targetQubit, double lambda) {
-    const double halfAngle = lambda * 0.5;
-    ApplyP(controlQubit, halfAngle);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyP(targetQubit, -halfAngle);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyP(targetQubit, halfAngle);
+    simulator->ApplyCP(targetQubit, controlQubit, lambda);
   }
 
   void ApplyCS(size_t controlQubit, size_t targetQubit) {
-    ApplyT(controlQubit);
-    ApplyT(targetQubit);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyTDG(targetQubit);
-    ApplyCX(controlQubit, targetQubit);
+    simulator->ApplyCS(targetQubit, controlQubit);
   }
 
   void ApplyCSDAG(size_t controlQubit, size_t targetQubit) {
-    ApplyCX(controlQubit, targetQubit);
-    ApplyT(targetQubit);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyTDG(controlQubit);
-    ApplyTDG(targetQubit);
+    simulator->ApplyCSdg(targetQubit, controlQubit);
   }
 
   void ApplyCSX(size_t controlQubit, size_t targetQubit) {
-    ApplyH(targetQubit);
-    ApplyCS(controlQubit, targetQubit);
-    ApplyH(targetQubit);
+    simulator->ApplyCSx(targetQubit, controlQubit);
   }
 
   void ApplyCSx(size_t controlQubit, size_t targetQubit) {
@@ -272,9 +244,7 @@ class QCSimExtendedStabilizer {
   }
 
   void ApplyCSXDAG(size_t controlQubit, size_t targetQubit) {
-    ApplyH(targetQubit);
-    ApplyCSDAG(controlQubit, targetQubit);
-    ApplyH(targetQubit);
+    simulator->ApplyCSxDag(targetQubit, controlQubit);
   }
 
   void ApplyCSxDAG(size_t controlQubit, size_t targetQubit) {
@@ -283,36 +253,12 @@ class QCSimExtendedStabilizer {
 
   void ApplyCSwap(size_t controlQubit, size_t targetQubit1,
                   size_t targetQubit2) {
-    const size_t q1 = controlQubit;
-    const size_t q2 = targetQubit1;
-    const size_t q3 = targetQubit2;
-
-    ApplyCX(q3, q2);
-    ApplyCSX(q2, q3);
-    ApplyCX(q1, q2);
-
-    ApplyP(q3, kPi);
-    ApplyP(q2, -kPi / 2.0);
-
-    ApplyCSX(q2, q3);
-    ApplyCX(q1, q2);
-
-    ApplyP(q3, kPi);
-    ApplyCSX(q1, q3);
-    ApplyCX(q3, q2);
+    simulator->ApplyCSwap(targetQubit1, targetQubit2, controlQubit);
   }
 
   void ApplyCCX(size_t controlQubit1, size_t controlQubit2,
                 size_t targetQubit) {
-    const size_t q1 = controlQubit1;
-    const size_t q2 = controlQubit2;
-    const size_t q3 = targetQubit;
-
-    ApplyCSX(q2, q3);
-    ApplyCX(q1, q2);
-    ApplyCSXDAG(q2, q3);
-    ApplyCX(q1, q2);
-    ApplyCSX(q1, q3);
+    simulator->ApplyCCX(targetQubit, controlQubit1, controlQubit2);
   }
 
  private:

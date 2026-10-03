@@ -26,6 +26,10 @@ void Check(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
 }
 
+void Check(bool condition, const std::string& message) {
+  Check(condition, message.c_str());
+}
+
 std::shared_ptr<Net> MakeNetwork(Backend backend, Method method,
                                  size_t bits = 2) {
   auto network =
@@ -808,7 +812,8 @@ void QCSimWorkerRandomStreams() {
     circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
     circuit->AddOperation(CF::CreateMeasurement({{0, bit}}));
   }
-  for (auto method : {Method::kDensityMatrix, Method::kExtendedStabilizer})
+  for (auto method : {Method::kDensityMatrix, Method::kStabilizer,
+                      Method::kExtendedStabilizer})
     for (bool onHost : {false, true})
       for (bool seeded : {false, true}) {
         auto network = MakeNetwork(Backend::kQCSim, method, 64);
@@ -831,10 +836,14 @@ void QCSimWorkerRandomStreams() {
       }
 }
 
-void QCSimSamplingRandomStreams() {
-  const auto create = [] {
+void QCSimSamplingRandomStreams(Method method) {
+  // The Clifford backend has no MeasureNoCollapse; it samples through counts.
+  const int apis = method == Method::kStabilizer ? 2 : 4;
+  const std::string name =
+      method == Method::kStabilizer ? "Clifford" : "Extended-stabilizer";
+  const auto create = [method] {
     auto sim = Simulators::SimulatorsFactory::CreateSimulator(
-        Backend::kQCSim, Method::kExtendedStabilizer);
+        Backend::kQCSim, method);
     sim->AllocateQubits(3);
     sim->Initialize();
     sim->ApplyX(0);
@@ -859,34 +868,57 @@ void QCSimSamplingRandomStreams() {
     }
     return results;
   };
-  for (int api = 0; api < 4; ++api) {
+  for (int api = 0; api < apis; ++api) {
     auto sim = create();
     const auto unseeded = sequence(sim, api);
     Check(std::set<std::vector<bool>>(unseeded.begin(), unseeded.end()).size() > 1,
-          "Unseeded extended-stabilizer sampling replayed one outcome");
-    for (uint64_t seed : {uint64_t{0}, UINT64_MAX}) {
+          "Unseeded " + name + " sampling replayed one outcome");
+    // Seeds differing only above bit 31 must give different streams.
+    for (uint64_t seed : {uint64_t{0}, uint64_t{1} << 32, UINT64_MAX}) {
       sim->SetSeed(seed);
       const auto first = sequence(sim, api);
       Check(first != sequence(sim, api),
-            "Extended-stabilizer sampling did not advance its RNG");
+            name + " sampling did not advance its RNG");
       sim->SetSeed(seed);
       Check(first == sequence(sim, api),
-            "Extended-stabilizer sampling did not replay an explicit seed");
+            name + " sampling did not replay an explicit seed");
+      if (seed == 0) {
+        sim->SetSeed(uint64_t{1} << 32);
+        Check(first != sequence(sim, api),
+              name + " sampling ignored the high seed bits");
+      }
     }
     Check(std::abs(sim->ExpectationValue("XXX") - 1.) < 1e-12,
-          "Extended-stabilizer sampling changed the quantum state");
+          name + " sampling changed the quantum state");
     sim->RestoreState();
     Check(std::abs(sim->Probability(1) - 1.) < 1e-12,
-          "Extended-stabilizer sampling changed the saved checkpoint");
+          name + " sampling changed the saved checkpoint");
   }
+  // Collapsing measurements draw from the backend's own RNG, which must see
+  // every seed bit; sampling above draws worker seeds from the state's RNG.
+  const auto measured = [&](uint64_t seed) {
+    auto sim = create();
+    sim->SetSeed(seed);
+    std::vector<size_t> outcomes;
+    for (size_t shot = 0; shot < 64; ++shot) {
+      outcomes.push_back(sim->Measure({0, 1, 2}));
+      for (size_t q = 0; q < 3; ++q) sim->ApplyH(q);
+    }
+    return outcomes;
+  };
+  Check(measured(0) == measured(0),
+        name + " measurements did not replay an explicit seed");
+  Check(measured(0) != measured(uint64_t{1} << 32),
+        name + " measurements ignored the high seed bits");
+
   auto sim = create();
   sim->SetSeed(0);
   const auto first = sim->SampleCounts({2, 0, 1}, 1024);
   Check(first != sim->SampleCounts({2, 0, 1}, 1024),
-        "Extended-stabilizer sampling replayed an entire batch");
+        name + " sampling replayed an entire batch");
   sim->SetSeed(0);
   Check(first == sim->SampleCounts({2, 0, 1}, 1024),
-        "Extended-stabilizer batch sampling ignored reseeding");
+        name + " batch sampling ignored reseeding");
 }
 
 void SharedReset() {
@@ -1039,7 +1071,8 @@ int main() try {
   NoiseClonePolicy();
   ConditionalOutputMapping();
   QCSimWorkerRandomStreams();
-  QCSimSamplingRandomStreams();
+  QCSimSamplingRandomStreams(Method::kStabilizer);
+  QCSimSamplingRandomStreams(Method::kExtendedStabilizer);
   SharedReset();
   TrailingReset();
   NoiseEstimateResetStreams();

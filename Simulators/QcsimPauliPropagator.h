@@ -27,137 +27,8 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
 
   void ApplyTDG(int qubit) { ApplyRZ(qubit, -M_PI_4); }
 
-  void ApplyU(int qubit, double theta, double phi, double lambda,
-              double gamma = 0.0) {
-    ApplyRZ(qubit, lambda);
-    ApplyRY(qubit, theta);
-    ApplyRZ(qubit, phi);
-  }
-
-  void ApplyCH(int controlQubit, int targetQubit) {
-    ApplyH(targetQubit);
-    ApplySDG(targetQubit);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyH(targetQubit);
-    ApplyT(targetQubit);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyT(targetQubit);
-    ApplyH(targetQubit);
-    ApplyS(targetQubit);
-    ApplyX(targetQubit);
-    ApplyS(controlQubit);
-  }
-
-  void ApplyCU(int controlQubit, int targetQubit, double theta, double phi,
-               double lambda, double gamma = 0.0) {
-    if (gamma != 0.0) ApplyP(controlQubit, gamma);
-
-    const double lambdaPlusPhiHalf = 0.5 * (lambda + phi);
-    const double halfTheta = 0.5 * theta;
-    ApplyP(targetQubit, 0.5 * (lambda - phi));
-    ApplyP(controlQubit, lambdaPlusPhiHalf);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyU(targetQubit, -halfTheta, 0, -lambdaPlusPhiHalf);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyU(targetQubit, halfTheta, phi, 0);
-  }
-
-  void ApplyCRX(int controlQubit, int targetQubit, double angle) {
-    const double halfAngle = angle * 0.5;
-
-    ApplyH(targetQubit);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyRZ(targetQubit, -halfAngle);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyRZ(targetQubit, halfAngle);
-    ApplyH(targetQubit);
-  }
-
-  void ApplyCRY(int controlQubit, int targetQubit, double angle) {
-    const double halfAngle = angle * 0.5;
-    ApplyRY(targetQubit, halfAngle);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyRY(targetQubit, -halfAngle);
-    ApplyCX(controlQubit, targetQubit);
-  }
-
-  void ApplyCRZ(int controlQubit, int targetQubit, double angle) {
-    const double halfAngle = angle * 0.5;
-
-    ApplyRZ(targetQubit, halfAngle);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyRZ(targetQubit, -halfAngle);
-    ApplyCX(controlQubit, targetQubit);
-  }
-
-  void ApplyCP(int controlQubit, int targetQubit, double lambda) {
-    const double halfAngle = lambda * 0.5;
-    ApplyP(controlQubit, halfAngle);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyP(targetQubit, -halfAngle);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyP(targetQubit, halfAngle);
-  }
-
-  void ApplyCS(int controlQubit, int targetQubit) {
-    ApplyT(controlQubit);
-    ApplyT(targetQubit);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyTDG(targetQubit);
-    ApplyCX(controlQubit, targetQubit);
-  }
-
-  void ApplyCSDAG(int controlQubit, int targetQubit) {
-    ApplyCX(controlQubit, targetQubit);
-    ApplyT(targetQubit);
-    ApplyCX(controlQubit, targetQubit);
-    ApplyTDG(controlQubit);
-    ApplyTDG(targetQubit);
-  }
-
-  void ApplyCSX(int controlQubit, int targetQubit) {
-    ApplyH(targetQubit);
-    ApplyCS(controlQubit, targetQubit);
-    ApplyH(targetQubit);
-  }
-
-  void ApplyCSXDAG(int controlQubit, int targetQubit) {
-    ApplyH(targetQubit);
-    ApplyCSDAG(controlQubit, targetQubit);
-    ApplyH(targetQubit);
-  }
-
-  void ApplyCSwap(int controlQubit, int targetQubit1, int targetQubit2) {
-    const int q1 = controlQubit;  // control
-    const int q2 = targetQubit1;
-    const int q3 = targetQubit2;
-
-    ApplyCX(q3, q2);
-    ApplyCSX(q2, q3);  // 3 rotaations
-    ApplyCX(q1, q2);
-
-    ApplyP(q3, M_PI);     // 1 rotation
-    ApplyP(q2, -M_PI_2);  // 1 rotation
-
-    ApplyCSX(q2, q3);  // 3 rotations
-    ApplyCX(q1, q2);
-
-    ApplyP(q3, M_PI);  // 1 rotation
-    ApplyCSX(q1, q3);  // 3 rotations
-    ApplyCX(q3, q2);
-  }
-
-  void ApplyCCX(int controlQubit1, int controlQubit2, int targetQubit) {
-    const int q1 = controlQubit1;  // control 1
-    const int q2 = controlQubit2;  // control 2
-    const int q3 = targetQubit;    // target
-
-    ApplyCSX(q2, q3);  // 3 rotations
-    ApplyCX(q1, q2);
-    ApplyCSXDAG(q2, q3);  // 3 rotations
-    ApplyCX(q1, q2);
-    ApplyCSX(q1, q3);  // 3 rotations
-  }
+  // U and controlled gates are inherited from QCSim's native packed API.
+  // Each is one recorded operation, so approximation intervals count full gates.
 
   std::unique_ptr<QcsimPauliPropagator> Clone() const {
     auto clone = std::make_unique<QcsimPauliPropagator>();
@@ -170,18 +41,13 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
     clone->SetParallelThresholdForSum(GetParallelThresholdForSum());
     clone->SetStepsBetweenDeduplication(StepsBetweenDeduplication());
     clone->SetStepsBetweenTrims(StepsBetweenTrims());
-#ifdef QCSIM_PAULI_PROPAGATOR_BATCH_API
+
     clone->ShareOperationsFrom(*this);
-#else
-    clone->SetOperations(GetOperations());
-#endif
+
     clone->SetSavePosition(GetSavePosition());
-#ifdef QCSIM_PAULI_PROPAGATOR_BATCH_API
+
     clone->SetSamplingCacheMaxNodes(GetSamplingCacheMaxNodes());
     if (IsParallelEnabled()) clone->EnableParallel(GetThreadCount());
-#else
-    if (IsParallelEnabled()) clone->EnableParallel();
-#endif
 
     return clone;
   }
@@ -195,6 +61,8 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
   static double GetCost(const std::shared_ptr<Circuits::Circuit<>>& circuit) {
     if (!circuit) return 0.0;
 
+    // Conservative branching estimates, not elapsed time: commuting inputs and
+    // deduplication often reduce the actual expansion.
     double cost = 0.0;
     double doublingCost = 1;
 
@@ -296,32 +164,30 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
         return 2.;
 
       case Circuits::QuantumGateType::kUGateType:
-        return 8.;  // implemented with three rotations
+        return 3.;  // at most three Pauli outputs
 
       case Circuits::QuantumGateType::kCPGateType:
-        // p, cx, p, cx, p
-        return 20;
+        return 4.;
       case Circuits::QuantumGateType::kCRxGateType:
-        // h, cx, rz, cx, rz, h
-        return 14;
+        return 4.;
       case Circuits::QuantumGateType::kCRyGateType:
         [[fallthrough]];
       case Circuits::QuantumGateType::kCRzGateType:
-        return 12;
+        return 4.;
       case Circuits::QuantumGateType::kCHGateType:
-        return 26.5;
+        return 4.;
       case Circuits::QuantumGateType::kCSxGateType:
-        return 35;
+        return 4.;
       case Circuits::QuantumGateType::kCSxDagGateType:
-        return 26;
+        return 4.;
 
       case Circuits::QuantumGateType::kCUGateType:
-        return 546;
+        return 8.;
 
       case Circuits::QuantumGateType::kCCXGateType:
-        return 2555;
+        return 4.;
       case Circuits::QuantumGateType::kCSwapGateType:
-        return 23996;
+        return 4.;
 
       default:
         return 1.;
@@ -397,7 +263,7 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
                     // let's just put a constant for now
 
       case Circuits::QuantumGateType::kUGateType:
-        return 8.;  // implemented with three rotations
+        return 3.;  // at most three Pauli outputs
 
       case Circuits::QuantumGateType::kCPGateType:
         [[fallthrough]];
@@ -408,21 +274,21 @@ class QcsimPauliPropagator : public QC::PauliPropagator {
       case Circuits::QuantumGateType::kCRzGateType:
         [[fallthrough]];
       case Circuits::QuantumGateType::kCHGateType:
-        return 4;  // implemented with 2 rotations, the rest are cliffords
+        return 4.;  // maximum outputs of the native local action
 
       case Circuits::QuantumGateType::kCSxGateType:
         [[fallthrough]];
       case Circuits::QuantumGateType::kCSxDagGateType:
-        return 8;  // implemented with 3 rotations, the rest are cliffords
+        return 4.;
 
       case Circuits::QuantumGateType::kCUGateType:
-        return 256;  // implemented with 8 rotations
+        return 8.;  // includes a nonzero controlled global phase
 
-      // three qubit gates, particularly costly!
+      // Native three-qubit actions have at most four outputs.
       case Circuits::QuantumGateType::kCSwapGateType:
-        return 4096;  // 12 rotations!!!!!!
+        return 4.;
       case Circuits::QuantumGateType::kCCXGateType:
-        return 512;  // 9 rotations!!!!!!
+        return 4.;
 
       default:
         return 1.;

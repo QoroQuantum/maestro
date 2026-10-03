@@ -99,6 +99,32 @@ void CliffordWideSampling() {
   Require(sim->Probability(0) == 1.0, "sampling must preserve the caller's saved state");
 }
 
+// Stabilizer backends follow maestro's multithreading flag whether it is set
+// before or after the backend is created.
+struct StabilizerThreadsProbe : Private::ImmediateQCSimSimulator {
+  bool BackendMultithreading() const {
+    if (cliffordSimulator) return cliffordSimulator->GetMultithreading();
+    if (extendedStabilizer) return extendedStabilizer->GetMultithreading();
+    throw std::runtime_error("no stabilizer backend");
+  }
+};
+
+void StabilizerMultithreading() {
+  for (const std::string method : {"stabilizer", "extended_stabilizer"})
+    for (const bool enable : {false, true}) {
+      StabilizerThreadsProbe sim;
+      sim.Configure("method", method.c_str());
+      sim.SetMultithreading(enable);
+      sim.AllocateQubits(4);
+      sim.Initialize();
+      Require(sim.BackendMultithreading() == enable,
+              method + " ignored multithreading set before creation");
+      sim.SetMultithreading(!enable);
+      Require(sim.BackendMultithreading() == !enable,
+              method + " ignored multithreading set after creation");
+    }
+}
+
 void Individual(SimulatorType type) {
   for (const std::vector<Types::qubit_t>& ids :
        {std::vector<Types::qubit_t>{0,1,2}, {5,7,9}, {9,5,7}}) {
@@ -138,6 +164,7 @@ int main(int argc, char** argv) {
                              SimulationType::kPathIntegral})
       run("QCSim method " + std::to_string(int(method)), [&] { Backend(SimulatorType::kQCSim, method); });
     run("QCSim Clifford wide probabilities and marginal sampling", CliffordWideSampling);
+    run("QCSim stabilizer backends follow multithreading", StabilizerMultithreading);
     run("QCSim MPS collapse sampler", [&] { Backend(SimulatorType::kQCSim, SimulationType::kMatrixProductState, "mps_apply_measure"); });
     run("Composite QCSim", [&] { Backend(SimulatorType::kCompositeQCSim, SimulationType::kStatevector); });
     run("Individual QCSim mappings", [&] { Individual(SimulatorType::kQCSim); });
