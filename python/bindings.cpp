@@ -716,13 +716,14 @@ nb::dict incremental_evolve_core(
     }
     current_step = target_step;
 
-    // Compute expectation values (non-destructive for MPS)
-    // GIL is held here — needed for Python object creation
-    nb::list step_exp;
-    for (const auto& pauli : paulis) {
-      double ev = simulator->ExpectationValue(pauli);
-      step_exp.append(ev);
+    // Share tensor contractions across the observables at this state.
+    std::vector<double> values;
+    {
+      nb::gil_scoped_release release;
+      values = simulator->ExpectationValues(paulis);
     }
+    nb::list step_exp;
+    for (double value : values) step_exp.append(value);
 
     auto end_step = std::chrono::high_resolution_clock::now();
 
@@ -1584,6 +1585,18 @@ NB_MODULE(maestro, m) {
       .def("expectation_value_complex",
            &Simulators::ISimulator::ExpectationValueComplex, "pauli"_a,
            "normalized"_a = true)
+      .def("ExpectationValues", &Simulators::ISimulator::ExpectationValues,
+           "paulis"_a, nb::call_guard<nb::gil_scoped_release>(),
+           "Evaluate Pauli strings together on the current state, in input order.")
+      .def("expectation_values", &Simulators::ISimulator::ExpectationValues,
+           "paulis"_a, nb::call_guard<nb::gil_scoped_release>())
+      .def("expectation_values_complex",
+           &Simulators::ISimulator::ExpectationValuesComplex, "paulis"_a,
+           "normalized"_a = true, nb::call_guard<nb::gil_scoped_release>(),
+           "Batch MPO expectations; normalized=False returns raw traces.")
+      .def("ExpectationValuesComplex",
+           &Simulators::ISimulator::ExpectationValuesComplex, "paulis"_a,
+           "normalized"_a = true, nb::call_guard<nb::gil_scoped_release>())
       .def("apply_operator", &Simulators::ISimulator::ApplyOperator, "qubits"_a,
            "matrix"_a, "normalize"_a = false)
       .def("move_at_beginning_of_chain",

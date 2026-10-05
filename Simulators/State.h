@@ -548,6 +548,16 @@ class IState {
     throw std::runtime_error(
         "This simulator does not support ExpectationValueComplex");
   }
+  // Same normalization and validation as the scalar complex query. Backends
+  // may share contractions; other backends retain their scalar behavior.
+  virtual std::vector<std::complex<double>> ExpectationValuesComplex(
+      const std::vector<std::string> &paulis, bool normalized = true) const {
+    std::vector<std::complex<double>> values;
+    values.reserve(paulis.size());
+    for (const auto &pauli : paulis)
+      values.push_back(ExpectationValueComplex(pauli, normalized));
+    return values;
+  }
   virtual void ApplyOperator(const Types::qubits_vector &,
                              const Eigen::MatrixXcd &, bool = false) {
     throw std::runtime_error("This simulator does not support ApplyOperator");
@@ -860,6 +870,17 @@ class IState {
    * @return The expected value of the specified Pauli string.
    */
   virtual double ExpectationValue(const std::string &pauliString) = 0;
+
+  // Backends may share contractions across this read-only batch. The default
+  // retains the existing behavior for every other simulator.
+  virtual std::vector<double> ExpectationValues(
+      const std::vector<std::string> &paulis) {
+    std::vector<double> values;
+    values.reserve(paulis.size());
+    for (const auto &pauli : paulis) values.push_back(ExpectationValue(pauli));
+    return values;
+  }
+
 
   /**
    * @brief Registers an observer.

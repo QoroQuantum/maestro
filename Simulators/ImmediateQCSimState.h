@@ -18,6 +18,7 @@
 #ifdef INCLUDED_BY_FACTORY
 
 #include <algorithm>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <random>
@@ -61,6 +62,84 @@ struct HasSetSeed<T, std::void_t<decltype(std::declval<T &>().SetSeed(
 template <typename T>
 void SeedBackend(T *backend, uint64_t seed) {
   if constexpr (HasSetSeed<T>::value) backend->SetSeed(seed);
+}
+
+// Keep compatibility with the pinned QCSim dependency while allowing local
+// and newer QCSim builds to use the summary and batch APIs.
+template <typename T, typename = void>
+struct HasBondSummary : std::false_type {};
+template <typename T>
+struct HasBondSummary<T, std::void_t<decltype(std::declval<T &>().SetBondDimensionSummaryCallback(
+                            std::declval<std::function<void(Eigen::Index)>>()))>> : std::true_type {};
+
+template <typename T, typename Callback>
+void InstallBondSummary(T &backend, Callback callback) {
+  if constexpr (HasBondSummary<T>::value) {
+    backend.SetBondDimensionSummaryCallback(std::move(callback));
+  } else {
+    backend.SetBondDimensionCallback([callback = std::move(callback)](const auto &dims) {
+      Eigen::Index maximum = 1;
+      for (auto dim : dims) maximum = std::max(maximum, dim);
+      callback(maximum);
+    });
+  }
+}
+
+template <typename T, typename = void>
+struct HasTensorExpectationBatch : std::false_type {};
+template <typename T>
+struct HasTensorExpectationBatch<T, std::void_t<decltype(std::declval<T &>().ExpectationValues(
+                                      std::declval<const std::vector<std::string> &>()))>> : std::true_type {};
+
+template <typename T, typename = void>
+struct HasNormalizedTensorExpectationBatch : std::false_type {};
+template <typename T>
+struct HasNormalizedTensorExpectationBatch<T, std::void_t<decltype(
+    std::declval<const T &>().ExpectationValues(
+        std::declval<const std::vector<std::string> &>(), true))>>
+    : std::true_type {};
+
+template <typename T>
+std::vector<std::complex<double>> ComplexTensorExpectationBatch(
+    const T &backend, const std::vector<std::string> &paulis, bool normalized) {
+  if constexpr (HasNormalizedTensorExpectationBatch<T>::value) {
+    return backend.ExpectationValues(paulis, normalized);
+  } else {
+    std::vector<std::complex<double>> values;
+    values.reserve(paulis.size());
+    for (const auto &pauli : paulis)
+      values.push_back(normalized ? backend.ExpectationValue(pauli)
+                                  : backend.UnnormalizedExpectationValue(pauli));
+    return values;
+  }
+}
+
+template <typename T>
+std::vector<std::complex<double>> TensorExpectationBatch(
+    T &backend, const std::vector<std::string> &paulis) {
+  if constexpr (HasTensorExpectationBatch<T>::value) {
+    return backend.ExpectationValues(paulis);
+  } else {
+    std::vector<std::complex<double>> values;
+    values.reserve(paulis.size());
+    for (const auto &pauli : paulis) {
+      if constexpr (std::is_same_v<T, QC::TensorNetworks::MPSSimulator>) {
+        static const QC::Gates::PauliXGate<> x;
+        static const QC::Gates::PauliYGate<> y;
+        static const QC::Gates::PauliZGate<> z;
+        std::vector<QC::Gates::AppliedGate<>> gates;
+        for (size_t q = 0; q < pauli.size(); ++q) {
+          if (pauli[q] == 'X') gates.emplace_back(x.getRawOperatorMatrix(), q);
+          if (pauli[q] == 'Y') gates.emplace_back(y.getRawOperatorMatrix(), q);
+          if (pauli[q] == 'Z') gates.emplace_back(z.getRawOperatorMatrix(), q);
+        }
+        values.push_back(backend.ExpectationValue(gates));
+      } else {
+        values.push_back(backend.ExpectationValue(pauli));
+      }
+    }
+    return values;
+  }
 }
 
 /**
@@ -179,10 +258,8 @@ class ImmediateQCSimState : public ISimulator {
       }
     };
 
-    bondDimensionCallback = [this](const auto &bondDims) {
-      for (int i = 0; i < static_cast<int>(bondDims.size()); ++i)
-        if (static_cast<size_t>(bondDims[i]) > curMaxBondDim)
-          curMaxBondDim = static_cast<size_t>(bondDims[i]);
+    bondDimensionCallback = [this](auto maximum) {
+      curMaxBondDim = std::max(curMaxBondDim, static_cast<size_t>(maximum));
     };
   }
 
@@ -202,7 +279,7 @@ class ImmediateQCSimState : public ISimulator {
         // default is true
         if (!useOptimalMeetingPosition)
           mpsSimulator->SetUseOptimalMeetingPosition(false);
-        mpsSimulator->SetBondDimensionCallback(bondDimensionCallback);
+        InstallBondSummary(*mpsSimulator, bondDimensionCallback);
 
         curMaxBondDim = 1;
       } else if (simulationType == SimulationType::kMatrixProductOperator) {
@@ -210,7 +287,7 @@ class ImmediateQCSimState : public ISimulator {
             std::make_unique<QC::TensorNetworks::MPOSimulator>(nrQubits);
         if (!useOptimalMeetingPosition)
           mpoSimulator->SetUseOptimalMeetingPosition(false);
-        mpoSimulator->SetBondDimensionCallback(bondDimensionCallback);
+        InstallBondSummary(*mpoSimulator, bondDimensionCallback);
         curMaxBondDim = 1;
       } else if (simulationType == SimulationType::kStabilizer)
         cliffordSimulator =
@@ -1211,6 +1288,14 @@ class ImmediateQCSimState : public ISimulator {
     return normalized ? mpoSimulator->ExpectationValue(pauli)
                       : mpoSimulator->UnnormalizedExpectationValue(pauli);
   }
+  std::vector<std::complex<double>> ExpectationValuesComplex(
+      const std::vector<std::string> &paulis,
+      bool normalized = true) const override {
+    if (!mpoSimulator)
+      return IState::ExpectationValuesComplex(paulis, normalized);
+    for (const auto &pauli : paulis) MPOValidation::Pauli(pauli, nrQubits);
+    return ComplexTensorExpectationBatch(*mpoSimulator, paulis, normalized);
+  }
   void ApplyOperator(const Types::qubits_vector &qubits,
                      const Eigen::MatrixXcd &matrix,
                      bool normalize = false) override {
@@ -2014,6 +2099,40 @@ class ImmediateQCSimState : public ISimulator {
     return result;
   }
 
+  std::vector<double> ExpectationValues(
+      const std::vector<std::string> &paulis) override {
+    const bool mps = simulationType == SimulationType::kMatrixProductState;
+    if (!mps && simulationType != SimulationType::kMatrixProductOperator)
+      return ISimulator::ExpectationValues(paulis);
+    std::vector<double> result(paulis.size(), 1.);
+    std::vector<std::string> selected;
+    std::vector<size_t> indices;
+    const size_t n = GetNumberOfQubits();
+    for (size_t i = 0; i < paulis.size(); ++i) {
+      if (paulis[i].empty()) continue;
+      bool zero = false;
+      for (size_t q = n; q < paulis[i].size(); ++q) {
+        const auto p = toupper(static_cast<unsigned char>(paulis[i][q]));
+        if (p != 'I' && p != 'Z') { zero = true; break; }
+      }
+      if (zero) { result[i] = 0.; continue; }
+      std::string pauli = paulis[i];
+      pauli.resize(n, 'I');
+      for (char &p : pauli) {
+        p = static_cast<char>(toupper(static_cast<unsigned char>(p)));
+        // The existing MPS single-query interface ignores unknown characters.
+        if (mps && p != 'X' && p != 'Y' && p != 'Z') p = 'I';
+      }
+      indices.push_back(i);
+      selected.push_back(std::move(pauli));
+    }
+    if (selected.empty()) return result;
+    const auto values = mps ? TensorExpectationBatch(*mpsSimulator, selected)
+                            : TensorExpectationBatch(*mpoSimulator, selected);
+    for (size_t i = 0; i < indices.size(); ++i) result[indices[i]] = values[i].real();
+    return result;
+  }
+
   /**
    * @brief Returns the expected value of a Pauli string.
    *
@@ -2022,7 +2141,7 @@ class ImmediateQCSimState : public ISimulator {
    * operators, e.g. "XIZY". The length of the string should be less or equal
    * to the number of qubits (if it's less, it's completed with I).
    *
-   * @param pauliString The Pauli string to obtain the expected value for.
+   * @param pauliStringOrig The Pauli string to obtain the expected value for.
    * @return The expected value of the specified Pauli string.
    */
   double ExpectationValue(const std::string &pauliStringOrig) override {
@@ -2544,8 +2663,7 @@ class ImmediateQCSimState : public ISimulator {
   size_t curMaxBondDim = 0;
   QC::TensorNetworks::MPSSimulator::MeetingPositionCallback
       meetingPositionCallback = nullptr;
-  QC::TensorNetworks::MPSSimulator::BondDimensionCallback
-      bondDimensionCallback = nullptr;
+  std::function<void(Eigen::Index)> bondDimensionCallback = nullptr;
 
   // Observer that counts applied gates to track position in upcomingGates
   class GateCounterObserver : public ISimulatorObserver {

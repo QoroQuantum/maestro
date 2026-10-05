@@ -20,6 +20,8 @@ int maestro_request_c_header_test(void) {
       MaestroDensityMatrixElementBits(0, 0, 0, 0, 0, 0) ||
       MaestroDensityMatrixTrace(0, 0, 0) ||
       MaestroExpectationValueComplex(0, 0, 1, 0, 0) ||
+      MaestroExpectationValues(0, 0, 0, 0, 0) ||
+      MaestroExpectationValuesComplex(0, 0, 0, 1, 0, 0, 0) ||
       MaestroGetDensityMatrix(0, 1, 0, 0) ||
       MaestroApplyOperator(0, 0, 0, 0, 0) ||
       MaestroMoveAtBeginningOfChain(0, 0, 0) ||

@@ -82,6 +82,15 @@ class Simulator : protected MaestroLibrary {
 
   void *GetSimulator() { return MaestroLibrary::GetSimulator(handle); }
 
+  std::vector<double> ExpectationValues(const std::vector<std::string>& paulis) {
+    return MaestroLibrary::ExpectationValues(simulatorPtr, paulis);
+  }
+
+  std::vector<std::complex<double>> ExpectationValuesComplex(
+      const std::vector<std::string>& paulis, bool normalized = true) {
+    return MaestroLibrary::ExpectationValuesComplex(simulatorPtr, paulis, normalized);
+  }
+
   void FreeResult(char *result) override { MaestroLibrary::FreeResult(result); }
 
   int InitializeSimulator() {

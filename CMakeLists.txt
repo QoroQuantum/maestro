@@ -141,7 +141,7 @@ if(NOT DEFINED QCSIM_INCLUDE_DIR)
         FetchContent_Declare(
             qcsim
             GIT_REPOSITORY https://github.com/QoroQuantum/QCSim.git
-            GIT_TAG e0e5b98fb433c28e8d1eefd29f5a98f8d65d8e56
+            GIT_TAG 860a601fdc54f6a716af8219c3815da10fa61600
         )
         FetchContent_GetProperties(qcsim)
         if(NOT qcsim_POPULATED)
@@ -809,6 +809,10 @@ endif()
 option(MAESTRO_BUILD_REQUEST_TESTS "Build the native JSON request contract tests" OFF)
 if(MAESTRO_BUILD_REQUEST_TESTS)
     enable_testing()
+    add_executable(expectation_batch_tests tests/expectation_batch_tests.cpp)
+    target_include_directories(expectation_batch_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(expectation_batch_tests PRIVATE maestro Boost::json)
+    add_test(NAME expectation_batches COMMAND expectation_batch_tests)
     add_executable(maestro_request_tests tests/request_api.cpp tests/request_noise.cpp tests/request_options.cpp tests/request_header.c)
     target_include_directories(maestro_request_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(maestro_request_tests PRIVATE maestro Boost::json)

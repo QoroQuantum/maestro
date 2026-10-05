@@ -33,5 +33,19 @@ int main(int argc, char** argv) {
         stats.fusedBlocks == 1);
   Check(sim.ConfigureSimulator("gate_fusion", "false"));
   Check(!sim.IsGateFusionEnabled());
+  const auto values = sim.ExpectationValues({"ZZI", "ZII", "ZZI"});
+  Check(values.size() == 3 && values[0] == 1 && values[1] == -1 && values[2] == 1);
+  Check(sim.ExpectationValues({}).empty());
+  Simulator mpo;
+  Check(mpo.Init(argv[1]));
+  Check(mpo.CreateSimulator(static_cast<int>(Simulators::SimulatorType::kQCSim),
+      static_cast<int>(Simulators::SimulationType::kMatrixProductOperator)));
+  mpo.AllocateQubits(2);
+  Check(mpo.InitializeSimulator());
+  mpo.ApplyH(0);
+  mpo.ApplyCX(0, 1);
+  const auto complex = mpo.ExpectationValuesComplex({"XX", "YY", "ZZ"}, false);
+  Check(complex.size() == 3 && std::abs(complex[0] - 1.) < 1e-10 &&
+        std::abs(complex[1] + 1.) < 1e-10 && std::abs(complex[2] - 1.) < 1e-10);
   return 0;
 }

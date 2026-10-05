@@ -1272,8 +1272,7 @@ class ImmediateQCSimSimulator : public ImmediateQCSimState {
 
       cloned->mpsSimulator->SetMeetingPositionCallback(
           cloned->meetingPositionCallback);
-      cloned->mpsSimulator->SetBondDimensionCallback(
-          cloned->bondDimensionCallback);
+      InstallBondSummary(*cloned->mpsSimulator, cloned->bondDimensionCallback);
     }
 
     if (mpoSimulator) {
@@ -1285,8 +1284,7 @@ class ImmediateQCSimSimulator : public ImmediateQCSimState {
       cloned->RegisterObserver(cloned->gateCounterObserver);
       cloned->mpoSimulator->SetMeetingPositionCallback(
           cloned->meetingPositionCallback);
-      cloned->mpoSimulator->SetBondDimensionCallback(
-          cloned->bondDimensionCallback);
+      InstallBondSummary(*cloned->mpoSimulator, cloned->bondDimensionCallback);
     }
 
     if (cliffordSimulator)

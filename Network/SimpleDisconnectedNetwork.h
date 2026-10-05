@@ -297,6 +297,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       if (optimiser) {
         // convert the classical state results back to the expected order
         const auto &qubitsMap = optimiser->GetQubitsMap();
+        std::vector<std::string> translatedPaulis;
+        translatedPaulis.reserve(paulis.size());
 
         for (size_t i = 0; i < paulis.size(); ++i) {
           std::string translated(numOps, 'I');
@@ -309,11 +311,11 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
               translated[j] = paulis[i][j];
           }
 
-          expectations[i] = simulator->ExpectationValue(translated);
+          translatedPaulis.push_back(std::move(translated));
         }
+        expectations = simulator->ExpectationValues(translatedPaulis);
       } else {
-        for (size_t i = 0; i < paulis.size(); ++i)
-          expectations[i] = simulator->ExpectationValue(paulis[i]);
+        expectations = simulator->ExpectationValues(paulis);
       }
     }
 
@@ -389,6 +391,8 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       const size_t numOps = simulator->GetNumberOfQubits();
 
       // convert the pauli strings to the actual qubits order
+      std::vector<std::string> translatedPaulis;
+      translatedPaulis.reserve(paulis.size());
       for (size_t i = 0; i < paulis.size(); ++i) {
         std::string translated(std::max(numOps, paulis[i].size()), 'I');
 
@@ -406,8 +410,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
 
         // std::cout << "Translated pauli string: " << translated << std::endl;
 
-        expectations[i] = simulator->ExpectationValue(translated);
+        translatedPaulis.push_back(std::move(translated));
       }
+      expectations = simulator->ExpectationValues(translatedPaulis);
     } else {
       throw std::runtime_error(
           "ExecuteOnHostExpectations: no simulator available after execution.");

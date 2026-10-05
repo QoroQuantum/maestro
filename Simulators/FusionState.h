@@ -283,6 +283,12 @@ class FusionState : public ISimulator {
     Synchronize();
     return immediate_->SampleCountsMany(qs, shots);
   }
+  std::vector<double> ExpectationValues(
+      const std::vector<std::string>& paulis) override {
+    if (paulis.empty()) return {};
+    Synchronize();
+    return immediate_->ExpectationValues(paulis);
+  }
   double ExpectationValue(const std::string& pauli) override {
     Synchronize();
     return immediate_->ExpectationValue(pauli);
@@ -313,6 +319,13 @@ class FusionState : public ISimulator {
       const std::string& pauli, bool normalized = true) const override {
     Synchronize();
     return immediate_->ExpectationValueComplex(pauli, normalized);
+  }
+  std::vector<std::complex<double>> ExpectationValuesComplex(
+      const std::vector<std::string>& paulis,
+      bool normalized = true) const override {
+    if (paulis.empty()) return {};
+    Synchronize();
+    return immediate_->ExpectationValuesComplex(paulis, normalized);
   }
   void ApplyOperator(const Types::qubits_vector& qubits,
                      const Eigen::MatrixXcd& matrix,

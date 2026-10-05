@@ -139,6 +139,55 @@ matrices and MPOs. The latter requires unique `keep_qubits` and returns
 accepts the operation for maintenance only and reports no diagnostics by
 default.
 
+## Batched Pauli expectations
+
+`estimate` evaluates all observables together on each prepared state, including
+each noise realization. `incremental_evolve` does the same at each requested
+step. CPU QCSim MPS shares repeated observable prefixes; MPO shares contraction
+environments and trace normalization. Other backends preserve their scalar
+behavior. Batches preserve input order and duplicates and do not collapse the
+state. They never combine different evolution steps or noise realizations.
+
+For MPO `diagnostics`, use `expectations_complex` and/or
+`unnormalized_expectations` with an `observables` array of full-width Pauli
+strings. Each result is an array of `[real, imaginary]` values, in input order.
+The former divides by the operator trace; the latter retains its scale.
+`max_output_elements` bounds the number of values in each batch. Empty batches
+return empty arrays. Scalar `pauli` diagnostics continue to work unchanged.
+
+The same current-state queries are available directly:
+
+```cpp
+auto real = simulator->ExpectationValues({"XX", "YY", "ZZ"});
+auto normalized = simulator->ExpectationValuesComplex({"XX", "YY"});
+auto raw = simulator->ExpectationValuesComplex({"XX", "YY"}, false);
+```
+
+The C ABI accepts a simulator pointer returned by `GetSimulator`:
+
+```c
+const char *paulis[] = {"XX", "YY", "ZZ"};
+double real[3], imag[3];
+int ok = MaestroExpectationValues(sim, paulis, 3, real, 3);
+ok = MaestroExpectationValuesComplex(sim, paulis, 3, 0, real, imag, 3);
+```
+
+Capacity counts entries in each output array. A zero count permits null arrays;
+the simulator must still be valid. The functions return 1 on success or 0 on
+failure, leave output buffers unchanged on failure, and contain C++ exceptions.
+Real queries follow the existing scalar padding rules; complex MPO queries
+require exactly one uppercase `I`, `X`, `Y`, or `Z` per qubit. The C++ dynamic
+library wrappers expose `ExpectationValues` and `ExpectationValuesComplex`;
+their new exports are optional when loading an older library and throw a clear
+error only when called against that library.
+
+Maestro Python exposes `sim.expectation_values(paulis)` and
+`sim.expectation_values_complex(paulis, normalized=True)`, with matching
+`ExpectationValues` / `ExpectationValuesComplex` aliases. These return Python
+lists and release the GIL during native computation. Callers must serialize
+queries and mutations of the same simulator. Rebuild native C++ consumers when
+updating the simulator interface headers.
+
 ## Configuration
 
 Backend names and supported methods come from `MaestroGetCapabilitiesJson`;

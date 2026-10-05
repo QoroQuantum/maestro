@@ -306,8 +306,9 @@ json::array Expectations(
     const std::shared_ptr<Simulators::ISimulator>& simulator,
     const std::vector<std::string>& observables) {
   json::array result;
-  for (const auto& pauli : observables)
-    result.emplace_back(simulator->ExpectationValue(pauli));
+  const auto values = simulator->ExpectationValues(observables);
+  result.reserve(values.size());
+  for (double value : values) result.emplace_back(value);
   return result;
 }
 void Prepare(Context& context, const CircuitPtr& circuit, size_t bits) {
@@ -457,7 +458,7 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
   // A known field for another operation must not bypass nested validation or
   // appear to configure a computation which never reads it.
   const std::map<std::string, std::set<std::string>> operationFields{
-      {"observables", {"estimate", "incremental_evolve"}},
+      {"observables", {"estimate", "incremental_evolve", "diagnostics"}},
       {"basis_states", {"statevector", "amplitudes", "probabilities"}},
       {"target_state", {"state_probability"}},
       {"other_circuit", {"inner_product"}},
@@ -721,6 +722,10 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
                 requestedDiagnostics.count("expectation_complex") ||
                 requestedDiagnostics.count("unnormalized_expectation"),
             "pauli requires a complex expectation diagnostic");
+    Require(!request.contains("observables") ||
+                requestedDiagnostics.count("expectations_complex") ||
+                requestedDiagnostics.count("unnormalized_expectations"),
+            "observables requires a batch complex expectation diagnostic");
     if (const auto* values = request.if_contains("diagnostics"))
       for (const auto& value : Array(*values)) {
         const auto name = String(value);
@@ -729,7 +734,9 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
                                       "partial_trace", "density_matrix",
                                       "unnormalized_density_matrix", "element",
                                       "expectation_complex",
-                                      "unnormalized_expectation"}
+                                      "unnormalized_expectation",
+                                      "expectations_complex",
+                                      "unnormalized_expectations"}
                     .count(name),
                 "Unknown diagnostic");
         Supported(Mixed(config),
@@ -751,6 +758,13 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
           Require(pauli.size() == input.qubits &&
                       pauli.find_first_not_of("IXYZ") == std::string::npos,
                   "pauli must contain one I/X/Y/Z per qubit");
+        } else if (name == "expectations_complex" ||
+                   name == "unnormalized_expectations") {
+          Supported(nativeMpo, "Complex expectations require CPU or GPU MPO");
+          Require(request.contains("observables"),
+                  "Batch complex expectations require observables");
+          Require(observables.size() <= limit,
+                  "Complex expectation batch exceeds output bound");
         }
         if (name == "partial_trace") {
           const auto& keep = Array(Field(request, "keep_qubits"));
@@ -909,6 +923,15 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
                  name == "unnormalized_expectation")
           result[name] = Complex(simulator->ExpectationValueComplex(
               String(Field(request, "pauli")), name == "expectation_complex"));
+        else if (name == "expectations_complex" ||
+                 name == "unnormalized_expectations") {
+          const auto values = simulator->ExpectationValuesComplex(
+              observables, name == "expectations_complex");
+          json::array encoded;
+          encoded.reserve(values.size());
+          for (const auto& value : values) encoded.emplace_back(Complex(value));
+          result[name] = std::move(encoded);
+        }
         else if (name == "density_matrix" ||
                  name == "unnormalized_density_matrix") {
           const auto matrix =

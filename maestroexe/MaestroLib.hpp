@@ -2,6 +2,9 @@
 
 #include "../Utils/Library.h"
 #include "../maestrolib/InterfaceTypes.h"
+#include <complex>
+#include <string>
+#include <vector>
 
 class MaestroLibrary : public Utils::Library {
  public:
@@ -57,6 +60,12 @@ class MaestroLibrary : public Utils::Library {
           fGetSimulator =
               (void* (*)(unsigned long int))GetFunction("GetSimulator");
           CheckFunction((void*)fGetSimulator, __LINE__);
+          // Optional exports keep loading older libraries compatible.
+          fExpectationValues = reinterpret_cast<decltype(fExpectationValues)>(
+              GetFunction("MaestroExpectationValues"));
+          fExpectationValuesComplex =
+              reinterpret_cast<decltype(fExpectationValuesComplex)>(
+                  GetFunction("MaestroExpectationValuesComplex"));
           fDestroySimulator =
               (void (*)(unsigned long int))GetFunction("DestroySimulator");
           CheckFunction((void*)fDestroySimulator, __LINE__);
@@ -879,7 +888,43 @@ class MaestroLibrary : public Utils::Library {
     return 0;
   }
 
+  std::vector<double> ExpectationValues(
+      void* sim, const std::vector<std::string>& paulis) {
+    if (!maestro || !sim || !fExpectationValues)
+      throw std::runtime_error("MaestroLibrary: Batch expectations unavailable.");
+    std::vector<const char*> strings;
+    strings.reserve(paulis.size());
+    for (const auto& pauli : paulis) strings.push_back(pauli.c_str());
+    std::vector<double> values(paulis.size());
+    if (!fExpectationValues(sim, strings.data(), strings.size(), values.data(),
+                            values.size()))
+      throw std::runtime_error("MaestroLibrary: Batch expectations failed.");
+    return values;
+  }
+
+  std::vector<std::complex<double>> ExpectationValuesComplex(
+      void* sim, const std::vector<std::string>& paulis, bool normalized = true) {
+    if (!maestro || !sim || !fExpectationValuesComplex)
+      throw std::runtime_error("MaestroLibrary: Complex batch expectations unavailable.");
+    std::vector<const char*> strings;
+    strings.reserve(paulis.size());
+    for (const auto& pauli : paulis) strings.push_back(pauli.c_str());
+    std::vector<double> real(paulis.size()), imag(paulis.size());
+    if (!fExpectationValuesComplex(sim, strings.data(), strings.size(),
+                                   normalized ? 1 : 0, real.data(), imag.data(),
+                                   real.size()))
+      throw std::runtime_error("MaestroLibrary: Complex batch expectations failed.");
+    std::vector<std::complex<double>> values;
+    values.reserve(paulis.size());
+    for (size_t i = 0; i < paulis.size(); ++i)
+      values.emplace_back(real[i], imag[i]);
+    return values;
+  }
+
  private:
+  int (*fExpectationValues)(void*, const char* const*, size_t, double*, size_t) = nullptr;
+  int (*fExpectationValuesComplex)(void*, const char* const*, size_t, int,
+                                   double*, double*, size_t) = nullptr;
   void* maestro = nullptr;
 
   void* (*fGetMaestroObject)();

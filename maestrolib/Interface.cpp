@@ -74,6 +74,50 @@ static Eigen::Matrix<std::complex<double>, Dimension, Dimension> ReadGateMatrix(
 }
 
 extern "C" {
+int MaestroExpectationValues(void *sim, const char *const *paulis, size_t count,
+                             double *values, size_t capacity) {
+  if (!sim || capacity < count || (count && (!paulis || !values))) return 0;
+  try {
+    std::vector<std::string> observables;
+    observables.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+      if (!paulis[i]) return 0;
+      observables.emplace_back(paulis[i]);
+    }
+    const auto result = static_cast<Simulators::ISimulator *>(sim)
+                            ->ExpectationValues(observables);
+    if (result.size() != count) return 0;
+    if (count) std::copy(result.begin(), result.end(), values);
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+int MaestroExpectationValuesComplex(void *sim, const char *const *paulis,
+                                    size_t count, int normalized, double *real,
+                                    double *imag, size_t capacity) {
+  if (!sim || capacity < count || (count && (!paulis || !real || !imag)))
+    return 0;
+  try {
+    std::vector<std::string> observables;
+    observables.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+      if (!paulis[i]) return 0;
+      observables.emplace_back(paulis[i]);
+    }
+    const auto result = static_cast<Simulators::ISimulator *>(sim)
+                            ->ExpectationValuesComplex(observables,
+                                                       normalized != 0);
+    if (result.size() != count) return 0;
+    for (size_t i = 0; i < count; ++i) {
+      real[i] = result[i].real();
+      imag[i] = result[i].imag();
+    }
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
 int MaestroProbabilityBits(void *sim, const unsigned char *bits, size_t width,
                            double *result) {
   if (!sim) return 0;

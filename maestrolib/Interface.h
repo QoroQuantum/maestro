@@ -394,6 +394,24 @@ __declspec(dllexport)
     int MaestroExpectationValueComplex(void *sim, const char *pauli,
                                        int normalized, double *real,
                                        double *imag);
+
+// Batch observables on the current state, in input order, without collapsing it.
+// capacity counts entries in each output array and must be >= count. For count
+// zero the arrays may be null. Strings are q0-first. The real API follows the
+// scalar real query's padding rules; complex MPO queries require full width.
+// Return 1 on success, 0 on failure; output buffers are unchanged on failure.
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroExpectationValues(void *sim, const char *const *paulis,
+                                 size_t count, double *values, size_t capacity);
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroExpectationValuesComplex(void *sim, const char *const *paulis,
+                                        size_t count, int normalized,
+                                        double *real, double *imag,
+                                        size_t capacity);
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
