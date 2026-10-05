@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "GpuDeviceContext.h"
+#include "TensorQueries.h"
 
 namespace Simulators {
 
@@ -103,6 +104,48 @@ class GpuMPO {
   }
   bool SetBondDimensionsCallback(void (*callback)(void*, const int64_t*)) {
     return lib->MPOSetBondDimensionsCallback(obj, callback);
+  }
+  void InstallBondSummary(void (*summary)(void*, int64_t),
+                          void (*full)(void*, const int64_t*)) {
+    const bool ok = lib->HasMPOBondSummary()
+                        ? lib->MPOSetBondDimensionSummaryCallback(obj, summary)
+                        : SetBondDimensionsCallback(full);
+    if (!ok)
+      throw std::runtime_error("GPU MPO bond callback installation failed");
+  }
+  std::vector<double> ExpectationValues(
+      const std::vector<std::string>& paulis) const {
+    TensorQueries::PauliBatch batch(paulis);
+    std::vector<double> values(paulis.size());
+    if (paulis.empty()) return values;
+    if (lib->HasMPOExpectationValues()) {
+      if (!lib->MPOExpectationValues(obj, TensorQueries::Count(paulis.size()),
+                                     batch.strings.data(), batch.lengths.data(),
+                                     values.data()))
+        throw std::runtime_error("GPU MPO batch expectation failed");
+    } else {
+      for (size_t i = 0; i < paulis.size(); ++i)
+        values[i] = ExpectationValueComplex(paulis[i]).real();
+    }
+    return values;
+  }
+  std::vector<std::complex<double>> ExpectationValuesComplex(
+      const std::vector<std::string>& paulis, bool normalized = true) const {
+    TensorQueries::PauliBatch batch(paulis);
+    std::vector<std::complex<double>> values(paulis.size());
+    if (paulis.empty()) return values;
+    if (lib->HasMPOExpectationValuesComplex()) {
+      std::vector<double> re(paulis.size()), im(paulis.size());
+      if (!lib->MPOExpectationValuesComplex(
+              obj, TensorQueries::Count(paulis.size()), batch.strings.data(),
+              batch.lengths.data(), normalized, re.data(), im.data()))
+        throw std::runtime_error("GPU MPO complex batch expectation failed");
+      for (size_t i = 0; i < paulis.size(); ++i) values[i] = {re[i], im[i]};
+    } else {
+      for (size_t i = 0; i < paulis.size(); ++i)
+        values[i] = ExpectationValueComplex(paulis[i], normalized);
+    }
+    return values;
   }
   bool IsCreated() const { return lib->MPOIsCreated(obj); }
   bool IsDoublePrecision() const { return lib->MPOIsDoublePrecision(obj); }

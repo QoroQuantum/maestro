@@ -49,7 +49,8 @@ j::object Call(const j::object& request, bool success = true,
   const std::string output(result);
   FreeResult(result);
   auto parsed = j::parse(output).as_object();
-  if (parsed.at("ok").as_bool() != success) throw std::runtime_error(output);
+  if (parsed.at("ok").as_bool() != success)
+    throw std::runtime_error(input + "\n" + output);
   ++checks;
   return parsed;
 }

@@ -38,6 +38,7 @@
 
 #include "QuantumChannel.h"
 #include "SimulatorObserver.h"
+#include "TensorQueries.h"
 
 namespace Circuits {
 template <typename Time>
@@ -781,6 +782,28 @@ class IState {
    * @return The amplitude of the specified outcome.
    */
   virtual std::complex<double> Amplitude(Types::qubit_t outcome) = 0;
+
+  // Full pure-state readout, indexed by logical qubit (q0 is the low bit).
+  // Backends with a bulk reader override the scalar fallback.
+  virtual std::vector<std::complex<double>> GetStateVector() {
+    if (GetSimulationType() == SimulationType::kDensityMatrix ||
+        GetSimulationType() == SimulationType::kMatrixProductOperator)
+      throw std::runtime_error("Mixed states have no unique statevector");
+    if (GetNumberOfQubits() == 0) return {};
+    std::vector<std::complex<double>> result(
+        TensorQueries::DenseSize(GetNumberOfQubits()));
+    for (size_t i = 0; i < result.size(); ++i) result[i] = Amplitude(i);
+    return result;
+  }
+
+  // <psi|O_(k-1)...O_0|psi>. Each matrix is 2x2; repeated targets are allowed.
+  // This is a read-only query, including for non-Hermitian/non-unitary
+  // operators.
+  virtual std::complex<double> ExpectationValueOperators(
+      const Types::qubits_vector &, const std::vector<Eigen::MatrixXcd> &) {
+    throw std::runtime_error(
+        "This simulator does not support ExpectationValueOperators");
+  }
 
   /**
    * @brief Projects the state onto the zero state.

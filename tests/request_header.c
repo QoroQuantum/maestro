@@ -22,6 +22,8 @@ int maestro_request_c_header_test(void) {
       MaestroExpectationValueComplex(0, 0, 1, 0, 0) ||
       MaestroExpectationValues(0, 0, 0, 0, 0) ||
       MaestroExpectationValuesComplex(0, 0, 0, 1, 0, 0, 0) ||
+      MaestroGetStateVector(0, 0, 0) ||
+      MaestroExpectationValueOperators(0, 0, 0, 0, 0, 0) ||
       MaestroGetDensityMatrix(0, 1, 0, 0) ||
       MaestroApplyOperator(0, 0, 0, 0, 0) ||
       MaestroMoveAtBeginningOfChain(0, 0, 0) ||

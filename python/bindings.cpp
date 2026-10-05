@@ -1507,6 +1507,20 @@ NB_MODULE(maestro, m) {
       .def("Probability", &Simulators::ISimulator::Probability, "outcome"_a)
       .def("Amplitude", &Simulators::ISimulator::Amplitude, "outcome"_a)
       .def("AllProbabilities", &Simulators::ISimulator::AllProbabilities)
+      .def("GetStateVector", &Simulators::ISimulator::GetStateVector,
+           nb::call_guard<nb::gil_scoped_release>())
+      .def("get_statevector", &Simulators::ISimulator::GetStateVector,
+           nb::call_guard<nb::gil_scoped_release>(),
+           "Full pure-state amplitudes in logical basis order (q0 is the low "
+           "bit).")
+      .def("ExpectationValueOperators",
+           &Simulators::ISimulator::ExpectationValueOperators, "qubits"_a,
+           "matrices"_a, nb::call_guard<nb::gil_scoped_release>())
+      .def("expectation_value_operators",
+           &Simulators::ISimulator::ExpectationValueOperators, "qubits"_a,
+           "matrices"_a, nb::call_guard<nb::gil_scoped_release>(),
+           "MPS expectation of ordered one-qubit operators; repeated targets "
+           "are allowed.")
       .def("Probabilities", &Simulators::ISimulator::Probabilities,
            "outcomes"_a,
            "Return probabilities for the given basis-state indices.")
@@ -1587,7 +1601,8 @@ NB_MODULE(maestro, m) {
            "normalized"_a = true)
       .def("ExpectationValues", &Simulators::ISimulator::ExpectationValues,
            "paulis"_a, nb::call_guard<nb::gil_scoped_release>(),
-           "Evaluate Pauli strings together on the current state, in input order.")
+           "Evaluate Pauli strings together on the current state, in input "
+           "order.")
       .def("expectation_values", &Simulators::ISimulator::ExpectationValues,
            "paulis"_a, nb::call_guard<nb::gil_scoped_release>())
       .def("expectation_values_complex",

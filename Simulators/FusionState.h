@@ -269,6 +269,16 @@ class FusionState : public ISimulator {
     Synchronize();
     return immediate_->AllProbabilities();
   }
+  std::vector<std::complex<double>> GetStateVector() override {
+    Synchronize();
+    return immediate_->GetStateVector();
+  }
+  std::complex<double> ExpectationValueOperators(
+      const Types::qubits_vector& qubits,
+      const std::vector<Eigen::MatrixXcd>& matrices) override {
+    Synchronize();
+    return immediate_->ExpectationValueOperators(qubits, matrices);
+  }
   std::vector<double> Probabilities(const Types::qubits_vector& qs) override {
     Synchronize();
     return immediate_->Probabilities(qs);
@@ -337,6 +347,8 @@ class FusionState : public ISimulator {
   }
   void MoveAtBeginningOfChain(const Types::qubits_vector& qubits) override {
     Flush();
+    // A failed routing SWAP may have already changed the physical qubit map.
+    InvalidatePlan();
     immediate_->MoveAtBeginningOfChain(qubits);
     RebuildPlan();
   }

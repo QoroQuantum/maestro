@@ -106,7 +106,8 @@ class ImmediateGpuState : public ISimulator {
               "operator state.");
         mpo->SetCallbackContext((void *)this);
         curMaxBondDim = 1;
-        mpo->SetBondDimensionsCallback(&ImmediateGpuState::BondDimCallback);
+        mpo->InstallBondSummary(&ImmediateGpuState::BondSummaryCallback,
+                                &ImmediateGpuState::BondDimCallback);
 
         // Precision and truncation controls must be selected before native
         // storage is allocated.
@@ -124,7 +125,8 @@ class ImmediateGpuState : public ISimulator {
         if (mps) {
           mps->SetCallbackContext((void *)this);
           curMaxBondDim = 1;
-          mps->SetBondDimensionsCallback(&ImmediateGpuState::BondDimCallback);
+          mps->InstallBondSummary(&ImmediateGpuState::BondSummaryCallback,
+                                  &ImmediateGpuState::BondDimCallback);
 
           // ensure the config settings are applied, they need to be applied
           // after the simulator is created but before the state is created
@@ -1171,6 +1173,31 @@ class ImmediateGpuState : public ISimulator {
     MPOValidation::Pauli(pauli, nrQubits);
     return mpo->ExpectationValueComplex(pauli, normalized);
   }
+  std::vector<std::complex<double>> ExpectationValuesComplex(
+      const std::vector<std::string> &paulis,
+      bool normalized = true) const override {
+    if (!mpo) return IState::ExpectationValuesComplex(paulis, normalized);
+    for (const auto &pauli : paulis) MPOValidation::Pauli(pauli, nrQubits);
+    return mpo->ExpectationValuesComplex(paulis, normalized);
+  }
+  std::complex<double> ExpectationValueOperators(
+      const Types::qubits_vector &qubits,
+      const std::vector<Eigen::MatrixXcd> &matrices) override {
+    if (!mps) return IState::ExpectationValueOperators(qubits, matrices);
+    TensorQueries::Operators(qubits, matrices, nrQubits);
+    std::vector<int> targets;
+    std::vector<double> raw;
+    targets.reserve(qubits.size());
+    raw.reserve(8 * matrices.size());
+    for (size_t i = 0; i < qubits.size(); ++i) {
+      targets.push_back(TensorQueries::Count(qubits[i]));
+      for (Eigen::Index e = 0; e < 4; ++e) {
+        raw.push_back(matrices[i].data()[e].real());
+        raw.push_back(matrices[i].data()[e].imag());
+      }
+    }
+    return mps->ExpectationValueOperators(targets, raw);
+  }
   void ApplyOperator(const Types::qubits_vector &qubits,
                      const Eigen::MatrixXcd &matrix,
                      bool normalize = false) override {
@@ -1186,10 +1213,18 @@ class ImmediateGpuState : public ISimulator {
     NotifyObservers(qubits);
   }
   void MoveAtBeginningOfChain(const Types::qubits_vector &qubits) override {
-    if (!mpo) return IState::MoveAtBeginningOfChain(qubits);
+    if (!mpo && !mps) return IState::MoveAtBeginningOfChain(qubits);
     const auto selected = MPOValidation::Qubits(qubits, nrQubits);
     if (selected.empty()) return;
-    mpo->MoveAtBeginningOfChain(selected);
+    if (mps)
+      mps->MoveAtBeginningOfChain(selected);
+    else
+      mpo->MoveAtBeginningOfChain(selected);
+  }
+
+  std::vector<std::complex<double>> GetStateVector() override {
+    if (!mps) return IState::GetStateVector();
+    return mps->GetStateVector();
   }
   std::complex<double> DensityMatrixTrace() const override {
     if (densityMatrix) return densityMatrix->Trace();
@@ -1363,10 +1398,14 @@ class ImmediateGpuState : public ISimulator {
              simulationType == SimulationType::kTensorNetwork) {
       std::vector<long int> fixedValues(nrQubits);
       for (size_t i = 0; i < nrQubits; ++i)
-        fixedValues[i] = (outcome & (1ULL << i)) ? 1 : 0;
-      if (simulationType == SimulationType::kMatrixProductState)
-        mps->Amplitude(nrQubits, fixedValues.data(), &real, &imag);
-      else if (simulationType == SimulationType::kTensorNetwork)
+        fixedValues[i] = i < std::numeric_limits<Types::qubit_t>::digits
+                             ? (outcome >> i) & 1
+                             : 0;
+      if (simulationType == SimulationType::kMatrixProductState) {
+        if (!mps->Amplitude(nrQubits, fixedValues.data(), &real, &imag) ||
+            !std::isfinite(real) || !std::isfinite(imag))
+          throw std::runtime_error("GPU MPS amplitude query failed");
+      } else if (simulationType == SimulationType::kTensorNetwork)
         tn->Amplitude(nrQubits, fixedValues.data(), &real, &imag);
     } else if (simulationType == SimulationType::kPauliPropagator) {
       // Pauli propagator does not support amplitude calculation
@@ -1410,6 +1449,7 @@ class ImmediateGpuState : public ISimulator {
    */
   std::vector<double> AllProbabilities() override {
     if (nrQubits == 0) return {};
+    if (mps) return mps->AllProbabilities();
     if (nrQubits >= std::numeric_limits<size_t>::digits ||
         (mpo && nrQubits >= 63))
       throw std::length_error(
@@ -1497,7 +1537,7 @@ class ImmediateGpuState : public ISimulator {
    */
   std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
-    if (mpo) {
+    if (mpo || mps) {
       if (qubits.size() > sizeof(Types::qubit_t) * 8)
         throw std::invalid_argument(
             "Use SampleCountsMany for more than 64 measured qubits");
@@ -1551,28 +1591,6 @@ class ImmediateGpuState : public ISimulator {
           if (outcome & (1ULL << qubits[i])) translatedOutcome |= 1ULL << i;
         ++result[translatedOutcome];
       }
-    } else if (simulationType == SimulationType::kMatrixProductState) {
-      std::unordered_map<std::vector<bool>, int64_t> *map =
-          mps->GetMapForSample();
-
-      std::vector<unsigned int> qubitsIndices(qubits.begin(), qubits.end());
-
-      mps->Sample(shots, qubitsIndices.size(), qubitsIndices.data(), map);
-      const auto positions = SampleBitPositions(qubits);
-
-      // put the results in the result map
-      for (const auto &[meas, cnt] : *map) {
-        Types::qubit_t outcome = 0;
-        Types::qubit_t mask = 1ULL;
-        for (Types::qubit_t q = 0; q < qubits.size(); ++q) {
-          if (meas[positions[q]]) outcome |= mask;
-          mask <<= 1;
-        }
-
-        result[outcome] += cnt;
-      }
-
-      mps->FreeMapForSample(map);
     } else if (simulationType == SimulationType::kTensorNetwork) {
       std::unordered_map<std::vector<bool>, int64_t> *map =
           tn->GetMapForSample();
@@ -1623,19 +1641,21 @@ class ImmediateGpuState : public ISimulator {
    */
   std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(
       const Types::qubits_vector &qubits, size_t shots = 1000) override {
-    if (mpo) {
+    if (mpo || mps) {
       std::vector<unsigned int> selected;
       for (auto q : qubits) {
         if (q >= nrQubits ||
             q > static_cast<size_t>(std::numeric_limits<int>::max()))
-          throw std::out_of_range("GPU MPO sampled qubit is out of range");
+          throw std::out_of_range("GPU tensor sampled qubit is out of range");
         selected.push_back(static_cast<unsigned int>(q));
       }
       if (qubits.empty() || shots == 0) return {};
       std::sort(selected.begin(), selected.end());
       selected.erase(std::unique(selected.begin(), selected.end()),
                      selected.end());
-      const auto counts = mpo->SampleHistogram(shots, std::move(selected));
+      const auto counts =
+          mps ? mps->SampleHistogram(shots, std::move(selected))
+              : mpo->SampleHistogram(shots, std::move(selected));
       const auto positions = SampleBitPositions(qubits);
       std::unordered_map<std::vector<bool>, Types::qubit_t> result;
       for (const auto &entry : counts) {
@@ -1676,23 +1696,6 @@ class ImmediateGpuState : public ISimulator {
           outcomeVec[i] = ((outcome >> qubits[i]) & 1) != 0;
         ++result[outcomeVec];
       }
-    } else if (simulationType == SimulationType::kMatrixProductState) {
-      std::unordered_map<std::vector<bool>, int64_t> *map =
-          mps->GetMapForSample();
-
-      std::vector<unsigned int> qubitsIndices(qubits.begin(), qubits.end());
-      mps->Sample(shots, qubitsIndices.size(), qubitsIndices.data(), map);
-      const auto positions = SampleBitPositions(qubits);
-
-      // put the results in the result map
-      for (const auto &[meas, cnt] : *map) {
-        std::vector<bool> ordered(qubits.size());
-        for (size_t q = 0; q < qubits.size(); ++q)
-          ordered[q] = meas[positions[q]];
-        result[ordered] += cnt;
-      }
-
-      mps->FreeMapForSample(map);
     } else if (simulationType == SimulationType::kTensorNetwork) {
       std::unordered_map<std::vector<bool>, int64_t> *map =
           tn->GetMapForSample();
@@ -1752,6 +1755,35 @@ class ImmediateGpuState : public ISimulator {
           "GpuState::ExpectationValue: Invalid simulation type for expectation "
           "value calculation.");
 
+    return result;
+  }
+
+  std::vector<double> ExpectationValues(
+      const std::vector<std::string> &paulis) override {
+    if (!mps && !mpo) return IState::ExpectationValues(paulis);
+    // Preserve GPU scalar semantics: empty strings are identity, invalid or
+    // over-width strings return zero. Only valid strings enter the native
+    // batch.
+    std::vector<double> result(paulis.size(), 0.);
+    std::vector<std::string> selected;
+    std::vector<size_t> indices;
+    for (size_t i = 0; i < paulis.size(); ++i) {
+      if (paulis[i].empty()) {
+        result[i] = 1.;
+        continue;
+      }
+      if (paulis[i].size() > nrQubits) continue;
+      auto pauli = paulis[i];
+      for (char &p : pauli)
+        p = static_cast<char>(std::toupper(static_cast<unsigned char>(p)));
+      if (pauli.find_first_not_of("IXYZ") != std::string::npos) continue;
+      indices.push_back(i);
+      selected.push_back(std::move(pauli));
+    }
+    if (selected.empty()) return result;
+    const auto values = mps ? mps->ExpectationValues(selected)
+                            : mpo->ExpectationValues(selected);
+    for (size_t i = 0; i < indices.size(); ++i) result[indices[i]] = values[i];
     return result;
   }
 
@@ -1855,9 +1887,10 @@ class ImmediateGpuState : public ISimulator {
       densityMatrix->SaveState();
     else if (simulationType == SimulationType::kMatrixProductOperator)
       mpo->SaveState();
-    else if (simulationType == SimulationType::kMatrixProductState)
-      mps->SaveState();
-    else if (simulationType == SimulationType::kTensorNetwork)
+    else if (simulationType == SimulationType::kMatrixProductState) {
+      if (!mps->SaveState())
+        throw std::runtime_error("GPU MPS state save failed");
+    } else if (simulationType == SimulationType::kTensorNetwork)
       tn->SaveState();
     else if (simulationType == SimulationType::kPauliPropagator)
       pp->SaveState();
@@ -1877,9 +1910,10 @@ class ImmediateGpuState : public ISimulator {
       densityMatrix->RestoreState();
     else if (simulationType == SimulationType::kMatrixProductOperator)
       mpo->RestoreState();
-    else if (simulationType == SimulationType::kMatrixProductState)
-      mps->RestoreState();
-    else if (simulationType == SimulationType::kTensorNetwork)
+    else if (simulationType == SimulationType::kMatrixProductState) {
+      if (!mps->RestoreState())
+        throw std::runtime_error("GPU MPS state restore failed");
+    } else if (simulationType == SimulationType::kTensorNetwork)
       tn->RestoreState();
     else if (simulationType == SimulationType::kPauliPropagator)
       pp->RestoreState();
@@ -2212,6 +2246,13 @@ class ImmediateGpuState : public ISimulator {
     ImmediateGpuState *self = static_cast<ImmediateGpuState *>(thisPtr);
 
     return self->BondDimCallbackFunc(bondDims);
+  }
+
+  static void BondSummaryCallback(void *thisPtr, int64_t maximum) {
+    auto *self = static_cast<ImmediateGpuState *>(thisPtr);
+    if (maximum > 0)
+      self->curMaxBondDim =
+          std::max(self->curMaxBondDim, static_cast<size_t>(maximum));
   }
 
   void BondDimCallbackFunc(const int64_t *bondDims) {

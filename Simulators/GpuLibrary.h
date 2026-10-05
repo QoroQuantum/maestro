@@ -122,6 +122,21 @@ class GpuLibrary : public Utils::Library {
     fDMSynchronize = (int (*)(void*))GetFunction("DMSynchronize");
     fMPSTrim = (int (*)(void*))GetFunction("MPSTrim");
     fMPSReCanonicalize = (int (*)(void*))GetFunction("MPSReCanonicalize");
+    // Tensor query extensions are optional; older plugins retain scalar paths.
+#define LOAD_TENSOR_QUERY(name) \
+  f##name = reinterpret_cast<decltype(f##name)>(GetFunction(#name))
+    LOAD_TENSOR_QUERY(MPSExpectationValues);
+    LOAD_TENSOR_QUERY(MPOExpectationValues);
+    LOAD_TENSOR_QUERY(MPOExpectationValuesComplex);
+    LOAD_TENSOR_QUERY(MPSGetStateVector);
+    LOAD_TENSOR_QUERY(MPSAllProbabilities);
+    LOAD_TENSOR_QUERY(MPSMoveAtBeginningOfChain);
+    LOAD_TENSOR_QUERY(MPSExpectationValueOperators);
+    LOAD_TENSOR_QUERY(MPSSetBondDimensionSummaryCallback);
+    LOAD_TENSOR_QUERY(MPOSetBondDimensionSummaryCallback);
+    LOAD_TENSOR_QUERY(MPSGetMaxBondDimension);
+    LOAD_TENSOR_QUERY(MPOGetMaxBondDimension);
+#undef LOAD_TENSOR_QUERY
 
     return true;
   }
@@ -1348,6 +1363,80 @@ class GpuLibrary : public Utils::Library {
            fMPOApplyCH && fMPOApplyCSX && fMPOApplyCSXDG && fMPOApplyCP &&
            fMPOApplyCRx && fMPOApplyCRy && fMPOApplyCRz && fMPOApplySwap &&
            fMPOApplyCU;
+  }
+
+  bool HasMPSExpectationValues() const { return fMPSExpectationValues; }
+  bool HasMPOExpectationValues() const { return fMPOExpectationValues; }
+  bool HasMPOExpectationValuesComplex() const {
+    return fMPOExpectationValuesComplex;
+  }
+  bool HasMPSGetStateVector() const { return fMPSGetStateVector; }
+  bool HasMPSAllProbabilities() const { return fMPSAllProbabilities; }
+  bool HasMPSMoveAtBeginningOfChain() const {
+    return fMPSMoveAtBeginningOfChain;
+  }
+  bool HasMPSExpectationValueOperators() const {
+    return fMPSExpectationValueOperators;
+  }
+  bool HasMPSBondSummary() const { return fMPSSetBondDimensionSummaryCallback; }
+  bool HasMPOBondSummary() const { return fMPOSetBondDimensionSummaryCallback; }
+  bool HasMPSMaxBondDimension() const { return fMPSGetMaxBondDimension; }
+  bool HasMPOMaxBondDimension() const { return fMPOGetMaxBondDimension; }
+
+  bool MPSExpectationValues(void *obj, int count, const char *const *paulis,
+                            const int *lengths, double *values) const {
+    return obj && fMPSExpectationValues &&
+           fMPSExpectationValues(obj, count, paulis, lengths, values) == 1;
+  }
+  bool MPOExpectationValues(void *obj, int count, const char *const *paulis,
+                            const int *lengths, double *values) const {
+    return obj && fMPOExpectationValues &&
+           fMPOExpectationValues(obj, count, paulis, lengths, values) == 1;
+  }
+  bool MPOExpectationValuesComplex(void *obj, int count,
+                                   const char *const *paulis,
+                                   const int *lengths, bool normalized,
+                                   double *real, double *imag) const {
+    return obj && fMPOExpectationValuesComplex &&
+           fMPOExpectationValuesComplex(obj, count, paulis, lengths,
+                                        normalized ? 1 : 0, real, imag) == 1;
+  }
+  bool MPSGetStateVector(void *obj, double *values) const {
+    return obj && fMPSGetStateVector && fMPSGetStateVector(obj, values) == 1;
+  }
+  bool MPSAllProbabilities(void *obj, double *values) const {
+    return obj && fMPSAllProbabilities &&
+           fMPSAllProbabilities(obj, values) == 1;
+  }
+  bool MPSMoveAtBeginningOfChain(void *obj, const int *qubits,
+                                 int count) const {
+    return obj && fMPSMoveAtBeginningOfChain &&
+           fMPSMoveAtBeginningOfChain(obj, qubits, count) == 1;
+  }
+  bool MPSExpectationValueOperators(void *obj, int count, const int *qubits,
+                                    const double *matrices, double *real,
+                                    double *imag) const {
+    return obj && fMPSExpectationValueOperators &&
+           fMPSExpectationValueOperators(obj, count, qubits, matrices, real,
+                                         imag) == 1;
+  }
+  bool MPSSetBondDimensionSummaryCallback(void *obj,
+                                          void (*callback)(void *,
+                                                           int64_t)) const {
+    return obj && fMPSSetBondDimensionSummaryCallback &&
+           fMPSSetBondDimensionSummaryCallback(obj, callback) == 1;
+  }
+  bool MPOSetBondDimensionSummaryCallback(void *obj,
+                                          void (*callback)(void *,
+                                                           int64_t)) const {
+    return obj && fMPOSetBondDimensionSummaryCallback &&
+           fMPOSetBondDimensionSummaryCallback(obj, callback) == 1;
+  }
+  long long MPSGetMaxBondDimension(void *obj) const {
+    return obj && fMPSGetMaxBondDimension ? fMPSGetMaxBondDimension(obj) : 0;
+  }
+  long long MPOGetMaxBondDimension(void *obj) const {
+    return obj && fMPOGetMaxBondDimension ? fMPOGetMaxBondDimension(obj) : 0;
   }
 
   // statevector functions
@@ -4704,6 +4793,26 @@ class GpuLibrary : public Utils::Library {
                                       const unsigned char *) = nullptr;
   int (*fMPSReset)(void *) = nullptr;
   int (*fMPSTrim)(void *) = nullptr;
+  int (*fMPSExpectationValues)(void *, int, const char *const *, const int *,
+                               double *) = nullptr;
+  int (*fMPOExpectationValues)(void *, int, const char *const *, const int *,
+                               double *) = nullptr;
+  int (*fMPOExpectationValuesComplex)(void *, int, const char *const *,
+                                      const int *, int, double *,
+                                      double *) = nullptr;
+  int (*fMPSGetStateVector)(void *, double *) = nullptr;
+  int (*fMPSAllProbabilities)(void *, double *) = nullptr;
+  int (*fMPSMoveAtBeginningOfChain)(void *, const int *, int) = nullptr;
+  int (*fMPSExpectationValueOperators)(void *, int, const int *, const double *,
+                                       double *, double *) = nullptr;
+  int (*fMPSSetBondDimensionSummaryCallback)(void *,
+                                             void (*)(void *,
+                                                      int64_t)) = nullptr;
+  int (*fMPOSetBondDimensionSummaryCallback)(void *,
+                                             void (*)(void *,
+                                                      int64_t)) = nullptr;
+  long long (*fMPSGetMaxBondDimension)(void *) = nullptr;
+  long long (*fMPOGetMaxBondDimension)(void *) = nullptr;
   int (*fMPSReCanonicalize)(void *) = nullptr;
   int (*fMPSSetInitialQubitsMap)(void *, const long long int *,
                                  int) = nullptr;

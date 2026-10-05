@@ -74,6 +74,51 @@ static Eigen::Matrix<std::complex<double>, Dimension, Dimension> ReadGateMatrix(
 }
 
 extern "C" {
+int MaestroGetStateVector(void *sim, double *interleaved, size_t capacity) {
+  if (!sim) return 0;
+  try {
+    auto &state = *static_cast<Simulators::ISimulator *>(sim);
+    const auto n = state.GetNumberOfQubits();
+    const auto count = n ? Simulators::TensorQueries::DenseSize(n) : 0;
+    if (capacity < count || (count && !interleaved)) return 0;
+    const auto values = state.GetStateVector();
+    if (values.size() != count) return 0;
+    for (size_t i = 0; i < count; ++i) {
+      interleaved[2 * i] = values[i].real();
+      interleaved[2 * i + 1] = values[i].imag();
+    }
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+
+int MaestroExpectationValueOperators(void *sim, const unsigned long int *qubits,
+                                     size_t count, const double *matrices,
+                                     double *real, double *imag) {
+  if (!sim || !real || !imag || (count && (!qubits || !matrices))) return 0;
+  try {
+    Simulators::TensorQueries::Count(count);
+    if (count > std::numeric_limits<size_t>::max() / 8) return 0;
+    Types::qubits_vector targets;
+    std::vector<Eigen::MatrixXcd> operators;
+    targets.reserve(count);
+    operators.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+      targets.push_back(qubits[i]);
+      operators.emplace_back(ReadGateMatrix<2>(matrices + 8 * i));
+    }
+    const auto value =
+        static_cast<Simulators::ISimulator *>(sim)->ExpectationValueOperators(
+            targets, operators);
+    *real = value.real();
+    *imag = value.imag();
+    return 1;
+  } catch (...) {
+    return 0;
+  }
+}
+
 int MaestroExpectationValues(void *sim, const char *const *paulis, size_t count,
                              double *values, size_t capacity) {
   if (!sim || capacity < count || (count && (!paulis || !values))) return 0;
@@ -216,8 +261,10 @@ int MaestroMoveAtBeginningOfChain(void *sim, const unsigned long int *qubits,
   if (!sim) return 0;
   try {
     auto &state = *static_cast<Simulators::ISimulator *>(sim);
-    if (!qubits || !count) return 0;
-    state.MoveAtBeginningOfChain(Types::qubits_vector(qubits, qubits + count));
+    if (count && !qubits) return 0;
+    Types::qubits_vector targets;
+    if (count) targets.assign(qubits, qubits + count);
+    state.MoveAtBeginningOfChain(targets);
     return 1;
   } catch (...) {
     return 0;
@@ -1306,10 +1353,14 @@ __declspec(dllexport)
 __declspec(dllexport)
 #endif
     double Probability(void *sim, unsigned long long int outcome) {
-  if (!sim) return 0.0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  const double res = simulator->Probability(outcome);
-  return res;
+  try {
+    if (!sim) return 0.0;
+    auto simulator = static_cast<Simulators::ISimulator *>(sim);
+    const double res = simulator->Probability(outcome);
+    return res;
+  } catch (...) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
 }
 
 #ifdef _WIN32
@@ -1330,27 +1381,35 @@ __declspec(dllexport)
 __declspec(dllexport)
 #endif
     double *Amplitude(void *sim, unsigned long long int outcome) {
-  if (!sim) return nullptr;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  const std::complex<double> amp = simulator->Amplitude(outcome);
+  try {
+    if (!sim) return nullptr;
+    auto simulator = static_cast<Simulators::ISimulator *>(sim);
+    const std::complex<double> amp = simulator->Amplitude(outcome);
 
-  double *result = new double[2];
-  result[0] = amp.real();
-  result[1] = amp.imag();
-  return result;
+    double *result = new double[2];
+    result[0] = amp.real();
+    result[1] = amp.imag();
+    return result;
+  } catch (...) {
+    return nullptr;
+  }
 }
 
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
     double *AllProbabilities(void *sim) {
-  if (!sim) return nullptr;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  const auto probabilities = simulator->AllProbabilities();
+  try {
+    if (!sim) return nullptr;
+    auto simulator = static_cast<Simulators::ISimulator *>(sim);
+    const auto probabilities = simulator->AllProbabilities();
 
-  double *result = new double[probabilities.size()];
-  std::copy(probabilities.begin(), probabilities.end(), result);
-  return result;
+    double *result = new double[probabilities.size()];
+    std::copy(probabilities.begin(), probabilities.end(), result);
+    return result;
+  } catch (...) {
+    return nullptr;
+  }
 }
 
 #ifdef _WIN32
@@ -1358,14 +1417,18 @@ __declspec(dllexport)
 #endif
     double *Probabilities(void *sim, const unsigned long long int *qubits,
                           unsigned long int nrQubits) {
-  if (!sim || !qubits || nrQubits == 0) return nullptr;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
-  const auto probabilities = simulator->Probabilities(qubitVector);
+  try {
+    if (!sim || !qubits || nrQubits == 0) return nullptr;
+    auto simulator = static_cast<Simulators::ISimulator *>(sim);
+    Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
+    const auto probabilities = simulator->Probabilities(qubitVector);
 
-  double *result = new double[probabilities.size()];
-  std::copy(probabilities.begin(), probabilities.end(), result);
-  return result;
+    double *result = new double[probabilities.size()];
+    std::copy(probabilities.begin(), probabilities.end(), result);
+    return result;
+  } catch (...) {
+    return nullptr;
+  }
 }
 
 #ifdef _WIN32
@@ -1375,22 +1438,26 @@ __declspec(dllexport)
                                          const unsigned long long int *qubits,
                                          unsigned long int nrQubits,
                                          unsigned long int shots) {
-  if (!sim || !qubits || nrQubits == 0 || shots == 0) return nullptr;
+  try {
+    if (!sim || !qubits || nrQubits == 0 || shots == 0) return nullptr;
 
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
-  const auto counts = simulator->SampleCounts(qubitVector, shots);
+    auto simulator = static_cast<Simulators::ISimulator *>(sim);
+    Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
+    const auto counts = simulator->SampleCounts(qubitVector, shots);
 
-  unsigned long long int *result =
-      new unsigned long long int[counts.size() * 2];
-  size_t index = 0;
-  for (const auto &count : counts) {
-    result[index] = count.first;  // outcome
-    ++index;
-    result[index] = count.second;  // count
-    ++index;
+    unsigned long long int *result =
+        new unsigned long long int[counts.size() * 2];
+    size_t index = 0;
+    for (const auto &count : counts) {
+      result[index] = count.first;  // outcome
+      ++index;
+      result[index] = count.second;  // count
+      ++index;
+    }
+    return result;
+  } catch (...) {
+    return nullptr;
   }
-  return result;
 }
 
 #ifdef _WIN32
@@ -1445,20 +1512,28 @@ __declspec(dllexport)
 __declspec(dllexport)
 #endif
     int SaveState(void *sim) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->SaveState();
-  return 1;
+  try {
+    if (!sim) return 0;
+    auto simulator = static_cast<Simulators::ISimulator *>(sim);
+    simulator->SaveState();
+    return 1;
+  } catch (...) {
+    return 0;
+  }
 }
 
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
     int RestoreState(void *sim) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->RestoreState();
-  return 1;
+  try {
+    if (!sim) return 0;
+    auto simulator = static_cast<Simulators::ISimulator *>(sim);
+    simulator->RestoreState();
+    return 1;
+  } catch (...) {
+    return 0;
+  }
 }
 
 #ifdef _WIN32

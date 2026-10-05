@@ -1310,10 +1310,39 @@ class ImmediateQCSimState : public ISimulator {
     NotifyObservers(qubits);
   }
   void MoveAtBeginningOfChain(const Types::qubits_vector &qubits) override {
-    if (!mpoSimulator) return IState::MoveAtBeginningOfChain(qubits);
+    if (!mpoSimulator && !mpsSimulator)
+      return IState::MoveAtBeginningOfChain(qubits);
     const auto selected = MPOValidation::Qubits(qubits, nrQubits);
-    mpoSimulator->MoveAtBeginningOfChain(
-        std::set<Eigen::Index>(selected.begin(), selected.end()));
+    const std::set<Eigen::Index> targets(selected.begin(), selected.end());
+    if (mpsSimulator)
+      mpsSimulator->MoveAtBeginningOfChain(targets);
+    else
+      mpoSimulator->MoveAtBeginningOfChain(targets);
+  }
+
+  std::vector<std::complex<double>> GetStateVector() override {
+    if (!mpsSimulator && simulationType != SimulationType::kStatevector)
+      return IState::GetStateVector();
+    if (!nrQubits) return {};
+    const auto count = TensorQueries::DenseSize(nrQubits);
+    const auto values = mpsSimulator ? mpsSimulator->getRegisterStorage()
+                                     : state->getRegisterStorage();
+    if (static_cast<size_t>(values.size()) != count)
+      throw std::runtime_error("QCSim statevector query returned an invalid size");
+    return {values.data(), values.data() + values.size()};
+  }
+
+  std::complex<double> ExpectationValueOperators(
+      const Types::qubits_vector &qubits,
+      const std::vector<Eigen::MatrixXcd> &matrices) override {
+    if (!mpsSimulator)
+      return IState::ExpectationValueOperators(qubits, matrices);
+    TensorQueries::Operators(qubits, matrices, nrQubits);
+    std::vector<QC::Gates::AppliedGate<>> gates;
+    gates.reserve(qubits.size());
+    for (size_t i = 0; i < qubits.size(); ++i)
+      gates.emplace_back(matrices[i], qubits[i]);
+    return mpsSimulator->ExpectationValue(gates);
   }
 
   std::complex<double> DensityMatrixTrace() const override {

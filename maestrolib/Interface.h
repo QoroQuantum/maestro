@@ -412,6 +412,24 @@ __declspec(dllexport)
                                         size_t count, int normalized,
                                         double *real, double *imag,
                                         size_t capacity);
+// Full pure-state readout in logical basis order (q0 is the low bit).
+// capacity counts complex entries; interleaved holds 2*capacity doubles.
+// Returns 0 on failure without modifying the output buffer.
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroGetStateVector(void *sim, double *interleaved, size_t capacity);
+// Read-only <psi|O_(count-1)...O_0|psi> on MPS. Each operator is a row-major
+// 2x2 matrix (8 interleaved doubles). Repeated target qubits are allowed and
+// applied in list order. count=0 is identity; the input arrays may be null.
+// Returns 0 on failure without modifying real/imag.
+#ifdef _WIN32
+__declspec(dllexport)
+#endif
+    int MaestroExpectationValueOperators(void *sim,
+                                         const unsigned long int *qubits,
+                                         size_t count, const double *matrices,
+                                         double *real, double *imag);
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
@@ -426,6 +444,7 @@ __declspec(dllexport)
 #ifdef _WIN32
 __declspec(dllexport)
 #endif
+    // Empty lists are no-ops on supported simulators; qubits may be null when count is zero.
     int MaestroMoveAtBeginningOfChain(void *sim,
                                       const unsigned long int *qubits,
                                       size_t count);

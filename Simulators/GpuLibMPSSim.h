@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "GpuDeviceContext.h"
+#include "TensorQueries.h"
 
 namespace Simulators {
 
@@ -219,6 +220,127 @@ class GpuLibMPSSim {
     return false;
   }
 
+  void InstallBondSummary(void (*summary)(void *, int64_t),
+                          void (*full)(void *, const int64_t *)) {
+    const bool ok = lib->HasMPSBondSummary()
+                        ? lib->MPSSetBondDimensionSummaryCallback(obj, summary)
+                        : SetBondDimensionsCallback(full);
+    if (!ok)
+      throw std::runtime_error("GPU MPS bond callback installation failed");
+  }
+
+  std::vector<std::complex<double>> GetStateVector() {
+    const auto n = GetNrQubits();
+    if (n < 0 || n > 40)
+      throw std::length_error(
+          "GPU MPS dense output supports at most 40 qubits");
+    const auto count = TensorQueries::DenseSize(n);
+    std::vector<std::complex<double>> result(count);
+    if (lib->HasMPSGetStateVector()) {
+      // std::complex<double> arrays have the interleaved layout required by
+      // the C API. The result is private until the native call succeeds.
+      if (!lib->MPSGetStateVector(obj,
+                                 reinterpret_cast<double *>(result.data())))
+        throw std::runtime_error("GPU MPS statevector query failed");
+    } else {
+      std::vector<long int> bits(n);
+      for (size_t i = 0; i < count; ++i) {
+        for (int q = 0; q < n; ++q) bits[q] = (i >> q) & 1;
+        double re = 0., im = 0.;
+        if (!Amplitude(n, bits.data(), &re, &im) || !std::isfinite(re) ||
+            !std::isfinite(im))
+          throw std::runtime_error("GPU MPS amplitude query failed");
+        result[i] = {re, im};
+      }
+    }
+    return result;
+  }
+
+  std::vector<double> AllProbabilities() {
+    const auto n = GetNrQubits();
+    if (n < 0 || n > 40)
+      throw std::length_error(
+          "GPU MPS dense output supports at most 40 qubits");
+    std::vector<double> result(TensorQueries::DenseSize(n));
+    if (lib->HasMPSAllProbabilities()) {
+      if (!lib->MPSAllProbabilities(obj, result.data()))
+        throw std::runtime_error("GPU MPS probability enumeration failed");
+    } else {
+      const auto amplitudes = GetStateVector();
+      for (size_t i = 0; i < result.size(); ++i)
+        result[i] = std::norm(amplitudes[i]);
+    }
+    return result;
+  }
+
+  void MoveAtBeginningOfChain(const std::vector<int> &qubits) {
+    if (!lib->HasMPSMoveAtBeginningOfChain())
+      throw std::runtime_error(
+          "GPU MPS chain movement requires an updated GPU plugin");
+    if (!lib->MPSMoveAtBeginningOfChain(obj, qubits.data(),
+                                        TensorQueries::Count(qubits.size())))
+      throw std::runtime_error("GPU MPS chain movement failed");
+  }
+
+  std::complex<double> ExpectationValueOperators(
+      const std::vector<int> &qubits, const std::vector<double> &matrices) {
+    if (!lib->HasMPSExpectationValueOperators())
+      throw std::runtime_error(
+          "GPU MPS operator expectations require an updated GPU plugin");
+    double re = 0., im = 0.;
+    if (!lib->MPSExpectationValueOperators(
+            obj, TensorQueries::Count(qubits.size()), qubits.data(),
+            matrices.data(), &re, &im))
+      throw std::runtime_error("GPU MPS operator expectation failed");
+    return {re, im};
+  }
+
+  std::vector<double> ExpectationValues(
+      const std::vector<std::string> &paulis) {
+    TensorQueries::PauliBatch batch(paulis);
+    std::vector<double> values(paulis.size());
+    if (paulis.empty()) return values;
+    if (lib->HasMPSExpectationValues()) {
+      if (!lib->MPSExpectationValues(obj, TensorQueries::Count(paulis.size()),
+                                     batch.strings.data(), batch.lengths.data(),
+                                     values.data()))
+        throw std::runtime_error("GPU MPS batch expectation failed");
+    } else {
+      for (size_t i = 0; i < paulis.size(); ++i) {
+        values[i] = ExpectationValue(paulis[i]);
+        if (!std::isfinite(values[i]))
+          throw std::runtime_error("GPU MPS expectation failed");
+      }
+    }
+    return values;
+  }
+
+  std::unordered_map<std::vector<bool>, int64_t> SampleHistogram(
+      size_t shots, std::vector<unsigned int> qubits) {
+    if (shots == 0 || qubits.empty()) return {};
+    if (shots > static_cast<size_t>(std::numeric_limits<long int>::max()) ||
+        qubits.size() >
+            static_cast<size_t>(std::numeric_limits<long int>::max()))
+      throw std::length_error("GPU MPS sampling size exceeds API limits");
+    for (auto q : qubits)
+      if (q >= static_cast<size_t>(GetNrQubits()))
+        throw std::out_of_range("GPU MPS sampled qubit is out of range");
+    using Map = std::unordered_map<std::vector<bool>, int64_t>;
+    auto deleter = [this](Map *map) { FreeMapForSample(map); };
+    std::unique_ptr<Map, decltype(deleter)> map(GetMapForSample(), deleter);
+    if (!map || !Sample(shots, qubits.size(), qubits.data(), map.get()))
+      throw std::runtime_error("GPU MPS sampling failed");
+    size_t total = 0;
+    for (const auto &entry : *map) {
+      if (entry.second < 0 || static_cast<size_t>(entry.second) > shots - total)
+        throw std::runtime_error("GPU MPS returned invalid sample counts");
+      total += static_cast<size_t>(entry.second);
+    }
+    if (total != shots)
+      throw std::runtime_error("GPU MPS returned incomplete sample counts");
+    return *map;
+  }
+
   bool Amplitude(long int numFixedValues, long int *fixedValues, double *real,
                  double *imaginary) const {
     if (obj)
@@ -299,7 +421,11 @@ class GpuLibMPSSim {
   }
 
   std::unique_ptr<GpuLibMPSSim> Clone() const {
-    if (obj) return std::make_unique<GpuLibMPSSim>(lib, lib->MPSClone(obj));
+    if (obj) {
+      auto *cloned = lib->MPSClone(obj);
+      if (!cloned) throw std::runtime_error("GPU MPS clone failed");
+      return std::make_unique<GpuLibMPSSim>(lib, cloned);
+    }
 
     return nullptr;
   }

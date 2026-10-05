@@ -469,12 +469,9 @@ class SimpleDisconnectedNetwork : public INetwork<Time> {
       throw std::runtime_error(
           "ExecuteOnHostAmplitudes: no simulator available after execution.");
 
-    std::vector<std::complex<double>> amplitudes;
     const size_t n = simulator->GetNumberOfQubits();
-    const size_t dim = 1ULL << n;
-    amplitudes.resize(dim);
-    for (size_t state = 0; state < dim; ++state)
-      amplitudes[state] = simulator->Amplitude(state);
+    auto amplitudes = simulator->GetStateVector();
+    const size_t dim = amplitudes.size();
 
     // Remap amplitudes back to the original qubit ordering if qubits were
     // remapped during execution on the host.

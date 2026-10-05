@@ -23,10 +23,10 @@ inline std::vector<int> Qubits(const Types::qubits_vector& qubits,
   std::vector<int> result;
   for (auto q : qubits) {
     if (q >= width || q > static_cast<size_t>(std::numeric_limits<int>::max()))
-      throw std::out_of_range("MPO target qubit is out of range");
+      throw std::out_of_range("Target qubit is out of range");
     if (std::find(result.begin(), result.end(), static_cast<int>(q)) !=
         result.end())
-      throw std::invalid_argument("MPO target qubits must be distinct");
+      throw std::invalid_argument("Target qubits must be distinct");
     result.push_back(static_cast<int>(q));
   }
   return result;

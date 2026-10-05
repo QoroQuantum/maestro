@@ -212,8 +212,8 @@ std::vector<std::string> Observables(const json::object& request,
 struct Context {
   unsigned long handle = 0;
   std::shared_ptr<Network::INetwork<double>> network;
-  explicit Context(const ParsedCircuit& circuit,
-                   const SimulatorConfig& config) {
+  explicit Context(const ParsedCircuit& circuit, const SimulatorConfig& config,
+                   bool exactRegister = false) {
     auto* maestro = static_cast<Maestro*>(GetMaestroObjectWithMute());
     if (!maestro) throw Error("native_failure", "Cannot initialize Maestro");
     handle = maestro->CreateSimpleSimulator(circuit.qubits, circuit.clbits);
@@ -223,10 +223,11 @@ struct Context {
         throw Error("backend_unavailable",
                     "Requested backend could not be created");
       // A single-host network reserves an internal entanglement qubit.
-      // Native MPO queries describe only the declared logical register;
-      // bit-vector and dense queries must not include that unused ancilla.
-      if (config.simulation_type ==
-              Simulators::SimulationType::kMatrixProductOperator &&
+      // Direct queries describe only the declared logical register; bulk
+      // readers and bit-vector queries must not include that unused ancilla.
+      if ((exactRegister ||
+           config.simulation_type ==
+               Simulators::SimulationType::kMatrixProductOperator) &&
           network->GetSimulator()->GetNumberOfQubits() != circuit.qubits)
         network->CreateSimulator(network->GetSimulator()->GetType(),
                                  network->GetSimulator()->GetSimulationType(),
@@ -449,6 +450,7 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
                  "keep_qubits",
                  "max_output_elements",
                  "operators",
+                 "expectation_operators",
                  "move_qubits",
                  "pauli",
                  "row_state",
@@ -470,6 +472,7 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
       {"maintenance", {"diagnostics"}},
       {"keep_qubits", {"diagnostics"}},
       {"operators", {"diagnostics"}},
+      {"expectation_operators", {"diagnostics"}},
       {"move_qubits", {"diagnostics"}},
       {"pauli", {"diagnostics"}},
       {"row_state", {"diagnostics"}},
@@ -630,6 +633,10 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
        config.simulator_type == Simulators::SimulatorType::kQCSim) &&
       config.simulation_type ==
           Simulators::SimulationType::kMatrixProductOperator;
+  const bool nativeMps =
+      (config.simulator_type == Simulators::SimulatorType::kGpuSim ||
+       config.simulator_type == Simulators::SimulatorType::kQCSim) &&
+      config.simulation_type == Simulators::SimulationType::kMatrixProductState;
   auto readBits = [&](const char* field) {
     const auto value = String(Field(request, field));
     Require(value.size() == input.qubits &&
@@ -649,6 +656,8 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
   };
   std::vector<LocalOperator> localOperators;
   Types::qubits_vector moveQubits;
+  Types::qubits_vector expectationQubits;
+  std::vector<Eigen::MatrixXcd> expectationOperators;
   if (operation == "state_probability") {
     Supported(nativeMpo || input.qubits < 63,
               "Wide state probability requires CPU or GPU MPO");
@@ -662,21 +671,22 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
       if (state[q] == '1') target |= uint64_t{1} << q;
   }
   if (operation == "diagnostics") {
-    auto readQubits = [&](const json::value& value) {
+    auto readQubits = [&](const json::value& value, bool allowEmpty = false) {
       Types::qubits_vector qubits;
       std::set<uint64_t> unique;
       for (const auto& q : Array(value)) {
         const auto index = UInt(q);
         Require(index < input.qubits && unique.insert(index).second,
-                "Invalid MPO target qubit");
+                "Invalid tensor target qubit");
         qubits.push_back(index);
       }
-      Require(!qubits.empty(), "MPO operation requires qubits");
+      Require(allowEmpty || !qubits.empty(), "Tensor operation requires qubits");
       return qubits;
     };
     if (const auto* value = request.if_contains("move_qubits")) {
-      Supported(nativeMpo, "Chain routing requires CPU or GPU MPO");
-      moveQubits = readQubits(*value);
+      Supported(nativeMpo || nativeMps,
+                "Chain routing requires CPU or GPU MPS/MPO");
+      moveQubits = readQubits(*value, true);
     }
     if (const auto* values = request.if_contains("operators")) {
       Supported(nativeMpo, "Local operators require CPU or GPU MPO");
@@ -700,6 +710,26 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
         }
         localOperators.push_back(
             {std::move(qubits), std::move(matrix), normalize});
+      }
+    }
+    if (const auto* values = request.if_contains("expectation_operators")) {
+      Supported(nativeMps, "Operator expectations require CPU or GPU MPS");
+      const auto& operators = Array(*values);
+      Require(operators.size() <= limit, "Operator list exceeds output bound");
+      for (const auto& value : operators) {
+        const auto& op = Object(value);
+        Keys(op, {"qubit", "matrix"});
+        const auto qubit = UInt(Field(op, "qubit"));
+        Require(qubit < input.qubits, "Operator target qubit is out of range");
+        const auto& entries = Array(Field(op, "matrix"));
+        Require(entries.size() == 4,
+                "Expectation operator must be a flat row-major 2x2 matrix");
+        Eigen::MatrixXcd matrix(2, 2);
+        for (size_t r = 0; r < 2; ++r)
+          for (size_t c = 0; c < 2; ++c)
+            matrix(r, c) = Complex(entries[2 * r + c]);
+        expectationQubits.push_back(qubit);
+        expectationOperators.push_back(std::move(matrix));
       }
     }
     Supported(Mixed(config) || MatrixProductChain(config),
@@ -726,22 +756,32 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
                 requestedDiagnostics.count("expectations_complex") ||
                 requestedDiagnostics.count("unnormalized_expectations"),
             "observables requires a batch complex expectation diagnostic");
+    Require(
+        !request.contains("expectation_operators") ||
+            requestedDiagnostics.count("operator_expectation"),
+        "expectation_operators requires the operator_expectation diagnostic");
     if (const auto* values = request.if_contains("diagnostics"))
       for (const auto& value : Array(*values)) {
         const auto name = String(value);
-        Require(std::set<std::string>{"trace", "purity", "trace_of_square",
-                                      "hermiticity_residual", "is_hermitian",
-                                      "partial_trace", "density_matrix",
-                                      "unnormalized_density_matrix", "element",
-                                      "expectation_complex",
-                                      "unnormalized_expectation",
-                                      "expectations_complex",
-                                      "unnormalized_expectations"}
-                    .count(name),
-                "Unknown diagnostic");
-        Supported(Mixed(config),
-                  "Mixed-state diagnostics require density_matrix or MPO");
-        if (name == "density_matrix" || name == "unnormalized_density_matrix") {
+        Require(
+            std::set<std::string>{
+                "trace", "purity", "trace_of_square", "hermiticity_residual",
+                "is_hermitian", "partial_trace", "density_matrix",
+                "unnormalized_density_matrix", "element", "expectation_complex",
+                "unnormalized_expectation", "expectations_complex",
+                "unnormalized_expectations", "operator_expectation"}
+                .count(name),
+            "Unknown diagnostic");
+        if (name == "operator_expectation") {
+          Supported(nativeMps, "Operator expectations require CPU or GPU MPS");
+          Require(request.contains("expectation_operators"),
+                  "operator_expectation requires expectation_operators");
+        } else {
+          Supported(Mixed(config),
+                    "Mixed-state diagnostics require density_matrix or MPO");
+        }
+        if (name == "density_matrix" ||
+                   name == "unnormalized_density_matrix") {
           Supported(nativeMpo, "Dense MPO output requires CPU or GPU MPO");
           Require(input.qubits <= 13 &&
                       (uint64_t{1} << (2 * input.qubits)) <= limit,
@@ -805,7 +845,7 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
                                                  config.distributed_options);
     noise.seed = static_cast<uint32_t>(*config.seed);
   }
-  Context context(input, config);
+  Context context(input, config, query);
   auto simulator = context.simulator();
   // Validation remains silent; warn once per execution, not per realization.
   if (!noise.thermal_approximation_warning.empty())
@@ -906,7 +946,10 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
       const auto* queries = request.if_contains("diagnostics");
       for (const auto& value : queries ? Array(*queries) : defaults) {
         const auto name = String(value);
-        if (name == "trace")
+        if (name == "operator_expectation")
+          result[name] = Complex(simulator->ExpectationValueOperators(
+              expectationQubits, expectationOperators));
+        else if (name == "trace")
           result[name] = Complex(simulator->DensityMatrixTrace());
         else if (name == "purity")
           result[name] = simulator->DensityMatrixPurity();
@@ -966,11 +1009,29 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
       }
     } else {
       json::array values;
-      for (const auto& index : basis)
-        if (amplitudes)
-          values.emplace_back(Complex(simulator->Amplitude(UInt(index))));
-        else
-          values.emplace_back(simulator->Probability(UInt(index)));
+      // Tensor-network backends intentionally do not provide efficient bulk
+      // probabilities. An explicitly requested full output still uses the
+      // bounded per-index path, just as selected basis states do.
+      const bool scalarProbabilities =
+          !amplitudes && simulator->GetSimulationType() ==
+                             Simulators::SimulationType::kTensorNetwork;
+      if (!request.contains("basis_states") && !scalarProbabilities) {
+        if (amplitudes) {
+          for (const auto& value : simulator->GetStateVector())
+            values.emplace_back(Complex(value));
+        } else {
+          for (double value : simulator->AllProbabilities())
+            values.emplace_back(value);
+        }
+        Require(values.size() == basis.size(),
+                "Backend returned an invalid full state output");
+      } else {
+        for (const auto& index : basis)
+          if (amplitudes)
+            values.emplace_back(Complex(simulator->Amplitude(UInt(index))));
+          else
+            values.emplace_back(simulator->Probability(UInt(index)));
+      }
       result[amplitudes ? "amplitudes" : "probabilities"] = std::move(values);
       result["basis_states"] = std::move(basis);
     }

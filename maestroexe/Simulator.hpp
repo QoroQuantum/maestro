@@ -4,6 +4,8 @@
 
 class SimpleSimulator : protected MaestroLibrary {
  public:
+  using MaestroLibrary::RunRequestJson;
+  using MaestroLibrary::ValidateRequestJson;
   SimpleSimulator() noexcept {}
 
   virtual ~SimpleSimulator() {
@@ -58,6 +60,8 @@ class SimpleSimulator : protected MaestroLibrary {
 
 class Simulator : protected MaestroLibrary {
  public:
+  using MaestroLibrary::RunRequestJson;
+  using MaestroLibrary::ValidateRequestJson;
   Simulator() noexcept {}
 
   virtual ~Simulator() {
@@ -84,6 +88,18 @@ class Simulator : protected MaestroLibrary {
 
   std::vector<double> ExpectationValues(const std::vector<std::string>& paulis) {
     return MaestroLibrary::ExpectationValues(simulatorPtr, paulis);
+  }
+  std::vector<std::complex<double>> GetStateVector() {
+    return MaestroLibrary::GetStateVector(simulatorPtr);
+  }
+  std::complex<double> ExpectationValueOperators(
+      const std::vector<unsigned long> &qubits,
+      const std::vector<std::array<std::complex<double>, 4>> &matrices) {
+    return MaestroLibrary::ExpectationValueOperators(simulatorPtr, qubits,
+                                                     matrices);
+  }
+  void MoveAtBeginningOfChain(const std::vector<unsigned long> &qubits) {
+    MaestroLibrary::MoveAtBeginningOfChain(simulatorPtr, qubits);
   }
 
   std::vector<std::complex<double>> ExpectationValuesComplex(

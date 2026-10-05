@@ -3,6 +3,9 @@
 #include "../Utils/Library.h"
 #include "../maestrolib/InterfaceTypes.h"
 #include <complex>
+#include <array>
+#include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -66,6 +69,19 @@ class MaestroLibrary : public Utils::Library {
           fExpectationValuesComplex =
               reinterpret_cast<decltype(fExpectationValuesComplex)>(
                   GetFunction("MaestroExpectationValuesComplex"));
+          fGetStateVector = reinterpret_cast<decltype(fGetStateVector)>(
+              GetFunction("MaestroGetStateVector"));
+          fExpectationValueOperators =
+              reinterpret_cast<decltype(fExpectationValueOperators)>(
+                  GetFunction("MaestroExpectationValueOperators"));
+          fMoveAtBeginningOfChain =
+              reinterpret_cast<decltype(fMoveAtBeginningOfChain)>(
+                  GetFunction("MaestroMoveAtBeginningOfChain"));
+          fRunRequestJson = reinterpret_cast<decltype(fRunRequestJson)>(
+              GetFunction("MaestroRunRequestJson"));
+          fValidateRequestJson =
+              reinterpret_cast<decltype(fValidateRequestJson)>(
+                  GetFunction("MaestroValidateRequestJson"));
           fDestroySimulator =
               (void (*)(unsigned long int))GetFunction("DestroySimulator");
           CheckFunction((void*)fDestroySimulator, __LINE__);
@@ -921,7 +937,83 @@ class MaestroLibrary : public Utils::Library {
     return values;
   }
 
+  // Versioned JSON requests return their complete response envelope.
+  std::string RunRequestJson(const std::string& request) {
+    return RequestJson(request, fRunRequestJson);
+  }
+  std::string ValidateRequestJson(const std::string& request) {
+    return RequestJson(request, fValidateRequestJson);
+  }
+
+  std::vector<std::complex<double>> GetStateVector(void* sim) {
+    if (!maestro || !sim || !fGetStateVector)
+      throw std::runtime_error(
+          "MaestroLibrary: Statevector query unavailable.");
+    const auto n = GetNumberOfQubits(sim);
+    if (n >= std::numeric_limits<size_t>::digits)
+      throw std::length_error("Statevector exceeds the basis-index range");
+    const size_t count = n ? size_t{1} << n : 0;
+    if (count > std::vector<double>().max_size() / 2)
+      throw std::length_error("Statevector output is too large");
+    std::vector<std::complex<double>> result(count);
+    if (!fGetStateVector(sim, reinterpret_cast<double*>(result.data()), count))
+      throw std::runtime_error("MaestroLibrary: Statevector query failed.");
+    return result;
+  }
+
+  // Four entries per operator, in row-major order; repeated targets are
+  // allowed.
+  std::complex<double> ExpectationValueOperators(
+      void* sim, const std::vector<unsigned long>& qubits,
+      const std::vector<std::array<std::complex<double>, 4>>& matrices) {
+    if (!maestro || !sim || !fExpectationValueOperators)
+      throw std::runtime_error(
+          "MaestroLibrary: Operator expectation unavailable.");
+    if (qubits.size() != matrices.size())
+      throw std::invalid_argument("Each operator must have one target qubit");
+    if (matrices.size() > std::vector<double>().max_size() / 8)
+      throw std::length_error("Too many operators");
+    std::vector<double> raw;
+    raw.reserve(8 * matrices.size());
+    for (const auto& matrix : matrices)
+      for (const auto& entry : matrix) {
+        raw.push_back(entry.real());
+        raw.push_back(entry.imag());
+      }
+    double re = 0., im = 0.;
+    if (!fExpectationValueOperators(sim, qubits.data(), qubits.size(),
+                                    raw.data(), &re, &im))
+      throw std::runtime_error("MaestroLibrary: Operator expectation failed.");
+    return {re, im};
+  }
+
+  void MoveAtBeginningOfChain(void* sim,
+                              const std::vector<unsigned long>& qubits) {
+    if (!maestro || !sim || !fMoveAtBeginningOfChain)
+      throw std::runtime_error("MaestroLibrary: Chain movement unavailable.");
+    if (!fMoveAtBeginningOfChain(sim, qubits.data(), qubits.size()))
+      throw std::runtime_error("MaestroLibrary: Chain movement failed.");
+  }
+
  private:
+  std::string RequestJson(const std::string& request,
+                          char* (*call)(const char*)) {
+    if (!maestro || !call || !fFreeResult)
+      throw std::runtime_error("MaestroLibrary: JSON request API unavailable.");
+    auto release = [this](char* p) { FreeResult(p); };
+    std::unique_ptr<char, decltype(release)> result(call(request.c_str()),
+                                                    release);
+    if (!result)
+      throw std::runtime_error(
+          "MaestroLibrary: JSON request returned no response.");
+    return result.get();
+  }
+  char* (*fRunRequestJson)(const char*) = nullptr;
+  char* (*fValidateRequestJson)(const char*) = nullptr;
+  int (*fGetStateVector)(void*, double*, size_t) = nullptr;
+  int (*fExpectationValueOperators)(void*, const unsigned long*, size_t,
+                                    const double*, double*, double*) = nullptr;
+  int (*fMoveAtBeginningOfChain)(void*, const unsigned long*, size_t) = nullptr;
   int (*fExpectationValues)(void*, const char* const*, size_t, double*, size_t) = nullptr;
   int (*fExpectationValuesComplex)(void*, const char* const*, size_t, int,
                                    double*, double*, size_t) = nullptr;
