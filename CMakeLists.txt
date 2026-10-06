@@ -384,7 +384,21 @@ set(MAESTROEXESRC maestroexe/maestroexe.cpp)
 
 # Define core library and executable
 add_library(maestro SHARED ${MAESTROSRC})
-target_include_directories(maestro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+# Build identity is informational; schema_version remains the protocol contract.
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml" MAESTRO_VERSION_LINE REGEX "^version = ")
+string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" MAESTRO_BUILD_VERSION "${MAESTRO_VERSION_LINE}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml")
+# Avoid attributing an unpacked source archive to an unrelated parent repository.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+    execute_process(COMMAND git describe --always --dirty --exclude "*"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE MAESTRO_SOURCE_REVISION OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+endif()
+if(NOT MAESTRO_SOURCE_REVISION)
+    set(MAESTRO_SOURCE_REVISION "unknown")
+endif()
+configure_file(cmake/MaestroBuildInfo.h.in generated/MaestroBuildInfo.h @ONLY)
+target_include_directories(maestro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} "${CMAKE_CURRENT_BINARY_DIR}/generated")
 if(QAER)
     target_include_directories(maestro PUBLIC ${AER_INCLUDE_DIR} ${JSON_INCLUDE_DIR})
 endif()

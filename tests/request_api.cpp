@@ -217,18 +217,18 @@ void TestFusionMetadata() {
     size_t qubits;
     bool enabled;
   };
-  for (const auto& c : {Default{"statevector", 2, false},
-                        Default{"statevector", 11, true},
-                        Default{"density_matrix", 4, false},
-                        Default{"density_matrix", 5, true},
-                        Default{"matrix_product_state", 2, true}}) {
+  for (const auto& c :
+       {Default{"statevector", 2, false}, Default{"statevector", 11, true},
+        Default{"density_matrix", 4, false}, Default{"density_matrix", 5, true},
+        Default{"matrix_product_state", 2, true}}) {
     // Every qubit is used: only the qubits a circuit touches are simulated.
     auto request = Request("execute", c.qubits,
                            "h q; cx q[0],q[1]; measure q->c;", c.method);
     const auto unset = Call(request).at("execution_metadata").as_object();
     Check(unset.at("gate_fusion").at("requested").is_null() &&
-              !unset.at("configured_options").as_object().contains(
-                  "gate_fusion") &&
+              !unset.at("configured_options")
+                   .as_object()
+                   .contains("gate_fusion") &&
               unset.at("gate_fusion").at("enabled").as_bool() == c.enabled,
           "Default fusion does not follow the register-size threshold");
     request["simulator"].as_object()["options"] =
@@ -267,6 +267,38 @@ int main() try {
   Check(capabilities != nullptr, "Missing capabilities");
   auto caps = j::parse(capabilities).as_object();
   FreeResult(capabilities);
+  Check(caps.at("build").at("version").is_string(), "Missing build version");
+  Check(caps.at("build").at("source_revision").is_string(),
+        "Missing build revision");
+  Check(caps.at("capability_scope") == "validation",
+        "Capabilities must not promise device readiness");
+  bool operatorQuery = false, precision = false, workers = false;
+  for (const auto& diagnostic : caps.at("diagnostics").as_array()) {
+    if (diagnostic.at("name") != "operator_expectation") continue;
+    operatorQuery = true;
+    for (const auto& config :
+         diagnostic.at("supported_configurations").as_array()) {
+      Check(config.at("method") == "matrix_product_state",
+            "MPS query advertised for wrong method");
+      Check(config.at("backend") == "qcsim" || config.at("backend") == "gpu",
+            "MPS query advertised for wrong backend");
+    }
+  }
+  for (const auto& option : caps.at("options").as_array()) {
+    if (option.at("name") == "precision") {
+      precision = true;
+      Check(option.at("enum") == j::array{"single", "double"},
+            "Precision choices differ from parser");
+    }
+    if (option.at("name") == "pp_workers") {
+      workers = true;
+      Check(option.at("minimum").to_number<int>() == 0 &&
+                option.at("maximum").to_number<int>() == 1024,
+            "Worker bounds differ from parser");
+    }
+  }
+  Check(operatorQuery && precision && workers, "Incomplete discovery metadata");
+
   Check(!caps.at("python_required").as_bool(),
         "Native API must not require Python");
   Check(caps.at("schema_version").as_int64() == 2, "Wrong native schema");
@@ -317,8 +349,8 @@ int main() try {
         "Fixed backend method changed");
 
   // Typed options are reported under the native keys they configure.
-  auto mps = Request("execute", 2, "h q[0]; measure q -> c;",
-                     "matrix_product_state");
+  auto mps =
+      Request("execute", 2, "h q[0]; measure q -> c;", "matrix_product_state");
   const auto sampling = [](const j::object& response) {
     return response.at("execution_metadata")
         .at("configured_options")
@@ -529,8 +561,8 @@ int main() try {
               (std::string(method) == "matrix_product_operator"),
           "Default diagnostics do not follow the method");
   }
-  request =
-      Request("diagnostics", 2, "h q[0]; cx q[0],q[1];", "matrix_product_state");
+  request = Request("diagnostics", 2, "h q[0]; cx q[0],q[1];",
+                    "matrix_product_state");
   for (const auto& field :
        {j::object{{"diagnostics", j::array{"trace"}}},
         j::object{{"maintenance", j::array{"hermitize"}}}}) {

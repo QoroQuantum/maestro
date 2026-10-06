@@ -7,6 +7,7 @@
 #include <memory>
 #include <random>
 #include "Request.h"
+#include "Capabilities.h"
 #include "maestrolib/Interface.h"
 #include "NoiseJson.h"
 #include "CircuitHelpers.h"
@@ -384,47 +385,7 @@ json::object Metadata(Context& context, const SimulatorConfig& config,
 }
 }  // namespace
 
-json::object Capabilities() {
-  json::array backends, options, noiseKinds, names;
-  for (const auto& entry : Backends()) {
-    json::array methods;
-    for (const auto& method : Methods())
-      if (Accepts(entry.second, method.second))
-        methods.emplace_back(method.first);
-    backends.emplace_back(json::object{
-        {"name", entry.first},
-        {"legacy_id", static_cast<int>(entry.second)},
-        {"methods", methods},
-        {"compiled", true},
-        {"readiness",
-         entry.first == "qcsim" || entry.first == "composite_qcsim" ||
-                 entry.first == "aer" || entry.first == "composite_aer"
-             ? "available"
-             : "requires_runtime_probe"}});
-  }
-  for (const auto& option : Options())
-    options.emplace_back(json::object{{"name", option.name},
-                                      {"native_name", option.native_name},
-                                      {"type", option.type},
-                                      {"family", option.family}});
-  for (const auto& entry : NoiseKinds()) noiseKinds.emplace_back(entry.first);
-  for (const auto& operation : operations) names.emplace_back(operation);
-  return {{"schema_version", SchemaVersion},
-          {"api", "maestro.native.request"},
-          {"operations", names},
-          {"backends", backends},
-          {"options", options},
-          {"noise_channels", noiseKinds},
-          {"circuit_formats", json::array{"openqasm", "instructions"}},
-          {"python_required", false},
-          {"max_request_bytes", MaxRequestBytes},
-          {"max_result_bytes", MaxResultBytes},
-          {"max_output_elements", 1048576},
-          {"count_order", "classical_bit_0_first"},
-          {"basis_order", "qubit_0_least_significant"},
-          {"complex_encoding", "[real, imaginary]"},
-          {"mpi_lifecycle", "externally_initialized_collective"}};
-}
+json::object Capabilities() { return NativeCapabilities(operations); }
 
 json::object Run(const json::object& request, bool validate, unsigned depth) {
   Require(depth <= 4, "Batch nesting exceeds four levels");
@@ -680,7 +641,8 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
                 "Invalid tensor target qubit");
         qubits.push_back(index);
       }
-      Require(allowEmpty || !qubits.empty(), "Tensor operation requires qubits");
+      Require(allowEmpty || !qubits.empty(),
+              "Tensor operation requires qubits");
       return qubits;
     };
     if (const auto* value = request.if_contains("move_qubits")) {
@@ -763,15 +725,7 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
     if (const auto* values = request.if_contains("diagnostics"))
       for (const auto& value : Array(*values)) {
         const auto name = String(value);
-        Require(
-            std::set<std::string>{
-                "trace", "purity", "trace_of_square", "hermiticity_residual",
-                "is_hermitian", "partial_trace", "density_matrix",
-                "unnormalized_density_matrix", "element", "expectation_complex",
-                "unnormalized_expectation", "expectations_complex",
-                "unnormalized_expectations", "operator_expectation"}
-                .count(name),
-            "Unknown diagnostic");
+        Require(DiagnosticNames().count(name), "Unknown diagnostic");
         if (name == "operator_expectation") {
           Supported(nativeMps, "Operator expectations require CPU or GPU MPS");
           Require(request.contains("expectation_operators"),
@@ -780,8 +734,7 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
           Supported(Mixed(config),
                     "Mixed-state diagnostics require density_matrix or MPO");
         }
-        if (name == "density_matrix" ||
-                   name == "unnormalized_density_matrix") {
+        if (name == "density_matrix" || name == "unnormalized_density_matrix") {
           Supported(nativeMpo, "Dense MPO output requires CPU or GPU MPO");
           Require(input.qubits <= 13 &&
                       (uint64_t{1} << (2 * input.qubits)) <= limit,
@@ -974,9 +927,8 @@ json::object Run(const json::object& request, bool validate, unsigned depth) {
           encoded.reserve(values.size());
           for (const auto& value : values) encoded.emplace_back(Complex(value));
           result[name] = std::move(encoded);
-        }
-        else if (name == "density_matrix" ||
-                 name == "unnormalized_density_matrix") {
+        } else if (name == "density_matrix" ||
+                   name == "unnormalized_density_matrix") {
           const auto matrix =
               simulator->GetDensityMatrix(name == "density_matrix");
           json::array entries;

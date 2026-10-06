@@ -498,3 +498,19 @@ After initialization the precision is fixed: a precision setting applied then
 only after clearing the state. `GetConfiguration` reports the active native
 GPU precision. QCSim and Aer MPS always compute in double precision. When omitted,
 backend defaults remain GPU single precision and Aer/QCSim double precision.
+
+## Additive discovery metadata
+
+`capabilities` keeps schema version 2 and now includes `build.version` (the package
+version), `build.source_revision` (Git revision captured at CMake configuration,
+with `-dirty` for tracked modifications, or `unknown` in source archives), and
+`capability_scope: "validation"`. These identifiers are informational; use the
+catalog and request validation for feature negotiation.
+
+`diagnostics` lists names and `supported_configurations` backend/method pairs.
+Each option also lists `supported_configurations`, and where applicable `enum`,
+`minimum` and `maximum`. Conditional `exceptions` override general bounds (MPO
+accepts zero for unlimited bond dimension); `constraints` narrow choices (Aer
+truncation supports only `discarded_weight`). Cross-field and size constraints
+remain enforced by request validation. Catalog support does not probe optional
+plugins, GPU hardware or licensing, and is not a promise of runtime readiness.
