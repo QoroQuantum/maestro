@@ -861,6 +861,16 @@ if(MAESTRO_BUILD_REQUEST_TESTS)
         add_test(NAME gpu_tensor_cpp_wrappers COMMAND fusion_interface_wrapper_tests $<TARGET_FILE:maestro> --gpu)
         set_tests_properties(gpu_tensor_cpp_wrappers PROPERTIES
             SKIP_RETURN_CODE 77 LABELS "gpu;hardware" RUN_SERIAL TRUE TIMEOUT 180)
+        # These tests both link Maestro and load its explicit build path. Loading
+        # an installed copy via LD_LIBRARY_PATH as well can corrupt shared state.
+        # Preserve the caller's plugin search paths while selecting one Maestro.
+        if(CMAKE_VERSION VERSION_LESS "3.22")
+            set_tests_properties(fusion_interface_wrappers gpu_tensor_cpp_wrappers PROPERTIES
+                ENVIRONMENT "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:maestro>:$ENV{LD_LIBRARY_PATH}")
+        else()
+            set_tests_properties(fusion_interface_wrappers gpu_tensor_cpp_wrappers PROPERTIES
+                ENVIRONMENT_MODIFICATION "LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:maestro>")
+        endif()
     endif()
     add_executable(maestro_request_abi_consumer tests/request_header.c)
     target_compile_definitions(maestro_request_abi_consumer PRIVATE MAESTRO_ABI_CONSUMER_MAIN)
