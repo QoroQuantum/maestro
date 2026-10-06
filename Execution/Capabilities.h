@@ -2,7 +2,15 @@
 #pragma once
 #include "Options.h"
 #include "NoiseJson.h"
+// Source consumers such as Composer do not run Maestro's CMake configuration.
+// Build identity is optional and must not prevent those consumers from
+// compiling.
+#if __has_include("MaestroBuildInfo.h")
 #include "MaestroBuildInfo.h"
+#else
+#define MAESTRO_BUILD_VERSION "unknown"
+#define MAESTRO_SOURCE_REVISION "unknown"
+#endif
 
 namespace MaestroExecution {
 inline const std::set<std::string>& DiagnosticNames() {
