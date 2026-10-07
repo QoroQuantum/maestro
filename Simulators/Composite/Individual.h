@@ -15,7 +15,9 @@
 #ifdef INCLUDED_BY_FACTORY
 
 #include "../../Utils/Alias.h"
+#include "../Aer/AerSimulator.h"
 #include "../Core/Factory.h"
+#include "../QCSim/ImmediateQCSimSimulator.h"
 #include <unordered_map>
 
 namespace Simulators
