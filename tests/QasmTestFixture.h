@@ -8,9 +8,9 @@
 #include <numeric>
 #include <random>
 
-#include "../Circuit/Measurements.h"
-#include "../Circuit/RandomOp.h"
-#include "../Circuit/Reset.h"
+#include "../Circuit/Operations/Measurements.h"
+#include "../Circuit/Operations/RandomOp.h"
+#include "../Circuit/Operations/Reset.h"
 #include "QasmTestUtils.h"
 
 namespace bdata = boost::unit_test::data;

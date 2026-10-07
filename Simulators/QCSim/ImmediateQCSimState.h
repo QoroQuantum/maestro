@@ -38,7 +38,7 @@
 #include "QcsimPauliPropagator.h"
 #include "QubitRegister.h"
 
-#include "../../TensorNetworks/ForestContractor.h"
+#include "../../TensorNetworks/Contractors/ForestContractor.h"
 #include "../../TensorNetworks/TensorNetwork.h"
 
 #include "../../Utils/Alias.h"

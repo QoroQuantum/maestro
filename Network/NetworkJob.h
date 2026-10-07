@@ -14,7 +14,7 @@
 #define _NETWORK_JOB_H
 
 #include "../Types.h"
-#include "../Utils/ThreadsPool.h"
+#include "../Utils/Threads/ThreadsPool.h"
 
 #include "../Simulators/Core/RandomSeed.h"
 #include "../Simulators/TensorNetworks/MPSDummySimulator.h"

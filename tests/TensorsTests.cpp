@@ -27,19 +27,19 @@ namespace bdata = boost::unit_test::data;
 
 #include "../Circuit/Circuit.h"
 
-#include "../Circuit/Conditional.h"
 #include "../Circuit/Factory.h"
-#include "../Circuit/Measurements.h"
-#include "../Circuit/QuantumGates.h"
-#include "../Circuit/RandomOp.h"
-#include "../Circuit/Reset.h"
+#include "../Circuit/Operations/Conditional.h"
+#include "../Circuit/Operations/Measurements.h"
+#include "../Circuit/Operations/QuantumGates.h"
+#include "../Circuit/Operations/RandomOp.h"
+#include "../Circuit/Operations/Reset.h"
 
-#include "../TensorNetworks/DumbContractor.h"
-#include "../TensorNetworks/ForestContractor.h"
-#include "../TensorNetworks/LookaheadContractor.h"
-#include "../TensorNetworks/StochasticContractor.h"
+#include "../TensorNetworks/Contractors/DumbContractor.h"
+#include "../TensorNetworks/Contractors/ForestContractor.h"
+#include "../TensorNetworks/Contractors/LookaheadContractor.h"
+#include "../TensorNetworks/Contractors/StochasticContractor.h"
+#include "../TensorNetworks/Contractors/VerticalContractor.h"
 #include "../TensorNetworks/TensorNetwork.h"
-#include "../TensorNetworks/VerticalContractor.h"
 
 struct TensorsTestFixture
 {

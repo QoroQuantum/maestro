@@ -1,7 +1,7 @@
 // Additive discovery metadata for the native request contract.
 #pragma once
-#include "NoiseJson.h"
 #include "Options.h"
+#include "Json/NoiseJson.h"
 // Source consumers such as Composer do not run Maestro's CMake configuration.
 // Build identity is optional and must not prevent those consumers from
 // compiling.

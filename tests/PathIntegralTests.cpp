@@ -35,7 +35,7 @@ namespace bdata = boost::unit_test::data;
 
 #include "../Circuit/Circuit.h"
 #include "../Circuit/Factory.h"
-#include "../Circuit/QuantumGates.h"
+#include "../Circuit/Operations/QuantumGates.h"
 
 namespace
 {

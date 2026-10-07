@@ -19,7 +19,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "TensorContractor.h"
+#include "Contractors/TensorContractor.h"
 #include "TensorNode.h"
 
 namespace TensorNetworks

@@ -10,7 +10,7 @@
 
 #include "../Circuit/Circuit.h"
 #include "../Circuit/Factory.h"
-#include "../Circuit/QuantumGates.h"
+#include "../Circuit/Operations/QuantumGates.h"
 #include "../Simulators/Core/Factory.h"
 #include "../qasm/QasmCirc.h"
 

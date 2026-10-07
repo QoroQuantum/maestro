@@ -32,12 +32,12 @@ namespace bdata = boost::unit_test::data;
 #include "../Simulators/Core/Factory.h"
 
 #include "../Circuit/Circuit.h"
-#include "../Circuit/Conditional.h"
 #include "../Circuit/Factory.h"
-#include "../Circuit/Measurements.h"
-#include "../Circuit/QuantumGates.h"
-#include "../Circuit/RandomOp.h"
-#include "../Circuit/Reset.h"
+#include "../Circuit/Operations/Conditional.h"
+#include "../Circuit/Operations/Measurements.h"
+#include "../Circuit/Operations/QuantumGates.h"
+#include "../Circuit/Operations/RandomOp.h"
+#include "../Circuit/Operations/Reset.h"
 
 extern bool checkClose(std::complex<double> a, std::complex<double> b, double dif);
 

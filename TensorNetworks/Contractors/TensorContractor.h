@@ -18,8 +18,8 @@
 
 #include <memory>
 
-#include "../Utils/Tensor.h"
-#include "TensorNode.h"
+#include "../../Utils/Tensors/Tensor.h"
+#include "../TensorNode.h"
 
 namespace TensorNetworks
 {

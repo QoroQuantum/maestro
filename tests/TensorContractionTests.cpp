@@ -11,7 +11,7 @@
 #include <numeric>
 #include <random>
 
-#include "../TensorNetworks/ForestContractor.h"
+#include "../TensorNetworks/Contractors/ForestContractor.h"
 
 namespace
 {
