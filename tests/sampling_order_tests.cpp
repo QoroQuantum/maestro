@@ -1,11 +1,11 @@
 // Regression tests for caller-ordered sampling, including mapped internal states.
-#include "../Simulators/Factory.h"
+#include "../Simulators/Core/Factory.h"
 #define INCLUDED_BY_FACTORY
 #ifndef NO_QISKIT_AER
-#include "../Simulators/AerSimulator.h"
+#include "../Simulators/Aer/AerSimulator.h"
 #endif
-#include "../Simulators/QCSimSimulator.h"
-#include "../Simulators/Individual.h"
+#include "../Simulators/QCSim/QCSimSimulator.h"
+#include "../Simulators/Composite/Individual.h"
 #include <array>
 #include <iostream>
 #include <stdexcept>

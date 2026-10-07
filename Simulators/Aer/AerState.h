@@ -1,0 +1,1166 @@
+/**
+ * @file AerState.h
+ * @version 1.0
+ *
+ * @section DESCRIPTION
+ *
+ * The aer state class.
+ *
+ * Should not be used directly, create an instance with the factory and use the
+ * generic simulator interface.
+ */
+
+#pragma once
+
+#ifndef _AER_STATE_H_
+#define _AER_STATE_H_
+
+#ifndef NO_QISKIT_AER
+
+#ifdef INCLUDED_BY_FACTORY
+
+#include <algorithm>
+#include <iomanip>
+#include <limits>
+#include <numeric>
+#include <sstream>
+#include <stdexcept>
+
+#include "QubitRegister.h"
+#include "../Interfaces/Simulator.h"
+
+#include "QiskitAerState.h"
+#include "../Core/Configuration.h"
+
+namespace Simulators {
+// TODO: Maybe use the pimpl idiom
+// https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation
+// for good but during development this should be good enough
+namespace Private {
+
+class IndividualSimulator;
+
+/**
+ * @class AerState
+ * @brief Class for the qiskit aer simulator state.
+ *
+ * Implements the qiskit aer state.
+ * Do not use this class directly, use the factory to create an instance.
+ * @sa ISimulator
+ * @sa IState
+ * @sa AerSimulator
+ */
+class AerState : public ISimulator {
+  friend class IndividualSimulator; /**< Allows the IndividualSimulator to
+                                       access the private members of AerState */
+ public:
+  /**
+   * @brief The constructor.
+   *
+   * The constructor for the qiskit aer simulator state.
+   * Seeds the random number generator.
+   */
+  AerState() {
+    std::random_device rd;
+
+    rng.seed(rd());
+    Configure("method", "statevector");
+  }
+
+  /**
+   * @brief Initializes the state.
+   *
+   * This function is called when the simulator is initialized.
+   * Call it after the qubits allocation.
+   * @sa AerState::AllocateQubits
+   */
+  void Initialize() override {
+    SetMultithreading(enableMultithreading);
+    if (simulationType == SimulationType::kMatrixProductState && !configuration.IsSet("mps_sample_measure_algorithm"))
+      Configure("mps_sample_measure_algorithm", "mps_probabilities");
+
+    // Gate fusion must be off for MPS. Aer intends this itself -- AerState::transpile_ops()
+    // has `case Method::matrix_product_state: fusion_pass_.active = false;` -- but the very
+    // next statement is `fusion_pass_.set_config(configs_)`, and Fusion::set_config does an
+    // unconditional `active = config.fusion_enable`, whose default is true. The MPS disable is
+    // therefore dead code and fusion runs anyway (see qiskit-aer/src/transpile/fusion.hpp and
+    // src/controllers/state_controller.hpp). Aer's other execution path, transpile_fusion() in
+    // simulators/circuit_executor.hpp, guards against exactly this with an early return.
+    // Fixed in our fork as well, but kept here so a build against an unpatched Aer behaves.
+    // It is not a small effect: fusing gates into wider unitaries forces the MPS to bring more
+    // qubits together and do bigger SVDs, and on a 16 qubit brickwork circuit at bond dimension
+    // 128 it costs about 7x (1.5s -> 10.7s). Only set it when the caller has not, so an explicit
+    // "fusion_enable" from a configuration still wins.
+    if (simulationType == SimulationType::kMatrixProductState && !configuration.IsSet("fusion_enable"))
+      Configure("fusion_enable", "false");
+
+    state->initialize();
+  }
+
+  /**
+   * @brief Initializes the state.
+   *
+   * This function is called when the simulator is initialized.
+   * Call it only on a non-initialized state.
+   * This works only for 'statevector' method.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param amplitudes A vector with the amplitudes to initialize the state
+   * with.
+   */
+  void InitializeState(size_t num_qubits,
+                       std::vector<std::complex<double>> &amplitudes) override {
+    Clear();
+    if (simulationType == SimulationType::kDensityMatrix)
+      InitializeDensityMatrixFromStatevector(num_qubits, amplitudes.data());
+    else
+      InitializeStatevectorBuffer(num_qubits, amplitudes.data());
+  }
+
+  /**
+   * @brief Initializes the state.
+   *
+   * This function is called when the simulator is initialized.
+   * Call it only on a non-initialized state.
+   * This works only for 'statevector' method.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param amplitudes A vector with the amplitudes to initialize the state
+   * with.
+   */
+  /*
+  void InitializeState(size_t num_qubits, std::vector<std::complex<double>,
+  avoid_init_allocator<std::complex<double>>>& amplitudes) override
+  {
+          Clear();
+          InitializeStatevectorBuffer(num_qubits, amplitudes.data());
+  }
+  */
+
+  /**
+   * @brief Initializes the state.
+   *
+   * This function is called when the simulator is initialized.
+   * Call it only on a non-initialized state.
+   * This works only for 'statevector' method.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param amplitudes A vector with the amplitudes to initialize the state
+   * with.
+   */
+  void InitializeState(size_t num_qubits,
+                       AER::Vector<std::complex<double>> &amplitudes) override {
+    Clear();
+    if (simulationType == SimulationType::kDensityMatrix)
+      InitializeDensityMatrixFromStatevector(num_qubits, amplitudes.data());
+    else
+      InitializeStatevectorBuffer(num_qubits, amplitudes.data());
+  }
+
+  /**
+   * @brief Initializes the state.
+   *
+   * This function is called when the simulator is initialized.
+   * Call it only on a non-initialized state.
+   * This works only for 'statevector' method.
+   *
+   * @param num_qubits The number of qubits to initialize the state with.
+   * @param amplitudes A vector with the amplitudes to initialize the state
+   * with.
+   */
+  void InitializeState(size_t num_qubits,
+                       Eigen::VectorXcd &amplitudes) override {
+    Clear();
+    if (simulationType == SimulationType::kDensityMatrix)
+      InitializeDensityMatrixFromStatevector(num_qubits, amplitudes.data());
+    else
+      InitializeStatevectorBuffer(num_qubits, amplitudes.data());
+  }
+
+  /**
+   * @brief Just resets the state to 0.
+   *
+   * Does not destroy the internal state, just resets it to zero (as a 'reset'
+   * op on each qubit would do).
+   */
+  void Reset() override {
+    const auto numQubits = GetNumberOfQubits();
+    Clear();
+    AllocateQubits(numQubits);
+    state->initialize();
+  }
+
+  /**
+   * @brief Configures the state.
+   *
+   * This function is called to configure the simulator.
+   *
+   * @param key The key of the configuration option.
+   * @param value The value of the configuration.
+   */
+  void Configure(const char* key, const char* value) override {
+    if (!key || !value) throw std::invalid_argument("Null Aer configuration");
+    if (std::string(key) == "precision" ||
+        std::string(key) == "use_double_precision") {
+      const bool useDouble = Configuration::ParsePrecision(key, value);
+      const std::string precision = useDouble ? "double" : "single";
+      // Fixed once initialized; a reapplied precision is ignored until Clear.
+      if (state->is_initialized()) return;
+      state->configure("precision", precision);
+      configuration.SetConfiguration("precision", precision);
+      return;
+    }
+    if (std::string("seed") != key && configuration.WasApplied(key, value) &&
+        state->is_initialized())
+      return;
+
+    // Validate BEFORE storing below: Qiskit Aer's own MPS/MPO truncation always
+    // implements the discarded-weight (Aer/iTensor) convention natively -- see
+    // reduce_zeros() in qiskit-aer/src/simulators/matrix_product_state/svd.cpp.
+    // Unlike the QCSim and GPU backends (see Simulators/QCSimState.h,
+    // Simulators/GpuState.h), there is no relative-to-max mode to switch to
+    // here, so requesting anything else is rejected outright. Checked here,
+    // ahead of the store below, so a rejected value never lingers in
+    // `configuration` -- otherwise it would still show up via
+    // GetConfiguration(), or get silently replayed later by Clone()'s
+    // generic configuration-replay loop, throwing again from an unrelated
+    // call site.
+    if ((std::string("matrix_product_state_truncation_mode") == key ||
+         std::string("matrix_product_operator_truncation_mode") == key) &&
+        std::string("discarded_weight") != value)
+      throw std::invalid_argument(
+          "Aer backend only supports the discarded_weight truncation mode");
+
+    // Shared configurations can contain settings Aer does not support. Only
+    // record settings after Aer accepts them, so rejected values are not
+    // replayed by Clone() and cannot change the reported simulation type.
+    if (std::string("seed") != key &&
+        std::string("use_double_precision") != key &&
+        std::string("matrix_product_state_truncation_mode") != key &&
+        std::string("matrix_product_operator_truncation_mode") != key) {
+      try {
+        state->configure(key, value);
+      } catch (const std::exception &) {
+        return;
+      }
+    }
+
+    if (!configuration.WasApplied(key, value))
+      configuration.SetConfiguration(key, value);
+
+    if (std::string("seed") == key) {
+      const uint64_t seed = std::stoull(value);
+      SeedAuxiliaryRng(seed);
+      nextSeedStream = 0;
+      rng.seed(seed);
+      state->set_seed(seed);
+      return;
+    }
+
+    if (std::string("method") == key) {
+      if (std::string("statevector") == value)
+        simulationType = SimulationType::kStatevector;
+      else if (std::string("matrix_product_state") == value)
+        simulationType = SimulationType::kMatrixProductState;
+      else if (std::string("stabilizer") == value)
+        simulationType = SimulationType::kStabilizer;
+      else if (std::string("tensor_network") == value)
+        simulationType = SimulationType::kTensorNetwork;
+      else if (std::string("extended_stabilizer") == value)
+        simulationType = SimulationType::kExtendedStabilizer;
+      else if (std::string("density_matrix") == value)
+        simulationType = SimulationType::kDensityMatrix;
+      else
+        simulationType = SimulationType::kOther;
+    }
+  }
+
+  /**
+   * @brief Returns configuration value.
+   *
+   * This function is called get a configuration value.
+   * @param key The key of the configuration value.
+   * @return The configuration value as a string.
+   */
+  std::string GetConfiguration(const char *key) const override {
+    if (!key) return {};
+    if (std::string(key) == "precision" ||
+        std::string(key) == "use_double_precision") {
+      const bool fixedDouble =
+          simulationType == SimulationType::kMatrixProductState;
+      const bool useDouble =
+          fixedDouble || !configuration.IsSet("precision") ||
+          configuration.GetConfiguration("precision") == "double";
+      return std::string(key) == "precision" ? (useDouble ? "double" : "single")
+                                             : (useDouble ? "1" : "0");
+    }
+    if (std::string("method") == key) {
+      switch (simulationType) {
+        case SimulationType::kStatevector:
+          return "statevector";
+        case SimulationType::kMatrixProductState:
+          return "matrix_product_state";
+        case SimulationType::kStabilizer:
+          return "stabilizer";
+        case SimulationType::kTensorNetwork:
+          return "tensor_network";
+        case SimulationType::kExtendedStabilizer:
+          return "extended_stabilizer";
+        case SimulationType::kDensityMatrix:
+          return "density_matrix";
+        default:
+          return "other";
+      }
+    }
+
+    return configuration.GetConfiguration(key);
+  }
+
+  /**
+   * @brief Allocates qubits.
+   *
+   * This function is called to allocate qubits.
+   * @param num_qubits The number of qubits to allocate.
+   * @return The index of the first qubit allocated.
+   */
+  size_t AllocateQubits(size_t num_qubits) override {
+    const auto ids = state->allocate_qubits(num_qubits);
+    return ids[0];
+  }
+
+  /**
+   * @brief Returns the number of qubits.
+   *
+   * This function is called to obtain the number of the allocated qubits.
+   * @return The number of qubits.
+   */
+  size_t GetNumberOfQubits() const override {
+    if (state->is_initialized()) return state->num_of_qubits();
+
+    return 0;
+  }
+
+  /**
+   * @brief Clears the state.
+   *
+   * Sets the number of allocated qubits to 0 and clears the state.
+   * After this qubits allocation is required then calling
+   * IState::AllocateQubits in order to use the simulator.
+   */
+  void Clear() override {
+    state->clear();
+    SetMultithreading(enableMultithreading);
+
+    if (simulationType == SimulationType::kMatrixProductState && !configuration.IsSet("mps_sample_measure_algorithm"))
+      Configure("mps_sample_measure_algorithm", "mps_probabilities");
+  }
+
+  /**
+   * @brief Performs a measurement on the specified qubits.
+   *
+   * Don't use it if the number of qubits is larger than the number of bits in
+   * the size_t type (usually 64), as the outcome will be undefined
+   *
+   * @param qubits A vector with the qubits to be measured.
+   * @return The outcome of the measurements, the first qubit result is the
+   * least significant bit.
+   */
+  size_t Measure(const Types::qubits_vector &qubits) override {
+    if (qubits.size() > sizeof(size_t) * 8)
+      std::cerr
+          << "Warning: The number of qubits to measure is larger than the "
+             "number of bits in the size_t type, the outcome will be undefined"
+          << std::endl;
+
+    const size_t res = state->apply_measure(qubits);
+
+    NotifyObservers(qubits);
+
+    return res;
+  }
+
+  /**
+   * @brief Performs a measurement on the specified qubits.
+   *
+   * @param qubits A vector with the qubits to be measured.
+   * @return The outcome of the measurements
+   */
+  std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override {
+    auto res = state->apply_measure_many(qubits);
+
+    NotifyObservers(qubits);
+
+    return res;
+  }
+
+  /**
+   * @brief Performs a reset of the specified qubits.
+   *
+   * Measures the qubits and for those that are 1, applies X on them
+   * @param qubits A vector with the qubits to be reset.
+   */
+  void ApplyReset(const Types::qubits_vector &qubits) override {
+    state->apply_reset(qubits);
+
+    NotifyObservers(qubits);
+  }
+
+  bool SupportsQuantumChannels() const override {
+    return simulationType == SimulationType::kDensityMatrix;
+  }
+
+  /**
+   * @brief Applies an exact one- or two-qubit CPTP channel to Aer density
+   * matrix state.
+   *
+   * Aer's public controller does expose apply_kraus even though several of its
+   * other channel helpers are not exposed. On the density-matrix backend the
+   * Kraus operators are fused into a superoperator and applied
+   * deterministically. Statevector and MPS backends instead sample a single
+   * trajectory, so this exact mixed-state API intentionally rejects them.
+   */
+  void ApplyQuantumChannel(const Types::qubits_vector &targets,
+                           const QuantumChannel &channel) override {
+    if (!SupportsQuantumChannels())
+      throw std::runtime_error(
+          "Aer exact quantum channels require density_matrix simulation");
+    if (targets.size() != channel.GetNumberOfQubits())
+      throw std::invalid_argument(
+          "The number of channel targets does not match its Kraus operators");
+    if (targets.empty() || targets.size() > 2)
+      throw std::invalid_argument(
+          "Maestro supports only one- and two-qubit local channels");
+
+    std::unordered_set<Types::qubit_t> uniqueTargets;
+    for (const Types::qubit_t target : targets) {
+      if (target >= GetNumberOfQubits())
+        throw std::invalid_argument("Quantum-channel qubit is out of range");
+      if (!uniqueTargets.insert(target).second)
+        throw std::invalid_argument(
+            "Quantum-channel target qubits must be distinct");
+    }
+
+    std::vector<AER::cmatrix_t> aerKrausOperators;
+    aerKrausOperators.reserve(channel.GetKrausOperators().size());
+    for (const Eigen::MatrixXcd &krausOperator :
+         channel.GetKrausOperators()) {
+      AER::cmatrix_t aerOperator(
+          static_cast<size_t>(krausOperator.rows()),
+          static_cast<size_t>(krausOperator.cols()));
+      for (Eigen::Index row = 0; row < krausOperator.rows(); ++row)
+        for (Eigen::Index column = 0; column < krausOperator.cols(); ++column)
+          aerOperator(static_cast<size_t>(row),
+                      static_cast<size_t>(column)) =
+              krausOperator(row, column);
+      aerKrausOperators.emplace_back(std::move(aerOperator));
+    }
+
+    // Both QCSim and Aer treat targets[0] as local matrix bit zero (LSB), so
+    // channel target order is preserved and matrices need no permutation.
+    const AER::reg_t aerTargets(targets.begin(), targets.end());
+    state->apply_kraus(aerTargets, aerKrausOperators);
+    NotifyObservers(targets);
+  }
+
+  /**
+   * @brief Returns the probability of the specified outcome.
+   *
+   * Use it to obtain the probability to obtain the specified outcome, if all
+   * qubits are measured.
+   * @sa AerState::Amplitude
+   * @sa AerState::Probabilities
+   *
+   * @param outcome The outcome to obtain the probability for.
+   * @return The probability of the specified outcome.
+   */
+  double Probability(Types::qubit_t outcome) override {
+    return state->probability(outcome);
+  }
+
+  /**
+   * @brief Returns the amplitude of the specified state.
+   *
+   * Use it to obtain the amplitude of the specified state.
+   * @sa AerState::Probability
+   * @sa AerState::Probabilities
+   *
+   * @param outcome The outcome to obtain the amplitude for.
+   * @return The amplitude of the specified outcome.
+   */
+  std::complex<double> Amplitude(Types::qubit_t outcome) override {
+    if (simulationType == SimulationType::kDensityMatrix)
+      throw std::runtime_error(
+          "AerState::Amplitude is not defined for density matrix simulation");
+
+    if (simulationType == SimulationType::kExtendedStabilizer) {
+      const auto amplitudes = state->statevector();
+      return outcome < amplitudes.size() ? amplitudes[outcome] : complex_t{};
+    }
+
+    return state->amplitude(outcome);
+  }
+
+  /**
+   * @brief Projects the state onto the zero state.
+   *
+   * Use it to project the state onto the zero state.
+   * For most simulator is the same as calling Amplitude(0), but for some
+   * simulators it can be optimized to be faster than calling Amplitude(0).
+   * This for now is done for qcsim mps and gpu mps.
+   *
+   * @sa IState::Amplitude
+   * @sa IState::Probability
+   *
+   * @return The inner product result as a complex number.
+   */
+  std::complex<double> ProjectOnZero() override {
+    return Amplitude(0);
+  }
+
+
+  /**
+   * @brief Returns the probabilities of all possible outcomes.
+   *
+   * Use it to obtain the probabilities of all possible outcomes.
+   * @sa AerState::Probability
+   * @sa AerState::Amplitude
+   * @sa AerState::AllProbabilities
+   *
+   * @return A vector with the probabilities of all possible outcomes.
+   */
+  std::vector<double> AllProbabilities() override {
+    if (simulationType == SimulationType::kDensityMatrix) {
+      Types::qubits_vector qubits(GetNumberOfQubits());
+      std::iota(qubits.begin(), qubits.end(), 0);
+      return state->probabilities(qubits);
+    }
+
+    if (simulationType == SimulationType::kExtendedStabilizer) {
+      const auto amplitudes = state->statevector();
+      std::vector<double> probabilities(amplitudes.size());
+      for (size_t outcome = 0; outcome < amplitudes.size(); ++outcome)
+        probabilities[outcome] = std::norm(amplitudes[outcome]);
+      return probabilities;
+    }
+
+    return state->probabilities();
+  }
+
+  /**
+   * @brief Returns the probabilities of the specified outcomes.
+   *
+   * Use it to obtain the probabilities of the specified outcomes.
+   * @sa AerState::Probability
+   * @sa AerState::Amplitude
+   *
+   * @param qubits A vector with the qubits configuration outcomes.
+   * @return A vector with the probabilities for the specified qubit
+   * configurations.
+   */
+  std::vector<double> Probabilities(
+      const Types::qubits_vector &qubits) override {
+    if (simulationType == SimulationType::kDensityMatrix) {
+      std::vector<double> probabilities;
+      probabilities.reserve(qubits.size());
+      for (const auto outcome : qubits)
+        probabilities.push_back(state->probability(outcome));
+      return probabilities;
+    }
+
+    if (simulationType == SimulationType::kExtendedStabilizer) {
+      const auto amplitudes = state->statevector();
+      std::vector<double> probabilities;
+      probabilities.reserve(qubits.size());
+      for (const auto outcome : qubits)
+        probabilities.push_back(
+            outcome < amplitudes.size() ? std::norm(amplitudes[outcome]) : 0.0);
+      return probabilities;
+    }
+
+    return state->probabilities(qubits);
+  }
+
+  /**
+   * @brief Returns the counts of the outcomes of measurement of the specified
+   * qubits, for repeated measurements.
+   *
+   * Use it to obtain the counts of the outcomes of the specified qubits
+   * measurements. The state is not collapsed, so the measurement can be
+   * repeated 'shots' times.
+   *
+   * Don't use it if the number of qubits is larger than the number of bits in
+   * the Types::qubit_t type (usually 64), as the outcome will be undefined.
+   *
+   * @param qubits A vector with the qubits to be measured.
+   * @param shots The number of shots to perform.
+   * @return A map with the counts for the outcomes of measurements of the
+   * specified qubits.
+   */
+  std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(
+      const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    if (qubits.empty() || shots == 0) return {};
+
+    if (qubits.size() > sizeof(Types::qubit_t) * 8)
+      std::cerr
+          << "Warning: The number of qubits to measure is larger than the "
+             "number of bits in the Types::qubit_t type, the outcome will be "
+             "undefined"
+          << std::endl;
+
+    // Aer MPS can return native samples sorted by qubit index. Use the
+    // ordered sampling adapter for both public result formats.
+    std::unordered_map<Types::qubit_t, Types::qubit_t> res;
+    for (const auto& [bits, count] : state->sample_counts_many(qubits, shots)) {
+      Types::qubit_t packed = 0;
+      const size_t width = std::min(bits.size(), sizeof(Types::qubit_t) * 8);
+      for (size_t i = 0; i < width; ++i)
+        if (bits[i]) packed |= Types::qubit_t(1) << i;
+      res[packed] += count;
+    }
+
+    NotifyObservers(qubits);
+
+    return res;
+  }
+
+  /**
+   * @brief Returns the counts of the outcomes of measurement of the specified
+   * qubits, for repeated measurements.
+   *
+   * Use it to obtain the counts of the outcomes of the specified qubits
+   * measurements. The state is not collapsed, so the measurement can be
+   * repeated 'shots' times.
+   *
+   * @param qubits A vector with the qubits to be measured.
+   * @param shots The number of shots to perform.
+   * @return A map with the counts for the otcomes of measurements of the
+   * specified qubits.
+   */
+  std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(
+      const Types::qubits_vector &qubits, size_t shots = 1000) override {
+    if (qubits.empty() || shots == 0) return {};
+    std::unordered_map<std::vector<bool>, Types::qubit_t> res =
+        state->sample_counts_many(qubits, shots);
+    NotifyObservers(qubits);
+    return res;
+  }
+
+  /**
+   * @brief Returns the expected value of a Pauli string.
+   *
+   * Use it to obtain the expected value of a Pauli string.
+   * The Pauli string is a string of characters representing the Pauli
+   * operators, e.g. "XIZY". The length of the string should be less or equal to
+   * the number of qubits (if it's less, it's completed with I).
+   *
+   * @param pauliString The Pauli string to obtain the expected value for.
+   * @return The expected value of the specified Pauli string.
+   */
+  double ExpectationValue(const std::string &pauliStringOrig) override {
+    if (pauliStringOrig.empty()) return 1.0;
+
+    std::string pauliString = pauliStringOrig;
+    if (pauliString.size() > GetNumberOfQubits()) {
+      for (size_t i = GetNumberOfQubits(); i < pauliString.size(); ++i) {
+        const auto pauliOp = toupper(pauliString[i]);
+        if (pauliOp != 'I' && pauliOp != 'Z') return 0.0;
+      }
+
+      pauliString.resize(GetNumberOfQubits());
+    }
+
+    AER::reg_t qubits;
+    std::string pauli;
+
+    pauli.reserve(pauliString.size());
+    qubits.reserve(pauliString.size());
+
+    for (size_t q = 0; q < pauliString.size(); ++q) {
+      const char p = toupper(pauliString[q]);
+      if (p == 'I') continue;
+
+      pauli.push_back(p);
+      qubits.push_back(q);
+    }
+
+    if (qubits.empty()) return 1.0;
+
+    // qiskit aer expects the pauli string in reverse order
+    std::reverse(pauli.begin(), pauli.end());
+
+    return state->expval_pauli(qubits, pauli);
+  }
+
+  /**
+   * @brief Returns the type of simulator.
+   *
+   * Returns the type of simulator.
+   * @return The type of simulator.
+   * @sa SimulatorType
+   */
+  SimulatorType GetType() const override { return SimulatorType::kQiskitAer; }
+
+  /**
+   * @brief Returns the type of simulation.
+   *
+   * Returns the type of simulation.
+   *
+   * @return The type of simulation.
+   * @sa SimulationType
+   */
+  SimulationType GetSimulationType() const override { return simulationType; }
+
+  /**
+   * @brief Flushes the applied operations
+   *
+   * This function is called to flush the applied operations.
+   * It is used to flush the operations that were applied to the state.
+   * qcsim applies them right away, so this has no effect on it, but qiskit aer
+   * does not.
+   */
+  void Flush() override {
+    state->flush_ops();
+    // state->set_random_seed(); // avoid reusing the old seed
+  }
+
+  /**
+   * @brief Saves the state to internal storage.
+   *
+   * Saves the state to internal storage, if needed.
+   * Calling this should consider as the simulator is gone to uninitialized.
+   * Either do not use it except for getting amplitudes, or reinitialize the
+   * simulator after calling it. This is needed only for the composite
+   * simulator, for an optimization for qiskit aer. For qcsim it does nothing.
+   */
+  void SaveStateToInternalDestructive() override {
+    if (simulationType == SimulationType::kDensityMatrix)
+      savedDensityMatrix = state->move_to_matrix();
+    else
+      savedAmplitudes = state->move_to_vector();
+  }
+
+  /**
+   * @brief Restores the state from the internally saved state
+   *
+   * Restores the state from the internally saved state, if needed.
+   * This does something only for qiskit aer.
+   */
+  void RestoreInternalDestructiveSavedState() override {
+    if (simulationType == SimulationType::kDensityMatrix) {
+      const size_t numQubits = static_cast<size_t>(
+          log2(savedDensityMatrix.GetRows()));
+      InitializeDensityMatrixBuffer(numQubits, savedDensityMatrix.data());
+      return;
+    }
+
+    const size_t numQubits = static_cast<size_t>(log2(savedAmplitudes.size()));
+    InitializeStatevectorBuffer(numQubits, savedAmplitudes.data());
+  }
+
+  /**
+   * @brief Saves the state to internal storage.
+   *
+   * Saves the state to internal storage, if needed.
+   * Calling this will not destroy the internal state, unlike the 'Destructive'
+   * variant. To be used in order to recover the state after doing measurements,
+   * for multiple shots executions.
+   */
+  void SaveState() override {
+    if (!state) return;
+
+    const auto numQubits = GetNumberOfQubits();
+
+    if (simulationType == SimulationType::kExtendedStabilizer) {
+      savedExtendedStabilizerState = state->clone_extended_stabilizer_state();
+      return;
+    }
+
+    if (simulationType == SimulationType::kStatevector ||
+        simulationType == SimulationType::kDensityMatrix) {
+      SaveStateToInternalDestructive();
+      if (simulationType == SimulationType::kDensityMatrix)
+        InitializeDensityMatrixBuffer(numQubits, savedDensityMatrix.data());
+      else
+        InitializeStatevectorBuffer(numQubits, savedAmplitudes.data());
+      return;
+    }
+
+    bool saved = false;
+
+    if (state->is_initialized()) {
+      AER::Operations::Op op;
+
+      op.type = AER::Operations::OpType::save_state;
+      op.name = "save_state";
+      op.save_type = AER::Operations::DataSubType::single;
+      op.string_params.push_back("s");
+
+      for (size_t q = 0; q < numQubits; ++q) op.qubits.push_back(q);
+
+      state->buffer_op(std::move(op));
+      Flush();
+
+      // get the state from the last result
+      AER::ExperimentResult &last_result = state->last_result();
+      // state should be in last_result.data
+      if (last_result.status == AER::ExperimentResult::Status::completed) {
+        savedState = std::move(last_result.data);
+        saved = true;
+      }
+    } else {
+      // try get the state from the last result
+      AER::ExperimentResult &last_result_prev = state->last_result();
+      // state should be in last_result.data
+      if (last_result_prev.status == AER::ExperimentResult::Status::completed) {
+        savedState = std::move(last_result_prev.data);
+        saved = true;
+      }
+    }
+
+    // this is a hack, for statevector and matrix product state if the last op
+    // is executed, it can destroy the state! see also the workaround for
+    // statevector for the stabilizer at least for now it doesn't seem to do
+    // that
+    // TODO: check everything!!!!
+    if (saved && simulationType == SimulationType::kMatrixProductState)
+      RestoreState();
+  }
+
+  /**
+   * @brief Restores the state from the internally saved state
+   *
+   * Restores the state from the internally saved state, if needed.
+   * To be used in order to recover the state after doing measurements, for
+   * multiple shots executions. In the first phase, only qcsim will implement
+   * this.
+   */
+  void RestoreState() override {
+    auto numQubits = GetNumberOfQubits();
+
+    AER::Operations::Op op;
+
+    switch (simulationType) {
+      case SimulationType::kStatevector: {
+        // op.type = AER::Operations::OpType::set_statevec;
+        // op.name = "set_statevec";
+
+        // const auto& vec = static_cast<AER::DataMap<AER::SingleData,
+        // AER::Vector<complex_t>>>(savedState).value()["s"].value();
+
+        // this is a hack until I figure it out
+        Clear();
+        numQubits = static_cast<size_t>(log2(savedAmplitudes.size()));
+        InitializeStatevectorBuffer(numQubits, savedAmplitudes.data());
+
+        return;
+      } break;
+      case SimulationType::kDensityMatrix: {
+        Clear();
+        numQubits = static_cast<size_t>(
+            log2(savedDensityMatrix.GetRows()));
+        InitializeDensityMatrixBuffer(numQubits, savedDensityMatrix.data());
+
+        return;
+      } break;
+      case SimulationType::kExtendedStabilizer:
+        if (!savedExtendedStabilizerState)
+          throw std::runtime_error(
+              "AerState::RestoreState: no extended stabilizer state was saved");
+        state->restore_extended_stabilizer_state(savedExtendedStabilizerState);
+        return;
+      case SimulationType::kMatrixProductState:
+        op.type = AER::Operations::OpType::set_mps;
+        op.name = "set_mps";
+        op.mps =
+            static_cast<AER::DataMap<AER::SingleData, AER::mps_container_t>>(
+                savedState)
+                .value()["s"]
+                .value();
+
+        /*
+        {
+                auto& value = static_cast<AER::DataMap<AER::SingleData,
+        AER::mps_container_t>>(savedState).value(); if (!value.empty())
+                {
+                        if (value.find("s") != value.end())
+                                op.mps = value["s"].value();
+                        else if (value.find("matrix_product_state") !=
+        value.end()) op.mps = value["matrix_product_state"].value();
+                }
+        }
+        */
+
+        numQubits = op.mps.first.size();
+        break;
+      case SimulationType::kStabilizer:
+        op.type = AER::Operations::OpType::set_stabilizer;
+        op.name = "set_stabilizer";
+        op.clifford =
+            static_cast<AER::DataMap<AER::SingleData, json_t>>(savedState)
+                .value()["s"]
+                .value();
+
+        /*
+        {
+                auto& value = static_cast<AER::DataMap<AER::SingleData,
+        json_t>>(savedState).value(); if (!value.empty())
+                {
+                        if (value.find("s") != value.end())
+                                op.clifford = value["s"].value();
+                        else if (value.find("stabilizer") != value.end())
+                                op.clifford = value["stabilizer"].value();
+                }
+        }
+        */
+
+        numQubits = op.clifford.num_qubits();
+        break;
+      case SimulationType::kTensorNetwork:
+      default:
+        throw std::runtime_error(
+            "AerState::RestoreState: not implemented yet "
+            "for this type of simulator.");
+    }
+
+    op.save_type = AER::Operations::DataSubType::single;
+    op.string_params.push_back("s");
+
+    for (size_t q = 0; q < numQubits; ++q) op.qubits.push_back(q);
+
+    // WHY?
+    if (!state->is_initialized()) {
+      Clear();
+      AllocateQubits(numQubits);
+      state->initialize();
+    }
+
+    state->buffer_op(std::move(op));
+    Flush();
+  }
+
+  /**
+   * @brief Gets the amplitude.
+   *
+   * Gets the amplitude, from the internal storage if needed.
+   * This is needed only for the composite simulator, for an optimization for
+   * qiskit aer. For qcsim it does the same thing as Amplitude.
+   */
+  std::complex<double> AmplitudeRaw(Types::qubit_t outcome) override {
+    if (simulationType == SimulationType::kDensityMatrix)
+      throw std::runtime_error(
+          "AerState::AmplitudeRaw is not defined for density matrix "
+          "simulation");
+
+    return savedAmplitudes[outcome];
+  }
+
+  /**
+   * @brief Enable/disable multithreading.
+   *
+   * Enable/disable multithreading. Default is enabled.
+   *
+   * @param multithreading A flag to indicate if multithreading should be
+   * enabled.
+   */
+  void SetMultithreading(bool multithreading = true) override {
+    enableMultithreading = multithreading;
+    if (state && !state->is_initialized()) {
+      const std::string nrThreads =
+          std::to_string(enableMultithreading
+                             ? 0
+                             : 1);  // 0 means auto/all available, 1 limits to 1
+      state->configure("max_parallel_threads", nrThreads);
+      state->configure("parallel_state_update", nrThreads);
+      const std::string threadsLimit =
+          std::to_string(12);  // set one less, multithreading is started if the
+                               // value is bigger than this
+      state->configure("statevector_parallel_threshold", threadsLimit);
+
+      configuration.SetConfiguration(std::string("max_parallel_threads"), nrThreads);
+      configuration.SetConfiguration(std::string("parallel_state_update"), nrThreads);
+      configuration.SetConfiguration(std::string("statevector_parallel_threshold"), threadsLimit);
+    }
+  }
+
+  /**
+   * @brief Get the multithreading flag.
+   *
+   * Returns the multithreading flag.
+   *
+   * @return The multithreading flag.
+   */
+  bool GetMultithreading() const override { return enableMultithreading; }
+
+  /**
+   * @brief Returns if the simulator is a qcsim simulator.
+   *
+   * Returns if the simulator is a qcsim simulator.
+   * This is just a helper function to ease things up: qcsim has different
+   * functionality exposed sometimes so it's good to know if we deal with qcsim
+   * or with qiskit aer.
+   *
+   * @return True if the simulator is a qcsim simulator, false otherwise.
+   */
+  bool IsQcsim() const override { return false; }
+
+  /**
+   * @brief Measures all the qubits without collapsing the state.
+   *
+   * Measures all the qubits without collapsing the state, allowing to perform
+   * multiple shots. This is to be used only internally, only for the
+   * statevector simulators (or those based on them, as the composite ones). For
+   * the qiskit aer case, SaveStateToInternalDestructive is needed to be called
+   * before this. If one wants to use the simulator after such measurement(s),
+   * RestoreInternalDestructiveSavedState should be called at the end.
+   *
+   * Don't use this for more qubits than the size of Types::qubit_t, as the
+   * result is packed in a limited number of bits (e.g. 64 bits for uint64_t)
+   *
+   * @return The result of the measurements, the first qubit result is the least
+   * significant bit.
+   */
+  Types::qubit_t MeasureNoCollapse() override {
+    if (simulationType == SimulationType::kStatevector) {
+      const double prob =
+          1. - uniformZeroOne(rng);  // this excludes 0 as probabiliy
+      double accum = 0;
+      Types::qubit_t state = 0;
+      for (Types::qubit_t i = 0; i < savedAmplitudes.size(); ++i) {
+        accum += std::norm(savedAmplitudes[i]);
+        if (prob <= accum) {
+          state = i;
+          break;
+        }
+      }
+
+      return state;
+    }
+
+    throw std::runtime_error(
+        "AerState::MeasureNoCollapse: Invalid simulation type for measuring "
+        "all the qubits without collapsing the state.");
+
+    return 0;
+  }
+
+  /**
+   * @brief Measures all the qubits without collapsing the state.
+   *
+   * Measures all the qubits without collapsing the state, allowing to perform
+   * multiple shots. This is to be used only internally, only for the
+   * statevector simulators (or those based on them, as the composite ones). For
+   * the qiskit aer case, SaveStateToInternalDestructive is needed to be called
+   * before this. If one wants to use the simulator after such measurement(s),
+   * RestoreInternalDestructiveSavedState should be called at the end.
+   *
+   * Use this for more qubits than the size of Types::qubit_t
+   *
+   * @return The result of the measurements
+   */
+  std::vector<bool> MeasureNoCollapseMany() override {
+    if (simulationType == SimulationType::kStatevector) {
+      const size_t numQubits =
+          static_cast<size_t>(log2(savedAmplitudes.size()));
+      std::vector<bool> res(numQubits, false);
+
+      Types::qubit_t state = MeasureNoCollapse();
+
+      for (size_t i = 0; i < numQubits; ++i) {
+        if ((state & 1) == 1) res[i] = true;
+        state >>= 1;
+      }
+
+      return res;
+    }
+    throw std::runtime_error(
+        "AerState::MeasureNoCollapseMany: Invalid simulation type for "
+        "measuring "
+        "all the qubits without collapsing the state.");
+
+    return {};
+  }
+
+  const Configuration& GetConfiguration() const {
+    return configuration;
+  }
+
+  const std::unordered_map<std::string, std::string>& GetConfigMap()
+      const override {
+    return configuration.GetConfigMap();
+  }
+
+ protected:
+  void InitializeStatevectorBuffer(size_t numQubits,
+                                   std::complex<double> *amplitudes) {
+    if (GetConfiguration("precision") == "double") {
+      state->initialize_statevector(numQubits, amplitudes, true);
+      return;
+    }
+    AllocateQubits(numQubits);
+    Initialize();
+    AER::Operations::Op op;
+    op.type = AER::Operations::OpType::set_statevec;
+    op.name = "set_statevector";
+    op.params.assign(amplitudes, amplitudes + (size_t{1} << numQubits));
+    for (size_t q = 0; q < numQubits; ++q) op.qubits.push_back(q);
+    state->buffer_op(std::move(op));
+    Flush();
+  }
+
+  void InitializeDensityMatrixBuffer(size_t numQubits,
+                                     std::complex<double> *values) {
+    if (GetConfiguration("precision") == "double") {
+      state->initialize_density_matrix(numQubits, values, true, true);
+      return;
+    }
+    AllocateQubits(numQubits);
+    Initialize();
+    const size_t dimension = size_t{1} << numQubits;
+    AER::Operations::Op op;
+    op.type = AER::Operations::OpType::set_densmat;
+    op.name = "set_density_matrix";
+    op.mats.emplace_back(dimension, dimension);
+    std::copy(values, values + dimension * dimension, op.mats.back().data());
+    for (size_t q = 0; q < numQubits; ++q) op.qubits.push_back(q);
+    state->buffer_op(std::move(op));
+    Flush();
+  }
+
+  void InitializeDensityMatrixFromStatevector(
+      size_t numQubits, const std::complex<double>* amplitudes) {
+    const size_t dimension = 1ULL << numQubits;
+    AER::cmatrix_t densityMatrix(dimension, dimension);
+    for (size_t row = 0; row < dimension; ++row)
+      for (size_t column = 0; column < dimension; ++column)
+        densityMatrix(row, column) =
+            amplitudes[row] * std::conj(amplitudes[column]);
+
+    InitializeDensityMatrixBuffer(numQubits, densityMatrix.data());
+  }
+
+  SimulationType simulationType =
+      SimulationType::kStatevector; /**< The simulation type. */
+  std::unique_ptr<QiskitAerState> state =
+      std::make_unique<QiskitAerState>(); /**< The qiskit aer state. */
+  AER::Vector<complex_t> savedAmplitudes; /**< The amplitudes, saved. */
+  AER::cmatrix_t savedDensityMatrix; /**< The density matrix, saved. */
+  std::shared_ptr<AER::QuantumState::Base> savedExtendedStabilizerState;
+  
+  bool enableMultithreading = true;    /**< The multithreading flag. */
+  AER::Data savedState; /**< The saved data - here there will be the saved state
+                           of the simulator */
+  std::mt19937_64 rng;
+  uint64_t nextSeedStream = 0;
+  std::uniform_real_distribution<double> uniformZeroOne{0., 1.};
+
+  Configuration configuration; /**< The configuration of the simulator. */
+};
+
+}  // namespace Private
+}  // namespace Simulators
+
+#endif
+
+#endif
+
+#endif  // !_AER_STATE_H_

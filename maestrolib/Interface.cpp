@@ -12,8 +12,8 @@
 #include "../../composer/composer/Estimators/ExecutionEstimator.h"
 #endif
 
-#include "../Simulators/Factory.h"
-#include "../Simulators/GenericGateValidation.h"
+#include "../Simulators/Core/Factory.h"
+#include "../Simulators/Core/GenericGateValidation.h"
 
 #include "Maestro.h"
 

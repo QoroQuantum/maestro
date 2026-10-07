@@ -27,8 +27,8 @@
 #include "../Circuit/Circuit.h"
 #include "../Network/SimpleDisconnectedNetwork.h"
 #include "../Noise/NoiseAdd.h"
-#include "../Simulators/Configuration.h"
-#include "../Simulators/Factory.h"
+#include "../Simulators/Core/Configuration.h"
+#include "../Simulators/Core/Factory.h"
 #include "../python/noise.h"
 
 namespace {

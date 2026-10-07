@@ -23,7 +23,7 @@ namespace bdata = boost::unit_test::data;
 #define _USE_MATH_DEFINES
 #include <math.h>
 
-#include "../Simulators/Factory.h"
+#include "../Simulators/Core/Factory.h"
 #include "../Circuit/Factory.h"
 
 struct Operation {

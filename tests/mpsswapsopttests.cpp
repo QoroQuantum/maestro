@@ -29,8 +29,8 @@ namespace bdata = boost::unit_test::data;
 
 #include "../Circuit/Circuit.h"
 #include "../Circuit/Factory.h"
-#include "../Simulators/MPSDummySimulator.h"
-#include "../Simulators/Factory.h"
+#include "../Simulators/TensorNetworks/MPSDummySimulator.h"
+#include "../Simulators/Core/Factory.h"
 #include "../Network/SimpleDisconnectedNetwork.h"
 
 extern bool checkClose(std::complex<double> a, std::complex<double> b,

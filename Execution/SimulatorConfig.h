@@ -11,7 +11,7 @@
 #include <vector>
 #include "maestrolib/Interface.h"
 #include "maestrolib/Maestro.h"
-#include "Simulators/RandomSeed.h"
+#include "Simulators/Core/RandomSeed.h"
 
 namespace MaestroExecution {
 // Deduplication cadence for PauliPropagator simulations that leave it unset.

@@ -19,8 +19,8 @@
 #define __EXECUTION_COST_H_
 
 #include "../Circuit/Factory.h"
-#include "../Simulators/QcsimPauliPropagator.h"
-#include "../Simulators/Factory.h"
+#include "../Simulators/QCSim/QcsimPauliPropagator.h"
+#include "../Simulators/Core/Factory.h"
 #include "../Utils/LogFile.h"
 #include "../Utils/MultipleLinearRegression.h"
 #include "../Utils/MultivariateHermiteInterpolation.h"

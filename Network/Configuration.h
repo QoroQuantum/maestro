@@ -13,7 +13,7 @@
 #define _NETWORK_CONFIGURATION_H_
 
 #include "Network.h"
-#include "../Simulators/Configuration.h"
+#include "../Simulators/Core/Configuration.h"
 
 namespace Network {
 

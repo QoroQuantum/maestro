@@ -16,8 +16,8 @@
 #include "../Types.h"
 #include "../Utils/ThreadsPool.h"
 
-#include "../Simulators/MPSDummySimulator.h"
-#include "../Simulators/RandomSeed.h"
+#include "../Simulators/TensorNetworks/MPSDummySimulator.h"
+#include "../Simulators/Core/RandomSeed.h"
 
 #include "Network.h"
 

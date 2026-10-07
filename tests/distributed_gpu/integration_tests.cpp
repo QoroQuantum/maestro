@@ -1,5 +1,5 @@
-#include "../../Simulators/Factory.h"
-#include "../../Simulators/DistributedMpiGpuLibrary.h"
+#include "../../Simulators/Core/Factory.h"
+#include "../../Simulators/DistributedGpu/DistributedMpiGpuLibrary.h"
 #include "../../Network/SimpleDisconnectedNetwork.h"
 #include "../../Circuit/Factory.h"
 #include <iostream>

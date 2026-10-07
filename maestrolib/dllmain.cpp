@@ -10,7 +10,7 @@
 
 #include <cassert>
 
-#include "../Simulators/Factory.cpp"
+#include "../Simulators/Core/Factory.cpp"
 
 #ifndef __linux__
 

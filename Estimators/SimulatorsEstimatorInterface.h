@@ -13,7 +13,7 @@
 #define __SIMULATORS_ESTIMATOR_INTERFACE_H_
 
 #include "../Circuit/Circuit.h"
-#include "../Simulators/Simulator.h"
+#include "../Simulators/Interfaces/Simulator.h"
 
 namespace Estimators {
 

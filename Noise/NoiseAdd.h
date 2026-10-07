@@ -15,7 +15,7 @@
 #include "NoiseModel.h"
 
 #include "../Network/Network.h"
-#include "../Simulators/RandomSeed.h"
+#include "../Simulators/Core/RandomSeed.h"
 
 #include <functional>
 #include <iostream>

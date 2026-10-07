@@ -1,4 +1,4 @@
-#include "../../Simulators/DistributedGpuLibStateVectorSim.h"
+#include "../../Simulators/DistributedGpu/DistributedGpuLibStateVectorSim.h"
 #include <iostream>
 #include <limits>
 using namespace Simulators;

@@ -1,7 +1,7 @@
 // CPU-only loader fixture. Unused numerical entry points abort so accidental
 // execution cannot silently pass. Deliberately does not export CheckLicense.
 #include "../gpu_device/mock_plugin.cpp"
-#include "../../Simulators/DistributedGpuApi.h"
+#include "../../Simulators/DistributedGpu/DistributedGpuApi.h"
 using namespace Simulators::DistributedGpuApi;
 extern "C" {
 uint32_t GetApiVersion() { return 1; }

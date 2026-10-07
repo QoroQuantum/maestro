@@ -1,7 +1,7 @@
 /** GPU SVD wrapper/configuration coverage; --config-only uses the mock plugin.
  */
-#include "../../Simulators/Factory.h"
-#include "../../Simulators/Configuration.h"
+#include "../../Simulators/Core/Factory.h"
+#include "../../Simulators/Core/Configuration.h"
 #include "../../Network/SimpleDisconnectedNetwork.h"
 #include <cmath>
 #include <iostream>

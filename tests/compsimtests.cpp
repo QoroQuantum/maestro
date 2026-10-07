@@ -29,7 +29,7 @@ namespace bdata = boost::unit_test::data;
 #include <fstream>
 
 // project being tested
-#include "../Simulators/Factory.h"
+#include "../Simulators/Core/Factory.h"
 
 #include "../Circuit/Circuit.h"
 #include "../Circuit/Conditional.h"

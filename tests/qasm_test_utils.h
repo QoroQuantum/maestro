@@ -11,7 +11,7 @@
 #include "../Circuit/Circuit.h"
 #include "../Circuit/Factory.h"
 #include "../Circuit/QuantumGates.h"
-#include "../Simulators/Factory.h"
+#include "../Simulators/Core/Factory.h"
 #include "../qasm/QasmCirc.h"
 
 extern bool checkClose(std::complex<double> a, std::complex<double> b,

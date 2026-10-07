@@ -1,5 +1,5 @@
-#include "../../Simulators/Factory.h"
-#include "../../Simulators/GpuLibraryRegistry.h"
+#include "../../Simulators/Core/Factory.h"
+#include "../../Simulators/Gpu/GpuLibraryRegistry.h"
 #include <iostream>
 #include <sstream>
 #include <stdexcept>

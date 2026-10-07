@@ -13,7 +13,7 @@
 #ifndef __ESTIMATOR_INTERFACE_H_
 #define __ESTIMATOR_INTERFACE_H_
 
-#include "Simulators/Simulator.h"
+#include "Simulators/Interfaces/Simulator.h"
 
 #include <string>
 #include <vector>

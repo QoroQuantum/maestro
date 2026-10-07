@@ -22,7 +22,7 @@
 #include "../Estimators/SimulatorsEstimatorInterface.h"
 #include "NetworkJob.h"
 
-#include "../Simulators/MPSDummySimulator.h"
+#include "../Simulators/TensorNetworks/MPSDummySimulator.h"
 
 #include "Configuration.h"
 

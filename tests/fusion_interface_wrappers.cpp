@@ -1,6 +1,6 @@
 #include "../maestroexe/Simulator.hpp"
-#include "../Simulators/State.h"
-#include "../Simulators/Factory.h"
+#include "../Simulators/Interfaces/State.h"
+#include "../Simulators/Core/Factory.h"
 #include <cmath>
 #include <stdexcept>
 

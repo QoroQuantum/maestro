@@ -19,8 +19,8 @@ namespace bdata = boost::unit_test::data;
 #include <vector>
 
 #include "../Circuit/Factory.h"
-#include "../Simulators/Factory.h"
-#include "../Simulators/QuantumChannel.h"
+#include "../Simulators/Core/Factory.h"
+#include "../Simulators/Core/QuantumChannel.h"
 
 namespace {
 

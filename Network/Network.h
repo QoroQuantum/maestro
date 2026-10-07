@@ -22,7 +22,7 @@
 #include <vector>
 
 #include "../Circuit/Circuit.h"
-#include "../Simulators/Factory.h"
+#include "../Simulators/Core/Factory.h"
 #include "Controller.h"
 
 namespace Network {

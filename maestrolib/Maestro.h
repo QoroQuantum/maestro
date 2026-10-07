@@ -15,7 +15,7 @@
 #include "../Network/SimpleDisconnectedNetwork.h"
 #endif
 
-#include "../Simulators/Factory.h"
+#include "../Simulators/Core/Factory.h"
 
 class Maestro {
  public:

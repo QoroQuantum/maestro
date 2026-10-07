@@ -26,7 +26,7 @@ namespace bdata = boost::unit_test::data;
 
 #include "../Circuit/Factory.h"
 #include "../Network/SimpleDisconnectedNetwork.h"
-#include "../Simulators/Factory.h"
+#include "../Simulators/Core/Factory.h"
 #include "../python/noise.h"
 
 namespace {

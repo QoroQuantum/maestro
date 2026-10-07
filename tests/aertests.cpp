@@ -21,8 +21,8 @@ namespace utf = boost::unit_test;
 #undef min
 #undef max
 
-#include "../Simulators/Configuration.h"
-#include "../Simulators/Factory.h"  // project being tested
+#include "../Simulators/Core/Configuration.h"
+#include "../Simulators/Core/Factory.h"  // project being tested
 #include "../python/noise.h"
 
 struct AerSimulatorTestFixture {

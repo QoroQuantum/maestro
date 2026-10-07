@@ -28,7 +28,7 @@ namespace bdata = boost::unit_test::data;
 
 #include "../Circuit/Circuit.h"
 #include "../Circuit/Factory.h"
-#include "../Simulators/Factory.h"  // project being tested
+#include "../Simulators/Core/Factory.h"  // project being tested
 
 #include "../Network/SimpleDisconnectedNetwork.h"
 

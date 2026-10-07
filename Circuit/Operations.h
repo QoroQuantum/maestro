@@ -16,7 +16,7 @@
 #ifndef _CIRCUIT_OPERATIONS_H_
 #define _CIRCUIT_OPERATIONS_H_
 
-#include "../Simulators/Simulator.h"
+#include "../Simulators/Interfaces/Simulator.h"
 #include "../Types.h"
 
 namespace Circuits {

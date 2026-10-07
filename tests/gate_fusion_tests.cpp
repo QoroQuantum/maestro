@@ -3,12 +3,12 @@
 #include <iostream>
 #include <random>
 #include <stdexcept>
-#include "Simulators/Factory.h"
-#include "Simulators/FusionGate.h"
+#include "Simulators/Core/Factory.h"
+#include "Simulators/Fusion/FusionGate.h"
 #ifdef __linux__
-#include "Simulators/DistributedGpuLibStateVectorSim.h"
+#include "Simulators/DistributedGpu/DistributedGpuLibStateVectorSim.h"
 #define INCLUDED_BY_FACTORY
-#include "Simulators/ImmediateGpuSimulator.h"
+#include "Simulators/Gpu/ImmediateGpuSimulator.h"
 #undef INCLUDED_BY_FACTORY
 #endif
 

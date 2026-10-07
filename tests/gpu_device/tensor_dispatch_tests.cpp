@@ -1,4 +1,4 @@
-#include "../../Simulators/Factory.h"
+#include "../../Simulators/Core/Factory.h"
 #include "../../maestrolib/Interface.h"
 #include <cstdlib>
 #include <iostream>

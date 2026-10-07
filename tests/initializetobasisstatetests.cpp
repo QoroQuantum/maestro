@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "../Simulators/Factory.h"
+#include "../Simulators/Core/Factory.h"
 
 namespace {
 

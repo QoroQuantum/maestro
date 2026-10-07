@@ -33,7 +33,7 @@ express permission of 2639731 ONTARIO INC.
 #define _CONTROLLER_INTERFACE_H_
 
 #include "../Circuit/Circuit.h"
-#include "../Simulators/Simulator.h"
+#include "../Simulators/Interfaces/Simulator.h"
 #include "Host.h"
 
 namespace Distribution {

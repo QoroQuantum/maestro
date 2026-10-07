@@ -20,8 +20,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "../Simulators/Factory.h"
-#include "../Simulators/QCSimExtendedStabilizer.h"
+#include "../Simulators/Core/Factory.h"
+#include "../Simulators/QCSim/QCSimExtendedStabilizer.h"
 
 namespace {
 

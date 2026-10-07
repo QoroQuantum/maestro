@@ -9,7 +9,7 @@
 #include <fstream>
 
 #include "Simulator.hpp"
-#include "../Simulators/State.h"
+#include "../Simulators/Interfaces/State.h"
 
 static std::string _get_env_var(const char* envs) {
   std::string val;

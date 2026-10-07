@@ -1,7 +1,7 @@
-#include "Simulators/Factory.h"
+#include "Simulators/Core/Factory.h"
 #define INCLUDED_BY_FACTORY
-#include "Simulators/ImmediateQCSimSimulator.h"
-#include "Simulators/FusionSimulator.h"
+#include "Simulators/QCSim/ImmediateQCSimSimulator.h"
+#include "Simulators/Fusion/FusionSimulator.h"
 #include "Network/SimpleDisconnectedNetwork.h"
 #include <iostream>
 

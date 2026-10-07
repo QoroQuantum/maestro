@@ -1,5 +1,5 @@
 // Real hardware regression: two live GPU instances, independent CPU references.
-#include "../../Simulators/Factory.h"
+#include "../../Simulators/Core/Factory.h"
 
 #include <array>
 #include <cmath>

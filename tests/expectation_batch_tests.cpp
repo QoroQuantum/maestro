@@ -1,5 +1,5 @@
-#include "Simulators/Factory.h"
-#include "Simulators/FusionSimulator.h"
+#include "Simulators/Core/Factory.h"
+#include "Simulators/Fusion/FusionSimulator.h"
 #include "Network/SimpleDisconnectedNetwork.h"
 #include "maestrolib/Interface.h"
 #include <boost/json.hpp>

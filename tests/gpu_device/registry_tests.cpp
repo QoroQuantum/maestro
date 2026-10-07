@@ -1,7 +1,7 @@
-#include "../../Simulators/GpuLibraryRegistry.h"
-#include "../../Simulators/GpuLibStateVectorSim.h"
-#include "../../Simulators/GpuPauliPropagator.h"
-#include "../../Simulators/GpuStabilizer.h"
+#include "../../Simulators/Gpu/GpuLibraryRegistry.h"
+#include "../../Simulators/Gpu/GpuLibStateVectorSim.h"
+#include "../../Simulators/Gpu/GpuPauliPropagator.h"
+#include "../../Simulators/Gpu/GpuStabilizer.h"
 #include <future>
 #include <iostream>
 #include <vector>

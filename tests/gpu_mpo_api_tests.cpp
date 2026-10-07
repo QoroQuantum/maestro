@@ -1,5 +1,5 @@
 // Hardware contract tests for the Hastings MPO plugin and its public adapters.
-#include "../Simulators/Factory.h"
+#include "../Simulators/Core/Factory.h"
 #include "../maestrolib/Interface.h"
 #include <boost/json.hpp>
 #include <iostream>

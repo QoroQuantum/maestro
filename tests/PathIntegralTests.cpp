@@ -29,9 +29,9 @@ namespace bdata = boost::unit_test::data;
 #include <math.h>
 
 // project being tested
-#include "../Simulators/PathIntegralSimulator.h"
+#include "../Simulators/PathIntegral/PathIntegralSimulator.h"
 
-#include "../Simulators/Factory.h"
+#include "../Simulators/Core/Factory.h"
 
 #include "../Circuit/Circuit.h"
 #include "../Circuit/QuantumGates.h"

@@ -1,4 +1,4 @@
-#include "../../Simulators/Factory.h"
+#include "../../Simulators/Core/Factory.h"
 #include "../../Network/SimpleDisconnectedNetwork.h"
 #include <future>
 #include <iostream>

@@ -1,5 +1,5 @@
 // Manual benchmark: no wall-clock assertions. Always includes the final flush.
-#include "Simulators/Factory.h"
+#include "Simulators/Core/Factory.h"
 #include <chrono>
 #include <iomanip>
 #include <iostream>
