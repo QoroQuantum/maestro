@@ -14,7 +14,7 @@
 #ifndef _QASMCIRC_H_
 #define _QASMCIRC_H_
 
-#include "qasm.h"
+#include "Qasm.h"
 
 namespace qasm
 {

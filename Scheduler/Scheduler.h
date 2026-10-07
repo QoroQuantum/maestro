@@ -16,7 +16,7 @@
 #define _SCHEDULER_INTERFACE_H_
 
 #include "../Network/Network.h"
-#include "../Utils/ThreadsPool.h"
+#include "../Utils/Threads/ThreadsPool.h"
 
 namespace Schedulers
 {

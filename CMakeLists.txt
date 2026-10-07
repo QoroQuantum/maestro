@@ -375,12 +375,12 @@ endif()
 
 set(MAESTROSRC maestrolib/Interface.cpp Execution/Request.cpp)
 if(WIN32)
-    list(APPEND MAESTROSRC maestrolib/dllmain.cpp)
+    list(APPEND MAESTROSRC maestrolib/DllMain.cpp)
 else()
     list(APPEND MAESTROSRC Simulators/Core/Factory.cpp)
 endif()
 
-set(MAESTROEXESRC maestroexe/maestroexe.cpp)
+set(MAESTROEXESRC maestroexe/MaestroExe.cpp)
 
 # Define core library and executable
 add_library(maestro SHARED ${MAESTROSRC})
@@ -485,7 +485,7 @@ if(BUILD_PYTHON_BINDINGS)
         )
         FetchContent_MakeAvailable(nanobind)
 
-        nanobind_add_module(maestro_py python/bindings.cpp)
+        nanobind_add_module(maestro_py python/Bindings.cpp)
         set_target_properties(maestro_py PROPERTIES OUTPUT_NAME "maestro")
 
         if(WIN32)
@@ -542,7 +542,7 @@ if(COMPILE_TESTS)
 
     # Focused CPU tensor tests use baseline compiler ISA settings. They also
     # build without OpenMP and do not require the Aer/GPU simulator backends.
-    add_executable(tensor_contraction_tests tests/tensor_contraction_tests.cpp)
+    add_executable(tensor_contraction_tests tests/TensorContractionTests.cpp)
     target_compile_definitions(tensor_contraction_tests PRIVATE
         MAESTRO_TENSOR_TEST_MAIN BOOST_ALL_NO_LIB NOMINMAX)
     if(NOT Boost_USE_STATIC_LIBS)
@@ -559,55 +559,55 @@ if(COMPILE_TESTS)
     endif()
 
     set(TESTSSRC
-        tests/aertests.cpp
-        tests/densitymatrixtests.cpp
-        tests/circtests.cpp
-        tests/cliffordtests.cpp
-        tests/compsimtests.cpp
-        tests/expvals.cpp
-        tests/gputests.cpp
-        tests/gpudensitymatrixtests.cpp
-        tests/gpumpotests.cpp
-        tests/gpuvscpudensitymatrixtests.cpp
-        tests/gpuvscpumpotests.cpp
-        tests/gpuvscpumpstests.cpp
-        tests/initializetobasisstatetests.cpp
-        tests/mpssimtests.cpp
-        tests/qasm.cpp
-        tests/qasm_core.cpp
-        tests/qasm_dialects.cpp
-        tests/qasm_expressions.cpp
-        tests/qasm_gate_contract.cpp
-        tests/qasm_integration.cpp
-        tests/qasm_inputs.cpp
-        tests/qasm_modifiers.cpp
-        tests/qasm_syntax.cpp
-        tests/qasm_validation.cpp
-        tests/qcsimtests.cpp
-        tests/qcsimdensitymatrixtests.cpp
-        tests/qcsimextendedstabilizertests.cpp
-        tests/qcsimmpotests.cpp
-        tests/tensorstests.cpp
-        tests/pauliproptests.cpp
-        tests/extstabtests.cpp
-        tests/mpsswapsopttests.cpp
-        tests/noisemodeltests.cpp
+        tests/AerTests.cpp
+        tests/DensityMatrixTests.cpp
+        tests/CircTests.cpp
+        tests/CliffordTests.cpp
+        tests/CompSimTests.cpp
+        tests/ExpVals.cpp
+        tests/GpuTests.cpp
+        tests/GpuDensityMatrixTests.cpp
+        tests/GpuMPOTests.cpp
+        tests/GpuVsCpuDensityMatrixTests.cpp
+        tests/GpuVsCpuMPOTests.cpp
+        tests/GpuVsCpuMPSTests.cpp
+        tests/InitializeToBasisStateTests.cpp
+        tests/MPSSimTests.cpp
+        tests/Qasm.cpp
+        tests/QasmCore.cpp
+        tests/QasmDialects.cpp
+        tests/QasmExpressions.cpp
+        tests/QasmGateContract.cpp
+        tests/QasmIntegration.cpp
+        tests/QasmInputs.cpp
+        tests/QasmModifiers.cpp
+        tests/QasmSyntax.cpp
+        tests/QasmValidation.cpp
+        tests/QCSimTests.cpp
+        tests/QCSimDensityMatrixTests.cpp
+        tests/QCSimExtendedStabilizerTests.cpp
+        tests/QCSimMPOTests.cpp
+        tests/TensorsTests.cpp
+        tests/PauliPropTests.cpp
+        tests/ExtStabTests.cpp
+        tests/MPSSwapsOptTests.cpp
+        tests/NoiseModelTests.cpp
         tests/PathIntegralTests.cpp
-        tests/netwsimtests.cpp
-        tests/fusionnetwtests.cpp
-        tests/mpsnetwtests.cpp
-        tests/tests.cpp
+        tests/NetwSimTests.cpp
+        tests/FusionNetwTests.cpp
+        tests/MPSNetwTests.cpp
+        tests/Tests.cpp
     )
 
     set(ACTIVE_TESTSSRC ${TESTSSRC})
     if(NOT QAER)
         list(REMOVE_ITEM ACTIVE_TESTSSRC
-            tests/aertests.cpp
-            tests/densitymatrixtests.cpp
-            tests/compsimtests.cpp
-            tests/cliffordtests.cpp
-            tests/circtests.cpp
-            tests/extstabtests.cpp
+            tests/AerTests.cpp
+            tests/DensityMatrixTests.cpp
+            tests/CompSimTests.cpp
+            tests/CliffordTests.cpp
+            tests/CircTests.cpp
+            tests/ExtStabTests.cpp
             tests/PathIntegralTests.cpp
         )
     endif()
@@ -648,13 +648,13 @@ if(COMPILE_TESTS)
     endif()
 
     # Unity test: sampling_order_tests
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_order_tests.cpp")
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/SamplingOrderTests.cpp")
         if(CMAKE_VERSION VERSION_LESS "3.16")
-            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/sampling_order_unity.cpp"
-                "#include \"${CMAKE_CURRENT_SOURCE_DIR}/Simulators/Core/Factory.cpp\"\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/tests/sampling_order_tests.cpp\"\n")
-            add_executable(sampling_order_tests "${CMAKE_CURRENT_BINARY_DIR}/sampling_order_unity.cpp")
+            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/SamplingOrderUnity.cpp"
+                "#include \"${CMAKE_CURRENT_SOURCE_DIR}/Simulators/Core/Factory.cpp\"\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/tests/SamplingOrderTests.cpp\"\n")
+            add_executable(sampling_order_tests "${CMAKE_CURRENT_BINARY_DIR}/SamplingOrderUnity.cpp")
         else()
-            add_executable(sampling_order_tests Simulators/Core/Factory.cpp tests/sampling_order_tests.cpp)
+            add_executable(sampling_order_tests Simulators/Core/Factory.cpp tests/SamplingOrderTests.cpp)
             set_target_properties(sampling_order_tests PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 0)
         endif()
         target_link_libraries(sampling_order_tests PRIVATE Boost::serialization ${CMAKE_DL_LIBS}
@@ -672,14 +672,14 @@ if(COMPILE_TESTS)
     endif()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        add_executable(distributed_gpu_error_tests tests/distributed_gpu/error_contract_tests.cpp)
+        add_executable(distributed_gpu_error_tests tests/distributed_gpu/ErrorContractTests.cpp)
         target_link_libraries(distributed_gpu_error_tests PRIVATE ${CMAKE_DL_LIBS})
         add_test(NAME distributed_gpu_error_contract COMMAND distributed_gpu_error_tests)
-        add_executable(distributed_gpu_tests tests/distributed_gpu/integration_tests.cpp)
+        add_executable(distributed_gpu_tests tests/distributed_gpu/IntegrationTests.cpp)
         target_link_libraries(distributed_gpu_tests PRIVATE maestro)
         # Match Python's visibility boundary when checking singleton identity.
         set_target_properties(distributed_gpu_tests PROPERTIES CXX_VISIBILITY_PRESET hidden)
-        add_executable(distributed_network_tests tests/distributed_gpu/network_mapping_tests.cpp)
+        add_executable(distributed_network_tests tests/distributed_gpu/NetworkMappingTests.cpp)
         target_link_libraries(distributed_network_tests PRIVATE maestro)
         set_property(TARGET distributed_network_tests APPEND_STRING PROPERTY
             LINK_FLAGS " -Wl,--disable-new-dtags")
@@ -720,17 +720,17 @@ if(COMPILE_TESTS)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         find_package(Threads REQUIRED)
 
-        add_library(mock_gpu_plugin SHARED tests/gpu_device/mock_plugin.cpp)
+        add_library(mock_gpu_plugin SHARED tests/gpu_device/MockPlugin.cpp)
         set_target_properties(mock_gpu_plugin PROPERTIES
             OUTPUT_NAME maestro_gpu_simulators
             LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/mock_gpu")
 
-        add_library(mock_distributed_gpu_plugin SHARED tests/distributed_gpu/mock_plugin.cpp)
+        add_library(mock_distributed_gpu_plugin SHARED tests/distributed_gpu/MockPlugin.cpp)
         add_dependencies(distributed_gpu_tests mock_distributed_gpu_plugin)
         add_dependencies(distributed_network_tests mock_distributed_gpu_plugin)
         set_tests_properties(distributed_gpu_configuration distributed_network_mapping PROPERTIES
             ENVIRONMENT "MAESTRO_DIST_GPU_LIBRARY=$<TARGET_FILE:mock_distributed_gpu_plugin>")
-        add_executable(gpu_licensing_tests tests/gpu_device/licensing_tests.cpp)
+        add_executable(gpu_licensing_tests tests/gpu_device/LicensingTests.cpp)
         target_link_libraries(gpu_licensing_tests PRIVATE maestro)
         set_property(TARGET gpu_licensing_tests APPEND_STRING PROPERTY
             LINK_FLAGS " -Wl,--disable-new-dtags")
@@ -745,11 +745,11 @@ if(COMPILE_TESTS)
             endforeach()
         endforeach()
 
-        add_executable(gpu_registry_tests tests/gpu_device/registry_tests.cpp)
+        add_executable(gpu_registry_tests tests/gpu_device/RegistryTests.cpp)
         target_link_libraries(gpu_registry_tests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
         add_test(NAME gpu_registry COMMAND gpu_registry_tests $<TARGET_FILE:mock_gpu_plugin>)
 
-        add_executable(gpu_multi_device_tests tests/gpu_device/multi_gpu_tests.cpp)
+        add_executable(gpu_multi_device_tests tests/gpu_device/MultiGpuTests.cpp)
         target_link_libraries(gpu_multi_device_tests PRIVATE maestro)
         set_property(TARGET gpu_multi_device_tests APPEND_STRING PROPERTY
             LINK_FLAGS " -Wl,--disable-new-dtags")
@@ -757,7 +757,7 @@ if(COMPILE_TESTS)
         set_tests_properties(gpu_multi_device PROPERTIES
             SKIP_RETURN_CODE 77 LABELS "gpu;hardware")
 
-        add_executable(gpu_device_tests tests/gpu_device/simulator_tests.cpp)
+        add_executable(gpu_device_tests tests/gpu_device/SimulatorTests.cpp)
         target_link_libraries(gpu_device_tests PRIVATE maestro Threads::Threads)
         add_dependencies(gpu_device_tests mock_gpu_plugin)
         add_test(NAME gpu_device_configuration
@@ -765,7 +765,7 @@ if(COMPILE_TESTS)
                 "LD_LIBRARY_PATH=$<TARGET_FILE_DIR:mock_gpu_plugin>:$<TARGET_FILE_DIR:maestro>:$ENV{LD_LIBRARY_PATH}"
                 $<TARGET_FILE:gpu_device_tests>)
 
-        add_executable(gpu_svd_tests tests/gpu_device/svd_tests.cpp)
+        add_executable(gpu_svd_tests tests/gpu_device/SvdTests.cpp)
         target_link_libraries(gpu_svd_tests PRIVATE maestro Threads::Threads)
         add_dependencies(gpu_svd_tests mock_gpu_plugin)
         add_test(NAME gpu_svd_configuration
@@ -823,7 +823,7 @@ endif()
 option(MAESTRO_BUILD_REQUEST_TESTS "Build the native JSON request contract tests" OFF)
 if(MAESTRO_BUILD_REQUEST_TESTS)
     enable_testing()
-    add_executable(expectation_batch_tests tests/expectation_batch_tests.cpp)
+    add_executable(expectation_batch_tests tests/ExpectationBatchTests.cpp)
     target_include_directories(expectation_batch_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(expectation_batch_tests PRIVATE maestro Boost::json)
     add_test(NAME expectation_batches COMMAND expectation_batch_tests)
@@ -832,10 +832,10 @@ if(MAESTRO_BUILD_REQUEST_TESTS)
         add_test(NAME gpu_tensor_queries_single COMMAND expectation_batch_tests --gpu --single)
         set_tests_properties(gpu_tensor_queries_double gpu_tensor_queries_single PROPERTIES
             SKIP_RETURN_CODE 77 LABELS "gpu;hardware" RUN_SERIAL TRUE TIMEOUT 180)
-        add_executable(tensor_dispatch_tests tests/gpu_device/tensor_dispatch_tests.cpp)
+        add_executable(tensor_dispatch_tests tests/gpu_device/TensorDispatchTests.cpp)
         target_link_libraries(tensor_dispatch_tests PRIVATE maestro)
         foreach(variant IN ITEMS current legacy)
-            add_library(tensor_mock_${variant} SHARED tests/gpu_device/tensor_mock_plugin.cpp)
+            add_library(tensor_mock_${variant} SHARED tests/gpu_device/TensorMockPlugin.cpp)
             set_target_properties(tensor_mock_${variant} PROPERTIES
                 OUTPUT_NAME maestro_gpu_simulators
                 LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tensor_mock_${variant}")
@@ -850,11 +850,11 @@ if(MAESTRO_BUILD_REQUEST_TESTS)
                 ENVIRONMENT "LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/tensor_mock_${variant}:${CMAKE_BINARY_DIR}:$ENV{LD_LIBRARY_PATH}")
         endforeach()
     endif()
-    add_executable(maestro_request_tests tests/request_api.cpp tests/request_noise.cpp tests/request_options.cpp tests/request_header.c)
+    add_executable(maestro_request_tests tests/RequestApi.cpp tests/RequestNoise.cpp tests/RequestOptions.cpp tests/RequestHeader.c)
     target_include_directories(maestro_request_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(maestro_request_tests PRIVATE maestro Boost::json)
     add_test(NAME maestro_request_api COMMAND maestro_request_tests)
-    add_executable(fusion_interface_wrapper_tests tests/fusion_interface_wrappers.cpp)
+    add_executable(fusion_interface_wrapper_tests tests/FusionInterfaceWrappers.cpp)
     target_link_libraries(fusion_interface_wrapper_tests PRIVATE maestro ${CMAKE_DL_LIBS})
     add_test(NAME fusion_interface_wrappers COMMAND fusion_interface_wrapper_tests $<TARGET_FILE:maestro>)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -872,7 +872,7 @@ if(MAESTRO_BUILD_REQUEST_TESTS)
                 ENVIRONMENT_MODIFICATION "LD_LIBRARY_PATH=path_list_prepend:$<TARGET_FILE_DIR:maestro>")
         endif()
     endif()
-    add_executable(maestro_request_abi_consumer tests/request_header.c)
+    add_executable(maestro_request_abi_consumer tests/RequestHeader.c)
     target_compile_definitions(maestro_request_abi_consumer PRIVATE MAESTRO_ABI_CONSUMER_MAIN)
     target_link_libraries(maestro_request_abi_consumer PRIVATE maestro)
     add_test(NAME maestro_request_abi COMMAND maestro_request_abi_consumer)
@@ -881,7 +881,7 @@ endif()
 # Worker and noise regressions also run in builds containing only request tests.
 if(COMPILE_TESTS OR MAESTRO_BUILD_REQUEST_TESTS)
     enable_testing()
-    add_executable(network_job_tests tests/network_job_tests.cpp)
+    add_executable(network_job_tests tests/NetworkJobTests.cpp)
     target_link_libraries(network_job_tests PRIVATE maestro Boost::json)
     add_test(NAME network_jobs COMMAND network_job_tests)
     set_tests_properties(network_jobs PROPERTIES
@@ -889,7 +889,7 @@ if(COMPILE_TESTS OR MAESTRO_BUILD_REQUEST_TESTS)
 endif()
 
 # Standalone native JSON runner; MPI is linked only into its optional sibling.
-add_executable(maestro_request_worker maestroexe/request_worker.cpp)
+add_executable(maestro_request_worker maestroexe/RequestWorker.cpp)
 set_target_properties(maestro_request_worker PROPERTIES OUTPUT_NAME maestro-request)
 target_link_libraries(maestro_request_worker PRIVATE maestro Boost::json)
 if(APPLE)
@@ -905,7 +905,7 @@ endif()
 option(MAESTRO_BUILD_MPI_WORKER "Build the native collective MPI request worker" OFF)
 if(MAESTRO_BUILD_MPI_WORKER)
     find_package(MPI REQUIRED COMPONENTS CXX)
-    add_executable(maestro_mpi_worker maestroexe/request_worker.cpp)
+    add_executable(maestro_mpi_worker maestroexe/RequestWorker.cpp)
     set_target_properties(maestro_mpi_worker PROPERTIES OUTPUT_NAME maestro-mpi-worker)
     target_compile_definitions(maestro_mpi_worker PRIVATE MAESTRO_REQUEST_MPI)
     target_link_libraries(maestro_mpi_worker PRIVATE maestro Boost::json MPI::MPI_CXX)
@@ -931,7 +931,7 @@ if(MAESTRO_BUILD_REQUEST_TESTS)
         -DWORKER=$<TARGET_FILE:maestro_request_worker> -DMODE=success
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/request_worker.cmake)
     if(MAESTRO_BUILD_MPI_WORKER)
-        add_executable(maestro_request_mpi_seed_tests tests/request_mpi_seeds.cpp)
+        add_executable(maestro_request_mpi_seed_tests tests/RequestMpiSeeds.cpp)
         target_link_libraries(maestro_request_mpi_seed_tests PRIVATE maestro Boost::json MPI::MPI_CXX)
         foreach(mode success failure)
             add_test(NAME maestro_request_mpi_${mode} COMMAND ${CMAKE_COMMAND}
@@ -974,11 +974,11 @@ if(MAESTRO_RUN_MPI_GPU_REQUEST_TESTS)
 endif()
 
 if(COMPILE_TESTS)
-    add_executable(gate_fusion_tests tests/gate_fusion_tests.cpp)
+    add_executable(gate_fusion_tests tests/GateFusionTests.cpp)
     target_include_directories(gate_fusion_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(gate_fusion_tests PRIVATE maestro)
     add_test(NAME gate_fusion_tests COMMAND gate_fusion_tests)
-    add_executable(fusion_routing_tests tests/fusion_routing_tests.cpp)
+    add_executable(fusion_routing_tests tests/FusionRoutingTests.cpp)
     target_include_directories(fusion_routing_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(fusion_routing_tests PRIVATE maestro)
     add_test(NAME fusion_routing_tests COMMAND fusion_routing_tests)
@@ -988,13 +988,13 @@ if(COMPILE_TESTS)
         set_tests_properties(gate_fusion_gpu gate_fusion_distributed PROPERTIES
             SKIP_RETURN_CODE 77 LABELS "gpu;hardware" RUN_SERIAL TRUE TIMEOUT 180)
     endif()
-    add_executable(gate_fusion_benchmark EXCLUDE_FROM_ALL tests/gate_fusion_benchmark.cpp)
+    add_executable(gate_fusion_benchmark EXCLUDE_FROM_ALL tests/GateFusionBenchmark.cpp)
     target_include_directories(gate_fusion_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(gate_fusion_benchmark PRIVATE maestro)
 endif()
 
 if(COMPILE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_executable(gpu_mpo_api_tests tests/gpu_mpo_api_tests.cpp)
+    add_executable(gpu_mpo_api_tests tests/GpuMPOApiTests.cpp)
     target_link_libraries(gpu_mpo_api_tests PRIVATE maestro Boost::json)
     add_test(NAME cpu_mpo_api COMMAND gpu_mpo_api_tests --cpu)
     add_test(NAME gpu_mpo_api COMMAND gpu_mpo_api_tests)

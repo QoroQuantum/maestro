@@ -14,7 +14,7 @@
 #ifndef __TENSORS_FACTORY_H_
 #define __TENSORS_FACTORY_H_ 1
 
-#include "../Utils/Tensor.h"
+#include "../Utils/Tensors/Tensor.h"
 #include "QubitRegister.h"
 
 namespace TensorNetworks

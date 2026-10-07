@@ -18,10 +18,10 @@
 #define _CIRCUIT_FACTORY_H_
 
 #include "Circuit.h"
-#include "Conditional.h"
-#include "Measurements.h"
-#include "RandomOp.h"
-#include "Reset.h"
+#include "Operations/Conditional.h"
+#include "Operations/Measurements.h"
+#include "Operations/RandomOp.h"
+#include "Operations/Reset.h"
 
 namespace Circuits
 {

@@ -24,12 +24,12 @@
 #include <numeric>
 #include <set>
 
-#include "Conditional.h"
-#include "Delay.h"
-#include "Operations.h"
-#include "QuantumChannelOperation.h"
-#include "QuantumGates.h"
-#include "Reset.h"
+#include "Operations/Conditional.h"
+#include "Operations/Delay.h"
+#include "Operations/Operations.h"
+#include "Operations/QuantumChannelOperation.h"
+#include "Operations/QuantumGates.h"
+#include "Operations/Reset.h"
 #include <vector>
 
 namespace Circuits

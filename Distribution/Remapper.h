@@ -18,8 +18,8 @@
 #define _REMAPPER_H_
 
 #include "../Circuit/Circuit.h"
-#include "../Circuit/Operations.h"
-#include "../Circuit/Reset.h"
+#include "../Circuit/Operations/Operations.h"
+#include "../Circuit/Operations/Reset.h"
 #include "../Network/Network.h"
 
 namespace Distribution

@@ -2,10 +2,10 @@
 #include "Request.h"
 #include "Capabilities.h"
 #include "CircuitHelpers.h"
-#include "NoiseJson.h"
 #include "maestrolib/Interface.h"
 #include "maestrolib/Json.h"
 #include "qasm/QasmCirc.h"
+#include "Json/NoiseJson.h"
 #include <chrono>
 #include <climits>
 #include <complex>

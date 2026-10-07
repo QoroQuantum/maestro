@@ -17,7 +17,7 @@
 #define __TENSOR_NODE_H_ 1
 
 #include "../Types.h"
-#include "../Utils/Tensor.h"
+#include "../Utils/Tensors/Tensor.h"
 #include "Factory.h"
 #include <Eigen/Eigen>
 #include <memory>

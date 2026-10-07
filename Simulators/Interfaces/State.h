@@ -711,7 +711,7 @@ class IState
         ApplyQuantumChannel({qubit}, QuantumChannel::PhaseFlip(probability));
     }
 
-    /** `noise.h` dephasing is a stochastic phase flip, not phase damping. */
+    /** `Noise.h` dephasing is a stochastic phase flip, not phase damping. */
     void ApplyDephasingNoise(Types::qubit_t qubit, double probability)
     {
         ApplyPhaseFlipNoise(qubit, probability);
