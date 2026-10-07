@@ -1,15 +1,19 @@
 #pragma once
 #if defined(INCLUDED_BY_FACTORY)
-#include "QCSimState.h"
 #include "../Fusion/FusionSimulator.h"
-namespace Simulators::Private {
-class QCSimSimulator : public FusionSimulator<QCSimState> {
- public:
-  std::unique_ptr<ISimulator> Clone() override {
-    auto copy = std::make_unique<QCSimSimulator>();
-    CloneInto(*copy);
-    return copy;
-  }
+#include "QCSimState.h"
+
+namespace Simulators::Private
+{
+class QCSimSimulator : public FusionSimulator<QCSimState>
+{
+  public:
+    std::unique_ptr<ISimulator> Clone() override
+    {
+        auto copy = std::make_unique<QCSimSimulator>();
+        CloneInto(*copy);
+        return copy;
+    }
 };
-}  // namespace Simulators::Private
+} // namespace Simulators::Private
 #endif

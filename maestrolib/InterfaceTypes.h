@@ -4,8 +4,9 @@
 // the exported function declarations.
 #include <stdint.h>
 
-typedef struct MaestroGateFusionStatistics {
-  uint64_t submittedGates;
-  uint64_t backendGates;
-  uint64_t fusedBlocks;
+typedef struct MaestroGateFusionStatistics
+{
+    uint64_t submittedGates;
+    uint64_t backendGates;
+    uint64_t fusedBlocks;
 } MaestroGateFusionStatistics;

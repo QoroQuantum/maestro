@@ -7,23 +7,28 @@
 #include <string>
 #include <utility>
 
-namespace Simulators {
-class GpuLibraryRegistry {
- public:
-  explicit GpuLibraryRegistry(std::string path = "libmaestro_gpu_simulators.so")
-      : path(std::move(path)) {}
+namespace Simulators
+{
+class GpuLibraryRegistry
+{
+  public:
+    explicit GpuLibraryRegistry(std::string path = "libmaestro_gpu_simulators.so") : path(std::move(path))
+    {
+    }
 
-  std::shared_ptr<GpuLibrary> Acquire(int device, bool mute = false) {
-    auto library = GpuLibrary::GetInstance();
-    return library->InitializeForDevice(path.c_str(), device, mute) ? library : nullptr;
-  }
+    std::shared_ptr<GpuLibrary> Acquire(int device, bool mute = false)
+    {
+        auto library = GpuLibrary::GetInstance();
+        return library->InitializeForDevice(path.c_str(), device, mute) ? library : nullptr;
+    }
 
-  int DeviceCount() {
-    return GpuLibrary::GetInstance()->DiscoverDevices(path.c_str());
-  }
+    int DeviceCount()
+    {
+        return GpuLibrary::GetInstance()->DiscoverDevices(path.c_str());
+    }
 
- private:
-  std::string path;
+  private:
+    std::string path;
 };
-}  // namespace Simulators
+} // namespace Simulators
 #endif

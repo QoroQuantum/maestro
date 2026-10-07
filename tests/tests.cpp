@@ -13,7 +13,7 @@
  */
 
 #define BOOST_TEST_MODULE Conductor Test Module
-#include <boost/test/included/unit_test.hpp>  //single-header
+#include <boost/test/included/unit_test.hpp> //single-header
 #include <fstream>
 
 // this is just to fix some bug with detecting memory leaks in qiskit-aer
@@ -22,8 +22,8 @@
 
 #define _CRTDBG_MAP_ALLOC
 
-#include <stdlib.h>
 #include <crtdbg.h>
+#include <stdlib.h>
 #endif
 #endif
 //************************************************************
@@ -36,18 +36,24 @@
 
 #include "../Simulators/Core/Factory.cpp"
 
-bool checkClose(std::complex<double> a, std::complex<double> b, double dif) {
-  return std::abs(a.real() - b.real()) < dif &&
-         std::abs(a.imag() - b.imag()) < dif;
+bool checkClose(std::complex<double> a, std::complex<double> b, double dif)
+{
+    return std::abs(a.real() - b.real()) < dif && std::abs(a.imag() - b.imag()) < dif;
 }
 
-struct MyConfig {
-  MyConfig() : test_log("tests.log") {
-    boost::unit_test::unit_test_log.set_stream(test_log);
-  }
-  ~MyConfig() { boost::unit_test::unit_test_log.set_stream(std::cout); }
+struct MyConfig
+{
+    MyConfig() : test_log("tests.log")
+    {
+        boost::unit_test::unit_test_log.set_stream(test_log);
+    }
 
-  std::ofstream test_log;
+    ~MyConfig()
+    {
+        boost::unit_test::unit_test_log.set_stream(std::cout);
+    }
+
+    std::ofstream test_log;
 };
 
 // for logging to a file, uncomment this
@@ -55,15 +61,16 @@ struct MyConfig {
 
 BOOST_AUTO_TEST_SUITE(main_tests)
 
-BOOST_AUTO_TEST_CASE(avoid_spurious_memory_leaks) {
-  BOOST_TEST(true);
-  // this is just to fix some bug with detecting memory leaks in qiskit-aer
-  // on the other hand, turning this on will make Visual Studio to report memory
-  // leaks in the IDE if debugging I must find better way
+BOOST_AUTO_TEST_CASE(avoid_spurious_memory_leaks)
+{
+    BOOST_TEST(true);
+    // this is just to fix some bug with detecting memory leaks in qiskit-aer
+    // on the other hand, turning this on will make Visual Studio to report memory
+    // leaks in the IDE if debugging I must find better way
 #ifdef _WIN32
 #ifdef _DEBUG
-  _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_DEBUG);
-  _CrtDumpMemoryLeaks();
+    _CrtSetReportMode(_CRT_WARN, _CRTDBG_MODE_DEBUG);
+    _CrtDumpMemoryLeaks();
 #endif
 #endif
 }

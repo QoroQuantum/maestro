@@ -27,115 +27,136 @@
 #endif
 #endif
 
-#include "Factory.h"
 #include "../Gpu/GpuLibraryRegistry.h"
+#include "Factory.h"
 
 #define INCLUDED_BY_FACTORY
 #ifndef NO_QISKIT_AER
 #include "../Aer/AerSimulator.h"
 #endif
-#include "../QCSim/QCSimSimulator.h"
 #include "../Composite/Composite.h"
-#include "../Gpu/GpuSimulator.h"
 #include "../DistributedGpu/DistributedGpuSimulator.h"
+#include "../Gpu/GpuSimulator.h"
+#include "../QCSim/QCSimSimulator.h"
 #include "../Quest/QuestSimulator.h"
 
-namespace Simulators {
+namespace Simulators
+{
 
-std::unique_ptr<ISimulator> SimulatorsFactory::CreateImmediateSimulatorUnique(SimulatorType type) {
-  if (type == SimulatorType::kQCSim)
-    return std::make_unique<Private::ImmediateQCSimSimulator>();
+std::unique_ptr<ISimulator> SimulatorsFactory::CreateImmediateSimulatorUnique(SimulatorType type)
+{
+    if (type == SimulatorType::kQCSim)
+        return std::make_unique<Private::ImmediateQCSimSimulator>();
 #ifndef NO_QISKIT_AER
-  if (type == SimulatorType::kQiskitAer)
-    return std::make_unique<Private::AerSimulator>();
+    if (type == SimulatorType::kQiskitAer)
+        return std::make_unique<Private::AerSimulator>();
 #endif
-  throw std::invalid_argument("Unsupported composite child backend");
+    throw std::invalid_argument("Unsupported composite child backend");
 }
 
 #ifdef __linux__
 std::atomic_int SimulatorsFactory::requestedGpuDeviceId{0};
 thread_local int SimulatorsFactory::scopedGpuDeviceId = -1;
 
-namespace {
-GpuLibraryRegistry& GpuLibraries() {
-  static GpuLibraryRegistry registry;
-  return registry;
+namespace
+{
+GpuLibraryRegistry &GpuLibraries()
+{
+    static GpuLibraryRegistry registry;
+    return registry;
 }
-}  // namespace
+} // namespace
 
-std::shared_ptr<DistributedGpuLibrary>
-SimulatorsFactory::GetDistributedGpuLibrary() {
-  return DistributedGpuLibrary::GetInstance();
-}
-
-std::shared_ptr<DistributedGpuLibrary> DistributedGpuLibrary::GetInstance() {
-  static auto lib =
-      std::shared_ptr<DistributedGpuLibrary>(new DistributedGpuLibrary());
-  return lib;
+std::shared_ptr<DistributedGpuLibrary> SimulatorsFactory::GetDistributedGpuLibrary()
+{
+    return DistributedGpuLibrary::GetInstance();
 }
 
-std::shared_ptr<DistributedMpiGpuLibrary>
-DistributedMpiGpuLibrary::GetInstance() {
-  static auto lib =
-      std::shared_ptr<DistributedMpiGpuLibrary>(new DistributedMpiGpuLibrary());
-  return lib;
+std::shared_ptr<DistributedGpuLibrary> DistributedGpuLibrary::GetInstance()
+{
+    static auto lib = std::shared_ptr<DistributedGpuLibrary>(new DistributedGpuLibrary());
+    return lib;
 }
 
-bool SimulatorsFactory::IsDistributedGpuAvailable() noexcept {
-  try {
-    auto lib = GetDistributedGpuLibrary();
-    return lib->Load() && lib->GetGpuDeviceCount() > 0;
-  } catch (...) {
-    // Initialization still exposes the full diagnostic; discovery is a probe.
-    return false;
-  }
+std::shared_ptr<DistributedMpiGpuLibrary> DistributedMpiGpuLibrary::GetInstance()
+{
+    static auto lib = std::shared_ptr<DistributedMpiGpuLibrary>(new DistributedMpiGpuLibrary());
+    return lib;
 }
 
-std::shared_ptr<DistributedMpiGpuLibrary>
-SimulatorsFactory::GetDistributedMpiGpuLibrary() {
-  return DistributedMpiGpuLibrary::GetInstance();
+bool SimulatorsFactory::IsDistributedGpuAvailable() noexcept
+{
+    try
+    {
+        auto lib = GetDistributedGpuLibrary();
+        return lib->Load() && lib->GetGpuDeviceCount() > 0;
+    }
+    catch (...)
+    {
+        // Initialization still exposes the full diagnostic; discovery is a probe.
+        return false;
+    }
 }
 
-void SimulatorsFactory::FinalizeDistributedMpiGpuBackend() {
-  DistributedMpiGpuLibrary::GetInstance()->FinalizeBackend();
+std::shared_ptr<DistributedMpiGpuLibrary> SimulatorsFactory::GetDistributedMpiGpuLibrary()
+{
+    return DistributedMpiGpuLibrary::GetInstance();
 }
 
-void SimulatorsFactory::SelectGpuDevice(int deviceId) {
-  if (deviceId < 0)
-    throw std::invalid_argument("gpu_device must be nonnegative");
-  requestedGpuDeviceId = deviceId;
+void SimulatorsFactory::FinalizeDistributedMpiGpuBackend()
+{
+    DistributedMpiGpuLibrary::GetInstance()->FinalizeBackend();
 }
 
-int SimulatorsFactory::ResolveGpuDevice(int deviceId) {
-  if (deviceId >= 0) return deviceId;
-  if (scopedGpuDeviceId >= 0) return scopedGpuDeviceId;
-  return requestedGpuDeviceId.load();
+void SimulatorsFactory::SelectGpuDevice(int deviceId)
+{
+    if (deviceId < 0)
+        throw std::invalid_argument("gpu_device must be nonnegative");
+    requestedGpuDeviceId = deviceId;
 }
 
-SimulatorsFactory::ScopedGpuDevice::ScopedGpuDevice(int deviceId)
-    : previous(scopedGpuDeviceId) {
-  scopedGpuDeviceId = ResolveGpuDevice(deviceId);
-}
-SimulatorsFactory::ScopedGpuDevice::~ScopedGpuDevice() {
-  scopedGpuDeviceId = previous;
-}
-
-std::shared_ptr<GpuLibrary> SimulatorsFactory::GetGpuLibrary(int deviceId) {
-  return GpuLibraries().Acquire(ResolveGpuDevice(deviceId));
+int SimulatorsFactory::ResolveGpuDevice(int deviceId)
+{
+    if (deviceId >= 0)
+        return deviceId;
+    if (scopedGpuDeviceId >= 0)
+        return scopedGpuDeviceId;
+    return requestedGpuDeviceId.load();
 }
 
-bool SimulatorsFactory::InitGpuLibrary() { return bool(GetGpuLibrary()); }
-
-bool SimulatorsFactory::InitGpuLibraryWithMute() {
-  return bool(GpuLibraries().Acquire(ResolveGpuDevice(), true));
+SimulatorsFactory::ScopedGpuDevice::ScopedGpuDevice(int deviceId) : previous(scopedGpuDeviceId)
+{
+    scopedGpuDeviceId = ResolveGpuDevice(deviceId);
 }
 
-int SimulatorsFactory::GetGpuDeviceCount() {
-  return GpuLibraries().DeviceCount();
+SimulatorsFactory::ScopedGpuDevice::~ScopedGpuDevice()
+{
+    scopedGpuDeviceId = previous;
 }
 
-bool SimulatorsFactory::IsGpuLibraryAvailable(int deviceId) {
-  return bool(GpuLibraries().Acquire(ResolveGpuDevice(deviceId), true));
+std::shared_ptr<GpuLibrary> SimulatorsFactory::GetGpuLibrary(int deviceId)
+{
+    return GpuLibraries().Acquire(ResolveGpuDevice(deviceId));
+}
+
+bool SimulatorsFactory::InitGpuLibrary()
+{
+    return bool(GetGpuLibrary());
+}
+
+bool SimulatorsFactory::InitGpuLibraryWithMute()
+{
+    return bool(GpuLibraries().Acquire(ResolveGpuDevice(), true));
+}
+
+int SimulatorsFactory::GetGpuDeviceCount()
+{
+    return GpuLibraries().DeviceCount();
+}
+
+bool SimulatorsFactory::IsGpuLibraryAvailable(int deviceId)
+{
+    return bool(GpuLibraries().Acquire(ResolveGpuDevice(deviceId), true));
 }
 
 #endif
@@ -143,283 +164,279 @@ bool SimulatorsFactory::IsGpuLibraryAvailable(int deviceId) {
 std::shared_ptr<QuestLibSim> SimulatorsFactory::questLibrary = nullptr;
 std::atomic_bool SimulatorsFactory::firstTimeQuest = true;
 
-bool SimulatorsFactory::InitQuestLibrary() {
-  if (!questLibrary) {
-    questLibrary = std::make_shared<QuestLibSim>();
-    if (!firstTimeQuest.exchange(false)) questLibrary->SetMute(true);
-    if (questLibrary->Init(
+bool SimulatorsFactory::InitQuestLibrary()
+{
+    if (!questLibrary)
+    {
+        questLibrary = std::make_shared<QuestLibSim>();
+        if (!firstTimeQuest.exchange(false))
+            questLibrary->SetMute(true);
+        if (questLibrary->Init(
 #ifdef _WIN32
-            "maestroquest.dll"
+                "maestroquest.dll"
 #elif defined(__APPLE__)
-            "libmaestroquest.dylib"
+                "libmaestroquest.dylib"
 #else
-            "libmaestroquest.so"
+                "libmaestroquest.so"
 #endif
-            ))
-      return true;
-    else
-      questLibrary = nullptr;
-  }
-  return false;
+                ))
+            return true;
+        else
+            questLibrary = nullptr;
+    }
+    return false;
 }
 
-bool SimulatorsFactory::IsQuestLibraryAvailable() {
-  return questLibrary && questLibrary->IsValid();
+bool SimulatorsFactory::IsQuestLibraryAvailable()
+{
+    return questLibrary && questLibrary->IsValid();
 }
 
-std::shared_ptr<QuestLibSim> SimulatorsFactory::GetQuestLibrary() {
-  if (!questLibrary || !questLibrary->IsValid()) return nullptr;
-  return questLibrary;
+std::shared_ptr<QuestLibSim> SimulatorsFactory::GetQuestLibrary()
+{
+    if (!questLibrary || !questLibrary->IsValid())
+        return nullptr;
+    return questLibrary;
 }
 
-bool SimulatorsFactory::InitQuestLibraryWithMute() {
-  if (!questLibrary) {
-    questLibrary = std::make_shared<QuestLibSim>();
-    firstTimeQuest = false;
-    questLibrary->SetMute(true);
-    if (questLibrary->Init(
+bool SimulatorsFactory::InitQuestLibraryWithMute()
+{
+    if (!questLibrary)
+    {
+        questLibrary = std::make_shared<QuestLibSim>();
+        firstTimeQuest = false;
+        questLibrary->SetMute(true);
+        if (questLibrary->Init(
 #ifdef _WIN32
-            "maestroquest.dll"
+                "maestroquest.dll"
 #elif defined(__APPLE__)
-            "libmaestroquest.dylib"
+                "libmaestroquest.dylib"
 #else
-            "libmaestroquest.so"
+                "libmaestroquest.so"
 #endif
-            ))
-      return true;
-    else
-      questLibrary = nullptr;
-  }
-  return false;
+                ))
+            return true;
+        else
+            questLibrary = nullptr;
+    }
+    return false;
 }
 
-std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(
-    SimulatorType t, SimulationType m) {
-  switch (t) {
+std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(SimulatorType t, SimulationType m)
+{
+    switch (t)
+    {
     case SimulatorType::kQCSim: {
-      auto sim = std::make_shared<Private::QCSimSimulator>();
-      if (m == SimulationType::kMatrixProductState)
-        sim->Configure("method", "matrix_product_state");
-      else if (m == SimulationType::kMatrixProductOperator)
-        sim->Configure("method", "matrix_product_operator");
-      else if (m == SimulationType::kStabilizer)
-        sim->Configure("method", "stabilizer");
-      else if (m == SimulationType::kTensorNetwork)
-        sim->Configure("method", "tensor_network");
-      else if (m == SimulationType::kPauliPropagator)
-        sim->Configure("method", "pauli_propagator");
-      else if (m == SimulationType::kPathIntegral)
-        sim->Configure("method", "path_integral");
-      else if (m == SimulationType::kDensityMatrix)
-        sim->Configure("method", "density_matrix");
-      else if (m == SimulationType::kExtendedStabilizer)
-        sim->Configure("method", "extended_stabilizer");
-      else if (m != SimulationType::kStatevector)
-        throw std::invalid_argument("Simulation Type not supported for QCSim");
+        auto sim = std::make_shared<Private::QCSimSimulator>();
+        if (m == SimulationType::kMatrixProductState)
+            sim->Configure("method", "matrix_product_state");
+        else if (m == SimulationType::kMatrixProductOperator)
+            sim->Configure("method", "matrix_product_operator");
+        else if (m == SimulationType::kStabilizer)
+            sim->Configure("method", "stabilizer");
+        else if (m == SimulationType::kTensorNetwork)
+            sim->Configure("method", "tensor_network");
+        else if (m == SimulationType::kPauliPropagator)
+            sim->Configure("method", "pauli_propagator");
+        else if (m == SimulationType::kPathIntegral)
+            sim->Configure("method", "path_integral");
+        else if (m == SimulationType::kDensityMatrix)
+            sim->Configure("method", "density_matrix");
+        else if (m == SimulationType::kExtendedStabilizer)
+            sim->Configure("method", "extended_stabilizer");
+        else if (m != SimulationType::kStatevector)
+            throw std::invalid_argument("Simulation Type not supported for QCSim");
 
-      return sim;
+        return sim;
     }
 #ifndef NO_QISKIT_AER
     case SimulatorType::kQiskitAer: {
-      auto sim = std::make_shared<Private::AerSimulator>();
-      if (m == SimulationType::kMatrixProductState)
-        sim->Configure("method", "matrix_product_state");
-      else if (m == SimulationType::kStabilizer)
-        sim->Configure("method", "stabilizer");
-      else if (m == SimulationType::kTensorNetwork)
-        sim->Configure("method", "tensor_network");
-      else if (m == SimulationType::kExtendedStabilizer)
-        sim->Configure("method", "extended_stabilizer");
-      else if (m == SimulationType::kDensityMatrix)
-        sim->Configure("method", "density_matrix");
-      else if (m == SimulationType::kStatevector)
-        sim->Configure("method", "statevector");
-      else
-        throw std::invalid_argument(
-            "Simulation Type not supported for Qiskit Aer");
-
-      return sim;
-    }
-    case SimulatorType::kCompositeQiskitAer:
-      return std::make_shared<Private::ImmediateCompositeSimulator>(
-          SimulatorType::kQiskitAer);
-#endif
-    case SimulatorType::kCompositeQCSim:
-      return std::make_shared<Private::CompositeSimulator>(
-          SimulatorType::kQCSim);
-#ifdef __linux__
-    case SimulatorType::kDistGpuSim:
-      if (m != SimulationType::kStatevector)
-        throw std::invalid_argument(
-            "Distributed GPU supports only statevector");
-      if (!IsDistributedGpuAvailable()) return nullptr;
-      return std::make_shared<Private::DistributedGpuSimulator>();
-    case SimulatorType::kDistMpiGpuSim:
-      if (m != SimulationType::kStatevector)
-        throw std::invalid_argument(
-            "Distributed MPI GPU supports only statevector");
-      return std::make_shared<Private::DistributedMpiGpuSimulator>();
-
-    case SimulatorType::kGpuSim:
-      // Library initialization is checked before advertising the backend;
-      // device resources remain lazy and configuration follows creation.
-      if (GetGpuDeviceCount() <= 0) return nullptr;
-      if ((m == SimulationType::kStatevector ||
-           m == SimulationType::kMatrixProductState ||
-           m == SimulationType::kDensityMatrix ||
-           m == SimulationType::kMatrixProductOperator ||
-           m == SimulationType::kTensorNetwork ||
-           m == SimulationType::kPauliPropagator)) {
-        auto sim = std::make_shared<Private::GpuSimulator>();
-        sim->Configure("gpu_device",
-                       std::to_string(ResolveGpuDevice()).c_str());
+        auto sim = std::make_shared<Private::AerSimulator>();
         if (m == SimulationType::kMatrixProductState)
-          sim->Configure("method", "matrix_product_state");
-        else if (m == SimulationType::kMatrixProductOperator)
-          sim->Configure("method", "matrix_product_operator");
+            sim->Configure("method", "matrix_product_state");
+        else if (m == SimulationType::kStabilizer)
+            sim->Configure("method", "stabilizer");
         else if (m == SimulationType::kTensorNetwork)
-          sim->Configure("method", "tensor_network");
-        else if (m == SimulationType::kPauliPropagator)
-          sim->Configure("method", "pauli_propagator");
-        else if (m == SimulationType::kStatevector)
-          sim->Configure("method", "statevector");
+            sim->Configure("method", "tensor_network");
+        else if (m == SimulationType::kExtendedStabilizer)
+            sim->Configure("method", "extended_stabilizer");
         else if (m == SimulationType::kDensityMatrix)
-          sim->Configure("method", "density_matrix");
+            sim->Configure("method", "density_matrix");
+        else if (m == SimulationType::kStatevector)
+            sim->Configure("method", "statevector");
+        else
+            throw std::invalid_argument("Simulation Type not supported for Qiskit Aer");
 
         return sim;
-      }
+    }
+    case SimulatorType::kCompositeQiskitAer:
+        return std::make_shared<Private::ImmediateCompositeSimulator>(SimulatorType::kQiskitAer);
+#endif
+    case SimulatorType::kCompositeQCSim:
+        return std::make_shared<Private::CompositeSimulator>(SimulatorType::kQCSim);
+#ifdef __linux__
+    case SimulatorType::kDistGpuSim:
+        if (m != SimulationType::kStatevector)
+            throw std::invalid_argument("Distributed GPU supports only statevector");
+        if (!IsDistributedGpuAvailable())
+            return nullptr;
+        return std::make_shared<Private::DistributedGpuSimulator>();
+    case SimulatorType::kDistMpiGpuSim:
+        if (m != SimulationType::kStatevector)
+            throw std::invalid_argument("Distributed MPI GPU supports only statevector");
+        return std::make_shared<Private::DistributedMpiGpuSimulator>();
 
-      return nullptr;
+    case SimulatorType::kGpuSim:
+        // Library initialization is checked before advertising the backend;
+        // device resources remain lazy and configuration follows creation.
+        if (GetGpuDeviceCount() <= 0)
+            return nullptr;
+        if ((m == SimulationType::kStatevector || m == SimulationType::kMatrixProductState || m == SimulationType::kDensityMatrix ||
+             m == SimulationType::kMatrixProductOperator || m == SimulationType::kTensorNetwork || m == SimulationType::kPauliPropagator))
+        {
+            auto sim = std::make_shared<Private::GpuSimulator>();
+            sim->Configure("gpu_device", std::to_string(ResolveGpuDevice()).c_str());
+            if (m == SimulationType::kMatrixProductState)
+                sim->Configure("method", "matrix_product_state");
+            else if (m == SimulationType::kMatrixProductOperator)
+                sim->Configure("method", "matrix_product_operator");
+            else if (m == SimulationType::kTensorNetwork)
+                sim->Configure("method", "tensor_network");
+            else if (m == SimulationType::kPauliPropagator)
+                sim->Configure("method", "pauli_propagator");
+            else if (m == SimulationType::kStatevector)
+                sim->Configure("method", "statevector");
+            else if (m == SimulationType::kDensityMatrix)
+                sim->Configure("method", "density_matrix");
+
+            return sim;
+        }
+
+        return nullptr;
 #endif
     case SimulatorType::kQuestSim:
-      if (m != SimulationType::kStatevector)
-        throw std::invalid_argument(
-            "Simulation Type not supported for Quest Simulator");
-      else if (questLibrary && questLibrary->IsValid()) {
-        return std::make_shared<Private::QuestSimulator>();
-      }
-      return nullptr;
+        if (m != SimulationType::kStatevector)
+            throw std::invalid_argument("Simulation Type not supported for Quest Simulator");
+        else if (questLibrary && questLibrary->IsValid())
+        {
+            return std::make_shared<Private::QuestSimulator>();
+        }
+        return nullptr;
     default:
-      break;
-  }
+        break;
+    }
 
-  throw std::invalid_argument("Simulator Type not supported");
+    throw std::invalid_argument("Simulator Type not supported");
 
-  return nullptr;  // keep compillers happy
+    return nullptr; // keep compillers happy
 }
 
-std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(
-    SimulatorType t, SimulationType m) {
-  switch (t) {
+std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(SimulatorType t, SimulationType m)
+{
+    switch (t)
+    {
     case SimulatorType::kQCSim: {
-      auto sim = std::make_unique<Private::QCSimSimulator>();
-      if (m == SimulationType::kMatrixProductState)
-        sim->Configure("method", "matrix_product_state");
-      else if (m == SimulationType::kMatrixProductOperator)
-        sim->Configure("method", "matrix_product_operator");
-      else if (m == SimulationType::kStabilizer)
-        sim->Configure("method", "stabilizer");
-      else if (m == SimulationType::kTensorNetwork)
-        sim->Configure("method", "tensor_network");
-      else if (m == SimulationType::kPauliPropagator)
-        sim->Configure("method", "pauli_propagator");
-      else if (m == SimulationType::kPathIntegral)
-        sim->Configure("method", "path_integral");
-      else if (m == SimulationType::kDensityMatrix)
-        sim->Configure("method", "density_matrix");
-      else if (m == SimulationType::kExtendedStabilizer)
-        sim->Configure("method", "extended_stabilizer");
-      else if (m != SimulationType::kStatevector)
-        throw std::invalid_argument("Simulation Type not supported for QCSim");
+        auto sim = std::make_unique<Private::QCSimSimulator>();
+        if (m == SimulationType::kMatrixProductState)
+            sim->Configure("method", "matrix_product_state");
+        else if (m == SimulationType::kMatrixProductOperator)
+            sim->Configure("method", "matrix_product_operator");
+        else if (m == SimulationType::kStabilizer)
+            sim->Configure("method", "stabilizer");
+        else if (m == SimulationType::kTensorNetwork)
+            sim->Configure("method", "tensor_network");
+        else if (m == SimulationType::kPauliPropagator)
+            sim->Configure("method", "pauli_propagator");
+        else if (m == SimulationType::kPathIntegral)
+            sim->Configure("method", "path_integral");
+        else if (m == SimulationType::kDensityMatrix)
+            sim->Configure("method", "density_matrix");
+        else if (m == SimulationType::kExtendedStabilizer)
+            sim->Configure("method", "extended_stabilizer");
+        else if (m != SimulationType::kStatevector)
+            throw std::invalid_argument("Simulation Type not supported for QCSim");
 
-      return sim;
+        return sim;
     }
 #ifndef NO_QISKIT_AER
     case SimulatorType::kQiskitAer: {
-      auto sim = std::make_unique<Private::AerSimulator>();
-      if (m == SimulationType::kMatrixProductState)
-        sim->Configure("method", "matrix_product_state");
-      else if (m == SimulationType::kStabilizer)
-        sim->Configure("method", "stabilizer");
-      else if (m == SimulationType::kTensorNetwork)
-        sim->Configure("method", "tensor_network");
-      else if (m == SimulationType::kExtendedStabilizer)
-        sim->Configure("method", "extended_stabilizer");
-      else if (m == SimulationType::kDensityMatrix)
-        sim->Configure("method", "density_matrix");
-      else if (m == SimulationType::kStatevector)
-        sim->Configure("method", "statevector");
-      else
-        throw std::invalid_argument(
-            "Simulation Type not supported for Qiskit Aer");
-
-      return sim;
-    }
-    case SimulatorType::kCompositeQiskitAer:
-      return std::make_unique<Private::ImmediateCompositeSimulator>(
-          SimulatorType::kQiskitAer);
-#endif
-    case SimulatorType::kCompositeQCSim:
-      return std::make_unique<Private::CompositeSimulator>(
-          SimulatorType::kQCSim);
-#ifdef __linux__
-    case SimulatorType::kDistGpuSim:
-      if (m != SimulationType::kStatevector)
-        throw std::invalid_argument(
-            "Distributed GPU supports only statevector");
-      if (!IsDistributedGpuAvailable()) return nullptr;
-      return std::make_unique<Private::DistributedGpuSimulator>();
-    case SimulatorType::kDistMpiGpuSim:
-      if (m != SimulationType::kStatevector)
-        throw std::invalid_argument(
-            "Distributed MPI GPU supports only statevector");
-      return std::make_unique<Private::DistributedMpiGpuSimulator>();
-
-    case SimulatorType::kGpuSim:
-      // Library initialization is checked before advertising the backend;
-      // device resources remain lazy and configuration follows creation.
-      if (GetGpuDeviceCount() <= 0) return nullptr;
-      if ((m == SimulationType::kStatevector ||
-           m == SimulationType::kMatrixProductState ||
-           m == SimulationType::kDensityMatrix ||
-           m == SimulationType::kMatrixProductOperator ||
-           m == SimulationType::kTensorNetwork ||
-           m == SimulationType::kPauliPropagator)) {
-        auto sim = std::make_unique<Private::GpuSimulator>();
-        sim->Configure("gpu_device",
-                       std::to_string(ResolveGpuDevice()).c_str());
+        auto sim = std::make_unique<Private::AerSimulator>();
         if (m == SimulationType::kMatrixProductState)
-          sim->Configure("method", "matrix_product_state");
-        else if (m == SimulationType::kMatrixProductOperator)
-          sim->Configure("method", "matrix_product_operator");
+            sim->Configure("method", "matrix_product_state");
+        else if (m == SimulationType::kStabilizer)
+            sim->Configure("method", "stabilizer");
         else if (m == SimulationType::kTensorNetwork)
-          sim->Configure("method", "tensor_network");
-        else if (m == SimulationType::kPauliPropagator)
-          sim->Configure("method", "pauli_propagator");
-        else if (m == SimulationType::kStatevector)
-          sim->Configure("method", "statevector");
+            sim->Configure("method", "tensor_network");
+        else if (m == SimulationType::kExtendedStabilizer)
+            sim->Configure("method", "extended_stabilizer");
         else if (m == SimulationType::kDensityMatrix)
-          sim->Configure("method", "density_matrix");
+            sim->Configure("method", "density_matrix");
+        else if (m == SimulationType::kStatevector)
+            sim->Configure("method", "statevector");
+        else
+            throw std::invalid_argument("Simulation Type not supported for Qiskit Aer");
 
         return sim;
-      }
+    }
+    case SimulatorType::kCompositeQiskitAer:
+        return std::make_unique<Private::ImmediateCompositeSimulator>(SimulatorType::kQiskitAer);
+#endif
+    case SimulatorType::kCompositeQCSim:
+        return std::make_unique<Private::CompositeSimulator>(SimulatorType::kQCSim);
+#ifdef __linux__
+    case SimulatorType::kDistGpuSim:
+        if (m != SimulationType::kStatevector)
+            throw std::invalid_argument("Distributed GPU supports only statevector");
+        if (!IsDistributedGpuAvailable())
+            return nullptr;
+        return std::make_unique<Private::DistributedGpuSimulator>();
+    case SimulatorType::kDistMpiGpuSim:
+        if (m != SimulationType::kStatevector)
+            throw std::invalid_argument("Distributed MPI GPU supports only statevector");
+        return std::make_unique<Private::DistributedMpiGpuSimulator>();
 
-      return nullptr;
+    case SimulatorType::kGpuSim:
+        // Library initialization is checked before advertising the backend;
+        // device resources remain lazy and configuration follows creation.
+        if (GetGpuDeviceCount() <= 0)
+            return nullptr;
+        if ((m == SimulationType::kStatevector || m == SimulationType::kMatrixProductState || m == SimulationType::kDensityMatrix ||
+             m == SimulationType::kMatrixProductOperator || m == SimulationType::kTensorNetwork || m == SimulationType::kPauliPropagator))
+        {
+            auto sim = std::make_unique<Private::GpuSimulator>();
+            sim->Configure("gpu_device", std::to_string(ResolveGpuDevice()).c_str());
+            if (m == SimulationType::kMatrixProductState)
+                sim->Configure("method", "matrix_product_state");
+            else if (m == SimulationType::kMatrixProductOperator)
+                sim->Configure("method", "matrix_product_operator");
+            else if (m == SimulationType::kTensorNetwork)
+                sim->Configure("method", "tensor_network");
+            else if (m == SimulationType::kPauliPropagator)
+                sim->Configure("method", "pauli_propagator");
+            else if (m == SimulationType::kStatevector)
+                sim->Configure("method", "statevector");
+            else if (m == SimulationType::kDensityMatrix)
+                sim->Configure("method", "density_matrix");
+
+            return sim;
+        }
+
+        return nullptr;
 #endif
     case SimulatorType::kQuestSim:
-      if (m != SimulationType::kStatevector)
-        throw std::invalid_argument(
-            "Simulation Type not supported for Quest Simulator");
-      else if (questLibrary && questLibrary->IsValid()) {
-        return std::make_unique<Private::QuestSimulator>();
-      }
-      return nullptr;
+        if (m != SimulationType::kStatevector)
+            throw std::invalid_argument("Simulation Type not supported for Quest Simulator");
+        else if (questLibrary && questLibrary->IsValid())
+        {
+            return std::make_unique<Private::QuestSimulator>();
+        }
+        return nullptr;
     default:
-      break;
-  }
+        break;
+    }
 
-  throw std::invalid_argument("Simulator Type not supported");
+    throw std::invalid_argument("Simulator Type not supported");
 
-  return nullptr;  // keep compillers happy
+    return nullptr; // keep compillers happy
 }
-}  // namespace Simulators
+} // namespace Simulators

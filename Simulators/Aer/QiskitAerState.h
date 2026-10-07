@@ -21,28 +21,32 @@
 
 #include "controllers/state_controller.hpp"
 
-namespace AER {
+namespace AER
+{
 
-class AerStateFake {
- public:
-  virtual ~AerStateFake() = default;
+class AerStateFake
+{
+  public:
+    virtual ~AerStateFake() = default;
 
-  bool initialized_;
-  uint_t num_of_qubits_;
-  RngEngine rng_;
-  int seed_ = std::random_device()();
-  std::shared_ptr<QuantumState::Base> state_;
-  json_t configs_;
-  ExperimentResult last_result_;
+    bool initialized_;
+    uint_t num_of_qubits_;
+    RngEngine rng_;
+    int seed_ = std::random_device()();
+    std::shared_ptr<QuantumState::Base> state_;
+    json_t configs_;
+    ExperimentResult last_result_;
 };
 
-}  // namespace AER
+} // namespace AER
 
-namespace Simulators {
+namespace Simulators
+{
 // TODO: Maybe use the pimpl idiom
 // https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation
 // for good but during development this should be good enough
-namespace Private {
+namespace Private
+{
 
 /**
  * @class QiskitAerState
@@ -52,171 +56,177 @@ namespace Private {
  * it's available through the base class public interface. Do not use this class
  * directly.
  */
-class QiskitAerState : public AER::AerState {
- public:
-  const std::shared_ptr<AER::QuantumState::Base> &get_state() const {
-    const AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
-    return fakeState->state_;
-  }
-
-  // AerState's buffer export extracts double-precision result storage even
-  // when the actual state stores floats. Convert the concrete float state
-  // before clearing it so saved states and clones retain their amplitudes.
-  AER::Vector<complex_t> move_to_vector() override {
-    flush_ops();
-    const auto single = std::dynamic_pointer_cast<
-        AER::Statevector::State<AER::QV::QubitVector<float>>>(get_state());
-    if (!single) return AER::AerState::move_to_vector();
-    auto values = single->move_to_vector();
-    AER::Vector<complex_t> result(values.size(), false);
-    for (size_t i = 0; i < values.size(); ++i) result[i] = values[i];
-    clear();
-    return result;
-  }
-
-  AER::cmatrix_t move_to_matrix() override {
-    flush_ops();
-    const auto single = std::dynamic_pointer_cast<
-        AER::DensityMatrix::State<AER::QV::DensityMatrix<float>>>(get_state());
-    if (!single) return AER::AerState::move_to_matrix();
-    auto values = single->move_to_matrix();
-    AER::cmatrix_t result(values.GetRows(), values.GetColumns());
-    for (size_t i = 0; i < values.GetRows() * values.GetColumns(); ++i)
-      result.data()[i] = values.data()[i];
-    clear();
-    return result;
-  }
-
-  double expval_pauli(const reg_t &qubits, const std::string &pauli) {
-    if (qubits.empty() || pauli.empty()) return 1.;
-
-    const auto &state = get_state();
-    if (!state) return 0.;
-
-    flush_ops();
-
-    return state->expval_pauli(qubits, pauli);
-  }
-
-  AER::Vector<complex_t> statevector() {
-    const auto &state = get_state();
-    if (!state) return {};
-
-    flush_ops();
-
-    AER::Operations::Op op;
-    op.type = AER::Operations::OpType::save_statevec;
-    op.name = "save_statevector";
-    op.save_type = AER::Operations::DataSubType::single;
-    op.string_params.push_back("statevector");
-    for (uint_t qubit = 0; qubit < num_of_qubits(); ++qubit)
-      op.qubits.push_back(qubit);
-
-    AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
-    fakeState->last_result_ = AER::ExperimentResult();
-    state->apply_op(op, fakeState->last_result_, fakeState->rng_);
-
-    return std::move(
-        static_cast<AER::DataMap<AER::SingleData, AER::Vector<complex_t>>>(
-            std::move(fakeState->last_result_.data))
-            .value()["statevector"]
-            .value());
-  }
-
-  std::shared_ptr<AER::QuantumState::Base> clone_extended_stabilizer_state() {
-    flush_ops();
-    const auto extendedState =
-        std::dynamic_pointer_cast<AER::ExtendedStabilizer::State>(get_state());
-    if (!extendedState)
-      throw std::runtime_error(
-          "QiskitAerState: current state is not an extended stabilizer state");
-    return std::make_shared<AER::ExtendedStabilizer::State>(*extendedState);
-  }
-
-  void restore_extended_stabilizer_state(
-      const std::shared_ptr<AER::QuantumState::Base> &savedState) {
-    const auto extendedState =
-        std::dynamic_pointer_cast<AER::ExtendedStabilizer::State>(savedState);
-    if (!extendedState)
-      throw std::runtime_error(
-          "QiskitAerState: saved state is not an extended stabilizer state");
-
-    AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
-    fakeState->state_ =
-        std::make_shared<AER::ExtendedStabilizer::State>(*extendedState);
-    fakeState->num_of_qubits_ = extendedState->qreg().get_n_qubits();
-    fakeState->initialized_ = true;
-    fakeState->last_result_ = AER::ExperimentResult();
-    clear_ops();
-  }
-
-  std::vector<bool> apply_measure_many(const reg_t &qubits) {
-    const auto &state = get_state();
-    if (!state) return {};
-
-    flush_ops();
-
-    AER::Operations::Op op;
-    op.type = AER::Operations::OpType::measure;
-    op.name = "measure";
-    op.qubits = qubits;
-    op.memory = qubits;
-    op.registers = qubits;
-
-    AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
-    fakeState->last_result_ = AER::ExperimentResult();
-    state->apply_op(op, fakeState->last_result_, fakeState->rng_);
-
-    std::vector<bool> bitstring(qubits.size(), false);
-    uint_t mem_size = state->creg().memory_size();
-    for (size_t q = 0; q < qubits.size(); ++q) {
-      const auto qubit = qubits[q];
-      if (state->creg().creg_memory()[mem_size - qubit - 1] == '1')
-        bitstring[q] = true;
+class QiskitAerState : public AER::AerState
+{
+  public:
+    const std::shared_ptr<AER::QuantumState::Base> &get_state() const
+    {
+        const AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
+        return fakeState->state_;
     }
-    return bitstring;
-  }
 
-  std::unordered_map<std::vector<bool>, uint_t> sample_counts_many(
-      const reg_t &qubits, uint_t shots) {
-    const auto &state = get_state();
-    if (!state) return {};
-
-    flush_ops();
-
-    AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
-
-    // Aer's MPS backend returns samples sorted by ascending qubit index
-    // regardless of the order of `qubits` (see sort_measured_values in
-    // matrix_product_state_internal.cpp), while the statevector backend
-    // returns them in the order of `qubits`. To get consistent behavior
-    // across backends we sort the qubits ourselves and then remap the
-    // bits back to the caller-requested order.
-    reg_t sorted_qubits = qubits;
-    std::vector<size_t> order(qubits.size());
-    std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(),
-              [&qubits](size_t a, size_t b) { return qubits[a] < qubits[b]; });
-    for (size_t i = 0; i < qubits.size(); ++i)
-      sorted_qubits[i] = qubits[order[i]];
-
-    std::vector<AER::SampleVector> samples =
-        state->sample_measure(sorted_qubits, shots, fakeState->rng_);
-    std::unordered_map<std::vector<bool>, uint_t> ret;
-
-    std::vector<bool> bitstring(qubits.size());
-    for (const auto &sample : samples) {
-      for (size_t i = 0; i < qubits.size(); ++i)
-        bitstring[order[i]] = sample[i] == 1;
-
-      ++ret[bitstring];
+    // AerState's buffer export extracts double-precision result storage even
+    // when the actual state stores floats. Convert the concrete float state
+    // before clearing it so saved states and clones retain their amplitudes.
+    AER::Vector<complex_t> move_to_vector() override
+    {
+        flush_ops();
+        const auto single = std::dynamic_pointer_cast<AER::Statevector::State<AER::QV::QubitVector<float>>>(get_state());
+        if (!single)
+            return AER::AerState::move_to_vector();
+        auto values = single->move_to_vector();
+        AER::Vector<complex_t> result(values.size(), false);
+        for (size_t i = 0; i < values.size(); ++i)
+            result[i] = values[i];
+        clear();
+        return result;
     }
-    return ret;
-  }
+
+    AER::cmatrix_t move_to_matrix() override
+    {
+        flush_ops();
+        const auto single = std::dynamic_pointer_cast<AER::DensityMatrix::State<AER::QV::DensityMatrix<float>>>(get_state());
+        if (!single)
+            return AER::AerState::move_to_matrix();
+        auto values = single->move_to_matrix();
+        AER::cmatrix_t result(values.GetRows(), values.GetColumns());
+        for (size_t i = 0; i < values.GetRows() * values.GetColumns(); ++i)
+            result.data()[i] = values.data()[i];
+        clear();
+        return result;
+    }
+
+    double expval_pauli(const reg_t &qubits, const std::string &pauli)
+    {
+        if (qubits.empty() || pauli.empty())
+            return 1.;
+
+        const auto &state = get_state();
+        if (!state)
+            return 0.;
+
+        flush_ops();
+
+        return state->expval_pauli(qubits, pauli);
+    }
+
+    AER::Vector<complex_t> statevector()
+    {
+        const auto &state = get_state();
+        if (!state)
+            return {};
+
+        flush_ops();
+
+        AER::Operations::Op op;
+        op.type = AER::Operations::OpType::save_statevec;
+        op.name = "save_statevector";
+        op.save_type = AER::Operations::DataSubType::single;
+        op.string_params.push_back("statevector");
+        for (uint_t qubit = 0; qubit < num_of_qubits(); ++qubit)
+            op.qubits.push_back(qubit);
+
+        AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
+        fakeState->last_result_ = AER::ExperimentResult();
+        state->apply_op(op, fakeState->last_result_, fakeState->rng_);
+
+        return std::move(
+            static_cast<AER::DataMap<AER::SingleData, AER::Vector<complex_t>>>(std::move(fakeState->last_result_.data)).value()["statevector"].value());
+    }
+
+    std::shared_ptr<AER::QuantumState::Base> clone_extended_stabilizer_state()
+    {
+        flush_ops();
+        const auto extendedState = std::dynamic_pointer_cast<AER::ExtendedStabilizer::State>(get_state());
+        if (!extendedState)
+            throw std::runtime_error("QiskitAerState: current state is not an extended stabilizer state");
+        return std::make_shared<AER::ExtendedStabilizer::State>(*extendedState);
+    }
+
+    void restore_extended_stabilizer_state(const std::shared_ptr<AER::QuantumState::Base> &savedState)
+    {
+        const auto extendedState = std::dynamic_pointer_cast<AER::ExtendedStabilizer::State>(savedState);
+        if (!extendedState)
+            throw std::runtime_error("QiskitAerState: saved state is not an extended stabilizer state");
+
+        AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
+        fakeState->state_ = std::make_shared<AER::ExtendedStabilizer::State>(*extendedState);
+        fakeState->num_of_qubits_ = extendedState->qreg().get_n_qubits();
+        fakeState->initialized_ = true;
+        fakeState->last_result_ = AER::ExperimentResult();
+        clear_ops();
+    }
+
+    std::vector<bool> apply_measure_many(const reg_t &qubits)
+    {
+        const auto &state = get_state();
+        if (!state)
+            return {};
+
+        flush_ops();
+
+        AER::Operations::Op op;
+        op.type = AER::Operations::OpType::measure;
+        op.name = "measure";
+        op.qubits = qubits;
+        op.memory = qubits;
+        op.registers = qubits;
+
+        AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
+        fakeState->last_result_ = AER::ExperimentResult();
+        state->apply_op(op, fakeState->last_result_, fakeState->rng_);
+
+        std::vector<bool> bitstring(qubits.size(), false);
+        uint_t mem_size = state->creg().memory_size();
+        for (size_t q = 0; q < qubits.size(); ++q)
+        {
+            const auto qubit = qubits[q];
+            if (state->creg().creg_memory()[mem_size - qubit - 1] == '1')
+                bitstring[q] = true;
+        }
+        return bitstring;
+    }
+
+    std::unordered_map<std::vector<bool>, uint_t> sample_counts_many(const reg_t &qubits, uint_t shots)
+    {
+        const auto &state = get_state();
+        if (!state)
+            return {};
+
+        flush_ops();
+
+        AER::AerStateFake *fakeState = (AER::AerStateFake *)(void *)this;
+
+        // Aer's MPS backend returns samples sorted by ascending qubit index
+        // regardless of the order of `qubits` (see sort_measured_values in
+        // matrix_product_state_internal.cpp), while the statevector backend
+        // returns them in the order of `qubits`. To get consistent behavior
+        // across backends we sort the qubits ourselves and then remap the
+        // bits back to the caller-requested order.
+        reg_t sorted_qubits = qubits;
+        std::vector<size_t> order(qubits.size());
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(), [&qubits](size_t a, size_t b) { return qubits[a] < qubits[b]; });
+        for (size_t i = 0; i < qubits.size(); ++i)
+            sorted_qubits[i] = qubits[order[i]];
+
+        std::vector<AER::SampleVector> samples = state->sample_measure(sorted_qubits, shots, fakeState->rng_);
+        std::unordered_map<std::vector<bool>, uint_t> ret;
+
+        std::vector<bool> bitstring(qubits.size());
+        for (const auto &sample : samples)
+        {
+            for (size_t i = 0; i < qubits.size(); ++i)
+                bitstring[order[i]] = sample[i] == 1;
+
+            ++ret[bitstring];
+        }
+        return ret;
+    }
 };
 
-}  // namespace Private
-}  // namespace Simulators
+} // namespace Private
+} // namespace Simulators
 
 #endif
 #endif

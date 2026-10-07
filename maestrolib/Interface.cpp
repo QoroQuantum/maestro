@@ -30,1546 +30,1821 @@ static std::unique_ptr<Maestro> maestroInstance;
 
 // Legacy configuration uses JSON integers, including zero and the full uint64
 // range. Reject malformed seeds without throwing across this C ABI.
-static bool ConfigureLegacySeed(Network::INetwork<> &network,
-                                const boost::json::value &config) {
-  if (!config.is_object()) return true;
-  const auto *value = config.as_object().if_contains("seed");
-  if (!value) return true;
-  uint64_t seed;
-  if (value->is_uint64())
-    seed = value->as_uint64();
-  else if (value->is_int64() && value->as_int64() >= 0)
-    seed = static_cast<uint64_t>(value->as_int64());
-  else
-    return false;
-  network.Configure("seed", std::to_string(seed).c_str());
-  return true;
+static bool ConfigureLegacySeed(Network::INetwork<> &network, const boost::json::value &config)
+{
+    if (!config.is_object())
+        return true;
+    const auto *value = config.as_object().if_contains("seed");
+    if (!value)
+        return true;
+    uint64_t seed;
+    if (value->is_uint64())
+        seed = value->as_uint64();
+    else if (value->is_int64() && value->as_int64() >= 0)
+        seed = static_cast<uint64_t>(value->as_int64());
+    else
+        return false;
+    network.Configure("seed", std::to_string(seed).c_str());
+    return true;
 }
 
 // A missing legacy option uses the default, just like a fresh SimulatorConfig.
-static bool ConfigureLegacyFusion(Network::INetwork<> &network,
-                                  const boost::json::value &config) {
-  const char *setting = "auto";
-  if (config.is_object()) {
-    if (const auto *value = config.as_object().if_contains("gate_fusion")) {
-      if (!value->is_bool()) return false;
-      setting = value->as_bool() ? "true" : "false";
+static bool ConfigureLegacyFusion(Network::INetwork<> &network, const boost::json::value &config)
+{
+    const char *setting = "auto";
+    if (config.is_object())
+    {
+        if (const auto *value = config.as_object().if_contains("gate_fusion"))
+        {
+            if (!value->is_bool())
+                return false;
+            setting = value->as_bool() ? "true" : "false";
+        }
     }
-  }
-  network.Configure("gate_fusion", setting);
-  return true;
+    network.Configure("gate_fusion", setting);
+    return true;
 }
 
-template <int Dimension>
-static Eigen::Matrix<std::complex<double>, Dimension, Dimension> ReadGateMatrix(
-    const double *buffer) {
-  if (!buffer) throw std::invalid_argument("Null generic gate matrix");
-  Eigen::Matrix<std::complex<double>, Dimension, Dimension> matrix;
-  for (int row = 0; row < Dimension; ++row)
-    for (int col = 0; col < Dimension; ++col) {
-      const auto index = 2 * (row * Dimension + col);
-      matrix(row, col) = {buffer[index], buffer[index + 1]};
-    }
-  return matrix;
+template <int Dimension> static Eigen::Matrix<std::complex<double>, Dimension, Dimension> ReadGateMatrix(const double *buffer)
+{
+    if (!buffer)
+        throw std::invalid_argument("Null generic gate matrix");
+    Eigen::Matrix<std::complex<double>, Dimension, Dimension> matrix;
+    for (int row = 0; row < Dimension; ++row)
+        for (int col = 0; col < Dimension; ++col)
+        {
+            const auto index = 2 * (row * Dimension + col);
+            matrix(row, col) = {buffer[index], buffer[index + 1]};
+        }
+    return matrix;
 }
 
-extern "C" {
-int MaestroGetStateVector(void *sim, double *interleaved, size_t capacity) {
-  if (!sim) return 0;
-  try {
-    auto &state = *static_cast<Simulators::ISimulator *>(sim);
-    const auto n = state.GetNumberOfQubits();
-    const auto count = n ? Simulators::TensorQueries::DenseSize(n) : 0;
-    if (capacity < count || (count && !interleaved)) return 0;
-    const auto values = state.GetStateVector();
-    if (values.size() != count) return 0;
-    for (size_t i = 0; i < count; ++i) {
-      interleaved[2 * i] = values[i].real();
-      interleaved[2 * i + 1] = values[i].imag();
+extern "C"
+{
+    int MaestroGetStateVector(void *sim, double *interleaved, size_t capacity)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            auto &state = *static_cast<Simulators::ISimulator *>(sim);
+            const auto n = state.GetNumberOfQubits();
+            const auto count = n ? Simulators::TensorQueries::DenseSize(n) : 0;
+            if (capacity < count || (count && !interleaved))
+                return 0;
+            const auto values = state.GetStateVector();
+            if (values.size() != count)
+                return 0;
+            for (size_t i = 0; i < count; ++i)
+            {
+                interleaved[2 * i] = values[i].real();
+                interleaved[2 * i + 1] = values[i].imag();
+            }
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
     }
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
 
-int MaestroExpectationValueOperators(void *sim, const unsigned long int *qubits,
-                                     size_t count, const double *matrices,
-                                     double *real, double *imag) {
-  if (!sim || !real || !imag || (count && (!qubits || !matrices))) return 0;
-  try {
-    Simulators::TensorQueries::Count(count);
-    if (count > std::numeric_limits<size_t>::max() / 8) return 0;
-    Types::qubits_vector targets;
-    std::vector<Eigen::MatrixXcd> operators;
-    targets.reserve(count);
-    operators.reserve(count);
-    for (size_t i = 0; i < count; ++i) {
-      targets.push_back(qubits[i]);
-      operators.emplace_back(ReadGateMatrix<2>(matrices + 8 * i));
+    int MaestroExpectationValueOperators(void *sim, const unsigned long int *qubits, size_t count, const double *matrices, double *real, double *imag)
+    {
+        if (!sim || !real || !imag || (count && (!qubits || !matrices)))
+            return 0;
+        try
+        {
+            Simulators::TensorQueries::Count(count);
+            if (count > std::numeric_limits<size_t>::max() / 8)
+                return 0;
+            Types::qubits_vector targets;
+            std::vector<Eigen::MatrixXcd> operators;
+            targets.reserve(count);
+            operators.reserve(count);
+            for (size_t i = 0; i < count; ++i)
+            {
+                targets.push_back(qubits[i]);
+                operators.emplace_back(ReadGateMatrix<2>(matrices + 8 * i));
+            }
+            const auto value = static_cast<Simulators::ISimulator *>(sim)->ExpectationValueOperators(targets, operators);
+            *real = value.real();
+            *imag = value.imag();
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
     }
-    const auto value =
-        static_cast<Simulators::ISimulator *>(sim)->ExpectationValueOperators(
-            targets, operators);
-    *real = value.real();
-    *imag = value.imag();
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
 
-int MaestroExpectationValues(void *sim, const char *const *paulis, size_t count,
-                             double *values, size_t capacity) {
-  if (!sim || capacity < count || (count && (!paulis || !values))) return 0;
-  try {
-    std::vector<std::string> observables;
-    observables.reserve(count);
-    for (size_t i = 0; i < count; ++i) {
-      if (!paulis[i]) return 0;
-      observables.emplace_back(paulis[i]);
+    int MaestroExpectationValues(void *sim, const char *const *paulis, size_t count, double *values, size_t capacity)
+    {
+        if (!sim || capacity < count || (count && (!paulis || !values)))
+            return 0;
+        try
+        {
+            std::vector<std::string> observables;
+            observables.reserve(count);
+            for (size_t i = 0; i < count; ++i)
+            {
+                if (!paulis[i])
+                    return 0;
+                observables.emplace_back(paulis[i]);
+            }
+            const auto result = static_cast<Simulators::ISimulator *>(sim)->ExpectationValues(observables);
+            if (result.size() != count)
+                return 0;
+            if (count)
+                std::copy(result.begin(), result.end(), values);
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
     }
-    const auto result = static_cast<Simulators::ISimulator *>(sim)
-                            ->ExpectationValues(observables);
-    if (result.size() != count) return 0;
-    if (count) std::copy(result.begin(), result.end(), values);
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int MaestroExpectationValuesComplex(void *sim, const char *const *paulis,
-                                    size_t count, int normalized, double *real,
-                                    double *imag, size_t capacity) {
-  if (!sim || capacity < count || (count && (!paulis || !real || !imag)))
-    return 0;
-  try {
-    std::vector<std::string> observables;
-    observables.reserve(count);
-    for (size_t i = 0; i < count; ++i) {
-      if (!paulis[i]) return 0;
-      observables.emplace_back(paulis[i]);
-    }
-    const auto result = static_cast<Simulators::ISimulator *>(sim)
-                            ->ExpectationValuesComplex(observables,
-                                                       normalized != 0);
-    if (result.size() != count) return 0;
-    for (size_t i = 0; i < count; ++i) {
-      real[i] = result[i].real();
-      imag[i] = result[i].imag();
-    }
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int MaestroProbabilityBits(void *sim, const unsigned char *bits, size_t width,
-                           double *result) {
-  if (!sim) return 0;
-  try {
-    auto &state = *static_cast<Simulators::ISimulator *>(sim);
-    if (!bits || !result || width != state.GetNumberOfQubits()) return 0;
-    *result = state.ProbabilityBits(std::vector<bool>(bits, bits + width));
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int MaestroDensityMatrixElementBits(void *sim, const unsigned char *row,
-                                    const unsigned char *col, size_t width,
-                                    double *real, double *imag) {
-  if (!sim) return 0;
-  try {
-    auto &state = *static_cast<Simulators::ISimulator *>(sim);
-    if (!row || !col || !real || !imag || width != state.GetNumberOfQubits())
-      return 0;
-    const auto value =
-        state.DensityMatrixElementBits(std::vector<bool>(row, row + width),
-                                       std::vector<bool>(col, col + width));
-    *real = value.real();
-    *imag = value.imag();
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int MaestroDensityMatrixTrace(void *sim, double *real, double *imag) {
-  if (!sim) return 0;
-  try {
-    auto &state = *static_cast<Simulators::ISimulator *>(sim);
-    if (!real || !imag) return 0;
-    const auto value = state.DensityMatrixTrace();
-    *real = value.real();
-    *imag = value.imag();
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int MaestroExpectationValueComplex(void *sim, const char *pauli, int normalized,
-                                   double *real, double *imag) {
-  if (!sim) return 0;
-  try {
-    auto &state = *static_cast<Simulators::ISimulator *>(sim);
-    if (!pauli || !real || !imag) return 0;
-    const auto value = state.ExpectationValueComplex(pauli, normalized != 0);
-    *real = value.real();
-    *imag = value.imag();
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int MaestroGetDensityMatrix(void *sim, int normalized, double *interleaved,
-                            size_t capacity) {
-  if (!sim) return 0;
-  try {
-    auto &state = *static_cast<Simulators::ISimulator *>(sim);
-    if (!interleaved) return 0;
-    const auto n = state.GetNumberOfQubits();
-    if (n > 13 || capacity < (size_t{2} << (2 * n))) return 0;
-    const auto matrix = state.GetDensityMatrix(normalized != 0);
-    for (Eigen::Index i = 0; i < matrix.size(); ++i) {
-      interleaved[2 * i] = matrix.data()[i].real();
-      interleaved[2 * i + 1] = matrix.data()[i].imag();
-    }
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int MaestroApplyOperator(void *sim, const unsigned long int *qubits,
-                         size_t count, const double *interleaved,
-                         int normalize) {
-  if (!sim) return 0;
-  try {
-    auto &state = *static_cast<Simulators::ISimulator *>(sim);
-    if (!qubits || !interleaved || count < 1 || count > 2) return 0;
-    const size_t dim = size_t{1} << count;
-    Eigen::MatrixXcd matrix(dim, dim);
-    for (size_t i = 0; i < dim * dim; ++i)
-      matrix.data()[i] = {interleaved[2 * i], interleaved[2 * i + 1]};
-    state.ApplyOperator(Types::qubits_vector(qubits, qubits + count), matrix,
-                        normalize != 0);
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int MaestroMoveAtBeginningOfChain(void *sim, const unsigned long int *qubits,
-                                  size_t count) {
-  if (!sim) return 0;
-  try {
-    auto &state = *static_cast<Simulators::ISimulator *>(sim);
-    if (count && !qubits) return 0;
-    Types::qubits_vector targets;
-    if (count) targets.assign(qubits, qubits + count);
-    state.MoveAtBeginningOfChain(targets);
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int MaestroSampleCountsBits(void *sim, const unsigned long int *qubits,
-                            size_t width, size_t shots, unsigned char *outcomes,
-                            unsigned long long *counts, size_t capacity,
-                            size_t *written) {
-  if (!sim) return 0;
-  try {
-    auto &state = *static_cast<Simulators::ISimulator *>(sim);
-    if (!written) return 0;
-    *written = 0;
-    if (!shots || !width) return 1;
-    if (!qubits || !outcomes || !counts ||
-        width > std::numeric_limits<size_t>::max() / shots || capacity < shots)
-      return 0;
-    const auto result = state.SampleCountsMany(
-        Types::qubits_vector(qubits, qubits + width), shots);
-    for (const auto &entry : result) {
-      for (size_t i = 0; i < width; ++i)
-        outcomes[*written * width + i] = entry.first[i];
-      counts[*written] = entry.second;
-      ++*written;
-    }
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int MaestroMeasureBits(void *sim, const unsigned long int *qubits, size_t width,
-                       unsigned char *outcomes) {
-  if (!sim) return 0;
-  try {
-    auto &state = *static_cast<Simulators::ISimulator *>(sim);
-    if (!qubits || !outcomes || !width) return 0;
-    const auto result =
-        state.MeasureMany(Types::qubits_vector(qubits, qubits + width));
-    for (size_t i = 0; i < width; ++i) outcomes[i] = result[i];
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
 
-unsigned GetGateFusionMaxQubits(void *sim) {
-  if (!sim) return 0;
-  try {
-    return static_cast<Simulators::ISimulator *>(sim)->GetGateFusionMaxQubits();
-  } catch (...) {
-    return 0;
-  }
-}
-int IsGateFusionEnabled(void *sim) {
-  if (!sim) return 0;
-  try {
-    return static_cast<Simulators::ISimulator *>(sim)->IsGateFusionEnabled();
-  } catch (...) {
-    return 0;
-  }
-}
-int GetGateFusionStatistics(void *sim,
-                            MaestroGateFusionStatistics *statistics) {
-  if (!sim || !statistics) return 0;
-  try {
-    const auto value =
-        static_cast<Simulators::ISimulator *>(sim)->GetGateFusionStatistics();
-    *statistics = {value.submittedGates, value.backendGates, value.fusedBlocks};
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int ApplyGenericOneQubitGate(void *sim, unsigned long q0,
-                             const double *buffer) {
-  if (!sim || !buffer) return 0;
-  try {
-    auto &simulator = *static_cast<Simulators::ISimulator *>(sim);
-    const auto matrix = ReadGateMatrix<2>(buffer);
-    Simulators::ValidateGenericGate(simulator, {q0}, matrix);
-    simulator.ApplyGenericOneQubitGate(q0, matrix);
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int ApplyGenericTwoQubitGate(void *sim, unsigned long q0, unsigned long q1,
-                             const double *buffer) {
-  if (!sim || !buffer) return 0;
-  try {
-    auto &simulator = *static_cast<Simulators::ISimulator *>(sim);
-    const auto matrix = ReadGateMatrix<4>(buffer);
-    Simulators::ValidateGenericGate(simulator, {q0, q1}, matrix);
-    simulator.ApplyGenericTwoQubitGate(q0, q1, matrix);
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-int ApplyGenericThreeQubitGate(void *sim, unsigned long q0, unsigned long q1,
-                               unsigned long q2, const double *buffer) {
-  if (!sim || !buffer) return 0;
-  try {
-    auto &simulator = *static_cast<Simulators::ISimulator *>(sim);
-    const auto matrix = ReadGateMatrix<8>(buffer);
-    Simulators::ValidateGenericGate(simulator, {q0, q1, q2}, matrix);
-    simulator.ApplyGenericThreeQubitGate(q0, q1, q2, matrix);
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
+    int MaestroExpectationValuesComplex(void *sim, const char *const *paulis, size_t count, int normalized, double *real, double *imag, size_t capacity)
+    {
+        if (!sim || capacity < count || (count && (!paulis || !real || !imag)))
+            return 0;
+        try
+        {
+            std::vector<std::string> observables;
+            observables.reserve(count);
+            for (size_t i = 0; i < count; ++i)
+            {
+                if (!paulis[i])
+                    return 0;
+                observables.emplace_back(paulis[i]);
+            }
+            const auto result = static_cast<Simulators::ISimulator *>(sim)->ExpectationValuesComplex(observables, normalized != 0);
+            if (result.size() != count)
+                return 0;
+            for (size_t i = 0; i < count; ++i)
+            {
+                real[i] = result[i].real();
+                imag[i] = result[i].imag();
+            }
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroProbabilityBits(void *sim, const unsigned char *bits, size_t width, double *result)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            auto &state = *static_cast<Simulators::ISimulator *>(sim);
+            if (!bits || !result || width != state.GetNumberOfQubits())
+                return 0;
+            *result = state.ProbabilityBits(std::vector<bool>(bits, bits + width));
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroDensityMatrixElementBits(void *sim, const unsigned char *row, const unsigned char *col, size_t width, double *real, double *imag)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            auto &state = *static_cast<Simulators::ISimulator *>(sim);
+            if (!row || !col || !real || !imag || width != state.GetNumberOfQubits())
+                return 0;
+            const auto value = state.DensityMatrixElementBits(std::vector<bool>(row, row + width), std::vector<bool>(col, col + width));
+            *real = value.real();
+            *imag = value.imag();
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroDensityMatrixTrace(void *sim, double *real, double *imag)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            auto &state = *static_cast<Simulators::ISimulator *>(sim);
+            if (!real || !imag)
+                return 0;
+            const auto value = state.DensityMatrixTrace();
+            *real = value.real();
+            *imag = value.imag();
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroExpectationValueComplex(void *sim, const char *pauli, int normalized, double *real, double *imag)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            auto &state = *static_cast<Simulators::ISimulator *>(sim);
+            if (!pauli || !real || !imag)
+                return 0;
+            const auto value = state.ExpectationValueComplex(pauli, normalized != 0);
+            *real = value.real();
+            *imag = value.imag();
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroGetDensityMatrix(void *sim, int normalized, double *interleaved, size_t capacity)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            auto &state = *static_cast<Simulators::ISimulator *>(sim);
+            if (!interleaved)
+                return 0;
+            const auto n = state.GetNumberOfQubits();
+            if (n > 13 || capacity < (size_t{2} << (2 * n)))
+                return 0;
+            const auto matrix = state.GetDensityMatrix(normalized != 0);
+            for (Eigen::Index i = 0; i < matrix.size(); ++i)
+            {
+                interleaved[2 * i] = matrix.data()[i].real();
+                interleaved[2 * i + 1] = matrix.data()[i].imag();
+            }
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroApplyOperator(void *sim, const unsigned long int *qubits, size_t count, const double *interleaved, int normalize)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            auto &state = *static_cast<Simulators::ISimulator *>(sim);
+            if (!qubits || !interleaved || count < 1 || count > 2)
+                return 0;
+            const size_t dim = size_t{1} << count;
+            Eigen::MatrixXcd matrix(dim, dim);
+            for (size_t i = 0; i < dim * dim; ++i)
+                matrix.data()[i] = {interleaved[2 * i], interleaved[2 * i + 1]};
+            state.ApplyOperator(Types::qubits_vector(qubits, qubits + count), matrix, normalize != 0);
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroMoveAtBeginningOfChain(void *sim, const unsigned long int *qubits, size_t count)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            auto &state = *static_cast<Simulators::ISimulator *>(sim);
+            if (count && !qubits)
+                return 0;
+            Types::qubits_vector targets;
+            if (count)
+                targets.assign(qubits, qubits + count);
+            state.MoveAtBeginningOfChain(targets);
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroSampleCountsBits(void *sim, const unsigned long int *qubits, size_t width, size_t shots, unsigned char *outcomes, unsigned long long *counts,
+                                size_t capacity, size_t *written)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            auto &state = *static_cast<Simulators::ISimulator *>(sim);
+            if (!written)
+                return 0;
+            *written = 0;
+            if (!shots || !width)
+                return 1;
+            if (!qubits || !outcomes || !counts || width > std::numeric_limits<size_t>::max() / shots || capacity < shots)
+                return 0;
+            const auto result = state.SampleCountsMany(Types::qubits_vector(qubits, qubits + width), shots);
+            for (const auto &entry : result)
+            {
+                for (size_t i = 0; i < width; ++i)
+                    outcomes[*written * width + i] = entry.first[i];
+                counts[*written] = entry.second;
+                ++*written;
+            }
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroMeasureBits(void *sim, const unsigned long int *qubits, size_t width, unsigned char *outcomes)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            auto &state = *static_cast<Simulators::ISimulator *>(sim);
+            if (!qubits || !outcomes || !width)
+                return 0;
+            const auto result = state.MeasureMany(Types::qubits_vector(qubits, qubits + width));
+            for (size_t i = 0; i < width; ++i)
+                outcomes[i] = result[i];
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    unsigned GetGateFusionMaxQubits(void *sim)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            return static_cast<Simulators::ISimulator *>(sim)->GetGateFusionMaxQubits();
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int IsGateFusionEnabled(void *sim)
+    {
+        if (!sim)
+            return 0;
+        try
+        {
+            return static_cast<Simulators::ISimulator *>(sim)->IsGateFusionEnabled();
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int GetGateFusionStatistics(void *sim, MaestroGateFusionStatistics *statistics)
+    {
+        if (!sim || !statistics)
+            return 0;
+        try
+        {
+            const auto value = static_cast<Simulators::ISimulator *>(sim)->GetGateFusionStatistics();
+            *statistics = {value.submittedGates, value.backendGates, value.fusedBlocks};
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int ApplyGenericOneQubitGate(void *sim, unsigned long q0, const double *buffer)
+    {
+        if (!sim || !buffer)
+            return 0;
+        try
+        {
+            auto &simulator = *static_cast<Simulators::ISimulator *>(sim);
+            const auto matrix = ReadGateMatrix<2>(buffer);
+            Simulators::ValidateGenericGate(simulator, {q0}, matrix);
+            simulator.ApplyGenericOneQubitGate(q0, matrix);
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int ApplyGenericTwoQubitGate(void *sim, unsigned long q0, unsigned long q1, const double *buffer)
+    {
+        if (!sim || !buffer)
+            return 0;
+        try
+        {
+            auto &simulator = *static_cast<Simulators::ISimulator *>(sim);
+            const auto matrix = ReadGateMatrix<4>(buffer);
+            Simulators::ValidateGenericGate(simulator, {q0, q1}, matrix);
+            simulator.ApplyGenericTwoQubitGate(q0, q1, matrix);
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int ApplyGenericThreeQubitGate(void *sim, unsigned long q0, unsigned long q1, unsigned long q2, const double *buffer)
+    {
+        if (!sim || !buffer)
+            return 0;
+        try
+        {
+            auto &simulator = *static_cast<Simulators::ISimulator *>(sim);
+            const auto matrix = ReadGateMatrix<8>(buffer);
+            Simulators::ValidateGenericGate(simulator, {q0, q1, q2}, matrix);
+            simulator.ApplyGenericThreeQubitGate(q0, q1, q2, matrix);
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    void *GetMaestroObject() {
-  if (!isInitialized.exchange(true)) {
-    Simulators::SimulatorsFactory::InitQuestLibrary();
+    void *GetMaestroObject()
+    {
+        if (!isInitialized.exchange(true))
+        {
+            Simulators::SimulatorsFactory::InitQuestLibrary();
 
 #ifdef COMPOSER
-    Estimators::ExecutionEstimator<>::InitializeRegressors();
+            Estimators::ExecutionEstimator<>::InitializeRegressors();
 #endif
 
-    maestroInstance = std::make_unique<Maestro>();
-  }
+            maestroInstance = std::make_unique<Maestro>();
+        }
 
-  return (void *)maestroInstance.get();
-}
+        return (void *)maestroInstance.get();
+    }
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    void *GetMaestroObjectWithMute() {
-  if (!isInitialized.exchange(true)) {
-    Simulators::SimulatorsFactory::InitQuestLibraryWithMute();
+    void *GetMaestroObjectWithMute()
+    {
+        if (!isInitialized.exchange(true))
+        {
+            Simulators::SimulatorsFactory::InitQuestLibraryWithMute();
 
 #ifdef COMPOSER
-    Estimators::ExecutionEstimator<>::InitializeRegressors();
+            Estimators::ExecutionEstimator<>::InitializeRegressors();
 #endif
 
-    maestroInstance = std::make_unique<Maestro>();
-  }
+            maestroInstance = std::make_unique<Maestro>();
+        }
 
-  return (void *)maestroInstance.get();
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    unsigned long int CreateSimpleSimulator(int nrQubits) {
-  if (!maestroInstance) return 0;
-
-  return maestroInstance->CreateSimpleSimulator(nrQubits);
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    void DestroySimpleSimulator(unsigned long int simHandle) {
-  if (!maestroInstance || simHandle == 0) return;
-
-  maestroInstance->DestroySimpleSimulator(simHandle);
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int RemoveAllOptimizationSimulatorsAndAdd(unsigned long int simHandle,
-                                              int simType, int simExecType) {
-  if (!maestroInstance || simHandle == 0) return 0;
-
-  return maestroInstance->RemoveAllOptimizationSimulatorsAndAdd(
-      simHandle, static_cast<Simulators::SimulatorType>(simType),
-      static_cast<Simulators::SimulationType>(simExecType));
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int AddOptimizationSimulator(unsigned long int simHandle, int simType,
-                                 int simExecType) {
-  if (!maestroInstance || simHandle == 0) return 0;
-
-  return maestroInstance->AddOptimizationSimulator(
-      simHandle, static_cast<Simulators::SimulatorType>(simType),
-      static_cast<Simulators::SimulationType>(simExecType));
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    char *SimpleExecute(unsigned long int simpleSim, const char *circuitStr,
-                        const char *jsonConfig) {
-  if (simpleSim == 0 || !circuitStr || !jsonConfig || !maestroInstance)
-    return nullptr;
-
-  auto network = maestroInstance->GetSimpleSimulator(simpleSim);
-
-  // step 1: Parse the JSON circuit and configuration strings
-  // convert the JSON circuit into a Circuit object
-
-  // I'm unsure here on how it deals with the classical registers, more
-  // precisely with stuff like "other_measure_name" and "meas" (see below) since
-  // in the example it seems to just use the cbit number
-
-  // This is the json format:
-  // {"instructions":
-  // [{"name": "h", "qubits": [0], "params": []},
-  // {"name": "cx", "qubits": [0, 1], "params": []},
-  // {"name": "rx", "qubits": [0], "params": [0.39528385768119634]},
-  // {"name": "measure", "qubits": [0], "memory": [0]}],
-  //
-  // "num_qubits": 2, "num_clbits": 4,
-  // "quantum_registers": {"q": [0, 1]},
-  // "classical_registers": {"c": [0, 1], "other_measure_name": [2], "meas":
-  // [3]}}
-
-  std::shared_ptr<Circuits::Circuit<>> circuit;
-
-  if (circuitStr[0] == '{' || circuitStr[0] == '[') {
-    // assume JSON format only if either object or array
-    Json::JsonParserMaestro<> jsonParser;
-    circuit = jsonParser.ParseCircuit(circuitStr);
-  } else {
-    // QASM 2.0 format
-    qasm::QasmToCirc<> parser;
-    std::string qasmInput(circuitStr);
-    circuit = parser.ParseAndTranslate(qasmInput);
-    if (parser.Failed()) return nullptr;
-  }
-
-  // check if the circuit has measurements only at the end
-
-  // get the number of shots from the configuration
-  size_t nrShots = 1;  // default value
-
-  const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
-  if (!ConfigureLegacyFusion(*network, configJson)) return nullptr;
-  if (!ConfigureLegacySeed(*network, configJson)) return nullptr;
-
-  if (configJson.is_object()) {
-    const auto configObject = configJson.as_object();
-    // get whatever else is needed from the configuration
-    // maybe simulator type, allowed simulator types, bond dimension limit, etc.
-
-    // execute the circuit in the network object
-    if (configObject.contains("shots") &&
-        configObject.at("shots").is_number()) {
-      auto number = configObject.at("shots");
-      nrShots = number.is_int64() ? (size_t)number.as_int64()
-                                  : (size_t)number.as_uint64();
+        return (void *)maestroInstance.get();
     }
-  }
-
-  bool configured = false;
-  const std::string gpuDevice =
-      Json::JsonParserMaestro<>::GetConfigString("gpu_device", configJson);
-  if (!gpuDevice.empty()) {
-    Simulators::Configuration::ParseGpuDevice(gpuDevice);
-    configured = true;
-    if (network->GetSimulator()) network->GetSimulator()->Clear();
-    network->Configure("gpu_device", gpuDevice.c_str());
-  }
-
-  const std::string maxBondDim = Json::JsonParserMaestro<>::GetConfigString(
-      "matrix_product_state_max_bond_dimension", configJson);
-  if (!maxBondDim.empty()) {
-    configured = true;
-    if (network->GetSimulator()) network->GetSimulator()->Clear();
-    network->Configure("matrix_product_state_max_bond_dimension",
-                       maxBondDim.c_str());
-  }
-
-  const std::string singularValueThreshold =
-      Json::JsonParserMaestro<>::GetConfigString(
-          "matrix_product_state_truncation_threshold", configJson);
-  if (!singularValueThreshold.empty()) {
-    configured = true;
-    if (network->GetSimulator()) network->GetSimulator()->Clear();
-    network->Configure("matrix_product_state_truncation_threshold",
-                       singularValueThreshold.c_str());
-  }
-
-  const std::string truncationMode = Json::JsonParserMaestro<>::GetConfigString(
-      "matrix_product_state_truncation_mode", configJson);
-  if (!truncationMode.empty()) {
-    configured = true;
-    if (network->GetSimulator()) network->GetSimulator()->Clear();
-    network->Configure("matrix_product_state_truncation_mode",
-                       truncationMode.c_str());
-  }
-
-  const std::string mpsSample = Json::JsonParserMaestro<>::GetConfigString(
-      "mps_sample_measure_algorithm", configJson);
-  if (!mpsSample.empty()) {
-    configured = true;
-    if (network->GetSimulator()) network->GetSimulator()->Clear();
-    network->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
-  }
-
-  if (configured || !network->GetSimulator()) network->CreateSimulator();
-
-  // TODO: get from config the allowed simulators types and so on, if set
-  auto start = std::chrono::high_resolution_clock::now();
-  auto results = network->RepeatedExecuteOnHost(circuit, 0, nrShots);
-  auto end = std::chrono::high_resolution_clock::now();
-
-  std::chrono::duration<double> duration = end - start;
-  double time_taken = duration.count();
-  std::string timeStr = std::to_string(time_taken);
-
-  // convert the results into a JSON string
-  // allocate memory for the result string and copy the JSON result into it
-  // return the result string
-
-  boost::json::object jsonResult;
-  jsonResult.reserve(results.size());
-
-  for (auto &result : results) {
-    boost::json::string bits;
-    bits.reserve(result.first.size());
-    for (const auto bit : result.first) bits.append(bit ? "1" : "0");
-
-    jsonResult.emplace(std::move(bits), std::move(result.second));
-  }
-
-  boost::json::object response;
-  response.reserve(4);
-
-  response.emplace("counts", std::move(jsonResult));
-  response.emplace("time_taken", timeStr);
-  response.emplace("gate_fusion",
-                   boost::json::object{
-                       {"enabled", network->WasGateFusionEnabled()},
-                       {"max_qubits", network->GetLastGateFusionMaxQubits()}});
-
-  auto simulatorType = network->GetLastSimulatorType();
-
-  switch (simulatorType) {
-#ifndef NO_QISKIT_AER
-    case Simulators::SimulatorType::kQiskitAer:
-      response.emplace("simulator", "aer");
-      break;
-#endif
-    case Simulators::SimulatorType::kQCSim:
-      response.emplace("simulator", "qcsim");
-      break;
-#ifndef NO_QISKIT_AER
-    case Simulators::SimulatorType::kCompositeQiskitAer:
-      response.emplace("simulator", "composite_aer");
-      break;
-#endif
-    case Simulators::SimulatorType::kCompositeQCSim:
-      response.emplace("simulator", "composite_qcsim");
-      break;
-    case Simulators::SimulatorType::kQuestSim:
-      response.emplace("simulator", "quest");
-      break;
-#ifdef __linux__
-    case Simulators::SimulatorType::kDistGpuSim:
-      response.emplace("simulator", "distributed_gpu_simulator");
-      break;
-    case Simulators::SimulatorType::kDistMpiGpuSim:
-      response.emplace("simulator", "distributed_mpi_gpu_simulator");
-      break;
-    case Simulators::SimulatorType::kGpuSim:
-      response.emplace("simulator", "gpu_simulator");
-      response.emplace("gpu_device", network->GetLastGpuDevice());
-      break;
-#endif
-    default:
-      response.emplace("simulator", "unknown");
-      break;
-  }
-
-  auto simulationType = network->GetLastSimulationType();
-  switch (simulationType) {
-    case Simulators::SimulationType::kStatevector:
-      response.emplace("method", "statevector");
-      break;
-    case Simulators::SimulationType::kMatrixProductState:
-      response.emplace("method", "matrix_product_state");
-      break;
-    case Simulators::SimulationType::kStabilizer:
-      response.emplace("method", "stabilizer");
-      break;
-    case Simulators::SimulationType::kTensorNetwork:
-      response.emplace("method", "tensor_network");
-      break;
-    case Simulators::SimulationType::kPauliPropagator:
-      response.emplace("method", "pauli_propagation");
-      break;
-    case Simulators::SimulationType::kExtendedStabilizer:
-      response.emplace("method", "extended_stabilizer");
-      break;
-    case Simulators::SimulationType::kPathIntegral:
-      response.emplace("method", "path_integral");
-      break;
-    case Simulators::SimulationType::kDensityMatrix:
-      response.emplace("method", "density_matrix");
-      break;
-    default:
-      response.emplace("method", "unknown");
-      break;
-  }
-
-  const std::string responseStr = boost::json::serialize(response);
-  const size_t responseSize = responseStr.length();
-  char *result = new char[responseSize + 1];
-
-  const char *responseData = responseStr.c_str();
-  std::copy(responseData, responseData + responseSize, result);
-
-  result[responseSize] = 0;  // ensure null-termination
-
-  return result;
-}
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    char *SimpleEstimate(unsigned long int simpleSim, const char *circuitStr,
-                         const char *observableStr, const char *jsonConfig) {
-  if (simpleSim == 0 || !circuitStr || !observableStr || !jsonConfig ||
-      !maestroInstance)
-    return nullptr;
-
-  auto network = maestroInstance->GetSimpleSimulator(simpleSim);
-
-  std::shared_ptr<Circuits::Circuit<>> circuit;
-
-  if (circuitStr[0] == '{' || circuitStr[0] == '[') {
-    Json::JsonParserMaestro<> jsonParser;
-    circuit = jsonParser.ParseCircuit(circuitStr);
-  } else {
-    qasm::QasmToCirc<> parser;
-    std::string qasmInput(circuitStr);
-    circuit = parser.ParseAndTranslate(qasmInput);
-    if (parser.Failed()) return nullptr;
-  }
-
-  const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
-  if (!ConfigureLegacyFusion(*network, configJson)) return nullptr;
-  if (!ConfigureLegacySeed(*network, configJson)) return nullptr;
-
-  bool configured = false;
-  const std::string gpuDevice =
-      Json::JsonParserMaestro<>::GetConfigString("gpu_device", configJson);
-  if (!gpuDevice.empty()) {
-    Simulators::Configuration::ParseGpuDevice(gpuDevice);
-    configured = true;
-    if (network->GetSimulator()) network->GetSimulator()->Clear();
-    network->Configure("gpu_device", gpuDevice.c_str());
-  }
-
-  const std::string maxBondDim = Json::JsonParserMaestro<>::GetConfigString(
-      "matrix_product_state_max_bond_dimension", configJson);
-  if (!maxBondDim.empty()) {
-    configured = true;
-    if (network->GetSimulator()) network->GetSimulator()->Clear();
-    network->Configure("matrix_product_state_max_bond_dimension",
-                       maxBondDim.c_str());
-  }
-
-  const std::string singularValueThreshold =
-      Json::JsonParserMaestro<>::GetConfigString(
-          "matrix_product_state_truncation_threshold", configJson);
-  if (!singularValueThreshold.empty()) {
-    configured = true;
-    if (network->GetSimulator()) network->GetSimulator()->Clear();
-    network->Configure("matrix_product_state_truncation_threshold",
-                       singularValueThreshold.c_str());
-  }
-
-  const std::string truncationMode = Json::JsonParserMaestro<>::GetConfigString(
-      "matrix_product_state_truncation_mode", configJson);
-  if (!truncationMode.empty()) {
-    configured = true;
-    if (network->GetSimulator()) network->GetSimulator()->Clear();
-    network->Configure("matrix_product_state_truncation_mode",
-                       truncationMode.c_str());
-  }
-
-  const std::string mpsSample = Json::JsonParserMaestro<>::GetConfigString(
-      "mps_sample_measure_algorithm", configJson);
-  if (!mpsSample.empty()) {
-    configured = true;
-    if (network->GetSimulator()) network->GetSimulator()->Clear();
-    network->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
-  }
-
-  if (configured || !network->GetSimulator()) network->CreateSimulator();
-
-  // Split observableStr by ';'
-  std::vector<std::string> paulis;
-  std::string obsStr(observableStr);
-  std::stringstream ss(obsStr);
-  std::string item;
-  while (std::getline(ss, item, ';')) {
-    if (!item.empty()) paulis.push_back(item);
-  }
-
-  auto start = std::chrono::high_resolution_clock::now();
-  auto expectations = network->ExecuteOnHostExpectations(circuit, 0, paulis);
-  auto end = std::chrono::high_resolution_clock::now();
-
-  std::chrono::duration<double> duration = end - start;
-  double time_taken = duration.count();
-  std::string timeStr = std::to_string(time_taken);
-
-  boost::json::object response;
-  response.reserve(4);
-
-  boost::json::array jsonExpectations;
-  jsonExpectations.reserve(expectations.size());
-  for (double val : expectations) {
-    jsonExpectations.push_back(val);
-  }
-
-  response.emplace("expectation_values", std::move(jsonExpectations));
-  response.emplace("time_taken", timeStr);
-  response.emplace("gate_fusion",
-                   boost::json::object{
-                       {"enabled", network->WasGateFusionEnabled()},
-                       {"max_qubits", network->GetLastGateFusionMaxQubits()}});
-
-  auto simulatorType = network->GetLastSimulatorType();
-
-  switch (simulatorType) {
-#ifndef NO_QISKIT_AER
-    case Simulators::SimulatorType::kQiskitAer:
-      response.emplace("simulator", "aer");
-      break;
-#endif
-    case Simulators::SimulatorType::kQCSim:
-      response.emplace("simulator", "qcsim");
-      break;
-    case Simulators::SimulatorType::kQuestSim:
-      response.emplace("simulator", "quest");
-      break;
-#ifndef NO_QISKIT_AER
-    case Simulators::SimulatorType::kCompositeQiskitAer:
-      response.emplace("simulator", "composite_aer");
-      break;
-#endif
-    case Simulators::SimulatorType::kCompositeQCSim:
-      response.emplace("simulator", "composite_qcsim");
-      break;
-#ifdef __linux__
-    case Simulators::SimulatorType::kDistGpuSim:
-      response.emplace("simulator", "distributed_gpu_simulator");
-      break;
-    case Simulators::SimulatorType::kDistMpiGpuSim:
-      response.emplace("simulator", "distributed_mpi_gpu_simulator");
-      break;
-    case Simulators::SimulatorType::kGpuSim:
-      response.emplace("simulator", "gpu_simulator");
-      response.emplace("gpu_device", network->GetLastGpuDevice());
-      break;
-#endif
-    default:
-      response.emplace("simulator", "unknown");
-      break;
-  }
-
-  auto simulationType = network->GetLastSimulationType();
-  switch (simulationType) {
-    case Simulators::SimulationType::kStatevector:
-      response.emplace("method", "statevector");
-      break;
-    case Simulators::SimulationType::kMatrixProductState:
-      response.emplace("method", "matrix_product_state");
-      break;
-    case Simulators::SimulationType::kStabilizer:
-      response.emplace("method", "stabilizer");
-      break;
-    case Simulators::SimulationType::kTensorNetwork:
-      response.emplace("method", "tensor_network");
-      break;
-    case Simulators::SimulationType::kPauliPropagator:
-      response.emplace("method", "pauli_propagation");
-      break;
-    case Simulators::SimulationType::kExtendedStabilizer:
-      response.emplace("method", "extended_stabilizer");
-      break;
-    case Simulators::SimulationType::kPathIntegral:
-      response.emplace("method", "path_integral");
-      break;
-    case Simulators::SimulationType::kDensityMatrix:
-      response.emplace("method", "density_matrix");
-      break;
-    default:
-      response.emplace("method", "unknown");
-      break;
-  }
-
-  const std::string responseStr = boost::json::serialize(response);
-  const size_t responseSize = responseStr.length();
-  char *result = new char[responseSize + 1];
-
-  const char *responseData = responseStr.c_str();
-  std::copy(responseData, responseData + responseSize, result);
-
-  result[responseSize] = 0;  // ensure null-termination
-
-  return result;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    void FreeResult(char *result) {
-  if (result) delete[] result;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    unsigned long int CreateSimulator(int simType, int simExecType) {
-  if (!maestroInstance) return 0;
-
-  return maestroInstance->CreateSimulator(
-      static_cast<Simulators::SimulatorType>(simType),
-      static_cast<Simulators::SimulationType>(simExecType));
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    void *GetSimulator(unsigned long int simHandle) {
-  if (!maestroInstance || simHandle == 0) return nullptr;
-  return maestroInstance->GetSimulator(simHandle);
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    void DestroySimulator(unsigned long int simHandle) {
-  if (!maestroInstance || simHandle == 0) return;
-  maestroInstance->DestroySimulator(simHandle);
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyX(void *sim, int qubit) {
-  if (!sim) return 0;
-
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyX(qubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyY(void *sim, int qubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyY(qubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyZ(void *sim, int qubit) {
-  if (!sim) return 0;
-
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyZ(qubit);
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyH(void *sim, int qubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyH(qubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyS(void *sim, int qubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyS(qubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplySDG(void *sim, int qubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplySDG(qubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyT(void *sim, int qubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyT(qubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyTDG(void *sim, int qubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyTDG(qubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplySX(void *sim, int qubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplySx(qubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplySXDG(void *sim, int qubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplySxDAG(qubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyK(void *sim, int qubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyK(qubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyP(void *sim, int qubit, double theta) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyP(qubit, theta);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyRx(void *sim, int qubit, double theta) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyRx(qubit, theta);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyRy(void *sim, int qubit, double theta) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyRy(qubit, theta);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyRz(void *sim, int qubit, double theta) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyRz(qubit, theta);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyU(void *sim, int qubit, double theta, double phi, double lambda,
-               double gamma) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyU(qubit, theta, phi, lambda, gamma);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCX(void *sim, int controlQubit, int targetQubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCX(controlQubit, targetQubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCY(void *sim, int controlQubit, int targetQubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCY(controlQubit, targetQubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCZ(void *sim, int controlQubit, int targetQubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCZ(controlQubit, targetQubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCH(void *sim, int controlQubit, int targetQubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCH(controlQubit, targetQubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCSX(void *sim, int controlQubit, int targetQubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCSx(controlQubit, targetQubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCSXDG(void *sim, int controlQubit, int targetQubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCSxDAG(controlQubit, targetQubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCP(void *sim, int controlQubit, int targetQubit, double theta) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCP(controlQubit, targetQubit, theta);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCRx(void *sim, int controlQubit, int targetQubit, double theta) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCRx(controlQubit, targetQubit, theta);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCRy(void *sim, int controlQubit, int targetQubit, double theta) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCRy(controlQubit, targetQubit, theta);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCRz(void *sim, int controlQubit, int targetQubit, double theta) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCRz(controlQubit, targetQubit, theta);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCCX(void *sim, int controlQubit1, int controlQubit2,
-                 int targetQubit) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCCX(controlQubit1, controlQubit2, targetQubit);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplySwap(void *sim, int qubit1, int qubit2) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplySwap(qubit1, qubit2);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCSwap(void *sim, int controlQubit, int qubit1, int qubit2) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCSwap(controlQubit, qubit1, qubit2);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyCU(void *sim, int controlQubit, int targetQubit, double theta,
-                double phi, double lambda, double gamma) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->ApplyCU(controlQubit, targetQubit, theta, phi, lambda, gamma);
-
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int InitializeSimulator(void *sim) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->Initialize();
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ResetSimulator(void *sim) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->Reset();
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ConfigureSimulator(void *sim, const char *key, const char *value) {
-  if (!sim || !key || !value) return 0;
-  try {
-    auto simulator = static_cast<Simulators::ISimulator *>(sim);
-    simulator->Configure(key, value);
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    char *GetConfiguration(void *sim, const char *key) {
-  if (!sim || !key) return nullptr;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  std::string value = simulator->GetConfiguration(key);
-  if (value.empty()) return nullptr;
-  // allocate memory for the result string and copy the configuration value into
-  // it
-  const size_t valueSize = value.length();
-  char *result = new char[valueSize + 1];
-  std::copy(value.c_str(), value.c_str() + valueSize, result);
-  result[valueSize] = 0;  // ensure null-termination
-  return result;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    unsigned long int AllocateQubits(void *sim, unsigned long int nrQubits) {
-  if (!sim || nrQubits == 0) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  const size_t res = simulator->AllocateQubits(nrQubits);
-
-  return static_cast<unsigned long int>(res);
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    unsigned long int GetNumberOfQubits(void *sim) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  const size_t res = simulator->GetNumberOfQubits();
-  return static_cast<unsigned long int>(res);
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ClearSimulator(void *sim) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->Clear();
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    unsigned long long int Measure(void *sim, const unsigned long int *qubits,
-                                   unsigned long int nrQubits) {
-  if (!sim || !qubits || nrQubits == 0) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
-  const size_t res = simulator->Measure(qubitVector);
-  return static_cast<unsigned long long int>(res);
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    int ApplyReset(void *sim, const unsigned long int *qubits,
-                   unsigned long int nrQubits) {
-  if (!sim || !qubits || nrQubits == 0) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
-  simulator->ApplyReset(qubitVector);
-  return 1;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    double Probability(void *sim, unsigned long long int outcome) {
-  try {
-    if (!sim) return 0.0;
-    auto simulator = static_cast<Simulators::ISimulator *>(sim);
-    const double res = simulator->Probability(outcome);
-    return res;
-  } catch (...) {
-    return std::numeric_limits<double>::quiet_NaN();
-  }
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    void FreeDoubleVector(double *vec) {
-  if (vec) delete[] vec;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    void FreeULLIVector(unsigned long long int *vec) {
-  if (vec) delete[] vec;
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    double *Amplitude(void *sim, unsigned long long int outcome) {
-  try {
-    if (!sim) return nullptr;
-    auto simulator = static_cast<Simulators::ISimulator *>(sim);
-    const std::complex<double> amp = simulator->Amplitude(outcome);
-
-    double *result = new double[2];
-    result[0] = amp.real();
-    result[1] = amp.imag();
-    return result;
-  } catch (...) {
-    return nullptr;
-  }
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    double *AllProbabilities(void *sim) {
-  try {
-    if (!sim) return nullptr;
-    auto simulator = static_cast<Simulators::ISimulator *>(sim);
-    const auto probabilities = simulator->AllProbabilities();
-
-    double *result = new double[probabilities.size()];
-    std::copy(probabilities.begin(), probabilities.end(), result);
-    return result;
-  } catch (...) {
-    return nullptr;
-  }
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    double *Probabilities(void *sim, const unsigned long long int *qubits,
-                          unsigned long int nrQubits) {
-  try {
-    if (!sim || !qubits || nrQubits == 0) return nullptr;
-    auto simulator = static_cast<Simulators::ISimulator *>(sim);
-    Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
-    const auto probabilities = simulator->Probabilities(qubitVector);
-
-    double *result = new double[probabilities.size()];
-    std::copy(probabilities.begin(), probabilities.end(), result);
-    return result;
-  } catch (...) {
-    return nullptr;
-  }
-}
-
-#ifdef _WIN32
-__declspec(dllexport)
-#endif
-    unsigned long long int *SampleCounts(void *sim,
-                                         const unsigned long long int *qubits,
-                                         unsigned long int nrQubits,
-                                         unsigned long int shots) {
-  try {
-    if (!sim || !qubits || nrQubits == 0 || shots == 0) return nullptr;
-
-    auto simulator = static_cast<Simulators::ISimulator *>(sim);
-    Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
-    const auto counts = simulator->SampleCounts(qubitVector, shots);
-
-    unsigned long long int *result =
-        new unsigned long long int[counts.size() * 2];
-    size_t index = 0;
-    for (const auto &count : counts) {
-      result[index] = count.first;  // outcome
-      ++index;
-      result[index] = count.second;  // count
-      ++index;
+    unsigned long int CreateSimpleSimulator(int nrQubits)
+    {
+        if (!maestroInstance)
+            return 0;
+
+        return maestroInstance->CreateSimpleSimulator(nrQubits);
     }
-    return result;
-  } catch (...) {
-    return nullptr;
-  }
-}
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    int GetSimulatorType(void *sim) {
-  if (!sim) return -1;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  return static_cast<int>(simulator->GetType());
-}
+    void DestroySimpleSimulator(unsigned long int simHandle)
+    {
+        if (!maestroInstance || simHandle == 0)
+            return;
+
+        maestroInstance->DestroySimpleSimulator(simHandle);
+    }
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    int GetSimulationType(void *sim) {
-  if (!sim) return -1;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  return static_cast<int>(simulator->GetSimulationType());
-}
+    int RemoveAllOptimizationSimulatorsAndAdd(unsigned long int simHandle, int simType, int simExecType)
+    {
+        if (!maestroInstance || simHandle == 0)
+            return 0;
+
+        return maestroInstance->RemoveAllOptimizationSimulatorsAndAdd(simHandle, static_cast<Simulators::SimulatorType>(simType),
+                                                                      static_cast<Simulators::SimulationType>(simExecType));
+    }
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    int FlushSimulator(void *sim) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->Flush();
-  return 1;
-}
+    int AddOptimizationSimulator(unsigned long int simHandle, int simType, int simExecType)
+    {
+        if (!maestroInstance || simHandle == 0)
+            return 0;
+
+        return maestroInstance->AddOptimizationSimulator(simHandle, static_cast<Simulators::SimulatorType>(simType),
+                                                         static_cast<Simulators::SimulationType>(simExecType));
+    }
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    int SaveStateToInternalDestructive(void *sim) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->SaveStateToInternalDestructive();
-  return 1;
-}
+    char *SimpleExecute(unsigned long int simpleSim, const char *circuitStr, const char *jsonConfig)
+    {
+        if (simpleSim == 0 || !circuitStr || !jsonConfig || !maestroInstance)
+            return nullptr;
+
+        auto network = maestroInstance->GetSimpleSimulator(simpleSim);
+
+        // step 1: Parse the JSON circuit and configuration strings
+        // convert the JSON circuit into a Circuit object
+
+        // I'm unsure here on how it deals with the classical registers, more
+        // precisely with stuff like "other_measure_name" and "meas" (see below) since
+        // in the example it seems to just use the cbit number
+
+        // This is the json format:
+        // {"instructions":
+        // [{"name": "h", "qubits": [0], "params": []},
+        // {"name": "cx", "qubits": [0, 1], "params": []},
+        // {"name": "rx", "qubits": [0], "params": [0.39528385768119634]},
+        // {"name": "measure", "qubits": [0], "memory": [0]}],
+        //
+        // "num_qubits": 2, "num_clbits": 4,
+        // "quantum_registers": {"q": [0, 1]},
+        // "classical_registers": {"c": [0, 1], "other_measure_name": [2], "meas":
+        // [3]}}
+
+        std::shared_ptr<Circuits::Circuit<>> circuit;
+
+        if (circuitStr[0] == '{' || circuitStr[0] == '[')
+        {
+            // assume JSON format only if either object or array
+            Json::JsonParserMaestro<> jsonParser;
+            circuit = jsonParser.ParseCircuit(circuitStr);
+        }
+        else
+        {
+            // QASM 2.0 format
+            qasm::QasmToCirc<> parser;
+            std::string qasmInput(circuitStr);
+            circuit = parser.ParseAndTranslate(qasmInput);
+            if (parser.Failed())
+                return nullptr;
+        }
+
+        // check if the circuit has measurements only at the end
+
+        // get the number of shots from the configuration
+        size_t nrShots = 1; // default value
+
+        const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
+        if (!ConfigureLegacyFusion(*network, configJson))
+            return nullptr;
+        if (!ConfigureLegacySeed(*network, configJson))
+            return nullptr;
+
+        if (configJson.is_object())
+        {
+            const auto configObject = configJson.as_object();
+            // get whatever else is needed from the configuration
+            // maybe simulator type, allowed simulator types, bond dimension limit, etc.
+
+            // execute the circuit in the network object
+            if (configObject.contains("shots") && configObject.at("shots").is_number())
+            {
+                auto number = configObject.at("shots");
+                nrShots = number.is_int64() ? (size_t)number.as_int64() : (size_t)number.as_uint64();
+            }
+        }
+
+        bool configured = false;
+        const std::string gpuDevice = Json::JsonParserMaestro<>::GetConfigString("gpu_device", configJson);
+        if (!gpuDevice.empty())
+        {
+            Simulators::Configuration::ParseGpuDevice(gpuDevice);
+            configured = true;
+            if (network->GetSimulator())
+                network->GetSimulator()->Clear();
+            network->Configure("gpu_device", gpuDevice.c_str());
+        }
+
+        const std::string maxBondDim = Json::JsonParserMaestro<>::GetConfigString("matrix_product_state_max_bond_dimension", configJson);
+        if (!maxBondDim.empty())
+        {
+            configured = true;
+            if (network->GetSimulator())
+                network->GetSimulator()->Clear();
+            network->Configure("matrix_product_state_max_bond_dimension", maxBondDim.c_str());
+        }
+
+        const std::string singularValueThreshold = Json::JsonParserMaestro<>::GetConfigString("matrix_product_state_truncation_threshold", configJson);
+        if (!singularValueThreshold.empty())
+        {
+            configured = true;
+            if (network->GetSimulator())
+                network->GetSimulator()->Clear();
+            network->Configure("matrix_product_state_truncation_threshold", singularValueThreshold.c_str());
+        }
+
+        const std::string truncationMode = Json::JsonParserMaestro<>::GetConfigString("matrix_product_state_truncation_mode", configJson);
+        if (!truncationMode.empty())
+        {
+            configured = true;
+            if (network->GetSimulator())
+                network->GetSimulator()->Clear();
+            network->Configure("matrix_product_state_truncation_mode", truncationMode.c_str());
+        }
+
+        const std::string mpsSample = Json::JsonParserMaestro<>::GetConfigString("mps_sample_measure_algorithm", configJson);
+        if (!mpsSample.empty())
+        {
+            configured = true;
+            if (network->GetSimulator())
+                network->GetSimulator()->Clear();
+            network->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
+        }
+
+        if (configured || !network->GetSimulator())
+            network->CreateSimulator();
+
+        // TODO: get from config the allowed simulators types and so on, if set
+        auto start = std::chrono::high_resolution_clock::now();
+        auto results = network->RepeatedExecuteOnHost(circuit, 0, nrShots);
+        auto end = std::chrono::high_resolution_clock::now();
+
+        std::chrono::duration<double> duration = end - start;
+        double time_taken = duration.count();
+        std::string timeStr = std::to_string(time_taken);
+
+        // convert the results into a JSON string
+        // allocate memory for the result string and copy the JSON result into it
+        // return the result string
+
+        boost::json::object jsonResult;
+        jsonResult.reserve(results.size());
+
+        for (auto &result : results)
+        {
+            boost::json::string bits;
+            bits.reserve(result.first.size());
+            for (const auto bit : result.first)
+                bits.append(bit ? "1" : "0");
+
+            jsonResult.emplace(std::move(bits), std::move(result.second));
+        }
+
+        boost::json::object response;
+        response.reserve(4);
+
+        response.emplace("counts", std::move(jsonResult));
+        response.emplace("time_taken", timeStr);
+        response.emplace("gate_fusion",
+                         boost::json::object{{"enabled", network->WasGateFusionEnabled()}, {"max_qubits", network->GetLastGateFusionMaxQubits()}});
+
+        auto simulatorType = network->GetLastSimulatorType();
+
+        switch (simulatorType)
+        {
+#ifndef NO_QISKIT_AER
+        case Simulators::SimulatorType::kQiskitAer:
+            response.emplace("simulator", "aer");
+            break;
+#endif
+        case Simulators::SimulatorType::kQCSim:
+            response.emplace("simulator", "qcsim");
+            break;
+#ifndef NO_QISKIT_AER
+        case Simulators::SimulatorType::kCompositeQiskitAer:
+            response.emplace("simulator", "composite_aer");
+            break;
+#endif
+        case Simulators::SimulatorType::kCompositeQCSim:
+            response.emplace("simulator", "composite_qcsim");
+            break;
+        case Simulators::SimulatorType::kQuestSim:
+            response.emplace("simulator", "quest");
+            break;
+#ifdef __linux__
+        case Simulators::SimulatorType::kDistGpuSim:
+            response.emplace("simulator", "distributed_gpu_simulator");
+            break;
+        case Simulators::SimulatorType::kDistMpiGpuSim:
+            response.emplace("simulator", "distributed_mpi_gpu_simulator");
+            break;
+        case Simulators::SimulatorType::kGpuSim:
+            response.emplace("simulator", "gpu_simulator");
+            response.emplace("gpu_device", network->GetLastGpuDevice());
+            break;
+#endif
+        default:
+            response.emplace("simulator", "unknown");
+            break;
+        }
+
+        auto simulationType = network->GetLastSimulationType();
+        switch (simulationType)
+        {
+        case Simulators::SimulationType::kStatevector:
+            response.emplace("method", "statevector");
+            break;
+        case Simulators::SimulationType::kMatrixProductState:
+            response.emplace("method", "matrix_product_state");
+            break;
+        case Simulators::SimulationType::kStabilizer:
+            response.emplace("method", "stabilizer");
+            break;
+        case Simulators::SimulationType::kTensorNetwork:
+            response.emplace("method", "tensor_network");
+            break;
+        case Simulators::SimulationType::kPauliPropagator:
+            response.emplace("method", "pauli_propagation");
+            break;
+        case Simulators::SimulationType::kExtendedStabilizer:
+            response.emplace("method", "extended_stabilizer");
+            break;
+        case Simulators::SimulationType::kPathIntegral:
+            response.emplace("method", "path_integral");
+            break;
+        case Simulators::SimulationType::kDensityMatrix:
+            response.emplace("method", "density_matrix");
+            break;
+        default:
+            response.emplace("method", "unknown");
+            break;
+        }
+
+        const std::string responseStr = boost::json::serialize(response);
+        const size_t responseSize = responseStr.length();
+        char *result = new char[responseSize + 1];
+
+        const char *responseData = responseStr.c_str();
+        std::copy(responseData, responseData + responseSize, result);
+
+        result[responseSize] = 0; // ensure null-termination
+
+        return result;
+    }
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    int RestoreInternalDestructiveSavedState(void *sim) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->RestoreInternalDestructiveSavedState();
-  return 1;
-}
+    char *SimpleEstimate(unsigned long int simpleSim, const char *circuitStr, const char *observableStr, const char *jsonConfig)
+    {
+        if (simpleSim == 0 || !circuitStr || !observableStr || !jsonConfig || !maestroInstance)
+            return nullptr;
+
+        auto network = maestroInstance->GetSimpleSimulator(simpleSim);
+
+        std::shared_ptr<Circuits::Circuit<>> circuit;
+
+        if (circuitStr[0] == '{' || circuitStr[0] == '[')
+        {
+            Json::JsonParserMaestro<> jsonParser;
+            circuit = jsonParser.ParseCircuit(circuitStr);
+        }
+        else
+        {
+            qasm::QasmToCirc<> parser;
+            std::string qasmInput(circuitStr);
+            circuit = parser.ParseAndTranslate(qasmInput);
+            if (parser.Failed())
+                return nullptr;
+        }
+
+        const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
+        if (!ConfigureLegacyFusion(*network, configJson))
+            return nullptr;
+        if (!ConfigureLegacySeed(*network, configJson))
+            return nullptr;
+
+        bool configured = false;
+        const std::string gpuDevice = Json::JsonParserMaestro<>::GetConfigString("gpu_device", configJson);
+        if (!gpuDevice.empty())
+        {
+            Simulators::Configuration::ParseGpuDevice(gpuDevice);
+            configured = true;
+            if (network->GetSimulator())
+                network->GetSimulator()->Clear();
+            network->Configure("gpu_device", gpuDevice.c_str());
+        }
+
+        const std::string maxBondDim = Json::JsonParserMaestro<>::GetConfigString("matrix_product_state_max_bond_dimension", configJson);
+        if (!maxBondDim.empty())
+        {
+            configured = true;
+            if (network->GetSimulator())
+                network->GetSimulator()->Clear();
+            network->Configure("matrix_product_state_max_bond_dimension", maxBondDim.c_str());
+        }
+
+        const std::string singularValueThreshold = Json::JsonParserMaestro<>::GetConfigString("matrix_product_state_truncation_threshold", configJson);
+        if (!singularValueThreshold.empty())
+        {
+            configured = true;
+            if (network->GetSimulator())
+                network->GetSimulator()->Clear();
+            network->Configure("matrix_product_state_truncation_threshold", singularValueThreshold.c_str());
+        }
+
+        const std::string truncationMode = Json::JsonParserMaestro<>::GetConfigString("matrix_product_state_truncation_mode", configJson);
+        if (!truncationMode.empty())
+        {
+            configured = true;
+            if (network->GetSimulator())
+                network->GetSimulator()->Clear();
+            network->Configure("matrix_product_state_truncation_mode", truncationMode.c_str());
+        }
+
+        const std::string mpsSample = Json::JsonParserMaestro<>::GetConfigString("mps_sample_measure_algorithm", configJson);
+        if (!mpsSample.empty())
+        {
+            configured = true;
+            if (network->GetSimulator())
+                network->GetSimulator()->Clear();
+            network->Configure("mps_sample_measure_algorithm", mpsSample.c_str());
+        }
+
+        if (configured || !network->GetSimulator())
+            network->CreateSimulator();
+
+        // Split observableStr by ';'
+        std::vector<std::string> paulis;
+        std::string obsStr(observableStr);
+        std::stringstream ss(obsStr);
+        std::string item;
+        while (std::getline(ss, item, ';'))
+        {
+            if (!item.empty())
+                paulis.push_back(item);
+        }
+
+        auto start = std::chrono::high_resolution_clock::now();
+        auto expectations = network->ExecuteOnHostExpectations(circuit, 0, paulis);
+        auto end = std::chrono::high_resolution_clock::now();
+
+        std::chrono::duration<double> duration = end - start;
+        double time_taken = duration.count();
+        std::string timeStr = std::to_string(time_taken);
+
+        boost::json::object response;
+        response.reserve(4);
+
+        boost::json::array jsonExpectations;
+        jsonExpectations.reserve(expectations.size());
+        for (double val : expectations)
+        {
+            jsonExpectations.push_back(val);
+        }
+
+        response.emplace("expectation_values", std::move(jsonExpectations));
+        response.emplace("time_taken", timeStr);
+        response.emplace("gate_fusion",
+                         boost::json::object{{"enabled", network->WasGateFusionEnabled()}, {"max_qubits", network->GetLastGateFusionMaxQubits()}});
+
+        auto simulatorType = network->GetLastSimulatorType();
+
+        switch (simulatorType)
+        {
+#ifndef NO_QISKIT_AER
+        case Simulators::SimulatorType::kQiskitAer:
+            response.emplace("simulator", "aer");
+            break;
+#endif
+        case Simulators::SimulatorType::kQCSim:
+            response.emplace("simulator", "qcsim");
+            break;
+        case Simulators::SimulatorType::kQuestSim:
+            response.emplace("simulator", "quest");
+            break;
+#ifndef NO_QISKIT_AER
+        case Simulators::SimulatorType::kCompositeQiskitAer:
+            response.emplace("simulator", "composite_aer");
+            break;
+#endif
+        case Simulators::SimulatorType::kCompositeQCSim:
+            response.emplace("simulator", "composite_qcsim");
+            break;
+#ifdef __linux__
+        case Simulators::SimulatorType::kDistGpuSim:
+            response.emplace("simulator", "distributed_gpu_simulator");
+            break;
+        case Simulators::SimulatorType::kDistMpiGpuSim:
+            response.emplace("simulator", "distributed_mpi_gpu_simulator");
+            break;
+        case Simulators::SimulatorType::kGpuSim:
+            response.emplace("simulator", "gpu_simulator");
+            response.emplace("gpu_device", network->GetLastGpuDevice());
+            break;
+#endif
+        default:
+            response.emplace("simulator", "unknown");
+            break;
+        }
+
+        auto simulationType = network->GetLastSimulationType();
+        switch (simulationType)
+        {
+        case Simulators::SimulationType::kStatevector:
+            response.emplace("method", "statevector");
+            break;
+        case Simulators::SimulationType::kMatrixProductState:
+            response.emplace("method", "matrix_product_state");
+            break;
+        case Simulators::SimulationType::kStabilizer:
+            response.emplace("method", "stabilizer");
+            break;
+        case Simulators::SimulationType::kTensorNetwork:
+            response.emplace("method", "tensor_network");
+            break;
+        case Simulators::SimulationType::kPauliPropagator:
+            response.emplace("method", "pauli_propagation");
+            break;
+        case Simulators::SimulationType::kExtendedStabilizer:
+            response.emplace("method", "extended_stabilizer");
+            break;
+        case Simulators::SimulationType::kPathIntegral:
+            response.emplace("method", "path_integral");
+            break;
+        case Simulators::SimulationType::kDensityMatrix:
+            response.emplace("method", "density_matrix");
+            break;
+        default:
+            response.emplace("method", "unknown");
+            break;
+        }
+
+        const std::string responseStr = boost::json::serialize(response);
+        const size_t responseSize = responseStr.length();
+        char *result = new char[responseSize + 1];
+
+        const char *responseData = responseStr.c_str();
+        std::copy(responseData, responseData + responseSize, result);
+
+        result[responseSize] = 0; // ensure null-termination
+
+        return result;
+    }
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    int SaveState(void *sim) {
-  try {
-    if (!sim) return 0;
-    auto simulator = static_cast<Simulators::ISimulator *>(sim);
-    simulator->SaveState();
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
+    void FreeResult(char *result)
+    {
+        if (result)
+            delete[] result;
+    }
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    int RestoreState(void *sim) {
-  try {
-    if (!sim) return 0;
-    auto simulator = static_cast<Simulators::ISimulator *>(sim);
-    simulator->RestoreState();
-    return 1;
-  } catch (...) {
-    return 0;
-  }
-}
+    unsigned long int CreateSimulator(int simType, int simExecType)
+    {
+        if (!maestroInstance)
+            return 0;
+
+        return maestroInstance->CreateSimulator(static_cast<Simulators::SimulatorType>(simType), static_cast<Simulators::SimulationType>(simExecType));
+    }
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    int SetMultithreading(void *sim, int multithreading) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  simulator->SetMultithreading(multithreading != 0);
-  return 1;
-}
+    void *GetSimulator(unsigned long int simHandle)
+    {
+        if (!maestroInstance || simHandle == 0)
+            return nullptr;
+        return maestroInstance->GetSimulator(simHandle);
+    }
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    int GetMultithreading(void *sim) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  return simulator->GetMultithreading() ? 1 : 0;
-}
+    void DestroySimulator(unsigned long int simHandle)
+    {
+        if (!maestroInstance || simHandle == 0)
+            return;
+        maestroInstance->DestroySimulator(simHandle);
+    }
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    int IsQcsim(void *sim) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  return simulator->IsQcsim() ? 1 : 0;
-}
+    int ApplyX(void *sim, int qubit)
+    {
+        if (!sim)
+            return 0;
+
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyX(qubit);
+
+        return 1;
+    }
 
 #ifdef _WIN32
-__declspec(dllexport)
+    __declspec(dllexport)
 #endif
-    unsigned long long int MeasureNoCollapse(void *sim) {
-  if (!sim) return 0;
-  auto simulator = static_cast<Simulators::ISimulator *>(sim);
-  return static_cast<unsigned long long int>(simulator->MeasureNoCollapse());
-}
+    int ApplyY(void *sim, int qubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyY(qubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyZ(void *sim, int qubit)
+    {
+        if (!sim)
+            return 0;
+
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyZ(qubit);
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyH(void *sim, int qubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyH(qubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyS(void *sim, int qubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyS(qubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplySDG(void *sim, int qubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplySDG(qubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyT(void *sim, int qubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyT(qubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyTDG(void *sim, int qubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyTDG(qubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplySX(void *sim, int qubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplySx(qubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplySXDG(void *sim, int qubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplySxDAG(qubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyK(void *sim, int qubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyK(qubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyP(void *sim, int qubit, double theta)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyP(qubit, theta);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyRx(void *sim, int qubit, double theta)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyRx(qubit, theta);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyRy(void *sim, int qubit, double theta)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyRy(qubit, theta);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyRz(void *sim, int qubit, double theta)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyRz(qubit, theta);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyU(void *sim, int qubit, double theta, double phi, double lambda, double gamma)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyU(qubit, theta, phi, lambda, gamma);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCX(void *sim, int controlQubit, int targetQubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCX(controlQubit, targetQubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCY(void *sim, int controlQubit, int targetQubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCY(controlQubit, targetQubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCZ(void *sim, int controlQubit, int targetQubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCZ(controlQubit, targetQubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCH(void *sim, int controlQubit, int targetQubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCH(controlQubit, targetQubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCSX(void *sim, int controlQubit, int targetQubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCSx(controlQubit, targetQubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCSXDG(void *sim, int controlQubit, int targetQubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCSxDAG(controlQubit, targetQubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCP(void *sim, int controlQubit, int targetQubit, double theta)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCP(controlQubit, targetQubit, theta);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCRx(void *sim, int controlQubit, int targetQubit, double theta)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCRx(controlQubit, targetQubit, theta);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCRy(void *sim, int controlQubit, int targetQubit, double theta)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCRy(controlQubit, targetQubit, theta);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCRz(void *sim, int controlQubit, int targetQubit, double theta)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCRz(controlQubit, targetQubit, theta);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCCX(void *sim, int controlQubit1, int controlQubit2, int targetQubit)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCCX(controlQubit1, controlQubit2, targetQubit);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplySwap(void *sim, int qubit1, int qubit2)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplySwap(qubit1, qubit2);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCSwap(void *sim, int controlQubit, int qubit1, int qubit2)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCSwap(controlQubit, qubit1, qubit2);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyCU(void *sim, int controlQubit, int targetQubit, double theta, double phi, double lambda, double gamma)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->ApplyCU(controlQubit, targetQubit, theta, phi, lambda, gamma);
+
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int InitializeSimulator(void *sim)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->Initialize();
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ResetSimulator(void *sim)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->Reset();
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ConfigureSimulator(void *sim, const char *key, const char *value)
+    {
+        if (!sim || !key || !value)
+            return 0;
+        try
+        {
+            auto simulator = static_cast<Simulators::ISimulator *>(sim);
+            simulator->Configure(key, value);
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    char *GetConfiguration(void *sim, const char *key)
+    {
+        if (!sim || !key)
+            return nullptr;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        std::string value = simulator->GetConfiguration(key);
+        if (value.empty())
+            return nullptr;
+        // allocate memory for the result string and copy the configuration value into
+        // it
+        const size_t valueSize = value.length();
+        char *result = new char[valueSize + 1];
+        std::copy(value.c_str(), value.c_str() + valueSize, result);
+        result[valueSize] = 0; // ensure null-termination
+        return result;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    unsigned long int AllocateQubits(void *sim, unsigned long int nrQubits)
+    {
+        if (!sim || nrQubits == 0)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        const size_t res = simulator->AllocateQubits(nrQubits);
+
+        return static_cast<unsigned long int>(res);
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    unsigned long int GetNumberOfQubits(void *sim)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        const size_t res = simulator->GetNumberOfQubits();
+        return static_cast<unsigned long int>(res);
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ClearSimulator(void *sim)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->Clear();
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    unsigned long long int Measure(void *sim, const unsigned long int *qubits, unsigned long int nrQubits)
+    {
+        if (!sim || !qubits || nrQubits == 0)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
+        const size_t res = simulator->Measure(qubitVector);
+        return static_cast<unsigned long long int>(res);
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int ApplyReset(void *sim, const unsigned long int *qubits, unsigned long int nrQubits)
+    {
+        if (!sim || !qubits || nrQubits == 0)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
+        simulator->ApplyReset(qubitVector);
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    double Probability(void *sim, unsigned long long int outcome)
+    {
+        try
+        {
+            if (!sim)
+                return 0.0;
+            auto simulator = static_cast<Simulators::ISimulator *>(sim);
+            const double res = simulator->Probability(outcome);
+            return res;
+        }
+        catch (...)
+        {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    void FreeDoubleVector(double *vec)
+    {
+        if (vec)
+            delete[] vec;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    void FreeULLIVector(unsigned long long int *vec)
+    {
+        if (vec)
+            delete[] vec;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    double *Amplitude(void *sim, unsigned long long int outcome)
+    {
+        try
+        {
+            if (!sim)
+                return nullptr;
+            auto simulator = static_cast<Simulators::ISimulator *>(sim);
+            const std::complex<double> amp = simulator->Amplitude(outcome);
+
+            double *result = new double[2];
+            result[0] = amp.real();
+            result[1] = amp.imag();
+            return result;
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    double *AllProbabilities(void *sim)
+    {
+        try
+        {
+            if (!sim)
+                return nullptr;
+            auto simulator = static_cast<Simulators::ISimulator *>(sim);
+            const auto probabilities = simulator->AllProbabilities();
+
+            double *result = new double[probabilities.size()];
+            std::copy(probabilities.begin(), probabilities.end(), result);
+            return result;
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    double *Probabilities(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits)
+    {
+        try
+        {
+            if (!sim || !qubits || nrQubits == 0)
+                return nullptr;
+            auto simulator = static_cast<Simulators::ISimulator *>(sim);
+            Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
+            const auto probabilities = simulator->Probabilities(qubitVector);
+
+            double *result = new double[probabilities.size()];
+            std::copy(probabilities.begin(), probabilities.end(), result);
+            return result;
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    unsigned long long int *SampleCounts(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits, unsigned long int shots)
+    {
+        try
+        {
+            if (!sim || !qubits || nrQubits == 0 || shots == 0)
+                return nullptr;
+
+            auto simulator = static_cast<Simulators::ISimulator *>(sim);
+            Types::qubits_vector qubitVector(qubits, qubits + nrQubits);
+            const auto counts = simulator->SampleCounts(qubitVector, shots);
+
+            unsigned long long int *result = new unsigned long long int[counts.size() * 2];
+            size_t index = 0;
+            for (const auto &count : counts)
+            {
+                result[index] = count.first; // outcome
+                ++index;
+                result[index] = count.second; // count
+                ++index;
+            }
+            return result;
+        }
+        catch (...)
+        {
+            return nullptr;
+        }
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int GetSimulatorType(void *sim)
+    {
+        if (!sim)
+            return -1;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        return static_cast<int>(simulator->GetType());
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int GetSimulationType(void *sim)
+    {
+        if (!sim)
+            return -1;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        return static_cast<int>(simulator->GetSimulationType());
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int FlushSimulator(void *sim)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->Flush();
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int SaveStateToInternalDestructive(void *sim)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->SaveStateToInternalDestructive();
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int RestoreInternalDestructiveSavedState(void *sim)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->RestoreInternalDestructiveSavedState();
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int SaveState(void *sim)
+    {
+        try
+        {
+            if (!sim)
+                return 0;
+            auto simulator = static_cast<Simulators::ISimulator *>(sim);
+            simulator->SaveState();
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int RestoreState(void *sim)
+    {
+        try
+        {
+            if (!sim)
+                return 0;
+            auto simulator = static_cast<Simulators::ISimulator *>(sim);
+            simulator->RestoreState();
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int SetMultithreading(void *sim, int multithreading)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        simulator->SetMultithreading(multithreading != 0);
+        return 1;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int GetMultithreading(void *sim)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        return simulator->GetMultithreading() ? 1 : 0;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    int IsQcsim(void *sim)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        return simulator->IsQcsim() ? 1 : 0;
+    }
+
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+    unsigned long long int MeasureNoCollapse(void *sim)
+    {
+        if (!sim)
+            return 0;
+        auto simulator = static_cast<Simulators::ISimulator *>(sim);
+        return static_cast<unsigned long long int>(simulator->MeasureNoCollapse());
+    }
 }

@@ -18,17 +18,17 @@
 #ifndef _SIMULATORS_FACTORY_H_
 #define _SIMULATORS_FACTORY_H_
 
-#include "../Gpu/GpuLibStateVectorSim.h"
 #include "../DistributedGpu/DistributedGpuLibrary.h"
 #include "../DistributedGpu/DistributedMpiGpuLibrary.h"
 #include "../Gpu/GpuDensityMatrix.h"
-#include "../Gpu/GpuMPO.h"
 #include "../Gpu/GpuLibMPSSim.h"
+#include "../Gpu/GpuLibStateVectorSim.h"
 #include "../Gpu/GpuLibTNSim.h"
-#include "../Gpu/GpuStabilizer.h"
+#include "../Gpu/GpuMPO.h"
 #include "../Gpu/GpuPauliPropagator.h"
-#include "../Quest/QuestLibSim.h"
+#include "../Gpu/GpuStabilizer.h"
 #include "../PathIntegral/PathIntegralSimulator.h"
+#include "../Quest/QuestLibSim.h"
 
 #include "../Interfaces/Simulator.h"
 
@@ -38,7 +38,8 @@
 #define MAESTRO_FACTORY_EXPORT
 #endif
 
-namespace Simulators {
+namespace Simulators
+{
 
 /**
  * @class SimulatorsFactory
@@ -46,166 +47,177 @@ namespace Simulators {
  *
  * Create either a qiskit aer or qcsim simulator.
  */
-class SimulatorsFactory {
- public:
-  /**
-   * @brief Create a quantum computing simulator.
-   *
-   * @param t The type of simulator to create.
-   * @return The simulator wrapped in a shared pointer.
-   */
-  MAESTRO_FACTORY_EXPORT static std::shared_ptr<ISimulator> CreateSimulator(
-      SimulatorType t = SimulatorType::kQCSim,
-      SimulationType method = SimulationType::kMatrixProductState);
+class SimulatorsFactory
+{
+  public:
+    /**
+     * @brief Create a quantum computing simulator.
+     *
+     * @param t The type of simulator to create.
+     * @return The simulator wrapped in a shared pointer.
+     */
+    MAESTRO_FACTORY_EXPORT static std::shared_ptr<ISimulator> CreateSimulator(SimulatorType t = SimulatorType::kQCSim,
+                                                                              SimulationType method = SimulationType::kMatrixProductState);
 
-  /**
-   * @brief Create a quantum computing simulator.
-   *
-   * @param t The type of simulator to create.
-   * @return The simulator wrapped in a unique pointer.
-   */
-  MAESTRO_FACTORY_EXPORT static std::unique_ptr<ISimulator>
-  CreateSimulatorUnique(
-      SimulatorType t = SimulatorType::kQCSim,
-      SimulationType method = SimulationType::kMatrixProductState);
+    /**
+     * @brief Create a quantum computing simulator.
+     *
+     * @param t The type of simulator to create.
+     * @return The simulator wrapped in a unique pointer.
+     */
+    MAESTRO_FACTORY_EXPORT static std::unique_ptr<ISimulator> CreateSimulatorUnique(SimulatorType t = SimulatorType::kQCSim,
+                                                                                    SimulationType method = SimulationType::kMatrixProductState);
 
-  // Internal immediate children for composite simulation. No fusion adapter.
-  MAESTRO_FACTORY_EXPORT static std::unique_ptr<ISimulator>
-  CreateImmediateSimulatorUnique(SimulatorType type);
+    // Internal immediate children for composite simulation. No fusion adapter.
+    MAESTRO_FACTORY_EXPORT static std::unique_ptr<ISimulator> CreateImmediateSimulatorUnique(SimulatorType type);
 
 #ifdef __linux__
-  // Defined in the core library so Python's hidden-visibility extension
-  // shares the same plugin instances and native-state lifetime counters.
-  static std::shared_ptr<DistributedGpuLibrary> GetDistributedGpuLibrary();
-  static std::shared_ptr<DistributedMpiGpuLibrary>
-  GetDistributedMpiGpuLibrary();
-  static bool IsDistributedGpuAvailable() noexcept;
-  static void FinalizeDistributedMpiGpuBackend();
-  static bool InitGpuLibrary();
-  static bool InitGpuLibraryWithMute();
+    // Defined in the core library so Python's hidden-visibility extension
+    // shares the same plugin instances and native-state lifetime counters.
+    static std::shared_ptr<DistributedGpuLibrary> GetDistributedGpuLibrary();
+    static std::shared_ptr<DistributedMpiGpuLibrary> GetDistributedMpiGpuLibrary();
+    static bool IsDistributedGpuAvailable() noexcept;
+    static void FinalizeDistributedMpiGpuBackend();
+    static bool InitGpuLibrary();
+    static bool InitGpuLibraryWithMute();
 
-  // Default for subsequently created simulators; explicit gpu_device wins.
-  static void SelectGpuDevice(int deviceId);
-  static int ResolveGpuDevice(int deviceId = -1);
-  static int GetGpuDeviceCount();
-  static bool IsGpuLibraryAvailable(int deviceId = -1);
-  static std::shared_ptr<GpuLibrary> GetGpuLibrary(int deviceId = -1);
+    // Default for subsequently created simulators; explicit gpu_device wins.
+    static void SelectGpuDevice(int deviceId);
+    static int ResolveGpuDevice(int deviceId = -1);
+    static int GetGpuDeviceCount();
+    static bool IsGpuLibraryAvailable(int deviceId = -1);
+    static std::shared_ptr<GpuLibrary> GetGpuLibrary(int deviceId = -1);
 
-  // Legacy estimators construct simulators synchronously without accepting a
-  // configuration map. Scope their default to the requesting network without
-  // changing the process-wide default or another network's worker thread.
-  class ScopedGpuDevice {
-   public:
-    explicit ScopedGpuDevice(int deviceId);
-    ~ScopedGpuDevice();
-    ScopedGpuDevice(const ScopedGpuDevice&) = delete;
-    ScopedGpuDevice& operator=(const ScopedGpuDevice&) = delete;
+    // Legacy estimators construct simulators synchronously without accepting a
+    // configuration map. Scope their default to the requesting network without
+    // changing the process-wide default or another network's worker thread.
+    class ScopedGpuDevice
+    {
+      public:
+        explicit ScopedGpuDevice(int deviceId);
+        ~ScopedGpuDevice();
+        ScopedGpuDevice(const ScopedGpuDevice &) = delete;
+        ScopedGpuDevice &operator=(const ScopedGpuDevice &) = delete;
 
-   private:
-    int previous;
-  };
+      private:
+        int previous;
+    };
 
-  static std::unique_ptr<GpuLibStateVectorSim> CreateGpuLibStateVectorSim(
-      int deviceId = -1) {
-    auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
-    auto gpuLibrary = GetGpuLibrary(deviceId);
-    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+    static std::unique_ptr<GpuLibStateVectorSim> CreateGpuLibStateVectorSim(int deviceId = -1)
+    {
+        auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
+        auto gpuLibrary = GetGpuLibrary(deviceId);
+        if (!gpuLibrary || !gpuLibrary->IsValid())
+            return nullptr;
 
-    return std::make_unique<GpuLibStateVectorSim>(
-        gpuLibrary, gpuLibrary->GetCreationDevice());
-  }
+        return std::make_unique<GpuLibStateVectorSim>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    }
 
-  static std::unique_ptr<GpuDensityMatrix> CreateGpuDensityMatrix(
-      int deviceId = -1) {
-    auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
-    auto gpuLibrary = GetGpuLibrary(deviceId);
-    if (!gpuLibrary || !gpuLibrary->HasDensityMatrixAPI()) return nullptr;
-    return std::make_unique<GpuDensityMatrix>(gpuLibrary,
-                                              gpuLibrary->GetCreationDevice());
-  }
+    static std::unique_ptr<GpuDensityMatrix> CreateGpuDensityMatrix(int deviceId = -1)
+    {
+        auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
+        auto gpuLibrary = GetGpuLibrary(deviceId);
+        if (!gpuLibrary || !gpuLibrary->HasDensityMatrixAPI())
+            return nullptr;
+        return std::make_unique<GpuDensityMatrix>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    }
 
-  static std::unique_ptr<GpuMPO> CreateGpuMPO(int deviceId = -1) {
-    auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
-    auto gpuLibrary = GetGpuLibrary(deviceId);
-    if (!gpuLibrary || !gpuLibrary->HasMPOAPI()) return nullptr;
-    return std::make_unique<GpuMPO>(gpuLibrary,
-                                    gpuLibrary->GetCreationDevice());
-  }
+    static std::unique_ptr<GpuMPO> CreateGpuMPO(int deviceId = -1)
+    {
+        auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
+        auto gpuLibrary = GetGpuLibrary(deviceId);
+        if (!gpuLibrary || !gpuLibrary->HasMPOAPI())
+            return nullptr;
+        return std::make_unique<GpuMPO>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    }
 
-  static std::unique_ptr<GpuLibMPSSim> CreateGpuLibMPSSim(int deviceId = -1) {
-    auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
-    auto gpuLibrary = GetGpuLibrary(deviceId);
-    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+    static std::unique_ptr<GpuLibMPSSim> CreateGpuLibMPSSim(int deviceId = -1)
+    {
+        auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
+        auto gpuLibrary = GetGpuLibrary(deviceId);
+        if (!gpuLibrary || !gpuLibrary->IsValid())
+            return nullptr;
 
-    return std::make_unique<GpuLibMPSSim>(gpuLibrary,
-                                          gpuLibrary->GetCreationDevice());
-  }
+        return std::make_unique<GpuLibMPSSim>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    }
 
-  static std::unique_ptr<GpuLibTNSim> CreateGpuLibTensorNetSim(
-      int deviceId = -1) {
-    auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
-    auto gpuLibrary = GetGpuLibrary(deviceId);
-    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
+    static std::unique_ptr<GpuLibTNSim> CreateGpuLibTensorNetSim(int deviceId = -1)
+    {
+        auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
+        auto gpuLibrary = GetGpuLibrary(deviceId);
+        if (!gpuLibrary || !gpuLibrary->IsValid())
+            return nullptr;
 
-    return std::make_unique<GpuLibTNSim>(gpuLibrary,
-                                         gpuLibrary->GetCreationDevice());
-  }
+        return std::make_unique<GpuLibTNSim>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    }
 
-  static std::shared_ptr<GpuStabilizer> CreateGpuStabilizerSimulator(
-      int deviceId = -1) {
-    auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
-    auto gpuLibrary = GetGpuLibrary(deviceId);
-    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
-    return std::make_shared<GpuStabilizer>(gpuLibrary,
-                                           gpuLibrary->GetCreationDevice());
-  }
+    static std::shared_ptr<GpuStabilizer> CreateGpuStabilizerSimulator(int deviceId = -1)
+    {
+        auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
+        auto gpuLibrary = GetGpuLibrary(deviceId);
+        if (!gpuLibrary || !gpuLibrary->IsValid())
+            return nullptr;
+        return std::make_shared<GpuStabilizer>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    }
 
-  static std::shared_ptr<GpuPauliPropagator> CreateGpuPauliPropagatorSimulator(
-      int deviceId = -1) {
-    auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
-    auto gpuLibrary = GetGpuLibrary(deviceId);
-    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
-    return std::make_shared<GpuPauliPropagator>(
-        gpuLibrary, gpuLibrary->GetCreationDevice());
-  }
+    static std::shared_ptr<GpuPauliPropagator> CreateGpuPauliPropagatorSimulator(int deviceId = -1)
+    {
+        auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
+        auto gpuLibrary = GetGpuLibrary(deviceId);
+        if (!gpuLibrary || !gpuLibrary->IsValid())
+            return nullptr;
+        return std::make_shared<GpuPauliPropagator>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    }
 
-  static std::unique_ptr<GpuPauliPropagator>
-  CreateGpuPauliPropagatorSimulatorUnique(int deviceId = -1) {
-    auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
-    auto gpuLibrary = GetGpuLibrary(deviceId);
-    if (!gpuLibrary || !gpuLibrary->IsValid()) return nullptr;
-    return std::make_unique<GpuPauliPropagator>(
-        gpuLibrary, gpuLibrary->GetCreationDevice());
-  }
+    static std::unique_ptr<GpuPauliPropagator> CreateGpuPauliPropagatorSimulatorUnique(int deviceId = -1)
+    {
+        auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
+        auto gpuLibrary = GetGpuLibrary(deviceId);
+        if (!gpuLibrary || !gpuLibrary->IsValid())
+            return nullptr;
+        return std::make_unique<GpuPauliPropagator>(gpuLibrary, gpuLibrary->GetCreationDevice());
+    }
 
- private:
-  static std::atomic_int requestedGpuDeviceId;
-  static thread_local int scopedGpuDeviceId;
+  private:
+    static std::atomic_int requestedGpuDeviceId;
+    static thread_local int scopedGpuDeviceId;
 
- public:
+  public:
 #else
-  static bool IsGpuLibraryAvailable(int = -1) { return false; }
+    static bool IsGpuLibraryAvailable(int = -1)
+    {
+        return false;
+    }
 
-  static bool InitGpuLibrary() { return false; }
+    static bool InitGpuLibrary()
+    {
+        return false;
+    }
 
-  static void SelectGpuDevice(int) {}
+    static void SelectGpuDevice(int)
+    {
+    }
 
-  static int GetGpuDeviceCount() { return 0; }
+    static int GetGpuDeviceCount()
+    {
+        return 0;
+    }
 #endif
-  MAESTRO_FACTORY_EXPORT static bool InitQuestLibrary();
-  MAESTRO_FACTORY_EXPORT static bool InitQuestLibraryWithMute();
-  MAESTRO_FACTORY_EXPORT static bool IsQuestLibraryAvailable();
-  MAESTRO_FACTORY_EXPORT static std::shared_ptr<QuestLibSim> GetQuestLibrary();
+    MAESTRO_FACTORY_EXPORT static bool InitQuestLibrary();
+    MAESTRO_FACTORY_EXPORT static bool InitQuestLibraryWithMute();
+    MAESTRO_FACTORY_EXPORT static bool IsQuestLibraryAvailable();
+    MAESTRO_FACTORY_EXPORT static std::shared_ptr<QuestLibSim> GetQuestLibrary();
 
-  static std::shared_ptr<PathIntegralSimulator> CreatePathIntegralSimulator() {
-    return std::make_shared<PathIntegralSimulator>();
-  }
+    static std::shared_ptr<PathIntegralSimulator> CreatePathIntegralSimulator()
+    {
+        return std::make_shared<PathIntegralSimulator>();
+    }
 
- private:
-  static std::shared_ptr<QuestLibSim> questLibrary;
-  static std::atomic_bool firstTimeQuest;
+  private:
+    static std::shared_ptr<QuestLibSim> questLibrary;
+    static std::atomic_bool firstTimeQuest;
 };
 
-}  // namespace Simulators
+} // namespace Simulators
 
-#endif  // !_SIMULATORS_FACTORY_H_
+#endif // !_SIMULATORS_FACTORY_H_

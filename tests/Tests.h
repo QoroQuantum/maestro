@@ -17,13 +17,15 @@
 #include "../../composer/composer/Estimators/ExecutionEstimator.h"
 #endif
 
-class InitSetup {
- public:
-  InitSetup() {
+class InitSetup
+{
+  public:
+    InitSetup()
+    {
 #ifdef COMPOSER
-    Estimators::ExecutionEstimator<>::InitializeRegressors();
+        Estimators::ExecutionEstimator<>::InitializeRegressors();
 #endif
-  }
+    }
 };
 
 #ifndef _TESTS_NO_EXCLUDE

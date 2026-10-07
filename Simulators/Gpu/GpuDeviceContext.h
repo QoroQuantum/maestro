@@ -5,7 +5,8 @@
 #include "GpuLibrary.h"
 #include <memory>
 
-namespace Simulators {
+namespace Simulators
+{
 using GpuDeviceContext = std::shared_ptr<GpuLibrary>;
-}  // namespace Simulators
+} // namespace Simulators
 #endif

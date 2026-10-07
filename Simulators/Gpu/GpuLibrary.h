@@ -45,5011 +45,5225 @@
 
 #include "../../Utils/Library.h"
 
+#include <complex>
 #include <cstdlib>
+#include <memory>
+#include <mutex>
+#include <stdexcept>
 #include <stdint.h>
 #include <unordered_map>
 #include <vector>
-#include <complex>
-#include <stdexcept>
-#include <memory>
-#include <mutex>
 
-namespace Simulators {
+namespace Simulators
+{
 
 // One plugin handle and API table for the process. The plugin owns device state.
-class GpuLibrary : public Utils::Library {
-  GpuLibrary() noexcept = default;
+class GpuLibrary : public Utils::Library
+{
+    GpuLibrary() noexcept = default;
 
- public:
-  enum { MATRIX_ROW_MAJOR = 0, MATRIX_COLUMN_MAJOR = 1 };
+  public:
+    enum
+    {
+        MATRIX_ROW_MAJOR = 0,
+        MATRIX_COLUMN_MAJOR = 1
+    };
 
-  static std::shared_ptr<GpuLibrary> GetInstance() {
-    static const auto instance = std::shared_ptr<GpuLibrary>(new GpuLibrary());
-    return instance;
-  }
-
-  GpuLibrary(const GpuLibrary &) = delete;
-  GpuLibrary &operator=(const GpuLibrary &) = delete;
-  GpuLibrary(GpuLibrary &&) = delete;
-  GpuLibrary &operator=(GpuLibrary &&) = delete;
-
-  ~GpuLibrary() override {
-    if (LibraryHandle && FreeLib) FreeLib();
-  }
-
-  // Keep selection and native simulator initialization together even if the
-  // plugin's selected device is process-global. Ordinary simulator operations
-  // do not take this lock or change the device: the plugin owns that behavior.
-  std::unique_lock<std::recursive_mutex> LockInitialization() {
-    return std::unique_lock<std::recursive_mutex>(initializationMutex);
-  }
-
-  bool Load(const char *libName) noexcept {
-    auto lock = LockInitialization();
-    if (GetHandle()) {
-      if (loadedPath == libName) return licenseValidated && !initializationFailed;
-      if (!IsMuted())
-        std::cerr << "GpuLibrary: singleton already loaded from " << loadedPath
-                  << "; cannot load " << libName << std::endl;
-      return false;
+    static std::shared_ptr<GpuLibrary> GetInstance()
+    {
+        static const auto instance = std::shared_ptr<GpuLibrary>(new GpuLibrary());
+        return instance;
     }
-    if (!Utils::Library::Init(libName)) return false;
-    loadedPath = libName;
-    fGetLicenseError = (const char *(*)())GetFunction("GetLicenseError");
-    fValidateLicense = (int (*)(const char *))GetFunction("ValidateLicense");
-    if (!fValidateLicense) {
-      std::cerr << "GpuLibrary: GPU backend unavailable: missing ValidateLicense"
-                << std::endl;
-      return false;
+
+    GpuLibrary(const GpuLibrary &) = delete;
+    GpuLibrary &operator=(const GpuLibrary &) = delete;
+    GpuLibrary(GpuLibrary &&) = delete;
+    GpuLibrary &operator=(GpuLibrary &&) = delete;
+
+    ~GpuLibrary() override
+    {
+        if (LibraryHandle && FreeLib)
+            FreeLib();
     }
-    if (fValidateLicense(std::getenv("MAESTRO_LICENSE_KEY")) != 1) {
-      ReportUnavailable("license validation failed");
-      return false;
+
+    // Keep selection and native simulator initialization together even if the
+    // plugin's selected device is process-global. Ordinary simulator operations
+    // do not take this lock or change the device: the plugin owns that behavior.
+    std::unique_lock<std::recursive_mutex> LockInitialization()
+    {
+        return std::unique_lock<std::recursive_mutex>(initializationMutex);
     }
-    licenseValidated = true;
-    fGetGpuDeviceCount = (int (*)())GetFunction("GetGpuDeviceCount");
-    fSetGpuDevice = (int (*)(int))GetFunction("SetGpuDevice");
-    fGetStateVectorGpuId = (int (*)(void*))GetFunction("GetStateVectorGpuId");
-    fMPSGetGpuId = (int (*)(void*))GetFunction("MPSGetGpuId");
-    fTNGetGpuId = (int (*)(void*))GetFunction("TNGetGpuId");
-    fDMGetGpuId = (int (*)(void*))GetFunction("DMGetGpuId");
-    fMPOGetGpuId = (int (*)(void*))GetFunction("MPOGetGpuId");
-    fGetStabilizerGpuId = (int (*)(void*))GetFunction("GetStabilizerGpuId");
-    fPauliPropGetGpuId = (int (*)(void*))GetFunction("PauliPropGetGpuId");
-    // optional: older libraries do not export them
-    fStateVectorSynchronize =
-        (int (*)(void*))GetFunction("StateVectorSynchronize");
-    fDMSynchronize = (int (*)(void*))GetFunction("DMSynchronize");
-    fMPSTrim = (int (*)(void*))GetFunction("MPSTrim");
-    fMPSReCanonicalize = (int (*)(void*))GetFunction("MPSReCanonicalize");
-    // Tensor query extensions are optional; older plugins retain scalar paths.
-#define LOAD_TENSOR_QUERY(name) \
-  f##name = reinterpret_cast<decltype(f##name)>(GetFunction(#name))
-    LOAD_TENSOR_QUERY(MPSExpectationValues);
-    LOAD_TENSOR_QUERY(MPOExpectationValues);
-    LOAD_TENSOR_QUERY(MPOExpectationValuesComplex);
-    LOAD_TENSOR_QUERY(MPSGetStateVector);
-    LOAD_TENSOR_QUERY(MPSAllProbabilities);
-    LOAD_TENSOR_QUERY(MPSMoveAtBeginningOfChain);
-    LOAD_TENSOR_QUERY(MPSExpectationValueOperators);
-    LOAD_TENSOR_QUERY(MPSSetBondDimensionSummaryCallback);
-    LOAD_TENSOR_QUERY(MPOSetBondDimensionSummaryCallback);
-    LOAD_TENSOR_QUERY(MPSGetMaxBondDimension);
-    LOAD_TENSOR_QUERY(MPOGetMaxBondDimension);
+
+    bool Load(const char *libName) noexcept
+    {
+        auto lock = LockInitialization();
+        if (GetHandle())
+        {
+            if (loadedPath == libName)
+                return licenseValidated && !initializationFailed;
+            if (!IsMuted())
+                std::cerr << "GpuLibrary: singleton already loaded from " << loadedPath << "; cannot load " << libName << std::endl;
+            return false;
+        }
+        if (!Utils::Library::Init(libName))
+            return false;
+        loadedPath = libName;
+        fGetLicenseError = (const char *(*)())GetFunction("GetLicenseError");
+        fValidateLicense = (int (*)(const char *))GetFunction("ValidateLicense");
+        if (!fValidateLicense)
+        {
+            std::cerr << "GpuLibrary: GPU backend unavailable: missing ValidateLicense" << std::endl;
+            return false;
+        }
+        if (fValidateLicense(std::getenv("MAESTRO_LICENSE_KEY")) != 1)
+        {
+            ReportUnavailable("license validation failed");
+            return false;
+        }
+        licenseValidated = true;
+        fGetGpuDeviceCount = (int (*)())GetFunction("GetGpuDeviceCount");
+        fSetGpuDevice = (int (*)(int))GetFunction("SetGpuDevice");
+        fGetStateVectorGpuId = (int (*)(void *))GetFunction("GetStateVectorGpuId");
+        fMPSGetGpuId = (int (*)(void *))GetFunction("MPSGetGpuId");
+        fTNGetGpuId = (int (*)(void *))GetFunction("TNGetGpuId");
+        fDMGetGpuId = (int (*)(void *))GetFunction("DMGetGpuId");
+        fMPOGetGpuId = (int (*)(void *))GetFunction("MPOGetGpuId");
+        fGetStabilizerGpuId = (int (*)(void *))GetFunction("GetStabilizerGpuId");
+        fPauliPropGetGpuId = (int (*)(void *))GetFunction("PauliPropGetGpuId");
+        // optional: older libraries do not export them
+        fStateVectorSynchronize = (int (*)(void *))GetFunction("StateVectorSynchronize");
+        fDMSynchronize = (int (*)(void *))GetFunction("DMSynchronize");
+        fMPSTrim = (int (*)(void *))GetFunction("MPSTrim");
+        fMPSReCanonicalize = (int (*)(void *))GetFunction("MPSReCanonicalize");
+        // Tensor query extensions are optional; older plugins retain scalar paths.
+#define LOAD_TENSOR_QUERY(name) f##name = reinterpret_cast<decltype(f##name)>(GetFunction(#name))
+        LOAD_TENSOR_QUERY(MPSExpectationValues);
+        LOAD_TENSOR_QUERY(MPOExpectationValues);
+        LOAD_TENSOR_QUERY(MPOExpectationValuesComplex);
+        LOAD_TENSOR_QUERY(MPSGetStateVector);
+        LOAD_TENSOR_QUERY(MPSAllProbabilities);
+        LOAD_TENSOR_QUERY(MPSMoveAtBeginningOfChain);
+        LOAD_TENSOR_QUERY(MPSExpectationValueOperators);
+        LOAD_TENSOR_QUERY(MPSSetBondDimensionSummaryCallback);
+        LOAD_TENSOR_QUERY(MPOSetBondDimensionSummaryCallback);
+        LOAD_TENSOR_QUERY(MPSGetMaxBondDimension);
+        LOAD_TENSOR_QUERY(MPOGetMaxBondDimension);
 #undef LOAD_TENSOR_QUERY
 
-    return true;
-  }
-
-  int DiscoverDevices(const char *path) {
-    auto lock = LockInitialization();
-    SetMute(true);
-    return Init(path) ? GetGpuDeviceCount() : 0;
-  }
-
-  bool InitializeForDevice(const char *path, int device, bool mute = false) {
-    auto lock = LockInitialization();
-    SetMute(mute);
-    if (device < 0) throw std::invalid_argument("gpu_device must be nonnegative");
-    if (!Load(path)) return false;
-    const int count = GetGpuDeviceCount();
-    if (device >= count) {
-      if (!mute)
-        std::cerr << "GpuLibrary: GPU device " << device << " is unavailable ("
-                  << count << " visible devices)" << std::endl;
-      return false;
+        return true;
     }
-    // Reapply selection on every acquisition, including after InitLib has
-    // already run. Native objects retain their own device inside the plugin.
-    if (!SetGpuDevice(device)) {
-      if (!mute)
-        std::cerr << "GpuLibrary: Unable to select GPU device " << device << std::endl;
-      return false;
-    }
-    return Init(path);
-  }
 
-  bool Init(const char *libName) noexcept override {
-    auto lock = LockInitialization();
-    if (!Load(libName)) return false;
-    if (IsValid()) return true;
+    int DiscoverDevices(const char *path)
     {
-      FreeLib = (void (*)())GetFunction("FreeLib");
-      if (!fSetGpuDevice || !FreeLib) {
-        if (!IsMuted())
-          std::cerr << "GpuLibrary: SetGpuDevice and FreeLib are required." << std::endl;
-        return false;
-      }
+        auto lock = LockInitialization();
+        SetMute(true);
+        return Init(path) ? GetGpuDeviceCount() : 0;
+    }
 
-      InitLib = (void *(*)())GetFunction("InitLib");
-      CheckFunction((void *)InitLib, __LINE__);
-      if (InitLib) {
-        LibraryHandle = InitLib();
-        if (LibraryHandle) {
-          FreeLib = (void (*)())GetFunction("FreeLib");
-          CheckFunction((void *)FreeLib, __LINE__);
+    bool InitializeForDevice(const char *path, int device, bool mute = false)
+    {
+        auto lock = LockInitialization();
+        SetMute(mute);
+        if (device < 0)
+            throw std::invalid_argument("gpu_device must be nonnegative");
+        if (!Load(path))
+            return false;
+        const int count = GetGpuDeviceCount();
+        if (device >= count)
+        {
+            if (!mute)
+                std::cerr << "GpuLibrary: GPU device " << device << " is unavailable (" << count << " visible devices)" << std::endl;
+            return false;
+        }
+        // Reapply selection on every acquisition, including after InitLib has
+        // already run. Native objects retain their own device inside the plugin.
+        if (!SetGpuDevice(device))
+        {
+            if (!mute)
+                std::cerr << "GpuLibrary: Unable to select GPU device " << device << std::endl;
+            return false;
+        }
+        return Init(path);
+    }
 
-          // state vector api functions
+    bool Init(const char *libName) noexcept override
+    {
+        auto lock = LockInitialization();
+        if (!Load(libName))
+            return false;
+        if (IsValid())
+            return true;
+        {
+            FreeLib = (void (*)())GetFunction("FreeLib");
+            if (!fSetGpuDevice || !FreeLib)
+            {
+                if (!IsMuted())
+                    std::cerr << "GpuLibrary: SetGpuDevice and FreeLib are required." << std::endl;
+                return false;
+            }
 
-          fCreateStateVector =
-              (void *(*)(void *))GetFunction("CreateStateVector");
-          CheckFunction((void *)fCreateStateVector, __LINE__);
-          fDestroyStateVector =
-              (void (*)(void *))GetFunction("DestroyStateVector");
-          CheckFunction((void *)fDestroyStateVector, __LINE__);
+            InitLib = (void *(*)())GetFunction("InitLib");
+            CheckFunction((void *)InitLib, __LINE__);
+            if (InitLib)
+            {
+                LibraryHandle = InitLib();
+                if (LibraryHandle)
+                {
+                    FreeLib = (void (*)())GetFunction("FreeLib");
+                    CheckFunction((void *)FreeLib, __LINE__);
 
-          fCreate = (int (*)(void *, unsigned int))GetFunction("Create");
-          CheckFunction((void *)fCreate, __LINE__);
-          fCreateWithState =
-              (int (*)(void *, unsigned int, const double *))GetFunction(
-                  "CreateWithState");
-          CheckFunction((void *)fCreateWithState, __LINE__);
-          fReset = (int (*)(void *))GetFunction("Reset");
-          CheckFunction((void *)fReset, __LINE__);
+                    // state vector api functions
 
-          fSetDataType = (int (*)(void *, int))GetFunction("SetDataType");
-          CheckFunction((void *)fSetDataType, __LINE__);
-          fIsDoublePrecision =
-              (int (*)(void *))GetFunction("IsDoublePrecision");
-          CheckFunction((void *)fIsDoublePrecision, __LINE__);
-          fGetNrQubits = (int (*)(void *))GetFunction("GetNrQubits");
-          CheckFunction((void *)fGetNrQubits, __LINE__);
+                    fCreateStateVector = (void *(*)(void *))GetFunction("CreateStateVector");
+                    CheckFunction((void *)fCreateStateVector, __LINE__);
+                    fDestroyStateVector = (void (*)(void *))GetFunction("DestroyStateVector");
+                    CheckFunction((void *)fDestroyStateVector, __LINE__);
 
-          fMeasureQubitCollapse =
-              (int (*)(void *, int))GetFunction("MeasureQubitCollapse");
-          CheckFunction((void *)fMeasureQubitCollapse, __LINE__);
-          fMeasureQubitNoCollapse =
-              (int (*)(void *, int))GetFunction("MeasureQubitNoCollapse");
-          CheckFunction((void *)fMeasureQubitNoCollapse, __LINE__);
-          fMeasureQubitsCollapse = (int (*)(
-              void *, int *, int *, int))GetFunction("MeasureQubitsCollapse");
-          CheckFunction((void *)fMeasureQubitsCollapse, __LINE__);
-          fMeasureQubitsNoCollapse = (int (*)(
-              void *, int *, int *, int))GetFunction("MeasureQubitsNoCollapse");
-          CheckFunction((void *)fMeasureQubitsNoCollapse, __LINE__);
-          fMeasureAllQubitsCollapse = (unsigned long long (*)(
-              void *))GetFunction("MeasureAllQubitsCollapse");
-          CheckFunction((void *)fMeasureAllQubitsCollapse, __LINE__);
-          fMeasureAllQubitsNoCollapse = (unsigned long long (*)(
-              void *))GetFunction("MeasureAllQubitsNoCollapse");
-          CheckFunction((void *)fMeasureAllQubitsNoCollapse, __LINE__);
+                    fCreate = (int (*)(void *, unsigned int))GetFunction("Create");
+                    CheckFunction((void *)fCreate, __LINE__);
+                    fCreateWithState = (int (*)(void *, unsigned int, const double *))GetFunction("CreateWithState");
+                    CheckFunction((void *)fCreateWithState, __LINE__);
+                    fReset = (int (*)(void *))GetFunction("Reset");
+                    CheckFunction((void *)fReset, __LINE__);
 
-          fSaveState = (int (*)(void *))GetFunction("SaveState");
-          CheckFunction((void *)fSaveState, __LINE__);
-          fSaveStateToHost = (int (*)(void *))GetFunction("SaveStateToHost");
-          CheckFunction((void *)fSaveStateToHost, __LINE__);
-          fSaveStateDestructive =
-              (int (*)(void *))GetFunction("SaveStateDestructive");
-          CheckFunction((void *)fSaveStateDestructive, __LINE__);
-          fRestoreStateFreeSaved =
-              (int (*)(void *))GetFunction("RestoreStateFreeSaved");
-          CheckFunction((void *)fRestoreStateFreeSaved, __LINE__);
-          fRestoreStateNoFreeSaved =
-              (int (*)(void *))GetFunction("RestoreStateNoFreeSaved");
-          CheckFunction((void *)fRestoreStateNoFreeSaved, __LINE__);
-          fFreeSavedState = (void (*)(void *))GetFunction("FreeSavedState");
-          CheckFunction((void *)fFreeSavedState, __LINE__);
-          fClone = (void *(*)(void *))GetFunction("Clone");
-          CheckFunction((void *)fClone, __LINE__);
-          fSetSeed =
-              (int (*)(void *, unsigned long long))GetFunction("SetSeed");
-          CheckFunction((void *)fSetSeed, __LINE__);
+                    fSetDataType = (int (*)(void *, int))GetFunction("SetDataType");
+                    CheckFunction((void *)fSetDataType, __LINE__);
+                    fIsDoublePrecision = (int (*)(void *))GetFunction("IsDoublePrecision");
+                    CheckFunction((void *)fIsDoublePrecision, __LINE__);
+                    fGetNrQubits = (int (*)(void *))GetFunction("GetNrQubits");
+                    CheckFunction((void *)fGetNrQubits, __LINE__);
 
-          fSample = (int (*)(void *, unsigned int, long int *, unsigned int,
-                             int *))GetFunction("Sample");
-          CheckFunction((void *)fSample, __LINE__);
-          fSampleAll = (int (*)(void *, unsigned int, long int *))GetFunction(
-              "SampleAll");
-          CheckFunction((void *)fSampleAll, __LINE__);
-          fAmplitude = (int (*)(void *, long long int, double *,
-                                double *))GetFunction("Amplitude");
-          CheckFunction((void *)fAmplitude, __LINE__);
-          fProbability =
-              (double (*)(void *, int *, int *, int))GetFunction("Probability");
-          CheckFunction((void *)fProbability, __LINE__);
-          fBasisStateProbability = (double (*)(
-              void *, long long int))GetFunction("BasisStateProbability");
-          CheckFunction((void *)fBasisStateProbability, __LINE__);
-          fAllProbabilities = (int (*)(
-              void *obj, double *probabilities))GetFunction("AllProbabilities");
-          CheckFunction((void *)fAllProbabilities, __LINE__);
-          fExpectationValue = (double (*)(void *, const char *,
-                                          int))GetFunction("ExpectationValue");
-          CheckFunction((void *)fExpectationValue, __LINE__);
+                    fMeasureQubitCollapse = (int (*)(void *, int))GetFunction("MeasureQubitCollapse");
+                    CheckFunction((void *)fMeasureQubitCollapse, __LINE__);
+                    fMeasureQubitNoCollapse = (int (*)(void *, int))GetFunction("MeasureQubitNoCollapse");
+                    CheckFunction((void *)fMeasureQubitNoCollapse, __LINE__);
+                    fMeasureQubitsCollapse = (int (*)(void *, int *, int *, int))GetFunction("MeasureQubitsCollapse");
+                    CheckFunction((void *)fMeasureQubitsCollapse, __LINE__);
+                    fMeasureQubitsNoCollapse = (int (*)(void *, int *, int *, int))GetFunction("MeasureQubitsNoCollapse");
+                    CheckFunction((void *)fMeasureQubitsNoCollapse, __LINE__);
+                    fMeasureAllQubitsCollapse = (unsigned long long (*)(void *))GetFunction("MeasureAllQubitsCollapse");
+                    CheckFunction((void *)fMeasureAllQubitsCollapse, __LINE__);
+                    fMeasureAllQubitsNoCollapse = (unsigned long long (*)(void *))GetFunction("MeasureAllQubitsNoCollapse");
+                    CheckFunction((void *)fMeasureAllQubitsNoCollapse, __LINE__);
 
-          fApplyX = (int (*)(void *, int))GetFunction("ApplyX");
-          CheckFunction((void *)fApplyX, __LINE__);
-          fApplyY = (int (*)(void *, int))GetFunction("ApplyY");
-          CheckFunction((void *)fApplyY, __LINE__);
-          fApplyZ = (int (*)(void *, int))GetFunction("ApplyZ");
-          CheckFunction((void *)fApplyZ, __LINE__);
-          fApplyH = (int (*)(void *, int))GetFunction("ApplyH");
-          CheckFunction((void *)fApplyH, __LINE__);
-          fApplyS = (int (*)(void *, int))GetFunction("ApplyS");
-          CheckFunction((void *)fApplyS, __LINE__);
-          fApplySDG = (int (*)(void *, int))GetFunction("ApplySDG");
-          CheckFunction((void *)fApplySDG, __LINE__);
-          fApplyT = (int (*)(void *, int))GetFunction("ApplyT");
-          CheckFunction((void *)fApplyT, __LINE__);
-          fApplyTDG = (int (*)(void *, int))GetFunction("ApplyTDG");
-          CheckFunction((void *)fApplyTDG, __LINE__);
-          fApplySX = (int (*)(void *, int))GetFunction("ApplySX");
-          CheckFunction((void *)fApplySX, __LINE__);
-          fApplySXDG = (int (*)(void *, int))GetFunction("ApplySXDG");
-          CheckFunction((void *)fApplySXDG, __LINE__);
-          fApplyK = (int (*)(void *, int))GetFunction("ApplyK");
-          CheckFunction((void *)fApplyK, __LINE__);
-          fApplyP = (int (*)(void *, int, double))GetFunction("ApplyP");
-          CheckFunction((void *)fApplyP, __LINE__);
-          fApplyRx = (int (*)(void *, int, double))GetFunction("ApplyRx");
-          CheckFunction((void *)fApplyRx, __LINE__);
-          fApplyRy = (int (*)(void *, int, double))GetFunction("ApplyRy");
-          CheckFunction((void *)fApplyRy, __LINE__);
-          fApplyRz = (int (*)(void *, int, double))GetFunction("ApplyRz");
-          CheckFunction((void *)fApplyRz, __LINE__);
-          fApplyU = (int (*)(void *, int, double, double, double,
-                             double))GetFunction("ApplyU");
-          CheckFunction((void *)fApplyU, __LINE__);
-          fApplyCX = (int (*)(void *, int, int))GetFunction("ApplyCX");
-          CheckFunction((void *)fApplyCX, __LINE__);
-          fApplyCY = (int (*)(void *, int, int))GetFunction("ApplyCY");
-          CheckFunction((void *)fApplyCY, __LINE__);
-          fApplyCZ = (int (*)(void *, int, int))GetFunction("ApplyCZ");
-          CheckFunction((void *)fApplyCZ, __LINE__);
-          fApplyCH = (int (*)(void *, int, int))GetFunction("ApplyCH");
-          CheckFunction((void *)fApplyCH, __LINE__);
-          fApplyCSX = (int (*)(void *, int, int))GetFunction("ApplyCSX");
-          CheckFunction((void *)fApplyCSX, __LINE__);
-          fApplyCSXDG = (int (*)(void *, int, int))GetFunction("ApplyCSXDG");
-          CheckFunction((void *)fApplyCSXDG, __LINE__);
-          fApplyCP = (int (*)(void *, int, int, double))GetFunction("ApplyCP");
-          CheckFunction((void *)fApplyCP, __LINE__);
-          fApplyCRx =
-              (int (*)(void *, int, int, double))GetFunction("ApplyCRx");
-          CheckFunction((void *)fApplyCRx, __LINE__);
-          fApplyCRy =
-              (int (*)(void *, int, int, double))GetFunction("ApplyCRy");
-          CheckFunction((void *)fApplyCRy, __LINE__);
-          fApplyCRz =
-              (int (*)(void *, int, int, double))GetFunction("ApplyCRz");
-          CheckFunction((void *)fApplyCRz, __LINE__);
-          fApplyCCX = (int (*)(void *, int, int, int))GetFunction("ApplyCCX");
-          CheckFunction((void *)fApplyCCX, __LINE__);
-          fApplySwap = (int (*)(void *, int, int))GetFunction("ApplySwap");
-          CheckFunction((void *)fApplySwap, __LINE__);
-          fApplyCSwap =
-              (int (*)(void *, int, int, int))GetFunction("ApplyCSwap");
-          CheckFunction((void *)fApplyCSwap, __LINE__);
-          fApplyCU = (int (*)(void *, int, int, double, double, double,
-                              double))GetFunction("ApplyCU");
-          CheckFunction((void *)fApplyCU, __LINE__);
+                    fSaveState = (int (*)(void *))GetFunction("SaveState");
+                    CheckFunction((void *)fSaveState, __LINE__);
+                    fSaveStateToHost = (int (*)(void *))GetFunction("SaveStateToHost");
+                    CheckFunction((void *)fSaveStateToHost, __LINE__);
+                    fSaveStateDestructive = (int (*)(void *))GetFunction("SaveStateDestructive");
+                    CheckFunction((void *)fSaveStateDestructive, __LINE__);
+                    fRestoreStateFreeSaved = (int (*)(void *))GetFunction("RestoreStateFreeSaved");
+                    CheckFunction((void *)fRestoreStateFreeSaved, __LINE__);
+                    fRestoreStateNoFreeSaved = (int (*)(void *))GetFunction("RestoreStateNoFreeSaved");
+                    CheckFunction((void *)fRestoreStateNoFreeSaved, __LINE__);
+                    fFreeSavedState = (void (*)(void *))GetFunction("FreeSavedState");
+                    CheckFunction((void *)fFreeSavedState, __LINE__);
+                    fClone = (void *(*)(void *))GetFunction("Clone");
+                    CheckFunction((void *)fClone, __LINE__);
+                    fSetSeed = (int (*)(void *, unsigned long long))GetFunction("SetSeed");
+                    CheckFunction((void *)fSetSeed, __LINE__);
 
-          // Optional on older plugins; fusion checks the complete matrix API.
-          fApplyOneQubitMatrix =
-              reinterpret_cast<int (*)(void *, int, const double *)>(
-                  GetFunction("ApplyOneQubitMatrix"));
-          fApplyOneQubitMatrixWithLayout =
-              reinterpret_cast<int (*)(void *, int, const double *, int)>(
-                  GetFunction("ApplyOneQubitMatrixWithLayout"));
-          fApplyTwoQubitMatrix =
-              reinterpret_cast<int (*)(void *, int, int, const double *)>(
-                  GetFunction("ApplyTwoQubitMatrix"));
-          fApplyTwoQubitMatrixWithLayout =
-              reinterpret_cast<int (*)(void *, int, int, const double *, int)>(
-                  GetFunction("ApplyTwoQubitMatrixWithLayout"));
-          fApplyThreeQubitMatrix =
-              reinterpret_cast<int (*)(void *, int, int, int, const double *)>(
-                  GetFunction("ApplyThreeQubitMatrix"));
-          fApplyThreeQubitMatrixWithLayout = reinterpret_cast<int (*)(
-              void *, int, int, int, const double *, int)>(
-              GetFunction("ApplyThreeQubitMatrixWithLayout"));
+                    fSample = (int (*)(void *, unsigned int, long int *, unsigned int, int *))GetFunction("Sample");
+                    CheckFunction((void *)fSample, __LINE__);
+                    fSampleAll = (int (*)(void *, unsigned int, long int *))GetFunction("SampleAll");
+                    CheckFunction((void *)fSampleAll, __LINE__);
+                    fAmplitude = (int (*)(void *, long long int, double *, double *))GetFunction("Amplitude");
+                    CheckFunction((void *)fAmplitude, __LINE__);
+                    fProbability = (double (*)(void *, int *, int *, int))GetFunction("Probability");
+                    CheckFunction((void *)fProbability, __LINE__);
+                    fBasisStateProbability = (double (*)(void *, long long int))GetFunction("BasisStateProbability");
+                    CheckFunction((void *)fBasisStateProbability, __LINE__);
+                    fAllProbabilities = (int (*)(void *obj, double *probabilities))GetFunction("AllProbabilities");
+                    CheckFunction((void *)fAllProbabilities, __LINE__);
+                    fExpectationValue = (double (*)(void *, const char *, int))GetFunction("ExpectationValue");
+                    CheckFunction((void *)fExpectationValue, __LINE__);
 
-          // density matrix api functions
-#define LOAD_DM(name, type)                                                   \
-  f##name = reinterpret_cast<type>(GetFunction(#name));                       \
-  CheckFunction(reinterpret_cast<void *>(f##name), __LINE__)
-          LOAD_DM(CreateDensityMatrix, void *(*)(void *));
-          LOAD_DM(DestroyDensityMatrix, void (*)(void *));
-          LOAD_DM(DMCreate, int (*)(void *, unsigned int));
-          LOAD_DM(DMCreateWithState,
-                  int (*)(void *, unsigned int, const double *));
-          LOAD_DM(DMCreateWithBasisState,
-                  int (*)(void *, unsigned int, unsigned long long));
-          LOAD_DM(DMCreateWithMixtureOfBasisStates,
-                  int (*)(void *, unsigned int, const unsigned long long *,
-                          const double *, int));
-          LOAD_DM(DMReset, int (*)(void *));
-          LOAD_DM(DMIsValid, int (*)(void *));
-          LOAD_DM(DMIsCreated, int (*)(void *));
-          LOAD_DM(DMSetDataType, int (*)(void *, int));
-          LOAD_DM(DMIsDoublePrecision, int (*)(void *));
-          LOAD_DM(DMGetNrQubits, int (*)(void *));
-          LOAD_DM(DMSaveState, int (*)(void *));
-          LOAD_DM(DMRestoreState, int (*)(void *));
-          LOAD_DM(DMCleanSavedState, int (*)(void *));
-          LOAD_DM(DMClone, void *(*)(void *));
-          LOAD_DM(DMSetSeed, int (*)(void *, unsigned long long));
-          LOAD_DM(DMMeasureQubitCollapse, int (*)(void *, int));
-          LOAD_DM(DMMeasureQubitNoCollapse, int (*)(void *, int));
-          LOAD_DM(DMMeasureQubitsCollapse, int (*)(void *, int *, int *, int));
-          LOAD_DM(DMMeasureQubitsNoCollapse, int (*)(void *, int *, int *, int));
-          LOAD_DM(DMMeasureAllQubitsCollapse, unsigned long long (*)(void *));
-          LOAD_DM(DMMeasureAllQubitsNoCollapse, unsigned long long (*)(void *));
-          LOAD_DM(DMSample, int (*)(void *, unsigned int, long int *, unsigned int, int *));
-          LOAD_DM(DMSampleAll,
-                  int (*)(void *, unsigned int, long int *));
-          LOAD_DM(DMGetElement,
-                  int (*)(void *, long long, long long, double *, double *));
-          LOAD_DM(DMBasisStateProbability, double (*)(void *, long long));
-          LOAD_DM(DMAllProbabilities, int (*)(void *, double *));
-          LOAD_DM(DMExpectationValue,
-                  double (*)(void *, const char *, int));
-          LOAD_DM(DMQubitProbability0, double (*)(void *, unsigned int));
-          LOAD_DM(DMTrace, double (*)(void *));
-          LOAD_DM(DMPurity, double (*)(void *));
-          LOAD_DM(DMIsHermitian, int (*)(void *, double));
-          LOAD_DM(DMPartialTrace, int (*)(void *, const int *, int, double *));
-          LOAD_DM(DMHilbertSchmidtOverlap, int (*)(void *, void *, double *, double *));
-          LOAD_DM(DMFidelityWithStatevector, int (*)(void *, const double *, double *));
-          LOAD_DM(DMApplyKraus,
-                  int (*)(void *, int, const int *, int, const double *));
+                    fApplyX = (int (*)(void *, int))GetFunction("ApplyX");
+                    CheckFunction((void *)fApplyX, __LINE__);
+                    fApplyY = (int (*)(void *, int))GetFunction("ApplyY");
+                    CheckFunction((void *)fApplyY, __LINE__);
+                    fApplyZ = (int (*)(void *, int))GetFunction("ApplyZ");
+                    CheckFunction((void *)fApplyZ, __LINE__);
+                    fApplyH = (int (*)(void *, int))GetFunction("ApplyH");
+                    CheckFunction((void *)fApplyH, __LINE__);
+                    fApplyS = (int (*)(void *, int))GetFunction("ApplyS");
+                    CheckFunction((void *)fApplyS, __LINE__);
+                    fApplySDG = (int (*)(void *, int))GetFunction("ApplySDG");
+                    CheckFunction((void *)fApplySDG, __LINE__);
+                    fApplyT = (int (*)(void *, int))GetFunction("ApplyT");
+                    CheckFunction((void *)fApplyT, __LINE__);
+                    fApplyTDG = (int (*)(void *, int))GetFunction("ApplyTDG");
+                    CheckFunction((void *)fApplyTDG, __LINE__);
+                    fApplySX = (int (*)(void *, int))GetFunction("ApplySX");
+                    CheckFunction((void *)fApplySX, __LINE__);
+                    fApplySXDG = (int (*)(void *, int))GetFunction("ApplySXDG");
+                    CheckFunction((void *)fApplySXDG, __LINE__);
+                    fApplyK = (int (*)(void *, int))GetFunction("ApplyK");
+                    CheckFunction((void *)fApplyK, __LINE__);
+                    fApplyP = (int (*)(void *, int, double))GetFunction("ApplyP");
+                    CheckFunction((void *)fApplyP, __LINE__);
+                    fApplyRx = (int (*)(void *, int, double))GetFunction("ApplyRx");
+                    CheckFunction((void *)fApplyRx, __LINE__);
+                    fApplyRy = (int (*)(void *, int, double))GetFunction("ApplyRy");
+                    CheckFunction((void *)fApplyRy, __LINE__);
+                    fApplyRz = (int (*)(void *, int, double))GetFunction("ApplyRz");
+                    CheckFunction((void *)fApplyRz, __LINE__);
+                    fApplyU = (int (*)(void *, int, double, double, double, double))GetFunction("ApplyU");
+                    CheckFunction((void *)fApplyU, __LINE__);
+                    fApplyCX = (int (*)(void *, int, int))GetFunction("ApplyCX");
+                    CheckFunction((void *)fApplyCX, __LINE__);
+                    fApplyCY = (int (*)(void *, int, int))GetFunction("ApplyCY");
+                    CheckFunction((void *)fApplyCY, __LINE__);
+                    fApplyCZ = (int (*)(void *, int, int))GetFunction("ApplyCZ");
+                    CheckFunction((void *)fApplyCZ, __LINE__);
+                    fApplyCH = (int (*)(void *, int, int))GetFunction("ApplyCH");
+                    CheckFunction((void *)fApplyCH, __LINE__);
+                    fApplyCSX = (int (*)(void *, int, int))GetFunction("ApplyCSX");
+                    CheckFunction((void *)fApplyCSX, __LINE__);
+                    fApplyCSXDG = (int (*)(void *, int, int))GetFunction("ApplyCSXDG");
+                    CheckFunction((void *)fApplyCSXDG, __LINE__);
+                    fApplyCP = (int (*)(void *, int, int, double))GetFunction("ApplyCP");
+                    CheckFunction((void *)fApplyCP, __LINE__);
+                    fApplyCRx = (int (*)(void *, int, int, double))GetFunction("ApplyCRx");
+                    CheckFunction((void *)fApplyCRx, __LINE__);
+                    fApplyCRy = (int (*)(void *, int, int, double))GetFunction("ApplyCRy");
+                    CheckFunction((void *)fApplyCRy, __LINE__);
+                    fApplyCRz = (int (*)(void *, int, int, double))GetFunction("ApplyCRz");
+                    CheckFunction((void *)fApplyCRz, __LINE__);
+                    fApplyCCX = (int (*)(void *, int, int, int))GetFunction("ApplyCCX");
+                    CheckFunction((void *)fApplyCCX, __LINE__);
+                    fApplySwap = (int (*)(void *, int, int))GetFunction("ApplySwap");
+                    CheckFunction((void *)fApplySwap, __LINE__);
+                    fApplyCSwap = (int (*)(void *, int, int, int))GetFunction("ApplyCSwap");
+                    CheckFunction((void *)fApplyCSwap, __LINE__);
+                    fApplyCU = (int (*)(void *, int, int, double, double, double, double))GetFunction("ApplyCU");
+                    CheckFunction((void *)fApplyCU, __LINE__);
+
+                    // Optional on older plugins; fusion checks the complete matrix API.
+                    fApplyOneQubitMatrix = reinterpret_cast<int (*)(void *, int, const double *)>(GetFunction("ApplyOneQubitMatrix"));
+                    fApplyOneQubitMatrixWithLayout = reinterpret_cast<int (*)(void *, int, const double *, int)>(GetFunction("ApplyOneQubitMatrixWithLayout"));
+                    fApplyTwoQubitMatrix = reinterpret_cast<int (*)(void *, int, int, const double *)>(GetFunction("ApplyTwoQubitMatrix"));
+                    fApplyTwoQubitMatrixWithLayout =
+                        reinterpret_cast<int (*)(void *, int, int, const double *, int)>(GetFunction("ApplyTwoQubitMatrixWithLayout"));
+                    fApplyThreeQubitMatrix = reinterpret_cast<int (*)(void *, int, int, int, const double *)>(GetFunction("ApplyThreeQubitMatrix"));
+                    fApplyThreeQubitMatrixWithLayout =
+                        reinterpret_cast<int (*)(void *, int, int, int, const double *, int)>(GetFunction("ApplyThreeQubitMatrixWithLayout"));
+
+                    // density matrix api functions
+#define LOAD_DM(name, type)                                                                                                                                    \
+    f##name = reinterpret_cast<type>(GetFunction(#name));                                                                                                      \
+    CheckFunction(reinterpret_cast<void *>(f##name), __LINE__)
+                    LOAD_DM(CreateDensityMatrix, void *(*)(void *));
+                    LOAD_DM(DestroyDensityMatrix, void (*)(void *));
+                    LOAD_DM(DMCreate, int (*)(void *, unsigned int));
+                    LOAD_DM(DMCreateWithState, int (*)(void *, unsigned int, const double *));
+                    LOAD_DM(DMCreateWithBasisState, int (*)(void *, unsigned int, unsigned long long));
+                    LOAD_DM(DMCreateWithMixtureOfBasisStates, int (*)(void *, unsigned int, const unsigned long long *, const double *, int));
+                    LOAD_DM(DMReset, int (*)(void *));
+                    LOAD_DM(DMIsValid, int (*)(void *));
+                    LOAD_DM(DMIsCreated, int (*)(void *));
+                    LOAD_DM(DMSetDataType, int (*)(void *, int));
+                    LOAD_DM(DMIsDoublePrecision, int (*)(void *));
+                    LOAD_DM(DMGetNrQubits, int (*)(void *));
+                    LOAD_DM(DMSaveState, int (*)(void *));
+                    LOAD_DM(DMRestoreState, int (*)(void *));
+                    LOAD_DM(DMCleanSavedState, int (*)(void *));
+                    LOAD_DM(DMClone, void *(*)(void *));
+                    LOAD_DM(DMSetSeed, int (*)(void *, unsigned long long));
+                    LOAD_DM(DMMeasureQubitCollapse, int (*)(void *, int));
+                    LOAD_DM(DMMeasureQubitNoCollapse, int (*)(void *, int));
+                    LOAD_DM(DMMeasureQubitsCollapse, int (*)(void *, int *, int *, int));
+                    LOAD_DM(DMMeasureQubitsNoCollapse, int (*)(void *, int *, int *, int));
+                    LOAD_DM(DMMeasureAllQubitsCollapse, unsigned long long (*)(void *));
+                    LOAD_DM(DMMeasureAllQubitsNoCollapse, unsigned long long (*)(void *));
+                    LOAD_DM(DMSample, int (*)(void *, unsigned int, long int *, unsigned int, int *));
+                    LOAD_DM(DMSampleAll, int (*)(void *, unsigned int, long int *));
+                    LOAD_DM(DMGetElement, int (*)(void *, long long, long long, double *, double *));
+                    LOAD_DM(DMBasisStateProbability, double (*)(void *, long long));
+                    LOAD_DM(DMAllProbabilities, int (*)(void *, double *));
+                    LOAD_DM(DMExpectationValue, double (*)(void *, const char *, int));
+                    LOAD_DM(DMQubitProbability0, double (*)(void *, unsigned int));
+                    LOAD_DM(DMTrace, double (*)(void *));
+                    LOAD_DM(DMPurity, double (*)(void *));
+                    LOAD_DM(DMIsHermitian, int (*)(void *, double));
+                    LOAD_DM(DMPartialTrace, int (*)(void *, const int *, int, double *));
+                    LOAD_DM(DMHilbertSchmidtOverlap, int (*)(void *, void *, double *, double *));
+                    LOAD_DM(DMFidelityWithStatevector, int (*)(void *, const double *, double *));
+                    LOAD_DM(DMApplyKraus, int (*)(void *, int, const int *, int, const double *));
 #define LOAD_DM_GATE1(name) LOAD_DM(name, int (*)(void *, int))
 #define LOAD_DM_GATE2(name) LOAD_DM(name, int (*)(void *, int, int))
 #define LOAD_DM_ROT1(name) LOAD_DM(name, int (*)(void *, int, double))
 #define LOAD_DM_ROT2(name) LOAD_DM(name, int (*)(void *, int, int, double))
-          LOAD_DM_GATE1(DMApplyReset);
-          LOAD_DM_ROT1(DMApplyBitFlipNoise); LOAD_DM_ROT1(DMApplyPhaseFlipNoise);
-          LOAD_DM_ROT1(DMApplyDepolarizingNoise); LOAD_DM_ROT1(DMApplyAmplitudeDamping);
-          LOAD_DM_ROT1(DMApplyPhaseDamping);
-          LOAD_DM_GATE1(DMApplyNonSelectiveMeasurement);
-          LOAD_DM_GATE1(DMApplyX); LOAD_DM_GATE1(DMApplyY);
-          LOAD_DM_GATE1(DMApplyZ); LOAD_DM_GATE1(DMApplyH);
-          LOAD_DM_GATE1(DMApplyS); LOAD_DM_GATE1(DMApplySDG);
-          LOAD_DM_GATE1(DMApplyT); LOAD_DM_GATE1(DMApplyTDG);
-          LOAD_DM_GATE1(DMApplySX); LOAD_DM_GATE1(DMApplySXDG);
-          LOAD_DM_GATE1(DMApplyK);
-          LOAD_DM_ROT1(DMApplyP); LOAD_DM_ROT1(DMApplyRx);
-          LOAD_DM_ROT1(DMApplyRy); LOAD_DM_ROT1(DMApplyRz);
-          LOAD_DM(DMApplyU,
-                  int (*)(void *, int, double, double, double, double));
-          LOAD_DM_GATE2(DMApplyCX); LOAD_DM_GATE2(DMApplyCY);
-          LOAD_DM_GATE2(DMApplyCZ); LOAD_DM_GATE2(DMApplyCH);
-          LOAD_DM_GATE2(DMApplyCSX); LOAD_DM_GATE2(DMApplyCSXDG);
-          LOAD_DM_ROT2(DMApplyCP); LOAD_DM_ROT2(DMApplyCRx);
-          LOAD_DM_ROT2(DMApplyCRy); LOAD_DM_ROT2(DMApplyCRz);
-          LOAD_DM(DMApplyCCX, int (*)(void *, int, int, int));
-          LOAD_DM_GATE2(DMApplySwap);
-          LOAD_DM(DMApplyCSwap, int (*)(void *, int, int, int));
-          LOAD_DM(DMApplyCU,
-                  int (*)(void *, int, int, double, double, double, double));
+                    LOAD_DM_GATE1(DMApplyReset);
+                    LOAD_DM_ROT1(DMApplyBitFlipNoise);
+                    LOAD_DM_ROT1(DMApplyPhaseFlipNoise);
+                    LOAD_DM_ROT1(DMApplyDepolarizingNoise);
+                    LOAD_DM_ROT1(DMApplyAmplitudeDamping);
+                    LOAD_DM_ROT1(DMApplyPhaseDamping);
+                    LOAD_DM_GATE1(DMApplyNonSelectiveMeasurement);
+                    LOAD_DM_GATE1(DMApplyX);
+                    LOAD_DM_GATE1(DMApplyY);
+                    LOAD_DM_GATE1(DMApplyZ);
+                    LOAD_DM_GATE1(DMApplyH);
+                    LOAD_DM_GATE1(DMApplyS);
+                    LOAD_DM_GATE1(DMApplySDG);
+                    LOAD_DM_GATE1(DMApplyT);
+                    LOAD_DM_GATE1(DMApplyTDG);
+                    LOAD_DM_GATE1(DMApplySX);
+                    LOAD_DM_GATE1(DMApplySXDG);
+                    LOAD_DM_GATE1(DMApplyK);
+                    LOAD_DM_ROT1(DMApplyP);
+                    LOAD_DM_ROT1(DMApplyRx);
+                    LOAD_DM_ROT1(DMApplyRy);
+                    LOAD_DM_ROT1(DMApplyRz);
+                    LOAD_DM(DMApplyU, int (*)(void *, int, double, double, double, double));
+                    LOAD_DM_GATE2(DMApplyCX);
+                    LOAD_DM_GATE2(DMApplyCY);
+                    LOAD_DM_GATE2(DMApplyCZ);
+                    LOAD_DM_GATE2(DMApplyCH);
+                    LOAD_DM_GATE2(DMApplyCSX);
+                    LOAD_DM_GATE2(DMApplyCSXDG);
+                    LOAD_DM_ROT2(DMApplyCP);
+                    LOAD_DM_ROT2(DMApplyCRx);
+                    LOAD_DM_ROT2(DMApplyCRy);
+                    LOAD_DM_ROT2(DMApplyCRz);
+                    LOAD_DM(DMApplyCCX, int (*)(void *, int, int, int));
+                    LOAD_DM_GATE2(DMApplySwap);
+                    LOAD_DM(DMApplyCSwap, int (*)(void *, int, int, int));
+                    LOAD_DM(DMApplyCU, int (*)(void *, int, int, double, double, double, double));
 #undef LOAD_DM_ROT2
 #undef LOAD_DM_ROT1
 #undef LOAD_DM_GATE2
 #undef LOAD_DM_GATE1
 #undef LOAD_DM
 
-          // matrix product operator (mpo) api functions
-#define LOAD_MPO(name, type)                                                  \
-  f##name = reinterpret_cast<type>(GetFunction(#name));                       \
-  CheckFunction(reinterpret_cast<void *>(f##name), __LINE__)
-          LOAD_MPO(CreateMPO, void *(*)(void *));
-          LOAD_MPO(DestroyMPO, void (*)(void *));
-          LOAD_MPO(MPOCreate, int (*)(void *, unsigned int));
-          LOAD_MPO(MPOCreateWithState,
-                   int (*)(void *, unsigned int, const double *));
-          LOAD_MPO(MPOCreateWithBasisState,
-                   int (*)(void *, unsigned int, unsigned long long));
-          LOAD_MPO(MPOCreateWithBasisStateBits,
-                   int (*)(void *, unsigned int, const unsigned char *));
-          LOAD_MPO(MPOCreateWithMixtureOfBasisStates,
-                   int (*)(void *, unsigned int, const unsigned long long *,
-                           const double *, int));
-          LOAD_MPO(MPOCreateWithMixtureOfBasisStatesBits,
-                   int (*)(void *, unsigned int, const unsigned char *,
-                           const double *, int));
-          LOAD_MPO(MPOReset, int (*)(void *));
-          LOAD_MPO(MPOSetInitialQubitsMap,
-                   int (*)(void *, const long long int *, int));
-          LOAD_MPO(MPOSetUseOptimalMeetingPosition, int (*)(void *, int));
-          LOAD_MPO(MPOGetUseOptimalMeetingPosition, int (*)(void *));
-          LOAD_MPO(MPOIsValid, int (*)(void *));
-          LOAD_MPO(MPOIsCreated, int (*)(void *));
-          LOAD_MPO(MPOSetDataType, int (*)(void *, int));
-          LOAD_MPO(MPOIsDoublePrecision, int (*)(void *));
-          LOAD_MPO(MPOGetNrQubits, int (*)(void *));
-          LOAD_MPO(MPOSetCutoff, int (*)(void *, double));
-          LOAD_MPO(MPOGetCutoff, double (*)(void *));
-          LOAD_MPO(MPOSetTruncationMode, int (*)(void *, int));
-          LOAD_MPO(MPOGetTruncationMode, int (*)(void *));
-          LOAD_MPO(MPOSetGesvdJ, int (*)(void *, int));
-          LOAD_MPO(MPOGetGesvdJ, int (*)(void *));
-          // Optional in older plugins; checked when explicitly requested.
-          fMPOSetGesvdP = (int (*)(void *, int))GetFunction("MPOSetGesvdP");
-          fMPOGetGesvdP = (int (*)(void *))GetFunction("MPOGetGesvdP");
-          fMPOSetGesvdR = (int (*)(void *, int))GetFunction("MPOSetGesvdR");
-          fMPOGetGesvdR = (int (*)(void *))GetFunction("MPOGetGesvdR");
-          fMPOGetLastSvdAlgo = (int (*)(void *))GetFunction("MPOGetLastSvdAlgo");
+                    // matrix product operator (mpo) api functions
+#define LOAD_MPO(name, type)                                                                                                                                   \
+    f##name = reinterpret_cast<type>(GetFunction(#name));                                                                                                      \
+    CheckFunction(reinterpret_cast<void *>(f##name), __LINE__)
+                    LOAD_MPO(CreateMPO, void *(*)(void *));
+                    LOAD_MPO(DestroyMPO, void (*)(void *));
+                    LOAD_MPO(MPOCreate, int (*)(void *, unsigned int));
+                    LOAD_MPO(MPOCreateWithState, int (*)(void *, unsigned int, const double *));
+                    LOAD_MPO(MPOCreateWithBasisState, int (*)(void *, unsigned int, unsigned long long));
+                    LOAD_MPO(MPOCreateWithBasisStateBits, int (*)(void *, unsigned int, const unsigned char *));
+                    LOAD_MPO(MPOCreateWithMixtureOfBasisStates, int (*)(void *, unsigned int, const unsigned long long *, const double *, int));
+                    LOAD_MPO(MPOCreateWithMixtureOfBasisStatesBits, int (*)(void *, unsigned int, const unsigned char *, const double *, int));
+                    LOAD_MPO(MPOReset, int (*)(void *));
+                    LOAD_MPO(MPOSetInitialQubitsMap, int (*)(void *, const long long int *, int));
+                    LOAD_MPO(MPOSetUseOptimalMeetingPosition, int (*)(void *, int));
+                    LOAD_MPO(MPOGetUseOptimalMeetingPosition, int (*)(void *));
+                    LOAD_MPO(MPOIsValid, int (*)(void *));
+                    LOAD_MPO(MPOIsCreated, int (*)(void *));
+                    LOAD_MPO(MPOSetDataType, int (*)(void *, int));
+                    LOAD_MPO(MPOIsDoublePrecision, int (*)(void *));
+                    LOAD_MPO(MPOGetNrQubits, int (*)(void *));
+                    LOAD_MPO(MPOSetCutoff, int (*)(void *, double));
+                    LOAD_MPO(MPOGetCutoff, double (*)(void *));
+                    LOAD_MPO(MPOSetTruncationMode, int (*)(void *, int));
+                    LOAD_MPO(MPOGetTruncationMode, int (*)(void *));
+                    LOAD_MPO(MPOSetGesvdJ, int (*)(void *, int));
+                    LOAD_MPO(MPOGetGesvdJ, int (*)(void *));
+                    // Optional in older plugins; checked when explicitly requested.
+                    fMPOSetGesvdP = (int (*)(void *, int))GetFunction("MPOSetGesvdP");
+                    fMPOGetGesvdP = (int (*)(void *))GetFunction("MPOGetGesvdP");
+                    fMPOSetGesvdR = (int (*)(void *, int))GetFunction("MPOSetGesvdR");
+                    fMPOGetGesvdR = (int (*)(void *))GetFunction("MPOGetGesvdR");
+                    fMPOGetLastSvdAlgo = (int (*)(void *))GetFunction("MPOGetLastSvdAlgo");
 
-          LOAD_MPO(MPOSetMaxExtent, int (*)(void *, long int));
-          LOAD_MPO(MPOGetMaxExtent, long int (*)(void *));
-          LOAD_MPO(MPOGetBondDimensions,
-                   int (*)(void *, long long int *));
-          // Optional read-only routing map (older plugins use local routing).
-          fMPOGetQubitsMap = reinterpret_cast<int (*)(void*, long long*, int)>(GetFunction("MPOGetQubitsMap"));
-          LOAD_MPO(MPOSetCallbackContext, int (*)(void *, void *));
-          LOAD_MPO(MPOSetMeetingPositionCallback,
-                   int (*)(void *, int64_t (*)(void *, const int64_t *)));
-          LOAD_MPO(MPOSetBondDimensionsCallback,
-                   int (*)(void *, void (*)(void *, const int64_t *)));
-          LOAD_MPO(MPOSampleBits, int (*)(void *, unsigned int, unsigned int,
-                                          const int *, unsigned char *));
-          LOAD_MPO(MPOGetMapForSample, void *(*)());
-          LOAD_MPO(MPOFreeMapForSample, int (*)(void *));
-          LOAD_MPO(MPOSampleHistogram,
-                   int (*)(void *, long int, long int, unsigned int *, void *));
-          LOAD_MPO(MPOGetElementBits,
-                   int (*)(void *, const unsigned char *, const unsigned char *,
-                           double *, double *));
-          LOAD_MPO(MPOBasisStateProbabilityBits,
-                   double (*)(void *, const unsigned char *));
-          LOAD_MPO(MPOExpectationValueComplex,
-                   int (*)(void *, const char *, int, double *, double *));
-          LOAD_MPO(MPOUnnormalizedExpectationValue,
-                   int (*)(void *, const char *, int, double *, double *));
-          LOAD_MPO(MPOGetDensityMatrix, int (*)(void *, double *));
-          LOAD_MPO(MPOGetUnnormalizedDensityMatrix, int (*)(void *, double *));
-          LOAD_MPO(MPOTraceComplex, int (*)(void *, double *, double *));
-          LOAD_MPO(MPOSetRestoreTraceAfterTruncation, int (*)(void *, int));
-          LOAD_MPO(MPOGetRestoreTraceAfterTruncation, int (*)(void *));
-          LOAD_MPO(MPOSetHermitizeAfterTruncation, int (*)(void *, int));
-          LOAD_MPO(MPOGetHermitizeAfterTruncation, int (*)(void *));
-          LOAD_MPO(MPOMoveAtBeginningOfChain,
-                   int (*)(void *, const int *, int));
-          LOAD_MPO(MPOApplyOperator,
-                   int (*)(void *, int, const int *, const double *));
-          LOAD_MPO(MPOApplyOperatorAndNormalize,
-                   int (*)(void *, int, const int *, const double *));
-          LOAD_MPO(MPOReCanonicalize, int (*)(void *));
-          LOAD_MPO(MPOTrim, int (*)(void *, double, long int));
-          LOAD_MPO(MPOSaveState, int (*)(void *));
-          LOAD_MPO(MPORestoreState, int (*)(void *));
-          LOAD_MPO(MPOCleanSavedState, int (*)(void *));
-          LOAD_MPO(MPOClone, void *(*)(void *));
-          LOAD_MPO(MPOSetSeed, int (*)(void *, unsigned long long));
-          LOAD_MPO(MPOMeasureQubitCollapse, int (*)(void *, int));
-          LOAD_MPO(MPOMeasureQubitNoCollapse, int (*)(void *, int));
-          LOAD_MPO(MPOMeasureQubitsCollapse, int (*)(void *, int *, int *, int));
-          LOAD_MPO(MPOMeasureQubitsNoCollapse, int (*)(void *, int *, int *, int));
-          LOAD_MPO(MPOMeasureAllQubitsCollapse, unsigned long long (*)(void *));
-          LOAD_MPO(MPOMeasureAllQubitsNoCollapse, unsigned long long (*)(void *));
-          LOAD_MPO(MPOSample,
-                   int (*)(void *, unsigned int, long int *, unsigned int,
-                           int *));
-          LOAD_MPO(MPOSampleAll,
-                   int (*)(void *, unsigned int, long int *));
-          LOAD_MPO(MPOGetElement,
-                   int (*)(void *, long long, long long, double *, double *));
-          LOAD_MPO(MPOBasisStateProbability, double (*)(void *, long long));
-          LOAD_MPO(MPOAllProbabilities, int (*)(void *, double *));
-          LOAD_MPO(MPOExpectationValue,
-                   double (*)(void *, const char *, int));
-          LOAD_MPO(MPOQubitProbability0, double (*)(void *, unsigned int));
-          LOAD_MPO(MPOPartialTrace, int (*)(void *, const int *, int, double *));
-          LOAD_MPO(MPOHilbertSchmidtOverlap, int (*)(void *, void *, double *, double *));
-          LOAD_MPO(MPOFidelityWithStatevector, int (*)(void *, const double *, double *));
-          LOAD_MPO(MPOTrace, double (*)(void *));
-          LOAD_MPO(MPOPurity, double (*)(void *));
-          LOAD_MPO(MPOHermiticityResidual, double (*)(void *));
-          LOAD_MPO(MPOIsHermitian, int (*)(void *, double));
-          LOAD_MPO(MPOTraceOfSquare, double (*)(void *));
-          LOAD_MPO(MPORestoreTrace, int (*)(void *));
-          LOAD_MPO(MPOHermitize, int (*)(void *));
-          LOAD_MPO(MPOSetKrausCompletenessCheck, int (*)(void *, int));
-          LOAD_MPO(MPOGetKrausCompletenessCheck, int (*)(void *));
-          LOAD_MPO(MPOApplyKraus,
-                   int (*)(void *, int, const int *, int, const double *));
+                    LOAD_MPO(MPOSetMaxExtent, int (*)(void *, long int));
+                    LOAD_MPO(MPOGetMaxExtent, long int (*)(void *));
+                    LOAD_MPO(MPOGetBondDimensions, int (*)(void *, long long int *));
+                    // Optional read-only routing map (older plugins use local routing).
+                    fMPOGetQubitsMap = reinterpret_cast<int (*)(void *, long long *, int)>(GetFunction("MPOGetQubitsMap"));
+                    LOAD_MPO(MPOSetCallbackContext, int (*)(void *, void *));
+                    LOAD_MPO(MPOSetMeetingPositionCallback, int (*)(void *, int64_t (*)(void *, const int64_t *)));
+                    LOAD_MPO(MPOSetBondDimensionsCallback, int (*)(void *, void (*)(void *, const int64_t *)));
+                    LOAD_MPO(MPOSampleBits, int (*)(void *, unsigned int, unsigned int, const int *, unsigned char *));
+                    LOAD_MPO(MPOGetMapForSample, void *(*)());
+                    LOAD_MPO(MPOFreeMapForSample, int (*)(void *));
+                    LOAD_MPO(MPOSampleHistogram, int (*)(void *, long int, long int, unsigned int *, void *));
+                    LOAD_MPO(MPOGetElementBits, int (*)(void *, const unsigned char *, const unsigned char *, double *, double *));
+                    LOAD_MPO(MPOBasisStateProbabilityBits, double (*)(void *, const unsigned char *));
+                    LOAD_MPO(MPOExpectationValueComplex, int (*)(void *, const char *, int, double *, double *));
+                    LOAD_MPO(MPOUnnormalizedExpectationValue, int (*)(void *, const char *, int, double *, double *));
+                    LOAD_MPO(MPOGetDensityMatrix, int (*)(void *, double *));
+                    LOAD_MPO(MPOGetUnnormalizedDensityMatrix, int (*)(void *, double *));
+                    LOAD_MPO(MPOTraceComplex, int (*)(void *, double *, double *));
+                    LOAD_MPO(MPOSetRestoreTraceAfterTruncation, int (*)(void *, int));
+                    LOAD_MPO(MPOGetRestoreTraceAfterTruncation, int (*)(void *));
+                    LOAD_MPO(MPOSetHermitizeAfterTruncation, int (*)(void *, int));
+                    LOAD_MPO(MPOGetHermitizeAfterTruncation, int (*)(void *));
+                    LOAD_MPO(MPOMoveAtBeginningOfChain, int (*)(void *, const int *, int));
+                    LOAD_MPO(MPOApplyOperator, int (*)(void *, int, const int *, const double *));
+                    LOAD_MPO(MPOApplyOperatorAndNormalize, int (*)(void *, int, const int *, const double *));
+                    LOAD_MPO(MPOReCanonicalize, int (*)(void *));
+                    LOAD_MPO(MPOTrim, int (*)(void *, double, long int));
+                    LOAD_MPO(MPOSaveState, int (*)(void *));
+                    LOAD_MPO(MPORestoreState, int (*)(void *));
+                    LOAD_MPO(MPOCleanSavedState, int (*)(void *));
+                    LOAD_MPO(MPOClone, void *(*)(void *));
+                    LOAD_MPO(MPOSetSeed, int (*)(void *, unsigned long long));
+                    LOAD_MPO(MPOMeasureQubitCollapse, int (*)(void *, int));
+                    LOAD_MPO(MPOMeasureQubitNoCollapse, int (*)(void *, int));
+                    LOAD_MPO(MPOMeasureQubitsCollapse, int (*)(void *, int *, int *, int));
+                    LOAD_MPO(MPOMeasureQubitsNoCollapse, int (*)(void *, int *, int *, int));
+                    LOAD_MPO(MPOMeasureAllQubitsCollapse, unsigned long long (*)(void *));
+                    LOAD_MPO(MPOMeasureAllQubitsNoCollapse, unsigned long long (*)(void *));
+                    LOAD_MPO(MPOSample, int (*)(void *, unsigned int, long int *, unsigned int, int *));
+                    LOAD_MPO(MPOSampleAll, int (*)(void *, unsigned int, long int *));
+                    LOAD_MPO(MPOGetElement, int (*)(void *, long long, long long, double *, double *));
+                    LOAD_MPO(MPOBasisStateProbability, double (*)(void *, long long));
+                    LOAD_MPO(MPOAllProbabilities, int (*)(void *, double *));
+                    LOAD_MPO(MPOExpectationValue, double (*)(void *, const char *, int));
+                    LOAD_MPO(MPOQubitProbability0, double (*)(void *, unsigned int));
+                    LOAD_MPO(MPOPartialTrace, int (*)(void *, const int *, int, double *));
+                    LOAD_MPO(MPOHilbertSchmidtOverlap, int (*)(void *, void *, double *, double *));
+                    LOAD_MPO(MPOFidelityWithStatevector, int (*)(void *, const double *, double *));
+                    LOAD_MPO(MPOTrace, double (*)(void *));
+                    LOAD_MPO(MPOPurity, double (*)(void *));
+                    LOAD_MPO(MPOHermiticityResidual, double (*)(void *));
+                    LOAD_MPO(MPOIsHermitian, int (*)(void *, double));
+                    LOAD_MPO(MPOTraceOfSquare, double (*)(void *));
+                    LOAD_MPO(MPORestoreTrace, int (*)(void *));
+                    LOAD_MPO(MPOHermitize, int (*)(void *));
+                    LOAD_MPO(MPOSetKrausCompletenessCheck, int (*)(void *, int));
+                    LOAD_MPO(MPOGetKrausCompletenessCheck, int (*)(void *));
+                    LOAD_MPO(MPOApplyKraus, int (*)(void *, int, const int *, int, const double *));
 #define LOAD_MPO_GATE1(name) LOAD_MPO(name, int (*)(void *, int))
 #define LOAD_MPO_GATE2(name) LOAD_MPO(name, int (*)(void *, int, int))
 #define LOAD_MPO_ROT1(name) LOAD_MPO(name, int (*)(void *, int, double))
 #define LOAD_MPO_ROT2(name) LOAD_MPO(name, int (*)(void *, int, int, double))
-          LOAD_MPO_GATE1(MPOApplyReset);
-          LOAD_MPO_ROT1(MPOApplyBitFlipNoise); LOAD_MPO_ROT1(MPOApplyPhaseFlipNoise);
-          LOAD_MPO_ROT1(MPOApplyDepolarizingNoise); LOAD_MPO_ROT1(MPOApplyAmplitudeDamping);
-          LOAD_MPO_ROT1(MPOApplyPhaseDamping);
-          LOAD_MPO_GATE1(MPOApplyNonSelectiveMeasurement);
-          LOAD_MPO_GATE1(MPOApplyX); LOAD_MPO_GATE1(MPOApplyY);
-          LOAD_MPO_GATE1(MPOApplyZ); LOAD_MPO_GATE1(MPOApplyH);
-          LOAD_MPO_GATE1(MPOApplyS); LOAD_MPO_GATE1(MPOApplySDG);
-          LOAD_MPO_GATE1(MPOApplyT); LOAD_MPO_GATE1(MPOApplyTDG);
-          LOAD_MPO_GATE1(MPOApplySX); LOAD_MPO_GATE1(MPOApplySXDG);
-          LOAD_MPO_GATE1(MPOApplyK);
-          LOAD_MPO_ROT1(MPOApplyP); LOAD_MPO_ROT1(MPOApplyRx);
-          LOAD_MPO_ROT1(MPOApplyRy); LOAD_MPO_ROT1(MPOApplyRz);
-          LOAD_MPO(MPOApplyU,
-                   int (*)(void *, int, double, double, double, double));
-          LOAD_MPO(MPOApplyOneQubitMatrix,
-                   int (*)(void *, int, const double *));
-          LOAD_MPO(MPOApplyTwoQubitMatrix,
-                   int (*)(void *, int, int, const double *));
-          LOAD_MPO_GATE2(MPOApplyCX); LOAD_MPO_GATE2(MPOApplyCY);
-          LOAD_MPO_GATE2(MPOApplyCZ); LOAD_MPO_GATE2(MPOApplyCH);
-          LOAD_MPO_GATE2(MPOApplyCSX); LOAD_MPO_GATE2(MPOApplyCSXDG);
-          LOAD_MPO_ROT2(MPOApplyCP); LOAD_MPO_ROT2(MPOApplyCRx);
-          LOAD_MPO_ROT2(MPOApplyCRy); LOAD_MPO_ROT2(MPOApplyCRz);
-          LOAD_MPO_GATE2(MPOApplySwap);
-          LOAD_MPO(MPOApplyCU,
-                   int (*)(void *, int, int, double, double, double, double));
-          // Note: the gpu MPO backend does not expose native 3-qubit gates
-          // (MPOApplyCCX / MPOApplyCSwap); those are decomposed into 1- and
-          // 2-qubit gates by GpuSimulator, matching the CPU MPOSimulator
-          // restriction to one- and two-qubit operators.
+                    LOAD_MPO_GATE1(MPOApplyReset);
+                    LOAD_MPO_ROT1(MPOApplyBitFlipNoise);
+                    LOAD_MPO_ROT1(MPOApplyPhaseFlipNoise);
+                    LOAD_MPO_ROT1(MPOApplyDepolarizingNoise);
+                    LOAD_MPO_ROT1(MPOApplyAmplitudeDamping);
+                    LOAD_MPO_ROT1(MPOApplyPhaseDamping);
+                    LOAD_MPO_GATE1(MPOApplyNonSelectiveMeasurement);
+                    LOAD_MPO_GATE1(MPOApplyX);
+                    LOAD_MPO_GATE1(MPOApplyY);
+                    LOAD_MPO_GATE1(MPOApplyZ);
+                    LOAD_MPO_GATE1(MPOApplyH);
+                    LOAD_MPO_GATE1(MPOApplyS);
+                    LOAD_MPO_GATE1(MPOApplySDG);
+                    LOAD_MPO_GATE1(MPOApplyT);
+                    LOAD_MPO_GATE1(MPOApplyTDG);
+                    LOAD_MPO_GATE1(MPOApplySX);
+                    LOAD_MPO_GATE1(MPOApplySXDG);
+                    LOAD_MPO_GATE1(MPOApplyK);
+                    LOAD_MPO_ROT1(MPOApplyP);
+                    LOAD_MPO_ROT1(MPOApplyRx);
+                    LOAD_MPO_ROT1(MPOApplyRy);
+                    LOAD_MPO_ROT1(MPOApplyRz);
+                    LOAD_MPO(MPOApplyU, int (*)(void *, int, double, double, double, double));
+                    LOAD_MPO(MPOApplyOneQubitMatrix, int (*)(void *, int, const double *));
+                    LOAD_MPO(MPOApplyTwoQubitMatrix, int (*)(void *, int, int, const double *));
+                    LOAD_MPO_GATE2(MPOApplyCX);
+                    LOAD_MPO_GATE2(MPOApplyCY);
+                    LOAD_MPO_GATE2(MPOApplyCZ);
+                    LOAD_MPO_GATE2(MPOApplyCH);
+                    LOAD_MPO_GATE2(MPOApplyCSX);
+                    LOAD_MPO_GATE2(MPOApplyCSXDG);
+                    LOAD_MPO_ROT2(MPOApplyCP);
+                    LOAD_MPO_ROT2(MPOApplyCRx);
+                    LOAD_MPO_ROT2(MPOApplyCRy);
+                    LOAD_MPO_ROT2(MPOApplyCRz);
+                    LOAD_MPO_GATE2(MPOApplySwap);
+                    LOAD_MPO(MPOApplyCU, int (*)(void *, int, int, double, double, double, double));
+                    // Note: the gpu MPO backend does not expose native 3-qubit gates
+                    // (MPOApplyCCX / MPOApplyCSwap); those are decomposed into 1- and
+                    // 2-qubit gates by GpuSimulator, matching the CPU MPOSimulator
+                    // restriction to one- and two-qubit operators.
 #undef LOAD_MPO_ROT2
 #undef LOAD_MPO_ROT1
 #undef LOAD_MPO_GATE2
 #undef LOAD_MPO_GATE1
 #undef LOAD_MPO
 
-          // mps api functions
+                    // mps api functions
 
-          fCreateMPS = (void *(*)(void *))GetFunction("CreateMPS");
-          CheckFunction((void *)fCreateMPS, __LINE__);
-          fDestroyMPS = (void (*)(void *))GetFunction("DestroyMPS");
-          CheckFunction((void *)fDestroyMPS, __LINE__);
+                    fCreateMPS = (void *(*)(void *))GetFunction("CreateMPS");
+                    CheckFunction((void *)fCreateMPS, __LINE__);
+                    fDestroyMPS = (void (*)(void *))GetFunction("DestroyMPS");
+                    CheckFunction((void *)fDestroyMPS, __LINE__);
 
-          fMPSCreate = (int (*)(void *, unsigned int))GetFunction("MPSCreate");
-          CheckFunction((void *)fMPSCreate, __LINE__);
-          fMPSCreateWithBasisState =
-              (int (*)(void *, unsigned int, unsigned long long))GetFunction(
-                  "MPSCreateWithBasisState");
-          CheckFunction((void *)fMPSCreateWithBasisState, __LINE__);
-          fMPSCreateWithBasisStateBits =
-              (int (*)(void *, unsigned int, const unsigned char *))
-                  GetFunction("MPSCreateWithBasisStateBits");
-          CheckFunction((void *)fMPSCreateWithBasisStateBits, __LINE__);
-          fMPSReset = (int (*)(void *))GetFunction("MPSReset");
-          CheckFunction((void *)fMPSReset, __LINE__);
-          fMPSSetInitialQubitsMap =
-              (int (*)(void *, const long long int *, int))GetFunction(
-                  "MPSSetInitialQubitsMap");
-          CheckFunction((void *)fMPSSetInitialQubitsMap, __LINE__);
-          fMPSSetUseOptimalMeetingPosition = (int (*)(void *, int))GetFunction(
-              "MPSSetUseOptimalMeetingPosition");
-          CheckFunction((void *)fMPSSetUseOptimalMeetingPosition, __LINE__);
-          fMPSGetUseOptimalMeetingPosition = (int (*)(void *))GetFunction(
-              "MPSGetUseOptimalMeetingPosition");
-          CheckFunction((void *)fMPSGetUseOptimalMeetingPosition, __LINE__);
+                    fMPSCreate = (int (*)(void *, unsigned int))GetFunction("MPSCreate");
+                    CheckFunction((void *)fMPSCreate, __LINE__);
+                    fMPSCreateWithBasisState = (int (*)(void *, unsigned int, unsigned long long))GetFunction("MPSCreateWithBasisState");
+                    CheckFunction((void *)fMPSCreateWithBasisState, __LINE__);
+                    fMPSCreateWithBasisStateBits = (int (*)(void *, unsigned int, const unsigned char *))GetFunction("MPSCreateWithBasisStateBits");
+                    CheckFunction((void *)fMPSCreateWithBasisStateBits, __LINE__);
+                    fMPSReset = (int (*)(void *))GetFunction("MPSReset");
+                    CheckFunction((void *)fMPSReset, __LINE__);
+                    fMPSSetInitialQubitsMap = (int (*)(void *, const long long int *, int))GetFunction("MPSSetInitialQubitsMap");
+                    CheckFunction((void *)fMPSSetInitialQubitsMap, __LINE__);
+                    fMPSSetUseOptimalMeetingPosition = (int (*)(void *, int))GetFunction("MPSSetUseOptimalMeetingPosition");
+                    CheckFunction((void *)fMPSSetUseOptimalMeetingPosition, __LINE__);
+                    fMPSGetUseOptimalMeetingPosition = (int (*)(void *))GetFunction("MPSGetUseOptimalMeetingPosition");
+                    CheckFunction((void *)fMPSGetUseOptimalMeetingPosition, __LINE__);
 
-          fMPSIsValid = (int (*)(void *))GetFunction("MPSIsValid");
-          CheckFunction((void *)fMPSIsValid, __LINE__);
-          fMPSIsCreated = (int (*)(void *))GetFunction("MPSIsCreated");
-          CheckFunction((void *)fMPSIsCreated, __LINE__);
+                    fMPSIsValid = (int (*)(void *))GetFunction("MPSIsValid");
+                    CheckFunction((void *)fMPSIsValid, __LINE__);
+                    fMPSIsCreated = (int (*)(void *))GetFunction("MPSIsCreated");
+                    CheckFunction((void *)fMPSIsCreated, __LINE__);
 
-          fMPSSetDataType = (int (*)(void *, int))GetFunction("MPSSetDataType");
-          CheckFunction((void *)fMPSSetDataType, __LINE__);
-          fMPSIsDoublePrecision =
-              (int (*)(void *))GetFunction("MPSIsDoublePrecision");
-          CheckFunction((void *)fMPSIsDoublePrecision, __LINE__);
-          fMPSSetCutoff = (int (*)(void *, double))GetFunction("MPSSetCutoff");
-          CheckFunction((void *)fMPSSetCutoff, __LINE__);
-          fMPSGetCutoff = (double (*)(void *))GetFunction("MPSGetCutoff");
-          CheckFunction((void *)fMPSGetCutoff, __LINE__);
-          fMPSSetTruncationMode =
-              (int (*)(void *, int))GetFunction("MPSSetTruncationMode");
-          CheckFunction((void *)fMPSSetTruncationMode, __LINE__);
-          fMPSGetTruncationMode =
-              (int (*)(void *))GetFunction("MPSGetTruncationMode");
-          CheckFunction((void *)fMPSGetTruncationMode, __LINE__);
-          fMPSSetGesvdJ = (int (*)(void *, int))GetFunction("MPSSetGesvdJ");
-          CheckFunction((void *)fMPSSetGesvdJ, __LINE__);
-          fMPSGetGesvdJ = (int (*)(void *))GetFunction("MPSGetGesvdJ");
-          CheckFunction((void *)fMPSGetGesvdJ, __LINE__);
-          // Optional in older plugins; checked when explicitly requested.
-          fMPSSetGesvdP = (int (*)(void *, int))GetFunction("MPSSetGesvdP");
-          fMPSGetGesvdP = (int (*)(void *))GetFunction("MPSGetGesvdP");
-          fMPSSetGesvdR = (int (*)(void *, int))GetFunction("MPSSetGesvdR");
-          fMPSGetGesvdR = (int (*)(void *))GetFunction("MPSGetGesvdR");
-          fMPSGetLastSvdAlgo = (int (*)(void *))GetFunction("MPSGetLastSvdAlgo");
+                    fMPSSetDataType = (int (*)(void *, int))GetFunction("MPSSetDataType");
+                    CheckFunction((void *)fMPSSetDataType, __LINE__);
+                    fMPSIsDoublePrecision = (int (*)(void *))GetFunction("MPSIsDoublePrecision");
+                    CheckFunction((void *)fMPSIsDoublePrecision, __LINE__);
+                    fMPSSetCutoff = (int (*)(void *, double))GetFunction("MPSSetCutoff");
+                    CheckFunction((void *)fMPSSetCutoff, __LINE__);
+                    fMPSGetCutoff = (double (*)(void *))GetFunction("MPSGetCutoff");
+                    CheckFunction((void *)fMPSGetCutoff, __LINE__);
+                    fMPSSetTruncationMode = (int (*)(void *, int))GetFunction("MPSSetTruncationMode");
+                    CheckFunction((void *)fMPSSetTruncationMode, __LINE__);
+                    fMPSGetTruncationMode = (int (*)(void *))GetFunction("MPSGetTruncationMode");
+                    CheckFunction((void *)fMPSGetTruncationMode, __LINE__);
+                    fMPSSetGesvdJ = (int (*)(void *, int))GetFunction("MPSSetGesvdJ");
+                    CheckFunction((void *)fMPSSetGesvdJ, __LINE__);
+                    fMPSGetGesvdJ = (int (*)(void *))GetFunction("MPSGetGesvdJ");
+                    CheckFunction((void *)fMPSGetGesvdJ, __LINE__);
+                    // Optional in older plugins; checked when explicitly requested.
+                    fMPSSetGesvdP = (int (*)(void *, int))GetFunction("MPSSetGesvdP");
+                    fMPSGetGesvdP = (int (*)(void *))GetFunction("MPSGetGesvdP");
+                    fMPSSetGesvdR = (int (*)(void *, int))GetFunction("MPSSetGesvdR");
+                    fMPSGetGesvdR = (int (*)(void *))GetFunction("MPSGetGesvdR");
+                    fMPSGetLastSvdAlgo = (int (*)(void *))GetFunction("MPSGetLastSvdAlgo");
 
-          fMPSSetMaxExtent =
-              (int (*)(void *, long int))GetFunction("MPSSetMaxExtent");
-          CheckFunction((void *)fMPSSetMaxExtent, __LINE__);
-          fMPSGetMaxExtent =
-              (long int (*)(void *))GetFunction("MPSGetMaxExtent");
-          CheckFunction((void *)fMPSGetMaxExtent, __LINE__);
-          fMPSGetNrQubits = (int (*)(void *))GetFunction("MPSGetNrQubits");
-          CheckFunction((void *)fMPSGetNrQubits, __LINE__);
-          fMPSGetBondDimensions =
-              (int (*)(void *, long long int *))GetFunction(
-                  "MPSGetBondDimensions");
-          CheckFunction((void *)fMPSGetBondDimensions, __LINE__);
-          // Optional read-only routing map (older plugins use local routing).
-          fMPSGetQubitsMap = reinterpret_cast<int (*)(void*, long long*, int)>(GetFunction("MPSGetQubitsMap"));
-          fMPSSetCallbackContext =
-              (int (*)(void *, void *))GetFunction("MPSSetCallbackContext");
-          CheckFunction((void *)fMPSSetCallbackContext, __LINE__);
+                    fMPSSetMaxExtent = (int (*)(void *, long int))GetFunction("MPSSetMaxExtent");
+                    CheckFunction((void *)fMPSSetMaxExtent, __LINE__);
+                    fMPSGetMaxExtent = (long int (*)(void *))GetFunction("MPSGetMaxExtent");
+                    CheckFunction((void *)fMPSGetMaxExtent, __LINE__);
+                    fMPSGetNrQubits = (int (*)(void *))GetFunction("MPSGetNrQubits");
+                    CheckFunction((void *)fMPSGetNrQubits, __LINE__);
+                    fMPSGetBondDimensions = (int (*)(void *, long long int *))GetFunction("MPSGetBondDimensions");
+                    CheckFunction((void *)fMPSGetBondDimensions, __LINE__);
+                    // Optional read-only routing map (older plugins use local routing).
+                    fMPSGetQubitsMap = reinterpret_cast<int (*)(void *, long long *, int)>(GetFunction("MPSGetQubitsMap"));
+                    fMPSSetCallbackContext = (int (*)(void *, void *))GetFunction("MPSSetCallbackContext");
+                    CheckFunction((void *)fMPSSetCallbackContext, __LINE__);
 
-          fMPSSetMeetingPositionCallback =
-              (int (*)(void *, int64_t (*)(void *, const int64_t *)))
-                  GetFunction("MPSSetMeetingPositionCallback");
-          CheckFunction((void *)fMPSSetMeetingPositionCallback, __LINE__);
+                    fMPSSetMeetingPositionCallback = (int (*)(void *, int64_t (*)(void *, const int64_t *)))GetFunction("MPSSetMeetingPositionCallback");
+                    CheckFunction((void *)fMPSSetMeetingPositionCallback, __LINE__);
 
-          fMPSSetBondDimensionsCallback =
-              (int (*)(void*, void (*)(void*, const int64_t*)))GetFunction(
-                  "MPSSetBondDimensionsCallback");
-          CheckFunction((void *)fMPSSetBondDimensionsCallback, __LINE__);
+                    fMPSSetBondDimensionsCallback = (int (*)(void *, void (*)(void *, const int64_t *)))GetFunction("MPSSetBondDimensionsCallback");
+                    CheckFunction((void *)fMPSSetBondDimensionsCallback, __LINE__);
 
-          fMPSAmplitude = (int (*)(void *, long int, long int *, double *,
-                                   double *))GetFunction("MPSAmplitude");
-          CheckFunction((void *)fMPSAmplitude, __LINE__);
-          fMPSProbability0 =
-              (double (*)(void *, unsigned int))GetFunction("MPSProbability0");
-          CheckFunction((void *)fMPSProbability0, __LINE__);
-          fMPSMeasure =
-              (int (*)(void *, unsigned int))GetFunction("MPSMeasure");
-          CheckFunction((void *)fMPSMeasure, __LINE__);
-          fMPSMeasureQubits = (int (*)(void *, long int, unsigned int *,
-                                       int *))GetFunction("MPSMeasureQubits");
-          CheckFunction((void *)fMPSMeasureQubits, __LINE__);
+                    fMPSAmplitude = (int (*)(void *, long int, long int *, double *, double *))GetFunction("MPSAmplitude");
+                    CheckFunction((void *)fMPSAmplitude, __LINE__);
+                    fMPSProbability0 = (double (*)(void *, unsigned int))GetFunction("MPSProbability0");
+                    CheckFunction((void *)fMPSProbability0, __LINE__);
+                    fMPSMeasure = (int (*)(void *, unsigned int))GetFunction("MPSMeasure");
+                    CheckFunction((void *)fMPSMeasure, __LINE__);
+                    fMPSMeasureQubits = (int (*)(void *, long int, unsigned int *, int *))GetFunction("MPSMeasureQubits");
+                    CheckFunction((void *)fMPSMeasureQubits, __LINE__);
 
-          fMPSGetMapForSample = (void *(*)())GetFunction("MPSGetMapForSample");
-          CheckFunction((void *)fMPSGetMapForSample, __LINE__);
-          fMPSFreeMapForSample =
-              (int (*)(void *))GetFunction("MPSFreeMapForSample");
-          CheckFunction((void *)fMPSFreeMapForSample, __LINE__);
-          fMPSSample = (int (*)(void *, long int, long int, unsigned int *,
-                                void *))GetFunction("MPSSample");
-          CheckFunction((void *)fMPSSample, __LINE__);
-          fMPSSampleRaw = (int (*)(void *, unsigned int, long int *,
-                                   unsigned int, const unsigned int *))
-              GetFunction("MPSSampleRaw");
-          CheckFunction((void *)fMPSSampleRaw, __LINE__);
-          fMPSSampleAll = (int (*)(void *, unsigned int, long int *))
-              GetFunction("MPSSampleAll");
-          CheckFunction((void *)fMPSSampleAll, __LINE__);
+                    fMPSGetMapForSample = (void *(*)())GetFunction("MPSGetMapForSample");
+                    CheckFunction((void *)fMPSGetMapForSample, __LINE__);
+                    fMPSFreeMapForSample = (int (*)(void *))GetFunction("MPSFreeMapForSample");
+                    CheckFunction((void *)fMPSFreeMapForSample, __LINE__);
+                    fMPSSample = (int (*)(void *, long int, long int, unsigned int *, void *))GetFunction("MPSSample");
+                    CheckFunction((void *)fMPSSample, __LINE__);
+                    fMPSSampleRaw = (int (*)(void *, unsigned int, long int *, unsigned int, const unsigned int *))GetFunction("MPSSampleRaw");
+                    CheckFunction((void *)fMPSSampleRaw, __LINE__);
+                    fMPSSampleAll = (int (*)(void *, unsigned int, long int *))GetFunction("MPSSampleAll");
+                    CheckFunction((void *)fMPSSampleAll, __LINE__);
 
-          fMPSSaveState = (int (*)(void *))GetFunction("MPSSaveState");
-          CheckFunction((void *)fMPSSaveState, __LINE__);
-          fMPSRestoreState = (int (*)(void *))GetFunction("MPSRestoreState");
-          CheckFunction((void *)fMPSRestoreState, __LINE__);
-          fMPSCleanSavedState =
-              (int (*)(void *))GetFunction("MPSCleanSavedState");
-          CheckFunction((void *)fMPSCleanSavedState, __LINE__);
-          fMPSClone = (void *(*)(void *))GetFunction("MPSClone");
-          CheckFunction((void *)fMPSClone, __LINE__);
-          fMPSSetSeed = (int (*)(void *, unsigned long long))
-              GetFunction("MPSSetSeed");
-          CheckFunction((void *)fMPSSetSeed, __LINE__);
+                    fMPSSaveState = (int (*)(void *))GetFunction("MPSSaveState");
+                    CheckFunction((void *)fMPSSaveState, __LINE__);
+                    fMPSRestoreState = (int (*)(void *))GetFunction("MPSRestoreState");
+                    CheckFunction((void *)fMPSRestoreState, __LINE__);
+                    fMPSCleanSavedState = (int (*)(void *))GetFunction("MPSCleanSavedState");
+                    CheckFunction((void *)fMPSCleanSavedState, __LINE__);
+                    fMPSClone = (void *(*)(void *))GetFunction("MPSClone");
+                    CheckFunction((void *)fMPSClone, __LINE__);
+                    fMPSSetSeed = (int (*)(void *, unsigned long long))GetFunction("MPSSetSeed");
+                    CheckFunction((void *)fMPSSetSeed, __LINE__);
 
-          fMPSExpectationValue = (double (*)(
-              void *, const char *, int))GetFunction("MPSExpectationValue");
-          CheckFunction((void *)fMPSExpectationValue, __LINE__);
-          fMPSProjectOnZero =
-              (int (*)(void *, double *, double *))GetFunction("MPSProjectOnZero");
-          CheckFunction((void *)fMPSProjectOnZero, __LINE__);
+                    fMPSExpectationValue = (double (*)(void *, const char *, int))GetFunction("MPSExpectationValue");
+                    CheckFunction((void *)fMPSExpectationValue, __LINE__);
+                    fMPSProjectOnZero = (int (*)(void *, double *, double *))GetFunction("MPSProjectOnZero");
+                    CheckFunction((void *)fMPSProjectOnZero, __LINE__);
 
-          fMPSApplyX = (int (*)(void *, unsigned int))GetFunction("MPSApplyX");
-          CheckFunction((void *)fMPSApplyX, __LINE__);
-          fMPSApplyY = (int (*)(void *, unsigned int))GetFunction("MPSApplyY");
-          CheckFunction((void *)fMPSApplyY, __LINE__);
-          fMPSApplyZ = (int (*)(void *, unsigned int))GetFunction("MPSApplyZ");
-          CheckFunction((void *)fMPSApplyZ, __LINE__);
-          fMPSApplyH = (int (*)(void *, unsigned int))GetFunction("MPSApplyH");
-          CheckFunction((void *)fMPSApplyH, __LINE__);
-          fMPSApplyS = (int (*)(void *, unsigned int))GetFunction("MPSApplyS");
-          CheckFunction((void *)fMPSApplyS, __LINE__);
-          fMPSApplySDG =
-              (int (*)(void *, unsigned int))GetFunction("MPSApplySDG");
-          CheckFunction((void *)fMPSApplySDG, __LINE__);
-          fMPSApplyT = (int (*)(void *, unsigned int))GetFunction("MPSApplyT");
-          CheckFunction((void *)fMPSApplyT, __LINE__);
-          fMPSApplyTDG =
-              (int (*)(void *, unsigned int))GetFunction("MPSApplyTDG");
-          CheckFunction((void *)fMPSApplyTDG, __LINE__);
-          fMPSApplySX =
-              (int (*)(void *, unsigned int))GetFunction("MPSApplySX");
-          CheckFunction((void *)fMPSApplySX, __LINE__);
-          fMPSApplySXDG =
-              (int (*)(void *, unsigned int))GetFunction("MPSApplySXDG");
-          CheckFunction((void *)fMPSApplySXDG, __LINE__);
-          fMPSApplyK = (int (*)(void *, unsigned int))GetFunction("MPSApplyK");
-          CheckFunction((void *)fMPSApplyK, __LINE__);
-          fMPSApplyP =
-              (int (*)(void *, unsigned int, double))GetFunction("MPSApplyP");
-          CheckFunction((void *)fMPSApplyP, __LINE__);
-          fMPSApplyRx =
-              (int (*)(void *, unsigned int, double))GetFunction("MPSApplyRx");
-          CheckFunction((void *)fMPSApplyRx, __LINE__);
-          fMPSApplyRy =
-              (int (*)(void *, unsigned int, double))GetFunction("MPSApplyRy");
-          CheckFunction((void *)fMPSApplyRy, __LINE__);
-          fMPSApplyRz =
-              (int (*)(void *, unsigned int, double))GetFunction("MPSApplyRz");
-          CheckFunction((void *)fMPSApplyRz, __LINE__);
-          fMPSApplyU = (int (*)(void *, unsigned int, double, double, double,
-                                double))GetFunction("MPSApplyU");
-          CheckFunction((void *)fMPSApplyU, __LINE__);
-          fMPSApplyOneQubitMatrix =
-              (int (*)(void *, unsigned int, const double *))GetFunction(
-                  "MPSApplyOneQubitMatrix");
-          CheckFunction((void *)fMPSApplyOneQubitMatrix, __LINE__);
-          fMPSApplyTwoQubitMatrix =
-              (int (*)(void *, unsigned int, unsigned int,
-                       const double *))GetFunction("MPSApplyTwoQubitMatrix");
-          CheckFunction((void *)fMPSApplyTwoQubitMatrix, __LINE__);
-          fMPSApplySwap = (int (*)(void *, unsigned int,
-                                   unsigned int))GetFunction("MPSApplySwap");
-          CheckFunction((void *)fMPSApplySwap, __LINE__);
-          fMPSApplyCX = (int (*)(void *, unsigned int,
-                                 unsigned int))GetFunction("MPSApplyCX");
-          CheckFunction((void *)fMPSApplyCX, __LINE__);
-          fMPSApplyCY = (int (*)(void *, unsigned int,
-                                 unsigned int))GetFunction("MPSApplyCY");
-          CheckFunction((void *)fMPSApplyCY, __LINE__);
-          fMPSApplyCZ = (int (*)(void *, unsigned int,
-                                 unsigned int))GetFunction("MPSApplyCZ");
-          CheckFunction((void *)fMPSApplyCZ, __LINE__);
-          fMPSApplyCH = (int (*)(void *, unsigned int,
-                                 unsigned int))GetFunction("MPSApplyCH");
-          CheckFunction((void *)fMPSApplyCH, __LINE__);
-          fMPSApplyCSX = (int (*)(void *, unsigned int,
-                                  unsigned int))GetFunction("MPSApplyCSX");
-          CheckFunction((void *)fMPSApplyCSX, __LINE__);
-          fMPSApplyCSXDG = (int (*)(void *, unsigned int,
-                                    unsigned int))GetFunction("MPSApplyCSXDG");
-          CheckFunction((void *)fMPSApplyCSXDG, __LINE__);
-          fMPSApplyCP = (int (*)(void *, unsigned int, unsigned int,
-                                 double))GetFunction("MPSApplyCP");
-          CheckFunction((void *)fMPSApplyCP, __LINE__);
-          fMPSApplyCRx = (int (*)(void *, unsigned int, unsigned int,
-                                  double))GetFunction("MPSApplyCRx");
-          CheckFunction((void *)fMPSApplyCRx, __LINE__);
-          fMPSApplyCRy = (int (*)(void *, unsigned int, unsigned int,
-                                  double))GetFunction("MPSApplyCRy");
-          CheckFunction((void *)fMPSApplyCRy, __LINE__);
-          fMPSApplyCRz = (int (*)(void *, unsigned int, unsigned int,
-                                  double))GetFunction("MPSApplyCRz");
-          CheckFunction((void *)fMPSApplyCRz, __LINE__);
-          fMPSApplyCU =
-              (int (*)(void *, unsigned int, unsigned int, double, double,
-                       double, double))GetFunction("MPSApplyCU");
-          CheckFunction((void *)fMPSApplyCU, __LINE__);
+                    fMPSApplyX = (int (*)(void *, unsigned int))GetFunction("MPSApplyX");
+                    CheckFunction((void *)fMPSApplyX, __LINE__);
+                    fMPSApplyY = (int (*)(void *, unsigned int))GetFunction("MPSApplyY");
+                    CheckFunction((void *)fMPSApplyY, __LINE__);
+                    fMPSApplyZ = (int (*)(void *, unsigned int))GetFunction("MPSApplyZ");
+                    CheckFunction((void *)fMPSApplyZ, __LINE__);
+                    fMPSApplyH = (int (*)(void *, unsigned int))GetFunction("MPSApplyH");
+                    CheckFunction((void *)fMPSApplyH, __LINE__);
+                    fMPSApplyS = (int (*)(void *, unsigned int))GetFunction("MPSApplyS");
+                    CheckFunction((void *)fMPSApplyS, __LINE__);
+                    fMPSApplySDG = (int (*)(void *, unsigned int))GetFunction("MPSApplySDG");
+                    CheckFunction((void *)fMPSApplySDG, __LINE__);
+                    fMPSApplyT = (int (*)(void *, unsigned int))GetFunction("MPSApplyT");
+                    CheckFunction((void *)fMPSApplyT, __LINE__);
+                    fMPSApplyTDG = (int (*)(void *, unsigned int))GetFunction("MPSApplyTDG");
+                    CheckFunction((void *)fMPSApplyTDG, __LINE__);
+                    fMPSApplySX = (int (*)(void *, unsigned int))GetFunction("MPSApplySX");
+                    CheckFunction((void *)fMPSApplySX, __LINE__);
+                    fMPSApplySXDG = (int (*)(void *, unsigned int))GetFunction("MPSApplySXDG");
+                    CheckFunction((void *)fMPSApplySXDG, __LINE__);
+                    fMPSApplyK = (int (*)(void *, unsigned int))GetFunction("MPSApplyK");
+                    CheckFunction((void *)fMPSApplyK, __LINE__);
+                    fMPSApplyP = (int (*)(void *, unsigned int, double))GetFunction("MPSApplyP");
+                    CheckFunction((void *)fMPSApplyP, __LINE__);
+                    fMPSApplyRx = (int (*)(void *, unsigned int, double))GetFunction("MPSApplyRx");
+                    CheckFunction((void *)fMPSApplyRx, __LINE__);
+                    fMPSApplyRy = (int (*)(void *, unsigned int, double))GetFunction("MPSApplyRy");
+                    CheckFunction((void *)fMPSApplyRy, __LINE__);
+                    fMPSApplyRz = (int (*)(void *, unsigned int, double))GetFunction("MPSApplyRz");
+                    CheckFunction((void *)fMPSApplyRz, __LINE__);
+                    fMPSApplyU = (int (*)(void *, unsigned int, double, double, double, double))GetFunction("MPSApplyU");
+                    CheckFunction((void *)fMPSApplyU, __LINE__);
+                    fMPSApplyOneQubitMatrix = (int (*)(void *, unsigned int, const double *))GetFunction("MPSApplyOneQubitMatrix");
+                    CheckFunction((void *)fMPSApplyOneQubitMatrix, __LINE__);
+                    fMPSApplyTwoQubitMatrix = (int (*)(void *, unsigned int, unsigned int, const double *))GetFunction("MPSApplyTwoQubitMatrix");
+                    CheckFunction((void *)fMPSApplyTwoQubitMatrix, __LINE__);
+                    fMPSApplySwap = (int (*)(void *, unsigned int, unsigned int))GetFunction("MPSApplySwap");
+                    CheckFunction((void *)fMPSApplySwap, __LINE__);
+                    fMPSApplyCX = (int (*)(void *, unsigned int, unsigned int))GetFunction("MPSApplyCX");
+                    CheckFunction((void *)fMPSApplyCX, __LINE__);
+                    fMPSApplyCY = (int (*)(void *, unsigned int, unsigned int))GetFunction("MPSApplyCY");
+                    CheckFunction((void *)fMPSApplyCY, __LINE__);
+                    fMPSApplyCZ = (int (*)(void *, unsigned int, unsigned int))GetFunction("MPSApplyCZ");
+                    CheckFunction((void *)fMPSApplyCZ, __LINE__);
+                    fMPSApplyCH = (int (*)(void *, unsigned int, unsigned int))GetFunction("MPSApplyCH");
+                    CheckFunction((void *)fMPSApplyCH, __LINE__);
+                    fMPSApplyCSX = (int (*)(void *, unsigned int, unsigned int))GetFunction("MPSApplyCSX");
+                    CheckFunction((void *)fMPSApplyCSX, __LINE__);
+                    fMPSApplyCSXDG = (int (*)(void *, unsigned int, unsigned int))GetFunction("MPSApplyCSXDG");
+                    CheckFunction((void *)fMPSApplyCSXDG, __LINE__);
+                    fMPSApplyCP = (int (*)(void *, unsigned int, unsigned int, double))GetFunction("MPSApplyCP");
+                    CheckFunction((void *)fMPSApplyCP, __LINE__);
+                    fMPSApplyCRx = (int (*)(void *, unsigned int, unsigned int, double))GetFunction("MPSApplyCRx");
+                    CheckFunction((void *)fMPSApplyCRx, __LINE__);
+                    fMPSApplyCRy = (int (*)(void *, unsigned int, unsigned int, double))GetFunction("MPSApplyCRy");
+                    CheckFunction((void *)fMPSApplyCRy, __LINE__);
+                    fMPSApplyCRz = (int (*)(void *, unsigned int, unsigned int, double))GetFunction("MPSApplyCRz");
+                    CheckFunction((void *)fMPSApplyCRz, __LINE__);
+                    fMPSApplyCU = (int (*)(void *, unsigned int, unsigned int, double, double, double, double))GetFunction("MPSApplyCU");
+                    CheckFunction((void *)fMPSApplyCU, __LINE__);
 
-          // tensor network api functions
+                    // tensor network api functions
 
-          fCreateTensorNet = (void *(*)(void *))GetFunction("CreateTensorNet");
-          CheckFunction((void *)fCreateTensorNet, __LINE__);
-          fDestroyTensorNet = (void (*)(void *))GetFunction("DestroyTensorNet");
-          CheckFunction((void *)fDestroyTensorNet, __LINE__);
+                    fCreateTensorNet = (void *(*)(void *))GetFunction("CreateTensorNet");
+                    CheckFunction((void *)fCreateTensorNet, __LINE__);
+                    fDestroyTensorNet = (void (*)(void *))GetFunction("DestroyTensorNet");
+                    CheckFunction((void *)fDestroyTensorNet, __LINE__);
 
-          fTNCreate = (int (*)(void *, unsigned int))GetFunction("TNCreate");
-          CheckFunction((void *)fTNCreate, __LINE__);
-          fTNReset = (int (*)(void *))GetFunction("TNReset");
-          CheckFunction((void *)fTNReset, __LINE__);
+                    fTNCreate = (int (*)(void *, unsigned int))GetFunction("TNCreate");
+                    CheckFunction((void *)fTNCreate, __LINE__);
+                    fTNReset = (int (*)(void *))GetFunction("TNReset");
+                    CheckFunction((void *)fTNReset, __LINE__);
 
-          fTNIsValid = (int (*)(void *))GetFunction("TNIsValid");
-          CheckFunction((void *)fTNIsValid, __LINE__);
-          fTNIsCreated = (int (*)(void *))GetFunction("TNIsCreated");
-          CheckFunction((void *)fTNIsCreated, __LINE__);
+                    fTNIsValid = (int (*)(void *))GetFunction("TNIsValid");
+                    CheckFunction((void *)fTNIsValid, __LINE__);
+                    fTNIsCreated = (int (*)(void *))GetFunction("TNIsCreated");
+                    CheckFunction((void *)fTNIsCreated, __LINE__);
 
-          fTNSetDataType = (int (*)(void *, int))GetFunction("TNSetDataType");
-          CheckFunction((void *)fTNSetDataType, __LINE__);
-          fTNIsDoublePrecision =
-              (int (*)(void *))GetFunction("TNIsDoublePrecision");
-          CheckFunction((void *)fTNIsDoublePrecision, __LINE__);
-          fTNSetCutoff = (int (*)(void *, double))GetFunction("TNSetCutoff");
-          CheckFunction((void *)fTNSetCutoff, __LINE__);
-          fTNGetCutoff = (double (*)(void *))GetFunction("TNGetCutoff");
-          CheckFunction((void *)fTNGetCutoff, __LINE__);
-          fTNSetTruncationMode =
-              (int (*)(void *, int))GetFunction("TNSetTruncationMode");
-          CheckFunction((void *)fTNSetTruncationMode, __LINE__);
-          fTNGetTruncationMode =
-              (int (*)(void *))GetFunction("TNGetTruncationMode");
-          CheckFunction((void *)fTNGetTruncationMode, __LINE__);
-          fTNSetGesvdJ = (int (*)(void *, int))GetFunction("TNSetGesvdJ");
-          CheckFunction((void *)fTNSetGesvdJ, __LINE__);
-          fTNGetGesvdJ = (int (*)(void *))GetFunction("TNGetGesvdJ");
-          CheckFunction((void *)fTNGetGesvdJ, __LINE__);
-          // Optional in older plugins; checked when explicitly requested.
-          fTNSetGesvdP = (int (*)(void *, int))GetFunction("TNSetGesvdP");
-          fTNGetGesvdP = (int (*)(void *))GetFunction("TNGetGesvdP");
-          fTNSetGesvdR = (int (*)(void *, int))GetFunction("TNSetGesvdR");
-          fTNGetGesvdR = (int (*)(void *))GetFunction("TNGetGesvdR");
+                    fTNSetDataType = (int (*)(void *, int))GetFunction("TNSetDataType");
+                    CheckFunction((void *)fTNSetDataType, __LINE__);
+                    fTNIsDoublePrecision = (int (*)(void *))GetFunction("TNIsDoublePrecision");
+                    CheckFunction((void *)fTNIsDoublePrecision, __LINE__);
+                    fTNSetCutoff = (int (*)(void *, double))GetFunction("TNSetCutoff");
+                    CheckFunction((void *)fTNSetCutoff, __LINE__);
+                    fTNGetCutoff = (double (*)(void *))GetFunction("TNGetCutoff");
+                    CheckFunction((void *)fTNGetCutoff, __LINE__);
+                    fTNSetTruncationMode = (int (*)(void *, int))GetFunction("TNSetTruncationMode");
+                    CheckFunction((void *)fTNSetTruncationMode, __LINE__);
+                    fTNGetTruncationMode = (int (*)(void *))GetFunction("TNGetTruncationMode");
+                    CheckFunction((void *)fTNGetTruncationMode, __LINE__);
+                    fTNSetGesvdJ = (int (*)(void *, int))GetFunction("TNSetGesvdJ");
+                    CheckFunction((void *)fTNSetGesvdJ, __LINE__);
+                    fTNGetGesvdJ = (int (*)(void *))GetFunction("TNGetGesvdJ");
+                    CheckFunction((void *)fTNGetGesvdJ, __LINE__);
+                    // Optional in older plugins; checked when explicitly requested.
+                    fTNSetGesvdP = (int (*)(void *, int))GetFunction("TNSetGesvdP");
+                    fTNGetGesvdP = (int (*)(void *))GetFunction("TNGetGesvdP");
+                    fTNSetGesvdR = (int (*)(void *, int))GetFunction("TNSetGesvdR");
+                    fTNGetGesvdR = (int (*)(void *))GetFunction("TNGetGesvdR");
 
-          fTNSetMaxExtent =
-              (int (*)(void *, long int))GetFunction("TNSetMaxExtent");
-          CheckFunction((void *)fTNSetMaxExtent, __LINE__);
-          fTNGetMaxExtent = (long int (*)(void *))GetFunction("TNGetMaxExtent");
-          CheckFunction((void *)fTNGetMaxExtent, __LINE__);
-          fTNGetNrQubits = (int (*)(void *))GetFunction("TNGetNrQubits");
-          CheckFunction((void *)fTNGetNrQubits, __LINE__);
-          fTNAmplitude = (int (*)(void *, long int, long int *, double *,
-                                  double *))GetFunction("TNAmplitude");
-          CheckFunction((void *)fTNAmplitude, __LINE__);
-          fTNProbability0 =
-              (double (*)(void *, unsigned int))GetFunction("TNProbability0");
-          CheckFunction((void *)fTNProbability0, __LINE__);
-          fTNMeasure = (int (*)(void *, unsigned int))GetFunction("TNMeasure");
-          CheckFunction((void *)fTNMeasure, __LINE__);
-          fTNMeasureQubits = (int (*)(void *, long int, unsigned int *,
-                                      int *))GetFunction("TNMeasureQubits");
-          CheckFunction((void *)fTNMeasureQubits, __LINE__);
+                    fTNSetMaxExtent = (int (*)(void *, long int))GetFunction("TNSetMaxExtent");
+                    CheckFunction((void *)fTNSetMaxExtent, __LINE__);
+                    fTNGetMaxExtent = (long int (*)(void *))GetFunction("TNGetMaxExtent");
+                    CheckFunction((void *)fTNGetMaxExtent, __LINE__);
+                    fTNGetNrQubits = (int (*)(void *))GetFunction("TNGetNrQubits");
+                    CheckFunction((void *)fTNGetNrQubits, __LINE__);
+                    fTNAmplitude = (int (*)(void *, long int, long int *, double *, double *))GetFunction("TNAmplitude");
+                    CheckFunction((void *)fTNAmplitude, __LINE__);
+                    fTNProbability0 = (double (*)(void *, unsigned int))GetFunction("TNProbability0");
+                    CheckFunction((void *)fTNProbability0, __LINE__);
+                    fTNMeasure = (int (*)(void *, unsigned int))GetFunction("TNMeasure");
+                    CheckFunction((void *)fTNMeasure, __LINE__);
+                    fTNMeasureQubits = (int (*)(void *, long int, unsigned int *, int *))GetFunction("TNMeasureQubits");
+                    CheckFunction((void *)fTNMeasureQubits, __LINE__);
 
-          fTNGetMapForSample = (void *(*)())GetFunction("TNGetMapForSample");
-          CheckFunction((void *)fTNGetMapForSample, __LINE__);
-          fTNFreeMapForSample =
-              (int (*)(void *))GetFunction("TNFreeMapForSample");
-          CheckFunction((void *)fTNFreeMapForSample, __LINE__);
-          fTNSample = (int (*)(void *, long int, long int, unsigned int *,
-                               void *))GetFunction("TNSample");
-          CheckFunction((void *)fTNSample, __LINE__);
+                    fTNGetMapForSample = (void *(*)())GetFunction("TNGetMapForSample");
+                    CheckFunction((void *)fTNGetMapForSample, __LINE__);
+                    fTNFreeMapForSample = (int (*)(void *))GetFunction("TNFreeMapForSample");
+                    CheckFunction((void *)fTNFreeMapForSample, __LINE__);
+                    fTNSample = (int (*)(void *, long int, long int, unsigned int *, void *))GetFunction("TNSample");
+                    CheckFunction((void *)fTNSample, __LINE__);
 
-          fTNSaveState = (int (*)(void *))GetFunction("TNSaveState");
-          CheckFunction((void *)fTNSaveState, __LINE__);
-          fTNRestoreState = (int (*)(void *))GetFunction("TNRestoreState");
-          CheckFunction((void *)fTNRestoreState, __LINE__);
-          fTNCleanSavedState =
-              (int (*)(void *))GetFunction("TNCleanSavedState");
-          CheckFunction((void *)fTNCleanSavedState, __LINE__);
-          fTNClone = (void *(*)(void *))GetFunction("TNClone");
-          CheckFunction((void *)fTNClone, __LINE__);
-          fTNSetSeed = (int (*)(void *, unsigned long long))
-              GetFunction("TNSetSeed");
-          CheckFunction((void *)fTNSetSeed, __LINE__);
+                    fTNSaveState = (int (*)(void *))GetFunction("TNSaveState");
+                    CheckFunction((void *)fTNSaveState, __LINE__);
+                    fTNRestoreState = (int (*)(void *))GetFunction("TNRestoreState");
+                    CheckFunction((void *)fTNRestoreState, __LINE__);
+                    fTNCleanSavedState = (int (*)(void *))GetFunction("TNCleanSavedState");
+                    CheckFunction((void *)fTNCleanSavedState, __LINE__);
+                    fTNClone = (void *(*)(void *))GetFunction("TNClone");
+                    CheckFunction((void *)fTNClone, __LINE__);
+                    fTNSetSeed = (int (*)(void *, unsigned long long))GetFunction("TNSetSeed");
+                    CheckFunction((void *)fTNSetSeed, __LINE__);
 
-          fTNExpectationValue = (double (*)(
-              void *, const char *, int))GetFunction("TNExpectationValue");
-          CheckFunction((void *)fTNExpectationValue, __LINE__);
+                    fTNExpectationValue = (double (*)(void *, const char *, int))GetFunction("TNExpectationValue");
+                    CheckFunction((void *)fTNExpectationValue, __LINE__);
 
-          fTNApplyX = (int (*)(void *, unsigned int))GetFunction("TNApplyX");
-          CheckFunction((void *)fTNApplyX, __LINE__);
-          fTNApplyY = (int (*)(void *, unsigned int))GetFunction("TNApplyY");
-          CheckFunction((void *)fTNApplyY, __LINE__);
-          fTNApplyZ = (int (*)(void *, unsigned int))GetFunction("TNApplyZ");
-          CheckFunction((void *)fTNApplyZ, __LINE__);
-          fTNApplyH = (int (*)(void *, unsigned int))GetFunction("TNApplyH");
-          CheckFunction((void *)fTNApplyH, __LINE__);
-          fTNApplyS = (int (*)(void *, unsigned int))GetFunction("TNApplyS");
-          CheckFunction((void *)fTNApplyS, __LINE__);
-          fTNApplySDG =
-              (int (*)(void *, unsigned int))GetFunction("TNApplySDG");
-          CheckFunction((void *)fTNApplySDG, __LINE__);
-          fTNApplyT = (int (*)(void *, unsigned int))GetFunction("TNApplyT");
-          CheckFunction((void *)fTNApplyT, __LINE__);
-          fTNApplyTDG =
-              (int (*)(void *, unsigned int))GetFunction("TNApplyTDG");
-          CheckFunction((void *)fTNApplyTDG, __LINE__);
-          fTNApplySX = (int (*)(void *, unsigned int))GetFunction("TNApplySX");
-          CheckFunction((void *)fTNApplySX, __LINE__);
-          fTNApplySXDG =
-              (int (*)(void *, unsigned int))GetFunction("TNApplySXDG");
-          CheckFunction((void *)fTNApplySXDG, __LINE__);
-          fTNApplyK = (int (*)(void *, unsigned int))GetFunction("TNApplyK");
-          CheckFunction((void *)fTNApplyK, __LINE__);
-          fTNApplyP =
-              (int (*)(void *, unsigned int, double))GetFunction("TNApplyP");
-          CheckFunction((void *)fTNApplyP, __LINE__);
-          fTNApplyRx =
-              (int (*)(void *, unsigned int, double))GetFunction("TNApplyRx");
-          CheckFunction((void *)fTNApplyRx, __LINE__);
-          fTNApplyRy =
-              (int (*)(void *, unsigned int, double))GetFunction("TNApplyRy");
-          CheckFunction((void *)fTNApplyRy, __LINE__);
-          fTNApplyRz =
-              (int (*)(void *, unsigned int, double))GetFunction("TNApplyRz");
-          CheckFunction((void *)fTNApplyRz, __LINE__);
-          fTNApplyU = (int (*)(void *, unsigned int, double, double, double,
-                               double))GetFunction("TNApplyU");
-          CheckFunction((void *)fTNApplyU, __LINE__);
-          fTNApplySwap = (int (*)(void *, unsigned int,
-                                  unsigned int))GetFunction("TNApplySwap");
-          CheckFunction((void *)fTNApplySwap, __LINE__);
-          fTNApplyCX = (int (*)(void *, unsigned int, unsigned int))GetFunction(
-              "TNApplyCX");
-          CheckFunction((void *)fTNApplyCX, __LINE__);
-          fTNApplyCY = (int (*)(void *, unsigned int, unsigned int))GetFunction(
-              "TNApplyCY");
-          CheckFunction((void *)fTNApplyCY, __LINE__);
-          fTNApplyCZ = (int (*)(void *, unsigned int, unsigned int))GetFunction(
-              "TNApplyCZ");
-          CheckFunction((void *)fTNApplyCZ, __LINE__);
-          fTNApplyCH = (int (*)(void *, unsigned int, unsigned int))GetFunction(
-              "TNApplyCH");
-          CheckFunction((void *)fTNApplyCH, __LINE__);
-          fTNApplyCSX = (int (*)(void *, unsigned int,
-                                 unsigned int))GetFunction("TNApplyCSX");
-          CheckFunction((void *)fTNApplyCSX, __LINE__);
-          fTNApplyCSXDG = (int (*)(void *, unsigned int,
-                                   unsigned int))GetFunction("TNApplyCSXDG");
-          CheckFunction((void *)fTNApplyCSXDG, __LINE__);
-          fTNApplyCP = (int (*)(void *, unsigned int, unsigned int,
-                                double))GetFunction("TNApplyCP");
-          CheckFunction((void *)fTNApplyCP, __LINE__);
-          fTNApplyCRx = (int (*)(void *, unsigned int, unsigned int,
-                                 double))GetFunction("TNApplyCRx");
-          CheckFunction((void *)fTNApplyCRx, __LINE__);
-          fTNApplyCRy = (int (*)(void *, unsigned int, unsigned int,
-                                 double))GetFunction("TNApplyCRy");
-          CheckFunction((void *)fTNApplyCRy, __LINE__);
-          fTNApplyCRz = (int (*)(void *, unsigned int, unsigned int,
-                                 double))GetFunction("TNApplyCRz");
-          CheckFunction((void *)fTNApplyCRz, __LINE__);
-          fTNApplyCU =
-              (int (*)(void *, unsigned int, unsigned int, double, double,
-                       double, double))GetFunction("TNApplyCU");
-          CheckFunction((void *)fTNApplyCU, __LINE__);
+                    fTNApplyX = (int (*)(void *, unsigned int))GetFunction("TNApplyX");
+                    CheckFunction((void *)fTNApplyX, __LINE__);
+                    fTNApplyY = (int (*)(void *, unsigned int))GetFunction("TNApplyY");
+                    CheckFunction((void *)fTNApplyY, __LINE__);
+                    fTNApplyZ = (int (*)(void *, unsigned int))GetFunction("TNApplyZ");
+                    CheckFunction((void *)fTNApplyZ, __LINE__);
+                    fTNApplyH = (int (*)(void *, unsigned int))GetFunction("TNApplyH");
+                    CheckFunction((void *)fTNApplyH, __LINE__);
+                    fTNApplyS = (int (*)(void *, unsigned int))GetFunction("TNApplyS");
+                    CheckFunction((void *)fTNApplyS, __LINE__);
+                    fTNApplySDG = (int (*)(void *, unsigned int))GetFunction("TNApplySDG");
+                    CheckFunction((void *)fTNApplySDG, __LINE__);
+                    fTNApplyT = (int (*)(void *, unsigned int))GetFunction("TNApplyT");
+                    CheckFunction((void *)fTNApplyT, __LINE__);
+                    fTNApplyTDG = (int (*)(void *, unsigned int))GetFunction("TNApplyTDG");
+                    CheckFunction((void *)fTNApplyTDG, __LINE__);
+                    fTNApplySX = (int (*)(void *, unsigned int))GetFunction("TNApplySX");
+                    CheckFunction((void *)fTNApplySX, __LINE__);
+                    fTNApplySXDG = (int (*)(void *, unsigned int))GetFunction("TNApplySXDG");
+                    CheckFunction((void *)fTNApplySXDG, __LINE__);
+                    fTNApplyK = (int (*)(void *, unsigned int))GetFunction("TNApplyK");
+                    CheckFunction((void *)fTNApplyK, __LINE__);
+                    fTNApplyP = (int (*)(void *, unsigned int, double))GetFunction("TNApplyP");
+                    CheckFunction((void *)fTNApplyP, __LINE__);
+                    fTNApplyRx = (int (*)(void *, unsigned int, double))GetFunction("TNApplyRx");
+                    CheckFunction((void *)fTNApplyRx, __LINE__);
+                    fTNApplyRy = (int (*)(void *, unsigned int, double))GetFunction("TNApplyRy");
+                    CheckFunction((void *)fTNApplyRy, __LINE__);
+                    fTNApplyRz = (int (*)(void *, unsigned int, double))GetFunction("TNApplyRz");
+                    CheckFunction((void *)fTNApplyRz, __LINE__);
+                    fTNApplyU = (int (*)(void *, unsigned int, double, double, double, double))GetFunction("TNApplyU");
+                    CheckFunction((void *)fTNApplyU, __LINE__);
+                    fTNApplySwap = (int (*)(void *, unsigned int, unsigned int))GetFunction("TNApplySwap");
+                    CheckFunction((void *)fTNApplySwap, __LINE__);
+                    fTNApplyCX = (int (*)(void *, unsigned int, unsigned int))GetFunction("TNApplyCX");
+                    CheckFunction((void *)fTNApplyCX, __LINE__);
+                    fTNApplyCY = (int (*)(void *, unsigned int, unsigned int))GetFunction("TNApplyCY");
+                    CheckFunction((void *)fTNApplyCY, __LINE__);
+                    fTNApplyCZ = (int (*)(void *, unsigned int, unsigned int))GetFunction("TNApplyCZ");
+                    CheckFunction((void *)fTNApplyCZ, __LINE__);
+                    fTNApplyCH = (int (*)(void *, unsigned int, unsigned int))GetFunction("TNApplyCH");
+                    CheckFunction((void *)fTNApplyCH, __LINE__);
+                    fTNApplyCSX = (int (*)(void *, unsigned int, unsigned int))GetFunction("TNApplyCSX");
+                    CheckFunction((void *)fTNApplyCSX, __LINE__);
+                    fTNApplyCSXDG = (int (*)(void *, unsigned int, unsigned int))GetFunction("TNApplyCSXDG");
+                    CheckFunction((void *)fTNApplyCSXDG, __LINE__);
+                    fTNApplyCP = (int (*)(void *, unsigned int, unsigned int, double))GetFunction("TNApplyCP");
+                    CheckFunction((void *)fTNApplyCP, __LINE__);
+                    fTNApplyCRx = (int (*)(void *, unsigned int, unsigned int, double))GetFunction("TNApplyCRx");
+                    CheckFunction((void *)fTNApplyCRx, __LINE__);
+                    fTNApplyCRy = (int (*)(void *, unsigned int, unsigned int, double))GetFunction("TNApplyCRy");
+                    CheckFunction((void *)fTNApplyCRy, __LINE__);
+                    fTNApplyCRz = (int (*)(void *, unsigned int, unsigned int, double))GetFunction("TNApplyCRz");
+                    CheckFunction((void *)fTNApplyCRz, __LINE__);
+                    fTNApplyCU = (int (*)(void *, unsigned int, unsigned int, double, double, double, double))GetFunction("TNApplyCU");
+                    CheckFunction((void *)fTNApplyCU, __LINE__);
 
-          fTNApplyCCX = (int (*)(void *, unsigned int, unsigned int,
-                                 unsigned int))GetFunction("TNApplyCCX");
-          CheckFunction((void *)fTNApplyCCX, __LINE__);
-          fTNApplyCSwap = (int (*)(void *, unsigned int, unsigned int,
-                                   unsigned int))GetFunction("TNApplyCSwap");
-          CheckFunction((void *)fTNApplyCSwap, __LINE__);
+                    fTNApplyCCX = (int (*)(void *, unsigned int, unsigned int, unsigned int))GetFunction("TNApplyCCX");
+                    CheckFunction((void *)fTNApplyCCX, __LINE__);
+                    fTNApplyCSwap = (int (*)(void *, unsigned int, unsigned int, unsigned int))GetFunction("TNApplyCSwap");
+                    CheckFunction((void *)fTNApplyCSwap, __LINE__);
 
-          // stabilizer simulator functions
-          fCreateStabilizerSimulator = (void *(*)(long long int, long long int,
-                                                  long long int, long long int))
-              GetFunction("CreateStabilizerSimulator");
-          CheckFunction((void *)fCreateStabilizerSimulator, __LINE__);
-          fDestroyStabilizerSimulator =
-              (void (*)(void *))GetFunction("DestroyStabilizerSimulator");
-          CheckFunction((void *)fDestroyStabilizerSimulator, __LINE__);
-          fExecuteStabilizerCircuit = (int (*)(
-              void *, const char *, int,
-              unsigned long long int))GetFunction("ExecuteStabilizerCircuit");
-          CheckFunction((void *)fExecuteStabilizerCircuit, __LINE__);
-          fGetStabilizerXZTableSize =
-              (long long (*)(void *))GetFunction("GetStabilizerXZTableSize");
-          CheckFunction((void *)fGetStabilizerXZTableSize, __LINE__);
-          fGetStabilizerMTableSize =
-              (long long (*)(void *))GetFunction("GetStabilizerMTableSize");
-          CheckFunction((void *)fGetStabilizerMTableSize, __LINE__);
+                    // stabilizer simulator functions
+                    fCreateStabilizerSimulator =
+                        (void *(*)(long long int, long long int, long long int, long long int))GetFunction("CreateStabilizerSimulator");
+                    CheckFunction((void *)fCreateStabilizerSimulator, __LINE__);
+                    fDestroyStabilizerSimulator = (void (*)(void *))GetFunction("DestroyStabilizerSimulator");
+                    CheckFunction((void *)fDestroyStabilizerSimulator, __LINE__);
+                    fExecuteStabilizerCircuit = (int (*)(void *, const char *, int, unsigned long long int))GetFunction("ExecuteStabilizerCircuit");
+                    CheckFunction((void *)fExecuteStabilizerCircuit, __LINE__);
+                    fGetStabilizerXZTableSize = (long long (*)(void *))GetFunction("GetStabilizerXZTableSize");
+                    CheckFunction((void *)fGetStabilizerXZTableSize, __LINE__);
+                    fGetStabilizerMTableSize = (long long (*)(void *))GetFunction("GetStabilizerMTableSize");
+                    CheckFunction((void *)fGetStabilizerMTableSize, __LINE__);
 
-          fGetStabilizerTableStrideMajor = (long long (*)(void *))GetFunction(
-              "GetStabilizerTableStrideMajor");
-          CheckFunction((void *)fGetStabilizerTableStrideMajor, __LINE__);
+                    fGetStabilizerTableStrideMajor = (long long (*)(void *))GetFunction("GetStabilizerTableStrideMajor");
+                    CheckFunction((void *)fGetStabilizerTableStrideMajor, __LINE__);
 
-          fGetStabilizerNumQubits =
-              (long long (*)(void *))GetFunction("GetStabilizerNumQubits");
-          CheckFunction((void *)fGetStabilizerNumQubits, __LINE__);
-          fGetStabilizerNumShots =
-              (long long (*)(void *))GetFunction("GetStabilizerNumShots");
-          CheckFunction((void *)fGetStabilizerNumShots, __LINE__);
-          fGetStabilizerNumMeasurements = (long long (*)(void *))GetFunction(
-              "GetStabilizerNumMeasurements");
-          CheckFunction((void *)fGetStabilizerNumMeasurements, __LINE__);
-          fGetStabilizerNumDetectors =
-              (long long (*)(void *))GetFunction("GetStabilizerNumDetectors");
-          CheckFunction((void *)fGetStabilizerNumDetectors, __LINE__);
-          fCopyStabilizerXTable = (int (*)(void *, unsigned int *))GetFunction(
-              "CopyStabilizerXTable");
-          CheckFunction((void *)fCopyStabilizerXTable, __LINE__);
-          fCopyStabilizerZTable = (int (*)(void *, unsigned int *))GetFunction(
-              "CopyStabilizerZTable");
-          CheckFunction((void *)fCopyStabilizerZTable, __LINE__);
-          fCopyStabilizerMTable = (int (*)(void *, unsigned int *))GetFunction(
-              "CopyStabilizerMTable");
-          CheckFunction((void *)fCopyStabilizerMTable, __LINE__);
+                    fGetStabilizerNumQubits = (long long (*)(void *))GetFunction("GetStabilizerNumQubits");
+                    CheckFunction((void *)fGetStabilizerNumQubits, __LINE__);
+                    fGetStabilizerNumShots = (long long (*)(void *))GetFunction("GetStabilizerNumShots");
+                    CheckFunction((void *)fGetStabilizerNumShots, __LINE__);
+                    fGetStabilizerNumMeasurements = (long long (*)(void *))GetFunction("GetStabilizerNumMeasurements");
+                    CheckFunction((void *)fGetStabilizerNumMeasurements, __LINE__);
+                    fGetStabilizerNumDetectors = (long long (*)(void *))GetFunction("GetStabilizerNumDetectors");
+                    CheckFunction((void *)fGetStabilizerNumDetectors, __LINE__);
+                    fCopyStabilizerXTable = (int (*)(void *, unsigned int *))GetFunction("CopyStabilizerXTable");
+                    CheckFunction((void *)fCopyStabilizerXTable, __LINE__);
+                    fCopyStabilizerZTable = (int (*)(void *, unsigned int *))GetFunction("CopyStabilizerZTable");
+                    CheckFunction((void *)fCopyStabilizerZTable, __LINE__);
+                    fCopyStabilizerMTable = (int (*)(void *, unsigned int *))GetFunction("CopyStabilizerMTable");
+                    CheckFunction((void *)fCopyStabilizerMTable, __LINE__);
 
-          fInitStabilizerXTable =
-              (int (*)(void *, const unsigned int *))GetFunction("InitXTable");
-          CheckFunction((void *)fInitStabilizerXTable, __LINE__);
-          fInitStabilizerZTable =
-              (int (*)(void *, const unsigned int *))GetFunction("InitZTable");
-          CheckFunction((void *)fInitStabilizerZTable, __LINE__);
+                    fInitStabilizerXTable = (int (*)(void *, const unsigned int *))GetFunction("InitXTable");
+                    CheckFunction((void *)fInitStabilizerXTable, __LINE__);
+                    fInitStabilizerZTable = (int (*)(void *, const unsigned int *))GetFunction("InitZTable");
+                    CheckFunction((void *)fInitStabilizerZTable, __LINE__);
 
-          // pauli propagation functions
-          fCreatePauliPropSimulator =
-              (void *(*)(int))GetFunction("CreatePauliPropSimulator");
-          CheckFunction((void *)fCreatePauliPropSimulator, __LINE__);
-          fDestroyPauliPropSimulator =
-              (void (*)(void *))GetFunction("DestroyPauliPropSimulator");
-          CheckFunction((void *)fDestroyPauliPropSimulator, __LINE__);
+                    // pauli propagation functions
+                    fCreatePauliPropSimulator = (void *(*)(int))GetFunction("CreatePauliPropSimulator");
+                    CheckFunction((void *)fCreatePauliPropSimulator, __LINE__);
+                    fDestroyPauliPropSimulator = (void (*)(void *))GetFunction("DestroyPauliPropSimulator");
+                    CheckFunction((void *)fDestroyPauliPropSimulator, __LINE__);
 
-          fPauliPropGetNrQubits =
-              (int (*)(void *))GetFunction("PauliPropGetNrQubits");
-          CheckFunction((void *)fPauliPropGetNrQubits, __LINE__);
-          fPauliPropSetWillUseSampling =
-              (int (*)(void *, int))GetFunction("PauliPropSetWillUseSampling");
-          CheckFunction((void *)fPauliPropSetWillUseSampling, __LINE__);
-          fPauliPropGetWillUseSampling =
-              (int (*)(void *))GetFunction("PauliPropGetWillUseSampling");
-          CheckFunction((void *)fPauliPropGetWillUseSampling, __LINE__);
+                    fPauliPropGetNrQubits = (int (*)(void *))GetFunction("PauliPropGetNrQubits");
+                    CheckFunction((void *)fPauliPropGetNrQubits, __LINE__);
+                    fPauliPropSetWillUseSampling = (int (*)(void *, int))GetFunction("PauliPropSetWillUseSampling");
+                    CheckFunction((void *)fPauliPropSetWillUseSampling, __LINE__);
+                    fPauliPropGetWillUseSampling = (int (*)(void *))GetFunction("PauliPropGetWillUseSampling");
+                    CheckFunction((void *)fPauliPropGetWillUseSampling, __LINE__);
 
-          fPauliPropGetCoefficientTruncationCutoff = (double (*)(
-              void *))GetFunction("PauliPropGetCoefficientTruncationCutoff");
-          CheckFunction((void *)fPauliPropGetCoefficientTruncationCutoff,
-                        __LINE__);
-          fPauliPropSetCoefficientTruncationCutoff =
-              (void (*)(void *, double))GetFunction(
-                  "PauliPropSetCoefficientTruncationCutoff");
-          CheckFunction((void *)fPauliPropSetCoefficientTruncationCutoff,
-                        __LINE__);
-          fPauliPropGetWeightTruncationCutoff = (double (*)(void *))GetFunction(
-              "PauliPropGetWeightTruncationCutoff");
-          CheckFunction((void *)fPauliPropGetWeightTruncationCutoff, __LINE__);
-          fPauliPropSetWeightTruncationCutoff = (void (*)(
-              void *, double))GetFunction("PauliPropSetWeightTruncationCutoff");
-          CheckFunction((void *)fPauliPropSetWeightTruncationCutoff, __LINE__);
-          fPauliPropGetNumGatesBetweenTruncations = (int (*)(
-              void *))GetFunction("PauliPropGetNumGatesBetweenTruncations");
-          CheckFunction((void *)fPauliPropGetNumGatesBetweenTruncations,
-                        __LINE__);
-          fPauliPropSetNumGatesBetweenTruncations =
-              (void (*)(void *, int))GetFunction(
-                  "PauliPropSetNumGatesBetweenTruncations");
-          CheckFunction((void *)fPauliPropSetNumGatesBetweenTruncations,
-                        __LINE__);
-          fPauliPropGetNumGatesBetweenDeduplications = (int (*)(
-              void *))GetFunction("PauliPropGetNumGatesBetweenDeduplications");
-          CheckFunction((void *)fPauliPropGetNumGatesBetweenDeduplications,
-                        __LINE__);
-          fPauliPropSetNumGatesBetweenDeduplications =
-              (void (*)(void *, int))GetFunction(
-                  "PauliPropSetNumGatesBetweenDeduplications");
-          CheckFunction((void *)fPauliPropSetNumGatesBetweenDeduplications,
-                        __LINE__);
+                    fPauliPropGetCoefficientTruncationCutoff = (double (*)(void *))GetFunction("PauliPropGetCoefficientTruncationCutoff");
+                    CheckFunction((void *)fPauliPropGetCoefficientTruncationCutoff, __LINE__);
+                    fPauliPropSetCoefficientTruncationCutoff = (void (*)(void *, double))GetFunction("PauliPropSetCoefficientTruncationCutoff");
+                    CheckFunction((void *)fPauliPropSetCoefficientTruncationCutoff, __LINE__);
+                    fPauliPropGetWeightTruncationCutoff = (double (*)(void *))GetFunction("PauliPropGetWeightTruncationCutoff");
+                    CheckFunction((void *)fPauliPropGetWeightTruncationCutoff, __LINE__);
+                    fPauliPropSetWeightTruncationCutoff = (void (*)(void *, double))GetFunction("PauliPropSetWeightTruncationCutoff");
+                    CheckFunction((void *)fPauliPropSetWeightTruncationCutoff, __LINE__);
+                    fPauliPropGetNumGatesBetweenTruncations = (int (*)(void *))GetFunction("PauliPropGetNumGatesBetweenTruncations");
+                    CheckFunction((void *)fPauliPropGetNumGatesBetweenTruncations, __LINE__);
+                    fPauliPropSetNumGatesBetweenTruncations = (void (*)(void *, int))GetFunction("PauliPropSetNumGatesBetweenTruncations");
+                    CheckFunction((void *)fPauliPropSetNumGatesBetweenTruncations, __LINE__);
+                    fPauliPropGetNumGatesBetweenDeduplications = (int (*)(void *))GetFunction("PauliPropGetNumGatesBetweenDeduplications");
+                    CheckFunction((void *)fPauliPropGetNumGatesBetweenDeduplications, __LINE__);
+                    fPauliPropSetNumGatesBetweenDeduplications = (void (*)(void *, int))GetFunction("PauliPropSetNumGatesBetweenDeduplications");
+                    CheckFunction((void *)fPauliPropSetNumGatesBetweenDeduplications, __LINE__);
 
-          fPauliPropClearOperators =
-              (int (*)(void *))GetFunction("PauliPropClearOperators");
-          CheckFunction((void *)fPauliPropClearOperators, __LINE__);
-          fPauliPropAllocateMemory =
-              (int (*)(void *, double))GetFunction("PauliPropAllocateMemory");
-          CheckFunction((void *)fPauliPropAllocateMemory, __LINE__);
+                    fPauliPropClearOperators = (int (*)(void *))GetFunction("PauliPropClearOperators");
+                    CheckFunction((void *)fPauliPropClearOperators, __LINE__);
+                    fPauliPropAllocateMemory = (int (*)(void *, double))GetFunction("PauliPropAllocateMemory");
+                    CheckFunction((void *)fPauliPropAllocateMemory, __LINE__);
 
-          fPauliPropGetExpectationValue =
-              (double (*)(void *))GetFunction("PauliPropGetExpectationValue");
-          CheckFunction((void *)fPauliPropGetExpectationValue, __LINE__);
-          fPauliPropExecute = (int (*)(void *))GetFunction("PauliPropExecute");
-          CheckFunction((void *)fPauliPropExecute, __LINE__);
-          fPauliPropSetSeed = (int (*)(void *, unsigned long long))
-              GetFunction("PauliPropSetSeed");
-          CheckFunction((void *)fPauliPropSetSeed, __LINE__);
-          fPauliPropSetInPauliExpansionUnique =
-              (int (*)(void *, const char *))GetFunction(
-                  "PauliPropSetInPauliExpansionUnique");
-          CheckFunction((void *)fPauliPropSetInPauliExpansionUnique, __LINE__);
-          fPauliPropSetInPauliExpansionMultiple =
-              (int (*)(void *, const char **, const double *, int))GetFunction(
-                  "PauliPropSetInPauliExpansionMultiple");
-          CheckFunction((void *)fPauliPropSetInPauliExpansionMultiple,
-                        __LINE__);
+                    fPauliPropGetExpectationValue = (double (*)(void *))GetFunction("PauliPropGetExpectationValue");
+                    CheckFunction((void *)fPauliPropGetExpectationValue, __LINE__);
+                    fPauliPropExecute = (int (*)(void *))GetFunction("PauliPropExecute");
+                    CheckFunction((void *)fPauliPropExecute, __LINE__);
+                    fPauliPropSetSeed = (int (*)(void *, unsigned long long))GetFunction("PauliPropSetSeed");
+                    CheckFunction((void *)fPauliPropSetSeed, __LINE__);
+                    fPauliPropSetInPauliExpansionUnique = (int (*)(void *, const char *))GetFunction("PauliPropSetInPauliExpansionUnique");
+                    CheckFunction((void *)fPauliPropSetInPauliExpansionUnique, __LINE__);
+                    fPauliPropSetInPauliExpansionMultiple =
+                        (int (*)(void *, const char **, const double *, int))GetFunction("PauliPropSetInPauliExpansionMultiple");
+                    CheckFunction((void *)fPauliPropSetInPauliExpansionMultiple, __LINE__);
 
-          fPauliPropApplyX =
-              (int (*)(void *, int))GetFunction("PauliPropApplyX");
-          CheckFunction((void *)fPauliPropApplyX, __LINE__);
-          fPauliPropApplyY =
-              (int (*)(void *, int))GetFunction("PauliPropApplyY");
-          CheckFunction((void *)fPauliPropApplyY, __LINE__);
-          fPauliPropApplyZ =
-              (int (*)(void *, int))GetFunction("PauliPropApplyZ");
-          CheckFunction((void *)fPauliPropApplyZ, __LINE__);
-          fPauliPropApplyH =
-              (int (*)(void *, int))GetFunction("PauliPropApplyH");
-          CheckFunction((void *)fPauliPropApplyH, __LINE__);
-          fPauliPropApplyS =
-              (int (*)(void *, int))GetFunction("PauliPropApplyS");
-          CheckFunction((void *)fPauliPropApplyS, __LINE__);
+                    fPauliPropApplyX = (int (*)(void *, int))GetFunction("PauliPropApplyX");
+                    CheckFunction((void *)fPauliPropApplyX, __LINE__);
+                    fPauliPropApplyY = (int (*)(void *, int))GetFunction("PauliPropApplyY");
+                    CheckFunction((void *)fPauliPropApplyY, __LINE__);
+                    fPauliPropApplyZ = (int (*)(void *, int))GetFunction("PauliPropApplyZ");
+                    CheckFunction((void *)fPauliPropApplyZ, __LINE__);
+                    fPauliPropApplyH = (int (*)(void *, int))GetFunction("PauliPropApplyH");
+                    CheckFunction((void *)fPauliPropApplyH, __LINE__);
+                    fPauliPropApplyS = (int (*)(void *, int))GetFunction("PauliPropApplyS");
+                    CheckFunction((void *)fPauliPropApplyS, __LINE__);
 
-          fPauliPropApplySQRTX =
-              (int (*)(void *, int))GetFunction("PauliPropApplySQRTX");
-          CheckFunction((void *)fPauliPropApplySQRTX, __LINE__);
-          fPauliPropApplySQRTY =
-              (int (*)(void *, int))GetFunction("PauliPropApplySQRTY");
-          CheckFunction((void *)fPauliPropApplySQRTY, __LINE__);
-          fPauliPropApplySQRTZ =
-              (int (*)(void *, int))GetFunction("PauliPropApplySQRTZ");
-          CheckFunction((void *)fPauliPropApplySQRTZ, __LINE__);
-          fPauliPropApplyCX =
-              (int (*)(void *, int, int))GetFunction("PauliPropApplyCX");
-          CheckFunction((void *)fPauliPropApplyCX, __LINE__);
-          fPauliPropApplyCY =
-              (int (*)(void *, int, int))GetFunction("PauliPropApplyCY");
-          CheckFunction((void *)fPauliPropApplyCY, __LINE__);
-          fPauliPropApplyCZ =
-              (int (*)(void *, int, int))GetFunction("PauliPropApplyCZ");
-          CheckFunction((void *)fPauliPropApplyCZ, __LINE__);
-          fPauliPropApplySWAP =
-              (int (*)(void *, int, int))GetFunction("PauliPropApplySWAP");
-          CheckFunction((void *)fPauliPropApplySWAP, __LINE__);
-          fPauliPropApplyISWAP =
-              (int (*)(void *, int, int))GetFunction("PauliPropApplyISWAP");
-          CheckFunction((void *)fPauliPropApplyISWAP, __LINE__);
-          fPauliPropApplyRX =
-              (int (*)(void *, int, double))GetFunction("PauliPropApplyRX");
-          CheckFunction((void *)fPauliPropApplyRX, __LINE__);
-          fPauliPropApplyRY =
-              (int (*)(void *, int, double))GetFunction("PauliPropApplyRY");
-          CheckFunction((void *)fPauliPropApplyRY, __LINE__);
-          fPauliPropApplyRZ =
-              (int (*)(void *, int, double))GetFunction("PauliPropApplyRZ");
-          CheckFunction((void *)fPauliPropApplyRZ, __LINE__);
+                    fPauliPropApplySQRTX = (int (*)(void *, int))GetFunction("PauliPropApplySQRTX");
+                    CheckFunction((void *)fPauliPropApplySQRTX, __LINE__);
+                    fPauliPropApplySQRTY = (int (*)(void *, int))GetFunction("PauliPropApplySQRTY");
+                    CheckFunction((void *)fPauliPropApplySQRTY, __LINE__);
+                    fPauliPropApplySQRTZ = (int (*)(void *, int))GetFunction("PauliPropApplySQRTZ");
+                    CheckFunction((void *)fPauliPropApplySQRTZ, __LINE__);
+                    fPauliPropApplyCX = (int (*)(void *, int, int))GetFunction("PauliPropApplyCX");
+                    CheckFunction((void *)fPauliPropApplyCX, __LINE__);
+                    fPauliPropApplyCY = (int (*)(void *, int, int))GetFunction("PauliPropApplyCY");
+                    CheckFunction((void *)fPauliPropApplyCY, __LINE__);
+                    fPauliPropApplyCZ = (int (*)(void *, int, int))GetFunction("PauliPropApplyCZ");
+                    CheckFunction((void *)fPauliPropApplyCZ, __LINE__);
+                    fPauliPropApplySWAP = (int (*)(void *, int, int))GetFunction("PauliPropApplySWAP");
+                    CheckFunction((void *)fPauliPropApplySWAP, __LINE__);
+                    fPauliPropApplyISWAP = (int (*)(void *, int, int))GetFunction("PauliPropApplyISWAP");
+                    CheckFunction((void *)fPauliPropApplyISWAP, __LINE__);
+                    fPauliPropApplyRX = (int (*)(void *, int, double))GetFunction("PauliPropApplyRX");
+                    CheckFunction((void *)fPauliPropApplyRX, __LINE__);
+                    fPauliPropApplyRY = (int (*)(void *, int, double))GetFunction("PauliPropApplyRY");
+                    CheckFunction((void *)fPauliPropApplyRY, __LINE__);
+                    fPauliPropApplyRZ = (int (*)(void *, int, double))GetFunction("PauliPropApplyRZ");
+                    CheckFunction((void *)fPauliPropApplyRZ, __LINE__);
 
-          fPauliPropAddNoiseX =
-              (int (*)(void *, int, double))GetFunction("PauliPropAddNoiseX");
-          CheckFunction((void *)fPauliPropAddNoiseX, __LINE__);
-          fPauliPropAddNoiseY =
-              (int (*)(void *, int, double))GetFunction("PauliPropAddNoiseY");
-          CheckFunction((void *)fPauliPropAddNoiseY, __LINE__);
-          fPauliPropAddNoiseZ =
-              (int (*)(void *, int, double))GetFunction("PauliPropAddNoiseZ");
-          CheckFunction((void *)fPauliPropAddNoiseZ, __LINE__);
-          fPauliPropAddNoiseXYZ =
-              (int (*)(void *, int, double, double, double))GetFunction(
-                  "PauliPropAddNoiseXYZ");
-          CheckFunction((void *)fPauliPropAddNoiseXYZ, __LINE__);
-          fPauliPropAddAmplitudeDamping =
-              (int (*)(void *, int, double, double))GetFunction(
-                  "PauliPropAddAmplitudeDamping");
-          CheckFunction((void *)fPauliPropAddAmplitudeDamping, __LINE__);
-          fPauliPropQubitProbability0 = (double (*)(void *, int))GetFunction(
-              "PauliPropQubitProbability0");
-          CheckFunction((void *)fPauliPropQubitProbability0, __LINE__);
-          fPauliPropProbability =
-              (double (*)(void *, unsigned long long int))GetFunction(
-                  "PauliPropProbability");
-          CheckFunction((void *)fPauliPropProbability, __LINE__);
+                    fPauliPropAddNoiseX = (int (*)(void *, int, double))GetFunction("PauliPropAddNoiseX");
+                    CheckFunction((void *)fPauliPropAddNoiseX, __LINE__);
+                    fPauliPropAddNoiseY = (int (*)(void *, int, double))GetFunction("PauliPropAddNoiseY");
+                    CheckFunction((void *)fPauliPropAddNoiseY, __LINE__);
+                    fPauliPropAddNoiseZ = (int (*)(void *, int, double))GetFunction("PauliPropAddNoiseZ");
+                    CheckFunction((void *)fPauliPropAddNoiseZ, __LINE__);
+                    fPauliPropAddNoiseXYZ = (int (*)(void *, int, double, double, double))GetFunction("PauliPropAddNoiseXYZ");
+                    CheckFunction((void *)fPauliPropAddNoiseXYZ, __LINE__);
+                    fPauliPropAddAmplitudeDamping = (int (*)(void *, int, double, double))GetFunction("PauliPropAddAmplitudeDamping");
+                    CheckFunction((void *)fPauliPropAddAmplitudeDamping, __LINE__);
+                    fPauliPropQubitProbability0 = (double (*)(void *, int))GetFunction("PauliPropQubitProbability0");
+                    CheckFunction((void *)fPauliPropQubitProbability0, __LINE__);
+                    fPauliPropProbability = (double (*)(void *, unsigned long long int))GetFunction("PauliPropProbability");
+                    CheckFunction((void *)fPauliPropProbability, __LINE__);
 
-          fPauliPropMeasureQubit =
-              (int (*)(void *, int))GetFunction("PauliPropMeasureQubit");
-          CheckFunction((void *)fPauliPropMeasureQubit, __LINE__);
+                    fPauliPropMeasureQubit = (int (*)(void *, int))GetFunction("PauliPropMeasureQubit");
+                    CheckFunction((void *)fPauliPropMeasureQubit, __LINE__);
 
-          fPauliPropSampleQubits =
-              (unsigned char *(*)(void *, const int *, int))GetFunction(
-                  "PauliPropSampleQubits");
-          CheckFunction((void *)fPauliPropSampleQubits, __LINE__);
-          fPauliPropFreeSampledQubits = (void (*)(unsigned char *))GetFunction(
-              "PauliPropFreeSampledQubits");
-          CheckFunction((void *)fPauliPropFreeSampledQubits, __LINE__);
-          fPauliPropSaveState =
-              (void (*)(void *))GetFunction("PauliPropSaveState");
-          CheckFunction((void *)fPauliPropSaveState, __LINE__);
-          fPauliPropRestoreState =
-              (void (*)(void *))GetFunction("PauliPropRestoreState");
-          CheckFunction((void *)fPauliPropRestoreState, __LINE__);
+                    fPauliPropSampleQubits = (unsigned char *(*)(void *, const int *, int))GetFunction("PauliPropSampleQubits");
+                    CheckFunction((void *)fPauliPropSampleQubits, __LINE__);
+                    fPauliPropFreeSampledQubits = (void (*)(unsigned char *))GetFunction("PauliPropFreeSampledQubits");
+                    CheckFunction((void *)fPauliPropFreeSampledQubits, __LINE__);
+                    fPauliPropSaveState = (void (*)(void *))GetFunction("PauliPropSaveState");
+                    CheckFunction((void *)fPauliPropSaveState, __LINE__);
+                    fPauliPropRestoreState = (void (*)(void *))GetFunction("PauliPropRestoreState");
+                    CheckFunction((void *)fPauliPropRestoreState, __LINE__);
 
-          return true;
-        } else {
-          initializationFailed = true;
-          ReportUnavailable("initialization failed");
+                    return true;
+                }
+                else
+                {
+                    initializationFailed = true;
+                    ReportUnavailable("initialization failed");
+                }
+            }
+            else if (!IsMuted())
+                std::cerr << "GpuLibrary: Unable to get initialization function for "
+                             "gpu library"
+                          << std::endl;
         }
-      } else if (!IsMuted())
-        std::cerr << "GpuLibrary: Unable to get initialization function for "
-                     "gpu library"
-                  << std::endl;
+
+        return false;
     }
 
-    return false;
-  }
+    void CheckFunction(void *func, int line) const
+    {
+        if (!func && !IsMuted())
+        {
+            std::cerr << "GpuLibrary: Unable to load function, line #: " << line;
+            const char *dlsym_error = dlerror();
+            if (dlsym_error)
+                std::cerr << ", error: " << dlsym_error;
 
-  void CheckFunction(void *func, int line) const {
-    if (!func && !IsMuted()) {
-      std::cerr << "GpuLibrary: Unable to load function, line #: " << line;
-      const char *dlsym_error = dlerror();
-      if (dlsym_error) std::cerr << ", error: " << dlsym_error;
-
-      std::cerr << std::endl;
+            std::cerr << std::endl;
+        }
     }
-  }
-
-  bool IsValid() const { return LibraryHandle != nullptr; }
-
-  void ReportUnavailable(const char* operation) const {
-    const char* detail = fGetLicenseError ? fGetLicenseError() : nullptr;
-    std::cerr << "GpuLibrary: GPU backend unavailable: " << operation;
-    if (detail && *detail) std::cerr << ": " << detail;
-    std::cerr << std::endl;
-  }
-
-  // Number of CUDA-capable devices visible to the process, or 0 if none are
-  // visible / the loaded library doesn't support device queries. A negative
-  // result reports a CUDA discovery error, not absent hardware.
-  int GetGpuDeviceCount() const {
-    return fGetGpuDeviceCount ? fGetGpuDeviceCount() : 0;
-  }
-
-  // Selection affects future native objects only. Capture it in wrappers that
-  // defer native creation until CreateSimulator(). Never select around gates.
-  bool SetGpuDevice(int device) {
-    auto lock = LockInitialization();
-    if (device < 0 || !fSetGpuDevice || !fSetGpuDevice(device)) return false;
-    creationDevice = device;
-    return true;
-  }
-  int GetCreationDevice() const { return creationDevice; }
-
-  int GetStateVectorGpuId(void* obj) const {
-    return obj && fGetStateVectorGpuId ? fGetStateVectorGpuId(obj) : -1;
-  }
-  // Wait until the queued work of the object has finished on the device. A
-  // library without the entry point cannot be waited for; report success.
-  bool StateVectorSynchronize(void* obj) const {
-    return !obj || !fStateVectorSynchronize || fStateVectorSynchronize(obj) == 1;
-  }
-  bool DMSynchronize(void* obj) const {
-    return !obj || !fDMSynchronize || fDMSynchronize(obj) == 1;
-  }
-  int MPSGetGpuId(void* obj) const {
-    return obj && fMPSGetGpuId ? fMPSGetGpuId(obj) : -1;
-  }
-  int TNGetGpuId(void* obj) const {
-    return obj && fTNGetGpuId ? fTNGetGpuId(obj) : -1;
-  }
-  int DMGetGpuId(void* obj) const {
-    return obj && fDMGetGpuId ? fDMGetGpuId(obj) : -1;
-  }
-  int MPOGetGpuId(void* obj) const {
-    return obj && fMPOGetGpuId ? fMPOGetGpuId(obj) : -1;
-  }
-  int GetStabilizerGpuId(void* obj) const {
-    return obj && fGetStabilizerGpuId ? fGetStabilizerGpuId(obj) : -1;
-  }
-  int PauliPropGetGpuId(void* obj) const {
-    return obj && fPauliPropGetGpuId ? fPauliPropGetGpuId(obj) : -1;
-  }
-
-  bool HasStatevectorMatrixAPI() const {
-    return IsValid() && fApplyOneQubitMatrix &&
-           fApplyOneQubitMatrixWithLayout && fApplyTwoQubitMatrix &&
-           fApplyTwoQubitMatrixWithLayout && fApplyThreeQubitMatrix &&
-           fApplyThreeQubitMatrixWithLayout;
-  }
-
-  bool HasDensityMatrixAPI() const {
-    return IsValid() && fCreateDensityMatrix && fDestroyDensityMatrix &&
-           fDMCreate && fDMCreateWithState && fDMReset && fDMIsCreated &&
-           fDMSetDataType &&
-           fDMSaveState && fDMRestoreState && fDMCleanSavedState && fDMClone &&
-           fDMSetSeed &&
-           fDMMeasureQubitCollapse && fDMSampleAll &&
-           fDMBasisStateProbability && fDMAllProbabilities &&
-           fDMExpectationValue && fDMTrace && fDMPurity && fDMIsHermitian &&
-           fDMPartialTrace && fDMHilbertSchmidtOverlap &&
-           fDMFidelityWithStatevector && fDMApplyKraus && fDMApplyReset &&
-           fDMApplyX && fDMApplyY && fDMApplyZ && fDMApplyH && fDMApplyS &&
-           fDMApplySDG && fDMApplyT && fDMApplyTDG && fDMApplySX &&
-           fDMApplySXDG && fDMApplyK && fDMApplyP && fDMApplyRx &&
-           fDMApplyRy && fDMApplyRz && fDMApplyU && fDMApplyCX &&
-           fDMApplyCY && fDMApplyCZ && fDMApplyCH && fDMApplyCSX &&
-           fDMApplyCSXDG && fDMApplyCP && fDMApplyCRx && fDMApplyCRy &&
-           fDMApplyCRz && fDMApplyCCX && fDMApplySwap && fDMApplyCSwap &&
-           fDMApplyCU;
-  }
-  bool HasMPOAPI() const {
-    return IsValid() && fCreateMPO && fDestroyMPO && fMPOSampleBits &&
-           fMPOGetMapForSample && fMPOFreeMapForSample && fMPOSampleHistogram &&
-           fMPOGetElementBits && fMPOBasisStateProbabilityBits &&
-           fMPOExpectationValueComplex && fMPOUnnormalizedExpectationValue &&
-           fMPOGetDensityMatrix && fMPOGetUnnormalizedDensityMatrix &&
-           fMPOTraceComplex && fMPOSetRestoreTraceAfterTruncation &&
-           fMPOGetRestoreTraceAfterTruncation &&
-           fMPOSetHermitizeAfterTruncation && fMPOGetHermitizeAfterTruncation &&
-           fMPOMoveAtBeginningOfChain && fMPOApplyOperator &&
-           fMPOApplyOperatorAndNormalize && fMPOCreate && fMPOCreateWithState &&
-           fMPOReset && fMPOIsCreated && fMPOSetDataType && fMPOSaveState &&
-           fMPORestoreState && fMPOCleanSavedState && fMPOClone &&
-           fMPOSetSeed && fMPOMeasureQubitCollapse && fMPOSampleAll &&
-           fMPOBasisStateProbability && fMPOAllProbabilities &&
-           fMPOExpectationValue && fMPOPartialTrace &&
-           fMPOHilbertSchmidtOverlap && fMPOFidelityWithStatevector &&
-           fMPOTrace && fMPOPurity && fMPOHermiticityResidual &&
-           fMPOIsHermitian && fMPOTraceOfSquare && fMPORestoreTrace &&
-           fMPOHermitize && fMPOReCanonicalize && fMPOTrim && fMPOApplyKraus &&
-           fMPOApplyReset && fMPOApplyX && fMPOApplyY && fMPOApplyZ &&
-           fMPOApplyH && fMPOApplyS && fMPOApplySDG && fMPOApplyT &&
-           fMPOApplyTDG && fMPOApplySX && fMPOApplySXDG && fMPOApplyK &&
-           fMPOApplyP && fMPOApplyRx && fMPOApplyRy && fMPOApplyRz &&
-           fMPOApplyU && fMPOApplyCX && fMPOApplyCY && fMPOApplyCZ &&
-           fMPOApplyCH && fMPOApplyCSX && fMPOApplyCSXDG && fMPOApplyCP &&
-           fMPOApplyCRx && fMPOApplyCRy && fMPOApplyCRz && fMPOApplySwap &&
-           fMPOApplyCU;
-  }
-
-  bool HasMPSExpectationValues() const { return fMPSExpectationValues; }
-  bool HasMPOExpectationValues() const { return fMPOExpectationValues; }
-  bool HasMPOExpectationValuesComplex() const {
-    return fMPOExpectationValuesComplex;
-  }
-  bool HasMPSGetStateVector() const { return fMPSGetStateVector; }
-  bool HasMPSAllProbabilities() const { return fMPSAllProbabilities; }
-  bool HasMPSMoveAtBeginningOfChain() const {
-    return fMPSMoveAtBeginningOfChain;
-  }
-  bool HasMPSExpectationValueOperators() const {
-    return fMPSExpectationValueOperators;
-  }
-  bool HasMPSBondSummary() const { return fMPSSetBondDimensionSummaryCallback; }
-  bool HasMPOBondSummary() const { return fMPOSetBondDimensionSummaryCallback; }
-  bool HasMPSMaxBondDimension() const { return fMPSGetMaxBondDimension; }
-  bool HasMPOMaxBondDimension() const { return fMPOGetMaxBondDimension; }
-
-  bool MPSExpectationValues(void *obj, int count, const char *const *paulis,
-                            const int *lengths, double *values) const {
-    return obj && fMPSExpectationValues &&
-           fMPSExpectationValues(obj, count, paulis, lengths, values) == 1;
-  }
-  bool MPOExpectationValues(void *obj, int count, const char *const *paulis,
-                            const int *lengths, double *values) const {
-    return obj && fMPOExpectationValues &&
-           fMPOExpectationValues(obj, count, paulis, lengths, values) == 1;
-  }
-  bool MPOExpectationValuesComplex(void *obj, int count,
-                                   const char *const *paulis,
-                                   const int *lengths, bool normalized,
-                                   double *real, double *imag) const {
-    return obj && fMPOExpectationValuesComplex &&
-           fMPOExpectationValuesComplex(obj, count, paulis, lengths,
-                                        normalized ? 1 : 0, real, imag) == 1;
-  }
-  bool MPSGetStateVector(void *obj, double *values) const {
-    return obj && fMPSGetStateVector && fMPSGetStateVector(obj, values) == 1;
-  }
-  bool MPSAllProbabilities(void *obj, double *values) const {
-    return obj && fMPSAllProbabilities &&
-           fMPSAllProbabilities(obj, values) == 1;
-  }
-  bool MPSMoveAtBeginningOfChain(void *obj, const int *qubits,
-                                 int count) const {
-    return obj && fMPSMoveAtBeginningOfChain &&
-           fMPSMoveAtBeginningOfChain(obj, qubits, count) == 1;
-  }
-  bool MPSExpectationValueOperators(void *obj, int count, const int *qubits,
-                                    const double *matrices, double *real,
-                                    double *imag) const {
-    return obj && fMPSExpectationValueOperators &&
-           fMPSExpectationValueOperators(obj, count, qubits, matrices, real,
-                                         imag) == 1;
-  }
-  bool MPSSetBondDimensionSummaryCallback(void *obj,
-                                          void (*callback)(void *,
-                                                           int64_t)) const {
-    return obj && fMPSSetBondDimensionSummaryCallback &&
-           fMPSSetBondDimensionSummaryCallback(obj, callback) == 1;
-  }
-  bool MPOSetBondDimensionSummaryCallback(void *obj,
-                                          void (*callback)(void *,
-                                                           int64_t)) const {
-    return obj && fMPOSetBondDimensionSummaryCallback &&
-           fMPOSetBondDimensionSummaryCallback(obj, callback) == 1;
-  }
-  long long MPSGetMaxBondDimension(void *obj) const {
-    return obj && fMPSGetMaxBondDimension ? fMPSGetMaxBondDimension(obj) : 0;
-  }
-  long long MPOGetMaxBondDimension(void *obj) const {
-    return obj && fMPOGetMaxBondDimension ? fMPOGetMaxBondDimension(obj) : 0;
-  }
-
-  // statevector functions
-
-  void *CreateStateVector() {
-    if (LibraryHandle)
-      return fCreateStateVector(LibraryHandle);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to create state vector");
-  }
-
-  void DestroyStateVector(void *obj) {
-    if (LibraryHandle)
-      fDestroyStateVector(obj);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to destroy state vector");
-  }
-
-  bool Create(void *obj, unsigned int nrQubits) {
-    if (LibraryHandle)
-      return fCreate(obj, nrQubits) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to create state vector state");
-
-    return false;
-  }
-
-  bool CreateWithState(void *obj, unsigned int nrQubits, const double *state) {
-    if (LibraryHandle)
-      return fCreateWithState(obj, nrQubits, state) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to create state vector state with a state");
-
-    return false;
-  }
-
-  bool Reset(void *obj) {
-    if (LibraryHandle)
-      return fReset(obj) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to reset state vector");
-
-    return false;
-  }
-
-  bool SetDataType(void *obj, int dataType) {
-    if (LibraryHandle)
-      return fSetDataType(obj, dataType) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to set data type");
-
-    return false;
-  }
-
-  bool IsDoublePrecision(void *obj) const {
-    if (LibraryHandle)
-      return fIsDoublePrecision(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to check if double precision");
-
-    return false;
-  }
-
-  int GetNrQubits(void *obj) const {
-    if (LibraryHandle)
-      return fGetNrQubits(obj);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to get number of qubits");
-    return 0;
-  }
-
-  bool MeasureQubitCollapse(void *obj, int qubitIndex) {
-    if (LibraryHandle)
-      return fMeasureQubitCollapse(obj, qubitIndex) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to measure qubit with collapse");
-
-    return false;
-  }
-
-  bool MeasureQubitNoCollapse(void *obj, int qubitIndex) {
-    if (LibraryHandle)
-      return fMeasureQubitNoCollapse(obj, qubitIndex) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to measure qubit no collapse");
-
-    return false;
-  }
-
-  bool MeasureQubitsCollapse(void *obj, int *qubits, int *bitstring,
-                             int bitstringLen) {
-    if (LibraryHandle)
-      return fMeasureQubitsCollapse(obj, qubits, bitstring, bitstringLen) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to measure qubits with collapse");
-
-    return false;
-  }
-
-  bool MeasureQubitsNoCollapse(void *obj, int *qubits, int *bitstring,
-                               int bitstringLen) {
-    if (LibraryHandle)
-      return fMeasureQubitsNoCollapse(obj, qubits, bitstring, bitstringLen) ==
-             1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to measure qubits with no collapse");
-
-    return false;
-  }
-
-  unsigned long long MeasureAllQubitsCollapse(void *obj) {
-    if (LibraryHandle)
-      return fMeasureAllQubitsCollapse(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to measure all qubits with collapse");
-
-    return 0;
-  }
-
-  unsigned long long MeasureAllQubitsNoCollapse(void *obj) {
-    if (LibraryHandle)
-      return fMeasureAllQubitsNoCollapse(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to measure all qubits with no collapse");
-
-    return 0;
-  }
-
-  bool SaveState(void *obj) {
-    if (LibraryHandle)
-      return fSaveState(obj) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to save state");
-
-    return false;
-  }
-
-  bool SaveStateToHost(void *obj) {
-    if (LibraryHandle)
-      return fSaveStateToHost(obj) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to save state to host");
-
-    return false;
-  }
-
-  bool SaveStateDestructive(void *obj) {
-    if (LibraryHandle)
-      return fSaveStateDestructive(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to save state destructively");
-
-    return false;
-  }
-
-  bool RestoreStateFreeSaved(void *obj) {
-    if (LibraryHandle)
-      return fRestoreStateFreeSaved(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to restore state free saved");
-
-    return false;
-  }
-
-  bool RestoreStateNoFreeSaved(void *obj) {
-    if (LibraryHandle)
-      return fRestoreStateNoFreeSaved(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to restore state no free saved");
-
-    return false;
-  }
-
-  void FreeSavedState(void *obj) {
-    if (LibraryHandle)
-      fFreeSavedState(obj);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to free saved state");
-  }
-
-  void *Clone(void *obj) const {
-    if (LibraryHandle)
-      return fClone(obj);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to clone state vector");
-
-    return nullptr;
-  }
-
-  bool SetSeed(void *obj, unsigned long long seed) const {
-    return obj && fSetSeed && fSetSeed(obj, seed) == 1;
-  }
-
-  bool Sample(void *obj, unsigned int nSamples, long int *samples,
-              unsigned int nBits, int *bits) {
-    if (LibraryHandle)
-      return fSample(obj, nSamples, samples, nBits, bits) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to sample state vector");
-
-    return false;
-  }
-
-  bool SampleAll(void *obj, unsigned int nSamples, long int *samples) {
-    if (LibraryHandle)
-      return fSampleAll(obj, nSamples, samples) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to sample state vector");
-
-    return false;
-  }
-
-  bool Amplitude(void *obj, long long int state, double *real,
-                 double *imaginary) const {
-    if (LibraryHandle)
-      return fAmplitude(obj, state, real, imaginary) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to get amplitude");
-
-    return false;
-  }
-
-  double Probability(void *obj, int *qubits, int *mask, int len) const {
-    if (LibraryHandle)
-      return fProbability(obj, qubits, mask, len);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to get probability");
-
-    return 0;
-  }
-
-  double BasisStateProbability(void *obj, long long int state) const {
-    if (LibraryHandle)
-      return fBasisStateProbability(obj, state);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get basis state probability");
-
-    return 0;
-  }
-
-  bool AllProbabilities(void *obj, double *probabilities) const {
-    if (LibraryHandle)
-      return fAllProbabilities(obj, probabilities) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to get all probabilities");
-
-    return false;
-  }
-
-  double ExpectationValue(void *obj, const char *pauliString, int len) const {
-    if (LibraryHandle)
-      return fExpectationValue(obj, pauliString, len);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to get expectation value");
-
-    return 0;
-  }
-
-  bool ApplyX(void *obj, int qubit) {
-    if (LibraryHandle)
-      return fApplyX(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply X gate");
-
-    return false;
-  }
-
-  bool ApplyY(void *obj, int qubit) {
-    if (LibraryHandle)
-      return fApplyY(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply Y gate");
-
-    return false;
-  }
-
-  bool ApplyZ(void *obj, int qubit) {
-    if (LibraryHandle)
-      return fApplyZ(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply Z gate");
-
-    return false;
-  }
-
-  bool ApplyH(void *obj, int qubit) {
-    if (LibraryHandle)
-      return fApplyH(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply H gate");
-
-    return false;
-  }
-
-  bool ApplyS(void *obj, int qubit) {
-    if (LibraryHandle)
-      return fApplyS(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply S gate");
-
-    return false;
-  }
-
-  bool ApplySDG(void *obj, int qubit) {
-    if (LibraryHandle)
-      return fApplySDG(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply SDG gate");
-
-    return false;
-  }
-
-  bool ApplyT(void *obj, int qubit) {
-    if (LibraryHandle)
-      return fApplyT(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply T gate");
-
-    return false;
-  }
-
-  bool ApplyTDG(void *obj, int qubit) {
-    if (LibraryHandle)
-      return fApplyTDG(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply TDG gate");
-
-    return false;
-  }
-
-  bool ApplySX(void *obj, int qubit) {
-    if (LibraryHandle)
-      return fApplySX(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply SX gate");
-
-    return false;
-  }
-
-  bool ApplySXDG(void *obj, int qubit) {
-    if (LibraryHandle)
-      return fApplySXDG(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply SXDG gate");
-
-    return false;
-  }
-
-  bool ApplyK(void *obj, int qubit) {
-    if (LibraryHandle)
-      return fApplyK(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply K gate");
-
-    return false;
-  }
-
-  bool ApplyP(void *obj, int qubit, double theta) {
-    if (LibraryHandle)
-      return fApplyP(obj, qubit, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply P gate");
-
-    return false;
-  }
-
-  bool ApplyRx(void *obj, int qubit, double theta) {
-    if (LibraryHandle)
-      return fApplyRx(obj, qubit, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply Rx gate");
-
-    return false;
-  }
-
-  bool ApplyRy(void *obj, int qubit, double theta) {
-    if (LibraryHandle)
-      return fApplyRy(obj, qubit, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply Ry gate");
-
-    return false;
-  }
-
-  bool ApplyRz(void *obj, int qubit, double theta) {
-    if (LibraryHandle)
-      return fApplyRz(obj, qubit, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply Rz gate");
-
-    return false;
-  }
-
-  bool ApplyU(void *obj, int qubit, double theta, double phi, double lambda,
-              double gamma) {
-    if (LibraryHandle)
-      return fApplyU(obj, qubit, theta, phi, lambda, gamma) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply U gate");
-
-    return false;
-  }
-
-  bool ApplyCX(void *obj, int controlQubit, int targetQubit) {
-    if (LibraryHandle)
-      return fApplyCX(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CX gate");
-
-    return false;
-  }
-
-  bool ApplyCY(void *obj, int controlQubit, int targetQubit) {
-    if (LibraryHandle)
-      return fApplyCY(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CY gate");
-
-    return false;
-  }
-
-  bool ApplyCZ(void *obj, int controlQubit, int targetQubit) {
-    if (LibraryHandle)
-      return fApplyCZ(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CZ gate");
-
-    return false;
-  }
-
-  bool ApplyCH(void *obj, int controlQubit, int targetQubit) {
-    if (LibraryHandle)
-      return fApplyCH(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CH gate");
-
-    return false;
-  }
-
-  bool ApplyCSX(void *obj, int controlQubit, int targetQubit) {
-    if (LibraryHandle)
-      return fApplyCSX(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CSX gate");
-
-    return false;
-  }
-
-  bool ApplyCSXDG(void *obj, int controlQubit, int targetQubit) {
-    if (LibraryHandle)
-      return fApplyCSXDG(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CSXDG gate");
-
-    return false;
-  }
-
-  bool ApplyCP(void *obj, int controlQubit, int targetQubit, double theta) {
-    if (LibraryHandle)
-      return fApplyCP(obj, controlQubit, targetQubit, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CP gate");
-
-    return false;
-  }
-
-  bool ApplyCRx(void *obj, int controlQubit, int targetQubit, double theta) {
-    if (LibraryHandle)
-      return fApplyCRx(obj, controlQubit, targetQubit, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CRx gate");
-
-    return false;
-  }
-
-  bool ApplyCRy(void *obj, int controlQubit, int targetQubit, double theta) {
-    if (LibraryHandle)
-      return fApplyCRy(obj, controlQubit, targetQubit, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CRy gate");
-
-    return false;
-  }
-
-  bool ApplyCRz(void *obj, int controlQubit, int targetQubit, double theta) {
-    if (LibraryHandle)
-      return fApplyCRz(obj, controlQubit, targetQubit, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CRz gate");
-
-    return false;
-  }
-
-  bool ApplyCCX(void *obj, int controlQubit1, int controlQubit2,
-                int targetQubit) {
-    if (LibraryHandle)
-      return fApplyCCX(obj, controlQubit1, controlQubit2, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CCX gate");
-
-    return false;
-  }
-
-  bool ApplySwap(void *obj, int qubit1, int qubit2) {
-    if (LibraryHandle)
-      return fApplySwap(obj, qubit1, qubit2) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply Swap gate");
-
-    return false;
-  }
-
-  bool ApplyCSwap(void *obj, int controlQubit, int qubit1, int qubit2) {
-    if (LibraryHandle)
-      return fApplyCSwap(obj, controlQubit, qubit1, qubit2) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CSwap gate");
-
-    return false;
-  }
-
-  bool ApplyCU(void *obj, int controlQubit, int targetQubit, double theta,
-               double phi, double lambda, double gamma) {
-    if (LibraryHandle)
-      return fApplyCU(obj, controlQubit, targetQubit, theta, phi, lambda,
-                      gamma) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CU gate");
-
-    return false;
-  }
-
-  // Host interleaved complex doubles. Target i is matrix basis bit i.
-  bool ApplyOneQubitMatrix(void *obj, int q0, const double *matrix) {
-    return obj && fApplyOneQubitMatrix &&
-           fApplyOneQubitMatrix(obj, q0, matrix) == 1;
-  }
-  bool ApplyOneQubitMatrixWithLayout(void *obj, int q0, const double *matrix,
-                                     int layout) {
-    return obj && fApplyOneQubitMatrixWithLayout &&
-           fApplyOneQubitMatrixWithLayout(obj, q0, matrix, layout) == 1;
-  }
-  bool ApplyTwoQubitMatrix(void *obj, int q0, int q1, const double *matrix) {
-    return obj && fApplyTwoQubitMatrix &&
-           fApplyTwoQubitMatrix(obj, q0, q1, matrix) == 1;
-  }
-  bool ApplyTwoQubitMatrixWithLayout(void *obj, int q0, int q1,
-                                     const double *matrix, int layout) {
-    return obj && fApplyTwoQubitMatrixWithLayout &&
-           fApplyTwoQubitMatrixWithLayout(obj, q0, q1, matrix, layout) == 1;
-  }
-  bool ApplyThreeQubitMatrix(void *obj, int q0, int q1, int q2,
-                             const double *matrix) {
-    return obj && fApplyThreeQubitMatrix &&
-           fApplyThreeQubitMatrix(obj, q0, q1, q2, matrix) == 1;
-  }
-  bool ApplyThreeQubitMatrixWithLayout(void *obj, int q0, int q1, int q2,
-                                       const double *matrix, int layout) {
-    return obj && fApplyThreeQubitMatrixWithLayout &&
-           fApplyThreeQubitMatrixWithLayout(obj, q0, q1, q2, matrix, layout) ==
-               1;
-  }
-
- public:
-  // density matrix functions
-  void *CreateDensityMatrix() {
-    if (!LibraryHandle || !fCreateDensityMatrix) return nullptr;
-    return fCreateDensityMatrix(LibraryHandle);
-  }
-  void DestroyDensityMatrix(void *obj) {
-    if (obj && fDestroyDensityMatrix) fDestroyDensityMatrix(obj);
-  }
-#define DM_BOOL0(name)                                                        \
-  bool name(void *obj) { return obj && f##name && f##name(obj) == 1; }
-#define DM_BOOL1(name, type)                                                  \
-  bool name(void *obj, type a) { return obj && f##name && f##name(obj, a) == 1; }
-#define DM_BOOL2(name, type1, type2)                                          \
-  bool name(void *obj, type1 a, type2 b) {                                    \
-    return obj && f##name && f##name(obj, a, b) == 1;                         \
-  }
-#define DM_BOOL3(name, type1, type2, type3)                                   \
-  bool name(void *obj, type1 a, type2 b, type3 c) {                           \
-    return obj && f##name && f##name(obj, a, b, c) == 1;                      \
-  }
-  DM_BOOL1(DMCreate, unsigned int)
-  bool DMCreateWithState(void *obj, unsigned int n, const double *data) {
-    return obj && fDMCreateWithState && fDMCreateWithState(obj, n, data) == 1;
-  }
-  bool DMCreateWithBasisState(void *obj, unsigned int n,
-                              unsigned long long state) {
-    return obj && fDMCreateWithBasisState &&
-           fDMCreateWithBasisState(obj, n, state) == 1;
-  }
-  bool DMCreateWithMixtureOfBasisStates(void *obj, unsigned int n,
-                                        const unsigned long long *states,
-                                        const double *weights, int nTerms) {
-    return obj && fDMCreateWithMixtureOfBasisStates &&
-           fDMCreateWithMixtureOfBasisStates(obj, n, states, weights,
-                                             nTerms) == 1;
-  }
-  DM_BOOL0(DMReset) DM_BOOL0(DMIsValid) DM_BOOL0(DMIsCreated)
-  DM_BOOL1(DMSetDataType, int) DM_BOOL0(DMIsDoublePrecision)
-  int DMGetNrQubits(void *obj) const {
-    return obj && fDMGetNrQubits ? fDMGetNrQubits(obj) : 0;
-  }
-  DM_BOOL0(DMSaveState) DM_BOOL0(DMRestoreState)
-  DM_BOOL0(DMCleanSavedState)
-  void *DMClone(void *obj) { return obj && fDMClone ? fDMClone(obj) : nullptr; }
-  bool DMSetSeed(void *obj, unsigned long long seed) const {
-    return obj && fDMSetSeed && fDMSetSeed(obj, seed) == 1;
-  }
-  bool DMMeasureQubitCollapse(void *obj, int q) {
-    return obj && fDMMeasureQubitCollapse && fDMMeasureQubitCollapse(obj, q);
-  }
-  DM_BOOL1(DMMeasureQubitNoCollapse, int)
-  bool DMMeasureQubitsCollapse(void *obj, int *q, int *bits, int n) {
-    return obj && fDMMeasureQubitsCollapse && fDMMeasureQubitsCollapse(obj, q, bits, n) == 1;
-  }
-  bool DMMeasureQubitsNoCollapse(void *obj, int *q, int *bits, int n) {
-    return obj && fDMMeasureQubitsNoCollapse && fDMMeasureQubitsNoCollapse(obj, q, bits, n) == 1;
-  }
-  unsigned long long DMMeasureAllQubitsCollapse(void *obj) { return obj && fDMMeasureAllQubitsCollapse ? fDMMeasureAllQubitsCollapse(obj) : 0; }
-  unsigned long long DMMeasureAllQubitsNoCollapse(void *obj) { return obj && fDMMeasureAllQubitsNoCollapse ? fDMMeasureAllQubitsNoCollapse(obj) : 0; }
-  bool DMGetElement(void *obj, long long row, long long col, double *re, double *im) const {
-    return obj && fDMGetElement && fDMGetElement(obj, row, col, re, im) == 1;
-  }
-  bool DMSample(void *obj, unsigned int n, long int *samples, unsigned int nBits, int *order) {
-    return obj && fDMSample && fDMSample(obj, n, samples, nBits, order) == 1;
-  }
-  bool DMSampleAll(void *obj, unsigned int shots, long int *samples) {
-    return obj && fDMSampleAll && fDMSampleAll(obj, shots, samples) == 1;
-  }
-  double DMBasisStateProbability(void *obj, long long state) const {
-    return obj && fDMBasisStateProbability
-               ? fDMBasisStateProbability(obj, state) : 0.0;
-  }
-  bool DMAllProbabilities(void *obj, double *values) {
-    return obj && fDMAllProbabilities && fDMAllProbabilities(obj, values) == 1;
-  }
-  double DMExpectationValue(void *obj, const char *pauli, int len) const {
-    return obj && fDMExpectationValue ? fDMExpectationValue(obj, pauli, len) : 0.0;
-  }
-  double DMQubitProbability0(void *obj, unsigned int q) const { return obj && fDMQubitProbability0 ? fDMQubitProbability0(obj, q) : 0.; }
-  double DMTrace(void *obj) const { return obj && fDMTrace ? fDMTrace(obj) : 0.; }
-  double DMPurity(void *obj) const { return obj && fDMPurity ? fDMPurity(obj) : 0.; }
-  bool DMIsHermitian(void *obj, double eps) const { return obj && fDMIsHermitian && fDMIsHermitian(obj, eps) == 1; }
-  bool DMPartialTrace(void *obj, const int *q, int n, double *out) { return obj && fDMPartialTrace && fDMPartialTrace(obj, q, n, out) == 1; }
-  bool DMHilbertSchmidtOverlap(void *obj, void *other, double *re, double *im) { return obj && other && fDMHilbertSchmidtOverlap && fDMHilbertSchmidtOverlap(obj, other, re, im) == 1; }
-  bool DMFidelityWithStatevector(void *obj, const double *state, double *out) { return obj && fDMFidelityWithStatevector && fDMFidelityWithStatevector(obj, state, out) == 1; }
-  bool DMApplyKraus(void *obj, int n, const int *qubits, int count,
-                    const double *operators) {
-    return obj && fDMApplyKraus &&
-           fDMApplyKraus(obj, n, qubits, count, operators) == 1;
-  }
-  DM_BOOL1(DMApplyReset, int)
-  DM_BOOL2(DMApplyBitFlipNoise, int, double) DM_BOOL2(DMApplyPhaseFlipNoise, int, double)
-  DM_BOOL2(DMApplyDepolarizingNoise, int, double) DM_BOOL2(DMApplyAmplitudeDamping, int, double)
-  DM_BOOL2(DMApplyPhaseDamping, int, double) DM_BOOL1(DMApplyNonSelectiveMeasurement, int)
-  DM_BOOL1(DMApplyX, int) DM_BOOL1(DMApplyY, int)
-  DM_BOOL1(DMApplyZ, int) DM_BOOL1(DMApplyH, int)
-  DM_BOOL1(DMApplyS, int) DM_BOOL1(DMApplySDG, int)
-  DM_BOOL1(DMApplyT, int) DM_BOOL1(DMApplyTDG, int)
-  DM_BOOL1(DMApplySX, int) DM_BOOL1(DMApplySXDG, int)
-  DM_BOOL1(DMApplyK, int)
-  DM_BOOL2(DMApplyP, int, double) DM_BOOL2(DMApplyRx, int, double)
-  DM_BOOL2(DMApplyRy, int, double) DM_BOOL2(DMApplyRz, int, double)
-  bool DMApplyU(void *o, int q, double a, double b, double c, double d) {
-    return o && fDMApplyU && fDMApplyU(o, q, a, b, c, d) == 1;
-  }
-  DM_BOOL2(DMApplyCX, int, int) DM_BOOL2(DMApplyCY, int, int)
-  DM_BOOL2(DMApplyCZ, int, int) DM_BOOL2(DMApplyCH, int, int)
-  DM_BOOL2(DMApplyCSX, int, int) DM_BOOL2(DMApplyCSXDG, int, int)
-  DM_BOOL3(DMApplyCP, int, int, double)
-  DM_BOOL3(DMApplyCRx, int, int, double)
-  DM_BOOL3(DMApplyCRy, int, int, double)
-  DM_BOOL3(DMApplyCRz, int, int, double)
-  DM_BOOL3(DMApplyCCX, int, int, int)
-  DM_BOOL2(DMApplySwap, int, int)
-  DM_BOOL3(DMApplyCSwap, int, int, int)
-  bool DMApplyCU(void *o, int c, int t, double a, double b, double d,
-                 double g) {
-    return o && fDMApplyCU && fDMApplyCU(o, c, t, a, b, d, g) == 1;
-  }
+
+    bool IsValid() const
+    {
+        return LibraryHandle != nullptr;
+    }
+
+    void ReportUnavailable(const char *operation) const
+    {
+        const char *detail = fGetLicenseError ? fGetLicenseError() : nullptr;
+        std::cerr << "GpuLibrary: GPU backend unavailable: " << operation;
+        if (detail && *detail)
+            std::cerr << ": " << detail;
+        std::cerr << std::endl;
+    }
+
+    // Number of CUDA-capable devices visible to the process, or 0 if none are
+    // visible / the loaded library doesn't support device queries. A negative
+    // result reports a CUDA discovery error, not absent hardware.
+    int GetGpuDeviceCount() const
+    {
+        return fGetGpuDeviceCount ? fGetGpuDeviceCount() : 0;
+    }
+
+    // Selection affects future native objects only. Capture it in wrappers that
+    // defer native creation until CreateSimulator(). Never select around gates.
+    bool SetGpuDevice(int device)
+    {
+        auto lock = LockInitialization();
+        if (device < 0 || !fSetGpuDevice || !fSetGpuDevice(device))
+            return false;
+        creationDevice = device;
+        return true;
+    }
+
+    int GetCreationDevice() const
+    {
+        return creationDevice;
+    }
+
+    int GetStateVectorGpuId(void *obj) const
+    {
+        return obj && fGetStateVectorGpuId ? fGetStateVectorGpuId(obj) : -1;
+    }
+
+    // Wait until the queued work of the object has finished on the device. A
+    // library without the entry point cannot be waited for; report success.
+    bool StateVectorSynchronize(void *obj) const
+    {
+        return !obj || !fStateVectorSynchronize || fStateVectorSynchronize(obj) == 1;
+    }
+
+    bool DMSynchronize(void *obj) const
+    {
+        return !obj || !fDMSynchronize || fDMSynchronize(obj) == 1;
+    }
+
+    int MPSGetGpuId(void *obj) const
+    {
+        return obj && fMPSGetGpuId ? fMPSGetGpuId(obj) : -1;
+    }
+
+    int TNGetGpuId(void *obj) const
+    {
+        return obj && fTNGetGpuId ? fTNGetGpuId(obj) : -1;
+    }
+
+    int DMGetGpuId(void *obj) const
+    {
+        return obj && fDMGetGpuId ? fDMGetGpuId(obj) : -1;
+    }
+
+    int MPOGetGpuId(void *obj) const
+    {
+        return obj && fMPOGetGpuId ? fMPOGetGpuId(obj) : -1;
+    }
+
+    int GetStabilizerGpuId(void *obj) const
+    {
+        return obj && fGetStabilizerGpuId ? fGetStabilizerGpuId(obj) : -1;
+    }
+
+    int PauliPropGetGpuId(void *obj) const
+    {
+        return obj && fPauliPropGetGpuId ? fPauliPropGetGpuId(obj) : -1;
+    }
+
+    bool HasStatevectorMatrixAPI() const
+    {
+        return IsValid() && fApplyOneQubitMatrix && fApplyOneQubitMatrixWithLayout && fApplyTwoQubitMatrix && fApplyTwoQubitMatrixWithLayout &&
+               fApplyThreeQubitMatrix && fApplyThreeQubitMatrixWithLayout;
+    }
+
+    bool HasDensityMatrixAPI() const
+    {
+        return IsValid() && fCreateDensityMatrix && fDestroyDensityMatrix && fDMCreate && fDMCreateWithState && fDMReset && fDMIsCreated && fDMSetDataType &&
+               fDMSaveState && fDMRestoreState && fDMCleanSavedState && fDMClone && fDMSetSeed && fDMMeasureQubitCollapse && fDMSampleAll &&
+               fDMBasisStateProbability && fDMAllProbabilities && fDMExpectationValue && fDMTrace && fDMPurity && fDMIsHermitian && fDMPartialTrace &&
+               fDMHilbertSchmidtOverlap && fDMFidelityWithStatevector && fDMApplyKraus && fDMApplyReset && fDMApplyX && fDMApplyY && fDMApplyZ && fDMApplyH &&
+               fDMApplyS && fDMApplySDG && fDMApplyT && fDMApplyTDG && fDMApplySX && fDMApplySXDG && fDMApplyK && fDMApplyP && fDMApplyRx && fDMApplyRy &&
+               fDMApplyRz && fDMApplyU && fDMApplyCX && fDMApplyCY && fDMApplyCZ && fDMApplyCH && fDMApplyCSX && fDMApplyCSXDG && fDMApplyCP && fDMApplyCRx &&
+               fDMApplyCRy && fDMApplyCRz && fDMApplyCCX && fDMApplySwap && fDMApplyCSwap && fDMApplyCU;
+    }
+
+    bool HasMPOAPI() const
+    {
+        return IsValid() && fCreateMPO && fDestroyMPO && fMPOSampleBits && fMPOGetMapForSample && fMPOFreeMapForSample && fMPOSampleHistogram &&
+               fMPOGetElementBits && fMPOBasisStateProbabilityBits && fMPOExpectationValueComplex && fMPOUnnormalizedExpectationValue && fMPOGetDensityMatrix &&
+               fMPOGetUnnormalizedDensityMatrix && fMPOTraceComplex && fMPOSetRestoreTraceAfterTruncation && fMPOGetRestoreTraceAfterTruncation &&
+               fMPOSetHermitizeAfterTruncation && fMPOGetHermitizeAfterTruncation && fMPOMoveAtBeginningOfChain && fMPOApplyOperator &&
+               fMPOApplyOperatorAndNormalize && fMPOCreate && fMPOCreateWithState && fMPOReset && fMPOIsCreated && fMPOSetDataType && fMPOSaveState &&
+               fMPORestoreState && fMPOCleanSavedState && fMPOClone && fMPOSetSeed && fMPOMeasureQubitCollapse && fMPOSampleAll && fMPOBasisStateProbability &&
+               fMPOAllProbabilities && fMPOExpectationValue && fMPOPartialTrace && fMPOHilbertSchmidtOverlap && fMPOFidelityWithStatevector && fMPOTrace &&
+               fMPOPurity && fMPOHermiticityResidual && fMPOIsHermitian && fMPOTraceOfSquare && fMPORestoreTrace && fMPOHermitize && fMPOReCanonicalize &&
+               fMPOTrim && fMPOApplyKraus && fMPOApplyReset && fMPOApplyX && fMPOApplyY && fMPOApplyZ && fMPOApplyH && fMPOApplyS && fMPOApplySDG &&
+               fMPOApplyT && fMPOApplyTDG && fMPOApplySX && fMPOApplySXDG && fMPOApplyK && fMPOApplyP && fMPOApplyRx && fMPOApplyRy && fMPOApplyRz &&
+               fMPOApplyU && fMPOApplyCX && fMPOApplyCY && fMPOApplyCZ && fMPOApplyCH && fMPOApplyCSX && fMPOApplyCSXDG && fMPOApplyCP && fMPOApplyCRx &&
+               fMPOApplyCRy && fMPOApplyCRz && fMPOApplySwap && fMPOApplyCU;
+    }
+
+    bool HasMPSExpectationValues() const
+    {
+        return fMPSExpectationValues;
+    }
+
+    bool HasMPOExpectationValues() const
+    {
+        return fMPOExpectationValues;
+    }
+
+    bool HasMPOExpectationValuesComplex() const
+    {
+        return fMPOExpectationValuesComplex;
+    }
+
+    bool HasMPSGetStateVector() const
+    {
+        return fMPSGetStateVector;
+    }
+
+    bool HasMPSAllProbabilities() const
+    {
+        return fMPSAllProbabilities;
+    }
+
+    bool HasMPSMoveAtBeginningOfChain() const
+    {
+        return fMPSMoveAtBeginningOfChain;
+    }
+
+    bool HasMPSExpectationValueOperators() const
+    {
+        return fMPSExpectationValueOperators;
+    }
+
+    bool HasMPSBondSummary() const
+    {
+        return fMPSSetBondDimensionSummaryCallback;
+    }
+
+    bool HasMPOBondSummary() const
+    {
+        return fMPOSetBondDimensionSummaryCallback;
+    }
+
+    bool HasMPSMaxBondDimension() const
+    {
+        return fMPSGetMaxBondDimension;
+    }
+
+    bool HasMPOMaxBondDimension() const
+    {
+        return fMPOGetMaxBondDimension;
+    }
+
+    bool MPSExpectationValues(void *obj, int count, const char *const *paulis, const int *lengths, double *values) const
+    {
+        return obj && fMPSExpectationValues && fMPSExpectationValues(obj, count, paulis, lengths, values) == 1;
+    }
+
+    bool MPOExpectationValues(void *obj, int count, const char *const *paulis, const int *lengths, double *values) const
+    {
+        return obj && fMPOExpectationValues && fMPOExpectationValues(obj, count, paulis, lengths, values) == 1;
+    }
+
+    bool MPOExpectationValuesComplex(void *obj, int count, const char *const *paulis, const int *lengths, bool normalized, double *real, double *imag) const
+    {
+        return obj && fMPOExpectationValuesComplex && fMPOExpectationValuesComplex(obj, count, paulis, lengths, normalized ? 1 : 0, real, imag) == 1;
+    }
+
+    bool MPSGetStateVector(void *obj, double *values) const
+    {
+        return obj && fMPSGetStateVector && fMPSGetStateVector(obj, values) == 1;
+    }
+
+    bool MPSAllProbabilities(void *obj, double *values) const
+    {
+        return obj && fMPSAllProbabilities && fMPSAllProbabilities(obj, values) == 1;
+    }
+
+    bool MPSMoveAtBeginningOfChain(void *obj, const int *qubits, int count) const
+    {
+        return obj && fMPSMoveAtBeginningOfChain && fMPSMoveAtBeginningOfChain(obj, qubits, count) == 1;
+    }
+
+    bool MPSExpectationValueOperators(void *obj, int count, const int *qubits, const double *matrices, double *real, double *imag) const
+    {
+        return obj && fMPSExpectationValueOperators && fMPSExpectationValueOperators(obj, count, qubits, matrices, real, imag) == 1;
+    }
+
+    bool MPSSetBondDimensionSummaryCallback(void *obj, void (*callback)(void *, int64_t)) const
+    {
+        return obj && fMPSSetBondDimensionSummaryCallback && fMPSSetBondDimensionSummaryCallback(obj, callback) == 1;
+    }
+
+    bool MPOSetBondDimensionSummaryCallback(void *obj, void (*callback)(void *, int64_t)) const
+    {
+        return obj && fMPOSetBondDimensionSummaryCallback && fMPOSetBondDimensionSummaryCallback(obj, callback) == 1;
+    }
+
+    long long MPSGetMaxBondDimension(void *obj) const
+    {
+        return obj && fMPSGetMaxBondDimension ? fMPSGetMaxBondDimension(obj) : 0;
+    }
+
+    long long MPOGetMaxBondDimension(void *obj) const
+    {
+        return obj && fMPOGetMaxBondDimension ? fMPOGetMaxBondDimension(obj) : 0;
+    }
+
+    // statevector functions
+
+    void *CreateStateVector()
+    {
+        if (LibraryHandle)
+            return fCreateStateVector(LibraryHandle);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to create state vector");
+    }
+
+    void DestroyStateVector(void *obj)
+    {
+        if (LibraryHandle)
+            fDestroyStateVector(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to destroy state vector");
+    }
+
+    bool Create(void *obj, unsigned int nrQubits)
+    {
+        if (LibraryHandle)
+            return fCreate(obj, nrQubits) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to create state vector state");
+
+        return false;
+    }
+
+    bool CreateWithState(void *obj, unsigned int nrQubits, const double *state)
+    {
+        if (LibraryHandle)
+            return fCreateWithState(obj, nrQubits, state) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to create state vector state with a state");
+
+        return false;
+    }
+
+    bool Reset(void *obj)
+    {
+        if (LibraryHandle)
+            return fReset(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to reset state vector");
+
+        return false;
+    }
+
+    bool SetDataType(void *obj, int dataType)
+    {
+        if (LibraryHandle)
+            return fSetDataType(obj, dataType) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set data type");
+
+        return false;
+    }
+
+    bool IsDoublePrecision(void *obj) const
+    {
+        if (LibraryHandle)
+            return fIsDoublePrecision(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to check if double precision");
+
+        return false;
+    }
+
+    int GetNrQubits(void *obj) const
+    {
+        if (LibraryHandle)
+            return fGetNrQubits(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get number of qubits");
+        return 0;
+    }
+
+    bool MeasureQubitCollapse(void *obj, int qubitIndex)
+    {
+        if (LibraryHandle)
+            return fMeasureQubitCollapse(obj, qubitIndex) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to measure qubit with collapse");
+
+        return false;
+    }
+
+    bool MeasureQubitNoCollapse(void *obj, int qubitIndex)
+    {
+        if (LibraryHandle)
+            return fMeasureQubitNoCollapse(obj, qubitIndex) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to measure qubit no collapse");
+
+        return false;
+    }
+
+    bool MeasureQubitsCollapse(void *obj, int *qubits, int *bitstring, int bitstringLen)
+    {
+        if (LibraryHandle)
+            return fMeasureQubitsCollapse(obj, qubits, bitstring, bitstringLen) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to measure qubits with collapse");
+
+        return false;
+    }
+
+    bool MeasureQubitsNoCollapse(void *obj, int *qubits, int *bitstring, int bitstringLen)
+    {
+        if (LibraryHandle)
+            return fMeasureQubitsNoCollapse(obj, qubits, bitstring, bitstringLen) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to measure qubits with no collapse");
+
+        return false;
+    }
+
+    unsigned long long MeasureAllQubitsCollapse(void *obj)
+    {
+        if (LibraryHandle)
+            return fMeasureAllQubitsCollapse(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to measure all qubits with collapse");
+
+        return 0;
+    }
+
+    unsigned long long MeasureAllQubitsNoCollapse(void *obj)
+    {
+        if (LibraryHandle)
+            return fMeasureAllQubitsNoCollapse(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to measure all qubits with no collapse");
+
+        return 0;
+    }
+
+    bool SaveState(void *obj)
+    {
+        if (LibraryHandle)
+            return fSaveState(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to save state");
+
+        return false;
+    }
+
+    bool SaveStateToHost(void *obj)
+    {
+        if (LibraryHandle)
+            return fSaveStateToHost(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to save state to host");
+
+        return false;
+    }
+
+    bool SaveStateDestructive(void *obj)
+    {
+        if (LibraryHandle)
+            return fSaveStateDestructive(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to save state destructively");
+
+        return false;
+    }
+
+    bool RestoreStateFreeSaved(void *obj)
+    {
+        if (LibraryHandle)
+            return fRestoreStateFreeSaved(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to restore state free saved");
+
+        return false;
+    }
+
+    bool RestoreStateNoFreeSaved(void *obj)
+    {
+        if (LibraryHandle)
+            return fRestoreStateNoFreeSaved(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to restore state no free saved");
+
+        return false;
+    }
+
+    void FreeSavedState(void *obj)
+    {
+        if (LibraryHandle)
+            fFreeSavedState(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to free saved state");
+    }
+
+    void *Clone(void *obj) const
+    {
+        if (LibraryHandle)
+            return fClone(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to clone state vector");
+
+        return nullptr;
+    }
+
+    bool SetSeed(void *obj, unsigned long long seed) const
+    {
+        return obj && fSetSeed && fSetSeed(obj, seed) == 1;
+    }
+
+    bool Sample(void *obj, unsigned int nSamples, long int *samples, unsigned int nBits, int *bits)
+    {
+        if (LibraryHandle)
+            return fSample(obj, nSamples, samples, nBits, bits) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to sample state vector");
+
+        return false;
+    }
+
+    bool SampleAll(void *obj, unsigned int nSamples, long int *samples)
+    {
+        if (LibraryHandle)
+            return fSampleAll(obj, nSamples, samples) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to sample state vector");
+
+        return false;
+    }
+
+    bool Amplitude(void *obj, long long int state, double *real, double *imaginary) const
+    {
+        if (LibraryHandle)
+            return fAmplitude(obj, state, real, imaginary) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get amplitude");
+
+        return false;
+    }
+
+    double Probability(void *obj, int *qubits, int *mask, int len) const
+    {
+        if (LibraryHandle)
+            return fProbability(obj, qubits, mask, len);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get probability");
+
+        return 0;
+    }
+
+    double BasisStateProbability(void *obj, long long int state) const
+    {
+        if (LibraryHandle)
+            return fBasisStateProbability(obj, state);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get basis state probability");
+
+        return 0;
+    }
+
+    bool AllProbabilities(void *obj, double *probabilities) const
+    {
+        if (LibraryHandle)
+            return fAllProbabilities(obj, probabilities) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get all probabilities");
+
+        return false;
+    }
+
+    double ExpectationValue(void *obj, const char *pauliString, int len) const
+    {
+        if (LibraryHandle)
+            return fExpectationValue(obj, pauliString, len);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get expectation value");
+
+        return 0;
+    }
+
+    bool ApplyX(void *obj, int qubit)
+    {
+        if (LibraryHandle)
+            return fApplyX(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply X gate");
+
+        return false;
+    }
+
+    bool ApplyY(void *obj, int qubit)
+    {
+        if (LibraryHandle)
+            return fApplyY(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply Y gate");
+
+        return false;
+    }
+
+    bool ApplyZ(void *obj, int qubit)
+    {
+        if (LibraryHandle)
+            return fApplyZ(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply Z gate");
+
+        return false;
+    }
+
+    bool ApplyH(void *obj, int qubit)
+    {
+        if (LibraryHandle)
+            return fApplyH(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply H gate");
+
+        return false;
+    }
+
+    bool ApplyS(void *obj, int qubit)
+    {
+        if (LibraryHandle)
+            return fApplyS(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply S gate");
+
+        return false;
+    }
+
+    bool ApplySDG(void *obj, int qubit)
+    {
+        if (LibraryHandle)
+            return fApplySDG(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply SDG gate");
+
+        return false;
+    }
+
+    bool ApplyT(void *obj, int qubit)
+    {
+        if (LibraryHandle)
+            return fApplyT(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply T gate");
+
+        return false;
+    }
+
+    bool ApplyTDG(void *obj, int qubit)
+    {
+        if (LibraryHandle)
+            return fApplyTDG(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply TDG gate");
+
+        return false;
+    }
+
+    bool ApplySX(void *obj, int qubit)
+    {
+        if (LibraryHandle)
+            return fApplySX(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply SX gate");
+
+        return false;
+    }
+
+    bool ApplySXDG(void *obj, int qubit)
+    {
+        if (LibraryHandle)
+            return fApplySXDG(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply SXDG gate");
+
+        return false;
+    }
+
+    bool ApplyK(void *obj, int qubit)
+    {
+        if (LibraryHandle)
+            return fApplyK(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply K gate");
+
+        return false;
+    }
+
+    bool ApplyP(void *obj, int qubit, double theta)
+    {
+        if (LibraryHandle)
+            return fApplyP(obj, qubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply P gate");
+
+        return false;
+    }
+
+    bool ApplyRx(void *obj, int qubit, double theta)
+    {
+        if (LibraryHandle)
+            return fApplyRx(obj, qubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply Rx gate");
+
+        return false;
+    }
+
+    bool ApplyRy(void *obj, int qubit, double theta)
+    {
+        if (LibraryHandle)
+            return fApplyRy(obj, qubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply Ry gate");
+
+        return false;
+    }
+
+    bool ApplyRz(void *obj, int qubit, double theta)
+    {
+        if (LibraryHandle)
+            return fApplyRz(obj, qubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply Rz gate");
+
+        return false;
+    }
+
+    bool ApplyU(void *obj, int qubit, double theta, double phi, double lambda, double gamma)
+    {
+        if (LibraryHandle)
+            return fApplyU(obj, qubit, theta, phi, lambda, gamma) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply U gate");
+
+        return false;
+    }
+
+    bool ApplyCX(void *obj, int controlQubit, int targetQubit)
+    {
+        if (LibraryHandle)
+            return fApplyCX(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CX gate");
+
+        return false;
+    }
+
+    bool ApplyCY(void *obj, int controlQubit, int targetQubit)
+    {
+        if (LibraryHandle)
+            return fApplyCY(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CY gate");
+
+        return false;
+    }
+
+    bool ApplyCZ(void *obj, int controlQubit, int targetQubit)
+    {
+        if (LibraryHandle)
+            return fApplyCZ(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CZ gate");
+
+        return false;
+    }
+
+    bool ApplyCH(void *obj, int controlQubit, int targetQubit)
+    {
+        if (LibraryHandle)
+            return fApplyCH(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CH gate");
+
+        return false;
+    }
+
+    bool ApplyCSX(void *obj, int controlQubit, int targetQubit)
+    {
+        if (LibraryHandle)
+            return fApplyCSX(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CSX gate");
+
+        return false;
+    }
+
+    bool ApplyCSXDG(void *obj, int controlQubit, int targetQubit)
+    {
+        if (LibraryHandle)
+            return fApplyCSXDG(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CSXDG gate");
+
+        return false;
+    }
+
+    bool ApplyCP(void *obj, int controlQubit, int targetQubit, double theta)
+    {
+        if (LibraryHandle)
+            return fApplyCP(obj, controlQubit, targetQubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CP gate");
+
+        return false;
+    }
+
+    bool ApplyCRx(void *obj, int controlQubit, int targetQubit, double theta)
+    {
+        if (LibraryHandle)
+            return fApplyCRx(obj, controlQubit, targetQubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CRx gate");
+
+        return false;
+    }
+
+    bool ApplyCRy(void *obj, int controlQubit, int targetQubit, double theta)
+    {
+        if (LibraryHandle)
+            return fApplyCRy(obj, controlQubit, targetQubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CRy gate");
+
+        return false;
+    }
+
+    bool ApplyCRz(void *obj, int controlQubit, int targetQubit, double theta)
+    {
+        if (LibraryHandle)
+            return fApplyCRz(obj, controlQubit, targetQubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CRz gate");
+
+        return false;
+    }
+
+    bool ApplyCCX(void *obj, int controlQubit1, int controlQubit2, int targetQubit)
+    {
+        if (LibraryHandle)
+            return fApplyCCX(obj, controlQubit1, controlQubit2, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CCX gate");
+
+        return false;
+    }
+
+    bool ApplySwap(void *obj, int qubit1, int qubit2)
+    {
+        if (LibraryHandle)
+            return fApplySwap(obj, qubit1, qubit2) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply Swap gate");
+
+        return false;
+    }
+
+    bool ApplyCSwap(void *obj, int controlQubit, int qubit1, int qubit2)
+    {
+        if (LibraryHandle)
+            return fApplyCSwap(obj, controlQubit, qubit1, qubit2) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CSwap gate");
+
+        return false;
+    }
+
+    bool ApplyCU(void *obj, int controlQubit, int targetQubit, double theta, double phi, double lambda, double gamma)
+    {
+        if (LibraryHandle)
+            return fApplyCU(obj, controlQubit, targetQubit, theta, phi, lambda, gamma) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CU gate");
+
+        return false;
+    }
+
+    // Host interleaved complex doubles. Target i is matrix basis bit i.
+    bool ApplyOneQubitMatrix(void *obj, int q0, const double *matrix)
+    {
+        return obj && fApplyOneQubitMatrix && fApplyOneQubitMatrix(obj, q0, matrix) == 1;
+    }
+
+    bool ApplyOneQubitMatrixWithLayout(void *obj, int q0, const double *matrix, int layout)
+    {
+        return obj && fApplyOneQubitMatrixWithLayout && fApplyOneQubitMatrixWithLayout(obj, q0, matrix, layout) == 1;
+    }
+
+    bool ApplyTwoQubitMatrix(void *obj, int q0, int q1, const double *matrix)
+    {
+        return obj && fApplyTwoQubitMatrix && fApplyTwoQubitMatrix(obj, q0, q1, matrix) == 1;
+    }
+
+    bool ApplyTwoQubitMatrixWithLayout(void *obj, int q0, int q1, const double *matrix, int layout)
+    {
+        return obj && fApplyTwoQubitMatrixWithLayout && fApplyTwoQubitMatrixWithLayout(obj, q0, q1, matrix, layout) == 1;
+    }
+
+    bool ApplyThreeQubitMatrix(void *obj, int q0, int q1, int q2, const double *matrix)
+    {
+        return obj && fApplyThreeQubitMatrix && fApplyThreeQubitMatrix(obj, q0, q1, q2, matrix) == 1;
+    }
+
+    bool ApplyThreeQubitMatrixWithLayout(void *obj, int q0, int q1, int q2, const double *matrix, int layout)
+    {
+        return obj && fApplyThreeQubitMatrixWithLayout && fApplyThreeQubitMatrixWithLayout(obj, q0, q1, q2, matrix, layout) == 1;
+    }
+
+  public:
+    // density matrix functions
+    void *CreateDensityMatrix()
+    {
+        if (!LibraryHandle || !fCreateDensityMatrix)
+            return nullptr;
+        return fCreateDensityMatrix(LibraryHandle);
+    }
+
+    void DestroyDensityMatrix(void *obj)
+    {
+        if (obj && fDestroyDensityMatrix)
+            fDestroyDensityMatrix(obj);
+    }
+
+#define DM_BOOL0(name)                                                                                                                                         \
+    bool name(void *obj)                                                                                                                                       \
+    {                                                                                                                                                          \
+        return obj && f##name && f##name(obj) == 1;                                                                                                            \
+    }
+#define DM_BOOL1(name, type)                                                                                                                                   \
+    bool name(void *obj, type a)                                                                                                                               \
+    {                                                                                                                                                          \
+        return obj && f##name && f##name(obj, a) == 1;                                                                                                         \
+    }
+#define DM_BOOL2(name, type1, type2)                                                                                                                           \
+    bool name(void *obj, type1 a, type2 b)                                                                                                                     \
+    {                                                                                                                                                          \
+        return obj && f##name && f##name(obj, a, b) == 1;                                                                                                      \
+    }
+#define DM_BOOL3(name, type1, type2, type3)                                                                                                                    \
+    bool name(void *obj, type1 a, type2 b, type3 c)                                                                                                            \
+    {                                                                                                                                                          \
+        return obj && f##name && f##name(obj, a, b, c) == 1;                                                                                                   \
+    }
+    DM_BOOL1(DMCreate, unsigned int)
+
+    bool DMCreateWithState(void *obj, unsigned int n, const double *data)
+    {
+        return obj && fDMCreateWithState && fDMCreateWithState(obj, n, data) == 1;
+    }
+
+    bool DMCreateWithBasisState(void *obj, unsigned int n, unsigned long long state)
+    {
+        return obj && fDMCreateWithBasisState && fDMCreateWithBasisState(obj, n, state) == 1;
+    }
+
+    bool DMCreateWithMixtureOfBasisStates(void *obj, unsigned int n, const unsigned long long *states, const double *weights, int nTerms)
+    {
+        return obj && fDMCreateWithMixtureOfBasisStates && fDMCreateWithMixtureOfBasisStates(obj, n, states, weights, nTerms) == 1;
+    }
+
+    DM_BOOL0(DMReset) DM_BOOL0(DMIsValid) DM_BOOL0(DMIsCreated) DM_BOOL1(DMSetDataType, int) DM_BOOL0(DMIsDoublePrecision) int DMGetNrQubits(void *obj) const
+    {
+        return obj && fDMGetNrQubits ? fDMGetNrQubits(obj) : 0;
+    }
+
+    DM_BOOL0(DMSaveState) DM_BOOL0(DMRestoreState) DM_BOOL0(DMCleanSavedState) void *DMClone(void *obj)
+    {
+        return obj && fDMClone ? fDMClone(obj) : nullptr;
+    }
+
+    bool DMSetSeed(void *obj, unsigned long long seed) const
+    {
+        return obj && fDMSetSeed && fDMSetSeed(obj, seed) == 1;
+    }
+
+    bool DMMeasureQubitCollapse(void *obj, int q)
+    {
+        return obj && fDMMeasureQubitCollapse && fDMMeasureQubitCollapse(obj, q);
+    }
+    DM_BOOL1(DMMeasureQubitNoCollapse, int)
+
+    bool DMMeasureQubitsCollapse(void *obj, int *q, int *bits, int n)
+    {
+        return obj && fDMMeasureQubitsCollapse && fDMMeasureQubitsCollapse(obj, q, bits, n) == 1;
+    }
+
+    bool DMMeasureQubitsNoCollapse(void *obj, int *q, int *bits, int n)
+    {
+        return obj && fDMMeasureQubitsNoCollapse && fDMMeasureQubitsNoCollapse(obj, q, bits, n) == 1;
+    }
+
+    unsigned long long DMMeasureAllQubitsCollapse(void *obj)
+    {
+        return obj && fDMMeasureAllQubitsCollapse ? fDMMeasureAllQubitsCollapse(obj) : 0;
+    }
+
+    unsigned long long DMMeasureAllQubitsNoCollapse(void *obj)
+    {
+        return obj && fDMMeasureAllQubitsNoCollapse ? fDMMeasureAllQubitsNoCollapse(obj) : 0;
+    }
+
+    bool DMGetElement(void *obj, long long row, long long col, double *re, double *im) const
+    {
+        return obj && fDMGetElement && fDMGetElement(obj, row, col, re, im) == 1;
+    }
+
+    bool DMSample(void *obj, unsigned int n, long int *samples, unsigned int nBits, int *order)
+    {
+        return obj && fDMSample && fDMSample(obj, n, samples, nBits, order) == 1;
+    }
+
+    bool DMSampleAll(void *obj, unsigned int shots, long int *samples)
+    {
+        return obj && fDMSampleAll && fDMSampleAll(obj, shots, samples) == 1;
+    }
+
+    double DMBasisStateProbability(void *obj, long long state) const
+    {
+        return obj && fDMBasisStateProbability ? fDMBasisStateProbability(obj, state) : 0.0;
+    }
+
+    bool DMAllProbabilities(void *obj, double *values)
+    {
+        return obj && fDMAllProbabilities && fDMAllProbabilities(obj, values) == 1;
+    }
+
+    double DMExpectationValue(void *obj, const char *pauli, int len) const
+    {
+        return obj && fDMExpectationValue ? fDMExpectationValue(obj, pauli, len) : 0.0;
+    }
+
+    double DMQubitProbability0(void *obj, unsigned int q) const
+    {
+        return obj && fDMQubitProbability0 ? fDMQubitProbability0(obj, q) : 0.;
+    }
+
+    double DMTrace(void *obj) const
+    {
+        return obj && fDMTrace ? fDMTrace(obj) : 0.;
+    }
+
+    double DMPurity(void *obj) const
+    {
+        return obj && fDMPurity ? fDMPurity(obj) : 0.;
+    }
+
+    bool DMIsHermitian(void *obj, double eps) const
+    {
+        return obj && fDMIsHermitian && fDMIsHermitian(obj, eps) == 1;
+    }
+
+    bool DMPartialTrace(void *obj, const int *q, int n, double *out)
+    {
+        return obj && fDMPartialTrace && fDMPartialTrace(obj, q, n, out) == 1;
+    }
+
+    bool DMHilbertSchmidtOverlap(void *obj, void *other, double *re, double *im)
+    {
+        return obj && other && fDMHilbertSchmidtOverlap && fDMHilbertSchmidtOverlap(obj, other, re, im) == 1;
+    }
+
+    bool DMFidelityWithStatevector(void *obj, const double *state, double *out)
+    {
+        return obj && fDMFidelityWithStatevector && fDMFidelityWithStatevector(obj, state, out) == 1;
+    }
+
+    bool DMApplyKraus(void *obj, int n, const int *qubits, int count, const double *operators)
+    {
+        return obj && fDMApplyKraus && fDMApplyKraus(obj, n, qubits, count, operators) == 1;
+    }
+    DM_BOOL1(DMApplyReset, int)
+
+    DM_BOOL2(DMApplyBitFlipNoise, int, double)
+
+    DM_BOOL2(DMApplyPhaseFlipNoise, int, double)
+
+    DM_BOOL2(DMApplyDepolarizingNoise, int, double)
+
+    DM_BOOL2(DMApplyAmplitudeDamping, int, double)
+
+    DM_BOOL2(DMApplyPhaseDamping, int, double)
+
+    DM_BOOL1(DMApplyNonSelectiveMeasurement, int)
+
+    DM_BOOL1(DMApplyX, int)
+
+    DM_BOOL1(DMApplyY, int)
+
+    DM_BOOL1(DMApplyZ, int)
+
+    DM_BOOL1(DMApplyH, int)
+
+    DM_BOOL1(DMApplyS, int)
+
+    DM_BOOL1(DMApplySDG, int)
+
+    DM_BOOL1(DMApplyT, int)
+
+    DM_BOOL1(DMApplyTDG, int)
+
+    DM_BOOL1(DMApplySX, int)
+
+    DM_BOOL1(DMApplySXDG, int)
+
+    DM_BOOL1(DMApplyK, int)
+
+    DM_BOOL2(DMApplyP, int, double)
+
+    DM_BOOL2(DMApplyRx, int, double)
+
+    DM_BOOL2(DMApplyRy, int, double) DM_BOOL2(DMApplyRz, int, double) bool DMApplyU(void *o, int q, double a, double b, double c, double d)
+    {
+        return o && fDMApplyU && fDMApplyU(o, q, a, b, c, d) == 1;
+    }
+
+    DM_BOOL2(DMApplyCX, int, int)
+
+    DM_BOOL2(DMApplyCY, int, int)
+
+    DM_BOOL2(DMApplyCZ, int, int)
+
+    DM_BOOL2(DMApplyCH, int, int)
+
+    DM_BOOL2(DMApplyCSX, int, int)
+
+    DM_BOOL2(DMApplyCSXDG, int, int)
+
+    DM_BOOL3(DMApplyCP, int, int, double)
+
+    DM_BOOL3(DMApplyCRx, int, int, double)
+
+    DM_BOOL3(DMApplyCRy, int, int, double)
+
+    DM_BOOL3(DMApplyCRz, int, int, double)
+
+    DM_BOOL3(DMApplyCCX, int, int, int)
+
+    DM_BOOL2(DMApplySwap, int, int) DM_BOOL3(DMApplyCSwap, int, int, int) bool DMApplyCU(void *o, int c, int t, double a, double b, double d, double g)
+    {
+        return o && fDMApplyCU && fDMApplyCU(o, c, t, a, b, d, g) == 1;
+    }
+
 #undef DM_BOOL3
 #undef DM_BOOL2
 #undef DM_BOOL1
 #undef DM_BOOL0
 
- public:
-  // matrix product operator (mpo) functions
-  void *CreateMPO() {
-    if (!LibraryHandle || !fCreateMPO) return nullptr;
-    return fCreateMPO(LibraryHandle);
-  }
-  void DestroyMPO(void *obj) {
-    if (obj && fDestroyMPO) fDestroyMPO(obj);
-  }
-#define MPO_BOOL0(name)                                                       \
-  bool name(void *obj) { return obj && f##name && f##name(obj) == 1; }
-#define MPO_BOOL1(name, type)                                                 \
-  bool name(void *obj, type a) { return obj && f##name && f##name(obj, a) == 1; }
-#define MPO_BOOL2(name, type1, type2)                                         \
-  bool name(void *obj, type1 a, type2 b) {                                    \
-    return obj && f##name && f##name(obj, a, b) == 1;                        \
-  }
-#define MPO_BOOL3(name, type1, type2, type3)                                  \
-  bool name(void *obj, type1 a, type2 b, type3 c) {                           \
-    return obj && f##name && f##name(obj, a, b, c) == 1;                     \
-  }
-  MPO_BOOL1(MPOCreate, unsigned int)
-  bool MPOCreateWithState(void *obj, unsigned int n, const double *data) {
-    return obj && fMPOCreateWithState && fMPOCreateWithState(obj, n, data) == 1;
-  }
-  bool MPOCreateWithBasisState(void *obj, unsigned int n,
-                               unsigned long long state) {
-    return obj && fMPOCreateWithBasisState &&
-           fMPOCreateWithBasisState(obj, n, state) == 1;
-  }
-  bool MPOCreateWithBasisStateBits(void *obj, unsigned int n,
-                                   const unsigned char *stateBits) {
-    return obj && fMPOCreateWithBasisStateBits &&
-           fMPOCreateWithBasisStateBits(obj, n, stateBits) == 1;
-  }
-  bool MPOCreateWithMixtureOfBasisStates(void *obj, unsigned int n,
-                                         const unsigned long long *states,
-                                         const double *weights, int nTerms) {
-    return obj && fMPOCreateWithMixtureOfBasisStates &&
-           fMPOCreateWithMixtureOfBasisStates(obj, n, states, weights,
-                                              nTerms) == 1;
-  }
-  bool MPOCreateWithMixtureOfBasisStatesBits(void *obj, unsigned int n,
-                                             const unsigned char *stateBitsFlat,
-                                             const double *weights,
-                                             int nTerms) {
-    return obj && fMPOCreateWithMixtureOfBasisStatesBits &&
-           fMPOCreateWithMixtureOfBasisStatesBits(obj, n, stateBitsFlat,
-                                                  weights, nTerms) == 1;
-  }
-  MPO_BOOL0(MPOReset)
-  bool MPOSetInitialQubitsMap(void *obj,
-                              const std::vector<long long int> &initialMap) {
-    return obj && fMPOSetInitialQubitsMap &&
-           fMPOSetInitialQubitsMap(obj, initialMap.data(),
-                                   static_cast<int>(initialMap.size())) == 1;
-  }
-  MPO_BOOL1(MPOSetUseOptimalMeetingPosition, int)
-  bool MPOGetUseOptimalMeetingPosition(void *obj) const {
-    return obj && fMPOGetUseOptimalMeetingPosition &&
-           fMPOGetUseOptimalMeetingPosition(obj) == 1;
-  }
-  MPO_BOOL0(MPOIsValid) MPO_BOOL0(MPOIsCreated)
-  MPO_BOOL1(MPOSetDataType, int) MPO_BOOL0(MPOIsDoublePrecision)
-  int MPOGetNrQubits(void *obj) const {
-    return obj && fMPOGetNrQubits ? fMPOGetNrQubits(obj) : 0;
-  }
-  MPO_BOOL1(MPOSetCutoff, double)
-  double MPOGetCutoff(void *obj) const {
-    return obj && fMPOGetCutoff ? fMPOGetCutoff(obj) : 0.0;
-  }
-  MPO_BOOL1(MPOSetTruncationMode, int)
-  int MPOGetTruncationMode(void *obj) const {
-    return obj && fMPOGetTruncationMode ? fMPOGetTruncationMode(obj) : 0;
-  }
-  MPO_BOOL1(MPOSetGesvdJ, int)
-  bool MPOGetGesvdJ(void *obj) const { return obj && fMPOGetGesvdJ && fMPOGetGesvdJ(obj) == 1; }
-  bool MPOSetGesvdP(void *obj, int val) {
-    return LibraryHandle && obj && fMPOSetGesvdP &&
-           fMPOSetGesvdP(obj, val) == 1;
-  }
+  public:
+    // matrix product operator (mpo) functions
+    void *CreateMPO()
+    {
+        if (!LibraryHandle || !fCreateMPO)
+            return nullptr;
+        return fCreateMPO(LibraryHandle);
+    }
 
-  bool MPOGetGesvdP(void *obj) const {
-    if (!LibraryHandle || !obj || !fMPOGetGesvdP)
-      throw std::runtime_error("GpuLibrary: MPOGetGesvdP is unavailable");
-    return fMPOGetGesvdP(obj) == 1;
-  }
+    void DestroyMPO(void *obj)
+    {
+        if (obj && fDestroyMPO)
+            fDestroyMPO(obj);
+    }
 
-  bool MPOSetGesvdR(void *obj, int val) {
-    return LibraryHandle && obj && fMPOSetGesvdR &&
-           fMPOSetGesvdR(obj, val) == 1;
-  }
+#define MPO_BOOL0(name)                                                                                                                                        \
+    bool name(void *obj)                                                                                                                                       \
+    {                                                                                                                                                          \
+        return obj && f##name && f##name(obj) == 1;                                                                                                            \
+    }
+#define MPO_BOOL1(name, type)                                                                                                                                  \
+    bool name(void *obj, type a)                                                                                                                               \
+    {                                                                                                                                                          \
+        return obj && f##name && f##name(obj, a) == 1;                                                                                                         \
+    }
+#define MPO_BOOL2(name, type1, type2)                                                                                                                          \
+    bool name(void *obj, type1 a, type2 b)                                                                                                                     \
+    {                                                                                                                                                          \
+        return obj && f##name && f##name(obj, a, b) == 1;                                                                                                      \
+    }
+#define MPO_BOOL3(name, type1, type2, type3)                                                                                                                   \
+    bool name(void *obj, type1 a, type2 b, type3 c)                                                                                                            \
+    {                                                                                                                                                          \
+        return obj && f##name && f##name(obj, a, b, c) == 1;                                                                                                   \
+    }
+    MPO_BOOL1(MPOCreate, unsigned int)
 
-  bool MPOGetGesvdR(void *obj) const {
-    if (!LibraryHandle || !obj || !fMPOGetGesvdR)
-      throw std::runtime_error("GpuLibrary: MPOGetGesvdR is unavailable");
-    return fMPOGetGesvdR(obj) == 1;
-  }
+    bool MPOCreateWithState(void *obj, unsigned int n, const double *data)
+    {
+        return obj && fMPOCreateWithState && fMPOCreateWithState(obj, n, data) == 1;
+    }
 
-  // 0=GESVD, 1=GESVDJ, 2=GESVDP, 3=GESVDR; -1 before the first split.
-  int MPOGetLastSvdAlgo(void *obj) const {
-    if (!LibraryHandle || !obj || !fMPOGetLastSvdAlgo)
-      throw std::runtime_error("GpuLibrary: MPOGetLastSvdAlgo is unavailable");
-    return fMPOGetLastSvdAlgo(obj);
-  }
+    bool MPOCreateWithBasisState(void *obj, unsigned int n, unsigned long long state)
+    {
+        return obj && fMPOCreateWithBasisState && fMPOCreateWithBasisState(obj, n, state) == 1;
+    }
 
-  MPO_BOOL1(MPOSetMaxExtent, long int)
-  long int MPOGetMaxExtent(void *obj) const {
-    return obj && fMPOGetMaxExtent ? fMPOGetMaxExtent(obj) : 0;
-  }
-  bool MPOGetBondDimensions(void *obj, long long int *bondDims) {
-    return obj && fMPOGetBondDimensions &&
-           fMPOGetBondDimensions(obj, bondDims) == 1;
-  }
-  bool MPOGetQubitsMap(void* obj, long long* map, int size) const {
-    return obj && fMPOGetQubitsMap && fMPOGetQubitsMap(obj, map, size) == 1;
-  }
-  bool MPOSetCallbackContext(void *obj, void *context) {
-    return obj && fMPOSetCallbackContext &&
-           fMPOSetCallbackContext(obj, context) == 1;
-  }
-  bool MPOSetMeetingPositionCallback(
-      void *obj, int64_t (*callback)(void *, const int64_t *)) {
-    return obj && fMPOSetMeetingPositionCallback &&
-           fMPOSetMeetingPositionCallback(obj, callback) == 1;
-  }
-  bool MPOSetBondDimensionsCallback(
-      void *obj, void (*callback)(void *, const int64_t *)) {
-    return obj && fMPOSetBondDimensionsCallback &&
-           fMPOSetBondDimensionsCallback(obj, callback) == 1;
-  }
-  int MPOSampleBits(void *obj, unsigned int shots, unsigned int n,
-                    const int *qubits, unsigned char *out) const {
-    if (!fMPOSampleBits)
-      throw std::runtime_error("GpuLibrary: MPOSampleBits is unavailable");
-    return fMPOSampleBits(obj, shots, n, qubits, out);
-  }
-  void *MPOGetMapForSample() const {
-    if (!fMPOGetMapForSample)
-      throw std::runtime_error("GpuLibrary: MPOGetMapForSample is unavailable");
-    return fMPOGetMapForSample();
-  }
-  int MPOFreeMapForSample(void *map) const {
-    if (!fMPOFreeMapForSample)
-      throw std::runtime_error(
-          "GpuLibrary: MPOFreeMapForSample is unavailable");
-    return fMPOFreeMapForSample(map);
-  }
-  int MPOSampleHistogram(void *obj, long int shots, long int n,
-                         unsigned int *qubits, void *map) const {
-    if (!fMPOSampleHistogram)
-      throw std::runtime_error("GpuLibrary: MPOSampleHistogram is unavailable");
-    return fMPOSampleHistogram(obj, shots, n, qubits, map);
-  }
-  int MPOGetElementBits(void *obj, const unsigned char *row,
-                        const unsigned char *col, double *re,
-                        double *im) const {
-    if (!fMPOGetElementBits)
-      throw std::runtime_error("GpuLibrary: MPOGetElementBits is unavailable");
-    return fMPOGetElementBits(obj, row, col, re, im);
-  }
-  double MPOBasisStateProbabilityBits(void *obj,
-                                      const unsigned char *bits) const {
-    if (!fMPOBasisStateProbabilityBits)
-      throw std::runtime_error(
-          "GpuLibrary: MPOBasisStateProbabilityBits is unavailable");
-    return fMPOBasisStateProbabilityBits(obj, bits);
-  }
-  int MPOExpectationValueComplex(void *obj, const char *pauli, int n,
-                                 double *re, double *im) const {
-    if (!fMPOExpectationValueComplex)
-      throw std::runtime_error(
-          "GpuLibrary: MPOExpectationValueComplex is unavailable");
-    return fMPOExpectationValueComplex(obj, pauli, n, re, im);
-  }
-  int MPOUnnormalizedExpectationValue(void *obj, const char *pauli, int n,
-                                      double *re, double *im) const {
-    if (!fMPOUnnormalizedExpectationValue)
-      throw std::runtime_error(
-          "GpuLibrary: MPOUnnormalizedExpectationValue is unavailable");
-    return fMPOUnnormalizedExpectationValue(obj, pauli, n, re, im);
-  }
-  int MPOGetDensityMatrix(void *obj, double *out) const {
-    if (!fMPOGetDensityMatrix)
-      throw std::runtime_error(
-          "GpuLibrary: MPOGetDensityMatrix is unavailable");
-    return fMPOGetDensityMatrix(obj, out);
-  }
-  int MPOGetUnnormalizedDensityMatrix(void *obj, double *out) const {
-    if (!fMPOGetUnnormalizedDensityMatrix)
-      throw std::runtime_error(
-          "GpuLibrary: MPOGetUnnormalizedDensityMatrix is unavailable");
-    return fMPOGetUnnormalizedDensityMatrix(obj, out);
-  }
-  int MPOTraceComplex(void *obj, double *re, double *im) const {
-    if (!fMPOTraceComplex)
-      throw std::runtime_error("GpuLibrary: MPOTraceComplex is unavailable");
-    return fMPOTraceComplex(obj, re, im);
-  }
-  int MPOSetRestoreTraceAfterTruncation(void *obj, int enable) const {
-    if (!fMPOSetRestoreTraceAfterTruncation)
-      throw std::runtime_error(
-          "GpuLibrary: MPOSetRestoreTraceAfterTruncation is unavailable");
-    return fMPOSetRestoreTraceAfterTruncation(obj, enable);
-  }
-  int MPOGetRestoreTraceAfterTruncation(void *obj) const {
-    if (!fMPOGetRestoreTraceAfterTruncation)
-      throw std::runtime_error(
-          "GpuLibrary: MPOGetRestoreTraceAfterTruncation is unavailable");
-    return fMPOGetRestoreTraceAfterTruncation(obj);
-  }
-  int MPOSetHermitizeAfterTruncation(void *obj, int enable) const {
-    if (!fMPOSetHermitizeAfterTruncation)
-      throw std::runtime_error(
-          "GpuLibrary: MPOSetHermitizeAfterTruncation is unavailable");
-    return fMPOSetHermitizeAfterTruncation(obj, enable);
-  }
-  int MPOGetHermitizeAfterTruncation(void *obj) const {
-    if (!fMPOGetHermitizeAfterTruncation)
-      throw std::runtime_error(
-          "GpuLibrary: MPOGetHermitizeAfterTruncation is unavailable");
-    return fMPOGetHermitizeAfterTruncation(obj);
-  }
-  int MPOMoveAtBeginningOfChain(void *obj, const int *qubits, int n) const {
-    if (!fMPOMoveAtBeginningOfChain)
-      throw std::runtime_error(
-          "GpuLibrary: MPOMoveAtBeginningOfChain is unavailable");
-    return fMPOMoveAtBeginningOfChain(obj, qubits, n);
-  }
-  int MPOApplyOperator(void *obj, int n, const int *qubits,
-                       const double *matrix) const {
-    if (!fMPOApplyOperator)
-      throw std::runtime_error("GpuLibrary: MPOApplyOperator is unavailable");
-    return fMPOApplyOperator(obj, n, qubits, matrix);
-  }
-  int MPOApplyOperatorAndNormalize(void *obj, int n, const int *qubits,
-                                   const double *matrix) const {
-    if (!fMPOApplyOperatorAndNormalize)
-      throw std::runtime_error(
-          "GpuLibrary: MPOApplyOperatorAndNormalize is unavailable");
-    return fMPOApplyOperatorAndNormalize(obj, n, qubits, matrix);
-  }
-  MPO_BOOL0(MPOReCanonicalize)
-  bool MPOTrim(void *obj, double cutoff, long int maxExtent) {
-    return obj && fMPOTrim && fMPOTrim(obj, cutoff, maxExtent) == 1;
-  }
-  MPO_BOOL0(MPOSaveState) MPO_BOOL0(MPORestoreState)
-  MPO_BOOL0(MPOCleanSavedState)
-  void *MPOClone(void *obj) {
-    return obj && fMPOClone ? fMPOClone(obj) : nullptr;
-  }
-  bool MPOSetSeed(void *obj, unsigned long long seed) const {
-    return obj && fMPOSetSeed && fMPOSetSeed(obj, seed) == 1;
-  }
-  bool MPOMeasureQubitCollapse(void *obj, int q) {
-    return obj && fMPOMeasureQubitCollapse && fMPOMeasureQubitCollapse(obj, q);
-  }
-  MPO_BOOL1(MPOMeasureQubitNoCollapse, int)
-  bool MPOMeasureQubitsCollapse(void *obj, int *q, int *bits, int n) { return obj && fMPOMeasureQubitsCollapse && fMPOMeasureQubitsCollapse(obj, q, bits, n) == 1; }
-  bool MPOMeasureQubitsNoCollapse(void *obj, int *q, int *bits, int n) { return obj && fMPOMeasureQubitsNoCollapse && fMPOMeasureQubitsNoCollapse(obj, q, bits, n) == 1; }
-  unsigned long long MPOMeasureAllQubitsCollapse(void *obj) { return obj && fMPOMeasureAllQubitsCollapse ? fMPOMeasureAllQubitsCollapse(obj) : 0; }
-  unsigned long long MPOMeasureAllQubitsNoCollapse(void *obj) { return obj && fMPOMeasureAllQubitsNoCollapse ? fMPOMeasureAllQubitsNoCollapse(obj) : 0; }
-  bool MPOGetElement(void *obj, long long row, long long col, double *re, double *im) const {
-    return obj && fMPOGetElement && fMPOGetElement(obj, row, col, re, im) == 1;
-  }
-  bool MPOSample(void *obj, unsigned int nSamples, long int *samples,
-                 unsigned int nBits, int *bitOrdering) {
-    return obj && fMPOSample &&
-           fMPOSample(obj, nSamples, samples, nBits, bitOrdering) == 1;
-  }
-  bool MPOSampleAll(void *obj, unsigned int shots, long int *samples) {
-    return obj && fMPOSampleAll && fMPOSampleAll(obj, shots, samples) == 1;
-  }
-  double MPOBasisStateProbability(void *obj, long long state) const {
-    return obj && fMPOBasisStateProbability
-               ? fMPOBasisStateProbability(obj, state) : 0.0;
-  }
-  bool MPOAllProbabilities(void *obj, double *values) {
-    return obj && fMPOAllProbabilities && fMPOAllProbabilities(obj, values) == 1;
-  }
-  double MPOExpectationValue(void *obj, const char *pauli, int len) const {
-    return obj && fMPOExpectationValue ? fMPOExpectationValue(obj, pauli, len)
-                                        : 0.0;
-  }
-  double MPOQubitProbability0(void *obj, unsigned int q) const { return obj && fMPOQubitProbability0 ? fMPOQubitProbability0(obj, q) : 0.; }
-  bool MPOPartialTrace(void *obj, const int *q, int n, double *out) { return obj && fMPOPartialTrace && fMPOPartialTrace(obj, q, n, out) == 1; }
-  bool MPOHilbertSchmidtOverlap(void *obj, void *other, double *re, double *im) { return obj && other && fMPOHilbertSchmidtOverlap && fMPOHilbertSchmidtOverlap(obj, other, re, im) == 1; }
-  bool MPOFidelityWithStatevector(void *obj, const double *state, double *out) { return obj && fMPOFidelityWithStatevector && fMPOFidelityWithStatevector(obj, state, out) == 1; }
-  double MPOTrace(void *obj) const { return obj && fMPOTrace ? fMPOTrace(obj) : 0.; }
-  double MPOPurity(void *obj) const { return obj && fMPOPurity ? fMPOPurity(obj) : 0.; }
-  double MPOHermiticityResidual(void *obj) const { return obj && fMPOHermiticityResidual ? fMPOHermiticityResidual(obj) : 0.; }
-  bool MPOIsHermitian(void *obj, double eps) const { return obj && fMPOIsHermitian && fMPOIsHermitian(obj, eps) == 1; }
-  double MPOTraceOfSquare(void *obj) const { return obj && fMPOTraceOfSquare ? fMPOTraceOfSquare(obj) : 0.; }
-  MPO_BOOL0(MPORestoreTrace) MPO_BOOL0(MPOHermitize)
-  MPO_BOOL1(MPOSetKrausCompletenessCheck, int)
-  int MPOGetKrausCompletenessCheck(void *obj) const { return obj && fMPOGetKrausCompletenessCheck ? fMPOGetKrausCompletenessCheck(obj) : -1; }
-  bool MPOApplyKraus(void *obj, int n, const int *qubits, int count,
-                     const double *operators) {
-    return obj && fMPOApplyKraus &&
-           fMPOApplyKraus(obj, n, qubits, count, operators) == 1;
-  }
-  MPO_BOOL1(MPOApplyReset, int)
-  MPO_BOOL2(MPOApplyBitFlipNoise, int, double) MPO_BOOL2(MPOApplyPhaseFlipNoise, int, double)
-  MPO_BOOL2(MPOApplyDepolarizingNoise, int, double) MPO_BOOL2(MPOApplyAmplitudeDamping, int, double)
-  MPO_BOOL2(MPOApplyPhaseDamping, int, double) MPO_BOOL1(MPOApplyNonSelectiveMeasurement, int)
-  MPO_BOOL1(MPOApplyX, int) MPO_BOOL1(MPOApplyY, int)
-  MPO_BOOL1(MPOApplyZ, int) MPO_BOOL1(MPOApplyH, int)
-  MPO_BOOL1(MPOApplyS, int) MPO_BOOL1(MPOApplySDG, int)
-  MPO_BOOL1(MPOApplyT, int) MPO_BOOL1(MPOApplyTDG, int)
-  MPO_BOOL1(MPOApplySX, int) MPO_BOOL1(MPOApplySXDG, int)
-  MPO_BOOL1(MPOApplyK, int)
-  MPO_BOOL2(MPOApplyP, int, double) MPO_BOOL2(MPOApplyRx, int, double)
-  MPO_BOOL2(MPOApplyRy, int, double) MPO_BOOL2(MPOApplyRz, int, double)
-  bool MPOApplyU(void *o, int q, double a, double b, double c, double d) {
-    return o && fMPOApplyU && fMPOApplyU(o, q, a, b, c, d) == 1;
-  }
-  bool MPOApplyOneQubitMatrix(void *obj, int qubit,
-                              const double *matrixInterleaved) {
-    return obj && fMPOApplyOneQubitMatrix &&
-           fMPOApplyOneQubitMatrix(obj, qubit, matrixInterleaved) == 1;
-  }
-  bool MPOApplyTwoQubitMatrix(void *obj, int qubit1, int qubit2,
-                              const double *matrixInterleaved) {
-    return obj && fMPOApplyTwoQubitMatrix &&
-           fMPOApplyTwoQubitMatrix(obj, qubit1, qubit2, matrixInterleaved) ==
-               1;
-  }
-  MPO_BOOL2(MPOApplyCX, int, int) MPO_BOOL2(MPOApplyCY, int, int)
-  MPO_BOOL2(MPOApplyCZ, int, int) MPO_BOOL2(MPOApplyCH, int, int)
-  MPO_BOOL2(MPOApplyCSX, int, int) MPO_BOOL2(MPOApplyCSXDG, int, int)
-  MPO_BOOL3(MPOApplyCP, int, int, double)
-  MPO_BOOL3(MPOApplyCRx, int, int, double)
-  MPO_BOOL3(MPOApplyCRy, int, int, double)
-  MPO_BOOL3(MPOApplyCRz, int, int, double)
-  MPO_BOOL2(MPOApplySwap, int, int)
-  bool MPOApplyCU(void *o, int c, int t, double a, double b, double d,
-                  double g) {
-    return o && fMPOApplyCU && fMPOApplyCU(o, c, t, a, b, d, g) == 1;
-  }
+    bool MPOCreateWithBasisStateBits(void *obj, unsigned int n, const unsigned char *stateBits)
+    {
+        return obj && fMPOCreateWithBasisStateBits && fMPOCreateWithBasisStateBits(obj, n, stateBits) == 1;
+    }
+
+    bool MPOCreateWithMixtureOfBasisStates(void *obj, unsigned int n, const unsigned long long *states, const double *weights, int nTerms)
+    {
+        return obj && fMPOCreateWithMixtureOfBasisStates && fMPOCreateWithMixtureOfBasisStates(obj, n, states, weights, nTerms) == 1;
+    }
+
+    bool MPOCreateWithMixtureOfBasisStatesBits(void *obj, unsigned int n, const unsigned char *stateBitsFlat, const double *weights, int nTerms)
+    {
+        return obj && fMPOCreateWithMixtureOfBasisStatesBits && fMPOCreateWithMixtureOfBasisStatesBits(obj, n, stateBitsFlat, weights, nTerms) == 1;
+    }
+    MPO_BOOL0(MPOReset)
+
+    bool MPOSetInitialQubitsMap(void *obj, const std::vector<long long int> &initialMap)
+    {
+        return obj && fMPOSetInitialQubitsMap && fMPOSetInitialQubitsMap(obj, initialMap.data(), static_cast<int>(initialMap.size())) == 1;
+    }
+    MPO_BOOL1(MPOSetUseOptimalMeetingPosition, int)
+
+    bool MPOGetUseOptimalMeetingPosition(void *obj) const
+    {
+        return obj && fMPOGetUseOptimalMeetingPosition && fMPOGetUseOptimalMeetingPosition(obj) == 1;
+    }
+
+    MPO_BOOL0(MPOIsValid) MPO_BOOL0(MPOIsCreated) MPO_BOOL1(MPOSetDataType, int) MPO_BOOL0(MPOIsDoublePrecision) int MPOGetNrQubits(void *obj) const
+    {
+        return obj && fMPOGetNrQubits ? fMPOGetNrQubits(obj) : 0;
+    }
+    MPO_BOOL1(MPOSetCutoff, double)
+
+    double MPOGetCutoff(void *obj) const
+    {
+        return obj && fMPOGetCutoff ? fMPOGetCutoff(obj) : 0.0;
+    }
+    MPO_BOOL1(MPOSetTruncationMode, int)
+
+    int MPOGetTruncationMode(void *obj) const
+    {
+        return obj && fMPOGetTruncationMode ? fMPOGetTruncationMode(obj) : 0;
+    }
+    MPO_BOOL1(MPOSetGesvdJ, int)
+
+    bool MPOGetGesvdJ(void *obj) const
+    {
+        return obj && fMPOGetGesvdJ && fMPOGetGesvdJ(obj) == 1;
+    }
+
+    bool MPOSetGesvdP(void *obj, int val)
+    {
+        return LibraryHandle && obj && fMPOSetGesvdP && fMPOSetGesvdP(obj, val) == 1;
+    }
+
+    bool MPOGetGesvdP(void *obj) const
+    {
+        if (!LibraryHandle || !obj || !fMPOGetGesvdP)
+            throw std::runtime_error("GpuLibrary: MPOGetGesvdP is unavailable");
+        return fMPOGetGesvdP(obj) == 1;
+    }
+
+    bool MPOSetGesvdR(void *obj, int val)
+    {
+        return LibraryHandle && obj && fMPOSetGesvdR && fMPOSetGesvdR(obj, val) == 1;
+    }
+
+    bool MPOGetGesvdR(void *obj) const
+    {
+        if (!LibraryHandle || !obj || !fMPOGetGesvdR)
+            throw std::runtime_error("GpuLibrary: MPOGetGesvdR is unavailable");
+        return fMPOGetGesvdR(obj) == 1;
+    }
+
+    // 0=GESVD, 1=GESVDJ, 2=GESVDP, 3=GESVDR; -1 before the first split.
+    int MPOGetLastSvdAlgo(void *obj) const
+    {
+        if (!LibraryHandle || !obj || !fMPOGetLastSvdAlgo)
+            throw std::runtime_error("GpuLibrary: MPOGetLastSvdAlgo is unavailable");
+        return fMPOGetLastSvdAlgo(obj);
+    }
+
+    MPO_BOOL1(MPOSetMaxExtent, long int)
+
+    long int MPOGetMaxExtent(void *obj) const
+    {
+        return obj && fMPOGetMaxExtent ? fMPOGetMaxExtent(obj) : 0;
+    }
+
+    bool MPOGetBondDimensions(void *obj, long long int *bondDims)
+    {
+        return obj && fMPOGetBondDimensions && fMPOGetBondDimensions(obj, bondDims) == 1;
+    }
+
+    bool MPOGetQubitsMap(void *obj, long long *map, int size) const
+    {
+        return obj && fMPOGetQubitsMap && fMPOGetQubitsMap(obj, map, size) == 1;
+    }
+
+    bool MPOSetCallbackContext(void *obj, void *context)
+    {
+        return obj && fMPOSetCallbackContext && fMPOSetCallbackContext(obj, context) == 1;
+    }
+
+    bool MPOSetMeetingPositionCallback(void *obj, int64_t (*callback)(void *, const int64_t *))
+    {
+        return obj && fMPOSetMeetingPositionCallback && fMPOSetMeetingPositionCallback(obj, callback) == 1;
+    }
+
+    bool MPOSetBondDimensionsCallback(void *obj, void (*callback)(void *, const int64_t *))
+    {
+        return obj && fMPOSetBondDimensionsCallback && fMPOSetBondDimensionsCallback(obj, callback) == 1;
+    }
+
+    int MPOSampleBits(void *obj, unsigned int shots, unsigned int n, const int *qubits, unsigned char *out) const
+    {
+        if (!fMPOSampleBits)
+            throw std::runtime_error("GpuLibrary: MPOSampleBits is unavailable");
+        return fMPOSampleBits(obj, shots, n, qubits, out);
+    }
+
+    void *MPOGetMapForSample() const
+    {
+        if (!fMPOGetMapForSample)
+            throw std::runtime_error("GpuLibrary: MPOGetMapForSample is unavailable");
+        return fMPOGetMapForSample();
+    }
+
+    int MPOFreeMapForSample(void *map) const
+    {
+        if (!fMPOFreeMapForSample)
+            throw std::runtime_error("GpuLibrary: MPOFreeMapForSample is unavailable");
+        return fMPOFreeMapForSample(map);
+    }
+
+    int MPOSampleHistogram(void *obj, long int shots, long int n, unsigned int *qubits, void *map) const
+    {
+        if (!fMPOSampleHistogram)
+            throw std::runtime_error("GpuLibrary: MPOSampleHistogram is unavailable");
+        return fMPOSampleHistogram(obj, shots, n, qubits, map);
+    }
+
+    int MPOGetElementBits(void *obj, const unsigned char *row, const unsigned char *col, double *re, double *im) const
+    {
+        if (!fMPOGetElementBits)
+            throw std::runtime_error("GpuLibrary: MPOGetElementBits is unavailable");
+        return fMPOGetElementBits(obj, row, col, re, im);
+    }
+
+    double MPOBasisStateProbabilityBits(void *obj, const unsigned char *bits) const
+    {
+        if (!fMPOBasisStateProbabilityBits)
+            throw std::runtime_error("GpuLibrary: MPOBasisStateProbabilityBits is unavailable");
+        return fMPOBasisStateProbabilityBits(obj, bits);
+    }
+
+    int MPOExpectationValueComplex(void *obj, const char *pauli, int n, double *re, double *im) const
+    {
+        if (!fMPOExpectationValueComplex)
+            throw std::runtime_error("GpuLibrary: MPOExpectationValueComplex is unavailable");
+        return fMPOExpectationValueComplex(obj, pauli, n, re, im);
+    }
+
+    int MPOUnnormalizedExpectationValue(void *obj, const char *pauli, int n, double *re, double *im) const
+    {
+        if (!fMPOUnnormalizedExpectationValue)
+            throw std::runtime_error("GpuLibrary: MPOUnnormalizedExpectationValue is unavailable");
+        return fMPOUnnormalizedExpectationValue(obj, pauli, n, re, im);
+    }
+
+    int MPOGetDensityMatrix(void *obj, double *out) const
+    {
+        if (!fMPOGetDensityMatrix)
+            throw std::runtime_error("GpuLibrary: MPOGetDensityMatrix is unavailable");
+        return fMPOGetDensityMatrix(obj, out);
+    }
+
+    int MPOGetUnnormalizedDensityMatrix(void *obj, double *out) const
+    {
+        if (!fMPOGetUnnormalizedDensityMatrix)
+            throw std::runtime_error("GpuLibrary: MPOGetUnnormalizedDensityMatrix is unavailable");
+        return fMPOGetUnnormalizedDensityMatrix(obj, out);
+    }
+
+    int MPOTraceComplex(void *obj, double *re, double *im) const
+    {
+        if (!fMPOTraceComplex)
+            throw std::runtime_error("GpuLibrary: MPOTraceComplex is unavailable");
+        return fMPOTraceComplex(obj, re, im);
+    }
+
+    int MPOSetRestoreTraceAfterTruncation(void *obj, int enable) const
+    {
+        if (!fMPOSetRestoreTraceAfterTruncation)
+            throw std::runtime_error("GpuLibrary: MPOSetRestoreTraceAfterTruncation is unavailable");
+        return fMPOSetRestoreTraceAfterTruncation(obj, enable);
+    }
+
+    int MPOGetRestoreTraceAfterTruncation(void *obj) const
+    {
+        if (!fMPOGetRestoreTraceAfterTruncation)
+            throw std::runtime_error("GpuLibrary: MPOGetRestoreTraceAfterTruncation is unavailable");
+        return fMPOGetRestoreTraceAfterTruncation(obj);
+    }
+
+    int MPOSetHermitizeAfterTruncation(void *obj, int enable) const
+    {
+        if (!fMPOSetHermitizeAfterTruncation)
+            throw std::runtime_error("GpuLibrary: MPOSetHermitizeAfterTruncation is unavailable");
+        return fMPOSetHermitizeAfterTruncation(obj, enable);
+    }
+
+    int MPOGetHermitizeAfterTruncation(void *obj) const
+    {
+        if (!fMPOGetHermitizeAfterTruncation)
+            throw std::runtime_error("GpuLibrary: MPOGetHermitizeAfterTruncation is unavailable");
+        return fMPOGetHermitizeAfterTruncation(obj);
+    }
+
+    int MPOMoveAtBeginningOfChain(void *obj, const int *qubits, int n) const
+    {
+        if (!fMPOMoveAtBeginningOfChain)
+            throw std::runtime_error("GpuLibrary: MPOMoveAtBeginningOfChain is unavailable");
+        return fMPOMoveAtBeginningOfChain(obj, qubits, n);
+    }
+
+    int MPOApplyOperator(void *obj, int n, const int *qubits, const double *matrix) const
+    {
+        if (!fMPOApplyOperator)
+            throw std::runtime_error("GpuLibrary: MPOApplyOperator is unavailable");
+        return fMPOApplyOperator(obj, n, qubits, matrix);
+    }
+
+    int MPOApplyOperatorAndNormalize(void *obj, int n, const int *qubits, const double *matrix) const
+    {
+        if (!fMPOApplyOperatorAndNormalize)
+            throw std::runtime_error("GpuLibrary: MPOApplyOperatorAndNormalize is unavailable");
+        return fMPOApplyOperatorAndNormalize(obj, n, qubits, matrix);
+    }
+    MPO_BOOL0(MPOReCanonicalize)
+
+    bool MPOTrim(void *obj, double cutoff, long int maxExtent)
+    {
+        return obj && fMPOTrim && fMPOTrim(obj, cutoff, maxExtent) == 1;
+    }
+
+    MPO_BOOL0(MPOSaveState) MPO_BOOL0(MPORestoreState) MPO_BOOL0(MPOCleanSavedState) void *MPOClone(void *obj)
+    {
+        return obj && fMPOClone ? fMPOClone(obj) : nullptr;
+    }
+
+    bool MPOSetSeed(void *obj, unsigned long long seed) const
+    {
+        return obj && fMPOSetSeed && fMPOSetSeed(obj, seed) == 1;
+    }
+
+    bool MPOMeasureQubitCollapse(void *obj, int q)
+    {
+        return obj && fMPOMeasureQubitCollapse && fMPOMeasureQubitCollapse(obj, q);
+    }
+    MPO_BOOL1(MPOMeasureQubitNoCollapse, int)
+
+    bool MPOMeasureQubitsCollapse(void *obj, int *q, int *bits, int n)
+    {
+        return obj && fMPOMeasureQubitsCollapse && fMPOMeasureQubitsCollapse(obj, q, bits, n) == 1;
+    }
+
+    bool MPOMeasureQubitsNoCollapse(void *obj, int *q, int *bits, int n)
+    {
+        return obj && fMPOMeasureQubitsNoCollapse && fMPOMeasureQubitsNoCollapse(obj, q, bits, n) == 1;
+    }
+
+    unsigned long long MPOMeasureAllQubitsCollapse(void *obj)
+    {
+        return obj && fMPOMeasureAllQubitsCollapse ? fMPOMeasureAllQubitsCollapse(obj) : 0;
+    }
+
+    unsigned long long MPOMeasureAllQubitsNoCollapse(void *obj)
+    {
+        return obj && fMPOMeasureAllQubitsNoCollapse ? fMPOMeasureAllQubitsNoCollapse(obj) : 0;
+    }
+
+    bool MPOGetElement(void *obj, long long row, long long col, double *re, double *im) const
+    {
+        return obj && fMPOGetElement && fMPOGetElement(obj, row, col, re, im) == 1;
+    }
+
+    bool MPOSample(void *obj, unsigned int nSamples, long int *samples, unsigned int nBits, int *bitOrdering)
+    {
+        return obj && fMPOSample && fMPOSample(obj, nSamples, samples, nBits, bitOrdering) == 1;
+    }
+
+    bool MPOSampleAll(void *obj, unsigned int shots, long int *samples)
+    {
+        return obj && fMPOSampleAll && fMPOSampleAll(obj, shots, samples) == 1;
+    }
+
+    double MPOBasisStateProbability(void *obj, long long state) const
+    {
+        return obj && fMPOBasisStateProbability ? fMPOBasisStateProbability(obj, state) : 0.0;
+    }
+
+    bool MPOAllProbabilities(void *obj, double *values)
+    {
+        return obj && fMPOAllProbabilities && fMPOAllProbabilities(obj, values) == 1;
+    }
+
+    double MPOExpectationValue(void *obj, const char *pauli, int len) const
+    {
+        return obj && fMPOExpectationValue ? fMPOExpectationValue(obj, pauli, len) : 0.0;
+    }
+
+    double MPOQubitProbability0(void *obj, unsigned int q) const
+    {
+        return obj && fMPOQubitProbability0 ? fMPOQubitProbability0(obj, q) : 0.;
+    }
+
+    bool MPOPartialTrace(void *obj, const int *q, int n, double *out)
+    {
+        return obj && fMPOPartialTrace && fMPOPartialTrace(obj, q, n, out) == 1;
+    }
+
+    bool MPOHilbertSchmidtOverlap(void *obj, void *other, double *re, double *im)
+    {
+        return obj && other && fMPOHilbertSchmidtOverlap && fMPOHilbertSchmidtOverlap(obj, other, re, im) == 1;
+    }
+
+    bool MPOFidelityWithStatevector(void *obj, const double *state, double *out)
+    {
+        return obj && fMPOFidelityWithStatevector && fMPOFidelityWithStatevector(obj, state, out) == 1;
+    }
+
+    double MPOTrace(void *obj) const
+    {
+        return obj && fMPOTrace ? fMPOTrace(obj) : 0.;
+    }
+
+    double MPOPurity(void *obj) const
+    {
+        return obj && fMPOPurity ? fMPOPurity(obj) : 0.;
+    }
+
+    double MPOHermiticityResidual(void *obj) const
+    {
+        return obj && fMPOHermiticityResidual ? fMPOHermiticityResidual(obj) : 0.;
+    }
+
+    bool MPOIsHermitian(void *obj, double eps) const
+    {
+        return obj && fMPOIsHermitian && fMPOIsHermitian(obj, eps) == 1;
+    }
+
+    double MPOTraceOfSquare(void *obj) const
+    {
+        return obj && fMPOTraceOfSquare ? fMPOTraceOfSquare(obj) : 0.;
+    }
+
+    MPO_BOOL0(MPORestoreTrace) MPO_BOOL0(MPOHermitize) MPO_BOOL1(MPOSetKrausCompletenessCheck, int) int MPOGetKrausCompletenessCheck(void *obj) const
+    {
+        return obj && fMPOGetKrausCompletenessCheck ? fMPOGetKrausCompletenessCheck(obj) : -1;
+    }
+
+    bool MPOApplyKraus(void *obj, int n, const int *qubits, int count, const double *operators)
+    {
+        return obj && fMPOApplyKraus && fMPOApplyKraus(obj, n, qubits, count, operators) == 1;
+    }
+    MPO_BOOL1(MPOApplyReset, int)
+
+    MPO_BOOL2(MPOApplyBitFlipNoise, int, double)
+
+    MPO_BOOL2(MPOApplyPhaseFlipNoise, int, double)
+
+    MPO_BOOL2(MPOApplyDepolarizingNoise, int, double)
+
+    MPO_BOOL2(MPOApplyAmplitudeDamping, int, double)
+
+    MPO_BOOL2(MPOApplyPhaseDamping, int, double)
+
+    MPO_BOOL1(MPOApplyNonSelectiveMeasurement, int)
+
+    MPO_BOOL1(MPOApplyX, int)
+
+    MPO_BOOL1(MPOApplyY, int)
+
+    MPO_BOOL1(MPOApplyZ, int)
+
+    MPO_BOOL1(MPOApplyH, int)
+
+    MPO_BOOL1(MPOApplyS, int)
+
+    MPO_BOOL1(MPOApplySDG, int)
+
+    MPO_BOOL1(MPOApplyT, int)
+
+    MPO_BOOL1(MPOApplyTDG, int)
+
+    MPO_BOOL1(MPOApplySX, int)
+
+    MPO_BOOL1(MPOApplySXDG, int)
+
+    MPO_BOOL1(MPOApplyK, int)
+
+    MPO_BOOL2(MPOApplyP, int, double)
+
+    MPO_BOOL2(MPOApplyRx, int, double)
+
+    MPO_BOOL2(MPOApplyRy, int, double) MPO_BOOL2(MPOApplyRz, int, double) bool MPOApplyU(void *o, int q, double a, double b, double c, double d)
+    {
+        return o && fMPOApplyU && fMPOApplyU(o, q, a, b, c, d) == 1;
+    }
+
+    bool MPOApplyOneQubitMatrix(void *obj, int qubit, const double *matrixInterleaved)
+    {
+        return obj && fMPOApplyOneQubitMatrix && fMPOApplyOneQubitMatrix(obj, qubit, matrixInterleaved) == 1;
+    }
+
+    bool MPOApplyTwoQubitMatrix(void *obj, int qubit1, int qubit2, const double *matrixInterleaved)
+    {
+        return obj && fMPOApplyTwoQubitMatrix && fMPOApplyTwoQubitMatrix(obj, qubit1, qubit2, matrixInterleaved) == 1;
+    }
+
+    MPO_BOOL2(MPOApplyCX, int, int)
+
+    MPO_BOOL2(MPOApplyCY, int, int)
+
+    MPO_BOOL2(MPOApplyCZ, int, int)
+
+    MPO_BOOL2(MPOApplyCH, int, int)
+
+    MPO_BOOL2(MPOApplyCSX, int, int)
+
+    MPO_BOOL2(MPOApplyCSXDG, int, int)
+
+    MPO_BOOL3(MPOApplyCP, int, int, double)
+
+    MPO_BOOL3(MPOApplyCRx, int, int, double)
+
+    MPO_BOOL3(MPOApplyCRy, int, int, double)
+
+    MPO_BOOL3(MPOApplyCRz, int, int, double) MPO_BOOL2(MPOApplySwap, int, int) bool MPOApplyCU(void *o, int c, int t, double a, double b, double d, double g)
+    {
+        return o && fMPOApplyCU && fMPOApplyCU(o, c, t, a, b, d, g) == 1;
+    }
+
 #undef MPO_BOOL3
 #undef MPO_BOOL2
 #undef MPO_BOOL1
 #undef MPO_BOOL0
 
- private:
-  // density matrix function pointers
-  void *(*fCreateDensityMatrix)(void *) = nullptr;
-  void (*fDestroyDensityMatrix)(void *) = nullptr;
-  int (*fDMCreate)(void *, unsigned int) = nullptr;
-  int (*fDMCreateWithState)(void *, unsigned int, const double *) = nullptr;
-  int (*fDMCreateWithBasisState)(void *, unsigned int,
-                                 unsigned long long) = nullptr;
-  int (*fDMCreateWithMixtureOfBasisStates)(void *, unsigned int,
-                                           const unsigned long long *,
-                                           const double *, int) = nullptr;
-  int (*fDMReset)(void *) = nullptr;
-  int (*fDMIsValid)(void *) = nullptr;
-  int (*fDMIsCreated)(void *) = nullptr;
-  int (*fDMSetDataType)(void *, int) = nullptr;
-  int (*fDMIsDoublePrecision)(void *) = nullptr;
-  int (*fDMGetNrQubits)(void *) = nullptr;
-  int (*fDMSaveState)(void *) = nullptr;
-  int (*fDMRestoreState)(void *) = nullptr;
-  int (*fDMCleanSavedState)(void *) = nullptr;
-  void *(*fDMClone)(void *) = nullptr;
-  int (*fDMSetSeed)(void *, unsigned long long) = nullptr;
-  int (*fDMMeasureQubitCollapse)(void *, int) = nullptr;
-  int (*fDMMeasureQubitNoCollapse)(void *, int) = nullptr;
-  int (*fDMMeasureQubitsCollapse)(void *, int *, int *, int) = nullptr;
-  int (*fDMMeasureQubitsNoCollapse)(void *, int *, int *, int) = nullptr;
-  unsigned long long (*fDMMeasureAllQubitsCollapse)(void *) = nullptr;
-  unsigned long long (*fDMMeasureAllQubitsNoCollapse)(void *) = nullptr;
-  int (*fDMSample)(void *, unsigned int, long int *, unsigned int, int *) = nullptr;
-  int (*fDMSampleAll)(void *, unsigned int, long int *) = nullptr;
-  int (*fDMGetElement)(void *, long long, long long, double *, double *) = nullptr;
-  double (*fDMBasisStateProbability)(void *, long long) = nullptr;
-  int (*fDMAllProbabilities)(void *, double *) = nullptr;
-  double (*fDMExpectationValue)(void *, const char *, int) = nullptr;
-  double (*fDMQubitProbability0)(void *, unsigned int) = nullptr;
-  double (*fDMTrace)(void *) = nullptr;
-  double (*fDMPurity)(void *) = nullptr;
-  int (*fDMIsHermitian)(void *, double) = nullptr;
-  int (*fDMPartialTrace)(void *, const int *, int, double *) = nullptr;
-  int (*fDMHilbertSchmidtOverlap)(void *, void *, double *, double *) = nullptr;
-  int (*fDMFidelityWithStatevector)(void *, const double *, double *) = nullptr;
-  int (*fDMApplyKraus)(void *, int, const int *, int, const double *) = nullptr;
-  int (*fDMApplyReset)(void *, int) = nullptr;
+  private:
+    // density matrix function pointers
+    void *(*fCreateDensityMatrix)(void *) = nullptr;
+    void (*fDestroyDensityMatrix)(void *) = nullptr;
+    int (*fDMCreate)(void *, unsigned int) = nullptr;
+    int (*fDMCreateWithState)(void *, unsigned int, const double *) = nullptr;
+    int (*fDMCreateWithBasisState)(void *, unsigned int, unsigned long long) = nullptr;
+    int (*fDMCreateWithMixtureOfBasisStates)(void *, unsigned int, const unsigned long long *, const double *, int) = nullptr;
+    int (*fDMReset)(void *) = nullptr;
+    int (*fDMIsValid)(void *) = nullptr;
+    int (*fDMIsCreated)(void *) = nullptr;
+    int (*fDMSetDataType)(void *, int) = nullptr;
+    int (*fDMIsDoublePrecision)(void *) = nullptr;
+    int (*fDMGetNrQubits)(void *) = nullptr;
+    int (*fDMSaveState)(void *) = nullptr;
+    int (*fDMRestoreState)(void *) = nullptr;
+    int (*fDMCleanSavedState)(void *) = nullptr;
+    void *(*fDMClone)(void *) = nullptr;
+    int (*fDMSetSeed)(void *, unsigned long long) = nullptr;
+    int (*fDMMeasureQubitCollapse)(void *, int) = nullptr;
+    int (*fDMMeasureQubitNoCollapse)(void *, int) = nullptr;
+    int (*fDMMeasureQubitsCollapse)(void *, int *, int *, int) = nullptr;
+    int (*fDMMeasureQubitsNoCollapse)(void *, int *, int *, int) = nullptr;
+    unsigned long long (*fDMMeasureAllQubitsCollapse)(void *) = nullptr;
+    unsigned long long (*fDMMeasureAllQubitsNoCollapse)(void *) = nullptr;
+    int (*fDMSample)(void *, unsigned int, long int *, unsigned int, int *) = nullptr;
+    int (*fDMSampleAll)(void *, unsigned int, long int *) = nullptr;
+    int (*fDMGetElement)(void *, long long, long long, double *, double *) = nullptr;
+    double (*fDMBasisStateProbability)(void *, long long) = nullptr;
+    int (*fDMAllProbabilities)(void *, double *) = nullptr;
+    double (*fDMExpectationValue)(void *, const char *, int) = nullptr;
+    double (*fDMQubitProbability0)(void *, unsigned int) = nullptr;
+    double (*fDMTrace)(void *) = nullptr;
+    double (*fDMPurity)(void *) = nullptr;
+    int (*fDMIsHermitian)(void *, double) = nullptr;
+    int (*fDMPartialTrace)(void *, const int *, int, double *) = nullptr;
+    int (*fDMHilbertSchmidtOverlap)(void *, void *, double *, double *) = nullptr;
+    int (*fDMFidelityWithStatevector)(void *, const double *, double *) = nullptr;
+    int (*fDMApplyKraus)(void *, int, const int *, int, const double *) = nullptr;
+    int (*fDMApplyReset)(void *, int) = nullptr;
 #define DECL_DM1(name) int (*f##name)(void *, int) = nullptr
 #define DECL_DM2(name) int (*f##name)(void *, int, int) = nullptr
 #define DECL_DMR1(name) int (*f##name)(void *, int, double) = nullptr
 #define DECL_DMR2(name) int (*f##name)(void *, int, int, double) = nullptr
-  DECL_DMR1(DMApplyBitFlipNoise); DECL_DMR1(DMApplyPhaseFlipNoise);
-  DECL_DMR1(DMApplyDepolarizingNoise); DECL_DMR1(DMApplyAmplitudeDamping);
-  DECL_DMR1(DMApplyPhaseDamping); DECL_DM1(DMApplyNonSelectiveMeasurement);
-  DECL_DM1(DMApplyX); DECL_DM1(DMApplyY); DECL_DM1(DMApplyZ);
-  DECL_DM1(DMApplyH); DECL_DM1(DMApplyS); DECL_DM1(DMApplySDG);
-  DECL_DM1(DMApplyT); DECL_DM1(DMApplyTDG); DECL_DM1(DMApplySX);
-  DECL_DM1(DMApplySXDG); DECL_DM1(DMApplyK);
-  DECL_DMR1(DMApplyP); DECL_DMR1(DMApplyRx); DECL_DMR1(DMApplyRy);
-  DECL_DMR1(DMApplyRz);
-  int (*fDMApplyU)(void *, int, double, double, double, double) = nullptr;
-  DECL_DM2(DMApplyCX); DECL_DM2(DMApplyCY); DECL_DM2(DMApplyCZ);
-  DECL_DM2(DMApplyCH); DECL_DM2(DMApplyCSX); DECL_DM2(DMApplyCSXDG);
-  DECL_DMR2(DMApplyCP); DECL_DMR2(DMApplyCRx); DECL_DMR2(DMApplyCRy);
-  DECL_DMR2(DMApplyCRz);
-  int (*fDMApplyCCX)(void *, int, int, int) = nullptr;
-  DECL_DM2(DMApplySwap);
-  int (*fDMApplyCSwap)(void *, int, int, int) = nullptr;
-  int (*fDMApplyCU)(void *, int, int, double, double, double, double) = nullptr;
+    DECL_DMR1(DMApplyBitFlipNoise);
+    DECL_DMR1(DMApplyPhaseFlipNoise);
+    DECL_DMR1(DMApplyDepolarizingNoise);
+    DECL_DMR1(DMApplyAmplitudeDamping);
+    DECL_DMR1(DMApplyPhaseDamping);
+    DECL_DM1(DMApplyNonSelectiveMeasurement);
+    DECL_DM1(DMApplyX);
+    DECL_DM1(DMApplyY);
+    DECL_DM1(DMApplyZ);
+    DECL_DM1(DMApplyH);
+    DECL_DM1(DMApplyS);
+    DECL_DM1(DMApplySDG);
+    DECL_DM1(DMApplyT);
+    DECL_DM1(DMApplyTDG);
+    DECL_DM1(DMApplySX);
+    DECL_DM1(DMApplySXDG);
+    DECL_DM1(DMApplyK);
+    DECL_DMR1(DMApplyP);
+    DECL_DMR1(DMApplyRx);
+    DECL_DMR1(DMApplyRy);
+    DECL_DMR1(DMApplyRz);
+    int (*fDMApplyU)(void *, int, double, double, double, double) = nullptr;
+    DECL_DM2(DMApplyCX);
+    DECL_DM2(DMApplyCY);
+    DECL_DM2(DMApplyCZ);
+    DECL_DM2(DMApplyCH);
+    DECL_DM2(DMApplyCSX);
+    DECL_DM2(DMApplyCSXDG);
+    DECL_DMR2(DMApplyCP);
+    DECL_DMR2(DMApplyCRx);
+    DECL_DMR2(DMApplyCRy);
+    DECL_DMR2(DMApplyCRz);
+    int (*fDMApplyCCX)(void *, int, int, int) = nullptr;
+    DECL_DM2(DMApplySwap);
+    int (*fDMApplyCSwap)(void *, int, int, int) = nullptr;
+    int (*fDMApplyCU)(void *, int, int, double, double, double, double) = nullptr;
 #undef DECL_DMR2
 #undef DECL_DMR1
 #undef DECL_DM2
 #undef DECL_DM1
 
- private:
-  // matrix product operator (mpo) function pointers
-  void *(*fCreateMPO)(void *) = nullptr;
-  void (*fDestroyMPO)(void *) = nullptr;
-  int (*fMPOCreate)(void *, unsigned int) = nullptr;
-  int (*fMPOCreateWithState)(void *, unsigned int, const double *) = nullptr;
-  int (*fMPOCreateWithBasisState)(void *, unsigned int,
-                                  unsigned long long) = nullptr;
-  int (*fMPOCreateWithBasisStateBits)(void *, unsigned int,
-                                      const unsigned char *) = nullptr;
-  int (*fMPOCreateWithMixtureOfBasisStates)(void *, unsigned int,
-                                            const unsigned long long *,
-                                            const double *, int) = nullptr;
-  int (*fMPOCreateWithMixtureOfBasisStatesBits)(void *, unsigned int,
-                                                const unsigned char *,
-                                                const double *,
-                                                int) = nullptr;
-  int (*fMPOReset)(void *) = nullptr;
-  int (*fMPOSetInitialQubitsMap)(void *, const long long int *,
-                                 int) = nullptr;
-  int (*fMPOSetUseOptimalMeetingPosition)(void *, int) = nullptr;
-  int (*fMPOGetUseOptimalMeetingPosition)(void *) = nullptr;
-  int (*fMPOIsValid)(void *) = nullptr;
-  int (*fMPOIsCreated)(void *) = nullptr;
-  int (*fMPOSetDataType)(void *, int) = nullptr;
-  int (*fMPOIsDoublePrecision)(void *) = nullptr;
-  int (*fMPOGetNrQubits)(void *) = nullptr;
-  int (*fMPOSetCutoff)(void *, double) = nullptr;
-  double (*fMPOGetCutoff)(void *) = nullptr;
-  int (*fMPOSetTruncationMode)(void *, int) = nullptr;
-  int (*fMPOGetTruncationMode)(void *) = nullptr;
-  int (*fMPOSetGesvdJ)(void *, int) = nullptr;
-  int (*fMPOGetGesvdJ)(void *) = nullptr;
-  int (*fMPOSetGesvdP)(void *, int) = nullptr;
-  int (*fMPOGetGesvdP)(void *) = nullptr;
-  int (*fMPOSetGesvdR)(void *, int) = nullptr;
-  int (*fMPOGetGesvdR)(void *) = nullptr;
-  int (*fMPOGetLastSvdAlgo)(void *) = nullptr;
-  int (*fMPOSetMaxExtent)(void *, long int) = nullptr;
-  long int (*fMPOGetMaxExtent)(void *) = nullptr;
-  int (*fMPOGetBondDimensions)(void *, long long int *) = nullptr;
-  int (*fMPOGetQubitsMap)(void*, long long*, int) = nullptr;
-  int (*fMPOSetCallbackContext)(void *, void *) = nullptr;
-  int (*fMPOSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
-  int (*fMPOSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;
-  int (*fMPOSampleBits)(void *, unsigned int, unsigned int, const int *,
-                        unsigned char *) = nullptr;
-  void *(*fMPOGetMapForSample)() = nullptr;
-  int (*fMPOFreeMapForSample)(void *) = nullptr;
-  int (*fMPOSampleHistogram)(void *, long int, long int, unsigned int *,
-                             void *) = nullptr;
-  int (*fMPOGetElementBits)(void *, const unsigned char *,
-                            const unsigned char *, double *,
-                            double *) = nullptr;
-  double (*fMPOBasisStateProbabilityBits)(void *,
-                                          const unsigned char *) = nullptr;
-  int (*fMPOExpectationValueComplex)(void *, const char *, int, double *,
-                                     double *) = nullptr;
-  int (*fMPOUnnormalizedExpectationValue)(void *, const char *, int, double *,
-                                          double *) = nullptr;
-  int (*fMPOGetDensityMatrix)(void *, double *) = nullptr;
-  int (*fMPOGetUnnormalizedDensityMatrix)(void *, double *) = nullptr;
-  int (*fMPOTraceComplex)(void *, double *, double *) = nullptr;
-  int (*fMPOSetRestoreTraceAfterTruncation)(void *, int) = nullptr;
-  int (*fMPOGetRestoreTraceAfterTruncation)(void *) = nullptr;
-  int (*fMPOSetHermitizeAfterTruncation)(void *, int) = nullptr;
-  int (*fMPOGetHermitizeAfterTruncation)(void *) = nullptr;
-  int (*fMPOMoveAtBeginningOfChain)(void *, const int *, int) = nullptr;
-  int (*fMPOApplyOperator)(void *, int, const int *, const double *) = nullptr;
-  int (*fMPOApplyOperatorAndNormalize)(void *, int, const int *,
-                                       const double *) = nullptr;
-  int (*fMPOReCanonicalize)(void *) = nullptr;
-  int (*fMPOTrim)(void *, double, long int) = nullptr;
-  int (*fMPOSaveState)(void *) = nullptr;
-  int (*fMPORestoreState)(void *) = nullptr;
-  int (*fMPOCleanSavedState)(void *) = nullptr;
-  void *(*fMPOClone)(void *) = nullptr;
-  int (*fMPOSetSeed)(void *, unsigned long long) = nullptr;
-  int (*fMPOMeasureQubitCollapse)(void *, int) = nullptr;
-  int (*fMPOMeasureQubitNoCollapse)(void *, int) = nullptr;
-  int (*fMPOMeasureQubitsCollapse)(void *, int *, int *, int) = nullptr;
-  int (*fMPOMeasureQubitsNoCollapse)(void *, int *, int *, int) = nullptr;
-  unsigned long long (*fMPOMeasureAllQubitsCollapse)(void *) = nullptr;
-  unsigned long long (*fMPOMeasureAllQubitsNoCollapse)(void *) = nullptr;
-  int (*fMPOSample)(void *, unsigned int, long int *, unsigned int,
-                    int *) = nullptr;
-  int (*fMPOSampleAll)(void *, unsigned int, long int *) = nullptr;
-  int (*fMPOGetElement)(void *, long long, long long, double *,
-                        double *) = nullptr;
-  double (*fMPOBasisStateProbability)(void *, long long) = nullptr;
-  int (*fMPOAllProbabilities)(void *, double *) = nullptr;
-  double (*fMPOExpectationValue)(void *, const char *, int) = nullptr;
-  double (*fMPOQubitProbability0)(void *, unsigned int) = nullptr;
-  int (*fMPOPartialTrace)(void *, const int *, int, double *) = nullptr;
-  int (*fMPOHilbertSchmidtOverlap)(void *, void *, double *, double *) = nullptr;
-  int (*fMPOFidelityWithStatevector)(void *, const double *, double *) = nullptr;
-  double (*fMPOTrace)(void *) = nullptr;
-  double (*fMPOPurity)(void *) = nullptr;
-  double (*fMPOHermiticityResidual)(void *) = nullptr;
-  int (*fMPOIsHermitian)(void *, double) = nullptr;
-  double (*fMPOTraceOfSquare)(void *) = nullptr;
-  int (*fMPORestoreTrace)(void *) = nullptr;
-  int (*fMPOHermitize)(void *) = nullptr;
-  int (*fMPOSetKrausCompletenessCheck)(void *, int) = nullptr;
-  int (*fMPOGetKrausCompletenessCheck)(void *) = nullptr;
-  int (*fMPOApplyKraus)(void *, int, const int *, int,
-                        const double *) = nullptr;
-  int (*fMPOApplyReset)(void *, int) = nullptr;
+  private:
+    // matrix product operator (mpo) function pointers
+    void *(*fCreateMPO)(void *) = nullptr;
+    void (*fDestroyMPO)(void *) = nullptr;
+    int (*fMPOCreate)(void *, unsigned int) = nullptr;
+    int (*fMPOCreateWithState)(void *, unsigned int, const double *) = nullptr;
+    int (*fMPOCreateWithBasisState)(void *, unsigned int, unsigned long long) = nullptr;
+    int (*fMPOCreateWithBasisStateBits)(void *, unsigned int, const unsigned char *) = nullptr;
+    int (*fMPOCreateWithMixtureOfBasisStates)(void *, unsigned int, const unsigned long long *, const double *, int) = nullptr;
+    int (*fMPOCreateWithMixtureOfBasisStatesBits)(void *, unsigned int, const unsigned char *, const double *, int) = nullptr;
+    int (*fMPOReset)(void *) = nullptr;
+    int (*fMPOSetInitialQubitsMap)(void *, const long long int *, int) = nullptr;
+    int (*fMPOSetUseOptimalMeetingPosition)(void *, int) = nullptr;
+    int (*fMPOGetUseOptimalMeetingPosition)(void *) = nullptr;
+    int (*fMPOIsValid)(void *) = nullptr;
+    int (*fMPOIsCreated)(void *) = nullptr;
+    int (*fMPOSetDataType)(void *, int) = nullptr;
+    int (*fMPOIsDoublePrecision)(void *) = nullptr;
+    int (*fMPOGetNrQubits)(void *) = nullptr;
+    int (*fMPOSetCutoff)(void *, double) = nullptr;
+    double (*fMPOGetCutoff)(void *) = nullptr;
+    int (*fMPOSetTruncationMode)(void *, int) = nullptr;
+    int (*fMPOGetTruncationMode)(void *) = nullptr;
+    int (*fMPOSetGesvdJ)(void *, int) = nullptr;
+    int (*fMPOGetGesvdJ)(void *) = nullptr;
+    int (*fMPOSetGesvdP)(void *, int) = nullptr;
+    int (*fMPOGetGesvdP)(void *) = nullptr;
+    int (*fMPOSetGesvdR)(void *, int) = nullptr;
+    int (*fMPOGetGesvdR)(void *) = nullptr;
+    int (*fMPOGetLastSvdAlgo)(void *) = nullptr;
+    int (*fMPOSetMaxExtent)(void *, long int) = nullptr;
+    long int (*fMPOGetMaxExtent)(void *) = nullptr;
+    int (*fMPOGetBondDimensions)(void *, long long int *) = nullptr;
+    int (*fMPOGetQubitsMap)(void *, long long *, int) = nullptr;
+    int (*fMPOSetCallbackContext)(void *, void *) = nullptr;
+    int (*fMPOSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
+    int (*fMPOSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;
+    int (*fMPOSampleBits)(void *, unsigned int, unsigned int, const int *, unsigned char *) = nullptr;
+    void *(*fMPOGetMapForSample)() = nullptr;
+    int (*fMPOFreeMapForSample)(void *) = nullptr;
+    int (*fMPOSampleHistogram)(void *, long int, long int, unsigned int *, void *) = nullptr;
+    int (*fMPOGetElementBits)(void *, const unsigned char *, const unsigned char *, double *, double *) = nullptr;
+    double (*fMPOBasisStateProbabilityBits)(void *, const unsigned char *) = nullptr;
+    int (*fMPOExpectationValueComplex)(void *, const char *, int, double *, double *) = nullptr;
+    int (*fMPOUnnormalizedExpectationValue)(void *, const char *, int, double *, double *) = nullptr;
+    int (*fMPOGetDensityMatrix)(void *, double *) = nullptr;
+    int (*fMPOGetUnnormalizedDensityMatrix)(void *, double *) = nullptr;
+    int (*fMPOTraceComplex)(void *, double *, double *) = nullptr;
+    int (*fMPOSetRestoreTraceAfterTruncation)(void *, int) = nullptr;
+    int (*fMPOGetRestoreTraceAfterTruncation)(void *) = nullptr;
+    int (*fMPOSetHermitizeAfterTruncation)(void *, int) = nullptr;
+    int (*fMPOGetHermitizeAfterTruncation)(void *) = nullptr;
+    int (*fMPOMoveAtBeginningOfChain)(void *, const int *, int) = nullptr;
+    int (*fMPOApplyOperator)(void *, int, const int *, const double *) = nullptr;
+    int (*fMPOApplyOperatorAndNormalize)(void *, int, const int *, const double *) = nullptr;
+    int (*fMPOReCanonicalize)(void *) = nullptr;
+    int (*fMPOTrim)(void *, double, long int) = nullptr;
+    int (*fMPOSaveState)(void *) = nullptr;
+    int (*fMPORestoreState)(void *) = nullptr;
+    int (*fMPOCleanSavedState)(void *) = nullptr;
+    void *(*fMPOClone)(void *) = nullptr;
+    int (*fMPOSetSeed)(void *, unsigned long long) = nullptr;
+    int (*fMPOMeasureQubitCollapse)(void *, int) = nullptr;
+    int (*fMPOMeasureQubitNoCollapse)(void *, int) = nullptr;
+    int (*fMPOMeasureQubitsCollapse)(void *, int *, int *, int) = nullptr;
+    int (*fMPOMeasureQubitsNoCollapse)(void *, int *, int *, int) = nullptr;
+    unsigned long long (*fMPOMeasureAllQubitsCollapse)(void *) = nullptr;
+    unsigned long long (*fMPOMeasureAllQubitsNoCollapse)(void *) = nullptr;
+    int (*fMPOSample)(void *, unsigned int, long int *, unsigned int, int *) = nullptr;
+    int (*fMPOSampleAll)(void *, unsigned int, long int *) = nullptr;
+    int (*fMPOGetElement)(void *, long long, long long, double *, double *) = nullptr;
+    double (*fMPOBasisStateProbability)(void *, long long) = nullptr;
+    int (*fMPOAllProbabilities)(void *, double *) = nullptr;
+    double (*fMPOExpectationValue)(void *, const char *, int) = nullptr;
+    double (*fMPOQubitProbability0)(void *, unsigned int) = nullptr;
+    int (*fMPOPartialTrace)(void *, const int *, int, double *) = nullptr;
+    int (*fMPOHilbertSchmidtOverlap)(void *, void *, double *, double *) = nullptr;
+    int (*fMPOFidelityWithStatevector)(void *, const double *, double *) = nullptr;
+    double (*fMPOTrace)(void *) = nullptr;
+    double (*fMPOPurity)(void *) = nullptr;
+    double (*fMPOHermiticityResidual)(void *) = nullptr;
+    int (*fMPOIsHermitian)(void *, double) = nullptr;
+    double (*fMPOTraceOfSquare)(void *) = nullptr;
+    int (*fMPORestoreTrace)(void *) = nullptr;
+    int (*fMPOHermitize)(void *) = nullptr;
+    int (*fMPOSetKrausCompletenessCheck)(void *, int) = nullptr;
+    int (*fMPOGetKrausCompletenessCheck)(void *) = nullptr;
+    int (*fMPOApplyKraus)(void *, int, const int *, int, const double *) = nullptr;
+    int (*fMPOApplyReset)(void *, int) = nullptr;
 #define DECL_MPO1(name) int (*f##name)(void *, int) = nullptr
 #define DECL_MPO2(name) int (*f##name)(void *, int, int) = nullptr
 #define DECL_MPOR1(name) int (*f##name)(void *, int, double) = nullptr
 #define DECL_MPOR2(name) int (*f##name)(void *, int, int, double) = nullptr
-  DECL_MPOR1(MPOApplyBitFlipNoise); DECL_MPOR1(MPOApplyPhaseFlipNoise);
-  DECL_MPOR1(MPOApplyDepolarizingNoise); DECL_MPOR1(MPOApplyAmplitudeDamping);
-  DECL_MPOR1(MPOApplyPhaseDamping); DECL_MPO1(MPOApplyNonSelectiveMeasurement);
-  DECL_MPO1(MPOApplyX); DECL_MPO1(MPOApplyY); DECL_MPO1(MPOApplyZ);
-  DECL_MPO1(MPOApplyH); DECL_MPO1(MPOApplyS); DECL_MPO1(MPOApplySDG);
-  DECL_MPO1(MPOApplyT); DECL_MPO1(MPOApplyTDG); DECL_MPO1(MPOApplySX);
-  DECL_MPO1(MPOApplySXDG); DECL_MPO1(MPOApplyK);
-  DECL_MPOR1(MPOApplyP); DECL_MPOR1(MPOApplyRx); DECL_MPOR1(MPOApplyRy);
-  DECL_MPOR1(MPOApplyRz);
-  int (*fMPOApplyU)(void *, int, double, double, double, double) = nullptr;
-  int (*fMPOApplyOneQubitMatrix)(void *, int, const double *) = nullptr;
-  int (*fMPOApplyTwoQubitMatrix)(void *, int, int, const double *) = nullptr;
-  DECL_MPO2(MPOApplyCX); DECL_MPO2(MPOApplyCY); DECL_MPO2(MPOApplyCZ);
-  DECL_MPO2(MPOApplyCH); DECL_MPO2(MPOApplyCSX); DECL_MPO2(MPOApplyCSXDG);
-  DECL_MPOR2(MPOApplyCP); DECL_MPOR2(MPOApplyCRx); DECL_MPOR2(MPOApplyCRy);
-  DECL_MPOR2(MPOApplyCRz);
-  DECL_MPO2(MPOApplySwap);
-  int (*fMPOApplyCU)(void *, int, int, double, double, double,
-                     double) = nullptr;
+    DECL_MPOR1(MPOApplyBitFlipNoise);
+    DECL_MPOR1(MPOApplyPhaseFlipNoise);
+    DECL_MPOR1(MPOApplyDepolarizingNoise);
+    DECL_MPOR1(MPOApplyAmplitudeDamping);
+    DECL_MPOR1(MPOApplyPhaseDamping);
+    DECL_MPO1(MPOApplyNonSelectiveMeasurement);
+    DECL_MPO1(MPOApplyX);
+    DECL_MPO1(MPOApplyY);
+    DECL_MPO1(MPOApplyZ);
+    DECL_MPO1(MPOApplyH);
+    DECL_MPO1(MPOApplyS);
+    DECL_MPO1(MPOApplySDG);
+    DECL_MPO1(MPOApplyT);
+    DECL_MPO1(MPOApplyTDG);
+    DECL_MPO1(MPOApplySX);
+    DECL_MPO1(MPOApplySXDG);
+    DECL_MPO1(MPOApplyK);
+    DECL_MPOR1(MPOApplyP);
+    DECL_MPOR1(MPOApplyRx);
+    DECL_MPOR1(MPOApplyRy);
+    DECL_MPOR1(MPOApplyRz);
+    int (*fMPOApplyU)(void *, int, double, double, double, double) = nullptr;
+    int (*fMPOApplyOneQubitMatrix)(void *, int, const double *) = nullptr;
+    int (*fMPOApplyTwoQubitMatrix)(void *, int, int, const double *) = nullptr;
+    DECL_MPO2(MPOApplyCX);
+    DECL_MPO2(MPOApplyCY);
+    DECL_MPO2(MPOApplyCZ);
+    DECL_MPO2(MPOApplyCH);
+    DECL_MPO2(MPOApplyCSX);
+    DECL_MPO2(MPOApplyCSXDG);
+    DECL_MPOR2(MPOApplyCP);
+    DECL_MPOR2(MPOApplyCRx);
+    DECL_MPOR2(MPOApplyCRy);
+    DECL_MPOR2(MPOApplyCRz);
+    DECL_MPO2(MPOApplySwap);
+    int (*fMPOApplyCU)(void *, int, int, double, double, double, double) = nullptr;
 #undef DECL_MPOR2
 #undef DECL_MPOR1
 #undef DECL_MPO2
 #undef DECL_MPO1
 
- public:
-  // mps functions
-
-  void *CreateMPS() {
-    if (LibraryHandle)
-      return fCreateMPS(LibraryHandle);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to create mps");
-  }
-
-  void DestroyMPS(void *obj) {
-    if (LibraryHandle)
-      fDestroyMPS(obj);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to destroy mps");
-  }
-
-  bool MPSCreate(void *obj, unsigned int nrQubits) {
-    if (LibraryHandle)
-      return fMPSCreate(obj, nrQubits) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to create mps with the "
-          "specified number of qubits");
-
-    return false;
-  }
-
-  bool MPSCreateWithBasisState(void *obj, unsigned int nrQubits,
-                               unsigned long long state) {
-    if (LibraryHandle)
-      return fMPSCreateWithBasisState(obj, nrQubits, state) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to create mps with a basis state");
-
-    return false;
-  }
-
-  bool MPSCreateWithBasisStateBits(void *obj, unsigned int nrQubits,
-                                   const unsigned char *stateBits) {
-    if (LibraryHandle)
-      return fMPSCreateWithBasisStateBits(obj, nrQubits, stateBits) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to create mps with a basis state (bits)");
-
-    return false;
-  }
-
-  bool MPSReset(void *obj) {
-    if (LibraryHandle)
-      return fMPSReset(obj) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to reset mps");
-
-    return false;
-  }
-
-  // Optional: older libraries do not export the explicit MPS compression.
-  bool HasMPSCompressionAPI() const {
-    return IsValid() && fMPSTrim && fMPSReCanonicalize;
-  }
-
-  bool MPSTrim(void *obj) {
-    if (!fMPSTrim)
-      throw std::runtime_error("GpuLibrary: this library cannot trim an mps");
-    return obj && fMPSTrim(obj) == 1;
-  }
-
-  bool MPSReCanonicalize(void *obj) {
-    if (!fMPSReCanonicalize)
-      throw std::runtime_error(
-          "GpuLibrary: this library cannot recanonicalize an mps");
-    return obj && fMPSReCanonicalize(obj) == 1;
-  }
-
-  bool MPSSetInitialQubitsMap(void *obj,
-                              const std::vector<long long int> &initialMap) {
-    if (LibraryHandle)
-      return fMPSSetInitialQubitsMap(obj, initialMap.data(),
-                                     initialMap.size()) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set initial qubits map for mps");
-
-    return false;
-  }
-
-  bool MPSSetUseOptimalMeetingPosition(void *obj, int val) {
-    if (LibraryHandle)
-      return fMPSSetUseOptimalMeetingPosition(obj, val) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set use optimal meeting position for mps");
-    return false;
-  }
-
-  bool MPSGetUseOptimalMeetingPosition(void *obj) const {
-    if (LibraryHandle)
-      return fMPSGetUseOptimalMeetingPosition(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get use optimal meeting position for mps");
-    return false;
-  }
-
-  bool MPSIsValid(void *obj) const {
-    if (LibraryHandle)
-      return fMPSIsValid(obj) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to check if mps is valid");
-
-    return false;
-  }
-
-  bool MPSIsCreated(void *obj) const {
-    if (LibraryHandle)
-      return fMPSIsCreated(obj) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to check if mps is created");
-
-    return false;
-  }
-
-  bool MPSSetDataType(void *obj, int useDoublePrecision) {
-    if (LibraryHandle)
-      return fMPSSetDataType(obj, useDoublePrecision) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to set precision for mps");
-
-    return false;
-  }
-
-  bool MPSIsDoublePrecision(void *obj) const {
-    if (LibraryHandle)
-      return fMPSIsDoublePrecision(obj) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to get precision for mps");
-
-    return false;
-  }
-
-  bool MPSSetCutoff(void *obj, double val) {
-    if (LibraryHandle)
-      return fMPSSetCutoff(obj, val) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to set cutoff for mps");
-
-    return false;
-  }
-
-  double MPSGetCutoff(void *obj) const {
-    if (LibraryHandle)
-      return fMPSGetCutoff(obj);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to get cutoff for mps");
-  }
-
-  bool MPSSetTruncationMode(void *obj, int mode) {
-    if (LibraryHandle)
-      return fMPSSetTruncationMode(obj, mode) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set truncation mode for mps");
-
-    return false;
-  }
-
-  int MPSGetTruncationMode(void *obj) const {
-    if (LibraryHandle)
-      return fMPSGetTruncationMode(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get truncation mode for mps");
-  }
-
-  bool MPSSetGesvdJ(void *obj, int val) {
-    if (LibraryHandle && obj && fMPSSetGesvdJ)
-      return fMPSSetGesvdJ(obj, val) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to set GesvdJ for mps");
-
-    return false;
-  }
-
-  bool MPSGetGesvdJ(void *obj) const {
-    if (LibraryHandle && obj && fMPSGetGesvdJ)
-      return fMPSGetGesvdJ(obj) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to get GesvdJ for mps");
-
-    return false;
-  }
-
-  bool MPSSetGesvdP(void *obj, int val) {
-    return LibraryHandle && obj && fMPSSetGesvdP &&
-           fMPSSetGesvdP(obj, val) == 1;
-  }
-
-  bool MPSGetGesvdP(void *obj) const {
-    if (!LibraryHandle || !obj || !fMPSGetGesvdP)
-      throw std::runtime_error("GpuLibrary: MPSGetGesvdP is unavailable");
-    return fMPSGetGesvdP(obj) == 1;
-  }
-
-  bool MPSSetGesvdR(void *obj, int val) {
-    return LibraryHandle && obj && fMPSSetGesvdR &&
-           fMPSSetGesvdR(obj, val) == 1;
-  }
-
-  bool MPSGetGesvdR(void *obj) const {
-    if (!LibraryHandle || !obj || !fMPSGetGesvdR)
-      throw std::runtime_error("GpuLibrary: MPSGetGesvdR is unavailable");
-    return fMPSGetGesvdR(obj) == 1;
-  }
-
-  // 0=GESVD, 1=GESVDJ, 2=GESVDP, 3=GESVDR; -1 before the first split.
-  int MPSGetLastSvdAlgo(void *obj) const {
-    if (!LibraryHandle || !obj || !fMPSGetLastSvdAlgo)
-      throw std::runtime_error("GpuLibrary: MPSGetLastSvdAlgo is unavailable");
-    return fMPSGetLastSvdAlgo(obj);
-  }
-
-  bool MPSSetMaxExtent(void *obj, long int val) {
-    if (LibraryHandle)
-      return fMPSSetMaxExtent(obj, val) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to set max extent for mps");
-
-    return false;
-  }
-
-  long int MPSGetMaxExtent(void *obj) {
-    if (LibraryHandle)
-      return fMPSGetMaxExtent(obj);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to get max extent for mps");
-
-    return 0;
-  }
-
-  int MPSGetNrQubits(void *obj) {
-    if (LibraryHandle)
-      return fMPSGetNrQubits(obj);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to get nr qubits for mps");
-
-    return 0;
-  }
-
-  bool MPSGetBondDimensions(void *obj, long long int *bondDims) {
-    if (LibraryHandle)
-      return fMPSGetBondDimensions(obj, bondDims) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get bond dimensions for mps");
-
-    return false;
-  }
-
-  bool MPSGetQubitsMap(void* obj, long long* map, int size) const {
-    return obj && fMPSGetQubitsMap && fMPSGetQubitsMap(obj, map, size) == 1;
-  }
-  bool MPSSetCallbackContext(void *obj, void *context) {
-    if (LibraryHandle)
-      return fMPSSetCallbackContext(obj, context) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set callback context for mps");
-    return false;
-  }
-
-  bool MPSSetMeetingPositionCallback(void *obj, int64_t(*callback)(void*, const int64_t*)) {
-      if (LibraryHandle)
-      return fMPSSetMeetingPositionCallback(obj, callback) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set meeting position callback for mps");
-    return false;
-  }
-
-  bool MPSSetBondDimensionsCallback(void* obj, void (*callback)(void*, const int64_t*)) {
-    if (LibraryHandle)
-      return fMPSSetBondDimensionsCallback(obj, callback) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set bond dimensions callback for mps");
-    return false;
-  }
-
-  bool MPSAmplitude(void *obj, long int numFixedValues, long int *fixedValues,
-                    double *real, double *imaginary) {
-    if (LibraryHandle)
-      return fMPSAmplitude(obj, numFixedValues, fixedValues, real, imaginary) ==
-             1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to get mps amplitude");
-
-    return false;
-  }
-
-  double MPSProbability0(void *obj, unsigned int qubit) {
-    if (LibraryHandle)
-      return fMPSProbability0(obj, qubit);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get probability for 0 for mps");
-
-    return 0.0;
-  }
-
-  bool MPSMeasure(void *obj, unsigned int qubit) {
-    if (LibraryHandle)
-      return fMPSMeasure(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to measure qubit on mps");
-
-    return false;
-  }
-
-  bool MPSMeasureQubits(void *obj, long int numQubits, unsigned int *qubits,
-                        int *result) {
-    if (LibraryHandle)
-      return fMPSMeasureQubits(obj, numQubits, qubits, result) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to measure qubits on mps");
-
-    return false;
-  }
-
-  std::unordered_map<std::vector<bool>, int64_t> *MPSGetMapForSample() {
-    if (LibraryHandle)
-      return (std::unordered_map<std::vector<bool>, int64_t> *)
-          fMPSGetMapForSample();
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get map for sample for mps");
-
-    return nullptr;
-  }
-
-  bool MPSFreeMapForSample(
-      std::unordered_map<std::vector<bool>, int64_t> *map) {
-    if (LibraryHandle)
-      return fMPSFreeMapForSample((void *)map) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to free map for sample for mps");
-
-    return false;
-  }
-
-  bool MPSSample(void *obj, long int numShots, long int numQubits,
-                 unsigned int *qubits, void *resultMap) {
-    if (LibraryHandle)
-      return fMPSSample(obj, numShots, numQubits, qubits, resultMap) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to sample mps");
-
-    return false;
-  }
-
-  bool MPSSampleRaw(void *obj, unsigned int nSamples, long int *samples,
-                    unsigned int nBits, const unsigned int *bitOrdering) {
-    if (LibraryHandle)
-      return fMPSSampleRaw(obj, nSamples, samples, nBits, bitOrdering) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to raw-sample mps");
-
-    return false;
-  }
-
-  bool MPSSampleAll(void *obj, unsigned int nSamples, long int *samples) {
-    if (LibraryHandle)
-      return fMPSSampleAll(obj, nSamples, samples) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to sample all for mps");
-
-    return false;
-  }
-
-  bool MPSSaveState(void *obj) {
-    if (LibraryHandle)
-      return fMPSSaveState(obj) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to save mps state");
-
-    return false;
-  }
-
-  bool MPSRestoreState(void *obj) {
-    if (LibraryHandle)
-      return fMPSRestoreState(obj) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to restore mps state");
-
-    return false;
-  }
-
-  bool MPSCleanSavedState(void *obj) {
-    if (LibraryHandle)
-      return fMPSCleanSavedState(obj) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to clean mps saved state");
-
-    return false;
-  }
-
-  void *MPSClone(void *obj) {
-    if (LibraryHandle)
-      return fMPSClone(obj);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to clone mps");
-
-    return nullptr;
-  }
-
-  bool MPSSetSeed(void *obj, unsigned long long seed) const {
-    return obj && fMPSSetSeed && fMPSSetSeed(obj, seed) == 1;
-  }
-
-  double MPSExpectationValue(void *obj, const char *pauliString,
-                             int len) const {
-    if (LibraryHandle)
-      return fMPSExpectationValue(obj, pauliString, len);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get mps expectation value");
-
-    return 0;
-  }
-
-  std::complex<double> MPSProjectOnZero(void* obj)
-  {
-    if (LibraryHandle) {
-      double real, imag;
-      if (fMPSProjectOnZero(obj, &real, &imag) == 1)
-        return std::complex<double>(real, imag);
-      else 
-        throw std::runtime_error(
-            "GpuLibrary: Unable to project on zero for mps");
-    } else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to project on zero for mps, library handle is null");
-
-    return std::complex<double>(0, 0);
-  }
-
-  bool MPSApplyX(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fMPSApplyX(obj, siteA) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply X gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyY(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fMPSApplyY(obj, siteA) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply Y gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyZ(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fMPSApplyZ(obj, siteA) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply Z gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyH(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fMPSApplyH(obj, siteA) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply H gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyS(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fMPSApplyS(obj, siteA) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply S gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplySDG(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fMPSApplySDG(obj, siteA) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply sdg gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyT(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fMPSApplyT(obj, siteA) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply t gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyTDG(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fMPSApplyTDG(obj, siteA) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to appl tdg gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplySX(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fMPSApplySX(obj, siteA) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply sx gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplySXDG(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fMPSApplySXDG(obj, siteA) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply sxdg gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyK(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fMPSApplyK(obj, siteA) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply k gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyP(void *obj, unsigned int siteA, double theta) {
-    if (LibraryHandle)
-      return fMPSApplyP(obj, siteA, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply p gate on mps");
-    return false;
-  }
-
-  bool MPSApplyRx(void *obj, unsigned int siteA, double theta) {
-    if (LibraryHandle)
-      return fMPSApplyRx(obj, siteA, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply rx gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyRy(void *obj, unsigned int siteA, double theta) {
-    if (LibraryHandle)
-      return fMPSApplyRy(obj, siteA, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply ry gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyRz(void *obj, unsigned int siteA, double theta) {
-    if (LibraryHandle)
-      return fMPSApplyRz(obj, siteA, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply rz gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyU(void *obj, unsigned int siteA, double theta, double phi,
-                 double lambda, double gamma) {
-    if (LibraryHandle)
-      return fMPSApplyU(obj, siteA, theta, phi, lambda, gamma) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply u gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyOneQubitMatrix(void *obj, unsigned int qubit,
-                              const double *matrixInterleaved) {
-    if (LibraryHandle)
-      return fMPSApplyOneQubitMatrix(obj, qubit, matrixInterleaved) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply one-qubit matrix on mps");
-
-    return false;
-  }
-
-  bool MPSApplyTwoQubitMatrix(void *obj, unsigned int qubit1,
-                              unsigned int qubit2,
-                              const double *matrixInterleaved) {
-    if (LibraryHandle)
-      return fMPSApplyTwoQubitMatrix(obj, qubit1, qubit2,
-                                     matrixInterleaved) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply two-qubit matrix on mps");
-
-    return false;
-  }
-
-  bool MPSApplySwap(void *obj, unsigned int controlQubit,
-                    unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fMPSApplySwap(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply swap gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyCX(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fMPSApplyCX(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply cx gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyCY(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fMPSApplyCY(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply cy gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyCZ(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fMPSApplyCZ(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply cz gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyCH(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fMPSApplyCH(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply ch gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyCSX(void *obj, unsigned int controlQubit,
-                   unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fMPSApplyCSX(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply csx gate on mps");
-  }
-
-  bool MPSApplyCSXDG(void *obj, unsigned int controlQubit,
-                     unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fMPSApplyCSXDG(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply csxdg gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyCP(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit, double theta) {
-    if (LibraryHandle)
-      return fMPSApplyCP(obj, controlQubit, targetQubit, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply cp gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyCRx(void *obj, unsigned int controlQubit,
-                   unsigned int targetQubit, double theta) {
-    if (LibraryHandle)
-      return fMPSApplyCRx(obj, controlQubit, targetQubit, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply crx gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyCRy(void *obj, unsigned int controlQubit,
-                   unsigned int targetQubit, double theta) {
-    if (LibraryHandle)
-      return fMPSApplyCRy(obj, controlQubit, targetQubit, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply cry gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyCRz(void *obj, unsigned int controlQubit,
-                   unsigned int targetQubit, double theta) {
-    if (LibraryHandle)
-      return fMPSApplyCRz(obj, controlQubit, targetQubit, theta) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply crz gate on mps");
-
-    return false;
-  }
-
-  bool MPSApplyCU(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit, double theta, double phi,
-                  double lambda, double gamma) {
-    if (LibraryHandle)
-      return fMPSApplyCU(obj, controlQubit, targetQubit, theta, phi, lambda,
-                         gamma) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply cu gate on mps");
-
-    return false;
-  }
-
-  // tensor network functions
-
-  void *CreateTensorNet() {
-    if (LibraryHandle)
-      return fCreateTensorNet(LibraryHandle);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to create tensor network");
-  }
-
-  void DestroyTensorNet(void *obj) {
-    if (LibraryHandle)
-      fDestroyTensorNet(obj);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to destroy tensor network");
-  }
-
-  bool TNCreate(void *obj, unsigned int nrQubits) {
-    if (LibraryHandle)
-      return fTNCreate(obj, nrQubits) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to create tensor network with the "
-          "specified number of qubits");
-
-    return false;
-  }
-
-  bool TNReset(void *obj) {
-    if (LibraryHandle)
-      return fTNReset(obj) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to reset tensor network");
-
-    return false;
-  }
-
-  bool TNIsValid(void *obj) const {
-    if (LibraryHandle)
-      return fTNIsValid(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to check if tensor network is valid");
-
-    return false;
-  }
-
-  bool TNIsCreated(void *obj) const {
-    if (LibraryHandle)
-      return fTNIsCreated(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to check if tensor network is created");
-
-    return false;
-  }
-
-  bool TNSetDataType(void *obj, int useDoublePrecision) {
-    if (LibraryHandle)
-      return fTNSetDataType(obj, useDoublePrecision) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set precision for tensor network");
-
-    return false;
-  }
-
-  bool TNIsDoublePrecision(void *obj) const {
-    if (LibraryHandle)
-      return fTNIsDoublePrecision(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get precision for tensor network");
-
-    return false;
-  }
-
-  bool TNSetCutoff(void *obj, double val) {
-    if (LibraryHandle)
-      return fTNSetCutoff(obj, val) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set cutoff for tensor network");
-
-    return false;
-  }
-
-  double TNGetCutoff(void *obj) const {
-    if (LibraryHandle)
-      return fTNGetCutoff(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get cutoff for tensor network");
-  }
-
-  bool TNSetTruncationMode(void *obj, int mode) {
-    if (LibraryHandle)
-      return fTNSetTruncationMode(obj, mode) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set truncation mode for tensor network");
-
-    return false;
-  }
-
-  int TNGetTruncationMode(void *obj) const {
-    if (LibraryHandle)
-      return fTNGetTruncationMode(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get truncation mode for tensor network");
-  }
-
-  bool TNSetGesvdJ(void *obj, int val) {
-    if (LibraryHandle && obj && fTNSetGesvdJ)
-      return fTNSetGesvdJ(obj, val) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set GesvdJ for tensor network");
-
-    return false;
-  }
-
-  bool TNGetGesvdJ(void *obj) const {
-    if (LibraryHandle && obj && fTNGetGesvdJ)
-      return fTNGetGesvdJ(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get GesvdJ for tensor network");
-
-    return false;
-  }
-
-  bool TNSetGesvdP(void *obj, int val) {
-    return LibraryHandle && obj && fTNSetGesvdP &&
-           fTNSetGesvdP(obj, val) == 1;
-  }
-
-  bool TNGetGesvdP(void *obj) const {
-    if (!LibraryHandle || !obj || !fTNGetGesvdP)
-      throw std::runtime_error("GpuLibrary: TNGetGesvdP is unavailable");
-    return fTNGetGesvdP(obj) == 1;
-  }
-
-  bool TNSetGesvdR(void *obj, int val) {
-    return LibraryHandle && obj && fTNSetGesvdR &&
-           fTNSetGesvdR(obj, val) == 1;
-  }
-
-  bool TNGetGesvdR(void *obj) const {
-    if (!LibraryHandle || !obj || !fTNGetGesvdR)
-      throw std::runtime_error("GpuLibrary: TNGetGesvdR is unavailable");
-    return fTNGetGesvdR(obj) == 1;
-  }
-
-  bool TNSetMaxExtent(void *obj, long int val) {
-    if (LibraryHandle)
-      return fTNSetMaxExtent(obj, val) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set max extent for tensor network");
-
-    return false;
-  }
-
-  long int TNGetMaxExtent(void *obj) {
-    if (LibraryHandle)
-      return fTNGetMaxExtent(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get max extent for tensor network");
-
-    return 0;
-  }
-
-  int TNGetNrQubits(void *obj) {
-    if (LibraryHandle)
-      return fTNGetNrQubits(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get nr qubits for tensor network");
-
-    return 0;
-  }
-
-  bool TNAmplitude(void *obj, long int numFixedValues, long int *fixedValues,
-                   double *real, double *imaginary) {
-    if (LibraryHandle)
-      return fTNAmplitude(obj, numFixedValues, fixedValues, real, imaginary) ==
-             1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get tensor network amplitude");
-
-    return false;
-  }
-
-  double TNProbability0(void *obj, unsigned int qubit) {
-    if (LibraryHandle)
-      return fTNProbability0(obj, qubit);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get probability for 0 for tensor network");
-
-    return 0.0;
-  }
-
-  bool TNMeasure(void *obj, unsigned int qubit) {
-    if (LibraryHandle)
-      return fTNMeasure(obj, qubit) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to measure qubit on tensor network");
-
-    return false;
-  }
-
-  bool TNMeasureQubits(void *obj, long int numQubits, unsigned int *qubits,
-                       int *result) {
-    if (LibraryHandle)
-      return fTNMeasureQubits(obj, numQubits, qubits, result) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to measure qubits on tensor network");
-
-    return false;
-  }
-
-  std::unordered_map<std::vector<bool>, int64_t> *TNGetMapForSample() {
-    if (LibraryHandle)
-      return (
-          std::unordered_map<std::vector<bool>, int64_t> *)fTNGetMapForSample();
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get map for sample for tensor network");
-
-    return nullptr;
-  }
-
-  bool TNFreeMapForSample(std::unordered_map<std::vector<bool>, int64_t> *map) {
-    if (LibraryHandle)
-      return fTNFreeMapForSample((void *)map) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to free map for sample for tensor network");
-
-    return false;
-  }
-
-  bool TNSample(void *obj, long int numShots, long int numQubits,
-                unsigned int *qubits, void *resultMap) {
-    if (LibraryHandle)
-      return fTNSample(obj, numShots, numQubits, qubits, resultMap) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to sample tensor network");
-
-    return false;
-  }
-
-  bool TNSaveState(void *obj) {
-    if (LibraryHandle)
-      return fTNSaveState(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to save tensor network state");
-
-    return false;
-  }
-
-  bool TNRestoreState(void *obj) {
-    if (LibraryHandle)
-      return fTNRestoreState(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to restore tensor network state");
-
-    return false;
-  }
-
-  bool TNCleanSavedState(void *obj) {
-    if (LibraryHandle)
-      return fTNCleanSavedState(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to clean tensor network saved state");
-
-    return false;
-  }
-
-  void *TNClone(void *obj) {
-    if (LibraryHandle)
-      return fTNClone(obj);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to clone tensor network");
-
-    return nullptr;
-  }
-
-  bool TNSetSeed(void *obj, unsigned long long seed) const {
-    return obj && fTNSetSeed && fTNSetSeed(obj, seed) == 1;
-  }
-
-  double TNExpectationValue(void *obj, const char *pauliString, int len) const {
-    if (LibraryHandle)
-      return fTNExpectationValue(obj, pauliString, len);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get tensor network expectation value");
-
-    return 0;
-  }
-
-  bool TNApplyX(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fTNApplyX(obj, siteA) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply X gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyY(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fTNApplyY(obj, siteA) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply Y gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyZ(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fTNApplyZ(obj, siteA) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply Z gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyH(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fTNApplyH(obj, siteA) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply H gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyS(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fTNApplyS(obj, siteA) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply S gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplySDG(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fTNApplySDG(obj, siteA) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply sdg gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyT(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fTNApplyT(obj, siteA) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply t gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyTDG(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fTNApplyTDG(obj, siteA) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply tdg gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplySX(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fTNApplySX(obj, siteA) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply sx gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplySXDG(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fTNApplySXDG(obj, siteA) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply sxdg gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyK(void *obj, unsigned int siteA) {
-    if (LibraryHandle)
-      return fTNApplyK(obj, siteA) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply k gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyP(void *obj, unsigned int siteA, double theta) {
-    if (LibraryHandle)
-      return fTNApplyP(obj, siteA, theta) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply p gate on tensor network");
-    return false;
-  }
-
-  bool TNApplyRx(void *obj, unsigned int siteA, double theta) {
-    if (LibraryHandle)
-      return fTNApplyRx(obj, siteA, theta) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply rx gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyRy(void *obj, unsigned int siteA, double theta) {
-    if (LibraryHandle)
-      return fTNApplyRy(obj, siteA, theta) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply ry gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyRz(void *obj, unsigned int siteA, double theta) {
-    if (LibraryHandle)
-      return fTNApplyRz(obj, siteA, theta) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply rz gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyU(void *obj, unsigned int siteA, double theta, double phi,
-                double lambda, double gamma) {
-    if (LibraryHandle)
-      return fTNApplyU(obj, siteA, theta, phi, lambda, gamma) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply u gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplySwap(void *obj, unsigned int controlQubit,
-                   unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fTNApplySwap(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply swap gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyCX(void *obj, unsigned int controlQubit,
-                 unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fTNApplyCX(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply cx gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyCY(void *obj, unsigned int controlQubit,
-                 unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fTNApplyCY(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply cy gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyCZ(void *obj, unsigned int controlQubit,
-                 unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fTNApplyCZ(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply cz gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyCH(void *obj, unsigned int controlQubit,
-                 unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fTNApplyCH(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply ch gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyCSX(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fTNApplyCSX(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply csx gate on tensor network");
-  }
-
-  bool TNApplyCSXDG(void *obj, unsigned int controlQubit,
-                    unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fTNApplyCSXDG(obj, controlQubit, targetQubit) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply csxdg gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyCP(void *obj, unsigned int controlQubit, unsigned int targetQubit,
-                 double theta) {
-    if (LibraryHandle)
-      return fTNApplyCP(obj, controlQubit, targetQubit, theta) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply cp gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyCRx(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit, double theta) {
-    if (LibraryHandle)
-      return fTNApplyCRx(obj, controlQubit, targetQubit, theta) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply crx gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyCRy(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit, double theta) {
-    if (LibraryHandle)
-      return fTNApplyCRy(obj, controlQubit, targetQubit, theta) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply cry gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyCRz(void *obj, unsigned int controlQubit,
-                  unsigned int targetQubit, double theta) {
-    if (LibraryHandle)
-      return fTNApplyCRz(obj, controlQubit, targetQubit, theta) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply crz gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyCU(void *obj, unsigned int controlQubit, unsigned int targetQubit,
-                 double theta, double phi, double lambda, double gamma) {
-    if (LibraryHandle)
-      return fTNApplyCU(obj, controlQubit, targetQubit, theta, phi, lambda,
-                        gamma) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply cu gate on tensor network");
-
-    return false;
-  }
-
-  bool TNApplyCCX(void *obj, unsigned int controlQubit1,
-                  unsigned int controlQubit2, unsigned int targetQubit) {
-    if (LibraryHandle)
-      return fTNApplyCCX(obj, controlQubit1, controlQubit2, targetQubit) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply ccx gate on tensor network");
-    return false;
-  }
-
-  bool TNApplyCSwap(void *obj, unsigned int controlQubit,
-                    unsigned int targetQubit1, unsigned int targetQubit2) {
-    if (LibraryHandle)
-      return fTNApplyCSwap(obj, controlQubit, targetQubit1, targetQubit2) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to apply cswap gate on tensor network");
-    return false;
-  }
-
-  // stabilizer functions
-  void *CreateStabilizerSimulator(long long int numQubits,
-                                  long long int numShots,
-                                  long long int numMeasurements,
-                                  long long int numDetectors) {
-    if (LibraryHandle)
-      return fCreateStabilizerSimulator(numQubits, numShots, numMeasurements,
-                                        numDetectors);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to create stabilizer simulator");
-
-    return nullptr;
-  }
-
-  void DestroyStabilizerSimulator(void *obj) {
-    if (!obj) return;
-    if (LibraryHandle)
-      fDestroyStabilizerSimulator(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to destroy stabilizer simulator");
-  }
-
-  bool ExecuteStabilizerCircuit(void *obj, const char *circuitStr,
-                                int randomizeMeasurements,
-                                unsigned long long int seed) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fExecuteStabilizerCircuit(obj, circuitStr, randomizeMeasurements,
-                                       seed) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to execute stabilizer circuit");
-
-    return false;
-  }
-
-  long long GetStabilizerXZTableSize(void *obj) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fGetStabilizerXZTableSize(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get stabilizer XZ table size");
-
-    return 0;
-  }
-
-  long long GetStabilizerMTableSize(void *obj) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fGetStabilizerMTableSize(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get stabilizer M table size");
-
-    return 0;
-  }
-
-  long long GetStabilizerTableStrideMajor(void *obj) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fGetStabilizerTableStrideMajor(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get stabilizer table stride major");
-    return 0;
-  }
-
-  long long GetStabilizerNumQubits(void *obj) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fGetStabilizerNumQubits(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get stabilizer number of qubits");
-
-    return 0;
-  }
-
-  long long GetStabilizerNumShots(void *obj) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fGetStabilizerNumShots(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get stabilizer number of shots");
-
-    return 0;
-  }
-
-  long long GetStabilizerNumMeasurements(void *obj) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fGetStabilizerNumMeasurements(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get stabilizer number of measurements");
-
-    return 0;
-  }
-
-  long long GetStabilizerNumDetectors(void *obj) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fGetStabilizerNumDetectors(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get stabilizer number of detectors");
-
-    return 0;
-  }
-
-  int CopyStabilizerXTable(void *obj, unsigned int *xtable) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fCopyStabilizerXTable(obj, xtable);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to copy stabilizer X table");
-    return 0;
-  }
-
-  int CopyStabilizerZTable(void *obj, unsigned int *ztable) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fCopyStabilizerZTable(obj, ztable);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to copy stabilizer Z table");
-    return 0;
-  }
-
-  int CopyStabilizerMTable(void *obj, unsigned int *mtable) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fCopyStabilizerMTable(obj, mtable);
-    else
-      throw std::runtime_error("GpuLibrary: Unable to copy stabilizer M table");
-    return 0;
-  }
-
-  int InitStabilizerXTable(void *obj, const unsigned int *xtable) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fInitStabilizerXTable(obj, xtable);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to initialize stabilizer X table");
-    return 0;
-  }
-
-  int InitStabilizerZTable(void *obj, const unsigned int *ztable) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fInitStabilizerZTable(obj, ztable);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to initialize stabilizer Z table");
-    return 0;
-  }
-
-  // pauli propagation functions
-  void *CreatePauliPropSimulator(int nrQubits) {
-    if (LibraryHandle)
-      return fCreatePauliPropSimulator(nrQubits);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to create pauli propagation simulator");
-    return nullptr;
-  }
-
-  void DestroyPauliPropSimulator(void *obj) {
-    if (!obj) return;
-    if (LibraryHandle)
-      fDestroyPauliPropSimulator(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to destroy pauli propagation simulator");
-  }
-
-  int PauliPropGetNrQubits(void *obj) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fPauliPropGetNrQubits(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get number of qubits in pauli propagation "
-          "simulator");
-    return 0;
-  }
-
-  int PauliPropSetWillUseSampling(void *obj, int willUseSampling) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fPauliPropSetWillUseSampling(obj, willUseSampling) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set 'will use sampling' in pauli propagation "
-          "simulator");
-    return 0;
-  }
-
-  int PauliPropGetWillUseSampling(void *obj) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fPauliPropGetWillUseSampling(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get 'will use sampling' in pauli propagation "
-          "simulator");
-    return 0;
-  }
-
-  double PauliPropGetCoefficientTruncationCutoff(void *obj) {
-    if (!obj) return 0.0;
-    if (LibraryHandle)
-      return fPauliPropGetCoefficientTruncationCutoff(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get coefficient truncation cutoff in pauli "
-          "propagation simulator");
-    return 0.0;
-  }
-
-  void PauliPropSetCoefficientTruncationCutoff(void *obj, double cutoff) {
-    if (!obj) return;
-    if (LibraryHandle)
-      fPauliPropSetCoefficientTruncationCutoff(obj, cutoff);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set coefficient truncation cutoff in pauli "
-          "propagation simulator");
-  }
-
-  double PauliPropGetWeightTruncationCutoff(void *obj) {
-    if (!obj) return 0.0;
-    if (LibraryHandle)
-      return fPauliPropGetWeightTruncationCutoff(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get weight truncation cutoff in pauli "
-          "propagation simulator");
-    return 0.0;
-  }
-
-  void PauliPropSetWeightTruncationCutoff(void *obj, double cutoff) {
-    if (!obj) return;
-    if (LibraryHandle)
-      fPauliPropSetWeightTruncationCutoff(obj, cutoff);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set weight truncation cutoff in pauli "
-          "propagation simulator");
-  }
-
-  int PauliPropGetNumGatesBetweenTruncations(void *obj) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fPauliPropGetNumGatesBetweenTruncations(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get number of gates between truncations in "
-          "pauli propagation simulator");
-    return 0;
-  }
-
-  void PauliPropSetNumGatesBetweenTruncations(void *obj, int numGates) {
-    if (!obj) return;
-    if (LibraryHandle)
-      fPauliPropSetNumGatesBetweenTruncations(obj, numGates);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set number of gates between truncations in "
-          "pauli "
-          "propagation simulator");
-  }
-
-  int PauliPropGetNumGatesBetweenDeduplications(void *obj) {
-    if (!obj) return 0;
-    if (LibraryHandle)
-      return fPauliPropGetNumGatesBetweenDeduplications(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get number of gates between deduplications in "
-          "pauli propagation simulator");
-    return 0;
-  }
-
-  void PauliPropSetNumGatesBetweenDeduplications(void *obj, int numGates) {
-    if (!obj) return;
-    if (LibraryHandle)
-      fPauliPropSetNumGatesBetweenDeduplications(obj, numGates);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set number of gates between deduplications in "
-          "pauli "
-          "propagation simulator");
-  }
-
-  bool PauliPropClearOperators(void *obj) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropClearOperators(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to clear operators in pauli propagation "
-          "simulator");
-    return false;
-  }
-
-  bool PauliPropAllocateMemory(void *obj, double percentage) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropAllocateMemory(obj, percentage) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to allocate memory in pauli propagation "
-          "simulator");
-    return false;
-  }
-
-  double PauliPropGetExpectationValue(void *obj) {
-    if (!obj) return 0.0;
-    if (LibraryHandle)
-      return fPauliPropGetExpectationValue(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get expectation value in pauli propagation "
-          "simulator");
-    return 0.0;
-  }
-
-  bool PauliPropExecute(void *obj) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropExecute(obj) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to execute pauli propagation simulator");
-    return false;
-  }
-
-  bool PauliPropSetSeed(void *obj, unsigned long long seed) const {
-    return obj && fPauliPropSetSeed && fPauliPropSetSeed(obj, seed) == 1;
-  }
-
-  bool PauliPropSetInPauliExpansionUnique(void *obj, const char *pauliString) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropSetInPauliExpansionUnique(obj, pauliString) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set unique pauli in pauli propagation "
-          "simulator");
-    return false;
-  }
-
-  bool PauliPropSetInPauliExpansionMultiple(void *obj,
-                                            const char **pauliStrings,
-                                            const double *coefficients,
-                                            int nrPaulis) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropSetInPauliExpansionMultiple(obj, pauliStrings,
-                                                   coefficients, nrPaulis) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to set multiple pauli in pauli propagation "
-          "simulator");
-    return false;
-  }
-
-  bool PauliPropApplyX(void *obj, int qubit) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplyX(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply X gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplyY(void *obj, int qubit) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplyY(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply Y gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplyZ(void *obj, int qubit) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplyZ(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply Z gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplyH(void *obj, int qubit) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplyH(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply H gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplyS(void *obj, int qubit) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplyS(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply S gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplySQRTX(void *obj, int qubit) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplySQRTX(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply SQRTX gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplySQRTY(void *obj, int qubit) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplySQRTY(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply SQRTY gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplySQRTZ(void *obj, int qubit) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplySQRTZ(obj, qubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply SQRTZ gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplyCX(void *obj, int targetQubit, int controlQubit) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplyCX(obj, targetQubit, controlQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CX gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplyCY(void *obj, int targetQubit, int controlQubit) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplyCY(obj, targetQubit, controlQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CY gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplyCZ(void *obj, int targetQubit, int controlQubit) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplyCZ(obj, targetQubit, controlQubit) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply CZ gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplySWAP(void *obj, int qubit1, int qubit2) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplySWAP(obj, qubit1, qubit2) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply SWAP gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplyISWAP(void *obj, int qubit1, int qubit2) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplyISWAP(obj, qubit1, qubit2) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply ISWAP gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplyRX(void *obj, int qubit, double angle) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplyRX(obj, qubit, angle) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply RX gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplyRY(void *obj, int qubit, double angle) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplyRY(obj, qubit, angle) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply RY gate on mps");
-    return false;
-  }
-
-  bool PauliPropApplyRZ(void *obj, int qubit, double angle) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropApplyRZ(obj, qubit, angle) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to apply RZ gate on mps");
-    return false;
-  }
-
-  bool PauliPropAddNoiseX(void *obj, int qubit, double probability) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropAddNoiseX(obj, qubit, probability) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to add X noise on mps");
-    return false;
-  }
-
-  bool PauliPropAddNoiseY(void *obj, int qubit, double probability) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropAddNoiseY(obj, qubit, probability) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to add Y noise on mps");
-    return false;
-  }
-
-  bool PauliPropAddNoiseZ(void *obj, int qubit, double probability) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropAddNoiseZ(obj, qubit, probability) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to add Z noise on mps");
-    return false;
-  }
-
-  bool PauliPropAddNoiseXYZ(void *obj, int qubit, double probabilityX,
-                            double probabilityY, double probabilityZ) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropAddNoiseXYZ(obj, qubit, probabilityX, probabilityY,
-                                   probabilityZ) == 1;
-    else
-      throw std::runtime_error("GpuLibrary: Unable to add XYZ noise on mps");
-    return false;
-  }
-
-  bool PauliPropAddAmplitudeDamping(void *obj, int qubit, double dampingProb,
-                                    double exciteProb) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropAddAmplitudeDamping(obj, qubit, dampingProb,
-                                           exciteProb) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to add amplitude damping on mps");
-    return false;
-  }
-
-  double PauliPropQubitProbability0(void *obj, int qubit) {
-    if (!obj) return 0.0;
-    if (LibraryHandle)
-      return fPauliPropQubitProbability0(obj, qubit);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get qubit probability 0 in pauli propagation "
-          "simulator");
-    return 0.0;
-  }
-
-  double PauliPropProbability(void *obj, unsigned long long int outcome) {
-    if (!obj) return 0.0;
-    if (LibraryHandle)
-      return fPauliPropProbability(obj, outcome);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to get probability of outcome in pauli "
-          "propagation simulator");
-    return 0.0;
-  }
-
-  bool PauliPropMeasureQubit(void *obj, int qubit) {
-    if (!obj) return false;
-    if (LibraryHandle)
-      return fPauliPropMeasureQubit(obj, qubit) == 1;
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to measure qubit in pauli propagation simulator");
-    return false;
-  }
-
-  unsigned char *PauliPropSampleQubits(void *obj, const int *qubits,
-                                       int nrQubits) {
-    if (!obj) return nullptr;
-    if (LibraryHandle)
-      return fPauliPropSampleQubits(obj, qubits, nrQubits);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to sample qubits in pauli propagation simulator");
-    return nullptr;
-  }
-
-  void PauliPropFreeSampledQubits(unsigned char *samples) {
-    if (!samples) return;
-    if (LibraryHandle)
-      fPauliPropFreeSampledQubits(samples);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to free sampled qubits in pauli propagation "
-          "simulator");
-  }
-
-  void PauliPropSaveState(void *obj) {
-    if (!obj) return;
-    if (LibraryHandle)
-      fPauliPropSaveState(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to save state in pauli propagation simulator");
-  }
-
-  void PauliPropRestoreState(void *obj) {
-    if (!obj) return;
-    if (LibraryHandle)
-      fPauliPropRestoreState(obj);
-    else
-      throw std::runtime_error(
-          "GpuLibrary: Unable to restore state in pauli propagation simulator");
-  }
-
- private:
-  std::recursive_mutex initializationMutex;
-  std::string loadedPath;
-  bool licenseValidated = false;
-  bool initializationFailed = false;
-  const char* (*fGetLicenseError)() = nullptr;
-  void *LibraryHandle = nullptr;
-
-  int (*fValidateLicense)(const char *) = nullptr;
-  void *(*InitLib)() = nullptr;
-  void (*FreeLib)() = nullptr;
-
-  inline static thread_local int creationDevice = 0;
-  int (*fGetStateVectorGpuId)(void*) = nullptr;
-  int (*fStateVectorSynchronize)(void*) = nullptr;
-  int (*fDMSynchronize)(void*) = nullptr;
-  int (*fMPSGetGpuId)(void*) = nullptr;
-  int (*fTNGetGpuId)(void*) = nullptr;
-  int (*fDMGetGpuId)(void*) = nullptr;
-  int (*fMPOGetGpuId)(void*) = nullptr;
-  int (*fGetStabilizerGpuId)(void*) = nullptr;
-  int (*fPauliPropGetGpuId)(void*) = nullptr;
-  int (*fSetGpuDevice)(int) = nullptr;
-  int (*fGetGpuDeviceCount)() = nullptr;
-
-  void *(*fCreateStateVector)(void *) = nullptr;
-  void (*fDestroyStateVector)(void *) = nullptr;
-  // statevector functions
-  int (*fSetDataType)(void *, int) = nullptr;
-  int (*fIsDoublePrecision)(void *) = nullptr;
-  int (*fGetNrQubits)(void *) = nullptr;
-  int (*fCreate)(void *, unsigned int) = nullptr;
-  int (*fReset)(void *) = nullptr;
-  int (*fCreateWithState)(void *, unsigned int, const double *) = nullptr;
-  int (*fMeasureQubitCollapse)(void *, int) = nullptr;
-  int (*fMeasureQubitNoCollapse)(void *, int) = nullptr;
-  int (*fMeasureQubitsCollapse)(void *, int *, int *, int) = nullptr;
-  int (*fMeasureQubitsNoCollapse)(void *, int *, int *, int) = nullptr;
-  unsigned long long (*fMeasureAllQubitsCollapse)(void *) = nullptr;
-  unsigned long long (*fMeasureAllQubitsNoCollapse)(void *) = nullptr;
-
-  int (*fSaveState)(void *) = nullptr;
-  int (*fSaveStateToHost)(void *) = nullptr;
-  int (*fSaveStateDestructive)(void *) = nullptr;
-  int (*fRestoreStateFreeSaved)(void *) = nullptr;
-  int (*fRestoreStateNoFreeSaved)(void *) = nullptr;
-  void (*fFreeSavedState)(void *obj) = nullptr;
-  void *(*fClone)(void *) = nullptr;
-  int (*fSetSeed)(void *, unsigned long long) = nullptr;
-  int (*fSample)(void *, unsigned int, long int *, unsigned int,
-                 int *) = nullptr;
-  int (*fSampleAll)(void *, unsigned int, long int *) = nullptr;
-  int (*fAmplitude)(void *, long long int, double *, double *) = nullptr;
-  double (*fProbability)(void *, int *, int *, int) = nullptr;
-  double (*fBasisStateProbability)(void *, long long int) = nullptr;
-  int (*fAllProbabilities)(void *, double *) = nullptr;
-  double (*fExpectationValue)(void *, const char *, int) = nullptr;
-
-  int (*fApplyX)(void *, int) = nullptr;
-  int (*fApplyY)(void *, int) = nullptr;
-  int (*fApplyZ)(void *, int) = nullptr;
-  int (*fApplyH)(void *, int) = nullptr;
-  int (*fApplyS)(void *, int) = nullptr;
-  int (*fApplySDG)(void *, int) = nullptr;
-  int (*fApplyT)(void *, int) = nullptr;
-  int (*fApplyTDG)(void *, int) = nullptr;
-  int (*fApplySX)(void *, int) = nullptr;
-  int (*fApplySXDG)(void *, int) = nullptr;
-  int (*fApplyK)(void *, int) = nullptr;
-  int (*fApplyP)(void *, int, double) = nullptr;
-  int (*fApplyRx)(void *, int, double) = nullptr;
-  int (*fApplyRy)(void *, int, double) = nullptr;
-  int (*fApplyRz)(void *, int, double) = nullptr;
-  int (*fApplyU)(void *, int, double, double, double, double) = nullptr;
-  int (*fApplyCX)(void *, int, int) = nullptr;
-  int (*fApplyCY)(void *, int, int) = nullptr;
-  int (*fApplyCZ)(void *, int, int) = nullptr;
-  int (*fApplyCH)(void *, int, int) = nullptr;
-  int (*fApplyCSX)(void *, int, int) = nullptr;
-  int (*fApplyCSXDG)(void *, int, int) = nullptr;
-  int (*fApplyCP)(void *, int, int, double) = nullptr;
-  int (*fApplyCRx)(void *, int, int, double) = nullptr;
-  int (*fApplyCRy)(void *, int, int, double) = nullptr;
-  int (*fApplyCRz)(void *, int, int, double) = nullptr;
-  int (*fApplyCCX)(void *, int, int, int) = nullptr;
-  int (*fApplySwap)(void *, int, int) = nullptr;
-  int (*fApplyCSwap)(void *, int, int, int) = nullptr;
-  int (*fApplyCU)(void *, int, int, double, double, double, double) = nullptr;
-  int (*fApplyOneQubitMatrix)(void *, int, const double *) = nullptr;
-  int (*fApplyOneQubitMatrixWithLayout)(void *, int, const double *,
-                                        int) = nullptr;
-  int (*fApplyTwoQubitMatrix)(void *, int, int, const double *) = nullptr;
-  int (*fApplyTwoQubitMatrixWithLayout)(void *, int, int, const double *,
-                                        int) = nullptr;
-  int (*fApplyThreeQubitMatrix)(void *, int, int, int,
-                                const double *) = nullptr;
-  int (*fApplyThreeQubitMatrixWithLayout)(void *, int, int, int, const double *,
-                                          int) = nullptr;
-  // mps functions
-  void *(*fCreateMPS)(void *) = nullptr;
-  void (*fDestroyMPS)(void *) = nullptr;
-
-  int (*fMPSCreate)(void *, unsigned int) = nullptr;
-  int (*fMPSCreateWithBasisState)(void *, unsigned int,
-                                  unsigned long long) = nullptr;
-  int (*fMPSCreateWithBasisStateBits)(void *, unsigned int,
-                                      const unsigned char *) = nullptr;
-  int (*fMPSReset)(void *) = nullptr;
-  int (*fMPSTrim)(void *) = nullptr;
-  int (*fMPSExpectationValues)(void *, int, const char *const *, const int *,
-                               double *) = nullptr;
-  int (*fMPOExpectationValues)(void *, int, const char *const *, const int *,
-                               double *) = nullptr;
-  int (*fMPOExpectationValuesComplex)(void *, int, const char *const *,
-                                      const int *, int, double *,
-                                      double *) = nullptr;
-  int (*fMPSGetStateVector)(void *, double *) = nullptr;
-  int (*fMPSAllProbabilities)(void *, double *) = nullptr;
-  int (*fMPSMoveAtBeginningOfChain)(void *, const int *, int) = nullptr;
-  int (*fMPSExpectationValueOperators)(void *, int, const int *, const double *,
-                                       double *, double *) = nullptr;
-  int (*fMPSSetBondDimensionSummaryCallback)(void *,
-                                             void (*)(void *,
-                                                      int64_t)) = nullptr;
-  int (*fMPOSetBondDimensionSummaryCallback)(void *,
-                                             void (*)(void *,
-                                                      int64_t)) = nullptr;
-  long long (*fMPSGetMaxBondDimension)(void *) = nullptr;
-  long long (*fMPOGetMaxBondDimension)(void *) = nullptr;
-  int (*fMPSReCanonicalize)(void *) = nullptr;
-  int (*fMPSSetInitialQubitsMap)(void *, const long long int *,
-                                 int) = nullptr;
-  int (*fMPSSetUseOptimalMeetingPosition)(void *, int) = nullptr;
-  int (*fMPSGetUseOptimalMeetingPosition)(void *) = nullptr;
-
-  int (*fMPSIsValid)(void *) = nullptr;
-  int (*fMPSIsCreated)(void *) = nullptr;
-
-  int (*fMPSSetDataType)(void *, int) = nullptr;
-  int (*fMPSIsDoublePrecision)(void *) = nullptr;
-  int (*fMPSSetCutoff)(void *, double) = nullptr;
-  double (*fMPSGetCutoff)(void *) = nullptr;
-  int (*fMPSSetTruncationMode)(void *, int) = nullptr;
-  int (*fMPSGetTruncationMode)(void *) = nullptr;
-  int (*fMPSSetGesvdJ)(void *, int) = nullptr;
-  int (*fMPSGetGesvdJ)(void *) = nullptr;
-  int (*fMPSSetGesvdP)(void *, int) = nullptr;
-  int (*fMPSGetGesvdP)(void *) = nullptr;
-  int (*fMPSSetGesvdR)(void *, int) = nullptr;
-  int (*fMPSGetGesvdR)(void *) = nullptr;
-  int (*fMPSGetLastSvdAlgo)(void *) = nullptr;
-  int (*fMPSSetMaxExtent)(void *, long int) = nullptr;
-  long int (*fMPSGetMaxExtent)(void *) = nullptr;
-  int (*fMPSGetNrQubits)(void *) = nullptr;
-  int (*fMPSGetBondDimensions)(void *, long long int *) = nullptr;
-  int (*fMPSGetQubitsMap)(void*, long long*, int) = nullptr;
-  int (*fMPSSetCallbackContext)(void *, void *) = nullptr;
-  int (*fMPSSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
-  int (*fMPSSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;
-
-  int (*fMPSAmplitude)(void *, long int, long int *, double *,
-                       double *) = nullptr;
-  double (*fMPSProbability0)(void *, unsigned int) = nullptr;
-  int (*fMPSMeasure)(void *, unsigned int) = nullptr;
-  int (*fMPSMeasureQubits)(void *, long int, unsigned int *, int *) = nullptr;
-  void *(*fMPSGetMapForSample)() = nullptr;
-  int (*fMPSFreeMapForSample)(void *) = nullptr;
-  int (*fMPSSample)(void *, long int, long int, unsigned int *,
-                    void *) = nullptr;
-  int (*fMPSSampleRaw)(void *, unsigned int, long int *, unsigned int,
-                       const unsigned int *) = nullptr;
-  int (*fMPSSampleAll)(void *, unsigned int, long int *) = nullptr;
-
-  int (*fMPSSaveState)(void *) = nullptr;
-  int (*fMPSRestoreState)(void *) = nullptr;
-  int (*fMPSCleanSavedState)(void *) = nullptr;
-  void *(*fMPSClone)(void *) = nullptr;
-  int (*fMPSSetSeed)(void *, unsigned long long) = nullptr;
-
-  double (*fMPSExpectationValue)(void *, const char *, int) = nullptr;
-  int (*fMPSProjectOnZero)(void *, double *, double *) = nullptr;
-
-  int (*fMPSApplyX)(void *, unsigned int) = nullptr;
-  int (*fMPSApplyY)(void *, unsigned int) = nullptr;
-  int (*fMPSApplyZ)(void *, unsigned int) = nullptr;
-  int (*fMPSApplyH)(void *, unsigned int) = nullptr;
-  int (*fMPSApplyS)(void *, unsigned int) = nullptr;
-  int (*fMPSApplySDG)(void *, unsigned int) = nullptr;
-  int (*fMPSApplyT)(void *, unsigned int) = nullptr;
-  int (*fMPSApplyTDG)(void *, unsigned int) = nullptr;
-  int (*fMPSApplySX)(void *, unsigned int) = nullptr;
-  int (*fMPSApplySXDG)(void *, unsigned int) = nullptr;
-  int (*fMPSApplyK)(void *, unsigned int) = nullptr;
-  int (*fMPSApplyP)(void *, unsigned int, double) = nullptr;
-  int (*fMPSApplyRx)(void *, unsigned int, double) = nullptr;
-  int (*fMPSApplyRy)(void *, unsigned int, double) = nullptr;
-  int (*fMPSApplyRz)(void *, unsigned int, double) = nullptr;
-  int (*fMPSApplyU)(void *, unsigned int, double, double, double,
-                    double) = nullptr;
-  int (*fMPSApplyOneQubitMatrix)(void *, unsigned int,
-                                 const double *) = nullptr;
-  int (*fMPSApplyTwoQubitMatrix)(void *, unsigned int, unsigned int,
-                                 const double *) = nullptr;
-  int (*fMPSApplySwap)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fMPSApplyCX)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fMPSApplyCY)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fMPSApplyCZ)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fMPSApplyCH)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fMPSApplyCSX)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fMPSApplyCSXDG)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fMPSApplyCP)(void *, unsigned int, unsigned int, double) = nullptr;
-  int (*fMPSApplyCRx)(void *, unsigned int, unsigned int, double) = nullptr;
-  int (*fMPSApplyCRy)(void *, unsigned int, unsigned int, double) = nullptr;
-  int (*fMPSApplyCRz)(void *, unsigned int, unsigned int, double) = nullptr;
-  int (*fMPSApplyCU)(void *, unsigned int, unsigned int, double, double, double,
-                     double) = nullptr;
-
-  // tensor network functions
-  void *(*fCreateTensorNet)(void *) = nullptr;
-  void (*fDestroyTensorNet)(void *) = nullptr;
-
-  int (*fTNCreate)(void *, unsigned int) = nullptr;
-  int (*fTNReset)(void *) = nullptr;
-  int (*fTNIsValid)(void *) = nullptr;
-  int (*fTNIsCreated)(void *) = nullptr;
-
-  int (*fTNSetDataType)(void *, int) = nullptr;
-  int (*fTNIsDoublePrecision)(void *) = nullptr;
-  int (*fTNSetCutoff)(void *, double) = nullptr;
-  double (*fTNGetCutoff)(void *) = nullptr;
-  int (*fTNSetTruncationMode)(void *, int) = nullptr;
-  int (*fTNGetTruncationMode)(void *) = nullptr;
-  int (*fTNSetGesvdJ)(void *, int) = nullptr;
-  int (*fTNGetGesvdJ)(void *) = nullptr;
-  int (*fTNSetGesvdP)(void *, int) = nullptr;
-  int (*fTNGetGesvdP)(void *) = nullptr;
-  int (*fTNSetGesvdR)(void *, int) = nullptr;
-  int (*fTNGetGesvdR)(void *) = nullptr;
-  int (*fTNSetMaxExtent)(void *, long int) = nullptr;
-  long int (*fTNGetMaxExtent)(void *) = nullptr;
-  int (*fTNGetNrQubits)(void *) = nullptr;
-  int (*fTNAmplitude)(void *, long int, long int *, double *,
-                      double *) = nullptr;
-  double (*fTNProbability0)(void *, unsigned int) = nullptr;
-  int (*fTNMeasure)(void *, unsigned int) = nullptr;
-  int (*fTNMeasureQubits)(void *, long int, unsigned int *, int *) = nullptr;
-  void *(*fTNGetMapForSample)() = nullptr;
-  int (*fTNFreeMapForSample)(void *) = nullptr;
-  int (*fTNSample)(void *, long int, long int, unsigned int *,
-                   void *) = nullptr;
-
-  int (*fTNSaveState)(void *) = nullptr;
-  int (*fTNRestoreState)(void *) = nullptr;
-  int (*fTNCleanSavedState)(void *) = nullptr;
-  void *(*fTNClone)(void *) = nullptr;
-  int (*fTNSetSeed)(void *, unsigned long long) = nullptr;
-
-  double (*fTNExpectationValue)(void *, const char *, int) = nullptr;
-
-  int (*fTNApplyX)(void *, unsigned int) = nullptr;
-  int (*fTNApplyY)(void *, unsigned int) = nullptr;
-  int (*fTNApplyZ)(void *, unsigned int) = nullptr;
-  int (*fTNApplyH)(void *, unsigned int) = nullptr;
-  int (*fTNApplyS)(void *, unsigned int) = nullptr;
-  int (*fTNApplySDG)(void *, unsigned int) = nullptr;
-  int (*fTNApplyT)(void *, unsigned int) = nullptr;
-  int (*fTNApplyTDG)(void *, unsigned int) = nullptr;
-  int (*fTNApplySX)(void *, unsigned int) = nullptr;
-  int (*fTNApplySXDG)(void *, unsigned int) = nullptr;
-  int (*fTNApplyK)(void *, unsigned int) = nullptr;
-  int (*fTNApplyP)(void *, unsigned int, double) = nullptr;
-  int (*fTNApplyRx)(void *, unsigned int, double) = nullptr;
-  int (*fTNApplyRy)(void *, unsigned int, double) = nullptr;
-  int (*fTNApplyRz)(void *, unsigned int, double) = nullptr;
-  int (*fTNApplyU)(void *, unsigned int, double, double, double,
-                   double) = nullptr;
-  int (*fTNApplySwap)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fTNApplyCX)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fTNApplyCY)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fTNApplyCZ)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fTNApplyCH)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fTNApplyCSX)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fTNApplyCSXDG)(void *, unsigned int, unsigned int) = nullptr;
-  int (*fTNApplyCP)(void *, unsigned int, unsigned int, double) = nullptr;
-  int (*fTNApplyCRx)(void *, unsigned int, unsigned int, double) = nullptr;
-  int (*fTNApplyCRy)(void *, unsigned int, unsigned int, double) = nullptr;
-  int (*fTNApplyCRz)(void *, unsigned int, unsigned int, double) = nullptr;
-  int (*fTNApplyCU)(void *, unsigned int, unsigned int, double, double, double,
-                    double) = nullptr;
-  int (*fTNApplyCCX)(void *, unsigned int, unsigned int,
-                     unsigned int) = nullptr;
-  int (*fTNApplyCSwap)(void *, unsigned int, unsigned int,
-                       unsigned int) = nullptr;
-  // stabilizer functions
-  void *(*fCreateStabilizerSimulator)(long long int, long long int,
-                                      long long int, long long int) = nullptr;
-  void (*fDestroyStabilizerSimulator)(void *) = nullptr;
-  int (*fExecuteStabilizerCircuit)(void *, const char *, int,
-                                   unsigned long long int) = nullptr;
-  long long (*fGetStabilizerXZTableSize)(void *) = nullptr;
-  long long (*fGetStabilizerMTableSize)(void *) = nullptr;
-  long long (*fGetStabilizerTableStrideMajor)(void *) = nullptr;
-  long long (*fGetStabilizerNumQubits)(void *) = nullptr;
-  long long (*fGetStabilizerNumShots)(void *) = nullptr;
-  long long (*fGetStabilizerNumMeasurements)(void *) = nullptr;
-  long long (*fGetStabilizerNumDetectors)(void *) = nullptr;
-  int (*fCopyStabilizerXTable)(void *, unsigned int *) = nullptr;
-  int (*fCopyStabilizerZTable)(void *, unsigned int *) = nullptr;
-  int (*fCopyStabilizerMTable)(void *, unsigned int *) = nullptr;
-  int (*fInitStabilizerXTable)(void *, const unsigned int *) = nullptr;
-  int (*fInitStabilizerZTable)(void *, const unsigned int *) = nullptr;
-  // Pauli propagation functions
-  void *(*fCreatePauliPropSimulator)(int) = nullptr;
-  void (*fDestroyPauliPropSimulator)(void *) = nullptr;
-
-  int (*fPauliPropGetNrQubits)(void *) = nullptr;
-  int (*fPauliPropSetWillUseSampling)(void *, int) = nullptr;
-  int (*fPauliPropGetWillUseSampling)(void *) = nullptr;
-  double (*fPauliPropGetCoefficientTruncationCutoff)(void *) = nullptr;
-  void (*fPauliPropSetCoefficientTruncationCutoff)(void *, double) = nullptr;
-  double (*fPauliPropGetWeightTruncationCutoff)(void *) = nullptr;
-  void (*fPauliPropSetWeightTruncationCutoff)(void *, double) = nullptr;
-  int (*fPauliPropGetNumGatesBetweenTruncations)(void *) = nullptr;
-  void (*fPauliPropSetNumGatesBetweenTruncations)(void *, int) = nullptr;
-  int (*fPauliPropGetNumGatesBetweenDeduplications)(void *) = nullptr;
-  void (*fPauliPropSetNumGatesBetweenDeduplications)(void *, int) = nullptr;
-  int (*fPauliPropClearOperators)(void *) = nullptr;
-  int (*fPauliPropAllocateMemory)(void *, double) = nullptr;
-  double (*fPauliPropGetExpectationValue)(void *) = nullptr;
-  int (*fPauliPropExecute)(void *) = nullptr;
-  int (*fPauliPropSetSeed)(void *, unsigned long long) = nullptr;
-  int (*fPauliPropSetInPauliExpansionUnique)(void *, const char *) = nullptr;
-  int (*fPauliPropSetInPauliExpansionMultiple)(void *, const char **,
-                                               const double *, int) = nullptr;
-
-  int (*fPauliPropApplyX)(void *, int) = nullptr;
-  int (*fPauliPropApplyY)(void *, int) = nullptr;
-  int (*fPauliPropApplyZ)(void *, int) = nullptr;
-  int (*fPauliPropApplyH)(void *, int) = nullptr;
-  int (*fPauliPropApplyS)(void *, int) = nullptr;
-  int (*fPauliPropApplySQRTX)(void *, int) = nullptr;
-  int (*fPauliPropApplySQRTY)(void *, int) = nullptr;
-  int (*fPauliPropApplySQRTZ)(void *, int) = nullptr;
-  int (*fPauliPropApplyCX)(void *, int, int) = nullptr;
-  int (*fPauliPropApplyCY)(void *, int, int) = nullptr;
-  int (*fPauliPropApplyCZ)(void *, int, int) = nullptr;
-  int (*fPauliPropApplySWAP)(void *, int, int) = nullptr;
-  int (*fPauliPropApplyISWAP)(void *, int, int) = nullptr;
-  int (*fPauliPropApplyRX)(void *, int, double) = nullptr;
-  int (*fPauliPropApplyRY)(void *, int, double) = nullptr;
-  int (*fPauliPropApplyRZ)(void *, int, double) = nullptr;
-  int (*fPauliPropAddNoiseX)(void *, int, double) = nullptr;
-  int (*fPauliPropAddNoiseY)(void *, int, double) = nullptr;
-  int (*fPauliPropAddNoiseZ)(void *, int, double) = nullptr;
-  int (*fPauliPropAddNoiseXYZ)(void *, int, double, double, double) = nullptr;
-  int (*fPauliPropAddAmplitudeDamping)(void *, int, double, double) = nullptr;
-  double (*fPauliPropQubitProbability0)(void *, int) = nullptr;
-  double (*fPauliPropProbability)(void *, unsigned long long int) = nullptr;
-
-  int (*fPauliPropMeasureQubit)(void *, int) = nullptr;
-  unsigned char *(*fPauliPropSampleQubits)(void *, const int *, int) = nullptr;
-  void (*fPauliPropFreeSampledQubits)(unsigned char *) = nullptr;
-  void (*fPauliPropSaveState)(void *) = nullptr;
-  void (*fPauliPropRestoreState)(void *) = nullptr;
+  public:
+    // mps functions
+
+    void *CreateMPS()
+    {
+        if (LibraryHandle)
+            return fCreateMPS(LibraryHandle);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to create mps");
+    }
+
+    void DestroyMPS(void *obj)
+    {
+        if (LibraryHandle)
+            fDestroyMPS(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to destroy mps");
+    }
+
+    bool MPSCreate(void *obj, unsigned int nrQubits)
+    {
+        if (LibraryHandle)
+            return fMPSCreate(obj, nrQubits) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to create mps with the "
+                                     "specified number of qubits");
+
+        return false;
+    }
+
+    bool MPSCreateWithBasisState(void *obj, unsigned int nrQubits, unsigned long long state)
+    {
+        if (LibraryHandle)
+            return fMPSCreateWithBasisState(obj, nrQubits, state) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to create mps with a basis state");
+
+        return false;
+    }
+
+    bool MPSCreateWithBasisStateBits(void *obj, unsigned int nrQubits, const unsigned char *stateBits)
+    {
+        if (LibraryHandle)
+            return fMPSCreateWithBasisStateBits(obj, nrQubits, stateBits) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to create mps with a basis state (bits)");
+
+        return false;
+    }
+
+    bool MPSReset(void *obj)
+    {
+        if (LibraryHandle)
+            return fMPSReset(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to reset mps");
+
+        return false;
+    }
+
+    // Optional: older libraries do not export the explicit MPS compression.
+    bool HasMPSCompressionAPI() const
+    {
+        return IsValid() && fMPSTrim && fMPSReCanonicalize;
+    }
+
+    bool MPSTrim(void *obj)
+    {
+        if (!fMPSTrim)
+            throw std::runtime_error("GpuLibrary: this library cannot trim an mps");
+        return obj && fMPSTrim(obj) == 1;
+    }
+
+    bool MPSReCanonicalize(void *obj)
+    {
+        if (!fMPSReCanonicalize)
+            throw std::runtime_error("GpuLibrary: this library cannot recanonicalize an mps");
+        return obj && fMPSReCanonicalize(obj) == 1;
+    }
+
+    bool MPSSetInitialQubitsMap(void *obj, const std::vector<long long int> &initialMap)
+    {
+        if (LibraryHandle)
+            return fMPSSetInitialQubitsMap(obj, initialMap.data(), initialMap.size()) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set initial qubits map for mps");
+
+        return false;
+    }
+
+    bool MPSSetUseOptimalMeetingPosition(void *obj, int val)
+    {
+        if (LibraryHandle)
+            return fMPSSetUseOptimalMeetingPosition(obj, val) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set use optimal meeting position for mps");
+        return false;
+    }
+
+    bool MPSGetUseOptimalMeetingPosition(void *obj) const
+    {
+        if (LibraryHandle)
+            return fMPSGetUseOptimalMeetingPosition(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get use optimal meeting position for mps");
+        return false;
+    }
+
+    bool MPSIsValid(void *obj) const
+    {
+        if (LibraryHandle)
+            return fMPSIsValid(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to check if mps is valid");
+
+        return false;
+    }
+
+    bool MPSIsCreated(void *obj) const
+    {
+        if (LibraryHandle)
+            return fMPSIsCreated(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to check if mps is created");
+
+        return false;
+    }
+
+    bool MPSSetDataType(void *obj, int useDoublePrecision)
+    {
+        if (LibraryHandle)
+            return fMPSSetDataType(obj, useDoublePrecision) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set precision for mps");
+
+        return false;
+    }
+
+    bool MPSIsDoublePrecision(void *obj) const
+    {
+        if (LibraryHandle)
+            return fMPSIsDoublePrecision(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get precision for mps");
+
+        return false;
+    }
+
+    bool MPSSetCutoff(void *obj, double val)
+    {
+        if (LibraryHandle)
+            return fMPSSetCutoff(obj, val) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set cutoff for mps");
+
+        return false;
+    }
+
+    double MPSGetCutoff(void *obj) const
+    {
+        if (LibraryHandle)
+            return fMPSGetCutoff(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get cutoff for mps");
+    }
+
+    bool MPSSetTruncationMode(void *obj, int mode)
+    {
+        if (LibraryHandle)
+            return fMPSSetTruncationMode(obj, mode) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set truncation mode for mps");
+
+        return false;
+    }
+
+    int MPSGetTruncationMode(void *obj) const
+    {
+        if (LibraryHandle)
+            return fMPSGetTruncationMode(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get truncation mode for mps");
+    }
+
+    bool MPSSetGesvdJ(void *obj, int val)
+    {
+        if (LibraryHandle && obj && fMPSSetGesvdJ)
+            return fMPSSetGesvdJ(obj, val) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set GesvdJ for mps");
+
+        return false;
+    }
+
+    bool MPSGetGesvdJ(void *obj) const
+    {
+        if (LibraryHandle && obj && fMPSGetGesvdJ)
+            return fMPSGetGesvdJ(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get GesvdJ for mps");
+
+        return false;
+    }
+
+    bool MPSSetGesvdP(void *obj, int val)
+    {
+        return LibraryHandle && obj && fMPSSetGesvdP && fMPSSetGesvdP(obj, val) == 1;
+    }
+
+    bool MPSGetGesvdP(void *obj) const
+    {
+        if (!LibraryHandle || !obj || !fMPSGetGesvdP)
+            throw std::runtime_error("GpuLibrary: MPSGetGesvdP is unavailable");
+        return fMPSGetGesvdP(obj) == 1;
+    }
+
+    bool MPSSetGesvdR(void *obj, int val)
+    {
+        return LibraryHandle && obj && fMPSSetGesvdR && fMPSSetGesvdR(obj, val) == 1;
+    }
+
+    bool MPSGetGesvdR(void *obj) const
+    {
+        if (!LibraryHandle || !obj || !fMPSGetGesvdR)
+            throw std::runtime_error("GpuLibrary: MPSGetGesvdR is unavailable");
+        return fMPSGetGesvdR(obj) == 1;
+    }
+
+    // 0=GESVD, 1=GESVDJ, 2=GESVDP, 3=GESVDR; -1 before the first split.
+    int MPSGetLastSvdAlgo(void *obj) const
+    {
+        if (!LibraryHandle || !obj || !fMPSGetLastSvdAlgo)
+            throw std::runtime_error("GpuLibrary: MPSGetLastSvdAlgo is unavailable");
+        return fMPSGetLastSvdAlgo(obj);
+    }
+
+    bool MPSSetMaxExtent(void *obj, long int val)
+    {
+        if (LibraryHandle)
+            return fMPSSetMaxExtent(obj, val) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set max extent for mps");
+
+        return false;
+    }
+
+    long int MPSGetMaxExtent(void *obj)
+    {
+        if (LibraryHandle)
+            return fMPSGetMaxExtent(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get max extent for mps");
+
+        return 0;
+    }
+
+    int MPSGetNrQubits(void *obj)
+    {
+        if (LibraryHandle)
+            return fMPSGetNrQubits(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get nr qubits for mps");
+
+        return 0;
+    }
+
+    bool MPSGetBondDimensions(void *obj, long long int *bondDims)
+    {
+        if (LibraryHandle)
+            return fMPSGetBondDimensions(obj, bondDims) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get bond dimensions for mps");
+
+        return false;
+    }
+
+    bool MPSGetQubitsMap(void *obj, long long *map, int size) const
+    {
+        return obj && fMPSGetQubitsMap && fMPSGetQubitsMap(obj, map, size) == 1;
+    }
+
+    bool MPSSetCallbackContext(void *obj, void *context)
+    {
+        if (LibraryHandle)
+            return fMPSSetCallbackContext(obj, context) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set callback context for mps");
+        return false;
+    }
+
+    bool MPSSetMeetingPositionCallback(void *obj, int64_t (*callback)(void *, const int64_t *))
+    {
+        if (LibraryHandle)
+            return fMPSSetMeetingPositionCallback(obj, callback) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set meeting position callback for mps");
+        return false;
+    }
+
+    bool MPSSetBondDimensionsCallback(void *obj, void (*callback)(void *, const int64_t *))
+    {
+        if (LibraryHandle)
+            return fMPSSetBondDimensionsCallback(obj, callback) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set bond dimensions callback for mps");
+        return false;
+    }
+
+    bool MPSAmplitude(void *obj, long int numFixedValues, long int *fixedValues, double *real, double *imaginary)
+    {
+        if (LibraryHandle)
+            return fMPSAmplitude(obj, numFixedValues, fixedValues, real, imaginary) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get mps amplitude");
+
+        return false;
+    }
+
+    double MPSProbability0(void *obj, unsigned int qubit)
+    {
+        if (LibraryHandle)
+            return fMPSProbability0(obj, qubit);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get probability for 0 for mps");
+
+        return 0.0;
+    }
+
+    bool MPSMeasure(void *obj, unsigned int qubit)
+    {
+        if (LibraryHandle)
+            return fMPSMeasure(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to measure qubit on mps");
+
+        return false;
+    }
+
+    bool MPSMeasureQubits(void *obj, long int numQubits, unsigned int *qubits, int *result)
+    {
+        if (LibraryHandle)
+            return fMPSMeasureQubits(obj, numQubits, qubits, result) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to measure qubits on mps");
+
+        return false;
+    }
+
+    std::unordered_map<std::vector<bool>, int64_t> *MPSGetMapForSample()
+    {
+        if (LibraryHandle)
+            return (std::unordered_map<std::vector<bool>, int64_t> *)fMPSGetMapForSample();
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get map for sample for mps");
+
+        return nullptr;
+    }
+
+    bool MPSFreeMapForSample(std::unordered_map<std::vector<bool>, int64_t> *map)
+    {
+        if (LibraryHandle)
+            return fMPSFreeMapForSample((void *)map) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to free map for sample for mps");
+
+        return false;
+    }
+
+    bool MPSSample(void *obj, long int numShots, long int numQubits, unsigned int *qubits, void *resultMap)
+    {
+        if (LibraryHandle)
+            return fMPSSample(obj, numShots, numQubits, qubits, resultMap) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to sample mps");
+
+        return false;
+    }
+
+    bool MPSSampleRaw(void *obj, unsigned int nSamples, long int *samples, unsigned int nBits, const unsigned int *bitOrdering)
+    {
+        if (LibraryHandle)
+            return fMPSSampleRaw(obj, nSamples, samples, nBits, bitOrdering) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to raw-sample mps");
+
+        return false;
+    }
+
+    bool MPSSampleAll(void *obj, unsigned int nSamples, long int *samples)
+    {
+        if (LibraryHandle)
+            return fMPSSampleAll(obj, nSamples, samples) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to sample all for mps");
+
+        return false;
+    }
+
+    bool MPSSaveState(void *obj)
+    {
+        if (LibraryHandle)
+            return fMPSSaveState(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to save mps state");
+
+        return false;
+    }
+
+    bool MPSRestoreState(void *obj)
+    {
+        if (LibraryHandle)
+            return fMPSRestoreState(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to restore mps state");
+
+        return false;
+    }
+
+    bool MPSCleanSavedState(void *obj)
+    {
+        if (LibraryHandle)
+            return fMPSCleanSavedState(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to clean mps saved state");
+
+        return false;
+    }
+
+    void *MPSClone(void *obj)
+    {
+        if (LibraryHandle)
+            return fMPSClone(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to clone mps");
+
+        return nullptr;
+    }
+
+    bool MPSSetSeed(void *obj, unsigned long long seed) const
+    {
+        return obj && fMPSSetSeed && fMPSSetSeed(obj, seed) == 1;
+    }
+
+    double MPSExpectationValue(void *obj, const char *pauliString, int len) const
+    {
+        if (LibraryHandle)
+            return fMPSExpectationValue(obj, pauliString, len);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get mps expectation value");
+
+        return 0;
+    }
+
+    std::complex<double> MPSProjectOnZero(void *obj)
+    {
+        if (LibraryHandle)
+        {
+            double real, imag;
+            if (fMPSProjectOnZero(obj, &real, &imag) == 1)
+                return std::complex<double>(real, imag);
+            else
+                throw std::runtime_error("GpuLibrary: Unable to project on zero for mps");
+        }
+        else
+            throw std::runtime_error("GpuLibrary: Unable to project on zero for mps, library handle is null");
+
+        return std::complex<double>(0, 0);
+    }
+
+    bool MPSApplyX(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fMPSApplyX(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply X gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyY(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fMPSApplyY(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply Y gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyZ(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fMPSApplyZ(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply Z gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyH(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fMPSApplyH(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply H gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyS(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fMPSApplyS(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply S gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplySDG(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fMPSApplySDG(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply sdg gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyT(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fMPSApplyT(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply t gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyTDG(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fMPSApplyTDG(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to appl tdg gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplySX(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fMPSApplySX(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply sx gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplySXDG(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fMPSApplySXDG(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply sxdg gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyK(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fMPSApplyK(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply k gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyP(void *obj, unsigned int siteA, double theta)
+    {
+        if (LibraryHandle)
+            return fMPSApplyP(obj, siteA, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply p gate on mps");
+        return false;
+    }
+
+    bool MPSApplyRx(void *obj, unsigned int siteA, double theta)
+    {
+        if (LibraryHandle)
+            return fMPSApplyRx(obj, siteA, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply rx gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyRy(void *obj, unsigned int siteA, double theta)
+    {
+        if (LibraryHandle)
+            return fMPSApplyRy(obj, siteA, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply ry gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyRz(void *obj, unsigned int siteA, double theta)
+    {
+        if (LibraryHandle)
+            return fMPSApplyRz(obj, siteA, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply rz gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyU(void *obj, unsigned int siteA, double theta, double phi, double lambda, double gamma)
+    {
+        if (LibraryHandle)
+            return fMPSApplyU(obj, siteA, theta, phi, lambda, gamma) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply u gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyOneQubitMatrix(void *obj, unsigned int qubit, const double *matrixInterleaved)
+    {
+        if (LibraryHandle)
+            return fMPSApplyOneQubitMatrix(obj, qubit, matrixInterleaved) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply one-qubit matrix on mps");
+
+        return false;
+    }
+
+    bool MPSApplyTwoQubitMatrix(void *obj, unsigned int qubit1, unsigned int qubit2, const double *matrixInterleaved)
+    {
+        if (LibraryHandle)
+            return fMPSApplyTwoQubitMatrix(obj, qubit1, qubit2, matrixInterleaved) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply two-qubit matrix on mps");
+
+        return false;
+    }
+
+    bool MPSApplySwap(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fMPSApplySwap(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply swap gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyCX(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fMPSApplyCX(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cx gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyCY(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fMPSApplyCY(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cy gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyCZ(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fMPSApplyCZ(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cz gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyCH(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fMPSApplyCH(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply ch gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyCSX(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fMPSApplyCSX(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply csx gate on mps");
+    }
+
+    bool MPSApplyCSXDG(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fMPSApplyCSXDG(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply csxdg gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyCP(void *obj, unsigned int controlQubit, unsigned int targetQubit, double theta)
+    {
+        if (LibraryHandle)
+            return fMPSApplyCP(obj, controlQubit, targetQubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cp gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyCRx(void *obj, unsigned int controlQubit, unsigned int targetQubit, double theta)
+    {
+        if (LibraryHandle)
+            return fMPSApplyCRx(obj, controlQubit, targetQubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply crx gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyCRy(void *obj, unsigned int controlQubit, unsigned int targetQubit, double theta)
+    {
+        if (LibraryHandle)
+            return fMPSApplyCRy(obj, controlQubit, targetQubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cry gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyCRz(void *obj, unsigned int controlQubit, unsigned int targetQubit, double theta)
+    {
+        if (LibraryHandle)
+            return fMPSApplyCRz(obj, controlQubit, targetQubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply crz gate on mps");
+
+        return false;
+    }
+
+    bool MPSApplyCU(void *obj, unsigned int controlQubit, unsigned int targetQubit, double theta, double phi, double lambda, double gamma)
+    {
+        if (LibraryHandle)
+            return fMPSApplyCU(obj, controlQubit, targetQubit, theta, phi, lambda, gamma) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cu gate on mps");
+
+        return false;
+    }
+
+    // tensor network functions
+
+    void *CreateTensorNet()
+    {
+        if (LibraryHandle)
+            return fCreateTensorNet(LibraryHandle);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to create tensor network");
+    }
+
+    void DestroyTensorNet(void *obj)
+    {
+        if (LibraryHandle)
+            fDestroyTensorNet(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to destroy tensor network");
+    }
+
+    bool TNCreate(void *obj, unsigned int nrQubits)
+    {
+        if (LibraryHandle)
+            return fTNCreate(obj, nrQubits) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to create tensor network with the "
+                                     "specified number of qubits");
+
+        return false;
+    }
+
+    bool TNReset(void *obj)
+    {
+        if (LibraryHandle)
+            return fTNReset(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to reset tensor network");
+
+        return false;
+    }
+
+    bool TNIsValid(void *obj) const
+    {
+        if (LibraryHandle)
+            return fTNIsValid(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to check if tensor network is valid");
+
+        return false;
+    }
+
+    bool TNIsCreated(void *obj) const
+    {
+        if (LibraryHandle)
+            return fTNIsCreated(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to check if tensor network is created");
+
+        return false;
+    }
+
+    bool TNSetDataType(void *obj, int useDoublePrecision)
+    {
+        if (LibraryHandle)
+            return fTNSetDataType(obj, useDoublePrecision) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set precision for tensor network");
+
+        return false;
+    }
+
+    bool TNIsDoublePrecision(void *obj) const
+    {
+        if (LibraryHandle)
+            return fTNIsDoublePrecision(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get precision for tensor network");
+
+        return false;
+    }
+
+    bool TNSetCutoff(void *obj, double val)
+    {
+        if (LibraryHandle)
+            return fTNSetCutoff(obj, val) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set cutoff for tensor network");
+
+        return false;
+    }
+
+    double TNGetCutoff(void *obj) const
+    {
+        if (LibraryHandle)
+            return fTNGetCutoff(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get cutoff for tensor network");
+    }
+
+    bool TNSetTruncationMode(void *obj, int mode)
+    {
+        if (LibraryHandle)
+            return fTNSetTruncationMode(obj, mode) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set truncation mode for tensor network");
+
+        return false;
+    }
+
+    int TNGetTruncationMode(void *obj) const
+    {
+        if (LibraryHandle)
+            return fTNGetTruncationMode(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get truncation mode for tensor network");
+    }
+
+    bool TNSetGesvdJ(void *obj, int val)
+    {
+        if (LibraryHandle && obj && fTNSetGesvdJ)
+            return fTNSetGesvdJ(obj, val) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set GesvdJ for tensor network");
+
+        return false;
+    }
+
+    bool TNGetGesvdJ(void *obj) const
+    {
+        if (LibraryHandle && obj && fTNGetGesvdJ)
+            return fTNGetGesvdJ(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get GesvdJ for tensor network");
+
+        return false;
+    }
+
+    bool TNSetGesvdP(void *obj, int val)
+    {
+        return LibraryHandle && obj && fTNSetGesvdP && fTNSetGesvdP(obj, val) == 1;
+    }
+
+    bool TNGetGesvdP(void *obj) const
+    {
+        if (!LibraryHandle || !obj || !fTNGetGesvdP)
+            throw std::runtime_error("GpuLibrary: TNGetGesvdP is unavailable");
+        return fTNGetGesvdP(obj) == 1;
+    }
+
+    bool TNSetGesvdR(void *obj, int val)
+    {
+        return LibraryHandle && obj && fTNSetGesvdR && fTNSetGesvdR(obj, val) == 1;
+    }
+
+    bool TNGetGesvdR(void *obj) const
+    {
+        if (!LibraryHandle || !obj || !fTNGetGesvdR)
+            throw std::runtime_error("GpuLibrary: TNGetGesvdR is unavailable");
+        return fTNGetGesvdR(obj) == 1;
+    }
+
+    bool TNSetMaxExtent(void *obj, long int val)
+    {
+        if (LibraryHandle)
+            return fTNSetMaxExtent(obj, val) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set max extent for tensor network");
+
+        return false;
+    }
+
+    long int TNGetMaxExtent(void *obj)
+    {
+        if (LibraryHandle)
+            return fTNGetMaxExtent(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get max extent for tensor network");
+
+        return 0;
+    }
+
+    int TNGetNrQubits(void *obj)
+    {
+        if (LibraryHandle)
+            return fTNGetNrQubits(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get nr qubits for tensor network");
+
+        return 0;
+    }
+
+    bool TNAmplitude(void *obj, long int numFixedValues, long int *fixedValues, double *real, double *imaginary)
+    {
+        if (LibraryHandle)
+            return fTNAmplitude(obj, numFixedValues, fixedValues, real, imaginary) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get tensor network amplitude");
+
+        return false;
+    }
+
+    double TNProbability0(void *obj, unsigned int qubit)
+    {
+        if (LibraryHandle)
+            return fTNProbability0(obj, qubit);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get probability for 0 for tensor network");
+
+        return 0.0;
+    }
+
+    bool TNMeasure(void *obj, unsigned int qubit)
+    {
+        if (LibraryHandle)
+            return fTNMeasure(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to measure qubit on tensor network");
+
+        return false;
+    }
+
+    bool TNMeasureQubits(void *obj, long int numQubits, unsigned int *qubits, int *result)
+    {
+        if (LibraryHandle)
+            return fTNMeasureQubits(obj, numQubits, qubits, result) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to measure qubits on tensor network");
+
+        return false;
+    }
+
+    std::unordered_map<std::vector<bool>, int64_t> *TNGetMapForSample()
+    {
+        if (LibraryHandle)
+            return (std::unordered_map<std::vector<bool>, int64_t> *)fTNGetMapForSample();
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get map for sample for tensor network");
+
+        return nullptr;
+    }
+
+    bool TNFreeMapForSample(std::unordered_map<std::vector<bool>, int64_t> *map)
+    {
+        if (LibraryHandle)
+            return fTNFreeMapForSample((void *)map) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to free map for sample for tensor network");
+
+        return false;
+    }
+
+    bool TNSample(void *obj, long int numShots, long int numQubits, unsigned int *qubits, void *resultMap)
+    {
+        if (LibraryHandle)
+            return fTNSample(obj, numShots, numQubits, qubits, resultMap) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to sample tensor network");
+
+        return false;
+    }
+
+    bool TNSaveState(void *obj)
+    {
+        if (LibraryHandle)
+            return fTNSaveState(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to save tensor network state");
+
+        return false;
+    }
+
+    bool TNRestoreState(void *obj)
+    {
+        if (LibraryHandle)
+            return fTNRestoreState(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to restore tensor network state");
+
+        return false;
+    }
+
+    bool TNCleanSavedState(void *obj)
+    {
+        if (LibraryHandle)
+            return fTNCleanSavedState(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to clean tensor network saved state");
+
+        return false;
+    }
+
+    void *TNClone(void *obj)
+    {
+        if (LibraryHandle)
+            return fTNClone(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to clone tensor network");
+
+        return nullptr;
+    }
+
+    bool TNSetSeed(void *obj, unsigned long long seed) const
+    {
+        return obj && fTNSetSeed && fTNSetSeed(obj, seed) == 1;
+    }
+
+    double TNExpectationValue(void *obj, const char *pauliString, int len) const
+    {
+        if (LibraryHandle)
+            return fTNExpectationValue(obj, pauliString, len);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get tensor network expectation value");
+
+        return 0;
+    }
+
+    bool TNApplyX(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fTNApplyX(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply X gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyY(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fTNApplyY(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply Y gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyZ(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fTNApplyZ(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply Z gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyH(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fTNApplyH(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply H gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyS(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fTNApplyS(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply S gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplySDG(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fTNApplySDG(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply sdg gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyT(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fTNApplyT(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply t gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyTDG(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fTNApplyTDG(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply tdg gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplySX(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fTNApplySX(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply sx gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplySXDG(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fTNApplySXDG(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply sxdg gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyK(void *obj, unsigned int siteA)
+    {
+        if (LibraryHandle)
+            return fTNApplyK(obj, siteA) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply k gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyP(void *obj, unsigned int siteA, double theta)
+    {
+        if (LibraryHandle)
+            return fTNApplyP(obj, siteA, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply p gate on tensor network");
+        return false;
+    }
+
+    bool TNApplyRx(void *obj, unsigned int siteA, double theta)
+    {
+        if (LibraryHandle)
+            return fTNApplyRx(obj, siteA, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply rx gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyRy(void *obj, unsigned int siteA, double theta)
+    {
+        if (LibraryHandle)
+            return fTNApplyRy(obj, siteA, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply ry gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyRz(void *obj, unsigned int siteA, double theta)
+    {
+        if (LibraryHandle)
+            return fTNApplyRz(obj, siteA, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply rz gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyU(void *obj, unsigned int siteA, double theta, double phi, double lambda, double gamma)
+    {
+        if (LibraryHandle)
+            return fTNApplyU(obj, siteA, theta, phi, lambda, gamma) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply u gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplySwap(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fTNApplySwap(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply swap gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyCX(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fTNApplyCX(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cx gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyCY(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fTNApplyCY(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cy gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyCZ(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fTNApplyCZ(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cz gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyCH(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fTNApplyCH(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply ch gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyCSX(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fTNApplyCSX(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply csx gate on tensor network");
+    }
+
+    bool TNApplyCSXDG(void *obj, unsigned int controlQubit, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fTNApplyCSXDG(obj, controlQubit, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply csxdg gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyCP(void *obj, unsigned int controlQubit, unsigned int targetQubit, double theta)
+    {
+        if (LibraryHandle)
+            return fTNApplyCP(obj, controlQubit, targetQubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cp gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyCRx(void *obj, unsigned int controlQubit, unsigned int targetQubit, double theta)
+    {
+        if (LibraryHandle)
+            return fTNApplyCRx(obj, controlQubit, targetQubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply crx gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyCRy(void *obj, unsigned int controlQubit, unsigned int targetQubit, double theta)
+    {
+        if (LibraryHandle)
+            return fTNApplyCRy(obj, controlQubit, targetQubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cry gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyCRz(void *obj, unsigned int controlQubit, unsigned int targetQubit, double theta)
+    {
+        if (LibraryHandle)
+            return fTNApplyCRz(obj, controlQubit, targetQubit, theta) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply crz gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyCU(void *obj, unsigned int controlQubit, unsigned int targetQubit, double theta, double phi, double lambda, double gamma)
+    {
+        if (LibraryHandle)
+            return fTNApplyCU(obj, controlQubit, targetQubit, theta, phi, lambda, gamma) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cu gate on tensor network");
+
+        return false;
+    }
+
+    bool TNApplyCCX(void *obj, unsigned int controlQubit1, unsigned int controlQubit2, unsigned int targetQubit)
+    {
+        if (LibraryHandle)
+            return fTNApplyCCX(obj, controlQubit1, controlQubit2, targetQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply ccx gate on tensor network");
+        return false;
+    }
+
+    bool TNApplyCSwap(void *obj, unsigned int controlQubit, unsigned int targetQubit1, unsigned int targetQubit2)
+    {
+        if (LibraryHandle)
+            return fTNApplyCSwap(obj, controlQubit, targetQubit1, targetQubit2) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply cswap gate on tensor network");
+        return false;
+    }
+
+    // stabilizer functions
+    void *CreateStabilizerSimulator(long long int numQubits, long long int numShots, long long int numMeasurements, long long int numDetectors)
+    {
+        if (LibraryHandle)
+            return fCreateStabilizerSimulator(numQubits, numShots, numMeasurements, numDetectors);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to create stabilizer simulator");
+
+        return nullptr;
+    }
+
+    void DestroyStabilizerSimulator(void *obj)
+    {
+        if (!obj)
+            return;
+        if (LibraryHandle)
+            fDestroyStabilizerSimulator(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to destroy stabilizer simulator");
+    }
+
+    bool ExecuteStabilizerCircuit(void *obj, const char *circuitStr, int randomizeMeasurements, unsigned long long int seed)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fExecuteStabilizerCircuit(obj, circuitStr, randomizeMeasurements, seed) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to execute stabilizer circuit");
+
+        return false;
+    }
+
+    long long GetStabilizerXZTableSize(void *obj)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fGetStabilizerXZTableSize(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get stabilizer XZ table size");
+
+        return 0;
+    }
+
+    long long GetStabilizerMTableSize(void *obj)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fGetStabilizerMTableSize(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get stabilizer M table size");
+
+        return 0;
+    }
+
+    long long GetStabilizerTableStrideMajor(void *obj)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fGetStabilizerTableStrideMajor(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get stabilizer table stride major");
+        return 0;
+    }
+
+    long long GetStabilizerNumQubits(void *obj)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fGetStabilizerNumQubits(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get stabilizer number of qubits");
+
+        return 0;
+    }
+
+    long long GetStabilizerNumShots(void *obj)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fGetStabilizerNumShots(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get stabilizer number of shots");
+
+        return 0;
+    }
+
+    long long GetStabilizerNumMeasurements(void *obj)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fGetStabilizerNumMeasurements(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get stabilizer number of measurements");
+
+        return 0;
+    }
+
+    long long GetStabilizerNumDetectors(void *obj)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fGetStabilizerNumDetectors(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get stabilizer number of detectors");
+
+        return 0;
+    }
+
+    int CopyStabilizerXTable(void *obj, unsigned int *xtable)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fCopyStabilizerXTable(obj, xtable);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to copy stabilizer X table");
+        return 0;
+    }
+
+    int CopyStabilizerZTable(void *obj, unsigned int *ztable)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fCopyStabilizerZTable(obj, ztable);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to copy stabilizer Z table");
+        return 0;
+    }
+
+    int CopyStabilizerMTable(void *obj, unsigned int *mtable)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fCopyStabilizerMTable(obj, mtable);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to copy stabilizer M table");
+        return 0;
+    }
+
+    int InitStabilizerXTable(void *obj, const unsigned int *xtable)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fInitStabilizerXTable(obj, xtable);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to initialize stabilizer X table");
+        return 0;
+    }
+
+    int InitStabilizerZTable(void *obj, const unsigned int *ztable)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fInitStabilizerZTable(obj, ztable);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to initialize stabilizer Z table");
+        return 0;
+    }
+
+    // pauli propagation functions
+    void *CreatePauliPropSimulator(int nrQubits)
+    {
+        if (LibraryHandle)
+            return fCreatePauliPropSimulator(nrQubits);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to create pauli propagation simulator");
+        return nullptr;
+    }
+
+    void DestroyPauliPropSimulator(void *obj)
+    {
+        if (!obj)
+            return;
+        if (LibraryHandle)
+            fDestroyPauliPropSimulator(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to destroy pauli propagation simulator");
+    }
+
+    int PauliPropGetNrQubits(void *obj)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fPauliPropGetNrQubits(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get number of qubits in pauli propagation "
+                                     "simulator");
+        return 0;
+    }
+
+    int PauliPropSetWillUseSampling(void *obj, int willUseSampling)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fPauliPropSetWillUseSampling(obj, willUseSampling) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set 'will use sampling' in pauli propagation "
+                                     "simulator");
+        return 0;
+    }
+
+    int PauliPropGetWillUseSampling(void *obj)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fPauliPropGetWillUseSampling(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get 'will use sampling' in pauli propagation "
+                                     "simulator");
+        return 0;
+    }
+
+    double PauliPropGetCoefficientTruncationCutoff(void *obj)
+    {
+        if (!obj)
+            return 0.0;
+        if (LibraryHandle)
+            return fPauliPropGetCoefficientTruncationCutoff(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get coefficient truncation cutoff in pauli "
+                                     "propagation simulator");
+        return 0.0;
+    }
+
+    void PauliPropSetCoefficientTruncationCutoff(void *obj, double cutoff)
+    {
+        if (!obj)
+            return;
+        if (LibraryHandle)
+            fPauliPropSetCoefficientTruncationCutoff(obj, cutoff);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set coefficient truncation cutoff in pauli "
+                                     "propagation simulator");
+    }
+
+    double PauliPropGetWeightTruncationCutoff(void *obj)
+    {
+        if (!obj)
+            return 0.0;
+        if (LibraryHandle)
+            return fPauliPropGetWeightTruncationCutoff(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get weight truncation cutoff in pauli "
+                                     "propagation simulator");
+        return 0.0;
+    }
+
+    void PauliPropSetWeightTruncationCutoff(void *obj, double cutoff)
+    {
+        if (!obj)
+            return;
+        if (LibraryHandle)
+            fPauliPropSetWeightTruncationCutoff(obj, cutoff);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set weight truncation cutoff in pauli "
+                                     "propagation simulator");
+    }
+
+    int PauliPropGetNumGatesBetweenTruncations(void *obj)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fPauliPropGetNumGatesBetweenTruncations(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get number of gates between truncations in "
+                                     "pauli propagation simulator");
+        return 0;
+    }
+
+    void PauliPropSetNumGatesBetweenTruncations(void *obj, int numGates)
+    {
+        if (!obj)
+            return;
+        if (LibraryHandle)
+            fPauliPropSetNumGatesBetweenTruncations(obj, numGates);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set number of gates between truncations in "
+                                     "pauli "
+                                     "propagation simulator");
+    }
+
+    int PauliPropGetNumGatesBetweenDeduplications(void *obj)
+    {
+        if (!obj)
+            return 0;
+        if (LibraryHandle)
+            return fPauliPropGetNumGatesBetweenDeduplications(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get number of gates between deduplications in "
+                                     "pauli propagation simulator");
+        return 0;
+    }
+
+    void PauliPropSetNumGatesBetweenDeduplications(void *obj, int numGates)
+    {
+        if (!obj)
+            return;
+        if (LibraryHandle)
+            fPauliPropSetNumGatesBetweenDeduplications(obj, numGates);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set number of gates between deduplications in "
+                                     "pauli "
+                                     "propagation simulator");
+    }
+
+    bool PauliPropClearOperators(void *obj)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropClearOperators(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to clear operators in pauli propagation "
+                                     "simulator");
+        return false;
+    }
+
+    bool PauliPropAllocateMemory(void *obj, double percentage)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropAllocateMemory(obj, percentage) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to allocate memory in pauli propagation "
+                                     "simulator");
+        return false;
+    }
+
+    double PauliPropGetExpectationValue(void *obj)
+    {
+        if (!obj)
+            return 0.0;
+        if (LibraryHandle)
+            return fPauliPropGetExpectationValue(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get expectation value in pauli propagation "
+                                     "simulator");
+        return 0.0;
+    }
+
+    bool PauliPropExecute(void *obj)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropExecute(obj) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to execute pauli propagation simulator");
+        return false;
+    }
+
+    bool PauliPropSetSeed(void *obj, unsigned long long seed) const
+    {
+        return obj && fPauliPropSetSeed && fPauliPropSetSeed(obj, seed) == 1;
+    }
+
+    bool PauliPropSetInPauliExpansionUnique(void *obj, const char *pauliString)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropSetInPauliExpansionUnique(obj, pauliString) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set unique pauli in pauli propagation "
+                                     "simulator");
+        return false;
+    }
+
+    bool PauliPropSetInPauliExpansionMultiple(void *obj, const char **pauliStrings, const double *coefficients, int nrPaulis)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropSetInPauliExpansionMultiple(obj, pauliStrings, coefficients, nrPaulis) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to set multiple pauli in pauli propagation "
+                                     "simulator");
+        return false;
+    }
+
+    bool PauliPropApplyX(void *obj, int qubit)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplyX(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply X gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplyY(void *obj, int qubit)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplyY(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply Y gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplyZ(void *obj, int qubit)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplyZ(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply Z gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplyH(void *obj, int qubit)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplyH(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply H gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplyS(void *obj, int qubit)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplyS(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply S gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplySQRTX(void *obj, int qubit)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplySQRTX(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply SQRTX gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplySQRTY(void *obj, int qubit)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplySQRTY(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply SQRTY gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplySQRTZ(void *obj, int qubit)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplySQRTZ(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply SQRTZ gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplyCX(void *obj, int targetQubit, int controlQubit)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplyCX(obj, targetQubit, controlQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CX gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplyCY(void *obj, int targetQubit, int controlQubit)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplyCY(obj, targetQubit, controlQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CY gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplyCZ(void *obj, int targetQubit, int controlQubit)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplyCZ(obj, targetQubit, controlQubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply CZ gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplySWAP(void *obj, int qubit1, int qubit2)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplySWAP(obj, qubit1, qubit2) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply SWAP gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplyISWAP(void *obj, int qubit1, int qubit2)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplyISWAP(obj, qubit1, qubit2) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply ISWAP gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplyRX(void *obj, int qubit, double angle)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplyRX(obj, qubit, angle) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply RX gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplyRY(void *obj, int qubit, double angle)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplyRY(obj, qubit, angle) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply RY gate on mps");
+        return false;
+    }
+
+    bool PauliPropApplyRZ(void *obj, int qubit, double angle)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropApplyRZ(obj, qubit, angle) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to apply RZ gate on mps");
+        return false;
+    }
+
+    bool PauliPropAddNoiseX(void *obj, int qubit, double probability)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropAddNoiseX(obj, qubit, probability) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to add X noise on mps");
+        return false;
+    }
+
+    bool PauliPropAddNoiseY(void *obj, int qubit, double probability)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropAddNoiseY(obj, qubit, probability) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to add Y noise on mps");
+        return false;
+    }
+
+    bool PauliPropAddNoiseZ(void *obj, int qubit, double probability)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropAddNoiseZ(obj, qubit, probability) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to add Z noise on mps");
+        return false;
+    }
+
+    bool PauliPropAddNoiseXYZ(void *obj, int qubit, double probabilityX, double probabilityY, double probabilityZ)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropAddNoiseXYZ(obj, qubit, probabilityX, probabilityY, probabilityZ) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to add XYZ noise on mps");
+        return false;
+    }
+
+    bool PauliPropAddAmplitudeDamping(void *obj, int qubit, double dampingProb, double exciteProb)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropAddAmplitudeDamping(obj, qubit, dampingProb, exciteProb) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to add amplitude damping on mps");
+        return false;
+    }
+
+    double PauliPropQubitProbability0(void *obj, int qubit)
+    {
+        if (!obj)
+            return 0.0;
+        if (LibraryHandle)
+            return fPauliPropQubitProbability0(obj, qubit);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get qubit probability 0 in pauli propagation "
+                                     "simulator");
+        return 0.0;
+    }
+
+    double PauliPropProbability(void *obj, unsigned long long int outcome)
+    {
+        if (!obj)
+            return 0.0;
+        if (LibraryHandle)
+            return fPauliPropProbability(obj, outcome);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to get probability of outcome in pauli "
+                                     "propagation simulator");
+        return 0.0;
+    }
+
+    bool PauliPropMeasureQubit(void *obj, int qubit)
+    {
+        if (!obj)
+            return false;
+        if (LibraryHandle)
+            return fPauliPropMeasureQubit(obj, qubit) == 1;
+        else
+            throw std::runtime_error("GpuLibrary: Unable to measure qubit in pauli propagation simulator");
+        return false;
+    }
+
+    unsigned char *PauliPropSampleQubits(void *obj, const int *qubits, int nrQubits)
+    {
+        if (!obj)
+            return nullptr;
+        if (LibraryHandle)
+            return fPauliPropSampleQubits(obj, qubits, nrQubits);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to sample qubits in pauli propagation simulator");
+        return nullptr;
+    }
+
+    void PauliPropFreeSampledQubits(unsigned char *samples)
+    {
+        if (!samples)
+            return;
+        if (LibraryHandle)
+            fPauliPropFreeSampledQubits(samples);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to free sampled qubits in pauli propagation "
+                                     "simulator");
+    }
+
+    void PauliPropSaveState(void *obj)
+    {
+        if (!obj)
+            return;
+        if (LibraryHandle)
+            fPauliPropSaveState(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to save state in pauli propagation simulator");
+    }
+
+    void PauliPropRestoreState(void *obj)
+    {
+        if (!obj)
+            return;
+        if (LibraryHandle)
+            fPauliPropRestoreState(obj);
+        else
+            throw std::runtime_error("GpuLibrary: Unable to restore state in pauli propagation simulator");
+    }
+
+  private:
+    std::recursive_mutex initializationMutex;
+    std::string loadedPath;
+    bool licenseValidated = false;
+    bool initializationFailed = false;
+    const char *(*fGetLicenseError)() = nullptr;
+    void *LibraryHandle = nullptr;
+
+    int (*fValidateLicense)(const char *) = nullptr;
+    void *(*InitLib)() = nullptr;
+    void (*FreeLib)() = nullptr;
+
+    inline static thread_local int creationDevice = 0;
+    int (*fGetStateVectorGpuId)(void *) = nullptr;
+    int (*fStateVectorSynchronize)(void *) = nullptr;
+    int (*fDMSynchronize)(void *) = nullptr;
+    int (*fMPSGetGpuId)(void *) = nullptr;
+    int (*fTNGetGpuId)(void *) = nullptr;
+    int (*fDMGetGpuId)(void *) = nullptr;
+    int (*fMPOGetGpuId)(void *) = nullptr;
+    int (*fGetStabilizerGpuId)(void *) = nullptr;
+    int (*fPauliPropGetGpuId)(void *) = nullptr;
+    int (*fSetGpuDevice)(int) = nullptr;
+    int (*fGetGpuDeviceCount)() = nullptr;
+
+    void *(*fCreateStateVector)(void *) = nullptr;
+    void (*fDestroyStateVector)(void *) = nullptr;
+    // statevector functions
+    int (*fSetDataType)(void *, int) = nullptr;
+    int (*fIsDoublePrecision)(void *) = nullptr;
+    int (*fGetNrQubits)(void *) = nullptr;
+    int (*fCreate)(void *, unsigned int) = nullptr;
+    int (*fReset)(void *) = nullptr;
+    int (*fCreateWithState)(void *, unsigned int, const double *) = nullptr;
+    int (*fMeasureQubitCollapse)(void *, int) = nullptr;
+    int (*fMeasureQubitNoCollapse)(void *, int) = nullptr;
+    int (*fMeasureQubitsCollapse)(void *, int *, int *, int) = nullptr;
+    int (*fMeasureQubitsNoCollapse)(void *, int *, int *, int) = nullptr;
+    unsigned long long (*fMeasureAllQubitsCollapse)(void *) = nullptr;
+    unsigned long long (*fMeasureAllQubitsNoCollapse)(void *) = nullptr;
+
+    int (*fSaveState)(void *) = nullptr;
+    int (*fSaveStateToHost)(void *) = nullptr;
+    int (*fSaveStateDestructive)(void *) = nullptr;
+    int (*fRestoreStateFreeSaved)(void *) = nullptr;
+    int (*fRestoreStateNoFreeSaved)(void *) = nullptr;
+    void (*fFreeSavedState)(void *obj) = nullptr;
+    void *(*fClone)(void *) = nullptr;
+    int (*fSetSeed)(void *, unsigned long long) = nullptr;
+    int (*fSample)(void *, unsigned int, long int *, unsigned int, int *) = nullptr;
+    int (*fSampleAll)(void *, unsigned int, long int *) = nullptr;
+    int (*fAmplitude)(void *, long long int, double *, double *) = nullptr;
+    double (*fProbability)(void *, int *, int *, int) = nullptr;
+    double (*fBasisStateProbability)(void *, long long int) = nullptr;
+    int (*fAllProbabilities)(void *, double *) = nullptr;
+    double (*fExpectationValue)(void *, const char *, int) = nullptr;
+
+    int (*fApplyX)(void *, int) = nullptr;
+    int (*fApplyY)(void *, int) = nullptr;
+    int (*fApplyZ)(void *, int) = nullptr;
+    int (*fApplyH)(void *, int) = nullptr;
+    int (*fApplyS)(void *, int) = nullptr;
+    int (*fApplySDG)(void *, int) = nullptr;
+    int (*fApplyT)(void *, int) = nullptr;
+    int (*fApplyTDG)(void *, int) = nullptr;
+    int (*fApplySX)(void *, int) = nullptr;
+    int (*fApplySXDG)(void *, int) = nullptr;
+    int (*fApplyK)(void *, int) = nullptr;
+    int (*fApplyP)(void *, int, double) = nullptr;
+    int (*fApplyRx)(void *, int, double) = nullptr;
+    int (*fApplyRy)(void *, int, double) = nullptr;
+    int (*fApplyRz)(void *, int, double) = nullptr;
+    int (*fApplyU)(void *, int, double, double, double, double) = nullptr;
+    int (*fApplyCX)(void *, int, int) = nullptr;
+    int (*fApplyCY)(void *, int, int) = nullptr;
+    int (*fApplyCZ)(void *, int, int) = nullptr;
+    int (*fApplyCH)(void *, int, int) = nullptr;
+    int (*fApplyCSX)(void *, int, int) = nullptr;
+    int (*fApplyCSXDG)(void *, int, int) = nullptr;
+    int (*fApplyCP)(void *, int, int, double) = nullptr;
+    int (*fApplyCRx)(void *, int, int, double) = nullptr;
+    int (*fApplyCRy)(void *, int, int, double) = nullptr;
+    int (*fApplyCRz)(void *, int, int, double) = nullptr;
+    int (*fApplyCCX)(void *, int, int, int) = nullptr;
+    int (*fApplySwap)(void *, int, int) = nullptr;
+    int (*fApplyCSwap)(void *, int, int, int) = nullptr;
+    int (*fApplyCU)(void *, int, int, double, double, double, double) = nullptr;
+    int (*fApplyOneQubitMatrix)(void *, int, const double *) = nullptr;
+    int (*fApplyOneQubitMatrixWithLayout)(void *, int, const double *, int) = nullptr;
+    int (*fApplyTwoQubitMatrix)(void *, int, int, const double *) = nullptr;
+    int (*fApplyTwoQubitMatrixWithLayout)(void *, int, int, const double *, int) = nullptr;
+    int (*fApplyThreeQubitMatrix)(void *, int, int, int, const double *) = nullptr;
+    int (*fApplyThreeQubitMatrixWithLayout)(void *, int, int, int, const double *, int) = nullptr;
+    // mps functions
+    void *(*fCreateMPS)(void *) = nullptr;
+    void (*fDestroyMPS)(void *) = nullptr;
+
+    int (*fMPSCreate)(void *, unsigned int) = nullptr;
+    int (*fMPSCreateWithBasisState)(void *, unsigned int, unsigned long long) = nullptr;
+    int (*fMPSCreateWithBasisStateBits)(void *, unsigned int, const unsigned char *) = nullptr;
+    int (*fMPSReset)(void *) = nullptr;
+    int (*fMPSTrim)(void *) = nullptr;
+    int (*fMPSExpectationValues)(void *, int, const char *const *, const int *, double *) = nullptr;
+    int (*fMPOExpectationValues)(void *, int, const char *const *, const int *, double *) = nullptr;
+    int (*fMPOExpectationValuesComplex)(void *, int, const char *const *, const int *, int, double *, double *) = nullptr;
+    int (*fMPSGetStateVector)(void *, double *) = nullptr;
+    int (*fMPSAllProbabilities)(void *, double *) = nullptr;
+    int (*fMPSMoveAtBeginningOfChain)(void *, const int *, int) = nullptr;
+    int (*fMPSExpectationValueOperators)(void *, int, const int *, const double *, double *, double *) = nullptr;
+    int (*fMPSSetBondDimensionSummaryCallback)(void *, void (*)(void *, int64_t)) = nullptr;
+    int (*fMPOSetBondDimensionSummaryCallback)(void *, void (*)(void *, int64_t)) = nullptr;
+    long long (*fMPSGetMaxBondDimension)(void *) = nullptr;
+    long long (*fMPOGetMaxBondDimension)(void *) = nullptr;
+    int (*fMPSReCanonicalize)(void *) = nullptr;
+    int (*fMPSSetInitialQubitsMap)(void *, const long long int *, int) = nullptr;
+    int (*fMPSSetUseOptimalMeetingPosition)(void *, int) = nullptr;
+    int (*fMPSGetUseOptimalMeetingPosition)(void *) = nullptr;
+
+    int (*fMPSIsValid)(void *) = nullptr;
+    int (*fMPSIsCreated)(void *) = nullptr;
+
+    int (*fMPSSetDataType)(void *, int) = nullptr;
+    int (*fMPSIsDoublePrecision)(void *) = nullptr;
+    int (*fMPSSetCutoff)(void *, double) = nullptr;
+    double (*fMPSGetCutoff)(void *) = nullptr;
+    int (*fMPSSetTruncationMode)(void *, int) = nullptr;
+    int (*fMPSGetTruncationMode)(void *) = nullptr;
+    int (*fMPSSetGesvdJ)(void *, int) = nullptr;
+    int (*fMPSGetGesvdJ)(void *) = nullptr;
+    int (*fMPSSetGesvdP)(void *, int) = nullptr;
+    int (*fMPSGetGesvdP)(void *) = nullptr;
+    int (*fMPSSetGesvdR)(void *, int) = nullptr;
+    int (*fMPSGetGesvdR)(void *) = nullptr;
+    int (*fMPSGetLastSvdAlgo)(void *) = nullptr;
+    int (*fMPSSetMaxExtent)(void *, long int) = nullptr;
+    long int (*fMPSGetMaxExtent)(void *) = nullptr;
+    int (*fMPSGetNrQubits)(void *) = nullptr;
+    int (*fMPSGetBondDimensions)(void *, long long int *) = nullptr;
+    int (*fMPSGetQubitsMap)(void *, long long *, int) = nullptr;
+    int (*fMPSSetCallbackContext)(void *, void *) = nullptr;
+    int (*fMPSSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;
+    int (*fMPSSetBondDimensionsCallback)(void *, void (*)(void *, const int64_t *)) = nullptr;
+
+    int (*fMPSAmplitude)(void *, long int, long int *, double *, double *) = nullptr;
+    double (*fMPSProbability0)(void *, unsigned int) = nullptr;
+    int (*fMPSMeasure)(void *, unsigned int) = nullptr;
+    int (*fMPSMeasureQubits)(void *, long int, unsigned int *, int *) = nullptr;
+    void *(*fMPSGetMapForSample)() = nullptr;
+    int (*fMPSFreeMapForSample)(void *) = nullptr;
+    int (*fMPSSample)(void *, long int, long int, unsigned int *, void *) = nullptr;
+    int (*fMPSSampleRaw)(void *, unsigned int, long int *, unsigned int, const unsigned int *) = nullptr;
+    int (*fMPSSampleAll)(void *, unsigned int, long int *) = nullptr;
+
+    int (*fMPSSaveState)(void *) = nullptr;
+    int (*fMPSRestoreState)(void *) = nullptr;
+    int (*fMPSCleanSavedState)(void *) = nullptr;
+    void *(*fMPSClone)(void *) = nullptr;
+    int (*fMPSSetSeed)(void *, unsigned long long) = nullptr;
+
+    double (*fMPSExpectationValue)(void *, const char *, int) = nullptr;
+    int (*fMPSProjectOnZero)(void *, double *, double *) = nullptr;
+
+    int (*fMPSApplyX)(void *, unsigned int) = nullptr;
+    int (*fMPSApplyY)(void *, unsigned int) = nullptr;
+    int (*fMPSApplyZ)(void *, unsigned int) = nullptr;
+    int (*fMPSApplyH)(void *, unsigned int) = nullptr;
+    int (*fMPSApplyS)(void *, unsigned int) = nullptr;
+    int (*fMPSApplySDG)(void *, unsigned int) = nullptr;
+    int (*fMPSApplyT)(void *, unsigned int) = nullptr;
+    int (*fMPSApplyTDG)(void *, unsigned int) = nullptr;
+    int (*fMPSApplySX)(void *, unsigned int) = nullptr;
+    int (*fMPSApplySXDG)(void *, unsigned int) = nullptr;
+    int (*fMPSApplyK)(void *, unsigned int) = nullptr;
+    int (*fMPSApplyP)(void *, unsigned int, double) = nullptr;
+    int (*fMPSApplyRx)(void *, unsigned int, double) = nullptr;
+    int (*fMPSApplyRy)(void *, unsigned int, double) = nullptr;
+    int (*fMPSApplyRz)(void *, unsigned int, double) = nullptr;
+    int (*fMPSApplyU)(void *, unsigned int, double, double, double, double) = nullptr;
+    int (*fMPSApplyOneQubitMatrix)(void *, unsigned int, const double *) = nullptr;
+    int (*fMPSApplyTwoQubitMatrix)(void *, unsigned int, unsigned int, const double *) = nullptr;
+    int (*fMPSApplySwap)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fMPSApplyCX)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fMPSApplyCY)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fMPSApplyCZ)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fMPSApplyCH)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fMPSApplyCSX)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fMPSApplyCSXDG)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fMPSApplyCP)(void *, unsigned int, unsigned int, double) = nullptr;
+    int (*fMPSApplyCRx)(void *, unsigned int, unsigned int, double) = nullptr;
+    int (*fMPSApplyCRy)(void *, unsigned int, unsigned int, double) = nullptr;
+    int (*fMPSApplyCRz)(void *, unsigned int, unsigned int, double) = nullptr;
+    int (*fMPSApplyCU)(void *, unsigned int, unsigned int, double, double, double, double) = nullptr;
+
+    // tensor network functions
+    void *(*fCreateTensorNet)(void *) = nullptr;
+    void (*fDestroyTensorNet)(void *) = nullptr;
+
+    int (*fTNCreate)(void *, unsigned int) = nullptr;
+    int (*fTNReset)(void *) = nullptr;
+    int (*fTNIsValid)(void *) = nullptr;
+    int (*fTNIsCreated)(void *) = nullptr;
+
+    int (*fTNSetDataType)(void *, int) = nullptr;
+    int (*fTNIsDoublePrecision)(void *) = nullptr;
+    int (*fTNSetCutoff)(void *, double) = nullptr;
+    double (*fTNGetCutoff)(void *) = nullptr;
+    int (*fTNSetTruncationMode)(void *, int) = nullptr;
+    int (*fTNGetTruncationMode)(void *) = nullptr;
+    int (*fTNSetGesvdJ)(void *, int) = nullptr;
+    int (*fTNGetGesvdJ)(void *) = nullptr;
+    int (*fTNSetGesvdP)(void *, int) = nullptr;
+    int (*fTNGetGesvdP)(void *) = nullptr;
+    int (*fTNSetGesvdR)(void *, int) = nullptr;
+    int (*fTNGetGesvdR)(void *) = nullptr;
+    int (*fTNSetMaxExtent)(void *, long int) = nullptr;
+    long int (*fTNGetMaxExtent)(void *) = nullptr;
+    int (*fTNGetNrQubits)(void *) = nullptr;
+    int (*fTNAmplitude)(void *, long int, long int *, double *, double *) = nullptr;
+    double (*fTNProbability0)(void *, unsigned int) = nullptr;
+    int (*fTNMeasure)(void *, unsigned int) = nullptr;
+    int (*fTNMeasureQubits)(void *, long int, unsigned int *, int *) = nullptr;
+    void *(*fTNGetMapForSample)() = nullptr;
+    int (*fTNFreeMapForSample)(void *) = nullptr;
+    int (*fTNSample)(void *, long int, long int, unsigned int *, void *) = nullptr;
+
+    int (*fTNSaveState)(void *) = nullptr;
+    int (*fTNRestoreState)(void *) = nullptr;
+    int (*fTNCleanSavedState)(void *) = nullptr;
+    void *(*fTNClone)(void *) = nullptr;
+    int (*fTNSetSeed)(void *, unsigned long long) = nullptr;
+
+    double (*fTNExpectationValue)(void *, const char *, int) = nullptr;
+
+    int (*fTNApplyX)(void *, unsigned int) = nullptr;
+    int (*fTNApplyY)(void *, unsigned int) = nullptr;
+    int (*fTNApplyZ)(void *, unsigned int) = nullptr;
+    int (*fTNApplyH)(void *, unsigned int) = nullptr;
+    int (*fTNApplyS)(void *, unsigned int) = nullptr;
+    int (*fTNApplySDG)(void *, unsigned int) = nullptr;
+    int (*fTNApplyT)(void *, unsigned int) = nullptr;
+    int (*fTNApplyTDG)(void *, unsigned int) = nullptr;
+    int (*fTNApplySX)(void *, unsigned int) = nullptr;
+    int (*fTNApplySXDG)(void *, unsigned int) = nullptr;
+    int (*fTNApplyK)(void *, unsigned int) = nullptr;
+    int (*fTNApplyP)(void *, unsigned int, double) = nullptr;
+    int (*fTNApplyRx)(void *, unsigned int, double) = nullptr;
+    int (*fTNApplyRy)(void *, unsigned int, double) = nullptr;
+    int (*fTNApplyRz)(void *, unsigned int, double) = nullptr;
+    int (*fTNApplyU)(void *, unsigned int, double, double, double, double) = nullptr;
+    int (*fTNApplySwap)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fTNApplyCX)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fTNApplyCY)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fTNApplyCZ)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fTNApplyCH)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fTNApplyCSX)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fTNApplyCSXDG)(void *, unsigned int, unsigned int) = nullptr;
+    int (*fTNApplyCP)(void *, unsigned int, unsigned int, double) = nullptr;
+    int (*fTNApplyCRx)(void *, unsigned int, unsigned int, double) = nullptr;
+    int (*fTNApplyCRy)(void *, unsigned int, unsigned int, double) = nullptr;
+    int (*fTNApplyCRz)(void *, unsigned int, unsigned int, double) = nullptr;
+    int (*fTNApplyCU)(void *, unsigned int, unsigned int, double, double, double, double) = nullptr;
+    int (*fTNApplyCCX)(void *, unsigned int, unsigned int, unsigned int) = nullptr;
+    int (*fTNApplyCSwap)(void *, unsigned int, unsigned int, unsigned int) = nullptr;
+    // stabilizer functions
+    void *(*fCreateStabilizerSimulator)(long long int, long long int, long long int, long long int) = nullptr;
+    void (*fDestroyStabilizerSimulator)(void *) = nullptr;
+    int (*fExecuteStabilizerCircuit)(void *, const char *, int, unsigned long long int) = nullptr;
+    long long (*fGetStabilizerXZTableSize)(void *) = nullptr;
+    long long (*fGetStabilizerMTableSize)(void *) = nullptr;
+    long long (*fGetStabilizerTableStrideMajor)(void *) = nullptr;
+    long long (*fGetStabilizerNumQubits)(void *) = nullptr;
+    long long (*fGetStabilizerNumShots)(void *) = nullptr;
+    long long (*fGetStabilizerNumMeasurements)(void *) = nullptr;
+    long long (*fGetStabilizerNumDetectors)(void *) = nullptr;
+    int (*fCopyStabilizerXTable)(void *, unsigned int *) = nullptr;
+    int (*fCopyStabilizerZTable)(void *, unsigned int *) = nullptr;
+    int (*fCopyStabilizerMTable)(void *, unsigned int *) = nullptr;
+    int (*fInitStabilizerXTable)(void *, const unsigned int *) = nullptr;
+    int (*fInitStabilizerZTable)(void *, const unsigned int *) = nullptr;
+    // Pauli propagation functions
+    void *(*fCreatePauliPropSimulator)(int) = nullptr;
+    void (*fDestroyPauliPropSimulator)(void *) = nullptr;
+
+    int (*fPauliPropGetNrQubits)(void *) = nullptr;
+    int (*fPauliPropSetWillUseSampling)(void *, int) = nullptr;
+    int (*fPauliPropGetWillUseSampling)(void *) = nullptr;
+    double (*fPauliPropGetCoefficientTruncationCutoff)(void *) = nullptr;
+    void (*fPauliPropSetCoefficientTruncationCutoff)(void *, double) = nullptr;
+    double (*fPauliPropGetWeightTruncationCutoff)(void *) = nullptr;
+    void (*fPauliPropSetWeightTruncationCutoff)(void *, double) = nullptr;
+    int (*fPauliPropGetNumGatesBetweenTruncations)(void *) = nullptr;
+    void (*fPauliPropSetNumGatesBetweenTruncations)(void *, int) = nullptr;
+    int (*fPauliPropGetNumGatesBetweenDeduplications)(void *) = nullptr;
+    void (*fPauliPropSetNumGatesBetweenDeduplications)(void *, int) = nullptr;
+    int (*fPauliPropClearOperators)(void *) = nullptr;
+    int (*fPauliPropAllocateMemory)(void *, double) = nullptr;
+    double (*fPauliPropGetExpectationValue)(void *) = nullptr;
+    int (*fPauliPropExecute)(void *) = nullptr;
+    int (*fPauliPropSetSeed)(void *, unsigned long long) = nullptr;
+    int (*fPauliPropSetInPauliExpansionUnique)(void *, const char *) = nullptr;
+    int (*fPauliPropSetInPauliExpansionMultiple)(void *, const char **, const double *, int) = nullptr;
+
+    int (*fPauliPropApplyX)(void *, int) = nullptr;
+    int (*fPauliPropApplyY)(void *, int) = nullptr;
+    int (*fPauliPropApplyZ)(void *, int) = nullptr;
+    int (*fPauliPropApplyH)(void *, int) = nullptr;
+    int (*fPauliPropApplyS)(void *, int) = nullptr;
+    int (*fPauliPropApplySQRTX)(void *, int) = nullptr;
+    int (*fPauliPropApplySQRTY)(void *, int) = nullptr;
+    int (*fPauliPropApplySQRTZ)(void *, int) = nullptr;
+    int (*fPauliPropApplyCX)(void *, int, int) = nullptr;
+    int (*fPauliPropApplyCY)(void *, int, int) = nullptr;
+    int (*fPauliPropApplyCZ)(void *, int, int) = nullptr;
+    int (*fPauliPropApplySWAP)(void *, int, int) = nullptr;
+    int (*fPauliPropApplyISWAP)(void *, int, int) = nullptr;
+    int (*fPauliPropApplyRX)(void *, int, double) = nullptr;
+    int (*fPauliPropApplyRY)(void *, int, double) = nullptr;
+    int (*fPauliPropApplyRZ)(void *, int, double) = nullptr;
+    int (*fPauliPropAddNoiseX)(void *, int, double) = nullptr;
+    int (*fPauliPropAddNoiseY)(void *, int, double) = nullptr;
+    int (*fPauliPropAddNoiseZ)(void *, int, double) = nullptr;
+    int (*fPauliPropAddNoiseXYZ)(void *, int, double, double, double) = nullptr;
+    int (*fPauliPropAddAmplitudeDamping)(void *, int, double, double) = nullptr;
+    double (*fPauliPropQubitProbability0)(void *, int) = nullptr;
+    double (*fPauliPropProbability)(void *, unsigned long long int) = nullptr;
+
+    int (*fPauliPropMeasureQubit)(void *, int) = nullptr;
+    unsigned char *(*fPauliPropSampleQubits)(void *, const int *, int) = nullptr;
+    void (*fPauliPropFreeSampledQubits)(unsigned char *) = nullptr;
+    void (*fPauliPropSaveState)(void *) = nullptr;
+    void (*fPauliPropRestoreState)(void *) = nullptr;
 };
-}  // namespace Simulators
+} // namespace Simulators
 
 #endif
 #endif
