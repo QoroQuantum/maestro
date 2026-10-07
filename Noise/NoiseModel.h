@@ -1,5 +1,5 @@
 /**
- * @file noise.h
+ * @file Noise.h
  * @brief Pauli and coherent noise models for quantum circuit simulation.
  *
  * Defines a NoiseModel that maps per-qubit noise parameters and provides:

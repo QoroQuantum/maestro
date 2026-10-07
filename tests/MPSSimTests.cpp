@@ -1,0 +1,831 @@
+/**
+ * @file MPSSimTests.cpp
+ * @version 1.0
+ *
+ * @section DESCRIPTION
+ *
+ * Tests for MPS simulators.
+ */
+
+#include <boost/test/data/monomorphic.hpp>
+#include <boost/test/data/test_case.hpp>
+#include <boost/test/unit_test.hpp>
+namespace utf = boost::unit_test;
+namespace bdata = boost::unit_test::data;
+
+#undef min
+#undef max
+
+#include <algorithm>
+#include <chrono>
+#include <numeric>
+#include <random>
+#define _USE_MATH_DEFINES
+#include <math.h>
+
+#include "../Circuit/Factory.h"
+#include "../Simulators/Core/Factory.h"
+
+struct MPSSimTestFixture
+{
+    MPSSimTestFixture()
+    {
+#ifdef __linux__
+        Simulators::SimulatorsFactory::InitGpuLibrary();
+#endif
+
+#ifndef NO_QISKIT_AER
+        aerMPS = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kMatrixProductState);
+        aerMPS->AllocateQubits(nrQubitsForRandomCirc);
+        aerMPS->Initialize();
+#endif
+
+        qcsimMPS = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState);
+        qcsimMPS->AllocateQubits(nrQubitsForRandomCirc);
+        qcsimMPS->Initialize();
+
+        qcsimSV = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector);
+        qcsimSV->AllocateQubits(nrQubitsForRandomCirc);
+        qcsimSV->Initialize();
+
+#ifndef NO_QISKIT_AER
+        aerSV = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kStatevector);
+        aerSV->AllocateQubits(nrQubitsForRandomCirc);
+        aerSV->Initialize();
+#endif
+
+#ifdef __linux__
+        gpusimMPS = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kGpuSim, Simulators::SimulationType::kMatrixProductState);
+        if (gpusimMPS)
+        {
+            gpusimMPS->AllocateQubits(nrQubitsForRandomCirc);
+            gpusimMPS->Initialize();
+        }
+#endif
+
+        circ = std::make_shared<Circuits::Circuit<>>();
+        state.AllocateBits(nrQubitsForRandomCirc);
+
+        resetRandomCirc = std::make_shared<Circuits::Circuit<>>();
+        Types::qubits_vector qubits(nrQubitsForRandomCirc);
+        std::iota(qubits.begin(), qubits.end(), 0);
+        resetRandomCirc->AddOperation(std::make_shared<Circuits::Reset<>>(qubits));
+    }
+
+    // The 50-qubit simulators (with bond dimension 20) are comparatively heavy
+    // on GPU memory and time, and only RandomCircuitsTest50 needs them. Building
+    // them unconditionally in the constructor meant every other data point of
+    // every other test case in this file (dozens of them) paid that cost too,
+    // which starved later GPU-heavy test suites (e.g. the Pauli propagator
+    // tests) of GPU memory when the whole binary runs in one process. Build
+    // them lazily instead, and release them explicitly once done.
+    void SetupMPS50()
+    {
+#ifndef NO_QISKIT_AER
+        aerMPS50 = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQiskitAer, Simulators::SimulationType::kMatrixProductState);
+        aerMPS50->AllocateQubits(50);
+        aerMPS50->Configure("matrix_product_state_max_bond_dimension", "20");
+        aerMPS50->Configure("matrix_product_state_truncation_threshold", "0.0001");
+        aerMPS50->Initialize();
+#endif
+
+        qcsimMPS50 = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState);
+        qcsimMPS50->AllocateQubits(50);
+        qcsimMPS50->Configure("matrix_product_state_max_bond_dimension", "20");
+        qcsimMPS50->Configure("matrix_product_state_truncation_threshold", "0.0001");
+        qcsimMPS50->Initialize();
+
+#ifdef __linux__
+        gpusimMPS50 = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kGpuSim, Simulators::SimulationType::kMatrixProductState);
+        if (gpusimMPS50)
+        {
+            gpusimMPS50->AllocateQubits(50);
+            gpusimMPS50->Configure("matrix_product_state_max_bond_dimension", "20");
+            gpusimMPS50->Configure("matrix_product_state_truncation_threshold", "0.0001");
+            gpusimMPS50->Initialize();
+        }
+#endif
+
+        circ50 = std::make_shared<Circuits::Circuit<>>();
+        state50.AllocateBits(50);
+
+        resetRandomCirc50 = std::make_shared<Circuits::Circuit<>>();
+        Types::qubits_vector qubits50(50);
+        std::iota(qubits50.begin(), qubits50.end(), 0);
+        resetRandomCirc50->AddOperation(std::make_shared<Circuits::Reset<>>(qubits50));
+    }
+
+    // Frees the (GPU) memory the 50-qubit simulators hold as soon as the test
+    // that needs them is done, instead of waiting for the fixture itself to be
+    // torn down.
+    void TeardownMPS50()
+    {
+#ifndef NO_QISKIT_AER
+        aerMPS50.reset();
+#endif
+        qcsimMPS50.reset();
+#ifdef __linux__
+        gpusimMPS50.reset();
+#endif
+        circ50.reset();
+        resetRandomCirc50.reset();
+    }
+
+    // fills randomly the circuit with gates
+    void GenerateCircuit(int nrGates)
+    {
+        std::random_device rd;
+        std::mt19937 g(rd());
+
+        auto dblGen = bdata::random(-2. * M_PI, 2. * M_PI);
+        auto dblGenIter = dblGen.begin();
+
+        auto gateGen = bdata::random(0, static_cast<int>(Circuits::QuantumGateType::kCCXGateType));
+        auto gateGenIter = gateGen.begin();
+
+        // TODO: Maybe insert from time to time a random number generating 'gate'
+        // and a conditioned random one, those should not affect results?
+        for (int gateNr = 0; gateNr < nrGates; ++gateNr, ++gateGenIter)
+        {
+            // create a random gate and add it to the circuit
+
+            // first, pick randomly three qubits (depending on the randomly chosen
+            // gate type, not all of them will be used)
+            Types::qubits_vector qubits(nrQubitsForRandomCirc);
+            std::iota(qubits.begin(), qubits.end(), 0);
+            std::shuffle(qubits.begin(), qubits.end(), g);
+            auto q1 = qubits[0];
+            auto q2 = qubits[1];
+            auto q3 = qubits[2];
+
+            // now some random parameters, again, they might be ignored
+            const double param1 = *dblGenIter;
+            ++dblGenIter;
+            const double param2 = *dblGenIter;
+            ++dblGenIter;
+            const double param3 = *dblGenIter;
+            ++dblGenIter;
+            const double param4 = *dblGenIter;
+            ++dblGenIter;
+
+            Circuits::QuantumGateType gateType = static_cast<Circuits::QuantumGateType>(*gateGenIter);
+
+            auto theGate = Circuits::CircuitFactory<>::CreateGate(gateType, q1, q2, q3, param1, param2, param3, param4);
+            circ->AddOperation(theGate);
+        }
+    }
+
+    void GenerateCircuit50(int nrGates)
+    {
+        std::random_device rd;
+        std::mt19937 g(rd());
+
+        auto dblGen = bdata::random(-2. * M_PI, 2. * M_PI);
+        auto dblGenIter = dblGen.begin();
+
+        auto gateGen = bdata::random(0, static_cast<int>(Circuits::QuantumGateType::kCCXGateType));
+        auto gateGenIter = gateGen.begin();
+
+        // TODO: Maybe insert from time to time a random number generating 'gate'
+        // and a conditioned random one, those should not affect results?
+        for (int gateNr = 0; gateNr < nrGates; ++gateNr, ++gateGenIter)
+        {
+            // create a random gate and add it to the circuit
+
+            // first, pick randomly three qubits (depending on the randomly chosen
+            // gate type, not all of them will be used)
+            Types::qubits_vector qubits(50);
+            std::iota(qubits.begin(), qubits.end(), 0);
+            std::shuffle(qubits.begin(), qubits.end(), g);
+            auto q1 = qubits[0];
+            auto q2 = qubits[1];
+            auto q3 = qubits[2];
+
+            // now some random parameters, again, they might be ignored
+            const double param1 = *dblGenIter;
+            ++dblGenIter;
+            const double param2 = *dblGenIter;
+            ++dblGenIter;
+            const double param3 = *dblGenIter;
+            ++dblGenIter;
+            const double param4 = *dblGenIter;
+            ++dblGenIter;
+
+            Circuits::QuantumGateType gateType = static_cast<Circuits::QuantumGateType>(*gateGenIter);
+
+            auto theGate = Circuits::CircuitFactory<>::CreateGate(gateType, q1, q2, q3, param1, param2, param3, param4);
+            circ50->AddOperation(theGate);
+        }
+
+        Types::qubits_vector mqubits(50);
+        std::iota(mqubits.begin(), mqubits.end(), 0);
+        std::shuffle(mqubits.begin(), mqubits.end(), g);
+
+        // only 3 measurements on randomly chosen qubits to avoid having too many
+        // results
+        for (int q = 0; q < 5; ++q)
+            circ50->AddOperation(Circuits::CircuitFactory<>::CreateMeasurement({{mqubits[q], mqubits[q]}}));
+    }
+
+    const unsigned int nrQubitsForRandomCirc = 5;
+    std::shared_ptr<Simulators::ISimulator> aerMPS;
+    std::shared_ptr<Simulators::ISimulator> qcsimMPS;
+    std::shared_ptr<Simulators::ISimulator> qcsimSV;
+    std::shared_ptr<Simulators::ISimulator> aerSV;
+    std::shared_ptr<Simulators::ISimulator> aerMPS50;
+    std::shared_ptr<Simulators::ISimulator> qcsimMPS50;
+
+#ifdef __linux__
+    std::shared_ptr<Simulators::ISimulator> gpusimMPS;
+    std::shared_ptr<Simulators::ISimulator> gpusimMPS50;
+#endif
+
+    std::shared_ptr<Circuits::Circuit<>> circ;
+    std::shared_ptr<Circuits::Circuit<>> circ50;
+    std::shared_ptr<Circuits::Circuit<>> resetRandomCirc;
+    std::shared_ptr<Circuits::Circuit<>> resetRandomCirc50;
+    Circuits::OperationState state;
+    Circuits::OperationState state50;
+
+    const unsigned int nrShots = 5000;
+};
+
+extern bool checkClose(std::complex<double> a, std::complex<double> b, double dif);
+
+BOOST_AUTO_TEST_SUITE(mps_tests)
+
+BOOST_FIXTURE_TEST_CASE(MPSSimInitializationTest, MPSSimTestFixture)
+{
+    BOOST_TEST(qcsimSV);
+    BOOST_TEST(qcsimMPS);
+    BOOST_TEST(circ);
+    BOOST_TEST(resetRandomCirc);
+
+    SetupMPS50();
+    BOOST_TEST(qcsimMPS50);
+    BOOST_TEST(circ50);
+    BOOST_TEST(resetRandomCirc50);
+    TeardownMPS50();
+}
+
+// Exercises the matrix_product_state_truncation_mode config key end to end,
+// through the same string-based Configure() path a real caller would use
+// (Simulators/QCSimState.h and Simulators/GpuState.h), rather than calling
+// the QCSim/GPU-library TruncationMode setters directly. Not attempting to
+// prove the two modes truncate differently in general -- that's covered at
+// the QCSim and GPU-library level -- just that: (a) leaving the mode unset
+// reproduces the DiscardedWeight default exactly, since that's the specific
+// thing this glue code is responsible for wiring correctly, and (b) an
+// explicit "relative_max" request is accepted and the simulator still
+// produces a valid, normalized result.
+BOOST_FIXTURE_TEST_CASE(TruncationModeConfigKeyTest, MPSSimTestFixture)
+{
+    GenerateCircuit(15);
+
+    const size_t nrStates = 1ULL << nrQubitsForRandomCirc;
+    const char *threshold = "0.05";
+
+    auto runWithMode = [&](Simulators::SimulatorType type, const char *mode) {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(type, Simulators::SimulationType::kMatrixProductState);
+        if (!sim)
+            return std::vector<double>{};
+
+        sim->AllocateQubits(nrQubitsForRandomCirc);
+        sim->Configure("matrix_product_state_truncation_threshold", threshold);
+        if (mode)
+            sim->Configure("matrix_product_state_truncation_mode", mode);
+        sim->Initialize();
+        circ->Execute(sim, state);
+
+        auto probs = sim->AllProbabilities();
+        BOOST_TEST(probs.size() == nrStates);
+
+        resetRandomCirc->Execute(sim, state);
+        return probs;
+    };
+
+    const auto qcsimDefault = runWithMode(Simulators::SimulatorType::kQCSim, nullptr);
+    const auto qcsimDiscardedWeight = runWithMode(Simulators::SimulatorType::kQCSim, "discarded_weight");
+    const auto qcsimRelativeToMax = runWithMode(Simulators::SimulatorType::kQCSim, "relative_max");
+
+    BOOST_TEST(qcsimDefault.size() == nrStates);
+    BOOST_TEST(qcsimRelativeToMax.size() == nrStates);
+    for (size_t i = 0; i < nrStates; ++i)
+        BOOST_CHECK_PREDICATE(checkClose, (qcsimDefault[i])(qcsimDiscardedWeight[i])(1e-9));
+
+    auto qcsimInvalid = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState);
+    BOOST_REQUIRE(qcsimInvalid);
+    BOOST_CHECK_THROW(qcsimInvalid->Configure("matrix_product_state_truncation_mode", "typo"), std::invalid_argument);
+    BOOST_TEST(qcsimInvalid->GetConfiguration("matrix_product_state_truncation_mode") != "typo");
+
+#ifdef __linux__
+    if (gpusimMPS)
+    {
+        const auto gpuDefault = runWithMode(Simulators::SimulatorType::kGpuSim, nullptr);
+        const auto gpuDiscardedWeight = runWithMode(Simulators::SimulatorType::kGpuSim, "discarded_weight");
+        const auto gpuRelativeToMax = runWithMode(Simulators::SimulatorType::kGpuSim, "relative_max");
+
+        BOOST_TEST(gpuDefault.size() == nrStates);
+        BOOST_TEST(gpuRelativeToMax.size() == nrStates);
+        for (size_t i = 0; i < nrStates; ++i)
+            BOOST_CHECK_PREDICATE(checkClose, (gpuDefault[i])(gpuDiscardedWeight[i])(1e-9));
+
+        auto gpuInvalid = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kGpuSim, Simulators::SimulationType::kMatrixProductState);
+        BOOST_REQUIRE(gpuInvalid);
+        BOOST_CHECK_THROW(gpuInvalid->Configure("matrix_product_state_truncation_mode", "typo"), std::invalid_argument);
+        BOOST_TEST(gpuInvalid->GetConfiguration("matrix_product_state_truncation_mode") != "typo");
+    }
+#endif
+
+    circ->Clear();
+    state.Reset();
+}
+
+BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, RandomCircuitsTest, bdata::xrange(1, 20), nrGates)
+{
+    size_t nrStates = 1ULL << nrQubitsForRandomCirc;
+
+    GenerateCircuit(nrGates);
+
+#ifndef NO_QISKIT_AER
+    auto start = std::chrono::system_clock::now();
+    circ->Execute(aerMPS, state);
+    auto end = std::chrono::system_clock::now();
+    double qiskitTime = std::chrono::duration<double>(end - start).count() * 1000.;
+#endif
+
+    auto qcStart = std::chrono::system_clock::now();
+    circ->Execute(qcsimMPS, state);
+    auto qcEnd = std::chrono::system_clock::now();
+    double qcsimTime = std::chrono::duration<double>(qcEnd - qcStart).count() * 1000.;
+
+#ifndef NO_QISKIT_AER
+    BOOST_TEST_MESSAGE("Time for qiskit aer MPS: " << qiskitTime << " ms, time for qcsim MPS: " << qcsimTime << " ms, qcsim is " << qiskitTime / qcsimTime
+                                                   << " faster");
+#else
+    BOOST_TEST_MESSAGE("Time for qcsim MPS: " << qcsimTime << " ms");
+#endif
+
+#ifdef __linux__
+    if (gpusimMPS)
+    {
+        auto gpuStart = std::chrono::system_clock::now();
+        circ->Execute(gpusimMPS, state);
+        auto gpuEnd = std::chrono::system_clock::now();
+        double gpusimTime = std::chrono::duration<double>(gpuEnd - gpuStart).count() * 1000.;
+
+#ifndef NO_QISKIT_AER
+        BOOST_TEST_MESSAGE("Time for gpu MPS: " << gpusimTime << " ms, gpu is " << qiskitTime / gpusimTime << " faster than qiskit aer mps");
+#else
+        BOOST_TEST_MESSAGE("Time for gpu MPS: " << gpusimTime << " ms");
+#endif
+    }
+#endif
+
+    auto qcsimProbs = qcsimMPS->AllProbabilities();
+    BOOST_TEST(qcsimProbs.size() == nrStates);
+
+#ifndef NO_QISKIT_AER
+    auto aerProbs = aerMPS->AllProbabilities();
+    BOOST_TEST(aerProbs.size() == nrStates);
+#endif
+
+#ifdef __linux__
+    std::vector<double> gpusimProbs;
+    if (gpusimMPS)
+    {
+        gpusimProbs = gpusimMPS->AllProbabilities();
+        BOOST_TEST(gpusimProbs.size() == nrStates);
+    }
+#endif
+
+    // now check the results, they should be the same!
+
+#ifndef NO_QISKIT_AER
+    for (size_t state = 0; state < nrStates; ++state)
+    {
+        const auto aaer = aerMPS->Amplitude(state);
+        const auto aqc = qcsimMPS->Amplitude(state);
+
+        BOOST_CHECK_PREDICATE(checkClose, (aaer)(aqc)(0.0001));
+
+#ifdef __linux__
+        if (gpusimMPS)
+        {
+            const auto agpusim = gpusimMPS->Amplitude(state);
+            BOOST_CHECK_PREDICATE(checkClose, (aaer)(agpusim)(0.0001));
+        }
+#endif
+
+        const auto paer = aerProbs[state];
+        const auto pqc = qcsimProbs[state];
+
+        if (paer < 1e-4 && pqc < 1e-4)
+            continue;
+
+        BOOST_CHECK_CLOSE(paer, pqc, 0.1);
+
+#ifdef __linux__
+        if (gpusimMPS)
+        {
+            const auto pgpusim = gpusimProbs[state];
+            if (pgpusim < 1e-4)
+                continue;
+            BOOST_CHECK_PREDICATE(checkClose, (paer)(pgpusim)(0.1));
+        }
+#endif
+    }
+#endif
+
+#ifndef NO_QISKIT_AER
+    resetRandomCirc->Execute(aerMPS, state);
+#endif
+    resetRandomCirc->Execute(qcsimMPS, state);
+
+#ifdef __linux__
+    if (gpusimMPS)
+        resetRandomCirc->Execute(gpusimMPS, state);
+#endif
+
+    circ->Clear();
+    state.Reset();
+}
+
+// this is quite slow, I'll leave it here with the number of tests/gates reduced
+// (originally it started from 100)
+
+BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, RandomCircuitsTest50, bdata::xrange(30, 33), nrGates)
+{
+    SetupMPS50();
+    GenerateCircuit50(nrGates);
+
+    std::unordered_map<std::vector<bool>, size_t> measResultsQcSim;
+
+#ifndef NO_QISKIT_AER
+    std::unordered_map<std::vector<bool>, size_t> measResultsQiskit;
+
+    auto aerStart = std::chrono::system_clock::now();
+
+    for (size_t shot = 0; shot < nrShots; ++shot)
+    {
+        circ50->Execute(aerMPS50, state50);
+
+        measResultsQiskit[state50.GetAllBits()]++;
+
+        resetRandomCirc50->Execute(aerMPS50, state50);
+        state50.Reset();
+    }
+
+    auto aerEnd = std::chrono::system_clock::now();
+    double qiskitTime = std::chrono::duration<double>(aerEnd - aerStart).count() * 1000.;
+#endif
+
+    auto start = std::chrono::system_clock::now();
+    std::vector<bool> executed;
+
+    for (size_t shot = 0; shot < nrShots; ++shot)
+    {
+        // circ50->Execute(qcsimMPS50, state50);
+        if (shot == 0)
+        {
+            executed = circ50->ExecuteNonMeasurements(qcsimMPS50, state50);
+            qcsimMPS50->SaveState();
+        }
+        else
+            qcsimMPS50->RestoreState();
+
+        circ50->ExecuteMeasurements(qcsimMPS50, state50, executed);
+
+        measResultsQcSim[state50.GetAllBits()]++;
+
+        // resetRandomCirc50->Execute(qcsimMPS50, state50);
+        // state50.Reset();
+    }
+
+    resetRandomCirc50->Execute(qcsimMPS50, state50);
+    state50.Reset();
+
+    auto end = std::chrono::system_clock::now();
+    double qcsimTime = std::chrono::duration<double>(end - start).count() * 1000.;
+
+#ifndef NO_QISKIT_AER
+    BOOST_TEST_MESSAGE("Time for qiskit aer MPS: " << qiskitTime << " ms, time for qcsim MPS: " << qcsimTime << " ms, qcsim is " << qiskitTime / qcsimTime
+                                                   << " faster");
+#else
+    BOOST_TEST_MESSAGE("Time for qcsim MPS: " << qcsimTime << " ms");
+#endif
+
+#ifdef __linux__
+    std::unordered_map<std::vector<bool>, size_t> measResultsGpuSim;
+
+    if (gpusimMPS50)
+    {
+        auto gpuStart = std::chrono::system_clock::now();
+
+        for (size_t shot = 0; shot < nrShots; ++shot)
+        {
+            // circ50->Execute(gpusimMPS50, state50);
+            if (shot == 0)
+            {
+                executed = circ50->ExecuteNonMeasurements(gpusimMPS50, state50);
+                gpusimMPS50->SaveState();
+            }
+            else
+                gpusimMPS50->RestoreState();
+
+            circ50->ExecuteMeasurements(gpusimMPS50, state50, executed);
+
+            measResultsGpuSim[state50.GetAllBits()]++;
+
+            // resetRandomCirc50->Execute(gpusimMPS50, state50);
+            // state50.Reset();
+        }
+
+        resetRandomCirc50->Execute(gpusimMPS50, state50);
+        state50.Reset();
+
+        auto gpuEnd = std::chrono::system_clock::now();
+        double gpusimTime = std::chrono::duration<double>(gpuEnd - gpuStart).count() * 1000.;
+
+#ifndef NO_QISKIT_AER
+        BOOST_TEST_MESSAGE("Time for gpu MPS: " << gpusimTime << " ms, gpu is " << qiskitTime / gpusimTime << " faster than qiskit aer mps");
+#else
+        BOOST_TEST_MESSAGE("Time for gpu MPS: " << gpusimTime << " ms");
+#endif
+    }
+#endif
+
+#ifndef NO_QISKIT_AER
+    for (const auto &[key, cnt] : measResultsQcSim)
+    {
+        double val = static_cast<double>(cnt) / static_cast<double>(nrShots);
+
+        if (val < 0.03)
+            continue;
+
+        double val2 = 0;
+        if (measResultsQiskit.find(key) != measResultsQiskit.end())
+            val2 = static_cast<double>(measResultsQiskit[key]) / static_cast<double>(nrShots);
+
+        BOOST_CHECK_CLOSE(val, val2, val2 < 0.1 ? 66 : 33);
+    }
+
+    for (const auto &[key, cnt] : measResultsQiskit)
+    {
+        double val = static_cast<double>(cnt) / static_cast<double>(nrShots);
+        if (val < 0.03)
+            continue;
+
+        double val2 = 0;
+        if (measResultsQcSim.find(key) != measResultsQcSim.end())
+            val2 = static_cast<double>(measResultsQcSim[key]) / static_cast<double>(nrShots);
+        BOOST_CHECK_CLOSE(val, val2, val2 < 0.1 ? 66 : 33);
+    }
+
+#ifdef __linux__
+    if (gpusimMPS50)
+    {
+        for (const auto &[key, cnt] : measResultsGpuSim)
+        {
+            double val = static_cast<double>(cnt) / static_cast<double>(nrShots);
+
+            if (val < 0.03)
+                continue;
+
+            double val2 = 0;
+            if (measResultsQiskit.find(key) != measResultsQiskit.end())
+                val2 = static_cast<double>(measResultsQiskit[key]) / static_cast<double>(nrShots);
+
+            BOOST_CHECK_CLOSE(val, val2, val2 < 0.1 ? 66 : 33);
+        }
+
+        for (const auto &[key, cnt] : measResultsQiskit)
+        {
+            double val = static_cast<double>(cnt) / static_cast<double>(nrShots);
+            if (val < 0.03)
+                continue;
+
+            double val2 = 0;
+            if (measResultsGpuSim.find(key) != measResultsGpuSim.end())
+                val2 = static_cast<double>(measResultsGpuSim[key]) / static_cast<double>(nrShots);
+            BOOST_CHECK_CLOSE(val, val2, val2 < 0.1 ? 66 : 33);
+        }
+    }
+#endif
+#endif
+
+    TeardownMPS50();
+}
+
+BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, ProjectOnZeroTest, bdata::xrange(1, 20), nrGates)
+{
+    GenerateCircuit(nrGates);
+
+    circ->Execute(qcsimSV, state);
+#ifndef NO_QISKIT_AER
+    circ->Execute(aerMPS, state);
+#endif
+    circ->Execute(qcsimMPS, state);
+
+#ifdef __linux__
+    if (gpusimMPS)
+        circ->Execute(gpusimMPS, state);
+#endif
+
+    const auto svProjectOnZero = qcsimSV->ProjectOnZero();
+    const auto svAmplitude0 = qcsimSV->Amplitude(0);
+    BOOST_CHECK_PREDICATE(checkClose, (svProjectOnZero)(svAmplitude0)(1e-10));
+
+#ifndef NO_QISKIT_AER
+    const auto aerProjectOnZero = aerMPS->ProjectOnZero();
+    BOOST_CHECK_PREDICATE(checkClose, (svProjectOnZero)(aerProjectOnZero)(0.0001));
+#endif
+
+    const auto qcsimProjectOnZero = qcsimMPS->ProjectOnZero();
+    BOOST_CHECK_PREDICATE(checkClose, (svProjectOnZero)(qcsimProjectOnZero)(0.0001));
+
+#ifdef __linux__
+    if (gpusimMPS)
+    {
+        const auto gpuProjectOnZero = gpusimMPS->ProjectOnZero();
+        BOOST_CHECK_PREDICATE(checkClose, (svProjectOnZero)(gpuProjectOnZero)(0.0001));
+    }
+#endif
+
+#ifndef NO_QISKIT_AER
+    resetRandomCirc->Execute(aerMPS, state);
+#endif
+    resetRandomCirc->Execute(qcsimMPS, state);
+    resetRandomCirc->Execute(qcsimSV, state);
+
+#ifdef __linux__
+    if (gpusimMPS)
+        resetRandomCirc->Execute(gpusimMPS, state);
+#endif
+
+    circ->Clear();
+    state.Reset();
+}
+
+BOOST_DATA_TEST_CASE_F(MPSSimTestFixture, SampleCountsManyTest, bdata::xrange(80, 100), nrGates)
+{
+    GenerateCircuit(nrGates);
+
+    circ->Execute(qcsimSV, state);
+    circ->Execute(qcsimMPS, state);
+#ifndef NO_QISKIT_AER
+    circ->Execute(aerMPS, state);
+    circ->Execute(aerSV, state);
+#endif
+
+    // pick a random subset of qubits (between 1 and nrQubitsForRandomCirc - 1)
+    // to exercise partial-qubit sampling where bugs are more likely
+    std::random_device rd;
+    std::mt19937 g(rd());
+
+    Types::qubits_vector allQubits(nrQubitsForRandomCirc);
+    std::iota(allQubits.begin(), allQubits.end(), 0);
+    std::shuffle(allQubits.begin(), allQubits.end(), g);
+
+    std::uniform_int_distribution<unsigned int> subsetSizeDist(1, nrQubitsForRandomCirc - 1);
+    const unsigned int subsetSize = subsetSizeDist(g);
+
+    Types::qubits_vector sampledQubits(allQubits.begin(), allQubits.begin() + subsetSize);
+
+    const size_t shots = 10000;
+
+    auto svCounts = qcsimSV->SampleCountsMany(sampledQubits, shots);
+    auto mpsCounts = qcsimMPS->SampleCountsMany(sampledQubits, shots);
+#ifndef NO_QISKIT_AER
+    auto aerSvCounts = aerSV->SampleCountsMany(sampledQubits, shots);
+    auto mpsAerCounts = aerMPS->SampleCountsMany(sampledQubits, shots);
+#endif
+
+    // compare distributions: every outcome that appears with non-negligible
+    // probability in one should appear close in the other
+    for (const auto &[outcome, cnt] : svCounts)
+    {
+        double svProb = static_cast<double>(cnt) / static_cast<double>(shots);
+        if (svProb < 0.02)
+            continue;
+
+        double mpsProb = 0;
+        if (mpsCounts.find(outcome) != mpsCounts.end())
+            mpsProb = static_cast<double>(mpsCounts[outcome]) / static_cast<double>(shots);
+
+        BOOST_CHECK_CLOSE(svProb, mpsProb, mpsProb < 0.1 ? 66 : 33);
+
+#ifndef NO_QISKIT_AER
+        double mpsAerProb = 0;
+        if (mpsAerCounts.find(outcome) != mpsAerCounts.end())
+            mpsAerProb = static_cast<double>(mpsAerCounts[outcome]) / static_cast<double>(shots);
+
+        double aerSvProb = 0;
+        if (aerSvCounts.find(outcome) != aerSvCounts.end())
+            aerSvProb = static_cast<double>(aerSvCounts[outcome]) / static_cast<double>(shots);
+
+        BOOST_CHECK_CLOSE(svProb, mpsAerProb, mpsAerProb < 0.1 ? 66 : 33);
+        BOOST_CHECK_CLOSE(svProb, aerSvProb, aerSvProb < 0.1 ? 66 : 33);
+#endif
+    }
+
+    for (const auto &[outcome, cnt] : mpsCounts)
+    {
+        double mpsProb = static_cast<double>(cnt) / static_cast<double>(shots);
+        if (mpsProb < 0.02)
+            continue;
+
+        double svProb = 0;
+        if (svCounts.find(outcome) != svCounts.end())
+            svProb = static_cast<double>(svCounts[outcome]) / static_cast<double>(shots);
+
+        BOOST_CHECK_CLOSE(mpsProb, svProb, svProb < 0.1 ? 66 : 33);
+
+#ifndef NO_QISKIT_AER
+        double mpsAerProb = 0;
+        if (mpsAerCounts.find(outcome) != mpsAerCounts.end())
+            mpsAerProb = static_cast<double>(mpsAerCounts[outcome]) / static_cast<double>(shots);
+
+        double aerSvProb = 0;
+        if (aerSvCounts.find(outcome) != aerSvCounts.end())
+            aerSvProb = static_cast<double>(aerSvCounts[outcome]) / static_cast<double>(shots);
+
+        BOOST_CHECK_CLOSE(mpsAerProb, svProb, svProb < 0.1 ? 66 : 33);
+        BOOST_CHECK_CLOSE(svProb, aerSvProb, aerSvProb < 0.1 ? 66 : 33);
+#endif
+    }
+
+    resetRandomCirc->Execute(qcsimMPS, state);
+    resetRandomCirc->Execute(qcsimSV, state);
+#ifndef NO_QISKIT_AER
+    resetRandomCirc->Execute(aerMPS, state);
+#endif
+
+    circ->Clear();
+    state.Reset();
+}
+
+// Trim and ReCanonicalize act on whichever matrix-product simulator is active:
+// without a bond limit they keep the state, with one they enforce it.
+BOOST_AUTO_TEST_CASE(TrimAndReCanonicalizeMatrixProductState)
+{
+    constexpr size_t nrQubits = 6;
+    std::vector<Simulators::SimulatorType> types{Simulators::SimulatorType::kQCSim};
+#ifdef __linux__
+    if (Simulators::SimulatorsFactory::InitGpuLibraryWithMute() && Simulators::SimulatorsFactory::GetGpuLibrary()->HasMPSCompressionAPI())
+        types.push_back(Simulators::SimulatorType::kGpuSim);
+    else
+        BOOST_TEST_MESSAGE("GPU MPS compression is unavailable; skipping GPU");
+#endif
+    for (const auto type : types)
+    {
+        auto mps = Simulators::SimulatorsFactory::CreateSimulator(type, Simulators::SimulationType::kMatrixProductState);
+        BOOST_REQUIRE(mps);
+        mps->Configure("use_double_precision", "true");
+        mps->Configure("matrix_product_state_truncation_threshold", "0");
+        mps->AllocateQubits(nrQubits);
+        mps->Initialize();
+        std::mt19937 g(7);
+        std::uniform_real_distribution<double> angle(-M_PI, M_PI);
+        for (int layer = 0; layer < 4; ++layer)
+        {
+            for (Types::qubit_t q = 0; q < nrQubits; ++q)
+                mps->ApplyRy(q, angle(g));
+            for (Types::qubit_t q = layer % 2; q + 1 < nrQubits; q += 2)
+                mps->ApplyCX(q, q + 1);
+        }
+        const auto expected = mps->AllProbabilities();
+
+        mps->ReCanonicalize();
+        mps->Trim();
+        const auto kept = mps->AllProbabilities();
+        BOOST_REQUIRE_EQUAL(kept.size(), expected.size());
+        for (size_t i = 0; i < expected.size(); ++i)
+            BOOST_CHECK_SMALL(kept[i] - expected[i], 1e-9);
+
+        // The reported maximum is the peak reached during execution, so the
+        // truncation is checked on the state itself.
+        BOOST_REQUIRE_GT(mps->GetCurrentMaxBondDimension(), 2);
+        mps->Configure("matrix_product_state_max_bond_dimension", "2");
+        mps->Trim();
+        const auto truncated = mps->AllProbabilities();
+        BOOST_CHECK_CLOSE(std::accumulate(truncated.begin(), truncated.end(), 0.), 1., 1e-6);
+        double change = 0;
+        for (size_t i = 0; i < expected.size(); ++i)
+            change = std::max(change, std::abs(truncated[i] - expected[i]));
+        BOOST_CHECK_MESSAGE(change > 1e-3, "trim did not apply the bond limit");
+        // The trimmed state already respects the limit.
+        mps->ReCanonicalize();
+        const auto repaired = mps->AllProbabilities();
+        for (size_t i = 0; i < expected.size(); ++i)
+            BOOST_CHECK_SMALL(repaired[i] - truncated[i], 1e-9);
+    }
+
+    auto statevector = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector);
+    statevector->AllocateQubits(2);
+    statevector->Initialize();
+    BOOST_CHECK_THROW(statevector->Trim(), std::runtime_error);
+    BOOST_CHECK_THROW(statevector->ReCanonicalize(), std::runtime_error);
+}
+
+BOOST_AUTO_TEST_SUITE_END()

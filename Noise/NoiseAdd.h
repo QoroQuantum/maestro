@@ -4,7 +4,7 @@
  *
  * @section DESCRIPTION
  *
- * Add noise to a circuit, using the NoiseModel defined in noise.h.
+ * Add noise to a circuit, using the NoiseModel defined in Noise.h.
  */
 
 #pragma once
@@ -49,7 +49,7 @@ class NoiseAdd
      * backends require. NoiseAdd cannot detect the backend on its own: the
      * network only reports which simulator it used after a circuit has run.
      * The Python bindings pick the path automatically from SimulatorConfig
-     * (see uses_exact_quantum_channels in bindings.cpp).
+     * (see uses_exact_quantum_channels in Bindings.cpp).
      */
     // Bindings may supply a language-level warning (e.g. Python RuntimeWarning).
     void set_warning_handler(std::function<void(const std::string &)> handler)

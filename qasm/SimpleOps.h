@@ -668,7 +668,7 @@ inline phx::function<AddMeasureExpr> AddMeasure;
 // so there is no discard form to lower onto - and fabricating a classical bit
 // to absorb the result would silently grow the program's classical register
 // and change what a subsequent `if (c == ...)` sees. So the construct is
-// recognised (see `measureNoTarget` in qasm.h) and rejected by name. Before
+// recognised (see `measureNoTarget` in Qasm.h) and rejected by name. Before
 // this rule existed it fell through to the gate-call path and was reported as
 // "Unsupported gate without parameters: measure", which named the wrong
 // thing entirely.

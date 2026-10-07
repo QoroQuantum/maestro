@@ -544,7 +544,7 @@ struct AddGateExpr : public AbstractSyntaxTree
     // Gate names are matched exactly - OpenQASM is case-sensitive, so "sdg" is
     // a gate and "SDG" is not - with exactly two exceptions: "CX" and "U", the
     // QASM2 builtins the language itself spells in uppercase. Their own call
-    // rules (`cxgateCall`/`ugateCall` in qasm.h) already accept either case, so
+    // rules (`cxgateCall`/`ugateCall` in Qasm.h) already accept either case, so
     // both spellings are listed here too. That matters only for the calls that
     // fall out of those rules - an over-long argument list, which `gatecall`
     // picks up - and it is what keeps `U(...) q[0], q[1];` reported as the
@@ -990,7 +990,7 @@ inline phx::function<RejectGateBodyModifierExpr> RejectGateBodyModifier;
 // QASM3 constructs outside our supported subset (for/while loops, subroutine
 // definitions, register aliases, duration/delay, box blocks, array
 // declarations) are recognised by keyword at statement position - see
-// `unsupportedConstruct` in qasm.h - and rejected by name instead of falling
+// `unsupportedConstruct` in Qasm.h - and rejected by name instead of falling
 // through to Spirit's generic "unparsed input" error or being misparsed as a
 // gate call. The recognising rule already carries the per-construct message
 // as its attribute (looked up from the unsupportedKeywords symbol table), so
@@ -1017,7 +1017,7 @@ inline phx::function<RejectUnsupportedConstructExpr> RejectUnsupportedConstruct;
 // The dialect is not visible where the allowed-gate sets and GetGateType are
 // consulted, and threading it there would have made GetGateType something
 // other than the pure name -> type function it is. So the filter sits in the
-// grammar instead, at `qasm2RejectedGate` in qasm.h - the one place that does
+// grammar instead, at `qasm2RejectedGate` in Qasm.h - the one place that does
 // know the dialect - and the gate tables stay dialect-agnostic.
 //
 // Two outcomes rather than one, hence the bool result. Under QASM2 these are

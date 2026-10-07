@@ -178,7 +178,7 @@ inline phx::function<MakeVariableExpression> MakeVariable;
 // while giving '^' to bitwise XOR, so the two meanings cannot share a code -
 // '^' is kept for exponentiation (built by both the QASM2 '^' rule and the
 // '**' rule) and XOR gets its own. Which node is built is decided by the
-// grammar, per language version; see `factor2`/`expression` in qasm.h.
+// grammar, per language version; see `factor2`/`expression` in Qasm.h.
 class BinaryOperator : public AbstractSyntaxTree
 {
   public:
