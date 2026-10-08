@@ -923,6 +923,12 @@ if(COMPILE_TESTS OR MAESTRO_BUILD_REQUEST_TESTS)
     target_compile_definitions(maestro_composer_integration_tests PRIVATE
         MAESTRO_EXPECT_COMPOSER=$<BOOL:${MAESTRO_ENABLE_COMPOSER}>)
     target_link_libraries(maestro_composer_integration_tests PRIVATE maestro)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # Select this build's integration setting even when LD_LIBRARY_PATH
+        # contains another Maestro installation.
+        set_property(TARGET maestro_composer_integration_tests APPEND_STRING PROPERTY
+            LINK_FLAGS " -Wl,--disable-new-dtags")
+    endif()
     add_test(NAME maestro_composer_integration COMMAND maestro_composer_integration_tests)
     add_executable(network_job_tests tests/NetworkJobTests.cpp)
     target_link_libraries(network_job_tests PRIVATE maestro Boost::json)
@@ -1031,6 +1037,8 @@ if(COMPILE_TESTS)
     target_link_libraries(fusion_routing_tests PRIVATE maestro)
     add_test(NAME fusion_routing_tests COMMAND fusion_routing_tests)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        set_property(TARGET backend_specialization_tests APPEND_STRING PROPERTY
+            LINK_FLAGS " -Wl,--disable-new-dtags")
         add_test(NAME gate_fusion_gpu COMMAND gate_fusion_tests --gpu)
         add_test(NAME gate_fusion_distributed COMMAND gate_fusion_tests --distributed)
         set_tests_properties(gate_fusion_gpu gate_fusion_distributed PROPERTIES
