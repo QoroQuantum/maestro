@@ -1339,7 +1339,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                                 else
                                     break; // not the expected gate, acting on same qubits,
                                            // bail out
-                            } // end for of looking forward
+                            }              // end for of looking forward
 
                             if (!found)
                                 newops.push_back(op);
@@ -3420,8 +3420,8 @@ template <typename Time = Types::time_type> class ComparableCircuit : public Cir
             }
             break;
             case OperationType::kDelay: {
-                const auto left = std::static_pointer_cast<Delay<Time>>(BaseClass::GetOperations()[i]);
-                const auto right = std::static_pointer_cast<Delay<Time>>(rhs.GetOperations()[i]);
+                const auto left = std::static_pointer_cast<Circuits::Delay<Time>>(BaseClass::GetOperations()[i]);
+                const auto right = std::static_pointer_cast<Circuits::Delay<Time>>(rhs.GetOperations()[i]);
                 if (left->GetQubit() != right->GetQubit())
                     return false;
                 if (approximateParamsCheck)

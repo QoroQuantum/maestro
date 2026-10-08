@@ -2,7 +2,9 @@
 #define INCLUDED_BY_FACTORY
 #include "Network/SimpleDisconnectedNetwork.h"
 #include "Simulators/Fusion/FusionSimulator.h"
-#include "Simulators/QCSim/ImmediateQCSimSimulator.h"
+#include "Simulators/QCSim/QCSimMPOSimulator.h"
+#include "Simulators/QCSim/QCSimMPSSimulator.h"
+#include "Simulators/QCSim/QCSimStatevectorSimulator.h"
 #include <iostream>
 
 using namespace Simulators;
@@ -16,18 +18,25 @@ static void Check(bool ok, const char *message)
         throw std::runtime_error(message);
 }
 
-struct RecordingImmediate : Private::ImmediateQCSimSimulator
+struct RecordingStats
 {
+    virtual ~RecordingStats() = default;
     size_t installs = 0, copied = 0, callbacks = 0, flushes = 0;
     std::vector<Op> installed;
+};
 
+template <class Backend> struct RecordingImmediate : Backend, RecordingStats
+{
     RecordingImmediate()
     {
-        auto original = meetingPositionCallback;
-        meetingPositionCallback = [this, original](const auto &bonds) {
-            ++callbacks;
-            return original(bonds);
-        };
+        if constexpr (std::is_base_of_v<Private::QCSimTensorChainSimulator, Backend>)
+        {
+            auto original = this->meetingPositionCallback;
+            this->meetingPositionCallback = [this, original](const auto &bonds) {
+                ++callbacks;
+                return original(bonds);
+            };
+        }
     }
 
     void SetUpcomingGates(const std::vector<Op> &operations) override
@@ -35,7 +44,7 @@ struct RecordingImmediate : Private::ImmediateQCSimSimulator
         ++installs;
         copied += operations.size();
         installed = operations;
-        ImmediateQCSimSimulator::SetUpcomingGates(operations);
+        Backend::SetUpcomingGates(operations);
     }
 
     void Flush() override
@@ -44,9 +53,23 @@ struct RecordingImmediate : Private::ImmediateQCSimSimulator
     }
 };
 
+static std::shared_ptr<ISimulator> MakeRecording(const char *method)
+{
+    if (std::string(method) == "statevector")
+        return std::make_shared<RecordingImmediate<Private::QCSimStatevectorSimulator>>();
+    if (std::string(method) == "matrix_product_state")
+        return std::make_shared<RecordingImmediate<Private::QCSimMPSSimulator>>();
+    return std::make_shared<RecordingImmediate<Private::QCSimMPOSimulator>>();
+}
+
+static RecordingStats &Stats(const std::shared_ptr<ISimulator> &sim)
+{
+    return dynamic_cast<RecordingStats &>(*sim);
+}
+
 struct RecordingState : Private::FusionState
 {
-    explicit RecordingState(std::shared_ptr<RecordingImmediate> raw) : FusionState(std::move(raw))
+    explicit RecordingState(std::shared_ptr<ISimulator> raw) : FusionState(std::move(raw))
     {
     }
 
@@ -82,7 +105,7 @@ static void BoundaryPlanning()
         for (const char *method : {"statevector", "matrix_product_state", "matrix_product_operator"})
             for (int n : {50, 100})
             {
-                auto raw = std::make_shared<RecordingImmediate>();
+                auto raw = MakeRecording(method);
                 RecordingSimulator sim(raw);
                 sim.Configure("method", method);
                 sim.Configure("gate_fusion", fusion ? "true" : "false");
@@ -100,22 +123,22 @@ static void BoundaryPlanning()
                 auto observer = std::make_shared<Observer>();
                 raw->RegisterObserver(observer);
                 sim.SetUpcomingGates(operations);
-                const auto installs = raw->installs, copies = raw->copied;
+                const auto installs = Stats(raw).installs, copies = Stats(raw).copied;
                 for (int i = 0; i < n; ++i)
                 {
                     sim.ApplyCX(0, 3);
                     sim.Measure({0});
-                    const auto flushes = raw->flushes;
+                    const auto flushes = Stats(raw).flushes;
                     sim.IncrementGatesCounter(); // delay/classical boundary
-                    Check(raw->flushes == flushes, "moving the gate counter synchronized the backend");
+                    Check(Stats(raw).flushes == flushes, "moving the gate counter synchronized the backend");
                 }
-                Check(raw->installs == installs && raw->copied == copies, "ordinary boundaries reinstalled the prepared operation list");
+                Check(Stats(raw).installs == installs && Stats(raw).copied == copies, "ordinary boundaries reinstalled the prepared operation list");
                 Check(observer->calls >= size_t(n), "preparation removed backend observer");
                 Check(sim.GetGatesCounter() == 3 * n, "source counter lost boundaries");
                 if (sim.IsRoutingLookaheadEnabled())
-                    Check(raw->callbacks > 0, "lookahead was enabled but never called");
+                    Check(Stats(raw).callbacks > 0, "lookahead was enabled but never called");
                 if (std::string(method) == "statevector" && fusion)
-                    Check(raw->installs == 0, "statevector unnecessarily prepared routing");
+                    Check(Stats(raw).installs == 0, "statevector unnecessarily prepared routing");
             }
 }
 
@@ -125,7 +148,7 @@ static void MultishotNetwork()
         for (auto method : {SimulationType::kMatrixProductState, SimulationType::kMatrixProductOperator})
             for (int preparation : {0, 1, 2, 3})
             {
-                auto raw = std::make_shared<RecordingImmediate>();
+                auto raw = MakeRecording(method == SimulationType::kMatrixProductState ? "matrix_product_state" : "matrix_product_operator");
                 auto sim = std::make_shared<RecordingSimulator>(raw);
                 sim->Configure("method", method == SimulationType::kMatrixProductState ? "matrix_product_state" : "matrix_product_operator");
                 sim->Configure("gate_fusion", fusion ? "true" : "false");
@@ -158,8 +181,8 @@ static void MultishotNetwork()
                 Check(sim->GetGatesCounter() == 0, "shot snapshot points inside the full circuit");
                 if (!fusion || sim->IsRoutingLookaheadEnabled())
                 {
-                    Check(!raw->installed.empty(), "shot snapshot lost its routing list");
-                    Check(raw->installed.front()->GetType() == Circuits::OperationType::kMeasurement,
+                    Check(!Stats(raw).installed.empty(), "shot snapshot lost its routing list");
+                    Check(Stats(raw).installed.front()->GetType() == Circuits::OperationType::kMeasurement,
                           "shot snapshot restored the prefix instead of the suffix");
                 }
                 sim->Measure({0});
@@ -171,7 +194,7 @@ static void MultishotNetwork()
 
 static void FlushScopeAndRoutingSettings()
 {
-    auto raw = std::make_shared<RecordingImmediate>();
+    auto raw = MakeRecording("statevector");
     raw->AllocateQubits(2);
     raw->Initialize();
     auto circuit = CF::CreateCircuit({CF::CreateGate(Kind::kXGateType, 0)});
@@ -180,9 +203,8 @@ static void FlushScopeAndRoutingSettings()
     circuit->Execute(raw, state);
     circuit->ExecuteNonMeasurements(raw, state);
     circuit->ExecuteMeasurements(raw, state, {});
-    Check(raw->flushes == 0, "circuit completion flushed an unfused backend");
-    raw->Clear();
-    raw->Configure("method", "matrix_product_state");
+    Check(Stats(raw).flushes == 0, "circuit completion flushed an unfused backend");
+    raw = MakeRecording("matrix_product_state");
     raw->AllocateQubits(4);
     raw->Initialize();
     raw->SetUseOptimalMeetingPosition(false);
@@ -196,7 +218,7 @@ static void FusedBoundariesDoNotWait()
 {
     for (const char *method : {"statevector", "matrix_product_state"})
     {
-        auto raw = std::make_shared<RecordingImmediate>();
+        auto raw = MakeRecording(method);
         auto sim = std::make_shared<RecordingSimulator>(raw);
         sim->Configure("method", method);
         sim->Configure("gate_fusion", "true");
@@ -211,7 +233,7 @@ static void FusedBoundariesDoNotWait()
         Circuits::OperationState state;
         state.AllocateBits(2);
         circuit->Execute(sim, state);
-        Check(raw->flushes == 0, "a fused circuit boundary waited for the backend");
+        Check(Stats(raw).flushes == 0, "a fused circuit boundary waited for the backend");
         Check(std::abs(sim->Probability(12) - .5) < 1e-10 && std::abs(sim->Probability(15) - .5) < 1e-10, "boundaries changed the fused circuit's result");
     }
 }
@@ -232,7 +254,7 @@ struct ThrowingRoutingGate : Circuits::CXGate<>
 
 static void CallbackFallback()
 {
-    RecordingImmediate raw;
+    RecordingImmediate<Private::QCSimMPSSimulator> raw;
     raw.Configure("method", "matrix_product_state");
     raw.AllocateQubits(4);
     raw.Initialize();
@@ -266,7 +288,7 @@ static void DeferredGatesKeepRouting()
         std::vector<double> reference;
         for (bool fusion : {false, true})
         {
-            auto raw = std::make_shared<RecordingImmediate>();
+            auto raw = MakeRecording(method);
             auto sim = std::make_shared<RecordingSimulator>(raw);
             PrepareChain(*sim, method, fusion, 6);
             std::vector<Op> operations;
@@ -286,7 +308,7 @@ static void DeferredGatesKeepRouting()
             // the mask starts at the measurement, the first operation not executed
             Check(executed == std::vector<bool>{false, false, true, true, true}, "unexpected executed mask");
             if (fusion && sim->IsRoutingLookaheadEnabled())
-                Check(!raw->installed.empty(), "a deferred gate dropped the look-ahead routing");
+                Check(!Stats(raw).installed.empty(), "a deferred gate dropped the look-ahead routing");
             const auto probabilities = sim->AllProbabilities();
             if (!fusion)
                 reference = probabilities;
@@ -303,7 +325,7 @@ static void FiringConditionalKeepsRouting()
 {
     for (const char *method : {"matrix_product_state", "matrix_product_operator"})
     {
-        auto raw = std::make_shared<RecordingImmediate>();
+        auto raw = MakeRecording(method);
         auto sim = std::make_shared<RecordingSimulator>(raw);
         PrepareChain(*sim, method, true, 6);
         sim->ApplyX(0);
@@ -315,7 +337,7 @@ static void FiringConditionalKeepsRouting()
         state.AllocateBits(1);
         suffix->ExecuteMeasurements(sim, state, std::vector<bool>(suffix->size(), false));
         if (sim->IsRoutingLookaheadEnabled())
-            Check(!raw->installed.empty(), "a firing conditional gate dropped the look-ahead routing");
+            Check(!Stats(raw).installed.empty(), "a firing conditional gate dropped the look-ahead routing");
         Check(std::abs(sim->Probability(9) - 1.) < 1e-10, "the conditional gate was not applied");
     }
 }

@@ -17,7 +17,7 @@
 #include "../../Utils/Alias.h"
 #include "../Aer/AerSimulator.h"
 #include "../Core/Factory.h"
-#include "../QCSim/ImmediateQCSimSimulator.h"
+#include "../QCSim/QCSimStatevectorSimulator.h"
 #include <unordered_map>
 
 namespace Simulators
@@ -1399,7 +1399,7 @@ class IndividualSimulator : public ISimulator
         {
             // qcsim - convert 'simulator' to qcsim simulator and access 'state' (from
             // there the statevector is accessible)
-            ImmediateQCSimSimulator *qcsim = dynamic_cast<ImmediateQCSimSimulator *>(simulator.get());
+            QCSimStatevectorSimulator *qcsim = dynamic_cast<QCSimStatevectorSimulator *>(simulator.get());
             prob = 1. - qcsim->uniformZeroOne(qcsim->rng);
         }
 #ifndef NO_QISKIT_AER
@@ -1440,7 +1440,7 @@ class IndividualSimulator : public ISimulator
         {
             // qcsim - convert 'simulator' to qcsim simulator and access 'state' (from
             // there the statevector is accessible)
-            ImmediateQCSimSimulator *qcsim = dynamic_cast<ImmediateQCSimSimulator *>(simulator.get());
+            QCSimStatevectorSimulator *qcsim = dynamic_cast<QCSimStatevectorSimulator *>(simulator.get());
 
             alias = std::unique_ptr<Utils::Alias>(new Utils::Alias(qcsim->state->getRegisterStorage()));
         }

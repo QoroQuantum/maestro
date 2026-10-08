@@ -5,7 +5,8 @@
 #include "../Simulators/Aer/AerSimulator.h"
 #endif
 #include "../Simulators/Composite/Individual.h"
-#include "../Simulators/QCSim/QCSimSimulator.h"
+#include "../Simulators/QCSim/QCSimExtendedStabilizerSimulator.h"
+#include "../Simulators/QCSim/QCSimStabilizerSimulator.h"
 #include <array>
 #include <iostream>
 #include <stdexcept>
@@ -123,32 +124,36 @@ void CliffordWideSampling()
 
 // Stabilizer backends follow maestro's multithreading flag whether it is set
 // before or after the backend is created.
-struct StabilizerThreadsProbe : Private::ImmediateQCSimSimulator
+template <class Backend> struct StabilizerThreadsProbe : Backend
 {
     bool BackendMultithreading() const
     {
-        if (cliffordSimulator)
-            return cliffordSimulator->GetMultithreading();
-        if (extendedStabilizer)
-            return extendedStabilizer->GetMultithreading();
-        throw std::runtime_error("no stabilizer backend");
+        if constexpr (std::is_same_v<Backend, Private::QCSimStabilizerSimulator>)
+            return this->cliffordSimulator->GetMultithreading();
+        else
+            return this->extendedStabilizer->GetMultithreading();
     }
 };
 
+template <class Backend> void CheckStabilizerMultithreading()
+{
+    for (const bool enable : {false, true})
+    {
+        StabilizerThreadsProbe<Backend> sim;
+        const std::string method = sim.MethodName();
+        sim.SetMultithreading(enable);
+        sim.AllocateQubits(4);
+        sim.Initialize();
+        Require(sim.BackendMultithreading() == enable, method + " ignored multithreading set before creation");
+        sim.SetMultithreading(!enable);
+        Require(sim.BackendMultithreading() == !enable, method + " ignored multithreading set after creation");
+    }
+}
+
 void StabilizerMultithreading()
 {
-    for (const std::string method : {"stabilizer", "extended_stabilizer"})
-        for (const bool enable : {false, true})
-        {
-            StabilizerThreadsProbe sim;
-            sim.Configure("method", method.c_str());
-            sim.SetMultithreading(enable);
-            sim.AllocateQubits(4);
-            sim.Initialize();
-            Require(sim.BackendMultithreading() == enable, method + " ignored multithreading set before creation");
-            sim.SetMultithreading(!enable);
-            Require(sim.BackendMultithreading() == !enable, method + " ignored multithreading set after creation");
-        }
+    CheckStabilizerMultithreading<Private::QCSimStabilizerSimulator>();
+    CheckStabilizerMultithreading<Private::QCSimExtendedStabilizerSimulator>();
 }
 
 void Individual(SimulatorType type)

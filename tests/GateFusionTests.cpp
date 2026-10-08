@@ -7,9 +7,6 @@
 #include <stdexcept>
 #ifdef __linux__
 #include "Simulators/DistributedGpu/DistributedGpuLibStateVectorSim.h"
-#define INCLUDED_BY_FACTORY
-#include "Simulators/Gpu/ImmediateGpuSimulator.h"
-#undef INCLUDED_BY_FACTORY
 #endif
 
 using namespace Simulators;
@@ -327,16 +324,9 @@ void SnapshotLifetime(Backend backend = Backend::kQCSim)
 
 void NativeCloneCounters(Backend backend)
 {
-    for (const char *method : {"matrix_product_state", "matrix_product_operator"})
+    for (const auto method : {Method::kMatrixProductState, Method::kMatrixProductOperator})
     {
-        std::unique_ptr<ISimulator> original;
-#ifdef __linux__
-        if (backend == Backend::kGpuSim)
-            original = std::make_unique<Private::ImmediateGpuSimulator>();
-        else
-#endif
-            original = SimulatorsFactory::CreateImmediateSimulatorUnique(backend);
-        original->Configure("method", method);
+        auto original = SimulatorsFactory::CreateImmediateSimulatorUnique(backend, method);
         original->Configure("use_double_precision", "true");
         original->AllocateQubits(4);
         original->Initialize();

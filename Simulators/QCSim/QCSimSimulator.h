@@ -8,9 +8,11 @@ namespace Simulators::Private
 class QCSimSimulator : public FusionSimulator<QCSimState>
 {
   public:
+    using FusionSimulator::FusionSimulator;
+
     std::unique_ptr<ISimulator> Clone() override
     {
-        auto copy = std::make_unique<QCSimSimulator>();
+        auto copy = std::make_unique<QCSimSimulator>(immediate_);
         CloneInto(*copy);
         return copy;
     }

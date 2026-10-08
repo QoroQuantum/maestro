@@ -186,23 +186,38 @@ class TensorNetwork
 
     double getBasisStateProbability(size_t outcome)
     {
-        SaveStateMinimal();
+        // Temporary projectors must not overwrite the caller's SaveState() checkpoint.
+        const auto tensorCount = tensors.size();
+        auto queryLastTensors = lastTensors;
+        auto queryLastTensorIndices = lastTensorIndices;
+        const auto restoreQuery = [&]() {
+            tensors.resize(tensorCount);
+            lastTensors.swap(queryLastTensors);
+            lastTensorIndices.swap(queryLastTensorIndices);
+            Disconnect();
+        };
 
-        size_t mask = 1ULL;
-
-        for (Types::qubit_t q = 0; q < GetNumQubits(); ++q)
+        double prob;
+        try
         {
-            const bool expected = (outcome & mask) == 0;
+            size_t mask = 1ULL;
+            for (Types::qubit_t q = 0; q < GetNumQubits(); ++q)
+            {
+                const bool expected = (outcome & mask) == 0;
 
-            AddProjector(q, expected);
+                AddProjector(q, expected);
 
-            mask <<= 1;
+                mask <<= 1;
+            }
+            prob = Contract();
+        }
+        catch (...)
+        {
+            restoreQuery();
+            throw;
         }
 
-        const double prob = Contract();
-
-        RestoreSavedStateMinimalDestructive();
-
+        restoreQuery();
         return prob;
     }
 

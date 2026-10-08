@@ -1,147 +1,400 @@
-/**
- * @file ImmediateGpuSimulator.h
- * @version 1.0
- *
- * @section DESCRIPTION
- *
- * The gpu simulator class.
- *
- * Should not be used directly, create an instance with the factory and use the
- * generic interface instead.
- */
-
 #pragma once
+#if defined(INCLUDED_BY_FACTORY) && defined(__linux__)
+#include "../../Utils/Alias.h"
+#include "../Core/Configuration.h"
+#include "../Interfaces/Simulator.h"
+#include "../TensorNetworks/MPOValidation.h"
+#include <algorithm>
+#include <cctype>
+#include <functional>
+#include <iomanip>
+#include <limits>
+#include <random>
+#include <sstream>
+#include <utility>
 
-#ifndef _IMMEDIATE_GPUSIMULATOR_H
-#define _IMMEDIATE_GPUSIMULATOR_H
-
-#ifdef INCLUDED_BY_FACTORY
-
-#ifdef __linux__
-
-#include "ImmediateGpuState.h"
-
-namespace Simulators
+namespace Simulators::Private
 {
-// TODO: Maybe use the pimpl idiom
-// https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation
-// for good but during development this should be good enough
-namespace Private
-{
-
-/**
- * @class ImmediateGpuSimulator
- * @brief Gpu simulator class.
- *
- * This is the implementation for the gpu simulator.
- * Do not use this class directly, use the factory to create an instance.
- * Only the interface should be exposed.
- * @sa ImmediateGpuState
- * @sa ISimulator
- * @sa IState
- */
-class ImmediateGpuSimulator : public ImmediateGpuState
+// Common configuration, sampling and circuit bookkeeping. Native state belongs
+// exclusively to the concrete simulator selected by the factory.
+class ImmediateGpuSimulator : public ISimulator
 {
   public:
-    ImmediateGpuSimulator() = default;
-    // allow no copy or assignment
-    ImmediateGpuSimulator(const ImmediateGpuSimulator &) = delete;
-    ImmediateGpuSimulator &operator=(const ImmediateGpuSimulator &) = delete;
+    virtual const char *MethodName() const = 0;
 
-    // but allow moving
-    ImmediateGpuSimulator(ImmediateGpuSimulator &&other) = default;
-    ImmediateGpuSimulator &operator=(ImmediateGpuSimulator &&other) = default;
+  protected:
+    void ValidateMethod(const char *value) const
+    {
+        if (std::string(value) != MethodName())
+            throw std::invalid_argument("A concrete simulator cannot change method; select the backend through SimulatorsFactory");
+    }
 
-    /**
-     * @brief Apply a generic one-qubit gate to the specified qubit.
-     * @param qubit The qubit to apply the gate to.
-     * @param gate The 2x2 matrix representing the gate.
-     */
+    virtual void RefreshRoutingCallback()
+    {
+    }
+
+  public:
+    void InitializeState(size_t num_qubits, std::vector<std::complex<double>> &amplitudes) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        throw std::runtime_error("GpuState::InitializeState: Invalid simulation "
+                                 "type for initializing the state.");
+    }
+
+#ifndef NO_QISKIT_AER
+    void InitializeState(size_t num_qubits, AER::Vector<std::complex<double>> &amplitudes) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        throw std::runtime_error("GpuState::InitializeState: Invalid simulation "
+                                 "type for initializing the state.");
+    }
+
+#endif
+
+    void InitializeState(size_t num_qubits, Eigen::VectorXcd &amplitudes) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        throw std::runtime_error("GpuState::InitializeState: Invalid simulation "
+                                 "type for initializing the state.");
+    }
+
+    void InitializeToBasisState(size_t num_qubits, Types::qubit_t basisState) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        for (size_t q = 0; q < num_qubits; ++q)
+            if ((basisState >> q) & 1ULL)
+                ApplyX(static_cast<Types::qubit_t>(q));
+    }
+
+    void InitializeToBasisState(size_t num_qubits, const std::vector<bool> &basisState) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        for (size_t q = 0; q < num_qubits && q < basisState.size(); ++q)
+            if (basisState[q])
+                ApplyX(static_cast<Types::qubit_t>(q));
+    }
+
+    void InitializeToMixtureOfBasisStates(size_t num_qubits, const std::vector<std::pair<Types::qubit_t, double>> &mixture) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        throw std::runtime_error("GpuState::InitializeToMixtureOfBasisStates: Invalid simulation "
+                                 "type for initializing to a mixture of basis states.");
+    }
+
+    void InitializeToMixtureOfBasisStates(size_t num_qubits, const std::vector<std::pair<std::vector<bool>, double>> &mixture) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        throw std::runtime_error("GpuState::InitializeToMixtureOfBasisStates: Invalid simulation "
+                                 "type for initializing to a mixture of basis states.");
+    }
+
+    bool SupportsMPSSwapOptimization() const override
+    {
+        return true;
+    }
+
+    void SetUpcomingGates(const std::vector<std::shared_ptr<Circuits::IOperation<double>>> &gates) override
+    {
+        upcomingGates = gates;
+        upcomingGateIndex = 0;
+        if (!gateCounterObserver)
+            gateCounterObserver = std::make_shared<GateCounterObserver>(upcomingGateIndex);
+        RegisterObserver(gateCounterObserver);
+        RefreshRoutingCallback();
+    }
+
+    long long int GetGatesCounter() const override
+    {
+        return upcomingGateIndex;
+    }
+
+    void SetGatesCounter(long long int counter) override
+    {
+        upcomingGateIndex = counter;
+    }
+
+    void IncrementGatesCounter() override
+    {
+        ++upcomingGateIndex;
+    }
+
+    size_t GetNumberOfQubits() const override
+    {
+        return nrQubits;
+    }
+
+    bool SupportsQuantumChannels() const override
+    {
+        return false;
+    }
+
+    void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel) override
+    {
+        throw std::runtime_error("GPU quantum channels require an initialized density matrix or "
+                                 "matrix product operator");
+    }
+
+    double ProbabilityBits(const std::vector<bool> &bits) override
+    {
+        return IState::ProbabilityBits(bits);
+    }
+
+    std::complex<double> DensityMatrixElementBits(const std::vector<bool> &row, const std::vector<bool> &col) const override
+    {
+        return IState::DensityMatrixElementBits(row, col);
+    }
+
+    Eigen::MatrixXcd GetDensityMatrix(bool normalized = true) const override
+    {
+        return IState::GetDensityMatrix(normalized);
+    }
+
+    std::complex<double> ExpectationValueComplex(const std::string &pauli, bool normalized = true) const override
+    {
+        return IState::ExpectationValueComplex(pauli, normalized);
+    }
+
+    std::vector<std::complex<double>> ExpectationValuesComplex(const std::vector<std::string> &paulis, bool normalized = true) const override
+    {
+        return IState::ExpectationValuesComplex(paulis, normalized);
+    }
+
+    std::complex<double> ExpectationValueOperators(const Types::qubits_vector &qubits, const std::vector<Eigen::MatrixXcd> &matrices) override
+    {
+        return IState::ExpectationValueOperators(qubits, matrices);
+    }
+
+    void ApplyOperator(const Types::qubits_vector &qubits, const Eigen::MatrixXcd &matrix, bool normalize = false) override
+    {
+        return IState::ApplyOperator(qubits, matrix, normalize);
+    }
+
+    void MoveAtBeginningOfChain(const Types::qubits_vector &qubits) override
+    {
+        return IState::MoveAtBeginningOfChain(qubits);
+    }
+
+    std::vector<std::complex<double>> GetStateVector() override
+    {
+        return IState::GetStateVector();
+    }
+
+    std::complex<double> DensityMatrixTrace() const override
+    {
+        throw std::runtime_error("GPU mixed-state diagnostics require density_matrix or "
+                                 "matrix_product_operator");
+    }
+
+    std::complex<double> DensityMatrixOverlap(const IState &other) const override
+    {
+        throw std::invalid_argument("Density-matrix overlap requires two density matrices or two MPOs");
+    }
+
+    double DensityMatrixPurity() const override
+    {
+        throw std::runtime_error("GPU mixed-state diagnostics require density_matrix or "
+                                 "matrix_product_operator");
+    }
+
+    std::complex<double> DensityMatrixTraceOfSquare() const override
+    {
+        throw std::runtime_error("GPU mixed-state diagnostics require density_matrix or "
+                                 "matrix_product_operator");
+    }
+
+    double DensityMatrixHermiticityResidual() const override
+    {
+        throw std::runtime_error("GPU mixed-state diagnostics require density_matrix or "
+                                 "matrix_product_operator");
+    }
+
+    bool IsDensityMatrixHermitian(double eps = 1e-10) const override
+    {
+        throw std::runtime_error("GPU mixed-state diagnostics require density_matrix or "
+                                 "matrix_product_operator");
+    }
+
+    Eigen::MatrixXcd PartialTrace(const Types::qubits_vector &qubits) const override
+    {
+        std::vector<int> keep(qubits.begin(), qubits.end());
+        throw std::runtime_error("GPU partial trace requires a mixed-state backend");
+    }
+
+    double FidelityWithStatevector(const Eigen::VectorXcd &psi) const override
+    {
+        std::vector<double> raw(2 * static_cast<size_t>(psi.size()));
+        for (Eigen::Index i = 0; i < psi.size(); ++i)
+        {
+            raw[2 * i] = psi[i].real();
+            raw[2 * i + 1] = psi[i].imag();
+        }
+        throw std::runtime_error("GPU mixed-state fidelity requires density_matrix or "
+                                 "matrix_product_operator");
+    }
+
+    void RestoreDensityMatrixTrace() override
+    {
+        throw std::runtime_error("Trace restoration is only available for GPU MPO");
+    }
+
+    void HermitizeDensityMatrix() override
+    {
+        throw std::runtime_error("Hermitization is only available for GPU MPO");
+    }
+
+    void Trim() override
+    {
+        throw std::runtime_error("Trim is only available for GPU MPS and MPO");
+    }
+
+    void ReCanonicalize() override
+    {
+        throw std::runtime_error("Canonicalization is only available for GPU MPS and MPO");
+    }
+
+    double Probability(Types::qubit_t outcome) override
+    {
+        const auto ampl = Amplitude(outcome);
+        return std::norm(ampl);
+    }
+
+    std::complex<double> ProjectOnZero() override
+    {
+        return Amplitude(0);
+    }
+
+    std::vector<double> Probabilities(const Types::qubits_vector &qubits) override
+    {
+        std::vector<double> result(qubits.size());
+        {
+            for (size_t i = 0; i < qubits.size(); ++i)
+            {
+                const auto ampl = Amplitude(qubits[i]);
+                result[i] = std::norm(ampl);
+            }
+        }
+        return result;
+    }
+
+    std::vector<double> ExpectationValues(const std::vector<std::string> &paulis) override
+    {
+        return IState::ExpectationValues(paulis);
+    }
+
+    SimulatorType GetType() const override
+    {
+        return SimulatorType::kGpuSim;
+    }
+
+    void Flush() override
+    {
+        const bool done = true;
+        if (!done)
+            throw std::runtime_error("GpuState::Flush: device synchronization failed");
+    }
+
+    void SaveStateToInternalDestructive() override
+    {
+        throw std::runtime_error("GpuState::SaveStateToInternalDestructive: Invalid simulation type "
+                                 "for saving the state destructively.");
+    }
+
+    void RestoreInternalDestructiveSavedState() override
+    {
+        throw std::runtime_error("GpuState::RestoreInternalDestructiveSavedState: Invalid simulation "
+                                 "type for restoring the state destructively.");
+    }
+
+    std::complex<double> AmplitudeRaw(Types::qubit_t outcome) override
+    {
+        return Amplitude(outcome);
+    }
+
+    void SetMultithreading(bool multithreading = true) override
+    {
+    }
+
+    bool GetMultithreading() const override
+    {
+        return true;
+    }
+
+    bool IsQcsim() const override
+    {
+        return false;
+    }
+
+    Types::qubit_t MeasureNoCollapse() override
+    {
+        if (nrQubits > sizeof(Types::qubit_t) * 8)
+            std::cerr << "Warning: The number of qubits to measure is larger than the "
+                         "number of bits in the Types::qubit_t type, the outcome will be "
+                         "undefined"
+                      << std::endl;
+        Types::qubits_vector fixedValues(nrQubits);
+        std::iota(fixedValues.begin(), fixedValues.end(), 0);
+        const auto res = SampleCounts(fixedValues, 1);
+        if (res.empty())
+            return 0;
+        return res.begin()->first;
+    }
+
+    std::vector<bool> MeasureNoCollapseMany() override
+    {
+        Types::qubits_vector fixedValues(nrQubits);
+        std::iota(fixedValues.begin(), fixedValues.end(), 0);
+        const auto res = SampleCountsMany(fixedValues, 1);
+        if (res.empty())
+            return std::vector<bool>(nrQubits, false);
+        return res.begin()->first;
+    }
+
+    const Configuration &GetConfiguration() const
+    {
+        return configuration;
+    }
+
+    const std::unordered_map<std::string, std::string> &GetConfigMap() const override
+    {
+        return configuration.GetConfigMap();
+    }
+
     void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
     {
-        if (GetSimulationType() == SimulationType::kStatevector)
-        {
-            ValidateStatevectorTarget(qubit);
-            if (!state->ApplyOneQubitMatrixWithLayout(static_cast<int>(qubit), reinterpret_cast<const double *>(gate.data()), GpuLibrary::MATRIX_COLUMN_MAJOR))
-                throw std::runtime_error("GPU statevector failed to apply one-qubit matrix");
-            NotifyObservers({qubit});
-            return;
-        }
-        // The MPS and MPO backends expose a direct unitary-matrix-application
-        // primitive; use it instead of routing through the Kraus/quantum-channel
-        // path (which is still what the density matrix backend needs, since it
-        // has no such primitive).
-        if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-        {
-            if (!mpo->ApplyOneQubitMatrix(static_cast<int>(qubit), reinterpret_cast<const double *>(gate.data())))
-                throw std::runtime_error("GpuSimulator::ApplyGenericOneQubitGate: Failed to apply the "
-                                         "generic one-qubit gate on the matrix product operator "
-                                         "simulator.");
-            NotifyObservers({qubit});
-            return;
-        }
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-        {
-            // The MPS tensor primitive orders input modes before output modes.
-            // Translate Eigen's (output, input) matrix layout at this boundary.
-            const Eigen::Matrix2cd inputFirst = gate.transpose();
-            if (!mps->ApplyOneQubitMatrix(static_cast<unsigned int>(qubit), reinterpret_cast<const double *>(inputFirst.data())))
-                throw std::runtime_error("GpuSimulator::ApplyGenericOneQubitGate: Failed to apply the "
-                                         "generic one-qubit gate on the matrix product state simulator.");
-            NotifyObservers({qubit});
-            return;
-        }
-        if (GetSimulationType() == SimulationType::kDensityMatrix)
-        {
-            ApplyQuantumChannel({qubit}, QuantumChannel({gate}));
-            return;
-        }
         throw std::runtime_error("GpuSimulator::ApplyGenericOneQubitGate: Not supported for GPU "
                                  "simulator yet.");
     }
 
-    /**
-     * @brief Apply a generic two-qubit gate to the specified qubits.
-     * @param qubit0 The first qubit to apply the gate to.
-     * @param qubit1 The second qubit to apply the gate to.
-     * @param gate The 4x4 matrix representing the gate.
-     */
     void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1, const Eigen::Matrix4cd &gate) override
     {
-        if (GetSimulationType() == SimulationType::kStatevector)
-        {
-            ValidateStatevectorTarget(qubit0);
-            ValidateStatevectorTarget(qubit1);
-            if (!state->ApplyTwoQubitMatrixWithLayout(static_cast<int>(qubit0), static_cast<int>(qubit1), reinterpret_cast<const double *>(gate.data()),
-                                                      GpuLibrary::MATRIX_COLUMN_MAJOR))
-                throw std::runtime_error("GPU statevector failed to apply two-qubit matrix");
-            NotifyObservers({qubit0, qubit1});
-            return;
-        }
-        if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-        {
-            if (!mpo->ApplyTwoQubitMatrix(static_cast<int>(qubit0), static_cast<int>(qubit1), reinterpret_cast<const double *>(gate.data())))
-                throw std::runtime_error("GpuSimulator::ApplyGenericTwoQubitGate: Failed to apply the "
-                                         "generic two-qubit gate on the matrix product operator "
-                                         "simulator.");
-            NotifyObservers({qubit0, qubit1});
-            return;
-        }
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-        {
-            const Eigen::Matrix4cd inputFirst = gate.transpose();
-            if (!mps->ApplyTwoQubitMatrix(static_cast<unsigned int>(qubit0), static_cast<unsigned int>(qubit1),
-                                          reinterpret_cast<const double *>(inputFirst.data())))
-                throw std::runtime_error("GpuSimulator::ApplyGenericTwoQubitGate: Failed to apply the "
-                                         "generic two-qubit gate on the matrix product state simulator.");
-            NotifyObservers({qubit0, qubit1});
-            return;
-        }
-        if (GetSimulationType() == SimulationType::kDensityMatrix)
-        {
-            ApplyQuantumChannel({qubit0, qubit1}, QuantumChannel({gate}));
-            return;
-        }
         throw std::runtime_error("GpuSimulator::ApplyGenericTwoQubitGate: Not supported for GPU "
                                  "simulator yet.");
     }
@@ -149,1004 +402,53 @@ class ImmediateGpuSimulator : public ImmediateGpuState
     void ApplyGenericThreeQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1, Types::qubit_t qubit2,
                                     const Eigen::Matrix<std::complex<double>, 8, 8> &gate) override
     {
-        if (GetSimulationType() != SimulationType::kStatevector)
-            throw std::runtime_error("Generic three-qubit gates require GPU statevector");
-        ValidateStatevectorTarget(qubit0);
-        ValidateStatevectorTarget(qubit1);
-        ValidateStatevectorTarget(qubit2);
-        if (!state->ApplyThreeQubitMatrixWithLayout(static_cast<int>(qubit0), static_cast<int>(qubit1), static_cast<int>(qubit2),
-                                                    reinterpret_cast<const double *>(gate.data()), GpuLibrary::MATRIX_COLUMN_MAJOR))
-            throw std::runtime_error("GPU statevector failed to apply three-qubit matrix");
-        NotifyObservers({qubit0, qubit1, qubit2});
+        throw std::runtime_error("Generic three-qubit gates require GPU statevector");
     }
 
-  private:
-    void ValidateStatevectorTarget(Types::qubit_t qubit) const
-    {
-        if (!state)
-            throw std::logic_error("GPU statevector is not initialized");
-        if (qubit >= GetNumberOfQubits())
-            throw std::out_of_range("GPU statevector qubit is out of range");
-    }
-
-  public:
-    /**
-     * @brief Applies a phase shift gate to the qubit
-     *
-     * Applies a specified phase shift gate to the qubit
-     * @param qubit The qubit to apply the gate to.
-     * @param lambda The phase shift angle.
-     */
-    void ApplyP(Types::qubit_t qubit, double lambda) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyP(qubit, lambda);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyP(qubit, lambda);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyP(qubit, lambda);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyP(qubit, lambda);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyP(qubit, lambda);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyP(qubit, lambda);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a not gate to the qubit
-     *
-     * Applies a not (X) gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyX(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyX(qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyX(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyX(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyX(qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyX(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyX(qubit);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Y gate to the qubit
-     *
-     * Applies a not (Y) gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyY(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyY(qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyY(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyY(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyY(qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyY(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyY(qubit);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Z gate to the qubit
-     *
-     * Applies a not (Z) gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyZ(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyZ(qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyZ(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyZ(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyZ(qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyZ(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyZ(qubit);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Hadamard gate to the qubit
-     *
-     * Applies a Hadamard gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyH(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyH(qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyH(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyH(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyH(qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyH(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyH(qubit);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a S gate to the qubit
-     *
-     * Applies a S gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyS(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyS(qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyS(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyS(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyS(qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyS(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyS(qubit);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a S dagger gate to the qubit
-     *
-     * Applies a S dagger gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplySDG(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplySDG(qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplySDG(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplySDG(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplySDG(qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplySDG(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplySDG(qubit);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a T gate to the qubit
-     *
-     * Applies a T gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyT(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyT(qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyT(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyT(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyT(qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyT(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyT(qubit);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a T dagger gate to the qubit
-     *
-     * Applies a T dagger gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyTDG(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyTDG(qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyTDG(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyTDG(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyTDG(qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyTDG(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyTDG(qubit);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Sx gate to the qubit
-     *
-     * Applies a Sx gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplySx(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplySX(qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplySX(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplySX(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplySX(qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplySX(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplySQRTX(qubit);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Sx dagger gate to the qubit
-     *
-     * Applies a Sx dagger gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplySxDAG(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplySXDG(qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplySXDG(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplySXDG(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplySXDG(qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplySXDG(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplySxDAG(qubit);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a K gate to the qubit
-     *
-     * Applies a K (Hy) gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyK(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyK(qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyK(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyK(qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyK(qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyK(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyK(qubit);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Rx gate to the qubit
-     *
-     * Applies an x rotation gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     * @param theta The rotation angle.
-     */
-    void ApplyRx(Types::qubit_t qubit, double theta) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyRx(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyRx(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyRx(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyRx(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyRx(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyRX(qubit, theta);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Ry gate to the qubit
-     *
-     * Applies a y rotation gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     * @param theta The rotation angle.
-     */
-    void ApplyRy(Types::qubit_t qubit, double theta) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyRy(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyRy(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyRy(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyRy(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyRy(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyRY(qubit, theta);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Rz gate to the qubit
-     *
-     * Applies a z rotation gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     * @param theta The rotation angle.
-     */
-    void ApplyRz(Types::qubit_t qubit, double theta) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyRz(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyRz(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyRz(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyRz(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyRz(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyRZ(qubit, theta);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a U gate to the qubit
-     *
-     * Applies a U gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     * @param theta The rotation angle.
-     */
-    void ApplyU(Types::qubit_t qubit, double theta, double phi, double lambda, double gamma) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyU(qubit, theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyU(qubit, theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyU(qubit, theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyU(qubit, theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyU(qubit, theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyU(qubit, theta, phi, lambda, gamma);
-
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a CX gate to the qubits
-     *
-     * Applies a controlled X gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     */
-    void ApplyCX(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyCX(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyCX(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyCX(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyCX(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyCX(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCX(ctrl_qubit, tgt_qubit);
-
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CY gate to the qubits
-     *
-     * Applies a controlled Y gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     */
-    void ApplyCY(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyCY(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyCY(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyCY(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyCY(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyCY(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCY(ctrl_qubit, tgt_qubit);
-
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CZ gate to the qubits
-     *
-     * Applies a controlled Z gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     */
-    void ApplyCZ(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyCZ(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyCZ(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyCZ(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyCZ(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyCZ(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCZ(ctrl_qubit, tgt_qubit);
-
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CP gate to the qubits
-     *
-     * Applies a controlled phase gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     * @param lambda The phase shift angle.
-     */
-    void ApplyCP(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double lambda) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
-
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CRx gate to the qubits
-     *
-     * Applies a controlled x rotation gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     * @param theta The rotation angle.
-     */
-    void ApplyCRx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCRX(ctrl_qubit, tgt_qubit, theta);
-
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CRy gate to the qubits
-     *
-     * Applies a controlled y rotation gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     * @param theta The rotation angle.
-     */
-    void ApplyCRy(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCRY(ctrl_qubit, tgt_qubit, theta);
-
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CRz gate to the qubits
-     *
-     * Applies a controlled z rotation gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     * @param theta The rotation angle.
-     */
-    void ApplyCRz(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCRZ(ctrl_qubit, tgt_qubit, theta);
-
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CH gate to the qubits
-     *
-     * Applies a controlled Hadamard gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     */
-    void ApplyCH(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyCH(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyCH(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyCH(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyCH(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyCH(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCH(ctrl_qubit, tgt_qubit);
-
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CSx gate to the qubits
-     *
-     * Applies a controlled squared root not gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     */
-    void ApplyCSx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyCSX(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyCSX(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyCSX(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyCSX(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyCSX(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCSX(ctrl_qubit, tgt_qubit);
-
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CSx dagger gate to the qubits
-     *
-     * Applies a controlled squared root not dagger gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     */
-    void ApplyCSxDAG(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyCSXDG(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyCSXDG(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyCSXDG(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyCSXDG(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyCSXDG(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCSXDAG(ctrl_qubit, tgt_qubit);
-
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a swap gate to the qubits
-     *
-     * Applies a swap gate to the specified qubits
-     * @param qubit0 The first qubit
-     * @param qubit1 The second qubit
-     */
-    void ApplySwap(Types::qubit_t qubit0, Types::qubit_t qubit1) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplySwap(qubit0, qubit1);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplySwap(qubit0, qubit1);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplySwap(qubit0, qubit1);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplySwap(qubit0, qubit1);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplySwap(qubit0, qubit1);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplySWAP(qubit0, qubit1);
-
-        NotifyObservers({qubit1, qubit0});
-    }
-
-    /**
-     * @brief Applies a controlled controlled not gate to the qubits
-     *
-     * Applies a controlled controlled not gate to the specified qubits
-     * @param qubit0 The first control qubit
-     * @param qubit1 The second control qubit
-     * @param qubit2 The target qubit
-     */
-    void ApplyCCX(Types::qubit_t qubit0, Types::qubit_t qubit1, Types::qubit_t qubit2) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-        {
-            state->ApplyCCX(qubit0, qubit1, qubit2);
-            NotifyObservers({qubit0, qubit1, qubit2});
-        }
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-        {
-            densityMatrix->ApplyCCX(qubit0, qubit1, qubit2);
-            NotifyObservers({qubit0, qubit1, qubit2});
-        }
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-        {
-            const size_t q1 = qubit0; // control 1
-            const size_t q2 = qubit1; // control 2
-            const size_t q3 = qubit2; // target
-
-            // The gpu MPO backend does not expose a native CCX gate; decompose it
-            // with the same Sleator-Weinfurter decomposition used for MPS.
-            mpo->ApplyCSX(static_cast<int>(q2), static_cast<int>(q3));
-            NotifyObservers({qubit1, qubit2});
-
-            mpo->ApplyCX(static_cast<int>(q1), static_cast<int>(q2));
-            NotifyObservers({qubit0, qubit1});
-
-            mpo->ApplyCSXDG(static_cast<int>(q2), static_cast<int>(q3));
-            NotifyObservers({qubit1, qubit2});
-
-            mpo->ApplyCX(static_cast<int>(q1), static_cast<int>(q2));
-            NotifyObservers({qubit0, qubit1});
-
-            mpo->ApplyCSX(static_cast<int>(q1), static_cast<int>(q3));
-            NotifyObservers({qubit0, qubit2});
-        }
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-        {
-            const size_t q1 = qubit0; // control 1
-            const size_t q2 = qubit1; // control 2
-            const size_t q3 = qubit2; // target
-
-            // Sleator-Weinfurter decomposition
-            mps->ApplyCSX(static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-            NotifyObservers({qubit1, qubit2});
-
-            mps->ApplyCX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q2));
-            NotifyObservers({qubit0, qubit1});
-
-            mps->ApplyCSXDG(static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-            NotifyObservers({qubit1, qubit2});
-
-            mps->ApplyCX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q2));
-            NotifyObservers({qubit0, qubit1});
-
-            mps->ApplyCSX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q3));
-            NotifyObservers({qubit0, qubit2});
-        }
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-        {
-            tn->ApplyCCX(qubit0, qubit1, qubit2);
-            NotifyObservers({qubit0, qubit1, qubit2});
-        }
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-        {
-            pp->ApplyCCX(qubit0, qubit1, qubit2);
-            NotifyObservers({qubit0, qubit1, qubit2});
-        }
-    }
-
-    /**
-     * @brief Applies a controlled swap gate to the qubits
-     *
-     * Applies a controlled swap gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param qubit0 The first qubit
-     * @param qubit1 The second qubit
-     */
-    void ApplyCSwap(Types::qubit_t ctrl_qubit, Types::qubit_t qubit0, Types::qubit_t qubit1) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-        {
-            state->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
-            NotifyObservers({qubit1, qubit0, ctrl_qubit});
-        }
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-        {
-            densityMatrix->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
-            NotifyObservers({qubit1, qubit0, ctrl_qubit});
-        }
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-        {
-            const size_t q1 = ctrl_qubit; // control
-            const size_t q2 = qubit0;
-            const size_t q3 = qubit1;
-
-            // The gpu MPO backend does not expose a native CSwap gate; decompose it
-            // with the same decomposition used for MPS.
-            mpo->ApplyCX(static_cast<int>(q3), static_cast<int>(q2));
-            NotifyObservers({qubit1, qubit0});
-
-            mpo->ApplyCSX(static_cast<int>(q2), static_cast<int>(q3));
-            NotifyObservers({qubit0, qubit1});
-
-            mpo->ApplyCX(static_cast<int>(q1), static_cast<int>(q2));
-            NotifyObservers({ctrl_qubit, qubit0});
-
-            mpo->ApplyP(static_cast<int>(q3), M_PI);
-            NotifyObservers({qubit1});
-            mpo->ApplyP(static_cast<int>(q2), -M_PI_2);
-            NotifyObservers({qubit0});
-
-            mpo->ApplyCSX(static_cast<int>(q2), static_cast<int>(q3));
-            NotifyObservers({qubit0, qubit1});
-
-            mpo->ApplyCX(static_cast<int>(q1), static_cast<int>(q2));
-            NotifyObservers({ctrl_qubit, qubit0});
-
-            mpo->ApplyP(static_cast<int>(q3), M_PI);
-            NotifyObservers({qubit1});
-
-            mpo->ApplyCSX(static_cast<int>(q1), static_cast<int>(q3));
-            NotifyObservers({ctrl_qubit, qubit1});
-
-            mpo->ApplyCX(static_cast<int>(q3), static_cast<int>(q2));
-            NotifyObservers({qubit1, qubit0});
-        }
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-        {
-            const size_t q1 = ctrl_qubit; // control
-            const size_t q2 = qubit0;
-            const size_t q3 = qubit1;
-
-            // TODO: find a better decomposition
-            // this one I've got with the qiskit transpiler
-            mps->ApplyCX(static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-            NotifyObservers({qubit1, qubit0});
-
-            mps->ApplyCSX(static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-            NotifyObservers({qubit0, qubit1});
-
-            mps->ApplyCX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q2));
-            NotifyObservers({ctrl_qubit, qubit0});
-
-            mps->ApplyP(static_cast<unsigned int>(q3), M_PI);
-            NotifyObservers({qubit1});
-            mps->ApplyP(static_cast<unsigned int>(q2), -M_PI_2);
-            NotifyObservers({qubit0});
-
-            mps->ApplyCSX(static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-            NotifyObservers({qubit0, qubit1});
-
-            mps->ApplyCX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q2));
-            NotifyObservers({ctrl_qubit, qubit0});
-
-            mps->ApplyP(static_cast<unsigned int>(q3), M_PI);
-            NotifyObservers({qubit1});
-
-            mps->ApplyCSX(static_cast<unsigned int>(q1), static_cast<unsigned int>(q3));
-            NotifyObservers({ctrl_qubit, qubit1});
-
-            mps->ApplyCX(static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-            NotifyObservers({qubit1, qubit0});
-        }
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-        {
-            tn->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
-            NotifyObservers({qubit1, qubit0, ctrl_qubit});
-        }
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-        {
-            pp->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
-            NotifyObservers({qubit1, qubit0, ctrl_qubit});
-        }
-    }
-
-    /**
-     * @brief Applies a controlled U gate to the qubits
-     *
-     * Applies a controlled U gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     * @param theta Theta parameter for the U gate
-     * @param phi Phi parameter for the U gate
-     * @param lambda Lambda parameter for the U gate
-     * @param gamma Gamma parameter for the U gate
-     */
-    void ApplyCU(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta, double phi, double lambda, double gamma) override
-    {
-        if (GetSimulationType() == SimulationType::kStatevector)
-            state->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-            mpo->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mps->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tn->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
-
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a nop
-     *
-     * Applies a nop (no operation).
-     * Typically does (almost) nothing. Equivalent to an identity.
-     * For qiskit aer it will send the 'nop' to the qiskit aer simulator.
-     */
     void ApplyNop() override
     {
-        // do nothing
     }
 
-    /**
-     * @brief Clones the simulator.
-     *
-     * Clones the simulator, including the state, the configuration and the
-     * internally saved state, if any. Does not copy the observers. Should be used
-     * mainly internally, to optimise multiple shots execution, copying the state
-     * from the simulator used for timing.
-     *
-     * @return A unique pointer to the cloned simulator.
-     */
-    std::unique_ptr<ISimulator> Clone() override
+  protected:
+    static std::vector<size_t> SampleBitPositions(const Types::qubits_vector &qubits)
     {
-        if (GetSimulationType() == SimulationType::kTensorNetwork || GetSimulationType() == SimulationType::kPauliPropagator)
-        {
-            throw std::runtime_error("GpuSimulator::Clone: Cloning Tensor Network or Pauli Propagator "
-                                     "simulation is not "
-                                     "supported.");
-        }
-
-        auto cloned = std::make_unique<ImmediateGpuSimulator>();
-
-        cloned->simulationType = simulationType;
-        cloned->nrQubits = nrQubits;
-
-        cloned->lookaheadDepth = lookaheadDepth;
-        cloned->lookaheadDepthWithHeuristic = lookaheadDepthWithHeuristic;
-        cloned->useOptimalMeetingPosition = useOptimalMeetingPosition;
-        cloned->upcomingGates = upcomingGates;
-        cloned->upcomingGateIndex = upcomingGateIndex;
-        cloned->growthFactorGate = growthFactorGate;
-        cloned->growthFactorSwap = growthFactorSwap;
-        cloned->configuration = configuration;
-
-        if (state)
-            cloned->state = state->Clone();
-        else if (densityMatrix)
-        {
-            cloned->densityMatrix = densityMatrix->Clone();
-            if (!cloned->densityMatrix)
-                throw std::runtime_error("GpuSimulator::Clone: Failed to clone density matrix state.");
-        }
-        else if (mpo)
-        {
-            cloned->mpo = mpo->Clone();
-            if (!cloned->mpo)
-                throw std::runtime_error("GpuSimulator::Clone: Failed to clone matrix product operator "
-                                         "state.");
-
-            cloned->gateCounterObserver = std::make_shared<GateCounterObserver>(cloned->upcomingGateIndex);
-            cloned->RegisterObserver(cloned->gateCounterObserver);
-
-            cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
-
-            cloned->curMaxBondDim = curMaxBondDim;
-            cloned->mpo->SetCallbackContext(cloned.get());
-        }
-        else if (mps)
-        {
-            cloned->mps = mps->Clone();
-
-            cloned->gateCounterObserver = std::make_shared<GateCounterObserver>(cloned->upcomingGateIndex);
-            cloned->RegisterObserver(cloned->gateCounterObserver);
-
-            cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
-
-            cloned->curMaxBondDim = curMaxBondDim;
-            cloned->mps->SetCallbackContext(cloned.get());
-        }
-        else if (tn || pp)
-        {
-            throw std::runtime_error("GpuSimulator::Clone: Cloning Tensor Network or Pauli Propagator "
-                                     "simulation is not "
-                                     "supported.");
-        }
-
-        if (configuration.IsSet("seed"))
-            cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
-
-        return cloned;
+        auto sorted = qubits;
+        std::sort(sorted.begin(), sorted.end());
+        sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+        std::vector<size_t> positions;
+        positions.reserve(qubits.size());
+        for (const auto q : qubits)
+            positions.push_back(std::lower_bound(sorted.begin(), sorted.end(), q) - sorted.begin());
+        return positions;
     }
+
+    uint64_t nextSeedStream = 0;
+
+    size_t nrQubits = 0;
+
+    std::vector<std::shared_ptr<Circuits::IOperation<>>> upcomingGates;
+
+    long long int upcomingGateIndex = 0;
+
+    class GateCounterObserver : public ISimulatorObserver
+    {
+      public:
+        GateCounterObserver(long long int &indexRef) : index(indexRef)
+        {
+        }
+
+        void Update(const Types::qubits_vector &) override
+        {
+            ++index;
+        }
+
+      private:
+        long long int &index;
+    };
+
+    std::shared_ptr<GateCounterObserver> gateCounterObserver;
+
+    Configuration configuration;
 };
-
-} // namespace Private
-} // namespace Simulators
-
-#endif
-#endif
+} // namespace Simulators::Private
 #endif

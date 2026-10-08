@@ -36,22 +36,94 @@
 #endif
 #include "../Composite/Composite.h"
 #include "../DistributedGpu/DistributedGpuSimulator.h"
+#include "../Gpu/GpuDensityMatrixSimulator.h"
+#include "../Gpu/GpuMPOSimulator.h"
+#include "../Gpu/GpuMPSSimulator.h"
+#include "../Gpu/GpuPauliPropagatorSimulator.h"
 #include "../Gpu/GpuSimulator.h"
+#include "../Gpu/GpuStatevectorSimulator.h"
+#include "../Gpu/GpuTensorNetworkSimulator.h"
+#include "../QCSim/QCSimDensityMatrixSimulator.h"
+#include "../QCSim/QCSimExtendedStabilizerSimulator.h"
+#include "../QCSim/QCSimMPOSimulator.h"
+#include "../QCSim/QCSimMPSSimulator.h"
+#include "../QCSim/QCSimPathIntegralSimulator.h"
+#include "../QCSim/QCSimPauliPropagatorSimulator.h"
 #include "../QCSim/QCSimSimulator.h"
+#include "../QCSim/QCSimStabilizerSimulator.h"
+#include "../QCSim/QCSimStatevectorSimulator.h"
+#include "../QCSim/QCSimTensorNetworkSimulator.h"
 #include "../Quest/QuestSimulator.h"
 
 namespace Simulators
 {
 
-std::unique_ptr<ISimulator> SimulatorsFactory::CreateImmediateSimulatorUnique(SimulatorType type)
+std::unique_ptr<ISimulator> SimulatorsFactory::CreateImmediateSimulatorUnique(SimulatorType type, SimulationType method)
 {
-    if (type == SimulatorType::kQCSim)
-        return std::make_unique<Private::ImmediateQCSimSimulator>();
+    switch (type)
+    {
+    case SimulatorType::kQCSim:
+        switch (method)
+        {
+        case SimulationType::kStatevector:
+            return std::make_unique<Private::QCSimStatevectorSimulator>();
+        case SimulationType::kMatrixProductState:
+            return std::make_unique<Private::QCSimMPSSimulator>();
+        case SimulationType::kMatrixProductOperator:
+            return std::make_unique<Private::QCSimMPOSimulator>();
+        case SimulationType::kStabilizer:
+            return std::make_unique<Private::QCSimStabilizerSimulator>();
+        case SimulationType::kTensorNetwork:
+            return std::make_unique<Private::QCSimTensorNetworkSimulator>();
+        case SimulationType::kPauliPropagator:
+            return std::make_unique<Private::QCSimPauliPropagatorSimulator>();
+        case SimulationType::kPathIntegral:
+            return std::make_unique<Private::QCSimPathIntegralSimulator>();
+        case SimulationType::kDensityMatrix:
+            return std::make_unique<Private::QCSimDensityMatrixSimulator>();
+        case SimulationType::kExtendedStabilizer:
+            return std::make_unique<Private::QCSimExtendedStabilizerSimulator>();
+        default:
+            throw std::invalid_argument("Simulation Type not supported for QCSim");
+        }
 #ifndef NO_QISKIT_AER
-    if (type == SimulatorType::kQiskitAer)
-        return std::make_unique<Private::AerSimulator>();
+    case SimulatorType::kQiskitAer:
+        // Aer owns its method selection and does not use the fusion adapter.
+        return CreateSimulatorUnique(type, method);
 #endif
-    throw std::invalid_argument("Unsupported composite child backend");
+#ifdef __linux__
+    case SimulatorType::kGpuSim: {
+        std::unique_ptr<ISimulator> sim;
+        switch (method)
+        {
+        case SimulationType::kStatevector:
+            sim = std::make_unique<Private::GpuStatevectorSimulator>();
+            break;
+        case SimulationType::kMatrixProductState:
+            sim = std::make_unique<Private::GpuMPSSimulator>();
+            break;
+        case SimulationType::kMatrixProductOperator:
+            sim = std::make_unique<Private::GpuMPOSimulator>();
+            break;
+        case SimulationType::kTensorNetwork:
+            sim = std::make_unique<Private::GpuTensorNetworkSimulator>();
+            break;
+        case SimulationType::kPauliPropagator:
+            sim = std::make_unique<Private::GpuPauliPropagatorSimulator>();
+            break;
+        case SimulationType::kDensityMatrix:
+            sim = std::make_unique<Private::GpuDensityMatrixSimulator>();
+            break;
+        default:
+            return nullptr;
+        }
+        sim->Configure("gpu_device", std::to_string(ResolveGpuDevice()).c_str());
+        return sim;
+    }
+#endif
+    default:
+        throw std::invalid_argument("Unsupported immediate backend");
+    }
 }
 
 #ifdef __linux__
@@ -224,140 +296,15 @@ bool SimulatorsFactory::InitQuestLibraryWithMute()
 
 std::shared_ptr<ISimulator> SimulatorsFactory::CreateSimulator(SimulatorType t, SimulationType m)
 {
-    switch (t)
-    {
-    case SimulatorType::kQCSim: {
-        auto sim = std::make_shared<Private::QCSimSimulator>();
-        if (m == SimulationType::kMatrixProductState)
-            sim->Configure("method", "matrix_product_state");
-        else if (m == SimulationType::kMatrixProductOperator)
-            sim->Configure("method", "matrix_product_operator");
-        else if (m == SimulationType::kStabilizer)
-            sim->Configure("method", "stabilizer");
-        else if (m == SimulationType::kTensorNetwork)
-            sim->Configure("method", "tensor_network");
-        else if (m == SimulationType::kPauliPropagator)
-            sim->Configure("method", "pauli_propagator");
-        else if (m == SimulationType::kPathIntegral)
-            sim->Configure("method", "path_integral");
-        else if (m == SimulationType::kDensityMatrix)
-            sim->Configure("method", "density_matrix");
-        else if (m == SimulationType::kExtendedStabilizer)
-            sim->Configure("method", "extended_stabilizer");
-        else if (m != SimulationType::kStatevector)
-            throw std::invalid_argument("Simulation Type not supported for QCSim");
-
-        return sim;
-    }
-#ifndef NO_QISKIT_AER
-    case SimulatorType::kQiskitAer: {
-        auto sim = std::make_shared<Private::AerSimulator>();
-        if (m == SimulationType::kMatrixProductState)
-            sim->Configure("method", "matrix_product_state");
-        else if (m == SimulationType::kStabilizer)
-            sim->Configure("method", "stabilizer");
-        else if (m == SimulationType::kTensorNetwork)
-            sim->Configure("method", "tensor_network");
-        else if (m == SimulationType::kExtendedStabilizer)
-            sim->Configure("method", "extended_stabilizer");
-        else if (m == SimulationType::kDensityMatrix)
-            sim->Configure("method", "density_matrix");
-        else if (m == SimulationType::kStatevector)
-            sim->Configure("method", "statevector");
-        else
-            throw std::invalid_argument("Simulation Type not supported for Qiskit Aer");
-
-        return sim;
-    }
-    case SimulatorType::kCompositeQiskitAer:
-        return std::make_shared<Private::ImmediateCompositeSimulator>(SimulatorType::kQiskitAer);
-#endif
-    case SimulatorType::kCompositeQCSim:
-        return std::make_shared<Private::CompositeSimulator>(SimulatorType::kQCSim);
-#ifdef __linux__
-    case SimulatorType::kDistGpuSim:
-        if (m != SimulationType::kStatevector)
-            throw std::invalid_argument("Distributed GPU supports only statevector");
-        if (!IsDistributedGpuAvailable())
-            return nullptr;
-        return std::make_shared<Private::DistributedGpuSimulator>();
-    case SimulatorType::kDistMpiGpuSim:
-        if (m != SimulationType::kStatevector)
-            throw std::invalid_argument("Distributed MPI GPU supports only statevector");
-        return std::make_shared<Private::DistributedMpiGpuSimulator>();
-
-    case SimulatorType::kGpuSim:
-        // Library initialization is checked before advertising the backend;
-        // device resources remain lazy and configuration follows creation.
-        if (GetGpuDeviceCount() <= 0)
-            return nullptr;
-        if ((m == SimulationType::kStatevector || m == SimulationType::kMatrixProductState || m == SimulationType::kDensityMatrix ||
-             m == SimulationType::kMatrixProductOperator || m == SimulationType::kTensorNetwork || m == SimulationType::kPauliPropagator))
-        {
-            auto sim = std::make_shared<Private::GpuSimulator>();
-            sim->Configure("gpu_device", std::to_string(ResolveGpuDevice()).c_str());
-            if (m == SimulationType::kMatrixProductState)
-                sim->Configure("method", "matrix_product_state");
-            else if (m == SimulationType::kMatrixProductOperator)
-                sim->Configure("method", "matrix_product_operator");
-            else if (m == SimulationType::kTensorNetwork)
-                sim->Configure("method", "tensor_network");
-            else if (m == SimulationType::kPauliPropagator)
-                sim->Configure("method", "pauli_propagator");
-            else if (m == SimulationType::kStatevector)
-                sim->Configure("method", "statevector");
-            else if (m == SimulationType::kDensityMatrix)
-                sim->Configure("method", "density_matrix");
-
-            return sim;
-        }
-
-        return nullptr;
-#endif
-    case SimulatorType::kQuestSim:
-        if (m != SimulationType::kStatevector)
-            throw std::invalid_argument("Simulation Type not supported for Quest Simulator");
-        else if (questLibrary && questLibrary->IsValid())
-        {
-            return std::make_shared<Private::QuestSimulator>();
-        }
-        return nullptr;
-    default:
-        break;
-    }
-
-    throw std::invalid_argument("Simulator Type not supported");
-
-    return nullptr; // keep compillers happy
+    return CreateSimulatorUnique(t, m);
 }
 
 std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(SimulatorType t, SimulationType m)
 {
     switch (t)
     {
-    case SimulatorType::kQCSim: {
-        auto sim = std::make_unique<Private::QCSimSimulator>();
-        if (m == SimulationType::kMatrixProductState)
-            sim->Configure("method", "matrix_product_state");
-        else if (m == SimulationType::kMatrixProductOperator)
-            sim->Configure("method", "matrix_product_operator");
-        else if (m == SimulationType::kStabilizer)
-            sim->Configure("method", "stabilizer");
-        else if (m == SimulationType::kTensorNetwork)
-            sim->Configure("method", "tensor_network");
-        else if (m == SimulationType::kPauliPropagator)
-            sim->Configure("method", "pauli_propagator");
-        else if (m == SimulationType::kPathIntegral)
-            sim->Configure("method", "path_integral");
-        else if (m == SimulationType::kDensityMatrix)
-            sim->Configure("method", "density_matrix");
-        else if (m == SimulationType::kExtendedStabilizer)
-            sim->Configure("method", "extended_stabilizer");
-        else if (m != SimulationType::kStatevector)
-            throw std::invalid_argument("Simulation Type not supported for QCSim");
-
-        return sim;
-    }
+    case SimulatorType::kQCSim:
+        return std::make_unique<Private::QCSimSimulator>(CreateImmediateSimulatorUnique(t, m));
 #ifndef NO_QISKIT_AER
     case SimulatorType::kQiskitAer: {
         auto sim = std::make_unique<Private::AerSimulator>();
@@ -400,27 +347,8 @@ std::unique_ptr<ISimulator> SimulatorsFactory::CreateSimulatorUnique(SimulatorTy
         // device resources remain lazy and configuration follows creation.
         if (GetGpuDeviceCount() <= 0)
             return nullptr;
-        if ((m == SimulationType::kStatevector || m == SimulationType::kMatrixProductState || m == SimulationType::kDensityMatrix ||
-             m == SimulationType::kMatrixProductOperator || m == SimulationType::kTensorNetwork || m == SimulationType::kPauliPropagator))
-        {
-            auto sim = std::make_unique<Private::GpuSimulator>();
-            sim->Configure("gpu_device", std::to_string(ResolveGpuDevice()).c_str());
-            if (m == SimulationType::kMatrixProductState)
-                sim->Configure("method", "matrix_product_state");
-            else if (m == SimulationType::kMatrixProductOperator)
-                sim->Configure("method", "matrix_product_operator");
-            else if (m == SimulationType::kTensorNetwork)
-                sim->Configure("method", "tensor_network");
-            else if (m == SimulationType::kPauliPropagator)
-                sim->Configure("method", "pauli_propagator");
-            else if (m == SimulationType::kStatevector)
-                sim->Configure("method", "statevector");
-            else if (m == SimulationType::kDensityMatrix)
-                sim->Configure("method", "density_matrix");
-
-            return sim;
-        }
-
+        if (auto immediate = CreateImmediateSimulatorUnique(t, m))
+            return std::make_unique<Private::GpuSimulator>(std::move(immediate));
         return nullptr;
 #endif
     case SimulatorType::kQuestSim:

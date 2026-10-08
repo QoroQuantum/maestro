@@ -8,9 +8,11 @@ namespace Simulators::Private
 class GpuSimulator : public FusionSimulator<GpuState>
 {
   public:
+    using FusionSimulator::FusionSimulator;
+
     std::unique_ptr<ISimulator> Clone() override
     {
-        auto copy = std::make_unique<GpuSimulator>();
+        auto copy = std::make_unique<GpuSimulator>(immediate_);
         CloneInto(*copy);
         return copy;
     }

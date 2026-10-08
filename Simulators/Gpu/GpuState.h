@@ -1,14 +1,13 @@
 #pragma once
 #if defined(INCLUDED_BY_FACTORY) && defined(__linux__)
 #include "../Fusion/FusionState.h"
-#include "ImmediateGpuSimulator.h"
 
 namespace Simulators::Private
 {
 class GpuState : public FusionState
 {
   public:
-    GpuState() : FusionState(std::make_shared<ImmediateGpuSimulator>())
+    explicit GpuState(std::shared_ptr<ISimulator> immediate) : FusionState(std::move(immediate))
     {
     }
 

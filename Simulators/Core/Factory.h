@@ -68,8 +68,10 @@ class SimulatorsFactory
     MAESTRO_FACTORY_EXPORT static std::unique_ptr<ISimulator> CreateSimulatorUnique(SimulatorType t = SimulatorType::kQCSim,
                                                                                     SimulationType method = SimulationType::kMatrixProductState);
 
-    // Internal immediate children for composite simulation. No fusion adapter.
-    MAESTRO_FACTORY_EXPORT static std::unique_ptr<ISimulator> CreateImmediateSimulatorUnique(SimulatorType type);
+    // Concrete backends without a fusion adapter. Composite children use statevector.
+    // The method is fixed for the lifetime of the returned object.
+    MAESTRO_FACTORY_EXPORT static std::unique_ptr<ISimulator> CreateImmediateSimulatorUnique(SimulatorType type,
+                                                                                             SimulationType method = SimulationType::kStatevector);
 
 #ifdef __linux__
     // Defined in the core library so Python's hidden-visibility extension

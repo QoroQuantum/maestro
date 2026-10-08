@@ -1,1369 +1,450 @@
-/**
- * @file ImmediateQCSimSimulator.h
- * @version 1.0
- *
- * @section DESCRIPTION
- *
- * The qcsim simulator class.
- *
- * Should not be used directly, create an instance with the factory and use the
- * generic interface instead.
- */
-
 #pragma once
+#if defined(INCLUDED_BY_FACTORY)
+#include "../../Utils/Alias.h"
+#include "../Core/Configuration.h"
+#include "../Interfaces/Simulator.h"
+#include "../TensorNetworks/MPOValidation.h"
+#include <algorithm>
+#include <cctype>
+#include <functional>
+#include <iomanip>
+#include <limits>
+#include <random>
+#include <sstream>
+#include <utility>
 
-#ifndef _IMMEDIATE_QCSIMSIMULATOR_H
-#define _IMMEDIATE_QCSIMSIMULATOR_H
-
-#ifdef INCLUDED_BY_FACTORY
-
-#include "ImmediateQCSimState.h"
-
-#define _USE_MATH_DEFINES
-#include <math.h>
-
-namespace Simulators
+namespace Simulators::Private
 {
-// TODO: Maybe use the pimpl idiom
-// https://en.cppreference.com/w/cpp/language/pimpl to hide the implementation
-// for good but during development this should be good enough
-namespace Private
+template <typename T, typename = void> struct HasSetSeed : std::false_type
 {
+};
 
-class IndividualSimulator;
-
-/**
- * @class ImmediateQCSimSimulator
- * @brief QCSim simulator class.
- *
- * This is the implementation for the qcsim simulator.
- * Do not use this class directly, use the factory to create an instance.
- * Only the interface should be exposed.
- * @sa ImmediateQCSimState
- * @sa ISimulator
- * @sa IState
- */
-class ImmediateQCSimSimulator : public ImmediateQCSimState
+template <typename T> struct HasSetSeed<T, std::void_t<decltype(std::declval<T &>().SetSeed(std::declval<uint64_t>()))>> : std::true_type
 {
-    friend class IndividualSimulator;
+};
 
+template <typename T> void SeedBackend(T *backend, uint64_t seed)
+{
+    if constexpr (HasSetSeed<T>::value)
+        backend->SetSeed(seed);
+}
+
+} // namespace Simulators::Private
+
+namespace Simulators::Private
+{
+// Common configuration, sampling and circuit bookkeeping. Native state belongs
+// exclusively to the concrete simulator selected by the factory.
+class ImmediateQCSimSimulator : public ISimulator
+{
   public:
-    ImmediateQCSimSimulator() = default;
-    // allow no copy or assignment
-    ImmediateQCSimSimulator(const ImmediateQCSimSimulator &) = delete;
-    ImmediateQCSimSimulator &operator=(const ImmediateQCSimSimulator &) = delete;
+    virtual const char *MethodName() const = 0;
 
-    // but allow moving
-    ImmediateQCSimSimulator(ImmediateQCSimSimulator &&other) = default;
-    ImmediateQCSimSimulator &operator=(ImmediateQCSimSimulator &&other) = default;
-
-    /**
-     * @brief Apply a generic one-qubit gate to the specified qubit.
-     * @param qubit The qubit to apply the gate to.
-     * @param gate The 2x2 matrix representing the gate.
-     */
-    void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
+  protected:
+    void ValidateMethod(const char *value) const
     {
-        if (GetSimulationType() != SimulationType::kMatrixProductState && GetSimulationType() != SimulationType::kMatrixProductOperator &&
-            GetSimulationType() != SimulationType::kTensorNetwork && GetSimulationType() != SimulationType::kStatevector &&
-            GetSimulationType() != SimulationType::kDensityMatrix)
-            throw std::runtime_error("QCSimSimulator::ApplyGenericOneQubitGate: Unsupported simulation "
-                                     "type.");
-
-        const QC::Gates::AppliedGate<> agate(gate, qubit);
-
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(agate);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(agate, qubit);
-        else if (GetSimulationType() == SimulationType::kStatevector || GetSimulationType() == SimulationType::kDensityMatrix ||
-                 GetSimulationType() == SimulationType::kMatrixProductOperator)
-            ApplyStatevectorOrDensityMatrix(agate);
-
-        NotifyObservers({qubit});
+        if (std::string(value) != MethodName())
+            throw std::invalid_argument("A concrete simulator cannot change method; select the backend through SimulatorsFactory");
     }
 
-    /**
-     * @brief Apply a generic two-qubit gate to the specified qubits.
-     * @param qubit0 The first qubit to apply the gate to.
-     * @param qubit1 The second qubit to apply the gate to.
-     * @param gate The 4x4 matrix representing the gate.
-     */
+    virtual void RefreshRoutingCallback()
+    {
+    }
+
+    ImmediateQCSimSimulator() : rng(std::random_device{}()), uniformZeroOne(0, 1)
+    {
+    }
+
+  public:
+    void InitializeState(size_t num_qubits, std::vector<std::complex<double>> &amplitudes) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        throw std::runtime_error("QCSimState::InitializeState: Invalid "
+                                 "simulation type for initializing the state.");
+    }
+
+#ifndef NO_QISKIT_AER
+    void InitializeState(size_t num_qubits, AER::Vector<std::complex<double>> &amplitudes) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        throw std::runtime_error("QCSimState::InitializeState: Invalid "
+                                 "simulation type for initializing the state.");
+    }
+
+#endif
+
+    void InitializeState(size_t num_qubits, Eigen::VectorXcd &amplitudes) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        throw std::runtime_error("QCSimState::InitializeState: Invalid "
+                                 "simulation type for initializing the state.");
+    }
+
+    void InitializeToBasisState(size_t num_qubits, Types::qubit_t basisState) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        for (size_t q = 0; q < num_qubits; ++q)
+            if ((basisState >> q) & 1ULL)
+                ApplyX(static_cast<Types::qubit_t>(q));
+    }
+
+    void InitializeToBasisState(size_t num_qubits, const std::vector<bool> &basisState) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        for (size_t q = 0; q < num_qubits && q < basisState.size(); ++q)
+            if (basisState[q])
+                ApplyX(static_cast<Types::qubit_t>(q));
+    }
+
+    void InitializeToMixtureOfBasisStates(size_t num_qubits, const std::vector<std::pair<Types::qubit_t, double>> &mixture) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        throw std::runtime_error("QCSimState::InitializeToMixtureOfBasisStates: Invalid simulation "
+                                 "type for initializing to a mixture of basis states.");
+    }
+
+    void InitializeToMixtureOfBasisStates(size_t num_qubits, const std::vector<std::pair<std::vector<bool>, double>> &mixture) override
+    {
+        if (num_qubits == 0)
+            return;
+        Clear();
+        nrQubits = num_qubits;
+        Initialize();
+        throw std::runtime_error("QCSimState::InitializeToMixtureOfBasisStates: Invalid simulation "
+                                 "type for initializing to a mixture of basis states.");
+    }
+
+    bool SupportsMPSSwapOptimization() const override
+    {
+        return true;
+    }
+
+    void SetUpcomingGates(const std::vector<std::shared_ptr<Circuits::IOperation<double>>> &gates) override
+    {
+        upcomingGates = gates;
+        upcomingGateIndex = 0;
+        if (!gateCounterObserver)
+            gateCounterObserver = std::make_shared<GateCounterObserver>(upcomingGateIndex);
+        RegisterObserver(gateCounterObserver);
+        RefreshRoutingCallback();
+    }
+
+    long long int GetGatesCounter() const override
+    {
+        return upcomingGateIndex;
+    }
+
+    void SetGatesCounter(long long int counter) override
+    {
+        upcomingGateIndex = counter;
+    }
+
+    void IncrementGatesCounter() override
+    {
+        ++upcomingGateIndex;
+    }
+
+    std::string GetConfiguration(const char *key) const override
+    {
+        if (!key)
+            return {};
+        if (std::string(key) == "precision")
+            return "double";
+        if (std::string(key) == "use_double_precision")
+            return "1";
+        if (std::string("method") == key)
+            return MethodName();
+        return configuration.GetConfiguration(key);
+    }
+
+    size_t GetNumberOfQubits() const override
+    {
+        return nrQubits;
+    }
+
+    bool SupportsQuantumChannels() const override
+    {
+        return false;
+    }
+
+    void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel) override
+    {
+        throw std::runtime_error("QCSim quantum channels require density_matrix or matrix_product_operator simulation");
+    }
+
+    double ProbabilityBits(const std::vector<bool> &bits) override
+    {
+        return IState::ProbabilityBits(bits);
+    }
+
+    std::complex<double> DensityMatrixElementBits(const std::vector<bool> &row, const std::vector<bool> &col) const override
+    {
+        return IState::DensityMatrixElementBits(row, col);
+    }
+
+    Eigen::MatrixXcd GetDensityMatrix(bool normalized = true) const override
+    {
+        return IState::GetDensityMatrix(normalized);
+    }
+
+    std::complex<double> ExpectationValueComplex(const std::string &pauli, bool normalized = true) const override
+    {
+        return IState::ExpectationValueComplex(pauli, normalized);
+    }
+
+    std::vector<std::complex<double>> ExpectationValuesComplex(const std::vector<std::string> &paulis, bool normalized = true) const override
+    {
+        return IState::ExpectationValuesComplex(paulis, normalized);
+    }
+
+    void ApplyOperator(const Types::qubits_vector &qubits, const Eigen::MatrixXcd &matrix, bool normalize = false) override
+    {
+        return IState::ApplyOperator(qubits, matrix, normalize);
+    }
+
+    void MoveAtBeginningOfChain(const Types::qubits_vector &qubits) override
+    {
+        return IState::MoveAtBeginningOfChain(qubits);
+    }
+
+    std::vector<std::complex<double>> GetStateVector() override
+    {
+        return IState::GetStateVector();
+    }
+
+    std::complex<double> ExpectationValueOperators(const Types::qubits_vector &qubits, const std::vector<Eigen::MatrixXcd> &matrices) override
+    {
+        return IState::ExpectationValueOperators(qubits, matrices);
+    }
+
+    std::complex<double> DensityMatrixTrace() const override
+    {
+        throw std::runtime_error("Mixed-state diagnostics require density_matrix or "
+                                 "matrix_product_operator");
+    }
+
+    std::complex<double> DensityMatrixOverlap(const IState &other) const override
+    {
+        throw std::invalid_argument("Density-matrix overlap requires two density matrices or two MPOs");
+    }
+
+    double DensityMatrixPurity() const override
+    {
+        throw std::runtime_error("Mixed-state diagnostics require density_matrix or "
+                                 "matrix_product_operator");
+    }
+
+    std::complex<double> DensityMatrixTraceOfSquare() const override
+    {
+        throw std::runtime_error("Mixed-state diagnostics require density_matrix or "
+                                 "matrix_product_operator");
+    }
+
+    double DensityMatrixHermiticityResidual() const override
+    {
+        throw std::runtime_error("Mixed-state diagnostics require density_matrix or "
+                                 "matrix_product_operator");
+    }
+
+    bool IsDensityMatrixHermitian(double eps = 1e-10) const override
+    {
+        throw std::runtime_error("Mixed-state diagnostics require density_matrix or "
+                                 "matrix_product_operator");
+    }
+
+    Eigen::MatrixXcd PartialTrace(const Types::qubits_vector &qubits) const override
+    {
+        throw std::runtime_error("Partial trace requires density_matrix or matrix_product_operator");
+    }
+
+    double FidelityWithStatevector(const Eigen::VectorXcd &psi) const override
+    {
+        throw std::runtime_error("Mixed-state fidelity requires density_matrix or "
+                                 "matrix_product_operator");
+    }
+
+    void RestoreDensityMatrixTrace() override
+    {
+        throw std::runtime_error("Trace restoration is only available for QCSim MPO");
+    }
+
+    void HermitizeDensityMatrix() override
+    {
+        throw std::runtime_error("Hermitization is only available for QCSim MPO");
+    }
+
+    void Trim() override
+    {
+        throw std::runtime_error("Trim is only available for QCSim MPS and MPO");
+    }
+
+    void ReCanonicalize() override
+    {
+        throw std::runtime_error("Canonicalization is only available for QCSim MPS and MPO");
+    }
+
+    std::complex<double> Amplitude(Types::qubit_t outcome) override
+    {
+        throw std::runtime_error("QCSimState::Amplitude: Invalid simulation type for obtaining the "
+                                 "amplitude of the specified outcome.");
+    }
+
+    std::complex<double> ProjectOnZero() override
+    {
+        return Amplitude(0);
+    }
+
+    std::vector<double> ExpectationValues(const std::vector<std::string> &paulis) override
+    {
+        return ISimulator::ExpectationValues(paulis);
+    }
+
+    SimulatorType GetType() const override
+    {
+        return SimulatorType::kQCSim;
+    }
+
+    void Flush() override
+    {
+    }
+
+    void SaveStateToInternalDestructive() override
+    {
+    }
+
+    void RestoreInternalDestructiveSavedState() override
+    {
+    }
+
+    std::complex<double> AmplitudeRaw(Types::qubit_t outcome) override
+    {
+        return Amplitude(outcome);
+    }
+
+    bool GetMultithreading() const override
+    {
+        return enableMultithreading;
+    }
+
+    bool IsQcsim() const override
+    {
+        return true;
+    }
+
+    Types::qubit_t MeasureNoCollapse() override
+    {
+        if (GetNumberOfQubits() > sizeof(Types::qubit_t) * 8)
+            std::cerr << "Warning: The number of qubits to measure is larger than the "
+                         "number of bits in the Types::qubit_t type, the outcome will be "
+                         "undefined"
+                      << std::endl;
+        throw std::runtime_error("QCSimState::MeasureNoCollapse: Invalid simulation type for "
+                                 "measuring "
+                                 "all the qubits without collapsing the state.");
+    }
+
+    std::vector<bool> MeasureNoCollapseMany() override
+    {
+        throw std::runtime_error("QCSimState::MeasureNoCollapseMany: Invalid simulation type for "
+                                 "measuring all the qubits without collapsing the state.");
+    }
+
+    const Configuration &GetConfiguration() const
+    {
+        return configuration;
+    }
+
+    const std::unordered_map<std::string, std::string> &GetConfigMap() const override
+    {
+        return configuration.GetConfigMap();
+    }
+
+    void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
+    {
+        throw std::runtime_error("QCSimSimulator::ApplyGenericOneQubitGate: Unsupported simulation "
+                                 "type.");
+    }
+
     void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1, const Eigen::Matrix4cd &gate) override
     {
-        if (GetSimulationType() != SimulationType::kMatrixProductState && GetSimulationType() != SimulationType::kMatrixProductOperator &&
-            GetSimulationType() != SimulationType::kTensorNetwork && GetSimulationType() != SimulationType::kStatevector &&
-            GetSimulationType() != SimulationType::kDensityMatrix)
-            throw std::runtime_error("QCSimSimulator::ApplyGenericTwoQubitGate: Unsupported simulation "
-                                     "type.");
-
-        const QC::Gates::AppliedGate<> agate(gate, qubit0, qubit1);
-
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(agate);
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(agate, qubit1, qubit0);
-        else if (GetSimulationType() == SimulationType::kStatevector || GetSimulationType() == SimulationType::kDensityMatrix ||
-                 GetSimulationType() == SimulationType::kMatrixProductOperator)
-            ApplyStatevectorOrDensityMatrix(agate);
-
-        NotifyObservers({qubit0, qubit1});
+        throw std::runtime_error("QCSimSimulator::ApplyGenericTwoQubitGate: Unsupported simulation "
+                                 "type.");
     }
 
     void ApplyGenericThreeQubitGate(Types::qubit_t q0, Types::qubit_t q1, Types::qubit_t q2, const Matrix8cd &gate) override
     {
-        if (GetSimulationType() != SimulationType::kStatevector && GetSimulationType() != SimulationType::kDensityMatrix)
-            throw std::runtime_error("Generic three-qubit gates require a statevector or density matrix");
-        const QC::Gates::AppliedGate<> applied(gate, q0, q1, q2);
-        ApplyStatevectorOrDensityMatrix(applied);
-        NotifyObservers({q0, q1, q2});
+        throw std::runtime_error("Generic three-qubit gates require a statevector or density matrix");
     }
 
-    /**
-     * @brief Applies a phase shift gate to the qubit
-     *
-     * Applies a specified phase shift gate to the qubit
-     * @param qubit The qubit to apply the gate to.
-     * @param lambda The phase shift angle.
-     */
-    void ApplyP(Types::qubit_t qubit, double lambda) override
-    {
-        pgate.SetPhaseShift(lambda);
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-        {
-            if (std::abs(lambda - M_PI_2) > 1e-10)
-                throw std::runtime_error("QCSimSimulator::ApplyP: Invalid phase shift "
-                                         "angle for a Clifford gate.");
-            cliffordSimulator->ApplyS(static_cast<unsigned int>(qubit));
-        }
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(pgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyP(qubit, lambda);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyP(static_cast<unsigned int>(qubit), lambda);
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(pgate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(pgate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a not gate to the qubit
-     *
-     * Applies a not (X) gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyX(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(xgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplyX(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(xgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyX(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyX(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(xgate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(xgate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Y gate to the qubit
-     *
-     * Applies a not (Y) gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyY(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(ygate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplyY(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(ygate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyY(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyY(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(ygate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(ygate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Z gate to the qubit
-     *
-     * Applies a not (Z) gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyZ(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(zgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplyZ(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(zgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyZ(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyZ(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(zgate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(zgate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Hadamard gate to the qubit
-     *
-     * Applies a Hadamard gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyH(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(h, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplyH(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(h, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyH(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyH(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(h.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(h, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a S gate to the qubit
-     *
-     * Applies a S gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyS(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(sgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplyS(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(sgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyS(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyS(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(sgate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(sgate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a S dagger gate to the qubit
-     *
-     * Applies a S dagger gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplySDG(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(sdggate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplySdg(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(sdggate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplySDG(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplySDG(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(sdggate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(sdggate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a T gate to the qubit
-     *
-     * Applies a T gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyT(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(tgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyT: The stabilizer simulator does not support "
-                                     "non-clifford gates.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(tgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyT(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyT(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(tgate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(tgate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a T dagger gate to the qubit
-     *
-     * Applies a T dagger gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyTDG(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(tdggate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyTDG: The stabilizer simulator does not support "
-                                     "non-clifford gates.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(tdggate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyTDG(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyTDG(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(tdggate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(tdggate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Sx gate to the qubit
-     *
-     * Applies a Sx gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplySx(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(sxgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplySx(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(sxgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplySX(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplySX(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(sxgate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(sxgate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Sx dagger gate to the qubit
-     *
-     * Applies a Sx dagger gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplySxDAG(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(sxdaggate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplySxDag(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(sxdaggate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplySXDG(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplySXDG(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(sxdaggate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(sxdaggate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a K gate to the qubit
-     *
-     * Applies a K (Hy) gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     */
-    void ApplyK(Types::qubit_t qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(k, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplyK(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(k, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyK(qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyK(static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(k.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(k, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Rx gate to the qubit
-     *
-     * Applies an x rotation gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     * @param theta The rotation angle.
-     */
-    void ApplyRx(Types::qubit_t qubit, double theta) override
-    {
-        rxgate.SetTheta(theta);
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(rxgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyRx: The stabilizer "
-                                     "simulator does not support the Rx gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(rxgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyRX(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyRX(static_cast<unsigned int>(qubit), theta);
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(rxgate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(rxgate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Ry gate to the qubit
-     *
-     * Applies a y rotation gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     * @param theta The rotation angle.
-     */
-    void ApplyRy(Types::qubit_t qubit, double theta) override
-    {
-        rygate.SetTheta(theta);
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(rygate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyRy: The stabilizer "
-                                     "simulator does not support the Ry gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(rygate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyRY(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyRY(static_cast<unsigned int>(qubit), theta);
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(rygate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(rygate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a Rz gate to the qubit
-     *
-     * Applies a z rotation gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     * @param theta The rotation angle.
-     */
-    void ApplyRz(Types::qubit_t qubit, double theta) override
-    {
-        rzgate.SetTheta(theta);
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(rzgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyRz: The stabilizer "
-                                     "simulator does not support the Rz gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(rzgate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyRZ(qubit, theta);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyRZ(static_cast<unsigned int>(qubit), theta);
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(rzgate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(rzgate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a U gate to the qubit
-     *
-     * Applies a U gate to the specified qubit
-     * @param qubit The qubit to apply the gate to.
-     * @param theta The first parameter.
-     * @param phi The second parameter.
-     * @param lambda The third parameter.
-     * @param gamma The fourth parameter.
-     */
-    void ApplyU(Types::qubit_t qubit, double theta, double phi, double lambda, double gamma) override
-    {
-        ugate.SetParams(theta, phi, lambda, gamma);
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(ugate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyU: The stabilizer "
-                                     "simulator does not support the U gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(ugate, static_cast<unsigned int>(qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyU(qubit, theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyU(static_cast<unsigned int>(qubit), theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(ugate.getRawOperatorMatrix(), qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(ugate, static_cast<unsigned int>(qubit));
-        NotifyObservers({qubit});
-    }
-
-    /**
-     * @brief Applies a CX gate to the qubits
-     *
-     * Applies a controlled X gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     */
-    void ApplyCX(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplyCX(static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyCX(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCX(static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(cxgate.getRawOperatorMatrix(), tgt_qubit, ctrl_qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(cxgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CY gate to the qubits
-     *
-     * Applies a controlled Y gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     */
-    void ApplyCY(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(cygate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplyCY(static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(cygate, static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyCY(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCY(static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(cygate.getRawOperatorMatrix(), tgt_qubit, ctrl_qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(cygate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CZ gate to the qubits
-     *
-     * Applies a controlled Z gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     */
-    void ApplyCZ(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(czgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplyCZ(static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(czgate, static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyCZ(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCZ(static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(czgate.getRawOperatorMatrix(), tgt_qubit, ctrl_qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(czgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CP gate to the qubits
-     *
-     * Applies a controlled phase gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     * @param lambda The phase shift angle.
-     */
-    void ApplyCP(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double lambda) override
-    {
-        cpgate.SetPhaseShift(lambda);
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(cpgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyCP: The stabilizer "
-                                     "simulator does not support the CP gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(cpgate, static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCP(static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit), lambda);
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(cpgate.getRawOperatorMatrix(), tgt_qubit, ctrl_qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(cpgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CRx gate to the qubits
-     *
-     * Applies a controlled x rotation gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     * @param theta The rotation angle.
-     */
-    void ApplyCRx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
-    {
-        crxgate.SetTheta(theta);
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(crxgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyCRx: The stabilizer "
-                                     "simulator does not support the CRx gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(crxgate, static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyCRX(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCRX(static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit), theta);
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(crxgate.getRawOperatorMatrix(), tgt_qubit, ctrl_qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(crxgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CRy gate to the qubits
-     *
-     * Applies a controlled y rotation gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     * @param theta The rotation angle.
-     */
-    void ApplyCRy(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
-    {
-        crygate.SetTheta(theta);
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(crygate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyCRy: The stabilizer "
-                                     "simulator does not support the CRy gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(crygate, static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyCRY(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCRY(static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit), theta);
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(crygate.getRawOperatorMatrix(), tgt_qubit, ctrl_qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(crygate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CRz gate to the qubits
-     *
-     * Applies a controlled z rotation gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     * @param theta The rotation angle.
-     */
-    void ApplyCRz(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
-    {
-        crzgate.SetTheta(theta);
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(crzgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyCRz: The stabilizer "
-                                     "simulator does not support the CRz gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(crzgate, static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyCRZ(ctrl_qubit, tgt_qubit, theta);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCRZ(static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit), theta);
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(crzgate.getRawOperatorMatrix(), tgt_qubit, ctrl_qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(crzgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CH gate to the qubits
-     *
-     * Applies a controlled Hadamard gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     */
-    void ApplyCH(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(ch, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyCH: The stabilizer "
-                                     "simulator does not support the CH gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(ch, static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyCH(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCH(static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(ch.getRawOperatorMatrix(), tgt_qubit, ctrl_qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(ch, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CSx gate to the qubits
-     *
-     * Applies a controlled squared root not gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     */
-    void ApplyCSx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyCSx: The stabilizer "
-                                     "simulator does not support the CSx gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(csx, static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyCSX(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCSX(static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(csx.getRawOperatorMatrix(), tgt_qubit, ctrl_qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(csx, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a CSx dagger gate to the qubits
-     *
-     * Applies a controlled squared root not dagger gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     */
-    void ApplyCSxDAG(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(csxdag, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyCSxDAG: The stabilizer "
-                                     "simulator does not support the CSxDag gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(csxdag, static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyCSXDAG(ctrl_qubit, tgt_qubit);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCSXDAG(static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(csxdag.getRawOperatorMatrix(), tgt_qubit, ctrl_qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(csxdag, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a swap gate to the qubits
-     *
-     * Applies a swap gate to the specified qubits
-     * @param qubit0 The first qubit
-     * @param qubit1 The second qubit
-     */
-    void ApplySwap(Types::qubit_t qubit0, Types::qubit_t qubit1) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(swapgate, static_cast<unsigned int>(qubit1), static_cast<unsigned int>(qubit0));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            cliffordSimulator->ApplySwap(static_cast<unsigned int>(qubit1), static_cast<unsigned int>(qubit0));
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(swapgate, static_cast<unsigned int>(qubit0), static_cast<unsigned int>(qubit1));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplySWAP(qubit0, qubit1);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplySWAP(static_cast<unsigned int>(qubit0), static_cast<unsigned int>(qubit1));
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(swapgate.getRawOperatorMatrix(), qubit1, qubit0);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(swapgate, static_cast<unsigned int>(qubit1), static_cast<unsigned int>(qubit0));
-        NotifyObservers({qubit1, qubit0});
-    }
-
-    /**
-     * @brief Applies a controlled controlled not gate to the qubits
-     *
-     * Applies a controlled controlled not gate to the specified qubits
-     * @param qubit0 The first control qubit
-     * @param qubit1 The second control qubit
-     * @param qubit2 The target qubit
-     */
-    void ApplyCCX(Types::qubit_t qubit0, Types::qubit_t qubit1, Types::qubit_t qubit2) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-        {
-            const size_t q1 = qubit0; // control 1
-            const size_t q2 = qubit1; // control 2
-            const size_t q3 = qubit2; // target
-
-            // Sleator-Weinfurter decomposition
-            mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-            NotifyObservers({qubit1, qubit2});
-
-            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
-            NotifyObservers({qubit0, qubit1});
-
-            mpsSimulator->ApplyGate(csxdag, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-            NotifyObservers({qubit1, qubit2});
-
-            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
-            NotifyObservers({qubit0, qubit1});
-
-            mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q1));
-            NotifyObservers({qubit0, qubit2});
-        }
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-        {
-            ApplyDecomposedGate(
-                [&]() {
-                    ApplyCSx(qubit1, qubit2);
-                    ApplyCX(qubit0, qubit1);
-                    ApplyCSxDAG(qubit1, qubit2);
-                    ApplyCX(qubit0, qubit1);
-                    ApplyCSx(qubit0, qubit2);
-                },
-                {qubit2, qubit1, qubit0});
-        }
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyCCX: The stabilizer "
-                                     "simulator does not support the CCX gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-        {
-            const size_t q1 = qubit0; // control 1
-            const size_t q2 = qubit1; // control 2
-            const size_t q3 = qubit2; // target
-
-            // Sleator-Weinfurter decomposition
-            tensorNetwork->AddGate(csx, static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-            NotifyObservers({qubit1, qubit2});
-
-            tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q1), static_cast<unsigned int>(q2));
-            NotifyObservers({qubit0, qubit1});
-
-            tensorNetwork->AddGate(csxdag, static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-            NotifyObservers({qubit1, qubit2});
-
-            tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q1), static_cast<unsigned int>(q2));
-            NotifyObservers({qubit0, qubit1});
-
-            tensorNetwork->AddGate(csx, static_cast<unsigned int>(q1), static_cast<unsigned int>(q3));
-            NotifyObservers({qubit0, qubit2});
-        }
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-        {
-            extendedStabilizer->ApplyCCX(qubit0, qubit1, qubit2);
-            NotifyObservers({qubit2, qubit1, qubit0});
-        }
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-        {
-            pp->ApplyCCX(static_cast<unsigned int>(qubit0), static_cast<unsigned int>(qubit1), static_cast<unsigned int>(qubit2));
-            NotifyObservers({qubit2, qubit1, qubit0});
-        }
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(ccxgate.getRawOperatorMatrix(), qubit2, qubit1, qubit0);
-            pathIntegralSimulator->ApplyGate(agate);
-            NotifyObservers({qubit2, qubit1, qubit0});
-        }
-        else
-        {
-            ApplyStatevectorOrDensityMatrix(ccxgate, static_cast<unsigned int>(qubit2), static_cast<unsigned int>(qubit1), static_cast<unsigned int>(qubit0));
-            NotifyObservers({qubit2, qubit1, qubit0});
-        }
-    }
-
-    /**
-     * @brief Applies a controlled swap gate to the qubits
-     *
-     * Applies a controlled swap gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param qubit0 The first qubit
-     * @param qubit1 The second qubit
-     */
-    void ApplyCSwap(Types::qubit_t ctrl_qubit, Types::qubit_t qubit0, Types::qubit_t qubit1) override
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-        {
-            const size_t q1 = ctrl_qubit; // control
-            const size_t q2 = qubit0;
-            const size_t q3 = qubit1;
-
-            // TODO: find a better decomposition
-            // this one I've got with the qiskit transpiler
-            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-            NotifyObservers({qubit1, qubit0});
-
-            mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-            NotifyObservers({qubit0, qubit1});
-
-            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
-            NotifyObservers({ctrl_qubit, qubit0});
-
-            pgate.SetPhaseShift(M_PI);
-            mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q3));
-            NotifyObservers({qubit1});
-            pgate.SetPhaseShift(-M_PI_2);
-            mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q2));
-            NotifyObservers({qubit0});
-
-            mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-            NotifyObservers({qubit0, qubit1});
-
-            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
-            NotifyObservers({ctrl_qubit, qubit0});
-
-            pgate.SetPhaseShift(M_PI);
-            mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q3));
-            NotifyObservers({qubit1});
-
-            mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q1));
-            NotifyObservers({ctrl_qubit, qubit1});
-
-            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-            NotifyObservers({qubit1, qubit0});
-        }
-        else if (GetSimulationType() == SimulationType::kMatrixProductOperator)
-        {
-            ApplyDecomposedGate(
-                [&]() {
-                    ApplyCX(qubit1, qubit0);
-                    ApplyCSx(qubit0, qubit1);
-                    ApplyCX(ctrl_qubit, qubit0);
-                    ApplyP(qubit1, M_PI);
-                    ApplyP(qubit0, -M_PI_2);
-                    ApplyCSx(qubit0, qubit1);
-                    ApplyCX(ctrl_qubit, qubit0);
-                    ApplyP(qubit1, M_PI);
-                    ApplyCSx(ctrl_qubit, qubit1);
-                    ApplyCX(qubit1, qubit0);
-                },
-                {qubit1, qubit0, ctrl_qubit});
-        }
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyCSwap: The stabilizer "
-                                     "simulator does not support the CSwap gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-        {
-            const size_t q1 = ctrl_qubit; // control
-            const size_t q2 = qubit0;
-            const size_t q3 = qubit1;
-
-            // TODO: find a better decomposition
-            // this one I've got with the qiskit transpiler
-            tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-            NotifyObservers({qubit1, qubit0});
-
-            tensorNetwork->AddGate(csx, static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-            NotifyObservers({qubit0, qubit1});
-
-            tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q1), static_cast<unsigned int>(q2));
-            NotifyObservers({ctrl_qubit, qubit0});
-
-            pgate.SetPhaseShift(M_PI);
-            tensorNetwork->AddGate(pgate, static_cast<unsigned int>(q3));
-            NotifyObservers({qubit1});
-            pgate.SetPhaseShift(-M_PI_2);
-            tensorNetwork->AddGate(pgate, static_cast<unsigned int>(q2));
-            NotifyObservers({qubit0});
-
-            tensorNetwork->AddGate(csx, static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-            NotifyObservers({qubit0, qubit1});
-
-            tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q1), static_cast<unsigned int>(q2));
-            NotifyObservers({ctrl_qubit, qubit0});
-
-            pgate.SetPhaseShift(M_PI);
-            tensorNetwork->AddGate(pgate, static_cast<unsigned int>(q3));
-            NotifyObservers({qubit1});
-
-            tensorNetwork->AddGate(csx, static_cast<unsigned int>(q1), static_cast<unsigned int>(q3));
-            NotifyObservers({ctrl_qubit, qubit1});
-
-            tensorNetwork->AddGate(cxgate, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-            NotifyObservers({qubit1, qubit0});
-        }
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-        {
-            extendedStabilizer->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
-            NotifyObservers({qubit1, qubit0, ctrl_qubit});
-        }
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-        {
-            pp->ApplyCSwap(static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(qubit0), static_cast<unsigned int>(qubit1));
-            NotifyObservers({qubit1, qubit0, ctrl_qubit});
-        }
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(cswapgate.getRawOperatorMatrix(), qubit1, qubit0, ctrl_qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-            NotifyObservers({qubit1, qubit0, ctrl_qubit});
-        }
-        else
-        {
-            ApplyStatevectorOrDensityMatrix(cswapgate, static_cast<unsigned int>(qubit1), static_cast<unsigned int>(qubit0),
-                                            static_cast<unsigned int>(ctrl_qubit));
-            NotifyObservers({qubit1, qubit0, ctrl_qubit});
-        }
-    }
-
-    /**
-     * @brief Applies a controlled U gate to the qubits
-     *
-     * Applies a controlled U gate to the specified qubits
-     * @param ctrl_qubit The control qubit
-     * @param tgt_qubit The target qubit
-     * @param theta Theta parameter for the U gate
-     * @param phi Phi parameter for the U gate
-     * @param lambda Lambda parameter for the U gate
-     * @param gamma Gamma parameter for the U gate
-     */
-    void ApplyCU(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta, double phi, double lambda, double gamma) override
-    {
-        cugate.SetParams(theta, phi, lambda, gamma);
-        if (GetSimulationType() == SimulationType::kMatrixProductState)
-            mpsSimulator->ApplyGate(cugate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        else if (GetSimulationType() == SimulationType::kStabilizer)
-            throw std::runtime_error("QCSimSimulator::ApplyCU: The stabilizer "
-                                     "simulator does not support the CU gate.");
-        else if (GetSimulationType() == SimulationType::kTensorNetwork)
-            tensorNetwork->AddGate(cugate, static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit));
-        else if (GetSimulationType() == SimulationType::kExtendedStabilizer)
-            extendedStabilizer->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kPauliPropagator)
-            pp->ApplyCU(static_cast<unsigned int>(ctrl_qubit), static_cast<unsigned int>(tgt_qubit), theta, phi, lambda, gamma);
-        else if (GetSimulationType() == SimulationType::kPathIntegral)
-        {
-            QC::Gates::AppliedGate<> agate(cugate.getRawOperatorMatrix(), tgt_qubit, ctrl_qubit);
-            pathIntegralSimulator->ApplyGate(agate);
-        }
-        else
-            ApplyStatevectorOrDensityMatrix(cugate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        NotifyObservers({tgt_qubit, ctrl_qubit});
-    }
-
-    /**
-     * @brief Applies a nop
-     *
-     * Applies a nop (no operation).
-     * Typically does (almost) nothing. Equivalent to an identity.
-     * For qiskit aer it will send the 'nop' to the qiskit aer simulator.
-     */
     void ApplyNop() override
     {
-        // do nothing
     }
 
-    /**
-     * @brief Clones the simulator.
-     *
-     * Clones the simulator, including the state, the configuration and the
-     * internally saved state, if any. Does not copy the observers. Should be used
-     * mainly internally, to optimise multiple shots execution, copying the state
-     * from the simulator used for timing.
-     *
-     * @return A unique pointer to the cloned simulator.
-     */
-    std::unique_ptr<ISimulator> Clone() override
+  protected:
+    size_t CheckedBasisStateCountForQueries() const
     {
-        auto cloned = std::make_unique<ImmediateQCSimSimulator>();
-
-        cloned->simulationType = simulationType;
-        cloned->nrQubits = nrQubits;
-
-        cloned->enableMultithreading = enableMultithreading;
-        cloned->pauliWorkerCount = pauliWorkerCount;
-
-        cloned->lookaheadDepth = lookaheadDepth;
-        cloned->lookaheadDepthWithHeuristic = lookaheadDepthWithHeuristic;
-        cloned->useOptimalMeetingPosition = useOptimalMeetingPosition;
-        cloned->upcomingGates = upcomingGates;
-        cloned->upcomingGateIndex = upcomingGateIndex;
-        cloned->growthFactorGate = growthFactorGate;
-        cloned->growthFactorSwap = growthFactorSwap;
-
-        if (state)
-            cloned->state = state->Clone();
-
-        if (mpsSimulator)
-        {
-            cloned->mpsSimulator = mpsSimulator->Clone();
-
-            cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
-
-            cloned->gateCounterObserver = std::make_shared<GateCounterObserver>(cloned->upcomingGateIndex);
-            cloned->RegisterObserver(cloned->gateCounterObserver);
-
-            cloned->curMaxBondDim = curMaxBondDim;
-
-            cloned->mpsSimulator->SetMeetingPositionCallback(cloned->meetingPositionCallback);
-            InstallBondSummary(*cloned->mpsSimulator, cloned->bondDimensionCallback);
-        }
-
-        if (mpoSimulator)
-        {
-            cloned->mpoSimulator = mpoSimulator->Clone();
-            cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
-            cloned->curMaxBondDim = curMaxBondDim;
-            cloned->gateCounterObserver = std::make_shared<GateCounterObserver>(cloned->upcomingGateIndex);
-            cloned->RegisterObserver(cloned->gateCounterObserver);
-            cloned->mpoSimulator->SetMeetingPositionCallback(cloned->meetingPositionCallback);
-            InstallBondSummary(*cloned->mpoSimulator, cloned->bondDimensionCallback);
-        }
-
-        if (cliffordSimulator)
-            cloned->cliffordSimulator = cliffordSimulator->Clone();
-
-        if (tensorNetwork)
-            cloned->tensorNetwork = tensorNetwork->Clone();
-
-        if (pp)
-            cloned->pp = pp->Clone();
-
-        if (pathIntegralSimulator)
-            cloned->pathIntegralSimulator = pathIntegralSimulator->Clone();
-
-        if (densityMatrix)
-            cloned->densityMatrix = densityMatrix->Clone();
-
-        if (extendedStabilizer)
-            cloned->extendedStabilizer = configuration.IsSet("seed") ? extendedStabilizer->Clone() : extendedStabilizer->CloneWithSeed(rng());
-
-        for (const auto &[key, value] : configuration.GetConfigMap())
-            cloned->Configure(key.c_str(), value.c_str());
-
-        if (configuration.IsSet("seed"))
-            cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
-        else
-        {
-            // These backend clones preserve their RNGs as part of a full snapshot.
-            // Execution workers need independent streams even without a public seed.
-            // Leave the configuration unset so generated seeds do not become sticky.
-            if (cloned->densityMatrix)
-                cloned->densityMatrix->SetSeed(rng());
-        }
-
-        return cloned;
+        if (nrQubits >= std::numeric_limits<size_t>::digits)
+            throw std::runtime_error("ImmediateQCSimState: Too many qubits for enumerating basis states.");
+        return 1ULL << nrQubits;
     }
 
-  private:
-    template <class Function> void ApplyDecomposedGate(Function &&apply, const Types::qubits_vector &affectedQubits)
+    size_t nrQubits = 0;
+
+    bool enableMultithreading = true;
+
+    std::vector<std::shared_ptr<Circuits::IOperation<>>> upcomingGates;
+
+    long long int upcomingGateIndex = 0;
+
+    class GateCounterObserver : public ISimulatorObserver
     {
-        DontNotify();
-        try
+      public:
+        GateCounterObserver(long long int &indexRef) : index(indexRef)
         {
-            std::forward<Function>(apply)();
         }
-        catch (...)
-        {
-            Notify();
-            throw;
-        }
-        Notify();
-        NotifyObservers(affectedQubits);
-    }
 
-    template <class Gate, class... Qubits> void ApplyStatevectorOrDensityMatrix(const Gate &gate, Qubits... qubits)
-    {
-        if (GetSimulationType() == SimulationType::kMatrixProductOperator)
+        void Update(const Types::qubits_vector &) override
         {
-            if constexpr (sizeof...(Qubits) <= 2)
-            {
-                mpoSimulator->ApplyGate(gate, static_cast<Eigen::Index>(qubits)...);
-            }
-            else
-            {
-                throw std::runtime_error("ImmediateQCSimSimulator: The matrix product operator simulator "
-                                         "supports "
-                                         "only one- and two-qubit gate operators.");
-            }
+            ++index;
         }
-        else if (GetSimulationType() == SimulationType::kDensityMatrix)
-            densityMatrix->ApplyGate(gate, static_cast<size_t>(qubits)...);
-        else
-            state->ApplyGate(gate, qubits...);
-    }
 
-    QC::Gates::PhaseShiftGate<> pgate;
-    QC::Gates::PauliXGate<> xgate;
-    QC::Gates::PauliYGate<> ygate;
-    QC::Gates::PauliZGate<> zgate;
-    QC::Gates::HadamardGate<> h;
-    // QC::Gates::UGate<> ugate;
-    QC::Gates::SGate<> sgate;
-    QC::Gates::SDGGate<> sdggate;
-    QC::Gates::TGate<> tgate;
-    QC::Gates::TDGGate<> tdggate;
-    QC::Gates::SquareRootNOTGate<> sxgate;
-    QC::Gates::SquareRootNOTDagGate<> sxdaggate;
-    QC::Gates::HyGate<> k;
-    QC::Gates::RxGate<> rxgate;
-    QC::Gates::RyGate<> rygate;
-    QC::Gates::RzGate<> rzgate;
-    QC::Gates::UGate<> ugate;
-    QC::Gates::CNOTGate<> cxgate;
-    QC::Gates::ControlledYGate<> cygate;
-    QC::Gates::ControlledZGate<> czgate;
-    QC::Gates::ControlledPhaseShiftGate<> cpgate;
-    QC::Gates::ControlledRxGate<> crxgate;
-    QC::Gates::ControlledRyGate<> crygate;
-    QC::Gates::ControlledRzGate<> crzgate;
-    QC::Gates::ControlledHadamardGate<> ch;
-    QC::Gates::ControlledSquareRootNOTGate<> csx;
-    QC::Gates::ControlledSquareRootNOTDagGate<> csxdag;
-    QC::Gates::SwapGate<> swapgate;
-    QC::Gates::ToffoliGate<> ccxgate;
-    QC::Gates::FredkinGate<> cswapgate;
-    QC::Gates::ControlledUGate<> cugate;
+      private:
+        long long int &index;
+    };
+
+    std::shared_ptr<GateCounterObserver> gateCounterObserver;
+
+    std::mt19937_64 rng;
+
+    uint64_t nextSeedStream = 0;
+
+    std::uniform_real_distribution<double> uniformZeroOne;
+
+    Configuration configuration;
 };
-
-} // namespace Private
-} // namespace Simulators
-
+} // namespace Simulators::Private
 #endif
-
-#endif // !_QCSIMSIMULATOR_H

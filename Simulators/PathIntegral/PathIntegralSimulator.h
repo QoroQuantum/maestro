@@ -365,36 +365,40 @@ class PathIntegralSimulator
   private:
     QC::PathIntegral::PathIntegralSimulator simulator;
 
+    // These gates are never modified, and their matrix accessors return const
+    // references. Sharing them avoids allocation on construction and cloning.
+    inline static const QC::Gates::PauliXGate<> xgate;
+    inline static const QC::Gates::PauliYGate<> ygate;
+    inline static const QC::Gates::PauliZGate<> zgate;
+    inline static const QC::Gates::HadamardGate<> h;
+    inline static const QC::Gates::SGate<> sgate;
+    inline static const QC::Gates::SDGGate<> sdggate;
+    inline static const QC::Gates::TGate<> tgate;
+    inline static const QC::Gates::TDGGate<> tdggate;
+    inline static const QC::Gates::SquareRootNOTGate<> sxgate;
+    inline static const QC::Gates::SquareRootNOTDagGate<> sxdaggate;
+    inline static const QC::Gates::HyGate<> k;
+    inline static const QC::Gates::CNOTGate<> cxgate;
+    inline static const QC::Gates::ControlledYGate<> cygate;
+    inline static const QC::Gates::ControlledZGate<> czgate;
+    inline static const QC::Gates::ControlledHadamardGate<> ch;
+    inline static const QC::Gates::ControlledSquareRootNOTGate<> csx;
+    inline static const QC::Gates::ControlledSquareRootNOTDagGate<> csxdag;
+    inline static const QC::Gates::SwapGate<> swapgate;
+    inline static const QC::Gates::ToffoliGate<> ccxgate;
+    inline static const QC::Gates::FredkinGate<> cswapgate;
+
+    // Setters update these matrices before each application. Keep them local
+    // to each simulator so independent instances and clones cannot interfere.
     QC::Gates::PhaseShiftGate<> pgate;
-    QC::Gates::PauliXGate<> xgate;
-    QC::Gates::PauliYGate<> ygate;
-    QC::Gates::PauliZGate<> zgate;
-    QC::Gates::HadamardGate<> h;
-    // QC::Gates::UGate<> ugate;
-    QC::Gates::SGate<> sgate;
-    QC::Gates::SDGGate<> sdggate;
-    QC::Gates::TGate<> tgate;
-    QC::Gates::TDGGate<> tdggate;
-    QC::Gates::SquareRootNOTGate<> sxgate;
-    QC::Gates::SquareRootNOTDagGate<> sxdaggate;
-    QC::Gates::HyGate<> k;
     QC::Gates::RxGate<> rxgate;
     QC::Gates::RyGate<> rygate;
     QC::Gates::RzGate<> rzgate;
     QC::Gates::UGate<> ugate;
-    QC::Gates::CNOTGate<> cxgate;
-    QC::Gates::ControlledYGate<> cygate;
-    QC::Gates::ControlledZGate<> czgate;
     QC::Gates::ControlledPhaseShiftGate<> cpgate;
     QC::Gates::ControlledRxGate<> crxgate;
     QC::Gates::ControlledRyGate<> crygate;
     QC::Gates::ControlledRzGate<> crzgate;
-    QC::Gates::ControlledHadamardGate<> ch;
-    QC::Gates::ControlledSquareRootNOTGate<> csx;
-    QC::Gates::ControlledSquareRootNOTDagGate<> csxdag;
-    QC::Gates::SwapGate<> swapgate;
-    QC::Gates::ToffoliGate<> ccxgate;
-    QC::Gates::FredkinGate<> cswapgate;
     QC::Gates::ControlledUGate<> cugate;
 };
 

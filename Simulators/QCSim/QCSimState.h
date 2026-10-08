@@ -1,14 +1,13 @@
 #pragma once
 #if defined(INCLUDED_BY_FACTORY)
 #include "../Fusion/FusionState.h"
-#include "ImmediateQCSimSimulator.h"
 
 namespace Simulators::Private
 {
 class QCSimState : public FusionState
 {
   public:
-    QCSimState() : FusionState(std::make_shared<ImmediateQCSimSimulator>())
+    explicit QCSimState(std::shared_ptr<ISimulator> immediate) : FusionState(std::move(immediate))
     {
     }
 

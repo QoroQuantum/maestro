@@ -10,6 +10,7 @@
 #include <deque>
 #include <numeric>
 #include <random>
+#include <stdexcept>
 
 #include "../TensorNetworks/Contractors/ForestContractor.h"
 
@@ -506,6 +507,109 @@ BOOST_AUTO_TEST_CASE(network_clone_measurements_preserve_bell_state)
         BOOST_CHECK_SMALL(net.Probability(0) - .5, 1e-12);
         BOOST_CHECK_SMALL(sibling->Probability(1) - .5, 1e-12);
     }
+}
+
+BOOST_AUTO_TEST_CASE(network_basis_queries_preserve_saved_state)
+{
+    for (const size_t cacheLimit : {size_t(0), size_t(4096)})
+        for (const bool clone : {false, true})
+            for (const bool destructive : {false, true})
+                BOOST_TEST_CONTEXT("cache limit=" << cacheLimit << ", clone=" << clone << ", destructive restore=" << destructive)
+                {
+                    auto net = std::make_unique<TensorNetworks::TensorNetwork>(3);
+                    auto contractor = std::make_shared<TensorNetworks::ForestContractor>();
+                    contractor->SetPlanCacheByteLimit(cacheLimit);
+                    net->SetContractor(contractor);
+                    net->SetMultithreading(false);
+                    QC::Gates::HadamardGate<> h;
+                    QC::Gates::CNOTGate<> cx;
+                    QC::Gates::PauliXGate<> x;
+                    net->AddGate(h, 0);
+                    net->AddGate(cx, 0, 1);
+                    const auto savedTensorCount = net->GetTensors().size();
+                    net->SaveState();
+
+                    // Change both the state and the qubit groups after saving.
+                    net->AddGate(cx, 1, 2);
+                    net->AddGate(x, 1);
+                    if (clone)
+                        net = net->Clone();
+                    const auto liveTensorCount = net->GetTensors().size();
+                    for (size_t pass = 0; pass < 2; ++pass)
+                        for (size_t basis = 0; basis < 8; ++basis)
+                        {
+                            const double expected = basis == 2 || basis == 5 ? .5 : 0.;
+                            BOOST_CHECK_SMALL(net->getBasisStateProbability(basis) - expected, 1e-12);
+                            BOOST_CHECK_EQUAL(net->GetTensors().size(), liveTensorCount);
+                        }
+
+                    if (destructive)
+                        net->RestoreSavedStateDestructive();
+                    else
+                        net->RestoreState();
+                    BOOST_REQUIRE_EQUAL(net->GetNumQubits(), 3);
+                    BOOST_REQUIRE_EQUAL(net->GetTensors().size(), savedTensorCount);
+                    for (size_t basis = 0; basis < 8; ++basis)
+                    {
+                        const double expected = basis == 0 || basis == 3 ? .5 : 0.;
+                        BOOST_CHECK_SMALL(net->getBasisStateProbability(basis) - expected, 1e-12);
+                    }
+                    BOOST_CHECK_SMALL(net->Probability(2) - 1., 1e-12);
+
+                    if (!destructive)
+                    {
+                        // Queries after a restore must also leave the checkpoint reusable.
+                        net->AddGate(x, 2);
+                        BOOST_CHECK_SMALL(net->getBasisStateProbability(4) - .5, 1e-12);
+                        net->RestoreState();
+                        BOOST_REQUIRE_EQUAL(net->GetNumQubits(), 3);
+                        BOOST_CHECK_SMALL(net->getBasisStateProbability(0) - .5, 1e-12);
+                        BOOST_CHECK_SMALL(net->getBasisStateProbability(4), 1e-12);
+                    }
+                }
+}
+
+BOOST_AUTO_TEST_CASE(network_basis_query_failure_preserves_live_and_saved_state)
+{
+    struct ThrowingContractor : TensorNetworks::ForestContractor
+    {
+        double Contract(const TensorNetworks::TensorNetwork &, Types::qubit_t) override
+        {
+            throw std::runtime_error("injected contraction failure");
+        }
+    };
+
+    for (const bool saved : {false, true})
+        BOOST_TEST_CONTEXT("saved checkpoint=" << saved)
+        {
+            TensorNetworks::TensorNetwork net(3);
+            net.SetContractor(std::make_shared<ThrowingContractor>());
+            net.SetMultithreading(false);
+            QC::Gates::HadamardGate<> h;
+            QC::Gates::CNOTGate<> cx;
+            QC::Gates::PauliXGate<> x;
+            net.AddGate(h, 0);
+            net.AddGate(cx, 0, 1);
+            if (saved)
+                net.SaveState();
+            net.AddGate(cx, 1, 2);
+            net.AddGate(x, 1);
+            const auto tensorCount = net.GetTensors().size();
+
+            BOOST_CHECK_THROW(net.getBasisStateProbability(2), std::runtime_error);
+            BOOST_REQUIRE_EQUAL(net.GetNumQubits(), 3);
+            BOOST_REQUIRE_EQUAL(net.GetTensors().size(), tensorCount);
+            net.SetContractor(std::make_shared<TensorNetworks::ForestContractor>());
+            BOOST_CHECK_SMALL(net.getBasisStateProbability(2) - .5, 1e-12);
+            BOOST_CHECK_SMALL(net.getBasisStateProbability(5) - .5, 1e-12);
+            if (saved)
+            {
+                net.RestoreState();
+                BOOST_REQUIRE_EQUAL(net.GetNumQubits(), 3);
+                BOOST_CHECK_SMALL(net.getBasisStateProbability(0) - .5, 1e-12);
+                BOOST_CHECK_SMALL(net.getBasisStateProbability(3) - .5, 1e-12);
+            }
+        }
 }
 
 BOOST_AUTO_TEST_CASE(cache_values_topology_limits_and_clone)

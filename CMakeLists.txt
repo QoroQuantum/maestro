@@ -640,6 +640,14 @@ if(COMPILE_TESTS)
 
     add_executable(tests ${ACTIVE_TESTSSRC})
     target_link_libraries(tests PRIVATE Boost::serialization)
+    if(MSVC AND NOT Boost_USE_STATIC_LIBS)
+        # Tests.cpp supplies the Boost.Test implementation. Import only the
+        # serialization DLL, not the test framework, in the other test files.
+        get_target_property(tests_link_libraries tests LINK_LIBRARIES)
+        list(REMOVE_ITEM tests_link_libraries Boost::dynamic_linking)
+        set_property(TARGET tests PROPERTY LINK_LIBRARIES "${tests_link_libraries}")
+        target_compile_definitions(tests PRIVATE BOOST_SERIALIZATION_DYN_LINK)
+    endif()
     if(MAESTRO_ENABLE_COMPOSER)
         # This executable compiles Maestro sources without linking libmaestro.
         target_link_libraries(tests PRIVATE maestro_composer)
@@ -1009,6 +1017,11 @@ if(MAESTRO_RUN_MPI_GPU_REQUEST_TESTS)
 endif()
 
 if(COMPILE_TESTS)
+    find_package(Threads REQUIRED)
+    add_executable(backend_specialization_tests tests/BackendSpecializationTests.cpp)
+    target_include_directories(backend_specialization_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(backend_specialization_tests PRIVATE maestro Threads::Threads)
+    add_test(NAME backend_specialization COMMAND backend_specialization_tests)
     add_executable(gate_fusion_tests tests/GateFusionTests.cpp)
     target_include_directories(gate_fusion_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(gate_fusion_tests PRIVATE maestro)

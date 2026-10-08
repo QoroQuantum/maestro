@@ -71,6 +71,19 @@ Execution (CPU / GPU / Distributed)
 
 Each backend is accessed through a C++ adapter that maps Maestro's IR to the simulator's native API.
 
+QCSim has separate implementations for statevector, density matrix, MPS, MPO,
+stabilizer, extended stabilizer, tensor network, Pauli propagation, and path
+integral simulation in `Simulators/QCSim`. The GPU implementations in
+`Simulators/Gpu` cover statevector, density matrix, MPS, MPO, tensor network,
+and Pauli propagation. Each owns only its native backend; MPS and MPO share
+the routing and bond-dimension bookkeeping in a tensor-chain base.
+
+Select the method with `SimulatorsFactory::CreateSimulator` or
+`CreateSimulatorUnique`. These factories add the gate-fusion adapter where
+appropriate; internal composite children use the immediate statevector backend.
+The method is fixed at construction. Replaying the same `method` configuration
+is supported; select a different method by creating another simulator.
+
 ## Documentation
 
 | Resource | Link |
