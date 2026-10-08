@@ -29,6 +29,20 @@ chmod +x build.sh
 
 For detailed build instructions, see [INSTALL.md](https://github.com/QoroQuantum/maestro/blob/main/markdown/INSTALL.md).
 
+Composer integration is optional and defaults to off. To build Maestro with
+Composer's network and execution estimators, point CMake at the Composer source
+root (the directory containing `composer/`):
+
+```bash
+cmake -S . -B build -DMAESTRO_ENABLE_COMPOSER=ON -DCOMPOSER_INCLUDE_DIR=../composer
+cmake --build build --config Release
+```
+
+An enabled build also searches the sibling `../composer` and `../../composer`
+locations. An explicit `COMPOSER_INCLUDE_DIR` supports any checkout layout.
+Composer's own CMake build and Visual Studio solution enable this integration
+automatically.
+
 ## How It Works
 
 ```

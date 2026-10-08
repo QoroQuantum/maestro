@@ -9,8 +9,8 @@
 
 #pragma once
 
-#ifdef COMPOSER
-#include "../../composer/composer/Network/SimpleFullyConnectedNetwork.h"
+#ifdef MAESTRO_ENABLE_COMPOSER
+#include <composer/Network/SimpleFullyConnectedNetwork.h>
 #else
 #include "../Network/SimpleDisconnectedNetwork.h"
 #endif
@@ -33,7 +33,7 @@ class Maestro
         const std::vector<Types::qubit_t> qubits{static_cast<Types::qubit_t>(nrQubits)};
         const std::vector<size_t> cbits{static_cast<size_t>(nrCbits < 0 ? nrQubits : nrCbits)};
 
-#ifdef COMPOSER
+#ifdef MAESTRO_ENABLE_COMPOSER
         auto network = std::make_shared<Network::SimpleNetwork<>>(qubits, cbits);
 #else
         auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(qubits, cbits);

@@ -63,6 +63,25 @@ endif()
 option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
 option(MAESTRO_BUILD_MPI_GPU_TESTS "Build MPI GPU hardware tests (only tests link MPI)" OFF)
 option(MAESTRO_ENABLE_OPENMP "Enable OpenMP acceleration" ON)
+option(MAESTRO_ENABLE_COMPOSER "Enable integration with Composer" OFF)
+
+if(MAESTRO_ENABLE_COMPOSER)
+    find_path(COMPOSER_INCLUDE_DIR
+        NAMES composer/Estimators/ExecutionEstimator.h
+        HINTS "${CMAKE_CURRENT_SOURCE_DIR}/../composer" "${CMAKE_CURRENT_SOURCE_DIR}/../../composer"
+        DOC "Composer source root (the directory containing composer/)")
+    if(NOT EXISTS "${COMPOSER_INCLUDE_DIR}/composer/Estimators/ExecutionEstimator.h" OR
+       NOT EXISTS "${COMPOSER_INCLUDE_DIR}/composer/Network/SimpleFullyConnectedNetwork.h")
+        message(FATAL_ERROR
+            "MAESTRO_ENABLE_COMPOSER requires Composer headers. "
+            "Set COMPOSER_INCLUDE_DIR to the Composer source root (containing composer/).")
+    endif()
+    add_library(maestro_composer INTERFACE)
+    target_compile_definitions(maestro_composer INTERFACE MAESTRO_ENABLE_COMPOSER)
+    # Composer headers also include Maestro headers relative to its source root.
+    target_include_directories(maestro_composer INTERFACE
+        "${COMPOSER_INCLUDE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
 
 # Qiskit Aer simulator backend (enabled by default unless explicitly disabled)
 option(ENABLE_QISKIT_AER "Enable Qiskit Aer simulator backend" ON)
@@ -287,6 +306,10 @@ set(Boost_USE_STATIC_RUNTIME OFF)
 set(Boost_USE_RELEASE_LIBS ON)
 set(Boost_USE_DEBUG_LIBS OFF)
 find_package(Boost REQUIRED COMPONENTS program_options json container serialization)
+if(MSVC AND NOT Boost_USE_STATIC_LIBS)
+    # Match MSVC's Boost auto-linking to the shared libraries selected above.
+    link_libraries(Boost::dynamic_linking Boost::disable_autolinking)
+endif()
 
 if(NOT Boost_FOUND)
     message(FATAL_ERROR "\n"
@@ -384,6 +407,9 @@ set(MAESTROEXESRC maestroexe/MaestroExe.cpp)
 
 # Define core library and executable
 add_library(maestro SHARED ${MAESTROSRC})
+if(MAESTRO_ENABLE_COMPOSER)
+    target_link_libraries(maestro PUBLIC maestro_composer)
+endif()
 # Build identity is informational; schema_version remains the protocol contract.
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/pyproject.toml" MAESTRO_VERSION_LINE REGEX "^version = ")
 string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+" MAESTRO_BUILD_VERSION "${MAESTRO_VERSION_LINE}")
@@ -614,6 +640,10 @@ if(COMPILE_TESTS)
 
     add_executable(tests ${ACTIVE_TESTSSRC})
     target_link_libraries(tests PRIVATE Boost::serialization)
+    if(MAESTRO_ENABLE_COMPOSER)
+        # This executable compiles Maestro sources without linking libmaestro.
+        target_link_libraries(tests PRIVATE maestro_composer)
+    endif()
 
     if(UNIX)
         target_link_libraries(tests PRIVATE dl)
@@ -881,6 +911,11 @@ endif()
 # Worker and noise regressions also run in builds containing only request tests.
 if(COMPILE_TESTS OR MAESTRO_BUILD_REQUEST_TESTS)
     enable_testing()
+    add_executable(maestro_composer_integration_tests tests/ComposerIntegrationTests.cpp)
+    target_compile_definitions(maestro_composer_integration_tests PRIVATE
+        MAESTRO_EXPECT_COMPOSER=$<BOOL:${MAESTRO_ENABLE_COMPOSER}>)
+    target_link_libraries(maestro_composer_integration_tests PRIVATE maestro)
+    add_test(NAME maestro_composer_integration COMMAND maestro_composer_integration_tests)
     add_executable(network_job_tests tests/NetworkJobTests.cpp)
     target_link_libraries(network_job_tests PRIVATE maestro Boost::json)
     add_test(NAME network_jobs COMMAND network_job_tests)

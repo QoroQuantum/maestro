@@ -95,6 +95,7 @@ jobs:
         export AER_INCLUDE_DIR=$PWD/qiskit-aer/src/
 
         cmake . -G Ninja \
+          -DMAESTRO_ENABLE_COMPOSER=OFF \
           -DMAESTRO_BUILD_REQUEST_TESTS=ON \
           -DMAESTRO_BUILD_MPI_WORKER=ON \
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
@@ -123,3 +124,6 @@ jobs:
       env:
         HWLOC_COMPONENTS: -gl,-opencl
       run: ctest --test-dir . --output-on-failure -R '^maestro_request_'
+
+    - name: Check standalone network configuration
+      run: ctest --test-dir . --output-on-failure -R '^maestro_composer_integration$'

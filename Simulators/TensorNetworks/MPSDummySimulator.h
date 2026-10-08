@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <iostream>
 #include <random>
 
 #include <Eigen/Eigen>

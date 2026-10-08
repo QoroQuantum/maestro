@@ -8,8 +8,8 @@
 
 #include "Interface.h"
 
-#ifdef COMPOSER
-#include "../../composer/composer/Estimators/ExecutionEstimator.h"
+#ifdef MAESTRO_ENABLE_COMPOSER
+#include <composer/Estimators/ExecutionEstimator.h>
 #endif
 
 #include "../Simulators/Core/Factory.h"
@@ -499,7 +499,7 @@ extern "C"
         {
             Simulators::SimulatorsFactory::InitQuestLibrary();
 
-#ifdef COMPOSER
+#ifdef MAESTRO_ENABLE_COMPOSER
             Estimators::ExecutionEstimator<>::InitializeRegressors();
 #endif
 
@@ -518,7 +518,7 @@ extern "C"
         {
             Simulators::SimulatorsFactory::InitQuestLibraryWithMute();
 
-#ifdef COMPOSER
+#ifdef MAESTRO_ENABLE_COMPOSER
             Estimators::ExecutionEstimator<>::InitializeRegressors();
 #endif
 
