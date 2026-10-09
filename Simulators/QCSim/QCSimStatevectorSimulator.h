@@ -14,6 +14,32 @@ class SamplingQubitRegister : public QC::QubitRegister<>
   public:
     using QC::QubitRegister<>::QubitRegister;
 
+    size_t MeasureQubitReproducible(size_t qubit)
+    {
+        if (!UseMultithreading())
+            return QC::QubitRegister<>::MeasureQubit(qubit);
+
+        // Match native serial MeasureRange exactly: one native RNG draw,
+        // the same cumulative scan, and the same outcome-probability sum.
+        // Only the independent amplitude updates are parallel. In particular,
+        // do not compute p(0) as 1-p(1), which changes normalization rounding.
+        const double draw = 1. - uniformZeroOne(rng);
+        const size_t mask = size_t{1} << qubit;
+        const size_t outcome = (BaseClass::SampleBasisState(NrBasisStates, registerStorage, draw, 0, false) >> qubit) & 1;
+        const size_t lowMask = mask - 1;
+        const size_t selected = outcome << qubit;
+        double probability = 0.;
+        for (size_t k = 0; k < NrBasisStates / 2; ++k)
+            probability += std::norm(registerStorage(((k & ~lowMask) << 1) | selected | (k & lowMask)));
+        const double norm = 1. / std::sqrt(probability);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (!omp_in_parallel())
+#endif
+        for (long long i = 0; i < static_cast<long long>(NrBasisStates); ++i)
+            registerStorage(i) = (static_cast<size_t>(i) & mask) == selected ? registerStorage(i) * norm : std::complex<double>(0., 0.);
+        return outcome;
+    }
+
     void DiscardMeasurementDraw()
     {
         // Consume the native distribution, just as MeasureNoCollapse does.
@@ -197,7 +223,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         {
             for (size_t qubit : qubits)
             {
-                if (state->MeasureQubit(static_cast<unsigned int>(qubit)))
+                if (MeasureQubit(qubit))
                     res |= mask;
                 mask <<= 1;
             }
@@ -213,7 +239,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         DontNotify();
         {
             for (size_t q = 0; q < qubits.size(); ++q)
-                if (state->MeasureQubit(static_cast<unsigned int>(qubits[q])))
+                if (MeasureQubit(qubits[q]))
                     res[q] = true;
         }
         Notify();
@@ -226,7 +252,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         DontNotify();
         {
             for (size_t qubit : qubits)
-                if (state->MeasureQubit(static_cast<unsigned int>(qubit)))
+                if (MeasureQubit(qubit))
                     state->ApplyGate(xgate, static_cast<unsigned int>(qubit));
         }
         Notify();
@@ -701,6 +727,11 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
     std::unique_ptr<SamplingQubitRegister> state;
 
   private:
+    size_t MeasureQubit(size_t qubit)
+    {
+        return LegacySampling() ? state->MeasureQubit(qubit) : state->MeasureQubitReproducible(qubit);
+    }
+
     // Internal state replacement, deliberately separate from public
     // initialization: preserve native/batch/readout RNGs and fork ordinals.
     void ReplaceState(size_t qubits, Eigen::VectorXcd &amplitudes)
@@ -767,6 +798,22 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
     template <class Gate, class... Qubits> void ApplyNativeGate(const Gate &gate, Qubits... qubits)
     {
+        // The native parallel dispatcher's one-thread fallback can contract
+        // complex products differently from its serial/actual-team kernels.
+        // Use the serial dispatcher when no team will run, including builds
+        // without OpenMP. Keep the public permission flag unchanged.
+        struct RestoreThreading
+        {
+            SamplingQubitRegister &state;
+            bool enabled;
+            ~RestoreThreading() { state.SetMultithreading(enabled); }
+        } restore{*state, state->GetMultithreading()};
+        bool hasTeam = false;
+#ifdef _OPENMP
+        hasTeam = !omp_in_parallel() && omp_get_max_threads() > 1;
+#endif
+        if (!LegacySampling() && !hasTeam)
+            state->SetMultithreading(false);
         state->ApplyGate(gate, qubits...);
         ((samplingSupportQubits = std::max(samplingSupportQubits, size_t(qubits) + 1)), ...);
     }

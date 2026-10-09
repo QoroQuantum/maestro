@@ -42,7 +42,10 @@ their caller-specified positions.
 Statevector and path-integral one-shot calls keep the native direct sampler and
 native RNG stream. Statevector one-shot sampling fixes the native summation path
 to serial, independently of the threading flag. Direct measurement APIs still
-use their native RNG streams. The native one-shot conversion and quantum
+use their native RNG streams. Under `reproducible_v1`, statevector measurement
+and reset also retain the native serial scan and probability-summation order,
+while allowing independent collapse updates to run in parallel. The native
+one-shot conversion and quantum
 evolution retain their existing numerical behavior; bitwise whole-circuit
 replay across different standard libraries, compiler floating-point settings or
 backends is not promised. The portable batch conversion cannot compensate for
@@ -98,13 +101,26 @@ retain their existing algorithms.
 
 Maestro terminal measurement batches use one statevector, density-matrix or
 path-integral simulator, letting the sampler use permitted internal threads.
+This density-matrix dispatch applies to Aer and both QCSim sampling policies.
+Terminal batches do not save an unused trajectory-restoration snapshot.
+Aer and legacy QCSim batches can therefore produce different seeded histograms
+from the former multi-simulator dispatch; their probability distributions are
+unchanged. QCSim's reproducible terminal batches already used one simulator.
 QCSim trajectory execution uses fixed logical blocks of 256 shots, seeded by
 block identity, independently of the number of outer workers. State copies are
 created when jobs start, so queued jobs do not each retain a quantum-state copy.
-Trajectory blocks disable internal threading even with one outer worker, so
-native collapse reductions use the same arithmetic regardless of outer pool or
-OpenMP team size. Large single-worker trajectories may therefore run more slowly;
-terminal count batches still permit internal threading. This guarantee does not
+Statevector and density-matrix trajectory jobs divide the caller's OpenMP thread
+limit among active outer workers, with a minimum of one thread per job. A single
+block can therefore use internal threads for gates and independent collapse
+updates. Each job restores its thread's previous OpenMP limit when it finishes;
+calls inside an existing OpenMP team and path-integral jobs remain serial
+internally. Measurement scans and probability sums retain serial arithmetic,
+preserving the existing block seeds and outcomes across outer pool and OpenMP
+team sizes. Density diagonal gates retain serial arithmetic during reproducible
+trajectories because their native OpenMP loops can round complex products
+differently. The dispatcher applies this arithmetic mode to prefix preparation
+and execution clones, and clears it for terminal batches; other density gates
+and collapse updates can run in parallel. This guarantee does not
 extend to changes in backend selection, compiler or standard-library behavior.
 Readout noise is applied in sorted outcome order under the new policy so count
 map insertion order cannot change its RNG assignment.
@@ -286,3 +302,77 @@ and optional `spread|ghz`. For example:
 composite_sampling_benchmarks 2 8 1000000 8 8 many 5
 composite_sampling_benchmarks 2 8 1000000 0 8 many 5 4
 ```
+
+## Trajectory and terminal-density scheduling follow-up
+
+The regression introduced in `b4c838f` was in network scheduling:
+`ExecuteLogicalShotBlocks` limited concurrency to one worker per 256-shot block
+and disabled internal threading in every block. Thus 100 shots used one serial
+worker even with a larger worker limit; 1,024 shots could use only four workers.
+The fix keeps these logical blocks and their seed streams, but assigns unused
+OpenMP capacity to internal work. Native arithmetic differences discovered by
+exact-state tests required the selective serial paths described above.
+
+Terminal density-matrix sampling had a separate dispatch problem: only QCSim's
+reproducible policy selected a single simulator. Aer and QCSim legacy still
+split one final-state sampling request across simulator jobs. The fix extends
+single-simulator dispatch to those paths and removes unused terminal snapshots.
+The Aer measurements below directly test the cost of that dispatch, rather than
+inferring it solely from execution-versus-sampling timing ratios.
+
+Measured on 2026-10-09 with GCC 13.3 Release, Linux/WSL2, Intel Core i9-13900KS,
+eight permitted OpenMP threads and one OpenBLAS thread. The environment's Intel
+OpenMP/MKL preload was retained for both versions. These are controlled network
+benchmarks, not a replay of an external circuit report. The baseline is the
+regressed `9cbda78` build, compared with the scheduling/arithmetic fixes above.
+
+The harness fixes the backend, disables gate fusion, reuses the prepared prefix,
+and requests 16 simulators. Each median comes from three before/after pairs with
+alternating order; every process performs an untimed warm-up. Separate saved
+executables and libraries prevent rebuilding from replacing the baseline.
+
+| Workload | Shots | Before (s) | After (s) | Speedup |
+| --- | ---: | ---: | ---: | ---: |
+| QCSim statevector, 20 qubits, mid-circuit | 100 | 0.745 | 0.475 | 1.57x |
+| QCSim statevector, 22 qubits, mid-circuit | 100 | 4.947 | 3.278 | 1.51x |
+| QCSim statevector, 24 qubits, mid-circuit | 100 | 20.102 | 14.633 | 1.37x |
+| QCSim density matrix, 10 qubits, mid-circuit | 100 | 0.682 | 0.234 | 2.91x |
+| QCSim density matrix, 11 qubits, mid-circuit | 100 | 4.159 | 1.980 | 2.10x |
+| QCSim density matrix, 12 qubits, mid-circuit | 100 | 17.925 | 11.612 | 1.54x |
+| QCSim statevector, 20 qubits, mid-circuit | 1,024 | 4.528 | 3.512 | 1.29x |
+| QCSim density matrix, 10 qubits, mid-circuit | 1,024 | 4.210 | 3.477 | 1.21x |
+| Aer density matrix, 11 qubits, terminal | 10,000 | 0.966 | 0.062 | 15.51x |
+| Aer density matrix, 12 qubits, terminal | 10,000 | 3.972 | 0.271 | 14.65x |
+| QCSim legacy density matrix, 11 qubits, terminal | 10,000 | 0.745 | 0.188 | 3.97x |
+| QCSim reproducible density matrix, 11 qubits, terminal | 10,000 | 0.206 | 0.196 | 1.05x |
+
+Controls with one simulator and one OpenMP thread were approximately unchanged:
+0.730 to 0.737 seconds for the 20-qubit statevector and 0.775 to 0.764 seconds
+for the 10-qubit density matrix, both with 100 mid-circuit shots. Peak process
+RSS for the 12-qubit Aer terminal case fell from 1,572 to 1,315 MiB. This is
+measured process memory, including preparation and runtime allocations, not
+the theoretical size of 16 simultaneously live state/snapshot pairs.
+
+Every measured call conserved its shots and repeated its seeded histogram.
+All QCSim `reproducible_v1` cases matched the baseline histograms exactly.
+Serial measurement scans/sums and density diagonal gates remain a throughput
+limit in reproducible trajectories; these results do not claim recovery of all
+performance from before `b4c838f` or uniform speedups on other circuits.
+
+Validation passed seven OpenMP CTest suites (`alias_sampling`,
+`adaptive_sampling`, `sampling_order`, `network_jobs`, `backend_specialization`,
+`gate_fusion_tests`, `fusion_routing_tests`) and both `network_jobs` and
+`backend_specialization` with OpenMP and Aer disabled. The added tests compare
+exact statevector amplitudes and density entries with native serial arithmetic,
+including gates, fusion, measurements, resets, and density channels. Network
+tests cover both entry points, prefix reuse, seed zero/high bits, readout noise,
+conditional gates, shot-block boundaries, worker budgets and restoration of the
+caller's OpenMP settings. Terminal tests check one preparation, correlations,
+readout, preservation of an existing checkpoint, and clearing trajectory mode.
+
+The investigation artifacts are under `investigations/sampling_regression`:
+`compare_fixed.py`, `fixed_comparison.jsonl`, `fixed_summary.txt`, and
+`fixed_metadata.json`, plus `large_comparison.jsonl` and `large_summary.txt`
+for the 24-qubit statevector and 12-qubit density trajectories. Library paths
+are selected explicitly for validation;
+the environment otherwise prefers an installed library in `/usr/local`.

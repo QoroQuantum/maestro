@@ -741,6 +741,23 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
 
     template <class Gate, class... Qubits> void ApplyNativeGate(const Gate &gate, Qubits... qubits)
     {
+        // Native density diagonal loops can contract complex products
+        // differently when outlined by OpenMP. Preserve their serial rounding
+        // in reproducible trajectories; terminal preparation keeps its existing
+        // threading policy, and the other gate kernels remain parallel.
+        struct RestoreThreading
+        {
+            SamplingDensityMatrix &state;
+            bool enabled;
+            ~RestoreThreading() { state.SetMultithreading(enabled); }
+        } restore{*densityMatrix, densityMatrix->GetMultithreading()};
+        bool hasTeam = false;
+#ifdef _OPENMP
+        hasTeam = !omp_in_parallel() && omp_get_max_threads() > 1;
+#endif
+        const bool trajectory = configuration.GetConfiguration("reproducible_trajectory") == "true";
+        if (!LegacySampling() && (!hasTeam || (trajectory && gate.getStructure().kind == QC::Gates::GateStructure::Kind::Diagonal)))
+            densityMatrix->SetMultithreading(false);
         densityMatrix->ApplyGate(gate, static_cast<size_t>(qubits)...);
     }
 };

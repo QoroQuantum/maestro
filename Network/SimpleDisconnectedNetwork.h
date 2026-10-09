@@ -684,7 +684,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         else
 #endif
             if (((method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
-                  (reproducibleSampling && method == Simulators::SimulationType::kDensityMatrix)) &&
+                  method == Simulators::SimulationType::kDensityMatrix) &&
                  !distCirc->HasOpsAfterMeasurements()) ||
                 simType == Simulators::SimulatorType::kQuestSim)
             nrThreads = 1;
@@ -921,7 +921,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         else
 #endif
             if (((method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
-                  (reproducibleSampling && method == Simulators::SimulationType::kDensityMatrix)) &&
+                  method == Simulators::SimulationType::kDensityMatrix) &&
                  !distCirc->HasOpsAfterMeasurements()) ||
                 simType == Simulators::SimulatorType::kQuestSim)
             nrThreads = 1;
@@ -2368,6 +2368,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
                 if (!dontRunCircuitStart)
                 {
+                    if (sim->GetType() == Simulators::SimulatorType::kQCSim)
+                        sim->Configure("reproducible_trajectory", dcirc->HasOpsAfterMeasurements() ? "true" : "false");
                     sim->SetMultithreading(true);
                     Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed,
                                                                                             &curMaxBondDim);
@@ -2407,6 +2409,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
             if (!dontRunCircuitStart)
             {
+                if (sim->GetType() == Simulators::SimulatorType::kQCSim)
+                    sim->Configure("reproducible_trajectory", dcirc->HasOpsAfterMeasurements() ? "true" : "false");
                 sim->SetMultithreading(true);
                 Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed, &curMaxBondDim);
             }
@@ -2596,16 +2600,24 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             threadsPool.Resize(workers);
             threadsPool.SetFinishLimit(shots);
         }
+        // The caller's OpenMP limit is a budget shared by concurrent shot jobs.
+        // std::thread workers do not inherit the caller's OpenMP ICV, so pass
+        // the budget explicitly and apply it only for the lifetime of each job.
+        int internalThreads = 1;
+#ifdef _OPENMP
+        if (!omp_in_parallel() && method != Simulators::SimulationType::kPathIntegral)
+            internalThreads = static_cast<int>(std::max<size_t>(1, static_cast<size_t>(omp_get_max_threads()) / workers));
+#endif
         std::shared_ptr<ExecuteJob<Time>> last;
         for (size_t begin = 0, block = 0; begin < shots; ++block)
         {
             const size_t count = std::min(blockSize, shots - begin);
             auto job = std::make_shared<ExecuteJob<Time>>(circuit, results, count, qubits, cbits, resultBits, type, method, resultsMutex);
             job->optimiseMultipleShotsExecution = count > 1 || GetOptimizeSimulator();
-            // Native collapse uses different floating-point reductions when
-            // threaded. Keep all trajectory blocks serial internally, even
-            // with one outer worker; terminal batches still allow threading.
-            job->allowInternalMultithreading = false;
+            // Reproducible measurement retains serial scan/reduction order;
+            // gates and disjoint collapse updates may use the remaining budget.
+            job->internalThreads = internalThreads;
+            job->allowInternalMultithreading = internalThreads > 1;
             job->network = BaseClass::getptr();
             job->onSimulatorReady = [this](const Simulators::ISimulator &actual) {
                 lastFusionWidth.store(actual.GetGateFusionMaxQubits());
@@ -2637,6 +2649,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     Configuration<Time> ExecutionConfiguration(Simulators::SimulatorType type, size_t qubits) const
     {
         auto result = configuration;
+        if (type == Simulators::SimulatorType::kQCSim)
+            result.SetConfiguration("reproducible_trajectory", distCirc && distCirc->HasOpsAfterMeasurements() ? "true" : "false");
         const auto found = resolvedDistributedDevices.find(type);
         if (!Simulators::IsDistributedGpuSimulator(type) || !configuration.GetConfiguration("distributed_devices").empty() ||
             found == resolvedDistributedDevices.end())

@@ -49,12 +49,10 @@ template <typename Time = Types::time_type> class SimulatorsEstimatorInterface
         state.AllocateBits(nrCbits);
 
         const bool hasMeasurementsOnlyAtEnd = !dcirc->HasOpsAfterMeasurements();
-        const bool specialOptimizationForStatevector = sim->GetSimulationType() == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
-        const bool specialOptimizationForMPS = sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductState && hasMeasurementsOnlyAtEnd;
 
         executed = dcirc->ExecuteNonMeasurements(sim, state, curMaxBondDim);
 
-        if (!specialOptimizationForStatevector && !specialOptimizationForMPS)
+        if (!hasMeasurementsOnlyAtEnd)
         {
             // Workers continue from this suffix, including when they receive a
             // clone of the estimator's simulator and its saved routing context.

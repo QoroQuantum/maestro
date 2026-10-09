@@ -23,6 +23,9 @@
 
 #include "Configuration.h"
 #include <functional>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace Network
 {
@@ -45,6 +48,7 @@ template <typename Time = Types::time_type> class ExecuteJob
     {
         if (curCnt == 0)
             return;
+        ScopedInternalThreads threadBudget(internalThreads);
         if (cloneSource)
         {
             // Clone only when a worker starts, so queued logical blocks do not
@@ -53,7 +57,8 @@ template <typename Time = Types::time_type> class ExecuteJob
             const std::lock_guard lock(*cloneMutex);
             optSim = cloneSource->CloneForExecution(std::stoull(config.GetConfiguration("seed")));
         }
-        // Inner work is disabled while this job occupies an outer shot worker.
+        // The dispatcher assigns this job a share of the internal thread budget.
+        ConfigureTrajectoryArithmetic();
         if (optSim && optSim->GetType() == Simulators::SimulatorType::kQCSim &&
             (method == Simulators::SimulationType::kPauliPropagator || optSim->GetConfiguration("sampling_policy") == "reproducible_v1"))
             optSim->SetMultithreading(allowInternalMultithreading);
@@ -66,7 +71,6 @@ template <typename Time = Types::time_type> class ExecuteJob
         const bool hasMeasurementsOnlyAtEnd = !dcirc->HasOpsAfterMeasurements();
         const bool optimiseMultipleShots = optimiseMultipleShotsExecution;
         const bool specialOptimizationForStatevector = optimiseMultipleShots && method == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
-        const bool specialOptimizationForMPS = optimiseMultipleShots && method == Simulators::SimulationType::kMatrixProductState && hasMeasurementsOnlyAtEnd;
 
         dcirc = dcirc->RemoveExecutedOperations(executedGates);
 
@@ -100,7 +104,7 @@ template <typename Time = Types::time_type> class ExecuteJob
                     optSim->SetUpcomingGates(dcirc->GetOperations());
                 }
                 // The snapshot must describe the suffix executed by every shot.
-                if (!specialOptimizationForStatevector && !specialOptimizationForMPS && curCnt > 1)
+                if (!hasMeasurementsOnlyAtEnd && curCnt > 1)
                     optSim->SaveState();
             }
         }
@@ -207,6 +211,7 @@ template <typename Time = Types::time_type> class ExecuteJob
         if (curCnt == 0)
             return;
 
+        ConfigureTrajectoryArithmetic();
         PrepareCircuitForExecution();
 
         Circuits::OperationState state;
@@ -215,7 +220,6 @@ template <typename Time = Types::time_type> class ExecuteJob
         const bool hasMeasurementsOnlyAtEnd = !dcirc->HasOpsAfterMeasurements();
         const bool optimiseMultipleShots = optimiseMultipleShotsExecution;
         const bool specialOptimizationForStatevector = optimiseMultipleShots && method == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
-        const bool specialOptimizationForMPS = optimiseMultipleShots && method == Simulators::SimulationType::kMatrixProductState && hasMeasurementsOnlyAtEnd;
 
         if (optSim)
         {
@@ -244,7 +248,7 @@ template <typename Time = Types::time_type> class ExecuteJob
                         // circ->ConvertForCutting();
                         optSim->SetUpcomingGates(dcirc->GetOperations());
                     }
-                    if (!specialOptimizationForStatevector && !specialOptimizationForMPS && curCnt > 1)
+                    if (!hasMeasurementsOnlyAtEnd && curCnt > 1)
                         optSim->SaveState();
                 }
             }
@@ -273,7 +277,7 @@ template <typename Time = Types::time_type> class ExecuteJob
                         // circ->ConvertForCutting();
                         optSim->SetUpcomingGates(dcirc->GetOperations());
                     }
-                    if (!specialOptimizationForStatevector && !specialOptimizationForMPS && curCnt > 1)
+                    if (!hasMeasurementsOnlyAtEnd && curCnt > 1)
                         optSim->SaveState();
                 }
                 else
@@ -327,7 +331,7 @@ template <typename Time = Types::time_type> class ExecuteJob
                     // circ->ConvertForCutting();
                     optSim->SetUpcomingGates(dcirc->GetOperations());
                 }
-                if (!specialOptimizationForStatevector && !specialOptimizationForMPS && curCnt > 1)
+                if (!hasMeasurementsOnlyAtEnd && curCnt > 1)
                     optSim->SaveState();
             }
         }
@@ -413,6 +417,42 @@ template <typename Time = Types::time_type> class ExecuteJob
     }
 
   private:
+    void ConfigureTrajectoryArithmetic()
+    {
+        // Existing and prepared simulators need the current execution mode too:
+        // a terminal batch following trajectories must not retain this mode.
+        if (optSim && optSim->GetType() == Simulators::SimulatorType::kQCSim && config.IsSet("reproducible_trajectory"))
+            optSim->Configure("reproducible_trajectory", config.GetConfiguration("reproducible_trajectory").c_str());
+    }
+
+    class ScopedInternalThreads
+    {
+      public:
+        explicit ScopedInternalThreads(int threads)
+        {
+#ifdef _OPENMP
+            if (threads > 0)
+            {
+                previous = omp_get_max_threads();
+                omp_set_num_threads(threads);
+            }
+#else
+            (void)threads;
+#endif
+        }
+        ~ScopedInternalThreads()
+        {
+#ifdef _OPENMP
+            if (previous > 0)
+                omp_set_num_threads(previous);
+#endif
+        }
+      private:
+#ifdef _OPENMP
+        int previous = 0;
+#endif
+    };
+
     template <class Samples>
     void AccumulateSamples(Circuits::MeasurementOperation<Time> &measurement, const Samples &samples, Circuits::OperationState &state,
                            ExecuteResults &target)
@@ -573,6 +613,8 @@ template <typename Time = Types::time_type> class ExecuteJob
 
     bool optimiseMultipleShotsExecution = true;
     bool allowInternalMultithreading = false;
+    // Zero leaves the caller's OpenMP settings untouched (ordinary jobs).
+    int internalThreads = 0;
     // Distinguishes jobs even when the caller did not configure a simulator seed.
     uint64_t randomStream = 0;
     std::shared_ptr<Simulators::ISimulator> optSim;

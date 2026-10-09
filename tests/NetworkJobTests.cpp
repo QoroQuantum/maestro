@@ -897,12 +897,17 @@ void AdaptiveWorkerCounts()
 class ThreadObservedX : public Circuits::XGate<>
 {
   public:
-    ThreadObservedX(bool expected, std::shared_ptr<std::atomic<size_t>> calls, std::shared_ptr<std::atomic<bool>> wrong)
-        : XGate(0), expected(expected), calls(std::move(calls)), wrong(std::move(wrong)) {}
+    ThreadObservedX(bool expected, std::shared_ptr<std::atomic<size_t>> calls, std::shared_ptr<std::atomic<bool>> wrong,
+                    std::shared_ptr<std::atomic<int>> budget = {})
+        : XGate(0), expected(expected), calls(std::move(calls)), wrong(std::move(wrong)), budget(std::move(budget)) {}
 
     void Execute(const std::shared_ptr<Simulators::ISimulator> &sim, Circuits::OperationState &state) const override
     {
-        if (sim->GetMultithreading() != expected) wrong->store(true);
+        if (sim->GetMultithreading() != (budget ? budget->load() > 1 : expected)) wrong->store(true);
+        if (budget && sim->GetConfiguration("reproducible_trajectory") != "true") wrong->store(true);
+#ifdef _OPENMP
+        if (budget && omp_get_max_threads() != budget->load()) wrong->store(true);
+#endif
         ++*calls;
         XGate::Execute(sim, state);
     }
@@ -912,12 +917,14 @@ class ThreadObservedX : public Circuits::XGate<>
     bool expected;
     std::shared_ptr<std::atomic<size_t>> calls;
     std::shared_ptr<std::atomic<bool>> wrong;
+    std::shared_ptr<std::atomic<int>> budget;
 };
 
 void LargeTrajectoryWorkers()
 {
     const auto calls = std::make_shared<std::atomic<size_t>>(0);
     const auto wrong = std::make_shared<std::atomic<bool>>(false);
+    const auto budget = std::make_shared<std::atomic<int>>(1);
     auto circuit = CF::CreateCircuit();
     for (size_t q = 0; q < 15; ++q)
     {
@@ -927,7 +934,7 @@ void LargeTrajectoryWorkers()
     circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
     // After the first collapse, so simulator-estimation/prefix preparation is
     // not mistaken for execution inside a logical trajectory block.
-    circuit->AddOperation(std::make_shared<ThreadObservedX>(false, calls, wrong));
+    circuit->AddOperation(std::make_shared<ThreadObservedX>(false, calls, wrong, budget));
     circuit->AddOperation(CF::CreateReset({7}));
     circuit->AddOperation(CF::CreateGate(Gate::kRyGateType, 14, 0, 0, 0.732));
     circuit->AddOperation(CF::CreateMeasurement({{14, 1}, {0, 2}}));
@@ -938,6 +945,7 @@ void LargeTrajectoryWorkers()
             {
 #ifdef _OPENMP
                 omp_set_num_threads(team);
+                budget->store(std::max(1, team / static_cast<int>(std::min<size_t>(workers, 5))));
 #endif
                 auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector, 3, 15);
                 network->Configure("gate_fusion", "false");
@@ -947,7 +955,10 @@ void LargeTrajectoryWorkers()
                 calls->store(0);
                 wrong->store(false);
                 const auto actual = onHost ? network->RepeatedExecuteOnHost(circuit, 0, 1027) : network->RepeatedExecute(circuit, 1027);
-                Check(calls->load() == 1027 && !wrong->load(), "Trajectory blocks changed native threading with worker count");
+                Check(calls->load() == 1027 && !wrong->load(), "Trajectory blocks did not respect their internal thread budget");
+#ifdef _OPENMP
+                Check(omp_get_max_threads() == team, "Trajectory job leaked its OpenMP budget into the caller");
+#endif
                 if (expected.empty()) expected = actual;
                 Check(actual == expected, "Large trajectory counts changed with outer workers/OpenMP team size");
             }
@@ -998,6 +1009,131 @@ void SamplingJobThreading()
             else network->RepeatedExecute(circuit, 32);
             Check(calls->load() > 0 && !wrong->load(), "Terminal single-job sampling disabled internal threading");
         }
+}
+
+void TerminalDensityDispatch()
+{
+    std::vector<Backend> backends{Backend::kQCSim};
+#ifndef NO_QISKIT_AER
+    backends.push_back(Backend::kQiskitAer);
+#endif
+    for (auto backend : backends)
+        for (const char *policy : {"legacy", "reproducible_v1"})
+            for (bool prepared : {false, true})
+                for (bool onHost : {false, true})
+                {
+                    Counts reference;
+                    for (size_t workers : {1, 4})
+                    {
+                        auto calls = std::make_shared<std::atomic<size_t>>(0);
+                        auto circuit = CF::CreateCircuit();
+                        circuit->AddOperation(std::make_shared<CountedX>(calls));
+                        circuit->AddOperation(std::make_shared<CountedX>(calls));
+                        circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+                        circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+                        auto measurement = std::static_pointer_cast<Circuits::MeasurementOperation<>>(CF::CreateMeasurement({{0, 0}, {1, 1}}));
+                        measurement->SetReadout({{1., 1.}, {0., 0.}});
+                        circuit->AddOperation(measurement);
+                        auto network = MakeNetwork(backend, Method::kDensityMatrix);
+                        network->SetOptimizeSimulator(prepared);
+                        network->SetMaxSimulators(workers);
+                        network->Configure("sampling_policy", policy);
+                        network->Configure("seed", "81");
+                        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+                        const auto counts = onHost ? network->RepeatedExecuteOnHost(circuit, 0, 1000) : network->RepeatedExecute(circuit, 1000);
+                        Check(calls->load() == 2, "Terminal density sampling repeated preparation across workers");
+                        Check(counts.size() == 2 && counts.at({true, false}) + counts.at({false, true}) == 1000,
+                              "Terminal density sampling lost Bell correlations or readout flips");
+                        if (workers == 1) reference = counts;
+                        Check(counts == reference, "Terminal density counts changed with maximum simulator count");
+                    }
+                }
+
+    // A terminal batch must not replace a caller's existing checkpoint with a
+    // snapshot that will never be restored by the batch.
+    for (auto backend : backends)
+        for (bool estimator : {false, true})
+        {
+            auto network = MakeNetwork(backend, Method::kDensityMatrix);
+            auto sim = network->GetSimulator();
+            sim->Clear();
+            sim->AllocateQubits(2);
+            sim->Initialize();
+            sim->ApplyX(1);
+            sim->SaveState();
+            sim->Reset();
+            auto circuit = CF::CreateCircuit();
+            circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+            circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+            if (estimator)
+            {
+                std::vector<bool> executed;
+                Estimators::SimulatorsEstimatorInterface<>::ExecuteUpToMeasurements(circuit, 2, 2, 2, sim, executed);
+            }
+            else
+            {
+                Counts counts;
+                std::mutex mutex;
+                Network::ExecuteJob<> job(circuit, counts, 10, 2, 2, 2, backend, Method::kDensityMatrix, mutex);
+                job.network = network;
+                job.optSim = sim;
+                if (backend == Backend::kQCSim)
+                {
+                    sim->Configure("reproducible_trajectory", "true");
+                    job.config.SetConfiguration("reproducible_trajectory", "false");
+                }
+                job.executedGates.assign(circuit->size(), false);
+                job.DoWorkNoLock();
+                if (backend == Backend::kQCSim)
+                    Check(sim->GetConfiguration("reproducible_trajectory") == "false", "Terminal job retained trajectory arithmetic mode");
+                Check(counts.at({true, false}) == 10, "Terminal density job did not execute its prefix");
+            }
+            sim->RestoreState();
+            Check(std::abs(sim->Probability(2) - 1.) < 1e-12, "Terminal density execution saved an unused checkpoint");
+        }
+}
+
+void SmallTrajectoryBudgets()
+{
+    for (auto method : {Method::kStatevector, Method::kDensityMatrix})
+        for (size_t shots : {size_t{100}, size_t{257}})
+            for (bool prepared : {false, true})
+            {
+                const size_t qubits = method == Method::kStatevector ? 15 : 8;
+                Counts reference;
+                for (bool onHost : {false, true})
+                    for (int team : {1, 3, 8})
+                    {
+#ifdef _OPENMP
+                        omp_set_num_threads(team);
+#endif
+                        auto circuit = CF::CreateCircuit();
+                        for (size_t q = 0; q < qubits; ++q)
+                        {
+                            circuit->AddOperation(CF::CreateGate(Gate::kRyGateType, q, 0, 0, .31 + .03*q));
+                            circuit->AddOperation(CF::CreateGate(Gate::kRzGateType, q, 0, 0, .17 + .02*q));
+                        }
+                        auto readout = std::static_pointer_cast<Circuits::MeasurementOperation<>>(CF::CreateMeasurement({{0, 0}}));
+                        readout->SetReadout({{.2, .35}});
+                        circuit->AddOperation(readout);
+                        circuit->AddOperation(CF::CreateReset({qubits/2}));
+                        circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, qubits/2));
+                        circuit->AddOperation(CF::CreateSimpleConditionalGate(CF::CreateGate(Gate::kRyGateType, qubits-1, 0, 0, .51), 0));
+                        circuit->AddOperation(CF::CreateMeasurement({{qubits/2, 1}, {qubits-1, 2}}));
+                        auto network = MakeNetwork(Backend::kQCSim, method, 3, qubits);
+                        network->SetOptimizeSimulator(prepared);
+                        network->SetMaxSimulators(8);
+                        network->Configure("gate_fusion", "true");
+                        network->Configure("seed", "0");
+                        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+                        const auto actual = onHost ? network->RepeatedExecuteOnHost(circuit, 0, shots) : network->RepeatedExecute(circuit, shots);
+                        if (reference.empty()) reference = actual;
+                        Check(actual == reference, "Small trajectory budgets changed seeded resets/readout");
+#ifdef _OPENMP
+                        Check(omp_get_max_threads() == team, "Small trajectory changed the caller's OpenMP settings");
+#endif
+                    }
+            }
 }
 
 void SharedReset()
@@ -1152,6 +1288,8 @@ try
     AdaptiveWorkerCounts();
     LargeTrajectoryWorkers();
     SamplingJobThreading();
+    TerminalDensityDispatch();
+    SmallTrajectoryBudgets();
     QCSimSamplingRandomStreams(Method::kStabilizer);
     QCSimSamplingRandomStreams(Method::kExtendedStabilizer);
     SharedReset();
