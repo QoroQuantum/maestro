@@ -59,9 +59,10 @@ class ImmediateCompositeSimulator : public ISimulator
 #else
                                     Simulators::SimulatorType::kQiskitAer
 #endif
-                                ) noexcept
+                                )
         : type(type)
     {
+        SeedAuxiliaryRng(samplingSeed);
         // just in case somebody tries to use a composite simulator composed of
         // composite simulators or a gpu simulator - this one would work, but until
         // we implement some supporting functionality with cuda, especially for
@@ -93,7 +94,9 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     void Initialize() override
     {
+        simulators.clear();
         qubitsMap.resize(nrQubits);
+        const uint64_t initializationSeed = nextInitialization++ == 0 ? samplingSeed : DeriveSeed(samplingSeed, 0x494E4954ULL + nextInitialization);
 
         // start with one qubit simulators:
         for (size_t q = 0; q < nrQubits; ++q)
@@ -111,6 +114,10 @@ class ImmediateCompositeSimulator : public ISimulator
             if (config.IsSet("precision"))
                 sim->Configure("precision", config.GetConfiguration("precision").c_str());
             sim->Initialize();
+            for (const auto &[key, value] : config.GetConfigMap())
+                if (key != "seed" && key != "method")
+                    sim->Configure(key.c_str(), value.c_str());
+            sim->SetSeed(DeriveSeed(initializationSeed, q));
             sim->GetQubitsMap()[q] = 0;
             simulators[q] = std::move(sim);
         }
@@ -214,6 +221,7 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     void Configure(const char *key, const char *value) override
     {
+        Utils::Sampling::ValidateSetting(key, value);
         // don't allow chaning the method, it should stay statevector
         if (std::string("method") == key)
             return;
@@ -234,6 +242,8 @@ class ImmediateCompositeSimulator : public ISimulator
         if (std::string("seed") == key)
         {
             const uint64_t seed = std::stoull(value);
+            samplingSeed = seed;
+            nextCloneStream = nextRestoreStream = nextInitialization = nextSplitStream = 0;
             SeedAuxiliaryRng(seed);
             for (auto &[id, simulator] : simulators)
                 simulator->SetSeed(DeriveSeed(seed, id));
@@ -254,6 +264,10 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     std::string GetConfiguration(const char *key) const override
     {
+        if (std::string(key) == "sampling_seed")
+            return std::to_string(samplingSeed);
+        if (std::string(key) == "sampling_policy" && type == SimulatorType::kQCSim && !config.IsSet(key))
+            return "reproducible_v1";
         if (std::string(key) == "precision" || std::string(key) == "use_double_precision")
         {
             if (!simulators.empty())
@@ -544,6 +558,10 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(const Types::qubits_vector &qubits, size_t shots = 1000) override
     {
+        if (type == SimulatorType::kQCSim && config.GetConfiguration("sampling_policy") != "legacy")
+            return SamplePrepared<false>(qubits, shots);
+        if (qubits.empty() || !shots)
+            return {};
         if (GetNumberOfQubits() > sizeof(Types::qubit_t) * 8)
             std::cerr << "Warning: The number of qubits to measure is larger than the "
                          "number of bits in the Types::qubit_t type, the outcome will be "
@@ -621,6 +639,10 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(const Types::qubits_vector &qubits, size_t shots = 1000) override
     {
+        if (type == SimulatorType::kQCSim && config.GetConfiguration("sampling_policy") != "legacy")
+            return SamplePrepared<true>(qubits, shots);
+        if (qubits.empty() || !shots)
+            return {};
         std::unordered_map<std::vector<bool>, Types::qubit_t> result;
         DontNotify();
 
@@ -1259,7 +1281,7 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     void SaveState() override
     {
-        savedState = Clone();
+        savedState = CloneStateForExecution(DeriveSeed(samplingSeed, 0x53415645ULL), false);
     }
 
     /**
@@ -1291,9 +1313,10 @@ class ImmediateCompositeSimulator : public ISimulator
                                                                            should be enabled. */
 
             simulators.clear();
+            const uint64_t restoreSeed = DeriveSeed(samplingSeed, 0x52455354ULL + nextRestoreStream++);
             for (auto &[id, simulator] : savedStatePtr->simulators)
             {
-                auto isim = simulator->Clone();
+                auto isim = simulator->CloneForExecution(DeriveSeed(restoreSeed, id));
                 simulators[id] = std::unique_ptr<IndividualSimulator>(static_cast<IndividualSimulator *>(isim.release()));
             }
         }
@@ -1373,6 +1396,19 @@ class ImmediateCompositeSimulator : public ISimulator
      */
     std::unique_ptr<ISimulator> Clone() override
     {
+        if (nextCloneStream == std::numeric_limits<uint64_t>::max())
+            throw std::overflow_error("Composite clone stream exhausted");
+        return CloneForExecution(DeriveSeed(samplingSeed, nextCloneStream++));
+    }
+
+    std::unique_ptr<ISimulator> CloneForExecution(uint64_t seed) override
+    {
+        return CloneStateForExecution(seed, true);
+    }
+
+  private:
+    std::unique_ptr<ISimulator> CloneStateForExecution(uint64_t seed, bool includeSnapshot)
+    {
         auto clone = std::make_unique<ImmediateCompositeSimulator>(type);
 
         clone->type = type;           /**< The type of simulators to create and use */
@@ -1388,16 +1424,19 @@ class ImmediateCompositeSimulator : public ISimulator
 
         for (auto &[id, simulator] : simulators)
         {
-            auto isim = simulator->Clone();
+            auto isim = simulator->CloneForExecution(DeriveSeed(seed, id));
             clone->simulators[id] = std::unique_ptr<IndividualSimulator>(static_cast<IndividualSimulator *>(isim.release()));
         }
 
-        if (savedState)
-            clone->savedState = savedState->Clone();
+        if (includeSnapshot && savedState)
+            clone->savedState = static_cast<ImmediateCompositeSimulator *>(savedState.get())->CloneStateForExecution(
+                DeriveSeed(seed, 0x53415645ULL), false);
 
+        clone->SetSeed(seed);
         return clone;
     }
 
+  public:
     const Configuration &GetConfiguration() const
     {
         return config;
@@ -1409,6 +1448,180 @@ class ImmediateCompositeSimulator : public ISimulator
     }
 
   private:
+    template <bool Many> Utils::Sampling::Counts<Many> SamplePrepared(const Types::qubits_vector &qubits, size_t shots)
+    {
+        using namespace Utils::Sampling;
+        using Plan = QCSimStatevectorSimulator::SamplingPlan;
+        Counts<Many> result;
+        if (qubits.empty() || !shots)
+            return result;
+        ValidateQubits(qubits, nrQubits, Many);
+        if (simulators.size() == 1)
+        {
+            auto &component = *simulators.begin()->second;
+            if constexpr (Many) result = component.SampleCountsMany(qubits, shots);
+            else result = component.SampleCounts(qubits, shots);
+            NotifyObservers(qubits);
+            return result;
+        }
+
+        // Duplicate selections share a joint bit; output positions are expanded
+        // only when inserting counts. No global qubit ID is used as a shift.
+        std::unordered_map<size_t, size_t> uniqueBits;
+        std::vector<size_t> outputBits;
+        for (const auto qubit : qubits)
+            outputBits.push_back(uniqueBits.emplace(qubit, uniqueBits.size()).first->second);
+        constexpr size_t wordBits = std::numeric_limits<size_t>::digits;
+        const size_t words = (uniqueBits.size() + wordBits - 1) / wordBits;
+        struct Component
+        {
+            size_t id;
+            IndividualSimulator *simulator;
+            std::vector<std::pair<size_t, size_t>> bits; // local bit -> joint bit
+            std::unique_ptr<Plan> plan;
+            std::vector<size_t> projection;
+            size_t minimumBytes = 0;
+        };
+        std::vector<Component> components;
+        components.reserve(simulators.size());
+        for (auto &[id, simulator] : simulators)
+        {
+            Component component{id, simulator.get()};
+            for (auto [qubit, local] : simulator->GetQubitsMap())
+                if (const auto found = uniqueBits.find(qubit); found != uniqueBits.end())
+                    component.bits.emplace_back(local, found->second);
+            components.push_back(std::move(component));
+        }
+        // Stable budget assignment; neither hash iteration order nor worker
+        // count is allowed to choose a component's sampling algorithm.
+        std::sort(components.begin(), components.end(), [](const auto &a, const auto &b) { return a.id < b.id; });
+        auto project = [&](const Component &component, size_t row, size_t *joint) {
+            if (!component.projection.empty())
+                joint[0] |= component.projection[row];
+            else
+                for (const auto [local, output] : component.bits)
+                    joint[output / wordBits] |= ((row >> local) & size_t{1}) << (output % wordBits);
+        };
+        std::vector<bool> key;
+        if constexpr (Many) key.resize(qubits.size());
+        auto insert = [&](const size_t *joint, size_t count) {
+            if constexpr (Many)
+            {
+                for (size_t bit = 0; bit < outputBits.size(); ++bit)
+                    key[bit] = ((joint[outputBits[bit] / wordBits] >> (outputBits[bit] % wordBits)) & 1) != 0;
+                result[key] += count;
+            }
+            else
+            {
+                Types::qubit_t packed = 0;
+                for (size_t bit = 0; bit < outputBits.size(); ++bit)
+                    packed |= Types::qubit_t((joint[outputBits[bit] / wordBits] >> (outputBits[bit] % wordBits)) & 1) << bit;
+                result[packed] += count;
+            }
+        };
+        if (shots == 1)
+        {
+            std::vector<size_t> joint(words, 0);
+            for (auto &component : components)
+                if (component.bits.empty())
+                    component.simulator->DiscardLocalMeasurementDraw();
+                else
+                    project(component, component.simulator->SampleLocalOnce(), joint.data());
+            insert(joint.data(), 1);
+            NotifyObservers(qubits);
+            return result;
+        }
+
+        const Options options = components.front().simulator->SamplingOptions();
+        const size_t sharedReserve = options.memoryBytes / 4;
+        size_t remaining = options.memoryBytes - sharedReserve, reserved = 0;
+        const size_t selected = std::count_if(components.begin(), components.end(), [](const auto &c) { return !c.bits.empty(); });
+        const size_t componentBudget = remaining / std::max<size_t>(1, selected);
+        for (auto &component : components)
+            if (!component.bits.empty())
+            {
+                component.minimumBytes = Plan::MinimumMemoryBytes(component.simulator->SamplingRows(), shots, componentBudget);
+                if (component.minimumBytes > remaining - reserved)
+                    throw std::length_error("Composite probability indexes exceed the sampling scratch budget");
+                reserved += component.minimumBytes;
+            }
+        for (auto &component : components)
+            if (!component.bits.empty())
+            {
+                reserved -= component.minimumBytes;
+                auto localOptions = options;
+                localOptions.memoryBytes = remaining - reserved;
+                component.plan = std::make_unique<Plan>(component.simulator->PrepareSampling(shots, localOptions));
+                remaining -= localOptions.memoryBytes - component.plan->ScratchAvailable();
+            }
+        // Small local projection tables avoid per-shot bit permutation work.
+        // Their memory comes from the same shared budget as sampling tables.
+        for (auto &component : components)
+            if (words == 1 && component.bits.size() > 1 && component.plan && component.plan->Size() <= 65536 &&
+                shots >= std::max<size_t>(256, component.plan->Size()) && component.plan->Size() <= remaining / sizeof(size_t))
+            {
+                std::vector<size_t> table(component.plan->Size(), 0);
+                for (size_t row = 0; row < table.size(); ++row) project(component, row, &table[row]);
+                remaining -= table.size() * sizeof(size_t);
+                component.projection = std::move(table);
+            }
+        remaining += sharedReserve;
+        const size_t categories = uniqueBits.size() <= 20 ? size_t{1} << uniqueBits.size() : 0;
+        const bool histogram = categories && shots >= std::max<size_t>(1024, categories / 4) &&
+                               categories <= remaining / (2 * sizeof(size_t));
+        std::vector<size_t> bins(histogram ? categories : 0, 0);
+        remaining -= bins.size() * sizeof(size_t);
+        // Uniforms, sampled rows, sorted-CDF scratch, and joint output words.
+        if (words > (std::numeric_limits<size_t>::max() - 32) / sizeof(size_t))
+            throw std::length_error("Composite sampling output is too wide");
+        const size_t bytesPerShot = 32 + words * sizeof(size_t);
+        const size_t batch = std::min({shots, options.batchSize, remaining / bytesPerShot});
+        if (!batch)
+            throw std::length_error("Composite sampling batch exceeds the scratch budget");
+        std::vector<size_t> joint(batch * words), sampled;
+        std::vector<double> uniforms;
+        // Unselected components still consume their original one word per shot.
+        // Omitting their probability preparation cannot restart later streams.
+        for (auto &component : components)
+            if (component.bits.empty()) component.simulator->SamplingRng().discard(shots);
+        for (size_t begin = 0; begin < shots;)
+        {
+            const size_t count = std::min(batch, shots - begin);
+            std::fill(joint.begin(), joint.begin() + count * words, 0);
+            for (auto &component : components)
+            {
+                if (!component.plan) continue;
+                const auto &plan = *component.plan;
+                auto &rng = component.simulator->SamplingRng();
+                const int threads = plan.Categories() <= 64 && plan.Method() == Family::Alias ? 1 : Threads(options.multithreading, count);
+                if (threads == 1 && (plan.Method() == Family::Alias || plan.Size() <= 65536 || count < 128))
+                {
+                    for (size_t shot = 0; shot < count; ++shot)
+                        project(component, plan.Sample(Utils::RandomStream::Uniform(rng)), &joint[shot * words]);
+                }
+                else
+                {
+                    uniforms.resize(count);
+                    for (double &value : uniforms) value = Utils::RandomStream::Uniform(rng);
+                    plan.Draw(uniforms, sampled, threads);
+#ifdef _OPENMP
+#pragma omp parallel for if (threads > 1) num_threads(threads) schedule(static)
+#endif
+                    for (int64_t shot = 0; shot < static_cast<int64_t>(count); ++shot)
+                        project(component, sampled[shot], &joint[size_t(shot) * words]);
+                }
+            }
+            for (size_t shot = 0; shot < count; ++shot)
+                if (histogram) ++bins[joint[shot]];
+                else insert(&joint[shot * words], 1);
+            begin += count;
+        }
+        for (size_t row = 0; row < bins.size(); ++row)
+            if (bins[row]) insert(&row, bins[row]);
+        NotifyObservers(qubits);
+        return result;
+    }
+
     void InitializeAlias()
     {
         for (auto &[id, simulator] : simulators)
@@ -1499,8 +1712,13 @@ class ImmediateCompositeSimulator : public ISimulator
         if (sim->GetNumberOfQubits() == 1) // no need to split it, it's already for a single qubit
             return;
 
+        if (nextSplitStream == std::numeric_limits<uint64_t>::max())
+            throw std::overflow_error("Composite split stream exhausted");
+        // A detached component gets its own stream. Restores and register
+        // rebuilds must not rewind this ordinal and reuse a child's seed.
+        const uint64_t splitSeed = DeriveSeed(DeriveSeed(samplingSeed, 0x53504C4954ULL), nextSplitStream++);
         qubitsMap[qubit] = nextId; // the qubit will be in the new simulator
-        simulators[nextId] = sim->Split(qubit, qubitOutcome, enableMultithreading);
+        simulators[nextId] = sim->Split(qubit, qubitOutcome, enableMultithreading, splitSeed);
 
         ++nextId;
     }
@@ -1516,6 +1734,8 @@ class ImmediateCompositeSimulator : public ISimulator
     std::unique_ptr<ISimulator> savedState; /**< The saved state, if any. */
 
     Configuration config; /**< The configuration of the simulator. */
+    uint64_t samplingSeed = Utils::RandomStream::FreshSeed();
+    uint64_t nextCloneStream = 0, nextRestoreStream = 0, nextInitialization = 0, nextSplitStream = 0;
 };
 
 } // namespace Private

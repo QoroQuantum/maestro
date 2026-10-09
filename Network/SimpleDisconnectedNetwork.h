@@ -675,6 +675,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         lastFusionWidth = 0;
         lastFusionEnabled = false;
 
+        const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t nrThreads = GetMaxSimulators();
 
 #ifdef __linux__
@@ -682,7 +683,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             nrThreads = 1;
         else
 #endif
-            if (((method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral) &&
+            if (((method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
+                  (reproducibleSampling && method == Simulators::SimulationType::kDensityMatrix)) &&
                  !distCirc->HasOpsAfterMeasurements()) ||
                 simType == Simulators::SimulatorType::kQuestSim)
             nrThreads = 1;
@@ -693,7 +695,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         auto dcirc = distCirc;
 
-        if (nrThreads > 1)
+        if (reproducibleSampling && dcirc->HasOpsAfterMeasurements() && shots > 1)
+        {
+            ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbitsResults, simType, method, optSim, executed, resultsMutex);
+        }
+        else if (nrThreads > 1)
         {
             // Clones are owned by outer shot workers; avoid constructing inner pools.
             if (optSim && method == Simulators::SimulationType::kPauliPropagator && optSim->GetType() == Simulators::SimulatorType::kQCSim)
@@ -906,6 +912,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         lastFusionWidth = 0;
         lastFusionEnabled = false;
 
+        const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t nrThreads = GetMaxSimulators();
 
 #ifdef __linux__
@@ -913,7 +920,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             nrThreads = 1;
         else
 #endif
-            if (((method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral) &&
+            if (((method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
+                  (reproducibleSampling && method == Simulators::SimulationType::kDensityMatrix)) &&
                  !distCirc->HasOpsAfterMeasurements()) ||
                 simType == Simulators::SimulatorType::kQuestSim)
             nrThreads = 1;
@@ -927,7 +935,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         auto dcirc = distCirc;
 
-        if (nrThreads > 1)
+        if (reproducibleSampling && dcirc->HasOpsAfterMeasurements() && shots > 1)
+        {
+            ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbits, simType, method, optSim, executed, resultsMutex);
+        }
+        else if (nrThreads > 1)
         {
             // Clones are owned by outer shot workers; avoid constructing inner pools.
             if (optSim && method == Simulators::SimulationType::kPauliPropagator && optSim->GetType() == Simulators::SimulatorType::kQCSim)
@@ -2555,6 +2567,71 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         const auto results = GetState().GetAllBits();
         CreateSimulator(simType, method);
         GetState().SetResultsInOrder(results);
+    }
+
+    bool UsesReproducibleSampling(Simulators::SimulatorType type, Simulators::SimulationType method) const
+    {
+        return type == Simulators::SimulatorType::kQCSim && configuration.GetConfiguration("sampling_policy") != "legacy" &&
+               (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kDensityMatrix ||
+                method == Simulators::SimulationType::kPathIntegral);
+    }
+
+    void ExecuteLogicalShotBlocks(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, ExecuteResults &results, size_t shots, size_t workers,
+                                  size_t qubits, size_t cbits, size_t resultBits, Simulators::SimulatorType type, Simulators::SimulationType method,
+                                  const std::shared_ptr<Simulators::ISimulator> &prepared, const std::vector<bool> &executed, std::mutex &resultsMutex)
+    {
+        // Policy v1: logical ranges and stream ids stay fixed when the pool size
+        // changes. Terminal measurement batches use one simulator instead.
+        constexpr size_t blockSize = 256;
+        const uint64_t seed = configuration.IsSet("seed") ? std::stoull(configuration.GetConfiguration("seed"))
+                                                          : Simulators::GenerateRandomSeed(type, configuration.GetConfigMap());
+        const auto cloneMutex = std::make_shared<std::mutex>();
+        if (prepared)
+            prepared->SetMultithreading(false);
+        if (simulator && simulator != prepared)
+            simulator->Clear();
+        workers = std::max<size_t>(1, std::min(workers, shots / blockSize + (shots % blockSize != 0)));
+        if (workers > 1)
+        {
+            threadsPool.Resize(workers);
+            threadsPool.SetFinishLimit(shots);
+        }
+        std::shared_ptr<ExecuteJob<Time>> last;
+        for (size_t begin = 0, block = 0; begin < shots; ++block)
+        {
+            const size_t count = std::min(blockSize, shots - begin);
+            auto job = std::make_shared<ExecuteJob<Time>>(circuit, results, count, qubits, cbits, resultBits, type, method, resultsMutex);
+            job->optimiseMultipleShotsExecution = count > 1 || GetOptimizeSimulator();
+            // Native collapse uses different floating-point reductions when
+            // threaded. Keep all trajectory blocks serial internally, even
+            // with one outer worker; terminal batches still allow threading.
+            job->allowInternalMultithreading = false;
+            job->network = BaseClass::getptr();
+            job->onSimulatorReady = [this](const Simulators::ISimulator &actual) {
+                lastFusionWidth.store(actual.GetGateFusionMaxQubits());
+                lastFusionEnabled.store(actual.IsGateFusionEnabled());
+            };
+            job->curMaxBondDim = &curMaxBondDim;
+            job->config = ExecutionConfiguration(type, qubits);
+            job->config.SetConfiguration("seed", std::to_string(Simulators::IState::DeriveSeed(seed, block)));
+            job->randomStream = block;
+            job->cloneSource = prepared;
+            job->cloneMutex = cloneMutex;
+            job->executedGates = executed;
+            last = job;
+            if (workers > 1)
+                threadsPool.AddRunJob(std::move(job));
+            else
+                job->DoWork();
+            begin += count;
+        }
+        if (workers > 1)
+        {
+            threadsPool.WaitForFinish();
+            threadsPool.Stop();
+        }
+        if (!recreateIfNeeded && last)
+            simulator = last->optSim;
     }
 
     Configuration<Time> ExecutionConfiguration(Simulators::SimulatorType type, size_t qubits) const

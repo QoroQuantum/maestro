@@ -25,9 +25,11 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
     {
         if (nrQubits != 0)
         {
+            InitializeSamplingSeed();
             {
                 pathIntegralSimulator = std::make_unique<PathIntegralSimulator>();
                 pathIntegralSimulator->SetStartZeroState(nrQubits);
+                pathIntegralSimulator->SetSeed(samplingSeed);
             }
             SetMultithreading(enableMultithreading);
             for (const auto &[key, value] : configuration.GetConfigMap())
@@ -48,6 +50,8 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
 
     void Configure(const char *key, const char *value) override
     {
+        if (ConfigureSampling(key, value))
+            return;
         if (std::string("method") == key)
         {
             ValidateMethod(value);
@@ -60,8 +64,7 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
         {
             const uint64_t seed = std::stoull(value);
             SeedAuxiliaryRng(seed);
-            nextSeedStream = 0;
-            rng.seed(seed);
+            SeedSampling(seed);
             if (pathIntegralSimulator)
                 pathIntegralSimulator->SetSeed(seed);
             return;
@@ -178,6 +181,8 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(const Types::qubits_vector &qubits, size_t shots = 1000) override
     {
+        if (!LegacySampling())
+            return SamplePrepared<false>(qubits, shots);
         if (qubits.empty() || shots == 0)
             return {};
         if (qubits.size() > sizeof(size_t) * 8)
@@ -237,6 +242,8 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
 
     std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(const Types::qubits_vector &qubits, size_t shots = 1000) override
     {
+        if (!LegacySampling())
+            return SamplePrepared<true>(qubits, shots);
         if (qubits.empty() || shots == 0)
             return {};
         std::unordered_map<std::vector<bool>, Types::qubit_t> result;
@@ -667,6 +674,11 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
 
     std::unique_ptr<ISimulator> Clone() override
     {
+        return CloneForExecution(NextCloneSeed());
+    }
+
+    std::unique_ptr<ISimulator> CloneForExecution(uint64_t seed) override
+    {
         auto cloned = std::make_unique<QCSimPathIntegralSimulator>();
         cloned->nrQubits = nrQubits;
         cloned->enableMultithreading = enableMultithreading;
@@ -676,13 +688,64 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
             cloned->pathIntegralSimulator = pathIntegralSimulator->Clone();
         for (const auto &[key, value] : configuration.GetConfigMap())
             cloned->Configure(key.c_str(), value.c_str());
-        if (configuration.IsSet("seed"))
-            cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
+        cloned->SetSeed(seed);
         return cloned;
     }
 
   protected:
     std::unique_ptr<PathIntegralSimulator> pathIntegralSimulator;
+
+  private:
+    template <bool Many> Utils::Sampling::Counts<Many> SamplePrepared(const Types::qubits_vector &qubits, size_t shots)
+    {
+        if (qubits.empty() || !shots)
+            return {};
+        Utils::Sampling::ValidateQubits(qubits, nrQubits, Many);
+        if (shots == 1)
+        {
+            // Native direct sampling already normalizes the retained mass.
+            // Project from the full label, including packed subsets above bit 63.
+            const auto row = pathIntegralSimulator->MeasureNoCollapse();
+            auto result = Utils::Sampling::Single<Many>(qubits.size(), [&](size_t bit) { return row.get(qubits[bit]); });
+            NotifyObservers(qubits);
+            return result;
+        }
+        const auto &amplitudes = pathIntegralSimulator->Amplitudes();
+        auto options = SamplingOptions();
+        const size_t count = amplitudes.size();
+        if (count > (options.memoryBytes - 4096) / (sizeof(double) + sizeof(const uint64_t *)))
+        {
+            // AmplitudeMap only exposes sequential iteration. Sweep bounded
+            // target batches when a random-access snapshot would exceed the
+            // budget, borrowing the original full-width labels as we visit them.
+            auto result = Utils::Sampling::CountCdfRange<Many>(
+                amplitudes, shots, qubits.size(), [](const auto &row) { return std::norm(row.second); },
+                [&](const auto &row, size_t bit) { return row.first.get(qubits[bit]); },
+                [&] { return Utils::RandomStream::Uniform(rng); }, options);
+            NotifyObservers(qubits);
+            return result;
+        }
+        options.memoryBytes -= count * (sizeof(double) + sizeof(const uint64_t *));
+        std::vector<double> probabilities;
+        std::vector<const uint64_t *> labels;
+        probabilities.reserve(count);
+        labels.reserve(count);
+        // Iteration follows AmplitudeMap's stored row order, preserved by copy.
+        // Labels borrow immutable storage for this batch only, never across a
+        // mutation, restore or clone; no wide labels are copied into alias rows.
+        for (const auto &entry : amplitudes)
+        {
+            probabilities.push_back(std::norm(entry.second));
+            labels.push_back(entry.first.getWords());
+        }
+        const Utils::Sampling::Prepared plan(count, shots, [&](size_t row) { return probabilities[row]; }, options);
+        auto result = Utils::Sampling::Count<Many>(
+            plan, shots, qubits.size(),
+            [&](size_t row, size_t bit) { const auto q = qubits[bit]; return ((labels[row][q / 64] >> (q % 64)) & 1) != 0; },
+            [&] { return Utils::RandomStream::Uniform(rng); });
+        NotifyObservers(qubits);
+        return result;
+    }
 };
 } // namespace Simulators::Private
 #endif

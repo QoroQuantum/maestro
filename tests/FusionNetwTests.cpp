@@ -533,4 +533,137 @@ BOOST_DATA_TEST_CASE(FusedExpectationValuesMatchReference, bdata::make(kTargets)
     }
 }
 
+// A split must not restart the surviving component's RNG or give the
+// detached component the same stream. Keep this in the Visual Studio suite.
+BOOST_AUTO_TEST_CASE(CompositeCollapseStreamsStayIndependent)
+{
+    for (bool fusion : {false, true})
+        for (const char *policy : {"reproducible_v1", "legacy"})
+        {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(SimType::kCompositeQCSim, Method::kStatevector);
+            sim->Configure("gate_fusion", fusion ? "true" : "false");
+            sim->Configure("sampling_policy", policy);
+            sim->SetMultithreading(false);
+            sim->AllocateQubits(2);
+            sim->Initialize();
+            std::vector<size_t> joint(4), detached(4);
+            for (uint64_t seed = 0; seed < 1024; ++seed)
+            {
+                sim->SetSeed(seed);
+                sim->Reset();
+                sim->ApplyH(0);
+                sim->ApplyH(1);
+                sim->ApplyCX(0, 1); // |++>, represented by one component
+                const size_t outcome = sim->Measure({1, 0});
+                ++joint[outcome];
+                sim->ApplyH(1);
+                ++detached[(outcome & 1) | (sim->Measure({1}) << 1)];
+            }
+            BOOST_TEST_CONTEXT("fusion=" << fusion << " policy=" << policy)
+            {
+                for (size_t outcome = 0; outcome < 4; ++outcome)
+                {
+                    BOOST_CHECK_MESSAGE(joint[outcome] > 190 && joint[outcome] < 325,
+                                        "split correlated joint outcome " << outcome << ": " << joint[outcome]);
+                    BOOST_CHECK_MESSAGE(detached[outcome] > 190 && detached[outcome] < 325,
+                                        "detached component reused its parent's stream for outcome " << outcome << ": " << detached[outcome]);
+                }
+            }
+        }
+}
+
+BOOST_AUTO_TEST_CASE(CompositeBatchesPreserveFormatsAndStreams)
+{
+    for (bool fusion : {false, true})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(SimType::kCompositeQCSim, Method::kStatevector);
+        sim->Configure("gate_fusion", fusion ? "true" : "false");
+        sim->SetMultithreading(false);
+        sim->AllocateQubits(24);
+        sim->Initialize();
+        for (size_t first = 0; first < 24; first += 8)
+            for (size_t bit = 0; bit < 8; ++bit)
+            {
+                sim->ApplyRy(first + bit, 0.4 + 0.13 * bit);
+                if (bit) sim->ApplyCX(first + bit - 1, first + bit);
+            }
+        const Types::qubits_vector selected{23, 0, 10, 0, 8, 17};
+        sim->SetSeed(823);
+        const auto packed = sim->SampleCounts(selected, 100000);
+        const auto next = sim->SampleCountsMany({18, 3}, 1000);
+        sim->SetMultithreading(true);
+        sim->SetSeed(823);
+        const auto many = sim->SampleCountsMany(selected, 100000);
+        BOOST_CHECK(sim->SampleCountsMany({18, 3}, 1000) == next);
+        BOOST_CHECK_EQUAL(packed.size(), many.size());
+        for (const auto &[outcome, count] : packed)
+        {
+            std::vector<bool> bits(selected.size());
+            for (size_t bit = 0; bit < bits.size(); ++bit) bits[bit] = ((outcome >> bit) & 1) != 0;
+            BOOST_CHECK_EQUAL(many.at(bits), count);
+        }
+        auto first = sim->Clone(), second = sim->Clone();
+        BOOST_CHECK(first->SampleCounts(selected, 10000) != second->SampleCounts(selected, 10000));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(CompositeSamplingSettingsRejectBeforeMutation)
+{
+    for (bool fusion : {false, true})
+    {
+        auto sim = Simulators::SimulatorsFactory::CreateSimulator(SimType::kCompositeQCSim, Method::kStatevector);
+        sim->Configure("gate_fusion", fusion ? "true" : "false");
+        sim->Configure("sampling_max_memory_mb", "1");
+        sim->Configure("sampling_policy", "reproducible_v1");
+        for (bool initialized : {false, true})
+        {
+            if (initialized)
+            {
+                sim->AllocateQubits(2);
+                sim->Initialize();
+                sim->ApplyH(0);
+            }
+            const auto before = sim->GetConfigMap();
+            BOOST_CHECK_THROW(sim->Configure("sampling_policy", "invalid"), std::invalid_argument);
+            BOOST_CHECK_THROW(sim->Configure("sampling_max_memory_mb", "0"), std::invalid_argument);
+            BOOST_CHECK_THROW(sim->Configure("sampling_max_memory_mb", "-1"), std::invalid_argument);
+            BOOST_CHECK_THROW(sim->Configure("sampling_max_memory_mb", "18446744073709551616"), std::invalid_argument);
+            BOOST_CHECK(sim->GetConfigMap() == before);
+        }
+        auto clone = sim->Clone();
+        BOOST_CHECK_EQUAL(clone->SampleCounts({0}, 1024).size(), 2);
+        BOOST_CHECK_EQUAL(sim->SampleCounts({0}, 1024).size(), 2);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(CompositeUnmeasuredSingleShotStreamContinues)
+{
+    for (bool fusion : {false, true})
+    {
+        const auto make = [&] {
+            auto sim = Simulators::SimulatorsFactory::CreateSimulator(SimType::kCompositeQCSim, Method::kStatevector);
+            sim->Configure("gate_fusion", fusion ? "true" : "false");
+            sim->SetMultithreading(false);
+            sim->AllocateQubits(19);
+            sim->Initialize();
+            for (size_t q = 0; q < 19; ++q)
+            {
+                sim->ApplyRy(q, 0.21 + 0.087 * q);
+                if (q > 1) sim->ApplyCX(q - 1, q);
+            }
+            sim->SetSeed(471);
+            return sim;
+        };
+        auto partial = make(), full = make();
+        for (size_t shot = 0; shot < 64; ++shot)
+        {
+            const auto selected = partial->SampleCounts({0}, 1).begin()->first;
+            const auto joint = full->SampleCounts({0, 18}, 1).begin()->first;
+            BOOST_CHECK_EQUAL(selected, joint & 1);
+            BOOST_CHECK(partial->SampleCountsMany({18, 0, 17}, 1) == full->SampleCountsMany({18, 0, 17}, 1));
+        }
+        BOOST_CHECK(partial->SampleCounts({18, 0, 17}, 4096) == full->SampleCounts({18, 0, 17}, 4096));
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

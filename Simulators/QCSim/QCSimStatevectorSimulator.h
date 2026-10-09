@@ -7,6 +7,31 @@
 
 namespace Simulators::Private
 {
+// Composite joins/splits replace amplitudes within an existing execution.
+// Keeping the native register alive also keeps its measurement RNG position.
+class SamplingQubitRegister : public QC::QubitRegister<>
+{
+  public:
+    using QC::QubitRegister<>::QubitRegister;
+
+    void DiscardMeasurementDraw()
+    {
+        // Consume the native distribution, just as MeasureNoCollapse does.
+        // Its engine-word usage is an implementation detail of the library.
+        (void)uniformZeroOne(rng);
+    }
+
+    void ReplaceAmplitudes(size_t qubits, Eigen::VectorXcd &amplitudes)
+    {
+        NrQubits = qubits;
+        NrBasisStates = static_cast<size_t>(amplitudes.size());
+        registerStorage.swap(amplitudes);
+        savedStateStorage.resize(0);
+        computeGates.clear();
+        recordGates = false;
+    }
+};
+
 // statevector backend. Owns exactly one native QCSim implementation.
 class QCSimStatevectorSimulator : public QCSimGateSimulator
 {
@@ -22,12 +47,27 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
     }
     friend class IndividualSimulator;
 
+    struct SamplingProbability
+    {
+        const Eigen::VectorXcd *storage;
+        double operator()(size_t row) const { return std::norm((*storage)[row]); }
+    };
+    using SamplingPlan = Utils::Sampling::Prepared<SamplingProbability>;
+
+    SamplingPlan PrepareSampling(size_t shots) const
+    {
+        return SamplingPlan(size_t{1} << samplingSupportQubits, shots, SamplingProbability{&state->getRegisterStorage()}, SamplingOptions());
+    }
+
   public:
     void Initialize() override
     {
         if (nrQubits != 0)
         {
-            state = std::make_unique<QC::QubitRegister<>>(nrQubits);
+            InitializeSamplingSeed();
+            state = std::make_unique<SamplingQubitRegister>(nrQubits);
+            samplingSupportQubits = savedSamplingSupportQubits = 0;
+            SeedBackend(state.get(), samplingSeed);
             SetMultithreading(enableMultithreading);
             for (const auto &[key, value] : configuration.GetConfigMap())
                 if (key != "method")
@@ -44,6 +84,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         Initialize();
         Eigen::VectorXcd amplitudesEigen(Eigen::Map<Eigen::VectorXcd, Eigen::Unaligned>(amplitudes.data(), amplitudes.size()));
         state->setRegisterStorageFastNoNormalize(amplitudesEigen);
+        UpdateSamplingSupport();
     }
 
 #ifndef NO_QISKIT_AER
@@ -56,6 +97,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         Initialize();
         Eigen::VectorXcd amplitudesEigen(Eigen::Map<Eigen::VectorXcd, Eigen::Unaligned>(amplitudes.data(), amplitudes.size()));
         state->setRegisterStorageFastNoNormalize(amplitudesEigen);
+        UpdateSamplingSupport();
     }
 
 #endif
@@ -68,8 +110,10 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         nrQubits = num_qubits;
         Initialize();
         {
-            state = std::make_unique<QC::QubitRegister<>>(nrQubits, amplitudes);
+            state = std::make_unique<SamplingQubitRegister>(nrQubits, amplitudes);
             state->SetMultithreading(enableMultithreading);
+            SeedBackend(state.get(), samplingSeed);
+            UpdateSamplingSupport();
         }
     }
 
@@ -81,17 +125,23 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         nrQubits = num_qubits;
         Initialize();
         state->setToBasisState(static_cast<size_t>(basisState));
+        samplingSupportQubits = 0;
+        for (size_t value = basisState; value; value >>= 1)
+            ++samplingSupportQubits;
     }
 
     void Reset() override
     {
         if (state)
             state->Reset();
+        samplingSupportQubits = 0;
         upcomingGateIndex = 0;
     }
 
     void Configure(const char *key, const char *value) override
     {
+        if (ConfigureSampling(key, value))
+            return;
         if (std::string("method") == key)
         {
             ValidateMethod(value);
@@ -104,8 +154,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         {
             const uint64_t seed = std::stoull(value);
             SeedAuxiliaryRng(seed);
-            nextSeedStream = 0;
-            rng.seed(seed);
+            SeedSampling(seed);
             if (state)
                 SeedBackend(state.get(), seed);
             return;
@@ -130,6 +179,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
     void Clear() override
     {
         state = nullptr;
+        samplingSupportQubits = savedSamplingSupportQubits = 0;
         nrQubits = 0;
         upcomingGateIndex = 0;
         upcomingGates.clear();
@@ -226,6 +276,8 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(const Types::qubits_vector &qubits, size_t shots = 1000) override
     {
+        if (!LegacySampling())
+            return SamplePrepared<false>(qubits, shots);
         if (qubits.empty() || shots == 0)
             return {};
         if (qubits.size() > sizeof(size_t) * 8)
@@ -280,6 +332,8 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
     std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(const Types::qubits_vector &qubits, size_t shots = 1000) override
     {
+        if (!LegacySampling())
+            return SamplePrepared<true>(qubits, shots);
         if (qubits.empty() || shots == 0)
             return {};
         std::unordered_map<std::vector<bool>, Types::qubit_t> result;
@@ -289,14 +343,13 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
             {
                 const auto &statev = state->getRegisterStorage();
                 const Utils::Alias alias(statev);
+                std::vector<bool> meas(qubits.size());
                 for (size_t shot = 0; shot < shots; ++shot)
                 {
                     const double prob = 1. - uniformZeroOne(rng);
                     const size_t measRaw = alias.Sample(prob);
-                    std::vector<bool> meas(qubits.size(), false);
                     for (size_t i = 0; i < qubits.size(); ++i)
-                        if (((measRaw >> qubits[i]) & 1) == 1)
-                            meas[i] = true;
+                        meas[i] = ((measRaw >> qubits[i]) & 1) != 0;
                     ++result[meas];
                 }
             }
@@ -373,11 +426,13 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
     void SaveState() override
     {
         state->SaveState();
+        savedSamplingSupportQubits = samplingSupportQubits;
     }
 
     void RestoreState() override
     {
         state->RestoreState();
+        samplingSupportQubits = std::max(samplingSupportQubits, savedSamplingSupportQubits);
     }
 
     void SetMultithreading(bool multithreading = true) override
@@ -408,6 +463,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
     void ApplyGenericOneQubitGate(Types::qubit_t qubit, const Eigen::Matrix2cd &gate) override
     {
+        samplingSupportQubits = std::max(samplingSupportQubits, size_t(qubit) + 1);
         const QC::Gates::AppliedGate<> agate(gate, qubit);
         ApplyNativeGate(agate);
         NotifyObservers({qubit});
@@ -415,6 +471,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
     void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1, const Eigen::Matrix4cd &gate) override
     {
+        samplingSupportQubits = std::max({samplingSupportQubits, size_t(qubit0) + 1, size_t(qubit1) + 1});
         const QC::Gates::AppliedGate<> agate(gate, qubit0, qubit1);
         ApplyNativeGate(agate);
         NotifyObservers({qubit0, qubit1});
@@ -422,6 +479,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
     void ApplyGenericThreeQubitGate(Types::qubit_t q0, Types::qubit_t q1, Types::qubit_t q2, const Matrix8cd &gate) override
     {
+        samplingSupportQubits = std::max({samplingSupportQubits, size_t(q0) + 1, size_t(q1) + 1, size_t(q2) + 1});
         const QC::Gates::AppliedGate<> applied(gate, q0, q1, q2);
         ApplyNativeGate(applied);
         NotifyObservers({q0, q1, q2});
@@ -619,27 +677,98 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
     std::unique_ptr<ISimulator> Clone() override
     {
+        return CloneForExecution(NextCloneSeed());
+    }
+
+    std::unique_ptr<ISimulator> CloneForExecution(uint64_t seed) override
+    {
         auto cloned = std::make_unique<QCSimStatevectorSimulator>();
         cloned->nrQubits = nrQubits;
         cloned->enableMultithreading = enableMultithreading;
         cloned->upcomingGates = upcomingGates;
         cloned->upcomingGateIndex = upcomingGateIndex;
+        cloned->samplingSupportQubits = samplingSupportQubits;
+        cloned->savedSamplingSupportQubits = savedSamplingSupportQubits;
         if (state)
-            cloned->state = state->Clone();
+            cloned->state = std::make_unique<SamplingQubitRegister>(*state);
         for (const auto &[key, value] : configuration.GetConfigMap())
             cloned->Configure(key.c_str(), value.c_str());
-        if (configuration.IsSet("seed"))
-            cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
+        cloned->SetSeed(seed);
         return cloned;
     }
 
   protected:
-    std::unique_ptr<QC::QubitRegister<>> state;
+    std::unique_ptr<SamplingQubitRegister> state;
 
   private:
+    // Internal state replacement, deliberately separate from public
+    // initialization: preserve native/batch/readout RNGs and fork ordinals.
+    void ReplaceState(size_t qubits, Eigen::VectorXcd &amplitudes)
+    {
+        if (!state || !qubits || qubits >= std::numeric_limits<size_t>::digits ||
+            static_cast<size_t>(amplitudes.size()) != (size_t{1} << qubits))
+            throw std::invalid_argument("Invalid composite replacement state");
+        state->ReplaceAmplitudes(qubits, amplitudes);
+        nrQubits = qubits;
+        savedSamplingSupportQubits = 0;
+        upcomingGateIndex = 0;
+        upcomingGates.clear();
+        UpdateSamplingSupport();
+    }
+
+    template <bool Many> Utils::Sampling::Counts<Many> SamplePrepared(const Types::qubits_vector &qubits, size_t shots)
+    {
+        if (qubits.empty() || !shots)
+            return {};
+        Utils::Sampling::ValidateQubits(qubits, nrQubits, Many);
+        if (shots == 1)
+        {
+            // Preserve the native one-shot fast path and its RNG stream. Fix
+            // its summation path too: native parallel reductions depend on P.
+            const size_t row = [&] {
+                struct RestoreThreading
+                {
+                    QC::QubitRegister<> &state;
+                    bool enabled;
+                    ~RestoreThreading() { state.SetMultithreading(enabled); }
+                } restore{*state, enableMultithreading};
+                state->SetMultithreading(false);
+                return state->MeasureNoCollapse();
+            }();
+            auto result = Utils::Sampling::Single<Many>(qubits.size(), [&](size_t bit) { return ((row >> qubits[bit]) & 1) != 0; });
+            NotifyObservers(qubits);
+            return result;
+        }
+        const auto plan = PrepareSampling(shots);
+        auto result = Utils::Sampling::Count<Many>(
+            plan, shots, qubits.size(), [&](size_t row, size_t bit) { return ((row >> qubits[bit]) & 1) != 0; },
+            [&] { return Utils::RandomStream::Uniform(rng); });
+        NotifyObservers(qubits);
+        return result;
+    }
+
+    void UpdateSamplingSupport()
+    {
+        // Imports already establish a new state. Inspect trailing entries once
+        // here, instead of scanning the whole register on every sampling call.
+        // This is exact support metadata: tiny/invalid nonzero entries are kept.
+        const auto &storage = state->getRegisterStorage();
+        size_t end = static_cast<size_t>(storage.size());
+        while (end > 1 && storage[end - 1] == std::complex<double>{})
+            --end;
+        samplingSupportQubits = 0;
+        for (size_t last = end ? end - 1 : 0; last; last >>= 1)
+            ++samplingSupportQubits;
+    }
+
+    // An exact upper bound on occupied basis bits, never inferred from a probe.
+    // Initialized/imported states set the bound; gates can only widen it.
+    size_t samplingSupportQubits = 0, savedSamplingSupportQubits = 0;
+
     template <class Gate, class... Qubits> void ApplyNativeGate(const Gate &gate, Qubits... qubits)
     {
         state->ApplyGate(gate, qubits...);
+        ((samplingSupportQubits = std::max(samplingSupportQubits, size_t(qubits) + 1)), ...);
     }
 };
 } // namespace Simulators::Private

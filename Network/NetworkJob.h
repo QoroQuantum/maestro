@@ -45,9 +45,18 @@ template <typename Time = Types::time_type> class ExecuteJob
     {
         if (curCnt == 0)
             return;
-        // This job already occupies an outer shot worker.
-        if (optSim && method == Simulators::SimulationType::kPauliPropagator && optSim->GetType() == Simulators::SimulatorType::kQCSim)
-            optSim->SetMultithreading(false);
+        if (cloneSource)
+        {
+            // Clone only when a worker starts, so queued logical blocks do not
+            // each retain another statevector/density matrix. Fusion flushes
+            // during cloning, hence the short lock around the source.
+            const std::lock_guard lock(*cloneMutex);
+            optSim = cloneSource->CloneForExecution(std::stoull(config.GetConfiguration("seed")));
+        }
+        // Inner work is disabled while this job occupies an outer shot worker.
+        if (optSim && optSim->GetType() == Simulators::SimulatorType::kQCSim &&
+            (method == Simulators::SimulationType::kPauliPropagator || optSim->GetConfiguration("sampling_policy") == "reproducible_v1"))
+            optSim->SetMultithreading(allowInternalMultithreading);
 
         PrepareCircuitForExecution();
 
@@ -68,10 +77,10 @@ template <typename Time = Types::time_type> class ExecuteJob
             optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
             if (!optSim)
                 return;
-            if (method == Simulators::SimulationType::kPauliPropagator && optSim->GetType() == Simulators::SimulatorType::kQCSim)
-                optSim->SetMultithreading(false);
             config.ApplyConfigurationToSimulator(optSim);
-
+            if (optSim->GetType() == Simulators::SimulatorType::kQCSim &&
+                (method == Simulators::SimulationType::kPauliPropagator || optSim->GetConfiguration("sampling_policy") == "reproducible_v1"))
+                optSim->SetMultithreading(allowInternalMultithreading);
             optSim->AllocateQubits(nrQubits);
             optSim->Initialize();
 
@@ -143,38 +152,7 @@ template <typename Time = Types::time_type> class ExecuteJob
 
             const auto sampleres = optSim->SampleCountsMany(qbits, curCnt);
 
-            for (const auto &[mstate, cnt] : sampleres)
-            {
-                if (measurementsOp->HasReadout())
-                {
-                    // Readout flips are independent per shot, so the aggregated sample
-                    // has to be expanded and each shot given its own draw. Costs
-                    // O(shots) instead of O(distinct outcomes), but only when a readout
-                    // error is actually configured.
-                    for (size_t shot = 0; shot < cnt; ++shot)
-                    {
-                        measurementsOp->SetStateFromSample(mstate, state, optSim.get());
-
-                        auto bits = state.GetAllBits();
-                        bits.resize(nrResultCbits, false);
-
-                        ++localRes[bits];
-
-                        state.Reset();
-                    }
-
-                    continue;
-                }
-
-                measurementsOp->SetStateFromSample(mstate, state);
-
-                auto bits = state.GetAllBits();
-                bits.resize(nrResultCbits, false);
-
-                localRes[bits] += cnt;
-
-                state.Reset();
-            }
+            AccumulateSamples(*measurementsOp, sampleres, state, localRes);
 
             const std::lock_guard lock(resultsMutex);
             for (const auto &r : localRes)
@@ -388,36 +366,7 @@ template <typename Time = Types::time_type> class ExecuteJob
 
             const auto sampleres = optSim->SampleCountsMany(qbits, curCnt);
 
-            for (const auto &[mstate, cnt] : sampleres)
-            {
-                if (measurementsOp->HasReadout())
-                {
-                    // See the threaded variant above: flips are per shot, so the
-                    // aggregated sample must be expanded.
-                    for (size_t shot = 0; shot < cnt; ++shot)
-                    {
-                        measurementsOp->SetStateFromSample(mstate, state, optSim.get());
-
-                        auto bits = state.GetAllBits();
-                        bits.resize(nrResultCbits, false);
-
-                        ++res[bits];
-
-                        state.Reset();
-                    }
-
-                    continue;
-                }
-
-                measurementsOp->SetStateFromSample(mstate, state);
-
-                auto bits = state.GetAllBits();
-                bits.resize(nrResultCbits, false);
-
-                res[bits] += cnt;
-
-                state.Reset();
-            }
+            AccumulateSamples(*measurementsOp, sampleres, state, res);
 
             return;
         }
@@ -464,6 +413,39 @@ template <typename Time = Types::time_type> class ExecuteJob
     }
 
   private:
+    template <class Samples>
+    void AccumulateSamples(Circuits::MeasurementOperation<Time> &measurement, const Samples &samples, Circuits::OperationState &state,
+                           ExecuteResults &target)
+    {
+        auto add = [&](const auto &sample) {
+            const auto &[bits, count] = sample;
+            const size_t draws = measurement.HasReadout() ? count : 1;
+            for (size_t i = 0; i < draws; ++i)
+            {
+                measurement.SetStateFromSample(bits, state, measurement.HasReadout() ? optSim.get() : nullptr);
+                auto output = state.GetAllBits();
+                output.resize(nrResultCbits, false);
+                target[output] += measurement.HasReadout() ? 1 : count;
+                state.Reset();
+            }
+        };
+        if (measurement.HasReadout() && optSim->GetConfiguration("sampling_policy") == "reproducible_v1")
+        {
+            // Histogram insertion order can change with the execution kernel.
+            // Apply auxiliary readout draws in lexicographic outcome order.
+            std::vector<const typename Samples::value_type *> ordered;
+            ordered.reserve(samples.size());
+            for (const auto &sample : samples)
+                ordered.push_back(&sample);
+            std::sort(ordered.begin(), ordered.end(), [](auto a, auto b) { return a->first < b->first; });
+            for (const auto *sample : ordered)
+                add(*sample);
+        }
+        else
+            for (const auto &sample : samples)
+                add(sample);
+    }
+
     void PrepareCircuitForExecution()
     {
         const uint64_t stream = config.IsSet("seed") ? std::stoull(config.GetConfiguration("seed")) : randomStream;
@@ -590,9 +572,12 @@ template <typename Time = Types::time_type> class ExecuteJob
     std::mutex &resultsMutex;
 
     bool optimiseMultipleShotsExecution = true;
+    bool allowInternalMultithreading = false;
     // Distinguishes jobs even when the caller did not configure a simulator seed.
     uint64_t randomStream = 0;
     std::shared_ptr<Simulators::ISimulator> optSim;
+    std::shared_ptr<Simulators::ISimulator> cloneSource;
+    std::shared_ptr<std::mutex> cloneMutex;
     std::vector<bool> executedGates;
 
     // relevant only if the simulator is not passed or the simulator doesn't have

@@ -14,6 +14,9 @@ class FusionState : public ISimulator
   public:
     explicit FusionState(std::shared_ptr<ISimulator> immediate) : immediate_(std::move(immediate)), cache_(3)
     {
+        const auto seed = immediate_->GetConfiguration("sampling_seed");
+        if (!seed.empty())
+            SeedAuxiliaryRng(std::stoull(seed));
     }
 
     GateFusionStatistics GetGateFusionStatistics() const override
@@ -701,10 +704,10 @@ class FusionState : public ISimulator
     using Operation = std::shared_ptr<Circuits::IOperation<double>>;
     std::shared_ptr<ISimulator> immediate_;
 
-    void CloneInto(FusionState &copy)
+    void CloneInto(FusionState &copy, const uint64_t *executionSeed = nullptr)
     {
         Flush();
-        copy.immediate_ = immediate_->Clone();
+        copy.immediate_ = executionSeed ? immediate_->CloneForExecution(*executionSeed) : immediate_->Clone();
         copy.requested_ = requested_;
         copy.stats_ = stats_;
         copy.ready_ = ready_;
@@ -836,6 +839,11 @@ class FusionState : public ISimulator
 
     void FinishInitialization(size_t n, bool invalidateSnapshots = true)
     {
+        // An unseeded native initialization may have generated a fresh root.
+        // Keep the wrapper's readout stream attached to that same root.
+        const auto seed = immediate_->GetConfiguration("sampling_seed");
+        if (!seed.empty())
+            SeedAuxiliaryRng(std::stoull(seed));
         ready_ = n != 0;
         sourceIndex_ = 0;
         if (invalidateSnapshots)

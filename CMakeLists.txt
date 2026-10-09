@@ -566,6 +566,34 @@ endif()
 if(COMPILE_TESTS)
     enable_testing()
 
+    add_executable(alias_sampling_tests tests/AliasSamplingTests.cpp)
+    target_compile_definitions(alias_sampling_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(alias_sampling_tests PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    add_test(NAME alias_sampling COMMAND alias_sampling_tests)
+
+    add_executable(adaptive_sampling_tests tests/AdaptiveSamplingTests.cpp)
+    target_compile_definitions(adaptive_sampling_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(adaptive_sampling_tests PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    add_test(NAME adaptive_sampling COMMAND adaptive_sampling_tests)
+
+    # Manual before/after benchmark of the production count APIs. Excluded from
+    # normal builds and CTest because timings depend on the host and workload.
+    add_executable(sampling_benchmarks EXCLUDE_FROM_ALL tests/SamplingBenchmarks.cpp)
+    target_link_libraries(sampling_benchmarks PRIVATE Boost::serialization ${CMAKE_DL_LIBS}
+        $<TARGET_PROPERTY:maestro,INTERFACE_LINK_LIBRARIES>)
+    target_compile_options(sampling_benchmarks PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_COMPILE_OPTIONS>)
+    target_include_directories(sampling_benchmarks PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_INCLUDE_DIRECTORIES>)
+    set_property(TARGET sampling_benchmarks PROPERTY LINK_DIRECTORIES $<TARGET_PROPERTY:maestro,INTERFACE_LINK_DIRECTORIES>)
+
+    add_executable(composite_sampling_benchmarks EXCLUDE_FROM_ALL tests/CompositeSamplingBenchmarks.cpp)
+    target_link_libraries(composite_sampling_benchmarks PRIVATE maestro)
+    target_compile_options(composite_sampling_benchmarks PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_COMPILE_OPTIONS>)
+    target_include_directories(composite_sampling_benchmarks PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_INCLUDE_DIRECTORIES>)
+
     # Focused CPU tensor tests use baseline compiler ISA settings. They also
     # build without OpenMP and do not require the Aer/GPU simulator backends.
     add_executable(tensor_contraction_tests tests/TensorContractionTests.cpp)

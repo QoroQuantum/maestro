@@ -14,7 +14,7 @@
 
 #ifdef INCLUDED_BY_FACTORY
 
-#include "../../Utils/Alias.h"
+#include "../../Utils/Sampling/Alias.h"
 #include "../Aer/AerSimulator.h"
 #include "../Core/Factory.h"
 #include "../QCSim/QCSimStatevectorSimulator.h"
@@ -123,7 +123,7 @@ class IndividualSimulator : public ISimulator
                 // this simulator so transfer mapping keeping this in mind
 
                 // simulator->SetMultithreading(enableMultithreading);
-                simulator->InitializeState(newNrQubits,
+                static_cast<QCSimStatevectorSimulator *>(simulator.get())->ReplaceState(newNrQubits,
                                            newAmplitudes); // this will end up by swapping the data from
                                                            // newAmplitudes to the simulator, no allocation
                                                            // and copying is done
@@ -179,7 +179,7 @@ class IndividualSimulator : public ISimulator
      * @param qubitOutcome The outcome of the qubit.
      * @return The new simulator split from this one.
      */
-    inline std::unique_ptr<IndividualSimulator> Split(size_t qubit, bool qubitOutcome, bool enableMultithreading)
+    inline std::unique_ptr<IndividualSimulator> Split(size_t qubit, bool qubitOutcome, bool enableMultithreading, uint64_t splitSeed)
     {
         const size_t oldNrQubits = GetNumberOfQubits();
         const size_t newNrQubits = oldNrQubits - 1;
@@ -197,7 +197,9 @@ class IndividualSimulator : public ISimulator
         newSimulator->SetMultithreading(enableMultithreading);
 
         for (const auto &[key, value] : GetConfigMap())
-            newSimulator->Configure(key.c_str(), value.c_str());
+            if (key != "seed")
+                newSimulator->Configure(key.c_str(), value.c_str());
+        newSimulator->SetSeed(splitSeed);
 
         newSimulator->Initialize();
         if (qubitOutcome)
@@ -239,7 +241,7 @@ class IndividualSimulator : public ISimulator
                 }
 
                 // simulator->SetMultithreading(enableMultithreading);
-                simulator->InitializeState(newNrQubits,
+                static_cast<QCSimStatevectorSimulator *>(simulator.get())->ReplaceState(newNrQubits,
                                            newAmplitudes); // this will end up by swapping the data from
                                                            // newAmplitudes to the simulator, no allocation
                                                            // and copying is done
@@ -455,10 +457,10 @@ class IndividualSimulator : public ISimulator
         if (!simulator)
             return;
         const size_t nrBasisStates = 1ULL << simulator->GetNumberOfQubits();
-        savedState.reserve(nrBasisStates);
+        savedState.resize(nrBasisStates);
 
         for (Types::qubit_t state = 0; state < nrBasisStates; ++state)
-            savedState.emplace_back(simulator->Amplitude(state));
+            savedState[state] = simulator->Amplitude(state);
     }
 
     /**
@@ -478,12 +480,20 @@ class IndividualSimulator : public ISimulator
      */
     void RestoreState() override
     {
-        if (!simulator)
+        if (!simulator || savedState.empty())
             return;
         const size_t nrQubits = simulator->GetNumberOfQubits();
 
-        simulator->Clear();
-        simulator->InitializeState(nrQubits, savedState);
+        if (GetType() == SimulatorType::kQCSim)
+        {
+            Eigen::VectorXcd amplitudes(Eigen::Map<const Eigen::VectorXcd>(savedState.data(), savedState.size()));
+            static_cast<QCSimStatevectorSimulator *>(simulator.get())->ReplaceState(nrQubits, amplitudes);
+        }
+        else
+        {
+            simulator->Clear();
+            simulator->InitializeState(nrQubits, savedState);
+        }
         ClearSavedState();
     }
 
@@ -1389,6 +1399,15 @@ class IndividualSimulator : public ISimulator
         return cloned;
     }
 
+    std::unique_ptr<ISimulator> CloneForExecution(uint64_t seed) override
+    {
+        auto cloned = std::make_unique<IndividualSimulator>();
+        cloned->qubitsMap = qubitsMap;
+        cloned->savedState = savedState;
+        cloned->simulator = simulator->CloneForExecution(seed);
+        return cloned;
+    }
+
     Types::qubit_t SampleFromAlias()
     {
         if (!alias || !simulator)
@@ -1433,16 +1452,45 @@ class IndividualSimulator : public ISimulator
     }
 
   private:
+    // These helpers operate on component-local rows. The composite projects
+    // directly into requested output positions, including global IDs above 63.
+    QCSimStatevectorSimulator &SamplingStatevector() const
+    {
+        return *static_cast<QCSimStatevectorSimulator *>(simulator.get());
+    }
+
+    size_t SamplingRows() const { return size_t{1} << SamplingStatevector().samplingSupportQubits; }
+    Utils::Sampling::Options SamplingOptions() const { return SamplingStatevector().SamplingOptions(); }
+    std::mt19937_64 &SamplingRng() { return SamplingStatevector().rng; }
+
+    QCSimStatevectorSimulator::SamplingPlan PrepareSampling(size_t shots, Utils::Sampling::Options options) const
+    {
+        return {SamplingRows(), shots, {&SamplingStatevector().state->getRegisterStorage()}, options};
+    }
+
+    size_t SampleLocalOnce()
+    {
+        auto &backend = *SamplingStatevector().state;
+        struct RestoreThreading
+        {
+            QC::QubitRegister<> &backend;
+            bool enabled;
+            ~RestoreThreading() { backend.SetMultithreading(enabled); }
+        } restore{backend, simulator->GetMultithreading()};
+        backend.SetMultithreading(false);
+        return backend.MeasureNoCollapse();
+    }
+
+    void DiscardLocalMeasurementDraw() { SamplingStatevector().state->DiscardMeasurementDraw(); }
+
     void InitializeAlias()
     {
-        // TODO: implement it!
         if (GetType() == SimulatorType::kQCSim)
         {
             // qcsim - convert 'simulator' to qcsim simulator and access 'state' (from
             // there the statevector is accessible)
             QCSimStatevectorSimulator *qcsim = dynamic_cast<QCSimStatevectorSimulator *>(simulator.get());
-
-            alias = std::unique_ptr<Utils::Alias>(new Utils::Alias(qcsim->state->getRegisterStorage()));
+            alias = std::make_unique<Utils::Alias>(qcsim->state->getRegisterStorage());
         }
 #ifndef NO_QISKIT_AER
         else
@@ -1601,7 +1649,7 @@ class IndividualSimulator : public ISimulator
         // the other ones get shifted to the left by the number of qubits of this
         // simulator so transfer mapping keeping this in mind
         // simulator->SetMultithreading(enableMultithreading);
-        simulator->InitializeState(newNrQubits, newAmplitudes); // this will end up by swapping the data
+        static_cast<QCSimStatevectorSimulator *>(simulator.get())->ReplaceState(newNrQubits, newAmplitudes); // swaps the data
                                                                 // from newAmplitudes to the simulator, no
                                                                 // allocation and copying is done
     }
@@ -1641,7 +1689,7 @@ class IndividualSimulator : public ISimulator
   qubitMask);
             }
 
-            simulator->InitializeState(newNrQubits, newAmplitudes); // this will
+            static_cast<QCSimStatevectorSimulator *>(simulator.get())->ReplaceState(newNrQubits, newAmplitudes); // this will
   end up by swapping the data from newAmplitudes to the simulator, no allocation
   and copying is done
     }

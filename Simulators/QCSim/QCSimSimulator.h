@@ -16,6 +16,13 @@ class QCSimSimulator : public FusionSimulator<QCSimState>
         CloneInto(*copy);
         return copy;
     }
+
+    std::unique_ptr<ISimulator> CloneForExecution(uint64_t seed) override
+    {
+        auto copy = std::make_unique<QCSimSimulator>(immediate_);
+        CloneInto(*copy, &seed);
+        return copy;
+    }
 };
 } // namespace Simulators::Private
 #endif

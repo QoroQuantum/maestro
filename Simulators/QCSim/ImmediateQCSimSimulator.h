@@ -1,11 +1,13 @@
 #pragma once
 #if defined(INCLUDED_BY_FACTORY)
-#include "../../Utils/Alias.h"
+#include "../../Utils/Sampling/Alias.h"
+#include "../../Utils/Sampling/Sampling.h"
 #include "../Core/Configuration.h"
 #include "../Interfaces/Simulator.h"
 #include "../TensorNetworks/MPOValidation.h"
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <functional>
 #include <iomanip>
 #include <limits>
@@ -51,8 +53,9 @@ class ImmediateQCSimSimulator : public ISimulator
     {
     }
 
-    ImmediateQCSimSimulator() : rng(std::random_device{}()), uniformZeroOne(0, 1)
+    ImmediateQCSimSimulator() : samplingSeed(Utils::RandomStream::FreshSeed()), rng(samplingSeed), uniformZeroOne(0, 1)
     {
+        SeedAuxiliaryRng(samplingSeed);
     }
 
   public:
@@ -172,6 +175,12 @@ class ImmediateQCSimSimulator : public ISimulator
     {
         if (!key)
             return {};
+        const bool adaptiveSampling = std::string(MethodName()) == "statevector" || std::string(MethodName()) == "density_matrix" ||
+                                      std::string(MethodName()) == "path_integral";
+        if (adaptiveSampling && std::string(key) == "sampling_seed")
+            return std::to_string(samplingSeed);
+        if (adaptiveSampling && std::string(key) == "sampling_policy" && !configuration.IsSet(key))
+            return "reproducible_v1";
         if (std::string(key) == "precision")
             return "double";
         if (std::string(key) == "use_double_precision")
@@ -405,6 +414,51 @@ class ImmediateQCSimSimulator : public ISimulator
     }
 
   protected:
+    bool ConfigureSampling(const char *key, const char *value)
+    {
+        if (!Utils::Sampling::ValidateSetting(key, value))
+            return false;
+        configuration.SetConfiguration(key, value);
+        return true;
+    }
+
+    bool LegacySampling() const { return configuration.GetConfiguration("sampling_policy") == "legacy"; }
+
+    Utils::Sampling::Options SamplingOptions() const
+    {
+        Utils::Sampling::Options options;
+        options.multithreading = GetMultithreading();
+        if (configuration.IsSet("sampling_max_memory_mb"))
+            options.memoryBytes = static_cast<size_t>(std::stoull(configuration.GetConfiguration("sampling_max_memory_mb"))) << 20;
+        return options;
+    }
+
+    void SeedSampling(uint64_t seed)
+    {
+        samplingSeed = seed;
+        nextSeedStream = 0;
+        rng.seed(seed);
+        uniformZeroOne.reset();
+    }
+
+    void InitializeSamplingSeed()
+    {
+        // Recreating an unseeded native state must not restart an old stream.
+        // Explicitly configured seeds deliberately replay on initialization.
+        if (!configuration.IsSet("seed"))
+        {
+            SeedSampling(Utils::RandomStream::FreshSeed());
+            SeedAuxiliaryRng(samplingSeed);
+        }
+    }
+
+    uint64_t NextCloneSeed()
+    {
+        if (nextSeedStream == std::numeric_limits<uint64_t>::max())
+            throw std::overflow_error("Simulator clone stream ids exhausted");
+        return DeriveSeed(samplingSeed, nextSeedStream++);
+    }
+
     size_t CheckedBasisStateCountForQueries() const
     {
         if (nrQubits >= std::numeric_limits<size_t>::digits)
@@ -438,6 +492,7 @@ class ImmediateQCSimSimulator : public ISimulator
 
     std::shared_ptr<GateCounterObserver> gateCounterObserver;
 
+    uint64_t samplingSeed;
     std::mt19937_64 rng;
 
     uint64_t nextSeedStream = 0;

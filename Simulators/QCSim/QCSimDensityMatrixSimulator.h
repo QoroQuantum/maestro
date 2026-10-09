@@ -7,6 +7,15 @@
 
 namespace Simulators::Private
 {
+// Keep density sampling on its existing native engine. The adapter exposes an
+// immutable-table draw input without changing the external QCSim dependency.
+class SamplingDensityMatrix : public QC::DensityMatrix<>
+{
+  public:
+    using QC::DensityMatrix<>::DensityMatrix;
+    double SamplingUniform() { return Utils::RandomStream::Uniform(rng); }
+};
+
 // density_matrix backend. Owns exactly one native QCSim implementation.
 class QCSimDensityMatrixSimulator : public QCSimGateSimulator
 {
@@ -25,8 +34,10 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
     {
         if (nrQubits != 0)
         {
+            InitializeSamplingSeed();
             {
-                densityMatrix = std::make_unique<QC::DensityMatrix<>>(nrQubits);
+                densityMatrix = std::make_unique<SamplingDensityMatrix>(nrQubits);
+                SeedBackend(densityMatrix.get(), samplingSeed);
             }
             SetMultithreading(enableMultithreading);
             for (const auto &[key, value] : configuration.GetConfigMap())
@@ -103,6 +114,8 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
 
     void Configure(const char *key, const char *value) override
     {
+        if (ConfigureSampling(key, value))
+            return;
         if (std::string("method") == key)
         {
             ValidateMethod(value);
@@ -115,8 +128,7 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
         {
             const uint64_t seed = std::stoull(value);
             SeedAuxiliaryRng(seed);
-            nextSeedStream = 0;
-            rng.seed(seed);
+            SeedSampling(seed);
             if (densityMatrix)
                 SeedBackend(densityMatrix.get(), seed);
             return;
@@ -327,6 +339,8 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
 
     std::unordered_map<Types::qubit_t, Types::qubit_t> SampleCounts(const Types::qubits_vector &qubits, size_t shots = 1000) override
     {
+        if (!LegacySampling())
+            return SamplePrepared<false>(qubits, shots);
         if (qubits.empty() || shots == 0)
             return {};
         if (qubits.size() > sizeof(size_t) * 8)
@@ -336,9 +350,10 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
         std::unordered_map<Types::qubit_t, Types::qubit_t> result;
         DontNotify();
         {
+            const auto sampler = densityMatrix->PrepareSampler();
             for (size_t shot = 0; shot < shots; ++shot)
             {
-                const size_t measured = densityMatrix->MeasureNoCollapse();
+                const size_t measured = densityMatrix->MeasureNoCollapse(sampler);
                 Types::qubit_t packed = 0;
                 for (size_t i = 0; i < qubits.size(); ++i)
                     if ((measured & (1ULL << qubits[i])) != 0)
@@ -353,15 +368,18 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
 
     std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(const Types::qubits_vector &qubits, size_t shots = 1000) override
     {
+        if (!LegacySampling())
+            return SamplePrepared<true>(qubits, shots);
         if (qubits.empty() || shots == 0)
             return {};
         std::unordered_map<std::vector<bool>, Types::qubit_t> result;
         DontNotify();
         {
+            const auto sampler = densityMatrix->PrepareSampler();
+            std::vector<bool> packed(qubits.size());
             for (size_t shot = 0; shot < shots; ++shot)
             {
-                const size_t measured = densityMatrix->MeasureNoCollapse();
-                std::vector<bool> packed(qubits.size(), false);
+                const size_t measured = densityMatrix->MeasureNoCollapse(sampler);
                 for (size_t i = 0; i < qubits.size(); ++i)
                     packed[i] = (measured & (1ULL << qubits[i])) != 0;
                 ++result[packed];
@@ -647,29 +665,80 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
 
     std::unique_ptr<ISimulator> Clone() override
     {
+        return CloneForExecution(NextCloneSeed());
+    }
+
+    std::unique_ptr<ISimulator> CloneForExecution(uint64_t seed) override
+    {
         auto cloned = std::make_unique<QCSimDensityMatrixSimulator>();
         cloned->nrQubits = nrQubits;
         cloned->enableMultithreading = enableMultithreading;
         cloned->upcomingGates = upcomingGates;
         cloned->upcomingGateIndex = upcomingGateIndex;
         if (densityMatrix)
-            cloned->densityMatrix = densityMatrix->Clone();
+            cloned->densityMatrix = std::make_unique<SamplingDensityMatrix>(*densityMatrix);
         for (const auto &[key, value] : configuration.GetConfigMap())
             cloned->Configure(key.c_str(), value.c_str());
-        if (configuration.IsSet("seed"))
-            cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
-        else
-        {
-            if (cloned->densityMatrix)
-                cloned->densityMatrix->SetSeed(rng());
-        }
+        // Native DensityMatrix copying includes its RNG. Replace every stream
+        // before publishing the clone, even when the parent was randomly seeded.
+        cloned->SetSeed(seed);
         return cloned;
     }
 
   protected:
-    std::unique_ptr<QC::DensityMatrix<>> densityMatrix;
+    std::unique_ptr<SamplingDensityMatrix> densityMatrix;
 
   private:
+    template <bool Many> Utils::Sampling::Counts<Many> SamplePrepared(const Types::qubits_vector &qubits, size_t shots)
+    {
+        if (qubits.empty() || !shots)
+            return {};
+        Utils::Sampling::ValidateQubits(qubits, nrQubits, Many);
+        const size_t states = densityMatrix->getNrBasisStates();
+        std::vector<size_t> selected, positions;
+        for (const auto q : qubits)
+        {
+            const auto found = std::find(selected.begin(), selected.end(), q);
+            positions.push_back(static_cast<size_t>(found - selected.begin()));
+            if (found == selected.end())
+                selected.push_back(q);
+        }
+        const bool marginal = selected.size() < nrQubits && selected.size() <= 12 && shots >= std::max<size_t>(256, states / 16);
+        const size_t outcomes = marginal ? size_t{1} << selected.size() : states;
+        auto options = SamplingOptions();
+        if (outcomes > (options.memoryBytes - 4096) / sizeof(double))
+            throw std::length_error("Density sampling snapshot exceeds the scratch budget");
+        options.memoryBytes -= outcomes * sizeof(double);
+        std::vector<double> probabilities(outcomes, 0.);
+        const auto &matrix = densityMatrix->getDensityMatrix();
+        double mass = 0.;
+        for (size_t state = 0; state < states; ++state)
+        {
+            const auto diagonal = matrix(state, state);
+            if (!std::isfinite(diagonal.real()) || !std::isfinite(diagonal.imag()) || std::abs(diagonal.imag()) > 1E-10 || diagonal.real() < -1E-12)
+                throw std::domain_error("Density-matrix populations must be finite, real and nonnegative");
+            const double probability = std::max(0., diagonal.real());
+            mass += probability;
+            size_t row = state;
+            if (marginal)
+            {
+                row = 0;
+                for (size_t bit = 0; bit < selected.size(); ++bit)
+                    if ((state >> selected[bit]) & 1)
+                        row |= size_t{1} << bit;
+            }
+            probabilities[row] += probability;
+        }
+        if (!std::isfinite(mass) || mass <= 1E-20)
+            throw std::domain_error("Cannot sample a density matrix with no probability mass");
+        const Utils::Sampling::Prepared plan(outcomes, shots, [&](size_t row) { return probabilities[row]; }, options);
+        auto result = Utils::Sampling::Count<Many>(
+            plan, shots, qubits.size(), [&](size_t row, size_t bit) { return ((row >> (marginal ? positions[bit] : qubits[bit])) & 1) != 0; },
+            [&] { return densityMatrix->SamplingUniform(); });
+        NotifyObservers(qubits);
+        return result;
+    }
+
     template <class Gate, class... Qubits> void ApplyNativeGate(const Gate &gate, Qubits... qubits)
     {
         densityMatrix->ApplyGate(gate, static_cast<size_t>(qubits)...);

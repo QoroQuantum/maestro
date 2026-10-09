@@ -1,6 +1,6 @@
 #pragma once
 #if defined(INCLUDED_BY_FACTORY) && defined(__linux__)
-#include "../../Utils/Alias.h"
+#include "../../Utils/Sampling/Alias.h"
 #include "../Core/Configuration.h"
 #include "../Interfaces/Simulator.h"
 #include "../TensorNetworks/MPOValidation.h"

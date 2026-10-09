@@ -39,6 +39,7 @@
 #include "../Core/QuantumChannel.h"
 #include "../TensorNetworks/TensorQueries.h"
 #include "SimulatorObserver.h"
+#include "../../Utils/RandomStream.h"
 
 namespace Circuits
 {
@@ -160,10 +161,7 @@ class IState
 
     static uint64_t DeriveSeed(uint64_t seed, uint64_t stream)
     {
-        uint64_t value = seed + 0x9e3779b97f4a7c15ULL * (stream + 1);
-        value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
-        value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
-        return value ^ (value >> 31);
+        return Utils::RandomStream::Derive(seed, stream);
     }
 
     /**

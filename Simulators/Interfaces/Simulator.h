@@ -421,6 +421,15 @@ class ISimulator : public IState, std::enable_shared_from_this<ISimulator>
      */
     virtual std::unique_ptr<ISimulator> Clone() = 0;
 
+    // A logical execution stream is assigned before jobs enter the worker pool.
+    // Backends can copy state without consuming their ordinary clone ordinal.
+    virtual std::unique_ptr<ISimulator> CloneForExecution(uint64_t seed)
+    {
+        auto clone = Clone();
+        clone->SetSeed(seed);
+        return clone;
+    }
+
     /**
      * @brief Get a shared pointer to this object.
      *

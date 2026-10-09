@@ -25,6 +25,13 @@ class CompositeSimulator : public FusionSimulator<FusionState>
         return copy;
     }
 
+    std::unique_ptr<ISimulator> CloneForExecution(uint64_t seed) override
+    {
+        auto copy = std::make_unique<CompositeSimulator>(childType_);
+        CloneInto(*copy, &seed);
+        return copy;
+    }
+
   protected:
     // The composite keeps its separate cloned snapshot when rebuilding children.
     bool InitializationPreservesSnapshots() const override
