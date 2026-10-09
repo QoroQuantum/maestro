@@ -124,7 +124,11 @@ void TestFixedBackendShotReuse()
                         circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
                     }
 
-                    const size_t jobs = scenario == 0 && config.simulation_type == Method::kStatevector ? 1 : network->GetMaxSimulators();
+                    // Reproducible statevector/density-matrix sampling uses one job for
+                    // terminal measurements and fixed 256-shot blocks for trajectories.
+                    // This 128-shot test fits in one block regardless of worker count.
+                    const bool reproducibleSampling = config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix;
+                    const size_t jobs = reproducibleSampling ? 1 : network->GetMaxSimulators();
                     for (int repeat = 0; repeat < 2; ++repeat)
                     {
                         *prefix = 0;
