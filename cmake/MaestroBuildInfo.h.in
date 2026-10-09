@@ -1,0 +1,4 @@
+// Generated at CMake configure time; source archives report an unknown revision.
+#pragma once
+#define MAESTRO_BUILD_VERSION "@MAESTRO_BUILD_VERSION@"
+#define MAESTRO_SOURCE_REVISION "@MAESTRO_SOURCE_REVISION@"

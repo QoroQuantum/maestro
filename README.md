@@ -29,6 +29,20 @@ chmod +x build.sh
 
 For detailed build instructions, see [INSTALL.md](https://github.com/QoroQuantum/maestro/blob/main/markdown/INSTALL.md).
 
+Composer integration is optional and defaults to off. To build Maestro with
+Composer's network and execution estimators, point CMake at the Composer source
+root (the directory containing `composer/`):
+
+```bash
+cmake -S . -B build -DMAESTRO_ENABLE_COMPOSER=ON -DCOMPOSER_INCLUDE_DIR=../composer
+cmake --build build --config Release
+```
+
+An enabled build also searches the sibling `../composer` and `../../composer`
+locations. An explicit `COMPOSER_INCLUDE_DIR` supports any checkout layout.
+Composer's own CMake build and Visual Studio solution enable this integration
+automatically.
+
 ## How It Works
 
 ```
@@ -56,6 +70,19 @@ Execution (CPU / GPU / Distributed)
 | Distributed | p-block composite simulation |
 
 Each backend is accessed through a C++ adapter that maps Maestro's IR to the simulator's native API.
+
+QCSim has separate implementations for statevector, density matrix, MPS, MPO,
+stabilizer, extended stabilizer, tensor network, Pauli propagation, and path
+integral simulation in `Simulators/QCSim`. The GPU implementations in
+`Simulators/Gpu` cover statevector, density matrix, MPS, MPO, tensor network,
+and Pauli propagation. Each owns only its native backend; MPS and MPO share
+the routing and bond-dimension bookkeeping in a tensor-chain base.
+
+Select the method with `SimulatorsFactory::CreateSimulator` or
+`CreateSimulatorUnique`. These factories add the gate-fusion adapter where
+appropriate; internal composite children use the immediate statevector backend.
+The method is fixed at construction. Replaying the same `method` configuration
+is supported; select a different method by creating another simulator.
 
 ## Documentation
 
@@ -88,5 +115,3 @@ make doc
 ## License
 
 GPL-3.0 — see [LICENSE](./LICENSE) or <https://www.gnu.org/licenses/gpl-3.0.en.html>.
-
-Distributed GPU statevectors (local multi-GPU and MPI) are documented in [docs/distributed_gpu.md](docs/distributed_gpu.md).

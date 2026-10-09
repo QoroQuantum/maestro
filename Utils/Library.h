@@ -55,76 +55,93 @@
 
 #endif
 
-namespace Utils {
+namespace Utils
+{
 
-class Library {
- public:
-  Library(const Library &) = delete;
-  Library &operator=(const Library &) = delete;
-  Library(Library &&) = delete;
-  Library &operator=(Library &&) = delete;
+class Library
+{
+  public:
+    Library(const Library &) = delete;
+    Library &operator=(const Library &) = delete;
+    Library(Library &&) = delete;
+    Library &operator=(Library &&) = delete;
 
-  Library() noexcept {}
-
-  virtual ~Library() {
-    if (handle)
-#if defined(__linux__) || defined(__APPLE__)
-      dlclose(handle);
-#elif defined(_WIN32)
-      FreeLibrary(handle);
-#endif
-  }
-
-  virtual bool Init(const char *libName) noexcept {
-    if (handle) return true;
-#if defined(__linux__) || defined(__APPLE__)
-    handle = dlopen(libName, RTLD_NOW);
-
-    if (handle == nullptr) {
-      const char *dlsym_error = dlerror();
-      if (!mute && dlsym_error)
-        std::cerr << "Library: Unable to load library, error: " << dlsym_error
-                  << std::endl;
-
-      return false;
+    Library() noexcept
+    {
     }
+
+    virtual ~Library()
+    {
+        if (handle)
+#if defined(__linux__) || defined(__APPLE__)
+            dlclose(handle);
 #elif defined(_WIN32)
-    handle = LoadLibraryA(libName);
-    if (handle == nullptr) {
-      const DWORD error = GetLastError();
-      if (!mute)
-        std::cerr << "Library: Unable to load library, error code: " << error
-                  << std::endl;
-      return false;
+            FreeLibrary(handle);
+#endif
     }
-#endif
 
-    return true;
-  }
-
-  void *GetFunction(const char *funcName) noexcept {
+    virtual bool Init(const char *libName) noexcept
+    {
+        if (handle)
+            return true;
 #if defined(__linux__) || defined(__APPLE__)
-    return dlsym(handle, funcName);
+        handle = dlopen(libName, RTLD_NOW);
+
+        if (handle == nullptr)
+        {
+            const char *dlsym_error = dlerror();
+            if (!mute && dlsym_error)
+                std::cerr << "Library: Unable to load library, error: " << dlsym_error << std::endl;
+
+            return false;
+        }
 #elif defined(_WIN32)
-    return GetProcAddress(handle, funcName);
+        handle = LoadLibraryA(libName);
+        if (handle == nullptr)
+        {
+            const DWORD error = GetLastError();
+            if (!mute)
+                std::cerr << "Library: Unable to load library, error code: " << error << std::endl;
+            return false;
+        }
 #endif
-  }
 
-  const void *GetHandle() const noexcept { return handle; }
+        return true;
+    }
 
-  bool IsMuted() const noexcept { return mute; }
-
-  void SetMute(bool m) noexcept { mute = m; }
-
- private:
+    void *GetFunction(const char *funcName) noexcept
+    {
 #if defined(__linux__) || defined(__APPLE__)
-  void *handle = nullptr;
+        return dlsym(handle, funcName);
 #elif defined(_WIN32)
-  HINSTANCE handle = nullptr;
+        return GetProcAddress(handle, funcName);
 #endif
-  bool mute = false;
+    }
+
+    const void *GetHandle() const noexcept
+    {
+        return handle;
+    }
+
+    bool IsMuted() const noexcept
+    {
+        return mute;
+    }
+
+    void SetMute(bool m) noexcept
+    {
+        mute = m;
+    }
+
+  private:
+#if defined(__linux__) || defined(__APPLE__)
+    void *handle = nullptr;
+#elif defined(_WIN32)
+    HINSTANCE handle = nullptr;
+#endif
+    bool mute = false;
 };
 
-}  // namespace Utils
+} // namespace Utils
 
 #endif

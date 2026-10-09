@@ -326,6 +326,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
+          # Reuse only artifacts built from the commit being published.
+          built_sha=$(gh api "repos/$GH_REPO/actions/runs/${{ inputs.from_run_id }}" --jq .head_sha)
+          if [ "$built_sha" != "$GITHUB_SHA" ]; then
+            echo "::error::Run ${{ inputs.from_run_id }} built $built_sha, not $GITHUB_SHA"
+            exit 1
+          fi
           # Builds run alongside CI, so replay only runs whose CI passed or was skipped.
           ci_results=$(gh api --paginate "repos/$GH_REPO/actions/runs/${{ inputs.from_run_id }}/jobs" \
             --jq '.jobs[] | select(.name | startswith("Run CI tests")) | .conclusion')

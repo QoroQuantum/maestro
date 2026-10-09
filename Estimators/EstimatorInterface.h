@@ -13,12 +13,13 @@
 #ifndef __ESTIMATOR_INTERFACE_H_
 #define __ESTIMATOR_INTERFACE_H_
 
-#include "Simulators/Simulator.h"
+#include "Simulators/Interfaces/Simulator.h"
 
 #include <string>
 #include <vector>
 
-namespace Estimators {
+namespace Estimators
+{
 
 /**
  * @class EstimatorInterface
@@ -32,18 +33,16 @@ namespace Estimators {
  * SimulatorsEstimatorInterface.
  * @sa SimulatorsEstimatorInterface
  */
-class EstimatorInterface {
- public:
-  virtual ~EstimatorInterface() = default;
+class EstimatorInterface
+{
+  public:
+    virtual ~EstimatorInterface() = default;
 
-  virtual double EstimateTime(Simulators::SimulatorType type,
-                              Simulators::SimulationType method) const = 0;
-  virtual double EstimateExpectationValuesTime(
-      Simulators::SimulatorType type, Simulators::SimulationType method,
-      const std::vector<std::string> &paulis) = 0;
+    virtual double EstimateTime(Simulators::SimulatorType type, Simulators::SimulationType method) const = 0;
+    virtual double EstimateExpectationValuesTime(Simulators::SimulatorType type, Simulators::SimulationType method, const std::vector<std::string> &paulis) = 0;
 
-  virtual bool IsInitialized() const = 0;
+    virtual bool IsInitialized() const = 0;
 };
-}  // namespace Estimators
+} // namespace Estimators
 
-#endif  // !__ESTIMATOR_INTERFACE_H_
+#endif // !__ESTIMATOR_INTERFACE_H_

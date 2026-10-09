@@ -3977,11 +3977,14 @@ class TestCombinedNoiseExecution:
         mps_config = maestro.SimulatorConfig(
             simulation_type=maestro.SimulationType.MatrixProductState,
             max_bond_dimension=32,
+            seed=0,
         )
+        # Seed both noise injection and simulator resets, and average enough
+        # trajectories that a single rare T1 event cannot dominate the estimate.
         result = qc.full_noise_estimate(
-            ['ZZ'], nm, noise_realizations=10, config=mps_config
+            ['ZZ'], nm, noise_realizations=1000, config=mps_config
         )
-        assert result['expectation_values'][0] == pytest.approx(1.0, abs=0.2)
+        assert result['expectation_values'][0] == pytest.approx(1.0, abs=0.02)
 
 
 class TestCombinedNoisePhysics:
@@ -5214,6 +5217,8 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "pp_gates_between_trims": 2,
     "pp_gates_between_deduplications": 5,
     "path_integral_threshold": 1e-9,
+    "gate_fusion": False,
+    "enable_causal_cone_reduction": True,
 }
 
 
@@ -5250,7 +5255,7 @@ class TestSimulatorConfigFields:
     def test_repr_lists_every_field_in_order(self):
         config = maestro.SimulatorConfig(**NON_DEFAULT_CONFIG_FIELDS)
         text = repr(config)
-        assert len(NON_DEFAULT_CONFIG_FIELDS) == 23
+        assert len(NON_DEFAULT_CONFIG_FIELDS) == 25
         assert text == expected_config_repr(NON_DEFAULT_CONFIG_FIELDS)
         assert "simulator_type=SimulatorType.Gpu, " in text
         assert "singular_value_threshold=1e-07, " in text

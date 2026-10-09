@@ -1,6 +1,6 @@
 # Python binding layout
 
-`../bindings.cpp` is the nanobind module entry point. CMake lists each translation
+`../Bindings.cpp` is the nanobind module entry point. CMake lists each translation
 unit explicitly; normal CMake and scikit-build builds use the same sources.
 
 - `module.h`: registration entry points; config/enums register before functions
@@ -19,5 +19,6 @@ Causal-cone reduction is opt-in via SimulatorConfig.enable_causal_cone_reduction
 It traces the union of observable supports backward through unitary operations,
 then clones/remaps the retained operations and Pauli strings to compact indices.
 All observables run together through the usual configured network. Unsupported
-operations retain full execution; no backend policy or network implementation
-is changed by the reducer.
+operations retain full execution. Distributed GPU and MPI backends also retain
+full execution to preserve explicit qubit layouts and the minimum register width
+required by their shard counts.

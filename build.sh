@@ -79,7 +79,7 @@ cd ..
 
 if [ ! -d QCSim ]
 then
-     git clone https://github.com/aromanro/QCSim.git
+     git clone https://github.com/QoroQuantum/QCSim.git
 fi
 
 if [ -z "${NO_QISKIT_AER}" ]; then

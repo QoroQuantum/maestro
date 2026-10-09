@@ -114,7 +114,7 @@ they cannot override the simulator or specify their own launch profiles.
 | `statevector`, `amplitudes` | optional `basis_states` | Pure-state amplitudes; these two names have the same output shape |
 | `probabilities` | optional `basis_states` | Selected or full basis probabilities |
 | `state_probability` | `target_state` | Probability of a q0-first bitstring |
-| `diagnostics` | `diagnostics`, `maintenance`, `keep_qubits` | Mixed-state diagnostics/reduced density matrix |
+| `diagnostics` | `diagnostics`, `maintenance`, `keep_qubits` | Mixed-state diagnostics/reduced density matrix; MPS/MPO maintenance |
 | `inner_product` | `other_circuit` | Complex overlap of two unitary preparations |
 | `mirror_fidelity` | — | Fidelity of the preparation followed by its inverse |
 | `noisy_fidelity` | coherent `noise` | Ideal-versus-noisy unitary fidelity across realizations |
@@ -132,9 +132,62 @@ pure-state overlap is advertised for density matrices/MPOs. Individual methods m
 have narrower numerical-query support and return a native error.
 
 Diagnostics are `trace`, `purity` (defaults), `trace_of_square`,
-`hermiticity_residual`, `is_hermitian`, and `partial_trace`. The latter requires
-unique `keep_qubits` and returns `{dimension,row_major}`. Maintenance accepts
-`restore_trace`, `hermitize`, and MPO-only `trim`/`recanonicalize`.
+`hermiticity_residual`, `is_hermitian`, and `partial_trace`, for density
+matrices and MPOs. The latter requires unique `keep_qubits` and returns
+`{dimension,row_major}`. Maintenance accepts `restore_trace` and `hermitize`
+(density matrix and MPO) and `trim`/`recanonicalize` (MPS and MPO). An MPS
+reports no diagnostics by default; its `operator_expectation` query is described
+below.
+
+## Batched Pauli expectations
+
+`estimate` evaluates all observables together on each prepared state, including
+each noise realization. `incremental_evolve` does the same at each requested
+step. CPU QCSim and current GPU MPS/MPO plugins batch the contractions; MPS
+shares observable prefixes and MPO shares contraction work and trace normalization.
+Older GPU plugins and other backends preserve their scalar
+behavior. Batches preserve input order and duplicates and do not collapse the
+state. They never combine different evolution steps or noise realizations.
+
+For MPO `diagnostics`, use `expectations_complex` and/or
+`unnormalized_expectations` with an `observables` array of full-width Pauli
+strings. Each result is an array of `[real, imaginary]` values, in input order.
+The former divides by the operator trace; the latter retains its scale.
+`max_output_elements` bounds the number of values in each batch. Empty batches
+return empty arrays. Scalar `pauli` diagnostics continue to work unchanged.
+
+The same current-state queries are available directly:
+
+```cpp
+auto real = simulator->ExpectationValues({"XX", "YY", "ZZ"});
+auto normalized = simulator->ExpectationValuesComplex({"XX", "YY"});
+auto raw = simulator->ExpectationValuesComplex({"XX", "YY"}, false);
+```
+
+The C ABI accepts a simulator pointer returned by `GetSimulator`:
+
+```c
+const char *paulis[] = {"XX", "YY", "ZZ"};
+double real[3], imag[3];
+int ok = MaestroExpectationValues(sim, paulis, 3, real, 3);
+ok = MaestroExpectationValuesComplex(sim, paulis, 3, 0, real, imag, 3);
+```
+
+Capacity counts entries in each output array. A zero count permits null arrays;
+the simulator must still be valid. The functions return 1 on success or 0 on
+failure, leave output buffers unchanged on failure, and contain C++ exceptions.
+Real queries follow the existing scalar padding rules; complex MPO queries
+require exactly one uppercase `I`, `X`, `Y`, or `Z` per qubit. The C++ dynamic
+library wrappers expose `ExpectationValues` and `ExpectationValuesComplex`;
+their new exports are optional when loading an older library and throw a clear
+error only when called against that library.
+
+Maestro Python exposes `sim.expectation_values(paulis)` and
+`sim.expectation_values_complex(paulis, normalized=True)`, with matching
+`ExpectationValues` / `ExpectationValuesComplex` aliases. These return Python
+lists and release the GIL during native computation. Callers must serialize
+queries and mutations of the same simulator. Rebuild native C++ consumers when
+updating the simulator interface headers.
 
 ## Configuration
 
@@ -159,10 +212,11 @@ are rejected. Small floating-point thresholds retain their precision.
 | `disable_optimized_swapping` | `` | boolean | mps |
 | `lookahead_depth` | `` | lookahead | mps |
 | `optimize_circuit` | `` | boolean | all |
+| `gate_fusion` | `` | boolean | all |
 | `max_simulators` | `max_simulators` | positive_integer | all |
 | `mpo_kraus_completeness_check` | `matrix_product_operator_kraus_completeness_check` | string | mpo |
-| `mpo_restore_trace_after_truncation` | `matrix_product_operator_restore_trace_after_truncation` | boolean | cpu_mpo |
-| `mpo_hermitize_after_truncation` | `matrix_product_operator_hermitize_after_truncation` | boolean | cpu_mpo |
+| `mpo_restore_trace_after_truncation` | `matrix_product_operator_restore_trace_after_truncation` | boolean | mpo |
+| `mpo_hermitize_after_truncation` | `matrix_product_operator_hermitize_after_truncation` | boolean | mpo |
 | `mps_svd_solver` | `` | string | gpu_mps |
 | `mpo_svd_solver` | `` | string | gpu_mpo |
 | `tensor_network_svd_solver` | `` | string | gpu_tn |
@@ -180,6 +234,11 @@ backends. Truncation is `relative_max` or `discarded_weight`. `mps_sampling` is
 deduplicates every 10 operations. Omitted seeds are generated randomly for each
 request. Specify an explicit simulator seed once, through `execution.seed` or
 the options object, to reproduce a run; zero is a valid explicit seed.
+
+`gate_fusion` forces fusion on or off on eligible methods. When omitted, fusion
+is on except for CPU statevectors below 11 qubits and CPU density matrices below
+5 qubits, where it costs more than it saves. It is independent of
+`optimize_circuit`. Unsupported methods and Aer retain their existing behavior.
 
 For maintainers: `SimulatorConfig` has two active construction paths. Python
 bindings populate typed option fields. The native parser populates typed network
@@ -360,3 +419,186 @@ use `MPIEXEC_PREFLAGS` for site launcher/binding arguments. This opt-in suite is
 not enabled on ordinary CPU CI runners. On systems where hwloc probes unavailable
 graphical displays, an appropriate
 site test profile can set `HWLOC_COMPONENTS=-gl,-opencl`.
+
+Fusion status is returned under `execution_metadata.gate_fusion`:
+`{"requested":true,"enabled":true,"max_qubits":3}`. `requested` is `null` when
+the request did not set `gate_fusion`; an explicit boolean is also echoed in
+`execution_metadata.configured_options.gate_fusion`. `enabled`
+and `max_qubits` describe Maestro fusion on the backend actually executed,
+including automatic method selection; they do not describe native Aer/Ex fusion.
+
+
+### CPU and GPU MPO (Hastings implementation)
+
+The GPU MPO backend requires the updated plugin exporting `MPOSampleBits` and
+`MPOSampleHistogram`. Maestro checks the full MPO API before creating a simulator;
+older plugins cannot be used as MPO backends with this version. Rebuild C++ clients
+and both Python extensions when upgrading (the generic state interface has new
+virtual methods).
+
+`execute` counts support registers wider than 64 qubits. `state_probability` accepts
+an arbitrary-width, q0-first `target_state` bitstring for CPU and GPU MPO. Integer basis
+queries retain their documented bounds; full state enumeration is exponential.
+`max_bond_dimension: 0` removes the MPO bond cap. The two
+`mpo_*_after_truncation` options now apply to GPU as well as CPU MPO.
+
+CPU and GPU MPO `diagnostics` also accept:
+
+- `density_matrix` and `unnormalized_density_matrix`: bounded dense output, using
+  the existing `{dimension, row_major}` encoding; at most 13 qubits.
+- `element`: raw matrix element, with q0-first `row_state` and `col_state` strings.
+- `expectation_complex` and `unnormalized_expectation`: complex Pauli expectations,
+  with `pauli` containing one `I`, `X`, `Y`, or `Z` per logical qubit.
+
+A diagnostics request can supply `operators`, an ordered list of
+`{qubits, matrix, normalize}` objects. Each matrix is a flat row-major array of
+complex `[real, imaginary]` entries on one or two targets; the first target is the
+local least-significant bit. Each operation computes `A rho A†`. `normalize`
+defaults to false; true divides by the resulting trace and preserves the state if
+postselection fails. These state-changing operators require QCSim or GPU MPO.
+Optional `move_qubits` supports QCSim and GPU MPS as well as MPO, and moves those
+logical qubits to the start of the chain, preserving their current physical
+relative order. Routing swaps use the configured cutoff and bond cap and can
+truncate the state. GPU MPS sampling does not insert these moves automatically.
+Operators run after the circuit, followed by explicit routing, maintenance,
+and diagnostics.
+
+Both backends expose trace-normalized dense output, partial trace, and
+Hilbert–Schmidt overlap. Raw matrix elements, unnormalized expectations, and
+unnormalized dense output retain the operator's scale. `trace` preserves both
+real and imaginary components.
+
+The same C++ `IState`/`ISimulator` methods on QCSim and GPU MPO expose `ProbabilityBits`,
+`DensityMatrixElementBits`, `GetDensityMatrix(normalized)`,
+`ExpectationValueComplex(pauli, normalized)`, `ApplyOperator`, and
+`MoveAtBeginningOfChain`. `SampleCountsMany` and `MeasureNoCollapseMany` support
+arbitrary-width results; packed `SampleCounts` supports at most 64 selected bits,
+including subsets of a larger register. Repeated selected qubits reproduce the
+same measured bit in every requested position. Unsupported backends throw.
+
+The plain C declarations in `maestrolib/Interface.h` expose corresponding
+`Maestro*` functions plus `MaestroSampleCountsBits` and `MaestroMeasureBits`.
+They return 1 on success and 0 on failure without throwing across C. C matrix
+buffers use **column-major interleaved doubles**, as documented in that header;
+JSON matrices use row-major arrays. Sampling buffers are caller-owned, and the
+header specifies their capacities. Existing `ConfigureSimulator` exposes the
+truncation controls.
+
+Maestro Python uses `probability_bits`, `density_matrix_element_bits`,
+`get_density_matrix`, `expectation_value_complex`, `apply_operator`, and
+`move_at_beginning_of_chain`. `SampleCountsMany` returns tuple-of-bool keys;
+`MeasureMany` and `MeasureNoCollapseMany` return lists. Composer Python exposes
+the C++ names and accepts lists for the new bit-vector and routing methods;
+`SampleCountsManyWithList` likewise returns tuple keys.
+
+Precision is selected before allocation with `precision=single|double` or
+`use_double_precision=0|1|false|true`. The aliases stay synchronized, with the
+last setting taking effect. GPU statevector, MPS, tensor network, density matrix,
+MPO, distributed GPU statevector, and Aer statevector/density matrix (including
+composite Aer) retain the selected precision through initialization and saved-state
+restoration, and cloning where supported. GPU tensor-network cloning remains
+unsupported.
+After initialization the precision is fixed: a precision setting applied then
+(for example by a configuration replay) is ignored, and a new one takes effect
+only after clearing the state. `GetConfiguration` reports the active native
+GPU precision. QCSim and Aer MPS always compute in double precision. When omitted,
+backend defaults remain GPU single precision and Aer/QCSim double precision.
+
+## MPS operator expectations and full state output
+
+QCSim and GPU MPS support the read-only complex query
+`ExpectationValueOperators(qubits, matrices)` in native C++ and
+`expectation_value_operators(qubits, matrices)` (also `ExpectationValueOperators`)
+in Python. Supply one finite 2x2 matrix per target. Targets may repeat; list order
+means the result is `<psi|O_(k-1)...O_0|psi>`. Matrices need not be unitary or
+Hermitian. An empty list returns one. The query never applies operators to the
+stored state. Unsupported backends report an error.
+
+The corresponding JSON diagnostic is `operator_expectation`, returning
+`[real, imaginary]`. Supply `expectation_operators`, an ordered list of
+`{"qubit": q, "matrix": [m00, m01, m10, m11]}` objects. Entries use the existing
+real-number or `[real, imaginary]` encoding. This field is distinct from the
+state-changing MPO `operators` field. For example, on an MPS prepared as `|00>`:
+
+```json
+{
+  "schema_version": 2,
+  "operation": "diagnostics",
+  "circuit": {"num_qubits": 2, "source": "OPENQASM 2.0; qreg q[2];"},
+  "simulator": {"backend": "gpu", "method": "matrix_product_state"},
+  "diagnostics": ["operator_expectation"],
+  "expectation_operators": [
+    {"qubit": 0, "matrix": [0, 1, 1, 0]},
+    {"qubit": 0, "matrix": [0, [0,-1], [0,1], 0]}
+  ]
+}
+```
+
+The result is `[0,-1]`, since the product is `YX = -iZ`. List length is bounded
+by `max_output_elements`. Missing matrices, out-of-range targets, non-finite
+entries, or use without the diagnostic are rejected during request validation.
+
+`GetStateVector()` in native C++ and `get_statevector()` / `GetStateVector()` in
+Python return all pure-state amplitudes with logical qubit zero as the low bit.
+Mixed states have no unique statevector. Full JSON `statevector` / `amplitudes`
+and `probabilities` outputs use bulk readers where supported; tensor-network
+probabilities retain per-index queries. Supplying `basis_states` also keeps
+selected scalar queries. Network amplitude execution uses the shared full-state
+query and retains its mapping back to caller qubit order. Full outputs remain
+exponential and JSON output bounds still apply. GPU MPS dense readers support
+at most 40 qubits and can fail earlier when memory is insufficient.
+
+The plain C functions are:
+
+```c
+int MaestroGetStateVector(void *sim, double *interleaved, size_t capacity);
+int MaestroExpectationValueOperators(void *sim, const unsigned long *qubits,
+    size_t count, const double *matrices, double *real, double *imag);
+```
+
+Statevector capacity counts complex entries; allocate twice that many doubles.
+Operator matrices are consecutive **row-major**, interleaved 2x2 matrices
+(eight doubles each). Both functions return 1 on success or 0 on failure,
+leaving output buffers unchanged on failure. For zero operators, input arrays
+may be null. `MaestroLibrary` and `Simulator` provide C++ wrappers for both
+queries and `MoveAtBeginningOfChain`; their operator matrices use
+`std::array<std::complex<double>,4>` in row-major order. The direct `ISimulator`
+method uses Eigen matrices. These queries flush pending fused gates before reading.
+Empty chain-movement lists are no-ops on supported simulators across native C++,
+C, Python, the dynamic C++ wrappers, and JSON (`"move_qubits": []`). The C pointer
+may be null when the count is zero; a null pointer with a nonzero count is invalid.
+GPU MPS full-state readout writes into Maestro's result buffer and uses bounded
+host staging for precision conversion and qubit permutation. Probability readout
+does not materialize a full host amplitude vector. GPU contraction workspace and
+the requested output still grow exponentially.
+`MaestroLibrary`, `Simulator`, and `SimpleSimulator` also expose
+`RunRequestJson(request)` and `ValidateRequestJson(request)`, returning the
+complete versioned response as a `std::string`.
+
+New GPU query symbols are optional: older plugins retain scalar expectation and
+dense-readout fallbacks and full bond-array callbacks. Explicit MPS chain moves
+and arbitrary-operator expectations require an updated plugin and report an
+unavailable-feature error otherwise. A failed native batch does not silently
+retry as scalar queries. Bond statistics continue to mean the maximum reached
+during execution, including transient routing growth, rather than the current
+bond dimension. MPS sampling propagates backend failure or incomplete shot
+counts as an error. Legacy C pointer-returning readers/samplers return null on
+failure; `Probability` returns NaN on a backend error. C save/restore returns
+zero on failure.
+
+
+## Additive discovery metadata
+
+`capabilities` keeps schema version 2 and now includes `build.version` (the package
+version), `build.source_revision` (Git revision captured at CMake configuration,
+with `-dirty` for tracked modifications, or `unknown` in source archives), and
+`capability_scope: "validation"`. These identifiers are informational; use the
+catalog and request validation for feature negotiation.
+
+`diagnostics` lists names and `supported_configurations` backend/method pairs.
+Each option also lists `supported_configurations`, and where applicable `enum`,
+`minimum` and `maximum`. Conditional `exceptions` override general bounds (MPO
+accepts zero for unlimited bond dimension); `constraints` narrow choices (Aer
+truncation supports only `discarded_weight`). Cross-field and size constraints
+remain enforced by request validation. Catalog support does not probe optional
+plugins, GPU hardware or licensing, and is not a promise of runtime readiness.

@@ -5,6 +5,7 @@ Set MAESTRO_TEST_MPI_GPU=1 to enable collective MPI tests.
 """
 import os
 import pickle
+import sys
 import pytest
 
 # Initialize MPI before importing the extension, with the application's chosen
@@ -46,6 +47,8 @@ def test_reject_unsupported_method():
 
 @pytest.mark.parametrize("mpi", [False, True])
 def test_execution(mpi):
+    if sys.platform != "linux":
+        pytest.skip("Distributed GPU backends are only supported on Linux")
     if mpi:
         if os.environ.get("MAESTRO_TEST_MPI_GPU") != "1":
             pytest.skip("MPI test requires an explicitly enabled collective launch")

@@ -13,17 +13,19 @@
 
 #ifndef _TESTS_H_
 
-#ifdef COMPOSER
-#include "../../composer/composer/Estimators/ExecutionEstimator.h"
+#ifdef MAESTRO_ENABLE_COMPOSER
+#include <composer/Estimators/ExecutionEstimator.h>
 #endif
 
-class InitSetup {
- public:
-  InitSetup() {
-#ifdef COMPOSER
-    Estimators::ExecutionEstimator<>::InitializeRegressors();
+class InitSetup
+{
+  public:
+    InitSetup()
+    {
+#ifdef MAESTRO_ENABLE_COMPOSER
+        Estimators::ExecutionEstimator<>::InitializeRegressors();
 #endif
-  }
+    }
 };
 
 #ifndef _TESTS_NO_EXCLUDE

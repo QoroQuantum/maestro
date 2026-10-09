@@ -128,9 +128,9 @@
  * uses the configured backend and its options. All observables share one
  * reduced circuit, with their order preserved. The source circuit is unchanged.
  * Measurement, reset, quantum channels, classical control, and composite
- * operations conservatively fall back to full execution. For approximate
+ * operations conservatively fall back to full execution. Distributed GPU and MPI
+ * backends also retain full execution to preserve qubit layouts and shard counts. For approximate
  * backends, truncation can introduce small differences after reduction.
  * Requesting observables that collectively cover the whole register may not
  * reduce the simulation width.
  */
-
