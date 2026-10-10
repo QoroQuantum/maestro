@@ -27,7 +27,9 @@ def test_reduction_preserves_batched_observables_and_backend(method):
     circuit.s(4)
     circuit.x(2)
     circuit.h(5)
-    config = maestro.SimulatorConfig(simulation_type=method)
+    config = maestro.SimulatorConfig(
+        simulation_type=method, enable_causal_cone_reduction=False
+    )
     observables = ["IZIIII", "IXIIYI", "IIZIII", "IIIIII", "IXIIYI"]
     full = maestro.simple_estimate(circuit, observables, config)
     assert full["expectation_values"] == pytest.approx([0, 1, -1, 1, 1], abs=1e-10)
@@ -142,7 +144,10 @@ def test_non_clifford_cones_against_full_statevector(seed):
     circuit.ccx(1, 3, 5)
     circuit.cx(0, 6)  # Independent of all requested observables.
     observables = ["IXIIIII", "IIIZIYI", "IYIXIZI"]
-    expected = circuit.estimate(observables)["expectation_values"]
+    expected = circuit.estimate(
+        observables,
+        config=maestro.SimulatorConfig(enable_causal_cone_reduction=False),
+    )["expectation_values"]
     for method in [
         maestro.SimulationType.Statevector,
         maestro.SimulationType.MatrixProductState,
@@ -325,3 +330,17 @@ def test_backward_cone_against_independent_statevector(seed):
         for word, value in zip(observables, expected):
             actual = circuit.estimate([word], config)["expectation_values"]
             assert actual == pytest.approx([value], abs=2e-12)
+
+
+def test_default_config_has_causal_cone_reduction_enabled():
+    cfg = maestro.SimulatorConfig()
+    assert cfg.enable_causal_cone_reduction is True
+
+    # Default estimation on 70-qubit circuit with localized observable succeeds
+    # with Statevector because causal cone reduction is active by default.
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.ry(0, 0.4)
+    circuit.cx(0, 1)
+    circuit.x(69)
+    res = circuit.estimate(["ZI" + "I" * 68])
+    assert res["expectation_values"] == pytest.approx([math.cos(0.4)], abs=1e-12)

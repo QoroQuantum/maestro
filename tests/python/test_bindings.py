@@ -5218,7 +5218,7 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "pp_gates_between_deduplications": 5,
     "path_integral_threshold": 1e-9,
     "gate_fusion": False,
-    "enable_causal_cone_reduction": True,
+    "enable_causal_cone_reduction": False,
 }
 
 
@@ -5269,6 +5269,7 @@ class TestSimulatorConfigFields:
             "simulation_type=SimulationType.Statevector, ")
         assert "precision=None, " in text
         assert "mps_sampling='probabilities', " in text
+        assert "enable_causal_cone_reduction=True" in text
         assert text.endswith(")")
         names = [part.split("=")[0]
                  for part in text[len("SimulatorConfig("):-1].split(", ")]

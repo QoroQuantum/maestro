@@ -15,7 +15,7 @@ unit explicitly; normal CMake and scikit-build builds use the same sources.
 - `core.h`, `common.h`, `runtime.h`: internal declarations, shared binding types,
   and simulator-handle lifetime management.
 
-Causal-cone reduction is opt-in via SimulatorConfig.enable_causal_cone_reduction.
+Causal-cone reduction is enabled by default via SimulatorConfig.enable_causal_cone_reduction (set to False to disable).
 It traces the union of observable supports backward through unitary operations,
 then clones/remaps the retained operations and Pauli strings to compact indices.
 All observables run together through the usual configured network. Unsupported

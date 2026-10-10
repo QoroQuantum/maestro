@@ -117,16 +117,16 @@
  * )
  * result = qc.estimate(observables=["ZZ", "XX"], config=mps_config)
  * @endcode
- * Set `config.enable_causal_cone_reduction = True` on `SimulatorConfig` to
+ * Causal-cone reduction is enabled by default on `SimulatorConfig` to
  * remove gates and qubits outside the combined backward dependencies of the
- * requested observables:
+ * requested observables (set `config.enable_causal_cone_reduction = False` to disable):
  * @code{.py}
- * config = maestro.SimulatorConfig(enable_causal_cone_reduction=True)
+ * config = maestro.SimulatorConfig(enable_causal_cone_reduction=False)
  * result = qc.estimate(["ZI", "II"], config=config)
  * @endcode
- * Reduction is disabled by default. It runs before simulator allocation and
- * uses the configured backend and its options. All observables share one
- * reduced circuit, with their order preserved. The source circuit is unchanged.
+ * Reduction runs before simulator allocation and uses the configured backend
+ * and its options. All observables share one reduced circuit, with their
+ * order preserved. The source circuit is unchanged.
  * Measurement, reset, quantum channels, classical control, and composite
  * operations conservatively fall back to full execution. Distributed GPU and MPI
  * backends also retain full execution to preserve qubit layouts and shard counts.

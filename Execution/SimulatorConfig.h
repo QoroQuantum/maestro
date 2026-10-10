@@ -106,7 +106,7 @@ struct SimulatorConfig
     std::optional<double> path_integral_threshold = std::nullopt;
     std::optional<uint64_t> seed = std::nullopt;
     std::optional<int> gpu_device = std::nullopt;
-    bool enable_causal_cone_reduction = false;
+    bool enable_causal_cone_reduction = true;
     // Values use the same names and syntax as ISimulator::Configure.
     std::unordered_map<std::string, std::string> distributed_options;
 

@@ -138,7 +138,7 @@ void bind_config(nb::module_ &m)
         "mpo_kraus_completeness_check"_a = nb::none(), "mpo_restore_trace_after_truncation"_a = defaults.mpo_restore_trace_after_truncation,
         "mpo_hermitize_after_truncation"_a = defaults.mpo_hermitize_after_truncation, "pp_coefficient_threshold"_a = nb::none(),
         "pp_max_pauli_weight"_a = nb::none(), "pp_gates_between_trims"_a = nb::none(), "pp_gates_between_deduplications"_a = nb::none(),
-        "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(), "enable_causal_cone_reduction"_a = false);
+        "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(), "enable_causal_cone_reduction"_a = defaults.enable_causal_cone_reduction);
 
     BindConfigField(config_class, "gate_fusion", &SimulatorConfig::gate_fusion,
                     "Fuse compatible gates on supported backends. None (the "
