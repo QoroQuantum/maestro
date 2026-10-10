@@ -79,6 +79,9 @@ std::mt19937 MakeNoiseRng(const SimulatorConfig &config, std::optional<uint64_t>
 SimulatorConfig NoiseExecutionConfig(const SimulatorConfig &config, std::optional<uint64_t> noise_seed, uint64_t batch)
 {
     auto execution_config = config;
+    // Noisy workflows retain their requested backend, even for realizations
+    // in which stochastic injection happens to insert no error.
+    execution_config.auto_reduce = false;
     if (!execution_config.seed && noise_seed)
         execution_config.seed = *noise_seed;
     if (execution_config.seed)
@@ -168,10 +171,19 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
     std::vector<double> sum_vals(n_obs, 0.0);
 
     auto start = std::chrono::high_resolution_clock::now();
+    bool any_reduced = false;
+    int qubits_before = 0;
+    int qubits_after = 0;
     for (int r = 0; r < noise_realizations; ++r)
     {
         auto noisy = inject(circuit, noise_model, rng, config);
         nb::dict result = estimate_core(noisy, paulis, NoiseExecutionConfig(config, noise_seed, r));
+        if (result.contains("auto_reduced") && nb::cast<bool>(result["auto_reduced"]))
+            any_reduced = true;
+        if (result.contains("qubits_before"))
+            qubits_before = nb::cast<int>(result["qubits_before"]);
+        if (result.contains("qubits_after"))
+            qubits_after = nb::cast<int>(result["qubits_after"]);
         nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
         for (size_t i = 0; i < n_obs; ++i)
             sum_vals[i] += nb::cast<double>(ev[i]);
@@ -196,6 +208,9 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
     if (ideal_result.contains("gpu_device"))
         out["gpu_device"] = ideal_result["gpu_device"];
     out["noise_realizations"] = noise_realizations;
+    out["auto_reduced"] = any_reduced;
+    out["qubits_before"] = qubits_before;
+    out["qubits_after"] = qubits_after;
     if (noise_type)
         out["noise_type"] = noise_type;
     return out;
