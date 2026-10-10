@@ -513,6 +513,7 @@ if(BUILD_PYTHON_BINDINGS)
 
         nanobind_add_module(maestro_py
             python/Bindings.cpp
+            python/bindings/causal_cone.cpp
             python/bindings/execution.cpp
             python/bindings/fidelity.cpp
             python/bindings/evolution.cpp
@@ -584,6 +585,11 @@ if(COMPILE_TESTS)
         target_link_libraries(alias_sampling_tests PRIVATE OpenMP::OpenMP_CXX)
     endif()
     add_test(NAME alias_sampling COMMAND alias_sampling_tests)
+
+    add_executable(causal_cone_tests tests/CausalConeTests.cpp python/bindings/causal_cone.cpp)
+    target_include_directories(causal_cone_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(causal_cone_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX)
+    add_test(NAME causal_cone COMMAND causal_cone_tests)
 
     add_executable(adaptive_sampling_tests tests/AdaptiveSamplingTests.cpp)
     target_compile_definitions(adaptive_sampling_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX)
