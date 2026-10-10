@@ -42,7 +42,7 @@ void TransformPipeline::Run(TransformContext &ctx)
         const auto prev_circuit = ctx.circuit;
         const auto prev_observables = ctx.observables;
         transform->Apply(ctx);
-        if (ctx.circuit != prev_circuit || ctx.observables != prev_observables || ctx.auto_reduced)
+        if (ctx.circuit != prev_circuit || ctx.observables != prev_observables)
         {
             ctx.applied_transforms.emplace_back(transform->Name());
             ctx.qubits_after = RegisterWidth(ctx);

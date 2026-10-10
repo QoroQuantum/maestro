@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Export.h"
 #include "ITransform.h"
 
 namespace MaestroExecution

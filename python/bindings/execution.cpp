@@ -103,8 +103,8 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
     }
     const auto reduction_duration = std::chrono::high_resolution_clock::now() - transform_start;
 
-    int num_qubits = static_cast<int>(circuit->GetMaxQubitIndex()) + 1;
-    for (const auto &p : paulis)
+    int num_qubits = static_cast<int>(ctx.circuit->GetMaxQubitIndex()) + 1;
+    for (const auto &p : ctx.observables)
         num_qubits = std::max(num_qubits, (int)p.length());
 
     ScopedSimulator sim(std::max(1, num_qubits));
@@ -121,7 +121,7 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
     auto start = std::chrono::high_resolution_clock::now();
     {
         nb::gil_scoped_release release;
-        expectations = network->ExecuteOnHostExpectations(circuit, 0, paulis);
+        expectations = network->ExecuteOnHostExpectations(ctx.circuit, 0, ctx.observables);
     }
     auto end = std::chrono::high_resolution_clock::now();
 

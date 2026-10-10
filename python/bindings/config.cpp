@@ -232,9 +232,9 @@ void bind_config(nb::module_ &m)
                     "trimming.");
     BindConfigField(config_class, "enable_causal_cone_reduction", &SimulatorConfig::enable_causal_cone_reduction,
                     "Reduce observable causal cones before allocation; distributed GPU backends retain full execution.");
-    BindConfigField(
-        config_class, "auto_reduce", &SimulatorConfig::auto_reduce,
-        "Detect check-generated invariant subspaces before estimation and use an exact CPU statevector; unsupported circuits retain the configured backend.");
+    BindConfigField(config_class, "auto_reduce", &SimulatorConfig::auto_reduce,
+                    "Detect check-generated invariant subspaces before estimation and simulate the reduced register using the configured backend; unsupported "
+                    "circuits retain full execution.");
     nb::list config_fields;
     for (const char *name : kConfigFields)
         config_fields.append(name);

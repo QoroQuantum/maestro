@@ -3,8 +3,9 @@ import copy
 import itertools
 import random
 
-import maestro
 import pytest
+
+import maestro
 
 
 def circuit_for_checks(n, checks, *, dual=False, seed=7, layers=3):
@@ -142,7 +143,7 @@ def test_colour_code_against_reference_adapter(depth, energy):
         for check in COLOUR_D7_CHECKS:
             # Chain ladders exercise a different decomposition than the star
             # ladders used in the exhaustive small-register tests.
-            pairs = list(zip(check[:-1], check[1:]))
+            pairs = list(itertools.pairwise(check))
             for control, target in pairs:
                 circuit.cx(control, target)
             circuit.rz(check[-1], layer / depth)
@@ -154,3 +155,55 @@ def test_colour_code_against_reference_adapter(depth, energy):
     result = circuit.estimate(observables, cfg(True))
     assert result["auto_reduced"] and result["qubits_after"] == 18
     assert sum(result["expectation_values"]) == pytest.approx(energy, abs=1e-10)
+
+
+def test_case_insensitive_and_short_observables():
+    circuit = circuit_for_checks(4, [(0, 1), (1, 2, 3)])
+    ref = circuit.estimate(["ZZII", "IZZI"], cfg(False))["expectation_values"]
+    reduced = circuit.estimate(["zzii", "izzi"], cfg(True))
+    assert reduced["auto_reduced"]
+    assert reduced["expectation_values"] == pytest.approx(ref, abs=2e-12)
+
+    # Shorter observable implicitly padded with identity
+    short_reduced = circuit.estimate("zz", cfg(True))
+    short_full = circuit.estimate("zz", cfg(False))
+    assert short_reduced["auto_reduced"]
+    assert short_reduced["expectation_values"] == pytest.approx(short_full["expectation_values"], abs=2e-12)
+
+
+def test_out_of_span_observables_evaluate_to_zero():
+    # Only checks (0, 1) and (1, 2, 3) are invariant; single-qubit Z observables
+    # take the state into an orthogonal coset, so their expectation values must be 0.
+    circuit = circuit_for_checks(4, [(0, 1), (1, 2, 3)])
+    out_of_span = ["ZIII", "IZII", "IIZI", "IIIZ", "ZIZI"]
+    res = circuit.estimate(out_of_span, cfg(True))
+    assert res["auto_reduced"]
+    assert res["expectation_values"] == [0.0] * len(out_of_span)
+
+
+def test_repeated_estimations_preserve_circuit_integrity():
+    circuit = circuit_for_checks(4, [(0, 1), (1, 2, 3)])
+
+    res1 = circuit.estimate(["ZZII"], cfg(True))
+    assert res1["auto_reduced"]
+
+    res2 = circuit.estimate(["ZZII"], cfg(False))
+    assert not res2["auto_reduced"]
+
+    res3 = circuit.estimate(["ZZII"], cfg(True))
+    assert res3["auto_reduced"]
+
+    assert res1["expectation_values"] == pytest.approx(res2["expectation_values"], abs=2e-12)
+    assert res1["expectation_values"] == pytest.approx(res3["expectation_values"], abs=2e-12)
+    assert circuit.num_qubits == 4
+
+
+def test_noisy_execution_bypasses_auto_reduction():
+    circuit = circuit_for_checks(4, [(0, 1), (1, 2, 3)])
+    nm = maestro.NoiseModel()
+    nm.set_all_depolarizing(1, 0.01)
+
+    res = circuit.noisy_estimate(["ZZII"], nm, cfg(True))
+    assert "expectation_values" in res
+    assert "ideal_expectation_values" in res
+

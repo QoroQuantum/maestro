@@ -299,7 +299,7 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
             // (-1)^(x.z) as well as the diagonal (-1)^(B^T x).b.
             const int effective_y = Popcount(effective_x & effective_z);
             const int phase = physical_y - effective_y + 2 * Popcount(x & z) + (!plus ? 2 * physical_y : 0);
-            factor = (phase % 4 == 0) ? 1 : -1;
+            factor = (((phase % 4) + 4) % 4 == 0) ? 1.0 : -1.0;
             for (size_t j = 0; j < rank; ++j)
             {
                 const bool a = effective_x & (Mask{1} << j);

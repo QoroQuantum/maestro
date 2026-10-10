@@ -50,6 +50,7 @@ int main()
         TransformPipeline::Run(ctx);
         const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         Check(ctx.auto_reduced && ctx.qubits_before == 37 && ctx.qubits_after == 18, "37-to-18 reduction failed");
+        Check(ctx.applied_transforms == std::vector<std::string>{"ParityReduction"}, "applied_transforms incorrect");
         Check(source != circuit && source->GetMaxQubitIndex() == 36, "Source was mutated");
         Check(ctx.expectation_factors == std::vector<double>(18, 1.0), "Check factors incorrect");
         std::cout << "37-to-18 preflight (including circuit emission): " << elapsed << " ms\n";
@@ -92,6 +93,25 @@ int main()
             TransformPipeline::Run(ctx);
             Check(!ctx.auto_reduced && circuit == oversized, "Resource cap failed");
         }
+        config.auto_reduce = true;
+        config.enable_causal_cone_reduction = true;
+        circuit = source;
+        observables = original_observables;
+        TransformPipeline::Run(ctx);
+        Check(ctx.auto_reduced, "Composite reduction failed");
+        Check(std::find(ctx.applied_transforms.begin(), ctx.applied_transforms.end(), "ParityReduction") != ctx.applied_transforms.end(),
+              "ParityReduction missing from applied_transforms in composite run");
+
+        // Out-of-span observable must be projected with factor 0.
+        config.enable_causal_cone_reduction = false;
+        circuit = source;
+        std::string out_of_span_obs(37, 'I');
+        out_of_span_obs[0] = 'Z';
+        observables = {out_of_span_obs};
+        TransformPipeline::Run(ctx);
+        Check(ctx.auto_reduced, "Out-of-span observable reduction failed");
+        Check(ctx.expectation_factors.size() == 1 && ctx.expectation_factors[0] == 0.0, "Out-of-span factor must be 0.0");
+
         config.auto_reduce = false;
         circuit = source;
         observables = original_observables;
