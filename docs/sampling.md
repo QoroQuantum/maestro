@@ -106,9 +106,59 @@ Terminal batches do not save an unused trajectory-restoration snapshot.
 Aer and legacy QCSim batches can therefore produce different seeded histograms
 from the former multi-simulator dispatch; their probability distributions are
 unchanged. QCSim's reproducible terminal batches already used one simulator.
-QCSim trajectory execution uses fixed logical blocks of 256 shots, seeded by
-block identity, independently of the number of outer workers. State copies are
-created when jobs start, so queued jobs do not each retain a quantum-state copy.
+QCSim trajectory execution defaults to `trajectory_policy=shot_v1`, which
+distributes individual shots across workers, including short dynamic requests.
+It assigns each shot separate quantum, readout and
+classical-random streams derived from the request seed and absolute shot index.
+Changing job boundaries, worker counts or the trajectory memory budget does not
+change its seeded counts. To replay the older seeded sequence, explicitly select
+`trajectory_policy=block_v1`: fixed logical blocks of 256 shots, seeded by block
+identity independently of the number of outer workers. **The new default changes
+seeded counts for dynamic circuits.** Both policies sample the same distribution.
+These controls apply to reproducible QCSim
+statevector, density-matrix and path-integral trajectories, not terminal batches
+or `sampling_policy=legacy`.
+
+For the JSON request API, put these options in `simulator.options`; for the
+legacy `SimpleExecute` API, put them in its configuration object:
+
+```json
+{"trajectory_policy": "shot_v1", "max_simulators": 16, "trajectory_max_memory_mb": 1024}
+```
+
+Maestro's Python API exposes the same controls on `SimulatorConfig`:
+
+```python
+config = maestro.SimulatorConfig(
+    seed=12345,
+    trajectory_policy="shot_v1",
+    max_simulators=16,
+    trajectory_max_memory_mb=1024,
+)
+result = maestro.simple_execute(circuit, config=config, shots=100)
+```
+
+These are also writable properties and survive configuration pickling. Each
+defaults to `None`, which keeps the network default. Invalid policy names and
+out-of-range limits are rejected on construction or assignment. `max_simulators`
+is limited to 1–1024. The trajectory policy and memory budget affect only the
+QCSim execution paths described above.
+
+`max_simulators` and `trajectory_max_memory_mb` must be positive JSON integers.
+The latter applies to dense statevector/density-matrix trajectory concurrency
+and defaults to 1024 MiB. It estimates live states and checkpoints, always
+allowing at least one worker. It is a **soft concurrency budget**, not a cap on
+process RSS: circuit storage, libraries, gate scratch, results and other
+allocations are outside it, and a single state may exceed it. It is separate
+from `sampling_max_memory_mb`. The legacy API resets omitted trajectory policy
+and memory options to their defaults for each request.
+
+State copies are created when jobs start, so queued jobs do not each retain a
+quantum-state copy. Dense execution clones share an immutable saved checkpoint;
+their live states and any replacement checkpoints remain independent. Outer
+workers count against the caller's OpenMP budget. States with at least `2^20`
+complex elements use at most one outer worker per four budgeted threads to
+reduce memory-bandwidth contention, subject to the memory and job-count limits.
 Statevector and density-matrix trajectory jobs divide the caller's OpenMP thread
 limit among active outer workers, with a minimum of one thread per job. A single
 block can therefore use internal threads for gates and independent collapse
@@ -116,7 +166,12 @@ updates. Each job restores its thread's previous OpenMP limit when it finishes;
 calls inside an existing OpenMP team and path-integral jobs remain serial
 internally. Measurement scans and probability sums retain serial arithmetic,
 preserving the existing block seeds and outcomes across outer pool and OpenMP
-team sizes. Density diagonal gates retain serial arithmetic during reproducible
+team sizes. Consecutive statevector measurements visit only the subspace left
+by earlier collapses, retaining the native ordering of surviving summands,
+normalization and RNG draws (including duplicate measurements). Gates, reset,
+restore and state replacement invalidate that subspace information. A complete
+measurement sequence therefore avoids repeating full-state scans for every bit.
+Density diagonal gates retain serial arithmetic during reproducible
 trajectories because their native OpenMP loops can round complex products
 differently. The dispatcher applies this arithmetic mode to prefix preparation
 and execution clones, and clears it for terminal batches; other density gates
@@ -376,3 +431,125 @@ The investigation artifacts are under `investigations/sampling_regression`:
 for the 24-qubit statevector and 12-qubit density trajectories. Library paths
 are selected explicitly for validation;
 the environment otherwise prefers an installed library in `/usr/local`.
+
+### Follow-up measurement and scheduling work (2026-10-10)
+
+The follow-up starts from `9e536c1` and uses the circuits from
+`investigations/aer_vs_qcsim`, with a fixed QCSim backend, automatic fusion,
+16 permitted OpenMP threads and one OpenBLAS thread. Compiler, hardware and
+preload settings match the saved baseline. Each fresh process performs an
+untimed warm-up; measurements use explicitly selected saved libraries and check
+shot conservation and repeated seeded counts. Compatibility-policy comparisons also
+require identical counts between baseline and implementation.
+
+The final small cases use two alternating pairs with two timed calls per
+process. The large cases use one three-way comparison with two timed calls per
+process. Each 4,096-shot variant has one full warm-up and one timed call, so its
+reported speedup has less timing precision. Warm-up durations are retained in
+the progress JSONL files. All timings use request seed 12345; `30c02ad` was not
+rebuilt for this follow-up.
+
+The retained changes are consecutive statevector measurement subspaces,
+independent per-shot streams (now the default), shared dense checkpoints and
+bounded dense-state concurrency. Two attempts to cap small-state internal teams were rejected:
+both helped some workloads but slowed 16-qubit random trajectories. Simply
+enabling the native parallel density diagonal kernel was also rejected because
+it changed the default policy's exact arithmetic. A reproducible fixed-tile
+density diagonal prototype passed correctness checks and accelerated isolated
+gates, but improved end-to-end 12-qubit QAOA by only 1% (34.15 to 33.79 seconds).
+Its 10-qubit gains were 3% for random trajectories and 7% for QAOA. It was left
+out because the workload-level benefit did not justify a second gate kernel.
+
+Artifacts in `investigations/runtime_followup` include `benchmark.py`, saved
+libraries for each stage, paired timings and histograms in the stage JSON files,
+`summary.json`, `artifact_hashes.json`, and build/test logs. `step3_v1.json`
+records the rejected whole-job cap. `step3_shots_ignored_option.json` is an
+invalid early run: the legacy API had ignored the new option. It is excluded
+from the summary. The API now explicitly forwards trajectory controls, and the
+harness verifies the returned policy before accepting per-shot measurements.
+
+Validation includes exact amplitude comparisons against the native serial
+statevector path; serial/parallel density comparisons and native numerical
+agreement; clone snapshot replacement and lifetime tests; worker, prefix reuse,
+host entry point, classical randomness, readout, reset, single-shot and tail-job
+replay tests; and public API validation including memory-dependent scheduling.
+Eight OpenMP CTest suites and three focused suites without OpenMP/Aer pass.
+`distribution_check.py` checks feed-forward/reset distributions over 20 seeds
+for each dense backend (163,840 shots total), including forbidden outcomes and
+chi-square checks against analytic probabilities.
+
+Selected incremental measurements (seconds; each row compares the stated
+experiment with its own control, not always the original baseline):
+
+| Experiment | Workload, 100 shots | Control | Experiment | Decision |
+| --- | --- | ---: | ---: | --- |
+| Per-kernel thread caps | Statevector random, 16 qubits | 0.229 | 0.368 | Rejected |
+| Consecutive measurement subspaces | Statevector random, 16 qubits | 0.208 | 0.115 | Retained; identical counts |
+| Whole-job small-state thread cap | Statevector random, 16 qubits | 0.108 | 0.209 | Rejected |
+| Per-shot streams versus updated block policy | Statevector random, 16 qubits | 0.116 | 0.063 | Retained; now the default, new seeded sequence |
+| Checkpoint sharing and dense-worker limits | Per-shot statevector random, 20 qubits | 1.978 | 1.363 | Retained; identical counts |
+| Checkpoint sharing and dense-worker limits | Per-shot density QAOA, 10 qubits | 1.662 | 0.683 | Retained; identical counts |
+| Fixed-tile density diagonals | Per-shot density QAOA, 12 qubits | 34.150 | 33.789 | Rejected; marginal end-to-end gain |
+
+Final comparisons with the starting `9e536c1` build (seconds). These measurements
+predate promoting `shot_v1` to the default; the saved binaries retain the earlier
+default, so columns identify the explicit policy:
+
+| Workload | Shots | Baseline | `block_v1` (replay) | `shot_v1` (now default) |
+| --- | ---: | ---: | ---: | ---: |
+| Statevector GHZ, 16 qubits | 100 | 0.146 | 0.049 | 0.009 |
+| Statevector random, 16 qubits | 100 | 0.225 | 0.119 | 0.061 |
+| Statevector random, 20 qubits | 100 | 3.228 | 1.650 | 1.339 |
+| Statevector QAOA, 20 qubits | 100 | 2.659 | 1.042 | 0.838 |
+| Statevector random, 24 qubits | 100 | 88.85 | 44.63 | 38.30 |
+| Density QAOA, 10 qubits | 100 | 0.911 | 0.921 | 0.703 |
+| Density QAOA, 12 qubits | 100 | 40.25 | 40.71 | 33.29 |
+| Statevector random, 20 qubits | 4096 | 118.96 | 53.66 | 53.36 |
+| Density random, 10 qubits | 4096 | 97.13 | 55.49 | 55.86 |
+| Statevector terminal random, 20 qubits | 10000 | 0.043 | 0.045 | 0.043 |
+| Density terminal random, 12 qubits | 10000 | 1.022 | 1.031 | 1.027 |
+
+Every `block_v1` histogram matched the original build exactly. Terminal
+histograms also matched under `shot_v1`; terminal timing ranges overlapped, so
+no terminal speedup is claimed. Density QAOA with 100 shots was approximately
+unchanged with `block_v1` (about 1% slower), while `shot_v1` improved it.
+
+At 4,096 shots, peak process RSS fell from 592.5 to 144.7 MiB for statevectors
+and from 592.2 to 144.3 MiB for density matrices with `block_v1` (about 76% lower).
+For the 100-shot large cases, `block_v1` RSS fell from 1,072 to 816 MiB
+(24-qubit statevector) and from 1,071 to 815 MiB (12-qubit density matrix).
+The `shot_v1` large cases used roughly the original memory footprint to run two
+live trajectories. The memory budget is a concurrency estimate, as described above.
+
+The `block_v1` policy still leaves the 16-qubit random case slower than the
+historical 0.071-second `30c02ad` result quoted in the earlier report; the `shot_v1`
+result is 0.061 seconds here. Preserving the old block RNG sequence prevents
+distributing a short block across independently seeded workers. These historical
+numbers are context, not a fresh cross-commit comparison.
+
+Reproduce the final suite with `python3 -B investigations/runtime_followup/final_suite.py`
+once the saved libraries and existing circuit generator are present. Run it without
+competing builds or benchmarks. Raw timings, counts, configurations and library
+hashes are retained in `final_small.json`, `final_large.json`, and `final_scaling.json`.
+
+The subsequent Python/default-policy follow-up exposes `trajectory_policy`,
+`trajectory_max_memory_mb` and `max_simulators` through `SimulatorConfig`, with
+constructor/setter validation and pickle support. `shot_v1` is now the network
+and legacy-request default and is advertised by capability discovery. Explicit
+`block_v1` remains available for replay. Validation passed 49 Python tests (19
+hardware/optional-dependency skips), the native request suite, and the network
+job suite, including omitted-versus-explicit policy checks.
+
+With 16 OpenMP threads, the Python 16-qubit random/100-shot check measured
+0.061 seconds for the new default versus 0.114 seconds for explicit `block_v1`
+(one warm-up, three timed calls per setting). The default matched explicit
+`shot_v1` counts exactly. Fresh-process comparisons against the saved final
+library's explicit `shot_v1` also matched every histogram for statevector
+random circuits at 16/20 qubits and density QAOA at 10 qubits. Repeated timings
+were mixed, including roughly 5% slower at 20 qubits; this follow-up makes the
+previously measured per-shot policy the default, rather than introducing a new
+kernel speedup. Results are in `python_interface_benchmark.json` and
+`default_policy_replay_repeated.json`, with the corresponding test logs in
+`investigations/runtime_followup`. Local Python tests explicitly load
+`build/libmaestro.so`; an older `/usr/local/libmaestro.so` otherwise takes
+precedence in this environment.

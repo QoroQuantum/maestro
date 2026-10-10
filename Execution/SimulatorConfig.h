@@ -118,6 +118,10 @@ struct SimulatorConfig
     // Unset: each backend's default, which turns fusion off for registers too
     // small to benefit. true/false force it.
     std::optional<bool> gate_fusion;
+    // Unset retains the network defaults and any native request options.
+    std::optional<std::string> trajectory_policy;
+    std::optional<size_t> trajectory_max_memory_mb;
+    std::optional<size_t> max_simulators;
     std::unordered_map<std::string, std::string> native_options;
 
     // Throws std::invalid_argument for an unsupported combination or value.
@@ -134,6 +138,11 @@ struct SimulatorConfig
             throw std::invalid_argument("QuestSim only supports Statevector simulation type.");
         if (gpu_device && *gpu_device < 0)
             throw std::invalid_argument("gpu_device must be nonnegative");
+        RequireOneOf(trajectory_policy, {"block_v1", "shot_v1"}, "trajectory_policy");
+        if (trajectory_max_memory_mb && (!*trajectory_max_memory_mb || *trajectory_max_memory_mb > (std::numeric_limits<size_t>::max() >> 20)))
+            throw std::invalid_argument("trajectory_max_memory_mb must be a positive representable MiB count");
+        if (max_simulators && (!*max_simulators || *max_simulators > 1024))
+            throw std::invalid_argument("max_simulators must be between 1 and 1024");
         RequireOneOf(truncation_mode, TruncationModes(), "truncation_mode");
         RequireOneOf(precision, Precisions(), "precision");
         RequireOneOf(mps_sampling, MpsSamplingModes(), "mps_sampling");
@@ -217,6 +226,12 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     network->GetController()->SetOptimizeCircuit(config.optimize_circuit);
     for (const auto &[key, value] : config.native_options)
         network->Configure(key.c_str(), value.c_str());
+    if (config.trajectory_policy)
+        network->Configure("trajectory_policy", config.trajectory_policy->c_str());
+    if (config.trajectory_max_memory_mb)
+        network->Configure("trajectory_max_memory_mb", std::to_string(*config.trajectory_max_memory_mb).c_str());
+    if (config.max_simulators)
+        network->SetMaxSimulators(*config.max_simulators);
 
     for (const auto &[key, value] : config.distributed_options)
         network->Configure(key.c_str(), value.c_str());

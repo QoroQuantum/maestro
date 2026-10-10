@@ -2,8 +2,8 @@
 
 #include <array>
 #include <cmath>
-#include <future>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <set>
 #include <stdexcept>
@@ -270,14 +270,16 @@ void ReproducibleTrajectoryArithmetic()
                         {
                             sim->ApplyRy(q, .137 + .039 * q);
                             sim->ApplyRz(q, .09 * q);
-                            if (q) sim->ApplyCX(q - 1, q);
+                            if (q)
+                                sim->ApplyCX(q - 1, q);
                         }
                         sim->SaveState();
                         return sim;
                     };
                     auto serial = create(false), parallel = create(true);
                     Types::qubits_vector allQubits(qubits);
-                    for (size_t q = 0; q < qubits; ++q) allQubits[q] = q;
+                    for (size_t q = 0; q < qubits; ++q)
+                        allQubits[q] = q;
                     const char *phase = "initial preparation";
                     auto sameState = [&] {
                         if (method == SimulationType::kStatevector)
@@ -287,7 +289,11 @@ void ReproducibleTrajectoryArithmetic()
                             {
                                 std::cerr << "State mismatch: phase=" << phase << " fused=" << fused << " seed=" << seed << " team=" << team << '\n';
                                 for (size_t i = 0; i < a.size(); ++i)
-                                    if (a[i] != b[i]) { std::cerr << "First mismatch at " << i << ": " << std::hexfloat << a[i] << " vs " << b[i] << std::defaultfloat << '\n'; break; }
+                                    if (a[i] != b[i])
+                                    {
+                                        std::cerr << "First mismatch at " << i << ": " << std::hexfloat << a[i] << " vs " << b[i] << std::defaultfloat << '\n';
+                                        break;
+                                    }
                             }
                             Check(a == b, "Parallel trajectory changed exact amplitudes");
                         }
@@ -361,8 +367,7 @@ void ReproducibleTrajectoryArithmetic()
                         if (method == SimulationType::kDensityMatrix)
                         {
                             Eigen::MatrixXcd unitary(2, 2);
-                            unitary << std::cos(.37), std::complex<double>(0., -std::sin(.37)),
-                                       std::complex<double>(0., -std::sin(.37)), std::cos(.37);
+                            unitary << std::cos(.37), std::complex<double>(0., -std::sin(.37)), std::complex<double>(0., -std::sin(.37)), std::cos(.37);
                             for (auto *sim : {serial.get(), parallel.get()})
                             {
                                 sim->ApplyAmplitudeDamping(0, .23);
@@ -372,7 +377,8 @@ void ReproducibleTrajectoryArithmetic()
                             phase = "density channels";
                             sameState();
                         }
-                        Check(serial->Measure({1, qubits - 1, 0}) == parallel->Measure({1, qubits - 1, 0}), "Reset or packed measurement changed RNG continuation");
+                        Check(serial->Measure({1, qubits - 1, 0}) == parallel->Measure({1, qubits - 1, 0}),
+                              "Reset or packed measurement changed RNG continuation");
                         phase = "packed collapse";
                         sameState();
                     }
@@ -396,7 +402,8 @@ void TerminalDensityArithmetic()
         input[i] = {std::sin(.17 * i), std::cos(.03 * i)};
         norm += std::norm(input[i]);
     }
-    for (auto &value : input) value /= std::sqrt(norm);
+    for (auto &value : input)
+        value /= std::sqrt(norm);
     auto create = [&](const char *policy) {
         auto sim = SimulatorsFactory::CreateSimulatorUnique(SimulatorType::kQCSim, SimulationType::kDensityMatrix);
         sim->Configure("gate_fusion", "false");
@@ -416,6 +423,104 @@ void TerminalDensityArithmetic()
     omp_set_num_threads(previousThreads);
 #endif
 }
+
+void ConsecutiveMeasurements()
+{
+#ifdef _OPENMP
+    const int previousThreads = omp_get_max_threads();
+#endif
+    // Compare to the unchanged native serial algorithm, not to another call
+    // through the optimized adapter. Check intermediate amplitudes as well as
+    // counts, including sparse support, duplicates, restore and mutations.
+    for (size_t width : {size_t{5}, size_t{16}})
+        for (int team : {1, 4})
+            for (bool sparse : {false, true})
+            {
+#ifdef _OPENMP
+                omp_set_num_threads(team);
+#endif
+                auto make = [&](bool reference) {
+                    auto sim = SimulatorsFactory::CreateSimulatorUnique(SimulatorType::kQCSim, SimulationType::kStatevector);
+                    sim->Configure("gate_fusion", "false");
+                    sim->Configure("sampling_policy", reference ? "legacy" : "reproducible_v1");
+                    sim->SetMultithreading(!reference);
+                    sim->SetSeed(0x10000000001ULL);
+                    sim->AllocateQubits(width);
+                    sim->Initialize();
+                    for (size_t q = 0; q < width; ++q)
+                    {
+                        if (!sparse || q % 3 == 0)
+                            sim->ApplyRy(q, .37 + .13 * q);
+                        sim->ApplyRz(q, .23 + .017 * q);
+                    }
+                    sim->SaveState();
+                    return sim;
+                };
+                auto reference = make(true), actual = make(false);
+                for (int pass = 0; pass < 3; ++pass)
+                {
+                    for (auto *sim : {reference.get(), actual.get()})
+                        sim->RestoreState();
+                    for (size_t q = 0; q < width; ++q)
+                    {
+                        const size_t bit = pass == 0 ? q : (q * 3 + 1) % width;
+                        Check(reference->Measure({bit}) == actual->Measure({bit}), "Consecutive measurement changed seeded outcome");
+                        Check(reference->GetStateVector() == actual->GetStateVector(), "Consecutive measurement changed exact amplitudes");
+                    }
+                    for (auto *sim : {reference.get(), actual.get()})
+                    {
+                        sim->ApplyReset({0, width - 1});
+                        sim->ApplyH(width - 1);
+                        sim->ApplyCX(width - 1, 0);
+                    }
+                    Check(reference->MeasureMany({0, width - 1, 0}) == actual->MeasureMany({0, width - 1, 0}),
+                          "Gate/reset invalidation changed measurement continuation");
+                    Check(reference->GetStateVector() == actual->GetStateVector(), "Gate/reset invalidation changed exact amplitudes");
+                }
+            }
+#ifdef _OPENMP
+    omp_set_num_threads(previousThreads);
+#endif
+    std::cout << "PASS consecutive measurements against native serial reference\n";
+}
+
+void IndependentCloneSnapshots()
+{
+    for (auto method : {SimulationType::kStatevector, SimulationType::kDensityMatrix})
+        for (bool fused : {false, true})
+        {
+            auto source = fused ? SimulatorsFactory::CreateSimulatorUnique(SimulatorType::kQCSim, method)
+                                : SimulatorsFactory::CreateImmediateSimulatorUnique(SimulatorType::kQCSim, method);
+            source->AllocateQubits(4);
+            source->Initialize();
+            source->ApplyX(0);
+            source->SaveState();
+            auto first = source->CloneForExecution(1), second = source->CloneForExecution(2);
+            source->ApplyX(1);
+            source->SaveState();
+            first->ApplyX(2);
+            first->SaveState();
+            second->ApplyX(3);
+            second->RestoreState();
+            Check(second->Probability(1) == 1., "Saving a sibling changed a shared checkpoint");
+            first->ApplyX(3);
+            first->RestoreState();
+            Check(first->Probability(5) == 1., "Clone did not replace its own checkpoint");
+            source->RestoreState();
+            Check(source->Probability(3) == 1., "Clone checkpoint replaced its parent's checkpoint");
+            source.reset();
+            first.reset();
+            second->Reset();
+            second->RestoreState();
+            Check(second->Probability(1) == 1., "Checkpoint lifetime depended on the source simulator");
+            second->Clear();
+            second->AllocateQubits(4);
+            second->Initialize();
+            second->RestoreState();
+            Check(second->Probability(0) == 1., "Reinitialization retained a stale shared checkpoint");
+        }
+    std::cout << "PASS independent clone snapshot replacement and lifetime\n";
+}
 } // namespace
 
 int main(int argc, char **argv)
@@ -427,6 +532,8 @@ int main(int argc, char **argv)
         ConcurrentGateApplications(publicOnly);
         ReproducibleTrajectoryArithmetic();
         TerminalDensityArithmetic();
+        ConsecutiveMeasurements();
+        IndependentCloneSnapshots();
         if (!publicOnly)
             GpuSelection();
     }

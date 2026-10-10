@@ -13,7 +13,25 @@ class SamplingDensityMatrix : public QC::DensityMatrix<>
 {
   public:
     using QC::DensityMatrix<>::DensityMatrix;
-    double SamplingUniform() { return Utils::RandomStream::Uniform(rng); }
+
+    double SamplingUniform()
+    {
+        return Utils::RandomStream::Uniform(rng);
+    }
+
+    void SaveState()
+    {
+        snapshot = std::make_shared<const Eigen::MatrixXcd>(rho);
+    }
+
+    void RestoreState()
+    {
+        if (snapshot)
+            rho = *snapshot;
+    }
+
+  private:
+    std::shared_ptr<const Eigen::MatrixXcd> snapshot;
 };
 
 // density_matrix backend. Owns exactly one native QCSim implementation.
@@ -731,7 +749,8 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
         }
         if (!std::isfinite(mass) || mass <= 1E-20)
             throw std::domain_error("Cannot sample a density matrix with no probability mass");
-        const Utils::Sampling::Prepared plan(outcomes, shots, [&](size_t row) { return probabilities[row]; }, options);
+        const Utils::Sampling::Prepared plan(
+            outcomes, shots, [&](size_t row) { return probabilities[row]; }, options);
         auto result = Utils::Sampling::Count<Many>(
             plan, shots, qubits.size(), [&](size_t row, size_t bit) { return ((row >> (marginal ? positions[bit] : qubits[bit])) & 1) != 0; },
             [&] { return densityMatrix->SamplingUniform(); });
@@ -749,8 +768,13 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
         {
             SamplingDensityMatrix &state;
             bool enabled;
-            ~RestoreThreading() { state.SetMultithreading(enabled); }
+
+            ~RestoreThreading()
+            {
+                state.SetMultithreading(enabled);
+            }
         } restore{*densityMatrix, densityMatrix->GetMultithreading()};
+
         bool hasTeam = false;
 #ifdef _OPENMP
         hasTeam = !omp_in_parallel() && omp_get_max_threads() > 1;

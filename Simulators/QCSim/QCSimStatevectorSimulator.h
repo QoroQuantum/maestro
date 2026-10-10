@@ -16,8 +16,16 @@ class SamplingQubitRegister : public QC::QubitRegister<>
 
     size_t MeasureQubitReproducible(size_t qubit)
     {
+        if (qubit >= NrQubits)
+            throw std::out_of_range("Measured qubit is outside the register");
+        if (measuredMask)
+            return MeasureRemainingQubit(qubit);
         if (!UseMultithreading())
-            return QC::QubitRegister<>::MeasureQubit(qubit);
+        {
+            const size_t outcome = QC::QubitRegister<>::MeasureQubit(qubit);
+            RememberMeasurement(qubit, outcome);
+            return outcome;
+        }
 
         // Match native serial MeasureRange exactly: one native RNG draw,
         // the same cumulative scan, and the same outcome-probability sum.
@@ -37,7 +45,27 @@ class SamplingQubitRegister : public QC::QubitRegister<>
 #endif
         for (long long i = 0; i < static_cast<long long>(NrBasisStates); ++i)
             registerStorage(i) = (static_cast<size_t>(i) & mask) == selected ? registerStorage(i) * norm : std::complex<double>(0., 0.);
+        if (std::isfinite(norm))
+            RememberMeasurement(qubit, outcome);
         return outcome;
+    }
+
+    void InvalidateMeasurements()
+    {
+        measuredMask = measuredValues = 0;
+    }
+
+    void SaveState()
+    {
+        // Execution clones share the immutable checkpoint, not live amplitudes.
+        snapshot = std::make_shared<const Eigen::VectorXcd>(registerStorage);
+    }
+
+    void RestoreState()
+    {
+        if (snapshot)
+            registerStorage = *snapshot;
+        InvalidateMeasurements();
     }
 
     void DiscardMeasurementDraw()
@@ -53,9 +81,93 @@ class SamplingQubitRegister : public QC::QubitRegister<>
         NrBasisStates = static_cast<size_t>(amplitudes.size());
         registerStorage.swap(amplitudes);
         savedStateStorage.resize(0);
+        snapshot.reset();
         computeGates.clear();
         recordGates = false;
+        InvalidateMeasurements();
     }
+
+  private:
+    void RememberMeasurement(size_t qubit, size_t outcome)
+    {
+        measuredMask |= size_t{1} << qubit;
+        measuredValues = (measuredValues & ~(size_t{1} << qubit)) | (outcome << qubit);
+    }
+
+    // Insert fixed measured bits into an index in the remaining subspace.
+    // Called once per tile, not once per amplitude.
+    size_t Expand(size_t packed) const
+    {
+        size_t result = measuredValues;
+        for (size_t free = (NrBasisStates - 1) & ~measuredMask; packed; packed >>= 1)
+        {
+            const size_t bit = free & (~free + 1);
+            if (packed & 1)
+                result |= bit;
+            free &= free - 1;
+        }
+        return result;
+    }
+
+    size_t MeasureRemainingQubit(size_t qubit)
+    {
+        const double draw = 1. - uniformZeroOne(rng);
+        const size_t mask = size_t{1} << qubit;
+        double cumulative = 0.;
+        size_t sampled = 0;
+        // This is the native left-to-right sum with known zero terms skipped.
+        // Keep normalization and RNG consumption for duplicate measurements too.
+        for (size_t i = measuredValues; i < NrBasisStates; i = (((i | measuredMask) + 1) & ~measuredMask) | measuredValues)
+        {
+            cumulative += std::norm(registerStorage(i));
+            if (draw <= cumulative)
+            {
+                sampled = i;
+                break;
+            }
+        }
+        const size_t outcome = (sampled >> qubit) & 1;
+        const size_t selected = outcome << qubit;
+        const size_t fixed = measuredMask | mask;
+        const size_t values = (measuredValues & ~mask) | selected;
+        double probability = 0.;
+        if (!(measuredMask & mask) || (measuredValues & mask) == selected)
+            for (size_t i = values; i < NrBasisStates; i = (((i | fixed) + 1) & ~fixed) | values)
+                probability += std::norm(registerStorage(i));
+        const double norm = 1. / std::sqrt(probability);
+        // Preserve the native full update for exceptional, unnormalizable input.
+        if (!std::isfinite(norm))
+        {
+            for (size_t i = 0; i < NrBasisStates; ++i)
+                registerStorage(i) = (i & mask) == selected ? registerStorage(i) * norm : std::complex<double>(0., 0.);
+            InvalidateMeasurements();
+            return outcome;
+        }
+        size_t active = NrBasisStates;
+        for (size_t bits = measuredMask; bits; bits &= bits - 1)
+            active >>= 1;
+        constexpr size_t tileSize = 1024;
+        const size_t tiles = (active + tileSize - 1) / tileSize;
+        const int threads = Utils::Sampling::Threads(GetMultithreading(), active / 4);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (threads > 1) num_threads(threads)
+#endif
+        for (long long tile = 0; tile < static_cast<long long>(tiles); ++tile)
+        {
+            size_t index = Expand(static_cast<size_t>(tile) * tileSize);
+            const size_t end = std::min(active, (static_cast<size_t>(tile) + 1) * tileSize);
+            for (size_t k = static_cast<size_t>(tile) * tileSize; k < end; ++k)
+            {
+                registerStorage(index) = (index & mask) == selected ? registerStorage(index) * norm : std::complex<double>(0., 0.);
+                index = (((index | measuredMask) + 1) & ~measuredMask) | measuredValues;
+            }
+        }
+        RememberMeasurement(qubit, outcome);
+        return outcome;
+    }
+
+    size_t measuredMask = 0, measuredValues = 0;
+    std::shared_ptr<const Eigen::VectorXcd> snapshot;
 };
 
 // statevector backend. Owns exactly one native QCSim implementation.
@@ -76,8 +188,13 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
     struct SamplingProbability
     {
         const Eigen::VectorXcd *storage;
-        double operator()(size_t row) const { return std::norm((*storage)[row]); }
+
+        double operator()(size_t row) const
+        {
+            return std::norm((*storage)[row]);
+        }
     };
+
     using SamplingPlan = Utils::Sampling::Prepared<SamplingProbability>;
 
     SamplingPlan PrepareSampling(size_t shots) const
@@ -159,7 +276,10 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
     void Reset() override
     {
         if (state)
+        {
+            state->InvalidateMeasurements();
             state->Reset();
+        }
         samplingSupportQubits = 0;
         upcomingGateIndex = 0;
     }
@@ -253,7 +373,10 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         {
             for (size_t qubit : qubits)
                 if (MeasureQubit(qubit))
+                {
+                    state->InvalidateMeasurements();
                     state->ApplyGate(xgate, static_cast<unsigned int>(qubit));
+                }
         }
         Notify();
         NotifyObservers(qubits);
@@ -457,6 +580,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
     void RestoreState() override
     {
+        state->InvalidateMeasurements();
         state->RestoreState();
         samplingSupportQubits = std::max(samplingSupportQubits, savedSamplingSupportQubits);
     }
@@ -729,15 +853,17 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
   private:
     size_t MeasureQubit(size_t qubit)
     {
-        return LegacySampling() ? state->MeasureQubit(qubit) : state->MeasureQubitReproducible(qubit);
+        if (!LegacySampling())
+            return state->MeasureQubitReproducible(qubit);
+        state->InvalidateMeasurements();
+        return state->MeasureQubit(qubit);
     }
 
     // Internal state replacement, deliberately separate from public
     // initialization: preserve native/batch/readout RNGs and fork ordinals.
     void ReplaceState(size_t qubits, Eigen::VectorXcd &amplitudes)
     {
-        if (!state || !qubits || qubits >= std::numeric_limits<size_t>::digits ||
-            static_cast<size_t>(amplitudes.size()) != (size_t{1} << qubits))
+        if (!state || !qubits || qubits >= std::numeric_limits<size_t>::digits || static_cast<size_t>(amplitudes.size()) != (size_t{1} << qubits))
             throw std::invalid_argument("Invalid composite replacement state");
         state->ReplaceAmplitudes(qubits, amplitudes);
         nrQubits = qubits;
@@ -761,7 +887,10 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
                 {
                     QC::QubitRegister<> &state;
                     bool enabled;
-                    ~RestoreThreading() { state.SetMultithreading(enabled); }
+                    ~RestoreThreading()
+                    {
+                        state.SetMultithreading(enabled);
+                    }
                 } restore{*state, enableMultithreading};
                 state->SetMultithreading(false);
                 return state->MeasureNoCollapse();
@@ -798,6 +927,8 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
     template <class Gate, class... Qubits> void ApplyNativeGate(const Gate &gate, Qubits... qubits)
     {
+        state->InvalidateMeasurements();
+
         // The native parallel dispatcher's one-thread fallback can contract
         // complex products differently from its serial/actual-team kernels.
         // Use the serial dispatcher when no team will run, including builds
@@ -806,8 +937,13 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         {
             SamplingQubitRegister &state;
             bool enabled;
-            ~RestoreThreading() { state.SetMultithreading(enabled); }
+
+            ~RestoreThreading()
+            {
+                state.SetMultithreading(enabled);
+            }
         } restore{*state, state->GetMultithreading()};
+
         bool hasTeam = false;
 #ifdef _OPENMP
         hasTeam = !omp_in_parallel() && omp_get_max_threads() > 1;

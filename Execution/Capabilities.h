@@ -86,6 +86,11 @@ inline json::object OptionCapability(const Option &option)
             values.emplace_back(choice);
         result["enum"] = std::move(values);
     }
+    if (name == "trajectory_policy")
+    {
+        result["enum"] = json::array{"block_v1", "shot_v1"};
+        result["default"] = "shot_v1";
+    }
     if (type == "integer" || type == "nonnegative")
         result["minimum"] = 0;
     else if (type == "positive_integer")

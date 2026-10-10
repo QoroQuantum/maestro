@@ -124,11 +124,15 @@ void TestFixedBackendShotReuse()
                         circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
                     }
 
-                    // Reproducible statevector/density-matrix sampling uses one job for
-                    // terminal measurements and fixed 256-shot blocks for trajectories.
-                    // This 128-shot test fits in one block regardless of worker count.
+                    // Terminal dense sampling uses one job. Default per-shot
+                    // trajectories share this short request across available workers,
+                    // executing the common prefix once per job, never once per shot.
                     const bool reproducibleSampling = config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix;
-                    const size_t jobs = reproducibleSampling ? 1 : network->GetMaxSimulators();
+                    size_t jobs = reproducibleSampling && scenario == 0 ? 1 : workers;
+#ifdef _OPENMP
+                    if (reproducibleSampling)
+                        jobs = std::min(jobs, static_cast<size_t>(std::max(1, omp_get_max_threads())));
+#endif
                     for (int repeat = 0; repeat < 2; ++repeat)
                     {
                         *prefix = 0;
@@ -305,6 +309,43 @@ void TestAutomaticGpuMixedStateFallback()
                       "GPU fallback changed the mixed-state representation");
             }
         }
+}
+
+void TestTypedTrajectoryConfiguration()
+{
+    using namespace MaestroExecution;
+    GetMaestroObjectWithMute();
+    for (const bool typed : {false, true})
+    {
+        struct NetworkHandle
+        {
+            unsigned long handle = CreateSimpleSimulator(2);
+
+            ~NetworkHandle()
+            {
+                DestroySimpleSimulator(handle);
+            }
+        } owner;
+
+        // JSON options and Python's typed fields share ConfigureNetwork.
+        auto config =
+            ParseConfig(json::object{{"backend", "qcsim"},
+                                     {"method", "statevector"},
+                                     {"options", json::object{{"trajectory_policy", "block_v1"}, {"trajectory_max_memory_mb", 64}, {"max_simulators", 3}}}});
+        if (typed)
+        {
+            config.trajectory_policy = "shot_v1";
+            config.trajectory_max_memory_mb = 1;
+            config.max_simulators = 4;
+        }
+        const auto network = ConfigureNetwork(owner.handle, config);
+        Check(bool(network), "Cannot configure trajectory network");
+        Check(network->GetMaxSimulators() == (typed ? 4 : 3), "Typed worker limit was ignored");
+        Check(network->GetSimulator()->GetConfiguration("trajectory_policy") == (typed ? "shot_v1" : "block_v1"),
+              "Trajectory policy did not reach the network");
+        Check(network->GetSimulator()->GetConfiguration("trajectory_max_memory_mb") == (typed ? "1" : "64"),
+              "Trajectory memory budget did not reach the network");
+    }
 }
 
 void TestGateFusionConfiguration()

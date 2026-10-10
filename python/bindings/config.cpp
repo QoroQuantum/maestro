@@ -14,7 +14,7 @@ template <typename T> struct IsOptional<std::optional<T>> : std::true_type
 
 // A property whose setter validates the whole config before committing, so an
 // invalid value leaves the config unchanged.
-template <typename T> void BindConfigField(nb::class_<SimulatorConfig> &cls, const char *name, T SimulatorConfig::*member, const char *doc)
+template <typename T> void BindConfigField(nb::class_<SimulatorConfig> &cls, const char *name, T SimulatorConfig::*member, const char *doc, bool convert = true)
 {
     cls.def_prop_rw(
         name, [member](const SimulatorConfig &c) -> T { return c.*member; },
@@ -24,7 +24,7 @@ template <typename T> void BindConfigField(nb::class_<SimulatorConfig> &cls, con
             next.Validate();
             c = std::move(next);
         },
-        nb::for_setter(nb::arg("value").none(IsOptional<T>::value)), doc);
+        nb::for_setter(nb::arg("value").none(IsOptional<T>::value).noconvert(!convert)), doc);
 }
 
 // Constructor keywords and __repr__ order.
@@ -54,6 +54,9 @@ const char *const kConfigFields[] = {
     "path_integral_threshold",
     "gate_fusion",
     "enable_causal_cone_reduction",
+    "trajectory_policy",
+    "trajectory_max_memory_mb",
+    "max_simulators",
 };
 
 void bind_config(nb::module_ &m)
@@ -100,7 +103,8 @@ void bind_config(nb::module_ &m)
            std::optional<std::string> mpo_kraus_completeness_check, bool mpo_restore_trace_after_truncation, bool mpo_hermitize_after_truncation,
            std::optional<double> pp_coefficient_threshold, std::optional<size_t> pp_max_pauli_weight, std::optional<int> pp_gates_between_trims,
            std::optional<int> pp_gates_between_deduplications, std::optional<double> path_integral_threshold, std::optional<bool> gate_fusion,
-           bool enable_causal_cone_reduction) {
+           bool enable_causal_cone_reduction, std::optional<std::string> trajectory_policy, std::optional<size_t> trajectory_max_memory_mb,
+           std::optional<size_t> max_simulators) {
             SimulatorConfig config;
             config.simulator_type = simulator_type;
             config.simulation_type = simulation_type;
@@ -127,6 +131,9 @@ void bind_config(nb::module_ &m)
             config.path_integral_threshold = path_integral_threshold;
             config.gate_fusion = gate_fusion;
             config.enable_causal_cone_reduction = enable_causal_cone_reduction;
+            config.trajectory_policy = std::move(trajectory_policy);
+            config.trajectory_max_memory_mb = trajectory_max_memory_mb;
+            config.max_simulators = max_simulators;
             config.Validate();
             new (self) SimulatorConfig(std::move(config));
         },
@@ -138,7 +145,23 @@ void bind_config(nb::module_ &m)
         "mpo_kraus_completeness_check"_a = nb::none(), "mpo_restore_trace_after_truncation"_a = defaults.mpo_restore_trace_after_truncation,
         "mpo_hermitize_after_truncation"_a = defaults.mpo_hermitize_after_truncation, "pp_coefficient_threshold"_a = nb::none(),
         "pp_max_pauli_weight"_a = nb::none(), "pp_gates_between_trims"_a = nb::none(), "pp_gates_between_deduplications"_a = nb::none(),
-        "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(), "enable_causal_cone_reduction"_a = defaults.enable_causal_cone_reduction);
+        "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(), "enable_causal_cone_reduction"_a = defaults.enable_causal_cone_reduction,
+        "trajectory_policy"_a = nb::none(), "trajectory_max_memory_mb"_a.noconvert() = nb::none(), "max_simulators"_a.noconvert() = nb::none());
+
+    BindConfigField(config_class, "trajectory_policy", &SimulatorConfig::trajectory_policy,
+                    "QCSim statevector, density-matrix and path-integral dynamic circuits: "
+                    "'block_v1' preserves existing seeded counts; 'shot_v1' distributes individual "
+                    "shots with streams independent of worker count. The policies give different "
+                    "seeded sequences. None uses 'shot_v1'. Terminal sampling is unaffected.");
+    BindConfigField(config_class, "trajectory_max_memory_mb", &SimulatorConfig::trajectory_max_memory_mb,
+                    "Positive MiB estimate limiting concurrent QCSim dense trajectories. "
+                    "None uses 1024 MiB. This is a soft concurrency budget, not a process "
+                    "memory limit; at least one worker is allowed.",
+                    false);
+    BindConfigField(config_class, "max_simulators", &SimulatorConfig::max_simulators,
+                    "Maximum concurrent simulators, from 1 to 1024. None keeps the network "
+                    "default; CPU and trajectory memory budgets may reduce concurrency.",
+                    false);
 
     BindConfigField(config_class, "gate_fusion", &SimulatorConfig::gate_fusion,
                     "Fuse compatible gates on supported backends. None (the "

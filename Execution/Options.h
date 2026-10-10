@@ -101,6 +101,8 @@ inline const std::vector<Option> &Options()
         {"optimize_circuit", "", "boolean", "all"},
         {"gate_fusion", "", "boolean", "all"},
         {"max_simulators", "max_simulators", "positive_integer", "all"},
+        {"trajectory_policy", "trajectory_policy", "string", "cpu_trajectory"},
+        {"trajectory_max_memory_mb", "trajectory_max_memory_mb", "positive_integer", "cpu_dense"},
         {"mpo_kraus_completeness_check", "matrix_product_operator_kraus_completeness_check", "string", "mpo"},
         {"mpo_restore_trace_after_truncation", "matrix_product_operator_restore_trace_after_truncation", "boolean", "mpo"},
         {"mpo_hermitize_after_truncation", "matrix_product_operator_hermitize_after_truncation", "boolean", "mpo"},
@@ -129,6 +131,10 @@ inline bool Applies(const Option &option, const SimulatorConfig &config)
     const bool mpo = method == Method::kMatrixProductOperator;
     if (family == "all")
         return true;
+    if (family == "cpu_trajectory")
+        return backend == Backend::kQCSim && (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kPathIntegral);
+    if (family == "cpu_dense")
+        return backend == Backend::kQCSim && (method == Method::kStatevector || method == Method::kDensityMatrix);
     if (family == "device")
         return gpu || distributed;
     if (family == "precision")
@@ -224,6 +230,10 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
             Require(UInt(value) <= 1024, "pp_workers exceeds 1024");
         if (name == "max_simulators")
             Require(UInt(value) <= 1024, "max_simulators exceeds 1024");
+        if (name == "trajectory_policy")
+            choice(value, {"block_v1", "shot_v1"}, key);
+        if (name == "trajectory_max_memory_mb")
+            Require(UInt(value) <= (std::numeric_limits<size_t>::max() >> 20), "trajectory_max_memory_mb is too large");
         if (name == "truncation_mode")
         {
             const auto mode = choice(value, TruncationModes(), key);
