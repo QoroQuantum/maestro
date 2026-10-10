@@ -511,7 +511,19 @@ if(BUILD_PYTHON_BINDINGS)
         )
         FetchContent_MakeAvailable(nanobind)
 
-        nanobind_add_module(maestro_py python/Bindings.cpp)
+        nanobind_add_module(maestro_py
+            python/Bindings.cpp
+            python/bindings/execution.cpp
+            python/bindings/fidelity.cpp
+            python/bindings/evolution.cpp
+            python/bindings/noise_execution.cpp
+            python/bindings/config.cpp
+            python/bindings/simulator.cpp
+            python/bindings/circuit.cpp
+            python/bindings/api.cpp
+            python/bindings/noise.cpp
+            python/bindings/checkpoint.cpp
+        )
         set_target_properties(maestro_py PROPERTIES OUTPUT_NAME "maestro")
 
         if(WIN32)
