@@ -2642,9 +2642,14 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         const uint64_t seed = configuration.IsSet("seed") ? std::stoull(configuration.GetConfiguration("seed"))
                                                           : Simulators::GenerateRandomSeed(type, configuration.GetConfigMap());
         const auto cloneMutex = std::make_shared<std::mutex>();
+        // Execute() continues the live register when no optimizer replaced it.
+        // A one-shot trajectory must not clear that state or invalidate handles
+        // held by callers preparing and inspecting the register around Execute().
+        const bool continueExecution = !resetBeforeExecution && shots == 1 && !prepared && simulator && simulator->GetType() == type &&
+                                       simulator->GetSimulationType() == method && simulator->GetNumberOfQubits() == qubits;
         if (prepared)
             prepared->SetMultithreading(false);
-        if (simulator && simulator != prepared)
+        if (simulator && simulator != prepared && !continueExecution)
             simulator->Clear();
         workers = std::max<size_t>(1, std::min(workers, shots / blockSize + (shots % blockSize != 0)));
         if (workers > 1)
@@ -2660,6 +2665,19 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         if (!omp_in_parallel() && method != Simulators::SimulationType::kPathIntegral)
             internalThreads = static_cast<int>(std::max<size_t>(1, static_cast<size_t>(omp_get_max_threads()) / workers));
 #endif
+#if defined(_OPENMP) && defined(_MSC_VER) && !defined(__clang__) && !defined(_OPENMP_LLVM_RUNTIME)
+        // Legacy MSVC OpenMP keeps this setting process-wide. Set it once before
+        // starting jobs; per-worker save/restore races with other active jobs.
+        struct RestoreThreadLimit
+        {
+            const int previous = omp_get_max_threads();
+            ~RestoreThreadLimit()
+            {
+                omp_set_num_threads(previous);
+            }
+        } restoreThreadLimit;
+        omp_set_num_threads(internalThreads);
+#endif
         std::shared_ptr<ExecuteJob<Time>> last;
         for (size_t begin = 0, block = 0; begin < shots; ++block)
         {
@@ -2670,7 +2688,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             job->optimiseMultipleShotsExecution = independentShots || count > 1 || GetOptimizeSimulator();
             // Reproducible measurement retains serial scan/reduction order;
             // gates and disjoint collapse updates may use the remaining budget.
+#if defined(_OPENMP) && defined(_MSC_VER) && !defined(__clang__) && !defined(_OPENMP_LLVM_RUNTIME)
+            job->internalThreads = 0; // The dispatcher owns the process-wide limit.
+#else
             job->internalThreads = internalThreads;
+#endif
             job->allowInternalMultithreading = internalThreads > 1;
             job->network = BaseClass::getptr();
             job->onSimulatorReady = [this](const Simulators::ISimulator &actual) {
@@ -2687,6 +2709,12 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             job->cloneSource = prepared;
             job->cloneMutex = cloneMutex;
             job->executedGates = executed;
+            if (continueExecution)
+            {
+                job->optSim = simulator;
+                job->config.ApplyConfigurationToSimulator(job->optSim);
+                job->executedGates.assign(circuit->size(), false);
+            }
             last = job;
             if (workers > 1)
                 threadsPool.AddRunJob(std::move(job));
