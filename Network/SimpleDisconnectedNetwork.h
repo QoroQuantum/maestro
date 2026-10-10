@@ -21,6 +21,7 @@
 #include "SimpleController.h"
 #include "SimpleHost.h"
 #include <atomic>
+#include <charconv>
 
 #include "../Simulators/TensorNetworks/MPSDummySimulator.h"
 
@@ -59,6 +60,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      */
     SimpleDisconnectedNetwork(const std::vector<Types::qubit_t> &qubits = {}, const std::vector<size_t> &cbits = {})
     {
+        configuration.SetConfiguration("trajectory_policy", "shot_v1");
         simulatorsForOptimizations.insert({Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector});
         simulatorsForOptimizations.insert({Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStabilizer});
         simulatorsForOptimizations.insert({Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState});
@@ -695,7 +697,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         auto dcirc = distCirc;
 
-        if (reproducibleSampling && dcirc->HasOpsAfterMeasurements() && shots > 1)
+        if (reproducibleSampling && dcirc->HasOpsAfterMeasurements() &&
+            (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))
         {
             ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbitsResults, simType, method, optSim, executed, resultsMutex);
         }
@@ -935,7 +938,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         auto dcirc = distCirc;
 
-        if (reproducibleSampling && dcirc->HasOpsAfterMeasurements() && shots > 1)
+        if (reproducibleSampling && dcirc->HasOpsAfterMeasurements() &&
+            (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))
         {
             ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbits, simType, method, optSim, executed, resultsMutex);
         }
@@ -1161,6 +1165,21 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     {
         if (!key || !value)
             return;
+
+        if (std::string("trajectory_policy") == key)
+        {
+            const std::string policy(value);
+            if (policy != "block_v1" && policy != "shot_v1")
+                throw std::invalid_argument("trajectory_policy must be block_v1 or shot_v1");
+        }
+        if (std::string("trajectory_max_memory_mb") == key)
+        {
+            size_t mb = 0;
+            const std::string_view text(value);
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), mb);
+            if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || !mb || mb > (std::numeric_limits<size_t>::max() >> 20))
+                throw std::invalid_argument("trajectory_max_memory_mb must be a positive representable MiB count");
+        }
 
         if (std::string("gate_fusion") == key)
         {
@@ -2580,13 +2599,46 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 method == Simulators::SimulationType::kPathIntegral);
     }
 
-    void ExecuteLogicalShotBlocks(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, ExecuteResults &results, size_t shots, size_t workers,
-                                  size_t qubits, size_t cbits, size_t resultBits, Simulators::SimulatorType type, Simulators::SimulationType method,
+    void ExecuteLogicalShotBlocks(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, ExecuteResults &results, size_t shots, size_t workers, size_t qubits,
+                                  size_t cbits, size_t resultBits, Simulators::SimulatorType type, Simulators::SimulationType method,
                                   const std::shared_ptr<Simulators::ISimulator> &prepared, const std::vector<bool> &executed, std::mutex &resultsMutex)
     {
-        // Policy v1: logical ranges and stream ids stay fixed when the pool size
-        // changes. Terminal measurement batches use one simulator instead.
-        constexpr size_t blockSize = 256;
+        // Per-shot streams are the default. block_v1 retains the original fixed
+        // logical ranges for replay. Terminal batches use one simulator instead.
+        const bool independentShots = configuration.GetConfiguration("trajectory_policy") == "shot_v1";
+        workers = std::max<size_t>(1, workers);
+#ifdef _OPENMP
+        // Outer jobs count against the same CPU budget as their internal teams.
+        workers = std::min(workers, static_cast<size_t>(omp_in_parallel() ? 1 : std::max(1, omp_get_max_threads())));
+#endif
+        if (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kDensityMatrix)
+        {
+            const size_t bitsPerQubit = method == Simulators::SimulationType::kDensityMatrix ? 2 : 1;
+            if (qubits <= (std::numeric_limits<size_t>::digits - 5) / bitsPerQubit)
+            {
+                const size_t elements = size_t{1} << (bitsPerQubit * qubits);
+                const size_t bytes = elements * sizeof(std::complex<double>);
+                const size_t mb =
+                    configuration.IsSet("trajectory_max_memory_mb") ? std::stoull(configuration.GetConfiguration("trajectory_max_memory_mb")) : 1024;
+                const size_t slots = (mb << 20) / bytes;
+                // Prepared executions retain a source and one shared checkpoint.
+                // Without preparation each worker owns its own checkpoint too.
+                const size_t memoryWorkers = prepared ? (slots > 2 ? slots - 2 : 1) : slots / 2;
+                workers = std::min(workers, std::max<size_t>(1, memoryWorkers));
+#ifdef _OPENMP
+                // Large independent states contend for cache and memory bandwidth.
+                // Reserve a small internal team instead of filling every CPU with
+                // a separate state. Logical RNG streams do not depend on this choice.
+                if (elements >= (size_t{1} << 20))
+                    workers = std::min(workers, static_cast<size_t>(std::max(1, omp_get_max_threads() / 4)));
+#endif
+            }
+            else
+                workers = 1;
+        }
+        // shot_v1 can change physical job boundaries without changing any RNG
+        // stream. Keep batches bounded while exposing short requests to workers.
+        const size_t blockSize = independentShots ? std::min<size_t>(256, std::max<size_t>(1, shots / workers + (shots % workers != 0))) : 256;
         const uint64_t seed = configuration.IsSet("seed") ? std::stoull(configuration.GetConfiguration("seed"))
                                                           : Simulators::GenerateRandomSeed(type, configuration.GetConfigMap());
         const auto cloneMutex = std::make_shared<std::mutex>();
@@ -2613,7 +2665,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         {
             const size_t count = std::min(blockSize, shots - begin);
             auto job = std::make_shared<ExecuteJob<Time>>(circuit, results, count, qubits, cbits, resultBits, type, method, resultsMutex);
-            job->optimiseMultipleShotsExecution = count > 1 || GetOptimizeSimulator();
+            // Even a one-shot tail must remove the same deterministic prefix:
+            // classical instruction positions are part of shot_v1 stream IDs.
+            job->optimiseMultipleShotsExecution = independentShots || count > 1 || GetOptimizeSimulator();
             // Reproducible measurement retains serial scan/reduction order;
             // gates and disjoint collapse updates may use the remaining budget.
             job->internalThreads = internalThreads;
@@ -2627,6 +2681,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             job->config = ExecutionConfiguration(type, qubits);
             job->config.SetConfiguration("seed", std::to_string(Simulators::IState::DeriveSeed(seed, block)));
             job->randomStream = block;
+            job->independentShotStreams = independentShots;
+            job->trajectorySeed = Simulators::IState::DeriveSeed(seed, 0x53484f545f5631ULL);
+            job->firstShot = begin;
             job->cloneSource = prepared;
             job->cloneMutex = cloneMutex;
             job->executedGates = executed;

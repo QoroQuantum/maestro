@@ -65,6 +65,62 @@ static bool ConfigureLegacyFusion(Network::INetwork<> &network, const boost::jso
     return true;
 }
 
+// Explicitly forward trajectory controls: legacy SimpleExecute does not pass
+// arbitrary JSON keys through to the network. A missing policy resets to shot_v1.
+static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boost::json::value &config)
+{
+    try
+    {
+        std::string policy = "shot_v1";
+        uint64_t workers = 0;
+        uint64_t memoryMb = 1024;
+        if (config.is_object())
+        {
+            if (const auto *value = config.as_object().if_contains("trajectory_policy"))
+            {
+                if (!value->is_string())
+                    return false;
+                policy = std::string(value->as_string());
+                if (policy != "block_v1" && policy != "shot_v1")
+                    return false;
+            }
+            if (const auto *value = config.as_object().if_contains("max_simulators"))
+            {
+                if (value->is_uint64())
+                    workers = value->as_uint64();
+                else if (value->is_int64() && value->as_int64() > 0)
+                    workers = static_cast<uint64_t>(value->as_int64());
+                else
+                    return false;
+                if (!workers || workers > 1024)
+                    return false;
+            }
+            if (const auto *value = config.as_object().if_contains("trajectory_max_memory_mb"))
+            {
+                uint64_t mb = 0;
+                if (value->is_uint64())
+                    mb = value->as_uint64();
+                else if (value->is_int64() && value->as_int64() > 0)
+                    mb = static_cast<uint64_t>(value->as_int64());
+                else
+                    return false;
+                if (!mb || mb > (std::numeric_limits<size_t>::max() >> 20))
+                    return false;
+                memoryMb = mb;
+            }
+        }
+        if (workers)
+            network.SetMaxSimulators(static_cast<size_t>(workers));
+        network.Configure("trajectory_max_memory_mb", std::to_string(memoryMb).c_str());
+        network.Configure("trajectory_policy", policy.c_str());
+        return true;
+    }
+    catch (const std::exception &)
+    {
+        return false;
+    }
+}
+
 template <int Dimension> static Eigen::Matrix<std::complex<double>, Dimension, Dimension> ReadGateMatrix(const double *buffer)
 {
     if (!buffer)
@@ -493,7 +549,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void *GetMaestroObject()
+        void *GetMaestroObject()
     {
         if (!isInitialized.exchange(true))
         {
@@ -512,7 +568,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void *GetMaestroObjectWithMute()
+        void *GetMaestroObjectWithMute()
     {
         if (!isInitialized.exchange(true))
         {
@@ -531,7 +587,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long int CreateSimpleSimulator(int nrQubits)
+        unsigned long int CreateSimpleSimulator(int nrQubits)
     {
         if (!maestroInstance)
             return 0;
@@ -542,7 +598,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void DestroySimpleSimulator(unsigned long int simHandle)
+        void DestroySimpleSimulator(unsigned long int simHandle)
     {
         if (!maestroInstance || simHandle == 0)
             return;
@@ -553,7 +609,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int RemoveAllOptimizationSimulatorsAndAdd(unsigned long int simHandle, int simType, int simExecType)
+        int RemoveAllOptimizationSimulatorsAndAdd(unsigned long int simHandle, int simType, int simExecType)
     {
         if (!maestroInstance || simHandle == 0)
             return 0;
@@ -565,7 +621,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int AddOptimizationSimulator(unsigned long int simHandle, int simType, int simExecType)
+        int AddOptimizationSimulator(unsigned long int simHandle, int simType, int simExecType)
     {
         if (!maestroInstance || simHandle == 0)
             return 0;
@@ -577,7 +633,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    char *SimpleExecute(unsigned long int simpleSim, const char *circuitStr, const char *jsonConfig)
+        char *SimpleExecute(unsigned long int simpleSim, const char *circuitStr, const char *jsonConfig)
     {
         if (simpleSim == 0 || !circuitStr || !jsonConfig || !maestroInstance)
             return nullptr;
@@ -627,6 +683,8 @@ extern "C"
         size_t nrShots = 1; // default value
 
         const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
+        if (!ConfigureLegacyTrajectories(*network, configJson))
+            return nullptr;
         if (!ConfigureLegacyFusion(*network, configJson))
             return nullptr;
         if (!ConfigureLegacySeed(*network, configJson))
@@ -726,6 +784,8 @@ extern "C"
         response.reserve(4);
 
         response.emplace("counts", std::move(jsonResult));
+        const auto trajectory = network->GetSimulator() ? network->GetSimulator()->GetConfiguration("trajectory_policy") : std::string();
+        response.emplace("trajectory_policy", trajectory.empty() ? "shot_v1" : trajectory);
         response.emplace("time_taken", timeStr);
         response.emplace("gate_fusion",
                          boost::json::object{{"enabled", network->WasGateFusionEnabled()}, {"max_qubits", network->GetLastGateFusionMaxQubits()}});
@@ -817,7 +877,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    char *SimpleEstimate(unsigned long int simpleSim, const char *circuitStr, const char *observableStr, const char *jsonConfig)
+        char *SimpleEstimate(unsigned long int simpleSim, const char *circuitStr, const char *observableStr, const char *jsonConfig)
     {
         if (simpleSim == 0 || !circuitStr || !observableStr || !jsonConfig || !maestroInstance)
             return nullptr;
@@ -841,6 +901,8 @@ extern "C"
         }
 
         const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
+        if (!ConfigureLegacyTrajectories(*network, configJson))
+            return nullptr;
         if (!ConfigureLegacyFusion(*network, configJson))
             return nullptr;
         if (!ConfigureLegacySeed(*network, configJson))
@@ -1017,7 +1079,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void FreeResult(char *result)
+        void FreeResult(char *result)
     {
         if (result)
             delete[] result;
@@ -1026,7 +1088,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long int CreateSimulator(int simType, int simExecType)
+        unsigned long int CreateSimulator(int simType, int simExecType)
     {
         if (!maestroInstance)
             return 0;
@@ -1037,7 +1099,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void *GetSimulator(unsigned long int simHandle)
+        void *GetSimulator(unsigned long int simHandle)
     {
         if (!maestroInstance || simHandle == 0)
             return nullptr;
@@ -1047,7 +1109,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void DestroySimulator(unsigned long int simHandle)
+        void DestroySimulator(unsigned long int simHandle)
     {
         if (!maestroInstance || simHandle == 0)
             return;
@@ -1057,7 +1119,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyX(void *sim, int qubit)
+        int ApplyX(void *sim, int qubit)
     {
         if (!sim)
             return 0;
@@ -1071,7 +1133,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyY(void *sim, int qubit)
+        int ApplyY(void *sim, int qubit)
     {
         if (!sim)
             return 0;
@@ -1084,7 +1146,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyZ(void *sim, int qubit)
+        int ApplyZ(void *sim, int qubit)
     {
         if (!sim)
             return 0;
@@ -1097,7 +1159,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyH(void *sim, int qubit)
+        int ApplyH(void *sim, int qubit)
     {
         if (!sim)
             return 0;
@@ -1110,7 +1172,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyS(void *sim, int qubit)
+        int ApplyS(void *sim, int qubit)
     {
         if (!sim)
             return 0;
@@ -1123,7 +1185,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplySDG(void *sim, int qubit)
+        int ApplySDG(void *sim, int qubit)
     {
         if (!sim)
             return 0;
@@ -1136,7 +1198,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyT(void *sim, int qubit)
+        int ApplyT(void *sim, int qubit)
     {
         if (!sim)
             return 0;
@@ -1149,7 +1211,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyTDG(void *sim, int qubit)
+        int ApplyTDG(void *sim, int qubit)
     {
         if (!sim)
             return 0;
@@ -1162,7 +1224,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplySX(void *sim, int qubit)
+        int ApplySX(void *sim, int qubit)
     {
         if (!sim)
             return 0;
@@ -1175,7 +1237,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplySXDG(void *sim, int qubit)
+        int ApplySXDG(void *sim, int qubit)
     {
         if (!sim)
             return 0;
@@ -1188,7 +1250,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyK(void *sim, int qubit)
+        int ApplyK(void *sim, int qubit)
     {
         if (!sim)
             return 0;
@@ -1201,7 +1263,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyP(void *sim, int qubit, double theta)
+        int ApplyP(void *sim, int qubit, double theta)
     {
         if (!sim)
             return 0;
@@ -1214,7 +1276,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyRx(void *sim, int qubit, double theta)
+        int ApplyRx(void *sim, int qubit, double theta)
     {
         if (!sim)
             return 0;
@@ -1227,7 +1289,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyRy(void *sim, int qubit, double theta)
+        int ApplyRy(void *sim, int qubit, double theta)
     {
         if (!sim)
             return 0;
@@ -1240,7 +1302,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyRz(void *sim, int qubit, double theta)
+        int ApplyRz(void *sim, int qubit, double theta)
     {
         if (!sim)
             return 0;
@@ -1253,7 +1315,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyU(void *sim, int qubit, double theta, double phi, double lambda, double gamma)
+        int ApplyU(void *sim, int qubit, double theta, double phi, double lambda, double gamma)
     {
         if (!sim)
             return 0;
@@ -1266,7 +1328,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCX(void *sim, int controlQubit, int targetQubit)
+        int ApplyCX(void *sim, int controlQubit, int targetQubit)
     {
         if (!sim)
             return 0;
@@ -1279,7 +1341,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCY(void *sim, int controlQubit, int targetQubit)
+        int ApplyCY(void *sim, int controlQubit, int targetQubit)
     {
         if (!sim)
             return 0;
@@ -1292,7 +1354,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCZ(void *sim, int controlQubit, int targetQubit)
+        int ApplyCZ(void *sim, int controlQubit, int targetQubit)
     {
         if (!sim)
             return 0;
@@ -1305,7 +1367,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCH(void *sim, int controlQubit, int targetQubit)
+        int ApplyCH(void *sim, int controlQubit, int targetQubit)
     {
         if (!sim)
             return 0;
@@ -1318,7 +1380,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCSX(void *sim, int controlQubit, int targetQubit)
+        int ApplyCSX(void *sim, int controlQubit, int targetQubit)
     {
         if (!sim)
             return 0;
@@ -1331,7 +1393,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCSXDG(void *sim, int controlQubit, int targetQubit)
+        int ApplyCSXDG(void *sim, int controlQubit, int targetQubit)
     {
         if (!sim)
             return 0;
@@ -1344,7 +1406,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCP(void *sim, int controlQubit, int targetQubit, double theta)
+        int ApplyCP(void *sim, int controlQubit, int targetQubit, double theta)
     {
         if (!sim)
             return 0;
@@ -1357,7 +1419,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCRx(void *sim, int controlQubit, int targetQubit, double theta)
+        int ApplyCRx(void *sim, int controlQubit, int targetQubit, double theta)
     {
         if (!sim)
             return 0;
@@ -1370,7 +1432,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCRy(void *sim, int controlQubit, int targetQubit, double theta)
+        int ApplyCRy(void *sim, int controlQubit, int targetQubit, double theta)
     {
         if (!sim)
             return 0;
@@ -1383,7 +1445,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCRz(void *sim, int controlQubit, int targetQubit, double theta)
+        int ApplyCRz(void *sim, int controlQubit, int targetQubit, double theta)
     {
         if (!sim)
             return 0;
@@ -1396,7 +1458,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCCX(void *sim, int controlQubit1, int controlQubit2, int targetQubit)
+        int ApplyCCX(void *sim, int controlQubit1, int controlQubit2, int targetQubit)
     {
         if (!sim)
             return 0;
@@ -1409,7 +1471,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplySwap(void *sim, int qubit1, int qubit2)
+        int ApplySwap(void *sim, int qubit1, int qubit2)
     {
         if (!sim)
             return 0;
@@ -1422,7 +1484,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCSwap(void *sim, int controlQubit, int qubit1, int qubit2)
+        int ApplyCSwap(void *sim, int controlQubit, int qubit1, int qubit2)
     {
         if (!sim)
             return 0;
@@ -1435,7 +1497,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCU(void *sim, int controlQubit, int targetQubit, double theta, double phi, double lambda, double gamma)
+        int ApplyCU(void *sim, int controlQubit, int targetQubit, double theta, double phi, double lambda, double gamma)
     {
         if (!sim)
             return 0;
@@ -1448,7 +1510,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int InitializeSimulator(void *sim)
+        int InitializeSimulator(void *sim)
     {
         if (!sim)
             return 0;
@@ -1460,7 +1522,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ResetSimulator(void *sim)
+        int ResetSimulator(void *sim)
     {
         if (!sim)
             return 0;
@@ -1472,7 +1534,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ConfigureSimulator(void *sim, const char *key, const char *value)
+        int ConfigureSimulator(void *sim, const char *key, const char *value)
     {
         if (!sim || !key || !value)
             return 0;
@@ -1491,7 +1553,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    char *GetConfiguration(void *sim, const char *key)
+        char *GetConfiguration(void *sim, const char *key)
     {
         if (!sim || !key)
             return nullptr;
@@ -1511,7 +1573,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long int AllocateQubits(void *sim, unsigned long int nrQubits)
+        unsigned long int AllocateQubits(void *sim, unsigned long int nrQubits)
     {
         if (!sim || nrQubits == 0)
             return 0;
@@ -1524,7 +1586,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long int GetNumberOfQubits(void *sim)
+        unsigned long int GetNumberOfQubits(void *sim)
     {
         if (!sim)
             return 0;
@@ -1536,7 +1598,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ClearSimulator(void *sim)
+        int ClearSimulator(void *sim)
     {
         if (!sim)
             return 0;
@@ -1548,7 +1610,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long long int Measure(void *sim, const unsigned long int *qubits, unsigned long int nrQubits)
+        unsigned long long int Measure(void *sim, const unsigned long int *qubits, unsigned long int nrQubits)
     {
         if (!sim || !qubits || nrQubits == 0)
             return 0;
@@ -1561,7 +1623,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyReset(void *sim, const unsigned long int *qubits, unsigned long int nrQubits)
+        int ApplyReset(void *sim, const unsigned long int *qubits, unsigned long int nrQubits)
     {
         if (!sim || !qubits || nrQubits == 0)
             return 0;
@@ -1574,7 +1636,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    double Probability(void *sim, unsigned long long int outcome)
+        double Probability(void *sim, unsigned long long int outcome)
     {
         try
         {
@@ -1593,7 +1655,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void FreeDoubleVector(double *vec)
+        void FreeDoubleVector(double *vec)
     {
         if (vec)
             delete[] vec;
@@ -1602,7 +1664,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void FreeULLIVector(unsigned long long int *vec)
+        void FreeULLIVector(unsigned long long int *vec)
     {
         if (vec)
             delete[] vec;
@@ -1611,7 +1673,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    double *Amplitude(void *sim, unsigned long long int outcome)
+        double *Amplitude(void *sim, unsigned long long int outcome)
     {
         try
         {
@@ -1634,7 +1696,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    double *AllProbabilities(void *sim)
+        double *AllProbabilities(void *sim)
     {
         try
         {
@@ -1656,7 +1718,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    double *Probabilities(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits)
+        double *Probabilities(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits)
     {
         try
         {
@@ -1679,7 +1741,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long long int *SampleCounts(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits, unsigned long int shots)
+        unsigned long long int *SampleCounts(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits, unsigned long int shots)
     {
         try
         {
@@ -1710,7 +1772,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int GetSimulatorType(void *sim)
+        int GetSimulatorType(void *sim)
     {
         if (!sim)
             return -1;
@@ -1721,7 +1783,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int GetSimulationType(void *sim)
+        int GetSimulationType(void *sim)
     {
         if (!sim)
             return -1;
@@ -1732,7 +1794,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int FlushSimulator(void *sim)
+        int FlushSimulator(void *sim)
     {
         if (!sim)
             return 0;
@@ -1744,7 +1806,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int SaveStateToInternalDestructive(void *sim)
+        int SaveStateToInternalDestructive(void *sim)
     {
         if (!sim)
             return 0;
@@ -1756,7 +1818,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int RestoreInternalDestructiveSavedState(void *sim)
+        int RestoreInternalDestructiveSavedState(void *sim)
     {
         if (!sim)
             return 0;
@@ -1768,7 +1830,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int SaveState(void *sim)
+        int SaveState(void *sim)
     {
         try
         {
@@ -1787,7 +1849,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int RestoreState(void *sim)
+        int RestoreState(void *sim)
     {
         try
         {
@@ -1806,7 +1868,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int SetMultithreading(void *sim, int multithreading)
+        int SetMultithreading(void *sim, int multithreading)
     {
         if (!sim)
             return 0;
@@ -1818,7 +1880,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int GetMultithreading(void *sim)
+        int GetMultithreading(void *sim)
     {
         if (!sim)
             return 0;
@@ -1829,7 +1891,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int IsQcsim(void *sim)
+        int IsQcsim(void *sim)
     {
         if (!sim)
             return 0;
@@ -1840,7 +1902,7 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long long int MeasureNoCollapse(void *sim)
+        unsigned long long int MeasureNoCollapse(void *sim)
     {
         if (!sim)
             return 0;

@@ -63,7 +63,10 @@ template <typename Time = Types::time_type> class ExecuteJob
             (method == Simulators::SimulationType::kPauliPropagator || optSim->GetConfiguration("sampling_policy") == "reproducible_v1"))
             optSim->SetMultithreading(allowInternalMultithreading);
 
-        PrepareCircuitForExecution();
+        // Per-shot streams must clone the original instruction seeds, not a
+        // job-seeded copy (which would make classical RNGs depend on batching).
+        if (!independentShotStreams)
+            PrepareCircuitForExecution();
 
         Circuits::OperationState state;
         state.AllocateBits(nrCbits);
@@ -169,8 +172,15 @@ template <typename Time = Types::time_type> class ExecuteJob
         }
 
         const auto curCnt1 = curCnt > 0 ? curCnt - 1 : 0;
+        const auto shotCircuit = dcirc;
         for (size_t i = 0; i < curCnt; ++i)
         {
+            if (independentShotStreams)
+            {
+                const uint64_t seed = Simulators::IState::DeriveSeed(trajectorySeed, firstShot + i);
+                optSim->SetSeed(seed); // Backend and readout have separate streams.
+                dcirc = shotCircuit->CloneForExecution(Simulators::IState::DeriveSeed(seed, 0x434c415353494341ULL));
+            }
             if (optimiseMultipleShots)
             {
                 if (i > 0)
@@ -440,6 +450,7 @@ template <typename Time = Types::time_type> class ExecuteJob
             (void)threads;
 #endif
         }
+
         ~ScopedInternalThreads()
         {
 #ifdef _OPENMP
@@ -447,6 +458,7 @@ template <typename Time = Types::time_type> class ExecuteJob
                 omp_set_num_threads(previous);
 #endif
         }
+
       private:
 #ifdef _OPENMP
         int previous = 0;
@@ -454,8 +466,7 @@ template <typename Time = Types::time_type> class ExecuteJob
     };
 
     template <class Samples>
-    void AccumulateSamples(Circuits::MeasurementOperation<Time> &measurement, const Samples &samples, Circuits::OperationState &state,
-                           ExecuteResults &target)
+    void AccumulateSamples(Circuits::MeasurementOperation<Time> &measurement, const Samples &samples, Circuits::OperationState &state, ExecuteResults &target)
     {
         auto add = [&](const auto &sample) {
             const auto &[bits, count] = sample;
@@ -617,6 +628,9 @@ template <typename Time = Types::time_type> class ExecuteJob
     int internalThreads = 0;
     // Distinguishes jobs even when the caller did not configure a simulator seed.
     uint64_t randomStream = 0;
+    bool independentShotStreams = false;
+    uint64_t trajectorySeed = 0;
+    size_t firstShot = 0;
     std::shared_ptr<Simulators::ISimulator> optSim;
     std::shared_ptr<Simulators::ISimulator> cloneSource;
     std::shared_ptr<std::mutex> cloneMutex;

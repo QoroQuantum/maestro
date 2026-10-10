@@ -13,6 +13,7 @@ void TestRequestNoiseAndOptions();
 void TestRequestSeedParsing();
 void TestNetworkBondDefaults();
 void TestGateFusionConfiguration();
+void TestTypedTrajectoryConfiguration();
 void TestFusionPublicInterfaces();
 void TestPauliPropagatorDedupDefault();
 void TestAutomaticGpuMixedStateFallback();
@@ -123,6 +124,82 @@ void TestLegacySeeds()
             Check(estimateRejected, "Legacy estimator accepted a malformed seed");
         }
         run(123);
+    }
+}
+
+void TestTrajectoryOptions()
+{
+    GetMaestroObjectWithMute();
+    char *catalogRaw = MaestroGetCapabilitiesJson();
+    const auto catalog = j::parse(catalogRaw);
+    FreeResult(catalogRaw);
+    int backend = -1;
+    for (const auto &entry : catalog.at("backends").as_array())
+        if (entry.at("name") == "qcsim")
+            backend = entry.at("legacy_id").to_number<int>();
+    for (const auto &entry : catalog.at("options").as_array())
+        if (entry.at("name") == "trajectory_policy")
+            Check(entry.at("default") == "shot_v1", "Discovery advertised the wrong trajectory default");
+    const char *body = "ry(0.71) q[0]; measure q[0]->c[0]; if(c==1) x q[1]; "
+                       "h q[0]; measure q[0]->c[1]; measure q[1]->c[2];";
+    const std::string circuit = std::string("OPENQASM 2.0; qreg q[2]; creg c[3]; ") + body;
+    const auto handle = CreateSimpleSimulator(2);
+    Check(RemoveAllOptimizationSimulatorsAndAdd(handle, backend, 0) == 1, "Cannot configure trajectory test");
+    j::value reference;
+    for (int workers : {1, 4, 1})
+    {
+        const auto config = j::serialize(j::object{{"shots", 257}, {"seed", 123}, {"max_simulators", workers}, {"trajectory_policy", "shot_v1"}});
+        auto *raw = SimpleExecute(handle, circuit.c_str(), config.c_str());
+        Check(raw != nullptr, "Legacy per-shot execution failed");
+        const auto result = j::parse(raw);
+        FreeResult(raw);
+        Check(result.at("trajectory_policy") == "shot_v1", "Legacy API ignored trajectory policy");
+        if (reference.is_null())
+            reference = result.at("counts");
+        Check(reference == result.at("counts"), "Legacy per-shot results changed with worker count");
+    }
+    auto *oldPolicy = SimpleExecute(handle, circuit.c_str(), "{\"shots\":257,\"seed\":123,\"trajectory_policy\":\"block_v1\"}");
+    Check(oldPolicy != nullptr, "Legacy block replay failed");
+    const auto oldResult = j::parse(oldPolicy);
+    FreeResult(oldPolicy);
+    Check(oldResult.at("trajectory_policy") == "block_v1" && oldResult.at("counts") != reference, "Explicit block replay was ignored");
+    auto *defaults = SimpleExecute(handle, circuit.c_str(), "{\"shots\":257,\"seed\":123}");
+    Check(defaults != nullptr, "Legacy default trajectory failed");
+    const auto result = j::parse(defaults);
+    FreeResult(defaults);
+    Check(result.at("trajectory_policy") == "shot_v1" && result.at("counts") == reference, "Missing policy did not restore shot_v1");
+    for (const char *invalid :
+         {"{\"trajectory_policy\":\"typo\"}", "{\"trajectory_policy\":true}", "{\"max_simulators\":0}", "{\"trajectory_max_memory_mb\":0}",
+          "{\"trajectory_max_memory_mb\":-1}", "{\"trajectory_max_memory_mb\":\"16\"}", "{\"trajectory_max_memory_mb\":18446744073709551615}"})
+    {
+        auto *raw = SimpleExecute(handle, circuit.c_str(), invalid);
+        const bool rejected = !raw;
+        if (raw)
+            FreeResult(raw);
+        Check(rejected, "Legacy trajectory option validation failed");
+    }
+    DestroySimpleSimulator(handle);
+    auto request = Request("execute", 2, body, "statevector", 3);
+    request["execution"].as_object()["shots"] = 257;
+    request["simulator"].as_object()["options"] = j::object{{"trajectory_policy", "shot_v1"}, {"max_simulators", 1}};
+    const auto first = Call(request).at("counts");
+    request["simulator"].as_object()["options"].as_object()["max_simulators"] = 4;
+    Check(first == Call(request).at("counts"), "Native per-shot results changed with worker count");
+    request["simulator"].as_object()["options"].as_object().erase("trajectory_policy");
+    Check(first == Call(request).at("counts"), "Native default did not select per-shot streams");
+    request["simulator"].as_object()["options"].as_object()["trajectory_policy"] = "typo";
+    Call(request, false, true);
+    request = Request("execute", 16, body, "statevector", 3);
+    request["execution"].as_object()["shots"] = 257;
+    auto &options = request["simulator"].as_object()["options"] =
+        j::object{{"trajectory_policy", "shot_v1"}, {"max_simulators", 8}, {"trajectory_max_memory_mb", 1}};
+    const auto limited = Call(request).at("counts");
+    options.as_object()["trajectory_max_memory_mb"] = 64;
+    Check(limited == Call(request).at("counts"), "Memory-limited scheduling changed per-shot results");
+    for (const auto &invalid : j::array{0, -1, 1.5, true, "16", UINT64_MAX})
+    {
+        options.as_object()["trajectory_max_memory_mb"] = invalid;
+        Call(request, false, true);
     }
 }
 
@@ -639,10 +716,12 @@ try
     Call(nested, false, true);
     TestRequestNoiseAndOptions();
     TestLegacySeeds();
+    TestTrajectoryOptions();
     TestNativeRandomSeeds();
     TestRequestSeedParsing();
     TestNetworkBondDefaults();
     TestGateFusionConfiguration();
+    TestTypedTrajectoryConfiguration();
     TestFusionPublicInterfaces();
     TestFusionMetadata();
     TestPauliPropagatorDedupDefault();
