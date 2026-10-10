@@ -1,5 +1,6 @@
 #include "Circuit/Factory.h"
-#include "python/bindings/causal_cone.h"
+#include "Execution/SimulatorConfig.h"
+#include "Execution/Transforms/TransformPipeline.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -30,7 +31,10 @@ int main()
             {
                 auto circuit = source;
                 std::vector<std::string> paulis{observable};
-                maestro_bindings::ReduceCausalCone(circuit, paulis, backend);
+                MaestroExecution::SimulatorConfig config;
+                MaestroExecution::TransformContext ctx{circuit, paulis, backend, config};
+                MaestroExecution::TransformPipeline::Run(ctx);
+                Require(ctx.qubits_before == 3 && ctx.qubits_after == 3 && ctx.applied_transforms.empty(), "Distributed diagnostics changed");
                 Require(circuit == source, "Distributed reduction replaced the source circuit");
                 Require(circuit->GetMaxQubitIndex() == 2, "Distributed reduction changed register width");
                 Require(paulis == std::vector<std::string>{observable}, "Distributed reduction remapped the observable");
@@ -41,13 +45,67 @@ int main()
         {
             auto circuit = source;
             std::vector<std::string> paulis{"IIZ"};
-            maestro_bindings::ReduceCausalCone(circuit, paulis, backend);
+            MaestroExecution::SimulatorConfig config;
+            MaestroExecution::TransformContext ctx{circuit, paulis, backend, config};
+            MaestroExecution::TransformPipeline::Run(ctx);
+            Require(ctx.qubits_before == 3 && ctx.qubits_after == 1, "Local diagnostics did not track register width");
+            Require(ctx.applied_transforms == std::vector<std::string>{"CausalCone"}, "Pipeline did not record the pass");
             Require(circuit != source, "Local reduction did not create a reduced circuit");
             Require(circuit->GetMaxQubitIndex() == 0, "Local reduction did not compact qubits");
             Require(circuit->GetOperations().size() == 1, "Local reduction retained spectator gates");
             Require(paulis == std::vector<std::string>{"Z"}, "Local reduction did not remap the observable");
             Require(source->GetMaxQubitIndex() == 2 && source->GetOperations().size() == 2, "Reduction mutated the source");
         }
+
+        auto circuit = source;
+        std::vector<std::string> paulis{"IIIIIZ"};
+        MaestroExecution::SimulatorConfig config;
+        config.enable_causal_cone_reduction = false;
+        MaestroExecution::TransformContext ctx{circuit, paulis, Type::kQCSim, config};
+        MaestroExecution::TransformPipeline::Run(ctx);
+        Require(circuit == source && paulis == std::vector<std::string>{"IIIIIZ"}, "Disabled pipeline changed inputs");
+        Require(ctx.qubits_before == 6 && ctx.qubits_after == 6 && ctx.applied_transforms.empty(), "Disabled diagnostics ignored observables");
+
+        config.enable_causal_cone_reduction = true;
+        MaestroExecution::TransformPipeline::Run(ctx);
+        Require(circuit->GetOperations().empty() && paulis == std::vector<std::string>{"Z"}, "Idle observable reduction failed");
+        Require(ctx.qubits_before == 6 && ctx.qubits_after == 1, "Idle observable width is incorrect");
+        MaestroExecution::TransformPipeline::Run(ctx);
+        Require(ctx.applied_transforms.size() == 1 && ctx.qubits_before == 1, "Pipeline diagnostics accumulated across runs");
+
+        circuit = source;
+        paulis = {"III"};
+        MaestroExecution::TransformPipeline::Run(ctx);
+        Require(circuit->GetOperations().empty() && paulis == std::vector<std::string>{"I"} && ctx.qubits_after == 1,
+                "Identity reduction did not retain the minimum register width");
+
+        circuit = source;
+        paulis = {"I?I"};
+        MaestroExecution::TransformPipeline::Run(ctx);
+        Require(circuit == source && paulis == std::vector<std::string>{"I?I"}, "Malformed observable did not fall back");
+
+        for (const auto &operation : {Factory::CreateReset({2}), Factory::CreateMeasurement({{2, 0}})})
+        {
+            auto nonunitary = std::make_shared<Circuit>();
+            nonunitary->AddOperation(operation);
+            circuit = nonunitary;
+            paulis = {"ZII"};
+            MaestroExecution::TransformPipeline::Run(ctx);
+            Require(circuit == nonunitary && paulis == std::vector<std::string>{"ZII"}, "Nonunitary operation did not fall back");
+            Require(ctx.qubits_before == 3 && ctx.qubits_after == 3, "Fallback diagnostics changed register width");
+        }
+
+        circuit.reset();
+        bool rejected_null = false;
+        try
+        {
+            MaestroExecution::TransformPipeline::Run(ctx);
+        }
+        catch (const std::invalid_argument &)
+        {
+            rejected_null = true;
+        }
+        Require(rejected_null, "Pipeline accepted a null circuit");
     }
     catch (const std::exception &error)
     {

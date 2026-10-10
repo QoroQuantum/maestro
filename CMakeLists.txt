@@ -396,7 +396,14 @@ endif()
 # 5. Core Targets: libmaestro and maestroexe
 # ==============================================================================
 
-set(MAESTROSRC maestrolib/Interface.cpp Execution/Request.cpp)
+set(MAESTROSRC maestrolib/Interface.cpp Execution/Request.cpp
+    Execution/Transforms/Export.h
+    Execution/Transforms/TransformContext.h
+    Execution/Transforms/ITransform.h
+    Execution/Transforms/TransformPipeline.h
+    Execution/Transforms/TransformPipeline.cpp
+    Execution/Transforms/CausalConeTransform.h
+    Execution/Transforms/CausalConeTransform.cpp)
 if(WIN32)
     list(APPEND MAESTROSRC maestrolib/DllMain.cpp)
 else()
@@ -513,7 +520,6 @@ if(BUILD_PYTHON_BINDINGS)
 
         nanobind_add_module(maestro_py
             python/Bindings.cpp
-            python/bindings/causal_cone.cpp
             python/bindings/execution.cpp
             python/bindings/fidelity.cpp
             python/bindings/evolution.cpp
@@ -586,7 +592,8 @@ if(COMPILE_TESTS)
     endif()
     add_test(NAME alias_sampling COMMAND alias_sampling_tests)
 
-    add_executable(causal_cone_tests tests/CausalConeTests.cpp python/bindings/causal_cone.cpp)
+    add_executable(causal_cone_tests tests/CausalConeTests.cpp)
+    target_link_libraries(causal_cone_tests PRIVATE maestro)
     target_include_directories(causal_cone_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(causal_cone_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX)
     add_test(NAME causal_cone COMMAND causal_cone_tests)

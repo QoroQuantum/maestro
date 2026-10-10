@@ -1,18 +1,27 @@
-#include "causal_cone.h"
+#include "CausalConeTransform.h"
+
+#include "Execution/SimulatorConfig.h"
 
 #include <algorithm>
 
-namespace maestro_bindings
+namespace MaestroExecution
 {
 
-void ReduceCausalCone(std::shared_ptr<Circuits::Circuit<double>> &circuit, std::vector<std::string> &paulis, Simulators::SimulatorType simulator_type)
+std::string_view CausalConeTransform::Name() const
 {
-    // Distributed layouts refer to the original qubit indices. Even automatic
-    // layouts need enough qubits for all shards and at least one local qubit.
-    // Keep the full circuit for both single-process and MPI distribution.
-    if (Simulators::IsDistributedGpuSimulator(simulator_type))
-        return;
+    return "CausalCone";
+}
 
+bool CausalConeTransform::IsApplicable(const TransformContext &ctx) const
+{
+    // Distributed layouts and shard counts refer to the original register.
+    return ctx.config.enable_causal_cone_reduction && !Simulators::IsDistributedGpuSimulator(ctx.simulator_type);
+}
+
+void CausalConeTransform::Apply(TransformContext &ctx)
+{
+    auto &circuit = ctx.circuit;
+    auto &paulis = ctx.observables;
     const auto &operations = circuit->GetOperations();
     // Classical dependencies and nonunitary trajectories need full execution.
     // In particular, never discard a measurement controlling a retained gate.
@@ -77,4 +86,4 @@ void ReduceCausalCone(std::shared_ptr<Circuits::Circuit<double>> &circuit, std::
     circuit = std::move(reduced);
 }
 
-} // namespace maestro_bindings
+} // namespace MaestroExecution

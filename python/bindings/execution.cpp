@@ -1,4 +1,4 @@
-#include "causal_cone.h"
+#include "Execution/Transforms/TransformPipeline.h"
 #include "core.h"
 #include "runtime.h"
 
@@ -95,16 +95,13 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
         throw nb::value_error("Circuit is null.");
 
     auto paulis = observables;
-    std::chrono::duration<double> reduction_duration(0.0);
-    if (config.enable_causal_cone_reduction)
+    auto transform_start = std::chrono::high_resolution_clock::now();
     {
-        auto start = std::chrono::high_resolution_clock::now();
-        {
-            nb::gil_scoped_release release;
-            ReduceCausalCone(circuit, paulis, config.simulator_type);
-        }
-        reduction_duration = std::chrono::high_resolution_clock::now() - start;
+        nb::gil_scoped_release release;
+        MaestroExecution::TransformContext ctx{circuit, paulis, config.simulator_type, config};
+        MaestroExecution::TransformPipeline::Run(ctx);
     }
+    const auto reduction_duration = std::chrono::high_resolution_clock::now() - transform_start;
 
     int num_qubits = static_cast<int>(circuit->GetMaxQubitIndex()) + 1;
     for (const auto &p : paulis)
