@@ -79,6 +79,9 @@ std::mt19937 MakeNoiseRng(const SimulatorConfig &config, std::optional<uint64_t>
 SimulatorConfig NoiseExecutionConfig(const SimulatorConfig &config, std::optional<uint64_t> noise_seed, uint64_t batch)
 {
     auto execution_config = config;
+    // Noisy workflows retain their requested backend, even for realizations
+    // in which stochastic injection happens to insert no error.
+    execution_config.auto_reduce = false;
     if (!execution_config.seed && noise_seed)
         execution_config.seed = *noise_seed;
     if (execution_config.seed)

@@ -54,6 +54,7 @@ const char *const kConfigFields[] = {
     "path_integral_threshold",
     "gate_fusion",
     "enable_causal_cone_reduction",
+    "auto_reduce",
 };
 
 void bind_config(nb::module_ &m)
@@ -100,7 +101,7 @@ void bind_config(nb::module_ &m)
            std::optional<std::string> mpo_kraus_completeness_check, bool mpo_restore_trace_after_truncation, bool mpo_hermitize_after_truncation,
            std::optional<double> pp_coefficient_threshold, std::optional<size_t> pp_max_pauli_weight, std::optional<int> pp_gates_between_trims,
            std::optional<int> pp_gates_between_deduplications, std::optional<double> path_integral_threshold, std::optional<bool> gate_fusion,
-           bool enable_causal_cone_reduction) {
+           bool enable_causal_cone_reduction, bool auto_reduce) {
             SimulatorConfig config;
             config.simulator_type = simulator_type;
             config.simulation_type = simulation_type;
@@ -127,6 +128,7 @@ void bind_config(nb::module_ &m)
             config.path_integral_threshold = path_integral_threshold;
             config.gate_fusion = gate_fusion;
             config.enable_causal_cone_reduction = enable_causal_cone_reduction;
+            config.auto_reduce = auto_reduce;
             config.Validate();
             new (self) SimulatorConfig(std::move(config));
         },
@@ -138,7 +140,8 @@ void bind_config(nb::module_ &m)
         "mpo_kraus_completeness_check"_a = nb::none(), "mpo_restore_trace_after_truncation"_a = defaults.mpo_restore_trace_after_truncation,
         "mpo_hermitize_after_truncation"_a = defaults.mpo_hermitize_after_truncation, "pp_coefficient_threshold"_a = nb::none(),
         "pp_max_pauli_weight"_a = nb::none(), "pp_gates_between_trims"_a = nb::none(), "pp_gates_between_deduplications"_a = nb::none(),
-        "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(), "enable_causal_cone_reduction"_a = defaults.enable_causal_cone_reduction);
+        "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(), "enable_causal_cone_reduction"_a = defaults.enable_causal_cone_reduction,
+        "auto_reduce"_a = defaults.auto_reduce);
 
     BindConfigField(config_class, "gate_fusion", &SimulatorConfig::gate_fusion,
                     "Fuse compatible gates on supported backends. None (the "
@@ -229,6 +232,9 @@ void bind_config(nb::module_ &m)
                     "trimming.");
     BindConfigField(config_class, "enable_causal_cone_reduction", &SimulatorConfig::enable_causal_cone_reduction,
                     "Reduce observable causal cones before allocation; distributed GPU backends retain full execution.");
+    BindConfigField(
+        config_class, "auto_reduce", &SimulatorConfig::auto_reduce,
+        "Detect check-generated invariant subspaces before estimation and use an exact CPU statevector; unsupported circuits retain the configured backend.");
     nb::list config_fields;
     for (const char *name : kConfigFields)
         config_fields.append(name);

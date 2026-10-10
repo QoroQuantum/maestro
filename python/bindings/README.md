@@ -37,3 +37,19 @@ factor, whose expectation is one in the all-zero product input used by these
 execution APIs. Noise is injected before this pass; channels and classical or
 measurement operations trigger full execution. Approximate simulator truncation
 can change after reduction, with no error bound supplied by the reducer.
+
+Exact parity-check subspace reduction is enabled by default for expectation APIs:
+
+```python
+# Enabled by default; non-matching circuits bail out in nanoseconds.
+result = circuit.estimate(["ZZII", "IIZZ"])
+print(result["auto_reduced"], result["qubits_after"])
+
+# Can be explicitly disabled:
+config = maestro.SimulatorConfig(auto_reduce=False)
+```
+
+The reduced circuit is simulated using the caller's configured simulator
+type, method, and options (e.g. GPU, CPU Statevector, or MPS). See
+[`Execution/Transforms/README.md`](../../Execution/Transforms/README.md#automatic-parity-reduction)
+for supported preparations/gates, resource bounds and observable projection.

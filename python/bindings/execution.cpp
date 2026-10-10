@@ -95,10 +95,10 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
         throw nb::value_error("Circuit is null.");
 
     auto paulis = observables;
+    MaestroExecution::TransformContext ctx{circuit, paulis, config.simulator_type, config};
     auto transform_start = std::chrono::high_resolution_clock::now();
     {
         nb::gil_scoped_release release;
-        MaestroExecution::TransformContext ctx{circuit, paulis, config.simulator_type, config};
         MaestroExecution::TransformPipeline::Run(ctx);
     }
     const auto reduction_duration = std::chrono::high_resolution_clock::now() - transform_start;
@@ -127,11 +127,15 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
 
     // Convert to Python list
     nb::list exp_vals;
-    for (double val : expectations)
-        exp_vals.append(val);
+    for (size_t i = 0; i < expectations.size(); ++i)
+        exp_vals.append(expectations[i] * ctx.expectation_factors[i]);
 
     nb::dict py_result;
     py_result["expectation_values"] = exp_vals;
+    py_result["auto_reduced"] = ctx.auto_reduced;
+    py_result["qubits_before"] = ctx.qubits_before;
+    py_result["qubits_after"] = ctx.qubits_after;
+    py_result["reduction_time"] = std::chrono::duration<double>(reduction_duration).count();
     py_result["time_taken"] = std::chrono::duration<double>(end - start + reduction_duration).count();
     py_result["simulator"] = (int)network->GetLastSimulatorType();
     py_result["method"] = (int)network->GetLastSimulationType();
