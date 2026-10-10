@@ -22,3 +22,18 @@ All observables run together through the usual configured network. Unsupported
 operations retain full execution. Distributed GPU and MPI backends also retain
 full execution to preserve explicit qubit layouts and the minimum register width
 required by their shard counts.
+
+## Correctness invariant
+
+Starting with the union of the observable supports, walk the gates in reverse
+execution order. If a unitary gate's qubits are disjoint from the current support,
+`G† O G = O`, so it can be dropped. Otherwise keep the gate and add all its qubits
+(including controls) to the support. This maintains a conservative superset of
+the Heisenberg-evolved support for every observable. It need not be the smallest
+cone: commuting gates and algebraic cancellations can leave extra gates retained.
+Restore forward order, clone the retained gates, and apply the same one-to-one
+qubit map to gates and observables. The removed qubits contribute an identity
+factor, whose expectation is one in the all-zero product input used by these
+execution APIs. Noise is injected before this pass; channels and classical or
+measurement operations trigger full execution. Approximate simulator truncation
+can change after reduction, with no error bound supplied by the reducer.
