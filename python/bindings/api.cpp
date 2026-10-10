@@ -125,7 +125,8 @@ void bind_api(nb::module_ &m)
         "incompatible plugins.");
 #endif
     // --- GPU Library Management ---
-    m.def("init_gpu", []() { return Simulators::SimulatorsFactory::InitGpuLibrary(); }, "Initialize the GPU simulation library. Returns True on success.");
+    m.def(
+        "init_gpu", []() { return Simulators::SimulatorsFactory::InitGpuLibrary(); }, "Initialize the GPU simulation library. Returns True on success.");
 
     m.def(
         "is_gpu_available", []() { return Simulators::SimulatorsFactory::IsGpuLibraryAvailable(); },
