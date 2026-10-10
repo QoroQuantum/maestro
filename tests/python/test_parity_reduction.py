@@ -206,4 +206,3 @@ def test_noisy_execution_bypasses_auto_reduction():
     res = circuit.noisy_estimate(["ZZII"], nm, cfg(True))
     assert "expectation_values" in res
     assert "ideal_expectation_values" in res
-
