@@ -1,4 +1,3 @@
-#include "causal_cone.h"
 #include "core.h"
 #include "runtime.h"
 
@@ -95,16 +94,6 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
         throw nb::value_error("Circuit is null.");
 
     auto paulis = observables;
-    std::chrono::duration<double> reduction_duration(0.0);
-    if (config.enable_causal_cone_reduction)
-    {
-        auto start = std::chrono::high_resolution_clock::now();
-        {
-            nb::gil_scoped_release release;
-            ReduceCausalCone(circuit, paulis, config.simulator_type);
-        }
-        reduction_duration = std::chrono::high_resolution_clock::now() - start;
-    }
 
     int num_qubits = static_cast<int>(circuit->GetMaxQubitIndex()) + 1;
     for (const auto &p : paulis)
@@ -135,7 +124,7 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
 
     nb::dict py_result;
     py_result["expectation_values"] = exp_vals;
-    py_result["time_taken"] = std::chrono::duration<double>(end - start + reduction_duration).count();
+    py_result["time_taken"] = std::chrono::duration<double>(end - start).count();
     py_result["simulator"] = (int)network->GetLastSimulatorType();
     py_result["method"] = (int)network->GetLastSimulationType();
     if (network->GetLastGpuDevice() >= 0)

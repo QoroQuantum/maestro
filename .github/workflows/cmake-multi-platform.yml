@@ -129,4 +129,4 @@ jobs:
       run: ctest --test-dir . --output-on-failure -R '^maestro_composer_integration$'
 
     - name: Check backend selection, tensor contractions, fusion, and sampling
-      run: ctest --test-dir . --output-on-failure -R '^(backend_specialization|tensor_contractions|gate_fusion_tests|fusion_routing_tests|sampling_order|causal_cone)$'
+      run: ctest --test-dir . --output-on-failure -R '^(backend_specialization|tensor_contractions|gate_fusion_tests|fusion_routing_tests|sampling_order)$'
