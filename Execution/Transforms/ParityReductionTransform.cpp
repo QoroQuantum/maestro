@@ -146,7 +146,8 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
 {
     // Fast O(1) signature bailout: a check-subspace circuit must start with H
     // (|+> preparation) or CX / Rx / Rz (zero-state dual). Non-unitary operations
-    // or non-matching gates (Ry, Phase, T, Swap, etc.) bail out in nanoseconds.
+    // or non-matching initial gates (Ry, Phase, T, Swap, etc.) bail out in nanoseconds;
+    // later rejection depends on the length of the scanned prefix.
     for (const auto &operation : ctx.circuit->GetOperations())
     {
         if (!operation || operation->GetType() == Circuits::OperationType::kNoOp || operation->GetType() == Circuits::OperationType::kDelay)

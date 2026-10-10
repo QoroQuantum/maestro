@@ -206,3 +206,16 @@ def test_noisy_execution_bypasses_auto_reduction():
     res = circuit.noisy_estimate(["ZZII"], nm, cfg(True))
     assert "expectation_values" in res
     assert "ideal_expectation_values" in res
+
+
+def test_noisy_montecarlo_no_error_retains_unreduced_register():
+    circuit = circuit_for_checks(4, [(0, 1), (1, 2, 3)])
+    nm = maestro.NoiseModel()  # deterministic no-error realization
+
+    res = circuit.noisy_estimate_montecarlo(
+        ["ZZII"], nm, noise_realizations=1, config=cfg(True)
+    )
+    assert not res["auto_reduced"]
+    assert res["qubits_before"] == 4
+    assert res["qubits_after"] == 4
+

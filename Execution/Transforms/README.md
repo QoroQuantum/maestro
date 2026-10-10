@@ -65,9 +65,10 @@ To add a new transformation (e.g., `SymmetryReductionTransform`):
 ## Automatic parity reduction
 
 `ParityReduction` runs before causal-cone reduction in Python expectation APIs.
-It is enabled by default (`SimulatorConfig.auto_reduce = true`). Non-matching
-circuits immediately bail out in nanoseconds via fast initial-operation and gate
-signature checks, retaining their original execution path without measurable overhead.
+It is enabled by default (`SimulatorConfig.auto_reduce = true`). Circuits whose
+initial operations do not match bail out in nanoseconds via fast gate signature
+checks; when rejection occurs later in a long circuit, the time required to fall
+back depends on the length of the scanned prefix.
 A successful reduction executes the projected effective circuit using the caller's
 configured simulator backend and options.
 
@@ -105,9 +106,10 @@ Cliffords are outside this detector's scope.
 
 Python estimate results report `auto_reduced`, `qubits_before`, `qubits_after`,
 and `reduction_time` in seconds (including causal-cone processing). Native
-estimate results report the first three. Python `time_taken` includes the
-preflight pass and execution, following the existing estimate timing convention;
-network setup is excluded. Performance depends on circuit depth and hardware.
+estimate APIs do not currently report these diagnostic fields. Python `time_taken`
+includes the preflight pass and execution, following the existing estimate timing
+convention; network setup is excluded. Performance depends on circuit depth and
+hardware.
 `parity_reduction_tests` prints the 37-to-18 preflight time, including effective
 circuit emission, without imposing a flaky wall-clock assertion.
 
