@@ -10,8 +10,8 @@ unit explicitly; normal CMake and scikit-build builds use the same sources.
 - `execution.cpp`, `fidelity.cpp`, `evolution.cpp`: shared executor implementations.
 - `noise_execution.cpp`: noise injection, seeding, and realization averaging.
 - `checkpoint.cpp`: persistent prefix simulator and its Python registration.
-- `causal_cone.cpp`: optional estimation preprocessing, independent of the
-  network and backend implementations.
+- Pre-execution circuit transforms (causal-cone pruning, symmetry reduction) are
+  hosted in native C++ under `Execution/Transforms/` and invoked via `TransformPipeline`.
 - `core.h`, `common.h`, `runtime.h`: internal declarations, shared binding types,
   and simulator-handle lifetime management.
 
