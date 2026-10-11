@@ -5219,6 +5219,7 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "path_integral_threshold": 1e-9,
     "gate_fusion": False,
     "enable_causal_cone_reduction": False,
+    "auto_reduce": False,
     "trajectory_policy": "shot_v1",
     "trajectory_max_memory_mb": 64,
     "max_simulators": 4,
@@ -5273,6 +5274,7 @@ class TestSimulatorConfigFields:
         assert "precision=None, " in text
         assert "mps_sampling='probabilities', " in text
         assert "enable_causal_cone_reduction=True" in text
+        assert "auto_reduce=True" in text
         assert text.endswith(")")
         names = [part.split("=")[0]
                  for part in text[len("SimulatorConfig("):-1].split(", ")]

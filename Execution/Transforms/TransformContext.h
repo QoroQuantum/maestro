@@ -21,6 +21,10 @@ struct TransformContext
     Simulators::SimulatorType simulator_type;
     const SimulatorConfig &config;
 
+    // Indicates whether parity reduction was applied to the circuit.
+    bool auto_reduced = false;
+    std::vector<double> expectation_factors{};
+
     // Effective register widths include observables and the one-qubit minimum.
     size_t qubits_before = 0;
     size_t qubits_after = 0;

@@ -107,6 +107,8 @@ struct SimulatorConfig
     std::optional<uint64_t> seed = std::nullopt;
     std::optional<int> gpu_device = std::nullopt;
     bool enable_causal_cone_reduction = true;
+    // Automatically reduce check-generated invariant subspaces for expectation evaluation.
+    bool auto_reduce = true;
     // Values use the same names and syntax as ISimulator::Configure.
     std::unordered_map<std::string, std::string> distributed_options;
 
