@@ -35,7 +35,7 @@ print(result["counts"])  # Approximately {"00": 512, "11": 512}
 
 The default is CPU statevector simulation. Reuse the same circuit with a different backend by passing a `maestro.SimulatorConfig` to `execute()`.
 
-For source builds and the C++ library, see the [installation guide](markdown/INSTALL.md).
+For source builds and the C++ library, see the [installation guide](https://qoroquantum.github.io/maestro/da/d03/md_markdown_2INSTALL.html).
 
 ## CPU, GPU, and Distributed Execution
 
@@ -63,30 +63,18 @@ result = qc.execute(shots=1024, config=config)
 
 For larger statevectors, `DistributedGpu` spreads the state across local GPU memory. `DistributedMpiGpu` extends this to MPI clusters, allowing simulations beyond a single GPU's memory capacity. Both distributed backends currently support **statevector simulation only**.
 
-GPU execution requires the corresponding acceleration plugin and compatible NVIDIA hardware and CUDA libraries. Distributed GPU plugins are Linux-only; MPI execution additionally requires CUDA-aware MPI. Run the same program on every rank, with matching simulation calls, using a launcher such as `mpirun`. See the [GPU, multi-GPU, and MPI guide](docs/python/hpc.dox) for plugin setup, licensing where required, device selection, and a complete MPI example.
+GPU execution requires the corresponding acceleration plugin and compatible NVIDIA hardware and CUDA libraries. Distributed GPU plugins are Linux-only; MPI execution additionally requires CUDA-aware MPI. Run the same program on every rank, with matching simulation calls, using a launcher such as `mpirun`. See the [GPU, multi-GPU, and MPI guide](https://qoroquantum.github.io/maestro/dc/d01/py_hpc.html) for plugin setup, licensing where required, device selection, and a complete MPI example.
 
 ## Documentation
 
-- [Installation and source builds](markdown/INSTALL.md)
-- [Python quick start and configuration](docs/python/quickstart.dox) · [Circuit building](docs/python/circuits.dox) · [Simulation backends](docs/python/backends.dox)
-- [Noise modeling](docs/python/noise.dox) · [Observables and algorithms](docs/python/algorithms.dox) · [QEC with Stim/Sinter](docs/python/sinter.dox)
-- [GPU and MPI execution](docs/python/hpc.dox)
-- [C++ tutorial](markdown/TUTORIAL.md) · [Native JSON request API](docs/native-request-api.md)
-- [Examples](examples) · [Release notes](markdown/CHANGELOG.md)
+Browse the [Doxygen documentation](https://qoroquantum.github.io/maestro/).
 
-<details>
-<summary>Optional Composer integration</summary>
-
-Composer's network and execution estimators are disabled by default. Enable them by pointing CMake at the Composer source root (the directory containing `composer/`):
-
-```bash
-cmake -S . -B build -DMAESTRO_ENABLE_COMPOSER=ON -DCOMPOSER_INCLUDE_DIR=../composer
-cmake --build build --config Release
-```
-
-An enabled build also searches `../composer` and `../../composer`. Composer's own CMake build and Visual Studio solution enable this integration automatically.
-
-</details>
+- [Installation and source builds](https://qoroquantum.github.io/maestro/da/d03/md_markdown_2INSTALL.html)
+- [Python quick start and configuration](https://qoroquantum.github.io/maestro/d2/d02/py_quickstart.html) · [Circuit building](https://qoroquantum.github.io/maestro/d2/d00/py_circuits.html) · [Simulation backends](https://qoroquantum.github.io/maestro/dc/d03/py_backends.html)
+- [Noise modeling](https://qoroquantum.github.io/maestro/d5/d03/py_noise.html) · [Observables and algorithms](https://qoroquantum.github.io/maestro/d4/d01/py_algorithms.html) · [QEC with Stim/Sinter](https://qoroquantum.github.io/maestro/d6/d02/py_sinter.html)
+- [GPU and MPI execution](https://qoroquantum.github.io/maestro/dc/d01/py_hpc.html)
+- [C++ tutorial](https://qoroquantum.github.io/maestro/da/d03/md_markdown_2TUTORIAL.html) · [C++ API reference](https://qoroquantum.github.io/maestro/annotated.html)
+- [Examples](https://github.com/QoroQuantum/maestro-demos) · [Release notes](https://qoroquantum.github.io/maestro/da/d02/md_markdown_2CHANGELOG.html)
 
 ## Citation
 
