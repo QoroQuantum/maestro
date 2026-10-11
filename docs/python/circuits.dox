@@ -117,23 +117,41 @@
  * )
  * result = qc.estimate(observables=["ZZ", "XX"], config=mps_config)
  * @endcode
- * Causal-cone reduction is enabled by default on `SimulatorConfig` to
- * remove gates and qubits outside the combined backward dependencies of the
- * requested observables (set `config.enable_causal_cone_reduction = False` to disable):
+ * @subsection py_circuits_transforms Pre-Execution Transforms and Reductions
+ *
+ * Maestro includes an extensible native transform pipeline that optimizes
+ * circuits and observables before simulator allocation:
+ *
+ * 1. **Causal-cone reduction** (`enable_causal_cone_reduction=True`, default):
+ *    Removes gates and idle qubits outside the combined backward dependencies of the
+ *    requested observables.
+ * 2. **Automatic parity-check reduction** (`auto_reduce=True`, default):
+ *    Detects invariant check subspaces (e.g. QAOA parity ladders with uncomputed
+ *    CNOT frames) and maps the simulation to an effective reduced register of
+ *    dimension 2^rank(checks), simulated using the caller's configured backend.
+ *
+ * Either or both transforms can be disabled via `SimulatorConfig`:
  * @code{.py}
- * config = maestro.SimulatorConfig(enable_causal_cone_reduction=False)
- * result = qc.estimate(["ZI", "II"], config=config)
+ * # Disable one or both transforms:
+ * config = maestro.SimulatorConfig(
+ *     enable_causal_cone_reduction=False,
+ *     auto_reduce=False,
+ * )
+ * result = qc.estimate(["ZZII", "IIZZ"], config=config)
  * @endcode
+ *
+ * Estimation results report diagnostic metadata on whether and how reduction was applied:
+ * @code{.py}
+ * result = qc.estimate(["ZZII", "IIZZ"])
+ * print("Reduced:", result["auto_reduced"])
+ * print("Qubits before:", result["qubits_before"])
+ * print("Qubits after:", result["qubits_after"])
+ * print("Reduction time (s):", result["reduction_time"])
+ * @endcode
+ *
  * Reduction runs before simulator allocation and uses the configured backend
  * and its options. All observables share one reduced circuit, with their
  * order preserved. The source circuit is unchanged.
- * Measurement, reset, quantum channels, classical control, and composite
- * operations conservatively fall back to full execution. Distributed GPU and MPI
- * backends also retain full execution to preserve qubit layouts and shard counts.
- * The reduction preserves exact unitary expectation values from the all-zero
- * initial state. Approximate backends can follow different truncation paths
- * after reduction; the size of the resulting numerical difference is not bounded
- * by this optimization.
- * Requesting observables that collectively cover the whole register may not
- * reduce the simulation width.
+ * Non-unitary operations (measurement, reset, quantum channels), classical control,
+ * and distributed GPU layouts conservatively fall back to full execution.
  */

@@ -73,6 +73,8 @@
  * | `pp_max_pauli_weight` | `int` or `None` | `None` | Pauli propagation: drop strings acting on more qubits than this |
  * | `pp_gates_between_trims`, `pp_gates_between_deduplications` | `int` or `None` | `None` | Pauli propagation: how often (in primitive operations) to apply the two thresholds; a deduplication pass also merges repeated strings. Unset, PauliPropagator simulations deduplicate every 10 operations. |
  * | `path_integral_threshold` | `float` or `None` | `None` | PathIntegral trim threshold |
+ * | `enable_causal_cone_reduction` | `bool` | `True` | Discard gates and idle qubits outside the backward causal dependencies of requested observables before simulation |
+ * | `auto_reduce` | `bool` | `True` | Detect check-generated invariant subspaces before estimation and simulate on the effective reduced register using the configured backend |
  *
  * The constructor takes every parameter by keyword only.
  *
