@@ -22,6 +22,7 @@
 #include "Network.h"
 
 #include "Configuration.h"
+#include <algorithm>
 #include <functional>
 #ifdef _OPENMP
 #include <omp.h>
@@ -75,9 +76,20 @@ template <typename Time = Types::time_type> class ExecuteJob
         const bool optimiseMultipleShots = optimiseMultipleShotsExecution;
         const bool specialOptimizationForStatevector = optimiseMultipleShots && method == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
 
-        dcirc = dcirc->RemoveExecutedOperations(executedGates);
-
         size_t curMaxBondDimLocal = 0;
+
+        // A retained simulator may contain the caller's input state rather than
+        // an executed prefix. Prepare the same suffix as a newly created worker
+        // so per-shot classical RNG positions do not depend on simulator reuse.
+        if (optSim && optimiseMultipleShots && executedGates.size() == dcirc->size() &&
+            std::none_of(executedGates.begin(), executedGates.end(), [](bool executed) { return executed; }))
+        {
+            executedGates = dcirc->ExecuteNonMeasurements(optSim, state, &curMaxBondDimLocal);
+            if (!hasMeasurementsOnlyAtEnd && curCnt > 1)
+                optSim->SaveState();
+        }
+
+        dcirc = dcirc->RemoveExecutedOperations(executedGates);
 
         if (!optSim)
         {

@@ -1322,6 +1322,68 @@ void TrailingReset()
     }
 }
 
+void ExecuteTrajectoryPreservesState()
+{
+    for (auto method : {Method::kStatevector, Method::kDensityMatrix, Method::kPathIntegral})
+        for (const char *policy : {"shot_v1", "block_v1"})
+            for (const char *fusion : {"false", "true"})
+            {
+                const std::string context = " (method=" + std::to_string(static_cast<int>(method)) + ", policy=" + policy + ", fusion=" + fusion + ")";
+                auto network = MakeNetwork(Backend::kQCSim, method, 4);
+                network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+                network->Configure("trajectory_policy", policy);
+                network->Configure("gate_fusion", fusion);
+                network->Configure("seed", "99");
+                const auto existing = network->GetSimulator();
+                const auto resultBits = [&] {
+                    auto bits = network->GetState().GetAllBits();
+                    bits.resize(network->GetNumClassicalBits());
+                    return bits;
+                };
+
+                // Mid-circuit measurement selects the trajectory dispatcher. The
+                // first qubit is input supplied by the caller; the second is a
+                // coherent spectator, so both populations and phase must survive.
+                auto circuit = CF::CreateCircuit({CF::CreateMeasurement({{0, 0}}), CF::CreateGate(Gate::kXGateType, 0), CF::CreateMeasurement({{0, 1}})});
+                for (int repeat = 0; repeat < 2; ++repeat)
+                {
+                    existing->Reset();
+                    existing->ApplyX(0);
+                    existing->ApplyH(1);
+                    existing->ApplyS(1);
+                    existing->SaveState();
+                    network->Execute(circuit);
+                    Check(network->GetSimulator() == existing, "Execute replaced the caller's trajectory simulator");
+                    Check(resultBits() == std::vector<bool>({true, false, false, false}), "Execute discarded its prepared trajectory input" + context);
+                    existing->ApplySDG(1);
+                    existing->ApplyH(1);
+                    Check(std::abs(existing->Probability(0) - 1.) < 1e-12, "Execute changed the unmeasured input's coherence");
+                    existing->RestoreState();
+                    existing->ApplySDG(1);
+                    existing->ApplyH(1);
+                    Check(std::abs(existing->Probability(1) - 1.) < 1e-12, "Single-shot Execute overwrote the caller's checkpoint");
+                }
+
+                // RepeatedExecute must still start from zero, even for one shot.
+                Check(network->RepeatedExecute(circuit, 1) == Counts{{{false, true, false, false}, 1}},
+                      "RepeatedExecute retained the input of a prior Execute");
+
+                // Prefix removal also determines the classical RNG stream IDs.
+                // Reuse and fresh single-shot dispatch must agree on all streams.
+                auto random = CF::CreateCircuit({CF::CreateGate(Gate::kHadamardGateType, 0), CF::CreateMeasurement({{0, 0}}), CF::CreateRandom({2, 3}),
+                                                 CF::CreateGate(Gate::kXGateType, 0), CF::CreateMeasurement({{0, 1}})});
+                auto measured = std::static_pointer_cast<Circuits::MeasurementOperation<>>(random->GetOperations()[1]);
+                measured->SetReadout({{0.2, 0.35}});
+                for (const char *seed : {"0", "1", "99", "1099511627776"})
+                {
+                    network->Configure("seed", seed);
+                    const auto reference = network->RepeatedExecute(random, 1);
+                    network->Execute(random);
+                    Check(reference == Counts{{resultBits(), 1}}, "Simulator reuse changed per-shot RNG streams" + context);
+                }
+            }
+}
+
 void DistributedSimulatorReuse()
 {
     std::vector<Backend> backends{Backend::kQCSim};
@@ -1400,6 +1462,7 @@ try
     NestedShotBoundaries();
     ConditionalBitHelpers();
     HostSimulatorReuse();
+    ExecuteTrajectoryPreservesState();
     DistributedSimulatorReuse();
     RandomJobs();
     RandomSeedPolicy();
