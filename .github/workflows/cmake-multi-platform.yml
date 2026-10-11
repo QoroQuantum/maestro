@@ -1,12 +1,20 @@
 name: Compiling and testing on Ubuntu
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      run_complete_test_suite:
+        description: "Run complete test suite (includes heavy/restricted tests)"
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      run_complete_test_suite:
+        description: "Run complete test suite (includes heavy/restricted tests)"
+        type: boolean
+        default: false
 
 env:
   QCSIM_VERSION: "217c60953795045ecb6439d0cc34191fecd165ff"
@@ -117,8 +125,15 @@ jobs:
 
     - name: Run tests
       run: |
-        ./bin/tests --log_level=test_suite \
-          --run_test='!gpu_simulator_tests:!MPSSwapOptTests:!circuit_tests/RandomCircuitsTest*:!circuit_tests/RandomCircuitsOptimizationTest*:!mps_tests/RandomCircuitsTest*:!mps_tests/RandomCircuitsTest50*:!clifford_tests/RandomCircuitsTest*:!convsim_tests/RandomAerCircuitsTest*:!convsim_tests/RandomQcsimCircuitsTest*:!convsim_tests/RandomAerQcsimCircuitsTest*'
+        if [ "${{ inputs.run_complete_test_suite }}" = "true" ]; then
+          echo "Running complete test suite..."
+          ./bin/tests --log_level=test_suite \
+            --run_test='!gpu_simulator_tests:!MPSSwapOptTests:!circuit_tests/RandomCircuitsTest*:!circuit_tests/RandomCircuitsOptimizationTest*:!mps_tests/RandomCircuitsTest*:!mps_tests/RandomCircuitsTest50*:!clifford_tests/RandomCircuitsTest*:!convsim_tests/RandomAerCircuitsTest*:!convsim_tests/RandomQcsimCircuitsTest*:!convsim_tests/RandomAerQcsimCircuitsTest*'
+        else
+          echo "Running fast test suite (excluding heavy/restricted tests)..."
+          ./bin/tests --log_level=test_suite \
+            --run_test='!gpu_simulator_tests:!MPSSwapOptTests:!circuit_tests/RandomCircuitsTest*:!circuit_tests/RandomCircuitsOptimizationTest*:!mps_tests/RandomCircuitsTest*:!mps_tests/RandomCircuitsTest50*:!clifford_tests/RandomCircuitsTest*:!convsim_tests/RandomAerCircuitsTest*:!convsim_tests/RandomQcsimCircuitsTest*:!convsim_tests/RandomAerQcsimCircuitsTest*:!ext_stabilizer_tests/RandomNonCliffordCircuitsTest*:!ext_stabilizer_tests/SaveRestoreMeasurementTest:!MpsNetwTests*'
+        fi
 
     - name: Run native request contract and MPI tests
       env:
@@ -129,4 +144,4 @@ jobs:
       run: ctest --test-dir . --output-on-failure -R '^maestro_composer_integration$'
 
     - name: Check backend selection, tensor contractions, fusion, and sampling
-      run: ctest --test-dir . --output-on-failure -R '^(backend_specialization|tensor_contractions|gate_fusion_tests|fusion_routing_tests|sampling_order|causal_cone)$'
+      run: ctest --test-dir . --output-on-failure -R '^(backend_specialization|tensor_contractions|gate_fusion_tests|fusion_routing_tests|sampling_order|causal_cone|parity_reduction)$'
