@@ -218,4 +218,3 @@ def test_noisy_montecarlo_no_error_retains_unreduced_register():
     assert not res["auto_reduced"]
     assert res["qubits_before"] == 4
     assert res["qubits_after"] == 4
-
