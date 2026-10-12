@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-10-12
+
+### Added
+
+- Automatic parity reduction transform (`ParityReductionTransform` / `parity_reduction`)
+  for observable estimation, reducing active qubit count by exploiting Z2 symmetries (#40).
+- Automatic causal-cone reduction transform (`CausalConeReductionTransform` / `causal_cone_reduction`)
+  for observable estimation, stripping non-causal operations and spectator qubits (#39).
+- Pre-execution transform configuration fields in `SimulatorConfig`: `causal_cone_reduction`
+  and `parity_reduction`.
+- Batched tensor expectations across public C and Python APIs.
+- Native diagnostic capabilities and build metadata reporting.
+- Modular nanobind Python bindings split into translation units under `bindings/python/` (#38).
+- Workflow input option in GitHub Actions to conditionally run the complete test suite.
+
+### Changed
+
+- QCSim trajectory performance improvements, defaulting to per-shot execution.
+- Improved reproducible sampling across QCSim backends.
+- C++ codebase organization: grouped Maestro headers into functional subfolders and
+  normalized native source filenames to `UpperCamelCase`.
+- Optional, path-configurable Composer integration.
+- Expanded `README.md` with feature overview, Python quickstart, and HPC execution guide.
+- Updated Python reference documentation for pre-execution transforms and reduction config options.
+
+### Fixed
+
+- Restored simulator validity retention before execution for Composer compatibility.
+- Trajectory threading and terminal density sampling dispatch.
+
+### Dependencies
+
+- Updated QCSim pin to `217c60953795` with improved extended stabilizer and Pauli propagation
+  simulators and additional non-Clifford gates.
+
 ## [0.3.5] - 2026-10-02
 
 ### Added
@@ -413,7 +448,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.5...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.6...HEAD
+[0.3.6]: https://github.com/QoroQuantum/maestro/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/QoroQuantum/maestro/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/QoroQuantum/maestro/compare/v0.3.3...v0.3.4
 [0.3.3]: https://github.com/QoroQuantum/maestro/compare/v0.3.2...v0.3.3
