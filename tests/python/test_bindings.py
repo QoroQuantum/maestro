@@ -1944,6 +1944,38 @@ class TestGetStatevector:
         for amp, prob in zip(sv, probs):
             assert abs(amp) ** 2 == pytest.approx(prob, abs=1e-10)
 
+    @pytest.mark.parametrize(
+        "method",
+        [maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState],
+    )
+    @pytest.mark.parametrize(
+        "gates, expected",
+        [
+            ([("x", 1)], [0, 1]),
+            ([("h", 1)], [INV_SQRT2, INV_SQRT2]),
+            ([("x", 0), ("x", 2)], [0, 0, 0, 1]),
+            # Qubit 2 is used first, but stays the more significant qubit.
+            ([("x", 2), ("h", 0)], [0, 0, INV_SQRT2, INV_SQRT2]),
+        ],
+        ids=["x-on-1", "h-on-1", "x-on-0-and-2", "first-use-is-higher"],
+    )
+    def test_get_statevector_drops_untouched_qubits(self, method, gates, expected):
+        """Untouched qubits are left out; the rest keep their relative order."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        for gate, qubit in gates:
+            if gate == "x":
+                qc.x(qubit)
+            else:
+                qc.h(qubit)
+        config = maestro.SimulatorConfig(simulation_type=method)
+
+        sv = maestro.get_statevector(qc, config=config)
+        probs = maestro.get_probabilities(qc, config=config)
+
+        assert list(sv) == pytest.approx(expected, abs=1e-10)
+        assert sum(probs) == pytest.approx(1.0, abs=1e-10)
+
 
 class TestMirrorFidelity:
     """Test the mirror_fidelity function and circuit method.

@@ -486,21 +486,14 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         // remapped during execution on the host.
         if (!qubitsMapOnHost.empty())
         {
-            const size_t offsetBase = qubitsMapOnHost.size();
+            // Build reverse mapping: simulator qubit position -> rank of its
+            // original qubit among the mapped ones.
+            std::vector<std::pair<Types::qubit_t, Types::qubit_t>> byOriginal(qubitsMapOnHost.begin(), qubitsMapOnHost.end());
+            std::sort(byOriginal.begin(), byOriginal.end());
 
-            // Build reverse mapping: simulator qubit position -> original qubit
-            // position.
             std::vector<size_t> simToOrig(n);
-            size_t offset = offsetBase;
-
-            for (size_t qbit = 0; qbit < n; ++qbit)
-            {
-                auto pos = qubitsMapOnHost.find(qbit);
-                if (pos != qubitsMapOnHost.end())
-                    simToOrig[pos->second] = pos->first;
-                else
-                    simToOrig[qbit] = offset++;
-            }
+            for (size_t pos = 0; pos < byOriginal.size(); ++pos)
+                simToOrig[byOriginal[pos].second] = pos;
 
             std::vector<std::complex<double>> remapped(dim);
 
