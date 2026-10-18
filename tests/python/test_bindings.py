@@ -5219,6 +5219,8 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "path_integral_threshold": 1e-9,
     "gate_fusion": False,
     "enable_causal_cone_reduction": False,
+    "enable_observable_clustering": False,
+    "max_cluster_qubits": 35,
     "auto_reduce": False,
     "trajectory_policy": "shot_v1",
     "trajectory_max_memory_mb": 64,

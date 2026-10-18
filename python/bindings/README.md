@@ -18,7 +18,10 @@ unit explicitly; normal CMake and scikit-build builds use the same sources.
 Causal-cone reduction is enabled by default via SimulatorConfig.enable_causal_cone_reduction (set to False to disable).
 It traces the union of observable supports backward through unitary operations,
 then clones/remaps the retained operations and Pauli strings to compact indices.
-All observables run together through the usual configured network. Unsupported
+With observable clustering (SimulatorConfig.enable_observable_clustering, default on),
+observables with disjoint lightcones are reduced and run as separate groups, and
+SimulatorConfig.max_cluster_qubits optionally caps each group's lightcone size
+(see Execution/Transforms/ObservableClustering.h). Unsupported
 operations retain full execution. Distributed GPU and MPI backends also retain
 full execution to preserve explicit qubit layouts and the minimum register width
 required by their shard counts.

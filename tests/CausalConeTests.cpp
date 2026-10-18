@@ -1,5 +1,6 @@
 #include "Circuit/Factory.h"
 #include "Execution/SimulatorConfig.h"
+#include "Execution/Transforms/ObservableClustering.h"
 #include "Execution/Transforms/TransformPipeline.h"
 
 #include <iostream>
@@ -106,6 +107,61 @@ int main()
             rejected_null = true;
         }
         Require(rejected_null, "Pipeline accepted a null circuit");
+
+        // Observable clustering: disjoint lightcones split, shared ones merge.
+        {
+            using Groups = std::vector<std::vector<size_t>>;
+            auto chain = std::make_shared<Circuit>();
+            chain->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kHadamardGateType, 0));
+            chain->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kCXGateType, 0, 1));
+            chain->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kHadamardGateType, 4));
+            chain->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kCXGateType, 4, 5));
+            chain->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kCXGateType, 1, 2));
+
+            // ZIIIII and IZIIII share qubits {0,1}; IIIIZI sits on {4,5}; identity is separate.
+            const std::vector<std::string> obs{"ZIIIII", "IIIIZI", "IZIIII", "IIIIII", "IIIIIZ"};
+            const auto groups = MaestroExecution::ClusterObservables(chain, obs);
+            Require(groups == Groups({{0, 2}, {1, 4}, {3}}), "Clustering split incorrect");
+
+            // A gate bridging both regions merges everything into one cluster.
+            chain->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kCXGateType, 2, 4));
+            chain->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kCXGateType, 5, 3));
+            const auto merged = MaestroExecution::ClusterObservables(chain, {"ZIIIII", "IIIIZI"});
+            Require(merged.size() == 1 && merged[0].size() == 2, "Entangled observables did not form one cluster");
+
+            Require(!MaestroExecution::BenefitsFromObservableClustering(Simulators::SimulatorType::kGpuSim, Simulators::SimulationType::kPauliPropagator),
+                    "GPU Pauli propagation should keep one group");
+            Require(MaestroExecution::BenefitsFromObservableClustering(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kPauliPropagator) &&
+                        MaestroExecution::BenefitsFromObservableClustering(Simulators::SimulatorType::kGpuSim, Simulators::SimulationType::kStatevector),
+                    "Only GPU Pauli propagation should skip clustering");
+
+            // Bounded packing on a register past 64 qubits. Cones: {70..73}, {72..75},
+            // {70,71}, {74,75}, {120}, then an identity.
+            auto wide = std::make_shared<Circuit>();
+            wide->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kCXGateType, 70, 71));
+            wide->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kCXGateType, 72, 73));
+            wide->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kCXGateType, 74, 75));
+            const auto word = [](std::vector<size_t> zs) {
+                std::string pauli(121, 'I');
+                for (auto q : zs)
+                    pauli[q] = 'Z';
+                return pauli;
+            };
+            const std::vector<std::string> wide_obs{word({70, 72}), word({73, 74}), word({71}), word({75}), word({120}), word({})};
+            Require(MaestroExecution::ClusterObservables(wide, wide_obs) == Groups({{0, 1, 2, 3}, {4}, {5}}), "Wide connected components incorrect");
+            Require(MaestroExecution::ClusterObservables(wide, wide_obs, 4) == Groups({{0, 2}, {1, 3}, {4}, {5}}), "Budget split incorrect");
+            // Cones larger than the budget keep their own group and still absorb contained cones.
+            Require(MaestroExecution::ClusterObservables(wide, wide_obs, 1) == Groups({{0, 2}, {1, 3}, {4}, {5}}), "Soft budget incorrect");
+            // A budget covering the union reproduces the components; disjoint cones never merge.
+            Require(MaestroExecution::ClusterObservables(wide, wide_obs, 6) == Groups({{0, 1, 2, 3}, {4}, {5}}), "Fitting budget split cones");
+            Require(MaestroExecution::ClusterObservables(wide, wide_obs, 1000) == Groups({{0, 1, 2, 3}, {4}, {5}}), "Large budget merged disjoint cones");
+
+            // Nonunitary circuits and malformed observables fall back to one group.
+            auto dynamic = std::make_shared<Circuit>();
+            dynamic->AddOperation(Factory::CreateMeasurement({{2, 0}}));
+            Require(MaestroExecution::ClusterObservables(dynamic, {"ZII", "IIZ"}).size() == 1, "Nonunitary fallback failed");
+            Require(MaestroExecution::ClusterObservables(source, {"ZII", "I?Z"}).size() == 1, "Malformed fallback failed");
+        }
     }
     catch (const std::exception &error)
     {
