@@ -2,7 +2,7 @@
 
 // Transform entry points are consumed across libmaestro's shared-library boundary.
 #if defined(_WIN32)
-#if defined(maestro_EXPORTS)
+#if defined(maestro_EXPORTS) || defined(MAESTRO_EXPORTS)
 #define MAESTRO_TRANSFORM_API __declspec(dllexport)
 #else
 #define MAESTRO_TRANSFORM_API __declspec(dllimport)

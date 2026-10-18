@@ -160,7 +160,7 @@ if(NOT DEFINED QCSIM_INCLUDE_DIR)
         FetchContent_Declare(
             qcsim
             GIT_REPOSITORY https://github.com/QoroQuantum/QCSim.git
-            GIT_TAG 217c60953795045ecb6439d0cc34191fecd165ff
+            GIT_TAG 2bcdb16c71243065ae36e7bc3ab44be7dacaeca4
         )
         FetchContent_GetProperties(qcsim)
         if(NOT qcsim_POPULATED)

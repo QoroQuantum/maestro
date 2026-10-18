@@ -96,6 +96,10 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
     if (!circuit)
         throw nb::value_error("Circuit is null.");
 
+    // Terminal measurements don't affect expectations; stripping them first also
+    // lets clustering and causal-cone reduction see a unitary circuit.
+    const auto clean_circuit = circuit->RemoveEndMeasurements();
+
     // Partition observables into groups with disjoint lightcones; each group is
     // reduced and simulated on a register sized to its own cone.
     std::vector<std::vector<size_t>> groups;
@@ -106,7 +110,7 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
     if (cluster)
     {
         nb::gil_scoped_release release;
-        groups = MaestroExecution::ClusterObservables(circuit, observables, config.max_cluster_qubits);
+        groups = MaestroExecution::ClusterObservables(clean_circuit, observables, config.max_cluster_qubits);
     }
     else
     {
@@ -132,7 +136,7 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
         for (auto index : group)
             paulis.push_back(observables[index]);
 
-        auto cluster_circuit = circuit;
+        auto cluster_circuit = clean_circuit;
         MaestroExecution::TransformContext ctx{cluster_circuit, paulis, config.simulator_type, config};
         auto transform_start = std::chrono::high_resolution_clock::now();
         {

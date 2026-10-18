@@ -423,6 +423,20 @@ def test_entangled_observables_form_single_cluster():
     )
 
 
+def test_terminal_measurements_do_not_block_clustering():
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.h(90)
+    circuit.cx(90, 91)
+    circuit.x(99)
+    circuit.measure_all()
+    res = circuit.estimate(["ZZ" + "I" * 98, "I" * 90 + "ZZ" + "I" * 8])
+    assert res["clusters_count"] == 2
+    assert res["largest_cluster_qubits"] <= 10
+    assert res["expectation_values"] == pytest.approx([1.0, 1.0], abs=1e-12)
+
+
 def test_clustering_default_and_disabled_with_reduction_off():
     assert maestro.SimulatorConfig().enable_observable_clustering is True
     circuit = maestro.circuits.QuantumCircuit()

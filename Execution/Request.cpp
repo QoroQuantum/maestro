@@ -492,6 +492,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         ValidateNoisyCircuit(input.circuit);
     auto circuit = operation == "execute" || operation == "checkpoint_batch"
                        ? input.circuit
+                   : operation == "estimate"
+                       ? input.circuit->RemoveEndMeasurements()
                        : Unmeasured(input.circuit, operation == "inner_product" || operation == "mirror_fidelity" || operation == "noisy_fidelity");
     std::vector<ParsedCircuit> additional;
     if (operation == "inner_product")

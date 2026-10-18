@@ -256,8 +256,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         recreateIfNeeded = false;
 
+        const auto cleanCircuit = circuit ? circuit->RemoveEndMeasurements() : circuit;
+
         pauliStrings = &paulis;
-        const auto res = RepeatedExecute(circuit, 1);
+        const auto res = RepeatedExecute(cleanCircuit, 1);
         pauliStrings = nullptr;
 
         recreateIfNeeded = recreate;
@@ -361,8 +363,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             }
         } restoreGuard(recreateIfNeeded, &pauliStrings);
 
+        const auto cleanCircuit = circuit ? circuit->RemoveEndMeasurements() : circuit;
+
         pauliStrings = &paulis;
-        const auto res = RepeatedExecuteOnHost(circuit, hostId, 1);
+        const auto res = RepeatedExecuteOnHost(cleanCircuit, hostId, 1);
 
         // put the results in the state
         if (!res.empty())

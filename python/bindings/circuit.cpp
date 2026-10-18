@@ -86,6 +86,8 @@ void bind_circuit(nb::module_ &m)
             "reset_qubits",
             [](Circuits::Circuit<double> &s, const std::vector<Types::qubit_t> &qubits) { s.AddOperation(std::make_shared<Circuits::Reset<>>(qubits)); },
             "qubits"_a, "Reset multiple qubits to |0>.")
+        .def("remove_end_measurements", &Circuits::Circuit<double>::RemoveEndMeasurements,
+             "Create a new circuit holding shared pointers to the original operations, with terminal measurements removed.")
 
         // ---- Bound Methods for Direct Execution ----
         .def("execute", &execute_core, "config"_a = SimulatorConfig{}, "shots"_a = 1024)
