@@ -344,11 +344,12 @@ class NoiseAdd
             return {};
         if (layer != Layer::Coherent)
             WarnThermalApproximation(nm);
+        auto cleanCircuit = circuit->RemoveEndMeasurements();
         auto execution = PrepareExecution(network);
         std::vector<double> values(paulis.size(), 0.0);
         for (int r = 0; r < realizations; ++r)
         {
-            auto noisy = Inject(circuit, nm, layer);
+            auto noisy = Inject(cleanCircuit, nm, layer);
             SeedExecution(execution);
             const auto sample =
                 host ? execution.network->ExecuteOnHostExpectations(noisy, *host, paulis) : execution.network->ExecuteExpectations(noisy, paulis);

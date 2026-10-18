@@ -94,8 +94,9 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
     if (!circuit)
         throw nb::value_error("Circuit is null.");
 
+    auto clean_circuit = circuit->RemoveEndMeasurements();
     auto paulis = observables;
-    MaestroExecution::TransformContext ctx{circuit, paulis, config.simulator_type, config};
+    MaestroExecution::TransformContext ctx{clean_circuit, paulis, config.simulator_type, config};
     auto transform_start = std::chrono::high_resolution_clock::now();
     {
         nb::gil_scoped_release release;

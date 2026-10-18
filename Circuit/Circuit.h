@@ -318,6 +318,171 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
     }
 
     /**
+     * @brief Creates a new circuit with terminal measurements removed.
+     *
+     * Creates a new circuit holding shared pointers to the original operations
+     * (without cloning unmodified operations), removing measurements at the end
+     * of the circuit on qubits that have no subsequent quantum gates, resets, or
+     * quantum channels applied after them and whose classical target bits are not
+     * read by any subsequent conditional operation before being overwritten.
+     * Multiple consecutive measurements on the same qubit at the end are all
+     * removed, while mid-circuit measurements and resets are retained.
+     *
+     * @return A shared pointer to the new circuit without terminal measurements.
+     */
+    std::shared_ptr<Circuit<Time>> RemoveEndMeasurements() const
+    {
+        OperationsVector retained;
+        retained.reserve(operations.size());
+
+        std::unordered_set<Types::qubit_t> activeQubits;
+        std::unordered_set<size_t> neededBits;
+
+        for (auto it = operations.rbegin(); it != operations.rend(); ++it)
+        {
+            const auto &op = *it;
+            if (!op)
+                continue;
+
+            const auto type = op->GetType();
+            if (type == OperationType::kMeasurement || type == OperationType::kConditionalMeasurement)
+            {
+                std::shared_ptr<MeasurementOperation<Time>> meas;
+                std::shared_ptr<ConditionalMeasurement<Time>> condMeas;
+
+                if (type == OperationType::kMeasurement)
+                {
+                    meas = std::static_pointer_cast<MeasurementOperation<Time>>(op);
+                }
+                else
+                {
+                    condMeas = std::static_pointer_cast<ConditionalMeasurement<Time>>(op);
+                    meas = std::static_pointer_cast<MeasurementOperation<Time>>(condMeas->GetOperation());
+                }
+
+                if (!meas)
+                    continue;
+
+                const auto &qubits = meas->GetQubits();
+                const auto &bits = meas->GetBitsIndices();
+                const size_t count = std::min(qubits.size(), bits.size());
+                if (count == 0)
+                    continue;
+
+                std::vector<bool> keepFlags(count, false);
+                size_t keptCount = 0;
+
+                for (size_t idx = count; idx-- > 0;)
+                {
+                    const auto q = qubits[idx];
+                    const auto b = bits[idx];
+                    if (activeQubits.count(q) > 0 || neededBits.count(b) > 0)
+                    {
+                        keepFlags[idx] = true;
+                        ++keptCount;
+                        if (type == OperationType::kMeasurement)
+                            neededBits.erase(b);
+                    }
+                }
+
+                if (keptCount == 0)
+                    continue;
+
+                if (type == OperationType::kConditionalMeasurement)
+                {
+                    const auto condBits = condMeas->AffectedBits();
+                    neededBits.insert(condBits.begin(), condBits.end());
+                }
+
+                if (keptCount == count)
+                {
+                    retained.push_back(op);
+                }
+                else
+                {
+                    std::vector<std::pair<Types::qubit_t, size_t>> keptPairs;
+                    keptPairs.reserve(keptCount);
+                    for (size_t i = 0; i < count; ++i)
+                    {
+                        if (keepFlags[i])
+                            keptPairs.emplace_back(qubits[i], bits[i]);
+                    }
+
+                    auto filteredMeas = std::make_shared<MeasurementOperation<Time>>(keptPairs, meas->GetDelay());
+                    if (meas->HasReadout())
+                    {
+                        const auto &rates = meas->GetReadout();
+                        std::vector<ReadoutRates> keptRates;
+                        keptRates.reserve(keptCount);
+                        for (size_t i = 0; i < count; ++i)
+                        {
+                            if (keepFlags[i])
+                                keptRates.push_back(i < rates.size() ? rates[i] : ReadoutRates{});
+                        }
+                        filteredMeas->SetReadout(std::move(keptRates));
+                    }
+
+                    if (type == OperationType::kConditionalMeasurement)
+                    {
+                        retained.push_back(std::make_shared<ConditionalMeasurement<Time>>(filteredMeas, condMeas->GetCondition(), condMeas->GetDelay()));
+                    }
+                    else
+                    {
+                        retained.push_back(std::move(filteredMeas));
+                    }
+                }
+            }
+            else
+            {
+                retained.push_back(op);
+
+                switch (type)
+                {
+                case OperationType::kGate:
+                case OperationType::kReset:
+                case OperationType::kQuantumChannel: {
+                    const auto qs = op->AffectedQubits();
+                    activeQubits.insert(qs.begin(), qs.end());
+                    break;
+                }
+                case OperationType::kConditionalGate: {
+                    const auto qs = op->AffectedQubits();
+                    activeQubits.insert(qs.begin(), qs.end());
+                    const auto bs = op->AffectedBits();
+                    neededBits.insert(bs.begin(), bs.end());
+                    break;
+                }
+                case OperationType::kRandomGen: {
+                    const auto bs = op->AffectedBits();
+                    for (const auto b : bs)
+                        neededBits.erase(b);
+                    break;
+                }
+                case OperationType::kConditionalRandomGen: {
+                    const auto bs = op->AffectedBits();
+                    neededBits.insert(bs.begin(), bs.end());
+                    break;
+                }
+                case OperationType::kComposite: {
+                    const auto qs = op->AffectedQubits();
+                    activeQubits.insert(qs.begin(), qs.end());
+                    const auto bs = GetReferencedBits(op);
+                    neededBits.insert(bs.begin(), bs.end());
+                    break;
+                }
+                case OperationType::kDelay:
+                case OperationType::kNoOp:
+                default:
+                    break;
+                }
+            }
+        }
+
+        std::reverse(retained.begin(), retained.end());
+        return std::make_shared<Circuit<Time>>(retained);
+    }
+
+    /**
      * @brief Get a shared pointer to a circuit remapped.
      *
      * Returns a shared pointer to a copy of the circuit with qubits and classical

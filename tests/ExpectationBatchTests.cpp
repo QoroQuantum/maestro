@@ -221,6 +221,21 @@ void NetworkDispatch()
     Near(mapped[1], 1);
     Near(mapped[2], 0);
     Near(mapped[3], 1);
+
+    // Terminal measurements on qubits (including multiple consecutive ones) must
+    // be removed before computing expectation values so the superposition state
+    // is not collapsed, while mid-circuit measurements are retained.
+    auto measuredCircuit = CF::CreateCircuit();
+    measuredCircuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+    measuredCircuit->AddOperation(CF::CreateGate(Gate::kXGateType, 1));
+    measuredCircuit->AddOperation(CF::CreateMeasurement({{1, 1}}));
+    measuredCircuit->AddOperation(CF::CreateConditionalGate(CF::CreateGate(Gate::kXGateType, 2), CF::CreateEqualCondition({1}, {true})));
+    measuredCircuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    measuredCircuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}, {2, 2}}));
+    const auto withEndMeas = network->ExecuteOnHostExpectations(measuredCircuit, 0, {"XIII", "IZII", "IIZI"});
+    Near(withEndMeas[0], 1);
+    Near(withEndMeas[1], -1);
+    Near(withEndMeas[2], -1);
 }
 
 j::object Request(const char *operation, const char *method)

@@ -170,13 +170,15 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
     const size_t n_obs = paulis.size();
     std::vector<double> sum_vals(n_obs, 0.0);
 
+    auto clean_circuit = circuit->RemoveEndMeasurements();
+
     auto start = std::chrono::high_resolution_clock::now();
     bool any_reduced = false;
     int qubits_before = 0;
     int qubits_after = 0;
     for (int r = 0; r < noise_realizations; ++r)
     {
-        auto noisy = inject(circuit, noise_model, rng, config);
+        auto noisy = inject(clean_circuit, noise_model, rng, config);
         nb::dict result = estimate_core(noisy, paulis, NoiseExecutionConfig(config, noise_seed, r));
         if (result.contains("auto_reduced") && nb::cast<bool>(result["auto_reduced"]))
             any_reduced = true;
@@ -190,7 +192,7 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
     }
     auto end = std::chrono::high_resolution_clock::now();
 
-    nb::dict ideal_result = estimate_core(circuit, paulis, config);
+    nb::dict ideal_result = estimate_core(clean_circuit, paulis, config);
     nb::list noisy_vals, ideal_vals;
     nb::list ideal_ev = nb::cast<nb::list>(ideal_result["expectation_values"]);
     for (size_t i = 0; i < n_obs; ++i)

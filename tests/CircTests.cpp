@@ -844,4 +844,94 @@ BOOST_DATA_TEST_CASE_F(SimulatorsTestFixture, RandomCircuitsToMultipleQubitsLaye
     randomCirc->Clear();
 }
 
+BOOST_AUTO_TEST_CASE(RemoveEndMeasurementsTests)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Gate = Circuits::QuantumGateType;
+
+    // 1. Terminal single and multiple consecutive measurements on the same qubit
+    // are all removed, while mid-circuit measurements and resets are kept, and
+    // unmodified operations share the same pointers.
+    auto circ = CF::CreateCircuit();
+    auto h0 = CF::CreateGate(Gate::kHadamardGateType, 0);
+    auto midMeas0 = CF::CreateMeasurement({{0, 0}});
+    auto x0 = CF::CreateGate(Gate::kXGateType, 0);
+    auto reset1 = CF::CreateReset({1});
+    auto endMeas0a = CF::CreateMeasurement({{0, 0}});
+    auto endMeas0b = CF::CreateMeasurement({{0, 1}});
+    auto endMeas1 = CF::CreateMeasurement({{1, 2}});
+
+    circ->AddOperation(h0);
+    circ->AddOperation(midMeas0);
+    circ->AddOperation(x0);
+    circ->AddOperation(reset1);
+    circ->AddOperation(endMeas0a);
+    circ->AddOperation(endMeas0b);
+    circ->AddOperation(endMeas1);
+
+    auto cleaned = circ->RemoveEndMeasurements();
+    BOOST_REQUIRE(cleaned);
+    BOOST_REQUIRE_EQUAL(cleaned->size(), 4ULL);
+    BOOST_CHECK_EQUAL((*cleaned)[0].get(), h0.get());
+    BOOST_CHECK_EQUAL((*cleaned)[1].get(), midMeas0.get());
+    BOOST_CHECK_EQUAL((*cleaned)[2].get(), x0.get());
+    BOOST_CHECK_EQUAL((*cleaned)[3].get(), reset1.get());
+
+    // 2. Teleportation circuit: measurements on q0 and q1 have no subsequent
+    // gates on q0 or q1, but their classical bits control conditional gates on
+    // q2, so they must be kept (with shared pointer identity), while the
+    // terminal measurement on q2 is removed.
+    auto tele = CF::CreateCircuit();
+    auto tx0 = CF::CreateGate(Gate::kXGateType, 0);
+    auto th1 = CF::CreateGate(Gate::kHadamardGateType, 1);
+    auto tcx12 = CF::CreateGate(Gate::kCXGateType, 1, 2);
+    auto tcx01 = CF::CreateGate(Gate::kCXGateType, 0, 1);
+    auto th0 = CF::CreateGate(Gate::kHadamardGateType, 0);
+    auto tBellMeas = CF::CreateMeasurement({{0, 0}, {1, 1}});
+    auto tCondX2 = CF::CreateConditionalGate(CF::CreateGate(Gate::kXGateType, 2), CF::CreateEqualCondition({1}, {true}));
+    auto tCondZ2 = CF::CreateConditionalGate(CF::CreateGate(Gate::kZGateType, 2), CF::CreateEqualCondition({0}, {true}));
+    auto tEndMeas2 = CF::CreateMeasurement({{2, 2}});
+
+    tele->AddOperation(tx0);
+    tele->AddOperation(th1);
+    tele->AddOperation(tcx12);
+    tele->AddOperation(tcx01);
+    tele->AddOperation(th0);
+    tele->AddOperation(tBellMeas);
+    tele->AddOperation(tCondX2);
+    tele->AddOperation(tCondZ2);
+    tele->AddOperation(tEndMeas2);
+
+    auto cleanTele = tele->RemoveEndMeasurements();
+    BOOST_REQUIRE(cleanTele);
+    BOOST_REQUIRE_EQUAL(cleanTele->size(), 8ULL);
+    for (size_t i = 0; i < 8; ++i)
+        BOOST_CHECK_EQUAL((*cleanTele)[i].get(), (*tele)[i].get());
+
+    // 3. Multi-qubit MeasurementOperation where one qubit has a subsequent gate
+    // and another qubit is terminal: only the non-terminal pair is retained,
+    // preserving delay and corresponding readout rates.
+    auto multi = CF::CreateCircuit();
+    auto multiMeas = std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}, {1, 1}}, 2.5);
+    multiMeas->SetReadout({Circuits::ReadoutRates{0.1, 0.2}, Circuits::ReadoutRates{0.3, 0.4}});
+    auto postGate0 = CF::CreateGate(Gate::kHadamardGateType, 0);
+    multi->AddOperation(multiMeas);
+    multi->AddOperation(postGate0);
+
+    auto cleanMulti = multi->RemoveEndMeasurements();
+    BOOST_REQUIRE(cleanMulti);
+    BOOST_REQUIRE_EQUAL(cleanMulti->size(), 2ULL);
+    BOOST_CHECK_EQUAL((*cleanMulti)[1].get(), postGate0.get());
+
+    auto filteredMeas = std::dynamic_pointer_cast<Circuits::MeasurementOperation<>>((*cleanMulti)[0]);
+    BOOST_REQUIRE(filteredMeas);
+    BOOST_CHECK_EQUAL(filteredMeas->GetDelay(), 2.5);
+    BOOST_CHECK(filteredMeas->GetQubits() == Types::qubits_vector({0}));
+    BOOST_CHECK(filteredMeas->GetBitsIndices() == std::vector<size_t>({0}));
+    BOOST_REQUIRE(filteredMeas->HasReadout());
+    BOOST_REQUIRE_EQUAL(filteredMeas->GetReadout().size(), 1ULL);
+    BOOST_CHECK_CLOSE(filteredMeas->GetReadout()[0].p_meas1_prep0, 0.1, 1e-12);
+    BOOST_CHECK_CLOSE(filteredMeas->GetReadout()[0].p_meas0_prep1, 0.2, 1e-12);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
