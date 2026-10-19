@@ -612,7 +612,7 @@ BOOST_DATA_TEST_CASE(WindowOptimizedVsOriginalSimulation, numGates, nrGates)
 
     int lookaheadDepth = layers.size() < 10   ? 0
                          : layers.size() < 20 ? static_cast<int>(lookaheadVal)
-                         : layers.size() < 35 ? 1.5 * lookaheadVal
+                         : layers.size() < 35 ? static_cast<int>(1.5 * lookaheadVal)
                                               : 2 * lookaheadVal;
 
     int lookaheadHeuristicDepth = layers.size() < 10 ? 0 : layers.size() < 20 ? lookaheadDepth - 1 : lookaheadDepth - 2;
@@ -1039,6 +1039,502 @@ BOOST_AUTO_TEST_CASE(LayersKeepClassicalBitOrder)
         const auto counts = network->RepeatedExecuteOnHost(circuit, 0, 100);
         BOOST_REQUIRE_EQUAL(counts.size(), 1);
         BOOST_CHECK(counts.begin()->first == std::vector<bool>({false, true}));
+    }
+}
+
+namespace
+{
+
+class GenericRank4TwoQubitGate final : public Circuits::TwoQubitsGate<>
+{
+  public:
+    GenericRank4TwoQubitGate(Types::qubit_t q1, Types::qubit_t q2) : Circuits::TwoQubitsGate<>(q1, q2)
+    {
+    }
+
+    Circuits::QuantumGateType GetGateType() const override
+    {
+        return Circuits::QuantumGateType::kNone;
+    }
+
+    Eigen::MatrixXcd GetMatrix() const override
+    {
+        return Eigen::Matrix4cd::Identity();
+    }
+
+    void Execute(const std::shared_ptr<Simulators::ISimulator> &, Circuits::OperationState &) const override
+    {
+    }
+
+    std::shared_ptr<Circuits::IOperation<>> Clone() const override
+    {
+        return std::make_shared<GenericRank4TwoQubitGate>(GetQubit(0), GetQubit(1));
+    }
+};
+
+} // namespace
+
+BOOST_AUTO_TEST_CASE(MemoCacheKeyAndInvalidation)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+
+    constexpr size_t nrQubits = 8;
+    Simulators::MPSDummySimulator sim(nrQubits);
+    sim.SetCurrentBondDimensions({2, 3, 4, 3, 5, 3, 2});
+
+    // Build a gate list where 12 single-qubit gates separate the first 2-qubit
+    // gate from the second 2-qubit gate (pushing the second 2-qubit gate past
+    // the raw operation index lookaheadDepth + 10 when lookaheadDepth == 1).
+    std::vector<std::shared_ptr<Circuits::IOperation<>>> opsA;
+    opsA.push_back(CF::CreateGate(Kind::kCXGateType, 0, 6));
+    for (int i = 0; i < 12; ++i)
+        opsA.push_back(CF::CreateGate(Kind::kXGateType, i % nrQubits));
+    auto trailingGate = CF::CreateGate(Kind::kCXGateType, 0, 1);
+    opsA.push_back(trailingGate);
+
+    double bestCostA1 = std::numeric_limits<double>::infinity();
+    const auto posA1 = sim.FindBestMeetingPosition(opsA, 0, 2, 2, 0.0, bestCostA1);
+
+    // Repeat identical query (should hit cache and return identical result)
+    double bestCostA2 = std::numeric_limits<double>::infinity();
+    const auto posA2 = sim.FindBestMeetingPosition(opsA, 0, 2, 2, 0.0, bestCostA2);
+    BOOST_CHECK_EQUAL(posA1, posA2);
+    BOOST_CHECK_CLOSE(bestCostA1, bestCostA2, 1e-12);
+
+    // Mutate the trailing 2-qubit gate in-place so its operands pull toward the
+    // right end (5, 6) instead of (0, 1), keeping the same pointer address.
+    trailingGate->SetQubit(6, 0);
+    trailingGate->SetQubit(5, 1);
+
+    double bestCostMutated = std::numeric_limits<double>::infinity();
+    const auto posMutated = sim.FindBestMeetingPosition(opsA, 0, 2, 2, 0.0, bestCostMutated);
+    BOOST_CHECK(posMutated != posA1 || std::abs(bestCostMutated - bestCostA1) > 1e-6);
+
+    // Verify that changing growthFactorGate, growthFactorSwap, or MaxBondDimension
+    // invalidates the cache and updates the returned cost.
+    double bestCostBeforeFactor = std::numeric_limits<double>::infinity();
+    (void)sim.FindBestMeetingPosition(opsA, 0, 2, 2, 0.0, bestCostBeforeFactor);
+
+    sim.setGrowthFactorGate(0.95);
+    double bestCostAfterGateFactor = std::numeric_limits<double>::infinity();
+    (void)sim.FindBestMeetingPosition(opsA, 0, 2, 2, 0.0, bestCostAfterGateFactor);
+    BOOST_CHECK_GT(bestCostAfterGateFactor, bestCostBeforeFactor);
+
+    sim.setGrowthFactorSwap(0.5);
+    double bestCostAfterSwapFactor = std::numeric_limits<double>::infinity();
+    (void)sim.FindBestMeetingPosition(opsA, 0, 2, 2, 0.0, bestCostAfterSwapFactor);
+    BOOST_CHECK_LT(bestCostAfterSwapFactor, bestCostAfterGateFactor);
+
+    sim.SetMaxBondDimension(2);
+    double bestCostAfterCap = std::numeric_limits<double>::infinity();
+    (void)sim.FindBestMeetingPosition(opsA, 0, 2, 2, 0.0, bestCostAfterCap);
+    BOOST_CHECK_LT(bestCostAfterCap, bestCostAfterSwapFactor);
+
+    // Verify the 5-qubit MPS/MPO bondCost initialization and reset transitions
+    // from swaps_opt_issues2.md Finding #1:
+    // 1. Construct a 5-qubit dummy simulator with default settings.
+    // 2. Query a single CX(0, 4) using lookahead depth 1 and heuristic depth 1.
+    // 3. Call SetCurrentBondDimensions({1, 1, 1, 1}), Clear(), and SetInitialQubitsMap().
+    // 4. Repeat the query and compare with a fresh evaluation on a Clone() (empty cache).
+    for (bool isMpo : {false, true})
+    {
+        const double expectedFreshCost = isMpo ? 15.726 : 6.122;
+        Simulators::MPSDummySimulator fiveQSim(5, isMpo);
+        std::vector<std::shared_ptr<Circuits::IOperation<>>> cx04{CF::CreateGate(Kind::kCXGateType, 0, 4)};
+
+        double initialCost = std::numeric_limits<double>::infinity();
+        const auto initialPos = fiveQSim.FindBestMeetingPosition(cx04, 0, 1, 1, 0.0, initialCost);
+        BOOST_CHECK_EQUAL(initialPos, 0);
+        BOOST_CHECK_CLOSE(initialCost, expectedFreshCost, 1e-9);
+
+        fiveQSim.SetCurrentBondDimensions({1.0, 1.0, 1.0, 1.0});
+        double cachedCostAfterSetDims = std::numeric_limits<double>::infinity();
+        const auto posAfterSetDims = fiveQSim.FindBestMeetingPosition(cx04, 0, 1, 1, 0.0, cachedCostAfterSetDims);
+
+        auto freshClone = fiveQSim.Clone();
+        double freshCost = std::numeric_limits<double>::infinity();
+        const auto freshPos = freshClone->FindBestMeetingPosition(cx04, 0, 1, 1, 0.0, freshCost);
+
+        BOOST_CHECK_EQUAL(posAfterSetDims, freshPos);
+        BOOST_CHECK_CLOSE(cachedCostAfterSetDims, freshCost, 1e-9);
+        BOOST_CHECK_CLOSE(cachedCostAfterSetDims, expectedFreshCost, 1e-9);
+
+        // Grow interior bonds via gate applications and explicit bond dimension
+        // updates, populate the cache in the grown state, then verify Clear()
+        // resets both currentBondDim and bondCost back to 1.
+        fiveQSim.SetCurrentBondDimensions({2.0, 3.0, 3.0, 2.0});
+        fiveQSim.ApplyGate(CF::CreateGate(Kind::kCXGateType, 1, 2));
+        fiveQSim.ApplyGate(CF::CreateGate(Kind::kCXGateType, 2, 3));
+        double grownCost = std::numeric_limits<double>::infinity();
+        (void)fiveQSim.FindBestMeetingPosition(cx04, 0, 1, 1, 0.0, grownCost);
+        BOOST_CHECK_GT(grownCost, expectedFreshCost);
+
+        fiveQSim.Clear();
+        double costAfterClear = std::numeric_limits<double>::infinity();
+        const auto posAfterClear = fiveQSim.FindBestMeetingPosition(cx04, 0, 1, 1, 0.0, costAfterClear);
+        auto cloneAfterClear = fiveQSim.Clone();
+        double cloneCostAfterClear = std::numeric_limits<double>::infinity();
+        const auto clonePosAfterClear = cloneAfterClear->FindBestMeetingPosition(cx04, 0, 1, 1, 0.0, cloneCostAfterClear);
+        BOOST_CHECK_EQUAL(posAfterClear, clonePosAfterClear);
+        BOOST_CHECK_CLOSE(costAfterClear, cloneCostAfterClear, 1e-9);
+        BOOST_CHECK_CLOSE(costAfterClear, expectedFreshCost, 1e-9);
+
+        // Grow bonds and permute qubits, then verify SetInitialQubitsMap() also
+        // resets both currentBondDim and bondCost and matches a fresh Clone().
+        fiveQSim.SetCurrentBondDimensions({2.0, 3.0, 3.0, 2.0});
+        fiveQSim.ApplyGate(CF::CreateGate(Kind::kCXGateType, 1, 3));
+        double grownCost2 = std::numeric_limits<double>::infinity();
+        (void)fiveQSim.FindBestMeetingPosition(cx04, 0, 1, 1, 0.0, grownCost2);
+        BOOST_CHECK_GT(grownCost2, expectedFreshCost);
+
+        fiveQSim.SetInitialQubitsMap({0, 1, 2, 3, 4});
+        double costAfterSetMap = std::numeric_limits<double>::infinity();
+        const auto posAfterSetMap = fiveQSim.FindBestMeetingPosition(cx04, 0, 1, 1, 0.0, costAfterSetMap);
+        auto cloneAfterSetMap = fiveQSim.Clone();
+        double cloneCostAfterSetMap = std::numeric_limits<double>::infinity();
+        const auto clonePosAfterSetMap = cloneAfterSetMap->FindBestMeetingPosition(cx04, 0, 1, 1, 0.0, cloneCostAfterSetMap);
+        BOOST_CHECK_EQUAL(posAfterSetMap, clonePosAfterSetMap);
+        BOOST_CHECK_CLOSE(costAfterSetMap, cloneCostAfterSetMap, 1e-9);
+        BOOST_CHECK_CLOSE(costAfterSetMap, expectedFreshCost, 1e-9);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(MinOneStepCostMatchesRolloutFormulaAndControlledRank)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+
+    // 1. Exact arithmetic check from review Finding #2:
+    // bondDims = [2, 3, 4, 3, 5, 3, 2], identity map, generic rank-4 gate on (0, 4),
+    // growthFactorGate = 0.65, growthFactorSwap = 1.0, no additional bond cap.
+    constexpr size_t nrQubits = 8;
+    const std::vector<double> initBonds{2, 3, 4, 3, 5, 3, 2};
+    const std::array<double, 4> expectedRolloutCosts{325.0985, 318.788, 342.304, 335.3125};
+
+    auto genericGate = std::make_shared<GenericRank4TwoQubitGate>(0, 4);
+    std::vector<std::shared_ptr<Circuits::IOperation<>>> singleGateWindow{genericGate};
+
+    for (long long int m = 0; m < 4; ++m)
+    {
+        Simulators::MPSDummySimulator rolloutSim(nrQubits);
+        rolloutSim.setGrowthFactorGate(0.65);
+        rolloutSim.setGrowthFactorSwap(1.0);
+        rolloutSim.SetCurrentBondDimensions(initBonds);
+        rolloutSim.SwapQubitsToPosition(0, 4, m);
+        rolloutSim.ApplyGate(genericGate);
+        BOOST_CHECK_CLOSE(rolloutSim.getTotalSwappingCost(), expectedRolloutCosts[static_cast<size_t>(m)], 1e-9);
+    }
+
+    Simulators::MPSDummySimulator searchSim(nrQubits);
+    searchSim.setGrowthFactorGate(0.65);
+    searchSim.setGrowthFactorSwap(1.0);
+    searchSim.SetCurrentBondDimensions(initBonds);
+
+    double bestCost = std::numeric_limits<double>::infinity();
+    const auto chosenPos = searchSim.FindBestMeetingPosition(singleGateWindow, 0, 0, 0, 0.0, bestCost);
+    BOOST_CHECK_EQUAL(chosenPos, 1);
+    BOOST_CHECK_CLOSE(bestCost, 318.788, 1e-9);
+
+    // 2. Verify controlled two-qubit gates use Schmidt rank 2 (and rank^2 = 4 in MPO)
+    // vs generic two-qubit gates using Schmidt rank 4 (and rank^2 = 16 in MPO).
+    for (bool isMpo : {false, true})
+    {
+        Simulators::MPSDummySimulator controlledSim(nrQubits, isMpo);
+        Simulators::MPSDummySimulator genericSim(nrQubits, isMpo);
+        controlledSim.setGrowthFactorGate(1.0);
+        genericSim.setGrowthFactorGate(1.0);
+        const std::vector<double> uniformBonds(nrQubits - 1, 4.0);
+        controlledSim.SetCurrentBondDimensions(uniformBonds);
+        genericSim.SetCurrentBondDimensions(uniformBonds);
+
+        const auto cxGate = CF::CreateGate(Kind::kCXGateType, 3, 4);
+        const auto genAdjGate = std::make_shared<GenericRank4TwoQubitGate>(3, 4);
+
+        controlledSim.ApplyGate(cxGate);
+        genericSim.ApplyGate(genAdjGate);
+
+        Simulators::MPSDummySimulator controlledMpoCheck(nrQubits, isMpo);
+        Simulators::MPSDummySimulator genericMpoCheck(nrQubits, isMpo);
+        controlledMpoCheck.setGrowthFactorGate(1.0);
+        genericMpoCheck.setGrowthFactorGate(1.0);
+        controlledMpoCheck.SetCurrentBondDimensions({8, 8, 8, 2, 8, 8, 8});
+        genericMpoCheck.SetCurrentBondDimensions({8, 8, 8, 2, 8, 8, 8});
+        controlledMpoCheck.ApplyGate(cxGate);
+        genericMpoCheck.ApplyGate(genAdjGate);
+
+        BOOST_CHECK_LT(controlledMpoCheck.getCurrentBondDimensions()[3], genericMpoCheck.getCurrentBondDimensions()[3]);
+
+        // Also verify FindBestMeetingPosition at lookaheadDepth = 0 picks the exact
+        // minimum-cost position for controlled gates as well.
+        Simulators::MPSDummySimulator cxSearchSim(nrQubits, isMpo);
+        cxSearchSim.setGrowthFactorGate(0.65);
+        cxSearchSim.setGrowthFactorSwap(1.0);
+        cxSearchSim.SetCurrentBondDimensions(initBonds);
+
+        const auto cxSpanGate = CF::CreateGate(Kind::kCXGateType, 0, 4);
+        std::vector<std::shared_ptr<Circuits::IOperation<>>> cxWindow{cxSpanGate};
+
+        double minExplicitCost = std::numeric_limits<double>::infinity();
+        long long int minExplicitPos = -1;
+        for (long long int m = 0; m < 4; ++m)
+        {
+            Simulators::MPSDummySimulator explicitSim(nrQubits, isMpo);
+            explicitSim.setGrowthFactorGate(0.65);
+            explicitSim.setGrowthFactorSwap(1.0);
+            explicitSim.SetCurrentBondDimensions(initBonds);
+            explicitSim.SwapQubitsToPosition(0, 4, m);
+            explicitSim.ApplyGate(cxSpanGate);
+            if (explicitSim.getTotalSwappingCost() < minExplicitCost)
+            {
+                minExplicitCost = explicitSim.getTotalSwappingCost();
+                minExplicitPos = m;
+            }
+        }
+
+        double cxBestCost = std::numeric_limits<double>::infinity();
+        const auto cxChosenPos = cxSearchSim.FindBestMeetingPosition(cxWindow, 0, 0, 0, 0.0, cxBestCost);
+        BOOST_CHECK_EQUAL(cxChosenPos, minExplicitPos);
+        BOOST_CHECK_CLOSE(cxBestCost, minExplicitCost, 1e-9);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(ConfigurableBranchingDepthAndLargeChainFallbacks)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+
+    // 1. Verify deeper branching (lookaheadDepth - lookaheadDepthWithHeuristic)
+    // is never worse than shallower branching on the same lookahead horizon, and
+    // strictly improves routes when the optimal meeting position (m = 3 for gate
+    // (1, 9) on 11 qubits) preserves adjacency of passive qubit pairs (0,2), (2,3),
+    // (4,5), (5,6), (6,7), (7,8), (8,10) that do not touch qubits 1 or 9 (so
+    // partner-gravity has zero pulls and single-step policies only test m in {1, 4, 5, 8}).
+    constexpr size_t nrQubits = 11;
+    std::vector<std::shared_ptr<Circuits::IOperation<>>> ops{
+        CF::CreateGate(Kind::kCXGateType, 0, 1),  // step 0 (adjacent)
+        CF::CreateGate(Kind::kCXGateType, 1, 9),  // step 1: only m1 = 3 keeps all of steps 2..8 adjacent
+        CF::CreateGate(Kind::kCXGateType, 0, 2),  // step 2: eliminates m1 = 1
+        CF::CreateGate(Kind::kCXGateType, 2, 3),  // step 3: eliminates m1 = 2
+        CF::CreateGate(Kind::kCXGateType, 4, 5),  // step 4: eliminates m1 = 4
+        CF::CreateGate(Kind::kCXGateType, 5, 6),  // step 5: eliminates m1 = 5
+        CF::CreateGate(Kind::kCXGateType, 6, 7),  // step 6: eliminates m1 = 6
+        CF::CreateGate(Kind::kCXGateType, 7, 8),  // step 7: eliminates m1 = 7
+        CF::CreateGate(Kind::kCXGateType, 8, 10)  // step 8: eliminates m1 = 8
+    };
+
+    const std::vector<double> uniformBonds(nrQubits - 1, 2.0);
+    auto makeUniformSim = [&]() {
+        Simulators::MPSDummySimulator s(nrQubits);
+        s.SetMaxBondDimension(2);
+        s.setGrowthFactorGate(1.0);
+        s.setGrowthFactorSwap(1.0);
+        s.SetCurrentBondDimensions(uniformBonds);
+        return s;
+    };
+
+    // Starting at index 1 (where (1, 9) is at stepIdx == 0):
+    // 1-step branching (depth 7, heuristic 6) enumerates m = 3 and achieves 0 extra swaps on steps 2..8,
+    // strictly beating 0-step branching (depth 7, heuristic 7) which only tests {1, 4, 5, 8}.
+    auto simRoot0 = makeUniformSim();
+    auto simRoot1 = makeUniformSim();
+    double costRoot0 = std::numeric_limits<double>::infinity();
+    double costRoot1 = std::numeric_limits<double>::infinity();
+    const auto posRoot0 = simRoot0.FindBestMeetingPosition(ops, 1, 7, 7, 0.0, costRoot0);
+    const auto posRoot1 = simRoot1.FindBestMeetingPosition(ops, 1, 7, 6, 0.0, costRoot1);
+    BOOST_CHECK_EQUAL(posRoot1, 3);
+    BOOST_CHECK_NE(posRoot0, 3);
+    BOOST_CHECK_LT(costRoot1, costRoot0);
+
+    // Starting at index 0 (where (0, 1) is at stepIdx == 0 and (1, 9) is at stepIdx == 1):
+    // 2-step branching (depth 8, heuristic 6) branches at stepIdx == 1 and finds m1 = 3,
+    // strictly beating 1-step branching (depth 8, heuristic 7) and 0-step branching (depth 8, heuristic 8).
+    auto sim0 = makeUniformSim();
+    auto sim1 = makeUniformSim();
+    auto sim2 = makeUniformSim();
+
+    double costBranch0 = std::numeric_limits<double>::infinity();
+    double costBranch1 = std::numeric_limits<double>::infinity();
+    double costBranch2 = std::numeric_limits<double>::infinity();
+
+    (void)sim0.FindBestMeetingPosition(ops, 0, 8, 8, 0.0, costBranch0);
+    (void)sim1.FindBestMeetingPosition(ops, 0, 8, 7, 0.0, costBranch1);
+    (void)sim2.FindBestMeetingPosition(ops, 0, 8, 6, 0.0, costBranch2);
+
+    BOOST_CHECK_LE(costBranch1, costBranch0 + 1e-9);
+    BOOST_CHECK_LT(costBranch2, costBranch1);
+
+    // 2. Exercise > 64 qubits snapshot heap fallback and > 128 bond span candidate heap fallback.
+    constexpr size_t largeNrQubits = 140;
+    Simulators::MPSDummySimulator largeSim(largeNrQubits);
+    largeSim.SetMaxBondDimension(32);
+
+    std::vector<double> largeBonds(largeNrQubits - 1, 2.0);
+    for (size_t i = 0; i < largeBonds.size(); ++i)
+        largeBonds[i] = static_cast<double>(2 + (i % 5));
+    largeSim.SetCurrentBondDimensions(largeBonds);
+
+    const auto mapBefore = largeSim.getQubitsMap();
+    const auto bondsBefore = largeSim.getCurrentBondDimensions();
+    const double costBefore = largeSim.getTotalSwappingCost();
+
+    std::vector<std::shared_ptr<Circuits::IOperation<>>> largeOps{
+        CF::CreateGate(Kind::kCXGateType, 1, 136), // span = 135 > 128 stack candidate buffer
+        CF::CreateGate(Kind::kCXGateType, 1, 70),
+        CF::CreateGate(Kind::kCXGateType, 70, 136)};
+
+    double largeBestCost = std::numeric_limits<double>::infinity();
+    const auto largeMeetPos = largeSim.FindBestMeetingPosition(largeOps, 0, 2, 1, 0.0, largeBestCost);
+
+    BOOST_CHECK_GE(largeMeetPos, 1);
+    BOOST_CHECK_LT(largeMeetPos, 136);
+    BOOST_CHECK(std::isfinite(largeBestCost));
+    BOOST_CHECK(largeSim.getQubitsMap() == mapBefore);
+    BOOST_CHECK(largeSim.getCurrentBondDimensions() == bondsBefore);
+    BOOST_CHECK_CLOSE(largeSim.getTotalSwappingCost(), costBefore, 1e-12);
+}
+
+BOOST_AUTO_TEST_CASE(RoutingOverheadVsSimulationTimeBenchmarkMPSAndMPO)
+{
+    constexpr std::array<unsigned int, 4> circuitSeeds{13579u, 24680u, 97531u, 86420u};
+    constexpr int numRepeats = 2;
+
+    for (auto method : {Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kMatrixProductOperator})
+    {
+        const bool isMpo = (method == Simulators::SimulationType::kMatrixProductOperator);
+        const char *label = isMpo ? "MPO" : "MPS";
+        const int nrQubits = isMpo ? 11 : 13;
+        const int nrGates = isMpo ? 70 : 180;
+        const int maxBondDim = isMpo ? 32 : 64;
+
+        double totalMapMs = 0.0;
+        double totalColdPlanMs = 0.0;
+        double totalWarmPlanMs = 0.0;
+        double totalSimFixedEndMs = 0.0;
+        double totalSimLocalOptMs = 0.0;
+        double totalSimLookaheadMs = 0.0;
+        double totalHeuristicSwapCost = 0.0;
+        double totalLookaheadSwapCost = 0.0;
+
+        for (unsigned int seed : circuitSeeds)
+        {
+            const auto randomCirc = CreateRandomMPSCircuit(nrQubits, nrGates, seed);
+            const auto layers = randomCirc->ToMultipleQubitsLayers();
+            const auto optCirc = randomCirc->LayersToCircuit(layers);
+            const auto &ops = optCirc->GetOperations();
+            const std::vector<std::shared_ptr<Circuits::IOperation<>>> opsVec(ops.begin(), ops.end());
+
+            // 1. Measure standalone routing planning time (cold cache vs warm cache)
+            Simulators::MPSDummySimulator planner(nrQubits, isMpo);
+            planner.SetMaxBondDimension(maxBondDim);
+
+            const auto tMapStart = std::chrono::steady_clock::now();
+            const auto optimalMap = planner.ComputeOptimalQubitsMap(layers);
+            const auto tMapEnd = std::chrono::steady_clock::now();
+            totalMapMs += std::chrono::duration<double, std::milli>(tMapEnd - tMapStart).count();
+
+            // Baseline dummy swap cost with local min-bond-cost heuristic only
+            planner.SetInitialQubitsMap(optimalMap);
+            planner.ApplyGates(ops);
+            totalHeuristicSwapCost += planner.getTotalSwappingCost();
+
+            auto runOnlinePlanningPass = [&](double &planningMsOut) {
+                planner.SetInitialQubitsMap(optimalMap);
+                planner.setTotalSwappingCost(0);
+                planner.SetCurrentBondDimensions(std::vector<double>(nrQubits - 1, 1.0));
+                const auto tPlanStart = std::chrono::steady_clock::now();
+                for (size_t i = 0; i < opsVec.size(); ++i)
+                {
+                    const auto qbits = opsVec[i]->AffectedQubits();
+                    if (qbits.size() == 2)
+                    {
+                        double bestCost = std::numeric_limits<double>::infinity();
+                        const auto pos = planner.FindBestMeetingPosition(opsVec, static_cast<long long int>(i), 12, 11, 0.0, bestCost);
+                        planner.SwapQubitsToPosition(static_cast<long long int>(qbits[0]), static_cast<long long int>(qbits[1]), pos);
+                    }
+                    planner.ApplyGate(opsVec[i]);
+                }
+                const auto tPlanEnd = std::chrono::steady_clock::now();
+                planningMsOut = std::chrono::duration<double, std::milli>(tPlanEnd - tPlanStart).count();
+                return planner.getTotalSwappingCost();
+            };
+
+            double coldPlanMs = 0.0;
+            double warmPlanMs = 0.0;
+            const double coldCost = runOnlinePlanningPass(coldPlanMs);
+            const double warmCost = runOnlinePlanningPass(warmPlanMs);
+            BOOST_CHECK_CLOSE(coldCost, warmCost, 1e-9);
+            totalColdPlanMs += coldPlanMs;
+            totalWarmPlanMs += warmPlanMs;
+            totalLookaheadSwapCost += coldCost;
+
+            // 2. Measure actual simulator execution time across 3 configurations:
+            //    (a) Fixed-end routing: SetUseOptimalMeetingPosition(false)
+            //    (b) Default local bond-aware routing: SetUseOptimalMeetingPosition(true), SetLookaheadDepth(0)
+            //    (c) Lookahead routing: SetUseOptimalMeetingPosition(true), SetLookaheadDepth(12), SetLookaheadDepthWithHeuristic(11)
+            for (int rep = 0; rep < numRepeats; ++rep)
+            {
+                auto simFixed = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+                simFixed->AllocateQubits(nrQubits);
+                simFixed->Configure("matrix_product_state_max_bond_dimension", std::to_string(maxBondDim).c_str());
+                simFixed->Configure("matrix_product_operator_max_bond_dimension", std::to_string(maxBondDim).c_str());
+                simFixed->Initialize();
+                simFixed->SetInitialQubitsMap(std::vector<long long int>(optimalMap.begin(), optimalMap.end()));
+                simFixed->SetUseOptimalMeetingPosition(false);
+
+                Circuits::OperationState stateFixed;
+                stateFixed.AllocateBits(nrQubits);
+                const auto tSimFixedStart = std::chrono::steady_clock::now();
+                optCirc->Execute(simFixed, stateFixed);
+                const auto tSimFixedEnd = std::chrono::steady_clock::now();
+                totalSimFixedEndMs += std::chrono::duration<double, std::milli>(tSimFixedEnd - tSimFixedStart).count();
+
+                auto simLocalOpt = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+                simLocalOpt->AllocateQubits(nrQubits);
+                simLocalOpt->Configure("matrix_product_state_max_bond_dimension", std::to_string(maxBondDim).c_str());
+                simLocalOpt->Configure("matrix_product_operator_max_bond_dimension", std::to_string(maxBondDim).c_str());
+                simLocalOpt->Initialize();
+                simLocalOpt->SetInitialQubitsMap(std::vector<long long int>(optimalMap.begin(), optimalMap.end()));
+                simLocalOpt->SetUseOptimalMeetingPosition(true);
+                simLocalOpt->SetLookaheadDepth(0);
+
+                Circuits::OperationState stateLocalOpt;
+                stateLocalOpt.AllocateBits(nrQubits);
+                const auto tSimLocalStart = std::chrono::steady_clock::now();
+                optCirc->Execute(simLocalOpt, stateLocalOpt);
+                const auto tSimLocalEnd = std::chrono::steady_clock::now();
+                totalSimLocalOptMs += std::chrono::duration<double, std::milli>(tSimLocalEnd - tSimLocalStart).count();
+
+                auto simLookahead = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+                simLookahead->AllocateQubits(nrQubits);
+                simLookahead->Configure("matrix_product_state_max_bond_dimension", std::to_string(maxBondDim).c_str());
+                simLookahead->Configure("matrix_product_operator_max_bond_dimension", std::to_string(maxBondDim).c_str());
+                simLookahead->Initialize();
+                simLookahead->SetInitialQubitsMap(std::vector<long long int>(optimalMap.begin(), optimalMap.end()));
+                simLookahead->SetUseOptimalMeetingPosition(true);
+                simLookahead->SetLookaheadDepth(12);
+                simLookahead->SetLookaheadDepthWithHeuristic(11);
+                simLookahead->SetUpcomingGates(optCirc->GetOperations());
+
+                Circuits::OperationState stateLookahead;
+                stateLookahead.AllocateBits(nrQubits);
+                const auto tSimOptStart = std::chrono::steady_clock::now();
+                optCirc->Execute(simLookahead, stateLookahead);
+                const auto tSimOptEnd = std::chrono::steady_clock::now();
+                totalSimLookaheadMs += std::chrono::duration<double, std::milli>(tSimOptEnd - tSimOptStart).count();
+            }
+        }
+
+        const double nCircs = static_cast<double>(circuitSeeds.size());
+        const double nRuns = nCircs * numRepeats;
+        BOOST_TEST_MESSAGE("[" << label << " avg over " << circuitSeeds.size() << " circuits] "
+                               << "Initial map: " << (totalMapMs / nCircs) << " ms | "
+                               << "Online planning cold: " << (totalColdPlanMs / nCircs) << " ms, warm: " << (totalWarmPlanMs / nCircs) << " ms | "
+                               << "Modeled cost (local heuristic -> lookahead): " << (totalHeuristicSwapCost / nCircs) << " -> "
+                               << (totalLookaheadSwapCost / nCircs) << " | "
+                               << "Sim time fixed-end: " << (totalSimFixedEndMs / nRuns) << " ms, "
+                               << "default local-opt (depth 0): " << (totalSimLocalOptMs / nRuns) << " ms, "
+                               << "lookahead (total incl. planning): " << (totalSimLookaheadMs / nRuns) << " ms");
     }
 }
 

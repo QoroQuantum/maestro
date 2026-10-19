@@ -603,9 +603,7 @@ template <typename Time = Types::time_type> class ExecuteJob
                         int lookaheadHeuristicDepthLocal = network->GetLookaheadDepthWithHeuristic();
 
                         if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
-                            lookaheadHeuristicDepthLocal = layers.size() < 10 || routedQubits <= 10 ? 0
-                                                           : layers.size() < 20                     ? lookaheadDepthLocal - 1
-                                                                                                    : lookaheadDepthLocal - 2;
+                            lookaheadHeuristicDepthLocal = layers.size() < 8 || routedQubits <= 10 ? 0 : lookaheadDepthLocal - 1;
 
                         if (lookaheadHeuristicDepthLocal < 0)
                             lookaheadHeuristicDepthLocal = 0;
