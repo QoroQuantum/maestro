@@ -380,9 +380,12 @@ def test_clustering_matches_unclustered_baseline_and_scatters_in_order():
     )
     assert base["clusters_count"] == 1
     assert clustered["clusters_count"] == len(blocks)
-    assert clustered["expectation_values"] == pytest.approx(
-        base["expectation_values"], abs=1e-12
-    )
+    expected = [0.0] * len(observables)
+    expected[3] = math.sin(0.3)
+    assert clustered["expectation_values"] == pytest.approx(expected, abs=1e-12)
+    # The unclustered 24-qubit state sums millions of probabilities, so its
+    # accumulated rounding error can exceed the small-register tolerance.
+    assert base["expectation_values"] == pytest.approx(expected, abs=1e-10)
     assert clustered["largest_cluster_qubits"] <= 4
     assert clustered["qubits_after"] == clustered["largest_cluster_qubits"]
     assert clustered["qubits_before"] >= n
