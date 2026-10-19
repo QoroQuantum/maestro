@@ -2633,6 +2633,24 @@ class TestNoisyEstimate:
 class TestNoisyEstimateMonteCarlo:
     """Tests for gate-by-gate Monte Carlo noisy estimation."""
 
+    def test_seed_alias_matches_noise_seed(self):
+        """The public seed alias must preserve Monte Carlo noise realizations."""
+        qc = maestro.circuits.QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.05)
+
+        expected = maestro.noisy_estimate_montecarlo(
+            qc, ['ZZ', 'XX'], nm, noise_realizations=50, noise_seed=123)
+        actual = maestro.noisy_estimate_montecarlo(
+            qc, ['ZZ', 'XX'], nm, noise_realizations=50, seed=123)
+
+        assert actual['expectation_values'] == expected['expectation_values']
+        assert (actual['ideal_expectation_values'] ==
+                expected['ideal_expectation_values'])
+        assert actual['noise_realizations'] == expected['noise_realizations']
+
     def test_returns_all_keys(self):
         """Result contains expected keys."""
         from maestro.circuits import QuantumCircuit

@@ -64,11 +64,10 @@ for _fn_name in (
     "noisy_execute",
     "coherent_execute",
     "full_noise_execute",
-    "noisy_estimate_monte_carlo",
+    "noisy_estimate_montecarlo",
     "coherent_estimate",
     "full_noise_estimate",
     "noisy_fidelity",
 ):
     if hasattr(_raw_maestro, _fn_name):
         globals()[_fn_name] = _wrap_noise_seed(getattr(_raw_maestro, _fn_name))
-
