@@ -146,7 +146,10 @@ if(NOT DEFINED EIGEN5_INCLUDE_DIR)
             URL https://gitlab.com/libeigen/eigen/-/archive/5.0.0/eigen-5.0.0.tar.gz
             DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         )
-        FetchContent_MakeAvailable(eigen)
+        FetchContent_GetProperties(eigen)
+        if(NOT eigen_POPULATED)
+            FetchContent_Populate(eigen)
+        endif()
         set(EIGEN5_INCLUDE_DIR ${eigen_SOURCE_DIR})
         message(STATUS "Eigen fetched to: ${EIGEN5_INCLUDE_DIR}")
     endif()
@@ -282,13 +285,12 @@ if(QAER)
 
     set(MAESTRO_LINALG_LIBRARIES ${BLAS_LIBRARIES})
     if(WIN32)
-        # vcpkg builds OpenBLAS without LAPACK. Aer also needs the LAPACK
-        # eigensolver and SVD routines, provided by lapack-reference.
-        find_package(lapack CONFIG REQUIRED)
-        if(NOT TARGET lapack)
-            message(FATAL_ERROR "The LAPACK package must provide the lapack target")
+        # Aer needs the LAPACK eigensolver and SVD routines. vcpkg builds OpenBLAS
+        # without them and supplies lapack-reference; official OpenBLAS builds bundle them.
+        find_package(lapack CONFIG QUIET)
+        if(TARGET lapack)
+            list(PREPEND MAESTRO_LINALG_LIBRARIES lapack)
         endif()
-        list(PREPEND MAESTRO_LINALG_LIBRARIES lapack)
     endif()
 endif()
 
@@ -509,18 +511,22 @@ endif()
 # ==============================================================================
 
 if(BUILD_PYTHON_BINDINGS)
-    find_package(Python 3.10 COMPONENTS Interpreter Development.Module QUIET)
+    find_package(Python 3.10 COMPONENTS Interpreter Development.Module OPTIONAL_COMPONENTS Development.SABIModule QUIET)
     if(Python_FOUND)
         message(STATUS "Found Python ${Python_VERSION} (${Python_EXECUTABLE})")
 
-        FetchContent_Declare(
-            nanobind
-            GIT_REPOSITORY https://github.com/wjakob/nanobind.git
-            GIT_TAG        v2.0.0
-        )
-        FetchContent_MakeAvailable(nanobind)
+        # nanobind comes from the Python environment; pyproject.toml sets its version.
+        execute_process(
+            COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
+            OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE nanobind_ROOT
+            RESULT_VARIABLE NANOBIND_CMAKE_DIR_RESULT ERROR_QUIET)
+    endif()
+    if(Python_FOUND AND NANOBIND_CMAKE_DIR_RESULT EQUAL 0)
+        find_package(nanobind CONFIG REQUIRED)
 
-        nanobind_add_module(maestro_py
+        # Split mode: one stable-ABI module serves every CPython from 3.10, with
+        # the version-specific runtime supplied by the nanobind-backend package.
+        nanobind_add_module(maestro_py BACKEND_MODULE nanobind_backend
             python/Bindings.cpp
             python/bindings/execution.cpp
             python/bindings/fidelity.cpp
@@ -575,6 +581,8 @@ if(BUILD_PYTHON_BINDINGS)
                 DESTINATION maestro
             )
         endif()
+    elseif(Python_FOUND)
+        message(STATUS "nanobind not installed for ${Python_EXECUTABLE}, skipping Python bindings")
     else()
         message(WARNING "Python 3.10+ (with Interpreter and Development.Module) not found. Skipping Python bindings.")
     endif()
