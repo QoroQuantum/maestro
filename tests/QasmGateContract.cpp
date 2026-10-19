@@ -89,6 +89,8 @@ const std::vector<AllowedGateExpectation> &AllowedGateExpectations()
                                                                      {"cry", 1, 2, GateType::kCRyGateType},
                                                                      {"crz", 1, 2, GateType::kCRzGateType},
                                                                      {"cu1", 1, 2, GateType::kCUGateType},
+                                                                     // qelib1.inc's parametrised idle, a no-op like "id".
+                                                                     {"u0", 1, 1, GateType::kNone},
                                                                      // A global phase, which is unobservable and so emits nothing. It is the
                                                                      // reason kNone cannot simply be made to accept any arity: its arity is
                                                                      // genuinely zero.
@@ -126,11 +128,12 @@ std::string SingleCallProgram(const std::string &versionLine, const std::string 
     return versionLine + registerDecl + call + ";\n";
 }
 
-// The two names that are legitimately no-ops: the identity, and a global
-// phase, which is unobservable. Nothing else may expect kNone.
+// The names that are legitimately no-ops: the identity, its parametrised
+// qelib1.inc form, and a global phase, which is unobservable. Nothing else may
+// expect kNone.
 bool IsLegitimateNoOpGateName(const std::string &name)
 {
-    return name == "id" || name == "gphase";
+    return name == "id" || name == "u0" || name == "gphase";
 }
 
 // The rule closing the hole this guard used to have. A table entry whose
@@ -208,11 +211,11 @@ BOOST_AUTO_TEST_CASE(EveryAllowedGateNameResolvesToTheGateItNames)
             if (parser.Failed())
                 continue;
 
-            // kNone is a claim only "id" and "gphase" may make, not a way for any
-            // name to opt out of the gate-type assertion below.
+            // kNone is a claim only the legitimate no-ops may make, not a way for
+            // any name to opt out of the gate-type assertion below.
             BOOST_TEST(ExpectationIsSelfConsistent(gate), "Gate '" << gate.name
-                                                                   << "': only 'id' and 'gphase' may expect kNone (they are "
-                                                                      "the only legitimate no-ops), and both must; every "
+                                                                   << "': only 'id', 'u0' and 'gphase' may expect kNone (they "
+                                                                      "are the only legitimate no-ops), and all must; every "
                                                                       "other name must name the gate it resolves to");
 
             if (IsLegitimateNoOpGateName(gate.name))
