@@ -1,4 +1,6 @@
 """Device configuration and optional real-GPU end-to-end checks."""
+import math
+
 import pytest
 import maestro
 
@@ -117,6 +119,105 @@ def test_two_gpu_python_placement(method):
             assert actual["expectation_values"] == pytest.approx(cpu["expectation_values"], abs=1e-5)
     finally:
         maestro.select_gpu_device(0)
+
+
+@pytest.mark.parametrize("backend", [maestro.SimulatorType.Gpu, maestro.SimulatorType.QCSim])
+@pytest.mark.parametrize("method", [
+    maestro.SimulationType.TensorNetwork,
+    maestro.SimulationType.MatrixProductState,
+    maestro.SimulationType.MatrixProductOperator,
+])
+@pytest.mark.parametrize("case", ["native", "reduced", "clustered", "identity"])
+def test_one_qubit_tensor_estimates(backend, method, case):
+    if backend == maestro.SimulatorType.Gpu and not maestro.is_gpu_available():
+        pytest.skip("GPU plugin/device unavailable")
+    config = maestro.SimulatorConfig(
+        simulator_type=backend, simulation_type=method,
+        gpu_device=0 if backend == maestro.SimulatorType.Gpu else None,
+        auto_reduce=False, enable_causal_cone_reduction=case != "native",
+        max_cluster_qubits=1,
+    )
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.ry(0, 0.7)
+    circuit.rz(0, 0.4)
+    if case != "native":
+        circuit.x(3)
+    if case == "native":
+        observables = ["X", "Y", "Z"]
+        expected = [math.sin(0.7) * math.cos(0.4), math.sin(0.7) * math.sin(0.4), math.cos(0.7)]
+    elif case == "reduced":
+        observables, expected = ["IIIZ"], [-1.0]
+    elif case == "clustered":
+        observables = ["IIIZ", "XIII", "YIII", "IIII"]
+        expected = [-1.0, math.sin(0.7) * math.cos(0.4), math.sin(0.7) * math.sin(0.4), 1.0]
+    else:
+        observables, expected = ["IIII"], [1.0]
+    before = repr(config)
+    result = circuit.estimate(observables, config)
+    expected_method = (maestro.SimulationType.Statevector
+                       if backend == maestro.SimulatorType.Gpu and method == maestro.SimulationType.TensorNetwork
+                       else method)
+    assert result["expectation_values"] == pytest.approx(expected, abs=1e-5)
+    assert result["qubits_after"] == 1
+    assert result["clusters_count"] == (3 if case == "clustered" else 1)
+    assert result["method"] == expected_method.value
+    assert result["cluster_methods"] == [expected_method.value] * result["clusters_count"]
+    assert result["simulator"] == backend.value
+    if backend == maestro.SimulatorType.Gpu:
+        assert result["gpu_device"] == 0
+    assert repr(config) == before
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_gpu_tensor_network_mixed_cluster_methods(reverse):
+    if not maestro.is_gpu_available():
+        pytest.skip("GPU plugin/device unavailable")
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.x(0)
+    circuit.h(1)
+    circuit.cx(1, 2)
+    observables = ["ZII", "IZZ"]
+    expected = [-1.0, 1.0]
+    methods = [maestro.SimulationType.Statevector.value, maestro.SimulationType.TensorNetwork.value]
+    if reverse:
+        observables.reverse()
+        expected.reverse()
+        methods.reverse()
+    config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.Gpu,
+                                     simulation_type=maestro.SimulationType.TensorNetwork, gpu_device=0)
+    result = circuit.estimate(observables, config)
+    assert result["expectation_values"] == pytest.approx(expected, abs=1e-5)
+    assert result["clusters_count"] == 2
+    assert result["largest_cluster_qubits"] == 2
+    assert result["cluster_methods"] == methods
+    assert result["method"] == methods[0]
+    assert result["gpu_device"] == 0
+
+
+def test_gpu_tensor_network_parity_reduced_to_one_qubit():
+    if not maestro.is_gpu_available():
+        pytest.skip("GPU plugin/device unavailable")
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.h(0)
+    circuit.h(1)
+    circuit.cx(0, 1)
+    circuit.rz(1, 0.7)
+    circuit.cx(0, 1)
+    circuit.rx(0, 0.3)
+    circuit.rx(1, 0.4)
+    observables = ["ZZ", "XI", "II"]
+    expected = circuit.estimate(observables, maestro.SimulatorConfig(
+        auto_reduce=False, enable_causal_cone_reduction=False))
+    config = maestro.SimulatorConfig(
+        simulator_type=maestro.SimulatorType.Gpu,
+        simulation_type=maestro.SimulationType.TensorNetwork,
+        gpu_device=0, enable_causal_cone_reduction=False,
+    )
+    result = circuit.estimate(observables, config)
+    assert result["auto_reduced"]
+    assert result["qubits_after"] == 1
+    assert result["cluster_methods"] == [maestro.SimulationType.Statevector.value]
+    assert result["expectation_values"] == pytest.approx(expected["expectation_values"], abs=1e-5)
 
 
 def test_json_gpu_placement():

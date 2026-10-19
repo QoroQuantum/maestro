@@ -127,6 +127,7 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
     size_t total_cluster_qubits = 0;
     size_t max_bond_dim = 0;
     int simulator_type = 0, method = 0, gpu_device = -1;
+    nb::list cluster_methods;
     bool first = true;
 
     for (const auto &group : groups)
@@ -154,7 +155,16 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
         if (sim.handle == 0)
             throw std::runtime_error("Failed to create simulator handle.");
 
-        auto network = ConfigureNetwork(sim.handle, config);
+        // cuTensorNet's MPS factorization requires at least two qubits. A
+        // cluster (or a single observable's reduced circuit) can have only one;
+        // evaluate it with the same device's statevector backend instead. The
+        // standalone MPS/MPO implementations support one qubit already.
+        auto cluster_config = config;
+        if (num_qubits == 1 && config.simulator_type == Simulators::SimulatorType::kGpuSim &&
+            config.simulation_type == Simulators::SimulationType::kTensorNetwork)
+            cluster_config.simulation_type = Simulators::SimulationType::kStatevector;
+
+        auto network = ConfigureNetwork(sim.handle, cluster_config);
         if (!network)
             throw std::runtime_error("Failed to configure network.");
 
@@ -175,6 +185,7 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
         largest_cluster_qubits = std::max(largest_cluster_qubits, ctx.qubits_after);
         total_cluster_qubits += ctx.qubits_after;
         max_bond_dim = std::max(max_bond_dim, network->GetCurrentMaxBondDimension());
+        cluster_methods.append((int)network->GetLastSimulationType());
         if (first)
         {
             simulator_type = (int)network->GetLastSimulatorType();
@@ -201,6 +212,9 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
     py_result["time_taken"] = std::chrono::duration<double>(execution_duration + reduction_duration).count();
     py_result["simulator"] = simulator_type;
     py_result["method"] = method;
+    // `method` retains the first cluster's method; this list also describes
+    // mixed requests containing both a statevector fallback and larger TNs.
+    py_result["cluster_methods"] = cluster_methods;
     if (gpu_device >= 0)
         py_result["gpu_device"] = gpu_device;
     if (max_bond_dim > 0)

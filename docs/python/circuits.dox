@@ -155,12 +155,19 @@
  * print("Reduction time (s):", result["reduction_time"])
  * print("Groups:", result["clusters_count"])
  * print("Largest group (qubits):", result["largest_cluster_qubits"])
+ * print("Methods per group:", result["cluster_methods"])
  * @endcode
  *
  * Reduction runs before simulator allocation and uses the configured backend
  * and its options. Each group of observables gets its own reduced circuit;
  * `qubits_after` reports the largest. Expectation values come back in the
  * order the observables were given. The source circuit is unchanged.
+ * GPU TensorNetwork estimates with a one-qubit effective register use GPU
+ * Statevector on the selected device, because cuTensorNet's MPS factorization
+ * requires at least two qubits. This also applies to single-observable requests
+ * and one-qubit input circuits. Larger groups keep TensorNetwork; MPS and MPO
+ * support one qubit directly. `cluster_methods` lists the actual SimulationType
+ * integer values in group order, while `method` reports the first group's method.
  *
  * @subsubsection py_circuits_cluster_budget Bounding group size
  *
