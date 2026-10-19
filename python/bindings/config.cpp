@@ -276,14 +276,13 @@ void bind_config(nb::module_ &m)
                     "With causal-cone reduction, partition multi-observable estimates into groups with disjoint "
                     "lightcones and simulate each on its own compact register. GPU PauliPropagator "
                     "keeps all observables in one run, since each extra run costs more than it saves.");
-    BindConfigField(config_class, "max_cluster_qubits", &SimulatorConfig::max_cluster_qubits,
-                    "With observable clustering, split overlapping lightcones into groups of at most "
-                    "this many qubits; a larger single-observable lightcone gets its own group. "
-                    "None (the default) keeps every overlapping lightcone in one group. GPU "
-                    "PauliPropagator ignores it and keeps all observables in one run. With "
-                    "PauliPropagator and pp_gates_between_trims above 1, trims fall on different "
-                    "gates per group, so values can vary with the budget within the truncation error.",
-                    false);
+    BindConfigField<false>(config_class, "max_cluster_qubits", &SimulatorConfig::max_cluster_qubits,
+                           "With observable clustering, split overlapping lightcones into groups of at most "
+                           "this many qubits; a larger single-observable lightcone gets its own group. "
+                           "None (the default) keeps every overlapping lightcone in one group. GPU "
+                           "PauliPropagator ignores it and keeps all observables in one run. With "
+                           "PauliPropagator and pp_gates_between_trims above 1, trims fall on different "
+                           "gates per group, so values can vary with the budget within the truncation error.");
     BindConfigField(config_class, "auto_reduce", &SimulatorConfig::auto_reduce,
                     "Detect check-generated invariant subspaces before estimation and simulate the reduced register using the configured backend; unsupported "
                     "circuits retain full execution.");
