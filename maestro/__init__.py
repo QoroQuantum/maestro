@@ -48,3 +48,26 @@ def _reduce_simulator_config(cfg):
 
 
 copyreg.pickle(_raw_maestro.SimulatorConfig, _reduce_simulator_config)
+
+
+def _wrap_noise_seed(fn):
+    def _wrapped(*args, **kwargs):
+        if "seed" in kwargs and "noise_seed" not in kwargs:
+            kwargs["noise_seed"] = kwargs.pop("seed")
+        return fn(*args, **kwargs)
+    _wrapped.__name__ = getattr(fn, "__name__", "wrapped")
+    _wrapped.__doc__ = getattr(fn, "__doc__", None)
+    return _wrapped
+
+
+for _fn_name in (
+    "noisy_execute",
+    "coherent_execute",
+    "full_noise_execute",
+    "noisy_estimate_montecarlo",
+    "coherent_estimate",
+    "full_noise_estimate",
+    "noisy_fidelity",
+):
+    if hasattr(_raw_maestro, _fn_name):
+        globals()[_fn_name] = _wrap_noise_seed(getattr(_raw_maestro, _fn_name))

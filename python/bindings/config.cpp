@@ -28,8 +28,7 @@ template <bool Convert, typename T> constexpr auto SetterArg()
 
 // A property whose setter validates the whole config before committing, so an
 // invalid value leaves the config unchanged.
-template <bool Convert = true, typename T>
-void BindConfigField(nb::class_<SimulatorConfig> &cls, const char *name, T SimulatorConfig::*member, const char *doc)
+template <bool Convert = true, typename T> void BindConfigField(nb::class_<SimulatorConfig> &cls, const char *name, T SimulatorConfig::*member, const char *doc)
 {
     cls.def_prop_rw(
         name, [member](const SimulatorConfig &c) -> T { return c.*member; },
@@ -69,6 +68,8 @@ const char *const kConfigFields[] = {
     "path_integral_threshold",
     "gate_fusion",
     "enable_causal_cone_reduction",
+    "enable_observable_clustering",
+    "max_cluster_qubits",
     "auto_reduce",
     "trajectory_policy",
     "trajectory_max_memory_mb",
@@ -119,8 +120,8 @@ void bind_config(nb::module_ &m)
            std::optional<std::string> mpo_kraus_completeness_check, bool mpo_restore_trace_after_truncation, bool mpo_hermitize_after_truncation,
            std::optional<double> pp_coefficient_threshold, std::optional<size_t> pp_max_pauli_weight, std::optional<int> pp_gates_between_trims,
            std::optional<int> pp_gates_between_deduplications, std::optional<double> path_integral_threshold, std::optional<bool> gate_fusion,
-           bool enable_causal_cone_reduction, bool auto_reduce, std::optional<std::string> trajectory_policy, std::optional<size_t> trajectory_max_memory_mb,
-           std::optional<size_t> max_simulators) {
+           bool enable_causal_cone_reduction, bool enable_observable_clustering, std::optional<size_t> max_cluster_qubits, bool auto_reduce,
+           std::optional<std::string> trajectory_policy, std::optional<size_t> trajectory_max_memory_mb, std::optional<size_t> max_simulators) {
             SimulatorConfig config;
             config.simulator_type = simulator_type;
             config.simulation_type = simulation_type;
@@ -147,6 +148,8 @@ void bind_config(nb::module_ &m)
             config.path_integral_threshold = path_integral_threshold;
             config.gate_fusion = gate_fusion;
             config.enable_causal_cone_reduction = enable_causal_cone_reduction;
+            config.enable_observable_clustering = enable_observable_clustering;
+            config.max_cluster_qubits = max_cluster_qubits;
             config.auto_reduce = auto_reduce;
             config.trajectory_policy = std::move(trajectory_policy);
             config.trajectory_max_memory_mb = trajectory_max_memory_mb;
@@ -163,6 +166,7 @@ void bind_config(nb::module_ &m)
         "mpo_hermitize_after_truncation"_a = defaults.mpo_hermitize_after_truncation, "pp_coefficient_threshold"_a = nb::none(),
         "pp_max_pauli_weight"_a = nb::none(), "pp_gates_between_trims"_a = nb::none(), "pp_gates_between_deduplications"_a = nb::none(),
         "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(), "enable_causal_cone_reduction"_a = defaults.enable_causal_cone_reduction,
+        "enable_observable_clustering"_a = defaults.enable_observable_clustering, "max_cluster_qubits"_a.noconvert() = nb::none(),
         "auto_reduce"_a = defaults.auto_reduce, "trajectory_policy"_a = nb::none(), "trajectory_max_memory_mb"_a.noconvert() = nb::none(),
         "max_simulators"_a.noconvert() = nb::none());
 
@@ -268,6 +272,17 @@ void bind_config(nb::module_ &m)
                     "trimming.");
     BindConfigField(config_class, "enable_causal_cone_reduction", &SimulatorConfig::enable_causal_cone_reduction,
                     "Reduce observable causal cones before allocation; distributed GPU backends retain full execution.");
+    BindConfigField(config_class, "enable_observable_clustering", &SimulatorConfig::enable_observable_clustering,
+                    "With causal-cone reduction, partition multi-observable estimates into groups with disjoint "
+                    "lightcones and simulate each on its own compact register. GPU PauliPropagator "
+                    "keeps all observables in one run, since each extra run costs more than it saves.");
+    BindConfigField<false>(config_class, "max_cluster_qubits", &SimulatorConfig::max_cluster_qubits,
+                           "With observable clustering, split overlapping lightcones into groups of at most "
+                           "this many qubits; a larger single-observable lightcone gets its own group. "
+                           "None (the default) keeps every overlapping lightcone in one group. GPU "
+                           "PauliPropagator ignores it and keeps all observables in one run. With "
+                           "PauliPropagator and pp_gates_between_trims above 1, trims fall on different "
+                           "gates per group, so values can vary with the budget within the truncation error.");
     BindConfigField(config_class, "auto_reduce", &SimulatorConfig::auto_reduce,
                     "Detect check-generated invariant subspaces before estimation and simulate the reduced register using the configured backend; unsupported "
                     "circuits retain full execution.");

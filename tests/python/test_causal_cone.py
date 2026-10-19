@@ -344,3 +344,183 @@ def test_default_config_has_causal_cone_reduction_enabled():
     circuit.x(69)
     res = circuit.estimate(["ZI" + "I" * 68])
     assert res["expectation_values"] == pytest.approx([math.cos(0.4)], abs=1e-12)
+
+
+def _local_blocks_circuit(num_qubits, blocks):
+    circuit = maestro.circuits.QuantumCircuit()
+    for a, b in blocks:
+        circuit.ry(a, 0.3 + 0.1 * a)
+        circuit.h(b)
+        circuit.cx(a, b)
+        circuit.rz(b, 0.2)
+        circuit.h(b)
+    circuit.x(num_qubits - 1)
+    return circuit
+
+
+def test_clustering_matches_unclustered_baseline_and_scatters_in_order():
+    n = 56
+    blocks = [(4 * k, 4 * k + 1) for k in range(12)]
+    circuit = _local_blocks_circuit(n, blocks)
+    observables = []
+    for a, b in reversed(blocks):  # deliberately not in qubit order
+        word = ["I"] * n
+        word[a], word[b] = "Z", "X"
+        observables.append("".join(word))
+    word = ["I"] * n
+    word[0] = "X"
+    observables.insert(3, "".join(word))
+
+    base = circuit.estimate(
+        observables,
+        maestro.SimulatorConfig(enable_observable_clustering=False),
+    )
+    clustered = circuit.estimate(
+        observables, maestro.SimulatorConfig(enable_observable_clustering=True)
+    )
+    assert base["clusters_count"] == 1
+    assert clustered["clusters_count"] == len(blocks)
+    expected = [0.0] * len(observables)
+    expected[3] = math.sin(0.3)
+    assert clustered["expectation_values"] == pytest.approx(expected, abs=1e-12)
+    # The unclustered 24-qubit state sums millions of probabilities, so its
+    # accumulated rounding error can exceed the small-register tolerance.
+    assert base["expectation_values"] == pytest.approx(expected, abs=1e-10)
+    assert clustered["largest_cluster_qubits"] <= 4
+    assert clustered["qubits_after"] == clustered["largest_cluster_qubits"]
+    assert clustered["qubits_before"] >= n
+
+
+def test_isolated_observables_use_small_registers():
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.h(90)
+    circuit.cx(90, 91)
+    circuit.x(99)
+    observables = [
+        "ZZ" + "I" * 98,
+        "I" * 90 + "ZZ" + "I" * 8,
+    ]
+    res = circuit.estimate(observables)
+    assert res["clusters_count"] == 2
+    assert res["largest_cluster_qubits"] <= 10
+    assert res["qubits_before"] == 100
+    assert res["expectation_values"] == pytest.approx([1.0, 1.0], abs=1e-12)
+
+
+def test_entangled_observables_form_single_cluster():
+    circuit = maestro.circuits.QuantumCircuit()
+    for q in range(5):
+        circuit.h(q)
+    for q in range(4):
+        circuit.cx(q, q + 1)
+    observables = ["ZIIII", "IIIIZ", "IXIII"]
+    on = circuit.estimate(observables)
+    off = circuit.estimate(
+        observables, maestro.SimulatorConfig(enable_observable_clustering=False)
+    )
+    assert on["clusters_count"] == 1
+    assert on["expectation_values"] == pytest.approx(
+        off["expectation_values"], abs=1e-12
+    )
+
+
+def test_terminal_measurements_do_not_block_clustering():
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.h(90)
+    circuit.cx(90, 91)
+    circuit.x(99)
+    circuit.measure_all()
+    res = circuit.estimate(["ZZ" + "I" * 98, "I" * 90 + "ZZ" + "I" * 8])
+    assert res["clusters_count"] == 2
+    assert res["largest_cluster_qubits"] <= 10
+    assert res["expectation_values"] == pytest.approx([1.0, 1.0], abs=1e-12)
+
+
+def test_clustering_default_and_disabled_with_reduction_off():
+    assert maestro.SimulatorConfig().enable_observable_clustering is True
+    circuit = maestro.circuits.QuantumCircuit()
+    circuit.x(0)
+    circuit.x(3)
+    cfg = maestro.SimulatorConfig(enable_causal_cone_reduction=False)
+    res = circuit.estimate(["ZIII", "IIIZ"], cfg)
+    assert res["clusters_count"] == 1
+    assert res["expectation_values"] == pytest.approx([-1.0, -1.0], abs=1e-12)
+
+
+def _brickwork_circuit(num_qubits):
+    circuit = maestro.circuits.QuantumCircuit()
+    for q in range(num_qubits):
+        circuit.ry(q, 0.1 + 0.05 * q)
+    for q in range(0, num_qubits - 1, 2):
+        circuit.cx(q, q + 1)
+    for q in range(1, num_qubits - 1, 2):
+        circuit.cx(q, q + 1)
+    return circuit
+
+
+def _brickwork_observables(num_qubits):
+    # Each cone spans four qubits and overlaps its neighbours, so the cones
+    # chain across the whole register.
+    observables = []
+    for q in range(1, num_qubits - 2, 2):
+        word = ["I"] * num_qubits
+        word[q] = "Z"
+        observables.append("".join(word))
+    return observables
+
+
+def test_cluster_budget_splits_chained_lightcones():
+    n = 80
+    circuit = _brickwork_circuit(n)
+    observables = _brickwork_observables(n)
+    expected = [circuit.estimate([p])["expectation_values"][0] for p in observables]
+    res = circuit.estimate(observables, maestro.SimulatorConfig(max_cluster_qubits=12))
+    assert res["clusters_count"] > 1
+    assert res["largest_cluster_qubits"] <= 12
+    assert res["qubits_before"] == n
+    assert res["expectation_values"] == pytest.approx(expected, abs=1e-12)
+
+
+def test_cluster_budget_matches_unbounded_pauli_propagation():
+    n = 80
+    circuit = _brickwork_circuit(n)
+    observables = _brickwork_observables(n)
+    pp = maestro.SimulationType.PauliPropagator
+    unbounded = circuit.estimate(observables, maestro.SimulatorConfig(simulation_type=pp))
+    bounded = circuit.estimate(
+        observables, maestro.SimulatorConfig(simulation_type=pp, max_cluster_qubits=8)
+    )
+    assert unbounded["clusters_count"] == 1
+    assert bounded["clusters_count"] > 1
+    assert bounded["largest_cluster_qubits"] <= 8
+    assert bounded["expectation_values"] == pytest.approx(
+        unbounded["expectation_values"], abs=1e-10
+    )
+
+
+def test_cluster_budget_smaller_than_a_cone_still_runs():
+    circuit = _brickwork_circuit(8)
+    observables = _brickwork_observables(8)
+    expected = [circuit.estimate([p])["expectation_values"][0] for p in observables]
+    res = circuit.estimate(observables, maestro.SimulatorConfig(max_cluster_qubits=1))
+    assert res["clusters_count"] == len(observables)
+    assert res["largest_cluster_qubits"] == 4
+    assert res["expectation_values"] == pytest.approx(expected, abs=1e-12)
+
+
+def test_max_cluster_qubits_config():
+    assert maestro.SimulatorConfig().max_cluster_qubits is None
+    config = maestro.SimulatorConfig(max_cluster_qubits=35)
+    assert config.max_cluster_qubits == 35
+    config.max_cluster_qubits = None
+    assert config.max_cluster_qubits is None
+    for bad in (0, -1, "35", True):
+        with pytest.raises((ValueError, TypeError)):
+            maestro.SimulatorConfig(max_cluster_qubits=bad)
+        with pytest.raises((ValueError, TypeError)):
+            config.max_cluster_qubits = bad
+        assert config.max_cluster_qubits is None

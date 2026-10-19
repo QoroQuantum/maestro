@@ -125,12 +125,18 @@
  * 1. **Causal-cone reduction** (`enable_causal_cone_reduction=True`, default):
  *    Removes gates and idle qubits outside the combined backward dependencies of the
  *    requested observables.
- * 2. **Automatic parity-check reduction** (`auto_reduce=True`, default):
+ * 2. **Observable clustering** (`enable_observable_clustering=True`, default):
+ *    Splits the observables into groups whose lightcones are disjoint and reduces
+ *    and simulates each group on its own compact register. Observables whose
+ *    lightcones overlap, even indirectly through other observables, stay in one
+ *    group. Setting `max_cluster_qubits` also splits overlapping lightcones (see below).
+ *    GPU Pauli propagation keeps all observables in one run.
+ * 3. **Automatic parity-check reduction** (`auto_reduce=True`, default):
  *    Detects invariant check subspaces (e.g. QAOA parity ladders with uncomputed
  *    CNOT frames) and maps the simulation to an effective reduced register of
  *    dimension 2^rank(checks), simulated using the caller's configured backend.
  *
- * Either or both transforms can be disabled via `SimulatorConfig`:
+ * Any of these transforms can be disabled via `SimulatorConfig`:
  * @code{.py}
  * # Disable one or both transforms:
  * config = maestro.SimulatorConfig(
@@ -147,11 +153,46 @@
  * print("Qubits before:", result["qubits_before"])
  * print("Qubits after:", result["qubits_after"])
  * print("Reduction time (s):", result["reduction_time"])
+ * print("Groups:", result["clusters_count"])
+ * print("Largest group (qubits):", result["largest_cluster_qubits"])
  * @endcode
  *
  * Reduction runs before simulator allocation and uses the configured backend
- * and its options. All observables share one reduced circuit, with their
- * order preserved. The source circuit is unchanged.
+ * and its options. Each group of observables gets its own reduced circuit;
+ * `qubits_after` reports the largest. Expectation values come back in the
+ * order the observables were given. The source circuit is unchanged.
+ *
+ * @subsubsection py_circuits_cluster_budget Bounding group size
+ *
+ * When many observables are spread across a chip, their lightcones often
+ * chain together into one group covering every qubit, and clustering then
+ * saves nothing. `max_cluster_qubits` caps each group's combined lightcone:
+ * each group starts from the largest remaining lightcone and adds the
+ * overlapping observable that adds the fewest new qubits, while the union
+ * fits the budget. An observable whose own lightcone exceeds the budget gets
+ * a group of its own. Disjoint lightcones are never grouped together.
+ *
+ * @code{.py}
+ * config = maestro.SimulatorConfig(
+ *     simulation_type=maestro.SimulationType.PauliPropagator,
+ *     max_cluster_qubits=35,
+ * )
+ * result = qc.estimate(observables, config=config)
+ * @endcode
+ *
+ * Smaller groups mean smaller registers but more simulator runs, so the best
+ * budget depends on the backend. On a 118-qubit benchmark with 179 Pauli
+ * observables, CPU Pauli propagation ran about 2.2x faster with budgets from
+ * 35 to 50. A budget helps backends whose cost grows with register width
+ * (Pauli propagation, statevector); matrix product states pay per group and
+ * gain little. GPU Pauli propagation skips clustering and ignores the
+ * budget: each GPU run costs about a second to set up, more than splitting saves.
+ *
+ * @note With PauliPropagator and `pp_gates_between_trims` above 1, trims land
+ * on different gates in each group's reduced circuit, so values can change
+ * slightly with the budget, within the truncation error. Trimming and
+ * deduplicating after every gate (`pp_gates_between_trims=1`,
+ * `pp_gates_between_deduplications=1`) makes values independent of the grouping.
  * Non-unitary operations (measurement, reset, quantum channels), classical control,
  * and distributed GPU layouts conservatively fall back to full execution.
  */

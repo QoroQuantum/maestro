@@ -406,6 +406,8 @@ set(MAESTROSRC maestrolib/Interface.cpp Execution/Request.cpp
     Execution/Transforms/TransformPipeline.cpp
     Execution/Transforms/CausalConeTransform.h
     Execution/Transforms/CausalConeTransform.cpp
+    Execution/Transforms/ObservableClustering.h
+    Execution/Transforms/ObservableClustering.cpp
     Execution/Transforms/ParityReductionTransform.h
     Execution/Transforms/ParityReductionTransform.cpp)
 
