@@ -14,6 +14,8 @@
 
 #define BOOST_TEST_MODULE Conductor Test Module
 #include <boost/test/included/unit_test.hpp> //single-header
+#include <cmath>
+#include <complex>
 #include <fstream>
 
 // this is just to fix some bug with detecting memory leaks in qiskit-aer
@@ -33,8 +35,6 @@
 
 #define _TESTS_NO_EXCLUDE 1
 #include "Tests.h"
-
-#include "../Simulators/Core/Factory.cpp"
 
 bool checkClose(std::complex<double> a, std::complex<double> b, double dif)
 {

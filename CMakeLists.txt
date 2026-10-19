@@ -408,10 +408,22 @@ set(MAESTROSRC maestrolib/Interface.cpp Execution/Request.cpp
     Execution/Transforms/CausalConeTransform.cpp
     Execution/Transforms/ParityReductionTransform.h
     Execution/Transforms/ParityReductionTransform.cpp)
+
+# The simulator factory is split by backend so the heavy, header-only simulator
+# implementations compile in parallel. Targets that compile the factory instead
+# of linking libmaestro must use the whole list. FactoryAerComposite.cpp stays
+# first so unity builds still see the Aer AVX2 kernels before other simulators.
+set(MAESTRO_FACTORY_SRC
+    Simulators/Core/FactoryAerComposite.cpp
+    Simulators/Core/Factory.cpp
+    Simulators/Core/FactoryGpu.cpp
+    Simulators/Core/FactoryQCSim.cpp
+    Simulators/Core/FactoryQCSimTensorChain.cpp
+    Simulators/Core/FactoryQuest.cpp)
+
+list(APPEND MAESTROSRC ${MAESTRO_FACTORY_SRC})
 if(WIN32)
     list(APPEND MAESTROSRC maestrolib/DllMain.cpp)
-else()
-    list(APPEND MAESTROSRC Simulators/Core/Factory.cpp)
 endif()
 
 set(MAESTROEXESRC maestroexe/MaestroExe.cpp)
@@ -692,6 +704,7 @@ if(COMPILE_TESTS)
         tests/FusionNetwTests.cpp
         tests/MPSNetwTests.cpp
         tests/Tests.cpp
+        ${MAESTRO_FACTORY_SRC}
     )
 
     set(ACTIVE_TESTSSRC ${TESTSSRC})
@@ -756,14 +769,8 @@ if(COMPILE_TESTS)
 
     # Unity test: sampling_order_tests
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/SamplingOrderTests.cpp")
-        if(CMAKE_VERSION VERSION_LESS "3.16")
-            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/SamplingOrderUnity.cpp"
-                "#include \"${CMAKE_CURRENT_SOURCE_DIR}/Simulators/Core/Factory.cpp\"\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/tests/SamplingOrderTests.cpp\"\n")
-            add_executable(sampling_order_tests "${CMAKE_CURRENT_BINARY_DIR}/SamplingOrderUnity.cpp")
-        else()
-            add_executable(sampling_order_tests Simulators/Core/Factory.cpp tests/SamplingOrderTests.cpp)
-            set_target_properties(sampling_order_tests PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 0)
-        endif()
+        add_executable(sampling_order_tests ${MAESTRO_FACTORY_SRC} tests/SamplingOrderTests.cpp)
+        set_target_properties(sampling_order_tests PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 0)
         target_link_libraries(sampling_order_tests PRIVATE Boost::serialization ${CMAKE_DL_LIBS}
             $<TARGET_PROPERTY:maestro,INTERFACE_LINK_LIBRARIES>)
         target_compile_options(sampling_order_tests PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_COMPILE_OPTIONS>)
