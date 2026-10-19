@@ -28,8 +28,7 @@ template <bool Convert, typename T> constexpr auto SetterArg()
 
 // A property whose setter validates the whole config before committing, so an
 // invalid value leaves the config unchanged.
-template <bool Convert = true, typename T>
-void BindConfigField(nb::class_<SimulatorConfig> &cls, const char *name, T SimulatorConfig::*member, const char *doc)
+template <bool Convert = true, typename T> void BindConfigField(nb::class_<SimulatorConfig> &cls, const char *name, T SimulatorConfig::*member, const char *doc)
 {
     cls.def_prop_rw(
         name, [member](const SimulatorConfig &c) -> T { return c.*member; },
