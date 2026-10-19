@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The QASM parser accepts qelib1.inc's `u0`, a parametrised idle that adds no operation.
+
 ## [0.3.7] - 2026-10-19
 
 ### Added
