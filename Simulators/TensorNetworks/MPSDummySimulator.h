@@ -19,6 +19,9 @@
 #define _MPSDUMMYSIMULATOR_H_
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstring>
 #include <deque>
 #include <iostream>
 #include <random>
@@ -88,24 +91,58 @@ class MPSDummySimulator
         return growthFactorGate;
     }
 
+    static constexpr double kPostSwapCostWeight = 0.25;
+    static constexpr double kPostGateCostWeight = 0.5;
+
+    static bool IsControlledTwoQubitGateType(Circuits::QuantumGateType gt)
+    {
+        switch (gt)
+        {
+        case Circuits::QuantumGateType::kCXGateType:
+        case Circuits::QuantumGateType::kCYGateType:
+        case Circuits::QuantumGateType::kCZGateType:
+        case Circuits::QuantumGateType::kCPGateType:
+        case Circuits::QuantumGateType::kCRxGateType:
+        case Circuits::QuantumGateType::kCRyGateType:
+        case Circuits::QuantumGateType::kCRzGateType:
+        case Circuits::QuantumGateType::kCHGateType:
+        case Circuits::QuantumGateType::kCSxGateType:
+        case Circuits::QuantumGateType::kCSxDagGateType:
+        case Circuits::QuantumGateType::kCUGateType:
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    void InvalidateMemoCache()
+    {
+        for (auto &entry : memoCache)
+            entry.valid = false;
+    }
+
     void setGrowthFactorSwap(double factor)
     {
         growthFactorSwap = factor;
+        InvalidateMemoCache();
     }
 
     void setGrowthFactorGate(double factor)
     {
         growthFactorGate = factor;
+        InvalidateMemoCache();
     }
 
     void Clear()
     {
         InitQubitsMap();
+        InvalidateMemoCache();
     }
 
     void SetMaxBondDimension(IndexType val)
     {
         maxVirtualExtent = val;
+        InvalidateMemoCache();
 
         if (nrQubits == 0)
             return;
@@ -120,7 +157,7 @@ class MPSDummySimulator
 
         maxVirtualExtent = maxVirtualExtent == 0 ? maxVirtualExtentLimit : std::min(maxVirtualExtent, maxVirtualExtentLimit);
 
-        bondCost.resize(nrQubits - 1);
+        bondCost.assign(nrQubits - 1, 1.0);
         maxBondDim.resize(nrQubits - 1);
         currentBondDim.assign(nrQubits - 1, 1.0);
 
@@ -148,8 +185,6 @@ class MPSDummySimulator
             if (i < static_cast<IndexType>(nrQubits) - 1)
             {
                 maxBondDim[i] = static_cast<double>(maxRightExtent);
-                const double maxRightExtentD = static_cast<double>(maxRightExtent);
-                bondCost[i] = maxRightExtentD * maxRightExtentD * maxRightExtentD;
             }
         }
     }
@@ -180,14 +215,21 @@ class MPSDummySimulator
         }
         else if (qbits.size() == 2)
         {
-            // Reuse a single static dummy 2-qubit gate to avoid heap allocation.
-            // Only getQubitsNumber() is checked; the matrix is never read.
-            static const QC::Gates::AppliedGate<MatrixClass> dummy2qGate(MatrixClass::Identity(4, 4), 0, 1);
-            ApplyGate(dummy2qGate, qbits[0], qbits[1]);
+            static const QC::Gates::SwapGate<MatrixClass> dummySwapGate;
+            static const QC::Gates::CNOTGate<MatrixClass> dummyControlled2qGate;
+            static const QC::Gates::TwoQubitsGate<MatrixClass> dummyGeneric2qGate;
+
+            const auto gateptr = std::dynamic_pointer_cast<Circuits::IQuantumGate<>>(gate);
+            if (gateptr && gateptr->GetGateType() == Circuits::QuantumGateType::kSwapGateType)
+                ApplyGate(dummySwapGate, qbits[0], qbits[1]);
+            else if (gateptr && IsControlledTwoQubitGateType(gateptr->GetGateType()))
+                ApplyGate(dummyControlled2qGate, qbits[0], qbits[1]);
+            else
+                ApplyGate(dummyGeneric2qGate, qbits[0], qbits[1]);
         }
         else if (qbits.size() == 3 && gate->GetType() == Circuits::OperationType::kGate)
         {
-            static const QC::Gates::AppliedGate<MatrixClass> dummy2qGate(MatrixClass::Identity(4, 4), 0, 1);
+            static const QC::Gates::CNOTGate<MatrixClass> dummyControlled2qGate;
 
             const auto gateptr = std::static_pointer_cast<Circuits::IQuantumGate<>>(gate);
 
@@ -196,21 +238,21 @@ class MPSDummySimulator
             const size_t q3 = qbits[2]; // target
             if (gateptr->GetGateType() == Circuits::QuantumGateType::kCCXGateType)
             {
-                ApplyGate(dummy2qGate, q3, q2);
-                ApplyGate(dummy2qGate, q2, q1);
-                ApplyGate(dummy2qGate, q3, q2);
-                ApplyGate(dummy2qGate, q2, q1);
-                ApplyGate(dummy2qGate, q3, q1);
+                ApplyGate(dummyControlled2qGate, q3, q2);
+                ApplyGate(dummyControlled2qGate, q2, q1);
+                ApplyGate(dummyControlled2qGate, q3, q2);
+                ApplyGate(dummyControlled2qGate, q2, q1);
+                ApplyGate(dummyControlled2qGate, q3, q1);
             }
             else
             { // cswap
-                ApplyGate(dummy2qGate, q2, q3);
-                ApplyGate(dummy2qGate, q3, q2);
-                ApplyGate(dummy2qGate, q2, q1);
-                ApplyGate(dummy2qGate, q3, q2);
-                ApplyGate(dummy2qGate, q2, q1);
-                ApplyGate(dummy2qGate, q3, q1);
-                ApplyGate(dummy2qGate, q2, q3);
+                ApplyGate(dummyControlled2qGate, q2, q3);
+                ApplyGate(dummyControlled2qGate, q3, q2);
+                ApplyGate(dummyControlled2qGate, q2, q1);
+                ApplyGate(dummyControlled2qGate, q3, q2);
+                ApplyGate(dummyControlled2qGate, q2, q1);
+                ApplyGate(dummyControlled2qGate, q3, q1);
+                ApplyGate(dummyControlled2qGate, q2, q3);
             }
         }
     }
@@ -240,10 +282,9 @@ class MPSDummySimulator
 
             // any 2-qubit gate (whether swaps were needed or not) grows the
             // bond dimension at the bond between the two adjacent qubits.
-            // Charge the cost based on the bond dimension *before* the growth,
-            // consistent with SwapQubitsToPosition: the cost reflects the size of
-            // the SVD/contraction actually performed for this operation, and the
-            // grown bond dimension only affects subsequent operations.
+            // Charge both the pre-gate contraction cost and a post-growth SVD/reconstruction
+            // cost so immediate entanglement growth and gate contraction overhead at this
+            // bond are reflected even near the end of the lookahead horizon.
             const IndexType bond = std::min(qubit1, qubit2);
             totalSwappingCost += bondCost[bond];
             // TODO: This is basic, the two qubit gates can have rank 2 and 4 (1 if
@@ -252,7 +293,8 @@ class MPSDummySimulator
             // here we assume that the others have Schmidt rank 4,
             // but that might not be the case for all gates
             // (3 is not possible for two qubit gates)
-            growBondDimension(bond, false, gate.isControlled() ? 2 : 4);
+            growBondDimension(bond, gate.isSwapGate(), gate.isControlled() ? 2 : 4);
+            totalSwappingCost += kPostGateCostWeight * bondCost[bond];
         }
     }
 
@@ -321,201 +363,137 @@ class MPSDummySimulator
         return totalSwappingCost;
     }
 
-    // Evaluate the total cost
-    // position, applying the current 2-qubit gate, and then simulating the
-    // next lookaheadDepth 2-qubit gates from upcomingGates.
+    enum class HeuristicPolicy
+    {
+        kCombinedCostAndGravity = 0,
+        kMinOneStepCost,
+        kNextPartnerGravity,
+        kAnchorHeavierQubit,
+        kMinBondCost,
+        kSwapLeft,
+        kSwapRight,
+        kCloserToEnd,
+        kCloserToCenter
+    };
+
+    // Evaluate the total cost of moving the current gate's qubits to meetPosition,
+    // applying the current 2-qubit gate, and then simulating the next
+    // lookaheadDepth 2-qubit gates from upcomingGates.
     void EvaluateMeetingPositionCost(IndexType meetPosition, const std::vector<std::shared_ptr<Circuits::IOperation<>>> &upcomingGates,
                                      long long int currentGateIndex, int lookaheadDepth, int lookaheadDepthWithHeuristic, double currentCost, double &bestCost,
                                      bool useSameDummy = false)
     {
-        if (currentGateIndex >= static_cast<long long int>(upcomingGates.size()) ||
-            upcomingGates[currentGateIndex]->GetType() != Circuits::OperationType::kGate)
+        const size_t maxNeeded = static_cast<size_t>(std::max(0, lookaheadDepth)) + 10;
+        std::array<FastGateOp, 128> stackWindow;
+        std::vector<FastGateOp> heapWindow;
+        FastGateOp *windowPtr = stackWindow.data();
+        if (maxNeeded > stackWindow.size())
+        {
+            heapWindow.resize(maxNeeded);
+            windowPtr = heapWindow.data();
+        }
+        const size_t windowSize = ExtractFastGateWindow(upcomingGates, currentGateIndex, maxNeeded, windowPtr);
+        if (windowSize == 0)
         {
             if (currentCost < bestCost)
                 bestCost = currentCost;
             return;
         }
 
-        // skip the 1 qubit gates, advance to the next 2-qubit gate
-        while (currentGateIndex < static_cast<long long int>(upcomingGates.size()) &&
-               upcomingGates[currentGateIndex]->GetType() == Circuits::OperationType::kGate && upcomingGates[currentGateIndex]->AffectedQubits().size() < 2)
-            ++currentGateIndex;
-
-        if (currentGateIndex >= static_cast<long long int>(upcomingGates.size()) ||
-            upcomingGates[currentGateIndex]->GetType() != Circuits::OperationType::kGate)
-        {
-            if (currentCost < bestCost)
-                bestCost = currentCost;
-            return;
-        }
-
-        const auto &op = upcomingGates[currentGateIndex];
-        const auto qbits = op->AffectedQubits();
-
-        assert(qbits.size() >= 2);
-
-        const IndexType qubit1 = static_cast<IndexType>(qbits[0]);
-        const IndexType qubit2 = static_cast<IndexType>(qbits[1]);
-
-        // Perform the swap to the meeting position;
-        // totalSwappingCost starts at 0 and SwapQubitsToPosition accumulates
-        // per-bond costs, so the cost correctly depends on meetPosition.
-
-        IndexType realq1 = qubitsMap[qubit1];
-        IndexType realq2 = qubitsMap[qubit2];
-        if (realq1 > realq2)
-            std::swap(realq1, realq2);
-
-        if (useSameDummy)
-        {
-            const double ccost = getTotalSwappingCost();
-
-            if (realq2 - realq1 > 1)
-                SwapQubitsToPosition(qubit1, qubit2, meetPosition);
-
-            ApplyGate(op);
-
-            // const double importanceFactor =
-            //     pow(dimFactor, (lookaheadDepthWithHeuristic - lookaheadDepth - 1));
-            currentCost += (getTotalSwappingCost() - ccost) /** importanceFactor*/;
-
-            if (currentCost >= bestCost)
-                return;
-            // No more lookahead depth: return without further recursion
-            if (lookaheadDepth <= 0)
-            {
-                if (currentCost < bestCost)
-                    bestCost = currentCost;
-                return;
-            }
-
-            // skip the 1 qubit gates, advance over the current gate on the next
-            // 2-qubit gate
-            ++currentGateIndex;
-            while (currentGateIndex < static_cast<long long int>(upcomingGates.size()) &&
-                   upcomingGates[currentGateIndex]->GetType() == Circuits::OperationType::kGate && upcomingGates[currentGateIndex]->AffectedQubits().size() < 2)
-                ++currentGateIndex;
-
-            if (currentGateIndex >= static_cast<long long int>(upcomingGates.size()) ||
-                upcomingGates[currentGateIndex]->GetType() != Circuits::OperationType::kGate)
-            {
-                if (currentCost < bestCost)
-                    bestCost = currentCost;
-                return;
-            }
-
-            FindBestMeetingPosition(upcomingGates, currentGateIndex, lookaheadDepth - 1, lookaheadDepthWithHeuristic, currentCost, bestCost);
-        }
-        else
-        {
-            MPSDummySimulator dummySim(nrQubits, LightweightInitTag{});
-            dummySim.physExtent = physExtent;
-            dummySim.maxVirtualExtent = maxVirtualExtent;
-            dummySim.maxBondDim = maxBondDim;
-            dummySim.currentBondDim = currentBondDim;
-            dummySim.bondCost = bondCost;
-            dummySim.qubitsMap = qubitsMap;
-            dummySim.qubitsMapInv.resize(qubitsMap.size());
-            for (size_t i = 0; i < qubitsMap.size(); ++i)
-                dummySim.qubitsMapInv[qubitsMap[i]] = static_cast<IndexType>(i);
-
-            dummySim.setTotalSwappingCost(0);
-
-            if (realq2 - realq1 > 1)
-                dummySim.SwapQubitsToPosition(qubit1, qubit2, meetPosition);
-
-            dummySim.ApplyGate(op); // this also updates the bond dimensions in
-                                    // dummySim according to the applied gate
-
-            currentCost += dummySim.getTotalSwappingCost();
-
-            // Pruning: if current accumulated cost already exceeds best known, prune
-            if (currentCost >= bestCost)
-                return;
-
-            // No more lookahead depth: return without further recursion
-            if (lookaheadDepth <= 0)
-            {
-                if (currentCost < bestCost)
-                    bestCost = currentCost;
-                return;
-            }
-
-            // skip the 1 qubit gates, advance over the current gate on the next
-            // 2-qubit gate
-            ++currentGateIndex;
-            while (currentGateIndex < static_cast<long long int>(upcomingGates.size()) &&
-                   upcomingGates[currentGateIndex]->GetType() == Circuits::OperationType::kGate && upcomingGates[currentGateIndex]->AffectedQubits().size() < 2)
-                ++currentGateIndex;
-
-            if (currentGateIndex >= static_cast<long long int>(upcomingGates.size()) ||
-                upcomingGates[currentGateIndex]->GetType() != Circuits::OperationType::kGate)
-            {
-                if (currentCost < bestCost)
-                    bestCost = currentCost;
-                return;
-            }
-
-            dummySim.FindBestMeetingPosition(upcomingGates, currentGateIndex, lookaheadDepth - 1, lookaheadDepthWithHeuristic, currentCost, bestCost);
-        }
+        EvaluateMeetingPositionCostFast(meetPosition, windowPtr, windowSize, 0, lookaheadDepth, lookaheadDepthWithHeuristic, currentCost, bestCost,
+                                        useSameDummy);
     }
 
-    // Find the meeting position that minimizes the combined cost of the
-    // current swap + lookahead gates.  Returns the optimal bond index.
-    // outBestCost receives the total accumulated cost for the best position.
+    // Find the meeting position that minimizes the estimated cost of the
+    // current swap + lookahead gates using exact branching for the first
+    // (lookaheadDepth - lookaheadDepthWithHeuristic) steps and a multi-policy
+    // rollout portfolio for the remaining heuristic horizon.
+    // bestCost receives the total accumulated cost for the chosen position.
     IndexType FindBestMeetingPosition(const std::vector<std::shared_ptr<Circuits::IOperation<>>> &upcomingGates, long long int currentGateIndex,
                                       int lookaheadDepth, int lookaheadDepthWithHeuristic, double currentCost, double &bestCost)
     {
-        const auto &op = upcomingGates[currentGateIndex];
-        const auto qbits = op->AffectedQubits();
-
-        assert(qbits.size() >= 2);
-
-        const IndexType qubit1 = static_cast<IndexType>(qbits[0]);
-        const IndexType qubit2 = static_cast<IndexType>(qbits[1]);
-
-        IndexType realq1 = qubitsMap[qubit1];
-        IndexType realq2 = qubitsMap[qubit2];
-
-        if (realq1 > realq2)
-            std::swap(realq1, realq2);
-
-        if (lookaheadDepth <= 0)
+        if (currentGateIndex < 0 || currentGateIndex >= static_cast<long long int>(upcomingGates.size()))
         {
-            IndexType pos = (realq2 - realq1 > 1) ? ComputeHeuristicMeetPosition(realq1, realq2) : realq1;
-            EvaluateMeetingPositionCost(pos, upcomingGates, currentGateIndex, 0, lookaheadDepthWithHeuristic, currentCost, bestCost, false);
-            return pos;
+            if (currentCost < bestCost)
+                bestCost = currentCost;
+            return 0;
         }
 
-        if (realq2 - realq1 <= 1)
+        const size_t maxNeeded = static_cast<size_t>(std::max(0, lookaheadDepth)) + 10;
+        std::array<FastGateOp, 128> stackWindow;
+        std::vector<FastGateOp> heapWindow;
+        FastGateOp *windowPtr = stackWindow.data();
+        if (maxNeeded > stackWindow.size())
         {
-            EvaluateMeetingPositionCost(realq1, upcomingGates, currentGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, currentCost, bestCost,
-                                        lookaheadDepth <= lookaheadDepthWithHeuristic);
-
-            return realq1;
+            heapWindow.resize(maxNeeded);
+            windowPtr = heapWindow.data();
+        }
+        const size_t windowSize = ExtractFastGateWindow(upcomingGates, currentGateIndex, maxNeeded, windowPtr);
+        if (windowSize == 0)
+        {
+            if (currentCost < bestCost)
+                bestCost = currentCost;
+            return 0;
         }
 
-        IndexType bestPosition = realq1;
+        uint64_t stateHash = 14695981039346656037ULL;
+        auto mixHash = [&](uint64_t v) {
+            stateHash ^= v;
+            stateHash *= 1099511628211ULL;
+        };
+        auto mixDouble = [&](double d) {
+            uint64_t bits = 0;
+            std::memcpy(&bits, &d, sizeof(double));
+            mixHash(bits);
+        };
 
-        if (lookaheadDepth <= lookaheadDepthWithHeuristic)
+        mixHash(static_cast<uint64_t>(windowSize));
+        mixHash(static_cast<uint64_t>(lookaheadDepth));
+        mixHash(static_cast<uint64_t>(lookaheadDepthWithHeuristic));
+        mixHash(static_cast<uint64_t>(physExtent));
+        mixHash(static_cast<uint64_t>(maxVirtualExtent));
+        mixDouble(growthFactorSwap);
+        mixDouble(growthFactorGate);
+        for (IndexType q : qubitsMap)
+            mixHash(static_cast<uint64_t>(q));
+        for (double d : currentBondDim)
+            mixDouble(d);
+        for (double c : bondCost)
+            mixDouble(c);
+        for (double m : maxBondDim)
+            mixDouble(m);
+        for (size_t w = 0; w < windowSize; ++w)
         {
-            bestPosition = ComputeHeuristicMeetPosition(realq1, realq2);
-            EvaluateMeetingPositionCost(bestPosition, upcomingGates, currentGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, currentCost, bestCost,
-                                        true);
+            const FastGateOp &fg = windowPtr[w];
+            mixHash(static_cast<uint64_t>(fg.q1));
+            mixHash(static_cast<uint64_t>(fg.q2));
+            mixHash(static_cast<uint64_t>(fg.q3));
+            mixHash(static_cast<uint64_t>(fg.numQubits));
+            mixHash(static_cast<uint64_t>(fg.isSwap ? 1 : 0));
+            mixHash(static_cast<uint64_t>(fg.schmidtRank));
         }
-        else
+
+        MemoEntry &slot = memoCache[(static_cast<size_t>(currentGateIndex) ^ static_cast<size_t>(stateHash)) & (kMemoCacheSize - 1)];
+        if (slot.valid && slot.hash == stateHash)
         {
-            for (IndexType m = realq1; m < realq2; ++m)
-            {
-                const double oldCost = bestCost;
-                EvaluateMeetingPositionCost(m, upcomingGates, currentGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, currentCost, bestCost);
-
-                if (bestCost < oldCost)
-                    bestPosition = m;
-            }
+            const double candCost = currentCost + slot.costDelta;
+            if (candCost < bestCost)
+                bestCost = candCost;
+            return slot.bestPos;
         }
 
-        return bestPosition;
+        double localBestCost = std::numeric_limits<double>::infinity();
+        const IndexType bestPos = FindBestMeetingPositionFast(windowPtr, windowSize, 0, lookaheadDepth, lookaheadDepthWithHeuristic, 0.0, localBestCost);
+
+        slot.valid = true;
+        slot.hash = stateHash;
+        slot.bestPos = bestPos;
+        slot.costDelta = localBestCost;
+
+        if (currentCost + localBestCost < bestCost)
+            bestCost = currentCost + localBestCost;
+
+        return bestPos;
     }
 
     std::vector<long long int> ComputeOptimalQubitsMap(const std::vector<std::shared_ptr<Circuits::Circuit<>>> &layers, int nrShuffles = 0 /*25*/,
@@ -858,6 +836,8 @@ class MPSDummySimulator
         totalSwappingCost = 0;
         if (!currentBondDim.empty())
             std::fill(currentBondDim.begin(), currentBondDim.end(), 1.0);
+        if (!bondCost.empty())
+            std::fill(bondCost.begin(), bondCost.end(), 1.0);
     }
 
     struct LightweightInitTag
@@ -909,6 +889,666 @@ class MPSDummySimulator
         return bestPos;
     }
 
+    double EstimateGrownBondDimension(IndexType bond, double leftDim, double betweenDim, double rightNeighborDim, bool swap, int schmidtRank) const
+    {
+        const double rank = IsOperatorChain() ? static_cast<double>(schmidtRank) * schmidtRank : static_cast<double>(schmidtRank);
+        double newMaxDim = (swap && leftDim == rightNeighborDim) ? betweenDim : static_cast<double>(physExtent) * std::min(leftDim, rightNeighborDim);
+        newMaxDim = std::min(newMaxDim, betweenDim * rank);
+        const double growthFactor = swap ? growthFactorSwap : growthFactorGate;
+        const double grown = std::min(newMaxDim * growthFactor, maxBondDim[bond]);
+        return std::max(grown, 1.);
+    }
+
+    // Anchor the qubit surrounded by higher bond cost so the less-entangled
+    // qubit travels across the cheaper region instead of dragging a heavy
+    // entangled cluster across the chain.
+    IndexType ComputeAnchorHeavierMeetPosition(IndexType realq1, IndexType realq2) const
+    {
+        assert(realq1 < realq2);
+
+        const double leftOuter = (realq1 > 0) ? bondCost[realq1 - 1] : 0.0;
+        const double rightOuter = (realq2 < static_cast<IndexType>(bondCost.size())) ? bondCost[realq2] : 0.0;
+        const double c1 = std::max(leftOuter, bondCost[realq1]);
+        const double c2 = std::max(rightOuter, bondCost[realq2 - 1]);
+
+        if (c1 > c2)
+            return realq1;
+        if (c2 > c1)
+            return realq2 - 1;
+
+        return (realq1 <= static_cast<IndexType>(nrQubits) - 1 - realq2) ? realq1 : (realq2 - 1);
+    }
+
+    struct FastGateOp
+    {
+        IndexType q1 = 0;
+        IndexType q2 = 0;
+        IndexType q3 = 0;
+        uint8_t numQubits = 2;
+        bool isSwap = false;
+        int schmidtRank = 4;
+    };
+
+    static constexpr size_t kMaxStackQubits = 64;
+
+    struct FastStateSnapshot
+    {
+        std::array<IndexType, kMaxStackQubits> qMap;
+        std::array<IndexType, kMaxStackQubits> qMapInv;
+        std::array<double, kMaxStackQubits> curBondDim;
+        std::array<double, kMaxStackQubits> bCost;
+        std::vector<IndexType> heapMap;
+        std::vector<double> heapBonds;
+        double totalCost = 0.0;
+
+        void SaveFrom(const MPSDummySimulator &sim)
+        {
+            const size_t n = sim.nrQubits;
+            const size_t nb = (n > 0) ? (n - 1) : 0;
+            totalCost = sim.totalSwappingCost;
+            if (n <= kMaxStackQubits)
+            {
+                std::memcpy(qMap.data(), sim.qubitsMap.data(), n * sizeof(IndexType));
+                std::memcpy(qMapInv.data(), sim.qubitsMapInv.data(), n * sizeof(IndexType));
+                if (nb > 0)
+                {
+                    std::memcpy(curBondDim.data(), sim.currentBondDim.data(), nb * sizeof(double));
+                    std::memcpy(bCost.data(), sim.bondCost.data(), nb * sizeof(double));
+                }
+            }
+            else
+            {
+                heapMap.resize(2 * n);
+                std::memcpy(heapMap.data(), sim.qubitsMap.data(), n * sizeof(IndexType));
+                std::memcpy(heapMap.data() + n, sim.qubitsMapInv.data(), n * sizeof(IndexType));
+                heapBonds.resize(2 * nb);
+                if (nb > 0)
+                {
+                    std::memcpy(heapBonds.data(), sim.currentBondDim.data(), nb * sizeof(double));
+                    std::memcpy(heapBonds.data() + nb, sim.bondCost.data(), nb * sizeof(double));
+                }
+            }
+        }
+
+        void RestoreTo(MPSDummySimulator &sim) const
+        {
+            const size_t n = sim.nrQubits;
+            const size_t nb = (n > 0) ? (n - 1) : 0;
+            sim.totalSwappingCost = totalCost;
+            if (n <= kMaxStackQubits)
+            {
+                std::memcpy(sim.qubitsMap.data(), qMap.data(), n * sizeof(IndexType));
+                std::memcpy(sim.qubitsMapInv.data(), qMapInv.data(), n * sizeof(IndexType));
+                if (nb > 0)
+                {
+                    std::memcpy(sim.currentBondDim.data(), curBondDim.data(), nb * sizeof(double));
+                    std::memcpy(sim.bondCost.data(), bCost.data(), nb * sizeof(double));
+                }
+            }
+            else
+            {
+                std::memcpy(sim.qubitsMap.data(), heapMap.data(), n * sizeof(IndexType));
+                std::memcpy(sim.qubitsMapInv.data(), heapMap.data() + n, n * sizeof(IndexType));
+                if (nb > 0)
+                {
+                    std::memcpy(sim.currentBondDim.data(), heapBonds.data(), nb * sizeof(double));
+                    std::memcpy(sim.bondCost.data(), heapBonds.data() + nb, nb * sizeof(double));
+                }
+            }
+        }
+    };
+
+    size_t ExtractFastGateWindow(const std::vector<std::shared_ptr<Circuits::IOperation<>>> &upcomingGates, long long int startGateIndex, size_t maxCount,
+                                 FastGateOp *outOps) const
+    {
+        size_t count = 0;
+        if (startGateIndex < 0)
+            return 0;
+
+        for (long long int idx = startGateIndex; idx < static_cast<long long int>(upcomingGates.size()) && count < maxCount; ++idx)
+        {
+            const auto &op = upcomingGates[idx];
+            if (!op || op->GetType() != Circuits::OperationType::kGate)
+                break;
+            const auto qbits = op->AffectedQubits();
+            if (qbits.size() < 2)
+                continue;
+
+            FastGateOp fg;
+            fg.q1 = static_cast<IndexType>(qbits[0]);
+            fg.q2 = static_cast<IndexType>(qbits[1]);
+            fg.numQubits = static_cast<uint8_t>(qbits.size());
+            fg.isSwap = false;
+            fg.schmidtRank = 4;
+
+            if (qbits.size() == 2)
+            {
+                const auto gateptr = std::dynamic_pointer_cast<Circuits::IQuantumGate<>>(op);
+                if (gateptr && gateptr->GetGateType() == Circuits::QuantumGateType::kSwapGateType)
+                {
+                    fg.isSwap = true;
+                    fg.schmidtRank = 4;
+                }
+                else if (gateptr && IsControlledTwoQubitGateType(gateptr->GetGateType()))
+                {
+                    fg.schmidtRank = 2;
+                }
+            }
+            else if (qbits.size() == 3)
+            {
+                fg.q3 = static_cast<IndexType>(qbits[2]);
+                const auto gateptr = std::static_pointer_cast<Circuits::IQuantumGate<>>(op);
+                fg.isSwap = (gateptr->GetGateType() != Circuits::QuantumGateType::kCCXGateType);
+                fg.schmidtRank = 2;
+            }
+
+            outOps[count++] = fg;
+        }
+
+        return count;
+    }
+
+    void ApplyTwoQubitFastGate(IndexType qubit, IndexType controllingQubit1, bool isSwap, int schmidtRank)
+    {
+        IndexType qubit1 = qubitsMap[qubit];
+        IndexType qubit2 = qubitsMap[controllingQubit1];
+
+        if (abs(qubit1 - qubit2) > 1)
+        {
+            SwapQubits(qubit, controllingQubit1);
+            qubit1 = qubitsMap[qubit];
+            qubit2 = qubitsMap[controllingQubit1];
+        }
+
+        const IndexType bond = std::min(qubit1, qubit2);
+        totalSwappingCost += bondCost[bond];
+        growBondDimension(bond, isSwap, schmidtRank);
+        totalSwappingCost += kPostGateCostWeight * bondCost[bond];
+    }
+
+    void ApplyFastGate(const FastGateOp &g)
+    {
+        if (g.numQubits == 2)
+        {
+            ApplyTwoQubitFastGate(g.q1, g.q2, g.isSwap, g.schmidtRank);
+        }
+        else if (g.numQubits == 3)
+        {
+            if (!g.isSwap) // CCX
+            {
+                ApplyTwoQubitFastGate(g.q3, g.q2, false, 2);
+                ApplyTwoQubitFastGate(g.q2, g.q1, false, 2);
+                ApplyTwoQubitFastGate(g.q3, g.q2, false, 2);
+                ApplyTwoQubitFastGate(g.q2, g.q1, false, 2);
+                ApplyTwoQubitFastGate(g.q3, g.q1, false, 2);
+            }
+            else // CSwap
+            {
+                ApplyTwoQubitFastGate(g.q2, g.q3, false, 2);
+                ApplyTwoQubitFastGate(g.q3, g.q2, false, 2);
+                ApplyTwoQubitFastGate(g.q2, g.q1, false, 2);
+                ApplyTwoQubitFastGate(g.q3, g.q2, false, 2);
+                ApplyTwoQubitFastGate(g.q2, g.q1, false, 2);
+                ApplyTwoQubitFastGate(g.q3, g.q1, false, 2);
+                ApplyTwoQubitFastGate(g.q2, g.q3, false, 2);
+            }
+        }
+    }
+
+    struct PartnerPull
+    {
+        IndexType pos = 0;
+        double weight = 0.0;
+    };
+
+    // Scan upcoming pre-parsed gates to collect weighted physical positions of
+    // the next partners of qubit1 and qubit2.
+    size_t CollectNextPartnerPullsFast(IndexType qubit1, IndexType qubit2, const FastGateOp *window, size_t windowSize, size_t stepIdx,
+                                       std::array<PartnerPull, 16> &pulls, double &totalWeight) const
+    {
+        size_t numPulls = 0;
+        totalWeight = 0.0;
+        bool foundQ1 = false;
+        bool foundQ2 = false;
+        double weight = 1.0;
+        const size_t maxStep = std::min(windowSize, stepIdx + 9);
+
+        for (size_t s = stepIdx + 1; s < maxStep; ++s)
+        {
+            const FastGateOp &fg = window[s];
+            const IndexType qA = fg.q1;
+            const IndexType qB = fg.q2;
+
+            auto recordPartner = [&](IndexType activeQ, IndexType partnerQ) {
+                if (partnerQ == qubit1 || partnerQ == qubit2)
+                    return;
+                const bool isFirst = (activeQ == qubit1) ? !foundQ1 : !foundQ2;
+                const double w = isFirst ? weight : (weight * 0.35);
+                if (numPulls < pulls.size())
+                {
+                    pulls[numPulls++] = {qubitsMap[partnerQ], w};
+                    totalWeight += w;
+                }
+                if (activeQ == qubit1)
+                    foundQ1 = true;
+                else
+                    foundQ2 = true;
+            };
+
+            if (qA == qubit1 || qA == qubit2)
+                recordPartner(qA, qB);
+            if (qB == qubit1 || qB == qubit2)
+                recordPartner(qB, qA);
+
+            if (foundQ1 && foundQ2)
+                break;
+            weight *= 0.6;
+        }
+
+        return numPulls;
+    }
+
+    IndexType ComputeNextPartnerGravityMeetPositionFast(IndexType realq1, IndexType realq2, IndexType qubit1, IndexType qubit2, const FastGateOp *window,
+                                                        size_t windowSize, size_t stepIdx) const
+    {
+        assert(realq1 < realq2);
+
+        std::array<PartnerPull, 16> pulls;
+        double totalWeight = 0.0;
+        const size_t numPulls = CollectNextPartnerPullsFast(qubit1, qubit2, window, windowSize, stepIdx, pulls, totalWeight);
+        if (numPulls == 0 || totalWeight <= 0.0)
+            return ComputeAnchorHeavierMeetPosition(realq1, realq2);
+
+        IndexType bestPos = realq1;
+        double bestDist = std::numeric_limits<double>::infinity();
+        double bestLocalBondCost = std::numeric_limits<double>::infinity();
+
+        for (IndexType m = realq1; m < realq2; ++m)
+        {
+            double dist = 0.0;
+            for (size_t k = 0; k < numPulls; ++k)
+                dist += pulls[k].weight * static_cast<double>(std::abs(m - pulls[k].pos));
+
+            const double localCost = bondCost[m];
+            if (dist < bestDist - 1e-9 || (std::abs(dist - bestDist) <= 1e-9 && localCost < bestLocalBondCost))
+            {
+                bestDist = dist;
+                bestLocalBondCost = localCost;
+                bestPos = m;
+            }
+        }
+
+        return bestPos;
+    }
+
+    // Compute the meeting position that minimizes the exact post-step bond cost
+    // in O(realq2 - realq1) time, optionally tilted by L1 partner distance.
+    IndexType ComputeMinOneStepCostMeetPositionFast(IndexType realq1, IndexType realq2, IndexType qubit1, IndexType qubit2, const FastGateOp *window,
+                                                    size_t windowSize, size_t stepIdx, bool includeGravity) const
+    {
+        assert(realq1 < realq2);
+        const IndexType span = realq2 - realq1;
+        if (span <= 1)
+            return realq1;
+
+        const FastGateOp &fg = window[stepIdx];
+        const bool isSwap = (fg.numQubits == 2) ? fg.isSwap : false;
+        const int schmidtRank = fg.schmidtRank;
+
+        constexpr IndexType kMaxStackSpan = 128;
+        std::array<double, kMaxStackSpan> rightSweepDimStack{};
+        std::array<double, kMaxStackSpan> prefixPostCostStack{};
+        std::array<double, kMaxStackSpan> leftSweepDimStack{};
+        std::array<double, kMaxStackSpan> suffixPostCostStack{};
+
+        std::vector<double> heapBuf;
+        double *rightSweepDim = rightSweepDimStack.data();
+        double *prefixPostCost = prefixPostCostStack.data();
+        double *leftSweepDim = leftSweepDimStack.data();
+        double *suffixPostCost = suffixPostCostStack.data();
+
+        if (span > kMaxStackSpan)
+        {
+            heapBuf.resize(static_cast<size_t>(span) * 4, 0.0);
+            rightSweepDim = heapBuf.data();
+            prefixPostCost = rightSweepDim + span;
+            leftSweepDim = prefixPostCost + span;
+            suffixPostCost = leftSweepDim + span;
+        }
+
+        prefixPostCost[0] = 0.0;
+        for (IndexType i = 0; i < span - 1; ++i)
+        {
+            const IndexType bond = realq1 + i;
+            const double leftD = (i == 0) ? ((realq1 > 0) ? currentBondDim[realq1 - 1] : 1.0) : rightSweepDim[i - 1];
+            const double betweenD = currentBondDim[bond];
+            const double rightD = currentBondDim[bond + 1];
+            const double newD = EstimateGrownBondDimension(bond, leftD, betweenD, rightD, true, 4);
+            rightSweepDim[i] = newD;
+            prefixPostCost[i + 1] = prefixPostCost[i] + newD * newD * newD;
+        }
+
+        suffixPostCost[span - 1] = 0.0;
+        for (IndexType i = span - 1; i > 0; --i)
+        {
+            const IndexType bond = realq1 + i;
+            const double leftD = currentBondDim[bond - 1];
+            const double betweenD = currentBondDim[bond];
+            const double rightD =
+                (i == span - 1) ? ((realq2 < static_cast<IndexType>(currentBondDim.size())) ? currentBondDim[realq2] : 1.0) : leftSweepDim[i + 1];
+            const double newD = EstimateGrownBondDimension(bond, leftD, betweenD, rightD, true, 4);
+            leftSweepDim[i] = newD;
+            suffixPostCost[i - 1] = suffixPostCost[i] + newD * newD * newD;
+        }
+
+        std::array<PartnerPull, 16> pulls;
+        double totalPullWeight = 0.0;
+        const size_t numPulls = CollectNextPartnerPullsFast(qubit1, qubit2, window, windowSize, stepIdx, pulls, totalPullWeight);
+        const double gravityWeight = includeGravity ? 0.15 : 1e-6;
+        const double invNorm = (numPulls > 0 && totalPullWeight > 0.0) ? (gravityWeight / (static_cast<double>(span) * totalPullWeight)) : 0.0;
+
+        IndexType bestPos = realq1;
+        double bestScore = std::numeric_limits<double>::infinity();
+
+        for (IndexType i = 0; i < span; ++i)
+        {
+            const IndexType m = realq1 + i;
+            const double leftD = (i == 0) ? ((realq1 > 0) ? currentBondDim[realq1 - 1] : 1.0) : rightSweepDim[i - 1];
+            const double rightD =
+                (i == span - 1) ? ((realq2 < static_cast<IndexType>(currentBondDim.size())) ? currentBondDim[realq2] : 1.0) : leftSweepDim[i + 1];
+            const double gateD = EstimateGrownBondDimension(m, leftD, currentBondDim[m], rightD, isSwap, schmidtRank);
+            const double gateCost = gateD * gateD * gateD;
+            // Share the exact post-growth cost coefficients (kPostSwapCostWeight * S +
+            // kPostGateCostWeight * G) with SwapQubitsToPosition and ApplyGate so the
+            // one-step objective matches the rollout's cost model exactly.
+            const double postBondCost = kPostSwapCostWeight * (prefixPostCost[i] + suffixPostCost[i]) + kPostGateCostWeight * gateCost;
+
+            double score = postBondCost;
+            if (invNorm > 0.0)
+            {
+                double pullDist = 0.0;
+                for (size_t k = 0; k < numPulls; ++k)
+                    pullDist += pulls[k].weight * static_cast<double>(std::abs(m - pulls[k].pos));
+                score *= (1.0 + invNorm * pullDist);
+            }
+
+            if (score < bestScore)
+            {
+                bestScore = score;
+                bestPos = m;
+            }
+        }
+
+        return bestPos;
+    }
+
+    IndexType SelectMeetPositionForPolicyFast(HeuristicPolicy policy, IndexType realq1, IndexType realq2, IndexType qubit1, IndexType qubit2,
+                                              const FastGateOp *window, size_t windowSize, size_t stepIdx) const
+    {
+        if (realq2 - realq1 <= 1)
+            return realq1;
+
+        switch (policy)
+        {
+        case HeuristicPolicy::kCombinedCostAndGravity:
+            return ComputeMinOneStepCostMeetPositionFast(realq1, realq2, qubit1, qubit2, window, windowSize, stepIdx, true);
+        case HeuristicPolicy::kMinOneStepCost:
+            return ComputeMinOneStepCostMeetPositionFast(realq1, realq2, qubit1, qubit2, window, windowSize, stepIdx, false);
+        case HeuristicPolicy::kNextPartnerGravity:
+            return ComputeNextPartnerGravityMeetPositionFast(realq1, realq2, qubit1, qubit2, window, windowSize, stepIdx);
+        case HeuristicPolicy::kAnchorHeavierQubit:
+            return ComputeAnchorHeavierMeetPosition(realq1, realq2);
+        case HeuristicPolicy::kMinBondCost:
+            return ComputeHeuristicMeetPosition(realq1, realq2);
+        case HeuristicPolicy::kSwapLeft:
+            return realq1;
+        case HeuristicPolicy::kSwapRight:
+            return realq2 - 1;
+        case HeuristicPolicy::kCloserToEnd:
+            return (realq1 <= static_cast<IndexType>(nrQubits) - 1 - realq2) ? realq1 : (realq2 - 1);
+        case HeuristicPolicy::kCloserToCenter: {
+            const IndexType center = std::max<IndexType>(0, (static_cast<IndexType>(nrQubits) - 2) / 2);
+            return std::clamp(center, realq1, realq2 - 1);
+        }
+        }
+
+        return ComputeHeuristicMeetPosition(realq1, realq2);
+    }
+
+    // Evaluate a portfolio of heuristic rollout policies over the remaining
+    // lookaheadDepth + 1 two-qubit gates using pre-parsed FastGateOp entries and
+    // zero-allocation stack snapshots.
+    IndexType EvaluateHeuristicRolloutsFast(const FastGateOp *window, size_t windowSize, size_t stepIdx, int lookaheadDepth, double currentCost,
+                                            double &bestCost)
+    {
+        if (stepIdx >= windowSize)
+        {
+            if (currentCost < bestCost)
+                bestCost = currentCost;
+            return 0;
+        }
+
+        const FastGateOp &firstOp = window[stepIdx];
+        const IndexType firstQ1 = firstOp.q1;
+        const IndexType firstQ2 = firstOp.q2;
+        IndexType firstReal1 = qubitsMap[firstQ1];
+        IndexType firstReal2 = qubitsMap[firstQ2];
+        if (firstReal1 > firstReal2)
+            std::swap(firstReal1, firstReal2);
+
+        const HeuristicPolicy defaultFirstPolicy = (lookaheadDepth <= 0) ? HeuristicPolicy::kMinOneStepCost : HeuristicPolicy::kCombinedCostAndGravity;
+        IndexType bestFirstPosition = (firstReal2 - firstReal1 > 1)
+                                          ? SelectMeetPositionForPolicyFast(defaultFirstPolicy, firstReal1, firstReal2, firstQ1, firstQ2, window, windowSize,
+                                                                            stepIdx)
+                                          : firstReal1;
+
+        static constexpr std::array<HeuristicPolicy, 9> kFullPortfolio = {
+            HeuristicPolicy::kCombinedCostAndGravity,
+            HeuristicPolicy::kMinOneStepCost,
+            HeuristicPolicy::kMinBondCost,
+            HeuristicPolicy::kAnchorHeavierQubit,
+            HeuristicPolicy::kCloserToEnd,
+            HeuristicPolicy::kNextPartnerGravity,
+            HeuristicPolicy::kSwapLeft,
+            HeuristicPolicy::kSwapRight,
+            HeuristicPolicy::kCloserToCenter,
+        };
+
+        const size_t numPolicies = (lookaheadDepth <= 0) ? 1 : kFullPortfolio.size();
+        const size_t endStep = std::min(windowSize, stepIdx + static_cast<size_t>(std::max(0, lookaheadDepth)) + 1);
+
+        FastStateSnapshot baseState;
+        baseState.SaveFrom(*this);
+
+        for (size_t pi = 0; pi < numPolicies; ++pi)
+        {
+            const HeuristicPolicy policy = (lookaheadDepth <= 0) ? HeuristicPolicy::kMinOneStepCost : kFullPortfolio[pi];
+            if (pi > 0)
+                baseState.RestoreTo(*this);
+            setTotalSwappingCost(0);
+
+            double rolloutCost = currentCost;
+            IndexType chosenFirstPos = bestFirstPosition;
+            bool pruned = false;
+
+            for (size_t s = stepIdx; s < endStep; ++s)
+            {
+                const FastGateOp &fg = window[s];
+                const IndexType q1 = fg.q1;
+                const IndexType q2 = fg.q2;
+                IndexType rq1 = qubitsMap[q1];
+                IndexType rq2 = qubitsMap[q2];
+                if (rq1 > rq2)
+                    std::swap(rq1, rq2);
+
+                IndexType meetPos = rq1;
+                if (rq2 - rq1 > 1)
+                {
+                    meetPos = SelectMeetPositionForPolicyFast(policy, rq1, rq2, q1, q2, window, windowSize, s);
+                    SwapQubitsToPosition(q1, q2, meetPos);
+                }
+
+                if (s == stepIdx)
+                    chosenFirstPos = meetPos;
+
+                ApplyFastGate(fg);
+                rolloutCost = currentCost + getTotalSwappingCost();
+
+                if (rolloutCost >= bestCost)
+                {
+                    pruned = true;
+                    break;
+                }
+            }
+
+            if (!pruned && rolloutCost < bestCost)
+            {
+                bestCost = rolloutCost;
+                bestFirstPosition = chosenFirstPos;
+            }
+        }
+
+        baseState.RestoreTo(*this);
+        return bestFirstPosition;
+    }
+
+    void EvaluateMeetingPositionCostFast(IndexType meetPosition, const FastGateOp *window, size_t windowSize, size_t stepIdx, int lookaheadDepth,
+                                         int lookaheadDepthWithHeuristic, double currentCost, double &bestCost, bool mutateSelf)
+    {
+        if (stepIdx >= windowSize)
+        {
+            if (currentCost < bestCost)
+                bestCost = currentCost;
+            return;
+        }
+
+        FastStateSnapshot saved;
+        if (!mutateSelf)
+            saved.SaveFrom(*this);
+
+        const double ccost = getTotalSwappingCost();
+        const FastGateOp &fg = window[stepIdx];
+        IndexType realq1 = qubitsMap[fg.q1];
+        IndexType realq2 = qubitsMap[fg.q2];
+        if (realq1 > realq2)
+            std::swap(realq1, realq2);
+
+        if (realq2 - realq1 > 1)
+            SwapQubitsToPosition(fg.q1, fg.q2, meetPosition);
+
+        ApplyFastGate(fg);
+        currentCost += (getTotalSwappingCost() - ccost);
+
+        if (currentCost < bestCost)
+        {
+            if (lookaheadDepth <= 0 || stepIdx + 1 >= windowSize)
+            {
+                bestCost = currentCost;
+            }
+            else
+            {
+                FindBestMeetingPositionFast(window, windowSize, stepIdx + 1, lookaheadDepth - 1, lookaheadDepthWithHeuristic, currentCost, bestCost);
+            }
+        }
+
+        if (!mutateSelf)
+            saved.RestoreTo(*this);
+    }
+
+    IndexType FindBestMeetingPositionFast(const FastGateOp *window, size_t windowSize, size_t stepIdx, int lookaheadDepth, int lookaheadDepthWithHeuristic,
+                                          double currentCost, double &bestCost)
+    {
+        if (stepIdx >= windowSize)
+        {
+            if (currentCost < bestCost)
+                bestCost = currentCost;
+            return 0;
+        }
+
+        const FastGateOp &fg = window[stepIdx];
+        const IndexType qubit1 = fg.q1;
+        const IndexType qubit2 = fg.q2;
+
+        IndexType realq1 = qubitsMap[qubit1];
+        IndexType realq2 = qubitsMap[qubit2];
+        if (realq1 > realq2)
+            std::swap(realq1, realq2);
+
+        if (lookaheadDepth <= 0 || lookaheadDepth <= lookaheadDepthWithHeuristic)
+        {
+            return EvaluateHeuristicRolloutsFast(window, windowSize, stepIdx, std::max(0, lookaheadDepth), currentCost, bestCost);
+        }
+
+        if (realq2 - realq1 <= 1)
+        {
+            EvaluateMeetingPositionCostFast(realq1, window, windowSize, stepIdx, lookaheadDepth, lookaheadDepthWithHeuristic, currentCost, bestCost, false);
+            return realq1;
+        }
+
+        // At the root (stepIdx == 0), first evaluate the full 9-policy rollout
+        // portfolio to establish a tight upper bound in bestCost for pruning.
+        IndexType bestPosition = realq1;
+        if (stepIdx == 0)
+        {
+            bestPosition = EvaluateHeuristicRolloutsFast(window, windowSize, stepIdx, lookaheadDepth, currentCost, bestCost);
+        }
+
+        const size_t span = static_cast<size_t>(realq2 - realq1);
+        std::array<IndexType, 128> stackCandidates;
+        std::vector<IndexType> heapCandidates;
+        IndexType *candidates = stackCandidates.data();
+        size_t maxCandidates = stackCandidates.size();
+        if (span > stackCandidates.size())
+        {
+            heapCandidates.resize(span);
+            candidates = heapCandidates.data();
+            maxCandidates = span;
+        }
+
+        size_t numCandidates = 0;
+        auto addCandidate = [&](IndexType pos) {
+            if (pos < realq1 || pos >= realq2)
+                return;
+            for (size_t i = 0; i < numCandidates; ++i)
+                if (candidates[i] == pos)
+                    return;
+            if (numCandidates < maxCandidates)
+                candidates[numCandidates++] = pos;
+        };
+
+        if (stepIdx == 0)
+            addCandidate(bestPosition);
+        addCandidate(ComputeMinOneStepCostMeetPositionFast(realq1, realq2, qubit1, qubit2, window, windowSize, stepIdx, true));
+        addCandidate(ComputeMinOneStepCostMeetPositionFast(realq1, realq2, qubit1, qubit2, window, windowSize, stepIdx, false));
+        addCandidate(ComputeHeuristicMeetPosition(realq1, realq2));
+        addCandidate(ComputeAnchorHeavierMeetPosition(realq1, realq2));
+        addCandidate(ComputeNextPartnerGravityMeetPositionFast(realq1, realq2, qubit1, qubit2, window, windowSize, stepIdx));
+        addCandidate(realq1);
+        addCandidate(realq2 - 1);
+        const IndexType centerPos = std::clamp(std::max<IndexType>(0, (static_cast<IndexType>(nrQubits) - 2) / 2), realq1, realq2 - 1);
+        addCandidate(centerPos);
+
+        // Enumerate all remaining positions in [realq1, realq2 - 1] after the
+        // priority heuristic candidates so branch-and-bound prunes early.
+        for (IndexType m = realq1; m < realq2; ++m)
+            addCandidate(m);
+
+        if (stepIdx > 0)
+            bestPosition = candidates[0];
+
+        for (size_t i = 0; i < numCandidates; ++i)
+        {
+            const IndexType m = candidates[i];
+            const double oldCost = bestCost;
+            EvaluateMeetingPositionCostFast(m, window, windowSize, stepIdx, lookaheadDepth, lookaheadDepthWithHeuristic, currentCost, bestCost, false);
+
+            if (bestCost < oldCost)
+                bestPosition = m;
+        }
+
+        return bestPosition;
+    }
+
   public:
     // Swap two logical qubits so they meet at a specified bond position.
     // meetPosition is the bond index (in real/chain coordinates) where
@@ -946,6 +1586,7 @@ class MPSDummySimulator
 
                 totalSwappingCost += bondCost[movingReal];
                 growBondDimension(movingReal, true);
+                totalSwappingCost += kPostSwapCostWeight * bondCost[movingReal];
                 movingReal = toReal;
             }
         }
@@ -966,6 +1607,7 @@ class MPSDummySimulator
 
                 totalSwappingCost += bondCost[toReal];
                 growBondDimension(toReal, true);
+                totalSwappingCost += kPostSwapCostWeight * bondCost[toReal];
                 movingReal = toReal;
             }
         }
@@ -974,6 +1616,17 @@ class MPSDummySimulator
     }
 
   private:
+    struct MemoEntry
+    {
+        uint64_t hash = 0;
+        IndexType bestPos = 0;
+        double costDelta = 0.0;
+        bool valid = false;
+    };
+
+    static constexpr size_t kMemoCacheSize = 64;
+    std::array<MemoEntry, kMemoCacheSize> memoCache{};
+
     size_t nrQubits;
 
     std::vector<IndexType> qubitsMap;

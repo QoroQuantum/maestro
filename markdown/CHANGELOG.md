@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The QASM parser accepts qelib1.inc's `u0`, a parametrised idle that adds no operation.
+
+## [0.3.7] - 2026-10-19
+
+### Added
+
+- `Circuit::RemoveEndMeasurements`, exposed in Python as `QuantumCircuit.remove_end_measurements`.
+
+### Changed
+
+- Expectation estimation strips terminal measurements before execution, across the
+  Python, native request and noisy estimation paths.
+
+### Fixed
+
+- `get_statevector` and `get_probabilities` lost amplitudes or swapped qubit order for
+  circuits that leave lower-indexed qubits untouched; `x(1)` alone returned `[0, 0]`.
+
 ## [0.3.6] - 2026-10-12
 
 ### Added
@@ -448,7 +468,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.6...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.7...HEAD
+[0.3.7]: https://github.com/QoroQuantum/maestro/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/QoroQuantum/maestro/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/QoroQuantum/maestro/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/QoroQuantum/maestro/compare/v0.3.3...v0.3.4

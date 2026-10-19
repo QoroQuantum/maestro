@@ -264,7 +264,10 @@ struct AddGateExpr : public AbstractSyntaxTree
                         }
 
                         stmt.gateType = GetGateType(gateName);
-                        const int expectedNrQubits = GateNrQubits(stmt.gateType);
+                        // "u0" is qelib1.inc's parametrised idle: like "id", a one-qubit
+                        // gate with no gate type of its own, so it lands on kNone and
+                        // emits nothing.
+                        const int expectedNrQubits = gateName == "u0" ? 1 : GateNrQubits(stmt.gateType);
                         if (static_cast<int>(args.size()) != expectedNrQubits)
                             throw std::invalid_argument("Gate " + gateName + " requires exactly " + std::to_string(expectedNrQubits) + " qubits");
 
@@ -499,9 +502,9 @@ struct AddGateExpr : public AbstractSyntaxTree
         else if (gateName == "cu" || gateName == "cu3" || gateName == "cu1")
             return Circuits::QuantumGateType::kCUGateType;
 
-        // Returned for an unmapped name, and for the two accepted names that
-        // legitimately have no gate of their own: 'id' and 'gphase', both of
-        // which are dropped rather than emitted. The callers pair this with an
+        // Returned for an unmapped name, and for the three accepted names that
+        // legitimately have no gate of their own: 'id', 'u0' and 'gphase', all
+        // of which are dropped rather than emitted. The callers pair this with an
         // arity check, so an unmapped name is still rejected rather than being
         // silently treated as a no-op.
         return Circuits::QuantumGateType::kNone;
@@ -553,7 +556,7 @@ struct AddGateExpr : public AbstractSyntaxTree
                                                                          "tdag", "sx", "sxdg", "sxdag", "k",      "swap",  "cx",   "CX", "cy",
                                                                          "cz",   "ch", "csx",  "csxdg", "csxdag", "cswap", "ccx",  "id"};
     static inline std::unordered_set<std::string> allowedOneParamGates = {"p",   "rx", "ry",  "rz",    "cp",     "crx",   "cry",
-                                                                          "crz", "u1", "cu1", "phase", "cphase", "gphase"};
+                                                                          "crz", "u1", "cu1", "phase", "cphase", "gphase", "u0"};
     // "cu1" is deliberately absent: like "u1" it takes exactly one angle, and
     // listing it here made cu1(a, b, c) accepted and silently lowered as cu3.
     static inline std::unordered_set<std::string> allowedMultipleParamsGates = {"u", "U", "u3", "cu", "cu3"}; // max 4

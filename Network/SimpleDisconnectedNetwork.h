@@ -431,6 +431,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      *
      * Execute the circuit on the specified host and return the complex amplitudes
      * of the resulting quantum state (one per basis state 0..2^n-1).
+     * Retained qubits are ordered by ascending original index, with gaps compacted.
      * Supported for Statevector and MPS simulation types.
      *
      * @param circuit The circuit to execute.
@@ -482,25 +483,18 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         auto amplitudes = simulator->GetStateVector();
         const size_t dim = amplitudes.size();
 
-        // Remap amplitudes back to the original qubit ordering if qubits were
-        // remapped during execution on the host.
+        // Restore ascending original-qubit order within the compact register.
+        // Original indices may be sparse, so use their ranks as output positions.
         if (!qubitsMapOnHost.empty())
         {
-            const size_t offsetBase = qubitsMapOnHost.size();
+            // Build reverse mapping: simulator qubit position -> rank of its
+            // original qubit among the mapped ones.
+            std::vector<std::pair<Types::qubit_t, Types::qubit_t>> byOriginal(qubitsMapOnHost.begin(), qubitsMapOnHost.end());
+            std::sort(byOriginal.begin(), byOriginal.end());
 
-            // Build reverse mapping: simulator qubit position -> original qubit
-            // position.
             std::vector<size_t> simToOrig(n);
-            size_t offset = offsetBase;
-
-            for (size_t qbit = 0; qbit < n; ++qbit)
-            {
-                auto pos = qubitsMapOnHost.find(qbit);
-                if (pos != qubitsMapOnHost.end())
-                    simToOrig[pos->second] = pos->first;
-                else
-                    simToOrig[qbit] = offset++;
-            }
+            for (size_t pos = 0; pos < byOriginal.size(); ++pos)
+                simToOrig[byOriginal[pos].second] = pos;
 
             std::vector<std::complex<double>> remapped(dim);
 
@@ -2675,11 +2669,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         struct RestoreThreadLimit
         {
             const int previous = omp_get_max_threads();
+
             ~RestoreThreadLimit()
             {
                 omp_set_num_threads(previous);
             }
         } restoreThreadLimit;
+
         omp_set_num_threads(internalThreads);
 #endif
         std::shared_ptr<ExecuteJob<Time>> last;
@@ -2860,9 +2856,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                         int lookaheadHeuristicDepthLocal = lookaheadDepthWithHeuristic;
 
                         if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
-                            lookaheadHeuristicDepthLocal = layers.size() < 10 || routedQubits <= 10 ? 0
-                                                           : layers.size() < 20                     ? lookaheadDepthLocal - 1
-                                                                                                    : lookaheadDepthLocal - 2;
+                            lookaheadHeuristicDepthLocal = layers.size() < 8 || routedQubits <= 10 ? 0 : lookaheadDepthLocal - 1;
 
                         if (lookaheadHeuristicDepthLocal < 0)
                             lookaheadHeuristicDepthLocal = 0;

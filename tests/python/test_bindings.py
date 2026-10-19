@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Unit tests for Maestro nanobind Python bindings using pytest"""
 
+import math
 import pickle
 
 import pytest
@@ -1943,6 +1944,103 @@ class TestGetStatevector:
         )
         for amp, prob in zip(sv, probs):
             assert abs(amp) ** 2 == pytest.approx(prob, abs=1e-10)
+
+    @pytest.mark.parametrize(
+        "method",
+        [maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState],
+    )
+    @pytest.mark.parametrize(
+        "gates, expected",
+        [
+            ([("x", 1)], [0, 1]),
+            ([("h", 1)], [INV_SQRT2, INV_SQRT2]),
+            ([("x", 0), ("x", 2)], [0, 0, 0, 1]),
+            # Qubit 2 is used first, but stays the more significant qubit.
+            ([("x", 2), ("h", 0)], [0, 0, INV_SQRT2, INV_SQRT2]),
+        ],
+        ids=["x-on-1", "h-on-1", "x-on-0-and-2", "first-use-is-higher"],
+    )
+    def test_get_statevector_drops_untouched_qubits(self, method, gates, expected):
+        """Untouched qubits are left out; the rest keep their relative order."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        for gate, qubit in gates:
+            if gate == "x":
+                qc.x(qubit)
+            else:
+                qc.h(qubit)
+        config = maestro.SimulatorConfig(simulation_type=method)
+
+        sv = maestro.get_statevector(qc, config=config)
+        probs = maestro.get_probabilities(qc, config=config)
+
+        assert list(sv) == pytest.approx(expected, abs=1e-10)
+        assert sum(probs) == pytest.approx(1.0, abs=1e-10)
+
+
+@pytest.mark.parametrize("get_output,probabilities", [
+    pytest.param(maestro.get_statevector, False, id="get_statevector"),
+    pytest.param(maestro.circuits.QuantumCircuit.get_statevector, False,
+                 id="circuit.get_statevector"),
+    pytest.param(maestro.get_probabilities, True, id="get_probabilities"),
+])
+class TestSparseStatevector:
+    """State outputs compact used qubits in ascending original-index order."""
+
+    @pytest.fixture(params=[
+        None,
+        ("QCSim", "Statevector"),
+        ("QCSim", "MatrixProductState"),
+        ("QiskitAer", "Statevector"),
+        ("QiskitAer", "MatrixProductState"),
+    ], ids=["default", "qcsim-sv", "qcsim-mps", "aer-sv", "aer-mps"])
+    def config(self, request):
+        if request.param is None:
+            return maestro.SimulatorConfig()
+        backend, method = request.param
+        if not hasattr(maestro.SimulatorType, backend):
+            pytest.skip(f"{backend} is not compiled in")
+        return maestro.SimulatorConfig(
+            simulator_type=getattr(maestro.SimulatorType, backend),
+            simulation_type=getattr(maestro.SimulationType, method),
+        )
+
+    @pytest.mark.parametrize("qubit", [1, 7])
+    @pytest.mark.parametrize("gate", ["x", "h"])
+    def test_single_used_qubit(self, config, get_output, probabilities, qubit, gate):
+        qc = maestro.circuits.QuantumCircuit()
+        getattr(qc, gate)(qubit)
+
+        expected = [0, 1] if gate == "x" else (
+            [0.5, 0.5] if probabilities else [2 ** -0.5, 2 ** -0.5])
+        output = get_output(qc, config=config)
+        assert output == pytest.approx(expected, abs=1e-10)
+        norm = sum(output) if probabilities else sum(abs(a) ** 2 for a in output)
+        assert norm == pytest.approx(1, abs=1e-10)
+        assert qc.num_qubits == qubit + 1
+
+    @pytest.mark.parametrize("low,high", [(0, 1), (0, 3), (1, 2), (2, 5)])
+    @pytest.mark.parametrize("reverse_order", [False, True])
+    def test_qubit_order_and_complex_amplitudes(
+        self, config, get_output, probabilities, low, high, reverse_order
+    ):
+        qc = maestro.circuits.QuantumCircuit()
+        if reverse_order:
+            qc.x(high)
+        qc.ry(low, math.pi / 3)
+        qc.s(low)
+        if not reverse_order:
+            qc.x(high)
+        qc.cx(low, high)
+
+        # q_low is the least-significant output bit, regardless of gate order.
+        # Unequal probabilities also expose swapped bits in get_probabilities.
+        expected = [0, 0.25, 0.75, 0] if probabilities else [0, 0.5j, 3 ** 0.5 / 2, 0]
+        output = get_output(qc, config=config)
+        assert output == pytest.approx(expected, abs=1e-10)
+        norm = sum(output) if probabilities else sum(abs(a) ** 2 for a in output)
+        assert norm == pytest.approx(1, abs=1e-10)
+        assert qc.num_qubits == high + 1
 
 
 class TestMirrorFidelity:

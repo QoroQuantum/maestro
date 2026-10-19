@@ -10,8 +10,6 @@
 
 #include <cassert>
 
-#include "../Simulators/Core/Factory.cpp"
-
 #ifndef __linux__
 
 #include "Framework.h"

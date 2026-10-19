@@ -65,10 +65,8 @@ class QCSimTensorChainSimulator : public QCSimGateSimulator
                 auto res = dummySim->FindBestMeetingPosition(upcomingGates, upcomingGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, 0, bestCost);
 #ifdef LOG_CALLBACK_INFO
                 std::cerr << "Swapping the two qubits on position: " << res << " and " << (res + 1) << std::endl;
-#endif
                 dummySim->SwapQubitsToPosition(qbits[0], qbits[1], res);
                 dummySim->ApplyGate(op);
-#ifdef LOG_CALLBACK_INFO
                 const auto &expectedBondDims = dummySim->getCurrentBondDimensions();
                 std::cerr << "Expected bond dimensions after swapping and applying "
                              "the gate: ";

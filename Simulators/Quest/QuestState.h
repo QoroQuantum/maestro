@@ -17,6 +17,7 @@
 
 #ifdef INCLUDED_BY_FACTORY
 
+#include "../../Utils/Sampling/Alias.h"
 #include "QuestLibSim.h"
 
 #include <random>

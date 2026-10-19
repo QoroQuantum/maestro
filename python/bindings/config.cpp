@@ -12,9 +12,24 @@ template <typename T> struct IsOptional<std::optional<T>> : std::true_type
 {
 };
 
+template <bool Convert, typename T> constexpr auto SetterArg()
+{
+    constexpr auto value = [] {
+        if constexpr (IsOptional<T>::value)
+            return nb::arg("value").none();
+        else
+            return nb::arg("value");
+    }();
+    if constexpr (Convert)
+        return value;
+    else
+        return value.noconvert();
+}
+
 // A property whose setter validates the whole config before committing, so an
 // invalid value leaves the config unchanged.
-template <typename T> void BindConfigField(nb::class_<SimulatorConfig> &cls, const char *name, T SimulatorConfig::*member, const char *doc, bool convert = true)
+template <bool Convert = true, typename T>
+void BindConfigField(nb::class_<SimulatorConfig> &cls, const char *name, T SimulatorConfig::*member, const char *doc)
 {
     cls.def_prop_rw(
         name, [member](const SimulatorConfig &c) -> T { return c.*member; },
@@ -24,7 +39,7 @@ template <typename T> void BindConfigField(nb::class_<SimulatorConfig> &cls, con
             next.Validate();
             c = std::move(next);
         },
-        nb::for_setter(nb::arg("value").none(IsOptional<T>::value).noconvert(!convert)), doc);
+        nb::for_setter(SetterArg<Convert, T>()), doc);
 }
 
 // Constructor keywords and __repr__ order.
@@ -161,15 +176,13 @@ void bind_config(nb::module_ &m)
                     "'block_v1' preserves existing seeded counts; 'shot_v1' distributes individual "
                     "shots with streams independent of worker count. The policies give different "
                     "seeded sequences. None uses 'shot_v1'. Terminal sampling is unaffected.");
-    BindConfigField(config_class, "trajectory_max_memory_mb", &SimulatorConfig::trajectory_max_memory_mb,
-                    "Positive MiB estimate limiting concurrent QCSim dense trajectories. "
-                    "None uses 1024 MiB. This is a soft concurrency budget, not a process "
-                    "memory limit; at least one worker is allowed.",
-                    false);
-    BindConfigField(config_class, "max_simulators", &SimulatorConfig::max_simulators,
-                    "Maximum concurrent simulators, from 1 to 1024. None keeps the network "
-                    "default; CPU and trajectory memory budgets may reduce concurrency.",
-                    false);
+    BindConfigField<false>(config_class, "trajectory_max_memory_mb", &SimulatorConfig::trajectory_max_memory_mb,
+                           "Positive MiB estimate limiting concurrent QCSim dense trajectories. "
+                           "None uses 1024 MiB. This is a soft concurrency budget, not a process "
+                           "memory limit; at least one worker is allowed.");
+    BindConfigField<false>(config_class, "max_simulators", &SimulatorConfig::max_simulators,
+                           "Maximum concurrent simulators, from 1 to 1024. None keeps the network "
+                           "default; CPU and trajectory memory budgets may reduce concurrency.");
 
     BindConfigField(config_class, "gate_fusion", &SimulatorConfig::gate_fusion,
                     "Fuse compatible gates on supported backends. None (the "

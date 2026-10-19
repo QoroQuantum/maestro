@@ -146,7 +146,10 @@ if(NOT DEFINED EIGEN5_INCLUDE_DIR)
             URL https://gitlab.com/libeigen/eigen/-/archive/5.0.0/eigen-5.0.0.tar.gz
             DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         )
-        FetchContent_MakeAvailable(eigen)
+        FetchContent_GetProperties(eigen)
+        if(NOT eigen_POPULATED)
+            FetchContent_Populate(eigen)
+        endif()
         set(EIGEN5_INCLUDE_DIR ${eigen_SOURCE_DIR})
         message(STATUS "Eigen fetched to: ${EIGEN5_INCLUDE_DIR}")
     endif()
@@ -282,13 +285,12 @@ if(QAER)
 
     set(MAESTRO_LINALG_LIBRARIES ${BLAS_LIBRARIES})
     if(WIN32)
-        # vcpkg builds OpenBLAS without LAPACK. Aer also needs the LAPACK
-        # eigensolver and SVD routines, provided by lapack-reference.
-        find_package(lapack CONFIG REQUIRED)
-        if(NOT TARGET lapack)
-            message(FATAL_ERROR "The LAPACK package must provide the lapack target")
+        # Aer needs the LAPACK eigensolver and SVD routines. vcpkg builds OpenBLAS
+        # without them and supplies lapack-reference; official OpenBLAS builds bundle them.
+        find_package(lapack CONFIG QUIET)
+        if(TARGET lapack)
+            list(PREPEND MAESTRO_LINALG_LIBRARIES lapack)
         endif()
-        list(PREPEND MAESTRO_LINALG_LIBRARIES lapack)
     endif()
 endif()
 
@@ -408,10 +410,22 @@ set(MAESTROSRC maestrolib/Interface.cpp Execution/Request.cpp
     Execution/Transforms/ObservableClustering.cpp
     Execution/Transforms/ParityReductionTransform.h
     Execution/Transforms/ParityReductionTransform.cpp)
+
+# The simulator factory is split by backend so the heavy, header-only simulator
+# implementations compile in parallel. Targets that compile the factory instead
+# of linking libmaestro must use the whole list. FactoryAerComposite.cpp stays
+# first so unity builds still see the Aer AVX2 kernels before other simulators.
+set(MAESTRO_FACTORY_SRC
+    Simulators/Core/FactoryAerComposite.cpp
+    Simulators/Core/Factory.cpp
+    Simulators/Core/FactoryGpu.cpp
+    Simulators/Core/FactoryQCSim.cpp
+    Simulators/Core/FactoryQCSimTensorChain.cpp
+    Simulators/Core/FactoryQuest.cpp)
+
+list(APPEND MAESTROSRC ${MAESTRO_FACTORY_SRC})
 if(WIN32)
     list(APPEND MAESTROSRC maestrolib/DllMain.cpp)
-else()
-    list(APPEND MAESTROSRC Simulators/Core/Factory.cpp)
 endif()
 
 set(MAESTROEXESRC maestroexe/MaestroExe.cpp)
@@ -511,18 +525,35 @@ endif()
 # ==============================================================================
 
 if(BUILD_PYTHON_BINDINGS)
-    find_package(Python 3.10 COMPONENTS Interpreter Development.Module QUIET)
+    find_package(Python 3.10 COMPONENTS Interpreter Development.Module OPTIONAL_COMPONENTS Development.SABIModule QUIET)
     if(Python_FOUND)
         message(STATUS "Found Python ${Python_VERSION} (${Python_EXECUTABLE})")
 
-        FetchContent_Declare(
-            nanobind
-            GIT_REPOSITORY https://github.com/wjakob/nanobind.git
-            GIT_TAG        v2.0.0
-        )
-        FetchContent_MakeAvailable(nanobind)
+        # Wheel builds get nanobind from the Python environment (pyproject.toml sets
+        # its version). Plain CMake builds without it fetch the same release.
+        execute_process(
+            COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
+            OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE nanobind_ROOT
+            RESULT_VARIABLE NANOBIND_CMAKE_DIR_RESULT ERROR_QUIET)
+        if(NANOBIND_CMAKE_DIR_RESULT EQUAL 0)
+            find_package(nanobind CONFIG REQUIRED)
+            # Split mode: one stable-ABI module serves every CPython from 3.10, with
+            # the version-specific runtime supplied by the nanobind-backend package.
+            set(MAESTRO_NANOBIND_MODE BACKEND_MODULE nanobind_backend)
+        else()
+            message(STATUS "nanobind not installed for ${Python_EXECUTABLE}, fetching it")
+            FetchContent_Declare(
+                nanobind
+                GIT_REPOSITORY https://github.com/wjakob/nanobind.git
+                GIT_TAG        v3.1.0
+            )
+            FetchContent_MakeAvailable(nanobind)
+            # Linked mode: the module runs only on this Python but needs no
+            # nanobind-backend package at runtime.
+            set(MAESTRO_NANOBIND_MODE "")
+        endif()
 
-        nanobind_add_module(maestro_py
+        nanobind_add_module(maestro_py ${MAESTRO_NANOBIND_MODE}
             python/Bindings.cpp
             python/bindings/execution.cpp
             python/bindings/fidelity.cpp
@@ -686,6 +717,7 @@ if(COMPILE_TESTS)
         tests/FusionNetwTests.cpp
         tests/MPSNetwTests.cpp
         tests/Tests.cpp
+        ${MAESTRO_FACTORY_SRC}
     )
 
     set(ACTIVE_TESTSSRC ${TESTSSRC})
@@ -750,14 +782,8 @@ if(COMPILE_TESTS)
 
     # Unity test: sampling_order_tests
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/SamplingOrderTests.cpp")
-        if(CMAKE_VERSION VERSION_LESS "3.16")
-            file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/SamplingOrderUnity.cpp"
-                "#include \"${CMAKE_CURRENT_SOURCE_DIR}/Simulators/Core/Factory.cpp\"\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/tests/SamplingOrderTests.cpp\"\n")
-            add_executable(sampling_order_tests "${CMAKE_CURRENT_BINARY_DIR}/SamplingOrderUnity.cpp")
-        else()
-            add_executable(sampling_order_tests Simulators/Core/Factory.cpp tests/SamplingOrderTests.cpp)
-            set_target_properties(sampling_order_tests PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 0)
-        endif()
+        add_executable(sampling_order_tests ${MAESTRO_FACTORY_SRC} tests/SamplingOrderTests.cpp)
+        set_target_properties(sampling_order_tests PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 0)
         target_link_libraries(sampling_order_tests PRIVATE Boost::serialization ${CMAKE_DL_LIBS}
             $<TARGET_PROPERTY:maestro,INTERFACE_LINK_LIBRARIES>)
         target_compile_options(sampling_order_tests PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_COMPILE_OPTIONS>)
