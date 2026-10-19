@@ -527,18 +527,31 @@ if(BUILD_PYTHON_BINDINGS)
     if(Python_FOUND)
         message(STATUS "Found Python ${Python_VERSION} (${Python_EXECUTABLE})")
 
-        # nanobind comes from the Python environment; pyproject.toml sets its version.
+        # Wheel builds get nanobind from the Python environment (pyproject.toml sets
+        # its version). Plain CMake builds without it fetch the same release.
         execute_process(
             COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
             OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE nanobind_ROOT
             RESULT_VARIABLE NANOBIND_CMAKE_DIR_RESULT ERROR_QUIET)
-    endif()
-    if(Python_FOUND AND NANOBIND_CMAKE_DIR_RESULT EQUAL 0)
-        find_package(nanobind CONFIG REQUIRED)
+        if(NANOBIND_CMAKE_DIR_RESULT EQUAL 0)
+            find_package(nanobind CONFIG REQUIRED)
+            # Split mode: one stable-ABI module serves every CPython from 3.10, with
+            # the version-specific runtime supplied by the nanobind-backend package.
+            set(MAESTRO_NANOBIND_MODE BACKEND_MODULE nanobind_backend)
+        else()
+            message(STATUS "nanobind not installed for ${Python_EXECUTABLE}, fetching it")
+            FetchContent_Declare(
+                nanobind
+                GIT_REPOSITORY https://github.com/wjakob/nanobind.git
+                GIT_TAG        v3.1.0
+            )
+            FetchContent_MakeAvailable(nanobind)
+            # Linked mode: the module runs only on this Python but needs no
+            # nanobind-backend package at runtime.
+            set(MAESTRO_NANOBIND_MODE "")
+        endif()
 
-        # Split mode: one stable-ABI module serves every CPython from 3.10, with
-        # the version-specific runtime supplied by the nanobind-backend package.
-        nanobind_add_module(maestro_py BACKEND_MODULE nanobind_backend
+        nanobind_add_module(maestro_py ${MAESTRO_NANOBIND_MODE}
             python/Bindings.cpp
             python/bindings/execution.cpp
             python/bindings/fidelity.cpp
@@ -593,8 +606,6 @@ if(BUILD_PYTHON_BINDINGS)
                 DESTINATION maestro
             )
         endif()
-    elseif(Python_FOUND)
-        message(STATUS "nanobind not installed for ${Python_EXECUTABLE}, skipping Python bindings")
     else()
         message(WARNING "Python 3.10+ (with Interpreter and Development.Module) not found. Skipping Python bindings.")
     endif()
