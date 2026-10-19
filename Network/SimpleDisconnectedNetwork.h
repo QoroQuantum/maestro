@@ -431,6 +431,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
      *
      * Execute the circuit on the specified host and return the complex amplitudes
      * of the resulting quantum state (one per basis state 0..2^n-1).
+     * Retained qubits are ordered by ascending original index, with gaps compacted.
      * Supported for Statevector and MPS simulation types.
      *
      * @param circuit The circuit to execute.
@@ -482,8 +483,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         auto amplitudes = simulator->GetStateVector();
         const size_t dim = amplitudes.size();
 
-        // Remap amplitudes back to the original qubit ordering if qubits were
-        // remapped during execution on the host.
+        // Restore ascending original-qubit order within the compact register.
+        // Original indices may be sparse, so use their ranks as output positions.
         if (!qubitsMapOnHost.empty())
         {
             // Build reverse mapping: simulator qubit position -> rank of its
@@ -2668,11 +2669,13 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         struct RestoreThreadLimit
         {
             const int previous = omp_get_max_threads();
+
             ~RestoreThreadLimit()
             {
                 omp_set_num_threads(previous);
             }
         } restoreThreadLimit;
+
         omp_set_num_threads(internalThreads);
 #endif
         std::shared_ptr<ExecuteJob<Time>> last;
