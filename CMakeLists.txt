@@ -163,7 +163,7 @@ if(NOT DEFINED QCSIM_INCLUDE_DIR)
         FetchContent_Declare(
             qcsim
             GIT_REPOSITORY https://github.com/QoroQuantum/QCSim.git
-            GIT_TAG 2bcdb16c71243065ae36e7bc3ab44be7dacaeca4
+            GIT_TAG f381eef8fe6ff005bed0856a7184796b3b9ca060
         )
         FetchContent_GetProperties(qcsim)
         if(NOT qcsim_POPULATED)
@@ -1130,7 +1130,8 @@ if(COMPILE_TESTS)
             LINK_FLAGS " -Wl,--disable-new-dtags")
         add_test(NAME gate_fusion_gpu COMMAND gate_fusion_tests --gpu)
         add_test(NAME gate_fusion_distributed COMMAND gate_fusion_tests --distributed)
-        set_tests_properties(gate_fusion_gpu gate_fusion_distributed PROPERTIES
+        add_test(NAME fusion_routing_gpu COMMAND fusion_routing_tests --gpu)
+        set_tests_properties(gate_fusion_gpu gate_fusion_distributed fusion_routing_gpu PROPERTIES
             SKIP_RETURN_CODE 77 LABELS "gpu;hardware" RUN_SERIAL TRUE TIMEOUT 180)
     endif()
     add_executable(gate_fusion_benchmark EXCLUDE_FROM_ALL tests/GateFusionBenchmark.cpp)

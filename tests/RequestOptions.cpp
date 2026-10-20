@@ -444,3 +444,64 @@ void TestFusionPublicInterfaces()
         DestroySimulator(handle);
     }
 }
+
+void TestVirtualRoutingConfiguration()
+{
+    using namespace MaestroExecution;
+    GetMaestroObjectWithMute();
+    for (const char *method : {"matrix_product_state", "matrix_product_operator"})
+    {
+        auto config = ParseConfig(json::object{
+            {"backend", "qcsim"},
+            {"method", method},
+            {"options", json::object{{"mps_routing_virtual_bonds", true}, {"mps_routing_truncation_weight", 0.5}, {"mps_routing_legacy_cap", false}}}});
+        const auto handle = CreateSimpleSimulator(4);
+        const auto network = ConfigureNetwork(handle, config);
+        Check(network && network->GetSimulator()->GetConfiguration("mps_routing_virtual_bonds") == "true", "JSON virtual routing setting lost");
+        Check(std::stod(network->GetSimulator()->GetConfiguration("mps_routing_truncation_weight")) == 0.5, "JSON routing weight lost");
+        config.mps_routing_virtual_bonds = false;
+        config.mps_routing_truncation_weight = 0.;
+        const auto updated = ConfigureNetwork(handle, config);
+        Check(updated && updated->GetSimulator()->GetConfiguration("mps_routing_virtual_bonds") == "false", "Typed virtual routing override lost");
+        Check(std::stod(updated->GetSimulator()->GetConfiguration("mps_routing_truncation_weight")) == 0., "Typed zero routing weight lost");
+        for (bool estimate : {false, true})
+        {
+            const char *circuit = "OPENQASM 2.0; qreg q[4]; creg c[4]; h q[0]; measure q->c;";
+            const char *options = "{\"shots\":2,\"mps_routing_virtual_bonds\":true,\"mps_routing_truncation_weight\":0.25}";
+            char *result = estimate ? SimpleEstimate(handle, circuit, "ZIII", options) : SimpleExecute(handle, circuit, options);
+            Check(result != nullptr, "Legacy routing configuration failed");
+            FreeResult(result);
+            Check(updated->GetSimulator()->GetConfiguration("mps_routing_virtual_bonds") == "true", "Legacy routing flag was ignored");
+            Check(std::stod(updated->GetSimulator()->GetConfiguration("mps_routing_truncation_weight")) == 0.25, "Legacy routing weight was ignored");
+        }
+        DestroySimpleSimulator(handle);
+    }
+    for (const auto &options : {json::object{{"mps_routing_virtual_bonds", "true"}}, json::object{{"mps_routing_truncation_weight", -1.}}})
+    {
+        bool rejected = false;
+        try
+        {
+            ParseConfig(json::object{{"backend", "qcsim"}, {"method", "matrix_product_state"}, {"options", options}});
+        }
+        catch (const std::exception &)
+        {
+            rejected = true;
+        }
+        Check(rejected, "Invalid routing setting accepted");
+    }
+    for (double weight : {-1., std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
+    {
+        SimulatorConfig config;
+        config.mps_routing_truncation_weight = weight;
+        bool rejected = false;
+        try
+        {
+            config.Validate();
+        }
+        catch (const std::invalid_argument &)
+        {
+            rejected = true;
+        }
+        Check(rejected, "Invalid typed routing weight accepted");
+    }
+}

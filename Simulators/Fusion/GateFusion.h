@@ -138,7 +138,7 @@ template <class Gate> class GateFusion
         }
     }
 
-    template <class Emit> void Submit(const Gate &gate, uint64_t source, Emit &&emit, bool preserveStructure = false)
+    template <class Emit> void Submit(const Gate &gate, uint64_t source, Emit &&emit, bool preserveStructure = false, bool standalone = false)
     {
         auto targets = gate.Targets();
         if (targets.empty() || targets.size() > width_)
@@ -156,6 +156,15 @@ template <class Gate> class GateFusion
         }
         std::sort(overlapping.begin(), overlapping.end());
         overlapping.erase(std::unique(overlapping.begin(), overlapping.end()), overlapping.end());
+        // A backend may implement this gate without touching tensor data.
+        // Keep it named, while unrelated cached operations can still fuse.
+        if (standalone)
+        {
+            for (auto id : overlapping)
+                EmitOne(id, emit);
+            emit(Block{std::move(targets), {}, gate, {source, source, 1}, preserveStructure});
+            return;
+        }
         // Keep native structured operations when a merge would only replace
         // diagonal/permutation kernels with a dense one. Mixed groups can still
         // benefit from fusion. Emitting only overlaps preserves disjoint caching.

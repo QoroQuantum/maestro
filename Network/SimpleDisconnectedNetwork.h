@@ -2809,11 +2809,19 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                     }
 
                     Simulators::MPSDummySimulator dummySim(nrQubits, sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator);
+                    dummySim.SetSwapGatesRelabelQubits(sim->SwapGatesRelabelQubits());
                     dummySim.setGrowthFactorGate(growthFactorGate);
                     dummySim.setGrowthFactorSwap(growthFactorSwap);
 
                     if (maxBondDimValue > 0)
-                        dummySim.SetMaxBondDimension(maxBondDimValue);
+                    {
+                        const bool virtualBonds = Simulators::RoutingConfig::VirtualBondsEnabled(configuration);
+                        dummySim.SetMaxBondDimension(
+                            virtualBonds ? Simulators::MPSDummySimulator::EffectiveMapMaxBondDimension(
+                                               nrQubits, sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator, maxBondDimValue)
+                                         : maxBondDimValue);
+                        dummySim.SetRoutingCostModel(virtualBonds ? maxBondDimValue : 0, Simulators::RoutingConfig::TruncationWeight(configuration));
+                    }
 
                     if (optimizeInitialQubitsMap)
                     {

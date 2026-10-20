@@ -24,6 +24,7 @@
 #include <cstring>
 #include <deque>
 #include <iostream>
+#include <numeric>
 #include <random>
 
 #include <Eigen/Eigen>
@@ -31,6 +32,8 @@
 
 #include "MPSSimulatorInterface.h"
 #include "QuantumGate.h"
+#include "RoutingConfig.h"
+#include "RoutingGateInfo.h"
 
 namespace Simulators
 {
@@ -59,6 +62,9 @@ class MPSDummySimulator
         clone->qubitsMapInv = qubitsMapInv;
         clone->physExtent = physExtent;
         clone->maxVirtualExtent = maxVirtualExtent;
+        clone->runtimeBondCap = runtimeBondCap;
+        clone->truncationWeight = truncationWeight;
+        clone->swapGatesRelabelQubits = swapGatesRelabelQubits;
         clone->bondCost = bondCost;
         clone->maxBondDim = maxBondDim;
         clone->currentBondDim = currentBondDim;
@@ -81,6 +87,25 @@ class MPSDummySimulator
         return physExtent == 4;
     }
 
+    void SetSwapGatesRelabelQubits(bool enabled)
+    {
+        if (swapGatesRelabelQubits == enabled)
+            return;
+        swapGatesRelabelQubits = enabled;
+        InvalidateMemoCache();
+    }
+
+    // Logical SWAP: exchange labels, keeping tensor sites, bonds and cost intact.
+    // SwapQubits/SwapQubitsToPosition model physical routing and remain separate.
+    void RelabelQubits(IndexType q1, IndexType q2)
+    {
+        if (q1 < 0 || q2 < 0 || q1 >= static_cast<IndexType>(nrQubits) || q2 >= static_cast<IndexType>(nrQubits))
+            throw std::invalid_argument("Qubit index out of bounds");
+        std::swap(qubitsMap[q1], qubitsMap[q2]);
+        qubitsMapInv[qubitsMap[q1]] = q1;
+        qubitsMapInv[qubitsMap[q2]] = q2;
+    }
+
     double getGrowthFactorSwap() const
     {
         return growthFactorSwap;
@@ -94,25 +119,53 @@ class MPSDummySimulator
     static constexpr double kPostSwapCostWeight = 0.25;
     static constexpr double kPostGateCostWeight = 0.5;
 
-    static bool IsControlledTwoQubitGateType(Circuits::QuantumGateType gt)
+    // Allow two extra rank doublings above the physical cap. This bounded
+    // horizon distinguishes saturated cuts without estimates growing with
+    // register size. Never exceed the exact central-cut rank (4 per MPO site).
+    static IndexType EffectiveLookaheadMaxBondDimension(size_t nrQubits, bool operatorChain, IndexType cap)
     {
-        switch (gt)
-        {
-        case Circuits::QuantumGateType::kCXGateType:
-        case Circuits::QuantumGateType::kCYGateType:
-        case Circuits::QuantumGateType::kCZGateType:
-        case Circuits::QuantumGateType::kCPGateType:
-        case Circuits::QuantumGateType::kCRxGateType:
-        case Circuits::QuantumGateType::kCRyGateType:
-        case Circuits::QuantumGateType::kCRzGateType:
-        case Circuits::QuantumGateType::kCHGateType:
-        case Circuits::QuantumGateType::kCSxGateType:
-        case Circuits::QuantumGateType::kCSxDagGateType:
-        case Circuits::QuantumGateType::kCUGateType:
-            return true;
-        default:
-            return false;
-        }
+        if (cap <= 0)
+            return cap;
+        const auto limit = std::numeric_limits<IndexType>::max();
+        const auto headroom = cap > limit / 4 ? limit : 4 * cap;
+        const size_t half = nrQubits / 2;
+        const size_t safeExponent = operatorChain ? 31 : 62;
+        const auto physical = half > safeExponent ? limit : static_cast<IndexType>(1ULL << (half * (operatorChain ? 2 : 1)));
+        return std::max(cap, std::min(headroom, physical));
+    }
+
+    static IndexType EffectiveMapMaxBondDimension(size_t nrQubits, bool operatorChain, IndexType cap)
+    {
+        return EffectiveLookaheadMaxBondDimension(nrQubits, operatorChain, cap);
+    }
+
+    static bool IsControlledTwoQubitGateType(Circuits::QuantumGateType type)
+    {
+        return IsControlledRoutingGate(type);
+    }
+
+    // A capped runtime proxy plus a separately weighted overflow penalty.
+    // Weight 1 adds one cap-cubed unit for each cap-sized overflow; weight 0
+    // charges runtime alone. Standalone planners retain the old cubic default.
+    double BondCost(double dimension) const
+    {
+        const double runtimeDim = runtimeBondCap > 0 ? std::min(dimension, static_cast<double>(runtimeBondCap)) : dimension;
+        const double runtime = runtimeDim * runtimeDim * runtimeDim;
+        const double overflow = runtimeBondCap > 0 ? std::max(0., dimension / runtimeBondCap - 1.) : 0.;
+        return runtime + truncationWeight * runtime * overflow;
+    }
+
+    void SetRoutingCostModel(IndexType cap, double weight)
+    {
+        if (cap < 0 || !std::isfinite(weight) || weight < 0.)
+            throw std::invalid_argument("Invalid routing cost model");
+        if (runtimeBondCap == cap && truncationWeight == weight)
+            return;
+        runtimeBondCap = cap;
+        truncationWeight = weight;
+        for (size_t i = 0; i < bondCost.size(); ++i)
+            bondCost[i] = BondCost(currentBondDim[i]);
+        InvalidateMemoCache();
     }
 
     void InvalidateMemoCache()
@@ -123,12 +176,16 @@ class MPSDummySimulator
 
     void setGrowthFactorSwap(double factor)
     {
+        if (growthFactorSwap == factor)
+            return;
         growthFactorSwap = factor;
         InvalidateMemoCache();
     }
 
     void setGrowthFactorGate(double factor)
     {
+        if (growthFactorGate == factor)
+            return;
         growthFactorGate = factor;
         InvalidateMemoCache();
     }
@@ -139,13 +196,29 @@ class MPSDummySimulator
         InvalidateMemoCache();
     }
 
+    void ResetBondDimensions()
+    {
+        if (nrQubits == 0)
+        {
+            currentBondDim.clear();
+            bondCost.clear();
+            return;
+        }
+        currentBondDim.assign(nrQubits - 1, 1.0);
+        bondCost.assign(nrQubits - 1, 1.0);
+    }
+
     void SetMaxBondDimension(IndexType val)
     {
-        maxVirtualExtent = val;
-        InvalidateMemoCache();
-
         if (nrQubits == 0)
+        {
+            if (maxVirtualExtent != val)
+            {
+                maxVirtualExtent = val;
+                InvalidateMemoCache();
+            }
             return;
+        }
 
         const double untruncatedMaxExtent = std::pow(physExtent, nrQubits / 2);
         IndexType maxVirtualExtentLimit = static_cast<IndexType>(untruncatedMaxExtent);
@@ -155,11 +228,20 @@ class MPSDummySimulator
         else if (untruncatedMaxExtent < 2)
             maxVirtualExtentLimit = 2;
 
-        maxVirtualExtent = maxVirtualExtent == 0 ? maxVirtualExtentLimit : std::min(maxVirtualExtent, maxVirtualExtentLimit);
+        const IndexType resolvedMaxVirtualExtent = val == 0 ? maxVirtualExtentLimit : std::min(val, maxVirtualExtentLimit);
+        const bool alreadyInitialized = (maxBondDim.size() + 1 == nrQubits && currentBondDim.size() + 1 == nrQubits && bondCost.size() + 1 == nrQubits);
+        if (alreadyInitialized && maxVirtualExtent == resolvedMaxVirtualExtent)
+            return;
 
-        bondCost.assign(nrQubits - 1, 1.0);
+        maxVirtualExtent = resolvedMaxVirtualExtent;
+        InvalidateMemoCache();
+
         maxBondDim.resize(nrQubits - 1);
-        currentBondDim.assign(nrQubits - 1, 1.0);
+        if (!alreadyInitialized)
+        {
+            currentBondDim.assign(nrQubits - 1, 1.0);
+            bondCost.assign(nrQubits - 1, 1.0);
+        }
 
         // the checks here are overkill, but better safe than sorry
         // we're dealing with large values here, overflows are to be expected
@@ -185,6 +267,11 @@ class MPSDummySimulator
             if (i < static_cast<IndexType>(nrQubits) - 1)
             {
                 maxBondDim[i] = static_cast<double>(maxRightExtent);
+                if (alreadyInitialized)
+                {
+                    currentBondDim[i] = std::clamp(currentBondDim[i], 1.0, maxBondDim[i]);
+                    bondCost[i] = BondCost(currentBondDim[i]);
+                }
             }
         }
     }
@@ -220,7 +307,10 @@ class MPSDummySimulator
             static const QC::Gates::TwoQubitsGate<MatrixClass> dummyGeneric2qGate;
 
             const auto gateptr = std::dynamic_pointer_cast<Circuits::IQuantumGate<>>(gate);
-            if (gateptr && gateptr->GetGateType() == Circuits::QuantumGateType::kSwapGateType)
+            const auto info = std::dynamic_pointer_cast<RoutingGateInfo>(gate);
+            if (info)
+                ApplyTwoQubitFastGate(qbits[0], qbits[1], info->isSwap, info->schmidtRank);
+            else if (gateptr && gateptr->GetGateType() == Circuits::QuantumGateType::kSwapGateType)
                 ApplyGate(dummySwapGate, qbits[0], qbits[1]);
             else if (gateptr && IsControlledTwoQubitGateType(gateptr->GetGateType()))
                 ApplyGate(dummyControlled2qGate, qbits[0], qbits[1]);
@@ -269,6 +359,8 @@ class MPSDummySimulator
         // don't forget to update the qubitsMap
         if (gate.getQubitsNumber() > 1)
         {
+            if (gate.getQubitsNumber() == 2 && gate.isSwapGate() && swapGatesRelabelQubits)
+                return RelabelQubits(qubit, controllingQubit1);
             IndexType qubit1 = qubitsMap[qubit];
             IndexType qubit2 = qubitsMap[controllingQubit1];
 
@@ -286,16 +378,23 @@ class MPSDummySimulator
             // cost so immediate entanglement growth and gate contraction overhead at this
             // bond are reflected even near the end of the lookahead horizon.
             const IndexType bond = std::min(qubit1, qubit2);
-            totalSwappingCost += bondCost[bond];
             // TODO: This is basic, the two qubit gates can have rank 2 and 4 (1 if
             // can be decomposed into two 1-qubit gates)
             // the controlled ones have Schmidt rank 2
             // here we assume that the others have Schmidt rank 4,
             // but that might not be the case for all gates
             // (3 is not possible for two qubit gates)
-            growBondDimension(bond, gate.isSwapGate(), gate.isControlled() ? 2 : 4);
-            totalSwappingCost += kPostGateCostWeight * bondCost[bond];
+            RecordAdjacentTwoQubitGate(bond, gate.isSwapGate(), gate.isControlled());
         }
+    }
+
+    void RecordAdjacentTwoQubitGate(IndexType bond, bool isSwapGate, bool isControlledGate)
+    {
+        if (bond < 0 || bond >= static_cast<IndexType>(currentBondDim.size()))
+            return;
+        totalSwappingCost += bondCost[bond];
+        growBondDimension(bond, isSwapGate, isControlledGate ? 2 : 4);
+        totalSwappingCost += kPostGateCostWeight * bondCost[bond];
     }
 
     void ApplyGates(const std::vector<QC::Gates::AppliedGate<MatrixClass>> &gates)
@@ -310,16 +409,18 @@ class MPSDummySimulator
             ApplyGate(gate);
     }
 
+    void SetRoutingMap(const std::vector<long long int> &actualMap)
+    {
+        qubitsMap = actualMap;
+        for (size_t i = 0; i < actualMap.size(); ++i)
+            qubitsMapInv[actualMap[i]] = i;
+    }
+
     void SetInitialQubitsMap(const std::vector<long long int> &initialMap)
     {
-        qubitsMap = initialMap;
-        for (size_t i = 0; i < initialMap.size(); ++i)
-            qubitsMapInv[initialMap[i]] = i;
-
+        SetRoutingMap(initialMap);
         totalSwappingCost = 0;
-        std::fill(currentBondDim.begin(), currentBondDim.end(), 1.0);
-        for (size_t i = 0; i < bondCost.size(); ++i)
-            bondCost[i] = 1;
+        ResetBondDimensions();
     }
 
     void SetCurrentBondDimensions(const std::vector<double> &dims)
@@ -330,7 +431,7 @@ class MPSDummySimulator
 
         // update bondCost as well, since it depends on the current bond dimensions
         for (size_t i = 0; i < currentBondDim.size(); ++i)
-            bondCost[i] = currentBondDim[i] * currentBondDim[i] * currentBondDim[i];
+            bondCost[i] = BondCost(currentBondDim[i]);
     }
 
     const std::vector<double> &getCurrentBondDimensions() const
@@ -416,7 +517,7 @@ class MPSDummySimulator
         {
             if (currentCost < bestCost)
                 bestCost = currentCost;
-            return 0;
+            return -1;
         }
 
         const size_t maxNeeded = static_cast<size_t>(std::max(0, lookaheadDepth)) + 10;
@@ -433,7 +534,7 @@ class MPSDummySimulator
         {
             if (currentCost < bestCost)
                 bestCost = currentCost;
-            return 0;
+            return -1;
         }
 
         uint64_t stateHash = 14695981039346656037ULL;
@@ -452,6 +553,7 @@ class MPSDummySimulator
         mixHash(static_cast<uint64_t>(lookaheadDepthWithHeuristic));
         mixHash(static_cast<uint64_t>(physExtent));
         mixHash(static_cast<uint64_t>(maxVirtualExtent));
+        mixHash(static_cast<uint64_t>(swapGatesRelabelQubits));
         mixDouble(growthFactorSwap);
         mixDouble(growthFactorGate);
         for (IndexType q : qubitsMap)
@@ -567,6 +669,8 @@ class MPSDummySimulator
         };
 
         std::vector<std::vector<QubitPair>> layerPairs;
+        std::vector<IndexType> initialLabels(nrQubits);
+        std::iota(initialLabels.begin(), initialLabels.end(), 0);
 
         for (size_t li = 0; li < layers.size(); ++li)
         {
@@ -577,6 +681,20 @@ class MPSDummySimulator
                 auto qbits = op->AffectedQubits();
                 if (qbits.size() >= 2)
                 {
+                    if (swapGatesRelabelQubits)
+                    {
+                        const auto gate = std::dynamic_pointer_cast<Circuits::IQuantumGate<>>(op);
+                        const auto info = std::dynamic_pointer_cast<RoutingGateInfo>(op);
+                        if (qbits.size() == 2 && ((info && info->isSwap) || (gate && gate->GetGateType() == Circuits::QuantumGateType::kSwapGateType)))
+                        {
+                            std::swap(initialLabels[qbits[0]], initialLabels[qbits[1]]);
+                            continue;
+                        }
+                        // Express later partners in the labels of the initial
+                        // state; a free SWAP itself creates no layout edge.
+                        for (auto &q : qbits)
+                            q = initialLabels[q];
+                    }
                     if (qbits[0] > qbits[1])
                         std::swap(qbits[0], qbits[1]);
 
@@ -1024,7 +1142,13 @@ class MPSDummySimulator
             if (qbits.size() == 2)
             {
                 const auto gateptr = std::dynamic_pointer_cast<Circuits::IQuantumGate<>>(op);
-                if (gateptr && gateptr->GetGateType() == Circuits::QuantumGateType::kSwapGateType)
+                const auto info = std::dynamic_pointer_cast<RoutingGateInfo>(op);
+                if (info)
+                {
+                    fg.isSwap = info->isSwap;
+                    fg.schmidtRank = info->schmidtRank;
+                }
+                else if (gateptr && gateptr->GetGateType() == Circuits::QuantumGateType::kSwapGateType)
                 {
                     fg.isSwap = true;
                     fg.schmidtRank = 4;
@@ -1050,6 +1174,8 @@ class MPSDummySimulator
 
     void ApplyTwoQubitFastGate(IndexType qubit, IndexType controllingQubit1, bool isSwap, int schmidtRank)
     {
+        if (isSwap && swapGatesRelabelQubits)
+            return RelabelQubits(qubit, controllingQubit1);
         IndexType qubit1 = qubitsMap[qubit];
         IndexType qubit2 = qubitsMap[controllingQubit1];
 
@@ -1095,6 +1221,11 @@ class MPSDummySimulator
         }
     }
 
+    bool IsRelabelingSwap(const FastGateOp &gate) const
+    {
+        return swapGatesRelabelQubits && gate.numQubits == 2 && gate.isSwap;
+    }
+
     struct PartnerPull
     {
         IndexType pos = 0;
@@ -1112,12 +1243,30 @@ class MPSDummySimulator
         bool foundQ2 = false;
         double weight = 1.0;
         const size_t maxStep = std::min(windowSize, stepIdx + 9);
+        std::array<std::pair<IndexType, IndexType>, 8> relabels;
+        size_t numRelabels = 0;
+        auto originalLabel = [&](IndexType q) {
+            for (size_t i = numRelabels; i > 0; --i)
+            {
+                const auto [a, b] = relabels[i - 1];
+                if (q == a)
+                    q = b;
+                else if (q == b)
+                    q = a;
+            }
+            return q;
+        };
 
         for (size_t s = stepIdx + 1; s < maxStep; ++s)
         {
             const FastGateOp &fg = window[s];
-            const IndexType qA = fg.q1;
-            const IndexType qB = fg.q2;
+            if (IsRelabelingSwap(fg))
+            {
+                relabels[numRelabels++] = {fg.q1, fg.q2};
+                continue;
+            }
+            const IndexType qA = originalLabel(fg.q1);
+            const IndexType qB = originalLabel(fg.q2);
 
             auto recordPartner = [&](IndexType activeQ, IndexType partnerQ) {
                 if (partnerQ == qubit1 || partnerQ == qubit2)
@@ -1225,7 +1374,7 @@ class MPSDummySimulator
             const double rightD = currentBondDim[bond + 1];
             const double newD = EstimateGrownBondDimension(bond, leftD, betweenD, rightD, true, 4);
             rightSweepDim[i] = newD;
-            prefixPostCost[i + 1] = prefixPostCost[i] + newD * newD * newD;
+            prefixPostCost[i + 1] = prefixPostCost[i] + BondCost(newD);
         }
 
         suffixPostCost[span - 1] = 0.0;
@@ -1238,7 +1387,7 @@ class MPSDummySimulator
                 (i == span - 1) ? ((realq2 < static_cast<IndexType>(currentBondDim.size())) ? currentBondDim[realq2] : 1.0) : leftSweepDim[i + 1];
             const double newD = EstimateGrownBondDimension(bond, leftD, betweenD, rightD, true, 4);
             leftSweepDim[i] = newD;
-            suffixPostCost[i - 1] = suffixPostCost[i] + newD * newD * newD;
+            suffixPostCost[i - 1] = suffixPostCost[i] + BondCost(newD);
         }
 
         std::array<PartnerPull, 16> pulls;
@@ -1257,7 +1406,7 @@ class MPSDummySimulator
             const double rightD =
                 (i == span - 1) ? ((realq2 < static_cast<IndexType>(currentBondDim.size())) ? currentBondDim[realq2] : 1.0) : leftSweepDim[i + 1];
             const double gateD = EstimateGrownBondDimension(m, leftD, currentBondDim[m], rightD, isSwap, schmidtRank);
-            const double gateCost = gateD * gateD * gateD;
+            const double gateCost = BondCost(gateD);
             // Share the exact post-growth cost coefficients (kPostSwapCostWeight * S +
             // kPostGateCostWeight * G) with SwapQubitsToPosition and ApplyGate so the
             // one-step objective matches the rollout's cost model exactly.
@@ -1337,10 +1486,10 @@ class MPSDummySimulator
             std::swap(firstReal1, firstReal2);
 
         const HeuristicPolicy defaultFirstPolicy = (lookaheadDepth <= 0) ? HeuristicPolicy::kMinOneStepCost : HeuristicPolicy::kCombinedCostAndGravity;
-        IndexType bestFirstPosition = (firstReal2 - firstReal1 > 1)
-                                          ? SelectMeetPositionForPolicyFast(defaultFirstPolicy, firstReal1, firstReal2, firstQ1, firstQ2, window, windowSize,
-                                                                            stepIdx)
-                                          : firstReal1;
+        IndexType bestFirstPosition = IsRelabelingSwap(firstOp)       ? -1
+                                      : (firstReal2 - firstReal1 > 1) ? SelectMeetPositionForPolicyFast(defaultFirstPolicy, firstReal1, firstReal2, firstQ1,
+                                                                                                        firstQ2, window, windowSize, stepIdx)
+                                                                      : firstReal1;
 
         static constexpr std::array<HeuristicPolicy, 9> kFullPortfolio = {
             HeuristicPolicy::kCombinedCostAndGravity,
@@ -1381,8 +1530,8 @@ class MPSDummySimulator
                 if (rq1 > rq2)
                     std::swap(rq1, rq2);
 
-                IndexType meetPos = rq1;
-                if (rq2 - rq1 > 1)
+                IndexType meetPos = IsRelabelingSwap(fg) ? -1 : rq1;
+                if (!IsRelabelingSwap(fg) && rq2 - rq1 > 1)
                 {
                     meetPos = SelectMeetPositionForPolicyFast(policy, rq1, rq2, q1, q2, window, windowSize, s);
                     SwapQubitsToPosition(q1, q2, meetPos);
@@ -1433,7 +1582,7 @@ class MPSDummySimulator
         if (realq1 > realq2)
             std::swap(realq1, realq2);
 
-        if (realq2 - realq1 > 1)
+        if (!IsRelabelingSwap(fg) && realq2 - realq1 > 1)
             SwapQubitsToPosition(fg.q1, fg.q2, meetPosition);
 
         ApplyFastGate(fg);
@@ -1468,6 +1617,12 @@ class MPSDummySimulator
         const FastGateOp &fg = window[stepIdx];
         const IndexType qubit1 = fg.q1;
         const IndexType qubit2 = fg.q2;
+
+        if (IsRelabelingSwap(fg))
+        {
+            EvaluateMeetingPositionCostFast(-1, window, windowSize, stepIdx, lookaheadDepth, lookaheadDepthWithHeuristic, currentCost, bestCost, false);
+            return -1; // A logical SWAP needs no meeting position or branching.
+        }
 
         IndexType realq1 = qubitsMap[qubit1];
         IndexType realq2 = qubitsMap[qubit2];
@@ -1635,6 +1790,9 @@ class MPSDummySimulator
     size_t physExtent = 2; // 2 for an MPS, 4 for an MPO (operator sites)
     IndexType maxVirtualExtent = 0;
     std::vector<double> bondCost;
+    IndexType runtimeBondCap = 0;
+    double truncationWeight = 0.;
+    bool swapGatesRelabelQubits = false;
     std::vector<double> maxBondDim;
     std::vector<double> currentBondDim;
 
@@ -1691,7 +1849,7 @@ class MPSDummySimulator
 
         currentBondDim[bond] = std::max(currentBondDim[bond], 1.);
 
-        bondCost[bond] = currentBondDim[bond] * currentBondDim[bond] * currentBondDim[bond];
+        bondCost[bond] = BondCost(currentBondDim[bond]);
     }
 };
 

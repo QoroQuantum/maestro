@@ -211,6 +211,9 @@ are rejected. Small floating-point thresholds retain their precision.
 | `mps_sampling` | `` | string | mps |
 | `disable_optimized_swapping` | `` | boolean | mps |
 | `lookahead_depth` | `` | lookahead | mps |
+| `mps_routing_virtual_bonds` | same | boolean | QCSim/GPU MPS and MPO |
+| `mps_routing_truncation_weight` | same | nonnegative | QCSim/GPU MPS and MPO |
+| `mps_routing_legacy_cap` | same | boolean | QCSim/GPU MPS and MPO |
 | `optimize_circuit` | `` | boolean | all |
 | `gate_fusion` | `` | boolean | all |
 | `max_simulators` | `max_simulators` | positive_integer | all |
@@ -602,3 +605,39 @@ accepts zero for unlimited bond dimension); `constraints` narrow choices (Aer
 truncation supports only `discarded_weight`). Cross-field and size constraints
 remain enforced by request validation. Catalog support does not probe optional
 plugins, GPU hardware or licensing, and is not a promise of runtime readiness.
+
+### Experimental virtual-bond routing
+
+QCSim MPS/MPO named SWAP gates exchange logical qubit labels without updating
+the tensors. Initial-layout planning and lookahead model these as zero tensor
+cost and unchanged bond dimensions, while following the exchanged labels for
+later gates. Fusion keeps these SWAPs as named operations. Internal routing
+swaps that move tensor sites still incur contraction and truncation costs.
+This backend behavior applies with virtual-bond routing either enabled or disabled.
+
+`mps_routing_virtual_bonds` defaults to `false`. Setting it to `true` enables
+bounded estimates above the physical bond cap for initial layout and lookahead
+routing. It does not change the simulator's physical bond limit. Online history
+requires optimized swapping, positive lookahead, and room above the physical cap.
+The virtual limit is at most four times that cap and never exceeds the exact
+central-cut rank. This allows two additional rank doublings without tying the
+heuristic's strength to register size.
+
+For an estimated dimension `d` and physical cap `c`, the routing score is
+`min(d,c)^3 * (1 + weight * max(0,d/c - 1))`. The first term models capped
+runtime; the second is a heuristic truncation penalty, not an error bound.
+`mps_routing_truncation_weight` defaults to `1`; `0` removes the penalty.
+Larger weights favor avoiding overflow and may increase execution time. This
+experimental policy does not guarantee better accuracy or runtime on every circuit.
+An unlimited physical cap uses the ordinary cubic model without virtual history.
+
+The same settings are available as Python `SimulatorConfig` keyword arguments
+and properties. `None` retains defaults. The compatibility flag
+`mps_routing_legacy_cap=true` forces virtual routing off, including when the new
+flag is true; `false` alone does not opt in.
+
+The live accuracy/runtime benchmark is excluded from default Boost test runs.
+Run it explicitly with
+`--run_test=MPSSwapOptTests/VirtualRoutingLiveBenchmark --log_level=message`.
+It compares real network execution at equal physical caps; timings are diagnostic,
+not machine-dependent CI assertions.

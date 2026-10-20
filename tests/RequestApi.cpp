@@ -13,6 +13,7 @@ void TestRequestNoiseAndOptions();
 void TestRequestSeedParsing();
 void TestNetworkBondDefaults();
 void TestGateFusionConfiguration();
+void TestVirtualRoutingConfiguration();
 void TestTypedTrajectoryConfiguration();
 void TestFusionPublicInterfaces();
 void TestPauliPropagatorDedupDefault();
@@ -721,6 +722,7 @@ try
     TestRequestSeedParsing();
     TestNetworkBondDefaults();
     TestGateFusionConfiguration();
+    TestVirtualRoutingConfiguration();
     TestTypedTrajectoryConfiguration();
     TestFusionPublicInterfaces();
     TestFusionMetadata();

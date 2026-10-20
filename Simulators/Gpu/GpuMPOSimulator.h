@@ -23,6 +23,8 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
 
     void Initialize() override
     {
+        RefreshRoutingSettings();
+        InvalidateDummyHistory();
         if (nrQubits)
         {
             auto initializationLock = GpuLibrary::GetInstance()->LockInitialization();
@@ -172,6 +174,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
             curMaxBondDim = 1;
         }
         upcomingGateIndex = 0;
+        ResetDummySimulator();
     }
 
     void SetInitialQubitsMap(const std::vector<long long int> &initialMap) override
@@ -179,13 +182,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
         if (mpo)
         {
             mpo->SetInitialQubitsMap(initialMap);
-            if (!dummySim || dummySim->getNrQubits() != initialMap.size() || dummySim->IsOperatorChain() != true)
-            {
-                dummySim = std::make_unique<Simulators::MPSDummySimulator>(initialMap.size(), true);
-                dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey()));
-            }
-            dummySim->setGrowthFactorGate(growthFactorGate);
-            dummySim->setGrowthFactorSwap(growthFactorSwap);
+            EnsureDummySimulator(initialMap.size());
             dummySim->SetInitialQubitsMap(initialMap);
         }
     }
@@ -193,6 +190,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
     void SetUseOptimalMeetingPosition(bool enable) override
     {
         useOptimalMeetingPosition = enable;
+        RefreshRoutingSettings();
         if (mpo)
             mpo->SetUseOptimalMeetingPosition(enable);
         RefreshRoutingCallback();
@@ -259,6 +257,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
         }
         if (!configuration.WasApplied(key, value))
             configuration.SetConfiguration(key, value);
+        RefreshRoutingSettings();
         if (std::string("seed") == key)
         {
             const uint64_t seed = std::stoull(value);
@@ -299,12 +298,13 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
                     if (!configuration.WasApplied(alias, bondDimension))
                         configuration.SetConfiguration(alias, bondDimension);
             }
+            RefreshRoutingSettings();
             if (mpo)
                 mpo->SetMaxExtent(chi);
             if (chi > 0)
             {
                 if (dummySim)
-                    dummySim->SetMaxBondDimension(chi);
+                    dummySim->SetMaxBondDimension(EffectiveLookaheadMaxBondDimension(dummySim->getNrQubits(), chi));
             }
         }
         else if (std::string("matrix_product_operator_kraus_completeness_check") == key)
@@ -387,13 +387,14 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
     {
         mpo = nullptr;
         nrQubits = 0;
-        dummySim = nullptr;
+        ClearDummySimulator();
         upcomingGateIndex = 0;
         upcomingGates.clear();
     }
 
     size_t Measure(const Types::qubits_vector &qubits) override
     {
+        InvalidateDummyHistory();
         if (mpo && qubits.size() > sizeof(size_t) * 8)
             throw std::invalid_argument("Use MeasureMany for more than 64 measured qubits");
         if (qubits.size() > sizeof(size_t) * 8)
@@ -418,6 +419,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
 
     std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override
     {
+        InvalidateDummyHistory();
         std::vector<bool> res(qubits.size(), false);
         DontNotify();
         {
@@ -431,6 +433,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
 
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
+        InvalidateDummyHistory();
         DontNotify();
         {
             for (size_t qubit : qubits)
@@ -470,10 +473,14 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
                 interleaved.push_back(op.data()[i].real());
                 interleaved.push_back(op.data()[i].imag());
             }
+        // Native channel/operator application can invoke routing before it
+        // finishes; discard old estimates both before and after that call.
+        InvalidateDummyHistory();
         const bool applied = mpo->ApplyKraus(gpuTargets, kraus.size(), interleaved.data());
         if (!applied)
             throw std::runtime_error("GPU density-matrix/matrix-product-operator channel application "
                                      "failed");
+        InvalidateDummyHistory();
         NotifyObservers(targets);
     }
 
@@ -528,8 +535,12 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
             raw[2 * i] = matrix.data()[i].real();
             raw[2 * i + 1] = matrix.data()[i].imag();
         }
+        // Native channel/operator application can invoke routing before it
+        // finishes; discard old estimates both before and after that call.
+        InvalidateDummyHistory();
         if (!mpo->ApplyOperator(selected, raw.data(), normalize))
             throw std::runtime_error("GPU MPO operator application failed");
+        InvalidateDummyHistory();
         NotifyObservers(qubits);
     }
 
@@ -541,6 +552,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
         if (selected.empty())
             return;
         mpo->MoveAtBeginningOfChain(selected);
+        InvalidateDummyHistory();
     }
 
     std::complex<double> DensityMatrixTrace() const override
@@ -631,6 +643,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
 
     void Trim() override
     {
+        InvalidateDummyHistory();
         if (mpo)
             mpo->Trim();
         else
@@ -639,6 +652,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
 
     void ReCanonicalize() override
     {
+        InvalidateDummyHistory();
         if (mpo)
             mpo->ReCanonicalize();
         else
@@ -731,6 +745,9 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
             std::sort(selected.begin(), selected.end());
             selected.erase(std::unique(selected.begin(), selected.end()), selected.end());
             const auto counts = mpo->SampleHistogram(shots, std::move(selected));
+            // Current plugins sample without moving sites. Check the map for
+            // plugins that implement selected sampling by reordering the chain.
+            ValidateDummyHistoryMap();
             const auto positions = SampleBitPositions(qubits);
             std::unordered_map<std::vector<bool>, Types::qubit_t> result;
             for (const auto &entry : counts)
@@ -806,11 +823,13 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
     void SaveState() override
     {
         mpo->SaveState();
+        SaveDummyState();
     }
 
     void RestoreState() override
     {
         mpo->RestoreState();
+        RestoreDummyState();
     }
 
     Types::qubit_t MeasureNoCollapse() override
@@ -850,6 +869,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
             throw std::runtime_error("GpuSimulator::ApplyGenericTwoQubitGate: Failed to apply the "
                                      "generic two-qubit gate on the matrix product operator "
                                      "simulator.");
+        RecordExecutedTwoQubitGate(qubit0, qubit1, false, false);
         NotifyObservers({qubit0, qubit1});
         return;
     }
@@ -953,116 +973,148 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
     void ApplyCX(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpo->ApplyCX(ctrl_qubit, tgt_qubit);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCY(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpo->ApplyCY(ctrl_qubit, tgt_qubit);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCZ(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpo->ApplyCZ(ctrl_qubit, tgt_qubit);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCP(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double lambda) override
     {
         mpo->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
         mpo->ApplyCRx(ctrl_qubit, tgt_qubit, theta);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRy(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
         mpo->ApplyCRy(ctrl_qubit, tgt_qubit, theta);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRz(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
         mpo->ApplyCRz(ctrl_qubit, tgt_qubit, theta);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCH(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpo->ApplyCH(ctrl_qubit, tgt_qubit);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpo->ApplyCSX(ctrl_qubit, tgt_qubit);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSxDAG(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpo->ApplyCSXDG(ctrl_qubit, tgt_qubit);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplySwap(Types::qubit_t qubit0, Types::qubit_t qubit1) override
     {
         mpo->ApplySwap(qubit0, qubit1);
+        RecordExecutedTwoQubitGate(qubit0, qubit1, true, false);
         NotifyObservers({qubit1, qubit0});
     }
 
     void ApplyCCX(Types::qubit_t qubit0, Types::qubit_t qubit1, Types::qubit_t qubit2) override
     {
-        const size_t q1 = qubit0;
-        const size_t q2 = qubit1;
-        const size_t q3 = qubit2;
-        mpo->ApplyCSX(static_cast<int>(q2), static_cast<int>(q3));
-        NotifyObservers({qubit1, qubit2});
-        mpo->ApplyCX(static_cast<int>(q1), static_cast<int>(q2));
-        NotifyObservers({qubit0, qubit1});
-        mpo->ApplyCSXDG(static_cast<int>(q2), static_cast<int>(q3));
-        NotifyObservers({qubit1, qubit2});
-        mpo->ApplyCX(static_cast<int>(q1), static_cast<int>(q2));
-        NotifyObservers({qubit0, qubit1});
-        mpo->ApplyCSX(static_cast<int>(q1), static_cast<int>(q3));
-        NotifyObservers({qubit0, qubit2});
+        {
+            DecompositionScope scope(*this);
+            const size_t q1 = qubit0;
+            const size_t q2 = qubit1;
+            const size_t q3 = qubit2;
+            mpo->ApplyCSX(static_cast<int>(q2), static_cast<int>(q3));
+            RecordExecutedTwoQubitGate(qubit1, qubit2, false, true);
+            NotifyObservers({qubit1, qubit2});
+            mpo->ApplyCX(static_cast<int>(q1), static_cast<int>(q2));
+            RecordExecutedTwoQubitGate(qubit0, qubit1, false, true);
+            NotifyObservers({qubit0, qubit1});
+            mpo->ApplyCSXDG(static_cast<int>(q2), static_cast<int>(q3));
+            RecordExecutedTwoQubitGate(qubit1, qubit2, false, true);
+            NotifyObservers({qubit1, qubit2});
+            mpo->ApplyCX(static_cast<int>(q1), static_cast<int>(q2));
+            RecordExecutedTwoQubitGate(qubit0, qubit1, false, true);
+            NotifyObservers({qubit0, qubit1});
+            mpo->ApplyCSX(static_cast<int>(q1), static_cast<int>(q3));
+            RecordExecutedTwoQubitGate(qubit0, qubit2, false, true);
+            NotifyObservers({qubit0, qubit2});
+        }
+        NotifyObservers({qubit2, qubit1, qubit0});
     }
 
     void ApplyCSwap(Types::qubit_t ctrl_qubit, Types::qubit_t qubit0, Types::qubit_t qubit1) override
     {
-        const size_t q1 = ctrl_qubit;
-        const size_t q2 = qubit0;
-        const size_t q3 = qubit1;
-        mpo->ApplyCX(static_cast<int>(q3), static_cast<int>(q2));
-        NotifyObservers({qubit1, qubit0});
-        mpo->ApplyCSX(static_cast<int>(q2), static_cast<int>(q3));
-        NotifyObservers({qubit0, qubit1});
-        mpo->ApplyCX(static_cast<int>(q1), static_cast<int>(q2));
-        NotifyObservers({ctrl_qubit, qubit0});
-        mpo->ApplyP(static_cast<int>(q3), M_PI);
-        NotifyObservers({qubit1});
-        mpo->ApplyP(static_cast<int>(q2), -M_PI_2);
-        NotifyObservers({qubit0});
-        mpo->ApplyCSX(static_cast<int>(q2), static_cast<int>(q3));
-        NotifyObservers({qubit0, qubit1});
-        mpo->ApplyCX(static_cast<int>(q1), static_cast<int>(q2));
-        NotifyObservers({ctrl_qubit, qubit0});
-        mpo->ApplyP(static_cast<int>(q3), M_PI);
-        NotifyObservers({qubit1});
-        mpo->ApplyCSX(static_cast<int>(q1), static_cast<int>(q3));
-        NotifyObservers({ctrl_qubit, qubit1});
-        mpo->ApplyCX(static_cast<int>(q3), static_cast<int>(q2));
-        NotifyObservers({qubit1, qubit0});
+        {
+            DecompositionScope scope(*this);
+            const size_t q1 = ctrl_qubit;
+            const size_t q2 = qubit0;
+            const size_t q3 = qubit1;
+            mpo->ApplyCX(static_cast<int>(q3), static_cast<int>(q2));
+            RecordExecutedTwoQubitGate(qubit1, qubit0, false, true);
+            NotifyObservers({qubit1, qubit0});
+            mpo->ApplyCSX(static_cast<int>(q2), static_cast<int>(q3));
+            RecordExecutedTwoQubitGate(qubit0, qubit1, false, true);
+            NotifyObservers({qubit0, qubit1});
+            mpo->ApplyCX(static_cast<int>(q1), static_cast<int>(q2));
+            RecordExecutedTwoQubitGate(ctrl_qubit, qubit0, false, true);
+            NotifyObservers({ctrl_qubit, qubit0});
+            mpo->ApplyP(static_cast<int>(q3), M_PI);
+            NotifyObservers({qubit1});
+            mpo->ApplyP(static_cast<int>(q2), -M_PI_2);
+            NotifyObservers({qubit0});
+            mpo->ApplyCSX(static_cast<int>(q2), static_cast<int>(q3));
+            RecordExecutedTwoQubitGate(qubit0, qubit1, false, true);
+            NotifyObservers({qubit0, qubit1});
+            mpo->ApplyCX(static_cast<int>(q1), static_cast<int>(q2));
+            RecordExecutedTwoQubitGate(ctrl_qubit, qubit0, false, true);
+            NotifyObservers({ctrl_qubit, qubit0});
+            mpo->ApplyP(static_cast<int>(q3), M_PI);
+            NotifyObservers({qubit1});
+            mpo->ApplyCSX(static_cast<int>(q1), static_cast<int>(q3));
+            RecordExecutedTwoQubitGate(ctrl_qubit, qubit1, false, true);
+            NotifyObservers({ctrl_qubit, qubit1});
+            mpo->ApplyCX(static_cast<int>(q3), static_cast<int>(q2));
+            RecordExecutedTwoQubitGate(qubit1, qubit0, false, true);
+            NotifyObservers({qubit1, qubit0});
+        }
+        NotifyObservers({qubit1, qubit0, ctrl_qubit});
     }
 
     void ApplyCU(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta, double phi, double lambda, double gamma) override
     {
         mpo->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
@@ -1086,16 +1138,27 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
                                          "state.");
             cloned->gateCounterObserver = std::make_shared<GateCounterObserver>(cloned->upcomingGateIndex);
             cloned->RegisterObserver(cloned->gateCounterObserver);
-            cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
             cloned->curMaxBondDim = curMaxBondDim;
             cloned->mpo->SetCallbackContext(static_cast<GpuTensorChainSimulator *>(cloned.get()));
         }
+        cloned->RefreshRoutingSettings();
+        cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
+        cloned->dummyHistoryValid = dummyHistoryValid;
+        cloned->savedDummyBondDims = savedDummyBondDims;
         if (configuration.IsSet("seed"))
             cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
         return cloned;
     }
 
   protected:
+    std::vector<double> CurrentBondDimensions() const override
+    {
+        if (!mpo)
+            return {};
+        const auto dims = mpo->GetBondDimensions(nrQubits);
+        return {dims.begin(), dims.end()};
+    }
+
     std::vector<long long> CurrentRoutingMap() const override
     {
         if (mpo)

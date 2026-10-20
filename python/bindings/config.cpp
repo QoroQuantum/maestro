@@ -74,6 +74,8 @@ const char *const kConfigFields[] = {
     "trajectory_policy",
     "trajectory_max_memory_mb",
     "max_simulators",
+    "mps_routing_virtual_bonds",
+    "mps_routing_truncation_weight",
 };
 
 void bind_config(nb::module_ &m)
@@ -121,7 +123,8 @@ void bind_config(nb::module_ &m)
            std::optional<double> pp_coefficient_threshold, std::optional<size_t> pp_max_pauli_weight, std::optional<int> pp_gates_between_trims,
            std::optional<int> pp_gates_between_deduplications, std::optional<double> path_integral_threshold, std::optional<bool> gate_fusion,
            bool enable_causal_cone_reduction, bool enable_observable_clustering, std::optional<size_t> max_cluster_qubits, bool auto_reduce,
-           std::optional<std::string> trajectory_policy, std::optional<size_t> trajectory_max_memory_mb, std::optional<size_t> max_simulators) {
+           std::optional<std::string> trajectory_policy, std::optional<size_t> trajectory_max_memory_mb, std::optional<size_t> max_simulators,
+           std::optional<bool> mps_routing_virtual_bonds, std::optional<double> mps_routing_truncation_weight) {
             SimulatorConfig config;
             config.simulator_type = simulator_type;
             config.simulation_type = simulation_type;
@@ -154,6 +157,8 @@ void bind_config(nb::module_ &m)
             config.trajectory_policy = std::move(trajectory_policy);
             config.trajectory_max_memory_mb = trajectory_max_memory_mb;
             config.max_simulators = max_simulators;
+            config.mps_routing_virtual_bonds = mps_routing_virtual_bonds;
+            config.mps_routing_truncation_weight = mps_routing_truncation_weight;
             config.Validate();
             new (self) SimulatorConfig(std::move(config));
         },
@@ -168,7 +173,12 @@ void bind_config(nb::module_ &m)
         "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(), "enable_causal_cone_reduction"_a = defaults.enable_causal_cone_reduction,
         "enable_observable_clustering"_a = defaults.enable_observable_clustering, "max_cluster_qubits"_a.noconvert() = nb::none(),
         "auto_reduce"_a = defaults.auto_reduce, "trajectory_policy"_a = nb::none(), "trajectory_max_memory_mb"_a.noconvert() = nb::none(),
-        "max_simulators"_a.noconvert() = nb::none());
+        "max_simulators"_a.noconvert() = nb::none(), "mps_routing_virtual_bonds"_a = nb::none(), "mps_routing_truncation_weight"_a = nb::none());
+
+    BindConfigField(config_class, "mps_routing_virtual_bonds", &SimulatorConfig::mps_routing_virtual_bonds,
+                    "Opt into bounded virtual-bond routing on QCSim/GPU MPS and MPO; defaults to disabled.");
+    BindConfigField(config_class, "mps_routing_truncation_weight", &SimulatorConfig::mps_routing_truncation_weight,
+                    "Nonnegative overflow penalty relative to capped runtime cost. Default 1; zero charges runtime alone.");
 
     BindConfigField(config_class, "trajectory_policy", &SimulatorConfig::trajectory_policy,
                     "QCSim statevector, density-matrix and path-integral dynamic circuits: "

@@ -23,6 +23,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
 
     void Initialize() override
     {
+        RefreshRoutingSettings();
+        InvalidateDummyHistory();
         if (nrQubits != 0)
         {
             {
@@ -99,13 +101,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         if (mpoSimulator)
         {
             mpoSimulator->SetInitialQubitsMap(initialMap);
-            if (!dummySim || dummySim->getNrQubits() != initialMap.size() || dummySim->IsOperatorChain() != true)
-            {
-                dummySim = std::make_unique<Simulators::MPSDummySimulator>(initialMap.size(), true);
-                dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey()));
-            }
-            dummySim->setGrowthFactorGate(growthFactorGate);
-            dummySim->setGrowthFactorSwap(growthFactorSwap);
+            EnsureDummySimulator(initialMap.size());
             dummySim->SetInitialQubitsMap(initialMap);
         }
     }
@@ -113,6 +109,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     void SetUseOptimalMeetingPosition(bool enable) override
     {
         useOptimalMeetingPosition = enable;
+        RefreshRoutingSettings();
         if (mpoSimulator)
             mpoSimulator->SetUseOptimalMeetingPosition(enable);
         RefreshRoutingCallback();
@@ -141,12 +138,12 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             const std::string limitValue(value);
             configuration.SetConfiguration("matrix_product_state_max_bond_dimension", limitValue);
             configuration.SetConfiguration("matrix_product_operator_max_bond_dimension", limitValue);
-            if (dummySim)
-                dummySim->SetMaxBondDimension(limit);
+            RefreshRoutingSettings();
             return;
         }
         if (!configuration.WasApplied(key, value))
             configuration.SetConfiguration(key, value);
+        RefreshRoutingSettings();
         if (std::string("seed") == key)
         {
             const uint64_t seed = std::stoull(value);
@@ -235,7 +232,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     void Clear() override
     {
         mpoSimulator = nullptr;
-        dummySim = nullptr;
+        ClearDummySimulator();
         nrQubits = 0;
         upcomingGateIndex = 0;
         upcomingGates.clear();
@@ -243,6 +240,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
 
     size_t Measure(const Types::qubits_vector &qubits) override
     {
+        InvalidateDummyHistory();
         if (mpoSimulator && qubits.size() > sizeof(size_t) * 8)
             throw std::invalid_argument("Use MeasureMany for more than 64 measured qubits");
         if (qubits.size() > sizeof(size_t) * 8)
@@ -269,6 +267,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
 
     std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override
     {
+        InvalidateDummyHistory();
         std::vector<bool> res(qubits.size(), false);
         DontNotify();
         {
@@ -284,6 +283,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
 
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
+        InvalidateDummyHistory();
         DontNotify();
         {
             for (size_t qubit : qubits)
@@ -316,14 +316,20 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
                 throw std::invalid_argument("Quantum-channel target qubits must be distinct");
         }
         const auto &krausOperators = channel.GetKrausOperators();
+        // Native channel/operator application can invoke routing before it
+        // finishes; discard old estimates both before and after that call.
+        InvalidateDummyHistory();
         {
             if (!mpoSimulator)
                 throw std::runtime_error("QCSim MPO state is not initialized");
             if (targets.size() == 1)
                 mpoSimulator->ApplyKrausOperators(krausOperators, static_cast<Eigen::Index>(targets[0]));
             else
+            {
                 mpoSimulator->ApplyKrausOperators(krausOperators, static_cast<Eigen::Index>(targets[0]), static_cast<Eigen::Index>(targets[1]));
+            }
         }
+        InvalidateDummyHistory();
         NotifyObservers(targets);
     }
 
@@ -376,10 +382,14 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             return IState::ApplyOperator(qubits, matrix, normalize);
         const auto selected = MPOValidation::Operator(qubits, matrix, nrQubits);
         const QC::Gates::AppliedGate<> op(matrix, selected[0], selected.size() == 2 ? selected[1] : 0);
+        // Native channel/operator application can invoke routing before it
+        // finishes; discard old estimates both before and after that call.
+        InvalidateDummyHistory();
         if (normalize)
             mpoSimulator->ApplyOperatorAndNormalize(op);
         else
             mpoSimulator->ApplyOperator(op);
+        InvalidateDummyHistory();
         NotifyObservers(qubits);
     }
 
@@ -390,6 +400,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         const auto selected = MPOValidation::Qubits(qubits, nrQubits);
         const std::set<Eigen::Index> targets(selected.begin(), selected.end());
         mpoSimulator->MoveAtBeginningOfChain(targets);
+        InvalidateDummyHistory();
     }
 
     std::complex<double> DensityMatrixTrace() const override
@@ -473,6 +484,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
 
     void Trim() override
     {
+        InvalidateDummyHistory();
         if (mpoSimulator)
             mpoSimulator->Trim();
         else
@@ -481,6 +493,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
 
     void ReCanonicalize() override
     {
+        InvalidateDummyHistory();
         if (mpoSimulator)
             mpoSimulator->ReCanonicalize();
         else
@@ -652,11 +665,13 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
     void SaveState() override
     {
         mpoSimulator->SaveState();
+        SaveDummyState();
     }
 
     void RestoreState() override
     {
         mpoSimulator->RestoreState();
+        RestoreDummyState();
     }
 
     void SetMultithreading(bool multithreading = true) override
@@ -932,7 +947,6 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         if (mpoSimulator)
         {
             cloned->mpoSimulator = mpoSimulator->Clone();
-            cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
             cloned->curMaxBondDim = curMaxBondDim;
             cloned->gateCounterObserver = std::make_shared<GateCounterObserver>(cloned->upcomingGateIndex);
             cloned->RegisterObserver(cloned->gateCounterObserver);
@@ -941,12 +955,24 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         }
         for (const auto &[key, value] : configuration.GetConfigMap())
             cloned->Configure(key.c_str(), value.c_str());
+        cloned->RefreshRoutingSettings();
+        cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
+        cloned->dummyHistoryValid = dummyHistoryValid;
+        cloned->savedDummyBondDims = savedDummyBondDims;
         if (configuration.IsSet("seed"))
             cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
         return cloned;
     }
 
   protected:
+    std::vector<double> CurrentBondDimensions() const override
+    {
+        if (!mpoSimulator)
+            return {};
+        const auto dims = mpoSimulator->getBondDimensions();
+        return {dims.begin(), dims.end()};
+    }
+
     std::vector<long long> CurrentRoutingMap() const override
     {
         if (mpoSimulator)
@@ -966,17 +992,10 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
   private:
     template <class Function> void ApplyDecomposedGate(Function &&apply, const Types::qubits_vector &affectedQubits)
     {
-        DontNotify();
-        try
         {
+            DecompositionScope scope(*this);
             std::forward<Function>(apply)();
         }
-        catch (...)
-        {
-            Notify();
-            throw;
-        }
-        Notify();
         NotifyObservers(affectedQubits);
     }
 
@@ -985,6 +1004,17 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         if constexpr (sizeof...(Qubits) <= 2)
         {
             mpoSimulator->ApplyGate(gate, static_cast<Eigen::Index>(qubits)...);
+            if constexpr (sizeof...(Qubits) == 2)
+            {
+                const std::array<Types::qubit_t, 2> qs{static_cast<Types::qubit_t>(qubits)...};
+                RecordExecutedTwoQubitGate(qs[0], qs[1], gate.isSwapGate(), gate.isControlled());
+            }
+            else if constexpr (sizeof...(Qubits) == 0)
+            {
+                if (gate.getQubitsNumber() == 2)
+                    RecordExecutedTwoQubitGate(static_cast<Types::qubit_t>(gate.getQubit1()), static_cast<Types::qubit_t>(gate.getQubit2()), gate.isSwapGate(),
+                                               gate.isControlled());
+            }
         }
         else
         {

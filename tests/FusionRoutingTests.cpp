@@ -2,6 +2,8 @@
 #define INCLUDED_BY_FACTORY
 #include "Network/SimpleDisconnectedNetwork.h"
 #include "Simulators/Fusion/FusionSimulator.h"
+#include "Simulators/Gpu/GpuMPOSimulator.h"
+#include "Simulators/Gpu/GpuMPSSimulator.h"
 #include "Simulators/QCSim/QCSimMPOSimulator.h"
 #include "Simulators/QCSim/QCSimMPSSimulator.h"
 #include "Simulators/QCSim/QCSimStatevectorSimulator.h"
@@ -21,12 +23,21 @@ static void Check(bool ok, const char *message)
 struct RecordingStats
 {
     virtual ~RecordingStats() = default;
+    virtual void SetNotificationsForTest(bool enabled) = 0;
     size_t installs = 0, copied = 0, callbacks = 0, flushes = 0;
     std::vector<Op> installed;
 };
 
 template <class Backend> struct RecordingImmediate : Backend, RecordingStats
 {
+    void SetNotificationsForTest(bool enabled) override
+    {
+        if (enabled)
+            this->Notify();
+        else
+            this->DontNotify();
+    }
+
     RecordingImmediate()
     {
         if constexpr (std::is_base_of_v<Private::QCSimTensorChainSimulator, Backend>)
@@ -53,8 +64,16 @@ template <class Backend> struct RecordingImmediate : Backend, RecordingStats
     }
 };
 
-static std::shared_ptr<ISimulator> MakeRecording(const char *method)
+static std::shared_ptr<ISimulator> MakeRecording(const char *method, bool gpu = false)
 {
+#ifdef __linux__
+    if (gpu)
+    {
+        if (std::string(method) == "matrix_product_state")
+            return std::make_shared<RecordingImmediate<Private::GpuMPSSimulator>>();
+        return std::make_shared<RecordingImmediate<Private::GpuMPOSimulator>>();
+    }
+#endif
     if (std::string(method) == "statevector")
         return std::make_shared<RecordingImmediate<Private::QCSimStatevectorSimulator>>();
     if (std::string(method) == "matrix_product_state")
@@ -342,10 +361,550 @@ static void FiringConditionalKeepsRouting()
     }
 }
 
-int main()
+template <class Backend> struct HistoryProbe : RecordingImmediate<Backend>
+{
+    mutable size_t mapReads = 0, bondReads = 0;
+    bool failMapRead = false;
+
+    const void *Planner() const
+    {
+        return this->dummySim.get();
+    }
+
+    long long RoutingCap() const
+    {
+        return this->physicalBondCap;
+    }
+
+    void InvalidateHistory()
+    {
+        this->InvalidateDummyHistory();
+    }
+
+    void CorruptMap()
+    {
+        auto map = this->dummySim->getQubitsMap();
+        std::swap(map[0], map[8]);
+        this->dummySim->SetRoutingMap(map);
+    }
+
+    std::vector<long long> PredictedMap() const
+    {
+        return this->dummySim->getQubitsMap();
+    }
+
+    std::vector<double> VirtualBonds() const
+    {
+        return this->CaptureDummyHistory();
+    }
+
+    std::vector<double> NativeBonds() const
+    {
+        return Backend::CurrentBondDimensions();
+    }
+
+    std::vector<long long> NativeMap() const
+    {
+        return Backend::CurrentRoutingMap();
+    }
+
+  protected:
+    std::vector<long long> CurrentRoutingMap() const override
+    {
+        ++mapReads;
+        if (failMapRead)
+            throw std::runtime_error("test routing read failure");
+        return Backend::CurrentRoutingMap();
+    }
+
+    std::vector<double> CurrentBondDimensions() const override
+    {
+        ++bondReads;
+        return Backend::CurrentBondDimensions();
+    }
+};
+
+static void GrowVirtualHistory(ISimulator &sim)
+{
+    sim.ApplyH(0);
+    sim.ApplyH(1);
+    sim.ApplyCP(0, 1, 1e-3);
+    sim.ApplyH(2);
+    sim.ApplyCP(1, 2, 1e-3);
+    sim.ApplyCX(2, 3);
+    sim.ApplyCP(1, 2, 1e-3);
+    sim.ApplyH(4);
+    sim.ApplyCP(3, 4, 1e-3);
+    sim.ApplyCX(4, 5);
+    sim.ApplyCP(3, 4, 1e-3);
+}
+
+template <class Backend> static void LogicalSwapHistory(const char *cap)
+{
+    HistoryProbe<Backend> sim;
+    sim.AllocateQubits(9);
+    sim.Configure("mps_routing_virtual_bonds", "true");
+    sim.Configure("matrix_product_state_max_bond_dimension", cap);
+    sim.Configure("matrix_product_operator_max_bond_dimension", cap);
+    sim.Initialize();
+    sim.SetLookaheadDepth(3);
+    sim.setGrowthFactorGate(1.);
+    GrowVirtualHistory(sim);
+    const auto history = sim.VirtualBonds(), bonds = sim.NativeBonds();
+    Check(!history.empty(), "logical SWAP test needs virtual history");
+    Check(sim.SwapGatesRelabelQubits(), "QCSim chain did not advertise SWAP relabeling");
+    auto map = sim.NativeMap();
+    const auto before = sim.AllProbabilities();
+    const auto planner = sim.Planner();
+    sim.SetUpcomingGates({CF::CreateGate(Kind::kSwapGateType, 0, 8), CF::CreateGate(Kind::kSwapGateType, 2, 3), CF::CreateGate(Kind::kCXGateType, 0, 4)});
+    const auto callbacks = sim.callbacks;
+    for (const auto &[a, b] : {std::pair{0, 8}, std::pair{2, 3}})
+    {
+        sim.ApplySwap(a, b);
+        std::swap(map[a], map[b]);
+        Check(sim.NativeMap() == map && sim.PredictedMap() == map, "logical SWAP history map differs from backend");
+        Check(sim.NativeBonds() == bonds && sim.VirtualBonds() == history, "logical SWAP changed bonds or discarded virtual history");
+        Check(sim.callbacks == callbacks && sim.Planner() == planner, "logical SWAP routed qubits or replaced the planner");
+    }
+    Check(sim.GetGatesCounter() == 2, "logical SWAP did not advance the gate counter once");
+    const auto after = sim.AllProbabilities();
+    for (size_t i = 0; i < before.size(); ++i)
+    {
+        size_t permuted = i;
+        for (const auto &[a, b] : {std::pair{0, 8}, std::pair{2, 3}})
+            if (((permuted >> a) & 1) != ((permuted >> b) & 1))
+                permuted ^= (size_t{1} << a) | (size_t{1} << b);
+        Check(std::abs(after[permuted] - before[i]) < 1e-10, "logical SWAP changed the state beyond relabeling");
+    }
+    sim.ApplyCX(0, 4);
+    Check(sim.callbacks > callbacks && sim.GetGatesCounter() == 3, "routing did not resume after logical SWAPs");
+    Check(sim.PredictedMap() == sim.NativeMap(), "later routing ignored the relabeled map");
+    sim.CorruptMap();
+    sim.ApplySwap(0, 8);
+    Check(sim.PredictedMap() == sim.NativeMap() && sim.VirtualBonds() == sim.NativeBonds(), "SWAP accepted unrelated map drift");
+}
+
+static void LogicalSwapFusion()
+{
+    for (auto method : {SimulationType::kStatevector, SimulationType::kDensityMatrix})
+    {
+        auto sim = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, method);
+        Check(!sim->SwapGatesRelabelQubits(), "non-chain QCSim backend advertised SWAP relabeling");
+        sim->Configure("gate_fusion", "true");
+        sim->AllocateQubits(4);
+        sim->Initialize();
+        sim->ApplyH(0);
+        sim->ApplySwap(0, 1);
+        sim->ApplyH(1);
+        sim->Flush();
+        Check(sim->GetGateFusionStatistics().backendGates == 1, "SWAP stopped fusing on a non-chain QCSim backend");
+    }
+    for (bool fusion : {false, true})
+        for (const char *method : {"matrix_product_state", "matrix_product_operator"})
+        {
+            auto raw = MakeRecording(method);
+            auto sim = std::make_shared<RecordingSimulator>(raw);
+            auto reference = MakeRecording("statevector");
+            sim->Configure("gate_fusion", fusion ? "true" : "false");
+            sim->Configure("matrix_product_state_max_bond_dimension", "64");
+            sim->Configure("matrix_product_operator_max_bond_dimension", "64");
+            for (const auto &s : std::vector<std::shared_ptr<ISimulator>>{sim, reference})
+            {
+                s->AllocateQubits(6);
+                s->Initialize();
+            }
+            sim->SetLookaheadDepth(3);
+            Check(sim->SwapGatesRelabelQubits(), "fusion wrapper lost SWAP capability");
+            const std::vector<Op> ops{
+                CF::CreateGate(Kind::kHadamardGateType, 0),      CF::CreateGate(Kind::kRyGateType, 2, 0, 0, 0.3), CF::CreateGate(Kind::kSwapGateType, 0, 5),
+                CF::CreateGate(Kind::kRyGateType, 0, 0, 0, 0.7), CF::CreateGate(Kind::kCXGateType, 5, 4),         CF::CreateGate(Kind::kSwapGateType, 4, 1),
+                CF::CreateGate(Kind::kCXGateType, 1, 3),         CF::CreateGate(Kind::kSwapGateType, 0, 2),       CF::CreateGate(Kind::kHadamardGateType, 2)};
+            sim->SetUpcomingGates(ops);
+            if (fusion)
+            {
+                size_t swaps = 0;
+                for (const auto &op : Stats(raw).installed)
+                    if (const auto info = std::dynamic_pointer_cast<RoutingGateInfo>(op); info && info->isSwap)
+                        ++swaps;
+                Check(swaps == 3, "fusion planner merged a relabeling SWAP into a matrix");
+            }
+            Circuits::OperationState state;
+            for (size_t i = 0; i < ops.size(); ++i)
+            {
+                ops[i]->Execute(sim, state);
+                ops[i]->Execute(reference, state);
+                if (i == 2)
+                {
+                    Check(Stats(raw).callbacks == 0, "fusion turned a relabeling SWAP into a routed matrix");
+                    if (fusion)
+                        Check(sim->GetGateFusionStatistics().backendGates == 2, "standalone SWAP flushed a disjoint pending gate");
+                }
+            }
+            const auto actual = sim->AllProbabilities(), expected = reference->AllProbabilities();
+            for (size_t i = 0; i < actual.size(); ++i)
+                Check(std::abs(actual[i] - expected[i]) < 1e-10, "fusion or routing changed a circuit with logical SWAPs");
+        }
+}
+
+#ifdef __linux__
+template <class Backend> static void CachedGpuRoutingSettings()
+{
+    // Configuration replay must not depend on unordered alias iteration.
+    // This check requires no initialized device or GPU plugin.
+    HistoryProbe<Backend> sim;
+    Check(!sim.SwapGatesRelabelQubits(), "GPU inherited QCSim-only SWAP semantics");
+    sim.Configure("matrix_product_state_max_bond_dimension", "2");
+    Check(sim.RoutingCap() == 2 && sim.GetConfiguration("matrix_product_operator_max_bond_dimension") == "2", "MPS cap alias left stale GPU settings");
+    sim.Configure("matrix_product_operator_max_bond_dimension", "4");
+    Check(sim.RoutingCap() == 4 && sim.GetConfiguration("matrix_product_state_max_bond_dimension") == "4", "MPO cap alias left stale GPU settings");
+    HistoryProbe<Backend> replay;
+    for (const auto &[key, value] : sim.GetConfigMap())
+        replay.Configure(key.c_str(), value.c_str());
+    Check(replay.RoutingCap() == 4, "GPU cap changed during configuration replay");
+}
+#endif
+
+template <class Backend> static void VirtualHistoryBoundaries(const char *cap)
+{
+    HistoryProbe<Backend> sim;
+    sim.AllocateQubits(9);
+    sim.Configure("mps_routing_virtual_bonds", "true");
+    sim.Configure("matrix_product_state_max_bond_dimension", cap);
+    sim.Configure("matrix_product_operator_max_bond_dimension", cap);
+    sim.Configure("matrix_product_state_truncation_threshold", "1e-16");
+    sim.Configure("matrix_product_operator_truncation_threshold", "1e-16");
+    sim.SetMultithreading(false);
+    sim.Initialize();
+    sim.setGrowthFactorGate(1.);
+    sim.setGrowthFactorSwap(1.);
+    sim.SetLookaheadDepth(2);
+    const Types::qubits_vector all{0, 1, 2, 3, 4, 5, 6, 7, 8};
+
+    for (int boundary = 0; boundary < 10; ++boundary)
+    {
+        sim.Reset();
+        GrowVirtualHistory(sim);
+        const auto history = sim.VirtualBonds();
+        Check(history.size() == 8 && history[1] > sim.NativeBonds()[1], "test prefix did not build virtual pressure");
+        sim.SaveState();
+        switch (boundary)
+        {
+        case 0:
+            sim.ApplyReset(all);
+            break;
+        case 1:
+            sim.Measure(all);
+            break;
+        case 2:
+            sim.MeasureMany(all);
+            break;
+        case 3:
+            sim.MoveAtBeginningOfChain({8});
+            Check(sim.NativeMap()[8] == 0, "explicit reorder did not move the requested qubit");
+            break;
+        case 4:
+            sim.Trim();
+            break;
+        case 5:
+            sim.ReCanonicalize();
+            break;
+        case 6:
+            if (!sim.SupportsQuantumChannels())
+                continue;
+            sim.ApplyQuantumChannel({1, 3}, QuantumChannel::TwoQubitDepolarizing(1.));
+            break;
+        case 7:
+            if (!sim.SupportsQuantumChannels())
+                continue;
+            sim.ApplyOperator({1}, Eigen::Matrix2cd::Identity());
+            break;
+        case 8:
+        case 9:
+            // These CPU MPS sampling paths reorder the selected sites.
+            if constexpr (std::is_base_of_v<Private::QCSimMPSSimulator, Backend>)
+            {
+                if (boundary == 8)
+                    sim.SampleCounts({7, 8}, 4);
+                else
+                    sim.SampleCountsMany({7, 8}, 4);
+                Check(sim.NativeMap()[7] == 0 && sim.NativeMap()[8] == 1, "sampling did not exercise chain reordering");
+            }
+            else
+                continue;
+            break;
+        }
+        Check(sim.VirtualBonds().empty(), "state boundary retained stale virtual bonds");
+        const auto map = sim.NativeMap();
+        const auto q0 = static_cast<Types::qubit_t>(std::find(map.begin(), map.end(), 2) - map.begin());
+        const auto q1 = static_cast<Types::qubit_t>(std::find(map.begin(), map.end(), 3) - map.begin());
+        sim.ApplyH(q0);
+        sim.ApplyCX(q0, q1);
+        Check(sim.VirtualBonds() == sim.NativeBonds(), "first gate after a boundary did not seed from the native state");
+        sim.RestoreState();
+        Check(sim.VirtualBonds() == history, "history invalidation destroyed the saved snapshot");
+    }
+
+    // Saving while history is invalid must not resurrect a later gate's history.
+    sim.ApplyReset(all);
+    sim.SaveState();
+    GrowVirtualHistory(sim);
+    sim.RestoreState();
+    Check(sim.VirtualBonds().empty(), "restoring a snapshot without history retained later virtual bonds");
+    sim.ApplyH(2);
+    sim.ApplyCX(2, 3);
+    Check(sim.VirtualBonds() == sim.NativeBonds(), "restored state was not used to seed history");
+
+    // Disabled lookahead, disabled optimal routing, legacy mode, unlimited bonds,
+    // and caps without extra virtual capacity must avoid native map/bond queries.
+    for (int mode = 0; mode < 6; ++mode)
+    {
+        // QCSim's MPS setter rejects zero; MPO exposes unlimited bonds as zero.
+        if (mode == 3 && !sim.SupportsQuantumChannels())
+            continue;
+        sim.Reset();
+        sim.Configure("mps_routing_legacy_cap", "false");
+        sim.Configure("mps_routing_virtual_bonds", "true");
+        sim.Configure("matrix_product_state_max_bond_dimension", cap);
+        sim.Configure("matrix_product_operator_max_bond_dimension", cap);
+        sim.SetUseOptimalMeetingPosition(true);
+        sim.SetLookaheadDepth(2);
+        GrowVirtualHistory(sim);
+        if (mode == 0)
+            sim.SetLookaheadDepth(0);
+        else if (mode == 1)
+            sim.SetUseOptimalMeetingPosition(false);
+        else if (mode == 2)
+            sim.Configure("mps_routing_legacy_cap", "true");
+        else if (mode == 5)
+            sim.Configure("mps_routing_virtual_bonds", "false");
+        else
+        {
+            sim.Configure("matrix_product_state_max_bond_dimension", mode == 3 ? "0" : "256");
+            sim.Configure("matrix_product_operator_max_bond_dimension", mode == 3 ? "0" : "256");
+        }
+        sim.mapReads = sim.bondReads = 0;
+        for (int i = 0; i < 100; ++i)
+            sim.ApplyCX(2, 3);
+        Check(sim.mapReads == 0 && sim.bondReads == 0, "inactive virtual tracking queried the native chain");
+        Check(sim.VirtualBonds().empty(), "inactive virtual tracking retained stale history");
+        sim.Configure("mps_routing_legacy_cap", "false");
+        sim.Configure("mps_routing_virtual_bonds", "true");
+        sim.Configure("matrix_product_state_max_bond_dimension", cap);
+        sim.Configure("matrix_product_operator_max_bond_dimension", cap);
+        sim.SetUseOptimalMeetingPosition(true);
+        sim.SetLookaheadDepth(2);
+        sim.ApplyCX(2, 3);
+        Check(sim.VirtualBonds() == sim.NativeBonds(), "reenabling tracking reused stale history");
+    }
+}
+
+template <class Backend> static void RoutingHistoryRecovery(const char *cap)
+{
+    HistoryProbe<Backend> sim;
+    sim.AllocateQubits(9);
+    sim.Configure("matrix_product_state_max_bond_dimension", cap);
+    sim.Configure("matrix_product_operator_max_bond_dimension", cap);
+    sim.Initialize();
+    sim.SetLookaheadDepth(2);
+    sim.setGrowthFactorGate(1.);
+    sim.setGrowthFactorSwap(1.);
+    GrowVirtualHistory(sim);
+    Check(sim.VirtualBonds().empty(), "virtual history must be opt-in");
+    sim.Configure("mps_routing_virtual_bonds", "true");
+    sim.Reset();
+    GrowVirtualHistory(sim);
+    const auto history = sim.VirtualBonds();
+    const auto *planner = sim.Planner();
+    Check(!history.empty(), "opt-in did not enable history");
+    sim.SaveState();
+    sim.InvalidateHistory();
+    Check(sim.Planner() == planner, "history invalidation destroyed the planner/cache");
+    sim.RestoreState();
+    Check(sim.Planner() == planner && sim.VirtualBonds() == history, "restore replaced the planner or lost history");
+
+    // Both gate operands remain adjacent; an unrelated part of the map differs.
+    // A check of the active pair alone cannot catch this drift.
+    sim.CorruptMap();
+    sim.ApplyCX(2, 3);
+    Check(sim.PredictedMap() == sim.NativeMap() && sim.VirtualBonds() == sim.NativeBonds(), "full-map mismatch did not reseed native bonds");
+
+    const std::vector<Op> oneGate{CF::CreateGate(Kind::kCXGateType, 2, 3)};
+    sim.SetUpcomingGates(oneGate);
+    sim.failMapRead = true;
+    sim.ApplyCX(2, 3);
+    sim.failMapRead = false;
+    Check(sim.GetGatesCounter() == 1 && sim.VirtualBonds().empty(), "advisory recording failure suppressed gate notification");
+
+    // Reset must follow a nonidentity native map, not assume logical order.
+    sim.MoveAtBeginningOfChain({8});
+    sim.Reset();
+    Check(sim.PredictedMap() == sim.NativeMap(), "reset installed a different map from the backend");
+    Check(sim.Planner() == planner, "reset discarded the planner cache");
+
+    if constexpr (std::is_base_of_v<Private::QCSimMPSSimulator, Backend>)
+    {
+        sim.Initialize();
+        GrowVirtualHistory(sim);
+        sim.Configure("mps_sample_measure_algorithm", "mps_apply_measure");
+        const auto beforeSampling = sim.VirtualBonds();
+        const auto probabilities = sim.AllProbabilities();
+        sim.SaveState();
+        sim.SampleCounts({2, 3}, 8);
+        Check(sim.VirtualBonds() == beforeSampling, "measure/restore sampling discarded history");
+        sim.SampleCountsMany({2, 3}, 8);
+        Check(sim.VirtualBonds() == beforeSampling, "wide measure/restore sampling discarded history");
+        const auto after = sim.AllProbabilities();
+        for (size_t i = 0; i < after.size(); ++i)
+            Check(std::abs(after[i] - probabilities[i]) < 1e-10, "sampling changed the restored state");
+        sim.Reset();
+        sim.RestoreState();
+        Check(sim.VirtualBonds() == beforeSampling, "sampling overwrote the caller's saved snapshot");
+    }
+}
+
+static void DecompositionAndFusionRanks(bool gpu = false)
+{
+    for (const char *method : {"matrix_product_state", "matrix_product_operator"})
+    {
+        auto raw = MakeRecording(method, gpu);
+        auto reference = MakeRecording("statevector");
+        raw->Configure("mps_routing_virtual_bonds", "true");
+        for (const auto &sim : {raw, reference})
+        {
+            sim->AllocateQubits(6);
+            sim->Configure("matrix_product_state_max_bond_dimension", "64");
+            sim->Initialize();
+            sim->SetLookaheadDepth(2);
+        }
+        const std::vector<Op> ops{CF::CreateGate(Kind::kHadamardGateType, 0), CF::CreateGate(Kind::kXGateType, 4), CF::CreateGate(Kind::kCCXGateType, 0, 4, 2),
+                                  CF::CreateGate(Kind::kCSwapGateType, 0, 1, 5), CF::CreateGate(Kind::kCXGateType, 1, 3)};
+        raw->SetUpcomingGates(ops);
+        Circuits::OperationState state;
+        for (size_t i = 0; i < ops.size(); ++i)
+        {
+            ops[i]->Execute(raw, state);
+            ops[i]->Execute(reference, state);
+            Check(raw->GetGatesCounter() == static_cast<long long>(i + 1), "decomposition advanced past its logical operation");
+        }
+        const auto actual = raw->AllProbabilities(), expected = reference->AllProbabilities();
+        for (size_t i = 0; i < actual.size(); ++i)
+            Check(std::abs(actual[i] - expected[i]) < 1e-10, "decomposition/routing changed the circuit result");
+        raw->SetGatesCounter(0);
+        Stats(raw).SetNotificationsForTest(false);
+        raw->ApplyCCX(0, 4, 2);
+        raw->ApplyCX(1, 3);
+        Check(raw->GetGatesCounter() == 0, "decomposition enabled suppressed observers");
+        Stats(raw).SetNotificationsForTest(true);
+        raw->ApplyCSwap(0, 1, 5);
+        Check(raw->GetGatesCounter() == 1, "decomposition failed to restore observer delivery");
+    }
+
+    auto raw = MakeRecording("matrix_product_state", gpu);
+    auto fused = std::make_shared<RecordingSimulator>(raw);
+    fused->AllocateQubits(6);
+    fused->Initialize();
+    fused->Configure("gate_fusion", "true");
+    fused->SetLookaheadDepth(2);
+    fused->SetUpcomingGates({CF::CreateGate(Kind::kCXGateType, 0, 2), CF::CreateGate(Kind::kSwapGateType, 1, 3)});
+    const auto &routing = Stats(raw).installed;
+    Check(routing.size() == 2, "isolated gates unexpectedly merged");
+    const auto first = std::dynamic_pointer_cast<RoutingGateInfo>(routing[0]);
+    const auto second = std::dynamic_pointer_cast<RoutingGateInfo>(routing[1]);
+    const auto cx = first && !first->isSwap ? first : second;
+    const auto swap = first && first->isSwap ? first : second;
+    Check(cx && cx->schmidtRank == 2 && !cx->isSwap && swap && swap->isSwap, "fusion discarded single-gate rank/swap metadata");
+    const auto &cxOperation = routing[first == cx ? 0 : 1];
+    const auto copied = std::dynamic_pointer_cast<RoutingGateInfo>(cxOperation->Clone());
+    Check(copied && copied->schmidtRank == 2, "routing metadata lost on clone");
+    for (bool mpo : {false, true})
+    {
+        MPSDummySimulator predicted(6, mpo), actual(6, mpo);
+        predicted.setGrowthFactorGate(1.);
+        actual.setGrowthFactorGate(1.);
+        predicted.SetCurrentBondDimensions({2, 2, 2, 2, 2});
+        actual.SetCurrentBondDimensions({2, 2, 2, 2, 2});
+        predicted.ApplyGate(cxOperation);
+        actual.ApplyGate(CF::CreateGate(Kind::kCXGateType, 0, 2));
+        Check(predicted.getCurrentBondDimensions() == actual.getCurrentBondDimensions(), "planner rank differs from the emitted native gate");
+    }
+}
+
+static void NonGateRoutingFallbacks(bool gpu = false)
+{
+    for (bool fusion : {false, true})
+        for (const char *method : {"matrix_product_state", "matrix_product_operator"})
+        {
+            const bool mpo = std::string(method) == "matrix_product_operator";
+            for (bool channel : {false, true})
+            {
+                if (channel && !mpo)
+                    continue;
+                auto raw = MakeRecording(method, gpu);
+                auto sim = std::make_shared<RecordingSimulator>(raw);
+                PrepareChain(*sim, method, fusion, 4);
+                std::vector<Op> operations;
+                if (channel)
+                    operations.push_back(
+                        std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{1, 3}, QuantumChannel::TwoQubitDepolarizing(0.2)));
+                else
+                {
+                    operations.push_back(CF::CreateGate(Kind::kHadamardGateType, 1));
+                    const auto cx = std::static_pointer_cast<Circuits::IGateOperation<>>(CF::CreateGate(Kind::kCXGateType, 1, 3));
+                    operations.push_back(CF::CreateConditionalGate(cx, CF::CreateEqualCondition({0}, {false})));
+                }
+                operations.push_back(CF::CreateGate(Kind::kCXGateType, 0, 2));
+                auto circuit = CF::CreateCircuit(operations);
+                sim->SetUpcomingGates(operations);
+                Circuits::OperationState state;
+                state.AllocateBits(1);
+                circuit->Execute(sim, state);
+                sim->Flush();
+                if (!gpu)
+                    Check(Stats(raw).callbacks > 0, "non-gate routing test did not exercise the callback");
+
+                auto reference = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, mpo ? SimulationType::kDensityMatrix : SimulationType::kStatevector);
+                reference->AllocateQubits(4);
+                reference->Initialize();
+                Circuits::OperationState referenceState;
+                referenceState.AllocateBits(1);
+                circuit->Execute(reference, referenceState);
+                const auto expected = reference->AllProbabilities(), actual = sim->AllProbabilities();
+                Check(expected.size() == actual.size(), "fallback probability size mismatch");
+                for (size_t i = 0; i < expected.size(); ++i)
+                    Check(std::isfinite(actual[i]) && std::abs(actual[i] - expected[i]) < 1e-10, "non-gate fallback changed the quantum state");
+            }
+        }
+
+    MPSDummySimulator dummy(4);
+    double cost = std::numeric_limits<double>::infinity();
+    Check(dummy.FindBestMeetingPosition({}, 0, 2, 0, 0., cost) == -1, "empty lookahead returned a meeting position");
+    const std::vector<Op> oneQubit{CF::CreateGate(Kind::kHadamardGateType, 1)};
+    Check(dummy.FindBestMeetingPosition(oneQubit, 0, 2, 0, 0., cost) == -1, "empty two-qubit window returned a meeting position");
+    const std::vector<Op> channel{std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{1, 3}, QuantumChannel::TwoQubitDepolarizing(0.2))};
+    Check(dummy.FindBestMeetingPosition(channel, 0, 2, 0, 0., cost) == -1, "channel boundary returned a meeting position");
+}
+
+int main(int argc, char **argv)
 {
     try
     {
+#ifdef __linux__
+        CachedGpuRoutingSettings<Private::GpuMPSSimulator>();
+        CachedGpuRoutingSettings<Private::GpuMPOSimulator>();
+        if (argc > 1 && std::string(argv[1]) == "--gpu")
+        {
+            if (!SimulatorsFactory::InitGpuLibraryWithMute())
+                return 77;
+            NonGateRoutingFallbacks(true);
+            VirtualHistoryBoundaries<Private::GpuMPSSimulator>("2");
+            VirtualHistoryBoundaries<Private::GpuMPOSimulator>("4");
+            RoutingHistoryRecovery<Private::GpuMPSSimulator>("2");
+            RoutingHistoryRecovery<Private::GpuMPOSimulator>("4");
+            DecompositionAndFusionRanks(true);
+            std::cout << "GPU routing fallbacks, virtual history boundaries and inactive tracking passed\n";
+            return 0;
+        }
+#endif
         BoundaryPlanning();
         MultishotNetwork();
         FlushScopeAndRoutingSettings();
@@ -353,9 +912,18 @@ int main()
         CallbackFallback();
         DeferredGatesKeepRouting();
         FiringConditionalKeepsRouting();
+        NonGateRoutingFallbacks();
+        VirtualHistoryBoundaries<Private::QCSimMPSSimulator>("2");
+        VirtualHistoryBoundaries<Private::QCSimMPOSimulator>("4");
+        RoutingHistoryRecovery<Private::QCSimMPSSimulator>("2");
+        RoutingHistoryRecovery<Private::QCSimMPOSimulator>("4");
+        DecompositionAndFusionRanks();
+        LogicalSwapHistory<Private::QCSimMPSSimulator>("2");
+        LogicalSwapHistory<Private::QCSimMPOSimulator>("4");
+        LogicalSwapFusion();
         std::cout << "Routing reuse, multishot snapshots, observers, flush scope, "
                      "fused boundaries, callback fallback, deferred gates and "
-                     "conditional gates passed\n";
+                     "conditional gates, virtual history boundaries and inactive tracking passed\n";
     }
     catch (const std::exception &e)
     {

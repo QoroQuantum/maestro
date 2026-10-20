@@ -84,6 +84,9 @@ struct SimulatorConfig
     std::optional<std::string> precision = std::nullopt;
     bool disable_optimized_swapping = false;
     int lookahead_depth = -1;
+    // Experimental accuracy-aware routing. Unset preserves native request values.
+    std::optional<bool> mps_routing_virtual_bonds;
+    std::optional<double> mps_routing_truncation_weight;
     // "probabilities" (no collapse) or "apply_measure" (measure and restore).
     std::string mps_sampling = "probabilities";
     std::optional<std::string> mpo_kraus_completeness_check = std::nullopt;
@@ -144,6 +147,8 @@ struct SimulatorConfig
             throw std::invalid_argument("Composite simulators only support Statevector simulation type.");
         if (simulator_type == Simulators::SimulatorType::kQuestSim && simulation_type != Simulators::SimulationType::kStatevector)
             throw std::invalid_argument("QuestSim only supports Statevector simulation type.");
+        if (mps_routing_truncation_weight && (!std::isfinite(*mps_routing_truncation_weight) || *mps_routing_truncation_weight < 0.))
+            throw std::invalid_argument("mps_routing_truncation_weight must be finite and nonnegative");
         if (gpu_device && *gpu_device < 0)
             throw std::invalid_argument("gpu_device must be nonnegative");
         RequireOneOf(trajectory_policy, {"block_v1", "shot_v1"}, "trajectory_policy");
@@ -236,6 +241,14 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     network->GetController()->SetOptimizeCircuit(config.optimize_circuit);
     for (const auto &[key, value] : config.native_options)
         network->Configure(key.c_str(), value.c_str());
+    if (config.mps_routing_virtual_bonds)
+        network->Configure(Simulators::RoutingConfig::kVirtualBonds, *config.mps_routing_virtual_bonds ? "true" : "false");
+    if (config.mps_routing_truncation_weight)
+    {
+        std::ostringstream weight;
+        weight << std::setprecision(std::numeric_limits<double>::max_digits10) << *config.mps_routing_truncation_weight;
+        network->Configure(Simulators::RoutingConfig::kTruncationWeight, weight.str().c_str());
+    }
     if (config.trajectory_policy)
         network->Configure("trajectory_policy", config.trajectory_policy->c_str());
     if (config.trajectory_max_memory_mb)

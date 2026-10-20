@@ -17,6 +17,7 @@
 #include <unordered_map>
 
 #include "../Interfaces/State.h"
+#include "../TensorNetworks/RoutingConfig.h"
 #include <charconv>
 #include <stdexcept>
 
@@ -128,6 +129,10 @@ class Configuration
 
     void SetConfiguration(const std::string &key, const std::string &value)
     {
+        if (key == RoutingConfig::kVirtualBonds || key == RoutingConfig::kLegacyCap)
+            RoutingConfig::ParseFlag(value);
+        else if (key == RoutingConfig::kTruncationWeight)
+            RoutingConfig::ParseWeight(value);
         if (key == "precision" || key == "use_double_precision")
         {
             const bool useDouble = ParsePrecision(key, value);

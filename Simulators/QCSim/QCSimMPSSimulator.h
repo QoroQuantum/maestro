@@ -23,6 +23,8 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void Initialize() override
     {
+        RefreshRoutingSettings();
+        InvalidateDummyHistory();
         if (nrQubits != 0)
         {
             {
@@ -75,13 +77,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         if (mpsSimulator)
         {
             mpsSimulator->SetInitialQubitsMap(initialMap);
-            if (!dummySim || dummySim->getNrQubits() != initialMap.size() || dummySim->IsOperatorChain() != false)
-            {
-                dummySim = std::make_unique<Simulators::MPSDummySimulator>(initialMap.size(), false);
-                dummySim->SetMaxBondDimension(configuration.GetConfigurationAsInt(MaxBondDimensionConfigKey()));
-            }
-            dummySim->setGrowthFactorGate(growthFactorGate);
-            dummySim->setGrowthFactorSwap(growthFactorSwap);
+            EnsureDummySimulator(initialMap.size());
             dummySim->SetInitialQubitsMap(initialMap);
         }
     }
@@ -89,6 +85,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     void SetUseOptimalMeetingPosition(bool enable) override
     {
         useOptimalMeetingPosition = enable;
+        RefreshRoutingSettings();
         if (mpsSimulator)
             mpsSimulator->SetUseOptimalMeetingPosition(enable);
         RefreshRoutingCallback();
@@ -104,6 +101,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         }
         if (!configuration.WasApplied(key, value))
             configuration.SetConfiguration(key, value);
+        RefreshRoutingSettings();
         if (std::string("seed") == key)
         {
             const uint64_t seed = std::stoull(value);
@@ -118,7 +116,10 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         {
             if (std::string(key) == "matrix_product_state_max_bond_dimension")
             {
-                mpsSimulator->setLimitBondDimension(configuration.GetConfigurationAsInt(key));
+                const auto limit = configuration.GetConfigurationAsInt(key);
+                mpsSimulator->setLimitBondDimension(limit);
+                if (dummySim)
+                    dummySim->SetMaxBondDimension(EffectiveLookaheadMaxBondDimension(dummySim->getNrQubits(), limit));
             }
             else if (std::string(key) == "matrix_product_state_truncation_threshold")
             {
@@ -154,7 +155,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     void Clear() override
     {
         mpsSimulator = nullptr;
-        dummySim = nullptr;
+        ClearDummySimulator();
         nrQubits = 0;
         upcomingGateIndex = 0;
         upcomingGates.clear();
@@ -162,6 +163,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     size_t Measure(const Types::qubits_vector &qubits) override
     {
+        InvalidateDummyHistory();
         if (qubits.size() > sizeof(size_t) * 8)
             std::cerr << "Warning: The number of qubits to measure is larger than the "
                          "number of bits in the size_t type, the outcome will be undefined"
@@ -186,6 +188,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override
     {
+        InvalidateDummyHistory();
         std::vector<bool> res(qubits.size(), false);
         DontNotify();
         {
@@ -202,6 +205,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
+        InvalidateDummyHistory();
         DontNotify();
         {
             for (size_t qubit : qubits)
@@ -219,6 +223,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         const auto selected = MPOValidation::Qubits(qubits, nrQubits);
         const std::set<Eigen::Index> targets(selected.begin(), selected.end());
         mpsSimulator->MoveAtBeginningOfChain(targets);
+        InvalidateDummyHistory();
     }
 
     std::vector<std::complex<double>> GetStateVector() override
@@ -248,6 +253,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void Trim() override
     {
+        InvalidateDummyHistory();
         if (mpsSimulator)
             mpsSimulator->Trim();
         else
@@ -256,6 +262,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void ReCanonicalize() override
     {
+        InvalidateDummyHistory();
         if (mpsSimulator)
             mpsSimulator->ReCanonicalize();
         else
@@ -332,6 +339,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                 else if (qset.size() > 1)
                 {
                     mpsSimulator->MoveAtBeginningOfChain(qset);
+                    InvalidateDummyHistory();
                     normal = false;
                     for (size_t shot = 0; shot < shots; ++shot)
                     {
@@ -367,12 +375,14 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             if (normal)
             {
                 auto savedState = mpsSimulator->getState();
+                const auto savedHistory = CaptureDummyHistory();
                 for (size_t shot = 0; shot < shots; ++shot)
                 {
                     const size_t meas = Measure(qubits);
                     ++result[meas];
                     mpsSimulator->setState(savedState);
                 }
+                RestoreDummyHistory(savedHistory);
             }
         }
         Notify();
@@ -406,6 +416,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                 else if (qset.size() > 1)
                 {
                     mpsSimulator->MoveAtBeginningOfChain(qset);
+                    InvalidateDummyHistory();
                     normal = false;
                     for (size_t shot = 0; shot < shots; ++shot)
                     {
@@ -431,12 +442,14 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             if (normal)
             {
                 auto savedState = mpsSimulator->getState();
+                const auto savedHistory = CaptureDummyHistory();
                 for (size_t shot = 0; shot < shots; ++shot)
                 {
                     const auto meas = MeasureMany(qubits);
                     ++result[meas];
                     mpsSimulator->setState(savedState);
                 }
+                RestoreDummyHistory(savedHistory);
             }
         }
         Notify();
@@ -543,11 +556,13 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     void SaveState() override
     {
         mpsSimulator->SaveState();
+        SaveDummyState();
     }
 
     void RestoreState() override
     {
         mpsSimulator->RestoreState();
+        RestoreDummyState();
     }
 
     void SetMultithreading(bool multithreading = true) override
@@ -598,6 +613,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         const QC::Gates::AppliedGate<> agate(gate, qubit0, qubit1);
         mpsSimulator->ApplyGate(agate);
+        RecordExecutedTwoQubitGate(qubit0, qubit1, false, false);
         NotifyObservers({qubit0, qubit1});
     }
 
@@ -705,18 +721,21 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     void ApplyCX(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCY(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpsSimulator->ApplyGate(cygate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCZ(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpsSimulator->ApplyGate(czgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
@@ -724,6 +743,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         cpgate.SetPhaseShift(lambda);
         mpsSimulator->ApplyGate(cpgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
@@ -731,6 +751,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         crxgate.SetTheta(theta);
         mpsSimulator->ApplyGate(crxgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
@@ -738,6 +759,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         crygate.SetTheta(theta);
         mpsSimulator->ApplyGate(crygate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
@@ -745,84 +767,110 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         crzgate.SetTheta(theta);
         mpsSimulator->ApplyGate(crzgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCH(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpsSimulator->ApplyGate(ch, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSxDAG(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpsSimulator->ApplyGate(csxdag, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplySwap(Types::qubit_t qubit0, Types::qubit_t qubit1) override
     {
         mpsSimulator->ApplyGate(swapgate, static_cast<unsigned int>(qubit1), static_cast<unsigned int>(qubit0));
+        RecordExecutedTwoQubitGate(qubit0, qubit1, true, false);
         NotifyObservers({qubit1, qubit0});
     }
 
     void ApplyCCX(Types::qubit_t qubit0, Types::qubit_t qubit1, Types::qubit_t qubit2) override
     {
-        const size_t q1 = qubit0;
-        const size_t q2 = qubit1;
-        const size_t q3 = qubit2;
-        mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-        NotifyObservers({qubit1, qubit2});
-        mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
-        NotifyObservers({qubit0, qubit1});
-        mpsSimulator->ApplyGate(csxdag, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-        NotifyObservers({qubit1, qubit2});
-        mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
-        NotifyObservers({qubit0, qubit1});
-        mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q1));
-        NotifyObservers({qubit0, qubit2});
+        {
+            DecompositionScope scope(*this);
+            const size_t q1 = qubit0;
+            const size_t q2 = qubit1;
+            const size_t q3 = qubit2;
+            mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
+            RecordExecutedTwoQubitGate(qubit1, qubit2, false, true);
+            NotifyObservers({qubit1, qubit2});
+            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
+            RecordExecutedTwoQubitGate(qubit0, qubit1, false, true);
+            NotifyObservers({qubit0, qubit1});
+            mpsSimulator->ApplyGate(csxdag, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
+            RecordExecutedTwoQubitGate(qubit1, qubit2, false, true);
+            NotifyObservers({qubit1, qubit2});
+            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
+            RecordExecutedTwoQubitGate(qubit0, qubit1, false, true);
+            NotifyObservers({qubit0, qubit1});
+            mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q1));
+            RecordExecutedTwoQubitGate(qubit0, qubit2, false, true);
+            NotifyObservers({qubit0, qubit2});
+        }
+        NotifyObservers({qubit2, qubit1, qubit0});
     }
 
     void ApplyCSwap(Types::qubit_t ctrl_qubit, Types::qubit_t qubit0, Types::qubit_t qubit1) override
     {
-        const size_t q1 = ctrl_qubit;
-        const size_t q2 = qubit0;
-        const size_t q3 = qubit1;
-        mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-        NotifyObservers({qubit1, qubit0});
-        mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-        NotifyObservers({qubit0, qubit1});
-        mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
-        NotifyObservers({ctrl_qubit, qubit0});
-        pgate.SetPhaseShift(M_PI);
-        mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q3));
-        NotifyObservers({qubit1});
-        pgate.SetPhaseShift(-M_PI_2);
-        mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q2));
-        NotifyObservers({qubit0});
-        mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-        NotifyObservers({qubit0, qubit1});
-        mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
-        NotifyObservers({ctrl_qubit, qubit0});
-        pgate.SetPhaseShift(M_PI);
-        mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q3));
-        NotifyObservers({qubit1});
-        mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q1));
-        NotifyObservers({ctrl_qubit, qubit1});
-        mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-        NotifyObservers({qubit1, qubit0});
+        {
+            DecompositionScope scope(*this);
+            const size_t q1 = ctrl_qubit;
+            const size_t q2 = qubit0;
+            const size_t q3 = qubit1;
+            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
+            RecordExecutedTwoQubitGate(qubit1, qubit0, false, true);
+            NotifyObservers({qubit1, qubit0});
+            mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
+            RecordExecutedTwoQubitGate(qubit0, qubit1, false, true);
+            NotifyObservers({qubit0, qubit1});
+            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
+            RecordExecutedTwoQubitGate(ctrl_qubit, qubit0, false, true);
+            NotifyObservers({ctrl_qubit, qubit0});
+            pgate.SetPhaseShift(M_PI);
+            mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q3));
+            NotifyObservers({qubit1});
+            pgate.SetPhaseShift(-M_PI_2);
+            mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q2));
+            NotifyObservers({qubit0});
+            mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
+            RecordExecutedTwoQubitGate(qubit0, qubit1, false, true);
+            NotifyObservers({qubit0, qubit1});
+            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
+            RecordExecutedTwoQubitGate(ctrl_qubit, qubit0, false, true);
+            NotifyObservers({ctrl_qubit, qubit0});
+            pgate.SetPhaseShift(M_PI);
+            mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q3));
+            NotifyObservers({qubit1});
+            mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q1));
+            RecordExecutedTwoQubitGate(ctrl_qubit, qubit1, false, true);
+            NotifyObservers({ctrl_qubit, qubit1});
+            mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
+            RecordExecutedTwoQubitGate(qubit1, qubit0, false, true);
+            NotifyObservers({qubit1, qubit0});
+        }
+        NotifyObservers({qubit1, qubit0, ctrl_qubit});
     }
 
     void ApplyCU(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta, double phi, double lambda, double gamma) override
     {
         cugate.SetParams(theta, phi, lambda, gamma);
         mpsSimulator->ApplyGate(cugate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
@@ -841,7 +889,6 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         if (mpsSimulator)
         {
             cloned->mpsSimulator = mpsSimulator->Clone();
-            cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
             cloned->gateCounterObserver = std::make_shared<GateCounterObserver>(cloned->upcomingGateIndex);
             cloned->RegisterObserver(cloned->gateCounterObserver);
             cloned->curMaxBondDim = curMaxBondDim;
@@ -850,12 +897,24 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         }
         for (const auto &[key, value] : configuration.GetConfigMap())
             cloned->Configure(key.c_str(), value.c_str());
+        cloned->RefreshRoutingSettings();
+        cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
+        cloned->dummyHistoryValid = dummyHistoryValid;
+        cloned->savedDummyBondDims = savedDummyBondDims;
         if (configuration.IsSet("seed"))
             cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
         return cloned;
     }
 
   protected:
+    std::vector<double> CurrentBondDimensions() const override
+    {
+        if (!mpsSimulator)
+            return {};
+        const auto dims = mpsSimulator->getBondDimensions();
+        return {dims.begin(), dims.end()};
+    }
+
     std::vector<long long> CurrentRoutingMap() const override
     {
         if (mpsSimulator)

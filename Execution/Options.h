@@ -98,6 +98,9 @@ inline const std::vector<Option> &Options()
         {"mps_sampling", "", "string", "mps"},
         {"disable_optimized_swapping", "", "boolean", "routing"},
         {"lookahead_depth", "", "lookahead", "routing"},
+        {"mps_routing_virtual_bonds", "mps_routing_virtual_bonds", "boolean", "native_routing"},
+        {"mps_routing_truncation_weight", "mps_routing_truncation_weight", "nonnegative", "native_routing"},
+        {"mps_routing_legacy_cap", "mps_routing_legacy_cap", "boolean", "native_routing"},
         {"optimize_circuit", "", "boolean", "all"},
         {"gate_fusion", "", "boolean", "all"},
         {"max_simulators", "max_simulators", "positive_integer", "all"},
@@ -150,6 +153,8 @@ inline bool Applies(const Option &option, const SimulatorConfig &config)
     if (family == "mps")
         return mps;
     // swap routing of the tensor-network chains (MPS and MPO)
+    if (family == "native_routing")
+        return (mps || mpo) && (backend == Backend::kQCSim || gpu);
     if (family == "routing")
         return mps || mpo;
     if (family == "mpo")

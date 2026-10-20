@@ -1,5 +1,6 @@
 #pragma once
 #include "../../Circuit/Factory.h"
+#include "../TensorNetworks/RoutingGateInfo.h"
 #include "GateFusion.h"
 #include <array>
 
@@ -276,11 +277,13 @@ struct FusionGate
 };
 
 // Routing-only operation. It cannot accidentally be executed as a quantum gate.
-class FusionRoutingOperation : public Circuits::IOperation<>
+class FusionRoutingOperation : public Circuits::IOperation<>, public RoutingGateInfo
 {
   public:
-    explicit FusionRoutingOperation(Types::qubits_vector targets) : Circuits::IOperation<>(0), targets_(std::move(targets))
+    explicit FusionRoutingOperation(Types::qubits_vector targets, int rank = 4, bool swap = false) : Circuits::IOperation<>(0), targets_(std::move(targets))
     {
+        schmidtRank = rank;
+        isSwap = swap;
     }
 
     Types::qubits_vector AffectedQubits() const override
@@ -300,7 +303,7 @@ class FusionRoutingOperation : public Circuits::IOperation<>
 
     std::shared_ptr<Circuits::IOperation<>> Clone() const override
     {
-        return std::make_shared<FusionRoutingOperation>(targets_);
+        return std::make_shared<FusionRoutingOperation>(targets_, schmidtRank, isSwap);
     }
 
     std::shared_ptr<Circuits::IOperation<>> Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &map,
@@ -309,7 +312,7 @@ class FusionRoutingOperation : public Circuits::IOperation<>
         auto targets = targets_;
         for (auto &q : targets)
             q = map.at(q);
-        return std::make_shared<FusionRoutingOperation>(std::move(targets));
+        return std::make_shared<FusionRoutingOperation>(std::move(targets), schmidtRank, isSwap);
     }
 
   private:

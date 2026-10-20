@@ -322,6 +322,11 @@ class FusionState : public ISimulator
         return immediate_->SupportsMPSSwapOptimization();
     }
 
+    bool SwapGatesRelabelQubits() const override
+    {
+        return immediate_->SwapGatesRelabelQubits();
+    }
+
     bool IsRoutingLookaheadEnabled() const override
     {
         return immediate_->IsRoutingLookaheadEnabled();
@@ -794,12 +799,12 @@ class FusionState : public ISimulator
             cache_.SetWidth(width);
         const auto emit = [this](const auto &block) { Emit(block); };
         if (gate.qubits.size() <= width) // Expand would return {gate}
-            cache_.Submit(gate, source << 4, emit, PreserveStructuredGates() && gate.IsStructured());
+            SubmitToCache(cache_, gate, source << 4, emit);
         else
         {
             const auto primitives = gate.Expand(width);
             for (size_t i = 0; i < primitives.size(); ++i)
-                cache_.Submit(primitives[i], (source << 4) | i, emit, PreserveStructuredGates() && primitives[i].IsStructured());
+                SubmitToCache(cache_, primitives[i], (source << 4) | i, emit);
         }
         NotifyObservers(gate.qubits);
     }
@@ -814,6 +819,12 @@ class FusionState : public ISimulator
     }
 
   private:
+    template <class EmitBlock> void SubmitToCache(Cache &cache, const FusionGate &gate, uint64_t source, EmitBlock &&emit)
+    {
+        cache.Submit(gate, source, std::forward<EmitBlock>(emit), PreserveStructuredGates() && gate.IsStructured(),
+                     SwapGatesRelabelQubits() && gate.kind == FusionGate::Kind::kSwapGateType);
+    }
+
     struct Context
     {
         long long source;
@@ -912,7 +923,9 @@ class FusionState : public ISimulator
         Cache planner(GetGateFusionMaxQubits(), false);
         auto emit = [this](const auto &block) {
             planned_.push_back({block.targets, block.sources, routing_.size()});
-            routing_.push_back(std::make_shared<FusionRoutingOperation>(block.targets));
+            const bool controlled = block.IsSingle() && IsControlledRoutingGate(block.original.kind);
+            const bool swap = block.IsSingle() && block.original.kind == Circuits::QuantumGateType::kSwapGateType;
+            routing_.push_back(std::make_shared<FusionRoutingOperation>(block.targets, controlled ? 2 : 4, swap));
         };
         for (size_t i = static_cast<size_t>(sourceIndex_); i < sources_.size(); ++i)
         {
@@ -921,7 +934,7 @@ class FusionState : public ISimulator
             {
                 const auto primitives = FusionGate::FromCircuit(*gate).Expand(GetGateFusionMaxQubits());
                 for (size_t j = 0; j < primitives.size(); ++j)
-                    planner.Submit(primitives[j], (uint64_t(i) << 4) | j, emit);
+                    SubmitToCache(planner, primitives[j], (uint64_t(i) << 4) | j, emit);
             }
             else
             {

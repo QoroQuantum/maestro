@@ -325,6 +325,13 @@ class IState
         return false;
     }
 
+    // Named SWAP gates exchange logical labels without moving tensor sites.
+    // Internal routing swaps still require tensor contractions.
+    virtual bool SwapGatesRelabelQubits() const
+    {
+        return false;
+    }
+
     // True when external meeting-position lookahead can use an upcoming list.
     // Requires a live MPS/MPO, enabled lookahead and an authoritative qubit map.
     virtual bool IsRoutingLookaheadEnabled() const
@@ -1186,6 +1193,12 @@ class IState
         {
             observer->Update(affectedQubits);
         }
+    }
+
+  protected:
+    bool NotificationsEnabled() const noexcept
+    {
+        return notifyObservers;
     }
 
   private:

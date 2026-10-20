@@ -31,6 +31,7 @@ namespace bdata = boost::unit_test::data;
 #include "../Circuit/Factory.h"
 #include "../Network/SimpleDisconnectedNetwork.h"
 #include "../Simulators/Core/Factory.h"
+#include "../Simulators/Fusion/FusionGate.h"
 #include "../Simulators/TensorNetworks/MPSDummySimulator.h"
 
 extern bool checkClose(std::complex<double> a, std::complex<double> b, double dif);
@@ -1312,15 +1313,15 @@ BOOST_AUTO_TEST_CASE(ConfigurableBranchingDepthAndLargeChainFallbacks)
     // partner-gravity has zero pulls and single-step policies only test m in {1, 4, 5, 8}).
     constexpr size_t nrQubits = 11;
     std::vector<std::shared_ptr<Circuits::IOperation<>>> ops{
-        CF::CreateGate(Kind::kCXGateType, 0, 1),  // step 0 (adjacent)
-        CF::CreateGate(Kind::kCXGateType, 1, 9),  // step 1: only m1 = 3 keeps all of steps 2..8 adjacent
-        CF::CreateGate(Kind::kCXGateType, 0, 2),  // step 2: eliminates m1 = 1
-        CF::CreateGate(Kind::kCXGateType, 2, 3),  // step 3: eliminates m1 = 2
-        CF::CreateGate(Kind::kCXGateType, 4, 5),  // step 4: eliminates m1 = 4
-        CF::CreateGate(Kind::kCXGateType, 5, 6),  // step 5: eliminates m1 = 5
-        CF::CreateGate(Kind::kCXGateType, 6, 7),  // step 6: eliminates m1 = 6
-        CF::CreateGate(Kind::kCXGateType, 7, 8),  // step 7: eliminates m1 = 7
-        CF::CreateGate(Kind::kCXGateType, 8, 10)  // step 8: eliminates m1 = 8
+        CF::CreateGate(Kind::kCXGateType, 0, 1), // step 0 (adjacent)
+        CF::CreateGate(Kind::kCXGateType, 1, 9), // step 1: only m1 = 3 keeps all of steps 2..8 adjacent
+        CF::CreateGate(Kind::kCXGateType, 0, 2), // step 2: eliminates m1 = 1
+        CF::CreateGate(Kind::kCXGateType, 2, 3), // step 3: eliminates m1 = 2
+        CF::CreateGate(Kind::kCXGateType, 4, 5), // step 4: eliminates m1 = 4
+        CF::CreateGate(Kind::kCXGateType, 5, 6), // step 5: eliminates m1 = 5
+        CF::CreateGate(Kind::kCXGateType, 6, 7), // step 6: eliminates m1 = 6
+        CF::CreateGate(Kind::kCXGateType, 7, 8), // step 7: eliminates m1 = 7
+        CF::CreateGate(Kind::kCXGateType, 8, 10) // step 8: eliminates m1 = 8
     };
 
     const std::vector<double> uniformBonds(nrQubits - 1, 2.0);
@@ -1378,10 +1379,8 @@ BOOST_AUTO_TEST_CASE(ConfigurableBranchingDepthAndLargeChainFallbacks)
     const auto bondsBefore = largeSim.getCurrentBondDimensions();
     const double costBefore = largeSim.getTotalSwappingCost();
 
-    std::vector<std::shared_ptr<Circuits::IOperation<>>> largeOps{
-        CF::CreateGate(Kind::kCXGateType, 1, 136), // span = 135 > 128 stack candidate buffer
-        CF::CreateGate(Kind::kCXGateType, 1, 70),
-        CF::CreateGate(Kind::kCXGateType, 70, 136)};
+    std::vector<std::shared_ptr<Circuits::IOperation<>>> largeOps{CF::CreateGate(Kind::kCXGateType, 1, 136), // span = 135 > 128 stack candidate buffer
+                                                                  CF::CreateGate(Kind::kCXGateType, 1, 70), CF::CreateGate(Kind::kCXGateType, 70, 136)};
 
     double largeBestCost = std::numeric_limits<double>::infinity();
     const auto largeMeetPos = largeSim.FindBestMeetingPosition(largeOps, 0, 2, 1, 0.0, largeBestCost);
@@ -1536,6 +1535,621 @@ BOOST_AUTO_TEST_CASE(RoutingOverheadVsSimulationTimeBenchmarkMPSAndMPO)
                                << "default local-opt (depth 0): " << (totalSimLocalOptMs / nRuns) << " ms, "
                                << "lookahead (total incl. planning): " << (totalSimLookaheadMs / nRuns) << " ms");
     }
+}
+
+BOOST_AUTO_TEST_CASE(VirtualBondHistoryLifecycleAndSaturatedRouting)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+
+    // 1. Direct MPSDummySimulator check: SetMaxBondDimension must not reset currentBondDim
+    //    when re-applying an unchanged limit or clamping to an updated limit, and
+    //    RecordAdjacentTwoQubitGate must grow only the specified bond.
+    {
+        Simulators::MPSDummySimulator dummy(8, false);
+        dummy.SetMaxBondDimension(4);
+        const std::vector<double> customBonds{2.0, 3.5, 4.0, 4.0, 3.0, 2.0, 2.0};
+        dummy.SetCurrentBondDimensions(customBonds);
+        BOOST_CHECK(dummy.getCurrentBondDimensions() == customBonds);
+
+        // Re-applying the same limit is a no-op and preserves currentBondDim
+        dummy.SetMaxBondDimension(4);
+        BOOST_CHECK(dummy.getCurrentBondDimensions() == customBonds);
+
+        // Lowering the limit clamps existing bond dimensions without resetting to 1.0
+        dummy.SetMaxBondDimension(3);
+        const std::vector<double> clampedBonds{2.0, 3.0, 3.0, 3.0, 3.0, 2.0, 2.0};
+        BOOST_CHECK(dummy.getCurrentBondDimensions() == clampedBonds);
+
+        // SetRoutingMap updates the map without resetting currentBondDim
+        dummy.SetRoutingMap({7, 6, 5, 4, 3, 2, 1, 0});
+        BOOST_CHECK(dummy.getCurrentBondDimensions() == clampedBonds);
+
+        // ResetBondDimensions explicitly resets currentBondDim to 1.0
+        dummy.ResetBondDimensions();
+        const std::vector<double> unitBonds(7, 1.0);
+        BOOST_CHECK(dummy.getCurrentBondDimensions() == unitBonds);
+
+        dummy.setGrowthFactorGate(1.0);
+        dummy.RecordAdjacentTwoQubitGate(2, false, true);
+        BOOST_CHECK_CLOSE(dummy.getCurrentBondDimensions()[2], 2.0, 1e-12);
+    }
+
+    // 2. Saturated-bond lifecycle tests through ISimulator. Compare uninterrupted
+    //    execution with cloning/restoration and skipped operations, independently
+    //    of which route the configured accuracy/runtime heuristic prefers.
+    constexpr size_t n = 9;
+    auto buildPrefixOps = []() {
+        return std::vector<std::shared_ptr<Circuits::IOperation<>>>{
+            CF::CreateGate(Kind::kHadamardGateType, 0),
+            CF::CreateGate(Kind::kHadamardGateType, 1),
+            CF::CreateGate(Kind::kCPGateType, 0, 1, 0, 1e-3), // bond 0 -> phys 2/4, virt 2/4
+            CF::CreateGate(Kind::kHadamardGateType, 2),
+            CF::CreateGate(Kind::kCPGateType, 1, 2, 0, 1e-3), // overlaps {0,1} -> emits (0,1); bond 1 -> phys 2/4, virt 2/4
+            CF::CreateGate(Kind::kCXGateType, 2, 3),          // overlaps {1,2} -> emits first (1,2); Bell pair #1 on (2,3) (bond 2 -> phys 2/4, virt 2/4)
+            CF::CreateGate(Kind::kCPGateType, 1, 2, 0, 1e-3), // overlaps {2,3} -> emits (2,3); second gate on (1,2) (bond 1 -> virt 4/16)
+            CF::CreateGate(Kind::kHadamardGateType, 4),
+            CF::CreateGate(Kind::kCPGateType, 3, 4, 0, 1e-3), // bond 3 -> phys 2/4, virt 2/4
+            CF::CreateGate(Kind::kCXGateType, 4, 5),          // overlaps {3,4} -> emits first (3,4); Bell pair #2 on (4,5) (bond 4 -> phys 2/4, virt 2/4)
+            CF::CreateGate(Kind::kCPGateType, 3, 4, 0, 1e-3)  // overlaps {4,5} -> emits (4,5); trailing adjacent gate on (3,4) (bond 3 -> virt 4/16)
+        };
+    };
+    auto buildPrefixEndingWithAdjacentOps = [&]() { return buildPrefixOps(); };
+    auto buildSuffixOps = []() {
+        return std::vector<std::shared_ptr<Circuits::IOperation<>>>{
+            CF::CreateGate(Kind::kCPGateType, 2, 4, 0, 0.0), // non-adjacent callback #2 on (2,4): m=3 swaps (2,3) (exact), m=2 swaps (3,4) (truncates!)
+            CF::CreateGate(Kind::kCPGateType, 3, 4, 0, 0.0)  // lookahead gate on (3,4): m=3 wins when bonds {1,2,3,4} = {4,2,4,2}; m=2 wins when bond 3 is 2/4
+        };
+    };
+    auto bellCoherenceError = [](const std::shared_ptr<Simulators::ISimulator> &sim) {
+        const double xx23 = sim->ExpectationValue("IIXXIIIII");
+        const double xx45 = sim->ExpectationValue("IIIIXXIII");
+        const double zz23 = sim->ExpectationValue("IIZZIIIII");
+        const double zz45 = sim->ExpectationValue("IIIIZZIII");
+        BOOST_REQUIRE(std::isfinite(xx23));
+        BOOST_REQUIRE(std::isfinite(xx45));
+        BOOST_REQUIRE(std::isfinite(zz23));
+        BOOST_REQUIRE(std::isfinite(zz45));
+        const double xxxx = sim->ExpectationValue("IIXXXXIII");
+        const double zzzz = sim->ExpectationValue("IIZZZZIII");
+        const double yyyy = sim->ExpectationValue("IIYYYYIII");
+        BOOST_REQUIRE(std::isfinite(xxxx));
+        BOOST_REQUIRE(std::isfinite(zzzz));
+        BOOST_REQUIRE(std::isfinite(yyyy));
+        const double err = std::abs(xx23 - 1.0) + std::abs(xx45 - 1.0) + std::abs(zz23 - 1.0) + std::abs(zz45 - 1.0) + std::abs(xxxx - 1.0) +
+                           std::abs(zzzz - 1.0) + std::abs(yyyy - 1.0);
+        return err;
+    };
+
+    for (const auto simType : {Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kMatrixProductOperator})
+    {
+        const bool isMpo = (simType == Simulators::SimulationType::kMatrixProductOperator);
+        const char *physCapStr = isMpo ? "4" : "2";
+
+        for (const char *fusionSetting : {"true", "false"})
+        {
+            auto configureSim = [&](const std::shared_ptr<Simulators::ISimulator> &sim) {
+                sim->AllocateQubits(n);
+                sim->Configure("gate_fusion", fusionSetting);
+                sim->Configure("mps_routing_virtual_bonds", "true");
+                sim->Configure("matrix_product_state_max_bond_dimension", physCapStr);
+                sim->Configure("matrix_product_operator_max_bond_dimension", physCapStr);
+                sim->Configure("matrix_product_state_truncation_threshold", "1e-16");
+                sim->Configure("matrix_product_operator_truncation_threshold", "1e-16");
+                sim->Initialize();
+                sim->setGrowthFactorGate(1.0);
+                sim->setGrowthFactorSwap(1.0);
+                sim->SetUseOptimalMeetingPosition(true);
+                sim->SetLookaheadDepth(2);
+                sim->SetLookaheadDepthWithHeuristic(0);
+            };
+
+            auto executePrefixAndRouteFirstSuffixGate =
+                [](const std::shared_ptr<Simulators::ISimulator> &sim, const std::vector<std::shared_ptr<Circuits::IOperation<>>> &prefOps,
+                   const std::vector<std::shared_ptr<Circuits::IOperation<>>> &sfxOps, Circuits::OperationState &state) {
+                    for (size_t i = 0; i < prefOps.size(); ++i)
+                        prefOps[i]->Execute(sim, state);
+                    sfxOps[0]->Execute(sim, state);
+                };
+
+            double uninterruptedError = 0.;
+            // The compatibility override and explicit virtual opt-out agree.
+            {
+                auto simLegacy = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, simType);
+                simLegacy->Configure("mps_routing_legacy_cap", "true");
+                configureSim(simLegacy);
+                const auto prefOps = buildPrefixOps();
+                const auto sfxOps = buildSuffixOps();
+                auto allOps = prefOps;
+                allOps.insert(allOps.end(), sfxOps.begin(), sfxOps.end());
+                simLegacy->SetUpcomingGates(allOps);
+                Circuits::OperationState state;
+                state.AllocateBits(n);
+                executePrefixAndRouteFirstSuffixGate(simLegacy, prefOps, sfxOps, state);
+                auto plain = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, simType);
+                configureSim(plain);
+                plain->Configure("mps_routing_virtual_bonds", "false");
+                plain->SetUpcomingGates(allOps);
+                executePrefixAndRouteFirstSuffixGate(plain, prefOps, sfxOps, state);
+                BOOST_CHECK_SMALL(bellCoherenceError(simLegacy) - bellCoherenceError(plain), 1e-9);
+            }
+
+            // (a) Reference run, without lifecycle boundaries.
+            {
+                auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, simType);
+                configureSim(sim);
+                const auto prefOps = buildPrefixOps();
+                const auto sfxOps = buildSuffixOps();
+                auto allOps = prefOps;
+                allOps.insert(allOps.end(), sfxOps.begin(), sfxOps.end());
+                sim->SetUpcomingGates(allOps);
+                Circuits::OperationState state;
+                state.AllocateBits(n);
+                executePrefixAndRouteFirstSuffixGate(sim, prefOps, sfxOps, state);
+                uninterruptedError = bellCoherenceError(sim);
+            }
+
+            // (b) [P2 #1 regression] Prefix ends with adjacent two-qubit gates on (2,3) and
+            //     SetUpcomingGates(suffix) is called directly without an intervening SaveState or Clone.
+            {
+                auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, simType);
+                configureSim(sim);
+                auto prefCirc = CF::CreateCircuit(buildPrefixEndingWithAdjacentOps());
+                sim->SetUpcomingGates(prefCirc->GetOperations());
+                Circuits::OperationState state;
+                state.AllocateBits(n);
+                prefCirc->Execute(sim, state);
+
+                const auto sfxOps = buildSuffixOps();
+                sim->SetUpcomingGates(sfxOps);
+                sfxOps[0]->Execute(sim, state);
+                BOOST_CHECK_SMALL(bellCoherenceError(sim) - uninterruptedError, 1e-9);
+            }
+
+            // (c) Clone() after prefix + SetUpcomingGates(suffix) preserves virtual bond history
+            {
+                auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, simType);
+                configureSim(sim);
+                auto prefCirc = CF::CreateCircuit(buildPrefixEndingWithAdjacentOps());
+                sim->SetUpcomingGates(prefCirc->GetOperations());
+                Circuits::OperationState state;
+                state.AllocateBits(n);
+                prefCirc->Execute(sim, state);
+
+                std::shared_ptr<Simulators::ISimulator> cloned(sim->Clone());
+                const auto sfxOps = buildSuffixOps();
+                cloned->SetUpcomingGates(sfxOps);
+                sfxOps[0]->Execute(cloned, state);
+                BOOST_CHECK_SMALL(bellCoherenceError(cloned) - uninterruptedError, 1e-9);
+            }
+
+            // (d) [P2 #2 regression] Clone() and SaveState()->Reset()->RestoreState() midway through
+            //     the SAME installed circuit (without reinstalling a separate suffix) must NOT replay
+            //     already-accounted-for prefix gates on bond 3 when execution resumes.
+            {
+                auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, simType);
+                configureSim(sim);
+                const auto prefOps = buildPrefixOps();
+                const auto sfxOps = buildSuffixOps();
+                auto allOps = prefOps;
+                allOps.insert(allOps.end(), sfxOps.begin(), sfxOps.end());
+                sim->SetUpcomingGates(allOps);
+
+                Circuits::OperationState state;
+                state.AllocateBits(n);
+                for (size_t i = 0; i < prefOps.size(); ++i)
+                    prefOps[i]->Execute(sim, state);
+
+                // Resume midway on a Clone() of the same installed circuit
+                std::shared_ptr<Simulators::ISimulator> cloned(sim->Clone());
+                sfxOps[0]->Execute(cloned, state);
+                BOOST_CHECK_SMALL(bellCoherenceError(cloned) - uninterruptedError, 1e-9);
+
+                // SaveState -> Reset -> RestoreState midway on the same installed circuit
+                sim->SaveState();
+                sim->Reset();
+                sim->RestoreState();
+                sfxOps[0]->Execute(sim, state);
+                BOOST_CHECK_SMALL(bellCoherenceError(sim) - uninterruptedError, 1e-9);
+            }
+
+            // (e) [P2 #3 regression] ExecuteNonMeasurements() stepping over deferred adjacent two-qubit
+            //     gates (dependent on a mid-circuit measurement) must NOT count those unexecuted gates
+            //     as having grown the dummy simulator's bond dimensions.
+            {
+                auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, simType);
+                configureSim(sim);
+                auto nonMeasOps = buildPrefixOps();
+                nonMeasOps.back() = CF::CreateGate(Kind::kCXGateType, 5, 6);   // flushes CX(4,5) under gate_fusion while leaving bond 3 at 2/4 (single CP(3,4))
+                nonMeasOps.push_back(CF::CreateMeasurement({{0, 0}}));         // mid-circuit measurement on qubit 0
+                nonMeasOps.push_back(CF::CreateGate(Kind::kCXGateType, 0, 4)); // deferred: marks qubit 4 as measurement-dependent
+                nonMeasOps.push_back(CF::CreateGate(Kind::kCPGateType, 3, 4, 0, 0.0)); // deferred adjacent gate on bond 3 (MUST NOT grow bond 3 to 4/16!)
+                nonMeasOps.push_back(CF::CreateGate(Kind::kCPGateType, 3, 4, 0, 0.0)); // deferred adjacent gate on bond 3 (MUST NOT grow bond 3 to 4/16!)
+                nonMeasOps.push_back(
+                    CF::CreateGate(Kind::kCPGateType, 6, 8, 0, 0.0)); // independent non-adjacent gate on (6,8): executes in ExecuteNonMeasurements!
+                auto nonMeasCirc = CF::CreateCircuit(nonMeasOps);
+                sim->SetUpcomingGates(nonMeasCirc->GetOperations());
+                Circuits::OperationState state;
+                state.AllocateBits(n);
+                size_t maxBondDim = 0;
+                const auto executed = nonMeasCirc->ExecuteNonMeasurements(sim, state, &maxBondDim);
+                BOOST_REQUIRE_EQUAL(executed.size(), 5U); // from Measure(0) onward: F, F, F, F, T
+                BOOST_CHECK(!executed[0] && !executed[1] && !executed[2] && !executed[3] && executed[4]);
+
+                // Compare to a fresh run containing only operations that executed.
+                // Deferred gates must influence neither native state nor history.
+                const auto sfxOps = buildSuffixOps();
+                sim->SetUpcomingGates(sfxOps);
+                sfxOps[0]->Execute(sim, state);
+                auto clean = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, simType);
+                configureSim(clean);
+                auto executedOps = buildPrefixOps();
+                executedOps.back() = CF::CreateGate(Kind::kCXGateType, 5, 6);
+                executedOps.push_back(nonMeasOps.back());
+                clean->SetUpcomingGates(executedOps);
+                for (const auto &op : executedOps)
+                    op->Execute(clean, state);
+                clean->SetUpcomingGates(sfxOps);
+                sfxOps[0]->Execute(clean, state);
+                BOOST_CHECK_SMALL(bellCoherenceError(sim) - bellCoherenceError(clean), 1e-9);
+            }
+
+            // (f) SaveState() before dummySim creation -> pollute bond 3 to 4/16 -> RestoreState()
+            //     wipes the post-SaveState virtual bond history back to 1.0s.
+            {
+                auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, simType);
+                configureSim(sim);
+                sim->SaveState();
+
+                auto polluteCirc = CF::CreateCircuit(buildPrefixOps());
+                sim->SetUpcomingGates(polluteCirc->GetOperations());
+                Circuits::OperationState state;
+                state.AllocateBits(n);
+                polluteCirc->Execute(sim, state);
+
+                sim->RestoreState();
+
+                // After RestoreState(), running a prefix with only a single CP(3,4) gate must NOT
+                // inherit the pre-RestoreState saturation (4/16) of bond 3.
+                auto unsatOps = buildPrefixOps();
+                unsatOps.back() = CF::CreateGate(Kind::kCXGateType, 5, 6); // flushes CX(4,5) under gate_fusion while leaving bond 3 at 2/4 (single CP(3,4))
+                const auto sfxOps = buildSuffixOps();
+                auto allUnsatOps = unsatOps;
+                allUnsatOps.insert(allUnsatOps.end(), sfxOps.begin(), sfxOps.end());
+                sim->SetUpcomingGates(allUnsatOps);
+                executePrefixAndRouteFirstSuffixGate(sim, unsatOps, sfxOps, state);
+                auto clean = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, simType);
+                configureSim(clean);
+                clean->SetUpcomingGates(allUnsatOps);
+                executePrefixAndRouteFirstSuffixGate(clean, unsatOps, sfxOps, state);
+                BOOST_CHECK_SMALL(bellCoherenceError(sim) - bellCoherenceError(clean), 1e-9);
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(BoundedVirtualRoutingCostModel)
+{
+    using Dummy = Simulators::MPSDummySimulator;
+    for (bool mpo : {false, true})
+        for (size_t n : {1U, 4U, 9U, 20U, 100U})
+            for (long long cap : {1LL, 4LL, 64LL, 512LL})
+            {
+                const auto effective = Dummy::EffectiveLookaheadMaxBondDimension(n, mpo, cap);
+                BOOST_CHECK_GE(effective, cap);
+                BOOST_CHECK_LE(effective, 4 * cap);
+                BOOST_CHECK_EQUAL(Dummy::EffectiveMapMaxBondDimension(n, mpo, cap), effective);
+                BOOST_CHECK_EQUAL(Dummy::EffectiveLookaheadMaxBondDimension(n, mpo, 0), 0);
+            }
+    Dummy dummy(20);
+    dummy.SetRoutingCostModel(4, 0.);
+    BOOST_CHECK_EQUAL(dummy.BondCost(2), 8.);
+    BOOST_CHECK_EQUAL(dummy.BondCost(16), 64.); // Capped runtime, no risk penalty.
+    dummy.SetRoutingCostModel(4, 1.);
+    BOOST_CHECK_EQUAL(dummy.BondCost(16), 256.); // Three cap-sized overflow units.
+    BOOST_CHECK_EQUAL(dummy.Clone()->BondCost(16), dummy.BondCost(16));
+    dummy.SetRoutingCostModel(0, 1.);
+    BOOST_CHECK_EQUAL(dummy.BondCost(16), 4096.); // Unlimited runtime.
+    BOOST_CHECK_THROW(dummy.SetRoutingCostModel(4, -1.), std::invalid_argument);
+    BOOST_CHECK_THROW(dummy.SetRoutingCostModel(4, std::numeric_limits<double>::infinity()), std::invalid_argument);
+    for (bool mpo : {false, true})
+        for (double weight : {0., 0.5, 2.})
+        {
+            Dummy planner(8, mpo);
+            planner.SetMaxBondDimension(16);
+            planner.SetRoutingCostModel(4, weight);
+            planner.SetCurrentBondDimensions({2, 4, 8, 8, 4, 2, 2});
+            const auto gate = Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kCXGateType, 1, 6);
+            double minimum = std::numeric_limits<double>::infinity();
+            for (long long position = 1; position < 6; ++position)
+            {
+                auto candidate = planner.Clone();
+                candidate->SwapQubitsToPosition(1, 6, position);
+                candidate->ApplyGate(gate);
+                minimum = std::min(minimum, candidate->getTotalSwappingCost());
+            }
+            double cost = std::numeric_limits<double>::infinity();
+            const auto chosen = planner.FindBestMeetingPosition({gate}, 0, 1, 0, 0., cost);
+            BOOST_CHECK_GE(chosen, 1);
+            BOOST_CHECK_LT(chosen, 6);
+            BOOST_CHECK_CLOSE(cost, minimum, 1e-9);
+        }
+}
+
+BOOST_AUTO_TEST_CASE(LogicalSwapRoutingModel)
+{
+    using Dummy = Simulators::MPSDummySimulator;
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+    using Op = std::shared_ptr<Circuits::IOperation<>>;
+    const auto swap = CF::CreateGate(Kind::kSwapGateType, 0, 5);
+    for (bool mpo : {false, true})
+    {
+        Dummy planner(6, mpo);
+        planner.SetMaxBondDimension(16);
+        planner.SetCurrentBondDimensions({2, 4, 4, 4, 2});
+        const auto bonds = planner.getCurrentBondDimensions();
+        const auto map = planner.getQubitsMap();
+
+        // Changing backend semantics must invalidate a previously cached cost.
+        double physicalCost = std::numeric_limits<double>::infinity();
+        planner.FindBestMeetingPosition({swap}, 0, 0, 0, 0., physicalCost);
+        BOOST_CHECK_GT(physicalCost, 0.);
+        planner.SetSwapGatesRelabelQubits(true);
+        for (int heuristic : {0, 3})
+        {
+            double cost = std::numeric_limits<double>::infinity();
+            BOOST_CHECK_EQUAL(planner.FindBestMeetingPosition({swap}, 0, 3, heuristic, 0., cost), -1);
+            BOOST_CHECK_EQUAL(cost, 0.);
+        }
+        BOOST_CHECK(planner.getQubitsMap() == map);
+        BOOST_CHECK(planner.getCurrentBondDimensions() == bonds);
+        auto relabeled = planner.Clone();
+        relabeled->setTotalSwappingCost(17.);
+        relabeled->ApplyGate(swap);
+        QC::Gates::SwapGate<> nativeSwap;
+        relabeled->ApplyGate(nativeSwap, 1, 3);
+        relabeled->ApplyGate(std::make_shared<Simulators::FusionRoutingOperation>(Types::qubits_vector{2, 4}, 4, true));
+        BOOST_CHECK(relabeled->getQubitsMap() == std::vector<long long>({5, 3, 4, 1, 2, 0}));
+        BOOST_CHECK(relabeled->getCurrentBondDimensions() == bonds);
+        BOOST_CHECK_EQUAL(relabeled->getTotalSwappingCost(), 17.);
+        for (size_t q = 0; q < map.size(); ++q)
+            BOOST_CHECK_EQUAL(relabeled->getQubitsMapInv()[relabeled->getQubitsMap()[q]], q);
+        relabeled->SwapQubitsToPosition(0, 5, 2);
+        BOOST_CHECK_GT(relabeled->getTotalSwappingCost(), 17.); // Physical routing still costs work.
+
+        const std::vector<Op> operations{CF::CreateGate(Kind::kCXGateType, 0, 5), CF::CreateGate(Kind::kSwapGateType, 1, 5),
+                                         CF::CreateGate(Kind::kSwapGateType, 2, 4), CF::CreateGate(Kind::kCXGateType, 0, 2),
+                                         CF::CreateGate(Kind::kCYGateType, 5, 4)};
+        // Exhaustively enumerate actual tensor routes, independently exchanging
+        // the logical labels for SWAPs. Check both exact and heuristic windows.
+        std::function<double(const Dummy &, size_t)> enumerate = [&](const Dummy &state, size_t index) -> double {
+            if (index == operations.size())
+                return state.getTotalSwappingCost();
+            const auto qs = operations[index]->AffectedQubits();
+            if (index == 1 || index == 2)
+            {
+                auto next = state.Clone();
+                auto nextMap = next->getQubitsMap();
+                std::swap(nextMap[qs[0]], nextMap[qs[1]]);
+                next->SetRoutingMap(nextMap);
+                return enumerate(*next, index + 1);
+            }
+            const auto &positions = state.getQubitsMap();
+            double best = std::numeric_limits<double>::infinity();
+            for (long long p = std::min(positions[qs[0]], positions[qs[1]]); p < std::max(positions[qs[0]], positions[qs[1]]); ++p)
+            {
+                auto next = state.Clone();
+                next->SwapQubitsToPosition(qs[0], qs[1], p);
+                next->ApplyGate(operations[index]);
+                best = std::min(best, enumerate(*next, index + 1));
+            }
+            return best;
+        };
+        const double minimum = enumerate(planner, 0);
+        for (int heuristic : {0, 4})
+        {
+            double cost = std::numeric_limits<double>::infinity();
+            const auto position = planner.FindBestMeetingPosition(operations, 0, 4, heuristic, 0., cost);
+            BOOST_CHECK_GE(position, 0);
+            BOOST_CHECK_LT(position, 5);
+            if (heuristic == 0)
+                BOOST_CHECK_CLOSE(cost, minimum, 1e-9);
+            else
+            {
+                BOOST_CHECK_GE(cost + 1e-9, minimum);
+                const std::vector<Op> rewritten{CF::CreateGate(Kind::kCXGateType, 0, 5), CF::CreateGate(Kind::kCXGateType, 0, 4),
+                                                CF::CreateGate(Kind::kCYGateType, 1, 2)};
+                double reference = std::numeric_limits<double>::infinity();
+                planner.FindBestMeetingPosition(rewritten, 0, 2, 2, 0., reference);
+                BOOST_CHECK_CLOSE(cost, reference, 1e-9);
+            }
+            BOOST_CHECK(planner.getQubitsMap() == map);
+            BOOST_CHECK(planner.getCurrentBondDimensions() == bonds);
+        }
+
+        const std::vector<Op> relabelThenGate{swap, CF::CreateGate(Kind::kCXGateType, 0, 1)};
+        const std::vector<Op> equivalent{CF::CreateGate(Kind::kCXGateType, 5, 1)};
+        // A relabel followed by an interaction has the same cost and initial
+        // layout as the interaction on the corresponding original labels.
+        for (int heuristic : {0, 1})
+        {
+            double cost = std::numeric_limits<double>::infinity(), reference = std::numeric_limits<double>::infinity();
+            planner.FindBestMeetingPosition(relabelThenGate, 0, 1, heuristic, 0., cost);
+            planner.FindBestMeetingPosition(equivalent, 0, 0, 0, 0., reference);
+            BOOST_CHECK_CLOSE(cost, reference, 1e-9);
+        }
+        BOOST_CHECK(planner.ComputeOptimalQubitsMap({CF::CreateCircuit(relabelThenGate)}) == planner.ComputeOptimalQubitsMap({CF::CreateCircuit(equivalent)}));
+        planner.SetSwapGatesRelabelQubits(false);
+        double restored = std::numeric_limits<double>::infinity();
+        planner.FindBestMeetingPosition({swap}, 0, 0, 0, 0., restored);
+        BOOST_CHECK_CLOSE(restored, physicalCost, 1e-9);
+    }
+}
+
+// Explicit opt-in: this test performs large live simulations and reports
+// runtime and error tradeoffs; it is not part of the default unit-test suite.
+BOOST_AUTO_TEST_CASE(VirtualRoutingLiveBenchmark, *boost::unit_test::disabled() * boost::unit_test::label("benchmark"))
+{
+    // Fixed 64-bit seed constants (replacing std::hash<std::string>) and portable double conversion
+    // so circuit parameters and observable permutations are bit-for-bit identical across platforms.
+    constexpr uint64_t kQftFamilySeed = 0x22c070c2f5ccbd65ULL;
+    constexpr uint64_t kQftObsSeed = 0x31f87d007a853846ULL;
+    constexpr uint64_t kQaoaFamilySeed = 0xb36d2071152d0104ULL;
+    auto nextAngle = [](std::mt19937_64 &rng) -> double {
+        return (static_cast<double>(rng()) / (static_cast<double>(std::mt19937_64::max()) + 1.0)) * (2.0 * M_PI);
+    };
+
+    auto makeQftCircuit = [&](size_t n) {
+        auto circ = std::make_shared<Circuits::Circuit<>>();
+        std::mt19937_64 rng(kQftFamilySeed ^ (static_cast<uint64_t>(n) * 0x9E3779B97F4A7C15ULL));
+        for (size_t q = 0; q < n; ++q)
+        {
+            const double theta = nextAngle(rng);
+            const double phi = nextAngle(rng);
+            const double lambda = nextAngle(rng);
+            circ->AddOperation(Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kUGateType, q, 0, 0, theta, phi, lambda, 0.0));
+        }
+        for (long long i = static_cast<long long>(n) - 1; i >= 0; --i)
+        {
+            circ->AddOperation(Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kHadamardGateType, static_cast<Types::qubit_t>(i)));
+            for (long long j = i - 1; j >= 0; --j)
+            {
+                const double angle = M_PI / static_cast<double>(1ULL << std::min<long long>(i - j, 62));
+                circ->AddOperation(Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kCPGateType, static_cast<Types::qubit_t>(j),
+                                                                          static_cast<Types::qubit_t>(i), 0, angle));
+            }
+        }
+        for (size_t i = 0; i < n / 2; ++i)
+            circ->AddOperation(Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kSwapGateType, i, n - 1 - i));
+        return circ;
+    };
+
+    auto makeBenchmarkObservables = [&](size_t n) {
+        std::vector<std::string> obs;
+        obs.reserve(3 * n - 1);
+        for (size_t q = 0; q < n; ++q)
+        {
+            std::string z(n, 'I');
+            z[q] = 'Z';
+            obs.push_back(std::move(z));
+        }
+        for (size_t q = 0; q + 1 < n; ++q)
+        {
+            std::string zz(n, 'I');
+            zz[q] = 'Z';
+            zz[q + 1] = 'Z';
+            obs.push_back(std::move(zz));
+        }
+        std::mt19937_64 rng(kQftObsSeed ^ (static_cast<uint64_t>(n) * 0x9E3779B97F4A7C15ULL));
+        std::vector<size_t> perm(n);
+        std::iota(perm.begin(), perm.end(), 0);
+        for (size_t k = 0; k < n; ++k)
+        {
+            std::string s(n, 'I');
+            for (size_t i = n - 1; i > 0; --i)
+                std::swap(perm[i], perm[rng() % (i + 1)]);
+            for (size_t w = 0; w < std::min<size_t>(4, n); ++w)
+                s[perm[w]] = "XYZ"[rng() % 3];
+            obs.push_back(std::move(s));
+        }
+        return obs;
+    };
+
+    auto makeQaoaCircuit = [&](size_t numQ) {
+        auto qaoaCirc = std::make_shared<Circuits::Circuit<>>();
+        std::mt19937_64 rng(kQaoaFamilySeed ^ (static_cast<uint64_t>(numQ) * 0x9E3779B97F4A7C15ULL));
+        for (size_t q = 0; q < numQ; ++q)
+            qaoaCirc->AddOperation(Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kHadamardGateType, q));
+        for (int layer = 0; layer < 3; ++layer)
+        {
+            const double gamma = nextAngle(rng);
+            const double beta = nextAngle(rng);
+            for (size_t i = 0; i < numQ; ++i)
+            {
+                const size_t j = (i + 1) % numQ;
+                qaoaCirc->AddOperation(Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kCXGateType, i, j));
+                qaoaCirc->AddOperation(Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kRzGateType, j, 0, 0, gamma));
+                qaoaCirc->AddOperation(Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kCXGateType, i, j));
+            }
+            for (size_t q = 0; q < numQ; ++q)
+                qaoaCirc->AddOperation(Circuits::CircuitFactory<>::CreateGate(Circuits::QuantumGateType::kRxGateType, q, 0, 0, beta));
+        }
+        return qaoaCirc;
+    };
+
+    struct SameChiBenchmarkCase
+    {
+        size_t numQubits;
+        Simulators::SimulationType simType;
+        bool isQaoa;
+        const char *label;
+    };
+
+    double baselineRms = 0., virtualRms = 0.;
+    for (const auto &tc : std::vector<SameChiBenchmarkCase>{{20, Simulators::SimulationType::kMatrixProductState, false, "MPS QFT-20"},
+                                                            {24, Simulators::SimulationType::kMatrixProductState, false, "MPS QFT-24"},
+                                                            {10, Simulators::SimulationType::kMatrixProductOperator, false, "MPO QFT-10"},
+                                                            {12, Simulators::SimulationType::kMatrixProductOperator, true, "MPO QAOA-12"}})
+    {
+        const bool isMpo = (tc.simType == Simulators::SimulationType::kMatrixProductOperator);
+        const auto rawCirc = tc.isQaoa ? makeQaoaCircuit(tc.numQubits) : makeQftCircuit(tc.numQubits);
+        const auto testObs = makeBenchmarkObservables(tc.numQubits);
+
+        // High-accuracy reference at chi = 256
+        auto netRef = std::make_shared<Network::SimpleDisconnectedNetwork<>>(std::vector<Types::qubit_t>{static_cast<Types::qubit_t>(tc.numQubits)},
+                                                                             std::vector<size_t>{tc.numQubits});
+        netRef->RemoveAllOptimizationSimulatorsAndAdd(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState);
+        netRef->CreateSimulator();
+        netRef->Configure("matrix_product_state_max_bond_dimension", "256");
+        netRef->Configure("matrix_product_state_truncation_threshold", "1e-16");
+        const auto valsRef = netRef->ExecuteOnHostExpectations(std::make_shared<Circuits::Circuit<>>(*rawCirc), 0, testObs);
+        BOOST_REQUIRE_EQUAL(valsRef.size(), testObs.size());
+        for (double v : valsRef)
+            BOOST_REQUIRE(std::isfinite(v));
+
+        auto runLiveChi64 = [&](bool virtualRouting, double &execMsOut, double &maxErrOut, double &rmsErrOut) {
+            auto netChi64 = std::make_shared<Network::SimpleDisconnectedNetwork<>>(std::vector<Types::qubit_t>{static_cast<Types::qubit_t>(tc.numQubits)},
+                                                                                   std::vector<size_t>{tc.numQubits});
+            netChi64->RemoveAllOptimizationSimulatorsAndAdd(Simulators::SimulatorType::kQCSim, tc.simType);
+            netChi64->CreateSimulator();
+            netChi64->Configure("matrix_product_state_max_bond_dimension", "64");
+            netChi64->Configure("matrix_product_operator_max_bond_dimension", "64");
+            netChi64->Configure("matrix_product_state_truncation_threshold", "1e-16");
+            netChi64->Configure("matrix_product_operator_truncation_threshold", "1e-16");
+            netChi64->Configure("mps_routing_virtual_bonds", virtualRouting ? "true" : "false");
+            const auto tStart = std::chrono::steady_clock::now();
+            const auto valsChi64 = netChi64->ExecuteOnHostExpectations(std::make_shared<Circuits::Circuit<>>(*rawCirc), 0, testObs);
+            execMsOut = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tStart).count();
+            BOOST_REQUIRE_EQUAL(valsChi64.size(), testObs.size());
+
+            maxErrOut = 0.0;
+            double sqSum = 0.0;
+            for (size_t i = 0; i < testObs.size(); ++i)
+            {
+                BOOST_REQUIRE(std::isfinite(valsChi64[i]));
+                const double diff = std::abs(valsChi64[i] - valsRef[i]);
+                maxErrOut = std::max(maxErrOut, diff);
+                sqSum += diff * diff;
+            }
+            rmsErrOut = std::sqrt(sqSum / static_cast<double>(testObs.size()));
+        };
+
+        double execMsPhysical = 0.0, maxErrPhysical = 0.0, rmsErrPhysical = 0.0;
+        double execMsChanged = 0.0, maxErrChanged = 0.0, rmsErrChanged = 0.0;
+        runLiveChi64(false, execMsPhysical, maxErrPhysical, rmsErrPhysical);
+        runLiveChi64(true, execMsChanged, maxErrChanged, rmsErrChanged);
+
+        BOOST_TEST_MESSAGE("[" << tc.label << " at physical chi=64] "
+                               << "totalExec(physical->virtual)=" << execMsPhysical << "->" << execMsChanged << " ms | "
+                               << "maxErr(physical->virtual)=" << maxErrPhysical << "->" << maxErrChanged << " | "
+                               << "rmsErr(physical->virtual)=" << rmsErrPhysical << "->" << rmsErrChanged);
+        baselineRms += rmsErrPhysical;
+        virtualRms += rmsErrChanged;
+    }
+    // A 5% aggregate budget tolerates different routing choices on individual
+    // circuits. Per-case maximum error and wall-clock time remain visible above.
+    BOOST_CHECK_LE(virtualRms, 1.05 * baselineRms + 1e-8);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

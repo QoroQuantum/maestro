@@ -65,6 +65,35 @@ static bool ConfigureLegacyFusion(Network::INetwork<> &network, const boost::jso
     return true;
 }
 
+static bool ConfigureLegacyRouting(Network::INetwork<> &network, const boost::json::value &config)
+{
+    using namespace Simulators::RoutingConfig;
+    bool enabled = false, legacy = false;
+    double weight = 1.;
+    if (config.is_object())
+    {
+        for (const auto &[key, target] : {std::pair{kVirtualBonds, &enabled}, std::pair{kLegacyCap, &legacy}})
+            if (const auto *value = config.as_object().if_contains(key))
+            {
+                if (!value->is_bool())
+                    return false;
+                *target = value->as_bool();
+            }
+        if (const auto *value = config.as_object().if_contains(kTruncationWeight))
+        {
+            if (!value->is_number())
+                return false;
+            weight = value->to_number<double>();
+            if (!std::isfinite(weight) || weight < 0.)
+                return false;
+        }
+    }
+    network.Configure(kVirtualBonds, enabled ? "true" : "false");
+    network.Configure(kLegacyCap, legacy ? "true" : "false");
+    network.Configure(kTruncationWeight, boost::json::serialize(weight).c_str());
+    return true;
+}
+
 // Explicitly forward trajectory controls: legacy SimpleExecute does not pass
 // arbitrary JSON keys through to the network. A missing policy resets to shot_v1.
 static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boost::json::value &config)
@@ -685,7 +714,7 @@ extern "C"
         const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
         if (!ConfigureLegacyTrajectories(*network, configJson))
             return nullptr;
-        if (!ConfigureLegacyFusion(*network, configJson))
+        if (!ConfigureLegacyFusion(*network, configJson) || !ConfigureLegacyRouting(*network, configJson))
             return nullptr;
         if (!ConfigureLegacySeed(*network, configJson))
             return nullptr;
@@ -903,7 +932,7 @@ extern "C"
         const auto configJson = Json::JsonParserMaestro<>::ParseString(jsonConfig);
         if (!ConfigureLegacyTrajectories(*network, configJson))
             return nullptr;
-        if (!ConfigureLegacyFusion(*network, configJson))
+        if (!ConfigureLegacyFusion(*network, configJson) || !ConfigureLegacyRouting(*network, configJson))
             return nullptr;
         if (!ConfigureLegacySeed(*network, configJson))
             return nullptr;

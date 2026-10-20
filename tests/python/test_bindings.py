@@ -5341,6 +5341,8 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "trajectory_policy": "shot_v1",
     "trajectory_max_memory_mb": 64,
     "max_simulators": 4,
+    "mps_routing_virtual_bonds": True,
+    "mps_routing_truncation_weight": 0.5,
 }
 
 
@@ -5566,3 +5568,13 @@ class TestIdleAndMultiBandNoise:
         nm.set_correlated_ou(0, sigma=20.0, alpha=2.0, gate_time=100e-9, after_1q=False, after_2q=True)
         nm.set_correlated_ou_band(0, sigma=30.0, alpha=5.0, gate_time=100e-9, after_1q=True, after_2q=True)
         assert nm.has_correlated()
+
+
+@pytest.mark.parametrize("weight", [-1.0, float("inf"), float("nan")])
+def test_virtual_routing_weight_validation(weight):
+    with pytest.raises(ValueError):
+        maestro.SimulatorConfig(mps_routing_truncation_weight=weight)
+    config = maestro.SimulatorConfig(mps_routing_truncation_weight=0.5)
+    with pytest.raises(ValueError):
+        config.mps_routing_truncation_weight = weight
+    assert config.mps_routing_truncation_weight == 0.5

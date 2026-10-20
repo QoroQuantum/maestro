@@ -557,10 +557,18 @@ template <typename Time = Types::time_type> class ExecuteJob
                     }
 
                     Simulators::MPSDummySimulator dummySim(nrQubits, sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator);
+                    dummySim.SetSwapGatesRelabelQubits(sim->SwapGatesRelabelQubits());
                     dummySim.setGrowthFactorGate(network->getGrowthFactorGate());
                     dummySim.setGrowthFactorSwap(network->getGrowthFactorSwap());
                     if (maxBondDimValue != 0)
-                        dummySim.SetMaxBondDimension(maxBondDimValue);
+                    {
+                        const bool virtualBonds = Simulators::RoutingConfig::VirtualBondsEnabled(config);
+                        dummySim.SetMaxBondDimension(
+                            virtualBonds ? Simulators::MPSDummySimulator::EffectiveMapMaxBondDimension(
+                                               nrQubits, sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator, maxBondDimValue)
+                                         : maxBondDimValue);
+                        dummySim.SetRoutingCostModel(virtualBonds ? maxBondDimValue : 0, Simulators::RoutingConfig::TruncationWeight(config));
+                    }
 
                     if (network->GetInitialQubitsMapOptimization())
                     {
