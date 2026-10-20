@@ -769,6 +769,8 @@ static void DecompositionAndFusionRanks(bool gpu = false)
         auto raw = MakeRecording(method, gpu);
         auto reference = MakeRecording("statevector");
         raw->Configure("mps_routing_virtual_bonds", "true");
+        if (gpu)
+            raw->Configure("use_double_precision", "true");
         for (const auto &sim : {raw, reference})
         {
             sim->AllocateQubits(6);
@@ -840,6 +842,9 @@ static void NonGateRoutingFallbacks(bool gpu = false)
                 if (channel && !mpo)
                     continue;
                 auto raw = MakeRecording(method, gpu);
+                // The GPU defaults to fp32; the state is compared at 1e-10.
+                if (gpu)
+                    raw->Configure("use_double_precision", "true");
                 auto sim = std::make_shared<RecordingSimulator>(raw);
                 PrepareChain(*sim, method, fusion, 4);
                 std::vector<Op> operations;
