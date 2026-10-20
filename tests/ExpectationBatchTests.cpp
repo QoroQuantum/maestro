@@ -457,7 +457,12 @@ void TensorQueries()
         auto clone = sim->Clone();
         clone->ApplyH(2);
         clone->ApplyCX(2, 3);
+        // Named SWAPs relabel qubits without touching bonds, so swap physically.
         clone->ApplySwap(1, 2);
+        Check(clone->GetCurrentMaxBondDimension() == peak, "Relabelling SWAP changed bonds");
+        clone->ApplyCX(1, 2);
+        clone->ApplyCX(2, 1);
+        clone->ApplyCX(1, 2);
         Check(clone->GetCurrentMaxBondDimension() > peak, "Clone callback missed bond growth");
         Check(sim->GetCurrentMaxBondDimension() == peak, "Clone callback changed original");
         sim->Measure({0, 1});
