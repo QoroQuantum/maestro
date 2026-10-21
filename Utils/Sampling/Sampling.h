@@ -1,8 +1,8 @@
 #pragma once
 
-#include "AliasBase.h"
 #include "../../Types.h"
 #include "../RandomStream.h"
+#include "AliasBase.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -87,8 +87,7 @@ class ProbabilityAlias : public AliasBase
 {
   public:
     template <class Probability>
-    ProbabilityAlias(size_t count, size_t sourceCount, double mass, const Probability &probability, size_t blockSize,
-                     const std::vector<double> &masses)
+    ProbabilityAlias(size_t count, size_t sourceCount, double mass, const Probability &probability, size_t blockSize, const std::vector<double> &masses)
     {
         if (count != sourceCount)
             sourceRows.resize(count);
@@ -122,7 +121,11 @@ class ProbabilityAlias : public AliasBase
     {
         return SampleIndex(value);
     }
-    size_t SourceRow(size_t row) const { return sourceRows.empty() ? row : sourceRows[row]; }
+
+    size_t SourceRow(size_t row) const
+    {
+        return sourceRows.empty() ? row : sourceRows[row];
+    }
 
   private:
     std::vector<size_t> sourceRows;
@@ -143,8 +146,7 @@ template <class Probability> class Prepared
         return std::max<size_t>(4096, blocks * bytesPerBlock + sizeof(double) + 1024);
     }
 
-    Prepared(size_t count, size_t shots, Probability probability, Options options = {})
-        : count(count), probability(std::move(probability)), options(options)
+    Prepared(size_t count, size_t shots, Probability probability, Options options = {}) : count(count), probability(std::move(probability)), options(options)
     {
         if (!count)
             throw std::domain_error("Sampling requires nonempty probability support");
@@ -153,8 +155,7 @@ template <class Probability> class Prepared
         // Each block has a fixed serial summation order, independent of teams.
         blockSize = BlockSize(count, shots, options.memoryBytes);
         const size_t blocks = count / blockSize + (count % blockSize != 0);
-        if (blocks > (options.memoryBytes - sizeof(double)) / (2 * sizeof(double) + 1) ||
-            blocks > static_cast<size_t>(std::numeric_limits<int64_t>::max()))
+        if (blocks > (options.memoryBytes - sizeof(double)) / (2 * sizeof(double) + 1) || blocks > static_cast<size_t>(std::numeric_limits<int64_t>::max()))
             throw std::length_error("Sampling probability index exceeds the scratch budget");
         prefix.resize(blocks + 1, 0.);
         masses.resize(blocks, 0.);
@@ -162,7 +163,7 @@ template <class Probability> class Prepared
         const int threads = Threads(options.multithreading, count);
         size_t nonzero = 0;
 #ifdef _OPENMP
-#pragma omp parallel for if (threads > 1) num_threads(threads) schedule(static) reduction(+:nonzero)
+#pragma omp parallel for if (threads > 1) num_threads(threads) schedule(static) reduction(+ : nonzero)
 #endif
         for (int64_t b = 0; b < static_cast<int64_t>(blocks); ++b)
         {
@@ -192,8 +193,8 @@ template <class Probability> class Prepared
         // Leave space for at least one batch, even if the table almost fills the budget.
         const size_t available = options.memoryBytes - IndexBytes();
         const bool fitsAlias = available >= 1024 && aliasCount <= (available - 1024) / AliasRowBytes();
-        const bool useAlias = options.family == Family::Alias ||
-                              (options.family == Family::Auto && shots >= std::max<size_t>(512, aliasCount / 4) && fitsAlias);
+        const bool useAlias =
+            options.family == Family::Alias || (options.family == Family::Auto && shots >= std::max<size_t>(512, aliasCount / 4) && fitsAlias);
         if (useAlias)
         {
             if (!fitsAlias)
@@ -213,12 +214,36 @@ template <class Probability> class Prepared
         }
     }
 
-    size_t Size() const { return count; }
-    size_t Categories() const { return alias ? aliasCount : count; }
-    size_t SourceRow(size_t category) const { return alias ? alias->SourceRow(category) : category; }
-    size_t SampleCategory(double uniform) const { return alias ? alias->Sample(uniform) : Sample(uniform); }
-    Family Method() const { return alias ? Family::Alias : Family::Cdf; }
-    const Options &Settings() const { return options; }
+    size_t Size() const
+    {
+        return count;
+    }
+
+    size_t Categories() const
+    {
+        return alias ? aliasCount : count;
+    }
+
+    size_t SourceRow(size_t category) const
+    {
+        return alias ? alias->SourceRow(category) : category;
+    }
+
+    size_t SampleCategory(double uniform) const
+    {
+        return alias ? alias->Sample(uniform) : Sample(uniform);
+    }
+
+    Family Method() const
+    {
+        return alias ? Family::Alias : Family::Cdf;
+    }
+
+    const Options &Settings() const
+    {
+        return options;
+    }
+
     size_t ScratchAvailable() const
     {
         const size_t tables = IndexBytes() + localCdf.size() * sizeof(double) + (alias ? aliasCount * AliasRowBytes() : 0);
@@ -310,17 +335,28 @@ template <class Probability> class Prepared
             block *= 2;
         return block;
     }
+
     size_t AliasRowBytes() const
     {
         return sizeof(double) + (aliasCount - 1 <= std::numeric_limits<uint32_t>::max() ? sizeof(uint32_t) : sizeof(uint64_t)) +
                (aliasCount != count ? sizeof(size_t) : 0);
     }
-    size_t IndexBytes() const { return (prefix.size() + masses.size()) * sizeof(double); }
-    double Target(double uniform) const { return std::min(uniform * mass, std::nextafter(mass, 0.)); }
+
+    size_t IndexBytes() const
+    {
+        return (prefix.size() + masses.size()) * sizeof(double);
+    }
+
+    double Target(double uniform) const
+    {
+        return std::min(uniform * mass, std::nextafter(mass, 0.));
+    }
+
     size_t Block(double target) const
     {
         return static_cast<size_t>(std::upper_bound(prefix.begin() + 1, prefix.end(), target) - prefix.begin() - 1);
     }
+
     double LocalTarget(double target, size_t block) const
     {
         return std::min(target - prefix[block], std::nextafter(masses[block], 0.));
@@ -368,8 +404,8 @@ template <class Qubits> void ValidateQubits(const Qubits &qubits, size_t width, 
 // snapshot cannot fit. Sorted targets allow one traversal per batch, with no
 // per-row table or copied labels. Counts do not need the original shot order.
 template <bool Many, class Range, class Probability, class Bit, class Uniform>
-Counts<Many> CountCdfRange(const Range &rows, size_t shots, size_t bits, const Probability &probability,
-                          const Bit &bit, Uniform &&uniform, Options options = {})
+Counts<Many> CountCdfRange(const Range &rows, size_t shots, size_t bits, const Probability &probability, const Bit &bit, Uniform &&uniform,
+                           Options options = {})
 {
     Counts<Many> result;
     if (!shots || !bits)
@@ -389,7 +425,8 @@ Counts<Many> CountCdfRange(const Range &rows, size_t shots, size_t bits, const P
     std::vector<double> targets;
     targets.reserve(batch);
     std::vector<bool> key;
-    if constexpr (Many) key.resize(bits);
+    if constexpr (Many)
+        key.resize(bits);
     for (size_t begin = 0; begin < shots;)
     {
         const size_t count = std::min(batch, shots - begin);
@@ -409,18 +446,21 @@ Counts<Many> CountCdfRange(const Range &rows, size_t shots, size_t bits, const P
             {
                 if constexpr (Many)
                 {
-                    for (size_t i = 0; i < bits; ++i) key[i] = bit(row, i);
+                    for (size_t i = 0; i < bits; ++i)
+                        key[i] = bit(row, i);
                     result[key] += sampled - first;
                 }
                 else
                 {
                     Types::qubit_t packed = 0;
                     for (size_t i = 0; i < bits; ++i)
-                        if (bit(row, i)) packed |= Types::qubit_t{1} << i;
+                        if (bit(row, i))
+                            packed |= Types::qubit_t{1} << i;
                     result[packed] += sampled - first;
                 }
             }
-            if (sampled == count) break;
+            if (sampled == count)
+                break;
         }
         begin += count;
     }
@@ -429,8 +469,7 @@ Counts<Many> CountCdfRange(const Range &rows, size_t shots, size_t bits, const P
 
 // Bit(row, outputBit) preserves ordered/duplicate selections and wide labels.
 // Uniform belongs to the caller: this utility never seeds or clones an engine.
-template <bool Many, class Plan, class Bit, class Uniform>
-Counts<Many> Count(const Plan &plan, size_t shots, size_t bits, const Bit &bit, Uniform &&uniform)
+template <bool Many, class Plan, class Bit, class Uniform> Counts<Many> Count(const Plan &plan, size_t shots, size_t bits, const Bit &bit, Uniform &&uniform)
 {
     Counts<Many> result;
     if (!shots || !bits)

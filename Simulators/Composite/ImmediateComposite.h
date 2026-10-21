@@ -1429,8 +1429,7 @@ class ImmediateCompositeSimulator : public ISimulator
         }
 
         if (includeSnapshot && savedState)
-            clone->savedState = static_cast<ImmediateCompositeSimulator *>(savedState.get())->CloneStateForExecution(
-                DeriveSeed(seed, 0x53415645ULL), false);
+            clone->savedState = static_cast<ImmediateCompositeSimulator *>(savedState.get())->CloneStateForExecution(DeriveSeed(seed, 0x53415645ULL), false);
 
         clone->SetSeed(seed);
         return clone;
@@ -1459,8 +1458,10 @@ class ImmediateCompositeSimulator : public ISimulator
         if (simulators.size() == 1)
         {
             auto &component = *simulators.begin()->second;
-            if constexpr (Many) result = component.SampleCountsMany(qubits, shots);
-            else result = component.SampleCounts(qubits, shots);
+            if constexpr (Many)
+                result = component.SampleCountsMany(qubits, shots);
+            else
+                result = component.SampleCounts(qubits, shots);
             NotifyObservers(qubits);
             return result;
         }
@@ -1473,6 +1474,7 @@ class ImmediateCompositeSimulator : public ISimulator
             outputBits.push_back(uniqueBits.emplace(qubit, uniqueBits.size()).first->second);
         constexpr size_t wordBits = std::numeric_limits<size_t>::digits;
         const size_t words = (uniqueBits.size() + wordBits - 1) / wordBits;
+
         struct Component
         {
             size_t id;
@@ -1482,6 +1484,7 @@ class ImmediateCompositeSimulator : public ISimulator
             std::vector<size_t> projection;
             size_t minimumBytes = 0;
         };
+
         std::vector<Component> components;
         components.reserve(simulators.size());
         for (auto &[id, simulator] : simulators)
@@ -1503,7 +1506,8 @@ class ImmediateCompositeSimulator : public ISimulator
                     joint[output / wordBits] |= ((row >> local) & size_t{1}) << (output % wordBits);
         };
         std::vector<bool> key;
-        if constexpr (Many) key.resize(qubits.size());
+        if constexpr (Many)
+            key.resize(qubits.size());
         auto insert = [&](const size_t *joint, size_t count) {
             if constexpr (Many)
             {
@@ -1561,14 +1565,14 @@ class ImmediateCompositeSimulator : public ISimulator
                 shots >= std::max<size_t>(256, component.plan->Size()) && component.plan->Size() <= remaining / sizeof(size_t))
             {
                 std::vector<size_t> table(component.plan->Size(), 0);
-                for (size_t row = 0; row < table.size(); ++row) project(component, row, &table[row]);
+                for (size_t row = 0; row < table.size(); ++row)
+                    project(component, row, &table[row]);
                 remaining -= table.size() * sizeof(size_t);
                 component.projection = std::move(table);
             }
         remaining += sharedReserve;
         const size_t categories = uniqueBits.size() <= 20 ? size_t{1} << uniqueBits.size() : 0;
-        const bool histogram = categories && shots >= std::max<size_t>(1024, categories / 4) &&
-                               categories <= remaining / (2 * sizeof(size_t));
+        const bool histogram = categories && shots >= std::max<size_t>(1024, categories / 4) && categories <= remaining / (2 * sizeof(size_t));
         std::vector<size_t> bins(histogram ? categories : 0, 0);
         remaining -= bins.size() * sizeof(size_t);
         // Uniforms, sampled rows, sorted-CDF scratch, and joint output words.
@@ -1583,14 +1587,16 @@ class ImmediateCompositeSimulator : public ISimulator
         // Unselected components still consume their original one word per shot.
         // Omitting their probability preparation cannot restart later streams.
         for (auto &component : components)
-            if (component.bits.empty()) component.simulator->SamplingRng().discard(shots);
+            if (component.bits.empty())
+                component.simulator->SamplingRng().discard(shots);
         for (size_t begin = 0; begin < shots;)
         {
             const size_t count = std::min(batch, shots - begin);
             std::fill(joint.begin(), joint.begin() + count * words, 0);
             for (auto &component : components)
             {
-                if (!component.plan) continue;
+                if (!component.plan)
+                    continue;
                 const auto &plan = *component.plan;
                 auto &rng = component.simulator->SamplingRng();
                 const int threads = plan.Categories() <= 64 && plan.Method() == Family::Alias ? 1 : Threads(options.multithreading, count);
@@ -1602,7 +1608,8 @@ class ImmediateCompositeSimulator : public ISimulator
                 else
                 {
                     uniforms.resize(count);
-                    for (double &value : uniforms) value = Utils::RandomStream::Uniform(rng);
+                    for (double &value : uniforms)
+                        value = Utils::RandomStream::Uniform(rng);
                     plan.Draw(uniforms, sampled, threads);
 #ifdef _OPENMP
 #pragma omp parallel for if (threads > 1) num_threads(threads) schedule(static)
@@ -1612,12 +1619,15 @@ class ImmediateCompositeSimulator : public ISimulator
                 }
             }
             for (size_t shot = 0; shot < count; ++shot)
-                if (histogram) ++bins[joint[shot]];
-                else insert(&joint[shot * words], 1);
+                if (histogram)
+                    ++bins[joint[shot]];
+                else
+                    insert(&joint[shot * words], 1);
             begin += count;
         }
         for (size_t row = 0; row < bins.size(); ++row)
-            if (bins[row]) insert(&row, bins[row]);
+            if (bins[row])
+                insert(&row, bins[row]);
         NotifyObservers(qubits);
         return result;
     }

@@ -123,10 +123,11 @@ class IndividualSimulator : public ISimulator
                 // this simulator so transfer mapping keeping this in mind
 
                 // simulator->SetMultithreading(enableMultithreading);
-                static_cast<QCSimStatevectorSimulator *>(simulator.get())->ReplaceState(newNrQubits,
-                                           newAmplitudes); // this will end up by swapping the data from
-                                                           // newAmplitudes to the simulator, no allocation
-                                                           // and copying is done
+                static_cast<QCSimStatevectorSimulator *>(simulator.get())
+                    ->ReplaceState(newNrQubits,
+                                   newAmplitudes); // this will end up by swapping the data from
+                                                   // newAmplitudes to the simulator, no allocation
+                                                   // and copying is done
             }
         }
 #ifndef NO_QISKIT_AER
@@ -241,10 +242,11 @@ class IndividualSimulator : public ISimulator
                 }
 
                 // simulator->SetMultithreading(enableMultithreading);
-                static_cast<QCSimStatevectorSimulator *>(simulator.get())->ReplaceState(newNrQubits,
-                                           newAmplitudes); // this will end up by swapping the data from
-                                                           // newAmplitudes to the simulator, no allocation
-                                                           // and copying is done
+                static_cast<QCSimStatevectorSimulator *>(simulator.get())
+                    ->ReplaceState(newNrQubits,
+                                   newAmplitudes); // this will end up by swapping the data from
+                                                   // newAmplitudes to the simulator, no allocation
+                                                   // and copying is done
             }
         }
 #ifndef NO_QISKIT_AER
@@ -1459,9 +1461,20 @@ class IndividualSimulator : public ISimulator
         return *static_cast<QCSimStatevectorSimulator *>(simulator.get());
     }
 
-    size_t SamplingRows() const { return size_t{1} << SamplingStatevector().samplingSupportQubits; }
-    Utils::Sampling::Options SamplingOptions() const { return SamplingStatevector().SamplingOptions(); }
-    std::mt19937_64 &SamplingRng() { return SamplingStatevector().rng; }
+    size_t SamplingRows() const
+    {
+        return size_t{1} << SamplingStatevector().samplingSupportQubits;
+    }
+
+    Utils::Sampling::Options SamplingOptions() const
+    {
+        return SamplingStatevector().SamplingOptions();
+    }
+
+    std::mt19937_64 &SamplingRng()
+    {
+        return SamplingStatevector().rng;
+    }
 
     QCSimStatevectorSimulator::SamplingPlan PrepareSampling(size_t shots, Utils::Sampling::Options options) const
     {
@@ -1471,17 +1484,26 @@ class IndividualSimulator : public ISimulator
     size_t SampleLocalOnce()
     {
         auto &backend = *SamplingStatevector().state;
+
         struct RestoreThreading
         {
             QC::QubitRegister<> &backend;
             bool enabled;
-            ~RestoreThreading() { backend.SetMultithreading(enabled); }
+
+            ~RestoreThreading()
+            {
+                backend.SetMultithreading(enabled);
+            }
         } restore{backend, simulator->GetMultithreading()};
+
         backend.SetMultithreading(false);
         return backend.MeasureNoCollapse();
     }
 
-    void DiscardLocalMeasurementDraw() { SamplingStatevector().state->DiscardMeasurementDraw(); }
+    void DiscardLocalMeasurementDraw()
+    {
+        SamplingStatevector().state->DiscardMeasurementDraw();
+    }
 
     void InitializeAlias()
     {
@@ -1650,8 +1672,8 @@ class IndividualSimulator : public ISimulator
         // simulator so transfer mapping keeping this in mind
         // simulator->SetMultithreading(enableMultithreading);
         static_cast<QCSimStatevectorSimulator *>(simulator.get())->ReplaceState(newNrQubits, newAmplitudes); // swaps the data
-                                                                // from newAmplitudes to the simulator, no
-                                                                // allocation and copying is done
+                                                                                                             // from newAmplitudes to the simulator, no
+                                                                                                             // allocation and copying is done
     }
 
     /**

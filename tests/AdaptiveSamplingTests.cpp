@@ -17,8 +17,14 @@ void Require(bool value, const char *message)
 template <class Error, class Function> void Reject(Function f)
 {
     bool rejected = false;
-    try { f(); }
-    catch (const Error &) { rejected = true; }
+    try
+    {
+        f();
+    }
+    catch (const Error &)
+    {
+        rejected = true;
+    }
     Require(rejected, "invalid sampling input was accepted");
 }
 
@@ -29,7 +35,8 @@ void Boundaries()
         const std::vector<double> p{0., 1., 0., 3., 0.};
         Utils::Sampling::Options options;
         options.family = family;
-        const Utils::Sampling::Prepared plan(p.size(), 1024, [&](size_t row) { return p[row]; }, options);
+        const Utils::Sampling::Prepared plan(
+            p.size(), 1024, [&](size_t row) { return p[row]; }, options);
         std::vector<size_t> counts(p.size(), 0);
         for (size_t i = 0; i < 20000; ++i)
             ++counts[plan.Sample((i + 0.5) / 20000.)];
@@ -83,8 +90,8 @@ void ExecutionInvariance()
                 options.multithreading = multithreading;
                 const Utils::Sampling::Prepared plan(size, uniforms.size(), probability, options);
                 size_t shot = 0;
-                return Utils::Sampling::Count<false>(plan, uniforms.size(), 18,
-                    [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; }, [&] { return uniforms[shot++]; });
+                return Utils::Sampling::Count<false>(
+                    plan, uniforms.size(), 18, [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; }, [&] { return uniforms[shot++]; });
             };
             Require(count(257, true) == count(100000, false), "batch size or histogram changed counts");
         }
@@ -95,18 +102,25 @@ void MemoryBudgets()
 {
     Utils::Sampling::Options options;
     options.memoryBytes = 4096;
-    const Utils::Sampling::Prepared plan(8192, 100000, [](size_t) { return 1.; }, options);
+    const Utils::Sampling::Prepared plan(
+        8192, 100000, [](size_t) { return 1.; }, options);
     Require(plan.Method() == Utils::Sampling::Family::Cdf, "over-budget alias did not fall back to CDF");
     std::mt19937_64 rng(42);
-    const auto counts = Utils::Sampling::Count<false>(plan, 20000, 13, [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; },
-                                                   [&] { return Utils::RandomStream::Uniform(rng); });
+    const auto counts = Utils::Sampling::Count<false>(
+        plan, 20000, 13, [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; }, [&] { return Utils::RandomStream::Uniform(rng); });
     size_t total = 0;
     for (const auto &[row, count] : counts)
         total += count;
     Require(total == 20000, "bounded sampling lost shots");
     options.family = Utils::Sampling::Family::Alias;
-    Reject<std::length_error>([&] { Utils::Sampling::Prepared forced(8192, 100000, [](size_t) { return 1.; }, options); });
-    Reject<std::length_error>([&] { Utils::Sampling::Prepared huge(1000000, 100000, [](size_t) { return 1.; }, options); });
+    Reject<std::length_error>([&] {
+        Utils::Sampling::Prepared forced(
+            8192, 100000, [](size_t) { return 1.; }, options);
+    });
+    Reject<std::length_error>([&] {
+        Utils::Sampling::Prepared huge(
+            1000000, 100000, [](size_t) { return 1.; }, options);
+    });
 }
 
 void GrowingBlocks()
@@ -127,11 +141,10 @@ void GrowingBlocks()
         options.memoryBytes = 4096;
         options.multithreading = parallel;
         const Plan plan(size, 100000, probability, options);
-        Require(plan.Method() == Utils::Sampling::Family::Cdf && plan.ScratchAvailable() >= 1024,
-                "grown blocks did not leave a bounded CDF draw batch");
+        Require(plan.Method() == Utils::Sampling::Family::Cdf && plan.ScratchAvailable() >= 1024, "grown blocks did not leave a bounded CDF draw batch");
         size_t shot = 0;
-        const auto counts = Utils::Sampling::Count<false>(plan, 10000, 20,
-            [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; }, [&] { return (shot++ + 0.5) / 10000.; });
+        const auto counts = Utils::Sampling::Count<false>(
+            plan, 10000, 20, [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; }, [&] { return (shot++ + 0.5) / 10000.; });
         Utils::Sampling::Counts<false> expected;
         for (size_t i = 0; i < 10000; ++i)
         {
@@ -144,7 +157,12 @@ void GrowingBlocks()
 
 void StreamingCdf()
 {
-    struct Row { double probability; Types::qubit_t label; };
+    struct Row
+    {
+        double probability;
+        Types::qubit_t label;
+    };
+
     const Types::qubit_t high = Types::qubit_t{1} << (std::numeric_limits<Types::qubit_t>::digits - 1);
     const std::vector<Row> rows{{0., 0}, {1., high}, {0., 0}, {3., high | 1}, {0., 0}};
     const auto p = [](const Row &row) { return row.probability; };
@@ -155,29 +173,32 @@ void StreamingCdf()
         options.memoryBytes = 4096;
         options.batchSize = batch;
         size_t shot = 0;
-        const auto counts = Utils::Sampling::CountCdfRange<false>(rows, 20000, std::numeric_limits<Types::qubit_t>::digits,
-            p, bit, [&] { return ++shot == 20000 ? std::nextafter(1., 0.) : (shot - 1) / 20000.; }, options);
+        const auto counts = Utils::Sampling::CountCdfRange<false>(
+            rows, 20000, std::numeric_limits<Types::qubit_t>::digits, p, bit, [&] { return ++shot == 20000 ? std::nextafter(1., 0.) : (shot - 1) / 20000.; },
+            options);
         Require(counts.size() == 2 && counts.at(high) == 5000 && counts.at(high | 1) == 15000 && shot == 20000,
                 "bounded streaming CDF changed normalization, endpoints or draws");
         shot = 0;
-        const auto many = Utils::Sampling::CountCdfRange<true>(rows, 20000, 3, p,
-            [&](const Row &row, size_t b) { return bit(row, b == 1 ? 0 : std::numeric_limits<Types::qubit_t>::digits - 1); },
+        const auto many = Utils::Sampling::CountCdfRange<true>(
+            rows, 20000, 3, p, [&](const Row &row, size_t b) { return bit(row, b == 1 ? 0 : std::numeric_limits<Types::qubit_t>::digits - 1); },
             [&] { return shot++ / 20000.; }, options);
-        Require(many.at({true, false, true}) == 5000 && many.at({true, true, true}) == 15000,
-                "streaming CDF changed wide/repeated labels");
+        Require(many.at({true, false, true}) == 5000 && many.at({true, true, true}) == 15000, "streaming CDF changed wide/repeated labels");
     }
     for (double invalid : {-1., std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
     {
         auto bad = rows;
         bad.back().probability = invalid;
         Reject<std::domain_error>([&] {
-            Utils::Sampling::CountCdfRange<false>(bad, 10, 1, p, bit, []() -> double {
-                throw std::runtime_error("invalid range consumed RNG before validation");
-            });
+            Utils::Sampling::CountCdfRange<false>(bad, 10, 1, p, bit,
+                                                  []() -> double { throw std::runtime_error("invalid range consumed RNG before validation"); });
         });
     }
-    Require(Utils::Sampling::Single<false>(std::numeric_limits<Types::qubit_t>::digits,
-        [](size_t bit) { return bit == std::numeric_limits<Types::qubit_t>::digits - 1; }).at(high) == 1, "single output truncated its high bit");
+    Require(Utils::Sampling::Single<false>(
+                std::numeric_limits<Types::qubit_t>::digits,
+                [](size_t bit) {
+                    return bit == std::numeric_limits<Types::qubit_t>::digits - 1;
+                }).at(high) == 1,
+            "single output truncated its high bit");
 }
 
 void SparseSupport()
@@ -191,22 +212,22 @@ void SparseSupport()
         const Utils::Sampling::Prepared plan(size, shots, probability, options);
         Require(plan.Categories() == 3, "sparse distribution retained a dense alias table");
         size_t shot = 0;
-        const auto counts = Utils::Sampling::Count<false>(plan, shots, 18, [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; },
-                                                       [&] { return (++shot - 0.5) / shots; });
+        const auto counts = Utils::Sampling::Count<false>(
+            plan, shots, 18, [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; }, [&] { return (++shot - 0.5) / shots; });
         Require(counts.size() == 3 && counts.at(0) == shots / 6 && counts.at(size / 2) == shots / 3 && counts.at(size - 1) == shots / 2,
                 "sparse histogram lost original row labels or weights");
         Require(probability(plan.Sample(0.)) > 0. && probability(plan.Sample(std::nextafter(1., 0.))) > 0., "sparse alias sampled a zero");
         const auto spread = [](size_t row) { return row < 131072 && row % 1024 == 0 ? 1. : 0.; };
         const Utils::Sampling::Prepared spreadPlan(size, shots, spread, options);
         shot = 0;
-        const auto spreadCounts = Utils::Sampling::Count<false>(spreadPlan, shots, 18,
-            [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; }, [&] { return (++shot - 0.5) / shots; });
+        const auto spreadCounts = Utils::Sampling::Count<false>(
+            spreadPlan, shots, 18, [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; }, [&] { return (++shot - 0.5) / shots; });
         Require(spreadCounts.size() == 128, "parallel sparse histogram changed support");
         for (size_t row = 0; row < 128; ++row)
             Require(spreadCounts.at(row * 1024) == shots / 128, "parallel sparse histogram changed original labels or counts");
     }
 }
-}
+} // namespace
 
 int main()
 {

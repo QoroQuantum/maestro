@@ -175,8 +175,8 @@ class ImmediateQCSimSimulator : public ISimulator
     {
         if (!key)
             return {};
-        const bool adaptiveSampling = std::string(MethodName()) == "statevector" || std::string(MethodName()) == "density_matrix" ||
-                                      std::string(MethodName()) == "path_integral";
+        const bool adaptiveSampling =
+            std::string(MethodName()) == "statevector" || std::string(MethodName()) == "density_matrix" || std::string(MethodName()) == "path_integral";
         if (adaptiveSampling && std::string(key) == "sampling_seed")
             return std::to_string(samplingSeed);
         if (adaptiveSampling && std::string(key) == "sampling_policy" && !configuration.IsSet(key))
@@ -422,7 +422,10 @@ class ImmediateQCSimSimulator : public ISimulator
         return true;
     }
 
-    bool LegacySampling() const { return configuration.GetConfiguration("sampling_policy") == "legacy"; }
+    bool LegacySampling() const
+    {
+        return configuration.GetConfiguration("sampling_policy") == "legacy";
+    }
 
     Utils::Sampling::Options SamplingOptions() const
     {

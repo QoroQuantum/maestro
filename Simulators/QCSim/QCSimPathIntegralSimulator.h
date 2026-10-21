@@ -720,8 +720,7 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
             // budget, borrowing the original full-width labels as we visit them.
             auto result = Utils::Sampling::CountCdfRange<Many>(
                 amplitudes, shots, qubits.size(), [](const auto &row) { return std::norm(row.second); },
-                [&](const auto &row, size_t bit) { return row.first.get(qubits[bit]); },
-                [&] { return Utils::RandomStream::Uniform(rng); }, options);
+                [&](const auto &row, size_t bit) { return row.first.get(qubits[bit]); }, [&] { return Utils::RandomStream::Uniform(rng); }, options);
             NotifyObservers(qubits);
             return result;
         }
@@ -738,10 +737,14 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
             probabilities.push_back(std::norm(entry.second));
             labels.push_back(entry.first.getWords());
         }
-        const Utils::Sampling::Prepared plan(count, shots, [&](size_t row) { return probabilities[row]; }, options);
+        const Utils::Sampling::Prepared plan(
+            count, shots, [&](size_t row) { return probabilities[row]; }, options);
         auto result = Utils::Sampling::Count<Many>(
             plan, shots, qubits.size(),
-            [&](size_t row, size_t bit) { const auto q = qubits[bit]; return ((labels[row][q / 64] >> (q % 64)) & 1) != 0; },
+            [&](size_t row, size_t bit) {
+                const auto q = qubits[bit];
+                return ((labels[row][q / 64] >> (q % 64)) & 1) != 0;
+            },
             [&] { return Utils::RandomStream::Uniform(rng); });
         NotifyObservers(qubits);
         return result;

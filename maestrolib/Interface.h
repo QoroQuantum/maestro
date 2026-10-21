@@ -24,15 +24,15 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned GetGateFusionMaxQubits(void *sim);
+        unsigned GetGateFusionMaxQubits(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int IsGateFusionEnabled(void *sim);
+        int IsGateFusionEnabled(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int GetGateFusionStatistics(void *sim, MaestroGateFusionStatistics *statistics);
+        int GetGateFusionStatistics(void *sim, MaestroGateFusionStatistics *statistics);
 
 // Matrix buffers contain row-major, interleaved real/imaginary doubles:
 // 8, 32 or 128 doubles for a 2x2, 4x4 or 8x8 matrix. The first target is
@@ -41,15 +41,15 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyGenericOneQubitGate(void *sim, unsigned long qubit, const double *matrix);
+        int ApplyGenericOneQubitGate(void *sim, unsigned long qubit, const double *matrix);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyGenericTwoQubitGate(void *sim, unsigned long qubit0, unsigned long qubit1, const double *matrix);
+        int ApplyGenericTwoQubitGate(void *sim, unsigned long qubit0, unsigned long qubit1, const double *matrix);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyGenericThreeQubitGate(void *sim, unsigned long qubit0, unsigned long qubit1, unsigned long qubit2, const double *matrix);
+        int ApplyGenericThreeQubitGate(void *sim, unsigned long qubit0, unsigned long qubit1, unsigned long qubit2, const double *matrix);
 
 // Native request API, schema version 2. All returned strings (including errors)
 // are UTF-8 JSON owned by the caller and must be released with FreeResult.
@@ -57,300 +57,300 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    char *MaestroRunRequestJson(const char *request);
+        char *MaestroRunRequestJson(const char *request);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    char *MaestroValidateRequestJson(const char *request);
+        char *MaestroValidateRequestJson(const char *request);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    char *MaestroGetCapabilitiesJson(void);
+        char *MaestroGetCapabilitiesJson(void);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    char *MaestroFinalizeDistributedMpiGpuJson(void);
+        char *MaestroFinalizeDistributedMpiGpuJson(void);
 
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void *GetMaestroObject();
+        void *GetMaestroObject();
 
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void *GetMaestroObjectWithMute();
+        void *GetMaestroObjectWithMute();
 
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long int CreateSimpleSimulator(int nrQubits);
+        unsigned long int CreateSimpleSimulator(int nrQubits);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void DestroySimpleSimulator(unsigned long int simHandle);
+        void DestroySimpleSimulator(unsigned long int simHandle);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int RemoveAllOptimizationSimulatorsAndAdd(unsigned long int simHandle, int simType, int simExecType);
+        int RemoveAllOptimizationSimulatorsAndAdd(unsigned long int simHandle, int simType, int simExecType);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int AddOptimizationSimulator(unsigned long int simHandle, int simType, int simExecType);
+        int AddOptimizationSimulator(unsigned long int simHandle, int simType, int simExecType);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    char *SimpleExecute(unsigned long int simpleSim, const char *circuitStr, const char *jsonConfig);
+        char *SimpleExecute(unsigned long int simpleSim, const char *circuitStr, const char *jsonConfig);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    char *SimpleEstimate(unsigned long int simpleSim, const char *circuitStr, const char *observableStr, const char *jsonConfig);
+        char *SimpleEstimate(unsigned long int simpleSim, const char *circuitStr, const char *observableStr, const char *jsonConfig);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void FreeResult(char *result);
+        void FreeResult(char *result);
 
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long int CreateSimulator(int simType, int simExecType);
+        unsigned long int CreateSimulator(int simType, int simExecType);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void *GetSimulator(unsigned long int simHandle);
+        void *GetSimulator(unsigned long int simHandle);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void DestroySimulator(unsigned long int simHandle);
+        void DestroySimulator(unsigned long int simHandle);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int InitializeSimulator(void *sim);
+        int InitializeSimulator(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ResetSimulator(void *sim);
+        int ResetSimulator(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ConfigureSimulator(void *sim, const char *key, const char *value);
+        int ConfigureSimulator(void *sim, const char *key, const char *value);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    char *GetConfiguration(void *sim, const char *key);
+        char *GetConfiguration(void *sim, const char *key);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long int AllocateQubits(void *sim, unsigned long int nrQubits);
+        unsigned long int AllocateQubits(void *sim, unsigned long int nrQubits);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long int GetNumberOfQubits(void *sim);
+        unsigned long int GetNumberOfQubits(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ClearSimulator(void *sim);
+        int ClearSimulator(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long long int Measure(void *sim, const unsigned long int *qubits, unsigned long int nrQubits);
+        unsigned long long int Measure(void *sim, const unsigned long int *qubits, unsigned long int nrQubits);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyReset(void *sim, const unsigned long int *qubits, unsigned long int nrQubits);
+        int ApplyReset(void *sim, const unsigned long int *qubits, unsigned long int nrQubits);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    double Probability(void *sim, unsigned long long int outcome);
+        double Probability(void *sim, unsigned long long int outcome);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void FreeDoubleVector(double *vec);
+        void FreeDoubleVector(double *vec);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    void FreeULLIVector(unsigned long long int *vec);
+        void FreeULLIVector(unsigned long long int *vec);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    double *Amplitude(void *sim, unsigned long long int outcome);
+        double *Amplitude(void *sim, unsigned long long int outcome);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    double *AllProbabilities(void *sim);
+        double *AllProbabilities(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    double *Probabilities(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits);
+        double *Probabilities(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long long int *SampleCounts(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits, unsigned long int shots);
+        unsigned long long int *SampleCounts(void *sim, const unsigned long long int *qubits, unsigned long int nrQubits, unsigned long int shots);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int GetSimulatorType(void *sim);
+        int GetSimulatorType(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int GetSimulationType(void *sim);
+        int GetSimulationType(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int FlushSimulator(void *sim);
+        int FlushSimulator(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int SaveStateToInternalDestructive(void *sim);
+        int SaveStateToInternalDestructive(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int RestoreInternalDestructiveSavedState(void *sim);
+        int RestoreInternalDestructiveSavedState(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int SaveState(void *sim);
+        int SaveState(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int RestoreState(void *sim);
+        int RestoreState(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int SetMultithreading(void *sim, int multithreading);
+        int SetMultithreading(void *sim, int multithreading);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int GetMultithreading(void *sim);
+        int GetMultithreading(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int IsQcsim(void *sim);
+        int IsQcsim(void *sim);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    unsigned long long int MeasureNoCollapse(void *sim);
+        unsigned long long int MeasureNoCollapse(void *sim);
 
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyX(void *sim, int qubit);
+        int ApplyX(void *sim, int qubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyY(void *sim, int qubit);
+        int ApplyY(void *sim, int qubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyZ(void *sim, int qubit);
+        int ApplyZ(void *sim, int qubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyH(void *sim, int qubit);
+        int ApplyH(void *sim, int qubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyS(void *sim, int qubit);
+        int ApplyS(void *sim, int qubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplySDG(void *sim, int qubit);
+        int ApplySDG(void *sim, int qubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyT(void *sim, int qubit);
+        int ApplyT(void *sim, int qubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyTDG(void *sim, int qubit);
+        int ApplyTDG(void *sim, int qubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplySX(void *sim, int qubit);
+        int ApplySX(void *sim, int qubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplySXDG(void *sim, int qubit);
+        int ApplySXDG(void *sim, int qubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyK(void *sim, int qubit);
+        int ApplyK(void *sim, int qubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyP(void *sim, int qubit, double theta);
+        int ApplyP(void *sim, int qubit, double theta);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyRx(void *sim, int qubit, double theta);
+        int ApplyRx(void *sim, int qubit, double theta);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyRy(void *sim, int qubit, double theta);
+        int ApplyRy(void *sim, int qubit, double theta);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyRz(void *sim, int qubit, double theta);
+        int ApplyRz(void *sim, int qubit, double theta);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyU(void *sim, int qubit, double theta, double phi, double lambda, double gamma);
+        int ApplyU(void *sim, int qubit, double theta, double phi, double lambda, double gamma);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCX(void *sim, int controlQubit, int targetQubit);
+        int ApplyCX(void *sim, int controlQubit, int targetQubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCY(void *sim, int controlQubit, int targetQubit);
+        int ApplyCY(void *sim, int controlQubit, int targetQubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCZ(void *sim, int controlQubit, int targetQubit);
+        int ApplyCZ(void *sim, int controlQubit, int targetQubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCH(void *sim, int controlQubit, int targetQubit);
+        int ApplyCH(void *sim, int controlQubit, int targetQubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCSX(void *sim, int controlQubit, int targetQubit);
+        int ApplyCSX(void *sim, int controlQubit, int targetQubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCSXDG(void *sim, int controlQubit, int targetQubit);
+        int ApplyCSXDG(void *sim, int controlQubit, int targetQubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCP(void *sim, int controlQubit, int targetQubit, double theta);
+        int ApplyCP(void *sim, int controlQubit, int targetQubit, double theta);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCRx(void *sim, int controlQubit, int targetQubit, double theta);
+        int ApplyCRx(void *sim, int controlQubit, int targetQubit, double theta);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCRy(void *sim, int controlQubit, int targetQubit, double theta);
+        int ApplyCRy(void *sim, int controlQubit, int targetQubit, double theta);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCRz(void *sim, int controlQubit, int targetQubit, double theta);
+        int ApplyCRz(void *sim, int controlQubit, int targetQubit, double theta);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCCX(void *sim, int controlQubit1, int controlQubit2, int targetQubit);
+        int ApplyCCX(void *sim, int controlQubit1, int controlQubit2, int targetQubit);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplySwap(void *sim, int qubit1, int qubit2);
+        int ApplySwap(void *sim, int qubit1, int qubit2);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCSwap(void *sim, int controlQubit, int qubit1, int qubit2);
+        int ApplyCSwap(void *sim, int controlQubit, int qubit1, int qubit2);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int ApplyCU(void *sim, int controlQubit, int targetQubit, double theta, double phi, double lambda, double gamma);
+        int ApplyCU(void *sim, int controlQubit, int targetQubit, double theta, double phi, double lambda, double gamma);
 // MPO extensions. Return 1 on success, 0 on invalid arguments/backend failure.
 // Bit vectors are q0-first; matrices are column-major interleaved doubles.
 // GetDensityMatrix capacity counts doubles. SampleCountsBits capacity counts
@@ -359,19 +359,19 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int MaestroProbabilityBits(void *sim, const unsigned char *bits, size_t width, double *result);
+        int MaestroProbabilityBits(void *sim, const unsigned char *bits, size_t width, double *result);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int MaestroDensityMatrixElementBits(void *sim, const unsigned char *row, const unsigned char *col, size_t width, double *real, double *imag);
+        int MaestroDensityMatrixElementBits(void *sim, const unsigned char *row, const unsigned char *col, size_t width, double *real, double *imag);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int MaestroDensityMatrixTrace(void *sim, double *real, double *imag);
+        int MaestroDensityMatrixTrace(void *sim, double *real, double *imag);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int MaestroExpectationValueComplex(void *sim, const char *pauli, int normalized, double *real, double *imag);
+        int MaestroExpectationValueComplex(void *sim, const char *pauli, int normalized, double *real, double *imag);
 
 // Batch observables on the current state, in input order, without collapsing it.
 // capacity counts entries in each output array and must be >= count. For count
@@ -381,18 +381,18 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int MaestroExpectationValues(void *sim, const char *const *paulis, size_t count, double *values, size_t capacity);
+        int MaestroExpectationValues(void *sim, const char *const *paulis, size_t count, double *values, size_t capacity);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int MaestroExpectationValuesComplex(void *sim, const char *const *paulis, size_t count, int normalized, double *real, double *imag, size_t capacity);
+        int MaestroExpectationValuesComplex(void *sim, const char *const *paulis, size_t count, int normalized, double *real, double *imag, size_t capacity);
 // Full pure-state readout in logical basis order (q0 is the low bit).
 // capacity counts complex entries; interleaved holds 2*capacity doubles.
 // Returns 0 on failure without modifying the output buffer.
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int MaestroGetStateVector(void *sim, double *interleaved, size_t capacity);
+        int MaestroGetStateVector(void *sim, double *interleaved, size_t capacity);
 // Read-only <psi|O_(count-1)...O_0|psi> on MPS. Each operator is a row-major
 // 2x2 matrix (8 interleaved doubles). Repeated target qubits are allowed and
 // applied in list order. count=0 is identity; the input arrays may be null.
@@ -400,29 +400,29 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int MaestroExpectationValueOperators(void *sim, const unsigned long int *qubits, size_t count, const double *matrices, double *real, double *imag);
+        int MaestroExpectationValueOperators(void *sim, const unsigned long int *qubits, size_t count, const double *matrices, double *real, double *imag);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int MaestroGetDensityMatrix(void *sim, int normalized, double *interleaved, size_t capacity);
+        int MaestroGetDensityMatrix(void *sim, int normalized, double *interleaved, size_t capacity);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int MaestroApplyOperator(void *sim, const unsigned long int *qubits, size_t count, const double *interleaved, int normalize);
+        int MaestroApplyOperator(void *sim, const unsigned long int *qubits, size_t count, const double *interleaved, int normalize);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    // Empty lists are no-ops on supported simulators; qubits may be null when count is zero.
-    int MaestroMoveAtBeginningOfChain(void *sim, const unsigned long int *qubits, size_t count);
+        // Empty lists are no-ops on supported simulators; qubits may be null when count is zero.
+        int MaestroMoveAtBeginningOfChain(void *sim, const unsigned long int *qubits, size_t count);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int MaestroSampleCountsBits(void *sim, const unsigned long int *qubits, size_t width, size_t shots, unsigned char *outcomes, unsigned long long *counts,
-                                size_t capacity, size_t *written);
+        int MaestroSampleCountsBits(void *sim, const unsigned long int *qubits, size_t width, size_t shots, unsigned char *outcomes, unsigned long long *counts,
+                                    size_t capacity, size_t *written);
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
-    int MaestroMeasureBits(void *sim, const unsigned long int *qubits, size_t width, unsigned char *outcomes);
+        int MaestroMeasureBits(void *sim, const unsigned long int *qubits, size_t width, unsigned char *outcomes);
 
 #ifdef __cplusplus
 }

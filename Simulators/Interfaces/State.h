@@ -36,10 +36,10 @@
 #include "framework/linalg/vector.hpp"
 #endif
 
+#include "../../Utils/RandomStream.h"
 #include "../Core/QuantumChannel.h"
 #include "../TensorNetworks/TensorQueries.h"
 #include "SimulatorObserver.h"
-#include "../../Utils/RandomStream.h"
 
 namespace Circuits
 {

@@ -1,15 +1,14 @@
 // End-to-end count API benchmark. Initialization and correctness checks are
 // outside timing; preparation, RNG, draw, projection and histogram are inside.
 #define INCLUDED_BY_FACTORY
-#include <iostream>
-#include <thread>
 #include "../Circuit/Circuit.h"
-#include "../Simulators/QCSim/QCSimStatevectorSimulator.h"
 #include "../Simulators/QCSim/QCSimDensityMatrixSimulator.h"
 #include "../Simulators/QCSim/QCSimPathIntegralSimulator.h"
+#include "../Simulators/QCSim/QCSimStatevectorSimulator.h"
 #include <chrono>
 #include <iomanip>
 #include <iostream>
+#include <thread>
 
 using Clock = std::chrono::steady_clock;
 using namespace Simulators::Private;
@@ -48,7 +47,8 @@ int main(int argc, char **argv)
 try
 {
     if (argc != 10 && argc != 11)
-        throw std::invalid_argument("usage: sampling_benchmarks sv|dm|path qubits active_bits shots threads random|uniform|basis measured_bits packed|many repetitions [outer_workers]");
+        throw std::invalid_argument("usage: sampling_benchmarks sv|dm|path qubits active_bits shots threads random|uniform|basis measured_bits packed|many "
+                                    "repetitions [outer_workers]");
     const std::string method = argv[1], kind = argv[6];
     const size_t width = std::stoull(argv[2]), active = std::stoull(argv[3]), shots = std::stoull(argv[4]);
     const int threads = std::stoi(argv[5]), reps = std::stoi(argv[9]);
@@ -68,8 +68,10 @@ try
     double mass = 0.;
     for (size_t row = 0; row < count; ++row)
     {
-        probabilities[row] = kind == "basis" ? double(row == 0) : kind == "ghz" ? double(row == 0 || row == count - 1) :
-                             kind == "uniform" ? 1. : exponential(random);
+        probabilities[row] = kind == "basis"     ? double(row == 0)
+                             : kind == "ghz"     ? double(row == 0 || row == count - 1)
+                             : kind == "uniform" ? 1.
+                                                 : exponential(random);
         mass += probabilities[row];
     }
     for (auto &p : probabilities)
@@ -140,7 +142,10 @@ try
                         else
                             packed[worker] = clones[worker]->SampleCounts(selected, shots);
                     }
-                    catch (...) { errors[worker] = std::current_exception(); }
+                    catch (...)
+                    {
+                        errors[worker] = std::current_exception();
+                    }
                 });
             for (auto &worker : workers)
                 worker.join();

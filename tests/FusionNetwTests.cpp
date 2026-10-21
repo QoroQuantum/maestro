@@ -563,8 +563,7 @@ BOOST_AUTO_TEST_CASE(CompositeCollapseStreamsStayIndependent)
             {
                 for (size_t outcome = 0; outcome < 4; ++outcome)
                 {
-                    BOOST_CHECK_MESSAGE(joint[outcome] > 190 && joint[outcome] < 325,
-                                        "split correlated joint outcome " << outcome << ": " << joint[outcome]);
+                    BOOST_CHECK_MESSAGE(joint[outcome] > 190 && joint[outcome] < 325, "split correlated joint outcome " << outcome << ": " << joint[outcome]);
                     BOOST_CHECK_MESSAGE(detached[outcome] > 190 && detached[outcome] < 325,
                                         "detached component reused its parent's stream for outcome " << outcome << ": " << detached[outcome]);
                 }
@@ -585,7 +584,8 @@ BOOST_AUTO_TEST_CASE(CompositeBatchesPreserveFormatsAndStreams)
             for (size_t bit = 0; bit < 8; ++bit)
             {
                 sim->ApplyRy(first + bit, 0.4 + 0.13 * bit);
-                if (bit) sim->ApplyCX(first + bit - 1, first + bit);
+                if (bit)
+                    sim->ApplyCX(first + bit - 1, first + bit);
             }
         const Types::qubits_vector selected{23, 0, 10, 0, 8, 17};
         sim->SetSeed(823);
@@ -599,7 +599,8 @@ BOOST_AUTO_TEST_CASE(CompositeBatchesPreserveFormatsAndStreams)
         for (const auto &[outcome, count] : packed)
         {
             std::vector<bool> bits(selected.size());
-            for (size_t bit = 0; bit < bits.size(); ++bit) bits[bit] = ((outcome >> bit) & 1) != 0;
+            for (size_t bit = 0; bit < bits.size(); ++bit)
+                bits[bit] = ((outcome >> bit) & 1) != 0;
             BOOST_CHECK_EQUAL(many.at(bits), count);
         }
         auto first = sim->Clone(), second = sim->Clone();
@@ -649,7 +650,8 @@ BOOST_AUTO_TEST_CASE(CompositeUnmeasuredSingleShotStreamContinues)
             for (size_t q = 0; q < 19; ++q)
             {
                 sim->ApplyRy(q, 0.21 + 0.087 * q);
-                if (q > 1) sim->ApplyCX(q - 1, q);
+                if (q > 1)
+                    sim->ApplyCX(q - 1, q);
             }
             sim->SetSeed(471);
             return sim;

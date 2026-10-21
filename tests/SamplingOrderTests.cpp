@@ -4,11 +4,11 @@
 #ifndef NO_QISKIT_AER
 #include "../Simulators/Aer/AerSimulator.h"
 #endif
-#include "../Simulators/Composite/Individual.h"
 #include "../Simulators/Composite/ImmediateComposite.h"
+#include "../Simulators/Composite/Individual.h"
+#include "../Simulators/QCSim/QCSimDensityMatrixSimulator.h"
 #include "../Simulators/QCSim/QCSimExtendedStabilizerSimulator.h"
 #include "../Simulators/QCSim/QCSimStabilizerSimulator.h"
-#include "../Simulators/QCSim/QCSimDensityMatrixSimulator.h"
 #include <array>
 #include <iostream>
 #include <stdexcept>
@@ -376,15 +376,18 @@ void CompositeBatchReference()
     {
         // Scalar component-by-component oracle with the original RNG streams.
         std::array<std::mt19937_64, 3> engines;
-        for (size_t group = 0; group < 3; ++group) engines[group].seed(IState::DeriveSeed(919, group * 17));
+        for (size_t group = 0; group < 3; ++group)
+            engines[group].seed(IState::DeriveSeed(919, group * 17));
         auto scalar = [&](const Types::qubits_vector &requested, size_t count) {
             std::vector<Private::QCSimStatevectorSimulator::SamplingPlan> plans;
-            for (auto &component : reference) plans.push_back(component.PrepareSampling(count));
+            for (auto &component : reference)
+                plans.push_back(component.PrepareSampling(count));
             std::unordered_map<std::vector<bool>, Types::qubit_t> expected;
             for (size_t shot = 0; shot < count; ++shot)
             {
                 std::array<size_t, 3> rows;
-                for (size_t group = 0; group < 3; ++group) rows[group] = plans[group].Sample(Utils::RandomStream::Uniform(engines[group]));
+                for (size_t group = 0; group < 3; ++group)
+                    rows[group] = plans[group].Sample(Utils::RandomStream::Uniform(engines[group]));
                 std::vector<bool> bits(requested.size());
                 for (size_t bit = 0; bit < requested.size(); ++bit)
                     bits[bit] = ((rows[requested[bit] / 17] >> (requested[bit] % 17)) & 1) != 0;
@@ -427,11 +430,16 @@ void CompositeSingleComponent()
     reference.AllocateQubits(4);
     reference.Initialize();
     // Joining in this order maps global [3,1,0,2] to local [0,1,2,3].
-    sim.ApplyH(3); reference.ApplyH(0);
-    sim.ApplyCX(3, 1); reference.ApplyCX(0, 1);
-    sim.ApplyRy(0, 0.37); reference.ApplyRy(2, 0.37);
-    sim.ApplyCX(3, 0); reference.ApplyCX(0, 2);
-    sim.ApplyCX(0, 2); reference.ApplyCX(2, 3);
+    sim.ApplyH(3);
+    reference.ApplyH(0);
+    sim.ApplyCX(3, 1);
+    reference.ApplyCX(0, 1);
+    sim.ApplyRy(0, 0.37);
+    reference.ApplyRy(2, 0.37);
+    sim.ApplyCX(3, 0);
+    reference.ApplyCX(0, 2);
+    sim.ApplyCX(0, 2);
+    reference.ApplyCX(2, 3);
     for (const size_t shots : {size_t{1}, size_t{31}, size_t{100000}})
         for (bool threads : {false, true})
         {
@@ -471,7 +479,8 @@ void CompositeWideBatches()
         {
             Require(outcome == 10 || outcome == 31, "wide composite lost high global IDs");
             std::vector<bool> bits(selected.size());
-            for (size_t bit = 0; bit < bits.size(); ++bit) bits[bit] = ((outcome >> bit) & 1) != 0;
+            for (size_t bit = 0; bit < bits.size(); ++bit)
+                bits[bit] = ((outcome >> bit) & 1) != 0;
             Require(many.at(bits) == count, "wide composite count formats disagree");
         }
     }
@@ -484,26 +493,45 @@ void CompositeWideBatches()
     {
         Require(bits[0] == bits[129] && bits[32] && bits[64], "multiword composite projection is incorrect");
         for (size_t bit = 1; bit < 129; ++bit)
-            if (bit != 32 && bit != 64) Require(!bits[bit], "multiword projection set an unrelated bit");
+            if (bit != 32 && bit != 64)
+                Require(!bits[bit], "multiword projection set an unrelated bit");
     }
     sim.SetSeed(781);
     const auto duplicate = sim.SampleCountsMany(Types::qubits_vector(130, 129), 10000);
     for (const auto &[bits, count] : duplicate)
         Require(std::all_of(bits.begin(), bits.end(), [&](bool bit) { return bit == bits[0]; }), "wide duplicate outputs disagree");
     bool rejected = false;
-    try { sim.SampleCounts(all, 1); }
-    catch (const std::invalid_argument &) { rejected = true; }
+    try
+    {
+        sim.SampleCounts(all, 1);
+    }
+    catch (const std::invalid_argument &)
+    {
+        rejected = true;
+    }
     Require(rejected, "wide composite packed output was accepted");
+
     struct Observer : ISimulatorObserver
     {
         size_t calls = 0;
-        void Update(const Types::qubits_vector &) override { ++calls; }
+
+        void Update(const Types::qubits_vector &) override
+        {
+            ++calls;
+        }
     };
+
     const auto observer = std::make_shared<Observer>();
     sim.RegisterObserver(observer);
     rejected = false;
-    try { sim.SampleCountsMany({130}, 1000); }
-    catch (const std::out_of_range &) { rejected = true; }
+    try
+    {
+        sim.SampleCountsMany({130}, 1000);
+    }
+    catch (const std::out_of_range &)
+    {
+        rejected = true;
+    }
     Require(rejected, "invalid composite qubit was accepted");
     sim.SampleCountsMany(selected, 1000);
     Require(observer->calls == 1, "sampling error disabled observer notifications");
@@ -521,7 +549,8 @@ void CompositeTightBudget()
     for (size_t first : {size_t{0}, size_t{21}})
     {
         sim.ApplyH(first);
-        for (size_t q = 1; q < 21; ++q) sim.ApplyCX(first + q - 1, first + q);
+        for (size_t q = 1; q < 21; ++q)
+            sim.ApplyCX(first + q - 1, first + q);
     }
     const Types::qubits_vector selected{41, 0, 21, 20, 41};
     sim.SetSeed(819);
@@ -537,12 +566,14 @@ void CompositeTightBudget()
 
 void SamplingConfigurationValidation()
 {
-    const std::vector<std::pair<std::string, std::string>> invalid{
-        {"sampling_policy", "unknown"}, {"sampling_policy", ""},
-        {"sampling_max_memory_mb", "0"}, {"sampling_max_memory_mb", "-1"},
-        {"sampling_max_memory_mb", "1x"}, {"sampling_max_memory_mb", " 1"},
-        {"sampling_max_memory_mb", "18446744073709551616"},
-        {"sampling_max_memory_mb", std::to_string((std::numeric_limits<size_t>::max() >> 20) + 1)}};
+    const std::vector<std::pair<std::string, std::string>> invalid{{"sampling_policy", "unknown"},
+                                                                   {"sampling_policy", ""},
+                                                                   {"sampling_max_memory_mb", "0"},
+                                                                   {"sampling_max_memory_mb", "-1"},
+                                                                   {"sampling_max_memory_mb", "1x"},
+                                                                   {"sampling_max_memory_mb", " 1"},
+                                                                   {"sampling_max_memory_mb", "18446744073709551616"},
+                                                                   {"sampling_max_memory_mb", std::to_string((std::numeric_limits<size_t>::max() >> 20) + 1)}};
     for (auto backend : {SimulatorType::kCompositeQCSim, SimulatorType::kQCSim})
     {
         auto sim = SimulatorsFactory::CreateSimulatorUnique(backend, SimulationType::kStatevector);
@@ -561,8 +592,14 @@ void SamplingConfigurationValidation()
             for (const auto &[key, value] : invalid)
             {
                 bool rejected = false;
-                try { sim->Configure(key.c_str(), value.c_str()); }
-                catch (const std::invalid_argument &) { rejected = true; }
+                try
+                {
+                    sim->Configure(key.c_str(), value.c_str());
+                }
+                catch (const std::invalid_argument &)
+                {
+                    rejected = true;
+                }
                 Require(rejected && sim->GetConfigMap() == before, "bad sampling setting was accepted or mutated configuration");
             }
         }
@@ -585,7 +622,8 @@ void CompositeSingleShotStreams()
         for (size_t q = 0; q < 19; ++q)
         {
             sim->ApplyRy(q, 0.21 + 0.087 * q);
-            if (q > 1) sim->ApplyCX(q - 1, q);
+            if (q > 1)
+                sim->ApplyCX(q - 1, q);
         }
         sim->SetSeed(471);
         sim->SaveState();
@@ -595,13 +633,11 @@ void CompositeSingleShotStreams()
         const auto first = partial.SampleCounts({0}, 1).begin()->first;
         const auto both = full.SampleCounts({0, 18}, 1).begin()->first;
         Require(first == (both & 1), "skipped component changed selected single-shot sample");
-        Require(partial.SampleCountsMany({18, 0, 17}, 1) == full.SampleCountsMany({18, 0, 17}, 1),
-                "unmeasured component consumed the wrong native draw");
+        Require(partial.SampleCountsMany({18, 0, 17}, 1) == full.SampleCountsMany({18, 0, 17}, 1), "unmeasured component consumed the wrong native draw");
     }
     partial.RestoreState();
     full.RestoreState();
-    Require(partial.SampleCounts({18, 0, 17}, 4096) == full.SampleCounts({18, 0, 17}, 4096),
-            "single-shot skip changed state or batch stream");
+    Require(partial.SampleCounts({18, 0, 17}, 4096) == full.SampleCounts({18, 0, 17}, 4096), "single-shot skip changed state or batch stream");
 
     // The discard helper must use the native distribution, not assume an
     // implementation-specific number of underlying engine words.
@@ -609,7 +645,11 @@ void CompositeSingleShotStreams()
     actual.SetSeed(123);
     reference.SetSeed(123);
     QC::Gates::HadamardGate<> h;
-    for (unsigned q = 0; q < 3; ++q) { actual.ApplyGate(h, q); reference.ApplyGate(h, q); }
+    for (unsigned q = 0; q < 3; ++q)
+    {
+        actual.ApplyGate(h, q);
+        reference.ApplyGate(h, q);
+    }
     for (size_t draw = 0; draw < 100; ++draw)
     {
         actual.DiscardMeasurementDraw();
@@ -624,7 +664,8 @@ void PathIntegralTightBudget()
     auto sim = SimulatorsFactory::CreateSimulatorUnique(SimulatorType::kQCSim, SimulationType::kPathIntegral);
     sim->AllocateQubits(130);
     sim->Initialize();
-    for (size_t q = 0; q < 17; ++q) sim->ApplyH(q);
+    for (size_t q = 0; q < 17; ++q)
+        sim->ApplyH(q);
     sim->ApplyX(129);
     const Types::qubits_vector selected{129, 16, 0, 64, 16};
     // 131072 rows need a 2 MiB snapshot. The 1 MiB request must sweep the
@@ -645,7 +686,8 @@ void PathIntegralTightBudget()
     for (const auto &[bits, count] : wide)
     {
         Require(bits.size() == 130 && bits[129], "streaming path integral truncated wide labels");
-        for (size_t q = 17; q < 129; ++q) Require(!bits[q], "streaming path integral corrupted labels");
+        for (size_t q = 17; q < 129; ++q)
+            Require(!bits[q], "streaming path integral corrupted labels");
         total += count;
     }
     Require(total == 517, "streaming path integral lost shots");
@@ -696,8 +738,7 @@ void DensityProbabilities()
     sim->ApplyCX(0, 2);
     sim->SetSeed(123);
     const auto counts = sim->SampleCounts({2, 0, 2}, 100000);
-    Require(counts.size() == 2 && std::abs(double(counts.at(7)) / 100000. - 0.25) < 0.01,
-            "density marginal lost correlations or squared probabilities");
+    Require(counts.size() == 2 && std::abs(double(counts.at(7)) / 100000. - 0.25) < 0.01, "density marginal lost correlations or squared probabilities");
 }
 
 void StatevectorSupport()
@@ -740,21 +781,33 @@ void DensityValidation()
     sim.SetSeed(123);
     const auto counts = sim.SampleCounts({0, 1}, 100000);
     Require(counts.size() == 2 && std::abs(double(counts.at(3)) / 100000. - 0.25) < 0.01, "density retained mass was not normalized");
-    for (const auto invalid : {std::complex<double>{-1E-4, 0.}, {0., 1E-4}, {std::numeric_limits<double>::quiet_NaN(), 0.},
-                               {std::numeric_limits<double>::infinity(), 0.}})
+    for (const auto invalid :
+         {std::complex<double>{-1E-4, 0.}, {0., 1E-4}, {std::numeric_limits<double>::quiet_NaN(), 0.}, {std::numeric_limits<double>::infinity(), 0.}})
     {
         sim.Population(1, invalid);
         bool rejected = false;
-        try { sim.SampleCounts({0}, 10000); }
-        catch (const std::domain_error &) { rejected = true; }
+        try
+        {
+            sim.SampleCounts({0}, 10000);
+        }
+        catch (const std::domain_error &)
+        {
+            rejected = true;
+        }
         Require(rejected, "invalid density population was accepted");
     }
     sim.Population(0, 0.);
     sim.Population(1, 0.);
     sim.Population(3, 0.);
     bool rejected = false;
-    try { sim.SampleCounts({0}, 10000); }
-    catch (const std::domain_error &) { rejected = true; }
+    try
+    {
+        sim.SampleCounts({0}, 10000);
+    }
+    catch (const std::domain_error &)
+    {
+        rejected = true;
+    }
     Require(rejected, "zero-trace density matrix was accepted");
 }
 

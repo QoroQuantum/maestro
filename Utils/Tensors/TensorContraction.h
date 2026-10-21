@@ -289,9 +289,9 @@ template <class Function> void TensorParallelRanges(size_t jobs, int threads, co
 
 template <class T, class Storage>
 constexpr bool TensorEigenStorage =
-    (std::is_same_v<T, float> || std::is_same_v<T, double> || std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) &&
-    (std::is_same_v<Storage, std::valarray<T>> || std::is_same_v<Storage, std::vector<T>> || std::is_same_v<Storage, const T *> ||
-     std::is_same_v<Storage, T *>);
+    (std::is_same_v<T, float> || std::is_same_v<T, double> || std::is_same_v<T, std::complex<float>> ||
+     std::is_same_v<T, std::complex<double>>)&&(std::is_same_v<Storage, std::valarray<T>> || std::is_same_v<Storage, std::vector<T>> ||
+                                                std::is_same_v<Storage, const T *> || std::is_same_v<Storage, T *>);
 
 template <class T, class Storage>
 T TensorScalarContraction(const Storage &a, const Storage &b, const TensorAxisPattern &ka, const TensorAxisPattern &kb, bool allow)

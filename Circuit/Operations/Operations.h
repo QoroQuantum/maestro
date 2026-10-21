@@ -407,7 +407,7 @@ template <typename Time = Types::time_type> class IOperation : public std::enabl
      * Construct a new IOperation object with the specified execution time.
      * @param delay The execution time of the operation.
      */
-    IOperation(Time delay = 0) : delay(delay) {};
+    IOperation(Time delay = 0) : delay(delay){};
 
     /**
      * @brief Destroy the IOperation object.
@@ -607,7 +607,7 @@ template <typename Time = Types::time_type> class NoOperation : public IOperatio
      * Construct a new NoOperation object with the specified execution time.
      * @param delay The execution time of the operation.
      */
-    NoOperation(Time delay = 0) : IOperation<Time>(delay) {};
+    NoOperation(Time delay = 0) : IOperation<Time>(delay){};
 
     /**
      * @brief Execute the operation.
@@ -684,7 +684,7 @@ template <typename Time = Types::time_type> class IGateOperation : public IOpera
      * Construct a new IGateOperation object with the specified execution time.
      * @param delay The execution time of the operation.
      */
-    IGateOperation(Time delay = 0) : IOperation<Time>(delay) {};
+    IGateOperation(Time delay = 0) : IOperation<Time>(delay){};
 
     /**
      * @brief Get the type of the operation.

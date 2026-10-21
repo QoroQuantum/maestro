@@ -555,7 +555,7 @@ struct AddGateExpr : public AbstractSyntaxTree
     static inline std::unordered_set<std::string> allowedNoParamGates = {"x",    "y",  "z",    "h",     "s",      "sdg",   "sdag", "t",  "tdg",
                                                                          "tdag", "sx", "sxdg", "sxdag", "k",      "swap",  "cx",   "CX", "cy",
                                                                          "cz",   "ch", "csx",  "csxdg", "csxdag", "cswap", "ccx",  "id"};
-    static inline std::unordered_set<std::string> allowedOneParamGates = {"p",   "rx", "ry",  "rz",    "cp",     "crx",   "cry",
+    static inline std::unordered_set<std::string> allowedOneParamGates = {"p",   "rx", "ry",  "rz",    "cp",     "crx",    "cry",
                                                                           "crz", "u1", "cu1", "phase", "cphase", "gphase", "u0"};
     // "cu1" is deliberately absent: like "u1" it takes exactly one angle, and
     // listing it here made cu1(a, b, c) accepted and silently lowered as cu3.

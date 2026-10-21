@@ -106,7 +106,7 @@ template <class T = std::complex<double>, class Storage = std::valarray<T>> clas
         if (typename Archive::is_loading())
             values.clear();
 
-        ar & dims & sz;
+        ar &dims &sz;
     }
 
     Tensor<T, Storage> &operator=(const Tensor<T, Storage> &other)

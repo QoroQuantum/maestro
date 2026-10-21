@@ -15,7 +15,8 @@ int main(int argc, char **argv)
 try
 {
     if (argc < 8 || argc > 10)
-        throw std::invalid_argument("usage: composite_sampling_benchmarks components bits_per_component shots threads measured_per_component packed|many repetitions [workers] [spread|ghz]");
+        throw std::invalid_argument("usage: composite_sampling_benchmarks components bits_per_component shots threads measured_per_component packed|many "
+                                    "repetitions [workers] [spread|ghz]");
     const size_t components = std::stoull(argv[1]), bits = std::stoull(argv[2]), shots = std::stoull(argv[3]);
     const int threads = std::stoi(argv[4]), repetitions = std::stoi(argv[7]);
     const size_t measured = std::stoull(argv[5]), workers = argc >= 9 ? std::stoull(argv[8]) : 1;
@@ -63,34 +64,47 @@ try
         auto sample = [&](size_t worker) {
             try
             {
-                if (many) wide[worker] = sims[worker]->SampleCountsMany(selected, shots);
-                else packed[worker] = sims[worker]->SampleCounts(selected, shots);
+                if (many)
+                    wide[worker] = sims[worker]->SampleCountsMany(selected, shots);
+                else
+                    packed[worker] = sims[worker]->SampleCounts(selected, shots);
             }
-            catch (...) { errors[worker] = std::current_exception(); }
+            catch (...)
+            {
+                errors[worker] = std::current_exception();
+            }
         };
         const auto start = std::chrono::steady_clock::now();
-        if (workers == 1) sample(0);
+        if (workers == 1)
+            sample(0);
         else
         {
             std::vector<std::thread> tasks;
-            for (size_t worker = 0; worker < workers; ++worker) tasks.emplace_back(sample, worker);
-            for (auto &task : tasks) task.join();
+            for (size_t worker = 0; worker < workers; ++worker)
+                tasks.emplace_back(sample, worker);
+            for (auto &task : tasks)
+                task.join();
         }
         const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
         for (size_t worker = 0; worker < workers; ++worker)
         {
-            if (errors[worker]) std::rethrow_exception(errors[worker]);
-            if (many) results[worker].assign(wide[worker].begin(), wide[worker].end());
+            if (errors[worker])
+                std::rethrow_exception(errors[worker]);
+            if (many)
+                results[worker].assign(wide[worker].begin(), wide[worker].end());
             else
                 for (const auto &[key, count] : packed[worker])
                 {
                     std::vector<bool> output(selected.size());
-                    for (size_t bit = 0; bit < output.size(); ++bit) output[bit] = ((key >> bit) & 1) != 0;
+                    for (size_t bit = 0; bit < output.size(); ++bit)
+                        output[bit] = ((key >> bit) & 1) != 0;
                     results[worker].emplace_back(std::move(output), count);
                 }
             size_t total = 0;
-            for (const auto &entry : results[worker]) total += entry.second;
-            if (total != shots) throw std::runtime_error("benchmark lost shots");
+            for (const auto &entry : results[worker])
+                total += entry.second;
+            if (total != shots)
+                throw std::runtime_error("benchmark lost shots");
             std::sort(results[worker].begin(), results[worker].end());
         }
         return elapsed;
@@ -101,19 +115,20 @@ try
     for (int repetition = 0; repetition < repetitions; ++repetition)
     {
         times.push_back(run());
-        if (results != expected) throw std::runtime_error("seeded replay changed");
+        if (results != expected)
+            throw std::runtime_error("seeded replay changed");
     }
     std::sort(times.begin(), times.end());
     uint64_t checksum = 14695981039346656037ULL;
     for (const auto &entries : results)
         for (const auto &[key, count] : entries)
         {
-            for (bool bit : key) checksum = (checksum ^ uint64_t(bit)) * 1099511628211ULL;
+            for (bool bit : key)
+                checksum = (checksum ^ uint64_t(bit)) * 1099511628211ULL;
             checksum = (checksum ^ count) * 1099511628211ULL;
         }
-    std::cout << components << ',' << bits << ',' << shots << ',' << threads << ',' << measured << ',' << (many ? "many" : "packed")
-              << ',' << workers << ',' << (ghz ? "ghz" : "spread") << ',' << std::fixed << std::setprecision(3) << times[times.size() / 2]
-              << ',' << checksum << '\n';
+    std::cout << components << ',' << bits << ',' << shots << ',' << threads << ',' << measured << ',' << (many ? "many" : "packed") << ',' << workers << ','
+              << (ghz ? "ghz" : "spread") << ',' << std::fixed << std::setprecision(3) << times[times.size() / 2] << ',' << checksum << '\n';
     return 0;
 }
 catch (const std::exception &error)
