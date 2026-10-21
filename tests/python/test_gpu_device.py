@@ -129,7 +129,8 @@ def test_two_gpu_python_placement(method):
 ])
 @pytest.mark.parametrize("case", ["native", "reduced", "clustered", "identity"])
 def test_one_qubit_tensor_estimates(backend, method, case):
-    if backend == maestro.SimulatorType.Gpu and not maestro.is_gpu_available():
+    # Identity-only estimates do not allocate a simulator or require a GPU.
+    if backend == maestro.SimulatorType.Gpu and case != "identity" and not maestro.is_gpu_available():
         pytest.skip("GPU plugin/device unavailable")
     config = maestro.SimulatorConfig(
         simulator_type=backend, simulation_type=method,
@@ -171,6 +172,8 @@ def test_one_qubit_tensor_estimates(backend, method, case):
     assert result["simulator"] == backend.value
     if backend == maestro.SimulatorType.Gpu:
         assert result["gpu_device"] == (-1 if case == "identity" else 0)
+    else:
+        assert "gpu_device" not in result
     assert repr(config) == before
 
 

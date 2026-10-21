@@ -111,7 +111,8 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
     for (auto method : result.cluster_methods)
         methods.append(static_cast<int>(method));
     out["cluster_methods"] = methods;
-    if (result.gpu_device >= 0)
+    // GPU estimates resolved without simulation retain -1 (no device used).
+    if (result.simulator == Simulators::SimulatorType::kGpuSim || result.gpu_device >= 0)
         out["gpu_device"] = result.gpu_device;
     if (result.max_bond_dimension)
         out["max_bond_dim_reached"] = result.max_bond_dimension;
