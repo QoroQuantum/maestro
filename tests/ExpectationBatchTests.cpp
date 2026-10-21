@@ -448,26 +448,32 @@ void TensorQueries()
     }
     // Peak statistics must not be replaced by the new instantaneous getter.
     for (auto method : {Method::kMatrixProductState, Method::kMatrixProductOperator})
-    {
-        auto sim = Make(method, 4);
-        sim->ApplyH(0);
-        sim->ApplyCX(0, 1);
-        const auto peak = sim->GetCurrentMaxBondDimension();
-        Check(peak >= 2, "Bond summary missed entanglement");
-        auto clone = sim->Clone();
-        clone->ApplyH(2);
-        clone->ApplyCX(2, 3);
-        // Named SWAPs relabel qubits without touching bonds, so swap physically.
-        clone->ApplySwap(1, 2);
-        Check(clone->GetCurrentMaxBondDimension() == peak, "Relabelling SWAP changed bonds");
-        clone->ApplyCX(1, 2);
-        clone->ApplyCX(2, 1);
-        clone->ApplyCX(1, 2);
-        Check(clone->GetCurrentMaxBondDimension() > peak, "Clone callback missed bond growth");
-        Check(sim->GetCurrentMaxBondDimension() == peak, "Clone callback changed original");
-        sim->Measure({0, 1});
-        Check(sim->GetCurrentMaxBondDimension() >= peak, "Measurement erased peak");
-    }
+        for (bool fusion : {false, true})
+        {
+            auto sim = Make(method, 4);
+            sim->Configure("gate_fusion", fusion ? "true" : "false");
+            sim->ApplyH(0);
+            sim->ApplyCX(0, 1);
+            const auto peak = sim->GetCurrentMaxBondDimension();
+            Check(peak >= 2, "Bond summary missed entanglement");
+            auto clone = sim->Clone();
+            clone->ApplyH(2);
+            clone->ApplyCX(2, 3);
+            // Named SWAPs relabel qubits without touching bonds.
+            clone->ApplySwap(1, 2);
+            Check(clone->GetCurrentMaxBondDimension() == peak, "Relabelling SWAP changed bonds");
+            // Execute each CNOT separately so fusion cannot turn this physical
+            // swap into a relabelling SWAP that leaves the bonds unchanged.
+            clone->ApplyCX(1, 2);
+            clone->Flush();
+            clone->ApplyCX(2, 1);
+            clone->Flush();
+            clone->ApplyCX(1, 2);
+            Check(clone->GetCurrentMaxBondDimension() > peak, "Clone callback missed bond growth");
+            Check(sim->GetCurrentMaxBondDimension() == peak, "Clone callback changed original");
+            sim->Measure({0, 1});
+            Check(sim->GetCurrentMaxBondDimension() >= peak, "Measurement erased peak");
+        }
     auto mixed = Make(Method::kMatrixProductOperator, 2);
     Reject([&] { mixed->GetStateVector(); });
     Reject([&] { mixed->ExpectationValueOperators({}, {}); });
