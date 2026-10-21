@@ -103,6 +103,14 @@ inline const std::vector<Option> &Options()
         {"mps_routing_legacy_cap", "mps_routing_legacy_cap", "boolean", "native_routing"},
         {"optimize_circuit", "", "boolean", "all"},
         {"gate_fusion", "", "boolean", "all"},
+        {"auto_reduce", "", "boolean", "all"},
+        {"enable_causal_cone_reduction", "", "boolean", "all"},
+        {"enable_observable_clustering", "", "boolean", "all"},
+        {"max_cluster_qubits", "", "positive_integer", "all"},
+        {"min_cluster_qubits", "", "positive_integer", "all"},
+        {"observable_error_tolerance", "", "positive_probability", "all"},
+        {"allow_reset_marginalization", "", "boolean", "all"},
+        {"enable_sampling_reduction", "", "boolean", "all"},
         {"max_simulators", "max_simulators", "positive_integer", "all"},
         {"trajectory_policy", "trajectory_policy", "string", "cpu_trajectory"},
         {"trajectory_max_memory_mb", "trajectory_max_memory_mb", "positive_integer", "cpu_dense"},
@@ -225,6 +233,8 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
                     key + " must be positive (MPO accepts zero for unlimited)");
         else if (type == "nonnegative")
             Require(Number(value) >= 0, key + " must be nonnegative");
+        else if (type == "positive_probability")
+            Require(Number(value) > 0 && Number(value) <= 1, key + " must be in (0, 1]");
         else if (type == "lookahead")
             Require(value.is_int64() && value.as_int64() >= -1 && value.as_int64() <= 1000000, "Invalid lookahead_depth");
         else
@@ -260,6 +270,22 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
             config.optimize_circuit = Boolean(value);
         else if (name == "gate_fusion")
             config.gate_fusion = Boolean(value);
+        else if (name == "auto_reduce")
+            config.auto_reduce = Boolean(value);
+        else if (name == "enable_causal_cone_reduction")
+            config.enable_causal_cone_reduction = Boolean(value);
+        else if (name == "enable_observable_clustering")
+            config.enable_observable_clustering = Boolean(value);
+        else if (name == "allow_reset_marginalization")
+            config.allow_reset_marginalization = Boolean(value);
+        else if (name == "enable_sampling_reduction")
+            config.enable_sampling_reduction = Boolean(value);
+        else if (name == "observable_error_tolerance")
+            config.observable_error_tolerance = Number(value);
+        else if (name == "min_cluster_qubits")
+            config.min_cluster_qubits = UInt(value);
+        else if (name == "max_cluster_qubits")
+            config.max_cluster_qubits = UInt(value);
         else if (name == "mps_sampling")
             config.mps_sampling = choice(value, MpsSamplingModes(), key);
         else if (name == "precision")
@@ -359,6 +385,7 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
             config.optimization_candidates.emplace_back(parsed.simulator_type, parsed.simulation_type);
         }
     }
+    config.Validate();
     return config;
 }
 } // namespace MaestroExecution

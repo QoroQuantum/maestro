@@ -67,6 +67,72 @@ void Near(double actual, double expected)
     Check(std::abs(actual - expected) < 1e-9, "Numerical mismatch");
 }
 
+void TestLightconeEstimation()
+{
+    auto request = Request("estimate", 80, "x q[0]; h q[79];");
+    request["observables"] = j::array{std::string("Z") + std::string(79, 'I')};
+    auto r = Call(request);
+    Near(Real(r.at("expectation_values").as_array()[0]), -1);
+    Check(r.at("qubits_after").to_number<size_t>() == 1 && r.at("clusters_count").to_number<size_t>() == 1, "Native estimate did not reduce before allocation");
+    request = Request("estimate", 3, "h q[0]; h q[1]; cx q[0],q[1]; rz(0.7) q[1]; cx q[0],q[1]; rx(0.2) q[0]; rx(-0.3) q[1]; ry(0.2) q[2];");
+    request["observables"] = j::array{"ZZI"};
+    r = Call(request);
+    Check(r.at("auto_reduced").as_bool() && r.at("qubits_after").to_number<size_t>() == 1, "Native local parity retry failed");
+    Near(Real(r.at("expectation_values").as_array()[0]), std::sin(0.7) * std::sin(-0.1));
+    request["simulator"].as_object()["options"] = j::object{{"auto_reduce", false}, {"enable_causal_cone_reduction", false}};
+    r = Call(request);
+    Check(!r.at("auto_reduced").as_bool() && r.at("qubits_after").to_number<size_t>() == 3, "Native reduction options ignored");
+    Near(Real(r.at("expectation_values").as_array()[0]), std::sin(0.7) * std::sin(-0.1));
+    request = Request("execute", 80, "x q[0]; x q[79]; measure q[0]->c[2]; measure q[79]->c[0];", "statevector", 3);
+    request["simulator"].as_object()["options"] = j::object{{"enable_sampling_reduction", true}};
+    r = Call(request);
+    Check(r.at("counts") == j::object{{"101", 80}} && r.at("sampling_components").to_number<size_t>() == 2 &&
+              r.at("largest_component_qubits").to_number<size_t>() == 1,
+          "Native disjoint sampling failed");
+    request = Request("estimate", 1, "rx(0.2) q[0]; rx(0.2) q[0]; rx(0.2) q[0];", "density_matrix");
+    request["observables"] = j::array{"Z", "I"};
+    request["noise"] = j::object{{"channels", j::array{j::object{{"kind", "depolarizing"}, {"targets", j::array{0}}, {"probability", 0.75}}}}, {"seed", 8}};
+    request["simulator"].as_object()["options"] = j::object{{"observable_error_tolerance", 0.001}};
+    r = Call(request);
+    Check(r.at("bounded_observables").to_number<size_t>() == 2 && r.at("clusters_count").to_number<size_t>() == 0,
+          "Native bounded noisy evaluation was bypassed");
+    Near(Real(r.at("expectation_values").as_array()[0]), 0);
+    Near(Real(r.at("expectation_values").as_array()[1]), 1);
+    auto *catalog_text = MaestroGetCapabilitiesJson();
+    auto catalog = j::parse(catalog_text);
+    FreeResult(catalog_text);
+    bool found_tolerance = false, found_resets = false;
+    for (const auto &option : catalog.at("options").as_array())
+    {
+        if (option.at("name") == "observable_error_tolerance")
+        {
+            found_tolerance = true;
+            Check(option.at("type") == "positive_probability" && option.at("exclusiveMinimum").to_number<int>() == 0 &&
+                      option.at("maximum").to_number<int>() == 1,
+                  "Tolerance discovery disagrees with validation");
+        }
+        if (option.at("name") == "allow_reset_marginalization")
+            found_resets = option.at("type") == "boolean";
+    }
+    Check(found_tolerance && found_resets, "Missing reduction option metadata");
+    request["simulator"].as_object()["options"] = j::object{{"observable_error_tolerance", 1}};
+    Call(request, true, true);
+    for (const auto &options : {j::object{{"observable_error_tolerance", 0}}, j::object{{"observable_error_tolerance", 1.1}},
+                                j::object{{"min_cluster_qubits", 5}, {"max_cluster_qubits", 4}}})
+    {
+        request["simulator"].as_object()["options"] = options;
+        Check(Call(request, false, true).at("error").at("code") == "invalid_input", "Native validation accepted invalid reduction options");
+    }
+    request = Request("estimate", 2, "h q[0]; cx q[0],q[1]; reset q[1];");
+    request["observables"] = j::array{"ZI"};
+    r = Call(request);
+    Check(r.at("qubits_after").to_number<size_t>() == 2, "Default reset trajectory policy changed");
+    request["simulator"].as_object()["options"] = j::object{{"allow_reset_marginalization", true}};
+    r = Call(request);
+    Near(Real(r.at("expectation_values").as_array()[0]), 0);
+    Check(r.at("qubits_after").to_number<size_t>() == 1, "Native reset marginalization option ignored");
+}
+
 void TestLegacySeeds()
 {
     GetMaestroObjectWithMute();
@@ -715,6 +781,7 @@ try
     Call(request, false);
     auto nested = j::object{{"schema_version", 2}, {"operation", "batch"}, {"requests", j::array{request}}};
     Call(nested, false, true);
+    TestLightconeEstimation();
     TestRequestNoiseAndOptions();
     TestLegacySeeds();
     TestTrajectoryOptions();

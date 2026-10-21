@@ -110,12 +110,23 @@ struct SimulatorConfig
     std::optional<uint64_t> seed = std::nullopt;
     std::optional<int> gpu_device = std::nullopt;
     bool enable_causal_cone_reduction = true;
+    // Exact independent sampling of disjoint measurement cones. Opt-in because
+    // decomposing a seeded sampler changes its random streams.
+    bool enable_sampling_reduction = false;
+    // Average over unobserved reset outcomes when reducing pure trajectories.
+    // Preserves ensemble expectations/distributions, not individual trajectories.
+    bool allow_reset_marginalization = false;
     // With causal-cone reduction, split multi-observable estimates into groups
     // with disjoint lightcones and simulate each on its own compact register.
     bool enable_observable_clustering = true;
-    // Unset: overlapping lightcones always share a group. Set: overlapping
-    // observables are packed into groups of at most this many lightcone qubits.
+    // Unset: dense statevectors use a 20-qubit batching budget, density matrices
+    // use 10; other methods merge connected cones. Oversized cones stay intact.
     std::optional<size_t> max_cluster_qubits = std::nullopt;
+    // Optionally batch disjoint small cones up to this width to amortize setup.
+    std::optional<size_t> min_cluster_qubits = std::nullopt;
+    // Opt-in absolute error budget per expectation, for bounded backward Pauli
+    // evaluation of exact noisy channels. Unset preserves exact reduction.
+    std::optional<double> observable_error_tolerance = std::nullopt;
     // Automatically reduce check-generated invariant subspaces for expectation evaluation.
     bool auto_reduce = true;
     // Values use the same names and syntax as ISimulator::Configure.
@@ -156,6 +167,10 @@ struct SimulatorConfig
             throw std::invalid_argument("trajectory_max_memory_mb must be a positive representable MiB count");
         if (max_cluster_qubits && !*max_cluster_qubits)
             throw std::invalid_argument("max_cluster_qubits must be positive");
+        if (min_cluster_qubits && (!*min_cluster_qubits || (max_cluster_qubits && *min_cluster_qubits > *max_cluster_qubits)))
+            throw std::invalid_argument("min_cluster_qubits must be positive and no greater than max_cluster_qubits");
+        if (observable_error_tolerance && (!std::isfinite(*observable_error_tolerance) || *observable_error_tolerance <= 0 || *observable_error_tolerance > 1))
+            throw std::invalid_argument("observable_error_tolerance must be finite and in (0, 1]");
         if (max_simulators && (!*max_simulators || *max_simulators > 1024))
             throw std::invalid_argument("max_simulators must be between 1 and 1024");
         RequireOneOf(truncation_mode, TruncationModes(), "truncation_mode");

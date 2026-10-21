@@ -95,6 +95,11 @@ inline json::object OptionCapability(const Option &option)
         result["minimum"] = 0;
     else if (type == "positive_integer")
         result["minimum"] = 1;
+    else if (type == "positive_probability")
+    {
+        result["exclusiveMinimum"] = 0;
+        result["maximum"] = 1;
+    }
     else if (type == "lookahead")
     {
         result["minimum"] = -1;

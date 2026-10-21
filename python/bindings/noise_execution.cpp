@@ -134,11 +134,14 @@ static nb::dict execute_noise_batches(const CircuitPtr &circuit, const noise::No
     const int leftover = shots % batches;
 
     std::unordered_map<std::string, size_t> combined;
+    size_t sampling_components = 0, largest_component = 0;
     auto start = std::chrono::high_resolution_clock::now();
     for (int b = 0; b < batches; ++b)
     {
         auto noisy = inject(circuit, noise_model, rng, config);
         nb::dict r = execute_core(noisy, NoiseExecutionConfig(config, noise_seed, b), base_batch + (b < leftover ? 1 : 0));
+        sampling_components = std::max(sampling_components, nb::cast<size_t>(r["sampling_components"]));
+        largest_component = std::max(largest_component, nb::cast<size_t>(r["largest_component_qubits"]));
         for (auto item : nb::cast<nb::dict>(r["counts"]))
             combined[nb::cast<std::string>(nb::str(item.first))] += nb::cast<size_t>(item.second);
     }
@@ -154,6 +157,8 @@ static nb::dict execute_noise_batches(const CircuitPtr &circuit, const noise::No
     out["simulator"] = (int)config.simulator_type;
     out["method"] = (int)config.simulation_type;
     out["noise_realizations"] = batches;
+    out["sampling_components"] = sampling_components;
+    out["largest_component_qubits"] = largest_component;
     if (noise_type)
         out["noise_type"] = noise_type;
     return out;
@@ -168,7 +173,19 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
     auto paulis = ParseObservables(observables);
     auto rng = MakeNoiseRng(config, noise_seed);
     const size_t n_obs = paulis.size();
-    std::vector<double> sum_vals(n_obs, 0.0);
+    if (!n_obs)
+    {
+        auto out = estimate_core(circuit, paulis, config);
+        out["ideal_expectation_values"] = nb::list();
+        out["noise_realizations"] = noise_realizations;
+        out["cone_cache_hits"] = 0;
+        if (noise_type)
+            out["noise_type"] = noise_type;
+        return out;
+    }
+    std::vector<double> sum_vals(n_obs, 0.0), error_bounds(n_obs, 0.0);
+    size_t bounded_observables = 0;
+    MaestroExecution::EstimationCache cache;
 
     auto clean_circuit = circuit->RemoveEndMeasurements();
 
@@ -176,16 +193,29 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
     bool any_reduced = false;
     int qubits_before = 0;
     int qubits_after = 0;
+    size_t clusters_count = 0, total_clusters = 0;
+    double total_cluster_qubits = 0, reduction_time = 0;
+    nb::list cluster_methods;
     for (int r = 0; r < noise_realizations; ++r)
     {
         auto noisy = inject(clean_circuit, noise_model, rng, config);
-        nb::dict result = estimate_core(noisy, paulis, NoiseExecutionConfig(config, noise_seed, r));
+        nb::dict result = estimate_core(noisy, paulis, NoiseExecutionConfig(config, noise_seed, r), &cache);
         if (result.contains("auto_reduced") && nb::cast<bool>(result["auto_reduced"]))
             any_reduced = true;
         if (result.contains("qubits_before"))
-            qubits_before = nb::cast<int>(result["qubits_before"]);
+            qubits_before = std::max(qubits_before, nb::cast<int>(result["qubits_before"]));
         if (result.contains("qubits_after"))
-            qubits_after = nb::cast<int>(result["qubits_after"]);
+            qubits_after = std::max(qubits_after, nb::cast<int>(result["qubits_after"]));
+        const auto count = nb::cast<size_t>(result["clusters_count"]);
+        clusters_count = std::max(clusters_count, count);
+        total_clusters += count;
+        total_cluster_qubits += count * nb::cast<double>(result["mean_cluster_qubits"]);
+        reduction_time += nb::cast<double>(result["reduction_time"]);
+        cluster_methods = nb::cast<nb::list>(result["cluster_methods"]);
+        bounded_observables = std::max(bounded_observables, nb::cast<size_t>(result["bounded_observables"]));
+        const auto bounds = nb::cast<std::vector<double>>(result["expectation_error_bounds"]);
+        for (size_t i = 0; i < n_obs; ++i)
+            error_bounds[i] += bounds[i] / noise_realizations;
         nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
         for (size_t i = 0; i < n_obs; ++i)
             sum_vals[i] += nb::cast<double>(ev[i]);
@@ -211,8 +241,16 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
         out["gpu_device"] = ideal_result["gpu_device"];
     out["noise_realizations"] = noise_realizations;
     out["auto_reduced"] = any_reduced;
+    out["expectation_error_bounds"] = nb::cast(error_bounds);
+    out["bounded_observables"] = bounded_observables;
+    out["cone_cache_hits"] = cache.hits;
     out["qubits_before"] = qubits_before;
     out["qubits_after"] = qubits_after;
+    out["clusters_count"] = clusters_count;
+    out["largest_cluster_qubits"] = qubits_after;
+    out["mean_cluster_qubits"] = total_clusters ? total_cluster_qubits / total_clusters : 0;
+    out["reduction_time"] = reduction_time;
+    out["cluster_methods"] = cluster_methods;
     if (noise_type)
         out["noise_type"] = noise_type;
     return out;

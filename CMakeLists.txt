@@ -398,7 +398,13 @@ endif()
 # 5. Core Targets: libmaestro and maestroexe
 # ==============================================================================
 
-set(MAESTROSRC maestrolib/Interface.cpp Execution/Request.cpp
+set(MAESTROSRC maestrolib/Interface.cpp Execution/Request.cpp Execution/Estimation.h Execution/Estimation.cpp
+    Execution/Sampling.h
+    Execution/Sampling.cpp
+    Execution/Transforms/ConeAnalysis.h
+    Execution/Transforms/PauliCone.h
+    Execution/Transforms/BoundedPauli.h
+    Execution/Transforms/BoundedPauli.cpp
     Execution/Transforms/Export.h
     Execution/Transforms/TransformContext.h
     Execution/Transforms/ITransform.h
@@ -639,6 +645,14 @@ if(COMPILE_TESTS)
     target_compile_definitions(causal_cone_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX)
     add_test(NAME causal_cone COMMAND causal_cone_tests)
 
+    add_executable(lightcone_update_tests tests/LightconeUpdateTests.cpp)
+    target_link_libraries(lightcone_update_tests PRIVATE maestro)
+    target_include_directories(lightcone_update_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(lightcone_update_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX)
+    add_test(NAME lightcone_update COMMAND lightcone_update_tests)
+    add_test(NAME lightcone_sparse_histograms COMMAND lightcone_update_tests --histogram-sparse)
+    set_tests_properties(lightcone_sparse_histograms PROPERTIES TIMEOUT 30)
+
     add_executable(adaptive_sampling_tests tests/AdaptiveSamplingTests.cpp)
     target_compile_definitions(adaptive_sampling_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX)
     if(OpenMP_CXX_FOUND)
@@ -734,7 +748,10 @@ if(COMPILE_TESTS)
     endif()
 
     add_executable(tests ${ACTIVE_TESTSSRC})
-    target_link_libraries(tests PRIVATE Boost::serialization)
+    # Link the shared estimation implementation without inheriting Maestro's
+    # blanket Boost DLL macros: Tests.cpp supplies Boost.Test inside this exe.
+    target_link_libraries(tests PRIVATE "$<TARGET_LINKER_FILE:maestro>" Boost::serialization)
+    add_dependencies(tests maestro)
     if(MSVC AND NOT Boost_USE_STATIC_LIBS)
         # Tests.cpp supplies the Boost.Test implementation. Import only the
         # serialization DLL, not the test framework, in the other test files.
@@ -744,7 +761,7 @@ if(COMPILE_TESTS)
         target_compile_definitions(tests PRIVATE BOOST_SERIALIZATION_DYN_LINK)
     endif()
     if(MAESTRO_ENABLE_COMPOSER)
-        # This executable compiles Maestro sources without linking libmaestro.
+        # Direct factory tests also need the optional composer implementation.
         target_link_libraries(tests PRIVATE maestro_composer)
     endif()
 

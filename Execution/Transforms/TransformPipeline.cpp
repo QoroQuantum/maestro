@@ -4,7 +4,6 @@
 #include "ParityReductionTransform.h"
 
 #include <algorithm>
-#include <array>
 #include <stdexcept>
 
 namespace MaestroExecution
@@ -20,33 +19,49 @@ size_t RegisterWidth(const TransformContext &ctx)
 }
 } // namespace
 
+void TransformPipeline::ApplyParity(TransformContext &ctx)
+{
+    ParityReductionTransform parity;
+    if (!parity.IsApplicable(ctx))
+        return;
+    parity.Apply(ctx);
+    if (ctx.auto_reduced)
+        ctx.applied_transforms.emplace_back(parity.Name());
+    ctx.qubits_after = RegisterWidth(ctx);
+}
+
+void TransformPipeline::Tighten(TransformContext &ctx, size_t original_width, bool retry_parity)
+{
+    CausalConeTransform cone;
+    const auto previous = ctx.circuit;
+    const auto apply_cone = [&] {
+        if (!cone.IsApplicable(ctx))
+            return;
+        const auto before = ctx.circuit;
+        const auto observables = ctx.observables;
+        cone.Apply(ctx);
+        if (before != ctx.circuit || observables != ctx.observables)
+            ctx.applied_transforms.emplace_back(cone.Name());
+    };
+    apply_cone();
+    if (retry_parity && (previous != ctx.circuit || RegisterWidth(ctx) < original_width))
+    {
+        ApplyParity(ctx);
+        if (ctx.auto_reduced)
+            apply_cone();
+    }
+    ctx.qubits_after = RegisterWidth(ctx);
+}
+
 void TransformPipeline::Run(TransformContext &ctx)
 {
     if (!ctx.circuit)
         throw std::invalid_argument("TransformPipeline requires a non-null circuit.");
-
     ctx.qubits_before = RegisterWidth(ctx);
-    ctx.qubits_after = ctx.qubits_before;
     ctx.applied_transforms.clear();
     ctx.auto_reduced = false;
     ctx.expectation_factors.assign(ctx.observables.size(), 1.0);
-
-    // Per-run instances avoid shared mutable pass state across concurrent calls.
-    ParityReductionTransform parity;
-    CausalConeTransform causal_cone;
-    const std::array<ITransform *, 2> transforms{&parity, &causal_cone};
-    for (auto *transform : transforms)
-    {
-        if (!transform->IsApplicable(ctx))
-            continue;
-        const auto prev_circuit = ctx.circuit;
-        const auto prev_observables = ctx.observables;
-        transform->Apply(ctx);
-        if (ctx.circuit != prev_circuit || ctx.observables != prev_observables)
-        {
-            ctx.applied_transforms.emplace_back(transform->Name());
-            ctx.qubits_after = RegisterWidth(ctx);
-        }
-    }
+    ApplyParity(ctx);
+    Tighten(ctx, ctx.qubits_before, !ctx.auto_reduced);
 }
 } // namespace MaestroExecution

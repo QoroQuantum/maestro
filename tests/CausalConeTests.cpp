@@ -1,7 +1,11 @@
 #include "Circuit/Factory.h"
+#include "Execution/Estimation.h"
+#include "Execution/Sampling.h"
 #include "Execution/SimulatorConfig.h"
+#include "Execution/Transforms/BoundedPauli.h"
 #include "Execution/Transforms/ObservableClustering.h"
 #include "Execution/Transforms/TransformPipeline.h"
+#include "Noise/NoiseAdd.h"
 
 #include <iostream>
 #include <stdexcept>
@@ -72,7 +76,7 @@ int main()
         Require(circuit->GetOperations().empty() && paulis == std::vector<std::string>{"Z"}, "Idle observable reduction failed");
         Require(ctx.qubits_before == 6 && ctx.qubits_after == 1, "Idle observable width is incorrect");
         MaestroExecution::TransformPipeline::Run(ctx);
-        Require(ctx.applied_transforms.size() == 1 && ctx.qubits_before == 1, "Pipeline diagnostics accumulated across runs");
+        Require(ctx.applied_transforms.empty() && ctx.qubits_before == 1, "Pipeline diagnostics accumulated across runs");
 
         circuit = source;
         paulis = {"III"};
@@ -88,6 +92,7 @@ int main()
         for (const auto &operation : {Factory::CreateReset({2}), Factory::CreateMeasurement({{2, 0}})})
         {
             auto nonunitary = std::make_shared<Circuit>();
+            nonunitary->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kCXGateType, 0, 2));
             nonunitary->AddOperation(operation);
             circuit = nonunitary;
             paulis = {"ZII"};
@@ -156,11 +161,110 @@ int main()
             Require(MaestroExecution::ClusterObservables(wide, wide_obs, 6) == Groups({{0, 1, 2, 3}, {4}, {5}}), "Fitting budget split cones");
             Require(MaestroExecution::ClusterObservables(wide, wide_obs, 1000) == Groups({{0, 1, 2, 3}, {4}, {5}}), "Large budget merged disjoint cones");
 
+            // Exercise both observable bit batches (>64 observables) and qubit
+            // words (>64 qubits), including repeated/contained and empty cones.
+            std::vector<std::string> many;
+            for (size_t i = 0; i < 130; ++i)
+                many.push_back(word({i % 2 ? size_t{120} : size_t{71}}));
+            many.push_back(word({}));
+            const auto packed = MaestroExecution::ClusterObservables(wide, many, 2);
+            Require(packed.size() == 3 && packed[0].size() == 65 && packed[1].size() == 65 && packed[2] == std::vector<size_t>{130},
+                    "Bit-parallel batches lost observable indices");
+            Require(MaestroExecution::ClusterObservables(wide, {}).empty(), "Empty requests must have zero groups");
+
             // Nonunitary circuits and malformed observables fall back to one group.
             auto dynamic = std::make_shared<Circuit>();
             dynamic->AddOperation(Factory::CreateMeasurement({{2, 0}}));
             Require(MaestroExecution::ClusterObservables(dynamic, {"ZII", "IIZ"}).size() == 1, "Nonunitary fallback failed");
             Require(MaestroExecution::ClusterObservables(source, {"ZII", "I?Z"}).size() == 1, "Malformed fallback failed");
+        }
+        {
+            using namespace MaestroExecution;
+            SimulatorConfig cfg;
+            cfg.auto_reduce = false;
+            auto unchanged = std::make_shared<Circuit>();
+            unchanged->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kHadamardGateType, 0));
+            auto original = unchanged;
+            std::vector<std::string> obs{"Z"};
+            TransformContext no_op{unchanged, obs, cfg.simulator_type, cfg};
+            TransformPipeline::Run(no_op);
+            Require(unchanged == original && no_op.applied_transforms.empty(), "No-op cone cloned its circuit");
+
+            SimulatorConfig fixed_gpu;
+            fixed_gpu.simulator_type = Simulators::SimulatorType::kGpuSim;
+            fixed_gpu.simulation_type = Simulators::SimulationType::kTensorNetwork;
+            fixed_gpu.fixed_backend = true;
+            const auto padded = PrepareEstimation(original, {"Z"}, fixed_gpu);
+            Require(padded.qubits_after == 2 && padded.groups[0].observables == std::vector<std::string>{"ZI"},
+                    "Fixed GPU tensor network lost its minimum register width");
+            EstimationCache gpu_cache;
+            const auto cached_pad = PrepareEstimation(original, {"Z"}, fixed_gpu, &gpu_cache);
+            Require(cached_pad.qubits_after == 2 && cached_pad.groups[0].observables == std::vector<std::string>{"ZI"},
+                    "Cached fixed GPU tensor network lost its minimum register width");
+            auto sampled = std::make_shared<Circuit>(*original);
+            sampled->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kHadamardGateType, 3));
+            sampled->AddOperation(Factory::CreateMeasurement({{0, 0}, {3, 1}}));
+            fixed_gpu.enable_sampling_reduction = true;
+            Require(!SampleDisjointCones(sampled, fixed_gpu, 10), "Fixed GPU tensor-network sampling attempted a one-qubit component");
+            fixed_gpu.fixed_backend = false;
+            Require(!SampleDisjointCones(sampled, fixed_gpu, 10), "Automatic GPU tensor-network sampling attempted a one-qubit component");
+
+            EstimationCache cache;
+            auto first = std::make_shared<Circuit>();
+            first->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kXGateType, 0));
+            first->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kHadamardGateType, 3));
+            const auto a = EstimateCircuit(first, {"ZIII"}, cfg, &cache);
+            Require(a.values == std::vector<double>{-1} && cache.hits == 0, "Initial cached estimate incorrect");
+            auto second = std::make_shared<Circuit>(*first);
+            second->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kXGateType, 0));
+            const auto b = EstimateCircuit(second, {"ZIII"}, cfg, &cache);
+            Require(b.values == std::vector<double>{1} && cache.hits == 1, "Cache reused gate values instead of topology");
+            second->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kCXGateType, 3, 0));
+            const auto c = EstimateCircuit(second, {"ZIII"}, cfg, &cache);
+            Require(std::abs(c.values[0]) < 1e-12 && cache.hits == 1 && c.plan.qubits_after == 2, "Topology change did not invalidate cache");
+            second->AddOperation(Factory::CreateReset({3}));
+            const auto fallback = PrepareEstimation(second, {"ZIII"}, cfg, &cache);
+            Require(fallback.qubits_after == 4 && cache.hits == 1, "Trajectory reset incorrectly reused cache");
+
+            // Backward branching has a work cap and leaves ordinary simulation
+            // available when no bounded expansion can be returned.
+            auto branching = std::make_shared<Circuit>();
+            for (size_t q = 0; q < 8; ++q)
+            {
+                branching->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kRxGateType, q, 0, 0, 0.7));
+                branching->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kRyGateType, q, 0, 0, 0.4));
+            }
+            branching->AddOperation(
+                std::make_shared<Circuits::QuantumChannelOperation<double>>(Types::qubits_vector{0}, Simulators::QuantumChannel::PhaseFlip(0.01)));
+            Require(!EvaluateBoundedPauli(branching, "ZZZZZZZZ", 0.001), "Pauli expansion exceeded its work cap");
+
+            // NoiseAdd must use the same preparation path with an already
+            // configured network, including exact channels on spectators.
+            GetMaestroObjectWithMute();
+            const auto handle = CreateSimpleSimulator(1);
+            Require(handle != 0, "Cannot create native noise test network");
+
+            struct Cleanup
+            {
+                unsigned long handle;
+
+                ~Cleanup()
+                {
+                    DestroySimpleSimulator(handle);
+                }
+            } cleanup{handle};
+
+            cfg.simulation_type = Simulators::SimulationType::kDensityMatrix;
+            cfg.fixed_backend = true;
+            auto network = ConfigureNetwork(handle, cfg);
+            noise::NoiseModel model;
+            model.set_depolarizing(3, 0.2);
+            noise::NoiseAdd add;
+            add.set_exact_channels(true);
+            add.seed(17);
+            const auto native = add.noisy_estimate_montecarlo(first, network, 0, {"ZIII"}, model, 3);
+            Require(native.size() == 1 && std::abs(native[0] + 1) < 1e-12, "Native NoiseAdd reduction changed the expectation");
+            Require(add.noisy_estimate_montecarlo(first, network, 0, {}, model, 3).empty(), "Native empty estimate did work");
         }
     }
     catch (const std::exception &error)

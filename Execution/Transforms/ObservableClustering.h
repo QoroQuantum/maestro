@@ -19,18 +19,21 @@ namespace MaestroExecution
 // (identity-only) share one group.
 //
 // Falls back to a single group holding every index when the circuit contains
-// non-unitary operations or an observable is malformed, matching the
+// unsupported classical/trajectory operations or a malformed observable, matching the
 // conditions under which CausalConeTransform declines to reduce.
 //
 // With max_cluster_qubits, overlapping cones are packed greedily instead: each
 // group is seeded by the largest remaining cone and grows by the overlapping
 // observable that adds the fewest qubits while the union stays within the
 // budget. A cone larger than the budget forms its own group, absorbing only
-// cones it contains. Groups never join disjoint cones, so an unbounded budget
-// reproduces the default partition. Groups are ordered by first member.
+// cones it contains. min_cluster_qubits optionally batches small disjoint cones.
+// tighten_paulis uses conservative Pauli-axis bounds and known input-state facts;
+// sampling and noise caches use structural cones. Groups order by first member.
 MAESTRO_TRANSFORM_API std::vector<std::vector<size_t>> ClusterObservables(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
                                                                           const std::vector<std::string> &observables,
-                                                                          std::optional<size_t> max_cluster_qubits = std::nullopt);
+                                                                          std::optional<size_t> max_cluster_qubits = std::nullopt, bool ensemble = false,
+                                                                          std::optional<size_t> min_cluster_qubits = std::nullopt, bool tighten_paulis = false,
+                                                                          bool marginalize_resets = false);
 
 // GPU Pauli propagation pays about a second of setup per simulator run and saves
 // only a few milliseconds per group, so it keeps every observable in one run.

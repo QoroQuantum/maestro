@@ -1,7 +1,10 @@
 // Versioned native computational API. No Python types or runtime are used.
 #include "Request.h"
+
 #include "Capabilities.h"
 #include "CircuitHelpers.h"
+#include "Estimation.h"
+#include "Sampling.h"
 #include "maestrolib/Interface.h"
 #include "maestrolib/Json.h"
 #include "qasm/QasmCirc.h"
@@ -353,6 +356,39 @@ json::array Basis(const json::object &request, size_t qubits, size_t limit)
 void SameSize(const ParsedCircuit &first, const ParsedCircuit &other)
 {
     Require(first.qubits == other.qubits && first.clbits == other.clbits, "Circuits in this operation must have identical register sizes");
+}
+
+template <class Result> json::object ReductionMetadata(const Result &execution, const SimulatorConfig &config)
+{
+    json::object options;
+    for (const auto &[key, value] : config.native_options)
+        options[key] = value;
+    for (const auto &[key, value] : TypedNativeOptions(config))
+        options[key] = value;
+    options["seed"] = config.seed.value_or(0);
+    if (config.gate_fusion)
+        options["gate_fusion"] = *config.gate_fusion;
+    options["auto_reduce"] = config.auto_reduce;
+    options["enable_causal_cone_reduction"] = config.enable_causal_cone_reduction;
+    options["enable_observable_clustering"] = config.enable_observable_clustering;
+    options["allow_reset_marginalization"] = config.allow_reset_marginalization;
+    options["enable_sampling_reduction"] = config.enable_sampling_reduction;
+    if (config.max_cluster_qubits)
+        options["max_cluster_qubits"] = *config.max_cluster_qubits;
+    if (config.min_cluster_qubits)
+        options["min_cluster_qubits"] = *config.min_cluster_qubits;
+    if (config.observable_error_tolerance)
+        options["observable_error_tolerance"] = *config.observable_error_tolerance;
+    json::object metadata{{"backend", BackendName(execution.simulator)},
+                          {"method", MethodName(execution.method)},
+                          {"selection", config.fixed_backend ? "fixed" : "automatic"},
+                          {"configured_options", std::move(options)},
+                          {"gate_fusion", json::object{{"requested", config.gate_fusion ? json::value(*config.gate_fusion) : json::value()},
+                                                       {"enabled", execution.gate_fusion},
+                                                       {"max_qubits", execution.gate_fusion_max_qubits}}}};
+    if (execution.gpu_device >= 0)
+        metadata["gpu_device"] = execution.gpu_device;
+    return metadata;
 }
 
 json::object Metadata(Context &context, const SimulatorConfig &config, bool executed)
@@ -743,6 +779,127 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
     {
         config.seed = Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options);
         noise.seed = static_cast<uint32_t>(*config.seed);
+    }
+    if (operation == "estimate" && !Simulators::IsDistributedGpuSimulator(config.simulator_type))
+    {
+        if (!noise.thermal_approximation_warning.empty())
+            std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
+        std::mt19937 rng(noise.seed);
+        const size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : 1;
+        std::vector<double> sums(observables.size()), squares(observables.size()), bounds(observables.size());
+        size_t bounded = 0;
+        EstimationCache cache;
+        EstimationResult last;
+        size_t largest = 0, clusters = 0, total_qubits = 0, total_clusters = 0;
+        double reduction_time = 0;
+        bool reduced = false;
+        for (size_t r = 0; r < realizations; ++r)
+        {
+            auto execution_config = config;
+            execution_config.seed = Simulators::IState::DeriveSeed(*config.seed, r);
+            if (noise.enabled && noise.mode != "analytical")
+                execution_config.auto_reduce = false;
+            last = EstimateCircuit(Inject(circuit, noise, rng), observables, execution_config, noise.enabled && noise.mode != "analytical" ? &cache : nullptr);
+            largest = std::max(largest, last.plan.qubits_after);
+            clusters = std::max(clusters, last.plan.groups.size());
+            total_qubits += last.plan.total_cluster_qubits;
+            total_clusters += last.plan.groups.size();
+            reduction_time += last.plan.reduction_time;
+            reduced = reduced || last.plan.auto_reduced;
+            bounded = std::max(bounded, last.plan.bounded_observables);
+            for (size_t i = 0; i < sums.size(); ++i)
+            {
+                bounds[i] += last.plan.error_bounds[i] / realizations;
+                const double value = last.values[i] * (noise.mode == "analytical" ? noise.model.compute_damping(observables[i]) : 1);
+                sums[i] += value;
+                squares[i] += value * value;
+            }
+        }
+        json::array values, errors, methods, error_bounds;
+        for (auto bound : bounds)
+            error_bounds.emplace_back(bound);
+        for (size_t i = 0; i < sums.size(); ++i)
+        {
+            const double mean = sums[i] / realizations;
+            values.emplace_back(mean);
+            errors.emplace_back(realizations > 1 ? std::sqrt(std::max(0.0, (squares[i] - realizations * mean * mean) / (realizations - 1) / realizations)) : 0);
+        }
+        for (auto method : last.cluster_methods)
+            methods.emplace_back(MethodName(method));
+        auto metadata = ReductionMetadata(last, config);
+        json::object result{{"schema_version", SchemaVersion},
+                            {"operation", operation},
+                            {"num_qubits", input.qubits},
+                            {"num_clbits", input.clbits},
+                            {"expectation_values", std::move(values)},
+                            {"realization_standard_errors", std::move(errors)},
+                            {"auto_reduced", reduced},
+                            {"expectation_error_bounds", std::move(error_bounds)},
+                            {"bounded_observables", bounded},
+                            {"cone_cache_hits", cache.hits},
+                            {"qubits_before", input.qubits},
+                            {"qubits_after", largest},
+                            {"clusters_count", clusters},
+                            {"largest_cluster_qubits", largest},
+                            {"mean_cluster_qubits", total_clusters ? static_cast<double>(total_qubits) / total_clusters : 0},
+                            {"reduction_time", reduction_time},
+                            {"cluster_methods", std::move(methods)},
+                            {"execution_metadata", std::move(metadata)},
+                            {"seed", *config.seed},
+                            {"time_taken", std::chrono::duration<double>(Clock::now() - start).count()},
+                            {"count_order", "classical_bit_0_first"},
+                            {"basis_order", "qubit_0_least_significant"}};
+        if (noise.enabled)
+            result["noise"] = json::object{{"mode", noise.mode},
+                                           {"evaluation", noise.mode == "analytical" ? "analytical_approximation"
+                                                          : noise.exact              ? "exact_channels"
+                                                                                     : "trajectories"},
+                                           {"seed", noise.seed},
+                                           {"realizations", realizations},
+                                           {"approximations", noise.approximations}};
+        Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
+        return result;
+    }
+    if (operation == "execute" && config.enable_sampling_reduction && !Simulators::IsDistributedGpuSimulator(config.simulator_type))
+    {
+        if (!noise.thermal_approximation_warning.empty())
+            std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
+        std::mt19937 rng(noise.seed);
+        const auto realizations = std::min(shots, noise.enabled && noise.mode != "analytical" ? noise.realizations : size_t{1});
+        Counts counts;
+        SamplingResult last;
+        size_t largest = 0, components = 0;
+        for (size_t r = 0; r < realizations; ++r)
+        {
+            auto local_config = config;
+            local_config.seed = Simulators::IState::DeriveSeed(*config.seed, r);
+            last = SampleCircuit(Inject(circuit, noise, rng), local_config, shots / realizations + (r < shots % realizations));
+            largest = std::max(largest, last.largest_component);
+            components = std::max(components, last.components);
+            for (const auto &[outcome, count] : last.counts)
+                counts[Bits(outcome, input.clbits)] += count;
+        }
+        json::object result{{"schema_version", SchemaVersion},
+                            {"operation", operation},
+                            {"num_qubits", input.qubits},
+                            {"num_clbits", input.clbits},
+                            {"counts", EncodeCounts(counts)},
+                            {"shots", shots},
+                            {"sampling_components", components},
+                            {"largest_component_qubits", largest},
+                            {"seed", *config.seed},
+                            {"execution_metadata", ReductionMetadata(last, config)},
+                            {"time_taken", std::chrono::duration<double>(Clock::now() - start).count()},
+                            {"count_order", "classical_bit_0_first"},
+                            {"basis_order", "qubit_0_least_significant"}};
+        if (noise.enabled)
+            result["noise"] = json::object{{"mode", noise.mode},
+                                           {"evaluation", noise.exact ? "exact_channels" : "trajectories"},
+                                           {"seed", noise.seed},
+                                           {"realizations", realizations},
+                                           {"approximations", noise.approximations}};
+        Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
+        return result;
     }
     Context context(input, config, query);
     auto simulator = context.simulator();

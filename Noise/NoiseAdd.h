@@ -12,6 +12,7 @@
 #ifndef __NOISE_ADD_H_
 #define __NOISE_ADD_H_
 
+#include "../Execution/Estimation.h"
 #include "NoiseModel.h"
 
 #include "../Network/Network.h"
@@ -140,10 +141,10 @@ class NoiseAdd
     std::vector<double> noisy_estimate(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const std::shared_ptr<Network::INetwork<>> &network,
                                        size_t hostId, const std::vector<std::string> &paulis, const NoiseModel &nm)
     {
-        if (!network || !circuit)
+        if (!network || !circuit || paulis.empty())
             return {};
 
-        auto ideal = network->ExecuteOnHostExpectations(circuit, hostId, paulis);
+        auto ideal = MaestroExecution::EstimateOnNetwork(circuit, paulis, network, hostId, true);
         std::vector<double> noisy;
         noisy.reserve(paulis.size());
         for (size_t i = 0; i < paulis.size(); ++i)
@@ -178,10 +179,10 @@ class NoiseAdd
                                                    const std::shared_ptr<Network::INetwork<>> &network, const std::vector<std::string> &paulis,
                                                    const NoiseModel &nm)
     {
-        if (!network || !circuit)
+        if (!network || !circuit || paulis.empty())
             return {};
 
-        auto ideal = network->ExecuteExpectations(circuit, paulis);
+        auto ideal = MaestroExecution::EstimateOnNetwork(circuit, paulis, network, std::nullopt, true);
         std::vector<double> noisy;
         noisy.reserve(paulis.size());
         for (size_t i = 0; i < paulis.size(); ++i)
@@ -340,19 +341,19 @@ class NoiseAdd
     {
         if (realizations <= 0)
             throw std::invalid_argument("noise_realizations must be positive");
-        if (!network || !circuit)
+        if (!network || !circuit || paulis.empty())
             return {};
         if (layer != Layer::Coherent)
             WarnThermalApproximation(nm);
         auto cleanCircuit = circuit->RemoveEndMeasurements();
         auto execution = PrepareExecution(network);
         std::vector<double> values(paulis.size(), 0.0);
+        MaestroExecution::EstimationCache cache;
         for (int r = 0; r < realizations; ++r)
         {
             auto noisy = Inject(cleanCircuit, nm, layer);
             SeedExecution(execution);
-            const auto sample =
-                host ? execution.network->ExecuteOnHostExpectations(noisy, *host, paulis) : execution.network->ExecuteExpectations(noisy, paulis);
+            const auto sample = MaestroExecution::EstimateOnNetwork(noisy, paulis, execution.network, host, false, &cache);
             for (size_t i = 0; i < values.size(); ++i)
                 values[i] += sample[i];
         }

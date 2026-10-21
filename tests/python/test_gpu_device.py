@@ -154,17 +154,23 @@ def test_one_qubit_tensor_estimates(backend, method, case):
         observables, expected = ["IIII"], [1.0]
     before = repr(config)
     result = circuit.estimate(observables, config)
-    expected_method = (maestro.SimulationType.Statevector
-                       if backend == maestro.SimulatorType.Gpu and method == maestro.SimulationType.TensorNetwork
-                       else method)
+    expected_method = (
+        maestro.SimulationType.Statevector
+        if case != "identity"
+        and backend == maestro.SimulatorType.Gpu
+        and method == maestro.SimulationType.TensorNetwork
+        else method
+    )
     assert result["expectation_values"] == pytest.approx(expected, abs=1e-5)
-    assert result["qubits_after"] == 1
-    assert result["clusters_count"] == (3 if case == "clustered" else 1)
+    assert result["qubits_after"] == (0 if case == "identity" else 1)
+    assert result["clusters_count"] == (
+        2 if case == "clustered" else 0 if case == "identity" else 1
+    )
     assert result["method"] == expected_method.value
     assert result["cluster_methods"] == [expected_method.value] * result["clusters_count"]
     assert result["simulator"] == backend.value
     if backend == maestro.SimulatorType.Gpu:
-        assert result["gpu_device"] == 0
+        assert result["gpu_device"] == (-1 if case == "identity" else 0)
     assert repr(config) == before
 
 

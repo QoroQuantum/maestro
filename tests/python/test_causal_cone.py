@@ -403,7 +403,7 @@ def test_isolated_observables_use_small_registers():
         "I" * 90 + "ZZ" + "I" * 8,
     ]
     res = circuit.estimate(observables)
-    assert res["clusters_count"] == 2
+    assert res["clusters_count"] == 1  # identical compact circuits share a simulator
     assert res["largest_cluster_qubits"] <= 10
     assert res["qubits_before"] == 100
     assert res["expectation_values"] == pytest.approx([1.0, 1.0], abs=1e-12)
@@ -435,7 +435,7 @@ def test_terminal_measurements_do_not_block_clustering():
     circuit.x(99)
     circuit.measure_all()
     res = circuit.estimate(["ZZ" + "I" * 98, "I" * 90 + "ZZ" + "I" * 8])
-    assert res["clusters_count"] == 2
+    assert res["clusters_count"] == 1  # identical compact circuits share a simulator
     assert res["largest_cluster_qubits"] <= 10
     assert res["expectation_values"] == pytest.approx([1.0, 1.0], abs=1e-12)
 
@@ -455,6 +455,7 @@ def _brickwork_circuit(num_qubits):
     circuit = maestro.circuits.QuantumCircuit()
     for q in range(num_qubits):
         circuit.ry(q, 0.1 + 0.05 * q)
+        circuit.rz(q, 0.03 * (q + 1))  # nonzero Y expectations for budget comparisons
     for q in range(0, num_qubits - 1, 2):
         circuit.cx(q, q + 1)
     for q in range(1, num_qubits - 1, 2):
@@ -463,12 +464,12 @@ def _brickwork_circuit(num_qubits):
 
 
 def _brickwork_observables(num_qubits):
-    # Each cone spans four qubits and overlaps its neighbours, so the cones
+    # Y support does not commute with either CNOT role. Each cone spans four qubits and overlaps its neighbours, so the cones
     # chain across the whole register.
     observables = []
     for q in range(1, num_qubits - 2, 2):
         word = ["I"] * num_qubits
-        word[q] = "Z"
+        word[q] = "Y"
         observables.append("".join(word))
     return observables
 

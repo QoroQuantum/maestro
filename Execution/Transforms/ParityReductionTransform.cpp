@@ -144,31 +144,14 @@ bool ParityReductionTransform::IsApplicable(const TransformContext &ctx) const
 
 void ParityReductionTransform::Apply(TransformContext &ctx)
 {
-    // Fast O(1) signature bailout: a check-subspace circuit must start with H
-    // (|+> preparation) or CX / Rx / Rz (zero-state dual). Non-unitary operations
-    // or non-matching initial gates (Ry, Phase, T, Swap, etc.) bail out in nanoseconds;
-    // later rejection depends on the length of the scanned prefix.
-    for (const auto &operation : ctx.circuit->GetOperations())
-    {
-        if (!operation || operation->GetType() == Circuits::OperationType::kNoOp || operation->GetType() == Circuits::OperationType::kDelay)
-            continue;
-        if (operation->GetType() != Circuits::OperationType::kGate)
-            return;
-        const auto gate = std::dynamic_pointer_cast<Circuits::IQuantumGate<double>>(operation);
-        if (!gate)
-            return;
-        const auto type = gate->GetGateType();
-        if (type != Gate::kHadamardGateType && type != Gate::kCXGateType && type != Gate::kRxGateType && type != Gate::kRzGateType)
-            return;
-        break;
-    }
-
     size_t width = ctx.circuit->GetMaxQubitIndex() + 1;
     for (const auto &observable : ctx.observables)
     {
         if (observable.find_first_not_of("IXYZixyz") != std::string::npos)
             return;
-        width = std::max(width, observable.size());
+        const auto last = observable.find_last_not_of("Ii");
+        if (last != std::string::npos)
+            width = std::max(width, last + 1);
     }
     if (width < 2 || width > MaxPhysicalQubits)
         return;
@@ -178,15 +161,9 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
     Mask prepared = 0;
     bool body = false;
     bool plus = false;
-    std::array<Mask, MaxPhysicalQubits> frame{};
+    std::array<Mask, MaxPhysicalQubits> frame{}, x_frame{};
     for (size_t q = 0; q < width; ++q)
-        frame[q] = Mask{1} << q;
-    const auto identity_frame = [&] {
-        for (size_t q = 0; q < width; ++q)
-            if (frame[q] != (Mask{1} << q))
-                return false;
-        return true;
-    };
+        frame[q] = x_frame[q] = Mask{1} << q;
     Basis basis;
     std::vector<Rotation> rotations;
     for (const auto &operation : ctx.circuit->GetOperations())
@@ -220,15 +197,8 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
                 return;
             body = true;
         }
-        // In the zero-state dual, conjugate every gate by H^N. This swaps X/Z
-        // and reverses CNOT direction, giving the same |+> check representation.
-        if (!plus)
-        {
-            if (type == Gate::kRxGateType)
-                type = Gate::kRzGateType;
-            else if (type == Gate::kRzGateType)
-                type = Gate::kRxGateType;
-        }
+        // F maps input bits to the current CNOT frame. Z uses rows of F,
+        // while X uses columns of F^-1; both updates are exact over GF(2).
         if (type == Gate::kCXGateType)
         {
             auto control = q;
@@ -238,27 +208,81 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
             if (!plus)
                 std::swap(control, target);
             frame[target] ^= frame[control];
+            x_frame[control] ^= x_frame[target];
+            continue;
         }
-        else if (type == Gate::kRzGateType || type == Gate::kRxGateType)
+        const auto append = [&](Mask support, double angle, bool check) {
+            if (angle == 0)
+                return true;
+            if (check && !basis.Insert(support))
+                return false;
+            rotations.push_back({support, angle, check});
+            return true;
+        };
+        constexpr double pi = 3.14159265358979323846;
+        if (type == Gate::kCZGateType)
         {
+            const auto target = gate->GetQubit(1);
+            if (target >= width || target == q)
+                return;
+            const auto a = plus ? frame[q] : x_frame[q];
+            const auto b = plus ? frame[target] : x_frame[target];
+            // CZ = phase * Rz(a,pi/2) Rz(b,pi/2) Rzz(a,b,-pi/2).
+            // Its global-H dual has the same decomposition about X.
+            if (!append(a, pi / 2, plus) || !append(b, pi / 2, plus) || !append(a ^ b, -pi / 2, plus))
+                return;
+            continue;
+        }
+        bool z = true;
+        double angle = 0;
+        switch (type)
+        {
+        case Gate::kXGateType:
+            z = false;
+            angle = pi;
+            break;
+        case Gate::kSxGateType:
+            z = false;
+            angle = pi / 2;
+            break;
+        case Gate::kSxDagGateType:
+            z = false;
+            angle = -pi / 2;
+            break;
+        case Gate::kZGateType:
+            angle = pi;
+            break;
+        case Gate::kSGateType:
+            angle = pi / 2;
+            break;
+        case Gate::kSdgGateType:
+            angle = -pi / 2;
+            break;
+        case Gate::kTGateType:
+            angle = pi / 4;
+            break;
+        case Gate::kTdgGateType:
+            angle = -pi / 4;
+            break;
+        case Gate::kRxGateType:
+        case Gate::kRzGateType:
+        case Gate::kPhaseGateType: {
             const auto params = gate->GetParams();
             if (params.size() != 1 || !std::isfinite(params[0]))
                 return;
-            const bool check = type == Gate::kRzGateType;
-            // CNOT parity ladders may surround checks. Mixers are accepted only
-            // after the ladder is uncomputed, so their physical axis is known.
-            if (!check && !identity_frame())
-                return;
-            const auto support = check ? frame[q] : Mask{1} << q;
-            if (check && !basis.Insert(support))
-                return;
-            rotations.push_back({support, params[0], check});
+            angle = params[0];
+            z = type != Gate::kRxGateType;
+            break;
         }
-        else
+        default:
+            return;
+        }
+        const bool check = plus ? z : !z;
+        if (!append(check ? frame[q] : x_frame[q], angle, check))
             return;
     }
     const size_t rank = basis.generators.size();
-    if (!identity_frame() || rank == 0 || rank >= width)
+    if (rank == 0 || rank >= width)
         return;
 
     auto reduced = std::make_shared<Circuit>();
@@ -289,6 +313,19 @@ void ParityReductionTransform::Apply(TransformContext &ctx)
         }
         if (!plus)
             std::swap(x, z);
+        // Conjugate through the remaining CNOT frame in canonical X^x Z^z
+        // order. Keep the original i^#Y phase; recomputing it after the frame
+        // would lose signs such as CX (Xc Zt) CX = -Yc Yt.
+        Mask framed_x = 0, framed_z = 0;
+        for (size_t q = 0; q < width; ++q)
+        {
+            if (x & (Mask{1} << q))
+                framed_x ^= x_frame[q];
+            if (z & (Mask{1} << q))
+                framed_z ^= frame[q];
+        }
+        x = framed_x;
+        z = framed_z;
         Mask effective_x = 0;
         const bool in_span = basis.Encode(z, effective_x);
         const Mask effective_z = basis.Dual(x);

@@ -28,7 +28,7 @@ struct TransformContext
     // Effective register widths include observables and the one-qubit minimum.
     size_t qubits_before = 0;
     size_t qubits_after = 0;
-    // Passes dispatched in order, including passes that conservatively no-op.
+    // Passes that changed the circuit or observables, in execution order.
     // Diagnostics are reset on each Run.
     std::vector<std::string> applied_transforms{};
 };

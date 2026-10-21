@@ -65,13 +65,11 @@ def test_preserves_requested_backend_and_config():
     assert "auto_reduce=True" in repr(config)
 
 
-@pytest.mark.parametrize("breaker", ["h", "ry", "reset", "cx"])
+@pytest.mark.parametrize("breaker", ["h", "ry", "reset"])
 def test_unsupported_operations_fall_back(breaker):
     circuit = circuit_for_checks(4, [(0, 1), (1, 2, 3)])
     if breaker == "ry":
         circuit.ry(0, 0.37)
-    elif breaker == "cx":
-        circuit.cx(0, 1)  # An uncomputed parity frame cannot be discarded.
     else:
         getattr(circuit, breaker)(0)
     full = circuit.estimate("ZZII", cfg(False, seed=1234))

@@ -1,4 +1,5 @@
 #pragma once
+#include "Execution/Estimation.h"
 #include "common.h"
 
 namespace maestro_bindings
@@ -21,7 +22,8 @@ std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_for_config(cons
                                                                             const noise::NoiseModel &noise_model, std::mt19937 &rng,
                                                                             const SimulatorConfig &config);
 nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots);
-nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const std::vector<std::string> &paulis, const SimulatorConfig &config);
+nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const std::vector<std::string> &paulis, const SimulatorConfig &config,
+                       MaestroExecution::EstimationCache *cache = nullptr);
 std::vector<std::complex<double>> statevector_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config);
 double mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots, bool full_amplitude);
 std::complex<double> inner_product_core(const std::shared_ptr<Circuits::Circuit<double>> &circuit_1,

@@ -316,7 +316,7 @@ void bind_noise(nb::module_ &m)
                 noisy_vals.append(damping * nb::cast<double>(ideal[i]));
             }
 
-            nb::dict out;
+            nb::dict out = result;
             out["expectation_values"] = noisy_vals;
             out["ideal_expectation_values"] = ideal;
             out["time_taken"] = result["time_taken"];
@@ -363,7 +363,7 @@ void bind_noise(nb::module_ &m)
                 noisy_vals.append(damping * nb::cast<double>(ideal[i]));
             }
 
-            nb::dict out;
+            nb::dict out = result;
             out["expectation_values"] = noisy_vals;
             out["ideal_expectation_values"] = ideal;
             out["time_taken"] = result["time_taken"];

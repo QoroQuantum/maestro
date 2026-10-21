@@ -1,5 +1,5 @@
-#include "Execution/Transforms/ObservableClustering.h"
-#include "Execution/Transforms/TransformPipeline.h"
+#include "Execution/Estimation.h"
+#include "Execution/Sampling.h"
 #include "core.h"
 #include "runtime.h"
 #include <numeric>
@@ -41,24 +41,14 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const 
     if (!circuit)
         throw nb::value_error("Circuit is null.");
 
-    int num_qubits = std::max(1, static_cast<int>(circuit->GetMaxQubitIndex()) + 1);
-    ScopedSimulator sim(num_qubits);
-    if (sim.handle == 0)
-        throw std::runtime_error("Failed to create simulator handle.");
-
-    auto network = ConfigureNetwork(sim.handle, config);
-    if (!network)
-        throw std::runtime_error("Failed to configure network.");
-
-    Network::INetwork<double>::ExecuteResults raw_results;
-
-    // Release GIL for heavy computation
-    auto start = std::chrono::high_resolution_clock::now();
+    if (shots < 0)
+        throw nb::value_error("shots must be nonnegative");
+    MaestroExecution::SamplingResult result;
     {
         nb::gil_scoped_release release;
-        raw_results = network->RepeatedExecuteOnHost(circuit, 0, (size_t)shots);
+        result = MaestroExecution::SampleCircuit(circuit, config, static_cast<size_t>(shots));
     }
-    auto end = std::chrono::high_resolution_clock::now();
+    const auto &raw_results = result.counts;
 
     // Process results back in Python land
     nb::dict counts;
@@ -77,150 +67,55 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const 
 
     nb::dict py_result;
     py_result["counts"] = counts;
-    py_result["time_taken"] = std::chrono::duration<double>(end - start).count();
-    py_result["simulator"] = (int)network->GetLastSimulatorType();
-    py_result["method"] = (int)network->GetLastSimulationType();
-    if (network->GetLastGpuDevice() >= 0)
-        py_result["gpu_device"] = network->GetLastGpuDevice();
-
-    size_t max_bond_dim = network->GetCurrentMaxBondDimension();
-    if (max_bond_dim > 0)
-        py_result["max_bond_dim_reached"] = max_bond_dim;
+    py_result["time_taken"] = result.time_taken;
+    py_result["simulator"] = static_cast<int>(result.simulator);
+    py_result["method"] = static_cast<int>(result.method);
+    py_result["sampling_components"] = result.components;
+    py_result["largest_component_qubits"] = result.largest_component;
+    if (result.gpu_device >= 0)
+        py_result["gpu_device"] = result.gpu_device;
+    if (result.max_bond_dimension)
+        py_result["max_bond_dim_reached"] = result.max_bond_dimension;
 
     return py_result;
 }
 
 // Core Estimation Logic
-nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const std::vector<std::string> &observables, const SimulatorConfig &config)
+nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const std::vector<std::string> &observables, const SimulatorConfig &config,
+                       MaestroExecution::EstimationCache *cache)
 {
     if (!circuit)
         throw nb::value_error("Circuit is null.");
 
-    // Terminal measurements don't affect expectations; stripping them first also
-    // lets clustering and causal-cone reduction see a unitary circuit.
-    const auto clean_circuit = circuit->RemoveEndMeasurements();
-
-    // Partition observables into groups with disjoint lightcones; each group is
-    // reduced and simulated on a register sized to its own cone.
-    std::vector<std::vector<size_t>> groups;
-    auto cluster_start = std::chrono::high_resolution_clock::now();
-    const bool cluster = config.enable_causal_cone_reduction && config.enable_observable_clustering && observables.size() > 1 &&
-                         !Simulators::IsDistributedGpuSimulator(config.simulator_type) &&
-                         MaestroExecution::BenefitsFromObservableClustering(config.simulator_type, config.simulation_type);
-    if (cluster)
+    MaestroExecution::EstimationResult result;
     {
         nb::gil_scoped_release release;
-        groups = MaestroExecution::ClusterObservables(clean_circuit, observables, config.max_cluster_qubits);
+        result = MaestroExecution::EstimateCircuit(circuit, observables, config, cache);
     }
-    else
-    {
-        groups.emplace_back(observables.size());
-        std::iota(groups.back().begin(), groups.back().end(), size_t{0});
-    }
-    auto reduction_duration = std::chrono::high_resolution_clock::now() - cluster_start;
-    std::chrono::high_resolution_clock::duration execution_duration{};
-
-    std::vector<double> expectations(observables.size(), 0.0);
-    bool auto_reduced = false;
-    size_t qubits_before = 0;
-    size_t largest_cluster_qubits = 0;
-    size_t total_cluster_qubits = 0;
-    size_t max_bond_dim = 0;
-    int simulator_type = 0, method = 0, gpu_device = -1;
-    nb::list cluster_methods;
-    bool first = true;
-
-    for (const auto &group : groups)
-    {
-        std::vector<std::string> paulis;
-        paulis.reserve(group.size());
-        for (auto index : group)
-            paulis.push_back(observables[index]);
-
-        auto cluster_circuit = clean_circuit;
-        MaestroExecution::TransformContext ctx{cluster_circuit, paulis, config.simulator_type, config};
-        auto transform_start = std::chrono::high_resolution_clock::now();
-        {
-            nb::gil_scoped_release release;
-            MaestroExecution::TransformPipeline::Run(ctx);
-        }
-        reduction_duration += std::chrono::high_resolution_clock::now() - transform_start;
-
-        int num_qubits = static_cast<int>(ctx.circuit->GetMaxQubitIndex()) + 1;
-        for (const auto &p : ctx.observables)
-            num_qubits = std::max(num_qubits, (int)p.length());
-        num_qubits = std::max(1, num_qubits);
-
-        ScopedSimulator sim(num_qubits);
-        if (sim.handle == 0)
-            throw std::runtime_error("Failed to create simulator handle.");
-
-        // cuTensorNet's MPS factorization requires at least two qubits. A
-        // cluster (or a single observable's reduced circuit) can have only one;
-        // evaluate it with the same device's statevector backend instead. The
-        // standalone MPS/MPO implementations support one qubit already.
-        auto cluster_config = config;
-        if (num_qubits == 1 && config.simulator_type == Simulators::SimulatorType::kGpuSim &&
-            config.simulation_type == Simulators::SimulationType::kTensorNetwork)
-            cluster_config.simulation_type = Simulators::SimulationType::kStatevector;
-
-        auto network = ConfigureNetwork(sim.handle, cluster_config);
-        if (!network)
-            throw std::runtime_error("Failed to configure network.");
-
-        std::vector<double> group_expectations;
-        auto start = std::chrono::high_resolution_clock::now();
-        {
-            nb::gil_scoped_release release;
-            group_expectations = network->ExecuteOnHostExpectations(ctx.circuit, 0, ctx.observables);
-        }
-        execution_duration += std::chrono::high_resolution_clock::now() - start;
-
-        // Scatter back to the caller's observable order.
-        for (size_t k = 0; k < group.size() && k < group_expectations.size(); ++k)
-            expectations[group[k]] = group_expectations[k] * ctx.expectation_factors[k];
-
-        auto_reduced = auto_reduced || ctx.auto_reduced;
-        qubits_before = std::max(qubits_before, ctx.qubits_before);
-        largest_cluster_qubits = std::max(largest_cluster_qubits, ctx.qubits_after);
-        total_cluster_qubits += ctx.qubits_after;
-        max_bond_dim = std::max(max_bond_dim, network->GetCurrentMaxBondDimension());
-        cluster_methods.append((int)network->GetLastSimulationType());
-        if (first)
-        {
-            simulator_type = (int)network->GetLastSimulatorType();
-            method = (int)network->GetLastSimulationType();
-            gpu_device = network->GetLastGpuDevice();
-            first = false;
-        }
-    }
-
-    // Convert to Python list
-    nb::list exp_vals;
-    for (double value : expectations)
-        exp_vals.append(value);
-
-    nb::dict py_result;
-    py_result["expectation_values"] = exp_vals;
-    py_result["auto_reduced"] = auto_reduced;
-    py_result["qubits_before"] = qubits_before;
-    py_result["qubits_after"] = largest_cluster_qubits;
-    py_result["clusters_count"] = groups.size();
-    py_result["largest_cluster_qubits"] = largest_cluster_qubits;
-    py_result["mean_cluster_qubits"] = groups.empty() ? 0.0 : static_cast<double>(total_cluster_qubits) / static_cast<double>(groups.size());
-    py_result["reduction_time"] = std::chrono::duration<double>(reduction_duration).count();
-    py_result["time_taken"] = std::chrono::duration<double>(execution_duration + reduction_duration).count();
-    py_result["simulator"] = simulator_type;
-    py_result["method"] = method;
-    // `method` retains the first cluster's method; this list also describes
-    // mixed requests containing both a statevector fallback and larger TNs.
-    py_result["cluster_methods"] = cluster_methods;
-    if (gpu_device >= 0)
-        py_result["gpu_device"] = gpu_device;
-    if (max_bond_dim > 0)
-        py_result["max_bond_dim_reached"] = max_bond_dim;
-
-    return py_result;
+    const auto &plan = result.plan;
+    nb::dict out;
+    out["expectation_values"] = nb::cast(result.values);
+    out["auto_reduced"] = plan.auto_reduced;
+    out["expectation_error_bounds"] = nb::cast(plan.error_bounds);
+    out["bounded_observables"] = plan.bounded_observables;
+    out["qubits_before"] = plan.qubits_before;
+    out["qubits_after"] = plan.qubits_after;
+    out["clusters_count"] = plan.groups.size();
+    out["largest_cluster_qubits"] = plan.qubits_after;
+    out["mean_cluster_qubits"] = plan.groups.empty() ? 0.0 : static_cast<double>(plan.total_cluster_qubits) / plan.groups.size();
+    out["reduction_time"] = plan.reduction_time;
+    out["time_taken"] = result.time_taken;
+    out["simulator"] = static_cast<int>(result.simulator);
+    out["method"] = static_cast<int>(result.method);
+    nb::list methods;
+    for (auto method : result.cluster_methods)
+        methods.append(static_cast<int>(method));
+    out["cluster_methods"] = methods;
+    if (result.gpu_device >= 0)
+        out["gpu_device"] = result.gpu_device;
+    if (result.max_bond_dimension)
+        out["max_bond_dim_reached"] = result.max_bond_dimension;
+    return out;
 }
 
 // Core Statevector Logic

@@ -70,6 +70,10 @@ const char *const kConfigFields[] = {
     "enable_causal_cone_reduction",
     "enable_observable_clustering",
     "max_cluster_qubits",
+    "min_cluster_qubits",
+    "observable_error_tolerance",
+    "enable_sampling_reduction",
+    "allow_reset_marginalization",
     "auto_reduce",
     "trajectory_policy",
     "trajectory_max_memory_mb",
@@ -124,7 +128,8 @@ void bind_config(nb::module_ &m)
            std::optional<int> pp_gates_between_deduplications, std::optional<double> path_integral_threshold, std::optional<bool> gate_fusion,
            bool enable_causal_cone_reduction, bool enable_observable_clustering, std::optional<size_t> max_cluster_qubits, bool auto_reduce,
            std::optional<std::string> trajectory_policy, std::optional<size_t> trajectory_max_memory_mb, std::optional<size_t> max_simulators,
-           std::optional<bool> mps_routing_virtual_bonds, std::optional<double> mps_routing_truncation_weight) {
+           std::optional<bool> mps_routing_virtual_bonds, std::optional<double> mps_routing_truncation_weight, std::optional<size_t> min_cluster_qubits,
+           std::optional<double> observable_error_tolerance, bool enable_sampling_reduction, bool allow_reset_marginalization) {
             SimulatorConfig config;
             config.simulator_type = simulator_type;
             config.simulation_type = simulation_type;
@@ -153,6 +158,10 @@ void bind_config(nb::module_ &m)
             config.enable_causal_cone_reduction = enable_causal_cone_reduction;
             config.enable_observable_clustering = enable_observable_clustering;
             config.max_cluster_qubits = max_cluster_qubits;
+            config.min_cluster_qubits = min_cluster_qubits;
+            config.observable_error_tolerance = observable_error_tolerance;
+            config.enable_sampling_reduction = enable_sampling_reduction;
+            config.allow_reset_marginalization = allow_reset_marginalization;
             config.auto_reduce = auto_reduce;
             config.trajectory_policy = std::move(trajectory_policy);
             config.trajectory_max_memory_mb = trajectory_max_memory_mb;
@@ -173,8 +182,18 @@ void bind_config(nb::module_ &m)
         "path_integral_threshold"_a = nb::none(), "gate_fusion"_a = nb::none(), "enable_causal_cone_reduction"_a = defaults.enable_causal_cone_reduction,
         "enable_observable_clustering"_a = defaults.enable_observable_clustering, "max_cluster_qubits"_a.noconvert() = nb::none(),
         "auto_reduce"_a = defaults.auto_reduce, "trajectory_policy"_a = nb::none(), "trajectory_max_memory_mb"_a.noconvert() = nb::none(),
-        "max_simulators"_a.noconvert() = nb::none(), "mps_routing_virtual_bonds"_a = nb::none(), "mps_routing_truncation_weight"_a = nb::none());
+        "max_simulators"_a.noconvert() = nb::none(), "mps_routing_virtual_bonds"_a = nb::none(), "mps_routing_truncation_weight"_a = nb::none(),
+        "min_cluster_qubits"_a.noconvert() = nb::none(), "observable_error_tolerance"_a = nb::none(),
+        "enable_sampling_reduction"_a = defaults.enable_sampling_reduction, "allow_reset_marginalization"_a = defaults.allow_reset_marginalization);
 
+    BindConfigField(config_class, "allow_reset_marginalization", &SimulatorConfig::allow_reset_marginalization,
+                    "Allow ensemble-equivalent reset marginalization; individual trajectories can change.");
+    BindConfigField(config_class, "enable_sampling_reduction", &SimulatorConfig::enable_sampling_reduction,
+                    "Opt into exact independent sampling of disjoint measurement cones; changes seeded random streams.");
+    BindConfigField(config_class, "observable_error_tolerance", &SimulatorConfig::observable_error_tolerance,
+                    "Opt-in absolute expectation error budget for bounded backward evaluation of exact noisy channels.");
+    BindConfigField<false>(config_class, "min_cluster_qubits", &SimulatorConfig::min_cluster_qubits,
+                           "Optionally batch disjoint small cones up to this width, within the maximum budget.");
     BindConfigField(config_class, "mps_routing_virtual_bonds", &SimulatorConfig::mps_routing_virtual_bonds,
                     "Opt into bounded virtual-bond routing on QCSim/GPU MPS and MPO; defaults to disabled.");
     BindConfigField(config_class, "mps_routing_truncation_weight", &SimulatorConfig::mps_routing_truncation_weight,
@@ -289,7 +308,7 @@ void bind_config(nb::module_ &m)
     BindConfigField<false>(config_class, "max_cluster_qubits", &SimulatorConfig::max_cluster_qubits,
                            "With observable clustering, split overlapping lightcones into groups of at most "
                            "this many qubits; a larger single-observable lightcone gets its own group. "
-                           "None (the default) keeps every overlapping lightcone in one group. GPU "
+                           "None uses 20 for statevectors, 10 for density matrices, or connected components for other methods. GPU "
                            "PauliPropagator ignores it and keeps all observables in one run. With "
                            "PauliPropagator and pp_gates_between_trims above 1, trims fall on different "
                            "gates per group, so values can vary with the budget within the truncation error.");

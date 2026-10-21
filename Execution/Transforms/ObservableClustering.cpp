@@ -1,7 +1,11 @@
 #include "ObservableClustering.h"
+#include "ConeAnalysis.h"
+#include "PauliCone.h"
+#include <cctype>
 
 #include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 
 namespace MaestroExecution
@@ -88,7 +92,7 @@ std::vector<std::vector<size_t>> ConnectedComponents(const std::vector<Cone> &co
 // Greedy bounded packing: seed each group with the largest remaining cone, then
 // add the overlapping cone that grows the union least (ties: larger overlap,
 // then lower index) while the union fits max(budget, seed size).
-std::vector<std::vector<size_t>> PackCones(const std::vector<Cone> &cones, const std::vector<size_t> &sizes, size_t budget)
+std::vector<std::vector<size_t>> PackCones(const std::vector<Cone> &cones, const std::vector<size_t> &sizes, size_t budget, size_t floor)
 {
     std::vector<size_t> remaining;
     for (size_t i = 0; i < cones.size(); ++i)
@@ -108,6 +112,15 @@ std::vector<std::vector<size_t>> PackCones(const std::vector<Cone> &cones, const
 
         while (true)
         {
+            // Absorb every contained cone together; none changes the mask.
+            remaining.erase(std::remove_if(remaining.begin(), remaining.end(),
+                                           [&](size_t i) {
+                                               if (OverlapCount(mask, cones[i]) != sizes[i])
+                                                   return false;
+                                               group.push_back(i);
+                                               return true;
+                                           }),
+                            remaining.end());
             auto best = remaining.end();
             size_t best_union = 0;
             size_t best_overlap = 0;
@@ -115,7 +128,7 @@ std::vector<std::vector<size_t>> PackCones(const std::vector<Cone> &cones, const
             {
                 const size_t overlap = OverlapCount(mask, cones[*it]);
                 const size_t merged = mask_size + sizes[*it] - overlap;
-                if (!overlap || merged > limit)
+                if (merged > limit || (!overlap && (!floor || merged > floor)))
                     continue;
                 if (best == remaining.end() || merged < best_union || (merged == best_union && overlap > best_overlap))
                 {
@@ -145,13 +158,16 @@ bool BenefitsFromObservableClustering(Simulators::SimulatorType simulator_type, 
 }
 
 std::vector<std::vector<size_t>> ClusterObservables(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const std::vector<std::string> &observables,
-                                                    std::optional<size_t> max_cluster_qubits)
+                                                    std::optional<size_t> max_cluster_qubits, bool ensemble, std::optional<size_t> min_cluster_qubits,
+                                                    bool tighten_paulis, bool marginalize_resets)
 {
     const size_t count = observables.size();
+    if (!count)
+        return {};
     std::vector<std::vector<size_t>> single(1);
     single[0].resize(count);
     std::iota(single[0].begin(), single[0].end(), size_t{0});
-    if (!circuit || count <= 1)
+    if (!circuit || count <= 1 || !CanTraceCone(circuit, observables, ensemble, marginalize_resets))
         return single;
 
     const auto &operations = circuit->GetOperations();
@@ -159,19 +175,9 @@ std::vector<std::vector<size_t>> ClusterObservables(const std::shared_ptr<Circui
     op_qubits.reserve(operations.size());
     for (const auto &operation : operations)
     {
-        if (!operation)
-            return single;
-        switch (operation->GetType())
-        {
-        case Circuits::OperationType::kGate:
-        case Circuits::OperationType::kNoOp:
-        case Circuits::OperationType::kDelay:
-            break;
-        default:
-            return single;
-        }
         const auto affected = operation->AffectedQubits();
-        op_qubits.emplace_back(affected.begin(), affected.end());
+        if (affected.size() > 1)
+            op_qubits.emplace_back(affected.begin(), affected.end());
     }
 
     size_t width = circuit->GetMaxQubitIndex() + 1;
@@ -187,38 +193,67 @@ std::vector<std::vector<size_t>> ClusterObservables(const std::shared_ptr<Circui
     std::vector<Cone> cones(count, Cone((width + 63) / 64));
     std::vector<size_t> sizes(count, 0);
     std::vector<size_t> empty_group;
-    std::vector<char> active(width);
-
-    for (size_t i = 0; i < count; ++i)
+    // Each bit is an observable, propagated through all multi-qubit gates in
+    // one backward pass. A final transpose produces arbitrary-width cone sets.
+    std::vector<uint64_t> active(width), x(width), z(width);
+    const auto initial_identities = tighten_paulis ? InitialIdentities(operations, width) : std::vector<bool>{};
+    for (size_t base = 0; base < count; base += 64)
     {
-        const auto &pauli = observables[i];
-        std::fill(active.begin(), active.end(), 0);
-        bool any = false;
-        for (size_t q = 0; q < pauli.size(); ++q)
-            if (pauli[q] != 'I' && pauli[q] != 'i')
-            {
-                active[q] = 1;
-                any = true;
-            }
-        if (!any)
+        std::fill(active.begin(), active.end(), uint64_t{0});
+        std::fill(x.begin(), x.end(), uint64_t{0});
+        std::fill(z.begin(), z.end(), uint64_t{0});
+        const auto batch = std::min(size_t{64}, count - base);
+        for (size_t bit = 0; bit < batch; ++bit)
+            for (size_t q = 0; q < observables[base + bit].size(); ++q)
+                if (observables[base + bit][q] != 'I' && observables[base + bit][q] != 'i')
+                {
+                    const auto p = std::toupper(static_cast<unsigned char>(observables[base + bit][q]));
+                    const auto mask = uint64_t{1} << bit;
+                    active[q] |= mask;
+                    if (p == 'X' || p == 'Y')
+                        x[q] |= mask;
+                    if (p == 'Z' || p == 'Y')
+                        z[q] |= mask;
+                }
+        if (tighten_paulis)
         {
-            empty_group.push_back(i);
-            continue;
-        }
-        for (auto it = op_qubits.rbegin(); it != op_qubits.rend(); ++it)
-            if (std::any_of(it->begin(), it->end(), [&](size_t q) { return active[q]; }))
-                for (auto q : *it)
-                    active[q] = 1;
-
-        for (size_t q = 0; q < width; ++q)
-            if (active[q])
+            for (size_t i = operations.size(); i-- > 0;)
             {
-                cones[i][q / 64] |= uint64_t{1} << (q % 64);
-                ++sizes[i];
+                if (initial_identities[i])
+                    continue;
+                const auto &op = operations[i];
+                const auto qs = op->AffectedQubits();
+                const auto keep = TracePauliOperation(op, x, z, ensemble || marginalize_resets);
+                for (auto q : qs)
+                    active[q] |= keep;
             }
+        }
+        else
+        {
+            for (auto it = op_qubits.rbegin(); it != op_qubits.rend(); ++it)
+            {
+                uint64_t affected = 0;
+                for (auto q : *it)
+                    affected |= active[q];
+                for (auto q : *it)
+                    active[q] = affected;
+            }
+        }
+        for (size_t q = 0; q < width; ++q)
+            for (size_t bit = 0; bit < batch; ++bit)
+                if (active[q] & (uint64_t{1} << bit))
+                {
+                    cones[base + bit][q / 64] |= uint64_t{1} << (q % 64);
+                    ++sizes[base + bit];
+                }
     }
+    for (size_t i = 0; i < count; ++i)
+        if (!sizes[i])
+            empty_group.push_back(i);
 
-    auto groups = max_cluster_qubits ? PackCones(cones, sizes, *max_cluster_qubits) : ConnectedComponents(cones, sizes, width);
+    auto groups = max_cluster_qubits || min_cluster_qubits
+                      ? PackCones(cones, sizes, max_cluster_qubits.value_or(std::numeric_limits<size_t>::max()), min_cluster_qubits.value_or(0))
+                      : ConnectedComponents(cones, sizes, width);
     if (!empty_group.empty())
         groups.push_back(std::move(empty_group));
     std::sort(groups.begin(), groups.end(), [](const auto &a, const auto &b) { return a.front() < b.front(); });
