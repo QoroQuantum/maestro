@@ -731,7 +731,6 @@ if(COMPILE_TESTS)
         tests/FusionNetwTests.cpp
         tests/MPSNetwTests.cpp
         tests/Tests.cpp
-        ${MAESTRO_FACTORY_SRC}
     )
 
     set(ACTIVE_TESTSSRC ${TESTSSRC})
@@ -748,10 +747,15 @@ if(COMPILE_TESTS)
     endif()
 
     add_executable(tests ${ACTIVE_TESTSSRC})
+    # Use libmaestro's factory implementation. Compiling it into this executable
+    # as well duplicates Aer's non-inline globals; ELF symbol interposition then
+    # registers two destructors for the same object and aborts at process exit.
     # Link the shared estimation implementation without inheriting Maestro's
     # blanket Boost DLL macros: Tests.cpp supplies Boost.Test inside this exe.
     target_link_libraries(tests PRIVATE "$<TARGET_LINKER_FILE:maestro>" Boost::serialization)
     add_dependencies(tests maestro)
+    # Check the process exit status, after Boost.Test reports its assertions.
+    add_test(NAME tests_shutdown COMMAND tests --run_test=main_tests)
     if(MSVC AND NOT Boost_USE_STATIC_LIBS)
         # Tests.cpp supplies the Boost.Test implementation. Import only the
         # serialization DLL, not the test framework, in the other test files.
