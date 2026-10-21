@@ -62,6 +62,23 @@ template <class Backend> struct RecordingImmediate : Backend, RecordingStats
     {
         ++flushes;
     }
+
+  protected:
+#ifdef __linux__
+    using GpuMeetingPositionCallback = int64_t (*)(void *, const int64_t *);
+
+    GpuMeetingPositionCallback GetMeetingPositionCallback() const
+    {
+        return &RecordGpuMeetingPosition;
+    }
+
+    static int64_t RecordGpuMeetingPosition(void *context, const int64_t *bonds) noexcept
+    {
+        auto *self = static_cast<RecordingImmediate *>(static_cast<Private::GpuTensorChainSimulator *>(context));
+        ++self->callbacks;
+        return Backend::FindBestMeetingPosition(context, bonds);
+    }
+#endif
 };
 
 static std::shared_ptr<ISimulator> MakeRecording(const char *method, bool gpu = false)
@@ -424,6 +441,26 @@ template <class Backend> struct HistoryProbe : RecordingImmediate<Backend>
     }
 };
 
+// Access inherited protected state through member pointers, so a real backend
+// clone can be inspected without pretending it is a HistoryProbe instance.
+template <class Backend> struct CloneRoutingInspection : Backend
+{
+    static auto NativeMap(const Backend &sim)
+    {
+        return (sim.*(&CloneRoutingInspection::CurrentRoutingMap))();
+    }
+
+    static auto VirtualBonds(const Backend &sim)
+    {
+        return (sim.*(&CloneRoutingInspection::CaptureDummyHistory))();
+    }
+
+    static auto PredictedMap(const Backend &sim)
+    {
+        return (sim.*(&CloneRoutingInspection::dummySim))->getQubitsMap();
+    }
+};
+
 static void GrowVirtualHistory(ISimulator &sim)
 {
     sim.ApplyH(0);
@@ -439,9 +476,19 @@ static void GrowVirtualHistory(ISimulator &sim)
     sim.ApplyCP(3, 4, 1e-3);
 }
 
-template <class Backend> static void LogicalSwapHistory(const char *cap)
+enum class SwapRepresentation
+{
+    Named,
+    Matrix,
+    Operator
+};
+
+template <class Backend>
+static void LogicalSwapHistory(const char *cap, SwapRepresentation representation = SwapRepresentation::Named, bool doublePrecision = true)
 {
     HistoryProbe<Backend> sim;
+    if (sim.GetType() == SimulatorType::kGpuSim)
+        sim.Configure("use_double_precision", doublePrecision ? "true" : "false");
     sim.AllocateQubits(9);
     sim.Configure("mps_routing_virtual_bonds", "true");
     sim.Configure("matrix_product_state_max_bond_dimension", cap);
@@ -452,7 +499,7 @@ template <class Backend> static void LogicalSwapHistory(const char *cap)
     GrowVirtualHistory(sim);
     const auto history = sim.VirtualBonds(), bonds = sim.NativeBonds();
     Check(!history.empty(), "logical SWAP test needs virtual history");
-    Check(sim.SwapGatesRelabelQubits(), "QCSim chain did not advertise SWAP relabeling");
+    Check(sim.SwapGatesRelabelQubits(), "tensor chain did not advertise SWAP relabeling");
     auto map = sim.NativeMap();
     const auto before = sim.AllProbabilities();
     const auto planner = sim.Planner();
@@ -460,7 +507,12 @@ template <class Backend> static void LogicalSwapHistory(const char *cap)
     const auto callbacks = sim.callbacks;
     for (const auto &[a, b] : {std::pair{0, 8}, std::pair{2, 3}})
     {
-        sim.ApplySwap(a, b);
+        if (representation == SwapRepresentation::Operator)
+            sim.ApplyOperator({static_cast<Types::qubit_t>(a), static_cast<Types::qubit_t>(b)}, Circuits::SwapGate<>(a, b).GetMatrix(), false);
+        else if (representation == SwapRepresentation::Matrix)
+            sim.ApplyGenericTwoQubitGate(a, b, Circuits::SwapGate<>(a, b).GetMatrix());
+        else
+            sim.ApplySwap(a, b);
         std::swap(map[a], map[b]);
         Check(sim.NativeMap() == map && sim.PredictedMap() == map, "logical SWAP history map differs from backend");
         Check(sim.NativeBonds() == bonds && sim.VirtualBonds() == history, "logical SWAP changed bonds or discarded virtual history");
@@ -474,8 +526,39 @@ template <class Backend> static void LogicalSwapHistory(const char *cap)
         for (const auto &[a, b] : {std::pair{0, 8}, std::pair{2, 3}})
             if (((permuted >> a) & 1) != ((permuted >> b) & 1))
                 permuted ^= (size_t{1} << a) | (size_t{1} << b);
-        Check(std::abs(after[permuted] - before[i]) < 1e-10, "logical SWAP changed the state beyond relabeling");
+        Check(std::abs(after[permuted] - before[i]) < (doublePrecision ? 1e-10 : 1e-5), "logical SWAP changed the state beyond relabeling");
     }
+#ifdef __linux__
+    if constexpr (std::is_base_of_v<Private::GpuTensorChainSimulator, Backend>)
+        for (const auto &[a, b] : {std::pair{0, 0}, std::pair{0, 9}})
+        {
+            bool rejected = false;
+            try
+            {
+                sim.ApplySwap(a, b);
+            }
+            catch (const std::runtime_error &)
+            {
+                rejected = true;
+            }
+            Check(rejected && sim.GetGatesCounter() == 2 && sim.NativeMap() == map && sim.VirtualBonds() == history,
+                  "invalid GPU SWAP was accepted or changed routing history");
+        }
+#endif
+    sim.SaveState();
+    auto clone = sim.Clone();
+    auto &cloned = dynamic_cast<Backend &>(*clone);
+    using Inspect = CloneRoutingInspection<Backend>;
+    Check(clone->SwapGatesRelabelQubits(), "clone lost SWAP capability");
+    Check(Inspect::NativeMap(cloned) == map && Inspect::PredictedMap(cloned) == map && Inspect::VirtualBonds(cloned) == history,
+          "clone lost relabeled routing history");
+    sim.ApplySwap(1, 7);
+    sim.RestoreState();
+    Check(sim.NativeMap() == map && sim.PredictedMap() == map && sim.VirtualBonds() == history, "restore lost relabeled routing history");
+    sim.SetGatesCounter(2);
+    clone->ApplyCX(0, 4);
+    Check(Inspect::PredictedMap(cloned) == Inspect::NativeMap(cloned), "clone routing ignored relabeled map");
+    Check(sim.NativeMap() == map && sim.VirtualBonds() == history, "clone routing changed original history");
     sim.ApplyCX(0, 4);
     Check(sim.callbacks > callbacks && sim.GetGatesCounter() == 3, "routing did not resume after logical SWAPs");
     Check(sim.PredictedMap() == sim.NativeMap(), "later routing ignored the relabeled map");
@@ -484,12 +567,66 @@ template <class Backend> static void LogicalSwapHistory(const char *cap)
     Check(sim.PredictedMap() == sim.NativeMap() && sim.VirtualBonds() == sim.NativeBonds(), "SWAP accepted unrelated map drift");
 }
 
-static void LogicalSwapFusion()
+template <class Backend> static void PhasedSwapHistory(const char *cap, bool doublePrecision = true)
+{
+    HistoryProbe<Backend> sim;
+    if (sim.GetType() == SimulatorType::kGpuSim)
+        sim.Configure("use_double_precision", doublePrecision ? "true" : "false");
+    sim.AllocateQubits(9);
+    sim.Configure("mps_routing_virtual_bonds", "true");
+    sim.Configure("matrix_product_state_max_bond_dimension", cap);
+    sim.Configure("matrix_product_operator_max_bond_dimension", cap);
+    sim.Initialize();
+    sim.SetLookaheadDepth(3);
+    sim.setGrowthFactorGate(1.);
+    GrowVirtualHistory(sim);
+    const auto before = sim.VirtualBonds();
+    const auto map = sim.NativeMap();
+    const Eigen::Matrix4cd phased = std::complex<double>(0., 1.) * Circuits::SwapGate<>(6, 7).GetMatrix();
+    sim.ApplyGenericTwoQubitGate(6, 7, phased);
+    Check(sim.NativeMap() == map && sim.PredictedMap() == map, "phased SWAP was incorrectly relabeled");
+    Check(!sim.VirtualBonds().empty() && sim.VirtualBonds() != before, "phased SWAP was not recorded as a tensor gate");
+}
+
+template <class Backend> static void FusedMatrixSwapHistory(const char *cap, bool doublePrecision = true)
+{
+    auto raw = std::make_shared<HistoryProbe<Backend>>();
+    RecordingSimulator sim(raw);
+    if (sim.GetType() == SimulatorType::kGpuSim)
+        sim.Configure("use_double_precision", doublePrecision ? "true" : "false");
+    sim.Configure("gate_fusion", "true");
+    sim.Configure("mps_routing_virtual_bonds", "true");
+    sim.Configure("matrix_product_state_max_bond_dimension", cap);
+    sim.Configure("matrix_product_operator_max_bond_dimension", cap);
+    sim.AllocateQubits(9);
+    sim.Initialize();
+    sim.SetLookaheadDepth(3);
+    sim.setGrowthFactorGate(1.);
+    GrowVirtualHistory(*raw);
+    const auto history = raw->VirtualBonds(), bonds = raw->NativeBonds();
+    auto map = raw->NativeMap();
+    sim.SetUpcomingGates({CF::CreateGate(Kind::kCXGateType, 0, 8), CF::CreateGate(Kind::kCXGateType, 8, 0), CF::CreateGate(Kind::kCXGateType, 0, 8),
+                          CF::CreateGate(Kind::kCXGateType, 0, 4)});
+    const auto callbacks = raw->callbacks;
+    sim.ApplyCX(0, 8);
+    sim.ApplyCX(8, 0);
+    sim.ApplyCX(0, 8);
+    sim.Flush();
+    std::swap(map[0], map[8]);
+    Check(sim.GetGateFusionStatistics().backendGates == 1, "CX SWAP decomposition did not fuse into one matrix");
+    Check(raw->callbacks == callbacks && raw->NativeMap() == map && raw->PredictedMap() == map, "fused matrix SWAP did not relabel exactly");
+    Check(raw->NativeBonds() == bonds && raw->VirtualBonds() == history, "fused matrix SWAP changed bond history");
+    sim.ApplyCX(0, 4);
+    sim.Flush();
+    Check(raw->PredictedMap() == raw->NativeMap(), "routing after a fused matrix SWAP lost the relabeled map");
+}
+
+static void LogicalSwapFusion(bool gpu = false, bool doublePrecision = true)
 {
     for (auto method : {SimulationType::kStatevector, SimulationType::kDensityMatrix})
     {
-        auto sim = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, method);
-        Check(!sim->SwapGatesRelabelQubits(), "non-chain QCSim backend advertised SWAP relabeling");
+        auto sim = SimulatorsFactory::CreateSimulator(gpu ? SimulatorType::kGpuSim : SimulatorType::kQCSim, method);
+        Check(!sim->SwapGatesRelabelQubits(), "non-chain backend advertised SWAP relabeling");
         sim->Configure("gate_fusion", "true");
         sim->AllocateQubits(4);
         sim->Initialize();
@@ -497,12 +634,14 @@ static void LogicalSwapFusion()
         sim->ApplySwap(0, 1);
         sim->ApplyH(1);
         sim->Flush();
-        Check(sim->GetGateFusionStatistics().backendGates == 1, "SWAP stopped fusing on a non-chain QCSim backend");
+        Check(sim->GetGateFusionStatistics().backendGates == 1, "SWAP stopped fusing on a non-chain backend");
     }
     for (bool fusion : {false, true})
         for (const char *method : {"matrix_product_state", "matrix_product_operator"})
         {
-            auto raw = MakeRecording(method);
+            auto raw = MakeRecording(method, gpu);
+            if (gpu)
+                raw->Configure("use_double_precision", doublePrecision ? "true" : "false");
             auto sim = std::make_shared<RecordingSimulator>(raw);
             auto reference = MakeRecording("statevector");
             sim->Configure("gate_fusion", fusion ? "true" : "false");
@@ -542,7 +681,7 @@ static void LogicalSwapFusion()
             }
             const auto actual = sim->AllProbabilities(), expected = reference->AllProbabilities();
             for (size_t i = 0; i < actual.size(); ++i)
-                Check(std::abs(actual[i] - expected[i]) < 1e-10, "fusion or routing changed a circuit with logical SWAPs");
+                Check(std::abs(actual[i] - expected[i]) < (doublePrecision ? 1e-10 : 1e-5), "fusion or routing changed a circuit with logical SWAPs");
         }
 }
 
@@ -552,7 +691,7 @@ template <class Backend> static void CachedGpuRoutingSettings()
     // Configuration replay must not depend on unordered alias iteration.
     // This check requires no initialized device or GPU plugin.
     HistoryProbe<Backend> sim;
-    Check(!sim.SwapGatesRelabelQubits(), "GPU inherited QCSim-only SWAP semantics");
+    Check(!sim.SwapGatesRelabelQubits(), "uninitialized GPU tensor chain assumed SWAP relabeling");
     sim.Configure("matrix_product_state_max_bond_dimension", "2");
     Check(sim.RoutingCap() == 2 && sim.GetConfiguration("matrix_product_operator_max_bond_dimension") == "2", "MPS cap alias left stale GPU settings");
     sim.Configure("matrix_product_operator_max_bond_dimension", "4");
@@ -906,6 +1045,20 @@ int main(int argc, char **argv)
             RoutingHistoryRecovery<Private::GpuMPSSimulator>("2");
             RoutingHistoryRecovery<Private::GpuMPOSimulator>("4");
             DecompositionAndFusionRanks(true);
+            for (bool doublePrecision : {false, true})
+            {
+                for (auto representation : {SwapRepresentation::Named, SwapRepresentation::Matrix})
+                {
+                    LogicalSwapHistory<Private::GpuMPSSimulator>("2", representation, doublePrecision);
+                    LogicalSwapHistory<Private::GpuMPOSimulator>("4", representation, doublePrecision);
+                }
+                LogicalSwapHistory<Private::GpuMPOSimulator>("4", SwapRepresentation::Operator, doublePrecision);
+                PhasedSwapHistory<Private::GpuMPSSimulator>("2", doublePrecision);
+                PhasedSwapHistory<Private::GpuMPOSimulator>("4", doublePrecision);
+                FusedMatrixSwapHistory<Private::GpuMPSSimulator>("2", doublePrecision);
+                FusedMatrixSwapHistory<Private::GpuMPOSimulator>("4", doublePrecision);
+                LogicalSwapFusion(true, doublePrecision);
+            }
             std::cout << "GPU routing fallbacks, virtual history boundaries and inactive tracking passed\n";
             return 0;
         }
@@ -923,8 +1076,16 @@ int main(int argc, char **argv)
         RoutingHistoryRecovery<Private::QCSimMPSSimulator>("2");
         RoutingHistoryRecovery<Private::QCSimMPOSimulator>("4");
         DecompositionAndFusionRanks();
-        LogicalSwapHistory<Private::QCSimMPSSimulator>("2");
-        LogicalSwapHistory<Private::QCSimMPOSimulator>("4");
+        for (auto representation : {SwapRepresentation::Named, SwapRepresentation::Matrix})
+        {
+            LogicalSwapHistory<Private::QCSimMPSSimulator>("2", representation);
+            LogicalSwapHistory<Private::QCSimMPOSimulator>("4", representation);
+        }
+        LogicalSwapHistory<Private::QCSimMPOSimulator>("4", SwapRepresentation::Operator);
+        PhasedSwapHistory<Private::QCSimMPSSimulator>("2");
+        PhasedSwapHistory<Private::QCSimMPOSimulator>("4");
+        FusedMatrixSwapHistory<Private::QCSimMPSSimulator>("2");
+        FusedMatrixSwapHistory<Private::QCSimMPOSimulator>("4");
         LogicalSwapFusion();
         std::cout << "Routing reuse, multishot snapshots, observers, flush scope, "
                      "fused boundaries, callback fallback, deferred gates and "

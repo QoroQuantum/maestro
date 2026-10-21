@@ -12,6 +12,13 @@ class GpuTensorChainSimulator : public TensorChainRouting<ImmediateGpuSimulator>
     {
     }
 
+    using MeetingPositionCallback = int64_t (*)(void *, const int64_t *);
+
+    virtual MeetingPositionCallback GetMeetingPositionCallback() const
+    {
+        return &FindBestMeetingPosition;
+    }
+
     static int64_t FindBestMeetingPosition(void *thisPtr, const int64_t *bonds) noexcept
     {
         auto *self = static_cast<GpuTensorChainSimulator *>(thisPtr);

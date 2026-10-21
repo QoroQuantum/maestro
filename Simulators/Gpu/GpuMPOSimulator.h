@@ -33,6 +33,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
             configuration.SetConfiguration("gpu_device", std::to_string(gpuDevice));
             if (!SimulatorsFactory::GetGpuLibrary(gpuDevice))
                 throw std::runtime_error("GpuState::Initialize: Unable to initialize GPU device " + std::to_string(gpuDevice));
+            SetSwapGatesRelabelQubits(GpuLibrary::GetInstance()->MPOSwapRelabels());
             {
                 mpo = SimulatorsFactory::CreateGpuMPO(gpuDevice);
                 if (!mpo)
@@ -529,6 +530,8 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
         if (!mpo)
             return IState::ApplyOperator(qubits, matrix, normalize);
         const auto selected = MPOValidation::Operator(qubits, matrix, nrQubits);
+        if (!normalize && swapGatesRelabelQubits && qubits.size() == 2 && IsExactSwapMatrix(matrix))
+            return ApplySwap(qubits[0], qubits[1]);
         std::vector<double> raw(2 * matrix.size());
         for (Eigen::Index i = 0; i < matrix.size(); ++i)
         {
@@ -869,7 +872,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
             throw std::runtime_error("GpuSimulator::ApplyGenericTwoQubitGate: Failed to apply the "
                                      "generic two-qubit gate on the matrix product operator "
                                      "simulator.");
-        RecordExecutedTwoQubitGate(qubit0, qubit1, false, false);
+        RecordExecutedTwoQubitGate(qubit0, qubit1, swapGatesRelabelQubits && IsExactSwapMatrix(gate), false);
         NotifyObservers({qubit0, qubit1});
         return;
     }
@@ -1121,6 +1124,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
     std::unique_ptr<ISimulator> Clone() override
     {
         auto cloned = std::make_unique<GpuMPOSimulator>();
+        cloned->swapGatesRelabelQubits = swapGatesRelabelQubits;
         cloned->nrQubits = nrQubits;
         cloned->lookaheadDepth = lookaheadDepth;
         cloned->lookaheadDepthWithHeuristic = lookaheadDepthWithHeuristic;
@@ -1145,6 +1149,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
         cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
         cloned->dummyHistoryValid = dummyHistoryValid;
         cloned->savedDummyBondDims = savedDummyBondDims;
+        cloned->RefreshRoutingCallback();
         if (configuration.IsSet("seed"))
             cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
         return cloned;
@@ -1170,7 +1175,7 @@ class GpuMPOSimulator : public GpuTensorChainSimulator
     {
         const bool active = IsRoutingLookaheadEnabled() && !upcomingGates.empty();
         if (mpo)
-            mpo->SetMeetingPositionCallback(active ? &GpuTensorChainSimulator::FindBestMeetingPosition : nullptr);
+            mpo->SetMeetingPositionCallback(active ? GetMeetingPositionCallback() : nullptr);
     }
 
     std::unique_ptr<GpuMPO> mpo;

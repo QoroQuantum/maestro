@@ -176,6 +176,19 @@ void Diagnostics(bool fusion)
     Check(MaestroApplyOperator(sim.get(), &q, 1, op, 0), "C operator failed");
     Check(MaestroDensityMatrixTrace(sim.get(), &re, &im), "C trace failed");
     Near(std::complex<double>(re, im), .25);
+    {
+        auto swapped = sim->Clone();
+        Eigen::Matrix4cd swap = Eigen::Matrix4cd::Identity();
+        swap(1, 1) = swap(2, 2) = 0.;
+        swap(1, 2) = swap(2, 1) = 1.;
+        swapped->ApplyOperator({0, 1}, swap, false);
+        Near(swapped->DensityMatrixTrace(), .25);
+        Near(swapped->GetDensityMatrix(false)(1, 1), .25);
+        // Explicit normalization must still run, even for an exact SWAP.
+        swapped->ApplyOperator({0, 1}, swap, true);
+        Near(swapped->DensityMatrixTrace(), 1.);
+        Near(swapped->GetDensityMatrix(false)(2, 2), 1.);
+    }
     Near(sim->GetDensityMatrix(false)(2, 2), .25);
     const unsigned char basis[] = {0, 1};
     Check(MaestroDensityMatrixElementBits(sim.get(), basis, basis, 2, &re, &im), "C element failed");

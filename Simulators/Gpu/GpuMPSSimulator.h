@@ -33,6 +33,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
             configuration.SetConfiguration("gpu_device", std::to_string(gpuDevice));
             if (!SimulatorsFactory::GetGpuLibrary(gpuDevice))
                 throw std::runtime_error("GpuState::Initialize: Unable to initialize GPU device " + std::to_string(gpuDevice));
+            SetSwapGatesRelabelQubits(GpuLibrary::GetInstance()->MPSSwapRelabels());
             {
                 mps = SimulatorsFactory::CreateGpuLibMPSSim(gpuDevice);
                 if (mps)
@@ -594,7 +595,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
                                       reinterpret_cast<const double *>(inputFirst.data())))
             throw std::runtime_error("GpuSimulator::ApplyGenericTwoQubitGate: Failed to apply the "
                                      "generic two-qubit gate on the matrix product state simulator.");
-        RecordExecutedTwoQubitGate(qubit0, qubit1, false, false);
+        RecordExecutedTwoQubitGate(qubit0, qubit1, swapGatesRelabelQubits && IsExactSwapMatrix(gate), false);
         NotifyObservers({qubit0, qubit1});
         return;
     }
@@ -767,7 +768,8 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
 
     void ApplySwap(Types::qubit_t qubit0, Types::qubit_t qubit1) override
     {
-        mps->ApplySwap(qubit0, qubit1);
+        if (!mps || !mps->ApplySwap(qubit0, qubit1))
+            throw std::runtime_error("GpuSimulator::ApplySwap: Failed to apply SWAP on the matrix product state simulator.");
         RecordExecutedTwoQubitGate(qubit0, qubit1, true, false);
         NotifyObservers({qubit1, qubit0});
     }
@@ -846,6 +848,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
     std::unique_ptr<ISimulator> Clone() override
     {
         auto cloned = std::make_unique<GpuMPSSimulator>();
+        cloned->swapGatesRelabelQubits = swapGatesRelabelQubits;
         cloned->nrQubits = nrQubits;
         cloned->lookaheadDepth = lookaheadDepth;
         cloned->lookaheadDepthWithHeuristic = lookaheadDepthWithHeuristic;
@@ -867,6 +870,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
         cloned->dummySim = dummySim ? dummySim->Clone() : nullptr;
         cloned->dummyHistoryValid = dummyHistoryValid;
         cloned->savedDummyBondDims = savedDummyBondDims;
+        cloned->RefreshRoutingCallback();
         if (configuration.IsSet("seed"))
             cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
         return cloned;
@@ -892,7 +896,7 @@ class GpuMPSSimulator : public GpuTensorChainSimulator
     {
         const bool active = IsRoutingLookaheadEnabled() && !upcomingGates.empty();
         if (mps)
-            mps->SetMeetingPositionCallback(active ? &GpuTensorChainSimulator::FindBestMeetingPosition : nullptr);
+            mps->SetMeetingPositionCallback(active ? GetMeetingPositionCallback() : nullptr);
     }
 
     std::unique_ptr<GpuLibMPSSim> mps;

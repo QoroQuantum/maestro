@@ -611,6 +611,8 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1, const Eigen::Matrix4cd &gate) override
     {
+        if (IsExactSwapMatrix(gate))
+            return ApplySwap(qubit0, qubit1);
         const QC::Gates::AppliedGate<> agate(gate, qubit0, qubit1);
         mpsSimulator->ApplyGate(agate);
         RecordExecutedTwoQubitGate(qubit0, qubit1, false, false);

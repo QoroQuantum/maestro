@@ -19,10 +19,24 @@ template <class Backend> class TensorChainRouting : public Backend
     {
     }
 
+    // Only an exact SWAP can use the logical relabelling path. Approximate SWAPs
+    // still update tensors and must be recorded as ordinary matrix gates.
+    static bool IsExactSwapMatrix(const Eigen::Matrix4cd &gate)
+    {
+        for (Eigen::Index row = 0; row < 4; ++row)
+            for (Eigen::Index col = 0; col < 4; ++col)
+            {
+                const Eigen::Index swapped = ((col & 1) << 1) | (col >> 1);
+                if (gate(row, col) != std::complex<double>(row == swapped ? 1. : 0., 0.))
+                    return false;
+            }
+        return true;
+    }
+
     virtual std::vector<long long> CurrentRoutingMap() const = 0;
     virtual std::vector<double> CurrentBondDimensions() const = 0;
     const bool operatorChain;
-    const bool swapGatesRelabelQubits;
+    bool swapGatesRelabelQubits;
 
   public:
     bool SwapGatesRelabelQubits() const override
@@ -139,6 +153,16 @@ template <class Backend> class TensorChainRouting : public Backend
         {
             InvalidateDummyHistory();
         }
+    }
+
+    void SetSwapGatesRelabelQubits(bool enabled)
+    {
+        if (swapGatesRelabelQubits == enabled)
+            return;
+        swapGatesRelabelQubits = enabled;
+        InvalidateDummyHistory();
+        if (dummySim)
+            ConfigureDummy();
     }
 
     void ConfigureDummy()

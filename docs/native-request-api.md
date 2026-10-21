@@ -608,12 +608,18 @@ plugins, GPU hardware or licensing, and is not a promise of runtime readiness.
 
 ### Experimental virtual-bond routing
 
-QCSim MPS/MPO named SWAP gates exchange logical qubit labels without updating
+QCSim and GPU MPS/MPO named SWAP gates exchange logical qubit labels without updating
 the tensors. Initial-layout planning and lookahead model these as zero tensor
 cost and unchanged bond dimensions, while following the exchanged labels for
 later gates. Fusion keeps these SWAPs as named operations. Internal routing
 swaps that move tensor sites still incur contraction and truncation costs.
 This backend behavior applies with virtual-bond routing either enabled or disabled.
+QCSim MPS/MPO exact SWAP matrices use the same relabelling path for generic
+two-qubit gates and for MPO `ApplyOperator` calls with `normalize=false`. GPU adapters
+query the optional `MPSSwapRelabels` / `MPOSwapRelabels` plugin capabilities at
+initialization and preserve virtual bond history for named and exact matrix
+SWAPs when supported. Plugins without these capabilities retain physical-SWAP
+planning and fusion behavior.
 
 `mps_routing_virtual_bonds` defaults to `false`. Setting it to `true` enables
 bounded estimates above the physical bond cap for initial layout and lookahead

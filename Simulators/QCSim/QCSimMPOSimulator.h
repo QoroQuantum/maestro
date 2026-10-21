@@ -381,6 +381,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         if (!mpoSimulator)
             return IState::ApplyOperator(qubits, matrix, normalize);
         const auto selected = MPOValidation::Operator(qubits, matrix, nrQubits);
+        if (!normalize && qubits.size() == 2 && IsExactSwapMatrix(matrix))
+            return ApplySwap(qubits[0], qubits[1]);
         const QC::Gates::AppliedGate<> op(matrix, selected[0], selected.size() == 2 ? selected[1] : 0);
         // Native channel/operator application can invoke routing before it
         // finishes; discard old estimates both before and after that call.
@@ -718,6 +720,8 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
 
     void ApplyGenericTwoQubitGate(Types::qubit_t qubit0, Types::qubit_t qubit1, const Eigen::Matrix4cd &gate) override
     {
+        if (IsExactSwapMatrix(gate))
+            return ApplySwap(qubit0, qubit1);
         const QC::Gates::AppliedGate<> agate(gate, qubit0, qubit1);
         ApplyNativeGate(agate);
         NotifyObservers({qubit0, qubit1});

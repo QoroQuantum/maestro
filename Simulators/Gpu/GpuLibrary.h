@@ -131,6 +131,8 @@ class GpuLibrary : public Utils::Library
         fGetStabilizerGpuId = (int (*)(void *))GetFunction("GetStabilizerGpuId");
         fPauliPropGetGpuId = (int (*)(void *))GetFunction("PauliPropGetGpuId");
         // optional: older libraries do not export them
+        fMPSSwapRelabels = reinterpret_cast<int (*)()>(GetFunction("MPSSwapRelabels"));
+        fMPOSwapRelabels = reinterpret_cast<int (*)()>(GetFunction("MPOSwapRelabels"));
         fStateVectorSynchronize = (int (*)(void *))GetFunction("StateVectorSynchronize");
         fDMSynchronize = (int (*)(void *))GetFunction("DMSynchronize");
         fMPSTrim = (int (*)(void *))GetFunction("MPSTrim");
@@ -151,6 +153,16 @@ class GpuLibrary : public Utils::Library
 #undef LOAD_TENSOR_QUERY
 
         return true;
+    }
+
+    bool MPSSwapRelabels() const
+    {
+        return fMPSSwapRelabels && fMPSSwapRelabels() == 1;
+    }
+
+    bool MPOSwapRelabels() const
+    {
+        return fMPOSwapRelabels && fMPOSwapRelabels() == 1;
     }
 
     int DiscoverDevices(const char *path)
@@ -5069,6 +5081,8 @@ class GpuLibrary : public Utils::Library
     long int (*fMPSGetMaxExtent)(void *) = nullptr;
     int (*fMPSGetNrQubits)(void *) = nullptr;
     int (*fMPSGetBondDimensions)(void *, long long int *) = nullptr;
+    int (*fMPSSwapRelabels)() = nullptr;
+    int (*fMPOSwapRelabels)() = nullptr;
     int (*fMPSGetQubitsMap)(void *, long long *, int) = nullptr;
     int (*fMPSSetCallbackContext)(void *, void *) = nullptr;
     int (*fMPSSetMeetingPositionCallback)(void *, int64_t (*)(void *, const int64_t *)) = nullptr;

@@ -48,6 +48,7 @@ int main(int argc, char **argv)
             Require(request.get() == first, "concurrent acquisition lost singleton identity");
         if (!real)
         {
+            Require(!first->MPSSwapRelabels() && !first->MPOSwapRelabels(), "legacy plugin advertised absent SWAP capabilities");
             auto count = reinterpret_cast<int (*)()>(first->GetFunction("MockInitializations"));
             auto selected = reinterpret_cast<int (*)()>(first->GetFunction("MockSelectedDevice"));
             Require(count && selected, "mock inspection API missing");
