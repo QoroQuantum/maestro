@@ -461,19 +461,22 @@ template <class Backend> struct CloneRoutingInspection : Backend
     }
 };
 
+// The planner counts each CP(pi) as a rank-2 gate, but every pair on the same
+// qubits cancels, so the estimated (virtual) bonds outgrow the real ones. A
+// small-angle CP no longer works here: its effective rank is close to 1.
 static void GrowVirtualHistory(ISimulator &sim)
 {
     sim.ApplyH(0);
     sim.ApplyH(1);
-    sim.ApplyCP(0, 1, 1e-3);
+    sim.ApplyCP(0, 1, M_PI);
     sim.ApplyH(2);
-    sim.ApplyCP(1, 2, 1e-3);
+    sim.ApplyCP(1, 2, M_PI);
     sim.ApplyCX(2, 3);
-    sim.ApplyCP(1, 2, 1e-3);
+    sim.ApplyCP(1, 2, M_PI);
     sim.ApplyH(4);
-    sim.ApplyCP(3, 4, 1e-3);
+    sim.ApplyCP(3, 4, M_PI);
     sim.ApplyCX(4, 5);
-    sim.ApplyCP(3, 4, 1e-3);
+    sim.ApplyCP(3, 4, M_PI);
 }
 
 enum class SwapRepresentation

@@ -50,6 +50,11 @@ class MPSDummySimulator
     explicit MPSDummySimulator(size_t N, bool operatorChain = false) : nrQubits(N), maxVirtualExtent(0)
     {
         physExtent = operatorChain ? 4 : 2;
+        // MPS: the cost model overrates scrambled layouts for circuits such as
+        // QFT, so only a large predicted gain moves away from the identity. MPO
+        // QFT measures the other way (the searched layouts are really better at
+        // predicted gains of 2-4), so an MPO accepts any improvement.
+        minLayoutGain = operatorChain ? 1. : 4.;
         InitQubitsMap();
 
         SetMaxBondDimension(0);
@@ -73,6 +78,7 @@ class MPSDummySimulator
 
         clone->growthFactorSwap = growthFactorSwap;
         clone->growthFactorGate = growthFactorGate;
+        clone->minLayoutGain = minLayoutGain;
 
         return clone;
     }
@@ -190,6 +196,21 @@ class MPSDummySimulator
         InvalidateMemoCache();
     }
 
+    // ComputeOptimalQubitsMap keeps the identity layout unless another layout
+    // is estimated to cost at least this many times less (1: any improvement).
+    // Defaults: 4 for an MPS, 1 for an MPO.
+    double getMinLayoutGain() const
+    {
+        return minLayoutGain;
+    }
+
+    void setMinLayoutGain(double gain)
+    {
+        if (!(gain >= 1.))
+            throw std::invalid_argument("Minimum layout gain must be at least 1");
+        minLayoutGain = gain;
+    }
+
     void Clear()
     {
         InitQubitsMap();
@@ -303,8 +324,6 @@ class MPSDummySimulator
         else if (qbits.size() == 2)
         {
             static const QC::Gates::SwapGate<MatrixClass> dummySwapGate;
-            static const QC::Gates::CNOTGate<MatrixClass> dummyControlled2qGate;
-            static const QC::Gates::TwoQubitsGate<MatrixClass> dummyGeneric2qGate;
 
             const auto gateptr = std::dynamic_pointer_cast<Circuits::IQuantumGate<>>(gate);
             const auto info = std::dynamic_pointer_cast<RoutingGateInfo>(gate);
@@ -312,10 +331,8 @@ class MPSDummySimulator
                 ApplyTwoQubitFastGate(qbits[0], qbits[1], info->isSwap, info->schmidtRank);
             else if (gateptr && gateptr->GetGateType() == Circuits::QuantumGateType::kSwapGateType)
                 ApplyGate(dummySwapGate, qbits[0], qbits[1]);
-            else if (gateptr && IsControlledTwoQubitGateType(gateptr->GetGateType()))
-                ApplyGate(dummyControlled2qGate, qbits[0], qbits[1]);
             else
-                ApplyGate(dummyGeneric2qGate, qbits[0], qbits[1]);
+                ApplyTwoQubitGate(qbits[0], qbits[1], gateptr ? GateSchmidtRank(*gateptr) : 4.);
         }
         else if (qbits.size() == 3 && gate->GetType() == Circuits::OperationType::kGate)
         {
@@ -361,39 +378,55 @@ class MPSDummySimulator
         {
             if (gate.getQubitsNumber() == 2 && gate.isSwapGate() && swapGatesRelabelQubits)
                 return RelabelQubits(qubit, controllingQubit1);
-            IndexType qubit1 = qubitsMap[qubit];
-            IndexType qubit2 = qubitsMap[controllingQubit1];
-
-            if (abs(qubit1 - qubit2) > 1)
-            {
-                SwapQubits(qubit, controllingQubit1);
-                qubit1 = qubitsMap[qubit];
-                qubit2 = qubitsMap[controllingQubit1];
-                assert(abs(qubit1 - qubit2) == 1);
-            }
-
-            // any 2-qubit gate (whether swaps were needed or not) grows the
-            // bond dimension at the bond between the two adjacent qubits.
-            // Charge both the pre-gate contraction cost and a post-growth SVD/reconstruction
-            // cost so immediate entanglement growth and gate contraction overhead at this
-            // bond are reflected even near the end of the lookahead horizon.
-            const IndexType bond = std::min(qubit1, qubit2);
-            // TODO: This is basic, the two qubit gates can have rank 2 and 4 (1 if
-            // can be decomposed into two 1-qubit gates)
-            // the controlled ones have Schmidt rank 2
-            // here we assume that the others have Schmidt rank 4,
-            // but that might not be the case for all gates
-            // (3 is not possible for two qubit gates)
-            RecordAdjacentTwoQubitGate(bond, gate.isSwapGate(), gate.isControlled());
+            // QCSim gate objects carry no angle: controlled ones count as rank 2,
+            // the others as 4.
+            ApplyTwoQubitGate(qubit, controllingQubit1, gate.isControlled() ? 2. : 4., gate.isSwapGate());
         }
     }
 
-    void RecordAdjacentTwoQubitGate(IndexType bond, bool isSwapGate, bool isControlledGate)
+    // Effective Schmidt rank of a named or generic two-qubit gate.
+    static double GateSchmidtRank(const Circuits::IQuantumGate<> &gate)
+    {
+        if (gate.GetNumQubits() != 2)
+            return 4.;
+        const auto params = gate.GetParams();
+        return RoutingSchmidtRank(gate.GetGateType(), params.empty() ? 0. : params[0], [&gate] { return gate.GetMatrix(); });
+    }
+
+    // Route two qubits together if needed, then grow the bond between them.
+    void ApplyTwoQubitGate(IndexType qubit, IndexType controllingQubit1, double schmidtRank, bool isSwapGate = false)
+    {
+        if (qubit < 0 || qubit >= static_cast<IndexType>(getNrQubits()))
+            throw std::invalid_argument("Qubit index out of bounds");
+        else if (controllingQubit1 < 0 || controllingQubit1 >= static_cast<IndexType>(getNrQubits()))
+            throw std::invalid_argument("Qubit index out of bounds");
+        IndexType qubit1 = qubitsMap[qubit];
+        IndexType qubit2 = qubitsMap[controllingQubit1];
+
+        if (abs(qubit1 - qubit2) > 1)
+        {
+            SwapQubits(qubit, controllingQubit1);
+            qubit1 = qubitsMap[qubit];
+            qubit2 = qubitsMap[controllingQubit1];
+            assert(abs(qubit1 - qubit2) == 1);
+        }
+
+        // any 2-qubit gate (whether swaps were needed or not) grows the
+        // bond dimension at the bond between the two adjacent qubits.
+        // Charge both the pre-gate contraction cost and a post-growth SVD/reconstruction
+        // cost so immediate entanglement growth and gate contraction overhead at this
+        // bond are reflected even near the end of the lookahead horizon.
+        // The growth factor is the gate's effective Schmidt rank
+        // (EffectiveSchmidtRank): 2 for CX/CZ, 4 for SWAP, near 1 for small angles.
+        RecordAdjacentTwoQubitGate(std::min(qubit1, qubit2), isSwapGate, schmidtRank);
+    }
+
+    void RecordAdjacentTwoQubitGate(IndexType bond, bool isSwapGate, double schmidtRank)
     {
         if (bond < 0 || bond >= static_cast<IndexType>(currentBondDim.size()))
             return;
         totalSwappingCost += bondCost[bond];
-        growBondDimension(bond, isSwapGate, isControlledGate ? 2 : 4);
+        growBondDimension(bond, isSwapGate, schmidtRank);
         totalSwappingCost += kPostGateCostWeight * bondCost[bond];
     }
 
@@ -572,7 +605,7 @@ class MPSDummySimulator
             mixHash(static_cast<uint64_t>(fg.q3));
             mixHash(static_cast<uint64_t>(fg.numQubits));
             mixHash(static_cast<uint64_t>(fg.isSwap ? 1 : 0));
-            mixHash(static_cast<uint64_t>(fg.schmidtRank));
+            mixDouble(fg.schmidtRank);
         }
 
         MemoEntry &slot = memoCache[(static_cast<size_t>(currentGateIndex) ^ static_cast<size_t>(stateHash)) & (kMemoCacheSize - 1)];
@@ -847,19 +880,26 @@ class MPSDummySimulator
             return result;
         };
 
+        // The cost model is a rough proxy: for some circuits (QFT, for one) it
+        // rates scrambled layouts a few times cheaper than the identity, while
+        // they can run far slower. Leave the identity only for a large predicted
+        // gain; a circuit whose labels really are scrambled relative to its
+        // interactions shows gains of orders of magnitude.
+        std::vector<long long int> identityMap(nrQubits);
+        std::iota(identityMap.begin(), identityMap.end(), 0);
         auto optMap = buildChain(layerPairs);
-        if (layers.size() <= 2)
-            return optMap;
         auto optCost = evaluateCost(optMap);
-
-        std::vector<long long int> qubitsMap(nrQubits);
-        std::iota(qubitsMap.begin(), qubitsMap.end(), 0);
-        double tryCost = evaluateCostBounded(qubitsMap, optCost);
-        if (tryCost < optCost)
+        const double identityCost = optMap == identityMap ? optCost : evaluateCost(identityMap);
+        if (layers.size() <= 2)
+            return optMap != identityMap && identityCost < minLayoutGain * optCost ? identityMap : optMap;
+        if (identityCost < optCost)
         {
-            optCost = tryCost;
-            optMap = qubitsMap;
+            optCost = identityCost;
+            optMap = identityMap;
         }
+
+        std::vector<long long int> qubitsMap = identityMap;
+        double tryCost;
 
         // try some random shuffles as well, in case the heuristic ordering is not
         // optimal
@@ -939,6 +979,8 @@ class MPSDummySimulator
             }
         }
 
+        if (optMap != identityMap && identityCost < minLayoutGain * optCost)
+            return identityMap;
         return optMap;
     }
 
@@ -1007,14 +1049,24 @@ class MPSDummySimulator
         return bestPos;
     }
 
-    double EstimateGrownBondDimension(IndexType bond, double leftDim, double betweenDim, double rightNeighborDim, bool swap, int schmidtRank) const
+    // An MPO site has physical dimension 4, and a gate acts on it as
+    // rho -> U rho U^dagger, whose operator Schmidt rank is the square of the
+    // gate's (the swap special case still holds, it only relabels the sites).
+    // Below rank 2 (small-angle gates) the result is interpolated linearly
+    // between rank 1, which leaves the bond unchanged, and rank 2, so the
+    // calibrated growth factors still apply unchanged to integer ranks.
+    double EstimateGrownBondDimension(IndexType bond, double leftDim, double betweenDim, double rightNeighborDim, bool swap, double schmidtRank) const
     {
-        const double rank = IsOperatorChain() ? static_cast<double>(schmidtRank) * schmidtRank : static_cast<double>(schmidtRank);
-        double newMaxDim = (swap && leftDim == rightNeighborDim) ? betweenDim : static_cast<double>(physExtent) * std::min(leftDim, rightNeighborDim);
-        newMaxDim = std::min(newMaxDim, betweenDim * rank);
-        const double growthFactor = swap ? growthFactorSwap : growthFactorGate;
-        const double grown = std::min(newMaxDim * growthFactor, maxBondDim[bond]);
-        return std::max(grown, 1.);
+        const double rank = IsOperatorChain() ? schmidtRank * schmidtRank : schmidtRank;
+        auto grownAt = [&](double r) {
+            double newMaxDim = (swap && leftDim == rightNeighborDim) ? betweenDim : static_cast<double>(physExtent) * std::min(leftDim, rightNeighborDim);
+            newMaxDim = std::min(newMaxDim, betweenDim * r);
+            const double growthFactor = swap ? growthFactorSwap : growthFactorGate;
+            return std::max(std::min(newMaxDim * growthFactor, maxBondDim[bond]), 1.);
+        };
+        if (rank >= 2.)
+            return grownAt(rank);
+        return betweenDim + (std::max(rank, 1.) - 1.) * (grownAt(2.) - betweenDim);
     }
 
     // Anchor the qubit surrounded by higher bond cost so the less-entangled
@@ -1044,7 +1096,7 @@ class MPSDummySimulator
         IndexType q3 = 0;
         uint8_t numQubits = 2;
         bool isSwap = false;
-        int schmidtRank = 4;
+        double schmidtRank = 4;
     };
 
     static constexpr size_t kMaxStackQubits = 64;
@@ -1153,9 +1205,9 @@ class MPSDummySimulator
                     fg.isSwap = true;
                     fg.schmidtRank = 4;
                 }
-                else if (gateptr && IsControlledTwoQubitGateType(gateptr->GetGateType()))
+                else if (gateptr)
                 {
-                    fg.schmidtRank = 2;
+                    fg.schmidtRank = GateSchmidtRank(*gateptr);
                 }
             }
             else if (qbits.size() == 3)
@@ -1172,7 +1224,7 @@ class MPSDummySimulator
         return count;
     }
 
-    void ApplyTwoQubitFastGate(IndexType qubit, IndexType controllingQubit1, bool isSwap, int schmidtRank)
+    void ApplyTwoQubitFastGate(IndexType qubit, IndexType controllingQubit1, bool isSwap, double schmidtRank)
     {
         if (isSwap && swapGatesRelabelQubits)
             return RelabelQubits(qubit, controllingQubit1);
@@ -1342,7 +1394,7 @@ class MPSDummySimulator
 
         const FastGateOp &fg = window[stepIdx];
         const bool isSwap = (fg.numQubits == 2) ? fg.isSwap : false;
-        const int schmidtRank = fg.schmidtRank;
+        const double schmidtRank = fg.schmidtRank;
 
         constexpr IndexType kMaxStackSpan = 128;
         std::array<double, kMaxStackSpan> rightSweepDimStack{};
@@ -1800,8 +1852,9 @@ class MPSDummySimulator
 
     double growthFactorSwap = 1.;
     double growthFactorGate = 0.7;
+    double minLayoutGain = 4.; // set per chain type by the constructor
 
-    void growBondDimension(IndexType bond, bool swap = true, int schmidtRank = 4)
+    void growBondDimension(IndexType bond, bool swap = true, double schmidtRank = 4)
     {
         // the left and right bond dimensions are relevant because:
         // the initial configuration before applying the swap or other gate is:
@@ -1836,18 +1889,7 @@ class MPSDummySimulator
         const double leftDim = leftBond >= 0 ? currentBondDim[leftBond] : 1;
         const double rightNeighborDim = rightNeigborBond < static_cast<IndexType>(currentBondDim.size()) ? currentBondDim[rightNeigborBond] : 1;
 
-        // an MPO site has physical dimension 4, and a gate acts on it as
-        // rho -> U rho U^dagger, whose operator Schmidt rank is the square of the
-        // gate's (the swap special case still holds, it only relabels the sites)
-        const double rank = IsOperatorChain() ? static_cast<double>(schmidtRank) * schmidtRank : static_cast<double>(schmidtRank);
-        double newMaxDim = (swap && leftDim == rightNeighborDim) ? betweenDim : static_cast<double>(physExtent) * std::min(leftDim, rightNeighborDim);
-        newMaxDim = std::min(newMaxDim, betweenDim * rank);
-
-        const double growthFactor = swap ? growthFactorSwap : growthFactorGate;
-
-        currentBondDim[bond] = std::min(newMaxDim * growthFactor, maxBondDim[bond]);
-
-        currentBondDim[bond] = std::max(currentBondDim[bond], 1.);
+        currentBondDim[bond] = EstimateGrownBondDimension(bond, leftDim, betweenDim, rightNeighborDim, swap, schmidtRank);
 
         bondCost[bond] = BondCost(currentBondDim[bond]);
     }

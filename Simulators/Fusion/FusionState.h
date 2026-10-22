@@ -923,9 +923,8 @@ class FusionState : public ISimulator
         Cache planner(GetGateFusionMaxQubits(), false);
         auto emit = [this](const auto &block) {
             planned_.push_back({block.targets, block.sources, routing_.size()});
-            const bool controlled = block.IsSingle() && IsControlledRoutingGate(block.original.kind);
             const bool swap = block.IsSingle() && block.original.kind == Circuits::QuantumGateType::kSwapGateType;
-            routing_.push_back(std::make_shared<FusionRoutingOperation>(block.targets, controlled ? 2 : 4, swap));
+            routing_.push_back(std::make_shared<FusionRoutingOperation>(block.targets, block.schmidtRank, swap));
         };
         for (size_t i = static_cast<size_t>(sourceIndex_); i < sources_.size(); ++i)
         {

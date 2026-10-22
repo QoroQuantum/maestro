@@ -615,7 +615,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             return ApplySwap(qubit0, qubit1);
         const QC::Gates::AppliedGate<> agate(gate, qubit0, qubit1);
         mpsSimulator->ApplyGate(agate);
-        RecordExecutedTwoQubitGate(qubit0, qubit1, false, false);
+        RecordExecutedTwoQubitGate(qubit0, qubit1, false, EffectiveSchmidtRank(gate));
         NotifyObservers({qubit0, qubit1});
     }
 
@@ -723,21 +723,21 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     void ApplyCX(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, 2.);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCY(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpsSimulator->ApplyGate(cygate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, 2.);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCZ(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpsSimulator->ApplyGate(czgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, 2.);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
@@ -745,7 +745,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         cpgate.SetPhaseShift(lambda);
         mpsSimulator->ApplyGate(cpgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(2. * std::abs(std::cos(lambda / 2.))));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
@@ -753,7 +753,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         crxgate.SetTheta(theta);
         mpsSimulator->ApplyGate(crxgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(2. * std::abs(std::cos(theta / 2.))));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
@@ -761,7 +761,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         crygate.SetTheta(theta);
         mpsSimulator->ApplyGate(crygate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(2. * std::abs(std::cos(theta / 2.))));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
@@ -769,35 +769,35 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         crzgate.SetTheta(theta);
         mpsSimulator->ApplyGate(crzgate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(2. * std::abs(std::cos(theta / 2.))));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCH(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpsSimulator->ApplyGate(ch, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, 2.);
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(std::sqrt(2.)));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSxDAG(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
         mpsSimulator->ApplyGate(csxdag, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(std::sqrt(2.)));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplySwap(Types::qubit_t qubit0, Types::qubit_t qubit1) override
     {
         mpsSimulator->ApplyGate(swapgate, static_cast<unsigned int>(qubit1), static_cast<unsigned int>(qubit0));
-        RecordExecutedTwoQubitGate(qubit0, qubit1, true, false);
+        RecordExecutedTwoQubitGate(qubit0, qubit1, true, 4.);
         NotifyObservers({qubit1, qubit0});
     }
 
@@ -809,19 +809,19 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             const size_t q2 = qubit1;
             const size_t q3 = qubit2;
             mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-            RecordExecutedTwoQubitGate(qubit1, qubit2, false, true);
+            RecordExecutedTwoQubitGate(qubit1, qubit2, false, 2.);
             NotifyObservers({qubit1, qubit2});
             mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
-            RecordExecutedTwoQubitGate(qubit0, qubit1, false, true);
+            RecordExecutedTwoQubitGate(qubit0, qubit1, false, 2.);
             NotifyObservers({qubit0, qubit1});
             mpsSimulator->ApplyGate(csxdag, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-            RecordExecutedTwoQubitGate(qubit1, qubit2, false, true);
+            RecordExecutedTwoQubitGate(qubit1, qubit2, false, 2.);
             NotifyObservers({qubit1, qubit2});
             mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
-            RecordExecutedTwoQubitGate(qubit0, qubit1, false, true);
+            RecordExecutedTwoQubitGate(qubit0, qubit1, false, 2.);
             NotifyObservers({qubit0, qubit1});
             mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q1));
-            RecordExecutedTwoQubitGate(qubit0, qubit2, false, true);
+            RecordExecutedTwoQubitGate(qubit0, qubit2, false, 2.);
             NotifyObservers({qubit0, qubit2});
         }
         NotifyObservers({qubit2, qubit1, qubit0});
@@ -835,13 +835,13 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             const size_t q2 = qubit0;
             const size_t q3 = qubit1;
             mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-            RecordExecutedTwoQubitGate(qubit1, qubit0, false, true);
+            RecordExecutedTwoQubitGate(qubit1, qubit0, false, 2.);
             NotifyObservers({qubit1, qubit0});
             mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-            RecordExecutedTwoQubitGate(qubit0, qubit1, false, true);
+            RecordExecutedTwoQubitGate(qubit0, qubit1, false, 2.);
             NotifyObservers({qubit0, qubit1});
             mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
-            RecordExecutedTwoQubitGate(ctrl_qubit, qubit0, false, true);
+            RecordExecutedTwoQubitGate(ctrl_qubit, qubit0, false, 2.);
             NotifyObservers({ctrl_qubit, qubit0});
             pgate.SetPhaseShift(M_PI);
             mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q3));
@@ -850,19 +850,19 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q2));
             NotifyObservers({qubit0});
             mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q2));
-            RecordExecutedTwoQubitGate(qubit0, qubit1, false, true);
+            RecordExecutedTwoQubitGate(qubit0, qubit1, false, 2.);
             NotifyObservers({qubit0, qubit1});
             mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q1));
-            RecordExecutedTwoQubitGate(ctrl_qubit, qubit0, false, true);
+            RecordExecutedTwoQubitGate(ctrl_qubit, qubit0, false, 2.);
             NotifyObservers({ctrl_qubit, qubit0});
             pgate.SetPhaseShift(M_PI);
             mpsSimulator->ApplyGate(pgate, static_cast<unsigned int>(q3));
             NotifyObservers({qubit1});
             mpsSimulator->ApplyGate(csx, static_cast<unsigned int>(q3), static_cast<unsigned int>(q1));
-            RecordExecutedTwoQubitGate(ctrl_qubit, qubit1, false, true);
+            RecordExecutedTwoQubitGate(ctrl_qubit, qubit1, false, 2.);
             NotifyObservers({ctrl_qubit, qubit1});
             mpsSimulator->ApplyGate(cxgate, static_cast<unsigned int>(q2), static_cast<unsigned int>(q3));
-            RecordExecutedTwoQubitGate(qubit1, qubit0, false, true);
+            RecordExecutedTwoQubitGate(qubit1, qubit0, false, 2.);
             NotifyObservers({qubit1, qubit0});
         }
         NotifyObservers({qubit1, qubit0, ctrl_qubit});
@@ -872,7 +872,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     {
         cugate.SetParams(theta, phi, lambda, gamma);
         mpsSimulator->ApplyGate(cugate, static_cast<unsigned int>(tgt_qubit), static_cast<unsigned int>(ctrl_qubit));
-        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, true);
+        RecordExecutedTwoQubitGate(ctrl_qubit, tgt_qubit, false, ControlledSchmidtRank(2. * std::abs(std::cos(theta / 2.) * std::cos((phi + lambda) / 2.))));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 

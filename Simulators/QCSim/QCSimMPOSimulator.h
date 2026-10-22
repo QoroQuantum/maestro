@@ -1011,13 +1011,13 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             if constexpr (sizeof...(Qubits) == 2)
             {
                 const std::array<Types::qubit_t, 2> qs{static_cast<Types::qubit_t>(qubits)...};
-                RecordExecutedTwoQubitGate(qs[0], qs[1], gate.isSwapGate(), gate.isControlled());
+                RecordExecutedTwoQubitGate(qs[0], qs[1], gate.isSwapGate(), NativeGateSchmidtRank(gate));
             }
             else if constexpr (sizeof...(Qubits) == 0)
             {
                 if (gate.getQubitsNumber() == 2)
                     RecordExecutedTwoQubitGate(static_cast<Types::qubit_t>(gate.getQubit1()), static_cast<Types::qubit_t>(gate.getQubit2()), gate.isSwapGate(),
-                                               gate.isControlled());
+                                               NativeGateSchmidtRank(gate));
             }
         }
         else

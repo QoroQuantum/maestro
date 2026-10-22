@@ -12,8 +12,9 @@
 namespace Simulators
 {
 
-// Backend-independent cache. Gate supplies Targets() and Matrix(); the same
-// algorithm runs without matrices when preparing a routing sequence.
+// Backend-independent cache. Gate supplies Targets(), Matrix() and
+// SchmidtRank(); the same algorithm runs without matrices when preparing a
+// routing sequence.
 template <class Gate> class GateFusion
 {
   public:
@@ -43,6 +44,10 @@ template <class Gate> class GateFusion
         Gate original;
         Sources sources;
         bool preserveStructure = false;
+        // Routing estimate without the matrix: the product of the merged gates'
+        // effective Schmidt ranks, capped at 4. Exact when one-qubit gates join a
+        // single two-qubit gate, since local gates leave the rank unchanged.
+        double schmidtRank = 1.;
 
         bool IsSingle() const
         {
@@ -162,7 +167,7 @@ template <class Gate> class GateFusion
         {
             for (auto id : overlapping)
                 EmitOne(id, emit);
-            emit(Block{std::move(targets), {}, gate, {source, source, 1}, preserveStructure});
+            emit(Block{std::move(targets), {}, gate, {source, source, 1}, preserveStructure, gate.SchmidtRank()});
             return;
         }
         // Keep native structured operations when a merge would only replace
@@ -213,11 +218,11 @@ template <class Gate> class GateFusion
         {
             for (auto q : support)
                 owners_[q] = source;
-            blocks_.emplace(source, Block{std::move(support), {}, gate, {source, source, 1}, preserveStructure});
+            blocks_.emplace(source, Block{std::move(support), {}, gate, {source, source, 1}, preserveStructure, gate.SchmidtRank()});
             return;
         }
         // A merged block is emitted through its matrix, never as `original`.
-        Block next{{}, {}, Gate{}, {source, source, 1}, false};
+        Block next{{}, {}, Gate{}, {source, source, 1}, false, gate.SchmidtRank()};
         {
             // Start from the first block's matrix and left-apply the other
             // (disjoint, hence commuting) blocks and the new gate as small gates,
@@ -228,6 +233,7 @@ template <class Gate> class GateFusion
                 const auto &old = blocks_.at(id);
                 next.sources.first = std::min(next.sources.first, old.sources.first);
                 next.sources.count += old.sources.count;
+                next.schmidtRank = std::min(4., next.schmidtRank * old.schmidtRank);
                 if (!matrices_)
                     continue;
                 if (old.IsSingle())

@@ -20,6 +20,7 @@
 #define _CIRCUIT_H_
 
 #define _USE_MATH_DEFINES
+#include <algorithm>
 #include <math.h>
 #include <numeric>
 #include <set>
@@ -522,20 +523,25 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         nrQubits = 0;
         nrCbits = 0;
 
+        // Number qubits in ascending order, not in order of first use: chain
+        // simulators (MPS/MPO) take the numbering as their site order, and a
+        // reordered gate sequence would otherwise scramble it.
+        std::vector<Types::qubit_t> usedQubits;
+        for (const auto &op : operations)
+            for (const auto qubit : op->AffectedQubits())
+                usedQubits.push_back(qubit);
+        std::sort(usedQubits.begin(), usedQubits.end());
+        usedQubits.erase(std::unique(usedQubits.begin(), usedQubits.end()), usedQubits.end());
+        for (const auto qubit : usedQubits)
+            if (newQubitsMap.find(qubit) == newQubitsMap.end())
+            {
+                newQubitsMap[qubit] = nrQubits;
+                ++nrQubits;
+            }
+
         for (const auto &op : operations)
         {
             const auto affectedBits = GetReferencedBits(op);
-            const auto affectedQubits = op->AffectedQubits();
-
-            for (const auto qubit : affectedQubits)
-            {
-                const auto it = newQubitsMap.find(qubit);
-                if (it == newQubitsMap.end())
-                {
-                    newQubitsMap[qubit] = nrQubits;
-                    ++nrQubits;
-                }
-            }
 
             for (const auto bit : affectedBits)
             {

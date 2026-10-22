@@ -1058,9 +1058,16 @@ class GenericRank4TwoQubitGate final : public Circuits::TwoQubitsGate<>
         return Circuits::QuantumGateType::kNone;
     }
 
+    // SWAP * CZ: iSWAP up to one-qubit phases, effective Schmidt rank exactly 4,
+    // and not an exact SWAP matrix.
     Eigen::MatrixXcd GetMatrix() const override
     {
-        return Eigen::Matrix4cd::Identity();
+        Eigen::Matrix4cd m = Eigen::Matrix4cd::Zero();
+        m(0, 0) = 1.;
+        m(1, 2) = 1.;
+        m(2, 1) = 1.;
+        m(3, 3) = -1.;
+        return m;
     }
 
     void Execute(const std::shared_ptr<Simulators::ISimulator> &, Circuits::OperationState &) const override
@@ -1571,7 +1578,7 @@ BOOST_AUTO_TEST_CASE(VirtualBondHistoryLifecycleAndSaturatedRouting)
         BOOST_CHECK(dummy.getCurrentBondDimensions() == unitBonds);
 
         dummy.setGrowthFactorGate(1.0);
-        dummy.RecordAdjacentTwoQubitGate(2, false, true);
+        dummy.RecordAdjacentTwoQubitGate(2, false, 2.); // controlled gate: Schmidt rank 2
         BOOST_CHECK_CLOSE(dummy.getCurrentBondDimensions()[2], 2.0, 1e-12);
     }
 
@@ -2150,6 +2157,101 @@ BOOST_AUTO_TEST_CASE(VirtualRoutingLiveBenchmark, *boost::unit_test::disabled() 
     // A 5% aggregate budget tolerates different routing choices on individual
     // circuits. Per-case maximum error and wall-clock time remain visible above.
     BOOST_CHECK_LE(virtualRms, 1.05 * baselineRms + 1e-8);
+}
+
+BOOST_AUTO_TEST_CASE(EffectiveSchmidtRankOfTwoQubitGates)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+
+    BOOST_CHECK_CLOSE(Simulators::EffectiveSchmidtRank(Eigen::Matrix4cd::Identity()), 1., 1e-9);
+    BOOST_CHECK_CLOSE(Simulators::EffectiveSchmidtRank(CF::CreateGate(Kind::kCXGateType, 0, 1)->GetMatrix()), 2., 1e-9);
+    BOOST_CHECK_CLOSE(Simulators::EffectiveSchmidtRank(CF::CreateGate(Kind::kSwapGateType, 0, 1)->GetMatrix()), 4., 1e-9);
+    BOOST_CHECK_CLOSE(Simulators::MPSDummySimulator::GateSchmidtRank(*CF::CreateGate(Kind::kCPGateType, 0, 1, 0, M_PI)), 2., 1e-9);
+    BOOST_CHECK_CLOSE(Simulators::MPSDummySimulator::GateSchmidtRank(*CF::CreateGate(Kind::kCPGateType, 0, 1, 0, M_PI / 2)), 4. / 3., 1e-9);
+    BOOST_CHECK_LT(Simulators::MPSDummySimulator::GateSchmidtRank(*CF::CreateGate(Kind::kCPGateType, 0, 1, 0, 1e-9)), 1. + 1e-12);
+
+    // The closed forms for named controlled gates agree with the matrix rank.
+    for (const auto kind : {Kind::kCPGateType, Kind::kCRxGateType, Kind::kCRyGateType, Kind::kCRzGateType, Kind::kCSxGateType, Kind::kCSxDagGateType,
+                            Kind::kCHGateType, Kind::kCYGateType})
+        for (const double angle : {1e-6, 0.3, M_PI / 4, 2., M_PI, 5.})
+        {
+            const auto gate = CF::CreateGate(kind, 0, 1, 0, angle);
+            BOOST_CHECK_CLOSE(Simulators::MPSDummySimulator::GateSchmidtRank(*gate), Simulators::EffectiveSchmidtRank(gate->GetMatrix()), 1e-7);
+        }
+    const auto cu = CF::CreateGate(Kind::kCUGateType, 0, 1, 0, 0.7, 1.1, -0.4, 0.3);
+    const double cuRank = Simulators::MPSDummySimulator::GateSchmidtRank(*cu);
+    BOOST_CHECK_CLOSE(cuRank, Simulators::ControlledSchmidtRank(2. * std::abs(std::cos(0.35) * std::cos(0.35))), 1e-7);
+}
+
+BOOST_AUTO_TEST_CASE(OptimalQubitsMapNeedsLargeGainToLeaveIdentity)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+    constexpr size_t nrQubits = 24;
+
+    // QFT: the identity layout is the right one, though the cost model rates
+    // scrambled layouts somewhat cheaper. Below the minimum gain it is kept.
+    auto qft = std::make_shared<Circuits::Circuit<>>();
+    for (size_t i = nrQubits; i-- > 0;)
+    {
+        qft->AddOperation(CF::CreateGate(Kind::kHadamardGateType, i));
+        for (size_t j = i; j-- > 0;)
+            qft->AddOperation(CF::CreateGate(Kind::kCPGateType, j, i, 0, M_PI / std::pow(2., static_cast<double>(i - j))));
+    }
+    std::vector<long long int> identity(nrQubits);
+    std::iota(identity.begin(), identity.end(), 0);
+    {
+        Simulators::MPSDummySimulator planner(nrQubits);
+        planner.SetMaxBondDimension(64);
+        BOOST_CHECK(planner.ComputeOptimalQubitsMap(qft->ToMultipleQubitsLayers()) == identity);
+    }
+
+    // A CX chain (GHZ preparation) whose labels are scrambled: in the identity
+    // layout every gate is long-range, so the gain is large and the search wins.
+    std::vector<size_t> perm(nrQubits);
+    std::iota(perm.begin(), perm.end(), 0);
+    std::shuffle(perm.begin(), perm.end(), std::mt19937(7));
+    auto chain = std::make_shared<Circuits::Circuit<>>();
+    chain->AddOperation(CF::CreateGate(Kind::kHadamardGateType, perm[0]));
+    for (size_t i = 0; i + 1 < nrQubits; ++i)
+        chain->AddOperation(CF::CreateGate(Kind::kCXGateType, perm[i], perm[i + 1]));
+    const auto layers = chain->ToMultipleQubitsLayers();
+    Simulators::MPSDummySimulator planner(nrQubits);
+    planner.SetMaxBondDimension(64);
+    const auto optimalMap = planner.ComputeOptimalQubitsMap(layers);
+    BOOST_CHECK(optimalMap != identity);
+    const auto ops = chain->LayersToCircuit(layers)->GetOperations();
+    planner.SetInitialQubitsMap(identity);
+    planner.ApplyGates(ops);
+    const double identityCost = planner.getTotalSwappingCost();
+    planner.SetInitialQubitsMap(optimalMap);
+    planner.ApplyGates(ops);
+    BOOST_CHECK_LT(4. * planner.getTotalSwappingCost(), identityCost);
+
+    BOOST_CHECK_THROW(planner.setMinLayoutGain(0.5), std::invalid_argument);
+    // MPO QFT is better served by the searched layouts, so an MPO keeps any gain.
+    BOOST_CHECK_EQUAL(Simulators::MPSDummySimulator(nrQubits, true).getMinLayoutGain(), 1.);
+    BOOST_CHECK_EQUAL(Simulators::MPSDummySimulator(nrQubits).getMinLayoutGain(), 4.);
+}
+
+BOOST_AUTO_TEST_CASE(RemapToContinuousKeepsQubitOrder)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+
+    // First use is 9, 5, 7, 2; the compact numbering must follow 2 < 5 < 7 < 9.
+    auto circuit = std::make_shared<Circuits::Circuit<>>();
+    circuit->AddOperation(CF::CreateGate(Kind::kCXGateType, 9, 5));
+    circuit->AddOperation(CF::CreateGate(Kind::kCXGateType, 7, 2));
+    Circuits::Circuit<>::BitMapping qubits, reverseBits;
+    size_t nrQubits = 0, nrCbits = 0;
+    const auto mapped = circuit->RemapToContinuous(qubits, reverseBits, nrQubits, nrCbits);
+    BOOST_CHECK_EQUAL(nrQubits, 4);
+    BOOST_CHECK(qubits == (Circuits::Circuit<>::BitMapping{{2, 0}, {5, 1}, {7, 2}, {9, 3}}));
+    const auto &ops = mapped->GetOperations();
+    BOOST_CHECK(ops[0]->AffectedQubits() == (Types::qubits_vector{3, 1}));
+    BOOST_CHECK(ops[1]->AffectedQubits() == (Types::qubits_vector{2, 0}));
 }
 
 BOOST_AUTO_TEST_SUITE_END()

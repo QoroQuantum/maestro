@@ -637,6 +637,19 @@ Larger weights favor avoiding overflow and may increase execution time. This
 experimental policy does not guarantee better accuracy or runtime on every circuit.
 An unlimited physical cap uses the ordinary cubic model without virtual history.
 
+Each two-qubit gate grows the estimated bond by its effective Schmidt rank: the
+participation ratio of its operator Schmidt coefficients, computed from the gate
+matrix (closed forms for named controlled gates). It is 2 for CX/CZ and 4 for
+SWAP, and tends to 1 as a controlled rotation's angle shrinks, so the
+near-identity controlled phases of a QFT barely count. Fused blocks carry the
+product of their gates' ranks, capped at 4. Below rank 2 the growth estimate
+interpolates linearly between an unchanged bond (rank 1) and the rank-2 result.
+
+The initial-layout search keeps the circuit's own qubit order for an MPS unless
+the cost model predicts a layout at least four times cheaper; an MPO accepts any
+predicted improvement. Before simulation, qubits are compacted in ascending
+order, so a circuit's numbering is the chain order the search starts from.
+
 The same settings are available as Python `SimulatorConfig` keyword arguments
 and properties. `None` retains defaults. The compatibility flag
 `mps_routing_legacy_cap=true` forces virtual routing off, including when the new

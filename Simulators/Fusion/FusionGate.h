@@ -98,6 +98,17 @@ struct FusionGate
         throw std::logic_error("Unknown fusion gate");
     }
 
+    // Effective Schmidt rank for routing (see EffectiveSchmidtRank); 1 for a
+    // one-qubit gate. Three-qubit gates are expanded before routing.
+    double SchmidtRank() const
+    {
+        if (qubits.size() < 2)
+            return 1.;
+        if (qubits.size() > 2)
+            return 4.;
+        return RoutingSchmidtRank(kind, params[0], [this] { return Matrix(); });
+    }
+
     static FusionGate FromCircuit(const Circuits::IQuantumGate<> &gate)
     {
         FusionGate result;
@@ -280,7 +291,7 @@ struct FusionGate
 class FusionRoutingOperation : public Circuits::IOperation<>, public RoutingGateInfo
 {
   public:
-    explicit FusionRoutingOperation(Types::qubits_vector targets, int rank = 4, bool swap = false) : Circuits::IOperation<>(0), targets_(std::move(targets))
+    explicit FusionRoutingOperation(Types::qubits_vector targets, double rank = 4, bool swap = false) : Circuits::IOperation<>(0), targets_(std::move(targets))
     {
         schmidtRank = rank;
         isSwap = swap;

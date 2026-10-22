@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The QASM parser accepts qelib1.inc's `u0`, a parametrised idle that adds no operation.
 
+### Changed
+
+- MPS/MPO routing estimates bond growth from each gate's effective Schmidt rank,
+  computed from its matrix, instead of 2 for every controlled gate and 4 otherwise;
+  small-angle controlled rotations now count as nearly rank 1.
+- The MPS initial-layout search keeps the circuit's qubit order unless another layout
+  is predicted to be at least four times cheaper (`MPSDummySimulator::setMinLayoutGain`).
+  MPO layouts are unchanged.
+- Circuits are compacted to continuous qubit indices in ascending order, not in order of
+  first use. Seeded samples of circuits that first touch their qubits out of order can
+  differ from earlier releases; their distributions do not.
+
+### Fixed
+
+- MPS QFT at 64 qubits took 20 s instead of 0.2 s and truncated: the layout search
+  scrambled the qubit order, and whether a run recovered depended on its random seed.
+
 ## [0.3.7] - 2026-10-19
 
 ### Added

@@ -231,7 +231,15 @@ template <class Backend> class TensorChainRouting : public Backend
         return position;
     }
 
-    void RecordExecutedTwoQubitGate(Types::qubit_t q0, Types::qubit_t q1, bool isSwap, bool controlled) noexcept
+    // Effective Schmidt rank (EffectiveSchmidtRank) of a QCSim gate object.
+    template <class Gate> static double NativeGateSchmidtRank(const Gate &gate)
+    {
+        return gate.isSwapGate() ? 4. : EffectiveSchmidtRank(gate.getRawOperatorMatrix());
+    }
+
+    // schmidtRank: the executed gate's effective Schmidt rank (2 for CX, 4 for
+    // SWAP or a generic gate, near 1 for a small-angle controlled rotation).
+    void RecordExecutedTwoQubitGate(Types::qubit_t q0, Types::qubit_t q1, bool isSwap, double schmidtRank) noexcept
     {
         if (!trackVirtualBonds)
             return;
@@ -267,9 +275,9 @@ template <class Backend> class TensorChainRouting : public Backend
             // the permutation. Unknown native reorders require a fresh seed.
             if (dummySim->getQubitsMap() != map)
                 return SeedDummyHistory(map);
-            // These flags describe the actual native call: lone fused CX
-            // retains rank 2; a merged matrix reaches the generic rank-4 path.
-            dummySim->RecordAdjacentTwoQubitGate(position, isSwap, controlled);
+            // The rank describes the actual native call: a lone fused CX keeps
+            // rank 2; a merged matrix is ranked from its own entries.
+            dummySim->RecordAdjacentTwoQubitGate(position, isSwap, schmidtRank);
         }
         catch (...)
         {
