@@ -51,7 +51,7 @@ std::vector<Readout> ParseReadouts(const nb::handle &observables)
         Observable obs;
         for (const auto &term : item)
         {
-            std::pair<double, std::string> parsed;
+            MaestroExecution::Adjoint::PauliTerm parsed;
             if (!nb::try_cast(term, parsed))
                 throw nb::type_error("Observable terms must be (coefficient, Pauli string) pairs.");
             obs.push_back(std::move(parsed));
@@ -59,6 +59,16 @@ std::vector<Readout> ParseReadouts(const nb::handle &observables)
         out.push_back(Readout::Expectation(std::move(obs)));
     }
     return out;
+}
+
+// A flat row-major float64 copy of any array-like, with its shape.
+std::vector<double> FlatDoubles(const nb::handle &values, std::vector<size_t> &shape)
+{
+    nb::object np = nb::module_::import_("numpy");
+    nb::object arr = np.attr("ascontiguousarray")(values, "dtype"_a = np.attr("float64"));
+    shape = nb::cast<std::vector<size_t>>(arr.attr("shape"));
+    auto flat = nb::cast<nb::ndarray<const double, nb::c_contig, nb::device::cpu>>(arr.attr("reshape")(-1));
+    return std::vector<double>(flat.data(), flat.data() + flat.size());
 }
 
 // Returns the parameter rows as a flat row-major copy and their count. None
@@ -71,19 +81,15 @@ std::vector<double> ParseRows(const Program &program, const nb::handle &params, 
         numRows = 1;
         return program.DefaultParams();
     }
-    nb::object np = nb::module_::import_("numpy");
-    nb::object arr = np.attr("ascontiguousarray")(params, "dtype"_a = np.attr("float64"));
-    const auto ndim = nb::cast<size_t>(arr.attr("ndim"));
-    const auto shape = nb::cast<std::vector<size_t>>(arr.attr("shape"));
-    if (ndim == 1 && shape[0] == nParams)
+    std::vector<size_t> shape;
+    auto rows = FlatDoubles(params, shape);
+    if (shape.size() == 1 && shape[0] == nParams)
         numRows = 1;
-    else if (ndim == 2 && shape[1] == nParams)
+    else if (shape.size() == 2 && shape[1] == nParams)
         numRows = shape[0];
     else
         throw nb::value_error(("params must have shape (num_params,) or (batch, num_params) with num_params = " + std::to_string(nParams)).c_str());
-    auto flat = nb::cast<nb::ndarray<const double, nb::c_contig, nb::device::cpu>>(arr.attr("reshape")(-1));
-    const double *data = flat.data();
-    return std::vector<double>(data, data + numRows * nParams);
+    return rows;
 }
 
 NumpyArray ToNumpy(std::vector<double> &&values, std::vector<size_t> shape)
@@ -104,79 +110,79 @@ void RequireStatevector(const SimulatorConfig &config)
         throw nb::value_error("Adjoint differentiation runs on the CPU statevector and requires simulator_type=QCSim.");
 }
 
-nb::dict Expectations(const Program &program, const nb::handle &observables, const nb::handle &params, const SimulatorConfig &config)
+/** The parsed arguments shared by every entry point. */
+struct Request
+{
+    std::vector<Readout> readouts;
+    size_t nCols = 0;
+    std::vector<double> rows;
+    size_t numRows = 0;
+    bool causalCone = true;
+};
+
+Request Prepare(const Program &program, const nb::handle &observables, const nb::handle &params, const SimulatorConfig &config)
 {
     RequireStatevector(config);
-    const auto obs = ParseReadouts(observables);
-    const size_t nCols = MaestroExecution::Adjoint::Columns(obs);
-    size_t numRows = 0;
-    const auto rows = ParseRows(program, params, numRows);
+    Request req;
+    req.readouts = ParseReadouts(observables);
+    req.nCols = MaestroExecution::Adjoint::Columns(req.readouts);
+    req.rows = ParseRows(program, params, req.numRows);
+    req.causalCone = config.enable_causal_cone_reduction;
+    return req;
+}
+
+nb::dict Expectations(const Program &program, const nb::handle &observables, const nb::handle &params, const SimulatorConfig &config)
+{
+    const auto req = Prepare(program, observables, params, config);
     std::vector<double> values;
     {
         nb::gil_scoped_release release;
-        values = program.Values(obs, rows, numRows, config.enable_causal_cone_reduction);
+        values = program.Values(req.readouts, req.rows, req.numRows, req.causalCone);
     }
     nb::dict out;
-    out["expectation_values"] = ToNumpy(std::move(values), {numRows, nCols});
+    out["expectation_values"] = ToNumpy(std::move(values), {req.numRows, req.nCols});
     return out;
 }
 
 nb::dict Jacobian(const Program &program, const nb::handle &observables, const nb::handle &params, const SimulatorConfig &config)
 {
-    RequireStatevector(config);
-    const auto obs = ParseReadouts(observables);
-    const size_t nCols = MaestroExecution::Adjoint::Columns(obs);
-    size_t numRows = 0;
-    const auto rows = ParseRows(program, params, numRows);
+    const auto req = Prepare(program, observables, params, config);
     std::vector<double> values, jac;
     {
         nb::gil_scoped_release release;
-        program.Jacobian(obs, rows, numRows, config.enable_causal_cone_reduction, values, jac);
+        program.Jacobian(req.readouts, req.rows, req.numRows, req.causalCone, values, jac);
     }
     nb::dict out;
-    out["expectation_values"] = ToNumpy(std::move(values), {numRows, nCols});
-    out["jacobian"] = ToNumpy(std::move(jac), {numRows, nCols, program.NumParams()});
+    out["expectation_values"] = ToNumpy(std::move(values), {req.numRows, req.nCols});
+    out["jacobian"] = ToNumpy(std::move(jac), {req.numRows, req.nCols, program.NumParams()});
     return out;
 }
 
 nb::dict VectorJacobianProduct(const Program &program, const nb::handle &observables, const nb::handle &cotangents, const nb::handle &params,
                                const SimulatorConfig &config)
 {
-    RequireStatevector(config);
-    const auto obs = ParseReadouts(observables);
-    const size_t nCols = MaestroExecution::Adjoint::Columns(obs);
-    size_t numRows = 0;
-    const auto rows = ParseRows(program, params, numRows);
-
-    nb::object np = nb::module_::import_("numpy");
-    nb::object dy = np.attr("ascontiguousarray")(cotangents, "dtype"_a = np.attr("float64")).attr("reshape")(-1);
-    auto dyArr = nb::cast<nb::ndarray<const double, nb::c_contig, nb::device::cpu>>(dy);
-    if (dyArr.size() != numRows * nCols)
+    const auto req = Prepare(program, observables, params, config);
+    std::vector<size_t> shape;
+    const auto dy = FlatDoubles(cotangents, shape);
+    if (dy.size() != req.numRows * req.nCols)
         throw nb::value_error("cotangents must have shape (batch, num_values).");
-    const std::vector<double> dyVec(dyArr.data(), dyArr.data() + dyArr.size());
 
     std::vector<double> values, vjp;
     {
         nb::gil_scoped_release release;
-        program.VectorJacobianProduct(obs, dyVec, rows, numRows, config.enable_causal_cone_reduction, values, vjp);
+        program.VectorJacobianProduct(req.readouts, dy, req.rows, req.numRows, req.causalCone, values, vjp);
     }
     nb::dict out;
-    out["expectation_values"] = ToNumpy(std::move(values), {numRows, nCols});
-    out["vjp"] = ToNumpy(std::move(vjp), {numRows, program.NumParams()});
+    out["expectation_values"] = ToNumpy(std::move(values), {req.numRows, req.nCols});
+    out["vjp"] = ToNumpy(std::move(vjp), {req.numRows, program.NumParams()});
     return out;
 }
 
+// nanobind turns the std::invalid_argument of an unsupported circuit into ValueError.
 Program Compile(const std::shared_ptr<Circuits::Circuit<double>> &circuit)
 {
     require_circuit(circuit);
-    try
-    {
-        return Program(*circuit);
-    }
-    catch (const std::invalid_argument &e)
-    {
-        throw nb::value_error(e.what());
-    }
+    return Program(*circuit);
 }
 
 } // namespace

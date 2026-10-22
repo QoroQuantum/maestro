@@ -103,6 +103,9 @@ struct Readout
         return {Kind::Probabilities, {}, std::move(qubits)};
     }
 
+    /** Throws std::invalid_argument for an unusable Probabilities readout. */
+    void Validate() const;
+
     /** Number of values this readout produces. */
     size_t Columns() const;
 };
@@ -118,15 +121,29 @@ inline constexpr size_t kMaxQubits = 63;
 // Probabilities readouts are limited to this many qubits (2^k values per row).
 inline constexpr size_t kMaxProbabilityQubits = 24;
 
-// Validated here, not only when parsing, because callers size their output
-// from it before anything else runs.
-inline size_t Readout::Columns() const
+inline void Readout::Validate() const
 {
     if (kind == Kind::Expectation)
-        return 1;
+        return;
     if (qubits.empty() || qubits.size() > kMaxProbabilityQubits)
-        throw std::invalid_argument("Probabilities need between 1 and 24 qubits.");
-    return size_t{1} << qubits.size();
+        throw std::invalid_argument("Probabilities need between 1 and " + std::to_string(kMaxProbabilityQubits) + " qubits.");
+    uint64_t seen = 0;
+    for (const auto q : qubits)
+    {
+        if (q >= kMaxQubits)
+            throw std::invalid_argument("Probabilities qubit index is out of range.");
+        const uint64_t bit = uint64_t{1} << q;
+        if (seen & bit)
+            throw std::invalid_argument("Probabilities qubits must be distinct.");
+        seen |= bit;
+    }
+}
+
+// Validates, because callers size their output from it before anything else runs.
+inline size_t Readout::Columns() const
+{
+    Validate();
+    return kind == Kind::Expectation ? 1 : size_t{1} << qubits.size();
 }
 
 /** Total number of values produced by a list of readouts. */
@@ -276,10 +293,39 @@ inline size_t ParamCount(GateKind kind)
     }
 }
 
-template <class Gate> Eigen::MatrixXcd FixedMatrix()
+/** Generator of a one-angle rotation: P, Rx, Ry, Rz or their controlled forms. */
+inline Generator::Kind RotationGenerator(GateKind kind)
 {
-    static const Gate gate;
-    return gate.getRawOperatorMatrix();
+    switch (kind)
+    {
+    case GateKind::P:
+    case GateKind::CP:
+        return Generator::Kind::Projector;
+    case GateKind::Rx:
+    case GateKind::CRx:
+        return Generator::Kind::X;
+    case GateKind::Ry:
+    case GateKind::CRy:
+        return Generator::Kind::Y;
+    case GateKind::Rz:
+    case GateKind::CRz:
+        return Generator::Kind::Z;
+    default:
+        throw std::logic_error("Not a one-angle rotation");
+    }
+}
+
+/** A generator as a 2x2 matrix on its target qubit. */
+inline const Eigen::Matrix2cd &GeneratorMatrix(Generator::Kind kind)
+{
+    // In Generator::Kind order.
+    static const Eigen::Matrix2cd matrices[4] = {
+        (Eigen::Matrix2cd() << 0., 1., 1., 0.).finished(),
+        (Eigen::Matrix2cd() << 0., Complex(0., -1.), Complex(0., 1.), 0.).finished(),
+        (Eigen::Matrix2cd() << 1., 0., 0., -1.).finished(),
+        (Eigen::Matrix2cd() << 0., 0., 0., -2.).finished(),
+    };
+    return matrices[static_cast<size_t>(kind)];
 }
 
 inline Eigen::MatrixXcd RxMatrix(double t)
@@ -355,12 +401,22 @@ inline Eigen::MatrixXcd GateMatrix(const GateSpec &g, const double *p)
     throw std::logic_error("Unknown gate kind");
 }
 
+/**
+ * OpenMP team for a loop over `count` basis states: QCSim's kernel team, so
+ * every region of a sweep has the same size (see QC::ParallelTeamSize).
+ */
+inline int TeamSize(size_t count, bool parallel)
+{
+    return parallel ? QC::ParallelTeamSize(count) : 1;
+}
+
 /** Sum f(i) over the basis states, in parallel for large states. */
 template <class F> Complex Reduce(size_t count, bool parallel, F f)
 {
     double re = 0., im = 0.;
+    [[maybe_unused]] const int threads = TeamSize(count, parallel);
 #ifdef _OPENMP
-#pragma omp parallel for reduction(+ : re, im) schedule(static) if (parallel)
+#pragma omp parallel for reduction(+ : re, im) schedule(static) num_threads(threads) if (threads > 1)
 #endif
     for (long long i = 0; i < static_cast<long long>(count); ++i)
     {
@@ -368,7 +424,6 @@ template <class F> Complex Reduce(size_t count, bool parallel, F f)
         re += v.real();
         im += v.imag();
     }
-    (void)parallel;
     return {re, im};
 }
 
@@ -414,8 +469,9 @@ inline void AddPauli(const PauliMasks &p, double coeff, const State &in, State &
     const long long count = static_cast<long long>(in.size());
     const Complex *src = in.data();
     Complex *dst = out.data();
+    [[maybe_unused]] const int threads = TeamSize(static_cast<size_t>(count), parallel);
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if (parallel)
+#pragma omp parallel for schedule(static) num_threads(threads) if (threads > 1)
 #endif
     for (long long i = 0; i < count; ++i)
     {
@@ -423,20 +479,6 @@ inline void AddPauli(const PauliMasks &p, double coeff, const State &in, State &
         const Complex v = c * src[j];
         dst[i] += (Popcount(j & phase) & 1) ? -v : v;
     }
-}
-
-/** <psi|P|psi> for a Pauli string P. */
-inline double PauliExpectation(const PauliMasks &p, const State &psi, bool parallel)
-{
-    static const Complex iPow[4] = {{1., 0.}, {0., 1.}, {-1., 0.}, {0., -1.}};
-    const uint64_t flip = p.flip, phase = p.phase;
-    const Complex *s = psi.data();
-    const Complex sum = Reduce(static_cast<size_t>(psi.size()), parallel, [=](uint64_t i) {
-        const uint64_t j = i ^ flip;
-        const Complex v = std::conj(s[i]) * s[j];
-        return (Popcount(j & phase) & 1) ? -v : v;
-    });
-    return (iPow[p.numY & 3] * sum).real();
 }
 
 /** Index of the outcome of the qubits at `bits` (bits[0] least significant). */
@@ -459,6 +501,7 @@ inline void Marginal(const State &psi, const std::vector<uint64_t> &bits, double
     const size_t numOutcomes = size_t{1} << bits.size();
     const long long count = static_cast<long long>(psi.size());
     const Complex *s = psi.data();
+    const int threads = TeamSize(static_cast<size_t>(count), parallel);
     if (numOutcomes > kMarginalHistogramMaxOutcomes)
     {
         uint64_t measured = 0;
@@ -466,7 +509,7 @@ inline void Marginal(const State &psi, const std::vector<uint64_t> &bits, double
             measured |= bit;
         const uint64_t rest = (static_cast<uint64_t>(count) - 1) & ~measured;
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if (parallel)
+#pragma omp parallel for schedule(static) num_threads(threads) if (threads > 1)
 #endif
         for (long long o = 0; o < static_cast<long long>(numOutcomes); ++o)
         {
@@ -484,19 +527,13 @@ inline void Marginal(const State &psi, const std::vector<uint64_t> &bits, double
             } while (sub);
             out[o] = p;
         }
-        (void)parallel;
         return;
     }
 
-    int threads = 1;
-#ifdef _OPENMP
-    if (parallel)
-        threads = omp_get_max_threads();
-#endif
     // Allocated up front: an exception must not escape a parallel region.
     std::vector<double> local(static_cast<size_t>(threads) * numOutcomes, 0.);
 #ifdef _OPENMP
-#pragma omp parallel num_threads(threads) if (parallel)
+#pragma omp parallel num_threads(threads) if (threads > 1)
 #endif
     {
         int t = 0;
@@ -522,12 +559,12 @@ inline void AddProjectors(const std::vector<uint64_t> &bits, const double *weigh
     const long long count = static_cast<long long>(in.size());
     const Complex *src = in.data();
     Complex *dst = out.data();
+    [[maybe_unused]] const int threads = TeamSize(static_cast<size_t>(count), parallel);
 #ifdef _OPENMP
-#pragma omp parallel for schedule(static) if (parallel)
+#pragma omp parallel for schedule(static) num_threads(threads) if (threads > 1)
 #endif
     for (long long i = 0; i < count; ++i)
         dst[i] += weights[Outcome(static_cast<uint64_t>(i), bits)] * src[i];
-    (void)parallel;
 }
 
 /**
@@ -542,8 +579,9 @@ inline Eigen::Matrix2cd CrossMatrix(const State &lambda, const State &phi, uint6
     const Complex *f = phi.data();
     const uint64_t low = bit - 1;
     double r00 = 0., i00 = 0., r01 = 0., i01 = 0., r10 = 0., i10 = 0., r11 = 0., i11 = 0.;
+    [[maybe_unused]] const int threads = TeamSize(static_cast<size_t>(phi.size()), parallel);
 #ifdef _OPENMP
-#pragma omp parallel for reduction(+ : r00, i00, r01, i01, r10, i10, r11, i11) schedule(static) if (parallel)
+#pragma omp parallel for reduction(+ : r00, i00, r01, i01, r10, i10, r11, i11) schedule(static) num_threads(threads) if (threads > 1)
 #endif
     for (long long k = 0; k < half; ++k)
     {
@@ -560,7 +598,6 @@ inline Eigen::Matrix2cd CrossMatrix(const State &lambda, const State &phi, uint6
         r11 += m11.real();
         i11 += m11.imag();
     }
-    (void)parallel;
     Eigen::Matrix2cd m;
     m << Complex(r00, i00), Complex(r01, i01), Complex(r10, i10), Complex(r11, i11);
     return m;
@@ -580,8 +617,7 @@ struct Block
 /** The gates of a circuit that lie in a causal cone, on a compact register. */
 struct ConeProgram
 {
-    std::vector<size_t> gates; // indices into Program::gates, in circuit order
-    std::vector<Block> blocks; // the same gates, with one-qubit runs fused
+    std::vector<Block> blocks; // the cone's gates, with one-qubit runs fused
     std::vector<int> compact;  // original qubit -> compact qubit, -1 outside
     size_t numQubits = 0;
 };
@@ -618,20 +654,14 @@ class Program
 
             GateSpec spec;
             spec.numQubits = gate->GetNumQubits();
-            std::array<Types::qubit_t, 3> q{};
             for (unsigned i = 0; i < spec.numQubits; ++i)
             {
-                q[i] = gate->GetQubit(i);
-                numQubits = std::max(numQubits, static_cast<size_t>(q[i]) + 1);
-                spec.mask |= uint64_t{1} << q[i];
+                const auto q = gate->GetQubit(i);
+                numQubits = std::max(numQubits, static_cast<size_t>(q) + 1);
+                spec.mask |= uint64_t{1} << q;
+                // Maestro lists controls first; QCSim kernels take the target first.
+                spec.kernelQubits[spec.numQubits - 1 - i] = q;
             }
-            // Maestro lists controls first; QCSim kernels take the target first.
-            if (spec.numQubits == 1)
-                spec.kernelQubits = {q[0], 0, 0};
-            else if (spec.numQubits == 2)
-                spec.kernelQubits = {q[1], q[0], 0};
-            else
-                spec.kernelQubits = {q[2], q[1], q[0]};
 
             const auto params = gate->GetParams();
             switch (gate->GetGateType())
@@ -650,7 +680,7 @@ class Program
                 break;
             case QuantumGateType::kUGateType:
                 spec.kind = GateKind::U;
-                spec.gamma = params.size() > 3 ? params[3] : 0.;
+                spec.gamma = params[3];
                 break;
             case QuantumGateType::kCPGateType:
                 spec.kind = GateKind::CP;
@@ -668,64 +698,26 @@ class Program
                 spec.kind = GateKind::CU;
                 break;
             case QuantumGateType::kXGateType:
-                spec.fixed = FixedMatrix<QC::Gates::PauliXGate<>>();
-                break;
             case QuantumGateType::kYGateType:
-                spec.fixed = FixedMatrix<QC::Gates::PauliYGate<>>();
-                break;
             case QuantumGateType::kZGateType:
-                spec.fixed = FixedMatrix<QC::Gates::PauliZGate<>>();
-                break;
             case QuantumGateType::kHadamardGateType:
-                spec.fixed = FixedMatrix<QC::Gates::HadamardGate<>>();
-                break;
             case QuantumGateType::kSGateType:
-                spec.fixed = FixedMatrix<QC::Gates::SGate<>>();
-                break;
             case QuantumGateType::kSdgGateType:
-                spec.fixed = FixedMatrix<QC::Gates::SDGGate<>>();
-                break;
             case QuantumGateType::kTGateType:
-                spec.fixed = FixedMatrix<QC::Gates::TGate<>>();
-                break;
             case QuantumGateType::kTdgGateType:
-                spec.fixed = FixedMatrix<QC::Gates::TDGGate<>>();
-                break;
             case QuantumGateType::kSxGateType:
-                spec.fixed = FixedMatrix<QC::Gates::SquareRootNOTGate<>>();
-                break;
             case QuantumGateType::kSxDagGateType:
-                spec.fixed = FixedMatrix<QC::Gates::SquareRootNOTDagGate<>>();
-                break;
             case QuantumGateType::kKGateType:
-                spec.fixed = FixedMatrix<QC::Gates::HyGate<>>();
-                break;
             case QuantumGateType::kSwapGateType:
-                spec.fixed = FixedMatrix<QC::Gates::SwapGate<>>();
-                break;
             case QuantumGateType::kCXGateType:
-                spec.fixed = FixedMatrix<QC::Gates::CNOTGate<>>();
-                break;
             case QuantumGateType::kCYGateType:
-                spec.fixed = FixedMatrix<QC::Gates::ControlledYGate<>>();
-                break;
             case QuantumGateType::kCZGateType:
-                spec.fixed = FixedMatrix<QC::Gates::ControlledZGate<>>();
-                break;
             case QuantumGateType::kCHGateType:
-                spec.fixed = FixedMatrix<QC::Gates::ControlledHadamardGate<>>();
-                break;
             case QuantumGateType::kCSxGateType:
-                spec.fixed = FixedMatrix<QC::Gates::ControlledSquareRootNOTGate<>>();
-                break;
             case QuantumGateType::kCSxDagGateType:
-                spec.fixed = FixedMatrix<QC::Gates::ControlledSquareRootNOTDagGate<>>();
-                break;
             case QuantumGateType::kCCXGateType:
-                spec.fixed = FixedMatrix<QC::Gates::ToffoliGate<>>();
-                break;
             case QuantumGateType::kCSwapGateType:
-                spec.fixed = FixedMatrix<QC::Gates::FredkinGate<>>();
+                spec.fixed = gate->GetMatrix();
                 break;
             default:
                 throw std::invalid_argument("Adjoint differentiation: unsupported gate type.");
@@ -733,12 +725,11 @@ class Program
 
             spec.firstParam = defaults.size();
             spec.numParams = ParamCount(spec.kind);
-            for (size_t i = 0; i < spec.numParams; ++i)
-                defaults.push_back(i < params.size() ? params[i] : 0.);
+            defaults.insert(defaults.end(), params.begin(), params.begin() + static_cast<std::ptrdiff_t>(spec.numParams));
             gates.push_back(std::move(spec));
         }
         if (numQubits > kMaxQubits)
-            throw std::invalid_argument("Adjoint differentiation supports at most 63 qubits.");
+            throw std::invalid_argument("Adjoint differentiation supports at most " + std::to_string(kMaxQubits) + " qubits.");
     }
 
     /** Number of differentiable parameters (columns of a parameter row). */
@@ -765,11 +756,12 @@ class Program
      */
     std::vector<double> Values(const std::vector<Readout> &readouts, const std::vector<double> &rows, size_t numRows, bool causalCone) const
     {
+        CheckRows(rows, numRows);
         const auto parsed = ParseAll(readouts);
         const auto cone = Cone(Support(parsed), causalCone);
         const auto compact = CompactAll(parsed, cone);
         const size_t nCols = Columns(readouts);
-        CheckMemory(numRows, cone.numQubits, 1, static_cast<double>(numRows) * nCols);
+        CheckMemory(StateBytes(numRows, cone.numQubits, 1), static_cast<double>(numRows) * nCols);
 
         std::vector<double> out(numRows * nCols, 0.);
         ForRows(numRows, cone.numQubits, [&](size_t row, bool parallel) {
@@ -787,18 +779,20 @@ class Program
     void Jacobian(const std::vector<Readout> &readouts, const std::vector<double> &rows, size_t numRows, bool causalCone, std::vector<double> &values,
                   std::vector<double> &jac) const
     {
+        CheckRows(rows, numRows);
         const size_t nCols = Columns(readouts), nParams = NumParams();
         const auto parsed = ParseAll(readouts);
         std::vector<Detail::ConeProgram> cones;
         cones.reserve(parsed.size());
-        size_t widest = 0;
+        // Readouts run one after another, each with its own row concurrency:
+        // the peak is the largest of them. psi, plus phi and lambda per sweep.
+        double stateBytes = 0.;
         for (const auto &r : parsed)
         {
             cones.push_back(Cone(r.support, causalCone));
-            widest = std::max(widest, cones.back().numQubits);
+            stateBytes = std::max(stateBytes, StateBytes(numRows, cones.back().numQubits, 3));
         }
-        // psi, plus phi and lambda for the sweep in progress.
-        CheckMemory(numRows, widest, 3, static_cast<double>(numRows) * nCols * (nParams + 1));
+        CheckMemory(stateBytes, static_cast<double>(numRows) * nCols * (nParams + 1));
 
         values.assign(numRows * nCols, 0.);
         jac.assign(numRows * nCols * nParams, 0.);
@@ -811,7 +805,7 @@ class Program
             ForRows(numRows, cone.numQubits, [&](size_t row, bool parallel) {
                 const double *p = rows.data() + row * nParams;
                 const State psi = Forward(cone, p, parallel);
-                WriteValues({compact}, psi, values.data() + row * nCols + first, parallel);
+                WriteValue(compact, psi, values.data() + row * nCols + first, parallel);
                 std::vector<double> weights(width, 0.);
                 for (size_t c = 0; c < width; ++c)
                 {
@@ -835,11 +829,14 @@ class Program
     void VectorJacobianProduct(const std::vector<Readout> &readouts, const std::vector<double> &cotangents, const std::vector<double> &rows, size_t numRows,
                                bool causalCone, std::vector<double> &values, std::vector<double> &vjp) const
     {
+        CheckRows(rows, numRows);
         const auto parsed = ParseAll(readouts);
         const auto cone = Cone(Support(parsed), causalCone);
         const auto compact = CompactAll(parsed, cone);
         const size_t nCols = Columns(readouts), nParams = NumParams();
-        CheckMemory(numRows, cone.numQubits, 2, static_cast<double>(numRows) * (nCols + nParams));
+        if (cotangents.size() != numRows * nCols)
+            throw std::invalid_argument("Cotangents must hold one value per row and readout value.");
+        CheckMemory(StateBytes(numRows, cone.numQubits, 2), static_cast<double>(numRows) * (nCols + nParams));
         values.assign(numRows * nCols, 0.);
         vjp.assign(numRows * nParams, 0.);
         ForRows(numRows, cone.numQubits, [&](size_t row, bool parallel) {
@@ -866,7 +863,7 @@ class Program
         Readout::Kind kind = Readout::Kind::Expectation;
         Masks terms;                // Expectation
         std::vector<uint64_t> bits; // Probabilities: one bit per qubit, in order
-        uint64_t support = 0;
+        uint64_t support = 0;       // qubits read, on the original register
         size_t columns = 1;
     };
 
@@ -884,11 +881,7 @@ class Program
         }
         for (const auto q : readout.qubits)
         {
-            if (q >= kMaxQubits)
-                throw std::invalid_argument("Probabilities qubit index is out of range.");
             const uint64_t bit = uint64_t{1} << q;
-            if (out.support & bit)
-                throw std::invalid_argument("Probabilities qubits must be distinct.");
             out.support |= bit;
             out.bits.push_back(bit);
         }
@@ -925,7 +918,7 @@ class Program
                 if (c == 'I' || c == 'i')
                     continue;
                 if (q >= kMaxQubits)
-                    throw std::invalid_argument("Pauli string is longer than 63 qubits.");
+                    throw std::invalid_argument("Pauli string is longer than " + std::to_string(kMaxQubits) + " qubits.");
                 const uint64_t bit = uint64_t{1} << q;
                 if (c == 'X' || c == 'x')
                     m.flip |= bit;
@@ -949,6 +942,7 @@ class Program
     Detail::ConeProgram Cone(uint64_t support, bool causalCone) const
     {
         Detail::ConeProgram cone;
+        std::vector<size_t> coneGates; // indices into gates, in circuit order
         uint64_t qubits = 0;
         if (causalCone)
         {
@@ -957,16 +951,16 @@ class Program
                 if (gates[k].mask & qubits)
                 {
                     qubits |= gates[k].mask;
-                    cone.gates.push_back(k);
+                    coneGates.push_back(k);
                 }
-            std::reverse(cone.gates.begin(), cone.gates.end());
+            std::reverse(coneGates.begin(), coneGates.end());
         }
         else
         {
             for (size_t k = 0; k < gates.size(); ++k)
             {
                 qubits |= gates[k].mask;
-                cone.gates.push_back(k);
+                coneGates.push_back(k);
             }
             qubits |= support;
         }
@@ -985,7 +979,7 @@ class Program
             cone.blocks.push_back({true, std::move(pending[q])});
             pending[q].clear();
         };
-        for (const size_t k : cone.gates)
+        for (const size_t k : coneGates)
         {
             const auto &g = gates[k];
             if (g.numQubits == 1)
@@ -1023,7 +1017,6 @@ class Program
         }
         for (auto &bit : out.bits)
             bit = CompactMask(bit, cone);
-        out.support = CompactMask(out.support, cone);
         return out;
     }
 
@@ -1036,15 +1029,21 @@ class Program
         return out;
     }
 
+    /** Write the values of a compacted readout. */
+    static void WriteValue(const ParsedReadout &r, const State &psi, double *out, bool parallel)
+    {
+        if (r.kind == Readout::Kind::Expectation)
+            *out = Expectation(r.terms, psi, parallel);
+        else
+            Detail::Marginal(psi, r.bits, out, parallel);
+    }
+
     /** Write the values of compacted readouts, side by side. */
     static void WriteValues(const std::vector<ParsedReadout> &readouts, const State &psi, double *out, bool parallel)
     {
         for (const auto &r : readouts)
         {
-            if (r.kind == Readout::Kind::Expectation)
-                *out = Expectation(r.terms, psi, parallel);
-            else
-                Detail::Marginal(psi, r.bits, out, parallel);
+            WriteValue(r, psi, out, parallel);
             out += r.columns;
         }
     }
@@ -1065,9 +1064,16 @@ class Program
     static double Expectation(const Masks &obs, const State &psi, bool parallel)
     {
         double value = 0.;
+        const auto size = static_cast<size_t>(psi.size());
         for (const auto &term : obs)
-            value += term.coeff * (term.flip || term.phase ? Detail::PauliExpectation(term, psi, parallel) : psi.squaredNorm());
+            value += term.coeff * Calculator::PauliExpectationValue(size, psi, term.flip, term.phase, term.numY, parallel).real();
         return value;
+    }
+
+    void CheckRows(const std::vector<double> &rows, size_t numRows) const
+    {
+        if (rows.size() != numRows * NumParams())
+            throw std::invalid_argument("Parameter rows must hold NumParams() values per row.");
     }
 
     static bool KernelsParallel(size_t coneQubits)
@@ -1094,15 +1100,20 @@ class Program
 #endif
     }
 
+    /** Bytes of the statevectors alive at once while ForRows runs rows on this cone. */
+    static double StateBytes(size_t numRows, size_t coneQubits, size_t statesPerRow)
+    {
+        const double rows = static_cast<double>(ConcurrentRows(numRows, coneQubits));
+        return rows * statesPerRow * std::ldexp(static_cast<double>(sizeof(Complex)), static_cast<int>(coneQubits));
+    }
+
     /**
      * Refuse a call whose states and outputs would not fit in physical memory,
      * rather than let the allocation swap the machine or get it OOM-killed.
      */
-    static void CheckMemory(size_t numRows, size_t coneQubits, size_t statesPerRow, double outputValues)
+    static void CheckMemory(double stateBytes, double outputValues)
     {
-        const double stateBytes = std::ldexp(static_cast<double>(sizeof(Complex)), static_cast<int>(coneQubits));
-        const double rows = static_cast<double>(ConcurrentRows(numRows, coneQubits));
-        const double needed = rows * statesPerRow * stateBytes + outputValues * sizeof(double);
+        const double needed = stateBytes + outputValues * sizeof(double);
         double limit = Detail::PhysicalMemoryBytes();
         // Unknown machine: still refuse sizes that cannot even be indexed.
         if (limit <= 0.)
@@ -1114,8 +1125,7 @@ class Program
             std::snprintf(buf, sizeof(buf), "%.3g", bytes / (1024. * 1024. * 1024.));
             return std::string(buf);
         };
-        throw MemoryLimitError("Adjoint differentiation needs about " + gib(needed) + " GiB (" + std::to_string(statesPerRow) + " statevectors of " +
-                               std::to_string(coneQubits) + " qubits per concurrent row), more than the " + gib(limit) +
+        throw MemoryLimitError("Adjoint differentiation needs about " + gib(needed) + " GiB for its statevectors and outputs, more than the " + gib(limit) +
                                " GiB of physical memory. Reduce the qubits in the causal cone or the batch size.");
     }
 
@@ -1189,13 +1199,9 @@ class Program
     void BackwardRun(const Detail::Block &block, const Detail::ConeProgram &cone, const double *p, State &phi, State &lambda, double *grad, bool parallel) const
     {
         using Detail::GateKind;
+        using Detail::Generator;
         const auto &first = gates[block.gates.front()];
         const uint64_t bit = uint64_t{1} << cone.compact[first.kernelQubits[0]];
-
-        static const Eigen::Matrix2cd X = (Eigen::Matrix2cd() << 0., 1., 1., 0.).finished();
-        static const Eigen::Matrix2cd Y = (Eigen::Matrix2cd() << 0., Complex(0., -1.), Complex(0., 1.), 0.).finished();
-        static const Eigen::Matrix2cd Z = (Eigen::Matrix2cd() << 1., 0., 0., -1.).finished();
-        static const Eigen::Matrix2cd Proj = (Eigen::Matrix2cd() << 0., 0., 0., -2.).finished();
 
         bool anyParams = false;
         for (const size_t k : block.gates)
@@ -1205,38 +1211,28 @@ class Program
         {
             const Eigen::Matrix2cd M = Detail::CrossMatrix(lambda, phi, bit, parallel);
             Eigen::Matrix2cd V = Eigen::Matrix2cd::Identity();
-            auto im = [&](const Eigen::Matrix2cd &G) { return (V * G * V.adjoint()).cwiseProduct(M).sum().imag(); };
+            auto im = [&](Generator::Kind kind) {
+                const Eigen::Matrix2cd &G = Detail::GeneratorMatrix(kind);
+                return (V * G * V.adjoint()).cwiseProduct(M).sum().imag();
+            };
             for (size_t idx = block.gates.size(); idx-- > 0;)
             {
                 const auto &g = gates[block.gates[idx]];
                 const double *gp = p + g.firstParam;
                 double *gg = grad + g.firstParam;
-                switch (g.kind)
+                if (g.kind == GateKind::U)
                 {
-                case GateKind::P:
-                    gg[0] += im(Proj);
-                    break;
-                case GateKind::Rx:
-                    gg[0] += im(X);
-                    break;
-                case GateKind::Ry:
-                    gg[0] += im(Y);
-                    break;
-                case GateKind::Rz:
-                    gg[0] += im(Z);
-                    break;
-                case GateKind::U:
                     // U = e^{i(f + l)/2} Rz(f) Ry(t) Rz(l); the phase cancels in V G V^dag.
-                    gg[1] += im(Z);
+                    gg[1] += im(Generator::Kind::Z);
                     V = V * Detail::RzMatrix(gp[1]);
-                    gg[0] += im(Y);
+                    gg[0] += im(Generator::Kind::Y);
                     V = V * Detail::RyMatrix(gp[0]);
-                    gg[2] += im(Z);
+                    gg[2] += im(Generator::Kind::Z);
                     V = V * Detail::RzMatrix(gp[2]);
                     continue;
-                default:
-                    break;
                 }
+                if (g.kind != GateKind::Fixed)
+                    gg[0] += im(Detail::RotationGenerator(g.kind));
                 V = V * Detail::GateMatrix(g, gp);
             }
         }
@@ -1267,66 +1263,51 @@ class Program
                 BackwardRun(block, cone, p, phi, lambda, grad, parallel);
                 continue;
             }
+            // Cone() fuses every one-qubit gate into a run, so this gate has
+            // a target and at least one control.
             const auto &g = gates[block.gates.front()];
             const double *gp = p + g.firstParam;
             double *gg = grad + g.firstParam;
             const uint64_t target = uint64_t{1} << cone.compact[g.kernelQubits[0]];
-            const uint64_t control = g.numQubits > 1 ? uint64_t{1} << cone.compact[g.kernelQubits[1]] : 0;
-            auto im = [&](Generator::Kind kind, uint64_t controls = 0) {
-                return Detail::GeneratorElement({kind, target, controls}, lambda, phi, parallel).imag();
+            const uint64_t control = uint64_t{1} << cone.compact[g.kernelQubits[1]];
+            auto im = [&](Generator::Kind kind, uint64_t on, uint64_t controls) {
+                return Detail::GeneratorElement({kind, on, controls}, lambda, phi, parallel).imag();
             };
-            // Undo a rotation-shaped piece of the gate, embedded on its qubits.
-            auto undoPart = [&](const Eigen::MatrixXcd &m) { Undo(g, g.numQubits > 1 ? Detail::Controlled(m) : m, cone, phi, lambda, parallel); };
+            // Undo a one-qubit piece of the gate, controlled like the gate.
+            auto undoPart = [&](const Eigen::MatrixXcd &m) { Undo(g, Detail::Controlled(m), cone, phi, lambda, parallel); };
 
             switch (g.kind)
             {
             case GateKind::Fixed:
                 Undo(g, g.fixed, cone, phi, lambda, parallel);
                 break;
-            case GateKind::P:
             case GateKind::CP:
-                gg[0] += im(Generator::Kind::Projector, control);
-                Undo(g, Detail::GateMatrix(g, gp), cone, phi, lambda, parallel);
-                break;
-            case GateKind::Rx:
             case GateKind::CRx:
-                gg[0] += im(Generator::Kind::X, control);
-                Undo(g, Detail::GateMatrix(g, gp), cone, phi, lambda, parallel);
-                break;
-            case GateKind::Ry:
             case GateKind::CRy:
-                gg[0] += im(Generator::Kind::Y, control);
-                Undo(g, Detail::GateMatrix(g, gp), cone, phi, lambda, parallel);
-                break;
-            case GateKind::Rz:
             case GateKind::CRz:
-                gg[0] += im(Generator::Kind::Z, control);
+                gg[0] += im(Detail::RotationGenerator(g.kind), target, control);
                 Undo(g, Detail::GateMatrix(g, gp), cone, phi, lambda, parallel);
                 break;
-            case GateKind::U:
             case GateKind::CU: {
-                // U(t, f, l) = e^{i(f + l)/2} Rz(f) Ry(t) Rz(l), up to gamma. A
-                // phase common to both states cancels in every overlap, so the
-                // pieces are undone without it. CU adds the controlled phase
-                // P(gamma + (f + l)/2) on the control qubit, which is not global
-                // and so is undone explicitly.
-                if (g.kind == GateKind::CU)
-                {
-                    const double d = Detail::GeneratorElement({Generator::Kind::Projector, control, 0}, lambda, phi, parallel).imag();
-                    gg[3] += d;
-                    gg[1] += 0.5 * d;
-                    gg[2] += 0.5 * d;
-                    const Complex phase = std::polar(1., gp[3] + 0.5 * (gp[1] + gp[2]));
-                    undoPart(phase * Eigen::MatrixXcd::Identity(2, 2));
-                }
-                gg[1] += im(Generator::Kind::Z, control);
+                // CU = controlled [e^{i(f + l)/2} Rz(f) Ry(t) Rz(l)] times the
+                // controlled phase P(gamma + (f + l)/2) on the control qubit,
+                // which is not global and so is undone explicitly first.
+                const double d = im(Generator::Kind::Projector, control, 0);
+                gg[3] += d;
+                gg[1] += 0.5 * d;
+                gg[2] += 0.5 * d;
+                const Complex phase = std::polar(1., gp[3] + 0.5 * (gp[1] + gp[2]));
+                undoPart(phase * Eigen::MatrixXcd::Identity(2, 2));
+                gg[1] += im(Generator::Kind::Z, target, control);
                 undoPart(Detail::RzMatrix(gp[1]));
-                gg[0] += im(Generator::Kind::Y, control);
+                gg[0] += im(Generator::Kind::Y, target, control);
                 undoPart(Detail::RyMatrix(gp[0]));
-                gg[2] += im(Generator::Kind::Z, control);
+                gg[2] += im(Generator::Kind::Z, target, control);
                 undoPart(Detail::RzMatrix(gp[2]));
                 break;
             }
+            default:
+                throw std::logic_error("One-qubit gates are differentiated as fused runs.");
             }
         }
     }
