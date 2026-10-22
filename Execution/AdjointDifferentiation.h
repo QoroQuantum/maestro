@@ -64,6 +64,50 @@ using PauliTerm = std::pair<double, std::string>;
 /** An observable is a real linear combination of Pauli strings. */
 using Observable = std::vector<PauliTerm>;
 
+/**
+ * What to read from the final state: the expectation value of an observable
+ * (one value), or the probabilities of the basis states of some qubits (2^k
+ * values, the first listed qubit being the least significant bit of the
+ * outcome index). Probabilities are expectation values of diagonal
+ * projectors, so they are differentiated the same way.
+ */
+struct Readout
+{
+    enum class Kind : uint8_t
+    {
+        Expectation,
+        Probabilities
+    };
+    Kind kind = Kind::Expectation;
+    Observable observable;
+    std::vector<Types::qubit_t> qubits;
+
+    static Readout Expectation(Observable observable)
+    {
+        return {Kind::Expectation, std::move(observable), {}};
+    }
+
+    static Readout Probabilities(std::vector<Types::qubit_t> qubits)
+    {
+        return {Kind::Probabilities, {}, std::move(qubits)};
+    }
+
+    /** Number of values this readout produces. */
+    size_t Columns() const
+    {
+        return kind == Kind::Expectation ? 1 : size_t{1} << qubits.size();
+    }
+};
+
+/** Total number of values produced by a list of readouts. */
+inline size_t Columns(const std::vector<Readout> &readouts)
+{
+    size_t n = 0;
+    for (const auto &r : readouts)
+        n += r.Columns();
+    return n;
+}
+
 // Up to this many statevector qubits, the rows of a batch run in parallel with
 // serial kernels (two states per thread, 32 MiB each at 20 qubits); above it,
 // rows run one at a time with parallel kernels.
@@ -71,6 +115,9 @@ inline constexpr size_t kRowParallelMaxQubits = 20;
 
 // States whose qubit masks must fit in 64 bits.
 inline constexpr size_t kMaxQubits = 63;
+
+// Probabilities readouts are limited to this many qubits (2^k values per row).
+inline constexpr size_t kMaxProbabilityQubits = 24;
 
 namespace Detail
 {
@@ -337,6 +384,56 @@ inline double PauliExpectation(const PauliMasks &p, const State &psi, bool paral
     return (iPow[p.numY & 3] * sum).real();
 }
 
+/** Index of the outcome of the qubits at `bits` (bits[0] least significant). */
+inline size_t Outcome(uint64_t i, const std::vector<uint64_t> &bits)
+{
+    size_t o = 0;
+    for (size_t j = 0; j < bits.size(); ++j)
+        if (i & bits[j])
+            o |= size_t{1} << j;
+    return o;
+}
+
+/** out[o] = probability of outcome o of the qubits at `bits`. */
+inline void Marginal(const State &psi, const std::vector<uint64_t> &bits, double *out, bool parallel)
+{
+    const size_t numOutcomes = size_t{1} << bits.size();
+    const long long count = static_cast<long long>(psi.size());
+    const Complex *s = psi.data();
+    std::fill(out, out + numOutcomes, 0.);
+#ifdef _OPENMP
+#pragma omp parallel if (parallel)
+#endif
+    {
+        std::vector<double> local(numOutcomes, 0.);
+#ifdef _OPENMP
+#pragma omp for schedule(static)
+#endif
+        for (long long i = 0; i < count; ++i)
+            local[Outcome(static_cast<uint64_t>(i), bits)] += std::norm(s[i]);
+#ifdef _OPENMP
+#pragma omp critical
+#endif
+        for (size_t o = 0; o < numOutcomes; ++o)
+            out[o] += local[o];
+    }
+    (void)parallel;
+}
+
+/** out[i] += weights[outcome(i)] * in[i]: a weighted sum of projectors. */
+inline void AddProjectors(const std::vector<uint64_t> &bits, const double *weights, const State &in, State &out, bool parallel)
+{
+    const long long count = static_cast<long long>(in.size());
+    const Complex *src = in.data();
+    Complex *dst = out.data();
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (parallel)
+#endif
+    for (long long i = 0; i < count; ++i)
+        dst[i] += weights[Outcome(static_cast<uint64_t>(i), bits)] * src[i];
+    (void)parallel;
+}
+
 /**
  * M(a, b) = sum over the other qubits of conj(lambda[a]) phi[b], with a, b the
  * value of `bit`. Then <lambda|A|phi> = sum_ab A(a, b) M(a, b) for any
@@ -566,88 +663,86 @@ class Program
     }
 
     /**
-     * Expectation values for each parameter row: out[row * nObs + o].
-     * Observables are evaluated on one statevector (their joint cone).
+     * The values of every readout for each row: out[row * nCols + c], with the
+     * readouts' values side by side in order. All readouts are evaluated on
+     * one statevector (their joint cone).
      */
-    std::vector<double> Expectations(const std::vector<Observable> &observables, const std::vector<double> &rows, size_t numRows, bool causalCone) const
+    std::vector<double> Values(const std::vector<Readout> &readouts, const std::vector<double> &rows, size_t numRows, bool causalCone) const
     {
-        const auto masks = ParseAll(observables);
-        uint64_t support = 0;
-        for (const auto &obs : masks)
-            for (const auto &term : obs)
-                support |= term.flip | term.phase;
-        const auto cone = Cone(support, causalCone);
-        const auto compact = CompactAll(masks, cone);
+        const auto parsed = ParseAll(readouts);
+        const auto cone = Cone(Support(parsed), causalCone);
+        const auto compact = CompactAll(parsed, cone);
+        const size_t nCols = Columns(readouts);
 
-        std::vector<double> out(numRows * observables.size(), 0.);
+        std::vector<double> out(numRows * nCols, 0.);
         ForRows(numRows, cone.numQubits, [&](size_t row, bool parallel) {
-            const double *p = rows.data() + row * NumParams();
-            State psi = Forward(cone, p, parallel);
-            for (size_t o = 0; o < compact.size(); ++o)
-                out[row * observables.size() + o] = Expectation(compact[o], psi, parallel);
+            const State psi = Forward(cone, rows.data() + row * NumParams(), parallel);
+            WriteValues(compact, psi, out.data() + row * nCols, parallel);
         });
         return out;
     }
 
     /**
-     * Jacobian of every observable with respect to every parameter, for each
-     * row: jac[(row * nObs + o) * nParams + k]; values as in Expectations.
-     * Each observable gets its own causal cone and backward sweep.
+     * Jacobian of every value with respect to every parameter, for each row:
+     * jac[(row * nCols + c) * nParams + k]; values as in Values. Each readout
+     * gets its own causal cone and one backward sweep per value.
      */
-    void Jacobian(const std::vector<Observable> &observables, const std::vector<double> &rows, size_t numRows, bool causalCone, std::vector<double> &values,
+    void Jacobian(const std::vector<Readout> &readouts, const std::vector<double> &rows, size_t numRows, bool causalCone, std::vector<double> &values,
                   std::vector<double> &jac) const
     {
-        const auto masks = ParseAll(observables);
-        const size_t nObs = observables.size(), nParams = NumParams();
-        values.assign(numRows * nObs, 0.);
-        jac.assign(numRows * nObs * nParams, 0.);
-        for (size_t o = 0; o < nObs; ++o)
+        const size_t nCols = Columns(readouts), nParams = NumParams();
+        values.assign(numRows * nCols, 0.);
+        jac.assign(numRows * nCols * nParams, 0.);
+        size_t first = 0;
+        for (const auto &readout : readouts)
         {
-            uint64_t support = 0;
-            for (const auto &term : masks[o])
-                support |= term.flip | term.phase;
-            const auto cone = Cone(support, causalCone);
-            const auto obs = Compact(masks[o], cone);
+            const auto parsed = Parse(readout);
+            const auto cone = Cone(parsed.support, causalCone);
+            const auto compact = Compact(parsed, cone);
+            const size_t width = readout.Columns();
             ForRows(numRows, cone.numQubits, [&](size_t row, bool parallel) {
                 const double *p = rows.data() + row * nParams;
-                State phi = Forward(cone, p, parallel);
-                State lambda = State::Zero(phi.size());
-                for (const auto &term : obs)
-                    Detail::AddPauli(term, term.coeff, phi, lambda, parallel);
-                values[row * nObs + o] = phi.dot(lambda).real();
-                Backward(cone, p, phi, lambda, jac.data() + (row * nObs + o) * nParams, parallel);
+                const State psi = Forward(cone, p, parallel);
+                WriteValues({compact}, psi, values.data() + row * nCols + first, parallel);
+                std::vector<double> weights(width, 0.);
+                for (size_t c = 0; c < width; ++c)
+                {
+                    weights[c] = 1.;
+                    State phi = psi;
+                    State lambda = State::Zero(phi.size());
+                    AddReadout(compact, weights.data(), phi, lambda, parallel);
+                    weights[c] = 0.;
+                    Backward(cone, p, phi, lambda, jac.data() + (row * nCols + first + c) * nParams, parallel);
+                }
             });
+            first += width;
         }
     }
 
     /**
      * Vector-Jacobian product for each row: vjp[row * nParams + k] =
-     * sum_o cotangents[row * nObs + o] * d<O_o>/dp_k, in one backward sweep.
+     * sum_c cotangents[row * nCols + c] * d value_c / dp_k, in one backward
+     * sweep for all readouts.
      */
-    void VectorJacobianProduct(const std::vector<Observable> &observables, const std::vector<double> &cotangents, const std::vector<double> &rows,
-                               size_t numRows, bool causalCone, std::vector<double> &values, std::vector<double> &vjp) const
+    void VectorJacobianProduct(const std::vector<Readout> &readouts, const std::vector<double> &cotangents, const std::vector<double> &rows, size_t numRows,
+                               bool causalCone, std::vector<double> &values, std::vector<double> &vjp) const
     {
-        const auto masks = ParseAll(observables);
-        const size_t nObs = observables.size(), nParams = NumParams();
-        uint64_t support = 0;
-        for (const auto &obs : masks)
-            for (const auto &term : obs)
-                support |= term.flip | term.phase;
-        const auto cone = Cone(support, causalCone);
-        const auto compact = CompactAll(masks, cone);
-        values.assign(numRows * nObs, 0.);
+        const auto parsed = ParseAll(readouts);
+        const auto cone = Cone(Support(parsed), causalCone);
+        const auto compact = CompactAll(parsed, cone);
+        const size_t nCols = Columns(readouts), nParams = NumParams();
+        values.assign(numRows * nCols, 0.);
         vjp.assign(numRows * nParams, 0.);
         ForRows(numRows, cone.numQubits, [&](size_t row, bool parallel) {
             const double *p = rows.data() + row * nParams;
             State phi = Forward(cone, p, parallel);
             State lambda = State::Zero(phi.size());
-            for (size_t o = 0; o < nObs; ++o)
+            WriteValues(compact, phi, values.data() + row * nCols, parallel);
+            const double *dy = cotangents.data() + row * nCols;
+            for (const auto &r : compact)
             {
-                values[row * nObs + o] = Expectation(compact[o], phi, parallel);
-                const double dy = cotangents[row * nObs + o];
-                if (dy != 0.)
-                    for (const auto &term : compact[o])
-                        Detail::AddPauli(term, dy * term.coeff, phi, lambda, parallel);
+                AddReadout(r, dy, phi, lambda, parallel);
+                dy += r.columns;
             }
             Backward(cone, p, phi, lambda, vjp.data() + row * nParams, parallel);
         });
@@ -656,7 +751,61 @@ class Program
   private:
     using Masks = std::vector<Detail::PauliMasks>;
 
-    Masks Parse(const Observable &observable) const
+    /** A readout as masks and bits; on a compact register after Compact. */
+    struct ParsedReadout
+    {
+        Readout::Kind kind = Readout::Kind::Expectation;
+        Masks terms;                // Expectation
+        std::vector<uint64_t> bits; // Probabilities: one bit per qubit, in order
+        uint64_t support = 0;
+        size_t columns = 1;
+    };
+
+    ParsedReadout Parse(const Readout &readout) const
+    {
+        ParsedReadout out;
+        out.kind = readout.kind;
+        out.columns = readout.Columns();
+        if (readout.kind == Readout::Kind::Expectation)
+        {
+            out.terms = ParseObservable(readout.observable);
+            for (const auto &term : out.terms)
+                out.support |= term.flip | term.phase;
+            return out;
+        }
+        if (readout.qubits.empty() || readout.qubits.size() > kMaxProbabilityQubits)
+            throw std::invalid_argument("Probabilities need between 1 and 24 qubits.");
+        for (const auto q : readout.qubits)
+        {
+            if (q >= kMaxQubits)
+                throw std::invalid_argument("Probabilities qubit index is out of range.");
+            const uint64_t bit = uint64_t{1} << q;
+            if (out.support & bit)
+                throw std::invalid_argument("Probabilities qubits must be distinct.");
+            out.support |= bit;
+            out.bits.push_back(bit);
+        }
+        return out;
+    }
+
+    std::vector<ParsedReadout> ParseAll(const std::vector<Readout> &readouts) const
+    {
+        std::vector<ParsedReadout> out;
+        out.reserve(readouts.size());
+        for (const auto &r : readouts)
+            out.push_back(Parse(r));
+        return out;
+    }
+
+    static uint64_t Support(const std::vector<ParsedReadout> &parsed)
+    {
+        uint64_t support = 0;
+        for (const auto &r : parsed)
+            support |= r.support;
+        return support;
+    }
+
+    Masks ParseObservable(const Observable &observable) const
     {
         Masks out;
         for (const auto &[coeff, pauli] : observable)
@@ -686,15 +835,6 @@ class Program
             }
             out.push_back(m);
         }
-        return out;
-    }
-
-    std::vector<Masks> ParseAll(const std::vector<Observable> &observables) const
-    {
-        std::vector<Masks> out;
-        out.reserve(observables.size());
-        for (const auto &obs : observables)
-            out.push_back(Parse(obs));
         return out;
     }
 
@@ -766,24 +906,53 @@ class Program
         return out;
     }
 
-    static Masks Compact(const Masks &obs, const Detail::ConeProgram &cone)
+    static ParsedReadout Compact(const ParsedReadout &readout, const Detail::ConeProgram &cone)
     {
-        Masks out = obs;
-        for (auto &m : out)
+        ParsedReadout out = readout;
+        for (auto &m : out.terms)
         {
             m.flip = CompactMask(m.flip, cone);
             m.phase = CompactMask(m.phase, cone);
         }
+        for (auto &bit : out.bits)
+            bit = CompactMask(bit, cone);
+        out.support = CompactMask(out.support, cone);
         return out;
     }
 
-    static std::vector<Masks> CompactAll(const std::vector<Masks> &all, const Detail::ConeProgram &cone)
+    static std::vector<ParsedReadout> CompactAll(const std::vector<ParsedReadout> &all, const Detail::ConeProgram &cone)
     {
-        std::vector<Masks> out;
+        std::vector<ParsedReadout> out;
         out.reserve(all.size());
-        for (const auto &obs : all)
-            out.push_back(Compact(obs, cone));
+        for (const auto &r : all)
+            out.push_back(Compact(r, cone));
         return out;
+    }
+
+    /** Write the values of compacted readouts, side by side. */
+    static void WriteValues(const std::vector<ParsedReadout> &readouts, const State &psi, double *out, bool parallel)
+    {
+        for (const auto &r : readouts)
+        {
+            if (r.kind == Readout::Kind::Expectation)
+                *out = Expectation(r.terms, psi, parallel);
+            else
+                Detail::Marginal(psi, r.bits, out, parallel);
+            out += r.columns;
+        }
+    }
+
+    /** lambda += sum_c weights[c] * (operator of value c) phi. */
+    static void AddReadout(const ParsedReadout &r, const double *weights, const State &phi, State &lambda, bool parallel)
+    {
+        if (r.kind == Readout::Kind::Probabilities)
+        {
+            Detail::AddProjectors(r.bits, weights, phi, lambda, parallel);
+            return;
+        }
+        if (weights[0] != 0.)
+            for (const auto &term : r.terms)
+                Detail::AddPauli(term, weights[0] * term.coeff, phi, lambda, parallel);
     }
 
     static double Expectation(const Masks &obs, const State &psi, bool parallel)

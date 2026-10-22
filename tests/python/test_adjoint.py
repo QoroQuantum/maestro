@@ -147,3 +147,71 @@ def test_rejects_non_unitary_circuits_and_bad_shapes():
     config.simulation_type = maestro.SimulationType.MatrixProductState
     with pytest.raises(ValueError):
         program.jacobian(["Z"], config=config)
+
+
+def marginal(qc, qubits):
+    """Probabilities of `qubits` from the full distribution (first qubit lowest bit)."""
+    full = np.array(maestro.get_probabilities(qc))
+    out = np.zeros(2 ** len(qubits))
+    for i, p in enumerate(full):
+        out[sum(((i >> q) & 1) << j for j, q in enumerate(qubits))] += p
+    return out
+
+
+@pytest.mark.parametrize("cone", [True, False])
+def test_probabilities_values_and_jacobian(cone):
+    n = 4
+    layout = random_layout(n, 1, seed=11)
+    num = sum(npar for *_, npar in layout)
+    params = np.random.default_rng(4).uniform(-math.pi, math.pi, num)
+    program = maestro.AdjointProgram(build(n, layout, params))
+    readouts = [[(0.5, "ZIXI")], maestro.Probabilities([2, 0]), maestro.Probabilities([3])]
+
+    config = maestro.SimulatorConfig()
+    config.enable_causal_cone_reduction = cone
+    out = program.jacobian(readouts, config=config)
+    assert out["expectation_values"].shape == (1, 1 + 4 + 2)
+    assert out["jacobian"].shape == (1, 7, num)
+
+    def values(p):
+        qc = build(n, layout, p)
+        ev = maestro.simple_estimate(qc, ["ZIXI"])["expectation_values"][0]
+        return np.concatenate([[0.5 * ev], marginal(qc, [2, 0]), marginal(qc, [3])])
+
+    np.testing.assert_allclose(out["expectation_values"][0], values(params), atol=1e-10)
+    h = 1e-6
+    ref = np.zeros((7, num))
+    for k in range(num):
+        up, down = params.copy(), params.copy()
+        up[k] += h
+        down[k] -= h
+        ref[:, k] = (values(up) - values(down)) / (2 * h)
+    np.testing.assert_allclose(out["jacobian"][0], ref, atol=1e-7)
+
+    fwd = program.expectation_values(readouts, config=config)["expectation_values"]
+    np.testing.assert_allclose(fwd, out["expectation_values"], atol=1e-12)
+
+
+def test_probabilities_vjp_matches_jacobian():
+    n = 4
+    layout = random_layout(n, 1, seed=12)
+    num = sum(npar for *_, npar in layout)
+    rows = np.random.default_rng(5).uniform(-math.pi, math.pi, (3, num))
+    program = maestro.AdjointProgram(build(n, layout, rows[0]))
+    readouts = [maestro.Probabilities([0, 1, 3]), [(1.0, "IYII")]]
+    jac = program.jacobian(readouts, rows)["jacobian"]
+    dy = np.random.default_rng(6).normal(size=(3, 9))
+    out = program.vjp(readouts, dy, rows)
+    np.testing.assert_allclose(out["vjp"], np.einsum("bc,bck->bk", dy, jac), atol=1e-12)
+    np.testing.assert_allclose(out["expectation_values"][:, :8].sum(axis=1), 1.0, atol=1e-12)
+
+
+def test_probabilities_rejects_bad_qubits():
+    qc = QuantumCircuit()
+    qc.rx(0, 0.1)
+    program = maestro.AdjointProgram(qc)
+    with pytest.raises(ValueError):
+        program.jacobian([maestro.Probabilities([0, 0])])
+    with pytest.raises(ValueError):
+        program.jacobian([maestro.Probabilities([])])
+    assert repr(maestro.Probabilities([1, 0])) == "Probabilities([1, 0])"

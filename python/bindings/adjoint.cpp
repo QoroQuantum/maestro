@@ -9,38 +9,49 @@ namespace maestro_bindings
 
 using MaestroExecution::Adjoint::Observable;
 using MaestroExecution::Adjoint::Program;
+using MaestroExecution::Adjoint::Readout;
 using NumpyArray = nb::ndarray<nb::numpy, double>;
+
+/** Python-facing request for basis-state probabilities of some qubits. */
+struct ProbabilitiesReadout
+{
+    std::vector<Types::qubit_t> qubits;
+};
 
 namespace
 {
 
 // Accepts a Pauli string, a ';'-separated string of them, or a list whose
-// items are Pauli strings or lists of (coefficient, Pauli string) pairs.
-std::vector<Observable> ParseWeightedObservables(const nb::handle &observables)
+// items are Pauli strings, lists of (coefficient, Pauli string) pairs, or
+// maestro.Probabilities readouts.
+std::vector<Readout> ParseReadouts(const nb::handle &observables)
 {
-    std::vector<Observable> out;
+    std::vector<Readout> out;
     if (nb::isinstance<nb::str>(observables))
     {
         for (const auto &pauli : ParseObservables(nb::borrow(observables)))
-            out.push_back({{1., pauli}});
+            out.push_back(Readout::Expectation({{1., pauli}}));
         return out;
     }
     if (!nb::isinstance<nb::sequence>(observables))
-        throw nb::type_error("Observables must be a Pauli string or a list of Pauli strings or (coefficient, Pauli string) term lists.");
+        throw nb::type_error("Observables must be a Pauli string or a list of Pauli strings, (coefficient, Pauli string) term lists or "
+                             "maestro.Probabilities.");
     for (const auto &item : observables)
     {
         if (nb::isinstance<nb::str>(item))
         {
-            out.push_back({{1., nb::cast<std::string>(item)}});
+            out.push_back(Readout::Expectation({{1., nb::cast<std::string>(item)}}));
+            continue;
+        }
+        if (nb::isinstance<ProbabilitiesReadout>(item))
+        {
+            out.push_back(Readout::Probabilities(nb::cast<const ProbabilitiesReadout &>(item).qubits));
             continue;
         }
         Observable obs;
         for (const auto &term : item)
-        {
-            const auto pair = nb::cast<std::pair<double, std::string>>(term);
-            obs.push_back(pair);
-        }
-        out.push_back(std::move(obs));
+            obs.push_back(nb::cast<std::pair<double, std::string>>(term));
+        out.push_back(Readout::Expectation(std::move(obs)));
     }
     return out;
 }
@@ -86,23 +97,25 @@ void RequireStatevector(const SimulatorConfig &config)
 nb::dict Expectations(const Program &program, const nb::handle &observables, const nb::handle &params, const SimulatorConfig &config)
 {
     RequireStatevector(config);
-    const auto obs = ParseWeightedObservables(observables);
+    const auto obs = ParseReadouts(observables);
+    const size_t nCols = MaestroExecution::Adjoint::Columns(obs);
     size_t numRows = 0;
     const auto rows = ParseRows(program, params, numRows);
     std::vector<double> values;
     {
         nb::gil_scoped_release release;
-        values = program.Expectations(obs, rows, numRows, config.enable_causal_cone_reduction);
+        values = program.Values(obs, rows, numRows, config.enable_causal_cone_reduction);
     }
     nb::dict out;
-    out["expectation_values"] = ToNumpy(std::move(values), {numRows, obs.size()});
+    out["expectation_values"] = ToNumpy(std::move(values), {numRows, nCols});
     return out;
 }
 
 nb::dict Jacobian(const Program &program, const nb::handle &observables, const nb::handle &params, const SimulatorConfig &config)
 {
     RequireStatevector(config);
-    const auto obs = ParseWeightedObservables(observables);
+    const auto obs = ParseReadouts(observables);
+    const size_t nCols = MaestroExecution::Adjoint::Columns(obs);
     size_t numRows = 0;
     const auto rows = ParseRows(program, params, numRows);
     std::vector<double> values, jac;
@@ -111,8 +124,8 @@ nb::dict Jacobian(const Program &program, const nb::handle &observables, const n
         program.Jacobian(obs, rows, numRows, config.enable_causal_cone_reduction, values, jac);
     }
     nb::dict out;
-    out["expectation_values"] = ToNumpy(std::move(values), {numRows, obs.size()});
-    out["jacobian"] = ToNumpy(std::move(jac), {numRows, obs.size(), program.NumParams()});
+    out["expectation_values"] = ToNumpy(std::move(values), {numRows, nCols});
+    out["jacobian"] = ToNumpy(std::move(jac), {numRows, nCols, program.NumParams()});
     return out;
 }
 
@@ -120,15 +133,16 @@ nb::dict VectorJacobianProduct(const Program &program, const nb::handle &observa
                                const SimulatorConfig &config)
 {
     RequireStatevector(config);
-    const auto obs = ParseWeightedObservables(observables);
+    const auto obs = ParseReadouts(observables);
+    const size_t nCols = MaestroExecution::Adjoint::Columns(obs);
     size_t numRows = 0;
     const auto rows = ParseRows(program, params, numRows);
 
     nb::object np = nb::module_::import_("numpy");
     nb::object dy = np.attr("ascontiguousarray")(cotangents, "dtype"_a = np.attr("float64")).attr("reshape")(-1);
     auto dyArr = nb::cast<nb::ndarray<const double, nb::c_contig, nb::device::cpu>>(dy);
-    if (dyArr.size() != numRows * obs.size())
-        throw nb::value_error("cotangents must have shape (batch, num_observables).");
+    if (dyArr.size() != numRows * nCols)
+        throw nb::value_error("cotangents must have shape (batch, num_values).");
     const std::vector<double> dyVec(dyArr.data(), dyArr.data() + dyArr.size());
 
     std::vector<double> values, vjp;
@@ -137,7 +151,7 @@ nb::dict VectorJacobianProduct(const Program &program, const nb::handle &observa
         program.VectorJacobianProduct(obs, dyVec, rows, numRows, config.enable_causal_cone_reduction, values, vjp);
     }
     nb::dict out;
-    out["expectation_values"] = ToNumpy(std::move(values), {numRows, obs.size()});
+    out["expectation_values"] = ToNumpy(std::move(values), {numRows, nCols});
     out["vjp"] = ToNumpy(std::move(vjp), {numRows, program.NumParams()});
     return out;
 }
@@ -159,6 +173,19 @@ Program Compile(const std::shared_ptr<Circuits::Circuit<double>> &circuit)
 
 void bind_adjoint(nb::module_ &m)
 {
+    nb::class_<ProbabilitiesReadout>(m, "Probabilities",
+                                     "Readout of the basis-state probabilities of some qubits, for\n"
+                                     "AdjointProgram. It produces 2**len(qubits) values; the first listed\n"
+                                     "qubit is the least significant bit of the outcome index.")
+        .def(nb::init<std::vector<Types::qubit_t>>(), "qubits"_a)
+        .def_ro("qubits", &ProbabilitiesReadout::qubits)
+        .def("__repr__", [](const ProbabilitiesReadout &r) {
+            std::string out = "Probabilities([";
+            for (size_t i = 0; i < r.qubits.size(); ++i)
+                out += (i ? ", " : "") + std::to_string(r.qubits[i]);
+            return out + "])";
+        });
+
     nb::class_<Program>(m, "AdjointProgram",
                         "A unitary circuit compiled for batched Pauli expectation values and\n"
                         "adjoint derivatives on the CPU statevector.\n\n"
@@ -166,9 +193,12 @@ void bind_adjoint(nb::module_ &m)
                         "parameters, in circuit order, are one angle for p, rx, ry, rz, cp, crx,\n"
                         "cry and crz; theta, phi, lambda for u; theta, phi, lambda, gamma for cu.\n"
                         "Each row of ``params`` replaces all of them.\n\n"
-                        "Observables are Pauli strings (character q acts on qubit q) or lists\n"
-                        "of (coefficient, Pauli string) terms. Gates outside an observable's\n"
-                        "causal cone are skipped when config.enable_causal_cone_reduction is set.")
+                        "Observables are Pauli strings (character q acts on qubit q), lists of\n"
+                        "(coefficient, Pauli string) terms, or maestro.Probabilities(qubits).\n"
+                        "An observable gives one value and Probabilities gives 2**k values;\n"
+                        "results list them side by side in order (num_values columns). Gates\n"
+                        "outside a readout's causal cone are skipped when\n"
+                        "config.enable_causal_cone_reduction is set.")
         .def(
             "__init__", [](Program *self, const std::shared_ptr<Circuits::Circuit<double>> &circuit) { new (self) Program(Compile(circuit)); }, "circuit"_a)
         .def_prop_ro("num_params", &Program::NumParams)
@@ -177,16 +207,17 @@ void bind_adjoint(nb::module_ &m)
             "parameters", [](const Program &p) { return ToNumpy(std::vector<double>(p.DefaultParams()), {p.NumParams()}); }, nb::rv_policy::move,
             "The circuit's own parameter values, in program order.")
         .def("expectation_values", &Expectations, "observables"_a, "params"_a = nb::none(), "config"_a = SimulatorConfig{},
-             "Expectation values for each parameter row.\n\n"
-             "Returns a dict with 'expectation_values' of shape (batch, num_observables).")
+             "Values of every readout for each parameter row.\n\n"
+             "Returns a dict with 'expectation_values' of shape (batch, num_values).")
         .def("jacobian", &Jacobian, "observables"_a, "params"_a = nb::none(), "config"_a = SimulatorConfig{},
-             "Expectation values and their adjoint Jacobian for each parameter row.\n\n"
-             "Returns a dict with 'expectation_values' (batch, num_observables) and\n"
-             "'jacobian' (batch, num_observables, num_params).")
+             "Values and their adjoint Jacobian for each parameter row, one backward\n"
+             "sweep per value.\n\n"
+             "Returns a dict with 'expectation_values' (batch, num_values) and\n"
+             "'jacobian' (batch, num_values, num_params).")
         .def("vjp", &VectorJacobianProduct, "observables"_a, "cotangents"_a, "params"_a = nb::none(), "config"_a = SimulatorConfig{},
-             "Vector-Jacobian product, one backward sweep per row.\n\n"
-             "cotangents has shape (batch, num_observables). Returns a dict with\n"
-             "'expectation_values' (batch, num_observables) and 'vjp' (batch, num_params).");
+             "Vector-Jacobian product, one backward sweep per row for all readouts.\n\n"
+             "cotangents has shape (batch, num_values). Returns a dict with\n"
+             "'expectation_values' (batch, num_values) and 'vjp' (batch, num_params).");
 
     m.def(
         "adjoint_jacobian",
@@ -194,7 +225,7 @@ void bind_adjoint(nb::module_ &m)
             return Jacobian(Compile(circuit), observables, params, config);
         },
         "circuit"_a, "observables"_a, "params"_a = nb::none(), "config"_a = SimulatorConfig{},
-        "Adjoint Jacobian of Pauli expectation values; see AdjointProgram.jacobian.");
+        "Adjoint Jacobian of expectation values and probabilities; see AdjointProgram.jacobian.");
 }
 
 } // namespace maestro_bindings
