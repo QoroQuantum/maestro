@@ -215,3 +215,95 @@ def test_probabilities_rejects_bad_qubits():
     with pytest.raises(ValueError):
         program.jacobian([maestro.Probabilities([])])
     assert repr(maestro.Probabilities([1, 0])) == "Probabilities([1, 0])"
+
+
+def test_rejects_other_simulator_backends():
+    qc = QuantumCircuit()
+    qc.rx(0, 0.3)
+    program = maestro.AdjointProgram(qc)
+    for name in ("Gpu", "QiskitAer", "QuestSim", "DistributedGpu"):
+        backend = getattr(maestro.SimulatorType, name, None)
+        if backend is None:
+            continue
+        config = maestro.SimulatorConfig()
+        config.simulator_type = backend
+        for call in (lambda: program.jacobian(["Z"], config=config),
+                     lambda: program.expectation_values(["Z"], config=config),
+                     lambda: program.vjp(["Z"], [[1.0]], config=config)):
+            with pytest.raises(ValueError, match="QCSim"):
+                call()
+    # The composite QCSim backend runs the same CPU kernels.
+    config = maestro.SimulatorConfig()
+    config.simulator_type = maestro.SimulatorType.CompositeQCSim
+    out = program.jacobian(["Z"], config=config)
+    np.testing.assert_allclose(out["jacobian"][0, 0], [-math.sin(0.3)], atol=1e-12)
+
+
+@pytest.mark.parametrize("width", [25, 30, 64])
+def test_oversized_probabilities_are_rejected_before_allocating(width):
+    qc = QuantumCircuit()
+    qc.rx(0, 0.1)
+    program = maestro.AdjointProgram(qc)
+    readouts = [maestro.Probabilities(list(range(width)))]
+    for call in (lambda: program.jacobian(readouts),
+                 lambda: program.expectation_values(readouts),
+                 lambda: program.vjp(readouts, [[0.0]])):
+        with pytest.raises(ValueError, match="between 1 and 24"):
+            call()
+
+
+def test_register_too_large_for_memory_raises_memory_error():
+    # Untouched qubits are always compacted away, so every qubit gets a gate.
+    n = 46
+    qc = QuantumCircuit()
+    for q in range(n):
+        qc.rx(q, 0.2 + 0.1 * (q == n - 1))
+    program = maestro.AdjointProgram(qc)
+    full = maestro.SimulatorConfig()
+    full.enable_causal_cone_reduction = False
+    for call in (lambda: program.jacobian(["Z"], config=full),
+                 lambda: program.expectation_values(["Z"], config=full),
+                 lambda: program.vjp(["Z"], [[1.0]], config=full)):
+        with pytest.raises(MemoryError, match="physical memory"):
+            call()
+    # With the causal cone each readout only needs its own qubit.
+    out = program.jacobian(["Z", "I" * (n - 1) + "Z"])
+    expected = np.zeros((2, n))
+    expected[0, 0], expected[1, n - 1] = -math.sin(0.2), -math.sin(0.3)
+    np.testing.assert_allclose(out["jacobian"][0], expected, atol=1e-12)
+
+
+def test_wide_probabilities_match_full_distribution():
+    # More outcomes than the per-thread histogram path handles, on a register
+    # large enough for parallel kernels.
+    n = 14
+    layout = [("ry", [q], 1) for q in range(n)] + [("cx", [q, q + 1], 0) for q in range(n - 1)]
+    params = np.linspace(0.2, 2.9, n)
+    program = maestro.AdjointProgram(build(n, layout, params))
+    qubits = list(range(n - 1, 0, -1))
+    readouts = [maestro.Probabilities(qubits)]
+    vals = program.expectation_values(readouts)["expectation_values"][0]
+    np.testing.assert_allclose(vals, marginal(build(n, layout, params), qubits), atol=1e-12)
+
+    dy = np.random.default_rng(7).normal(size=(1, 2 ** len(qubits)))
+    out = program.vjp(readouts, dy)
+    np.testing.assert_allclose(out["expectation_values"][0], vals, atol=1e-12)
+    h = 1e-6
+    ref = np.zeros(n)
+    for k in range(n):
+        up, down = params.copy(), params.copy()
+        up[k] += h
+        down[k] -= h
+        f = lambda p: dy[0] @ program.expectation_values(readouts, p)["expectation_values"][0]
+        ref[k] = (f(up) - f(down)) / (2 * h)
+    np.testing.assert_allclose(out["vjp"][0], ref, atol=1e-7)
+
+
+def test_malformed_terms_raise_type_error():
+    qc = QuantumCircuit()
+    qc.rx(0, 0.1)
+    program = maestro.AdjointProgram(qc)
+    with pytest.raises(TypeError, match="coefficient, Pauli string"):
+        program.jacobian([[(1.0, "Z", 3)]])
+    with pytest.raises(TypeError, match="coefficient, Pauli string"):
+        program.jacobian([[("Z", 1.0)]])

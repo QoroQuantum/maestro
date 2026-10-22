@@ -32,8 +32,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <complex>
 #include <cstdint>
+#include <cstdio>
+#include <exception>
+#include <limits>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -43,6 +48,12 @@
 
 #ifdef _OPENMP
 #include <omp.h>
+#endif
+
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#elif defined(__linux__)
+#include <unistd.h>
 #endif
 
 #include "../Circuit/Circuit.h"
@@ -93,11 +104,30 @@ struct Readout
     }
 
     /** Number of values this readout produces. */
-    size_t Columns() const
-    {
-        return kind == Kind::Expectation ? 1 : size_t{1} << qubits.size();
-    }
+    size_t Columns() const;
 };
+
+// Up to this many statevector qubits, the rows of a batch run in parallel with
+// serial kernels (up to three states per thread, 16 MiB each at 20 qubits);
+// above it, rows run one at a time with parallel kernels.
+inline constexpr size_t kRowParallelMaxQubits = 20;
+
+// States whose qubit masks must fit in 64 bits.
+inline constexpr size_t kMaxQubits = 63;
+
+// Probabilities readouts are limited to this many qubits (2^k values per row).
+inline constexpr size_t kMaxProbabilityQubits = 24;
+
+// Validated here, not only when parsing, because callers size their output
+// from it before anything else runs.
+inline size_t Readout::Columns() const
+{
+    if (kind == Kind::Expectation)
+        return 1;
+    if (qubits.empty() || qubits.size() > kMaxProbabilityQubits)
+        throw std::invalid_argument("Probabilities need between 1 and 24 qubits.");
+    return size_t{1} << qubits.size();
+}
 
 /** Total number of values produced by a list of readouts. */
 inline size_t Columns(const std::vector<Readout> &readouts)
@@ -108,19 +138,44 @@ inline size_t Columns(const std::vector<Readout> &readouts)
     return n;
 }
 
-// Up to this many statevector qubits, the rows of a batch run in parallel with
-// serial kernels (two states per thread, 32 MiB each at 20 qubits); above it,
-// rows run one at a time with parallel kernels.
-inline constexpr size_t kRowParallelMaxQubits = 20;
+/**
+ * Thrown before a call would need more memory than the machine has. It is a
+ * std::bad_alloc, so Python sees a MemoryError, but carries a message.
+ */
+class MemoryLimitError : public std::bad_alloc
+{
+  public:
+    explicit MemoryLimitError(std::string message) : message(std::move(message))
+    {
+    }
 
-// States whose qubit masks must fit in 64 bits.
-inline constexpr size_t kMaxQubits = 63;
+    const char *what() const noexcept override
+    {
+        return message.c_str();
+    }
 
-// Probabilities readouts are limited to this many qubits (2^k values per row).
-inline constexpr size_t kMaxProbabilityQubits = 24;
+  private:
+    std::string message;
+};
 
 namespace Detail
 {
+
+/** Physical memory of the machine in bytes, or 0 if unknown. */
+inline double PhysicalMemoryBytes()
+{
+#if defined(__APPLE__)
+    uint64_t bytes = 0;
+    size_t len = sizeof(bytes);
+    if (sysctlbyname("hw.memsize", &bytes, &len, nullptr, 0) == 0)
+        return static_cast<double>(bytes);
+#elif defined(__linux__)
+    const long pages = sysconf(_SC_PHYS_PAGES), pageSize = sysconf(_SC_PAGE_SIZE);
+    if (pages > 0 && pageSize > 0)
+        return static_cast<double>(pages) * static_cast<double>(pageSize);
+#endif
+    return 0.;
+}
 
 inline unsigned Popcount(uint64_t x)
 {
@@ -394,30 +449,71 @@ inline size_t Outcome(uint64_t i, const std::vector<uint64_t> &bits)
     return o;
 }
 
+// Up to this many outcomes, Marginal sums into one small histogram per thread;
+// above it, each thread owns whole outcomes, so no histogram grows with 2^k.
+inline constexpr size_t kMarginalHistogramMaxOutcomes = 4096;
+
 /** out[o] = probability of outcome o of the qubits at `bits`. */
 inline void Marginal(const State &psi, const std::vector<uint64_t> &bits, double *out, bool parallel)
 {
     const size_t numOutcomes = size_t{1} << bits.size();
     const long long count = static_cast<long long>(psi.size());
     const Complex *s = psi.data();
-    std::fill(out, out + numOutcomes, 0.);
+    if (numOutcomes > kMarginalHistogramMaxOutcomes)
+    {
+        uint64_t measured = 0;
+        for (const auto bit : bits)
+            measured |= bit;
+        const uint64_t rest = (static_cast<uint64_t>(count) - 1) & ~measured;
 #ifdef _OPENMP
-#pragma omp parallel if (parallel)
+#pragma omp parallel for schedule(static) if (parallel)
+#endif
+        for (long long o = 0; o < static_cast<long long>(numOutcomes); ++o)
+        {
+            uint64_t base = 0;
+            for (size_t j = 0; j < bits.size(); ++j)
+                if ((static_cast<uint64_t>(o) >> j) & 1)
+                    base |= bits[j];
+            // Visit every subset of the unmeasured bits.
+            double p = 0.;
+            uint64_t sub = 0;
+            do
+            {
+                p += std::norm(s[base | sub]);
+                sub = (sub - rest) & rest;
+            } while (sub);
+            out[o] = p;
+        }
+        (void)parallel;
+        return;
+    }
+
+    int threads = 1;
+#ifdef _OPENMP
+    if (parallel)
+        threads = omp_get_max_threads();
+#endif
+    // Allocated up front: an exception must not escape a parallel region.
+    std::vector<double> local(static_cast<size_t>(threads) * numOutcomes, 0.);
+#ifdef _OPENMP
+#pragma omp parallel num_threads(threads) if (parallel)
 #endif
     {
-        std::vector<double> local(numOutcomes, 0.);
+        int t = 0;
+#ifdef _OPENMP
+        t = omp_get_thread_num();
+#endif
+        double *mine = local.data() + static_cast<size_t>(t) * numOutcomes;
 #ifdef _OPENMP
 #pragma omp for schedule(static)
 #endif
         for (long long i = 0; i < count; ++i)
-            local[Outcome(static_cast<uint64_t>(i), bits)] += std::norm(s[i]);
-#ifdef _OPENMP
-#pragma omp critical
-#endif
-        for (size_t o = 0; o < numOutcomes; ++o)
-            out[o] += local[o];
+            mine[Outcome(static_cast<uint64_t>(i), bits)] += std::norm(s[i]);
     }
-    (void)parallel;
+    std::fill(out, out + numOutcomes, 0.);
+    for (int t = 0; t < threads; ++t)
+        for (size_t o = 0; o < numOutcomes; ++o)
+            out[o] += local[static_cast<size_t>(t) * numOutcomes + o];
 }
 
 /** out[i] += weights[outcome(i)] * in[i]: a weighted sum of projectors. */
@@ -673,6 +769,7 @@ class Program
         const auto cone = Cone(Support(parsed), causalCone);
         const auto compact = CompactAll(parsed, cone);
         const size_t nCols = Columns(readouts);
+        CheckMemory(numRows, cone.numQubits, 1, static_cast<double>(numRows) * nCols);
 
         std::vector<double> out(numRows * nCols, 0.);
         ForRows(numRows, cone.numQubits, [&](size_t row, bool parallel) {
@@ -691,15 +788,26 @@ class Program
                   std::vector<double> &jac) const
     {
         const size_t nCols = Columns(readouts), nParams = NumParams();
+        const auto parsed = ParseAll(readouts);
+        std::vector<Detail::ConeProgram> cones;
+        cones.reserve(parsed.size());
+        size_t widest = 0;
+        for (const auto &r : parsed)
+        {
+            cones.push_back(Cone(r.support, causalCone));
+            widest = std::max(widest, cones.back().numQubits);
+        }
+        // psi, plus phi and lambda for the sweep in progress.
+        CheckMemory(numRows, widest, 3, static_cast<double>(numRows) * nCols * (nParams + 1));
+
         values.assign(numRows * nCols, 0.);
         jac.assign(numRows * nCols * nParams, 0.);
         size_t first = 0;
-        for (const auto &readout : readouts)
+        for (size_t i = 0; i < parsed.size(); ++i)
         {
-            const auto parsed = Parse(readout);
-            const auto cone = Cone(parsed.support, causalCone);
-            const auto compact = Compact(parsed, cone);
-            const size_t width = readout.Columns();
+            const auto &cone = cones[i];
+            const auto compact = Compact(parsed[i], cone);
+            const size_t width = compact.columns;
             ForRows(numRows, cone.numQubits, [&](size_t row, bool parallel) {
                 const double *p = rows.data() + row * nParams;
                 const State psi = Forward(cone, p, parallel);
@@ -731,6 +839,7 @@ class Program
         const auto cone = Cone(Support(parsed), causalCone);
         const auto compact = CompactAll(parsed, cone);
         const size_t nCols = Columns(readouts), nParams = NumParams();
+        CheckMemory(numRows, cone.numQubits, 2, static_cast<double>(numRows) * (nCols + nParams));
         values.assign(numRows * nCols, 0.);
         vjp.assign(numRows * nParams, 0.);
         ForRows(numRows, cone.numQubits, [&](size_t row, bool parallel) {
@@ -773,8 +882,6 @@ class Program
                 out.support |= term.flip | term.phase;
             return out;
         }
-        if (readout.qubits.empty() || readout.qubits.size() > kMaxProbabilityQubits)
-            throw std::invalid_argument("Probabilities need between 1 and 24 qubits.");
         for (const auto q : readout.qubits)
         {
             if (q >= kMaxQubits)
@@ -963,28 +1070,84 @@ class Program
         return value;
     }
 
+    static bool KernelsParallel(size_t coneQubits)
+    {
+        return (size_t{1} << coneQubits) >= QC::ParallelMinBasisStatesSetting().load();
+    }
+
+    /** Number of rows that run at once: all threads for small registers, else one. */
+    static size_t ConcurrentRows(size_t numRows, size_t coneQubits)
+    {
+#ifdef _OPENMP
+        const size_t threads = static_cast<size_t>(omp_get_max_threads());
+        if (numRows <= 1 || coneQubits > kRowParallelMaxQubits)
+            return 1;
+        // Registers big enough for parallel kernels only go row-parallel when
+        // the rows can keep every thread busy.
+        if (KernelsParallel(coneQubits) && numRows < threads)
+            return 1;
+        return std::min(numRows, threads);
+#else
+        (void)numRows;
+        (void)coneQubits;
+        return 1;
+#endif
+    }
+
+    /**
+     * Refuse a call whose states and outputs would not fit in physical memory,
+     * rather than let the allocation swap the machine or get it OOM-killed.
+     */
+    static void CheckMemory(size_t numRows, size_t coneQubits, size_t statesPerRow, double outputValues)
+    {
+        const double stateBytes = std::ldexp(static_cast<double>(sizeof(Complex)), static_cast<int>(coneQubits));
+        const double rows = static_cast<double>(ConcurrentRows(numRows, coneQubits));
+        const double needed = rows * statesPerRow * stateBytes + outputValues * sizeof(double);
+        double limit = Detail::PhysicalMemoryBytes();
+        // Unknown machine: still refuse sizes that cannot even be indexed.
+        if (limit <= 0.)
+            limit = static_cast<double>(std::numeric_limits<Eigen::Index>::max());
+        if (needed <= limit)
+            return;
+        auto gib = [](double bytes) {
+            char buf[32];
+            std::snprintf(buf, sizeof(buf), "%.3g", bytes / (1024. * 1024. * 1024.));
+            return std::string(buf);
+        };
+        throw MemoryLimitError("Adjoint differentiation needs about " + gib(needed) + " GiB (" + std::to_string(statesPerRow) + " statevectors of " +
+                               std::to_string(coneQubits) + " qubits per concurrent row), more than the " + gib(limit) +
+                               " GiB of physical memory. Reduce the qubits in the causal cone or the batch size.");
+    }
+
     /** Run rows in parallel for small registers, else kernels in parallel. */
     template <class F> static void ForRows(size_t numRows, size_t coneQubits, F f)
     {
-        const bool kernelsParallel = (size_t{1} << coneQubits) >= QC::ParallelMinBasisStatesSetting().load();
-        bool rowsParallel = numRows > 1 && coneQubits <= kRowParallelMaxQubits;
 #ifdef _OPENMP
-        // Registers big enough for parallel kernels only go row-parallel when
-        // the rows can keep every thread busy.
-        if (kernelsParallel && numRows < static_cast<size_t>(omp_get_max_threads()))
-            rowsParallel = false;
-#endif
-#ifdef _OPENMP
-        if (rowsParallel)
+        if (ConcurrentRows(numRows, coneQubits) > 1)
         {
+            // An exception must not escape the parallel region (that would
+            // terminate); the first one is rethrown after it.
+            std::exception_ptr error;
 #pragma omp parallel for schedule(dynamic)
             for (long long row = 0; row < static_cast<long long>(numRows); ++row)
-                f(static_cast<size_t>(row), false);
+            {
+                try
+                {
+                    f(static_cast<size_t>(row), false);
+                }
+                catch (...)
+                {
+#pragma omp critical(adjoint_row_error)
+                    if (!error)
+                        error = std::current_exception();
+                }
+            }
+            if (error)
+                std::rethrow_exception(error);
             return;
         }
-#else
-        (void)rowsParallel;
 #endif
+        const bool kernelsParallel = KernelsParallel(coneQubits);
         for (size_t row = 0; row < numRows; ++row)
             f(row, kernelsParallel);
     }

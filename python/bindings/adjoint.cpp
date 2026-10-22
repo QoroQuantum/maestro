@@ -50,7 +50,12 @@ std::vector<Readout> ParseReadouts(const nb::handle &observables)
         }
         Observable obs;
         for (const auto &term : item)
-            obs.push_back(nb::cast<std::pair<double, std::string>>(term));
+        {
+            std::pair<double, std::string> parsed;
+            if (!nb::try_cast(term, parsed))
+                throw nb::type_error("Observable terms must be (coefficient, Pauli string) pairs.");
+            obs.push_back(std::move(parsed));
+        }
         out.push_back(Readout::Expectation(std::move(obs)));
     }
     return out;
@@ -88,10 +93,15 @@ NumpyArray ToNumpy(std::vector<double> &&values, std::vector<size_t> shape)
     return NumpyArray(buffer->data(), shape.size(), shape.data(), owner);
 }
 
+// The program always runs on QCSim's CPU statevector kernels; refuse other
+// backends rather than silently ignore the choice (a GPU-sized register would
+// otherwise be allocated in host memory).
 void RequireStatevector(const SimulatorConfig &config)
 {
     if (config.simulation_type != Simulators::SimulationType::kStatevector)
         throw nb::value_error("Adjoint differentiation requires simulation_type=Statevector.");
+    if (config.simulator_type != Simulators::SimulatorType::kQCSim && config.simulator_type != Simulators::SimulatorType::kCompositeQCSim)
+        throw nb::value_error("Adjoint differentiation runs on the CPU statevector and requires simulator_type=QCSim.");
 }
 
 nb::dict Expectations(const Program &program, const nb::handle &observables, const nb::handle &params, const SimulatorConfig &config)
