@@ -10,4 +10,5 @@ NB_MODULE(maestro, m)
     maestro_bindings::bind_api(m);
     maestro_bindings::bind_noise(m);
     maestro_bindings::bind_checkpoint(m);
+    maestro_bindings::bind_adjoint(m);
 }
