@@ -37,6 +37,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <fstream>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -188,8 +189,61 @@ inline double PhysicalMemoryBytes()
         return static_cast<double>(bytes);
 #elif defined(__linux__)
     const long pages = sysconf(_SC_PHYS_PAGES), pageSize = sysconf(_SC_PAGE_SIZE);
+    double mem = 0.;
     if (pages > 0 && pageSize > 0)
-        return static_cast<double>(pages) * static_cast<double>(pageSize);
+        mem = static_cast<double>(pages) * static_cast<double>(pageSize);
+
+    auto readLimit = [](const std::string &path) -> double {
+        std::ifstream f(path);
+        if (!f.is_open())
+            return 0.;
+        std::string token;
+        if (!(f >> token) || token == "max")
+            return 0.;
+        try
+        {
+            const auto limit = std::stoull(token);
+            // Treat limits >= LONG_MAX (typical cgroup v1 unlimited indicator) as unlimited.
+            if (limit > 0 && limit < 9223372036854771712ULL)
+                return static_cast<double>(limit);
+        }
+        catch (...)
+        {
+        }
+        return 0.;
+    };
+
+    double limit = readLimit("/sys/fs/cgroup/memory.max"); // cgroup v2
+    if (limit <= 0.)
+        limit = readLimit("/sys/fs/cgroup/memory/memory.limit_in_bytes"); // cgroup v1
+    if (limit <= 0.)
+        limit = readLimit("/sys/fs/cgroup/memory.limit_in_bytes");
+
+    std::ifstream cgroups("/proc/self/cgroup");
+    if (cgroups.is_open())
+    {
+        std::string line;
+        while (std::getline(cgroups, line))
+        {
+            if (line.rfind("0::", 0) == 0)
+            {
+                std::string sub = line.substr(3);
+                while (!sub.empty() && sub.front() == '/')
+                    sub.erase(sub.begin());
+                if (!sub.empty())
+                {
+                    double l = readLimit("/sys/fs/cgroup/" + sub + "/memory.max");
+                    if (l > 0.)
+                        limit = (limit > 0.) ? std::min(limit, l) : l;
+                }
+            }
+        }
+    }
+
+    if (limit > 0.)
+        mem = (mem > 0.) ? std::min(mem, limit) : limit;
+
+    return mem;
 #endif
     return 0.;
 }
@@ -657,6 +711,8 @@ class Program
             for (unsigned i = 0; i < spec.numQubits; ++i)
             {
                 const auto q = gate->GetQubit(i);
+                if (static_cast<size_t>(q) >= kMaxQubits)
+                    throw std::invalid_argument("Adjoint differentiation supports at most " + std::to_string(kMaxQubits) + " qubits.");
                 numQubits = std::max(numQubits, static_cast<size_t>(q) + 1);
                 spec.mask |= uint64_t{1} << q;
                 // Maestro lists controls first; QCSim kernels take the target first.

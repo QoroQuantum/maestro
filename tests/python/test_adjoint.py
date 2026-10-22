@@ -172,6 +172,18 @@ def test_rejects_non_unitary_circuits_and_bad_shapes():
     with pytest.raises(ValueError):
         program.jacobian(["Z"], config=config)
 
+    qc_oversized = QuantumCircuit()
+    qc_oversized.x(64)
+    with pytest.raises(ValueError, match="supports at most 63 qubits"):
+        maestro.AdjointProgram(qc_oversized)
+
+    # Cotangents must match (batch, num_values); a transposed (2, 3) must not be accepted for (3, 2).
+    params_3 = np.zeros((3, 1))
+    with pytest.raises(ValueError, match="cotangents must have shape"):
+        program.vjp(["Z", "I"], np.zeros((2, 3)), params_3)
+    with pytest.raises(ValueError, match="cotangents must have shape"):
+        program.vjp(["Z", "I"], np.zeros(6), params_3)
+
 
 def marginal(qc, qubits):
     """Probabilities of `qubits` from the full distribution (first qubit lowest bit)."""
