@@ -1347,7 +1347,13 @@ class MPSDummySimulator
             optMap = identityMap;
         }
 
-        if (totalGraphCost(optMap) > 1e-12)
+        // The graph candidates come from a local search whose cost grows with the
+        // qubits' degree. On a dense interaction graph (average degree above 8:
+        // QFT, quantum volume) no line ordering keeps the interacting pairs close,
+        // the search dominates the layout time (about 40 ms for a 64-qubit QFT)
+        // and its candidates did not win, so it is skipped there.
+        const bool denseGraph = edges.size() > 4 * nQ;
+        if (!denseGraph && totalGraphCost(optMap) > 1e-12)
         {
             std::vector<std::vector<IndexType>> graphCandidates;
             graphCandidates.push_back(refineGraphLayout(identityMap));
