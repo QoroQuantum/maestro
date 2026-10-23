@@ -2377,7 +2377,7 @@ BOOST_AUTO_TEST_CASE(AdaptivePlannerCommonHorizonAndLargeSparseLayout)
 
     // 3. Monotonicity of branching vs heuristic portfolio baseline when current
     // bonds are small relative to bond cap (12 qubits, bond cap 16, current bonds 2):
-    // Enabling 1- or 2-step branching must preserve the 3-policy heuristic portfolio's
+    // Enabling 1- or 2-step branching must preserve the heuristic rollout portfolio's
     // winning route and never return a worse estimated cost for either MPS or MPO.
     {
         constexpr size_t nrQubits = 12;
@@ -2409,8 +2409,8 @@ BOOST_AUTO_TEST_CASE(AdaptivePlannerCommonHorizonAndLargeSparseLayout)
             const auto pos1 = sim1.SelectMeetingPositionAdaptive(ops, 0, 4, 3, 0.0, cost1);
             const auto pos2 = sim2.SelectMeetingPositionAdaptive(ops, 0, 4, 2, 0.0, cost2);
 
-            BOOST_CHECK_EQUAL(pos0, 3);
-            BOOST_CHECK_EQUAL(pos1, 3);
+            BOOST_CHECK(pos0 == 3 || pos0 == 4);
+            BOOST_CHECK_EQUAL(pos1, pos0);
             BOOST_CHECK_LE(cost1, cost0 + 1e-9);
             BOOST_CHECK_LE(cost2, cost1 + 1e-9);
             (void)pos2;

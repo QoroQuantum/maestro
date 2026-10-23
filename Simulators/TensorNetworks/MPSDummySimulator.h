@@ -1374,7 +1374,9 @@ class MPSDummySimulator
         if (layers.size() <= 2)
             return optMap != identityMap && identityCost < minLayoutGain * optCost ? identityMap : optMap;
 
-        if (nrShuffles > 0)
+        // nrShuffles full random shuffles, then a perturbation search (1-3 random
+        // swaps per try) that always runs: MPO layouts depend on it, and gating it
+        // on nrShuffles (0 by default) left MPO QFT with worse layouts.
         {
             std::vector<long long int> trialMap = identityMap;
             std::mt19937 rng(42);
@@ -1500,90 +1502,24 @@ class MPSDummySimulator
         SwapQubitsToPosition(qubit1, qubit2, meetPos);
     }
 
-    // Cut-preserving, outer-bond-aware local meeting position heuristic,
-    // matching the real MPS/MPO simulator's FindBestMeetingPositionLocal.
+    // Pick the meeting position with the lowest bond cost (the lowest current
+    // bond dimension) between the two qubits. QCSim's own local heuristic now
+    // uses a cut-preserving score, but this path routes every gate itself, and
+    // here the plain rule works better both as a rollout policy (it adds a route
+    // the other cost-based policies don't) and in the layout search's cost model.
     IndexType ComputeHeuristicMeetPosition(IndexType realq1, IndexType realq2) const
     {
         assert(realq1 < realq2);
-        const IndexType span = realq2 - realq1;
-        if (span <= 1)
-            return realq1;
-
-        const IndexType nBonds = static_cast<IndexType>(currentBondDim.size());
-        constexpr IndexType kMaxStackSpan = 128;
-        std::array<double, kMaxStackSpan + 2> bondsStack{};
-        std::array<double, kMaxStackSpan> prefixCutStack{};
-        std::array<double, kMaxStackSpan> suffixCutStack{};
-        std::vector<double> heapBuf;
-
-        double *bonds = bondsStack.data();
-        double *prefixCut = prefixCutStack.data();
-        double *suffixCut = suffixCutStack.data();
-        if (span > kMaxStackSpan)
-        {
-            heapBuf.resize(static_cast<size_t>(span) * 3 + 2, 0.0);
-            bonds = heapBuf.data();
-            prefixCut = bonds + span + 2;
-            suffixCut = prefixCut + span;
-        }
-
-        bonds[0] = (realq1 > 0) ? currentBondDim[realq1 - 1] : 1.0;
-        for (IndexType i = 0; i < span; ++i)
-            bonds[i + 1] = currentBondDim[realq1 + i];
-        bonds[span + 1] = (realq2 < nBonds) ? currentBondDim[realq2] : 1.0;
-
-        const double E1 = std::max(bonds[0], bonds[1]);
-        const double E2 = std::max(bonds[span], bonds[span + 1]);
-        const double d = static_cast<double>(physExtent);
-
-        prefixCut[0] = 0.0;
-        for (IndexType i = 0; i < span - 1; ++i)
-        {
-            const double bDim = bonds[i + 1];
-            double dmg = 0.0;
-            if (E1 > bDim)
-            {
-                const double inflated = std::min(E1, d * bDim);
-                dmg = std::max(0.0, BondCost(inflated) - bondCost[realq1 + i]);
-            }
-            prefixCut[i + 1] = prefixCut[i] + dmg;
-        }
-
-        suffixCut[span - 1] = 0.0;
-        for (IndexType i = span - 1; i > 0; --i)
-        {
-            const double bDim = bonds[i + 1];
-            double dmg = 0.0;
-            if (E2 > bDim)
-            {
-                const double inflated = std::min(E2, d * bDim);
-                dmg = std::max(0.0, BondCost(inflated) - bondCost[realq1 + i]);
-            }
-            suffixCut[i - 1] = suffixCut[i] + dmg;
-        }
-
-        const double c1 = bonds[0] * bonds[1];
-        const double c2 = bonds[span] * bonds[span + 1];
-        const double effCap = (runtimeBondCap > 0) ? static_cast<double>(runtimeBondCap) : std::numeric_limits<double>::infinity();
 
         IndexType bestPos = realq1;
-        double bestScore = std::numeric_limits<double>::infinity();
+        double bestCost = bondCost[realq1];
 
-        for (IndexType i = 0; i < span; ++i)
+        for (IndexType m = realq1 + 1; m < realq2; ++m)
         {
-            const double bLeft = std::min(bonds[i], effCap);
-            const double bMid = std::min(bonds[i + 1], effCap);
-            const double bRight = std::min(bonds[i + 2], effCap);
-            const double localBondCost = bondCost[realq1 + i];
-            const double cutDamage = 0.5 * (prefixCut[i] + suffixCut[i]);
-            const double outerContext = 0.05 * (bLeft * bMid * bRight);
-            const double tieBreak = (c2 > c1) ? (1e-6 * static_cast<double>(span - 1 - i)) : (1e-6 * static_cast<double>(i));
-            const double score = localBondCost + cutDamage + outerContext + tieBreak;
-
-            if (score < bestScore)
+            if (bondCost[m] < bestCost)
             {
-                bestScore = score;
-                bestPos = realq1 + i;
+                bestCost = bondCost[m];
+                bestPos = m;
             }
         }
 
@@ -2557,38 +2493,6 @@ class MPSDummySimulator
             return -1;
         }
 
-        auto runRolloutFromStep = [&](size_t startStep, int policyIdx, double startCost, double boundCost, IndexType &outFirstPos) -> double {
-            setTotalSwappingCost(0.0);
-            double totalCost = startCost;
-            for (size_t s = startStep; s < endStep; ++s)
-            {
-                const FastGateOp &fg = windowPtr[s];
-                IndexType m = -1;
-                if (!IsRelabelingSwap(fg))
-                {
-                    IndexType rq1 = qubitsMap[fg.q1];
-                    IndexType rq2 = qubitsMap[fg.q2];
-                    if (rq1 > rq2)
-                        std::swap(rq1, rq2);
-                    m = rq1;
-                    if (rq2 - rq1 > 1)
-                    {
-                        m = (policyIdx == 0)   ? SelectMeetingPositionP0Fast(rq1, rq2, fg.q1, fg.q2, windowPtr, windowSize, s, true)
-                            : (policyIdx == 1) ? ComputeAnchorHeavierMeetPosition(rq1, rq2)
-                                               : SelectMeetingPositionP0Fast(rq1, rq2, fg.q1, fg.q2, windowPtr, windowSize, s, false);
-                        SwapQubitsToPosition(fg.q1, fg.q2, m);
-                    }
-                }
-                if (s == startStep)
-                    outFirstPos = m;
-                ApplyFastGate(fg);
-                totalCost = startCost + getTotalSwappingCost();
-                if (totalCost >= boundCost)
-                    return std::numeric_limits<double>::infinity();
-            }
-            return totalCost;
-        };
-
         auto searchAdaptive = [&](auto &self, size_t stepIdx, double stepStartCost, double &boundCost) -> IndexType {
             if (stepIdx >= endStep)
             {
@@ -2611,26 +2515,22 @@ class MPSDummySimulator
             FastStateSnapshot stepState;
             stepState.SaveFrom(*this);
 
-            // Always evaluate the 3-policy heuristic rollout portfolio from stepIdx over
+            // Always evaluate the full heuristic rollout portfolio from stepIdx over
             // [stepIdx, endStep) first. This serves as the leaf evaluation when
             // stepIdx >= exactSteps and preserves the heuristic portfolio's best result
             // as a tight upper-bound baseline before any branching at stepIdx < exactSteps.
+            // The full portfolio matters: positional policies (swap left/right, closer
+            // to an end or the center) win different decisions than the cost-based
+            // ones, and a three-policy subset lost exactness on large QFTs.
             IndexType bestPos = IsRelabelingSwap(fg) ? -1
                                 : (rq2 - rq1 <= 1)   ? rq1
                                                      : SelectMeetingPositionP0Fast(rq1, rq2, fg.q1, fg.q2, windowPtr, windowSize, stepIdx, true);
 
-            for (int pi = 0; pi < 3; ++pi)
-            {
-                if (pi > 0)
-                    stepState.RestoreTo(*this);
-                IndexType firstPos = bestPos;
-                const double c = runRolloutFromStep(stepIdx, pi, stepStartCost, boundCost, firstPos);
-                if (c < boundCost)
-                {
-                    boundCost = c;
-                    bestPos = firstPos;
-                }
-            }
+            const double boundBefore = boundCost;
+            const IndexType rolloutPos =
+                EvaluateHeuristicRolloutsFast(windowPtr, windowSize, stepIdx, static_cast<int>(endStep - stepIdx) - 1, stepStartCost, boundCost);
+            if (boundCost < boundBefore)
+                bestPos = rolloutPos;
 
             stepState.RestoreTo(*this);
             if (stepIdx >= static_cast<size_t>(exactSteps))
