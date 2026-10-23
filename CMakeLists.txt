@@ -571,6 +571,7 @@ if(BUILD_PYTHON_BINDINGS)
             python/bindings/api.cpp
             python/bindings/noise.cpp
             python/bindings/checkpoint.cpp
+            python/bindings/adjoint.cpp
         )
         set_target_properties(maestro_py PROPERTIES OUTPUT_NAME "maestro")
 
