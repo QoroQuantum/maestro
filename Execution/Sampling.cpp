@@ -198,7 +198,8 @@ std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits
             measurements.push_back(measurement);
             for (size_t i = 0; i < measurement->GetQubits().size(); ++i)
             {
-                const auto q = measurement->GetQubits()[i], bit = measurement->GetBitsIndices()[i];
+                const auto q = measurement->GetQubits()[i];
+                const auto bit = measurement->GetBitsIndices()[i];
                 // Preserve the existing overwrite/readout semantics by falling
                 // back when any classical destination is written more than once.
                 if (!bit_owner.emplace(bit, q).second)
