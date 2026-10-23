@@ -55,6 +55,10 @@
 #include <sys/sysctl.h>
 #elif defined(__linux__)
 #include <unistd.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#undef min
+#undef max
 #endif
 
 #include "../Circuit/Circuit.h"
@@ -244,6 +248,11 @@ inline double PhysicalMemoryBytes()
         mem = (mem > 0.) ? std::min(mem, limit) : limit;
 
     return mem;
+#elif defined(_WIN32)
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status))
+        return static_cast<double>(status.ullTotalPhys);
 #endif
     return 0.;
 }

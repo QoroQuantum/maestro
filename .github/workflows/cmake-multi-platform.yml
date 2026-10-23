@@ -27,6 +27,14 @@ jobs:
     - name: Checkout Repo
       uses: actions/checkout@v5
 
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Install Python test dependencies
+      run: python -m pip install pytest numpy
+
     # 1. INSTALL TOOLS
     - name: Install System Tools
       run: |
@@ -103,6 +111,8 @@ jobs:
         export AER_INCLUDE_DIR=$PWD/qiskit-aer/src/
 
         cmake . -G Ninja \
+          -DPython_EXECUTABLE="$(which python)" \
+          -DBUILD_PYTHON_BINDINGS=ON \
           -DMAESTRO_ENABLE_COMPOSER=OFF \
           -DMAESTRO_BUILD_REQUEST_TESTS=ON \
           -DMAESTRO_BUILD_MPI_WORKER=ON \
@@ -112,6 +122,13 @@ jobs:
     - name: Build
       # Simulator translation units each need several GB during compilation.
       run: ninja -j2
+
+    - name: Run adjoint Python tests
+      env:
+        OMP_NUM_THREADS: "4"
+      run: |
+        cp maestro*.so maestro/
+        python -m pytest tests/python/test_adjoint.py -q
 
     - name: Show ccache stats
       run: ccache -s
@@ -145,3 +162,56 @@ jobs:
 
     - name: Check backend selection, tensor contractions, fusion, and sampling
       run: ctest --test-dir . --output-on-failure -R '^(backend_specialization|tensor_contractions|gate_fusion_tests|fusion_routing_tests|gpu_registry|sampling_order|causal_cone|parity_reduction)$'
+
+  adjoint-windows:
+    name: Adjoint tests (Windows)
+    runs-on: windows-2022
+    env:
+      BOOST_ROOT: ${{ github.workspace }}/build/adjoint-deps/boost
+      OMP_NUM_THREADS: "4"
+      MSBUILDDISABLENODEREUSE: "1"
+    steps:
+    - name: Checkout Repo
+      uses: actions/checkout@v5
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+
+    - name: Install Python test dependencies
+      run: python -m pip install pytest numpy
+
+    - name: Cache Boost
+      id: cache-boost
+      uses: actions/cache@v5
+      with:
+        path: ${{ env.BOOST_ROOT }}
+        key: windows-2022-adjoint-boost-1.92.0
+
+    - name: Download Boost
+      if: steps.cache-boost.outputs.cache-hit != 'true'
+      run: |
+        $deps = Split-Path -Parent $env:BOOST_ROOT
+        New-Item -ItemType Directory -Force -Path $deps | Out-Null
+        $archive = Join-Path $deps 'boost.tar.gz'
+        curl.exe -sSfL --retry 5 -o $archive https://github.com/MarkusJx/prebuilt-boost/releases/download/1.92.0/boost-1.92.0-windows-2022-msvc-shared-x86.tar.gz
+        if ($LASTEXITCODE -ne 0) { throw "Boost download failed" }
+        # bsdtar can return 1 for empty-name entries; verify the extracted config.
+        tar.exe -xzf $archive -C $deps
+        if (-not (Test-Path "$env:BOOST_ROOT/lib/cmake/Boost-1.92.0/BoostConfig.cmake")) { throw "Boost extraction failed" }
+        $global:LASTEXITCODE = 0
+
+    - name: Configure CPU Python bindings
+      run: >-
+        cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+        -DCOMPILE_TESTS=OFF -DENABLE_QISKIT_AER=OFF -DBUILD_PYTHON_BINDINGS=ON
+        "-DPython_EXECUTABLE=$((Get-Command python).Source)"
+
+    - name: Build Python bindings
+      run: cmake --build build --config Release --target maestro_py --parallel 2 -- /nodeReuse:false
+
+    - name: Run adjoint Python tests
+      run: |
+        Copy-Item build/Release/maestro*.pyd maestro/
+        python -c "import os, pytest; dll_dirs = [os.add_dll_directory(os.path.abspath('build/bin')), os.add_dll_directory(os.path.join(os.environ['BOOST_ROOT'], 'bin'))]; raise SystemExit(pytest.main(['tests/python/test_adjoint.py', '-q']))"
