@@ -164,8 +164,7 @@ nb::dict VectorJacobianProduct(const Program &program, const nb::handle &observa
     const auto req = Prepare(program, observables, params, config);
     std::vector<size_t> shape;
     const auto dy = FlatDoubles(cotangents, shape);
-    const bool validShape = (shape == std::vector<size_t>{req.numRows, req.nCols}) ||
-                            (req.numRows == 1 && shape == std::vector<size_t>{req.nCols});
+    const bool validShape = (shape == std::vector<size_t>{req.numRows, req.nCols}) || (req.numRows == 1 && shape == std::vector<size_t>{req.nCols});
     if (!validShape)
         throw nb::value_error("cotangents must have shape (batch, num_values).");
 
