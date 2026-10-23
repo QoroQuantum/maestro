@@ -578,7 +578,6 @@ template <typename Time = Types::time_type> class ExecuteJob
 
                     if (network->GetMPSOptimizeSwaps())
                     {
-                        // TODO: come up with something better!
                         int lookaheadDepthLocal = network->GetLookaheadDepth();
 
                         if (lookaheadDepthLocal == std::numeric_limits<int>::max())
@@ -596,22 +595,17 @@ template <typename Time = Types::time_type> class ExecuteJob
                                 }
                                 avgTwoQubitGatesPerLayer += twoQubitGates;
                             }
-                            avgTwoQubitGatesPerLayer /= layers.size();
+                            if (!layers.empty())
+                                avgTwoQubitGatesPerLayer /= layers.size();
 
-                            int lookaheadVal = static_cast<int>(4. * avgTwoQubitGatesPerLayer);
-                            if (lookaheadVal > 15)
-                                lookaheadVal = 15;
-
-                            lookaheadDepthLocal = layers.size() < 8 || routedQubits <= 10 ? 0
-                                                  : layers.size() < 15                    ? static_cast<int>(lookaheadVal)
-                                                  : layers.size() < 25                    ? static_cast<int>(1.5 * lookaheadVal)
-                                                                                          : 2 * lookaheadVal;
+                            const int lookaheadVal = static_cast<int>(2. * avgTwoQubitGatesPerLayer);
+                            lookaheadDepthLocal = layers.empty() ? 0 : std::clamp(lookaheadVal, 4, 12);
                         }
 
                         int lookaheadHeuristicDepthLocal = network->GetLookaheadDepthWithHeuristic();
 
                         if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
-                            lookaheadHeuristicDepthLocal = layers.size() < 8 || routedQubits <= 10 ? 0 : lookaheadDepthLocal - 1;
+                            lookaheadHeuristicDepthLocal = lookaheadDepthLocal <= 0 ? 0 : std::max(1, lookaheadDepthLocal - 1);
 
                         if (lookaheadHeuristicDepthLocal < 0)
                             lookaheadHeuristicDepthLocal = 0;

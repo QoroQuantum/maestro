@@ -2504,8 +2504,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         if (simulator && lookaheadDepth != std::numeric_limits<int>::max())
         {
-            simulator->SetLookaheadDepth(0);
-            simulator->SetLookaheadDepthWithHeuristic(0);
+            simulator->SetLookaheadDepth(depth);
+            if (lookaheadDepthWithHeuristic != std::numeric_limits<int>::max())
+                simulator->SetLookaheadDepthWithHeuristic(std::min(depth, lookaheadDepthWithHeuristic));
         }
     }
 
@@ -2831,7 +2832,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
                     if (mpsOptimizeSwaps)
                     {
-                        // TODO: come up with something better!
                         int lookaheadDepthLocal = lookaheadDepth;
 
                         if (lookaheadDepthLocal == std::numeric_limits<int>::max())
@@ -2849,22 +2849,17 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                                 }
                                 avgTwoQubitGatesPerLayer += twoQubitGates;
                             }
-                            avgTwoQubitGatesPerLayer /= layers.size();
+                            if (!layers.empty())
+                                avgTwoQubitGatesPerLayer /= layers.size();
 
-                            int lookaheadVal = static_cast<int>(4. * avgTwoQubitGatesPerLayer);
-                            if (lookaheadVal > 15)
-                                lookaheadVal = 15;
-
-                            lookaheadDepthLocal = layers.size() < 8 || routedQubits <= 10 ? 0
-                                                  : layers.size() < 15                    ? static_cast<int>(lookaheadVal)
-                                                  : layers.size() < 25                    ? static_cast<int>(1.5 * lookaheadVal)
-                                                                                          : 2 * lookaheadVal;
+                            const int lookaheadVal = static_cast<int>(2. * avgTwoQubitGatesPerLayer);
+                            lookaheadDepthLocal = layers.empty() ? 0 : std::clamp(lookaheadVal, 4, 12);
                         }
 
                         int lookaheadHeuristicDepthLocal = lookaheadDepthWithHeuristic;
 
                         if (lookaheadHeuristicDepthLocal == std::numeric_limits<int>::max())
-                            lookaheadHeuristicDepthLocal = layers.size() < 8 || routedQubits <= 10 ? 0 : lookaheadDepthLocal - 1;
+                            lookaheadHeuristicDepthLocal = lookaheadDepthLocal <= 0 ? 0 : std::max(1, lookaheadDepthLocal - 1);
 
                         if (lookaheadHeuristicDepthLocal < 0)
                             lookaheadHeuristicDepthLocal = 0;

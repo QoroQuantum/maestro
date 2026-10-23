@@ -223,7 +223,8 @@ template <class Backend> class TensorChainRouting : public Backend
         dummySim->setTotalSwappingCost(0.);
         dummyHistoryValid = trackVirtualBonds;
         double bestCost = std::numeric_limits<double>::infinity();
-        const auto position = dummySim->FindBestMeetingPosition(upcomingGates, upcomingGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, 0., bestCost);
+        const auto position =
+            dummySim->SelectMeetingPositionAdaptive(upcomingGates, upcomingGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, 0., bestCost);
         if (position < std::min(map[qubits[0]], map[qubits[1]]) || position >= std::max(map[qubits[0]], map[qubits[1]]))
             return -1;
         if (trackVirtualBonds)

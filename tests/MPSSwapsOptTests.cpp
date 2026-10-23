@@ -1372,6 +1372,43 @@ BOOST_AUTO_TEST_CASE(ConfigurableBranchingDepthAndLargeChainFallbacks)
     BOOST_CHECK_LE(costBranch1, costBranch0 + 1e-9);
     BOOST_CHECK_LT(costBranch2, costBranch1);
 
+    // Also verify that SelectMeetingPositionAdaptive (used by the live routing
+    // callback) honors positive heuristic-depth branching settings (0, 1, and 2 steps),
+    // including when the bond cap is larger than the current small bond dimensions (cap 16, current 2).
+    for (const size_t bondCap : {static_cast<size_t>(2), static_cast<size_t>(16)})
+    {
+        auto makeCapSim = [&]() {
+            Simulators::MPSDummySimulator s(nrQubits);
+            s.SetMaxBondDimension(bondCap);
+            s.setGrowthFactorGate(1.0);
+            s.setGrowthFactorSwap(1.0);
+            s.SetCurrentBondDimensions(uniformBonds);
+            return s;
+        };
+
+        auto simAdaptRoot0 = makeCapSim();
+        auto simAdaptRoot1 = makeCapSim();
+        double costAdaptRoot0 = std::numeric_limits<double>::infinity();
+        double costAdaptRoot1 = std::numeric_limits<double>::infinity();
+        const auto posAdaptRoot0 = simAdaptRoot0.SelectMeetingPositionAdaptive(ops, 1, 7, 7, 0.0, costAdaptRoot0);
+        const auto posAdaptRoot1 = simAdaptRoot1.SelectMeetingPositionAdaptive(ops, 1, 7, 6, 0.0, costAdaptRoot1);
+        BOOST_CHECK_EQUAL(posAdaptRoot1, 3);
+        BOOST_CHECK_NE(posAdaptRoot0, 3);
+        BOOST_CHECK_LT(costAdaptRoot1, costAdaptRoot0);
+
+        auto simAdapt0 = makeCapSim();
+        auto simAdapt1 = makeCapSim();
+        auto simAdapt2 = makeCapSim();
+        double costAdapt0 = std::numeric_limits<double>::infinity();
+        double costAdapt1 = std::numeric_limits<double>::infinity();
+        double costAdapt2 = std::numeric_limits<double>::infinity();
+        (void)simAdapt0.SelectMeetingPositionAdaptive(ops, 0, 8, 8, 0.0, costAdapt0);
+        (void)simAdapt1.SelectMeetingPositionAdaptive(ops, 0, 8, 7, 0.0, costAdapt1);
+        (void)simAdapt2.SelectMeetingPositionAdaptive(ops, 0, 8, 6, 0.0, costAdapt2);
+        BOOST_CHECK_LE(costAdapt1, costAdapt0 + 1e-9);
+        BOOST_CHECK_LT(costAdapt2, costAdapt1);
+    }
+
     // 2. Exercise > 64 qubits snapshot heap fallback and > 128 bond span candidate heap fallback.
     constexpr size_t largeNrQubits = 140;
     Simulators::MPSDummySimulator largeSim(largeNrQubits);
@@ -2252,6 +2289,133 @@ BOOST_AUTO_TEST_CASE(RemapToContinuousKeepsQubitOrder)
     const auto &ops = mapped->GetOperations();
     BOOST_CHECK(ops[0]->AffectedQubits() == (Types::qubits_vector{3, 1}));
     BOOST_CHECK(ops[1]->AffectedQubits() == (Types::qubits_vector{2, 0}));
+}
+
+BOOST_AUTO_TEST_CASE(AdaptivePlannerCommonHorizonAndLargeSparseLayout)
+{
+    using CF = Circuits::CircuitFactory<>;
+    using Kind = Circuits::QuantumGateType;
+
+    // 1. Common gate horizon in SelectMeetingPositionAdaptive:
+    // Gate 0 on (3, 11) inside a 15-qubit chain (where all interior bonds in
+    // [2, 11] have uniform bond dimension 8) with 15 subsequent gates on passive
+    // pairs that stay adjacent only when m == 5. A candidate that breaks adjacency
+    // (e.g. m == 10) must be evaluated over the same common gate horizon rather than
+    // stopping early after fewer gates and appearing artificially cheaper.
+    {
+        constexpr size_t nrQubits = 15;
+        std::vector<std::shared_ptr<Circuits::IOperation<>>> ops;
+        ops.push_back(CF::CreateGate(Kind::kCXGateType, 3, 11));
+        const std::array<std::pair<Types::qubit_t, Types::qubit_t>, 7> passivePairs{{{2, 4}, {4, 5}, {6, 7}, {7, 8}, {8, 9}, {9, 10}, {10, 12}}};
+        for (size_t k = 0; k < 15; ++k)
+        {
+            const auto [a, b] = passivePairs[k % passivePairs.size()];
+            ops.push_back(CF::CreateGate(Kind::kCXGateType, a, b));
+        }
+
+        Simulators::MPSDummySimulator sim(nrQubits);
+        sim.SetMaxBondDimension(8);
+        sim.setGrowthFactorGate(1.0);
+        sim.setGrowthFactorSwap(1.0);
+        sim.SetCurrentBondDimensions(std::vector<double>(nrQubits - 1, 8.0));
+
+        double adaptiveCost = std::numeric_limits<double>::infinity();
+        const auto chosenPos = sim.SelectMeetingPositionAdaptive(ops, 0, 15, 14, 0.0, adaptiveCost);
+        BOOST_CHECK_EQUAL(chosenPos, 5);
+
+        auto evalFullWindow = [&](Simulators::MPSDummySimulator::IndexType m) {
+            auto copy = sim.Clone();
+            copy->SwapQubitsToPosition(3, 11, m);
+            copy->ApplyGate(ops[0]);
+            for (size_t s = 1; s < ops.size(); ++s)
+                copy->ApplyGate(ops[s]);
+            return copy->getTotalSwappingCost();
+        };
+        BOOST_CHECK_LT(evalFullWindow(chosenPos), evalFullWindow(10));
+    }
+
+    // 2. Large sparse circuit initial layout refinement scaling and spectral
+    // sort transitivity on symmetric graphs.
+    {
+        constexpr size_t nrQubits = 240;
+        auto sparseCirc = std::make_shared<Circuits::Circuit<>>();
+        for (int layer = 0; layer < 4; ++layer)
+        {
+            for (size_t q = static_cast<size_t>(layer & 1); q + 1 < nrQubits; q += 2)
+                sparseCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, q, q + 1));
+        }
+        const auto layers = sparseCirc->ToMultipleQubitsLayersNoClone();
+        Simulators::MPSDummySimulator planner(nrQubits);
+        planner.SetMaxBondDimension(16);
+
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto map = planner.ComputeOptimalQubitsMap(layers);
+        const double elapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+
+        BOOST_CHECK_EQUAL(map.size(), nrQubits);
+        BOOST_CHECK_LT(elapsedMs, 200.0);
+
+        // Also exercise full refinement + spectral/weighted chain on a scrambled sparse 240-qubit circuit
+        auto scrambledCirc = std::make_shared<Circuits::Circuit<>>();
+        for (int layer = 0; layer < 4; ++layer)
+        {
+            for (size_t q = static_cast<size_t>(layer & 1); q + 1 < nrQubits; q += 2)
+            {
+                const size_t u = (q * 37 + 11) % nrQubits;
+                const size_t v = ((q + 1) * 37 + 11) % nrQubits;
+                scrambledCirc->AddOperation(CF::CreateGate(Kind::kCXGateType, u, v));
+            }
+        }
+        const auto scrambledLayers = scrambledCirc->ToMultipleQubitsLayersNoClone();
+        const auto t1 = std::chrono::steady_clock::now();
+        const auto scrambledMap = planner.ComputeOptimalQubitsMap(scrambledLayers);
+        const double scrambledElapsedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
+
+        BOOST_CHECK_EQUAL(scrambledMap.size(), nrQubits);
+        BOOST_CHECK_LT(scrambledElapsedMs, 500.0);
+    }
+
+    // 3. Monotonicity of branching vs heuristic portfolio baseline when current
+    // bonds are small relative to bond cap (12 qubits, bond cap 16, current bonds 2):
+    // Enabling 1- or 2-step branching must preserve the 3-policy heuristic portfolio's
+    // winning route and never return a worse estimated cost for either MPS or MPO.
+    {
+        constexpr size_t nrQubits = 12;
+        const std::vector<std::shared_ptr<Circuits::IOperation<>>> ops{
+            CF::CreateGate(Kind::kCXGateType, 3, 5),
+            CF::CreateGate(Kind::kCXGateType, 2, 10),
+            CF::CreateGate(Kind::kCXGateType, 6, 7),
+            CF::CreateGate(Kind::kCXGateType, 11, 9),
+            CF::CreateGate(Kind::kCXGateType, 0, 7),
+            CF::CreateGate(Kind::kCXGateType, 2, 8)};
+
+        for (const bool isMPO : {false, true})
+        {
+            auto makeSim = [&]() {
+                Simulators::MPSDummySimulator s(nrQubits, isMPO);
+                s.SetMaxBondDimension(16);
+                s.SetCurrentBondDimensions(std::vector<double>(nrQubits - 1, 2.0));
+                return s;
+            };
+
+            auto sim0 = makeSim();
+            auto sim1 = makeSim();
+            auto sim2 = makeSim();
+            double cost0 = std::numeric_limits<double>::infinity();
+            double cost1 = std::numeric_limits<double>::infinity();
+            double cost2 = std::numeric_limits<double>::infinity();
+
+            const auto pos0 = sim0.SelectMeetingPositionAdaptive(ops, 0, 4, 4, 0.0, cost0);
+            const auto pos1 = sim1.SelectMeetingPositionAdaptive(ops, 0, 4, 3, 0.0, cost1);
+            const auto pos2 = sim2.SelectMeetingPositionAdaptive(ops, 0, 4, 2, 0.0, cost2);
+
+            BOOST_CHECK_EQUAL(pos0, 3);
+            BOOST_CHECK_EQUAL(pos1, 3);
+            BOOST_CHECK_LE(cost1, cost0 + 1e-9);
+            BOOST_CHECK_LE(cost2, cost1 + 1e-9);
+            (void)pos2;
+        }
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

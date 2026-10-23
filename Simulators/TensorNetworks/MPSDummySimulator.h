@@ -880,6 +880,457 @@ class MPSDummySimulator
             return result;
         };
 
+        // Build a time-decayed full-circuit interaction graph across all layers
+        // so deeper gates and multi-layer topology (ladders, 2D grids, islands)
+        // are visible even after all qubits have appeared once. Uses sparse
+        // adjacency lists O(|E|) instead of an O(N^2) dense matrix.
+        struct WeightedEdge
+        {
+            IndexType u;
+            IndexType v;
+            double w;
+        };
+
+        const size_t nQ = static_cast<size_t>(nrQubits);
+        std::vector<std::vector<std::pair<IndexType, double>>> adjList(nQ);
+        auto addEdgeWeight = [&](IndexType u, IndexType v, double w) {
+            auto &listU = adjList[static_cast<size_t>(u)];
+            for (auto &nb : listU)
+            {
+                if (nb.first == v)
+                {
+                    nb.second += w;
+                    return;
+                }
+            }
+            listU.push_back({v, w});
+        };
+
+        const double decay = std::exp(-2.5 / static_cast<double>(std::max<size_t>(1, layerPairs.size())));
+        double layerWeight = 1.0;
+        for (const auto &lp : layerPairs)
+        {
+            for (const auto &p : lp)
+            {
+                if (p.q1 != p.q2 && p.q1 >= 0 && p.q1 < nrQubits && p.q2 >= 0 && p.q2 < nrQubits)
+                {
+                    addEdgeWeight(p.q1, p.q2, layerWeight);
+                    addEdgeWeight(p.q2, p.q1, layerWeight);
+                }
+            }
+            layerWeight *= decay;
+        }
+
+        std::vector<WeightedEdge> edges;
+        for (IndexType u = 0; u < nrQubits; ++u)
+        {
+            auto &listU = adjList[static_cast<size_t>(u)];
+            std::sort(listU.begin(), listU.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+            for (const auto &nb : listU)
+            {
+                if (u < nb.first && nb.second > 0.0)
+                    edges.push_back({u, nb.first, nb.second});
+            }
+        }
+        std::sort(edges.begin(), edges.end(), [](const WeightedEdge &a, const WeightedEdge &b) {
+            if (a.w != b.w)
+                return a.w > b.w;
+            return std::tie(a.u, a.v) < std::tie(b.u, b.v);
+        });
+
+        auto getEdgeWeight = [&](IndexType u, IndexType v) -> double {
+            if (u == v)
+                return 0.0;
+            const auto &list = (adjList[u].size() <= adjList[v].size()) ? adjList[u] : adjList[v];
+            const IndexType target = (adjList[u].size() <= adjList[v].size()) ? v : u;
+            auto it = std::lower_bound(list.begin(), list.end(), target, [](const std::pair<IndexType, double> &elem, IndexType val) {
+                return elem.first < val;
+            });
+            return (it != list.end() && it->first == target) ? it->second : 0.0;
+        };
+
+        // Superlinear (convex) swap distance penalty: penalizes long-range spans
+        // more than a pair of medium spans so ladders and 2D grids interleave cleanly.
+        auto pairSwapPenalty = [](IndexType posU, IndexType posV) -> double {
+            const double swaps = static_cast<double>(std::max<IndexType>(0, std::abs(posU - posV) - 1));
+            return swaps * (1.0 + 0.25 * std::sqrt(swaps));
+        };
+
+        auto qubitGraphCost = [&](IndexType u, IndexType posU, const std::vector<IndexType> &pos) -> double {
+            double c = 0.0;
+            for (const auto &nb : adjList[u])
+                c += nb.second * pairSwapPenalty(posU, pos[nb.first]);
+            return c;
+        };
+
+        auto totalGraphCost = [&](const std::vector<IndexType> &pos) -> double {
+            double c = 0.0;
+            for (const auto &e : edges)
+                c += e.w * pairSwapPenalty(pos[e.u], pos[e.v]);
+            return c;
+        };
+
+        // Bounded O(|E| * W) 2-opt swap + incremental adjacent-slide insertion
+        // local search on the convex interaction graph cost.
+        auto refineGraphLayout = [&](std::vector<IndexType> pos) -> std::vector<IndexType> {
+            if (edges.empty() || nrQubits <= 2)
+                return pos;
+
+            // Early exit when all interacting pairs are already adjacent.
+            if (totalGraphCost(pos) <= 1e-12)
+                return pos;
+
+            std::vector<IndexType> order(nQ);
+            for (IndexType q = 0; q < nrQubits; ++q)
+                order[pos[q]] = q;
+
+            const IndexType maxWindow = std::clamp<IndexType>(static_cast<IndexType>(512 / std::max<size_t>(1, nQ / 16)), 8, 48);
+            const int maxIter = (nQ > 64) ? 5 : 12;
+            std::vector<IndexType> candPositions;
+            candPositions.reserve(static_cast<size_t>(maxWindow) + 16);
+
+            for (int iter = 0; iter < maxIter; ++iter)
+            {
+                bool improved = false;
+                for (IndexType p1 = 0; p1 < nrQubits; ++p1)
+                {
+                    IndexType u = order[p1];
+                    if (qubitGraphCost(u, p1, pos) <= 1e-12)
+                        continue;
+
+                    candPositions.clear();
+                    const IndexType p2Max = std::min<IndexType>(nrQubits - 1, p1 + maxWindow);
+                    for (IndexType p2 = p1 + 1; p2 <= p2Max; ++p2)
+                        candPositions.push_back(p2);
+                    for (const auto &nb : adjList[u])
+                    {
+                        const IndexType np = pos[nb.first];
+                        for (IndexType delta = -1; delta <= 1; ++delta)
+                        {
+                            const IndexType p2 = np + delta;
+                            if (p2 > p1 + maxWindow && p2 < nrQubits)
+                                candPositions.push_back(p2);
+                        }
+                    }
+
+                    for (IndexType p2 : candPositions)
+                    {
+                        u = order[p1];
+                        const IndexType v = order[p2];
+                        const double wuv = getEdgeWeight(u, v);
+                        const double pairTerm = wuv * pairSwapPenalty(p1, p2);
+                        const double before = qubitGraphCost(u, p1, pos) + qubitGraphCost(v, p2, pos) - pairTerm;
+
+                        pos[u] = p2;
+                        pos[v] = p1;
+                        const double after = qubitGraphCost(u, p2, pos) + qubitGraphCost(v, p1, pos) - pairTerm;
+
+                        if (after + 1e-9 < before)
+                        {
+                            order[p1] = v;
+                            order[p2] = u;
+                            improved = true;
+                        }
+                        else
+                        {
+                            pos[u] = p1;
+                            pos[v] = p2;
+                        }
+                    }
+                }
+
+                // Incremental single-qubit insertion via adjacent-swap sliding:
+                // each 1-slot shift only changes incident edge distances of the two
+                // swapped qubits, avoiding full-graph rescans and vector copies.
+                auto swapAdjacentPositions = [&](IndexType pA, IndexType pB) -> double {
+                    const IndexType qA = order[pA];
+                    const IndexType qB = order[pB];
+                    // Note: the edge (qA, qB) has |pA - pB| == 1 both before and after,
+                    // where pairSwapPenalty is 0.
+                    const double before = qubitGraphCost(qA, pA, pos) + qubitGraphCost(qB, pB, pos);
+                    pos[qA] = pB;
+                    pos[qB] = pA;
+                    order[pA] = qB;
+                    order[pB] = qA;
+                    const double after = qubitGraphCost(qA, pB, pos) + qubitGraphCost(qB, pA, pos);
+                    return after - before;
+                };
+
+                for (IndexType fromP = 0; fromP < nrQubits; ++fromP)
+                {
+                    const IndexType q = order[fromP];
+                    if (qubitGraphCost(q, fromP, pos) <= 1e-12)
+                        continue;
+
+                    const IndexType maxRight = std::min<IndexType>(nrQubits - 1, fromP + maxWindow);
+                    const IndexType minLeft = std::max<IndexType>(0, fromP - maxWindow);
+
+                    IndexType bestP = fromP;
+                    double bestDelta = 0.0;
+                    double cumDelta = 0.0;
+
+                    for (IndexType curP = fromP; curP < maxRight; ++curP)
+                    {
+                        cumDelta += swapAdjacentPositions(curP, curP + 1);
+                        if (cumDelta + 1e-9 < bestDelta)
+                        {
+                            bestDelta = cumDelta;
+                            bestP = curP + 1;
+                        }
+                    }
+                    for (IndexType curP = maxRight; curP > fromP; --curP)
+                        swapAdjacentPositions(curP, curP - 1);
+
+                    cumDelta = 0.0;
+                    for (IndexType curP = fromP; curP > minLeft; --curP)
+                    {
+                        cumDelta += swapAdjacentPositions(curP, curP - 1);
+                        if (cumDelta + 1e-9 < bestDelta)
+                        {
+                            bestDelta = cumDelta;
+                            bestP = curP - 1;
+                        }
+                    }
+                    for (IndexType curP = minLeft; curP < bestP; ++curP)
+                        swapAdjacentPositions(curP, curP + 1);
+
+                    if (bestP != fromP)
+                        improved = true;
+                }
+
+                if (!improved || totalGraphCost(pos) <= 1e-12)
+                    break;
+            }
+            return pos;
+        };
+
+        // Multi-layer weighted group merging with 4-way orientation selection,
+        // using sparse adjacency lookups O(|E|).
+        auto buildWeightedChain = [&]() -> std::vector<IndexType> {
+            std::vector<std::deque<IndexType>> groups;
+            std::vector<int> qubitGroup(nrQubits, -1);
+            std::vector<IndexType> posInGroup(nrQubits, 0);
+
+            auto refreshGroupPositions = [&](int gIdx) {
+                const auto &grp = groups[gIdx];
+                for (size_t i = 0; i < grp.size(); ++i)
+                    posInGroup[grp[i]] = static_cast<IndexType>(i);
+            };
+
+            for (const auto &e : edges)
+            {
+                const int g1 = qubitGroup[e.u];
+                const int g2 = qubitGroup[e.v];
+                if (g1 < 0 && g2 < 0)
+                {
+                    const int gIdx = static_cast<int>(groups.size());
+                    groups.push_back({e.u, e.v});
+                    qubitGroup[e.u] = gIdx;
+                    qubitGroup[e.v] = gIdx;
+                    posInGroup[e.u] = 0;
+                    posInGroup[e.v] = 1;
+                }
+                else if (g1 >= 0 && g2 < 0)
+                {
+                    auto &grp = groups[g1];
+                    const IndexType gSize = static_cast<IndexType>(grp.size());
+                    double costFront = 0.0;
+                    double costBack = 0.0;
+                    for (const auto &nb : adjList[e.v])
+                    {
+                        if (qubitGroup[nb.first] == g1)
+                        {
+                            const IndexType idx = posInGroup[nb.first];
+                            costFront += nb.second * pairSwapPenalty(0, idx + 1);
+                            costBack += nb.second * pairSwapPenalty(gSize, idx);
+                        }
+                    }
+                    if (costFront <= costBack)
+                    {
+                        grp.push_front(e.v);
+                        qubitGroup[e.v] = g1;
+                        refreshGroupPositions(g1);
+                    }
+                    else
+                    {
+                        posInGroup[e.v] = gSize;
+                        grp.push_back(e.v);
+                        qubitGroup[e.v] = g1;
+                    }
+                }
+                else if (g1 < 0 && g2 >= 0)
+                {
+                    auto &grp = groups[g2];
+                    const IndexType gSize = static_cast<IndexType>(grp.size());
+                    double costFront = 0.0;
+                    double costBack = 0.0;
+                    for (const auto &nb : adjList[e.u])
+                    {
+                        if (qubitGroup[nb.first] == g2)
+                        {
+                            const IndexType idx = posInGroup[nb.first];
+                            costFront += nb.second * pairSwapPenalty(0, idx + 1);
+                            costBack += nb.second * pairSwapPenalty(gSize, idx);
+                        }
+                    }
+                    if (costFront <= costBack)
+                    {
+                        grp.push_front(e.u);
+                        qubitGroup[e.u] = g2;
+                        refreshGroupPositions(g2);
+                    }
+                    else
+                    {
+                        posInGroup[e.u] = gSize;
+                        grp.push_back(e.u);
+                        qubitGroup[e.u] = g2;
+                    }
+                }
+                else if (g1 != g2)
+                {
+                    // Merge smaller group into larger group to keep position updates O(N log N)
+                    const int gA = (groups[g1].size() >= groups[g2].size()) ? g1 : g2;
+                    const int gB = (gA == g1) ? g2 : g1;
+                    auto &grpA = groups[gA];
+                    auto &grpB = groups[gB];
+                    const IndexType sizeA = static_cast<IndexType>(grpA.size());
+                    const IndexType sizeB = static_cast<IndexType>(grpB.size());
+
+                    std::array<double, 4> orientCosts{0.0, 0.0, 0.0, 0.0};
+                    for (IndexType ib = 0; ib < sizeB; ++ib)
+                    {
+                        const IndexType qb = grpB[ib];
+                        for (const auto &nb : adjList[qb])
+                        {
+                            if (qubitGroup[nb.first] == gA)
+                            {
+                                const IndexType ia = posInGroup[nb.first];
+                                for (int flipA = 0; flipA < 2; ++flipA)
+                                {
+                                    const IndexType effA = flipA ? (sizeA - 1 - ia) : ia;
+                                    for (int flipB = 0; flipB < 2; ++flipB)
+                                    {
+                                        const IndexType effB = sizeA + (flipB ? (sizeB - 1 - ib) : ib);
+                                        orientCosts[flipA * 2 + flipB] += nb.second * pairSwapPenalty(effA, effB);
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    int bestOrient = 0;
+                    for (int k = 1; k < 4; ++k)
+                        if (orientCosts[k] < orientCosts[bestOrient])
+                            bestOrient = k;
+
+                    if (bestOrient & 2)
+                        std::reverse(grpA.begin(), grpA.end());
+                    if (bestOrient & 1)
+                        std::reverse(grpB.begin(), grpB.end());
+                    for (const auto q : grpB)
+                    {
+                        grpA.push_back(q);
+                        qubitGroup[q] = gA;
+                    }
+                    grpB.clear();
+                    refreshGroupPositions(gA);
+                }
+            }
+
+            std::vector<IndexType> chain;
+            chain.reserve(nQ);
+            for (const auto &grp : groups)
+                for (const auto q : grp)
+                    chain.push_back(q);
+            for (IndexType q = 0; q < nrQubits; ++q)
+                if (qubitGroup[q] < 0)
+                    chain.push_back(q);
+
+            std::vector<IndexType> result(nQ);
+            for (size_t i = 0; i < chain.size(); ++i)
+                result[chain[i]] = static_cast<IndexType>(i);
+            return result;
+        };
+
+        // Spectral Fiedler vector ordering of the time-decayed interaction graph
+        auto buildSpectralChain = [&]() -> std::vector<IndexType> {
+            std::vector<double> deg(nQ, 0.0);
+            for (size_t u = 0; u < nQ; ++u)
+                for (const auto &nb : adjList[u])
+                    deg[u] += nb.second;
+
+            std::vector<double> v0(nQ, 0.0);
+            double v0Norm2 = 0.0;
+            for (size_t u = 0; u < nQ; ++u)
+            {
+                v0[u] = std::sqrt(std::max(deg[u], 1e-12));
+                v0Norm2 += v0[u] * v0[u];
+            }
+            const double invV0Norm = 1.0 / std::sqrt(std::max(v0Norm2, 1e-24));
+            for (size_t u = 0; u < nQ; ++u)
+                v0[u] *= invV0Norm;
+
+            std::vector<double> x(nQ);
+            for (size_t u = 0; u < nQ; ++u)
+                x[u] = static_cast<double>(u) - 0.5 * static_cast<double>(nQ - 1);
+
+            for (int iter = 0; iter < 40; ++iter)
+            {
+                double dot0 = 0.0;
+                for (size_t u = 0; u < nQ; ++u)
+                    dot0 += x[u] * v0[u];
+                for (size_t u = 0; u < nQ; ++u)
+                    x[u] -= dot0 * v0[u];
+
+                std::vector<double> y(nQ, 0.0);
+                for (size_t u = 0; u < nQ; ++u)
+                {
+                    y[u] = 0.5 * x[u];
+                    if (deg[u] > 1e-12)
+                    {
+                        const double invSqrtDu = 1.0 / std::sqrt(deg[u]);
+                        for (const auto &nb : adjList[u])
+                            if (deg[nb.first] > 1e-12)
+                                y[u] += 0.5 * nb.second * invSqrtDu * (x[nb.first] / std::sqrt(deg[nb.first]));
+                    }
+                }
+
+                dot0 = 0.0;
+                for (size_t u = 0; u < nQ; ++u)
+                    dot0 += y[u] * v0[u];
+                double norm2 = 0.0;
+                for (size_t u = 0; u < nQ; ++u)
+                {
+                    y[u] -= dot0 * v0[u];
+                    norm2 += y[u] * y[u];
+                }
+                if (norm2 < 1e-24)
+                    break;
+                const double invNorm = 1.0 / std::sqrt(norm2);
+                for (size_t u = 0; u < nQ; ++u)
+                    x[u] = y[u] * invNorm;
+            }
+
+            // Precompute quantized integer keys so comparator is a strict weak ordering (transitive)
+            std::vector<int64_t> quantKey(nQ, 0);
+            for (size_t u = 0; u < nQ; ++u)
+            {
+                const double coord = x[u] / std::sqrt(std::max(deg[u], 1e-12));
+                quantKey[u] = std::isfinite(coord) ? static_cast<int64_t>(std::llround(coord * 1e9)) : 0;
+            }
+
+            std::vector<IndexType> order(nQ);
+            std::iota(order.begin(), order.end(), 0);
+            std::sort(order.begin(), order.end(), [&](IndexType a, IndexType b) {
+                return std::tie(quantKey[a], a) < std::tie(quantKey[b], b);
+            });
+
+            std::vector<IndexType> result(nQ);
+            for (size_t i = 0; i < nQ; ++i)
+                result[order[i]] = static_cast<IndexType>(i);
+            return result;
+        };
+
         // The cost model is a rough proxy: for some circuits (QFT, for one) it
         // rates scrambled layouts a few times cheaper than the identity, while
         // they can run far slower. Leave the identity only for a large predicted
@@ -890,66 +1341,90 @@ class MPSDummySimulator
         auto optMap = buildChain(layerPairs);
         auto optCost = evaluateCost(optMap);
         const double identityCost = optMap == identityMap ? optCost : evaluateCost(identityMap);
-        if (layers.size() <= 2)
-            return optMap != identityMap && identityCost < minLayoutGain * optCost ? identityMap : optMap;
         if (identityCost < optCost)
         {
             optCost = identityCost;
             optMap = identityMap;
         }
 
-        std::vector<long long int> qubitsMap = identityMap;
-        double tryCost;
-
-        // try some random shuffles as well, in case the heuristic ordering is not
-        // optimal
-        std::mt19937 rng(42);
-        for (int i = 0; i < nrShuffles; ++i)
+        if (totalGraphCost(optMap) > 1e-12)
         {
-            std::shuffle(qubitsMap.begin(), qubitsMap.end(), rng);
-            tryCost = evaluateCostBounded(qubitsMap, optCost);
-            if (tryCost < optCost)
+            std::vector<std::vector<IndexType>> graphCandidates;
+            graphCandidates.push_back(refineGraphLayout(identityMap));
+            graphCandidates.push_back(refineGraphLayout(optMap));
+            if (layers.size() > 2)
             {
-                optCost = tryCost;
-                optMap = qubitsMap;
+                graphCandidates.push_back(refineGraphLayout(buildWeightedChain()));
+                graphCandidates.push_back(refineGraphLayout(buildSpectralChain()));
+            }
+
+            for (const auto &cand : graphCandidates)
+            {
+                if (cand == identityMap || cand == optMap)
+                    continue;
+                const double cost = evaluateCostBounded(cand, optCost);
+                if (cost < optCost)
+                {
+                    optCost = cost;
+                    optMap = cand;
+                }
             }
         }
 
-        std::uniform_int_distribution<IndexType> qubitDist(0, nrQubits - 1);
-        std::uniform_int_distribution<int> nrSwapsDist(1, std::min<int>(3, static_cast<int>(nrQubits) / 2));
+        if (layers.size() <= 2)
+            return optMap != identityMap && identityCost < minLayoutGain * optCost ? identityMap : optMap;
 
-        const int maxNoImprove = std::max(nrShuffles, static_cast<int>(nrQubits));
-        const int maxTotalShuffles = maxNoImprove * 3;
-        int noImproveCount = 0;
-
-        for (int s = 0; s < maxTotalShuffles && noImproveCount < maxNoImprove; ++s)
+        if (nrShuffles > 0)
         {
-            auto tryMap = optMap;
-            const int nrSwaps = nrSwapsDist(rng);
-            for (int sw = 0; sw < nrSwaps; ++sw)
+            std::vector<long long int> trialMap = identityMap;
+            std::mt19937 rng(42);
+            for (int i = 0; i < nrShuffles; ++i)
             {
-                const IndexType a = qubitDist(rng);
-                IndexType b = qubitDist(rng);
-                while (b == a)
-                    b = qubitDist(rng);
-                std::swap(tryMap[a], tryMap[b]);
+                std::shuffle(trialMap.begin(), trialMap.end(), rng);
+                const double tryCost = evaluateCostBounded(trialMap, optCost);
+                if (tryCost < optCost)
+                {
+                    optCost = tryCost;
+                    optMap = trialMap;
+                }
             }
 
-            auto cost = evaluateCostBounded(tryMap, optCost);
-            if (cost < optCost)
+            std::uniform_int_distribution<IndexType> qubitDist(0, nrQubits - 1);
+            std::uniform_int_distribution<int> nrSwapsDist(1, std::min<int>(3, static_cast<int>(nrQubits) / 2));
+
+            const int maxNoImprove = std::max(nrShuffles, static_cast<int>(nrQubits));
+            const int maxTotalShuffles = maxNoImprove * 3;
+            int noImproveCount = 0;
+
+            for (int s = 0; s < maxTotalShuffles && noImproveCount < maxNoImprove; ++s)
             {
-                optMap = tryMap;
-                optCost = cost;
-                noImproveCount = 0;
-            }
-            else
-            {
-                ++noImproveCount;
+                auto tryMap = optMap;
+                const int swapsCount = nrSwapsDist(rng);
+                for (int sw = 0; sw < swapsCount; ++sw)
+                {
+                    const IndexType a = qubitDist(rng);
+                    IndexType b = qubitDist(rng);
+                    while (b == a)
+                        b = qubitDist(rng);
+                    std::swap(tryMap[a], tryMap[b]);
+                }
+
+                const auto cost = evaluateCostBounded(tryMap, optCost);
+                if (cost < optCost)
+                {
+                    optMap = tryMap;
+                    optCost = cost;
+                    noImproveCount = 0;
+                }
+                else
+                {
+                    ++noImproveCount;
+                }
             }
         }
 
-        // 2-opt local search: iteratively swap pairs of positions in the best map
-        // and keep improvements, until no single swap can reduce the cost
+        // Optional explicit 2-opt local search in MPSDummySimulator when nrSwaps > 0
+        if (nrSwaps > 0)
         {
             auto candidate = optMap;
             bool improved = true;
@@ -960,9 +1435,8 @@ class MPSDummySimulator
                 {
                     for (IndexType j = i + 1; j < nrQubits; ++j)
                     {
-                        // swap the mapped positions of qubits i and j
                         std::swap(candidate[i], candidate[j]);
-                        auto cost = evaluateCostBounded(candidate, optCost);
+                        const auto cost = evaluateCostBounded(candidate, optCost);
                         if (cost < optCost)
                         {
                             optMap = candidate;
@@ -971,7 +1445,6 @@ class MPSDummySimulator
                         }
                         else
                         {
-                            // revert
                             std::swap(candidate[i], candidate[j]);
                         }
                     }
@@ -1027,22 +1500,90 @@ class MPSDummySimulator
         SwapQubitsToPosition(qubit1, qubit2, meetPos);
     }
 
-    // Pick the meeting position with the lowest bond cost (i.e., lowest
-    // current bond dimension), matching the real MPS simulator's
-    // FindBestMeetingPositionLocal behavior.
+    // Cut-preserving, outer-bond-aware local meeting position heuristic,
+    // matching the real MPS/MPO simulator's FindBestMeetingPositionLocal.
     IndexType ComputeHeuristicMeetPosition(IndexType realq1, IndexType realq2) const
     {
         assert(realq1 < realq2);
+        const IndexType span = realq2 - realq1;
+        if (span <= 1)
+            return realq1;
+
+        const IndexType nBonds = static_cast<IndexType>(currentBondDim.size());
+        constexpr IndexType kMaxStackSpan = 128;
+        std::array<double, kMaxStackSpan + 2> bondsStack{};
+        std::array<double, kMaxStackSpan> prefixCutStack{};
+        std::array<double, kMaxStackSpan> suffixCutStack{};
+        std::vector<double> heapBuf;
+
+        double *bonds = bondsStack.data();
+        double *prefixCut = prefixCutStack.data();
+        double *suffixCut = suffixCutStack.data();
+        if (span > kMaxStackSpan)
+        {
+            heapBuf.resize(static_cast<size_t>(span) * 3 + 2, 0.0);
+            bonds = heapBuf.data();
+            prefixCut = bonds + span + 2;
+            suffixCut = prefixCut + span;
+        }
+
+        bonds[0] = (realq1 > 0) ? currentBondDim[realq1 - 1] : 1.0;
+        for (IndexType i = 0; i < span; ++i)
+            bonds[i + 1] = currentBondDim[realq1 + i];
+        bonds[span + 1] = (realq2 < nBonds) ? currentBondDim[realq2] : 1.0;
+
+        const double E1 = std::max(bonds[0], bonds[1]);
+        const double E2 = std::max(bonds[span], bonds[span + 1]);
+        const double d = static_cast<double>(physExtent);
+
+        prefixCut[0] = 0.0;
+        for (IndexType i = 0; i < span - 1; ++i)
+        {
+            const double bDim = bonds[i + 1];
+            double dmg = 0.0;
+            if (E1 > bDim)
+            {
+                const double inflated = std::min(E1, d * bDim);
+                dmg = std::max(0.0, BondCost(inflated) - bondCost[realq1 + i]);
+            }
+            prefixCut[i + 1] = prefixCut[i] + dmg;
+        }
+
+        suffixCut[span - 1] = 0.0;
+        for (IndexType i = span - 1; i > 0; --i)
+        {
+            const double bDim = bonds[i + 1];
+            double dmg = 0.0;
+            if (E2 > bDim)
+            {
+                const double inflated = std::min(E2, d * bDim);
+                dmg = std::max(0.0, BondCost(inflated) - bondCost[realq1 + i]);
+            }
+            suffixCut[i - 1] = suffixCut[i] + dmg;
+        }
+
+        const double c1 = bonds[0] * bonds[1];
+        const double c2 = bonds[span] * bonds[span + 1];
+        const double effCap = (runtimeBondCap > 0) ? static_cast<double>(runtimeBondCap) : std::numeric_limits<double>::infinity();
 
         IndexType bestPos = realq1;
-        double bestCost = bondCost[realq1];
+        double bestScore = std::numeric_limits<double>::infinity();
 
-        for (IndexType m = realq1 + 1; m < realq2; ++m)
+        for (IndexType i = 0; i < span; ++i)
         {
-            if (bondCost[m] < bestCost)
+            const double bLeft = std::min(bonds[i], effCap);
+            const double bMid = std::min(bonds[i + 1], effCap);
+            const double bRight = std::min(bonds[i + 2], effCap);
+            const double localBondCost = bondCost[realq1 + i];
+            const double cutDamage = 0.5 * (prefixCut[i] + suffixCut[i]);
+            const double outerContext = 0.05 * (bLeft * bMid * bRight);
+            const double tieBreak = (c2 > c1) ? (1e-6 * static_cast<double>(span - 1 - i)) : (1e-6 * static_cast<double>(i));
+            const double score = localBondCost + cutDamage + outerContext + tieBreak;
+
+            if (score < bestScore)
             {
-                bestCost = bondCost[m];
-                bestPos = m;
+                bestScore = score;
+                bestPos = realq1 + i;
             }
         }
 
@@ -1756,7 +2297,463 @@ class MPSDummySimulator
         return bestPosition;
     }
 
+    // P0: Cut-preserving meeting position selector with O(span) prefix/suffix
+    // future displacement tables for both active endpoints and all shifted
+    // intermediate qubits in (realq1, realq2).
+    IndexType SelectMeetingPositionP0Fast(IndexType realq1, IndexType realq2, IndexType qubit1, IndexType qubit2, const FastGateOp *window, size_t windowSize,
+                                          size_t stepIdx, bool includeGravity) const
+    {
+        assert(realq1 < realq2);
+        const IndexType span = realq2 - realq1;
+        if (span <= 1)
+            return realq1;
+
+        const IndexType nBonds = static_cast<IndexType>(currentBondDim.size());
+        constexpr IndexType kMaxStackSpan = 128;
+        std::array<double, kMaxStackSpan + 2> bondsStack{};
+        std::array<double, kMaxStackSpan> prefixCutStack{};
+        std::array<double, kMaxStackSpan> suffixCutStack{};
+        std::array<double, kMaxStackSpan> interShiftStack{};
+        std::vector<double> heapBuf;
+
+        double *bonds = bondsStack.data();
+        double *prefixCut = prefixCutStack.data();
+        double *suffixCut = suffixCutStack.data();
+        double *interShift = interShiftStack.data();
+        if (span > kMaxStackSpan)
+        {
+            heapBuf.resize(static_cast<size_t>(span) * 4 + 2, 0.0);
+            bonds = heapBuf.data();
+            prefixCut = bonds + span + 2;
+            suffixCut = prefixCut + span;
+            interShift = suffixCut + span;
+        }
+
+        bonds[0] = (realq1 > 0) ? currentBondDim[realq1 - 1] : 1.0;
+        for (IndexType i = 0; i < span; ++i)
+            bonds[i + 1] = currentBondDim[realq1 + i];
+        bonds[span + 1] = (realq2 < nBonds) ? currentBondDim[realq2] : 1.0;
+
+        const double E1 = std::max(bonds[0], bonds[1]);
+        const double E2 = std::max(bonds[span], bonds[span + 1]);
+        const double d = static_cast<double>(physExtent);
+
+        prefixCut[0] = 0.0;
+        for (IndexType i = 0; i < span - 1; ++i)
+        {
+            const double bDim = bonds[i + 1];
+            double dmg = 0.0;
+            if (E1 > bDim)
+            {
+                const double inflated = std::min(E1, d * bDim);
+                dmg = std::max(0.0, BondCost(inflated) - bondCost[realq1 + i]);
+            }
+            prefixCut[i + 1] = prefixCut[i] + dmg;
+        }
+
+        suffixCut[span - 1] = 0.0;
+        for (IndexType i = span - 1; i > 0; --i)
+        {
+            const double bDim = bonds[i + 1];
+            double dmg = 0.0;
+            if (E2 > bDim)
+            {
+                const double inflated = std::min(E2, d * bDim);
+                dmg = std::max(0.0, BondCost(inflated) - bondCost[realq1 + i]);
+            }
+            suffixCut[i - 1] = suffixCut[i] + dmg;
+        }
+
+        std::array<PartnerPull, 16> pulls;
+        double totalPullWeight = 0.0;
+        size_t numPulls = 0;
+
+        if (includeGravity && window && stepIdx + 1 < windowSize)
+        {
+            numPulls = CollectNextPartnerPullsFast(qubit1, qubit2, window, windowSize, stepIdx, pulls, totalPullWeight);
+
+            // Compute O(span) prefix/suffix future distance change for all
+            // intermediate qubits shifted by meeting at m = realq1 + i:
+            // - sites k in (realq1, m] shift left by -1
+            // - sites k in [m + 1, realq2) shift right by +1
+            std::array<IndexType, kMaxStackSpan> nextPartnerPosStack;
+            std::array<double, kMaxStackSpan> nextPartnerWStack{};
+            std::vector<IndexType> nextPartnerPosHeap;
+            std::vector<double> nextPartnerWHeap;
+            IndexType *nextPartnerPos = nextPartnerPosStack.data();
+            double *nextPartnerW = nextPartnerWStack.data();
+            if (span > kMaxStackSpan)
+            {
+                nextPartnerPosHeap.assign(static_cast<size_t>(span), -1);
+                nextPartnerWHeap.assign(static_cast<size_t>(span), 0.0);
+                nextPartnerPos = nextPartnerPosHeap.data();
+                nextPartnerW = nextPartnerWHeap.data();
+            }
+            else
+            {
+                for (IndexType i = 0; i < span; ++i)
+                {
+                    nextPartnerPos[i] = -1;
+                    nextPartnerW[i] = 0.0;
+                }
+            }
+
+            const size_t maxLook = std::min(windowSize, stepIdx + 13);
+            double wDecay = 1.0;
+            int foundCount = 0;
+            std::array<std::pair<IndexType, IndexType>, 12> relabels;
+            size_t numRelabels = 0;
+            auto originalLabel = [&](IndexType q) {
+                for (size_t i = numRelabels; i > 0; --i)
+                {
+                    const auto [a, b] = relabels[i - 1];
+                    if (q == a)
+                        q = b;
+                    else if (q == b)
+                        q = a;
+                }
+                return q;
+            };
+
+            for (size_t s = stepIdx + 1; s < maxLook && foundCount < span - 1; ++s)
+            {
+                const FastGateOp &fg = window[s];
+                if (IsRelabelingSwap(fg))
+                {
+                    if (numRelabels < relabels.size())
+                        relabels[numRelabels++] = {fg.q1, fg.q2};
+                    continue;
+                }
+                const IndexType qA = originalLabel(fg.q1);
+                const IndexType qB = originalLabel(fg.q2);
+                const IndexType rA = qubitsMap[qA];
+                const IndexType rB = qubitsMap[qB];
+                if (rA > realq1 && rA < realq2 && nextPartnerPos[rA - realq1] < 0)
+                {
+                    nextPartnerPos[rA - realq1] = rB;
+                    nextPartnerW[rA - realq1] = wDecay;
+                    ++foundCount;
+                }
+                if (rB > realq1 && rB < realq2 && nextPartnerPos[rB - realq1] < 0)
+                {
+                    nextPartnerPos[rB - realq1] = rA;
+                    nextPartnerW[rB - realq1] = wDecay;
+                    ++foundCount;
+                }
+                wDecay *= 0.82;
+            }
+
+            double runningLeftShift = 0.0;
+            interShift[0] = 0.0;
+            for (IndexType i = 1; i < span; ++i)
+            {
+                const IndexType p = nextPartnerPos[i];
+                if (p >= 0)
+                {
+                    const IndexType kPos = realq1 + i;
+                    const double delta = (p < kPos) ? -1.0 : ((p > kPos) ? +1.0 : 0.0);
+                    runningLeftShift += nextPartnerW[i] * delta;
+                }
+                interShift[i] = runningLeftShift;
+            }
+
+            double runningRightShift = 0.0;
+            for (IndexType i = span - 2; i >= 0; --i)
+            {
+                const IndexType p = nextPartnerPos[i + 1];
+                if (p >= 0)
+                {
+                    const IndexType kPos = realq1 + i + 1;
+                    const double delta = (p > kPos) ? -1.0 : ((p < kPos) ? +1.0 : 0.0);
+                    runningRightShift += nextPartnerW[i + 1] * delta;
+                }
+                interShift[i] += runningRightShift;
+            }
+        }
+
+        const double c1 = bonds[0] * bonds[1];
+        const double c2 = bonds[span] * bonds[span + 1];
+        const double effCap = (runtimeBondCap > 0) ? static_cast<double>(runtimeBondCap) : std::numeric_limits<double>::infinity();
+
+        IndexType bestPos = realq1;
+        double bestScore = std::numeric_limits<double>::infinity();
+
+        for (IndexType i = 0; i < span; ++i)
+        {
+            const IndexType m = realq1 + i;
+            const double bLeft = std::min(bonds[i], effCap);
+            const double bMid = std::min(bonds[i + 1], effCap);
+            const double bRight = std::min(bonds[i + 2], effCap);
+            const double localBondCost = bondCost[m];
+            const double cutDamage = 0.5 * (prefixCut[i] + suffixCut[i]);
+            const double outerContext = 0.05 * (bLeft * bMid * bRight);
+            const double tieBreak = (c2 > c1) ? (1e-6 * static_cast<double>(span - 1 - i)) : (1e-6 * static_cast<double>(i));
+            const double baseCost = localBondCost + cutDamage + outerContext + tieBreak;
+
+            double pullCost = 0.0;
+            if (includeGravity)
+            {
+                for (size_t k = 0; k < numPulls; ++k)
+                    pullCost += pulls[k].weight * static_cast<double>(std::abs(m - pulls[k].pos));
+                pullCost += 1.15 * interShift[i];
+            }
+
+            const double score = baseCost + 0.35 * localBondCost * (pullCost / static_cast<double>(span));
+            if (score < bestScore)
+            {
+                bestScore = score;
+                bestPos = m;
+            }
+        }
+
+        return bestPos;
+    }
+
   public:
+    // 7b: Adaptive meeting-position planner with dynamic multi-step pruned rollout
+    // activation, common gate horizon, and configurable branching depth.
+    IndexType SelectMeetingPositionAdaptive(const std::vector<std::shared_ptr<Circuits::IOperation<>>> &upcomingGates, long long int currentGateIndex,
+                                            int lookaheadDepth, int lookaheadDepthWithHeuristic, double currentCost, double &bestCost)
+    {
+        if (currentGateIndex < 0 || currentGateIndex >= static_cast<long long int>(upcomingGates.size()))
+        {
+            if (currentCost < bestCost)
+                bestCost = currentCost;
+            return -1;
+        }
+
+        const int exactSteps = std::max(0, lookaheadDepth - std::max(0, lookaheadDepthWithHeuristic));
+
+        // Delegate zero-heuristic exhaustive search (lookaheadDepthWithHeuristic <= 0)
+        // or depth-0 queries to FindBestMeetingPosition.
+        if (lookaheadDepth <= 0 || lookaheadDepthWithHeuristic <= 0)
+            return FindBestMeetingPosition(upcomingGates, currentGateIndex, lookaheadDepth, lookaheadDepthWithHeuristic, currentCost, bestCost);
+
+        const size_t maxNeeded = static_cast<size_t>(std::max(16, 2 * std::max(0, lookaheadDepth) + 10));
+        std::array<FastGateOp, 128> stackWindow;
+        std::vector<FastGateOp> heapWindow;
+        FastGateOp *windowPtr = stackWindow.data();
+        if (maxNeeded > stackWindow.size())
+        {
+            heapWindow.resize(maxNeeded);
+            windowPtr = heapWindow.data();
+        }
+        const size_t windowSize = ExtractFastGateWindow(upcomingGates, currentGateIndex, maxNeeded, windowPtr);
+        if (windowSize == 0)
+        {
+            if (currentCost < bestCost)
+                bestCost = currentCost;
+            return -1;
+        }
+
+        // Common gate horizon shared by all candidates and rollout policies so
+        // routes that make future gates adjacent are never penalized by running more gates.
+        const size_t endStep = std::min(windowSize, static_cast<size_t>(std::max(0, lookaheadDepth)) + 1);
+
+        const FastGateOp &fg0 = windowPtr[0];
+        if (IsRelabelingSwap(fg0))
+        {
+            EvaluateMeetingPositionCostFast(-1, windowPtr, windowSize, 0, lookaheadDepth, lookaheadDepthWithHeuristic, currentCost, bestCost, false);
+            return -1;
+        }
+
+        auto runRolloutFromStep = [&](size_t startStep, int policyIdx, double startCost, double boundCost, IndexType &outFirstPos) -> double {
+            setTotalSwappingCost(0.0);
+            double totalCost = startCost;
+            for (size_t s = startStep; s < endStep; ++s)
+            {
+                const FastGateOp &fg = windowPtr[s];
+                IndexType m = -1;
+                if (!IsRelabelingSwap(fg))
+                {
+                    IndexType rq1 = qubitsMap[fg.q1];
+                    IndexType rq2 = qubitsMap[fg.q2];
+                    if (rq1 > rq2)
+                        std::swap(rq1, rq2);
+                    m = rq1;
+                    if (rq2 - rq1 > 1)
+                    {
+                        m = (policyIdx == 0)   ? SelectMeetingPositionP0Fast(rq1, rq2, fg.q1, fg.q2, windowPtr, windowSize, s, true)
+                            : (policyIdx == 1) ? ComputeAnchorHeavierMeetPosition(rq1, rq2)
+                                               : SelectMeetingPositionP0Fast(rq1, rq2, fg.q1, fg.q2, windowPtr, windowSize, s, false);
+                        SwapQubitsToPosition(fg.q1, fg.q2, m);
+                    }
+                }
+                if (s == startStep)
+                    outFirstPos = m;
+                ApplyFastGate(fg);
+                totalCost = startCost + getTotalSwappingCost();
+                if (totalCost >= boundCost)
+                    return std::numeric_limits<double>::infinity();
+            }
+            return totalCost;
+        };
+
+        auto searchAdaptive = [&](auto &self, size_t stepIdx, double stepStartCost, double &boundCost) -> IndexType {
+            if (stepIdx >= endStep)
+            {
+                if (stepStartCost < boundCost)
+                    boundCost = stepStartCost;
+                return -1;
+            }
+
+            const FastGateOp &fg = windowPtr[stepIdx];
+            IndexType rq1 = -1;
+            IndexType rq2 = -1;
+            if (!IsRelabelingSwap(fg))
+            {
+                rq1 = qubitsMap[fg.q1];
+                rq2 = qubitsMap[fg.q2];
+                if (rq1 > rq2)
+                    std::swap(rq1, rq2);
+            }
+
+            FastStateSnapshot stepState;
+            stepState.SaveFrom(*this);
+
+            // Always evaluate the 3-policy heuristic rollout portfolio from stepIdx over
+            // [stepIdx, endStep) first. This serves as the leaf evaluation when
+            // stepIdx >= exactSteps and preserves the heuristic portfolio's best result
+            // as a tight upper-bound baseline before any branching at stepIdx < exactSteps.
+            IndexType bestPos = IsRelabelingSwap(fg) ? -1
+                                : (rq2 - rq1 <= 1)   ? rq1
+                                                     : SelectMeetingPositionP0Fast(rq1, rq2, fg.q1, fg.q2, windowPtr, windowSize, stepIdx, true);
+
+            for (int pi = 0; pi < 3; ++pi)
+            {
+                if (pi > 0)
+                    stepState.RestoreTo(*this);
+                IndexType firstPos = bestPos;
+                const double c = runRolloutFromStep(stepIdx, pi, stepStartCost, boundCost, firstPos);
+                if (c < boundCost)
+                {
+                    boundCost = c;
+                    bestPos = firstPos;
+                }
+            }
+
+            stepState.RestoreTo(*this);
+            if (stepIdx >= static_cast<size_t>(exactSteps))
+                return bestPos;
+
+            if (IsRelabelingSwap(fg))
+            {
+                ApplyFastGate(fg);
+                if (stepStartCost < boundCost)
+                {
+                    if (stepIdx + 1 >= endStep)
+                        boundCost = stepStartCost;
+                    else
+                        (void)self(self, stepIdx + 1, stepStartCost, boundCost);
+                }
+                stepState.RestoreTo(*this);
+                return -1;
+            }
+
+            if (rq2 - rq1 <= 1)
+            {
+                setTotalSwappingCost(0.0);
+                ApplyFastGate(fg);
+                const double nextCost = stepStartCost + getTotalSwappingCost();
+                if (nextCost < boundCost)
+                {
+                    if (stepIdx + 1 >= endStep)
+                        boundCost = nextCost;
+                    else
+                        (void)self(self, stepIdx + 1, nextCost, boundCost);
+                }
+                stepState.RestoreTo(*this);
+                return rq1;
+            }
+
+            const IndexType mP0Grav = SelectMeetingPositionP0Fast(rq1, rq2, fg.q1, fg.q2, windowPtr, windowSize, stepIdx, true);
+            const IndexType mP0Pure = SelectMeetingPositionP0Fast(rq1, rq2, fg.q1, fg.q2, windowPtr, windowSize, stepIdx, false);
+            const IndexType mAnchor = ComputeAnchorHeavierMeetPosition(rq1, rq2);
+
+            double minBondInSpan = currentBondDim[rq1];
+            for (IndexType b = rq1 + 1; b < rq2; ++b)
+                minBondInSpan = std::min(minBondInSpan, currentBondDim[b]);
+
+            const double E1 = std::max((rq1 > 0) ? currentBondDim[rq1 - 1] : 1.0, currentBondDim[rq1]);
+            const double E2 = std::max(currentBondDim[rq2 - 1], (rq2 < static_cast<IndexType>(currentBondDim.size())) ? currentBondDim[rq2] : 1.0);
+            const bool hasLowEntanglementCut =
+                (minBondInSpan < 16.0) && (runtimeBondCap <= 0 || minBondInSpan < static_cast<double>(runtimeBondCap)) && (minBondInSpan <= 0.5 * std::min(E1, E2));
+
+            const IndexType span = rq2 - rq1;
+            std::array<IndexType, 128> stackCandidates{};
+            std::vector<IndexType> heapCandidates;
+            IndexType *candidates = stackCandidates.data();
+            size_t maxCandidates = stackCandidates.size();
+            if (static_cast<size_t>(span) > stackCandidates.size())
+            {
+                heapCandidates.resize(static_cast<size_t>(span));
+                candidates = heapCandidates.data();
+                maxCandidates = heapCandidates.size();
+            }
+
+            size_t numCandidates = 0;
+            auto addCand = [&](IndexType pos) {
+                if (pos < rq1 || pos >= rq2)
+                    return;
+                for (size_t i = 0; i < numCandidates; ++i)
+                    if (candidates[i] == pos)
+                        return;
+                if (numCandidates < maxCandidates)
+                    candidates[numCandidates++] = pos;
+            };
+
+            addCand(bestPos);
+            addCand(mP0Grav);
+            if (!hasLowEntanglementCut)
+            {
+                addCand(mP0Pure);
+                addCand(mAnchor);
+                addCand(rq1);
+                addCand(rq2 - 1);
+                addCand(rq1 + span / 2);
+                if (span <= 12 || stepIdx > 0 || exactSteps >= 2)
+                {
+                    for (IndexType m = rq1; m < rq2; ++m)
+                        addCand(m);
+                }
+            }
+
+            for (size_t ci = 0; ci < numCandidates; ++ci)
+            {
+                const IndexType candPos = candidates[ci];
+                stepState.RestoreTo(*this);
+                setTotalSwappingCost(0.0);
+
+                SwapQubitsToPosition(fg.q1, fg.q2, candPos);
+                ApplyFastGate(fg);
+                const double nextCost = stepStartCost + getTotalSwappingCost();
+                if (nextCost >= boundCost)
+                    continue;
+
+                if (stepIdx + 1 >= endStep)
+                {
+                    boundCost = nextCost;
+                    bestPos = candPos;
+                }
+                else
+                {
+                    const double prevBound = boundCost;
+                    (void)self(self, stepIdx + 1, nextCost, boundCost);
+                    if (boundCost < prevBound)
+                        bestPos = candPos;
+                }
+            }
+
+            stepState.RestoreTo(*this);
+            return bestPos;
+        };
+
+        double bestRolloutCost = bestCost;
+        const IndexType chosenPos = searchAdaptive(searchAdaptive, 0, currentCost, bestRolloutCost);
+        if (bestRolloutCost < bestCost)
+            bestCost = bestRolloutCost;
+        return chosenPos;
+    }
     // Swap two logical qubits so they meet at a specified bond position.
     // meetPosition is the bond index (in real/chain coordinates) where
     // the two qubits will end up adjacent: one at meetPosition, the other
