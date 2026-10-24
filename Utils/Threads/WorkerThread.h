@@ -115,6 +115,19 @@ template <class ThreadsPool, class Job> class WorkerThread
             Thread.join();
     }
 
+    /**
+     * @brief Forget a thread that does not exist any more.
+     *
+     * Used in a child process after fork(), where the parent's threads are
+     * gone: the handle is neither joined nor detached, and is leaked because
+     * destroying a joinable std::thread terminates the process.
+     */
+    void Abandon()
+    {
+        if (Thread.joinable())
+            (void)new std::thread(std::move(Thread));
+    }
+
   private:
     /**
      * @brief Check if the thread should terminate waiting.
@@ -150,15 +163,19 @@ template <class ThreadsPool, class Job> class WorkerThread
             {
                 const std::shared_ptr<Job> job = std::move(threadsPool->JobsQueue.front());
                 threadsPool->JobsQueue.pop();
+                ++threadsPool->Running;
                 lock.unlock();
 
                 job->DoWork();
 
+                // Idle before the waiter can see the job finished, so a fork()
+                // right after WaitForFinish() finds the pool idle.
+                lock.lock();
+                --threadsPool->Running;
                 {
                     std::lock_guard lockCount(threadsPool->FinishMutex);
                     threadsPool->FinishCount += job->GetJobCount();
                 }
-                lock.lock();
             }
 
             if (StopFlag)

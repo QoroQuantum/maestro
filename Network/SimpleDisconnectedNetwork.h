@@ -757,8 +757,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 threadsPool.AddRunJob(std::move(job));
             }
 
+            // The workers stay for the next execution: creating them costs
+            // more than a small batch of shots.
             threadsPool.WaitForFinish();
-            threadsPool.Stop();
         }
         else
         {
@@ -990,8 +991,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 threadsPool.AddRunJob(std::move(job));
             }
 
+            // The workers stay for the next execution: creating them costs
+            // more than a small batch of shots.
             threadsPool.WaitForFinish();
-            threadsPool.Stop();
         }
         else
         {
@@ -2084,6 +2086,26 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     }
 
     /**
+     * @brief Set the estimated work per trajectory worker.
+     *
+     * Per-shot (shot_v1) statevector and density-matrix trajectories use at
+     * most one worker per this many microseconds of estimated serial work, so
+     * tiny states don't pay for dispatching workers. 0 disables the limit.
+     * Counts do not depend on it.
+     *
+     * @param micros The estimated serial work per worker, in microseconds.
+     */
+    void SetTrajectoryMinWorkerMicros(double micros)
+    {
+        trajectoryMinWorkerMicros = std::max(0., micros);
+    }
+
+    double GetTrajectoryMinWorkerMicros() const
+    {
+        return trajectoryMinWorkerMicros;
+    }
+
+    /**
      * @brief Allows using an optimized simulator.
      *
      * If set, allows changing the simulator with an optimized one.
@@ -2211,6 +2233,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         cloned->resolvedDistributedDevices = resolvedDistributedDevices;
 
         cloned->maxSimulators = maxSimulators;
+        cloned->trajectoryMinWorkerMicros = trajectoryMinWorkerMicros;
 
         cloned->optimizeSimulator = optimizeSimulator;
         cloned->simulatorsForOptimizations = simulatorsForOptimizations;
@@ -2635,6 +2658,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             else
                 workers = 1;
         }
+        // shot_v1 streams do not depend on the worker count, so tiny states can
+        // skip workers whose dispatch would cost more than their shots.
+        if (independentShots && trajectoryMinWorkerMicros > 0)
+            workers = std::min(workers, TrajectoryWorkersForWork(circuit, shots, qubits, method, executed));
         // shot_v1 can change physical job boundaries without changing any RNG
         // stream. Keep batches bounded while exposing short requests to workers.
         const size_t blockSize = independentShots ? std::min<size_t>(256, std::max<size_t>(1, shots / workers + (shots % workers != 0))) : 256;
@@ -2724,12 +2751,28 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             begin += count;
         }
         if (workers > 1)
-        {
             threadsPool.WaitForFinish();
-            threadsPool.Stop();
-        }
         if (!recreateIfNeeded && last)
             simulator = last->optSim;
+    }
+
+    // Rough serial cost of the shots of a statevector or density-matrix
+    // trajectory batch (fixed per-shot cost plus the operations replayed after
+    // the checkpoint over every amplitude), measured on QCSim; one worker per
+    // trajectoryMinWorkerMicros of it.
+    size_t TrajectoryWorkersForWork(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, size_t shots, size_t qubits, Simulators::SimulationType method,
+                                    const std::vector<bool> &executed) const
+    {
+        if (method != Simulators::SimulationType::kStatevector && method != Simulators::SimulationType::kDensityMatrix)
+            return std::numeric_limits<size_t>::max();
+        const size_t bitsPerQubit = method == Simulators::SimulationType::kDensityMatrix ? 2 : 1;
+        if (qubits > (std::numeric_limits<size_t>::digits - 5) / bitsPerQubit)
+            return std::numeric_limits<size_t>::max();
+        const double elements = static_cast<double>(size_t{1} << (bitsPerQubit * qubits));
+        const size_t done = static_cast<size_t>(std::count(executed.begin(), executed.end(), true));
+        const double ops = static_cast<double>(circuit->size() > done ? circuit->size() - done : 1);
+        const double micros = static_cast<double>(shots) * (6. + 0.4e-3 * ops * elements);
+        return std::max<size_t>(1, static_cast<size_t>(micros / trajectoryMinWorkerMicros));
     }
 
     Configuration<Time> ExecutionConfiguration(Simulators::SimulatorType type, size_t qubits) const
@@ -3144,6 +3187,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
     size_t maxSimulators = QC::QubitRegisterCalculator<>::GetNumberOfThreads(); /**< The maximum number of simulators that can be
                                                                                    used in the network. */
+    double trajectoryMinWorkerMicros = 100.; /**< Estimated serial work per trajectory worker, see SetTrajectoryMinWorkerMicros. */
 
     Circuits::OperationState classicalState;           /**< The classical state of the network. */
     std::shared_ptr<Simulators::ISimulator> simulator; /**< The quantum computing simulator for the network. */

@@ -14,16 +14,98 @@
 #ifndef __THREADS_POOL_H_
 #define __THREADS_POOL_H_
 
+#include <algorithm>
 #include <condition_variable>
+#include <limits>
+#include <mutex>
+#include <new>
 #include <queue>
 #include <vector>
 
 #include <fstream>
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <pthread.h>
+#define MAESTRO_POOL_FORK_HANDLERS 1
+#endif
+
 #include "WorkerThread.h"
 
 namespace Utils
 {
+
+#ifdef MAESTRO_POOL_FORK_HANDLERS
+namespace Private
+{
+// Pools keep their threads between executions, but threads do not survive
+// fork(): a child would queue jobs for workers that do not exist. Each pool
+// holds its locks across fork(); in the child an idle pool drops its stale
+// workers and creates new ones on its next Resize(). Threads are not stopped
+// before fork(): their exit would wait on OpenMP's own fork locks.
+class ForkAwarePool
+{
+  public:
+    virtual ~ForkAwarePool() = default;
+    virtual void PrepareFork() = 0;
+    virtual void AfterForkParent() = 0;
+    virtual void AfterForkChild() = 0;
+};
+
+class PoolForkRegistry
+{
+  public:
+    static PoolForkRegistry &Instance()
+    {
+        // Never destroyed: pools owned by static objects unregister at exit.
+        static auto *registry = new PoolForkRegistry;
+        return *registry;
+    }
+
+    void Add(ForkAwarePool *pool)
+    {
+        std::call_once(installed, [] { pthread_atfork(&Prepare, &Parent, &Child); });
+        const std::lock_guard lock(mutex);
+        pools.push_back(pool);
+    }
+
+    void Remove(ForkAwarePool *pool)
+    {
+        const std::lock_guard lock(mutex);
+        pools.erase(std::remove(pools.begin(), pools.end(), pool), pools.end());
+    }
+
+  private:
+    // The registry lock is held from Prepare() until Parent()/Child().
+    static void Prepare()
+    {
+        auto &registry = Instance();
+        registry.mutex.lock();
+        for (auto *pool : registry.pools)
+            pool->PrepareFork();
+    }
+
+    static void Parent()
+    {
+        auto &registry = Instance();
+        for (auto *pool : registry.pools)
+            pool->AfterForkParent();
+        registry.mutex.unlock();
+    }
+
+    static void Child()
+    {
+        auto &registry = Instance();
+        for (auto *pool : registry.pools)
+            pool->AfterForkChild();
+        registry.mutex.unlock();
+    }
+
+    std::mutex mutex;
+    std::vector<ForkAwarePool *> pools;
+    std::once_flag installed;
+};
+} // namespace Private
+#endif
 
 /**
  * @class ThreadsPool
@@ -36,7 +118,11 @@ namespace Utils
  * @tparam Job The job class/type.
  * @sa WorkerThread
  */
-template <class Job> class ThreadsPool
+template <class Job>
+class ThreadsPool
+#ifdef MAESTRO_POOL_FORK_HANDLERS
+    : private Private::ForkAwarePool
+#endif
 {
     using JobWorkerThread = WorkerThread<ThreadsPool<Job>, Job>;
     friend class WorkerThread<ThreadsPool<Job>, Job>;
@@ -56,7 +142,13 @@ template <class Job> class ThreadsPool
 
         for (int i = 0; i < nrThreads; ++i)
             Threads.emplace_back(std::make_unique<JobWorkerThread>(this));
+#ifdef MAESTRO_POOL_FORK_HANDLERS
+        Private::PoolForkRegistry::Instance().Add(this);
+#endif
     }
+
+    ThreadsPool(const ThreadsPool &) = delete;
+    ThreadsPool &operator=(const ThreadsPool &) = delete;
 
     /**
      * @brief Destructor.
@@ -66,6 +158,9 @@ template <class Job> class ThreadsPool
      */
     ~ThreadsPool()
     {
+#ifdef MAESTRO_POOL_FORK_HANDLERS
+        Private::PoolForkRegistry::Instance().Remove(this);
+#endif
         Stop();
     }
 
@@ -77,6 +172,7 @@ template <class Job> class ThreadsPool
      */
     void Stop()
     {
+        const std::lock_guard lifecycle(LifecycleMutex);
         {
             std::lock_guard lock(Mutex);
 
@@ -176,6 +272,7 @@ template <class Job> class ThreadsPool
         if (nrThreads <= 0)
             nrThreads = 1;
 
+        const std::lock_guard lifecycle(LifecycleMutex);
         size_t oldSize = Threads.size();
 
         if (oldSize == nrThreads)
@@ -193,13 +290,13 @@ template <class Job> class ThreadsPool
         {
             {
                 std::lock_guard lock(Mutex);
-                for (size_t i = oldSize; i < nrThreads; ++i)
+                for (size_t i = nrThreads; i < oldSize; ++i)
                     Threads[i]->SetStopUnlocked();
             }
 
             NotifyAll();
 
-            for (size_t i = oldSize; i < nrThreads; ++i)
+            for (size_t i = nrThreads; i < oldSize; ++i)
                 Threads[i]->Join();
             Threads.resize(nrThreads);
         }
@@ -223,6 +320,38 @@ template <class Job> class ThreadsPool
     }
 
   private:
+#ifdef MAESTRO_POOL_FORK_HANDLERS
+    void PrepareFork() override
+    {
+        // Both locks are released by AfterForkParent() or AfterForkChild().
+        LifecycleMutex.lock();
+        Mutex.lock();
+        idleAtFork = JobsQueue.empty() && Running == 0;
+    }
+
+    void AfterForkParent() override
+    {
+        Mutex.unlock();
+        LifecycleMutex.unlock();
+    }
+
+    void AfterForkChild() override
+    {
+        // Only the forking thread exists here. A pool in the middle of an
+        // execution is left as it is; an idle one forgets its workers, whose
+        // waits also left the copied condition variable unusable.
+        if (idleAtFork)
+        {
+            for (auto &worker : Threads)
+                worker->Abandon();
+            Threads.clear();
+            new (&Condition) std::condition_variable;
+        }
+        new (&Mutex) std::mutex;
+        new (&LifecycleMutex) std::mutex;
+    }
+#endif
+
     /**
      * @brief Notify one thread that there is a new job to execute.
      *
@@ -267,6 +396,7 @@ template <class Job> class ThreadsPool
         ConditionFinish.notify_all();
     }
 
+    std::mutex LifecycleMutex;         /**< Serializes creating and stopping threads */
     std::mutex Mutex;                  /**< Mutex to be used to check the jobs queue */
     std::condition_variable Condition; /**< Condition variable to notify threads of new jobs */
 
@@ -279,6 +409,8 @@ template <class Job> class ThreadsPool
                                                                 reach before notifying finish */
 
     std::queue<std::shared_ptr<Job>> JobsQueue; /**< The queue of the jobs to be executed */
+    size_t Running = 0;                         /**< Jobs taken from the queue and not finished yet */
+    bool idleAtFork = false;                    /**< No job queued or running when fork() was called */
 
     std::vector<std::unique_ptr<JobWorkerThread>> Threads; /**< The vector with the worker threads */
 };

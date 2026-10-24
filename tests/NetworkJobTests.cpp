@@ -13,6 +13,10 @@
 #ifdef _OPENMP
 #include <omp.h>
 #endif
+#ifdef MAESTRO_POOL_FORK_HANDLERS
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace
 {
@@ -883,6 +887,7 @@ void AdaptiveWorkerCounts()
                         auto network = MakeNetwork(Backend::kQCSim, method, 16);
                         network->SetOptimizeSimulator(optimize);
                         network->SetMaxSimulators(workers);
+                        network->SetTrajectoryMinWorkerMicros(0);
                         network->Configure("seed", "1099511627776");
                         if (!onHost)
                             network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
@@ -1219,6 +1224,7 @@ void IndependentShotStreams()
                             auto network = MakeNetwork(Backend::kQCSim, method, 7, 2);
                             network->SetOptimizeSimulator(prepared);
                             network->SetMaxSimulators(workers);
+                            network->SetTrajectoryMinWorkerMicros(0);
                             Check(network->GetSimulator()->GetConfiguration("trajectory_policy") == "shot_v1",
                                   "Network default did not select per-shot streams");
                             if (workers != 3)
@@ -1452,6 +1458,140 @@ void NoiseEstimateResetStreams()
                     Check(network->GetSimulator()->GetConfiguration("seed") == configured, "Noise estimation replaced the caller's simulator seed");
                 }
 }
+
+struct PoolJob
+{
+    std::shared_ptr<std::atomic<size_t>> runs;
+
+    void DoWork()
+    {
+        ++*runs;
+    }
+
+    size_t GetJobCount() const
+    {
+        return 1;
+    }
+};
+
+void ThreadsPoolResize()
+{
+    // Shrinking used to destroy the surplus workers without waking them, so
+    // their join never returned.
+    Utils::ThreadsPool<PoolJob> pool;
+    const auto runs = std::make_shared<std::atomic<size_t>>(0);
+    size_t expected = 0;
+    for (size_t threads : {4, 2, 6, 1, 3})
+    {
+        pool.Resize(threads);
+        pool.SetFinishLimit(50);
+        for (int i = 0; i < 50; ++i)
+            pool.AddRunJob(std::make_shared<PoolJob>(PoolJob{runs}));
+        pool.WaitForFinish();
+        expected += 50;
+        Check(runs->load() == expected, "Thread pool lost jobs after a resize");
+    }
+}
+
+std::shared_ptr<Circuit> MidCircuitTrajectory(size_t qubits)
+{
+    auto circuit = CF::CreateCircuit();
+    for (size_t q = 0; q < qubits; ++q)
+    {
+        circuit->AddOperation(CF::CreateGate(Gate::kRyGateType, q, 0, 0, .29 + .07 * q));
+        if (q)
+            circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(q - 1, q));
+    }
+    circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    circuit->AddOperation(CF::CreateSimpleConditionalGate(CF::CreateGate(Gate::kXGateType, qubits - 1), 0));
+    circuit->AddOperation(CF::CreateReset({0}));
+    circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+    circuit->AddOperation(CF::CreateMeasurement({{0, 1}, {qubits - 1, 2}}));
+    return circuit;
+}
+
+void PersistentWorkers()
+{
+    // Workers stay alive between executions. Reusing them with fewer or more
+    // workers must give the counts of a fresh network.
+#ifdef _OPENMP
+    const int previous = omp_get_max_threads();
+    omp_set_num_threads(8);
+#endif
+    const auto circuit = MidCircuitTrajectory(6);
+    for (auto method : {Method::kStatevector, Method::kDensityMatrix, Method::kMatrixProductState})
+    {
+        auto reused = MakeNetwork(Backend::kQCSim, method, 3, 6);
+        reused->SetTrajectoryMinWorkerMicros(0);
+        reused->Configure("seed", "77");
+        reused->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+        for (size_t workers : {8, 3, 8, 2, 5})
+        {
+            auto fresh = MakeNetwork(Backend::kQCSim, method, 3, 6);
+            fresh->SetTrajectoryMinWorkerMicros(0);
+            fresh->Configure("seed", "77");
+            fresh->SetMaxSimulators(workers);
+            fresh->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+            reused->SetMaxSimulators(workers);
+            Check(reused->RepeatedExecute(circuit, 300) == fresh->RepeatedExecute(circuit, 300), "Reused workers changed counts");
+        }
+    }
+    // The work limit only removes workers; per-shot streams keep the counts.
+    for (auto method : {Method::kStatevector, Method::kDensityMatrix})
+    {
+        Counts reference;
+        for (double micros : {0., 100., 1e9})
+        {
+            auto network = MakeNetwork(Backend::kQCSim, method, 3, 6);
+            network->SetMaxSimulators(8);
+            network->SetTrajectoryMinWorkerMicros(micros);
+            network->Configure("seed", "78");
+            network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+            const auto counts = network->RepeatedExecute(circuit, 300);
+            if (reference.empty())
+                reference = counts;
+            Check(counts == reference, "Trajectory work limit changed counts");
+        }
+    }
+#ifdef _OPENMP
+    omp_set_num_threads(previous);
+#endif
+}
+
+#ifdef MAESTRO_POOL_FORK_HANDLERS
+void ForkWithIdleWorkers()
+{
+    // A forked child has none of the parent's threads; its pools must start
+    // empty instead of waiting for workers that do not exist.
+#ifdef _OPENMP
+    const int previous = omp_get_max_threads();
+    omp_set_num_threads(8);
+#endif
+    const auto circuit = MidCircuitTrajectory(6);
+    auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector, 3, 6);
+    network->SetTrajectoryMinWorkerMicros(0);
+    network->SetMaxSimulators(4);
+    network->Configure("seed", "79");
+    network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+    const auto before = network->RepeatedExecute(circuit, 300);
+    std::cout.flush();
+    const pid_t child = fork();
+    if (child == 0)
+    {
+        alarm(120); // a hang fails the check below instead of stalling the run
+        _exit(network->RepeatedExecute(circuit, 300) == before ? 0 : 2);
+    }
+    Check(child > 0, "fork failed");
+    int status = 0;
+    waitpid(child, &status, 0);
+    Check(WIFEXITED(status) && WEXITSTATUS(status) == 0, "Forked child could not execute on the network's workers");
+    Check(network->RepeatedExecute(circuit, 300) == before, "Parent lost its workers across fork");
+#ifdef _OPENMP
+    omp_set_num_threads(previous);
+#endif
+}
+#endif
+
 } // namespace
 
 int main()
@@ -1481,6 +1621,11 @@ try
     SharedReset();
     TrailingReset();
     NoiseEstimateResetStreams();
+    ThreadsPoolResize();
+    PersistentWorkers();
+#ifdef MAESTRO_POOL_FORK_HANDLERS
+    ForkWithIdleWorkers();
+#endif
     std::cout << checks << " network job checks passed\n";
     return 0;
 }
