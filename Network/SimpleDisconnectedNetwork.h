@@ -2631,7 +2631,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         workers = std::max<size_t>(1, workers);
 #ifdef _OPENMP
         // Outer jobs count against the same CPU budget as their internal teams.
-        workers = std::min(workers, static_cast<size_t>(omp_in_parallel() ? 1 : std::max(1, omp_get_max_threads())));
+        int threadBudget = omp_in_parallel() ? 1 : std::max(1, omp_get_max_threads());
+        workers = std::min(workers, static_cast<size_t>(threadBudget));
 #endif
         if (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kDensityMatrix)
         {
@@ -2650,9 +2651,17 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 #ifdef _OPENMP
                 // Large independent states contend for cache and memory bandwidth.
                 // Reserve a small internal team instead of filling every CPU with
-                // a separate state. Logical RNG streams do not depend on this choice.
+                // a separate state, and use no more threads in all than QCSim's
+                // team for one such register (half the processors by default):
+                // memory-bound work gains nothing from the second hardware
+                // thread of a core, and with the default OpenMP limit filling
+                // every logical CPU made these runs 1.3-1.5x slower. Logical RNG
+                // streams do not depend on this choice.
                 if (elements >= (size_t{1} << 20))
-                    workers = std::min(workers, static_cast<size_t>(std::max(1, omp_get_max_threads() / 4)));
+                {
+                    threadBudget = std::min(threadBudget, std::max(1, QC::QubitRegisterCalculator<>::GetParallelTeamSize(elements)));
+                    workers = std::min(workers, static_cast<size_t>(std::max(1, threadBudget / 4)));
+                }
 #endif
             }
             else
@@ -2689,7 +2698,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         int internalThreads = 1;
 #ifdef _OPENMP
         if (!omp_in_parallel() && method != Simulators::SimulationType::kPathIntegral)
-            internalThreads = static_cast<int>(std::max<size_t>(1, static_cast<size_t>(omp_get_max_threads()) / workers));
+            internalThreads = static_cast<int>(std::max<size_t>(1, static_cast<size_t>(threadBudget) / workers));
 #endif
 #if defined(_OPENMP) && defined(_MSC_VER) && !defined(__clang__) && !defined(_OPENMP_LLVM_RUNTIME)
         // Legacy MSVC OpenMP keeps this setting process-wide. Set it once before

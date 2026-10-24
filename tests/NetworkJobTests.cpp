@@ -982,6 +982,76 @@ void LargeTrajectoryWorkers()
             }
 }
 
+class ObserveThreads : public Circuits::XGate<>
+{
+  public:
+    struct Seen
+    {
+        std::mutex mutex;
+        std::set<std::thread::id> workers;
+        int budget = 0;
+    };
+
+    explicit ObserveThreads(std::shared_ptr<Seen> seen) : XGate(0), seen(std::move(seen))
+    {
+    }
+
+    void Execute(const std::shared_ptr<Simulators::ISimulator> &sim, Circuits::OperationState &state) const override
+    {
+        {
+            const std::lock_guard lock(seen->mutex);
+            seen->workers.insert(std::this_thread::get_id());
+#ifdef _OPENMP
+            seen->budget = std::max(seen->budget, omp_get_max_threads());
+#endif
+        }
+        XGate::Execute(sim, state);
+    }
+
+    std::shared_ptr<Circuits::IOperation<>> Clone() const override
+    {
+        return std::make_shared<ObserveThreads>(*this);
+    }
+
+  private:
+    std::shared_ptr<Seen> seen;
+};
+
+void LargeTrajectoryThreadBudget()
+{
+#ifdef _OPENMP
+    // Memory-bound registers: all workers together use no more threads than
+    // QCSim's team for one such register, even when OpenMP allows every CPU.
+    const int previous = omp_get_max_threads();
+    omp_set_num_threads(std::max(8, omp_get_num_procs()));
+    const size_t qubits = 20;
+    const int cap = QC::QubitRegisterCalculator<>::GetParallelTeamSize(size_t{1} << qubits);
+    for (const char *policy : {"shot_v1", "block_v1"})
+    {
+        const auto seen = std::make_shared<ObserveThreads::Seen>();
+        auto circuit = CF::CreateCircuit();
+        circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+        circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+        circuit->AddOperation(std::make_shared<ObserveThreads>(seen));
+        circuit->AddOperation(CF::CreateMeasurement({{0, 1}}));
+        auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector, 2, qubits);
+        network->SetMaxSimulators(64);
+        network->SetTrajectoryMinWorkerMicros(0);
+        network->Configure("trajectory_policy", policy);
+        network->Configure("seed", "80");
+        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+        const auto counts = network->RepeatedExecute(circuit, 600);
+        size_t total = 0;
+        for (const auto &[bits, count] : counts)
+            total += count;
+        Check(total == 600 && seen->budget > 0, "Large trajectory budget test did not execute");
+        Check(static_cast<int>(seen->workers.size()) * seen->budget <= cap,
+              std::string("Large trajectories used more threads than QCSim's team (") + policy + ")");
+    }
+    omp_set_num_threads(previous);
+#endif
+}
+
 void SamplingJobThreading()
 {
     for (auto method : {Method::kStatevector, Method::kDensityMatrix})
@@ -1612,6 +1682,7 @@ try
     QCSimWorkerRandomStreams();
     AdaptiveWorkerCounts();
     LargeTrajectoryWorkers();
+    LargeTrajectoryThreadBudget();
     SamplingJobThreading();
     TerminalDensityDispatch();
     SmallTrajectoryBudgets();
