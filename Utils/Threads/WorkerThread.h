@@ -161,12 +161,17 @@ template <class ThreadsPool, class Job> class WorkerThread
 
             while (threadsPool->HasWork() && !StopFlag)
             {
-                const std::shared_ptr<Job> job = std::move(threadsPool->JobsQueue.front());
+                std::shared_ptr<Job> job = std::move(threadsPool->JobsQueue.front());
                 threadsPool->JobsQueue.pop();
                 ++threadsPool->Running;
                 lock.unlock();
 
                 job->DoWork();
+                const size_t count = job->GetJobCount();
+                // A job can own the pool's owner (execution jobs hold their
+                // network). Release it before it counts as finished, so the
+                // owner is never destroyed on one of its own workers.
+                job.reset();
 
                 // Idle before the waiter can see the job finished, so a fork()
                 // right after WaitForFinish() finds the pool idle.
@@ -174,7 +179,7 @@ template <class ThreadsPool, class Job> class WorkerThread
                 --threadsPool->Running;
                 {
                     std::lock_guard lockCount(threadsPool->FinishMutex);
-                    threadsPool->FinishCount += job->GetJobCount();
+                    threadsPool->FinishCount += count;
                 }
             }
 

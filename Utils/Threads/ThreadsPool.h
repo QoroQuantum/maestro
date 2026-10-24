@@ -323,14 +323,16 @@ class ThreadsPool
 #ifdef MAESTRO_POOL_FORK_HANDLERS
     void PrepareFork() override
     {
-        // Both locks are released by AfterForkParent() or AfterForkChild().
+        // The locks are released by AfterForkParent() or AfterForkChild().
         LifecycleMutex.lock();
         Mutex.lock();
+        FinishMutex.lock();
         idleAtFork = JobsQueue.empty() && Running == 0;
     }
 
     void AfterForkParent() override
     {
+        FinishMutex.unlock();
         Mutex.unlock();
         LifecycleMutex.unlock();
     }
@@ -339,7 +341,8 @@ class ThreadsPool
     {
         // Only the forking thread exists here. A pool in the middle of an
         // execution is left as it is; an idle one forgets its workers, whose
-        // waits also left the copied condition variable unusable.
+        // waits also left the copied condition variable unusable. Threads
+        // that were waiting for jobs to finish are gone too.
         if (idleAtFork)
         {
             for (auto &worker : Threads)
@@ -347,6 +350,8 @@ class ThreadsPool
             Threads.clear();
             new (&Condition) std::condition_variable;
         }
+        new (&ConditionFinish) std::condition_variable;
+        new (&FinishMutex) std::mutex;
         new (&Mutex) std::mutex;
         new (&LifecycleMutex) std::mutex;
     }

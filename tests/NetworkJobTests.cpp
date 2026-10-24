@@ -6,6 +6,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <iostream>
 #include <optional>
 #include <set>
@@ -1563,6 +1564,82 @@ void ThreadsPoolResize()
     }
 }
 
+struct SlowReleaseJob
+{
+    std::shared_ptr<std::atomic<int>> live;
+
+    explicit SlowReleaseJob(std::shared_ptr<std::atomic<int>> counter) : live(std::move(counter))
+    {
+        ++*live;
+    }
+
+    ~SlowReleaseJob()
+    {
+        std::this_thread::sleep_for(std::chrono::microseconds(300));
+        --*live;
+    }
+
+    void DoWork()
+    {
+    }
+
+    size_t GetJobCount() const
+    {
+        return 1;
+    }
+};
+
+void ThreadsPoolReleasesFinishedJobs()
+{
+    // Execution jobs own the network that owns the pool. A job still alive
+    // after WaitForFinish() could destroy the network on its own worker.
+    Utils::ThreadsPool<SlowReleaseJob> pool;
+    pool.Resize(4);
+    const auto live = std::make_shared<std::atomic<int>>(0);
+    for (int round = 0; round < 50; ++round)
+    {
+        pool.SetFinishLimit(8);
+        for (int i = 0; i < 8; ++i)
+            pool.AddRunJob(std::make_shared<SlowReleaseJob>(live));
+        pool.WaitForFinish();
+        Check(live->load() == 0, "Thread pool reported jobs finished before releasing them");
+    }
+}
+
+#ifdef MAESTRO_POOL_FORK_HANDLERS
+void ForkWhileWaitingForJobs()
+{
+    // A thread waiting for jobs when another forks leaves a waiter, and
+    // possibly a held lock, in the child's copy of the completion state.
+    auto pool = std::make_unique<Utils::ThreadsPool<PoolJob>>();
+    pool->Resize(2);
+    pool->SetFinishLimit(1);
+    std::thread waiter([&pool] { pool->WaitForFinish(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    std::cout.flush();
+    const pid_t child = fork();
+    if (child == 0)
+    {
+        alarm(120); // a hang fails the check below instead of stalling the run
+        const auto runs = std::make_shared<std::atomic<size_t>>(0);
+        pool->Resize(2); // as executions do; a forked idle pool starts empty
+        pool->SetFinishLimit(10);
+        for (int i = 0; i < 10; ++i)
+            pool->AddRunJob(std::make_shared<PoolJob>(PoolJob{runs}));
+        pool->WaitForFinish();
+        pool.reset();
+        _exit(runs->load() == 10 ? 0 : 2);
+    }
+    Check(child > 0, "fork failed");
+    int status = 0;
+    waitpid(child, &status, 0);
+    const auto runs = std::make_shared<std::atomic<size_t>>(0);
+    pool->AddRunJob(std::make_shared<PoolJob>(PoolJob{runs}));
+    waiter.join();
+    Check(WIFEXITED(status) && WEXITSTATUS(status) == 0, "Forked child inherited the pool's completion waiters");
+}
+#endif
+
 std::shared_ptr<Circuit> MidCircuitTrajectory(size_t qubits)
 {
     auto circuit = CF::CreateCircuit();
@@ -1693,6 +1770,10 @@ try
     TrailingReset();
     NoiseEstimateResetStreams();
     ThreadsPoolResize();
+    ThreadsPoolReleasesFinishedJobs();
+#ifdef MAESTRO_POOL_FORK_HANDLERS
+    ForkWhileWaitingForJobs();
+#endif
     PersistentWorkers();
 #ifdef MAESTRO_POOL_FORK_HANDLERS
     ForkWithIdleWorkers();
