@@ -364,7 +364,7 @@ template <class Backend> class TensorChainRouting : public Backend
 
     int lookaheadDepth = 0, lookaheadDepthWithHeuristic = 0;
     bool useOptimalMeetingPosition = true;
-    double growthFactorSwap = 1., growthFactorGate = 0.65;
+    double growthFactorSwap = 1., growthFactorGate = 0.7;
     std::unique_ptr<MPSDummySimulator> dummySim;
     std::vector<double> savedDummyBondDims;
     bool dummyHistoryValid = false;

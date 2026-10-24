@@ -1215,10 +1215,10 @@ BOOST_AUTO_TEST_CASE(MinOneStepCostMatchesRolloutFormulaAndControlledRank)
 
     // 1. Exact arithmetic check from review Finding #2:
     // bondDims = [2, 3, 4, 3, 5, 3, 2], identity map, generic rank-4 gate on (0, 4),
-    // growthFactorGate = 0.65, growthFactorSwap = 1.0, no additional bond cap.
+    // growthFactorGate = 0.7, growthFactorSwap = 1.0, no additional bond cap.
     constexpr size_t nrQubits = 8;
     const std::vector<double> initBonds{2, 3, 4, 3, 5, 3, 2};
-    const std::array<double, 4> expectedRolloutCosts{325.0985, 318.788, 342.304, 335.3125};
+    const std::array<double, 4> expectedRolloutCosts{325.372, 320.976, 359.808, 369.5};
 
     auto genericGate = std::make_shared<GenericRank4TwoQubitGate>(0, 4);
     std::vector<std::shared_ptr<Circuits::IOperation<>>> singleGateWindow{genericGate};
@@ -1226,7 +1226,7 @@ BOOST_AUTO_TEST_CASE(MinOneStepCostMatchesRolloutFormulaAndControlledRank)
     for (long long int m = 0; m < 4; ++m)
     {
         Simulators::MPSDummySimulator rolloutSim(nrQubits);
-        rolloutSim.setGrowthFactorGate(0.65);
+        rolloutSim.setGrowthFactorGate(0.7);
         rolloutSim.setGrowthFactorSwap(1.0);
         rolloutSim.SetCurrentBondDimensions(initBonds);
         rolloutSim.SwapQubitsToPosition(0, 4, m);
@@ -1235,14 +1235,14 @@ BOOST_AUTO_TEST_CASE(MinOneStepCostMatchesRolloutFormulaAndControlledRank)
     }
 
     Simulators::MPSDummySimulator searchSim(nrQubits);
-    searchSim.setGrowthFactorGate(0.65);
+    searchSim.setGrowthFactorGate(0.7);
     searchSim.setGrowthFactorSwap(1.0);
     searchSim.SetCurrentBondDimensions(initBonds);
 
     double bestCost = std::numeric_limits<double>::infinity();
     const auto chosenPos = searchSim.FindBestMeetingPosition(singleGateWindow, 0, 0, 0, 0.0, bestCost);
     BOOST_CHECK_EQUAL(chosenPos, 1);
-    BOOST_CHECK_CLOSE(bestCost, 318.788, 1e-9);
+    BOOST_CHECK_CLOSE(bestCost, expectedRolloutCosts[1], 1e-9);
 
     // 2. Verify controlled two-qubit gates use Schmidt rank 2 (and rank^2 = 4 in MPO)
     // vs generic two-qubit gates using Schmidt rank 4 (and rank^2 = 16 in MPO).
@@ -1276,7 +1276,7 @@ BOOST_AUTO_TEST_CASE(MinOneStepCostMatchesRolloutFormulaAndControlledRank)
         // Also verify FindBestMeetingPosition at lookaheadDepth = 0 picks the exact
         // minimum-cost position for controlled gates as well.
         Simulators::MPSDummySimulator cxSearchSim(nrQubits, isMpo);
-        cxSearchSim.setGrowthFactorGate(0.65);
+        cxSearchSim.setGrowthFactorGate(0.7);
         cxSearchSim.setGrowthFactorSwap(1.0);
         cxSearchSim.SetCurrentBondDimensions(initBonds);
 
@@ -1288,7 +1288,7 @@ BOOST_AUTO_TEST_CASE(MinOneStepCostMatchesRolloutFormulaAndControlledRank)
         for (long long int m = 0; m < 4; ++m)
         {
             Simulators::MPSDummySimulator explicitSim(nrQubits, isMpo);
-            explicitSim.setGrowthFactorGate(0.65);
+            explicitSim.setGrowthFactorGate(0.7);
             explicitSim.setGrowthFactorSwap(1.0);
             explicitSim.SetCurrentBondDimensions(initBonds);
             explicitSim.SwapQubitsToPosition(0, 4, m);
