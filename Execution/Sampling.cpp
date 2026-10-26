@@ -106,8 +106,11 @@ Network::INetwork<double>::ExecuteResults CombineIndependentCounts(const Network
     const size_t sparse_limit = levels ? columns.size() / levels : 0;
     std::vector<size_t> tree;
     bool tree_current = false;
-    for (const auto &[prefix, count] : rows)
+    for (const auto &row : rows)
     {
+        // Lambdas cannot capture structured bindings before C++20.
+        const auto &prefix = row.first;
+        const auto count = row.second;
         if (!count)
             continue;
         const auto append = [&](const std::vector<bool> &outcome, size_t take) {
