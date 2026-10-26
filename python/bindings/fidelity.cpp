@@ -245,9 +245,12 @@ nb::object mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circu
     const bool single = nb::isinstance<nb::str>(*observables) && paulis.size() == 1 && nb::cast<std::string>(*observables).find(';') == std::string::npos;
 
     auto mirror = build_mirror_circuit(circuit);
-    // The optimizer would cancel the gate/adjoint pairs and hide truncation error.
+    // Preserve the gate sequence: even exact estimator reductions can hide
+    // truncation error by changing which operations the backend executes.
     SimulatorConfig mirror_config = config;
     mirror_config.optimize_circuit = false;
+    mirror_config.auto_reduce = false;
+    mirror_config.enable_causal_cone_reduction = false;
     MaestroExecution::EstimationResult result;
     {
         nb::gil_scoped_release release;

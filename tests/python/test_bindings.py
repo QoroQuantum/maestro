@@ -2253,6 +2253,61 @@ class TestMirrorFidelity:
         fid = maestro.mirror_fidelity(qc, config=config, observables="ZZ")
         assert fid == pytest.approx(1.0, abs=1e-8)
 
+    @pytest.mark.parametrize("use_method", [False, True], ids=["module", "circuit"])
+    @pytest.mark.parametrize("method,bond_dimension,expected", [
+        (maestro.SimulationType.Statevector, None, 1.0),
+        (maestro.SimulationType.MatrixProductState, 1, 0.5),
+        (maestro.SimulationType.MatrixProductState, 2, 1.0),
+    ], ids=["statevector", "truncated-mps", "exact-mps"])
+    def test_observable_preserves_truncation(
+        self, use_method, method, bond_dimension, expected
+    ):
+        """Default estimator reductions must not hide mirror truncation error."""
+        qc = maestro.circuits.QuantumCircuit()
+        qc.rx(0, math.pi / 3)
+        qc.cx(0, 1)
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=method,
+            max_bond_dimension=bond_dimension,
+            gate_fusion=False,
+            disable_optimized_swapping=True,
+        )
+
+        # The first CX creates Schmidt weights 3/4 and 1/4. Bond dimension 1
+        # truncates to |00>, so the final inverse RX leaves <ZI> = cos(pi/3).
+        fid = (qc.mirror_fidelity(config=config, observables="ZI") if use_method
+               else maestro.mirror_fidelity(qc, config=config, observables="ZI"))
+        assert fid == pytest.approx(expected, abs=1e-8)
+        assert config.auto_reduce
+        assert config.enable_causal_cone_reduction
+
+    @pytest.mark.parametrize("use_method", [False, True], ids=["module", "circuit"])
+    def test_observable_preserves_causal_cone_execution(self, use_method):
+        """Cone pruning must not change truncation, even with parity disabled."""
+        qc = maestro.circuits.QuantumCircuit()
+        qc.cz(1, 0)
+        qc.ry(1, math.pi / 3)
+        qc.rx(0, math.pi / 3)
+        qc.cz(0, 1)
+
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=1,
+            gate_fusion=False,
+            disable_optimized_swapping=True,
+            auto_reduce=False,
+        )
+
+        # Reference from sequential rank-one SVD evolution of all eight gates;
+        # cone pruning changes it to approximately 0.7968626966596885.
+        fid = (qc.mirror_fidelity(config=config, observables="ZZ") if use_method
+               else maestro.mirror_fidelity(qc, config=config, observables="ZZ"))
+        assert fid == pytest.approx(0.8311603315961249, abs=1e-8)
+        assert not config.auto_reduce
+        assert config.enable_causal_cone_reduction
+
     def test_observable_empty_rejected(self):
         """An empty observable set is an error rather than an empty result."""
         qc = self._observable_circuit()
