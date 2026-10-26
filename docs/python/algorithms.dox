@@ -100,6 +100,30 @@
  * fidelity = qc.mirror_fidelity(config=mps_config, shots=10000)
  * @endcode
  *
+ * @subsection py_mirror_observables Observable Mirror Fidelity
+ *
+ * For wide circuits the full-register projection P(|0...0>) is intractable for
+ * Pauli Propagation and collapses towards 0 for truncated MPS. Pass `observables`
+ * to instead evaluate the expectation of target Pauli strings on the mirror circuit
+ * C C^dagger. Z-type strings have ideal expectation 1.0, so any truncation error in the
+ * simulation (Pauli weight / coefficient thresholds, bond dimension) shows up as a
+ * value below 1.0 on exactly the observables being studied.
+ *
+ * A single Pauli string returns a `float`; a list or a ';'-separated string returns a
+ * `list[float]`. Circuit optimization is disabled for the mirror so the gate/adjoint
+ * pairs are not cancelled; `shots` and `full_amplitude` are ignored in this mode.
+ *
+ * @code{.py}
+ * pp_config = maestro.SimulatorConfig(
+ *     simulation_type=maestro.SimulationType.PauliPropagator,
+ *     pp_max_pauli_weight=4,
+ *     pp_coefficient_threshold=1e-6,
+ * )
+ * fid = qc.mirror_fidelity(config=pp_config, observables="ZZ")           # float
+ * fids = qc.mirror_fidelity(config=pp_config, observables=["ZZ", "ZI"])  # list[float]
+ * fids = maestro.mirror_fidelity(qc, config=pp_config, observables="ZZ;ZI")
+ * @endcode
+ *
  * @note Measurements in the input circuit are automatically skipped when generating the
  * mirror circuit — only unitary gates are inverted.
  *

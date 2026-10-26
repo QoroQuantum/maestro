@@ -2182,6 +2182,138 @@ class TestMirrorFidelity:
         fid = maestro.mirror_fidelity(qc, full_amplitude=True)
         assert fid == pytest.approx(1.0, abs=1e-10)
 
+    # --- Observable mirror fidelity tests ---
+
+    @staticmethod
+    def _observable_circuit():
+        from maestro.circuits import QuantumCircuit
+        import math
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.s(1)
+        qc.ry(0, math.pi / 3)
+        qc.crz(0, 1, math.pi / 5)
+        qc.t(1)
+        return qc
+
+    def test_observable_single_string(self):
+        """A single Pauli string returns a float close to 1.0."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.s(0)
+
+        fid = qc.mirror_fidelity(observables="Z")
+        assert isinstance(fid, float)
+        assert fid == pytest.approx(1.0, abs=1e-10)
+
+    def test_observable_list(self):
+        """A list of Pauli strings returns a list of floats."""
+        qc = self._observable_circuit()
+
+        fids = qc.mirror_fidelity(observables=["ZZ", "ZI"])
+        assert isinstance(fids, list)
+        assert fids == pytest.approx([1.0, 1.0], abs=1e-10)
+
+    def test_observable_semicolon_string(self):
+        """A ';'-separated string returns a list of floats."""
+        qc = self._observable_circuit()
+
+        fids = maestro.mirror_fidelity(qc, observables="ZZ;ZI")
+        assert isinstance(fids, list)
+        assert fids == pytest.approx([1.0, 1.0], abs=1e-10)
+
+    def test_observable_non_z_is_zero(self):
+        """Non-Z Paulis have zero expectation on |0...0>, so mirror gives 0."""
+        qc = self._observable_circuit()
+
+        fids = qc.mirror_fidelity(observables=["XI", "ZY"])
+        assert fids == pytest.approx([0.0, 0.0], abs=1e-10)
+
+    def test_observable_pauli_propagator(self):
+        """Pauli Propagation evaluates observable mirror fidelity."""
+        qc = self._observable_circuit()
+        config = maestro.SimulatorConfig(
+            simulation_type=maestro.SimulationType.PauliPropagator,
+        )
+
+        fids = qc.mirror_fidelity(config=config, observables=["ZZ", "IZ"])
+        assert fids == pytest.approx([1.0, 1.0], abs=1e-8)
+
+    def test_observable_mps(self):
+        """MPS evaluates observable mirror fidelity."""
+        qc = self._observable_circuit()
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=4,
+        )
+
+        fid = maestro.mirror_fidelity(qc, config=config, observables="ZZ")
+        assert fid == pytest.approx(1.0, abs=1e-8)
+
+    @pytest.mark.parametrize("use_method", [False, True], ids=["module", "circuit"])
+    @pytest.mark.parametrize("method,bond_dimension,expected", [
+        (maestro.SimulationType.Statevector, None, 1.0),
+        (maestro.SimulationType.MatrixProductState, 1, 0.5),
+        (maestro.SimulationType.MatrixProductState, 2, 1.0),
+    ], ids=["statevector", "truncated-mps", "exact-mps"])
+    def test_observable_preserves_truncation(
+        self, use_method, method, bond_dimension, expected
+    ):
+        """Default estimator reductions must not hide mirror truncation error."""
+        qc = maestro.circuits.QuantumCircuit()
+        qc.rx(0, math.pi / 3)
+        qc.cx(0, 1)
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=method,
+            max_bond_dimension=bond_dimension,
+            gate_fusion=False,
+            disable_optimized_swapping=True,
+        )
+
+        # The first CX creates Schmidt weights 3/4 and 1/4. Bond dimension 1
+        # truncates to |00>, so the final inverse RX leaves <ZI> = cos(pi/3).
+        fid = (qc.mirror_fidelity(config=config, observables="ZI") if use_method
+               else maestro.mirror_fidelity(qc, config=config, observables="ZI"))
+        assert fid == pytest.approx(expected, abs=1e-8)
+        assert config.auto_reduce
+        assert config.enable_causal_cone_reduction
+
+    @pytest.mark.parametrize("use_method", [False, True], ids=["module", "circuit"])
+    def test_observable_preserves_causal_cone_execution(self, use_method):
+        """Cone pruning must not change truncation, even with parity disabled."""
+        qc = maestro.circuits.QuantumCircuit()
+        qc.cz(1, 0)
+        qc.ry(1, math.pi / 3)
+        qc.rx(0, math.pi / 3)
+        qc.cz(0, 1)
+
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.MatrixProductState,
+            max_bond_dimension=1,
+            gate_fusion=False,
+            disable_optimized_swapping=True,
+            auto_reduce=False,
+        )
+
+        # Reference from sequential rank-one SVD evolution of all eight gates;
+        # cone pruning changes it to approximately 0.7968626966596885.
+        fid = (qc.mirror_fidelity(config=config, observables="ZZ") if use_method
+               else maestro.mirror_fidelity(qc, config=config, observables="ZZ"))
+        assert fid == pytest.approx(0.8311603315961249, abs=1e-8)
+        assert not config.auto_reduce
+        assert config.enable_causal_cone_reduction
+
+    def test_observable_empty_rejected(self):
+        """An empty observable set is an error rather than an empty result."""
+        qc = self._observable_circuit()
+        with pytest.raises(ValueError):
+            qc.mirror_fidelity(observables=[])
+
 
 class TestInnerProduct:
     """Test the inner_product function and circuit method.

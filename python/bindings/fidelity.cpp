@@ -89,38 +89,33 @@ OperationPtr adjoint_gate(const OperationPtr &op)
     }
 }
 
-// Core Mirror Fidelity Logic
-// Builds circuit + adjoint(circuit) in reverse, returns P(|0...0>).
-// By default uses shot-based sampling. Set full_amplitude=true for exact
-// statevector computation (only feasible for small qubit counts).
-double mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots, bool full_amplitude)
+// Builds the mirror circuit: forward gates + adjoint gates in reverse.
+// Measurements and other non-gate ops are skipped — they have no adjoint.
+static std::shared_ptr<Circuits::Circuit<double>> build_mirror_circuit(const std::shared_ptr<Circuits::Circuit<double>> &circuit)
 {
-    if (!circuit)
-        throw nb::value_error("Circuit is null.");
-
-    // Build the mirror circuit: forward gates + adjoint gates in reverse
     auto mirror = std::make_shared<Circuits::Circuit<double>>();
     const auto &ops = circuit->GetOperations();
-
-    // Forward pass: add only gate operations (skip measurements)
     for (const auto &op : ops)
     {
         if (op->GetType() == Circuits::OperationType::kGate)
-        {
             mirror->AddOperation(op->Clone());
-        }
     }
-
-    // Reverse pass: iterate backward and add adjoint of each gate operation only
-    // (skip measurements and other non-gate ops — they have no adjoint)
     for (auto it = ops.rbegin(); it != ops.rend(); ++it)
     {
-        if ((*it)->GetType() != Circuits::OperationType::kGate)
-            continue;
         auto adj = adjoint_gate(*it);
         if (adj)
             mirror->AddOperation(adj);
     }
+    return mirror;
+}
+
+// P(|0...0>) of the mirror circuit. By default uses shot-based sampling. Set
+// full_amplitude=true for exact statevector computation (only feasible for
+// small qubit counts).
+static double mirror_fidelity_projection(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const SimulatorConfig &config, int shots,
+                                         bool full_amplitude)
+{
+    auto mirror = build_mirror_circuit(circuit);
 
     // Helper lambda for the shot-based path
     auto run_shot_based = [&]() -> double {
@@ -230,6 +225,40 @@ double mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circuit, 
     {
         return run_shot_based();
     }
+}
+
+// Core Mirror Fidelity Logic
+// Builds circuit + adjoint(circuit) in reverse and returns P(|0...0>). With
+// observables, returns <0|M^dag O M|0> for each Pauli O instead, which is 1 for
+// Z-type strings under exact evolution and degrades with truncation.
+nb::object mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots, bool full_amplitude,
+                                const std::optional<nb::object> &observables)
+{
+    if (!circuit)
+        throw nb::value_error("Circuit is null.");
+    if (!observables || observables->is_none())
+        return nb::float_(mirror_fidelity_projection(circuit, config, shots, full_amplitude));
+
+    const auto paulis = ParseObservables(*observables);
+    if (paulis.empty())
+        throw nb::value_error("observables must contain at least one Pauli string.");
+    const bool single = nb::isinstance<nb::str>(*observables) && paulis.size() == 1 && nb::cast<std::string>(*observables).find(';') == std::string::npos;
+
+    auto mirror = build_mirror_circuit(circuit);
+    // Preserve the gate sequence: even exact estimator reductions can hide
+    // truncation error by changing which operations the backend executes.
+    SimulatorConfig mirror_config = config;
+    mirror_config.optimize_circuit = false;
+    mirror_config.auto_reduce = false;
+    mirror_config.enable_causal_cone_reduction = false;
+    MaestroExecution::EstimationResult result;
+    {
+        nb::gil_scoped_release release;
+        result = MaestroExecution::EstimateCircuit(mirror, paulis, mirror_config, nullptr);
+    }
+    if (single)
+        return nb::float_(result.values.at(0));
+    return nb::cast(result.values);
 }
 
 // Core Inner Product Logic

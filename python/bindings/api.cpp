@@ -165,14 +165,16 @@ void bind_api(nb::module_ &m)
 
     m.def(
         "mirror_fidelity",
-        [](std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots, bool full_amplitude) {
-            return mirror_fidelity_core(circuit, config, shots, full_amplitude);
-        },
-        "circuit"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "full_amplitude"_a = false,
+        [](std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots, bool full_amplitude,
+           std::optional<nb::object> observables) { return mirror_fidelity_core(circuit, config, shots, full_amplitude, observables); },
+        "circuit"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "full_amplitude"_a = false, "observables"_a = nb::none(),
         "Compute mirror fidelity: run a circuit forward then its adjoint in "
         "reverse, returning P(|0...0>). Uses shot-based sampling by "
         "default. Set full_amplitude=True for exact statevector "
-        "computation (small circuits only).");
+        "computation (small circuits only). Pass observables (a Pauli "
+        "string, ';'-separated string or list) to instead return the "
+        "expectation of each observable on the mirror circuit: a float "
+        "for a single string, otherwise a list.");
 
     m.def(
         "inner_product",
