@@ -7,26 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-10-26
+
 ### Added
 
+- Adjoint differentiation engine (`AdjointProgram`) supporting exact Jacobians,
+  Vector-Jacobian Products (VJP), and batched expectation values for parametrized
+  statevector circuits.
+- Probability readouts for `AdjointProgram`.
+- Observable clustering with configurable lightcone size budget (`cluster_budget`)
+  to group commuting observables during expectation value evaluation.
+- Added `observables` parameter to `mirror_fidelity` for expectation-based mirror
+  fidelity computations, preserving state truncation.
 - The QASM parser accepts qelib1.inc's `u0`, a parametrised idle that adds no operation.
+- Accepted `seed` as an alias for `noise_seed` in noise execution helpers.
 
 ### Changed
 
-- MPS/MPO routing estimates bond growth from each gate's effective Schmidt rank,
-  computed from its matrix, instead of 2 for every controlled gate and 4 otherwise;
-  small-angle controlled rotations now count as nearly rank 1.
+- MPS/MPO swap routing improved with a multi-policy rollout portfolio, adaptive
+  lookahead depth, and Schmidt-rank-based bond growth estimations derived from gate
+  unitaries instead of fixed upper bounds.
 - The MPS initial-layout search keeps the circuit's qubit order unless another layout
   is predicted to be at least four times cheaper (`MPSDummySimulator::setMinLayoutGain`).
   MPO layouts are unchanged.
 - Circuits are compacted to continuous qubit indices in ascending order, not in order of
   first use. Seeded samples of circuits that first touch their qubits out of order can
   differ from earlier releases; their distributions do not.
+- Worker threads in the shot execution pool are now retained between successive
+  executions instead of being respawned each run.
+- Trajectory execution thread counts for large states are capped at QCSim's team size.
+- Prebuilt Windows dependencies and `abi3` wheel builds for faster CI.
+- Updated `qcsim` dependency pin.
 
 ### Fixed
 
+- Two race conditions in the persistent worker thread pool.
 - MPS QFT at 64 qubits took 20 s instead of 0.2 s and truncated: the layout search
   scrambled the qubit order, and whether a run recovered depended on its random seed.
+- macOS compilation errors from `qubit_t` and `size_t` type differences, and mixed-type
+  template deduction in `Sampling.cpp`.
+- Adjoint differentiation guarded against physical memory exhaustion and cgroup limits
+  on Linux and Windows, with validation for cotangent shapes and qubit ranges.
+- Potential crash during test shutdown caused by duplicate simulator factory globals.
+- Single-qubit GPU tensor estimates defaulting to statevector backend.
+- Missing GPU device metadata for identity-only expectation estimates.
 
 ## [0.3.7] - 2026-10-19
 
@@ -485,7 +509,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.7...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.8...HEAD
+[0.3.8]: https://github.com/QoroQuantum/maestro/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/QoroQuantum/maestro/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/QoroQuantum/maestro/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/QoroQuantum/maestro/compare/v0.3.4...v0.3.5
