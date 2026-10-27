@@ -3,9 +3,43 @@
 
 import math
 import pickle
+import subprocess
+import sys
 
 import pytest
 import maestro
+
+_CONCURRENT_FIRST_CALLS = """
+import threading
+import maestro
+
+qasm = 'OPENQASM 2.0; include "qelib1.inc"; qreg q[4]; h q[0]; cx q[0],q[1]; cx q[1],q[2]; cx q[2],q[3];'
+barrier = threading.Barrier(16)
+errors = []
+
+def first_call():
+    barrier.wait()
+    try:
+        maestro.simple_estimate(qasm, ["ZZII", "IZZI"])
+    except RuntimeError as exc:
+        errors.append(str(exc))
+
+threads = [threading.Thread(target=first_call) for _ in range(16)]
+for thread in threads:
+    thread.start()
+for thread in threads:
+    thread.join()
+assert not errors, errors
+"""
+
+
+@pytest.mark.parametrize("attempt", range(10))
+def test_concurrent_first_calls_initialise_once(attempt):
+    """A fresh process per attempt, so every attempt races the singleton's creation."""
+    result = subprocess.run(
+        [sys.executable, "-c", _CONCURRENT_FIRST_CALLS], capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(

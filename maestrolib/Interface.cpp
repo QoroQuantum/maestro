@@ -19,14 +19,32 @@
 
 #include "Json.h"
 
-#include <atomic>
 #include <memory>
+#include <mutex>
 
 #include "../Utils/LogFile.h"
 #include "../qasm/QasmCirc.h"
 
-static std::atomic_bool isInitialized{false};
+static std::once_flag initFlag;
 static std::unique_ptr<Maestro> maestroInstance;
+
+// Concurrent first calls block until the instance exists.
+static void *InitializeMaestro(bool mute)
+{
+    std::call_once(initFlag, [mute] {
+        if (mute)
+            Simulators::SimulatorsFactory::InitQuestLibraryWithMute();
+        else
+            Simulators::SimulatorsFactory::InitQuestLibrary();
+
+#ifdef MAESTRO_ENABLE_COMPOSER
+        Estimators::ExecutionEstimator<>::InitializeRegressors();
+#endif
+
+        maestroInstance = std::make_unique<Maestro>();
+    });
+    return (void *)maestroInstance.get();
+}
 
 // Legacy configuration uses JSON integers, including zero and the full uint64
 // range. Reject malformed seeds without throwing across this C ABI.
@@ -596,18 +614,7 @@ extern "C"
 #endif
         void *GetMaestroObject()
     {
-        if (!isInitialized.exchange(true))
-        {
-            Simulators::SimulatorsFactory::InitQuestLibrary();
-
-#ifdef MAESTRO_ENABLE_COMPOSER
-            Estimators::ExecutionEstimator<>::InitializeRegressors();
-#endif
-
-            maestroInstance = std::make_unique<Maestro>();
-        }
-
-        return (void *)maestroInstance.get();
+        return InitializeMaestro(false);
     }
 
 #ifdef _WIN32
@@ -615,18 +622,7 @@ extern "C"
 #endif
         void *GetMaestroObjectWithMute()
     {
-        if (!isInitialized.exchange(true))
-        {
-            Simulators::SimulatorsFactory::InitQuestLibraryWithMute();
-
-#ifdef MAESTRO_ENABLE_COMPOSER
-            Estimators::ExecutionEstimator<>::InitializeRegressors();
-#endif
-
-            maestroInstance = std::make_unique<Maestro>();
-        }
-
-        return (void *)maestroInstance.get();
+        return InitializeMaestro(true);
     }
 
 #ifdef _WIN32

@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CPU MPS/MPO setup and cloning reuse valid fusion routing metadata, avoiding
   repeated preparation while keeping each clone's execution state independent.
 
+### Fixed
+
+- Concurrent first calls from several threads no longer fail with
+  `Failed to create simulator handle`. The library instance is now initialised once,
+  and threads that arrive during initialisation wait for it. 0.3.8 exposed the race by
+  creating simulator handles with the GIL released.
+
 ## [0.3.8] - 2026-10-26
 
 ### Added
