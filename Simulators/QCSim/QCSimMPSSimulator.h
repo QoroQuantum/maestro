@@ -23,6 +23,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void Initialize() override
     {
+        InvalidateBoundedRouting(true);
         RefreshRoutingSettings();
         InvalidateDummyHistory();
         if (nrQubits != 0)
@@ -39,6 +40,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                 if (key != "method")
                     Configure(key.c_str(), value.c_str());
         }
+        RefreshRoutingCallback();
     }
 
     void InitializeToBasisState(size_t num_qubits, Types::qubit_t basisState) override
@@ -141,6 +143,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
             if (workers > 1024)
                 throw std::invalid_argument("pauli_propagator_workers exceeds 1024");
         }
+        RefreshRoutingCallback();
     }
 
     size_t AllocateQubits(size_t num_qubits) override
@@ -154,6 +157,8 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void Clear() override
     {
+        automaticRoutingDepth = false;
+        InvalidateBoundedRouting(true);
         mpsSimulator = nullptr;
         ClearDummySimulator();
         nrQubits = 0;
@@ -882,10 +887,13 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         cloned->nrQubits = nrQubits;
         cloned->enableMultithreading = enableMultithreading;
         cloned->lookaheadDepth = lookaheadDepth;
+        cloned->automaticRoutingDepth = automaticRoutingDepth;
         cloned->lookaheadDepthWithHeuristic = lookaheadDepthWithHeuristic;
         cloned->useOptimalMeetingPosition = useOptimalMeetingPosition;
         cloned->upcomingGates = upcomingGates;
         cloned->upcomingGateIndex = upcomingGateIndex;
+        cloned->boundedRoutingOperations = boundedRoutingOperations;
+        cloned->boundedRoutingOperationsQubits = boundedRoutingOperationsQubits;
         cloned->growthFactorGate = growthFactorGate;
         cloned->growthFactorSwap = growthFactorSwap;
         if (mpsSimulator)
@@ -905,6 +913,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         cloned->savedDummyBondDims = savedDummyBondDims;
         if (configuration.IsSet("seed"))
             cloned->SetSeed(DeriveSeed(std::stoull(configuration.GetConfiguration("seed")), nextSeedStream++));
+        cloned->RefreshRoutingCallback();
         return cloned;
     }
 
@@ -926,6 +935,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
 
     void RefreshRoutingCallback() override
     {
+        RefreshBoundedRouting();
         const bool active = IsRoutingLookaheadEnabled() && !upcomingGates.empty();
         if (mpsSimulator)
             mpsSimulator->SetMeetingPositionCallback(active ? meetingPositionCallback : nullptr);

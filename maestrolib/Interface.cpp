@@ -68,10 +68,25 @@ static bool ConfigureLegacyFusion(Network::INetwork<> &network, const boost::jso
 static bool ConfigureLegacyRouting(Network::INetwork<> &network, const boost::json::value &config)
 {
     using namespace Simulators::RoutingConfig;
+    std::string strategy = "legacy";
     bool enabled = false, legacy = false;
     double weight = 1.;
     if (config.is_object())
     {
+        if (const auto *value = config.as_object().if_contains(kStrategy))
+        {
+            if (!value->is_string())
+                return false;
+            strategy.assign(value->as_string().data(), value->as_string().size());
+            try
+            {
+                ParseStrategy(strategy);
+            }
+            catch (const std::invalid_argument &)
+            {
+                return false;
+            }
+        }
         for (const auto &[key, target] : {std::pair{kVirtualBonds, &enabled}, std::pair{kLegacyCap, &legacy}})
             if (const auto *value = config.as_object().if_contains(key))
             {
@@ -88,6 +103,7 @@ static bool ConfigureLegacyRouting(Network::INetwork<> &network, const boost::js
                 return false;
         }
     }
+    network.Configure(kStrategy, strategy.c_str());
     network.Configure(kVirtualBonds, enabled ? "true" : "false");
     network.Configure(kLegacyCap, legacy ? "true" : "false");
     network.Configure(kTruncationWeight, boost::json::serialize(weight).c_str());

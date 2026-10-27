@@ -943,9 +943,8 @@ class MPSDummySimulator
                 return 0.0;
             const auto &list = (adjList[u].size() <= adjList[v].size()) ? adjList[u] : adjList[v];
             const IndexType target = (adjList[u].size() <= adjList[v].size()) ? v : u;
-            auto it = std::lower_bound(list.begin(), list.end(), target, [](const std::pair<IndexType, double> &elem, IndexType val) {
-                return elem.first < val;
-            });
+            auto it =
+                std::lower_bound(list.begin(), list.end(), target, [](const std::pair<IndexType, double> &elem, IndexType val) { return elem.first < val; });
             return (it != list.end() && it->first == target) ? it->second : 0.0;
         };
 
@@ -1321,9 +1320,7 @@ class MPSDummySimulator
 
             std::vector<IndexType> order(nQ);
             std::iota(order.begin(), order.end(), 0);
-            std::sort(order.begin(), order.end(), [&](IndexType a, IndexType b) {
-                return std::tie(quantKey[a], a) < std::tie(quantKey[b], b);
-            });
+            std::sort(order.begin(), order.end(), [&](IndexType a, IndexType b) { return std::tie(quantKey[a], a) < std::tie(quantKey[b], b); });
 
             std::vector<IndexType> result(nQ);
             for (size_t i = 0; i < nQ; ++i)
@@ -2582,8 +2579,8 @@ class MPSDummySimulator
 
             const double E1 = std::max((rq1 > 0) ? currentBondDim[rq1 - 1] : 1.0, currentBondDim[rq1]);
             const double E2 = std::max(currentBondDim[rq2 - 1], (rq2 < static_cast<IndexType>(currentBondDim.size())) ? currentBondDim[rq2] : 1.0);
-            const bool hasLowEntanglementCut =
-                (minBondInSpan < 16.0) && (runtimeBondCap <= 0 || minBondInSpan < static_cast<double>(runtimeBondCap)) && (minBondInSpan <= 0.5 * std::min(E1, E2));
+            const bool hasLowEntanglementCut = (minBondInSpan < 16.0) && (runtimeBondCap <= 0 || minBondInSpan < static_cast<double>(runtimeBondCap)) &&
+                                               (minBondInSpan <= 0.5 * std::min(E1, E2));
 
             const IndexType span = rq2 - rq1;
             std::array<IndexType, 128> stackCandidates{};
@@ -2660,6 +2657,7 @@ class MPSDummySimulator
             bestCost = bestRolloutCost;
         return chosenPos;
     }
+
     // Swap two logical qubits so they meet at a specified bond position.
     // meetPosition is the bond index (in real/chain coordinates) where
     // the two qubits will end up adjacent: one at meetPosition, the other

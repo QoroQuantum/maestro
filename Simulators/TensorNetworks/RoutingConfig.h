@@ -5,9 +5,30 @@
 
 namespace Simulators::RoutingConfig
 {
+inline constexpr const char *kStrategy = "mps_routing_strategy";
 inline constexpr const char *kVirtualBonds = "mps_routing_virtual_bonds";
 inline constexpr const char *kLegacyCap = "mps_routing_legacy_cap";
 inline constexpr const char *kTruncationWeight = "mps_routing_truncation_weight";
+
+enum class Strategy
+{
+    Combined,
+    Legacy
+};
+
+inline Strategy ParseStrategy(const std::string &value)
+{
+    if (value == "combined")
+        return Strategy::Combined;
+    if (value == "legacy")
+        return Strategy::Legacy;
+    throw std::invalid_argument("mps_routing_strategy must be combined or legacy");
+}
+
+template <class Config> Strategy GetStrategy(const Config &config)
+{
+    return config.IsSet(kStrategy) ? ParseStrategy(config.GetConfiguration(kStrategy)) : Strategy::Legacy;
+}
 
 inline bool ParseFlag(const std::string &value)
 {

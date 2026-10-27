@@ -2925,9 +2925,15 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                         sim->setGrowthFactorGate(growthFactorGate);
                         sim->setGrowthFactorSwap(growthFactorSwap);
                         sim->SetUseOptimalMeetingPosition(true);
-                        sim->SetLookaheadDepth(lookaheadDepthLocal);
+                        if (lookaheadDepth == std::numeric_limits<int>::max())
+                            sim->SetAutomaticLookaheadDepth(lookaheadDepthLocal);
+                        else
+                            sim->SetLookaheadDepth(lookaheadDepthLocal);
                         sim->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepthLocal);
-                        sim->SetUpcomingGates(dcirc->GetOperations());
+                        // The CPU window installed before layout planning has not
+                        // changed. Its routing setters already refresh the plan.
+                        if (sim->GetType() != Simulators::SimulatorType::kQCSim)
+                            sim->SetUpcomingGates(dcirc->GetOperations());
                     }
                 }
             }

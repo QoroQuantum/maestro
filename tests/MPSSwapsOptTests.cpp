@@ -2381,13 +2381,9 @@ BOOST_AUTO_TEST_CASE(AdaptivePlannerCommonHorizonAndLargeSparseLayout)
     // winning route and never return a worse estimated cost for either MPS or MPO.
     {
         constexpr size_t nrQubits = 12;
-        const std::vector<std::shared_ptr<Circuits::IOperation<>>> ops{
-            CF::CreateGate(Kind::kCXGateType, 3, 5),
-            CF::CreateGate(Kind::kCXGateType, 2, 10),
-            CF::CreateGate(Kind::kCXGateType, 6, 7),
-            CF::CreateGate(Kind::kCXGateType, 11, 9),
-            CF::CreateGate(Kind::kCXGateType, 0, 7),
-            CF::CreateGate(Kind::kCXGateType, 2, 8)};
+        const std::vector<std::shared_ptr<Circuits::IOperation<>>> ops{CF::CreateGate(Kind::kCXGateType, 3, 5), CF::CreateGate(Kind::kCXGateType, 2, 10),
+                                                                       CF::CreateGate(Kind::kCXGateType, 6, 7), CF::CreateGate(Kind::kCXGateType, 11, 9),
+                                                                       CF::CreateGate(Kind::kCXGateType, 0, 7), CF::CreateGate(Kind::kCXGateType, 2, 8)};
 
         for (const bool isMPO : {false, true})
         {

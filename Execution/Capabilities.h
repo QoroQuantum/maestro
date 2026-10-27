@@ -73,6 +73,8 @@ inline json::object OptionCapability(const Option &option)
         choices = &Precisions();
     else if (name == "mps_sampling")
         choices = &MpsSamplingModes();
+    else if (name == "mps_routing_strategy")
+        choices = &MpsRoutingStrategies();
     else if (name == "truncation_mode")
         choices = &TruncationModes();
     else if (name == "mpo_kraus_completeness_check")
@@ -86,6 +88,8 @@ inline json::object OptionCapability(const Option &option)
             values.emplace_back(choice);
         result["enum"] = std::move(values);
     }
+    if (name == "mps_routing_strategy")
+        result["default"] = "legacy";
     if (name == "trajectory_policy")
     {
         result["enum"] = json::array{"block_v1", "shot_v1"};

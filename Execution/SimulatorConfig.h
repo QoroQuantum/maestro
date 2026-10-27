@@ -42,6 +42,12 @@ inline const std::vector<std::string> &MpsSamplingModes()
     return values;
 }
 
+inline const std::vector<std::string> &MpsRoutingStrategies()
+{
+    static const std::vector<std::string> values{"combined", "legacy"};
+    return values;
+}
+
 inline const std::vector<std::string> &KrausCompletenessChecks()
 {
     static const std::vector<std::string> values{"ignore", "warn", "strict"};
@@ -84,6 +90,8 @@ struct SimulatorConfig
     std::optional<std::string> precision = std::nullopt;
     bool disable_optimized_swapping = false;
     int lookahead_depth = -1;
+    // CPU MPS/MPO automatic routing: "combined" or "legacy". Unset retains native options or the legacy default.
+    std::optional<std::string> mps_routing_strategy;
     // Experimental accuracy-aware routing. Unset preserves native request values.
     std::optional<bool> mps_routing_virtual_bonds;
     std::optional<double> mps_routing_truncation_weight;
@@ -176,6 +184,7 @@ struct SimulatorConfig
         RequireOneOf(truncation_mode, TruncationModes(), "truncation_mode");
         RequireOneOf(precision, Precisions(), "precision");
         RequireOneOf(mps_sampling, MpsSamplingModes(), "mps_sampling");
+        RequireOneOf(mps_routing_strategy, MpsRoutingStrategies(), "mps_routing_strategy");
         RequireOneOf(mpo_kraus_completeness_check, KrausCompletenessChecks(), "mpo_kraus_completeness_check");
         RequireOneOf(mps_svd_solver, SvdSolvers(), "mps_svd_solver");
         RequireOneOf(mpo_svd_solver, SvdSolvers(), "mpo_svd_solver");
@@ -256,6 +265,8 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     network->GetController()->SetOptimizeCircuit(config.optimize_circuit);
     for (const auto &[key, value] : config.native_options)
         network->Configure(key.c_str(), value.c_str());
+    if (config.mps_routing_strategy)
+        network->Configure(Simulators::RoutingConfig::kStrategy, config.mps_routing_strategy->c_str());
     if (config.mps_routing_virtual_bonds)
         network->Configure(Simulators::RoutingConfig::kVirtualBonds, *config.mps_routing_virtual_bonds ? "true" : "false");
     if (config.mps_routing_truncation_weight)

@@ -617,11 +617,18 @@ template <typename Time = Types::time_type> class ExecuteJob
                             lookaheadHeuristicDepthLocal = 0;
 
                         sim->SetUseOptimalMeetingPosition(true);
-                        sim->SetLookaheadDepth(lookaheadDepthLocal);
+                        if (network->GetLookaheadDepth() == std::numeric_limits<int>::max())
+                            sim->SetAutomaticLookaheadDepth(lookaheadDepthLocal);
+                        else
+                            sim->SetLookaheadDepth(lookaheadDepthLocal);
                         sim->SetLookaheadDepthWithHeuristic(lookaheadHeuristicDepthLocal);
                         sim->setGrowthFactorGate(network->getGrowthFactorGate());
                         sim->setGrowthFactorSwap(network->getGrowthFactorSwap());
-                        sim->SetUpcomingGates(dcirc->GetOperations());
+                        // CPU routing already owns this unchanged, ordered window
+                        // from before layout planning. Its setters refresh callbacks
+                        // and fusion plans; reinstalling it repeats that preparation.
+                        if (sim->GetType() != Simulators::SimulatorType::kQCSim)
+                            sim->SetUpcomingGates(dcirc->GetOperations());
                     }
                 }
             }

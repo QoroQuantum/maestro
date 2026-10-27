@@ -449,34 +449,91 @@ void TestVirtualRoutingConfiguration()
 {
     using namespace MaestroExecution;
     GetMaestroObjectWithMute();
+    Simulators::Configuration native;
+    Check(Simulators::RoutingConfig::GetStrategy(native) == Simulators::RoutingConfig::Strategy::Legacy, "Wrong default routing strategy");
+    native.SetConfiguration("mps_routing_strategy", "legacy");
+    Check(Simulators::RoutingConfig::GetStrategy(native) == Simulators::RoutingConfig::Strategy::Legacy, "Legacy strategy parsed incorrectly");
+    for (const char *invalid : {"", "typo", "Combined", "current"})
+    {
+        bool rejected = false;
+        try
+        {
+            native.SetConfiguration("mps_routing_strategy", invalid);
+        }
+        catch (const std::invalid_argument &)
+        {
+            rejected = true;
+        }
+        Check(rejected && native.GetConfiguration("mps_routing_strategy") == "legacy", "Invalid strategy changed native configuration");
+    }
+    char *catalogText = MaestroGetCapabilitiesJson();
+    Check(catalogText != nullptr, "Cannot inspect routing capabilities");
+    const auto catalog = json::parse(catalogText);
+    FreeResult(catalogText);
+    bool strategyFound = false;
+    for (const auto &option : catalog.at("options").as_array())
+        if (option.at("name") == "mps_routing_strategy")
+        {
+            strategyFound = true;
+            Check(option.at("enum") == json::array{"combined", "legacy"} && option.at("default") == "legacy", "Incorrect routing strategy discovery");
+            const auto &supported = option.at("supported_configurations").as_array();
+            Check(supported.size() == 2, "Routing strategy advertised unsupported configurations");
+            for (const auto &item : supported)
+                Check(item.at("backend") == "qcsim" && (item.at("method") == "matrix_product_state" || item.at("method") == "matrix_product_operator"),
+                      "Routing strategy advertised an untested backend");
+        }
+    Check(strategyFound, "Routing strategy missing from capabilities");
     for (const char *method : {"matrix_product_state", "matrix_product_operator"})
     {
-        auto config = ParseConfig(json::object{
-            {"backend", "qcsim"},
-            {"method", method},
-            {"options", json::object{{"mps_routing_virtual_bonds", true}, {"mps_routing_truncation_weight", 0.5}, {"mps_routing_legacy_cap", false}}}});
+        auto config = ParseConfig(json::object{{"backend", "qcsim"},
+                                               {"method", method},
+                                               {"options", json::object{{"mps_routing_virtual_bonds", true},
+                                                                        {"mps_routing_truncation_weight", 0.5},
+                                                                        {"mps_routing_legacy_cap", false},
+                                                                        {"mps_routing_strategy", "legacy"}}}});
         const auto handle = CreateSimpleSimulator(4);
         const auto network = ConfigureNetwork(handle, config);
         Check(network && network->GetSimulator()->GetConfiguration("mps_routing_virtual_bonds") == "true", "JSON virtual routing setting lost");
         Check(std::stod(network->GetSimulator()->GetConfiguration("mps_routing_truncation_weight")) == 0.5, "JSON routing weight lost");
+        Check(network->GetSimulator()->GetConfiguration("mps_routing_strategy") == "legacy", "JSON routing strategy lost");
+        config.mps_routing_strategy = "combined";
         config.mps_routing_virtual_bonds = false;
         config.mps_routing_truncation_weight = 0.;
         const auto updated = ConfigureNetwork(handle, config);
         Check(updated && updated->GetSimulator()->GetConfiguration("mps_routing_virtual_bonds") == "false", "Typed virtual routing override lost");
         Check(std::stod(updated->GetSimulator()->GetConfiguration("mps_routing_truncation_weight")) == 0., "Typed zero routing weight lost");
+        Check(updated->GetSimulator()->GetConfiguration("mps_routing_strategy") == "combined", "Typed routing strategy override lost");
         for (bool estimate : {false, true})
         {
             const char *circuit = "OPENQASM 2.0; qreg q[4]; creg c[4]; h q[0]; measure q->c;";
-            const char *options = "{\"shots\":2,\"mps_routing_virtual_bonds\":true,\"mps_routing_truncation_weight\":0.25}";
+            const char *options = "{\"shots\":2,\"mps_routing_virtual_bonds\":true,\"mps_routing_truncation_weight\":0.25,"
+                                  "\"mps_routing_strategy\":\"legacy\"}";
             char *result = estimate ? SimpleEstimate(handle, circuit, "ZIII", options) : SimpleExecute(handle, circuit, options);
             Check(result != nullptr, "Legacy routing configuration failed");
             FreeResult(result);
             Check(updated->GetSimulator()->GetConfiguration("mps_routing_virtual_bonds") == "true", "Legacy routing flag was ignored");
             Check(std::stod(updated->GetSimulator()->GetConfiguration("mps_routing_truncation_weight")) == 0.25, "Legacy routing weight was ignored");
+            Check(updated->GetSimulator()->GetConfiguration("mps_routing_strategy") == "legacy", "Legacy routing strategy was ignored");
+            for (const char *invalid : {"{\"mps_routing_strategy\":\"typo\"}", "{\"mps_routing_strategy\":\"current\"}", "{\"mps_routing_strategy\":true}"})
+            {
+                char *bad = estimate ? SimpleEstimate(handle, circuit, "ZIII", invalid) : SimpleExecute(handle, circuit, invalid);
+                const bool rejected = bad == nullptr;
+                if (bad)
+                    FreeResult(bad);
+                Check(rejected && updated->GetSimulator()->GetConfiguration("mps_routing_strategy") == "legacy",
+                      "Invalid legacy strategy changed routing configuration");
+            }
+            updated->GetSimulator()->Configure("mps_routing_strategy", "combined");
+            result = estimate ? SimpleEstimate(handle, circuit, "ZIII", "{\"shots\":2}") : SimpleExecute(handle, circuit, "{\"shots\":2}");
+            Check(result != nullptr, "Legacy routing default failed");
+            FreeResult(result);
+            Check(updated->GetSimulator()->GetConfiguration("mps_routing_strategy") == "legacy", "Missing routing strategy did not restore legacy default");
         }
         DestroySimpleSimulator(handle);
     }
-    for (const auto &options : {json::object{{"mps_routing_virtual_bonds", "true"}}, json::object{{"mps_routing_truncation_weight", -1.}}})
+    for (const auto &options :
+         {json::object{{"mps_routing_virtual_bonds", "true"}}, json::object{{"mps_routing_truncation_weight", -1.}},
+          json::object{{"mps_routing_strategy", "typo"}}, json::object{{"mps_routing_strategy", "current"}}, json::object{{"mps_routing_strategy", true}}})
     {
         bool rejected = false;
         try
@@ -488,6 +545,35 @@ void TestVirtualRoutingConfiguration()
             rejected = true;
         }
         Check(rejected, "Invalid routing setting accepted");
+    }
+    for (const auto &backendMethod : {std::pair{"qcsim", "statevector"}, std::pair{"gpu", "matrix_product_state"}, std::pair{"gpu", "matrix_product_operator"}})
+    {
+        bool rejected = false;
+        try
+        {
+            ParseConfig(json::object{
+                {"backend", backendMethod.first}, {"method", backendMethod.second}, {"options", json::object{{"mps_routing_strategy", "combined"}}}});
+        }
+        catch (const std::exception &)
+        {
+            rejected = true;
+        }
+        Check(rejected, "Routing strategy accepted for an unsupported backend/method");
+    }
+    for (const char *invalid : {"typo", "current"})
+    {
+        SimulatorConfig invalidStrategy;
+        invalidStrategy.mps_routing_strategy = invalid;
+        bool strategyRejected = false;
+        try
+        {
+            invalidStrategy.Validate();
+        }
+        catch (const std::invalid_argument &)
+        {
+            strategyRejected = true;
+        }
+        Check(strategyRejected, "Invalid typed routing strategy accepted");
     }
     for (double weight : {-1., std::numeric_limits<double>::infinity(), std::numeric_limits<double>::quiet_NaN()})
     {

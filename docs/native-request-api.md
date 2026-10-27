@@ -211,6 +211,7 @@ are rejected. Small floating-point thresholds retain their precision.
 | `mps_sampling` | `` | string | mps |
 | `disable_optimized_swapping` | `` | boolean | mps |
 | `lookahead_depth` | `` | lookahead | mps |
+| `mps_routing_strategy` | same | string | QCSim MPS and MPO |
 | `mps_routing_virtual_bonds` | same | boolean | QCSim/GPU MPS and MPO |
 | `mps_routing_truncation_weight` | same | nonnegative | QCSim/GPU MPS and MPO |
 | `mps_routing_legacy_cap` | same | boolean | QCSim/GPU MPS and MPO |
@@ -605,6 +606,36 @@ accepts zero for unlimited bond dimension); `constraints` narrow choices (Aer
 truncation supports only `discarded_weight`). Cross-field and size constraints
 remain enforced by request validation. Catalog support does not probe optional
 plugins, GPU hardware or licensing, and is not a promise of runtime readiness.
+
+### Automatic CPU MPS/MPO routing
+
+`mps_routing_strategy` accepts `"legacy"` (default) or opt-in `"combined"` on QCSim
+MPS/MPO. `"legacy"` retains the native local/adaptive routing policy.
+The former name `"current"` is rejected; use `"legacy"` to request the default
+strategy explicitly or `"combined"` to select bounded routing.
+`"combined"` uses bounded work estimates from the actual tensor ranks when the
+network's automatic lookahead resolves to zero: a horizon of up to 24 two-qubit
+operations for MPS registers larger than 10 qubits, or up to 4 for MPO registers
+of at most 8 qubits. It requires virtual-bond routing to be disabled and the
+default gate/SWAP growth factors. Other cases retain the native routing policy.
+
+The existing optimization thresholds still apply. By default they require an
+effective register width of at least 12 and a bond cap of at least 32, or an unlimited cap. An MPO contributes twice
+its logical width to the threshold and automatic-depth calculation. Automatic
+depth uses the prepared routing operations, including fusion when enabled.
+This option does not change initial qubit layout. Explicit `lookahead_depth`
+values of zero or greater and `disable_optimized_swapping=true` retain their
+existing behavior. GPU routing is unchanged.
+
+The same optional field is available on Python `SimulatorConfig`; `None`
+retains a native request value or the default. Direct simulator callers retain
+native routing until the network explicitly resolves automatic lookahead.
+At finite bond caps, routing can change truncation error as well as runtime.
+The combined policy has measured MPS and MPO accuracy regressions, including a
+noisy MPO case that is also about 70% slower than legacy. It is therefore opt-in;
+compare total execution time and accuracy for the intended workload before using it.
+The 4,096-update budget for the MPS forecast is not a wall-time limit, and its
+24-interaction horizon may shrink on wider registers.
 
 ### Experimental virtual-bond routing
 

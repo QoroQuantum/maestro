@@ -375,6 +375,14 @@ class IState
     {
     }
 
+    // Network execution calls this after computing the initial layout and
+    // resolving its automatic depth. Explicit SetLookaheadDepth calls retain
+    // their original meaning, including zero for immediate-cost routing.
+    virtual void SetAutomaticLookaheadDepth(int depth)
+    {
+        SetLookaheadDepth(depth);
+    }
+
     /**
      * @brief Sets the lookahead depth for swap optimization.
      *
@@ -399,8 +407,10 @@ class IState
     {
     }
 
-    // Prepared interactions used by initial-layout optimization. Empty means
-    // that the caller should retain its original circuit view.
+    // Prepared interactions used by initial-layout optimization. An active
+    // routing plan may retain its complete indexed window during execution;
+    // this is not a remaining-operations/suffix API. Inactive mid-execution
+    // views are empty. Empty means the caller should retain its circuit view.
     virtual const std::vector<std::shared_ptr<Circuits::IOperation<double>>> &GetUpcomingRoutingOperations() const
     {
         static const std::vector<std::shared_ptr<Circuits::IOperation<double>>> empty;

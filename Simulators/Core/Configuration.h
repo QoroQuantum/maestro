@@ -129,7 +129,9 @@ class Configuration
 
     void SetConfiguration(const std::string &key, const std::string &value)
     {
-        if (key == RoutingConfig::kVirtualBonds || key == RoutingConfig::kLegacyCap)
+        if (key == RoutingConfig::kStrategy)
+            RoutingConfig::ParseStrategy(value);
+        else if (key == RoutingConfig::kVirtualBonds || key == RoutingConfig::kLegacyCap)
             RoutingConfig::ParseFlag(value);
         else if (key == RoutingConfig::kTruncationWeight)
             RoutingConfig::ParseWeight(value);

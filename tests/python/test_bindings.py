@@ -5479,6 +5479,7 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "max_simulators": 4,
     "mps_routing_virtual_bonds": True,
     "mps_routing_truncation_weight": 0.5,
+    "mps_routing_strategy": "legacy",
 }
 
 
@@ -5498,6 +5499,8 @@ class TestSimulatorConfigFields:
         ("mpo_svd_solver", "gesvdx"),
         ("tensor_network_svd_solver", "gesvdx"),
         ("mpo_kraus_completeness_check", "loud"),
+        ("mps_routing_strategy", "typo"),
+        ("mps_routing_strategy", "current"),
     ]
 
     def test_constructor_is_keyword_only(self):
@@ -5535,6 +5538,17 @@ class TestSimulatorConfigFields:
         names = [part.split("=")[0]
                  for part in text[len("SimulatorConfig("):-1].split(", ")]
         assert names == list(NON_DEFAULT_CONFIG_FIELDS)
+
+    def test_routing_strategy_optional_choices(self):
+        config = maestro.SimulatorConfig()
+        assert config.mps_routing_strategy is None
+        for strategy in ("legacy", "combined", None):
+            constructed = maestro.SimulatorConfig(mps_routing_strategy=strategy)
+            assert constructed.mps_routing_strategy == strategy
+            config.mps_routing_strategy = strategy
+            restored = pickle.loads(pickle.dumps(config))
+            assert restored.mps_routing_strategy == strategy
+            assert f"mps_routing_strategy={strategy!r}" in repr(restored)
 
     def test_pickle_round_trips_every_field(self):
         config = maestro.SimulatorConfig(**NON_DEFAULT_CONFIG_FIELDS)

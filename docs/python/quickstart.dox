@@ -62,6 +62,7 @@
  * | `precision` | `str` or `None` | `None` | `"single"` or `"double"` for Qiskit Aer and the GPU simulators; `None` keeps each backend's default. Other backends ignore it; QCSim always uses double precision. |
  * | `disable_optimized_swapping` | `bool` | `False` | Disable swap-cost and initial qubit-map optimisation |
  * | `lookahead_depth` | `int` | `-1` | Swap optimization lookahead depth; `-1` uses the default |
+ * | `mps_routing_strategy` | `str` or `None` | `None` | CPU MPS/MPO automatic routing: `"legacy"` (backend default) or opt-in `"combined"`; explicit lookahead overrides selection |
  * | `mps_sampling` | `str` | `"probabilities"` | MPS shot sampling: `"probabilities"` samples without collapsing the state, `"apply_measure"` measures and restores it per shot |
  * | `seed` | `int` or `None` | `None` | Seed all backend and Maestro sampling RNGs. Parallel jobs derive deterministic, distinct child streams. |
  * | `gpu_device` | `int` or `None` | `None` | CUDA-visible device ordinal for single-GPU execution |

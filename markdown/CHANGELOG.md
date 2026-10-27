@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `mps_routing_strategy` for CPU MPS/MPO automatic swap routing. The default
+  `"legacy"` preserves the existing routing behavior; opt-in `"combined"` uses
+  bounded forecasts from live tensor ranks when automatic lookahead is zero.
+  Combined prepares its gate table on first use and shares prepared immutable
+  metadata between clones. It has measured runtime and finite-cap accuracy
+  tradeoffs, so it is not selected automatically. Existing optimization thresholds,
+  explicit lookahead settings, initial layouts, and GPU routing are preserved.
+
+### Changed
+
+- CPU MPS/MPO setup and cloning reuse valid fusion routing metadata, avoiding
+  repeated preparation while keeping each clone's execution state independent.
+
 ## [0.3.8] - 2026-10-26
 
 ### Added

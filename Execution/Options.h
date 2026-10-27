@@ -98,6 +98,7 @@ inline const std::vector<Option> &Options()
         {"mps_sampling", "", "string", "mps"},
         {"disable_optimized_swapping", "", "boolean", "routing"},
         {"lookahead_depth", "", "lookahead", "routing"},
+        {"mps_routing_strategy", "mps_routing_strategy", "string", "cpu_routing"},
         {"mps_routing_virtual_bonds", "mps_routing_virtual_bonds", "boolean", "native_routing"},
         {"mps_routing_truncation_weight", "mps_routing_truncation_weight", "nonnegative", "native_routing"},
         {"mps_routing_legacy_cap", "mps_routing_legacy_cap", "boolean", "native_routing"},
@@ -161,6 +162,8 @@ inline bool Applies(const Option &option, const SimulatorConfig &config)
     if (family == "mps")
         return mps;
     // swap routing of the tensor-network chains (MPS and MPO)
+    if (family == "cpu_routing")
+        return (mps || mpo) && backend == Backend::kQCSim;
     if (family == "native_routing")
         return (mps || mpo) && (backend == Backend::kQCSim || gpu);
     if (family == "routing")
@@ -258,6 +261,8 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
         }
         if (name == "mpo_kraus_completeness_check")
             choice(value, KrausCompletenessChecks(), key);
+        if (name == "mps_routing_strategy")
+            choice(value, MpsRoutingStrategies(), key);
         // Network controls and reshaped options use typed fields; other settings
         // keep the validated native Configure key/value. Keep both paths in
         // SimulatorConfig.h in sync when changing serialization or an option's

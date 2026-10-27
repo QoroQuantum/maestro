@@ -110,12 +110,19 @@ class FusionState : public ISimulator
 
     const std::vector<std::shared_ptr<Circuits::IOperation<double>>> &GetUpcomingRoutingOperations() const override
     {
+        static const std::vector<Operation> empty;
+        // An active plan retains its complete indexed window, not a suffix.
+        // Inactive metadata is only an initial-layout view. Reading it after
+        // execution starts must neither expose that stale view nor flush pending
+        // fusion blocks or install a new backend operation window.
+        if (!planValid_ && sourceIndex_ != 0)
+            return empty;
         // Initial placement may request a fused view even without lookahead.
         // Build it lazily; statevectors never need a routing plan.
-        if (routing_.empty() && !sources_.empty() && IsGateFusionEnabled() &&
+        if ((!routingPlan_ || routingPlan_->routing.empty()) && !sources_.empty() && IsGateFusionEnabled() &&
             (GetSimulationType() == SimulationType::kMatrixProductState || GetSimulationType() == SimulationType::kMatrixProductOperator))
             const_cast<FusionState *>(this)->PreparePlan();
-        return routing_;
+        return routingPlan_ ? routingPlan_->routing : empty;
     }
 
     long long GetGatesCounter() const override
@@ -169,8 +176,7 @@ class FusionState : public ISimulator
         ready_ = false;
         sourceIndex_ = 0;
         sources_.clear();
-        routing_.clear();
-        boundaryRouting_.clear();
+        routingPlan_.reset();
         backendRoutingInstalled_ = false;
         saved_.reset();
         destructiveSaved_.reset();
@@ -562,35 +568,40 @@ class FusionState : public ISimulator
 
     void SetUseOptimalMeetingPosition(bool value) override
     {
-        Flush();
-        immediate_->SetUseOptimalMeetingPosition(value);
-        RebuildPlan();
+        UpdateRoutingSetting([&] { immediate_->SetUseOptimalMeetingPosition(value); });
     }
 
     void SetLookaheadDepth(int value) override
     {
-        Flush();
-        immediate_->SetLookaheadDepth(value);
-        RebuildPlan();
+        UpdateRoutingSetting([&] { immediate_->SetLookaheadDepth(value); });
+    }
+
+    void SetAutomaticLookaheadDepth(int value) override
+    {
+        UpdateRoutingSetting([&] { immediate_->SetAutomaticLookaheadDepth(value); });
     }
 
     void SetLookaheadDepthWithHeuristic(int value) override
     {
-        Flush();
-        immediate_->SetLookaheadDepthWithHeuristic(value);
-        RebuildPlan();
+        UpdateRoutingSetting([&] { immediate_->SetLookaheadDepthWithHeuristic(value); });
     }
 
     void setGrowthFactorSwap(double value) override
     {
         Flush();
+        const bool oldLookahead = IsRoutingLookaheadEnabled();
         immediate_->setGrowthFactorSwap(value);
+        if (oldLookahead != IsRoutingLookaheadEnabled())
+            RebuildPlan();
     }
 
     void setGrowthFactorGate(double value) override
     {
         Flush();
+        const bool oldLookahead = IsRoutingLookaheadEnabled();
         immediate_->setGrowthFactorGate(value);
+        if (oldLookahead != IsRoutingLookaheadEnabled())
+            RebuildPlan();
     }
 
     void InitializeState(size_t n, std::vector<std::complex<double>> &value) override
@@ -724,7 +735,21 @@ class FusionState : public ISimulator
         const auto seed = copy.immediate_->GetConfiguration("seed");
         if (!seed.empty())
             copy.SeedAuxiliaryRng(std::stoull(seed));
-        copy.RebuildPlan();
+        // Flush above either completed the pending planned block or invalidated
+        // it. A still-valid plan uses the same complete backend operation window
+        // and cursor copied by the native wrapper; do not reparse its suffix.
+        const auto method = GetSimulationType();
+        const bool cpuChain =
+            GetType() == SimulatorType::kQCSim && (method == SimulationType::kMatrixProductState || method == SimulationType::kMatrixProductOperator);
+        if (cpuChain && (!IsGateFusionEnabled() || (planValid_ && routingPlan_)))
+        {
+            copy.routingPlan_ = routingPlan_;
+            copy.planIndex_ = planIndex_;
+            copy.planValid_ = planValid_;
+            copy.backendRoutingInstalled_ = backendRoutingInstalled_;
+        }
+        else
+            copy.RebuildPlan();
     }
 
     void SubmitGate(const FusionGate &gate)
@@ -777,8 +802,8 @@ class FusionState : public ISimulator
         if (planValid_)
         {
             const auto index = static_cast<size_t>(sourceIndex_);
-            const auto boundary = boundaryRouting_.find(index);
-            if (boundary != boundaryRouting_.end() && sources_[index]->GetType() == Circuits::OperationType::kConditionalGate)
+            const auto boundary = routingPlan_->boundaries.find(index);
+            if (boundary != routingPlan_->boundaries.end() && sources_[index]->GetType() == Circuits::OperationType::kConditionalGate)
             {
                 // A conditional gate that fires is a boundary of the plan: apply it on
                 // its own, at its routing position, and keep the plan.
@@ -819,6 +844,23 @@ class FusionState : public ISimulator
     }
 
   private:
+    template <class Setter> void UpdateRoutingSetting(Setter &&setter)
+    {
+        Flush();
+        const bool oldLookahead = IsRoutingLookaheadEnabled();
+        std::forward<Setter>(setter)();
+        const bool newLookahead = IsRoutingLookaheadEnabled();
+        // Reuse is limited to the CPU tensor chains verified here. Initial
+        // routing metadata does not depend on their depth/heuristic.
+        // Mid-circuit calls still rebuild the suffix: Flush may split a planned
+        // block, and a counter rewind can leave an invalid plan even at zero.
+        const auto method = GetSimulationType();
+        const bool cpuChain =
+            GetType() == SimulatorType::kQCSim && (method == SimulationType::kMatrixProductState || method == SimulationType::kMatrixProductOperator);
+        if (!cpuChain || sourceIndex_ != 0 || oldLookahead != newLookahead || (newLookahead && !planValid_))
+            RebuildPlan();
+    }
+
     template <class EmitBlock> void SubmitToCache(Cache &cache, const FusionGate &gate, uint64_t source, EmitBlock &&emit)
     {
         cache.Submit(gate, source, std::forward<EmitBlock>(emit), PreserveStructuredGates() && gate.IsStructured(),
@@ -836,6 +878,14 @@ class FusionState : public ISimulator
         Types::qubits_vector targets;
         Cache::Sources sources;
         size_t routingIndex;
+    };
+
+    struct RoutingPlan
+    {
+        std::vector<Operation> routing;
+        std::vector<Planned> planned;
+        // Source position -> routing position for non-gate boundaries.
+        std::unordered_map<size_t, size_t> boundaries;
     };
 
     void Synchronize() const
@@ -870,18 +920,14 @@ class FusionState : public ISimulator
     void Discard()
     {
         cache_.Clear();
-        planned_.clear();
-        routing_.clear();
-        boundaryRouting_.clear();
+        routingPlan_.reset();
         planValid_ = false;
     }
 
     void InvalidatePlan()
     {
         planValid_ = false;
-        planned_.clear();
-        routing_.clear();
-        boundaryRouting_.clear();
+        routingPlan_.reset();
         if (IsGateFusionEnabled() && backendRoutingInstalled_)
         {
             immediate_->SetUpcomingGates({});
@@ -891,9 +937,7 @@ class FusionState : public ISimulator
 
     void RebuildPlan()
     {
-        planned_.clear();
-        routing_.clear();
-        boundaryRouting_.clear();
+        routingPlan_.reset();
         planIndex_ = 0;
         planValid_ = false;
         if (!IsGateFusionEnabled())
@@ -915,16 +959,16 @@ class FusionState : public ISimulator
 
     void PreparePlan()
     {
-        planned_.clear();
-        routing_.clear();
-        boundaryRouting_.clear();
+        planValid_ = false;
+        routingPlan_.reset();
+        auto prepared = std::make_shared<RoutingPlan>();
         planIndex_ = 0;
-        planValid_ = IsRoutingLookaheadEnabled();
+        const bool installRouting = IsRoutingLookaheadEnabled();
         Cache planner(GetGateFusionMaxQubits(), false);
-        auto emit = [this](const auto &block) {
-            planned_.push_back({block.targets, block.sources, routing_.size()});
+        auto emit = [&prepared](const auto &block) {
+            prepared->planned.push_back({block.targets, block.sources, prepared->routing.size()});
             const bool swap = block.IsSingle() && block.original.kind == Circuits::QuantumGateType::kSwapGateType;
-            routing_.push_back(std::make_shared<FusionRoutingOperation>(block.targets, block.schmidtRank, swap));
+            prepared->routing.push_back(std::make_shared<FusionRoutingOperation>(block.targets, block.schmidtRank, swap));
         };
         for (size_t i = static_cast<size_t>(sourceIndex_); i < sources_.size(); ++i)
         {
@@ -938,15 +982,17 @@ class FusionState : public ISimulator
             else
             {
                 planner.Flush(emit);
-                boundaryRouting_[i] = routing_.size();
-                routing_.push_back(sources_[i]);
+                prepared->boundaries[i] = prepared->routing.size();
+                prepared->routing.push_back(sources_[i]);
             }
         }
         planner.Flush(emit);
+        routingPlan_ = prepared;
+        planValid_ = installRouting;
         if (planValid_)
         {
-            immediate_->SetUpcomingGates(routing_);
-            backendRoutingInstalled_ = !routing_.empty();
+            immediate_->SetUpcomingGates(prepared->routing);
+            backendRoutingInstalled_ = !prepared->routing.empty();
         }
     }
 
@@ -954,10 +1000,11 @@ class FusionState : public ISimulator
     {
         if (planValid_)
         {
-            if (planIndex_ >= planned_.size() || planned_[planIndex_].sources != block.sources || planned_[planIndex_].targets != block.targets)
+            if (planIndex_ >= routingPlan_->planned.size() || routingPlan_->planned[planIndex_].sources != block.sources ||
+                routingPlan_->planned[planIndex_].targets != block.targets)
                 InvalidatePlan();
             else
-                immediate_->SetGatesCounter(planned_[planIndex_].routingIndex);
+                immediate_->SetGatesCounter(routingPlan_->planned[planIndex_].routingIndex);
         }
         if (block.IsSingle())
             block.original.Apply(*immediate_);
@@ -986,10 +1033,9 @@ class FusionState : public ISimulator
     Cache cache_;
     long long sourceIndex_ = 0;
     std::vector<Operation> sources_;
-    std::vector<Operation> routing_;
-    std::vector<Planned> planned_;
-    // routing position of every non-gate source operation of the current plan
-    std::unordered_map<size_t, size_t> boundaryRouting_;
+    // Gate/index metadata is immutable after preparation and can be shared by
+    // compatible clones. Execution cursors and the pending fusion cache stay local.
+    std::shared_ptr<const RoutingPlan> routingPlan_;
     size_t planIndex_ = 0;
     bool planValid_ = false;
     bool backendRoutingInstalled_ = false;
