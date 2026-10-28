@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-10-28
+
 ### Added
 
 - `mps_routing_strategy` for CPU MPS/MPO automatic swap routing. The default
@@ -21,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CPU MPS/MPO setup and cloning reuse valid fusion routing metadata, avoiding
   repeated preparation while keeping each clone's execution state independent.
+- x86 builds with GCC and Clang pass `-ffp-contract=off`, so the compiler no longer
+  fuses multiplies and adds on its own. Serial and multithreaded runs now give
+  bit-identical results with GCC 15; floating-point results can differ from 0.3.8 in
+  the last bits.
 
 ### Fixed
 
@@ -28,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Failed to create simulator handle`. The library instance is now initialised once,
   and threads that arrive during initialisation wait for it. 0.3.8 exposed the race by
   creating simulator handles with the GIL released.
+- Source builds find OpenBLAS on systems whose OpenBLAS CMake package lists a library
+  that does not exist, such as Ubuntu 26.04, by falling back to `FindBLAS`.
 
 ## [0.3.8] - 2026-10-26
 
