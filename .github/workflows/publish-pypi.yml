@@ -235,9 +235,12 @@ jobs:
             CMAKE_C_COMPILER_LAUNCHER=ccache
             CMAKE_CXX_COMPILER_LAUNCHER=ccache
 
+          # delocate bundles libomp too; relink_libomp.py then has Maestro use torch's
+          # copy when torch is installed, since two copies in one process abort.
           CIBW_REPAIR_WHEEL_COMMAND_MACOS: >-
             DYLD_FALLBACK_LIBRARY_PATH=${{ env.MACOS_DYLD_PATH }}
-            delocate-wheel --require-archs {delocate_archs} --exclude libomp.dylib -w {dest_dir} -v {wheel}
+            delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel} &&
+            python .github/scripts/relink_libomp.py {dest_dir}/*.whl
 
           CIBW_ARCHS_MACOS: auto
 
@@ -254,8 +257,53 @@ jobs:
           CIBW_TEST_COMMAND: >-
             pytest {project}/tests/python/test_bindings.py -q -k "TestGetStatevector or TestSparseStatevector or TestSimulatorConfigFields" &&
             pytest {project}/tests/python/test_adjoint.py -q
+          # Also checks Maestro's libomp: alone with the Homebrew prefixes unreadable,
+          # then next to scikit-learn and torch, each in both import orders.
+          CIBW_TEST_COMMAND_MACOS: >-
+            pytest {project}/tests/python/test_bindings.py -q -k "TestGetStatevector or TestSparseStatevector or TestSimulatorConfigFields" &&
+            pytest {project}/tests/python/test_adjoint.py -q &&
+            sandbox-exec -p '(version 1)(allow default)(deny file-read* (subpath "/opt/homebrew") (subpath "/usr/local"))'
+            python {project}/.github/scripts/check_macos_libomp.py maestro &&
+            python -m pip install scikit-learn &&
+            python {project}/.github/scripts/check_macos_libomp.py sklearn maestro &&
+            python {project}/.github/scripts/check_macos_libomp.py maestro sklearn &&
+            python -m pip install torch &&
+            python {project}/.github/scripts/check_macos_libomp.py torch maestro &&
+            python {project}/.github/scripts/check_macos_libomp.py maestro torch maestro
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
+
+      # The cibuildwheel tests run on a runner with Homebrew installed, so also
+      # check the wheels themselves load nothing from it.
+      - name: Check macOS wheels are self-contained
+        if: runner.os == 'macOS'
+        run: |
+          status=0
+          for whl in wheelhouse/*.whl; do
+            dir=$(mktemp -d)
+            unzip -q "$whl" -d "$dir"
+            while IFS= read -r -d '' f; do
+              file -b "$f" | grep -q '^Mach-O' || continue
+              bad=$({
+                # Dependencies, install names and rpaths alike.
+                otool -l "$f" | awk '$1 == "name" || $1 == "path" { print $2 }' | grep -E '^(/opt/homebrew|/usr/local)/'
+                # relink_libomp.py leaves every libomp reference as @rpath/libomp.dylib.
+                otool -L "$f" | tail -n +2 | awk '{ print $1 }' | grep 'libomp' | grep -vx '@rpath/libomp.dylib'
+              } | sort -u || true)
+              if [ -n "$bad" ]; then
+                echo "::error::$(basename "$whl"): ${f#"$dir"/} references:"
+                echo "$bad"
+                status=1
+              fi
+            done < <(find "$dir" -type f -print0)
+            omp=$(find "$dir" -name 'libomp*.dylib' | wc -l | tr -d ' ')
+            if [ "$omp" -ne 1 ]; then
+              echo "::error::$(basename "$whl"): expected one bundled libomp, found $omp"
+              status=1
+            fi
+            rm -rf "$dir"
+          done
+          exit $status
 
       - name: Test native request DLL consumers (Windows)
         if: runner.os == 'Windows'
