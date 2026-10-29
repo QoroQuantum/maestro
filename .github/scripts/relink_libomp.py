@@ -43,7 +43,14 @@ MACHO_MAGICS = {
 
 
 def run(*cmd):
-    return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+    try:
+        return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+    except subprocess.CalledProcessError as exc:
+        if exc.stdout:
+            print(exc.stdout, file=sys.stdout, end="")
+        if exc.stderr:
+            print(exc.stderr, file=sys.stderr, end="")
+        raise
 
 
 def is_macho(path):
