@@ -275,6 +275,16 @@ void require_any_noise(const noise::NoiseModel &noise_model)
         throw nb::value_error("NoiseModel has no noise configured.");
 }
 
+// Channel operations in the circuit itself (e.g. translated Stim noise) are
+// noise in their own right, even under an empty NoiseModel.
+bool has_circuit_channels(const CircuitPtr &circuit)
+{
+    for (const auto &op : circuit->GetOperations())
+        if (op->GetType() == Circuits::OperationType::kQuantumChannel)
+            return true;
+    return false;
+}
+
 nb::dict NoisyExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots, int noise_realizations,
                       std::optional<uint64_t> noise_seed)
 {
@@ -295,7 +305,8 @@ nb::dict FullNoiseExecute(const CircuitPtr &circuit, const noise::NoiseModel &no
                           std::optional<uint64_t> noise_seed)
 {
     require_circuit(circuit);
-    require_any_noise(noise_model);
+    if (!has_circuit_channels(circuit))
+        require_any_noise(noise_model);
     warn_thermal_approximation(noise_model, config);
     return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, inject_combined_noise_for_config, "combined");
 }
@@ -320,7 +331,8 @@ nb::dict FullNoiseEstimate(const CircuitPtr &circuit, const nb::object &observab
                            const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
 {
     require_circuit(circuit);
-    require_any_noise(noise_model);
+    if (!has_circuit_channels(circuit))
+        require_any_noise(noise_model);
     warn_thermal_approximation(noise_model, config);
     return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, inject_combined_noise_for_config, "combined");
 }

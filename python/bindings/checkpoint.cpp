@@ -65,7 +65,11 @@ class PrefixCheckpointedSimulator
             total_cbits = std::max(total_cbits, *cbits_set.rbegin() + 1);
         }
 
-        const bool has_noise = (noise_model != nullptr) && noise_model->has_any();
+        // Circuit-level channels need per-realization injection like a model does.
+        static const noise::NoiseModel no_noise;
+        if (noise_model == nullptr)
+            noise_model = &no_noise;
+        const bool has_noise = noise_model->has_any() || has_circuit_channels(suffix_circuit);
         if (has_noise)
             warn_thermal_approximation(*noise_model, config_);
 

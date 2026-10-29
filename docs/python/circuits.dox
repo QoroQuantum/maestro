@@ -89,7 +89,28 @@
  *
  * # Or measure all active qubits at once
  * qc.measure_all()
+ *
+ * # Flip each recorded result with probability 0.01, like Stim's M(0.01)
+ * qc.measure([(0, 0)], readout_error=0.01)
  * @endcode
+ *
+ * @section py_circuit_noise Noise in the Circuit
+ *
+ * A Pauli channel can sit at a fixed point in the circuit, like a Stim noise
+ * instruction. `probabilities` has `4**len(qubits)` entries; base-4 digit k of
+ * an index selects I, X, Y or Z on `qubits[k]`.
+ *
+ * @code{.py}
+ * p = 0.01
+ * qc.pauli_channel([0], [1 - p, p / 3, p / 3, p / 3])     # DEPOLARIZE1(p)
+ * qc.pauli_channel([0, 1], [1 - p] + [p / 15] * 15)       # DEPOLARIZE2(p)
+ *
+ * # Pure-state and MPS backends draw one Pauli per noise realization
+ * result = qc.full_noise_execute(maestro.NoiseModel(), shots=1000, noise_realizations=1000)
+ * @endcode
+ *
+ * Basis changes that belong to a measurement or reset can be exempted from a
+ * NoiseModel's gate noise with `qc.h(q, noiseless=True)` (also `s`, `sdg`).
  *
  * ---
  *

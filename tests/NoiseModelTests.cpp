@@ -1005,4 +1005,87 @@ BOOST_AUTO_TEST_CASE(NoiseAddReportsThermalApproximationOncePerCall)
     BOOST_CHECK_EQUAL(warnings, 1);
 }
 
+/** Each coherent setter replaces only its own component, so axes compose. */
+BOOST_AUTO_TEST_CASE(CoherentSettersComposeAcrossAxes)
+{
+    noise::NoiseModel noiseModel;
+    noiseModel.set_coherent_bit_flip(0, 0.2);
+    noiseModel.set_coherent_dephasing(0, 0.2);
+    noiseModel.set_coherent_depolarizing(0, 0.1);
+
+    const auto *coherent = noiseModel.get_coherent(0);
+    BOOST_REQUIRE(coherent);
+    BOOST_CHECK_CLOSE(coherent->rx, 2.0 * std::asin(std::sqrt(0.2)), 1e-9);
+    BOOST_CHECK_SMALL(coherent->ry, kTolerance);
+    BOOST_CHECK_CLOSE(coherent->rz, 2.0 * std::asin(std::sqrt(0.2)), 1e-9);
+    BOOST_CHECK_CLOSE(coherent->diag, 2.0 * std::asin(std::sqrt(0.1)), 1e-9);
+}
+
+/**
+ * A circuit-level Pauli channel is replaced by the Pauli it draws on the
+ * sampled path and kept as a channel on the exact path. Probability one on
+ * index 6 (digit 0 = Y, digit 1 = X) makes the draw certain.
+ */
+BOOST_AUTO_TEST_CASE(CircuitPauliChannelIsSampledOrKept)
+{
+    std::vector<double> probabilities(16, 0.0);
+    probabilities[6] = 1.0;
+    auto circuit = std::make_shared<Circuits::Circuit<double>>();
+    circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{3, 5}, Simulators::QuantumChannel::Pauli(probabilities)));
+    const noise::NoiseModel noNoise;
+
+    std::mt19937 rng(1);
+    const auto sampled = noise::inject_combined_noise(circuit, noNoise, rng);
+    BOOST_REQUIRE_EQUAL(sampled->GetOperations().size(), 2u);
+    const auto y = std::dynamic_pointer_cast<Circuits::YGate<>>(sampled->GetOperations()[0]);
+    const auto x = std::dynamic_pointer_cast<Circuits::XGate<>>(sampled->GetOperations()[1]);
+    BOOST_REQUIRE(y && x);
+    BOOST_CHECK_EQUAL(y->GetQubit(), 3u);
+    BOOST_CHECK_EQUAL(x->GetQubit(), 5u);
+
+    const auto exact = noise::inject_combined_noise_exact(circuit, noNoise, rng);
+    BOOST_REQUIRE_EQUAL(exact->GetOperations().size(), 1u);
+    BOOST_CHECK(exact->GetOperations()[0]->GetType() == Circuits::OperationType::kQuantumChannel);
+}
+
+/** A noiseless gate gets no injected noise, and Circuit::Clone keeps the mark. */
+BOOST_AUTO_TEST_CASE(NoiselessGateGetsNoInjectedNoise)
+{
+    auto basisChange = std::make_shared<Circuits::HadamardGate<>>(0);
+    basisChange->SetNoiseless();
+    auto circuit = std::make_shared<Circuits::Circuit<double>>();
+    circuit->AddOperation(basisChange);
+    circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+    noise::NoiseModel noiseModel;
+    noiseModel.set_bit_flip(0, 1.0);
+
+    std::mt19937 rng(1);
+    const auto noisy = noise::inject_noise(circuit, noiseModel, rng);
+    BOOST_REQUIRE_EQUAL(noisy->GetOperations().size(), 3u);
+    BOOST_CHECK(std::dynamic_pointer_cast<Circuits::HadamardGate<>>(noisy->GetOperations()[1]));
+    BOOST_CHECK(std::dynamic_pointer_cast<Circuits::XGate<>>(noisy->GetOperations()[2]));
+
+    const auto copy = std::static_pointer_cast<Circuits::Circuit<double>>(circuit->Clone());
+    BOOST_CHECK(copy->GetOperations()[0]->IsNoiseless());
+    BOOST_CHECK(!copy->GetOperations()[1]->IsNoiseless());
+}
+
+/** The model's readout flip composes with a measurement's own, e.g. Stim's M(p). */
+BOOST_AUTO_TEST_CASE(ModelReadoutComposesWithMeasurementReadout)
+{
+    auto measurement = std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}});
+    measurement->SetReadoutAt(0, Circuits::ReadoutRates{0.1, 0.2});
+    auto circuit = std::make_shared<Circuits::Circuit<double>>();
+    circuit->AddOperation(measurement);
+    noise::NoiseModel noiseModel;
+    noiseModel.set_readout_error(0, 0.3, 0.4);
+
+    noise::attach_readout_error(circuit, noiseModel);
+
+    const auto &rates = measurement->GetReadout();
+    BOOST_REQUIRE_EQUAL(rates.size(), 1u);
+    BOOST_CHECK_CLOSE(rates[0].p_meas1_prep0, 0.1 * (1 - 0.4) + 0.9 * 0.3, 1e-9);
+    BOOST_CHECK_CLOSE(rates[0].p_meas0_prep1, 0.2 * (1 - 0.3) + 0.8 * 0.4, 1e-9);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

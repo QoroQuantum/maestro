@@ -33,23 +33,31 @@ void bind_noise(nb::module_ &m)
         .def("set_coherent_rotation", &noise::NoiseModel::set_coherent_rotation, "qubit"_a, "rx"_a, "ry"_a, "rz"_a,
              "Set per-qubit coherent noise as rotation angles (radians). "
              "After every gate on this qubit, Rx(±rx), Ry(±ry), Rz(±rz) "
-             "rotations are applied with random ± signs.")
+             "rotations are applied, with each ± sign drawn once per qubit "
+             "per noise realization. Replaces the X, Y and Z angles only; "
+             "set_coherent_depolarizing is kept.")
         .def("set_coherent_depolarizing", &noise::NoiseModel::set_coherent_depolarizing, "qubit"_a, "p"_a,
-             "Set coherent noise from a depolarizing probability. "
-             "Converts p to Rz angle ε = 2·arcsin(√p), matching the "
-             "infidelity of DEPOLARIZE1(p).")
+             "Set isotropic coherent noise calibrated to DEPOLARIZE1(p).\n\n"
+             "After every gate on this qubit, rotates by ε = 2·arcsin(√p) "
+             "about a body diagonal (±1, ±1, ±1)/√3 of the Bloch sphere, with "
+             "the signs drawn once per qubit per noise realization. The Pauli "
+             "twirl of that rotation is exactly DEPOLARIZE1(p), so it has the "
+             "same infidelity and affects X-, Y- and Z-basis measurements. "
+             "Composes with set_coherent_bit_flip/dephasing/rotation.")
         .def("set_coherent_dephasing", &noise::NoiseModel::set_coherent_dephasing, "qubit"_a, "p"_a,
-             "Set coherent dephasing noise: Rz rotation from probability p.")
+             "Set coherent dephasing noise: Rz rotation from probability p. "
+             "Replaces the Z angle only, so it composes with other axes.")
         .def("set_coherent_bit_flip", &noise::NoiseModel::set_coherent_bit_flip, "qubit"_a, "p"_a,
-             "Set coherent bit-flip noise: Rx rotation from probability p.")
+             "Set coherent bit-flip noise: Rx rotation from probability p. "
+             "Replaces the X angle only, so it composes with other axes.")
         .def("set_all_coherent_depolarizing", &noise::NoiseModel::set_all_coherent_depolarizing, "num_qubits"_a, "p"_a,
              "Set uniform coherent depolarizing noise on qubits [0, "
              "num_qubits).")
         .def("set_all_coherent_dephasing", &noise::NoiseModel::set_all_coherent_dephasing, "num_qubits"_a, "p"_a,
              "Set uniform coherent dephasing on qubits [0, num_qubits).")
         .def("set_coherent_strength", &noise::NoiseModel::set_coherent_strength, "num_qubits"_a, "p"_a,
-             "Convenience: set uniform coherent noise strength on all qubits. "
-             "Equivalent to set_all_coherent_depolarizing(n, p).")
+             "Convenience: set uniform isotropic coherent noise on qubits "
+             "[0, num_qubits). Equivalent to set_all_coherent_depolarizing(n, p).")
         .def("has_coherent", &noise::NoiseModel::has_coherent, "Return True if any coherent noise parameters have been set.")
         // ── Correlated (time-correlated) noise ──
         .def("set_correlated_ar1", &noise::NoiseModel::set_correlated_ar1, "qubit"_a, "phi"_a, "sigma_eta"_a, "after_1q"_a = true, "after_2q"_a = true,
@@ -274,11 +282,15 @@ void bind_noise(nb::module_ &m)
         .def("has_readout_error", &noise::NoiseModel::has_readout_error, "Return True if any readout error parameters have been set.")
         // ── Two-qubit depolarizing ──
         .def("set_2q_depolarizing", &noise::NoiseModel::set_2q_depolarizing, "q1"_a, "q2"_a, "p"_a,
-             "Set two-qubit depolarizing channel applied after CX/CZ gates "
-             "on (q1, q2).\n\n"
+             "Set a correlated two-qubit depolarizing channel applied after "
+             "every two-qubit gate on the pair (q1, q2).\n\n"
              "Channel: Λ(ρ) = (1-p)ρ + p/15 · Σ PρP†  "
-             "(15 non-identity two-qubit Paulis).\n"
-             "Applied ONLY after 2Q gates, separate from per-qubit noise.\n\n"
+             "(15 non-identity two-qubit Paulis), the same as Stim's "
+             "DEPOLARIZE2(p).\n"
+             "Applied ONLY after 2Q gates, separate from per-qubit noise. "
+             "Not to be confused with set_2q_gate_depolarizing(qubit, p), "
+             "which applies independent single-qubit depolarizing to each "
+             "qubit after its 2Q gates.\n\n"
              "Example: nm.set_2q_depolarizing(0, 1, 1.8e-3)")
         .def("has_any_2q_depolarizing", &noise::NoiseModel::has_any_2q_depolarizing, "Return True if any two-qubit depolarizing has been set.")
         // ── Gate-type-specific noise ──
@@ -288,13 +300,18 @@ void bind_noise(nb::module_ &m)
              "gates.\n\n"
              "Example: nm.set_1q_gate_depolarizing(0, 2.3e-4)")
         .def("set_2q_gate_depolarizing", &noise::NoiseModel::set_2q_gate_depolarizing, "qubit"_a, "p"_a,
-             "Set depolarizing noise applied only after two-qubit gates "
-             "involving this qubit.\n\n"
+             "Set single-qubit depolarizing noise (DEPOLARIZE1(p)) applied to "
+             "this qubit only after two-qubit gates involving it.\n\n"
+             "Each qubit of the gate gets an independent channel, so this is "
+             "NOT Stim's DEPOLARIZE2(p); for that use "
+             "set_2q_depolarizing(q1, q2, p).\n\n"
              "Example: nm.set_2q_gate_depolarizing(0, 1.8e-3)")
         .def("set_all_1q_gate_depolarizing", &noise::NoiseModel::set_all_1q_gate_depolarizing, "num_qubits"_a, "p"_a,
              "Set uniform 1Q gate depolarizing on qubits [0, num_qubits).")
         .def("set_all_2q_gate_depolarizing", &noise::NoiseModel::set_all_2q_gate_depolarizing, "num_qubits"_a, "p"_a,
-             "Set uniform 2Q gate depolarizing on qubits [0, num_qubits).")
+             "Set uniform single-qubit depolarizing after 2Q gates on qubits "
+             "[0, num_qubits). See set_2q_gate_depolarizing; for Stim's "
+             "DEPOLARIZE2 use set_2q_depolarizing on each coupled pair.")
         .def("has_1q_gate_noise", &noise::NoiseModel::has_1q_gate_noise, "Return True if any 1Q gate-specific noise has been set.")
         .def("has_2q_gate_noise", &noise::NoiseModel::has_2q_gate_noise, "Return True if any 2Q gate-specific noise has been set.")
         .def("has_any", &noise::NoiseModel::has_any, "Return True if any noise of any type has been configured.");

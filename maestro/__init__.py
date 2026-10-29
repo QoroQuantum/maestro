@@ -2,6 +2,7 @@
 
 import copyreg
 from copy import deepcopy as _deepcopy
+import functools
 import sys
 from .maestro import *
 from . import maestro as _raw_maestro
@@ -29,6 +30,7 @@ class NoiseModel(_raw_maestro.NoiseModel):
     def __getattribute__(self, name):
         attr = super().__getattribute__(name)
         if callable(attr) and name.startswith("set_"):
+            @functools.wraps(attr)
             def wrapper(*args, **kwargs):
                 # Snapshot mutable inputs before the native model can change.
                 saved_args, saved_kwargs = _deepcopy((args, kwargs))

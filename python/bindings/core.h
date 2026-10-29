@@ -11,6 +11,7 @@ void RequireNoiseSeed(std::optional<uint64_t> noise_seed);
 void require_circuit(const CircuitPtr &circuit);
 void require_realizations(int noise_realizations);
 void require_any_noise(const noise::NoiseModel &noise_model);
+bool has_circuit_channels(const CircuitPtr &circuit);
 
 std::vector<std::string> ParseObservables(const nb::object &observables);
 void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config);

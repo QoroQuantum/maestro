@@ -16,10 +16,39 @@ void bind_circuit(nb::module_ &m)
         .def("x", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::XGate<>>(q)); })
         .def("y", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::YGate<>>(q)); })
         .def("z", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::ZGate<>>(q)); })
-        .def("h", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::HadamardGate<>>(q)); })
+        // h, s and sdg are the basis changes of non-Z measurements and resets;
+        // noiseless=True keeps noise models from treating them as gates.
+        .def(
+            "h",
+            [](Circuits::Circuit<double> &s, Types::qubit_t q, bool noiseless) {
+                auto gate = std::make_shared<Circuits::HadamardGate<>>(q);
+                gate->SetNoiseless(noiseless);
+                s.AddOperation(gate);
+            },
+            "qubit"_a, "noiseless"_a = false,
+            "Apply a Hadamard gate. With noiseless=True, noise models add no "
+            "gate noise after it (for basis changes of a measurement or reset).")
         // Single Qubit Gates (Non-Parametric)
-        .def("s", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::SGate<>>(q)); })
-        .def("sdg", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::SdgGate<>>(q)); })
+        .def(
+            "s",
+            [](Circuits::Circuit<double> &s, Types::qubit_t q, bool noiseless) {
+                auto gate = std::make_shared<Circuits::SGate<>>(q);
+                gate->SetNoiseless(noiseless);
+                s.AddOperation(gate);
+            },
+            "qubit"_a, "noiseless"_a = false,
+            "Apply an S gate. With noiseless=True, noise models add no gate "
+            "noise after it (for basis changes of a measurement or reset).")
+        .def(
+            "sdg",
+            [](Circuits::Circuit<double> &s, Types::qubit_t q, bool noiseless) {
+                auto gate = std::make_shared<Circuits::SdgGate<>>(q);
+                gate->SetNoiseless(noiseless);
+                s.AddOperation(gate);
+            },
+            "qubit"_a, "noiseless"_a = false,
+            "Apply an S-dagger gate. With noiseless=True, noise models add no "
+            "gate noise after it (for basis changes of a measurement or reset).")
         .def("t", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::TGate<>>(q)); })
         .def("tdg", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::TdgGate<>>(q)); })
         .def("sx", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::SxGate<>>(q)); })
@@ -67,8 +96,20 @@ void bind_circuit(nb::module_ &m)
         .def("cswap", [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t a,
                          Types::qubit_t b) { s.AddOperation(std::make_shared<Circuits::CSwapGate<>>(c, a, b)); })
         // Measurement
-        .def("measure", [](Circuits::Circuit<double> &s,
-                           const std::vector<std::pair<Types::qubit_t, size_t>> &q) { s.AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(q)); })
+        .def(
+            "measure",
+            [](Circuits::Circuit<double> &s, const std::vector<std::pair<Types::qubit_t, size_t>> &q, double readout_error) {
+                auto measurement = std::make_shared<Circuits::MeasurementOperation<>>(q);
+                if (!std::isfinite(readout_error) || readout_error < 0.0 || readout_error > 1.0)
+                    throw nb::value_error("readout_error must be finite and in [0, 1].");
+                if (readout_error > 0.0)
+                    measurement->SetReadout(std::vector<Circuits::ReadoutRates>(q.size(), {readout_error, readout_error}));
+                s.AddOperation(measurement);
+            },
+            "qubits_and_bits"_a, "readout_error"_a = 0.0,
+            "Measure each (qubit, classical bit) pair.\n\n"
+            "readout_error flips each recorded result with that probability, "
+            "like Stim's M(p); a NoiseModel's readout error is applied on top.")
         .def("measure_all",
              [](Circuits::Circuit<double> &s) {
                  size_t n = s.GetMaxQubitIndex() + 1;
@@ -86,6 +127,23 @@ void bind_circuit(nb::module_ &m)
             "reset_qubits",
             [](Circuits::Circuit<double> &s, const std::vector<Types::qubit_t> &qubits) { s.AddOperation(std::make_shared<Circuits::Reset<>>(qubits)); },
             "qubits"_a, "Reset multiple qubits to |0>.")
+        // Noise channel
+        .def(
+            "pauli_channel",
+            [](Circuits::Circuit<double> &s, const Types::qubits_vector &qubits, const std::vector<double> &probabilities) {
+                s.AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(qubits, Simulators::QuantumChannel::Pauli(probabilities)));
+            },
+            "qubits"_a, "probabilities"_a,
+            "Apply a Pauli channel to one or two qubits, e.g. a Stim DEPOLARIZE1.\n\n"
+            "probabilities has 4**len(qubits) entries summing to one. Base-4 "
+            "digit k of an index selects I, X, Y or Z on qubits[k], so one "
+            "qubit is [pI, pX, pY, pZ] and two are II, XI, YI, ZI, IX, XX, ... "
+            "ZZ.\n\n"
+            "Density-matrix and MPO backends apply the channel exactly. "
+            "Pure-state and MPS backends sample one Pauli per noise "
+            "realization, so run the circuit through noisy_execute or "
+            "full_noise_execute with noise_realizations=shots; plain execute "
+            "rejects it there.")
         .def("remove_end_measurements", &Circuits::Circuit<double>::RemoveEndMeasurements,
              "Create a new circuit holding shared pointers to the original operations, with terminal measurements removed.")
 

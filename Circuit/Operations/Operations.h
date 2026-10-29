@@ -560,6 +560,29 @@ template <typename Time = Types::time_type> class IOperation : public std::enabl
     }
 
     /**
+     * @brief Mark the operation as exempt from injected gate noise.
+     *
+     * Noise models add no noise after a noiseless operation. This is for basis
+     * changes that belong to a non-Z measurement or reset rather than being
+     * gates in their own right. Circuit::Clone keeps the mark.
+     * @param value True to exempt the operation from gate noise.
+     */
+    void SetNoiseless(bool value = true)
+    {
+        noiseless = value;
+    }
+
+    /**
+     * @brief Whether noise models skip this operation.
+     *
+     * @return True if no gate noise is injected after this operation.
+     */
+    bool IsNoiseless() const
+    {
+        return noiseless;
+    }
+
+    /**
      * @brief Checks if the operation is a Clifford one.
      *
      * Checks if the operation is a Clifford one, allowing to be simulated in a
@@ -587,7 +610,8 @@ template <typename Time = Types::time_type> class IOperation : public std::enabl
     }
 
   private:
-    Time delay; /**< The delay of the operation. */
+    Time delay;             /**< The delay of the operation. */
+    bool noiseless = false; /**< True if noise models inject no noise after it. */
 };
 
 /**

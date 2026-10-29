@@ -59,7 +59,7 @@ def counts_to_measurements(
         raise ValueError(f"Maestro returned {sum(weights)} shots, expected {shots}")
     return np.repeat(np.asarray(rows, dtype=bool).reshape(len(rows), num_measurements), weights, axis=0)
 
-CLEAN_CIRCUIT_API_VERSION = 1
+CLEAN_CIRCUIT_API_VERSION = 2
 LOCAL_NOISE = {'DEPOLARIZE1', 'DEPOLARIZE2', 'X_ERROR', 'Y_ERROR', 'Z_ERROR',
                'PAULI_CHANNEL_1', 'PAULI_CHANNEL_2'}
 MEASUREMENTS = {'M', 'MZ', 'MX', 'MY', 'MR', 'MRZ', 'MRX', 'MRY'}
@@ -141,16 +141,78 @@ def _parse_instruction_line(line: str) -> tuple[str, list[float], list[int]]:
     return name, args, targets
 
 
+def _stim_instructions(circuit: stim.Circuit | str | Any) -> list[tuple[str, list[float], list[int]]]:
+    """(name, arguments, qubit targets) for each instruction of a Stim-like circuit."""
+    if isinstance(circuit, list):
+        return circuit
+    if isinstance(circuit, str) or hasattr(circuit, "circuit_str"):
+        text = circuit if isinstance(circuit, str) else circuit.circuit_str
+        instructions = []
+        for line in text.strip().splitlines():
+            name, args, targets = _parse_instruction_line(line)
+            if name:
+                instructions.append((name, args, targets))
+        return instructions
+
+    instructions = []
+    for inst in circuit.flattened():
+        name = inst.name
+        args = inst.gate_args_copy()
+        raw_targets = inst.targets_copy()
+        if name not in STIM_ANNOTATIONS and any(
+            not t.is_qubit_target or t.is_inverted_result_target for t in raw_targets
+        ):
+            raise ValueError("Special Stim targets are unsupported by clean translation")
+        targets = [t.qubit_value for t in raw_targets if t.is_qubit_target]
+        instructions.append((name, args, targets))
+    return instructions
+
+
+def _pauli_channel_probabilities(name: str, args: list[float]) -> tuple[int, list[float]]:
+    """Arity and QuantumCircuit.pauli_channel probabilities of a Stim Pauli noise channel.
+
+    Base-4 digit k of a Maestro index is the Pauli (I, X, Y, Z) on target k.
+    Stim lists PAULI_CHANNEL_2 arguments as IX, IY, ..., ZZ, the first letter
+    acting on the first target.
+    """
+    if name == "DEPOLARIZE1":
+        arity, errors = 1, {1: args[0] / 3, 2: args[0] / 3, 3: args[0] / 3}
+    elif name in ("X_ERROR", "Y_ERROR", "Z_ERROR"):
+        arity, errors = 1, {"XYZ".index(name[0]) + 1: args[0]}
+    elif name == "PAULI_CHANNEL_1":
+        arity, errors = 1, {1: args[0], 2: args[1], 3: args[2]}
+    elif name == "DEPOLARIZE2":
+        arity, errors = 2, {index: args[0] / 15 for index in range(1, 16)}
+    else:  # PAULI_CHANNEL_2
+        arity, errors = 2, {}
+        for k, p in enumerate(args):
+            first, second = divmod(k + 1, 4)
+            errors[first + 4 * second] = p
+
+    probabilities = [0.0] * 4**arity
+    for index, p in errors.items():
+        probabilities[index] = p
+    probabilities[0] = max(0.0, 1.0 - sum(errors.values()))
+    return arity, probabilities
+
+
 def translate_stim_to_maestro(
     circuit: stim.Circuit | str | Any,
     *, qubit_order=None,
 ) -> tuple[maestro.circuits.QuantumCircuit, maestro.NoiseModel, int]:
     """Translate a Stim circuit or circuit string into a Maestro QuantumCircuit and NoiseModel.
 
+    Pauli noise channels (DEPOLARIZE1/2, X/Y/Z_ERROR, PAULI_CHANNEL_1/2) become
+    QuantumCircuit.pauli_channel operations and measurement flip probabilities
+    such as M(p) become readout errors, so the circuit carries Stim's noise
+    exactly. The basis changes inserted for RX, RY, MX, MY, MRX and MRY are
+    marked noiseless, so a NoiseModel adds gate noise only where Stim has gates.
+
     Args:
-        circuit: A clean stim.Circuit, extended gate string, or list of
-            (name, arguments, integer targets) tuples. Embedded noise,
-            inverted measurements and record-controlled operations reject.
+        circuit: A stim.Circuit, extended gate string, or list of
+            (name, arguments, integer targets) tuples. Correlated (E) and
+            heralded noise, inverted measurements and record-controlled
+            operations reject.
         qubit_order: Optional complete qubit allocation order. Explicit order
             initializes these qubits to zero before the supplied instructions.
 
@@ -161,35 +223,7 @@ def translate_stim_to_maestro(
     nm = maestro.NoiseModel()
     meas_idx = 0
     active_qubits: set[int] = set()
-
-    if isinstance(circuit, str):
-        lines = circuit.strip().splitlines()
-        instructions = []
-        for line in lines:
-            name, args, targets = _parse_instruction_line(line)
-            if name:
-                instructions.append((name, args, targets))
-    elif hasattr(circuit, "circuit_str"):
-        lines = circuit.circuit_str.strip().splitlines()
-        instructions = []
-        for line in lines:
-            name, args, targets = _parse_instruction_line(line)
-            if name:
-                instructions.append((name, args, targets))
-    elif isinstance(circuit, list):
-        instructions = circuit
-    else:
-        instructions = []
-        for inst in circuit.flattened():
-            name = inst.name
-            args = inst.gate_args_copy()
-            raw_targets = inst.targets_copy()
-            if name not in STIM_ANNOTATIONS and any(
-                not t.is_qubit_target or t.is_inverted_result_target for t in raw_targets
-            ):
-                raise ValueError("Special Stim targets are unsupported by clean translation")
-            targets = [t.qubit_value for t in raw_targets if t.is_qubit_target]
-            instructions.append((name, args, targets))
+    instructions = _stim_instructions(circuit)
 
     used_qubits = {q for name, _, targets in instructions
                    if name not in STIM_ANNOTATIONS for q in targets}
@@ -207,10 +241,11 @@ def translate_stim_to_maestro(
             active_qubits.add(q)
 
     for name, args, targets in instructions:
-        if name in {"CX", "CNOT", "CY", "CZ", "SWAP", "ISWAP", "ISWAP_DAG"} and len(targets) % 2:
+        if name in {"CX", "CNOT", "CY", "CZ", "SWAP", "ISWAP", "ISWAP_DAG",
+                    "DEPOLARIZE2", "PAULI_CHANNEL_2"} and len(targets) % 2:
             raise ValueError(f"{name} requires pairs of qubit targets")
-        if name in MEASUREMENTS and args and args[0]:
-            raise ValueError("Measurement noise is unsupported; supply a clean circuit and external NoiseModel")
+        # Stim's M(p) flips the recorded result, which is what readout error does.
+        flip = args[0] if name in MEASUREMENTS and args else 0.0
         # --- Single-qubit Clifford gates ---
         if name == "I":
             for q in targets:
@@ -306,71 +341,77 @@ def translate_stim_to_maestro(
                 active_qubits.add(targets[i + 1])
 
         # --- Resets (unparameterized) ---
+        # Basis changes are part of the reset or measurement, so they are
+        # noiseless: a NoiseModel adds gate noise only where Stim has gates.
         elif name in ("R", "RZ"):
             for q in targets:
                 qc.reset(q)
         elif name == "RX":
             for q in targets:
                 qc.reset(q)
-                qc.h(q)
+                qc.h(q, noiseless=True)
                 active_qubits.add(q)
         elif name == "RY":
             for q in targets:
                 qc.reset(q)
-                qc.h(q)
-                qc.s(q)
+                qc.h(q, noiseless=True)
+                qc.s(q, noiseless=True)
                 active_qubits.add(q)
 
         # --- Measurements and Measure-and-Resets ---
         elif name in ("M", "MZ"):
             for q in targets:
-                qc.measure([(q, meas_idx)])
+                qc.measure([(q, meas_idx)], readout_error=flip)
                 meas_idx += 1
                 active_qubits.add(q)
         elif name in ("MR", "MRZ"):
             for q in targets:
-                qc.measure([(q, meas_idx)])
+                qc.measure([(q, meas_idx)], readout_error=flip)
                 qc.reset(q)
                 meas_idx += 1
                 active_qubits.add(q)
         elif name == "MX":
             for q in targets:
-                qc.h(q)
-                qc.measure([(q, meas_idx)])
-                qc.h(q)
+                qc.h(q, noiseless=True)
+                qc.measure([(q, meas_idx)], readout_error=flip)
+                qc.h(q, noiseless=True)
                 meas_idx += 1
                 active_qubits.add(q)
         elif name == "MRX":
             for q in targets:
-                qc.h(q)
-                qc.measure([(q, meas_idx)])
+                qc.h(q, noiseless=True)
+                qc.measure([(q, meas_idx)], readout_error=flip)
                 qc.reset(q)
-                qc.h(q)
+                qc.h(q, noiseless=True)
                 meas_idx += 1
                 active_qubits.add(q)
         elif name == "MY":
             for q in targets:
-                qc.sdg(q)
-                qc.h(q)
-                qc.measure([(q, meas_idx)])
-                qc.h(q)
-                qc.s(q)
+                qc.sdg(q, noiseless=True)
+                qc.h(q, noiseless=True)
+                qc.measure([(q, meas_idx)], readout_error=flip)
+                qc.h(q, noiseless=True)
+                qc.s(q, noiseless=True)
                 meas_idx += 1
                 active_qubits.add(q)
         elif name == "MRY":
             for q in targets:
-                qc.sdg(q)
-                qc.h(q)
-                qc.measure([(q, meas_idx)])
+                qc.sdg(q, noiseless=True)
+                qc.h(q, noiseless=True)
+                qc.measure([(q, meas_idx)], readout_error=flip)
                 qc.reset(q)
-                qc.h(q)
-                qc.s(q)
+                qc.h(q, noiseless=True)
+                qc.s(q, noiseless=True)
                 meas_idx += 1
                 active_qubits.add(q)
 
-        # A hardware NoiseModel cannot represent instruction-local channels.
+        # --- Pauli noise channels, carried exactly as circuit operations ---
         elif name in LOCAL_NOISE:
-            raise ValueError("Circuit-local noise is unsupported; supply a clean circuit and external NoiseModel")
+            arity, probabilities = _pauli_channel_probabilities(name, args)
+            if probabilities[0] < 1.0:
+                for i in range(0, len(targets), arity):
+                    qc.pauli_channel(targets[i:i + arity], probabilities)
+                    active_qubits.update(targets[i:i + arity])
 
         # --- Annotations (skipped for simulation) ---
         elif name in (
@@ -612,10 +653,16 @@ class MaestroSinterSampler(sinter.Sampler):
         Args:
             chi: Maximum bond dimension for Matrix Product State (MPS) simulation.
             use_gpu: Whether to use GPU acceleration.
-            noise_model: Optional pre-calibrated Maestro NoiseModel.
+            noise_model: Optional pre-calibrated Maestro NoiseModel, or a callable
+                ``task -> NoiseModel | None`` for per-task noise (for example read
+                from ``task.json_metadata``). With ``sinter.collect(num_workers>1)``
+                the callable must be picklable, e.g. a module-level function.
             device: Optional target device string.
             config: Optional pre-configured Maestro SimulatorConfig.
-            decoder: Optional default decoder (e.g. 'pymatching') to use for tasks.
+            decoder: Decoder for tasks, e.g. 'pymatching', or 'vacuous' for the
+                undecoded logical error rate. Required under ``sinter.collect``
+                unless this sampler is registered under a built-in decoder name,
+                because there ``task.decoder`` is the ``custom_decoders`` key.
             seed: Must be None for the factory. Use MaestroCompiledSampler for
                 reproducible direct sampling; collect worker identities are not
                 available here to partition seeded streams safely.
@@ -640,11 +687,12 @@ class MaestroSinterSampler(sinter.Sampler):
 
     def compiled_sampler_for_task(self, task: sinter.Task) -> sinter.CompiledSampler:
         """Create a compiled sampler configured for the given task."""
+        noise_model = self.noise_model(task) if callable(self.noise_model) else self.noise_model
         return MaestroCompiledSampler(
             task=task,
             chi=self.chi,
             use_gpu=self.use_gpu,
-            noise_model=self.noise_model,
+            noise_model=noise_model,
             device=self.device,
             config=self.config,
             decoder=self.decoder,
@@ -708,6 +756,8 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
         if self.num_circuit_meas != self.num_measurements:
             raise ValueError("Translated measurement count differs from the detector circuit")
         self.noise_model = noise_model
+        # Pauli channels in the circuit need a fresh draw per shot, like a NoiseModel.
+        self.has_circuit_noise = any(name in LOCAL_NOISE for name, _, _ in _stim_instructions(task.circuit))
 
         # Configure simulator
         if config is not None:
@@ -760,10 +810,20 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
                 except Exception:
                     self.checkpoint_sim = None
 
-        # Resolve decoder for task
-        decoder_to_use = self.decoder if self.decoder is not None else task.decoder
+        # Resolve decoder for task. Under sinter.collect, task.decoder is the
+        # custom_decoders key this sampler is registered under, which names a
+        # decoder only when it is one of sinter's built-ins.
+        decoder_to_use = self.decoder
+        if decoder_to_use is None and task.decoder is not None:
+            if task.decoder not in sinter.BUILT_IN_DECODERS:
+                raise ValueError(
+                    f"No decoder configured for task decoder {task.decoder!r}. Under "
+                    "sinter.collect that is the custom_decoders key, not a decoder: "
+                    "pass MaestroSinterSampler(decoder='pymatching'), or "
+                    "decoder='vacuous' for the undecoded logical error rate.")
+            decoder_to_use = task.decoder
         self.compiled_decoder = None
-        if decoder_to_use is not None and decoder_to_use != "maestro":
+        if decoder_to_use is not None:
             decoder_obj = None
             if isinstance(decoder_to_use, sinter.Decoder):
                 decoder_obj = decoder_to_use
@@ -794,10 +854,10 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
                 self.suffix_qc, shots=shots, noise_model=self.suffix_noise_model,
                 noise_realizations=shots, noise_seed=run_seed,
                 num_measurements=self.num_measurements)
-        elif self.noise_model is not None and self.noise_model.has_any():
+        elif self.has_circuit_noise or (self.noise_model is not None and self.noise_model.has_any()):
             res = self.qc.full_noise_execute(
-                self.noise_model, self.config, shots=shots,
-                noise_realizations=shots, noise_seed=run_seed)
+                self.noise_model if self.noise_model is not None else maestro.NoiseModel(),
+                self.config, shots=shots, noise_realizations=shots, noise_seed=run_seed)
         else:
             res = self.qc.execute(self.config, shots=shots)
         return counts_to_measurements(res.get("counts", {}), self.num_measurements, shots,
@@ -857,6 +917,19 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
             seconds=t1 - t0,
         )
 
+    def sample_measurements(self, shots: int = 1000, seed: int | None = None) -> np.ndarray:
+        """Sample the raw measurement record.
+
+        Args:
+            shots: Number of shots to sample.
+            seed: Optional random seed for simulation.
+
+        Returns:
+            A boolean numpy array of shape (shots, num_measurements), with
+            columns in Stim measurement-record order.
+        """
+        return self._measurements(shots, seed)
+
     def sample_detection_events(
         self, shots: int = 1000, seed: int | None = None
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -871,7 +944,7 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
             detection_events shape: (shots, num_detectors)
             actual_observables shape: (shots, num_observables)
         """
-        meas_matrix = self._measurements(shots, seed)
+        meas_matrix = self.sample_measurements(shots, seed)
 
         dets, actual_obs = self.converter.convert(
             measurements=meas_matrix,

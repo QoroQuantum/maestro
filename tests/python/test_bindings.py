@@ -3273,6 +3273,46 @@ class TestCoherentNoiseModel:
         assert nm.has_coherent() is True
 
 
+class TestCoherentDepolarizingIsIsotropic:
+    """set_coherent_depolarizing must act like DEPOLARIZE1(p) in every basis."""
+
+    @pytest.mark.parametrize("prep, observable", [("x", "Z"), ("h", "X")])
+    def test_one_gate_matches_depolarizing(self, prep, observable):
+        """After one gate, every sign realization gives DEPOLARIZE1's damping."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        getattr(qc, prep)(0)
+        p = 0.3
+        coherent = maestro.NoiseModel()
+        coherent.set_coherent_depolarizing(0, p)
+        pauli = maestro.NoiseModel()
+        pauli.set_depolarizing(0, p)
+
+        got = maestro.coherent_estimate(qc, [observable], coherent, noise_realizations=16,
+                                        noise_seed=3)['expectation_values'][0]
+        want = maestro.noisy_estimate(qc, [observable], pauli)['expectation_values'][0]
+        assert got == pytest.approx(want, abs=1e-9)
+
+    def test_coherent_setters_compose_across_axes(self):
+        """Bit flip then dephasing keeps the X rotation instead of overwriting it."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        nm = maestro.NoiseModel()
+        nm.set_coherent_bit_flip(0, 0.2)
+        nm.set_coherent_dephasing(0, 0.2)
+
+        got = maestro.coherent_estimate(qc, ['Z'], nm, noise_realizations=8,
+                                        noise_seed=1)['expectation_values'][0]
+        assert got == pytest.approx(-(1 - 2 * 0.2), abs=1e-9)
+
+    def test_wrapped_setters_keep_docstrings(self):
+        nm = maestro.NoiseModel()
+        raw = maestro._raw_maestro.NoiseModel.set_2q_depolarizing
+        assert nm.set_2q_depolarizing.__doc__ == raw.__doc__
+        assert nm.set_2q_depolarizing.__name__ == "set_2q_depolarizing"
+
+
 class TestCoherentEstimate:
     """Test coherent_estimate (coherent noise expectation values)."""
 
