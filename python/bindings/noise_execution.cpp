@@ -164,6 +164,17 @@ static nb::dict execute_noise_batches(const CircuitPtr &circuit, const noise::No
     return out;
 }
 
+// The noiseless baseline of a circuit drops its own channel operations, which a
+// pure-state backend can only sample per realization, never run directly.
+CircuitPtr without_circuit_channels(const CircuitPtr &circuit)
+{
+    auto out = std::make_shared<Circuits::Circuit<double>>();
+    for (const auto &op : circuit->GetOperations())
+        if (op->GetType() != Circuits::OperationType::kQuantumChannel)
+            out->AddOperation(op);
+    return out;
+}
+
 // Averages expectation values over noise_realizations independent injections.
 static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model,
                                             int noise_realizations, const SimulatorConfig &config, std::optional<uint64_t> noise_seed, NoiseInjector inject,
@@ -175,7 +186,7 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
     const size_t n_obs = paulis.size();
     if (!n_obs)
     {
-        auto out = estimate_core(circuit, paulis, config);
+        auto out = estimate_core(without_circuit_channels(circuit), paulis, config);
         out["ideal_expectation_values"] = nb::list();
         out["noise_realizations"] = noise_realizations;
         out["cone_cache_hits"] = 0;
@@ -222,7 +233,7 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
     }
     auto end = std::chrono::high_resolution_clock::now();
 
-    nb::dict ideal_result = estimate_core(clean_circuit, paulis, config);
+    nb::dict ideal_result = estimate_core(without_circuit_channels(clean_circuit), paulis, config);
     nb::list noisy_vals, ideal_vals;
     nb::list ideal_ev = nb::cast<nb::list>(ideal_result["expectation_values"]);
     for (size_t i = 0; i < n_obs; ++i)

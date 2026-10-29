@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "../Circuit/Circuit.h"
+#include "../Circuit/Factory.h"
 #include "../Network/SimpleDisconnectedNetwork.h"
 #include "../Noise/NoiseAdd.h"
 #include "../Simulators/Core/Configuration.h"
@@ -1048,7 +1049,7 @@ BOOST_AUTO_TEST_CASE(CircuitPauliChannelIsSampledOrKept)
     BOOST_CHECK(exact->GetOperations()[0]->GetType() == Circuits::OperationType::kQuantumChannel);
 }
 
-/** A noiseless gate gets no injected noise, and Circuit::Clone keeps the mark. */
+/** A noiseless gate gets no injected noise, and gate and circuit copies keep the mark. */
 BOOST_AUTO_TEST_CASE(NoiselessGateGetsNoInjectedNoise)
 {
     auto basisChange = std::make_shared<Circuits::HadamardGate<>>(0);
@@ -1068,6 +1069,49 @@ BOOST_AUTO_TEST_CASE(NoiselessGateGetsNoInjectedNoise)
     const auto copy = std::static_pointer_cast<Circuits::Circuit<double>>(circuit->Clone());
     BOOST_CHECK(copy->GetOperations()[0]->IsNoiseless());
     BOOST_CHECK(!copy->GetOperations()[1]->IsNoiseless());
+    BOOST_CHECK(basisChange->Clone()->IsNoiseless());
+    BOOST_CHECK(basisChange->Remap({{0, 4}})->IsNoiseless());
+
+    // Remapping before injection must not turn the basis change noisy.
+    const auto remapped = std::static_pointer_cast<Circuits::Circuit<double>>(circuit->Remap({{0, 4}}));
+    noise::NoiseModel remappedModel;
+    remappedModel.set_bit_flip(4, 1.0);
+    const auto remappedNoisy = noise::inject_noise(remapped, remappedModel, rng);
+    BOOST_REQUIRE_EQUAL(remappedNoisy->GetOperations().size(), 3u);
+    BOOST_CHECK(std::dynamic_pointer_cast<Circuits::HadamardGate<>>(remappedNoisy->GetOperations()[1]));
+}
+
+/** Every gate's Clone and Remap carry its type, qubits, parameters, delay and noiseless mark. */
+BOOST_AUTO_TEST_CASE(EveryGateCopyKeepsAllFields)
+{
+    for (int t = static_cast<int>(Circuits::QuantumGateType::kPhaseGateType); t <= static_cast<int>(Circuits::QuantumGateType::kCCXGateType); ++t)
+    {
+        const auto type = static_cast<Circuits::QuantumGateType>(t);
+        for (const bool noiseless : {false, true})
+        {
+            const auto gate = Circuits::CircuitFactory<>::CreateGate(type, 3, 5, 7, 0.1, 0.2, 0.3, 0.4);
+            BOOST_REQUIRE(gate);
+            gate->SetDelay(2.5);
+            gate->SetNoiseless(noiseless);
+
+            const auto copy = std::dynamic_pointer_cast<Circuits::IQuantumGate<>>(gate->Clone());
+            BOOST_REQUIRE(copy);
+            BOOST_CHECK(copy != gate);
+            BOOST_CHECK(copy->GetGateType() == type);
+            BOOST_CHECK(copy->AffectedQubits() == gate->AffectedQubits());
+            BOOST_CHECK(copy->GetParams() == gate->GetParams());
+            BOOST_CHECK_EQUAL(copy->GetDelay(), 2.5);
+            BOOST_CHECK_EQUAL(copy->IsNoiseless(), noiseless);
+
+            const auto remapped = std::dynamic_pointer_cast<Circuits::IQuantumGate<>>(gate->Remap({{3, 13}, {5, 15}, {7, 17}}));
+            BOOST_REQUIRE(remapped);
+            BOOST_CHECK(remapped->GetGateType() == type);
+            BOOST_CHECK(remapped->GetParams() == gate->GetParams());
+            BOOST_CHECK_EQUAL(remapped->IsNoiseless(), noiseless);
+            // The original is untouched by copying.
+            BOOST_CHECK_EQUAL(gate->AffectedQubits().front(), 3u);
+        }
+    }
 }
 
 /** The model's readout flip composes with a measurement's own, e.g. Stim's M(p). */

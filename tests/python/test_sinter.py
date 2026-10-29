@@ -1050,3 +1050,31 @@ def test_pauli_channel_needs_noise_realizations_on_pure_state():
         qc.execute(maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector), shots=4)
     counts = qc.full_noise_execute(maestro.NoiseModel(), shots=2000, noise_realizations=2000, noise_seed=5)["counts"]
     assert abs(counts.get("1", 0) / 2000 - 0.5) < 0.04
+
+
+def test_zero_probability_channel_runs_without_noise_model():
+    """Translation drops DEPOLARIZE1(0), so the sampler must not route it as noise."""
+    sampler = MaestroCompiledSampler(stim.Circuit("R 0\nDEPOLARIZE1(0) 0\nM 0"), enable_checkpoint=False, seed=1)
+    assert not sampler.has_circuit_noise
+    assert not sampler.sample_measurements(10).any()
+
+
+@pytest.mark.parametrize("estimate", ["full_noise_estimate", "noisy_estimate_montecarlo"])
+def test_estimate_with_circuit_channel_on_statevector(estimate):
+    """The noiseless baseline must not replay an unsampled channel on a pure-state backend."""
+    qc = maestro.circuits.QuantumCircuit()
+    qc.pauli_channel([0], [0.75, 0.25, 0.0, 0.0])
+    cfg = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector)
+    cfg.auto_reduce = False
+    result = getattr(qc, estimate)(["Z"], maestro.NoiseModel(), noise_realizations=1000, config=cfg, noise_seed=3)
+    assert result["ideal_expectation_values"] == [pytest.approx(1.0)]
+    assert result["expectation_values"][0] == pytest.approx(0.5, abs=0.1)
+
+
+def test_noisy_fidelity_with_circuit_channel_on_statevector():
+    qc = maestro.circuits.QuantumCircuit()
+    qc.h(0)
+    qc.pauli_channel([0], [0.75, 0.0, 0.0, 0.25])
+    cfg = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector)
+    result = qc.noisy_fidelity(maestro.NoiseModel(), noise_realizations=1000, config=cfg, noise_seed=3)
+    assert result["fidelity"] == pytest.approx(0.75, abs=0.05)

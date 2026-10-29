@@ -417,7 +417,9 @@ void bind_circuit(nb::module_ &m)
                std::optional<uint64_t> noise_seed) {
                 require_circuit(self);
                 require_realizations(noise_realizations);
-                require_any_noise(noise_model);
+                if (!has_circuit_channels(self))
+                    require_any_noise(noise_model);
+                const auto ideal = without_circuit_channels(self);
 
                 warn_thermal_approximation(noise_model, config);
                 auto rng = MakeNoiseRng(config, noise_seed);
@@ -432,7 +434,7 @@ void bind_circuit(nb::module_ &m)
                     auto realization_config = NoiseExecutionConfig(config, noise_seed, r);
                     if (!realization_config.seed)
                         realization_config.seed = rng();
-                    double fid = noisy_fidelity_core(self, noisy, realization_config);
+                    double fid = noisy_fidelity_core(ideal, noisy, realization_config);
                     sum_fid += fid;
                     sum_fid_sq += fid * fid;
                 }

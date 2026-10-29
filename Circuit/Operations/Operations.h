@@ -564,7 +564,7 @@ template <typename Time = Types::time_type> class IOperation : public std::enabl
      *
      * Noise models add no noise after a noiseless operation. This is for basis
      * changes that belong to a non-Z measurement or reset rather than being
-     * gates in their own right. Circuit::Clone keeps the mark.
+     * gates in their own right. Gate copies (Clone, Remap) keep the mark.
      * @param value True to exempt the operation from gate noise.
      */
     void SetNoiseless(bool value = true)

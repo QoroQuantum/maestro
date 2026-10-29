@@ -116,6 +116,35 @@ template <typename Time = Types::time_type> class IQuantumGate : public IGateOpe
 };
 
 /**
+ * @class CloneableGate
+ * @brief Implements Clone() once for a concrete gate.
+ *
+ * A concrete gate derives from CloneableGate<Gate, Base, Time> instead of
+ * directly from Base. Clone() copy-constructs the gate, so every member
+ * (qubits, parameters, delay, the noiseless mark) carries over without each
+ * gate listing them.
+ * @tparam Gate The concrete gate template deriving from this class.
+ * @tparam Base The gate interface it implements, e.g. SingleQubitGate.
+ * @tparam Time The type of the execution delay.
+ */
+template <template <typename> class Gate, template <typename> class Base, typename Time> class CloneableGate : public Base<Time>
+{
+  public:
+    using Base<Time>::Base;
+
+    /**
+     * @brief Get a shared pointer to a clone of this object.
+     *
+     * Returns a shared pointer to a copy of this object.
+     * @return A shared pointer to this object.
+     */
+    std::shared_ptr<IOperation<Time>> Clone() const override
+    {
+        return std::make_shared<Gate<Time>>(static_cast<const Gate<Time> &>(*this));
+    }
+};
+
+/**
  * @class SingleQubitGate
  * @brief The interface for single qubit quantum gates.
  *
@@ -506,7 +535,7 @@ template <typename Time = Types::time_type> class ThreeQubitsGate : public IQuan
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class PhaseGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class PhaseGate : public CloneableGate<PhaseGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -519,7 +548,7 @@ template <typename Time = Types::time_type> class PhaseGate : public SingleQubit
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    PhaseGate(Types::qubit_t qubit = 0, double lambda = 0, Time delay = 0) : SingleQubitGate<Time>(qubit, delay), lambda(lambda)
+    PhaseGate(Types::qubit_t qubit = 0, double lambda = 0, Time delay = 0) : CloneableGate<PhaseGate, SingleQubitGate, Time>(qubit, delay), lambda(lambda)
     {
     }
 
@@ -570,17 +599,6 @@ template <typename Time = Types::time_type> class PhaseGate : public SingleQubit
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kPhaseGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<PhaseGate<Time>>(SingleQubitGate<Time>::GetQubit(), lambda, IOperation<Time>::GetDelay());
     }
 
     /**
@@ -636,7 +654,7 @@ template <typename Time = Types::time_type> class PhaseGate : public SingleQubit
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class XGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class XGate : public CloneableGate<XGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -648,7 +666,7 @@ template <typename Time = Types::time_type> class XGate : public SingleQubitGate
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    XGate(Types::qubit_t qubit = 0, Time delay = 0) : SingleQubitGate<Time>(qubit, delay)
+    XGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<XGate, SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -677,17 +695,6 @@ template <typename Time = Types::time_type> class XGate : public SingleQubitGate
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kXGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<XGate<Time>>(SingleQubitGate<Time>::GetQubit(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -726,7 +733,7 @@ template <typename Time = Types::time_type> class XGate : public SingleQubitGate
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class YGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class YGate : public CloneableGate<YGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -738,7 +745,7 @@ template <typename Time = Types::time_type> class YGate : public SingleQubitGate
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    YGate(Types::qubit_t qubit = 0, Time delay = 0) : SingleQubitGate<Time>(qubit, delay)
+    YGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<YGate, SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -767,17 +774,6 @@ template <typename Time = Types::time_type> class YGate : public SingleQubitGate
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kYGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<YGate<Time>>(SingleQubitGate<Time>::GetQubit(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -816,7 +812,7 @@ template <typename Time = Types::time_type> class YGate : public SingleQubitGate
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class ZGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class ZGate : public CloneableGate<ZGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -828,7 +824,7 @@ template <typename Time = Types::time_type> class ZGate : public SingleQubitGate
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    ZGate(Types::qubit_t qubit = 0, Time delay = 0) : SingleQubitGate<Time>(qubit, delay)
+    ZGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<ZGate, SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -857,17 +853,6 @@ template <typename Time = Types::time_type> class ZGate : public SingleQubitGate
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kZGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<ZGate<Time>>(SingleQubitGate<Time>::GetQubit(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -906,7 +891,7 @@ template <typename Time = Types::time_type> class ZGate : public SingleQubitGate
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class HadamardGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class HadamardGate : public CloneableGate<HadamardGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -918,7 +903,7 @@ template <typename Time = Types::time_type> class HadamardGate : public SingleQu
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    HadamardGate(Types::qubit_t qubit = 0, Time delay = 0) : SingleQubitGate<Time>(qubit, delay)
+    HadamardGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<HadamardGate, SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -947,17 +932,6 @@ template <typename Time = Types::time_type> class HadamardGate : public SingleQu
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kHadamardGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<HadamardGate<Time>>(SingleQubitGate<Time>::GetQubit(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -1009,7 +983,7 @@ template <typename Time = Types::time_type> class HadamardGate : public SingleQu
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class SGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class SGate : public CloneableGate<SGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -1021,7 +995,7 @@ template <typename Time = Types::time_type> class SGate : public SingleQubitGate
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    SGate(Types::qubit_t qubit = 0, Time delay = 0) : SingleQubitGate<Time>(qubit, delay)
+    SGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<SGate, SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1050,17 +1024,6 @@ template <typename Time = Types::time_type> class SGate : public SingleQubitGate
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kSGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<SGate<Time>>(SingleQubitGate<Time>::GetQubit(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -1099,7 +1062,7 @@ template <typename Time = Types::time_type> class SGate : public SingleQubitGate
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class SdgGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class SdgGate : public CloneableGate<SdgGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -1111,7 +1074,7 @@ template <typename Time = Types::time_type> class SdgGate : public SingleQubitGa
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    SdgGate(Types::qubit_t qubit = 0, Time delay = 0) : SingleQubitGate<Time>(qubit, delay)
+    SdgGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<SdgGate, SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1140,17 +1103,6 @@ template <typename Time = Types::time_type> class SdgGate : public SingleQubitGa
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kSdgGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<SdgGate<Time>>(SingleQubitGate<Time>::GetQubit(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -1189,7 +1141,7 @@ template <typename Time = Types::time_type> class SdgGate : public SingleQubitGa
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class TGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class TGate : public CloneableGate<TGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -1201,7 +1153,7 @@ template <typename Time = Types::time_type> class TGate : public SingleQubitGate
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    TGate(Types::qubit_t qubit = 0, Time delay = 0) : SingleQubitGate<Time>(qubit, delay)
+    TGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<TGate, SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1233,17 +1185,6 @@ template <typename Time = Types::time_type> class TGate : public SingleQubitGate
     }
 
     /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<TGate<Time>>(SingleQubitGate<Time>::GetQubit(), IOperation<Time>::GetDelay());
-    }
-
-    /**
      * @brief Get the matrix representation of the quantum gate.
      *
      * Returns the matrix representation of the quantum gate.
@@ -1265,7 +1206,7 @@ template <typename Time = Types::time_type> class TGate : public SingleQubitGate
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class TdgGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class TdgGate : public CloneableGate<TdgGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -1277,7 +1218,7 @@ template <typename Time = Types::time_type> class TdgGate : public SingleQubitGa
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    TdgGate(Types::qubit_t qubit = 0, Time delay = 0) : SingleQubitGate<Time>(qubit, delay)
+    TdgGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<TdgGate, SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1309,17 +1250,6 @@ template <typename Time = Types::time_type> class TdgGate : public SingleQubitGa
     }
 
     /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<TdgGate<Time>>(SingleQubitGate<Time>::GetQubit(), IOperation<Time>::GetDelay());
-    }
-
-    /**
      * @brief Get the matrix representation of the quantum gate.
      *
      * Returns the matrix representation of the quantum gate.
@@ -1341,7 +1271,7 @@ template <typename Time = Types::time_type> class TdgGate : public SingleQubitGa
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class SxGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class SxGate : public CloneableGate<SxGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -1353,7 +1283,7 @@ template <typename Time = Types::time_type> class SxGate : public SingleQubitGat
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    SxGate(Types::qubit_t qubit = 0, Time delay = 0) : SingleQubitGate<Time>(qubit, delay)
+    SxGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<SxGate, SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1382,17 +1312,6 @@ template <typename Time = Types::time_type> class SxGate : public SingleQubitGat
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kSxGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<SxGate<Time>>(SingleQubitGate<Time>::GetQubit(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -1443,7 +1362,7 @@ template <typename Time = Types::time_type> class SxGate : public SingleQubitGat
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class SxDagGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class SxDagGate : public CloneableGate<SxDagGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -1455,7 +1374,7 @@ template <typename Time = Types::time_type> class SxDagGate : public SingleQubit
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    SxDagGate(Types::qubit_t qubit = 0, Time delay = 0) : SingleQubitGate<Time>(qubit, delay)
+    SxDagGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<SxDagGate, SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1484,17 +1403,6 @@ template <typename Time = Types::time_type> class SxDagGate : public SingleQubit
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kSxDagGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<SxDagGate<Time>>(SingleQubitGate<Time>::GetQubit(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -1545,7 +1453,7 @@ template <typename Time = Types::time_type> class SxDagGate : public SingleQubit
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class KGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class KGate : public CloneableGate<KGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -1557,7 +1465,7 @@ template <typename Time = Types::time_type> class KGate : public SingleQubitGate
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    KGate(Types::qubit_t qubit = 0, Time delay = 0) : SingleQubitGate<Time>(qubit, delay)
+    KGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<KGate, SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1586,17 +1494,6 @@ template <typename Time = Types::time_type> class KGate : public SingleQubitGate
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kKGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<KGate<Time>>(SingleQubitGate<Time>::GetQubit(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -1711,7 +1608,7 @@ template <typename Time = Types::time_type> class RotationGate : public SingleQu
  * @sa RotationGate
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class RxGate : public RotationGate<Time>
+template <typename Time = Types::time_type> class RxGate : public CloneableGate<RxGate, RotationGate, Time>
 {
   public:
     /**
@@ -1724,7 +1621,7 @@ template <typename Time = Types::time_type> class RxGate : public RotationGate<T
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    RxGate(Types::qubit_t qubit = 0, double theta = 0, Time delay = 0) : RotationGate<Time>(qubit, theta, delay)
+    RxGate(Types::qubit_t qubit = 0, double theta = 0, Time delay = 0) : CloneableGate<RxGate, RotationGate, Time>(qubit, theta, delay)
     {
     }
 
@@ -1753,17 +1650,6 @@ template <typename Time = Types::time_type> class RxGate : public RotationGate<T
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kRxGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<RxGate<Time>>(SingleQubitGate<Time>::GetQubit(), RotationGate<Time>::GetTheta(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -1801,7 +1687,7 @@ template <typename Time = Types::time_type> class RxGate : public RotationGate<T
  * @sa RotationGate
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class RyGate : public RotationGate<Time>
+template <typename Time = Types::time_type> class RyGate : public CloneableGate<RyGate, RotationGate, Time>
 {
   public:
     /**
@@ -1814,7 +1700,7 @@ template <typename Time = Types::time_type> class RyGate : public RotationGate<T
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    RyGate(Types::qubit_t qubit = 0, double theta = 0, Time delay = 0) : RotationGate<Time>(qubit, theta, delay)
+    RyGate(Types::qubit_t qubit = 0, double theta = 0, Time delay = 0) : CloneableGate<RyGate, RotationGate, Time>(qubit, theta, delay)
     {
     }
 
@@ -1843,17 +1729,6 @@ template <typename Time = Types::time_type> class RyGate : public RotationGate<T
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kRyGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<RyGate<Time>>(SingleQubitGate<Time>::GetQubit(), RotationGate<Time>::GetTheta(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -1891,7 +1766,7 @@ template <typename Time = Types::time_type> class RyGate : public RotationGate<T
  * @sa RotationGate
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class RzGate : public RotationGate<Time>
+template <typename Time = Types::time_type> class RzGate : public CloneableGate<RzGate, RotationGate, Time>
 {
   public:
     /**
@@ -1904,7 +1779,7 @@ template <typename Time = Types::time_type> class RzGate : public RotationGate<T
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    RzGate(Types::qubit_t qubit = 0, double theta = 0, Time delay = 0) : RotationGate<Time>(qubit, theta, delay)
+    RzGate(Types::qubit_t qubit = 0, double theta = 0, Time delay = 0) : CloneableGate<RzGate, RotationGate, Time>(qubit, theta, delay)
     {
     }
 
@@ -1936,17 +1811,6 @@ template <typename Time = Types::time_type> class RzGate : public RotationGate<T
     }
 
     /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<RzGate<Time>>(SingleQubitGate<Time>::GetQubit(), RotationGate<Time>::GetTheta(), IOperation<Time>::GetDelay());
-    }
-
-    /**
      * @brief Get the matrix representation of the quantum gate.
      *
      * Returns the matrix representation of the quantum gate.
@@ -1967,7 +1831,7 @@ template <typename Time = Types::time_type> class RzGate : public RotationGate<T
  * @tparam Time The type of the execution delay.
  * @sa SingleQubitGate
  */
-template <typename Time = Types::time_type> class UGate : public SingleQubitGate<Time>
+template <typename Time = Types::time_type> class UGate : public CloneableGate<UGate, SingleQubitGate, Time>
 {
   public:
     /**
@@ -1981,7 +1845,7 @@ template <typename Time = Types::time_type> class UGate : public SingleQubitGate
      * @sa SingleQubitGate
      */
     UGate(Types::qubit_t qubit = 0, double theta = 0, double phi = 0, double lambda = 0, double gamma = 0, Time delay = 0)
-        : SingleQubitGate<Time>(qubit, delay), theta(theta), phi(phi), lambda(lambda), gamma(gamma)
+        : CloneableGate<UGate, SingleQubitGate, Time>(qubit, delay), theta(theta), phi(phi), lambda(lambda), gamma(gamma)
     {
     }
 
@@ -2010,17 +1874,6 @@ template <typename Time = Types::time_type> class UGate : public SingleQubitGate
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kUGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<UGate<Time>>(SingleQubitGate<Time>::GetQubit(), GetTheta(), GetPhi(), GetLambda(), GetGamma(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -2183,7 +2036,7 @@ template <typename Time = Types::time_type> class UGate : public SingleQubitGate
  * @tparam Time The type of the execution delay.
  * @sa TwoQubitsGate
  */
-template <typename Time = Types::time_type> class SwapGate : public TwoQubitsGate<Time>
+template <typename Time = Types::time_type> class SwapGate : public CloneableGate<SwapGate, TwoQubitsGate, Time>
 {
   public:
     /**
@@ -2196,7 +2049,7 @@ template <typename Time = Types::time_type> class SwapGate : public TwoQubitsGat
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    SwapGate(Types::qubit_t qubit1 = 0, Types::qubit_t qubit2 = 1, Time delay = 0) : TwoQubitsGate<Time>(qubit1, qubit2, delay)
+    SwapGate(Types::qubit_t qubit1 = 0, Types::qubit_t qubit2 = 1, Time delay = 0) : CloneableGate<SwapGate, TwoQubitsGate, Time>(qubit1, qubit2, delay)
     {
     }
 
@@ -2225,17 +2078,6 @@ template <typename Time = Types::time_type> class SwapGate : public TwoQubitsGat
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kSwapGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<SwapGate<Time>>(TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -2275,7 +2117,7 @@ template <typename Time = Types::time_type> class SwapGate : public TwoQubitsGat
  * @tparam Time The type of the execution delay.
  * @sa TwoQubitsGate
  */
-template <typename Time = Types::time_type> class CXGate : public TwoQubitsGate<Time>
+template <typename Time = Types::time_type> class CXGate : public CloneableGate<CXGate, TwoQubitsGate, Time>
 {
   public:
     /**
@@ -2288,7 +2130,7 @@ template <typename Time = Types::time_type> class CXGate : public TwoQubitsGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CXGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : TwoQubitsGate<Time>(ctrl, target, delay)
+    CXGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CXGate, TwoQubitsGate, Time>(ctrl, target, delay)
     {
     }
 
@@ -2317,17 +2159,6 @@ template <typename Time = Types::time_type> class CXGate : public TwoQubitsGate<
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kCXGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CXGate<Time>>(TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -2365,7 +2196,7 @@ template <typename Time = Types::time_type> class CXGate : public TwoQubitsGate<
  * @tparam Time The type of the execution delay.
  * @sa TwoQubitsGate
  */
-template <typename Time = Types::time_type> class CYGate : public TwoQubitsGate<Time>
+template <typename Time = Types::time_type> class CYGate : public CloneableGate<CYGate, TwoQubitsGate, Time>
 {
   public:
     /**
@@ -2378,7 +2209,7 @@ template <typename Time = Types::time_type> class CYGate : public TwoQubitsGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CYGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : TwoQubitsGate<Time>(ctrl, target, delay)
+    CYGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CYGate, TwoQubitsGate, Time>(ctrl, target, delay)
     {
     }
 
@@ -2407,17 +2238,6 @@ template <typename Time = Types::time_type> class CYGate : public TwoQubitsGate<
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kCYGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CYGate<Time>>(TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -2455,7 +2275,7 @@ template <typename Time = Types::time_type> class CYGate : public TwoQubitsGate<
  * @tparam Time The type of the execution delay.
  * @sa TwoQubitsGate
  */
-template <typename Time = Types::time_type> class CZGate : public TwoQubitsGate<Time>
+template <typename Time = Types::time_type> class CZGate : public CloneableGate<CZGate, TwoQubitsGate, Time>
 {
   public:
     /**
@@ -2468,7 +2288,7 @@ template <typename Time = Types::time_type> class CZGate : public TwoQubitsGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CZGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : TwoQubitsGate<Time>(ctrl, target, delay)
+    CZGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CZGate, TwoQubitsGate, Time>(ctrl, target, delay)
     {
     }
 
@@ -2497,17 +2317,6 @@ template <typename Time = Types::time_type> class CZGate : public TwoQubitsGate<
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kCZGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CZGate<Time>>(TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -2545,7 +2354,7 @@ template <typename Time = Types::time_type> class CZGate : public TwoQubitsGate<
  * @tparam Time The type of the execution delay.
  * @sa TwoQubitsGate
  */
-template <typename Time = Types::time_type> class CPGate : public TwoQubitsGate<Time>
+template <typename Time = Types::time_type> class CPGate : public CloneableGate<CPGate, TwoQubitsGate, Time>
 {
   public:
     /**
@@ -2559,7 +2368,8 @@ template <typename Time = Types::time_type> class CPGate : public TwoQubitsGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CPGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double lambda = 0, Time delay = 0) : TwoQubitsGate<Time>(ctrl, target, delay), lambda(lambda)
+    CPGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double lambda = 0, Time delay = 0)
+        : CloneableGate<CPGate, TwoQubitsGate, Time>(ctrl, target, delay), lambda(lambda)
     {
     }
 
@@ -2610,17 +2420,6 @@ template <typename Time = Types::time_type> class CPGate : public TwoQubitsGate<
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kCPGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CPGate<Time>>(TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1), GetLambda(), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -2723,7 +2522,7 @@ template <typename Time = Types::time_type> class ControlledRotationGate : publi
  * @tparam Time The type of the execution delay.
  * @sa TwoQubitsGate
  */
-template <typename Time = Types::time_type> class CRxGate : public ControlledRotationGate<Time>
+template <typename Time = Types::time_type> class CRxGate : public CloneableGate<CRxGate, ControlledRotationGate, Time>
 {
   public:
     /**
@@ -2737,7 +2536,8 @@ template <typename Time = Types::time_type> class CRxGate : public ControlledRot
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CRxGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double theta = 0, Time delay = 0) : ControlledRotationGate<Time>(ctrl, target, theta, delay)
+    CRxGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double theta = 0, Time delay = 0)
+        : CloneableGate<CRxGate, ControlledRotationGate, Time>(ctrl, target, theta, delay)
     {
     }
 
@@ -2766,18 +2566,6 @@ template <typename Time = Types::time_type> class CRxGate : public ControlledRot
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kCRxGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CRxGate<Time>>(TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1), ControlledRotationGate<Time>::GetTheta(),
-                                               IOperation<Time>::GetDelay());
     }
 
     /**
@@ -2814,7 +2602,7 @@ template <typename Time = Types::time_type> class CRxGate : public ControlledRot
  * @tparam Time The type of the execution delay.
  * @sa TwoQubitsGate
  */
-template <typename Time = Types::time_type> class CRyGate : public ControlledRotationGate<Time>
+template <typename Time = Types::time_type> class CRyGate : public CloneableGate<CRyGate, ControlledRotationGate, Time>
 {
   public:
     /**
@@ -2828,7 +2616,8 @@ template <typename Time = Types::time_type> class CRyGate : public ControlledRot
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CRyGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double theta = 0, Time delay = 0) : ControlledRotationGate<Time>(ctrl, target, theta, delay)
+    CRyGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double theta = 0, Time delay = 0)
+        : CloneableGate<CRyGate, ControlledRotationGate, Time>(ctrl, target, theta, delay)
     {
     }
 
@@ -2857,18 +2646,6 @@ template <typename Time = Types::time_type> class CRyGate : public ControlledRot
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kCRyGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CRyGate<Time>>(TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1), ControlledRotationGate<Time>::GetTheta(),
-                                               IOperation<Time>::GetDelay());
     }
 
     /**
@@ -2905,7 +2682,7 @@ template <typename Time = Types::time_type> class CRyGate : public ControlledRot
  * @tparam Time The type of the execution delay.
  * @sa TwoQubitsGate
  */
-template <typename Time = Types::time_type> class CRzGate : public ControlledRotationGate<Time>
+template <typename Time = Types::time_type> class CRzGate : public CloneableGate<CRzGate, ControlledRotationGate, Time>
 {
   public:
     /**
@@ -2919,7 +2696,8 @@ template <typename Time = Types::time_type> class CRzGate : public ControlledRot
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CRzGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double theta = 0, Time delay = 0) : ControlledRotationGate<Time>(ctrl, target, theta, delay)
+    CRzGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double theta = 0, Time delay = 0)
+        : CloneableGate<CRzGate, ControlledRotationGate, Time>(ctrl, target, theta, delay)
     {
     }
 
@@ -2951,18 +2729,6 @@ template <typename Time = Types::time_type> class CRzGate : public ControlledRot
     }
 
     /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CRzGate<Time>>(TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1), ControlledRotationGate<Time>::GetTheta(),
-                                               IOperation<Time>::GetDelay());
-    }
-
-    /**
      * @brief Get the matrix representation of the quantum gate.
      *
      * Returns the matrix representation of the quantum gate.
@@ -2983,7 +2749,7 @@ template <typename Time = Types::time_type> class CRzGate : public ControlledRot
  * @tparam Time The type of the execution delay.
  * @sa TwoQubitsGate
  */
-template <typename Time = Types::time_type> class CHGate : public TwoQubitsGate<Time>
+template <typename Time = Types::time_type> class CHGate : public CloneableGate<CHGate, TwoQubitsGate, Time>
 {
   public:
     /**
@@ -2996,7 +2762,7 @@ template <typename Time = Types::time_type> class CHGate : public TwoQubitsGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CHGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : TwoQubitsGate<Time>(ctrl, target, delay)
+    CHGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CHGate, TwoQubitsGate, Time>(ctrl, target, delay)
     {
     }
 
@@ -3025,17 +2791,6 @@ template <typename Time = Types::time_type> class CHGate : public TwoQubitsGate<
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kCHGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CHGate<Time>>(TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -3072,7 +2827,7 @@ template <typename Time = Types::time_type> class CHGate : public TwoQubitsGate<
  * @tparam Time The type of the execution delay.
  * @sa TwoQubitsGate
  */
-template <typename Time = Types::time_type> class CSxGate : public TwoQubitsGate<Time>
+template <typename Time = Types::time_type> class CSxGate : public CloneableGate<CSxGate, TwoQubitsGate, Time>
 {
   public:
     /**
@@ -3085,7 +2840,7 @@ template <typename Time = Types::time_type> class CSxGate : public TwoQubitsGate
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CSxGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : TwoQubitsGate<Time>(ctrl, target, delay)
+    CSxGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CSxGate, TwoQubitsGate, Time>(ctrl, target, delay)
     {
     }
 
@@ -3114,17 +2869,6 @@ template <typename Time = Types::time_type> class CSxGate : public TwoQubitsGate
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kCSxGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CSxGate<Time>>(TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -3161,7 +2905,7 @@ template <typename Time = Types::time_type> class CSxGate : public TwoQubitsGate
  * @tparam Time The type of the execution delay.
  * @sa TwoQubitsGate
  */
-template <typename Time = Types::time_type> class CSxDagGate : public TwoQubitsGate<Time>
+template <typename Time = Types::time_type> class CSxDagGate : public CloneableGate<CSxDagGate, TwoQubitsGate, Time>
 {
   public:
     /**
@@ -3174,7 +2918,7 @@ template <typename Time = Types::time_type> class CSxDagGate : public TwoQubitsG
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CSxDagGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : TwoQubitsGate<Time>(ctrl, target, delay)
+    CSxDagGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CSxDagGate, TwoQubitsGate, Time>(ctrl, target, delay)
     {
     }
 
@@ -3203,17 +2947,6 @@ template <typename Time = Types::time_type> class CSxDagGate : public TwoQubitsG
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kCSxDagGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CSxDagGate<Time>>(TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1), IOperation<Time>::GetDelay());
     }
 
     /**
@@ -3250,7 +2983,7 @@ template <typename Time = Types::time_type> class CSxDagGate : public TwoQubitsG
  * @tparam Time The type of the execution delay.
  * @sa TwoQubitsGate
  */
-template <typename Time = Types::time_type> class CUGate : public TwoQubitsGate<Time>
+template <typename Time = Types::time_type> class CUGate : public CloneableGate<CUGate, TwoQubitsGate, Time>
 {
   public:
     /**
@@ -3268,7 +3001,7 @@ template <typename Time = Types::time_type> class CUGate : public TwoQubitsGate<
      * @sa TwoQubitsGate
      */
     CUGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double theta = 0, double phi = 0, double lambda = 0, double gamma = 0, Time delay = 0)
-        : TwoQubitsGate<Time>(ctrl, target, delay), theta(theta), phi(phi), lambda(lambda), gamma(gamma)
+        : CloneableGate<CUGate, TwoQubitsGate, Time>(ctrl, target, delay), theta(theta), phi(phi), lambda(lambda), gamma(gamma)
     {
     }
 
@@ -3388,18 +3121,6 @@ template <typename Time = Types::time_type> class CUGate : public TwoQubitsGate<
     }
 
     /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CUGate<Time>>(TwoQubitsGate<Time>::GetQubit(0), TwoQubitsGate<Time>::GetQubit(1), GetTheta(), GetPhi(), GetLambda(), GetGamma(),
-                                              IOperation<Time>::GetDelay());
-    }
-
-    /**
      * @brief Get the gate parameters.
      *
      * Returns the parameters of the gate.
@@ -3456,7 +3177,7 @@ template <typename Time = Types::time_type> class CUGate : public TwoQubitsGate<
  * @tparam Time The type of the execution delay.
  * @sa ThreeQubitsGate
  */
-template <typename Time = Types::time_type> class CCXGate : public ThreeQubitsGate<Time>
+template <typename Time = Types::time_type> class CCXGate : public CloneableGate<CCXGate, ThreeQubitsGate, Time>
 {
   public:
     /**
@@ -3470,7 +3191,8 @@ template <typename Time = Types::time_type> class CCXGate : public ThreeQubitsGa
      * @param delay The time the quantum gate takes to execute.
      * @sa ThreeQubitsGate
      */
-    CCXGate(Types::qubit_t ctrl1 = 0, Types::qubit_t ctrl2 = 1, Types::qubit_t target = 2, Time delay = 0) : ThreeQubitsGate<Time>(ctrl1, ctrl2, target, delay)
+    CCXGate(Types::qubit_t ctrl1 = 0, Types::qubit_t ctrl2 = 1, Types::qubit_t target = 2, Time delay = 0)
+        : CloneableGate<CCXGate, ThreeQubitsGate, Time>(ctrl1, ctrl2, target, delay)
     {
     }
 
@@ -3502,18 +3224,6 @@ template <typename Time = Types::time_type> class CCXGate : public ThreeQubitsGa
     }
 
     /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CCXGate<Time>>(ThreeQubitsGate<Time>::GetQubit(0), ThreeQubitsGate<Time>::GetQubit(1), ThreeQubitsGate<Time>::GetQubit(2),
-                                               IOperation<Time>::GetDelay());
-    }
-
-    /**
      * @brief Get the matrix representation of the quantum gate.
      *
      * Returns the matrix representation of the quantum gate.
@@ -3534,7 +3244,7 @@ template <typename Time = Types::time_type> class CCXGate : public ThreeQubitsGa
  * @tparam Time The type of the execution delay.
  * @sa ThreeQubitsGate
  */
-template <typename Time = Types::time_type> class CSwapGate : public ThreeQubitsGate<Time>
+template <typename Time = Types::time_type> class CSwapGate : public CloneableGate<CSwapGate, ThreeQubitsGate, Time>
 {
   public:
     /**
@@ -3549,7 +3259,7 @@ template <typename Time = Types::time_type> class CSwapGate : public ThreeQubits
      * @sa ThreeQubitsGate
      */
     CSwapGate(Types::qubit_t ctrl = 0, Types::qubit_t target1 = 1, Types::qubit_t target2 = 2, Time delay = 0)
-        : ThreeQubitsGate<Time>(ctrl, target1, target2, delay)
+        : CloneableGate<CSwapGate, ThreeQubitsGate, Time>(ctrl, target1, target2, delay)
     {
     }
 
@@ -3578,18 +3288,6 @@ template <typename Time = Types::time_type> class CSwapGate : public ThreeQubits
     QuantumGateType GetGateType() const override
     {
         return QuantumGateType::kCSwapGateType;
-    }
-
-    /**
-     * @brief Get a shared pointer to a clone of this object.
-     *
-     * Returns a shared pointer to a copy of this object.
-     * @return A shared pointer to this object.
-     */
-    std::shared_ptr<IOperation<Time>> Clone() const override
-    {
-        return std::make_shared<CSwapGate<Time>>(ThreeQubitsGate<Time>::GetQubit(0), ThreeQubitsGate<Time>::GetQubit(1), ThreeQubitsGate<Time>::GetQubit(2),
-                                                 IOperation<Time>::GetDelay());
     }
 
     /**

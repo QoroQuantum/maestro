@@ -241,10 +241,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         OperationsVector newops;
 
         for (auto &op : operations)
-        {
             newops.emplace_back(op->Clone());
-            newops.back()->SetNoiseless(op->IsNoiseless());
-        }
 
         return std::make_shared<Circuit<Time>>(newops);
     }
