@@ -257,16 +257,19 @@ jobs:
           CIBW_TEST_COMMAND: >-
             pytest {project}/tests/python/test_bindings.py -q -k "TestGetStatevector or TestSparseStatevector or TestSimulatorConfigFields" &&
             pytest {project}/tests/python/test_adjoint.py -q
-          # Also checks that one libomp is loaded: alone with the Homebrew prefixes
-          # unreadable, then next to torch in both import orders.
+          # Also checks Maestro's libomp: alone with the Homebrew prefixes unreadable,
+          # then next to scikit-learn and torch, each in both import orders.
           CIBW_TEST_COMMAND_MACOS: >-
             pytest {project}/tests/python/test_bindings.py -q -k "TestGetStatevector or TestSparseStatevector or TestSimulatorConfigFields" &&
             pytest {project}/tests/python/test_adjoint.py -q &&
             sandbox-exec -p '(version 1)(allow default)(deny file-read* (subpath "/opt/homebrew") (subpath "/usr/local"))'
-            python {project}/.github/scripts/check_macos_libomp.py alone &&
+            python {project}/.github/scripts/check_macos_libomp.py maestro &&
+            python -m pip install scikit-learn &&
+            python {project}/.github/scripts/check_macos_libomp.py sklearn maestro &&
+            python {project}/.github/scripts/check_macos_libomp.py maestro sklearn &&
             python -m pip install torch &&
-            python {project}/.github/scripts/check_macos_libomp.py torch-first &&
-            python {project}/.github/scripts/check_macos_libomp.py maestro-first
+            python {project}/.github/scripts/check_macos_libomp.py torch maestro &&
+            python {project}/.github/scripts/check_macos_libomp.py maestro torch maestro
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
 

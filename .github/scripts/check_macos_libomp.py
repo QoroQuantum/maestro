@@ -1,12 +1,14 @@
-"""Check that Maestro on macOS runs with exactly one libomp loaded.
+"""Check that Maestro on macOS loads one libomp and runs next to torch and scikit-learn.
 
-Usage: python check_macos_libomp.py MODE
-  alone          torch must not be installed; Maestro must use its bundled libomp
-  torch-first    import torch, then maestro; both must use torch's libomp
-  maestro-first  import maestro, then torch; both must use torch's libomp
+Usage: python check_macos_libomp.py PACKAGE [PACKAGE ...]
 
-Run "alone" under sandbox-exec with the Homebrew prefixes unreadable to show
-the wheel does not need Homebrew's libomp.
+Imports and runs maestro, torch or sklearn in the order given. Maestro must use
+torch's libomp when torch is installed and its bundled copy otherwise, and no
+other libomp may be loaded except scikit-learn's own, which runs alongside
+Maestro's without aborting.
+
+Run "maestro" alone, before torch is installed, under sandbox-exec with the
+Homebrew prefixes unreadable to show the wheel does not need Homebrew's libomp.
 """
 
 import importlib.util
@@ -15,6 +17,10 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+
+# scikit-learn sets KMP_DUPLICATE_LIB_OK=True on import, which would hide the
+# abort from a second libomp that detects the first.
+os.environ["KMP_DUPLICATE_LIB_OK"] = "FALSE"
 
 QASM = """
 OPENQASM 2.0;
@@ -59,26 +65,41 @@ def run_torch():
     return Path(torch.__file__).resolve().parent
 
 
+def run_sklearn():
+    import numpy as np
+    import sklearn
+    from sklearn.cluster import KMeans
+
+    # Lloyd's iterations run in OpenMP parallel loops.
+    X = np.random.default_rng(0).normal(size=(50_000, 8))
+    KMeans(n_clusters=8, n_init=1, random_state=0).fit(X)
+    return Path(sklearn.__file__).resolve().parent
+
+
+RUNS = {"maestro": run_maestro, "torch": run_torch, "sklearn": run_sklearn}
+
+
 def main():
-    mode = sys.argv[1] if len(sys.argv) == 2 else None
-    if mode == "alone":
-        assert importlib.util.find_spec("torch") is None, "torch is installed"
-        expected = run_maestro() / ".dylibs" / "libomp.dylib"
-    elif mode == "torch-first":
-        expected = run_torch() / "lib" / "libomp.dylib"
-        run_maestro()
-    elif mode == "maestro-first":
-        run_maestro()
-        expected = run_torch() / "lib" / "libomp.dylib"
-        # Maestro again, now that torch's OpenMP runtime is running too.
-        run_maestro()
-    else:
+    order = sys.argv[1:]
+    if "maestro" not in order or any(package not in RUNS for package in order):
         sys.exit(__doc__)
+    dirs = {}
+    for package in order:
+        dirs[package] = RUNS[package]()
+
+    torch = importlib.util.find_spec("torch")
+    if torch:
+        expected = Path(torch.origin).resolve().parent / "lib" / "libomp.dylib"
+    else:
+        expected = dirs["maestro"] / ".dylibs" / "libomp.dylib"
+    expected = str(expected.resolve())
 
     loaded = loaded_libomps()
-    print(f"{mode}: OpenMP runtimes loaded: {loaded}")
-    if loaded != [str(expected.resolve())]:
-        sys.exit(f"{mode}: expected only {expected}")
+    sklearn = dirs.get("sklearn")
+    others = [p for p in loaded if p != expected and not (sklearn and Path(p).is_relative_to(sklearn))]
+    print(f"{' -> '.join(order)}: OpenMP runtimes loaded: {loaded}")
+    if expected not in loaded or others:
+        sys.exit(f"{' -> '.join(order)}: expected Maestro to use {expected} and no other libomp but scikit-learn's")
 
 
 if __name__ == "__main__":
