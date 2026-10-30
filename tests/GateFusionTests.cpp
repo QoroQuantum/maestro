@@ -547,6 +547,24 @@ void Capabilities()
             rejected = true;
         }
         Check(rejected, "invalid fusion flag accepted");
+        if (!supported)
+        {
+            sim->Configure("gate_fusion", "true");
+            Check(!sim->IsGateFusionEnabled() && sim->GetGateFusionMaxQubits() == 0, "explicit fusion enabled an unsupported method");
+        }
+        if (method == Method::kStabilizer)
+        {
+            sim->AllocateQubits(2);
+            sim->Initialize();
+            Check(sim->GetSimulationType() == Method::kStabilizer && !sim->IsGateFusionEnabled() && sim->GetGateFusionMaxQubits() == 0,
+                  "stabilizer initialization enabled fusion or changed method");
+            sim->ApplyH(0);
+            sim->ApplyCX(0, 1);
+            sim->ApplyS(1);
+            sim->Flush();
+            Check(std::abs(sim->Probability(0) - .5) < 1e-12 && std::abs(sim->Probability(3) - .5) < 1e-12, "stabilizer Clifford circuit changed");
+            Check(sim->GetGateFusionStatistics().fusedBlocks == 0, "stabilizer Clifford gates were fused");
+        }
     }
 #ifndef NO_QISKIT_AER
     for (auto backend : {Backend::kQiskitAer, Backend::kCompositeQiskitAer})
