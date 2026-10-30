@@ -11,10 +11,10 @@ Run "maestro" alone, before torch is installed, under sandbox-exec with the
 Homebrew prefixes unreadable to show the wheel does not need Homebrew's libomp.
 """
 
+import ctypes
 import importlib.util
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -35,10 +35,14 @@ OBSERVABLES = ";".join(["Z" * 16, "X" * 16, "ZZ" + "I" * 14])
 
 
 def loaded_libomps():
-    out = subprocess.run(["vmmap", "-w", str(os.getpid())], capture_output=True, text=True, check=True).stdout
+    # Asks dyld directly: vmmap masks image paths under sandbox-exec.
+    dyld = ctypes.CDLL(None)
+    dyld._dyld_image_count.restype = ctypes.c_uint32
+    dyld._dyld_get_image_name.argtypes = [ctypes.c_uint32]
+    dyld._dyld_get_image_name.restype = ctypes.c_char_p
+    paths = (dyld._dyld_get_image_name(i).decode() for i in range(dyld._dyld_image_count()))
     # LLVM's libomp and Intel's libiomp5 both abort on finding a second copy.
-    paths = {line.split()[-1] for line in out.splitlines() if re.search(r"/lib(omp|iomp5)\.dylib$", line.rstrip())}
-    return sorted({os.path.realpath(p) for p in paths})
+    return sorted({os.path.realpath(p) for p in paths if re.search(r"/lib(omp|iomp5)\.dylib$", p)})
 
 
 def run_maestro():
