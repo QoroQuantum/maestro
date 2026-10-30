@@ -1,1 +1,6 @@
 pytest>=7.0.0
+numpy
+# test_sinter.py: the maestro[sinter] extra plus the pymatching decoder it exercises
+stim>=1.14
+sinter>=1.14
+pymatching
