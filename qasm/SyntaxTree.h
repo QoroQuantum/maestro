@@ -30,6 +30,21 @@ inline double EvaluateGateParameter(const Expression &parameter, const std::unor
     return value;
 }
 
+// Builds an unmodified gate call. Parameters are re-emitted as Constant
+// expressions, so all of AddGateExpr's qubit resolution, broadcasting and
+// validation applies to it unchanged.
+inline UopType MakeCall(const std::string &gateName, const std::vector<double> &params, const MixedListType &args)
+{
+    if (params.empty())
+        return GatecallType(SimpleGatecallType(gateName, args));
+
+    std::vector<Expression> paramExprs;
+    for (const double p : params)
+        paramExprs.push_back(Expression(Constant(p)));
+
+    return GatecallType(ExpGatecallType(gateName, paramExprs, args));
+}
+
 struct AddGateExpr : public AbstractSyntaxTree
 {
     struct result
@@ -307,7 +322,7 @@ struct AddGateExpr : public AbstractSyntaxTree
                     else if (gateName == "u2")
                     {
                         // Only names absent from the allowed-gate sets reach this chain:
-                        // "u2" and "cu2", qelib1.inc gates with no gate type of their own.
+                        // "u2", "cu2", "rzz" and "rxx", qelib1.inc gates with no gate type of their own.
                         // "u1", "u3", "cu1" and "cu3" are all listed in those sets, so the
                         // branch above handles them and arms for them here were dead.
                         stmt.gateType = Circuits::QuantumGateType::kUGateType;
@@ -341,6 +356,30 @@ struct AddGateExpr : public AbstractSyntaxTree
 
                         if (args.size() != 2)
                             throw std::invalid_argument("Gate " + gateName + " requires exactly 2 qubits");
+                    }
+                    else if (gateName == "rzz" || gateName == "rxx")
+                    {
+                        // qelib1.inc's two-qubit rotations, inlined as cx; rz; cx (in the X basis for rxx).
+                        if (stmt.parameters.size() != 1)
+                            throw std::invalid_argument("Gate " + gateName + " requires exactly 1 parameter");
+                        if (args.size() != 2)
+                            throw std::invalid_argument("Gate " + gateName + " requires exactly 2 qubits");
+
+                        stmt.gateType = Circuits::QuantumGateType::kNone;
+                        stmt.qubitsDecl = {"a", "b"};
+
+                        const MixedListType a{ArgumentType("a")};
+                        const MixedListType b{ArgumentType("b")};
+                        const MixedListType ab{ArgumentType("a"), ArgumentType("b")};
+                        const bool xBasis = gateName == "rxx";
+
+                        if (xBasis)
+                            stmt.declOps.insert(stmt.declOps.end(), {MakeCall("h", {}, a), MakeCall("h", {}, b)});
+                        stmt.declOps.insert(stmt.declOps.end(), {MakeCall("cx", {}, ab), MakeCall("rz", stmt.parameters, b), MakeCall("cx", {}, ab)});
+                        if (xBasis)
+                            stmt.declOps.insert(stmt.declOps.end(), {MakeCall("h", {}, a), MakeCall("h", {}, b)});
+
+                        stmt.parameters.clear();
                     }
                     else
                     {
@@ -802,21 +841,6 @@ struct AddModifiedGateExpr : public AbstractSyntaxTree
             gateName = it->second;
     }
 
-    // Builds the rewritten, unmodified gate call. Parameters are re-emitted as
-    // Constant expressions, so all of AddGateExpr's qubit resolution,
-    // broadcasting and validation applies to it unchanged.
-    static UopType MakeCall(const std::string &gateName, const std::vector<double> &params, const MixedListType &args)
-    {
-        if (params.empty())
-            return GatecallType(SimpleGatecallType(gateName, args));
-
-        std::vector<Expression> paramExprs;
-        for (const double p : params)
-            paramExprs.push_back(Expression(Constant(p)));
-
-        return GatecallType(ExpGatecallType(gateName, paramExprs, args));
-    }
-
     // A statement that adds nothing to the circuit: Program::AddToCircuit skips
     // a Uop with no gate type and no gate declaration.
     static QoperationStatement NoOpStatement()
@@ -960,7 +984,7 @@ struct AddModifiedGateExpr : public AbstractSyntaxTree
   private:
     // Gates whose single parameter is an angle they are linear in, so that
     // g(theta)^s == g(s * theta) for any real s.
-    static inline std::unordered_set<std::string> rotationGates = {"rx", "ry", "rz", "p", "cp", "crx", "cry", "crz"};
+    static inline std::unordered_set<std::string> rotationGates = {"rx", "ry", "rz", "p", "cp", "crx", "cry", "crz", "rxx", "rzz"};
 
     // The largest number of copies pow(k) may expand a gate into.
     static constexpr int kMaxRepetitions = 1024;

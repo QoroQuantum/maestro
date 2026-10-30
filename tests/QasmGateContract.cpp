@@ -358,6 +358,70 @@ BOOST_AUTO_TEST_CASE(Cu1RejectsExtraParametersJustAsU1Does)
                            2);
 }
 
+BOOST_AUTO_TEST_CASE(RzzAndRxxEntangleLikeRyThenCx)
+{
+    // rxx(theta)|00> = cos(theta/2)|00> - i sin(theta/2)|11>, and rzz is rxx
+    // conjugated by h on both qubits.
+    const std::string reference = "OPENQASM 2.0;\n"
+                                  "qreg q[2];\n"
+                                  "ry(0.7) q[0];\n"
+                                  "cx q[0], q[1];\n";
+
+    CheckSameProbabilities("OPENQASM 2.0;\n"
+                           "qreg q[2];\n"
+                           "rxx(0.7) q[0], q[1];\n",
+                           reference, 2);
+    CheckSameProbabilities("OPENQASM 2.0;\n"
+                           "qreg q[2];\n"
+                           "h q[0];\n"
+                           "h q[1];\n"
+                           "rzz(0.7) q[0], q[1];\n"
+                           "h q[0];\n"
+                           "h q[1];\n",
+                           reference, 2);
+}
+
+BOOST_AUTO_TEST_CASE(RzzAndRxxLowerToExistingGates)
+{
+    qasm::QasmToCirc<> parser;
+    auto circuit = parser.ParseAndTranslate("OPENQASM 2.0;\n"
+                                            "qreg q[2];\n"
+                                            "rzz(0.7) q[0], q[1];\n"
+                                            "rxx(0.7) q[0], q[1];\n");
+    BOOST_TEST_REQUIRE(!parser.Failed(), parser.GetErrorMessage());
+
+    BOOST_TEST(circuit->GetNumberOfOperations() == 10u);
+    BOOST_TEST((NthGateType(circuit, 0) == Circuits::QuantumGateType::kCXGateType));
+    BOOST_TEST((NthGateType(circuit, 1) == Circuits::QuantumGateType::kRzGateType));
+    BOOST_TEST((NthGateType(circuit, 2) == Circuits::QuantumGateType::kCXGateType));
+}
+
+BOOST_AUTO_TEST_CASE(RzzAndRxxAcceptInvAndPow)
+{
+    // On |+0>, rzz acts as rz on q[0] and rxx as rx on q[1], so the h-sandwich
+    // makes either angle observable.
+    const auto probe = [](const std::string &body) { return "OPENQASM 3.0;\nqubit[2] q;\nh q[0];\n" + body + "h q[0];\n"; };
+
+    for (const std::string gate : {"rzz", "rxx"})
+    {
+        CheckSameProbabilities(probe(gate + "(0.7) q[0], q[1];\ninv @ " + gate + "(0.7) q[0], q[1];\n"), probe(""), 2);
+        CheckSameProbabilities(probe("pow(2) @ " + gate + "(0.35) q[0], q[1];\n"), probe(gate + "(0.7) q[0], q[1];\n"), 2);
+        CheckDifferentProbabilities(probe(gate + "(0.7) q[0], q[1];\n"), probe(""), 2);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(RzzAndRxxRejectWrongArity)
+{
+    CheckRejectedWithMessage("OPENQASM 2.0;\n"
+                             "qreg q[2];\n"
+                             "rzz(0.1, 0.2) q[0], q[1];\n",
+                             "requires exactly 1 parameter");
+    CheckRejectedWithMessage("OPENQASM 2.0;\n"
+                             "qreg q[1];\n"
+                             "rxx(0.1) q[0];\n",
+                             "requires exactly 2 qubits");
+}
+
 // ****************************************************************************
 
 BOOST_AUTO_TEST_SUITE_END()
