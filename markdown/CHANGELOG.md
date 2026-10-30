@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-10-30
+
 ### Added
 
+- The QASM parser accepts qelib1.inc's `rzz` and `rxx`, expanding them into `cx`,
+  `rz`, `cx` (between `h` gates for `rxx`), so the gates no longer need
+  decomposing before they reach Maestro.
 - `maestro.sinter` runs Stim's own noise. `DEPOLARIZE1/2`, `X/Y/Z_ERROR` and
   `PAULI_CHANNEL_1/2` translate to the new `QuantumCircuit.pauli_channel`, and
   measurement flips such as `M(p)` to the new `measure(..., readout_error=p)`, so a
