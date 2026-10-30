@@ -47,4 +47,7 @@ nb::dict CoherentEstimate(const CircuitPtr &circuit, const nb::object &observabl
                           const SimulatorConfig &config, std::optional<uint64_t> noise_seed);
 nb::dict FullNoiseEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, int noise_realizations,
                            const SimulatorConfig &config, std::optional<uint64_t> noise_seed);
+nb::dict NoisyEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, const SimulatorConfig &config);
+nb::dict NoisyFidelity(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, int noise_realizations, const SimulatorConfig &config,
+                       std::optional<uint64_t> noise_seed);
 } // namespace maestro_bindings

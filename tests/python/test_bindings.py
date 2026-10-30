@@ -5802,3 +5802,629 @@ def test_virtual_routing_weight_validation(weight):
     with pytest.raises(ValueError):
         config.mps_routing_truncation_weight = weight
     assert config.mps_routing_truncation_weight == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Readout-corrected noisy_prob, CPTP channels, layer validation, pickling and
+# checkpoint seeding
+# ---------------------------------------------------------------------------
+
+def _config(method):
+    return maestro.SimulatorConfig(
+        simulator_type=maestro.SimulatorType.QCSim, simulation_type=method)
+
+
+def _dm_config():
+    return _config(maestro.SimulationType.DensityMatrix)
+
+
+def _sv_config():
+    return _config(maestro.SimulationType.Statevector)
+
+
+def _exact_expectations(qc, observables, nm):
+    """Expectation values with every channel applied exactly (density matrix)."""
+    return maestro.noisy_estimate_montecarlo(
+        qc, observables, nm, noise_realizations=1, config=_dm_config(),
+        noise_seed=0)["expectation_values"]
+
+
+# Amplitude damping with gamma = 0.36, as Kraus operators.
+_AMPLITUDE_DAMPING_KRAUS = [[[1, 0], [0, 0.8]], [[0, 0.6], [0, 0]]]
+
+
+class TestNoisyProbReadout:
+    """noisy_prob's first-order readout expansion, including asymmetric rates."""
+
+    @staticmethod
+    def _circuit():
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.ry(0, 0.7)
+        qc.ry(1, 1.9)
+        return qc
+
+    @staticmethod
+    def _first_order(qc, target, rates):
+        """P_noisy(b) to first order; rates[i] = (p_meas1_prep0, p_meas0_prep1)."""
+        away = [rates[i][0] if b == "0" else rates[i][1] for i, b in enumerate(target)]
+        into = [rates[i][1] if b == "0" else rates[i][0] for i, b in enumerate(target)]
+        result = math.prod(1 - a for a in away) * qc.prob(target)["probability"]
+        for i in range(len(target)):
+            flipped = target[:i] + ("1" if target[i] == "0" else "0") + target[i + 1:]
+            keep = math.prod(1 - a for j, a in enumerate(away) if j != i)
+            result += into[i] * keep * qc.prob(flipped)["probability"]
+        return result
+
+    def test_symmetric_readout(self):
+        qc = self._circuit()
+        nm = maestro.NoiseModel()
+        nm.set_readout_error_symmetric(0, 0.05)
+        nm.set_readout_error_symmetric(1, 0.02)
+        rates = [(0.05, 0.05), (0.02, 0.02)]
+        total = 0.0
+        for target in ("00", "01", "10", "11"):
+            result = qc.noisy_prob(target, nm)
+            assert result["has_readout_error"]
+            assert result["probability"] == pytest.approx(
+                self._first_order(qc, target, rates), abs=1e-12)
+            total += result["probability"]
+        # Only the second-order terms are dropped.
+        assert total == pytest.approx(1.0, abs=2 * 0.05 * 0.02)
+
+    def test_asymmetric_single_qubit_is_exact(self):
+        """For one qubit the expansion is exact: P(0) = (1-p10)P0 + p01 P1."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.ry(0, 1.1)
+        p0 = qc.prob("0")["probability"]
+        p1 = qc.prob("1")["probability"]
+        p_meas1_prep0, p_meas0_prep1 = 0.1, 0.3
+        nm = maestro.NoiseModel()
+        nm.set_readout_error(0, p_meas1_prep0, p_meas0_prep1)
+
+        noisy0 = qc.noisy_prob("0", nm)["probability"]
+        noisy1 = qc.noisy_prob("1", nm)["probability"]
+        assert noisy0 == pytest.approx((1 - p_meas1_prep0) * p0 + p_meas0_prep1 * p1, abs=1e-12)
+        assert noisy1 == pytest.approx((1 - p_meas0_prep1) * p1 + p_meas1_prep0 * p0, abs=1e-12)
+        assert noisy0 + noisy1 == pytest.approx(1.0, abs=1e-12)
+
+    def test_asymmetric_two_qubits(self):
+        qc = self._circuit()
+        rates = [(0.02, 0.08), (0.01, 0.05)]
+        nm = maestro.NoiseModel()
+        for q, (p10, p01) in enumerate(rates):
+            nm.set_readout_error(q, p10, p01)
+        probabilities = [qc.noisy_prob(t, nm)["probability"] for t in ("00", "01", "10", "11")]
+        for target, probability in zip(("00", "01", "10", "11"), probabilities):
+            assert probability == pytest.approx(
+                self._first_order(qc, target, rates), abs=1e-12)
+        assert sum(probabilities) == pytest.approx(1.0, abs=2 * 0.08 * 0.05)
+
+    @pytest.mark.parametrize("target", ["00", "01", "10", "11"])
+    def test_boundary_rates_do_not_produce_nan(self, target):
+        """A certain flip (p = 1) used to divide 0 by 0; p = 0 is the ideal."""
+        qc = self._circuit()
+        nm = maestro.NoiseModel()
+        nm.set_readout_error(0, 1.0, 1.0)  # qubit 0 is always read flipped
+        nm.set_readout_error(1, 0.0, 0.0)
+        probability = qc.noisy_prob(target, nm)["probability"]
+        assert not math.isnan(probability)
+        flipped = ("1" if target[0] == "0" else "0") + target[1]
+        assert probability == pytest.approx(qc.prob(flipped)["probability"], abs=1e-12)
+
+        ideal = maestro.NoiseModel()
+        ideal.set_readout_error(0, 0.0, 0.0)
+        assert qc.noisy_prob(target, ideal)["probability"] == pytest.approx(
+            qc.prob(target)["probability"], abs=1e-12)
+
+    def test_rejects_gate_noise(self):
+        nm = maestro.NoiseModel()
+        nm.set_readout_error_symmetric(0, 0.01)
+        nm.set_depolarizing(0, 0.01)
+        with pytest.raises(ValueError, match="only readout"):
+            self._circuit().noisy_prob("00", nm)
+
+
+class TestPhaseDamping:
+    def test_validation(self):
+        nm = maestro.NoiseModel()
+        for args in [(0, 1.5), (0, -0.1), (0, float("nan")), (-1, 0.1)]:
+            with pytest.raises(ValueError):
+                nm.set_phase_damping(*args)
+        for args in [(0, -1e-9, 1e-6), (0, 1e-9, 0.0), (0, 1e-9, -1e-6)]:
+            with pytest.raises(ValueError):
+                nm.set_phase_damping_from_time(*args)
+        assert not nm.has_any()
+
+    @pytest.mark.parametrize("method", [maestro.SimulationType.DensityMatrix,
+                                        maestro.SimulationType.Statevector])
+    def test_coherence_decay(self, method):
+        """Phase damping is the phase-flip channel, so both paths agree."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        gamma = 0.36
+        nm = maestro.NoiseModel()
+        nm.set_phase_damping(0, gamma)
+        assert not nm.has_additional_quantum_channels()
+        exact = method == maestro.SimulationType.DensityMatrix
+        result = maestro.noisy_estimate_montecarlo(
+            qc, ["X", "Z"], nm, noise_realizations=1 if exact else 3000,
+            config=_config(method), noise_seed=7)
+        x, z = result["expectation_values"]
+        assert x == pytest.approx(math.sqrt(1 - gamma), abs=1e-10 if exact else 0.04)
+        assert z == pytest.approx(0.0, abs=1e-10)
+
+    def test_from_time(self):
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        duration, t_phi = 2e-6, 10e-6
+        nm = maestro.NoiseModel()
+        nm.set_phase_damping_from_time(0, duration, t_phi)
+        assert _exact_expectations(qc, ["X"], nm)[0] == pytest.approx(
+            math.exp(-duration / t_phi), abs=1e-10)
+
+
+class TestGeneralizedAmplitudeDamping:
+    def test_validation(self):
+        nm = maestro.NoiseModel()
+        for args in [(0, 1.5, 0.1), (0, 0.1, -0.1), (0, 0.1, 1.2), (-1, 0.1, 0.1)]:
+            with pytest.raises(ValueError):
+                nm.set_generalized_amplitude_damping(*args)
+        assert not nm.has_any()
+
+    @pytest.mark.parametrize("excited_population", [0.0, 0.25])
+    def test_relaxes_to_equilibrium_population(self, excited_population):
+        """Population-preserving Z gates leave only the damping, which converges
+        to P(1) = excited_population."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.x(0)
+        for _ in range(40):
+            qc.z(0)
+        nm = maestro.NoiseModel()
+        nm.set_generalized_amplitude_damping(0, 0.3, excited_population)
+        assert nm.has_additional_quantum_channels()
+        assert nm.requires_exact_quantum_channels()
+        z = _exact_expectations(qc, ["Z"], nm)[0]
+        assert z == pytest.approx(1 - 2 * excited_population, abs=1e-6)
+
+    def test_exact_execution_and_sampled_rejection(self):
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.measure_all()
+        nm = maestro.NoiseModel()
+        nm.set_generalized_amplitude_damping(0, 1.0, 1.0)  # always ends in |1>
+        result = maestro.noisy_execute(qc, nm, config=_dm_config(), shots=50,
+                                       noise_realizations=1, noise_seed=1)
+        assert result["counts"] == {"1": 50}
+        with pytest.raises(ValueError, match="density-matrix or MPO"):
+            maestro.noisy_execute(qc, nm, config=_sv_config(), shots=10)
+
+
+class TestThermalRelaxationBindings:
+    def test_validation(self):
+        nm = maestro.NoiseModel()
+        with pytest.raises(ValueError):
+            nm.set_thermal_relaxation(0, 1e-6, 10e-6, 30e-6)  # T2 > 2*T1
+        with pytest.raises(ValueError):
+            nm.set_thermal_relaxation(0, -1e-6, 10e-6, 5e-6)
+        with pytest.raises(ValueError):
+            nm.set_thermal_relaxation_2q(0, 1e-6, 10e-6, 30e-6)
+        with pytest.raises(ValueError):
+            nm.set_thermal_relaxation(-1, 1e-6, 10e-6, 5e-6)
+        assert not nm.has_thermal_relaxation()
+
+    def test_conflict_with_t1_leaves_model_usable(self):
+        from maestro.circuits import QuantumCircuit
+        nm = maestro.NoiseModel()
+        nm.set_t1(0, 0.1)
+        with pytest.raises(ValueError, match="double-count"):
+            nm.set_thermal_relaxation(0, 1e-6, 40e-6, 25e-6)
+        assert not nm.has_thermal_relaxation()
+
+        thermal = maestro.NoiseModel()
+        thermal.set_thermal_relaxation(0, 1e-6, 40e-6, 25e-6)
+        with pytest.raises(ValueError, match="double-count"):
+            thermal.set_t1(0, 0.1)
+        with pytest.raises(ValueError, match="double-count"):
+            thermal.set_t1_2q(0, 0.1)
+        assert not thermal.has_t1()
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.measure_all()
+        for model in (nm, thermal):
+            result = maestro.noisy_execute(qc, model, shots=20, noise_seed=1)
+            assert sum(result["counts"].values()) == 20
+
+    def test_sampled_overdephasing_regime_warns(self):
+        import warnings
+        from maestro.circuits import QuantumCircuit
+        nm = maestro.NoiseModel()
+        nm.set_thermal_relaxation(0, 1e-6, 10e-6, 15e-6)  # T1 < T2 <= 2*T1
+        assert nm.has_thermal_relaxation()
+        assert nm.has_thermal_in_sampled_overdephasing_regime()
+        assert nm.requires_exact_quantum_channels()
+        assert not nm.has_additional_quantum_channels()
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.measure_all()
+        with pytest.warns(RuntimeWarning, match="T2 clamped to T1"):
+            maestro.noisy_execute(qc, nm, config=_sv_config(), shots=10, noise_seed=1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            maestro.noisy_execute(qc, nm, config=_dm_config(), shots=10, noise_seed=1)
+
+        exact = maestro.NoiseModel()
+        exact.set_thermal_relaxation(0, 1e-6, 40e-6, 25e-6)
+        assert not exact.has_thermal_in_sampled_overdephasing_regime()
+        assert not exact.requires_exact_quantum_channels()
+
+    def test_exact_kraus_execution(self):
+        from maestro.circuits import QuantumCircuit
+        duration, t1, t2 = 2e-6, 40e-6, 25e-6
+        qc = QuantumCircuit()
+        qc.h(0)
+        nm = maestro.NoiseModel()
+        nm.set_thermal_relaxation(0, duration, t1, t2)
+        x = _exact_expectations(qc, ["X"], nm)[0]
+        assert x == pytest.approx(math.exp(-duration / t2), abs=1e-10)
+
+    def test_2q_relaxation_only_follows_two_qubit_gates(self):
+        from maestro.circuits import QuantumCircuit
+        duration, t1, t2 = 2e-6, 40e-6, 25e-6
+        nm = maestro.NoiseModel()
+        nm.set_thermal_relaxation_2q(0, duration, t1, t2)
+        assert nm.has_thermal_relaxation()
+
+        one_qubit = QuantumCircuit()
+        one_qubit.h(0)
+        assert _exact_expectations(one_qubit, ["X"], nm)[0] == pytest.approx(1.0, abs=1e-10)
+
+        # CZ with the second qubit in |0> leaves qubit 0 in |+>.
+        two_qubit = QuantumCircuit()
+        two_qubit.h(0)
+        two_qubit.cz(0, 1)
+        assert _exact_expectations(two_qubit, ["XI"], nm)[0] == pytest.approx(
+            math.exp(-duration / t2), abs=1e-10)
+
+
+class TestCorrelatedPhaseFlipBindings:
+    def test_validation(self):
+        nm = maestro.NoiseModel()
+        with pytest.raises(ValueError):
+            nm.set_correlated_phase_flip(1, 1, 0.1)
+        with pytest.raises(ValueError):
+            nm.set_correlated_phase_flip(0, 1, 1.5)
+        with pytest.raises(ValueError):
+            nm.set_correlated_phase_flip(0, 1, -0.1)
+        with pytest.raises(ValueError):
+            nm.set_correlated_phase_flip(-1, 1, 0.1)
+        assert not nm.has_any()
+
+    @pytest.mark.parametrize("correlation", [0.0, 1.0])
+    def test_execution(self, correlation):
+        """|++> is unchanged by CX, so only the phase flips act after it.
+        Fully correlated flips are II/ZZ, which leave <XX> intact."""
+        from maestro.circuits import QuantumCircuit
+        p = 0.2
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.h(1)
+        qc.cx(0, 1)
+        nm = maestro.NoiseModel()
+        nm.set_correlated_phase_flip(0, 1, p, correlation)
+        assert nm.has_additional_quantum_channels()
+        xi, xx = _exact_expectations(qc, ["XI", "XX"], nm)
+        assert xi == pytest.approx(1 - 2 * p, abs=1e-10)
+        assert xx == pytest.approx(1.0 if correlation == 1.0 else (1 - 2 * p) ** 2, abs=1e-10)
+        with pytest.raises(ValueError, match="density-matrix or MPO"):
+            maestro.noisy_estimate_montecarlo(qc, ["XI"], nm, config=_sv_config())
+
+
+class TestKrausChannelBindings:
+    def test_single_qubit_channel(self):
+        from maestro.circuits import QuantumCircuit
+        nm = maestro.NoiseModel()
+        nm.set_kraus_channel([0], _AMPLITUDE_DAMPING_KRAUS)
+        assert nm.has_additional_quantum_channels()
+
+        coherence = QuantumCircuit()
+        coherence.h(0)
+        assert _exact_expectations(coherence, ["X"], nm)[0] == pytest.approx(0.8, abs=1e-10)
+
+        excited = QuantumCircuit()
+        excited.x(0)
+        # P(1) = 1 - gamma = 0.64
+        assert _exact_expectations(excited, ["Z"], nm)[0] == pytest.approx(1 - 2 * 0.64, abs=1e-10)
+
+    def test_two_qubit_channel_basis_order(self):
+        """targets[0] is the least significant bit of the 4x4 index."""
+        from maestro.circuits import QuantumCircuit
+        x_on_first_target = [[[0, 1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1], [0, 0, 1, 0]]]
+        nm = maestro.NoiseModel()
+        nm.set_kraus_channel([0, 1], x_on_first_target)
+        qc = QuantumCircuit()
+        qc.cx(0, 1)  # identity on |00>, but a gate the channel follows
+        zi, iz = _exact_expectations(qc, ["ZI", "IZ"], nm)
+        assert zi == pytest.approx(-1.0, abs=1e-10)
+        assert iz == pytest.approx(1.0, abs=1e-10)
+
+    def test_rejects_non_trace_preserving(self):
+        nm = maestro.NoiseModel()
+        with pytest.raises(ValueError):
+            nm.set_kraus_channel([0], [[[1, 0], [0, 0.5]]])
+        assert not nm.has_additional_quantum_channels()
+
+    @pytest.mark.parametrize("targets,operators", [
+        ([0, 1], [[[1, 0], [0, 1]]]),                       # 2x2 for two targets
+        ([0], [[[1, 0, 0], [0, 1, 0], [0, 0, 1]]]),         # not a power of two
+        ([0], [[[1, 0], [0]]]),                             # ragged rows
+        ([0], [[]]),                                        # empty matrix
+        ([0, 1, 2], [[[1 if r == c else 0 for c in range(8)] for r in range(8)]]),
+        ([1, 1], [[[1 if r == c else 0 for c in range(4)] for r in range(4)]]),
+    ])
+    def test_rejects_invalid_dimensions_and_targets(self, targets, operators):
+        nm = maestro.NoiseModel()
+        with pytest.raises(ValueError):
+            nm.set_kraus_channel(targets, operators)
+        assert not nm.has_additional_quantum_channels()
+
+
+class TestTwoQubitGateT1:
+    def test_getters_and_fallback(self):
+        nm = maestro.NoiseModel()
+        nm.set_t1_2q(0, 0.2)
+        nm.set_t1(1, 0.1)
+        nm.set_t1_2q_from_time(2, 40e-9, 100e-6)
+        assert nm.has_t1()
+        assert nm.get_t1_2q(0) == pytest.approx(0.2)
+        assert nm.get_t1_for_gate(0, True) == pytest.approx(0.2)
+        assert nm.get_t1_for_gate(0, False) == 0.0
+        # Without a 2Q override, 2Q gates fall back to the all-gates T1.
+        assert nm.get_t1_2q(1) == pytest.approx(0.1)
+        assert nm.get_t1_for_gate(1, True) == pytest.approx(0.1)
+        assert nm.get_t1_2q(2) == pytest.approx(-math.expm1(-40e-9 / 100e-6))
+
+    def test_validation(self):
+        nm = maestro.NoiseModel()
+        for args in [(0, 1.5), (0, -0.1), (-1, 0.1)]:
+            with pytest.raises(ValueError):
+                nm.set_t1_2q(*args)
+        for args in [(0, -1e-9, 1e-6), (0, 1e-9, 0.0), (-1, 1e-9, 1e-6)]:
+            with pytest.raises(ValueError):
+                nm.set_t1_2q_from_time(*args)
+        assert not nm.has_t1()
+
+    def test_applies_after_two_and_three_qubit_gates_only(self):
+        from maestro.circuits import QuantumCircuit
+        nm = maestro.NoiseModel()
+        nm.set_t1_2q(0, 1.0)
+        nm.set_t1_2q(2, 1.0)
+
+        one_qubit = QuantumCircuit()
+        one_qubit.x(0)
+        assert _exact_expectations(one_qubit, ["Z"], nm)[0] == pytest.approx(-1.0, abs=1e-10)
+
+        two_qubit = QuantumCircuit()
+        two_qubit.x(0)
+        two_qubit.cx(0, 1)
+        zi, iz = _exact_expectations(two_qubit, ["ZI", "IZ"], nm)
+        assert zi == pytest.approx(1.0, abs=1e-10)  # control decayed after the CX
+        assert iz == pytest.approx(-1.0, abs=1e-10)
+
+        # A CCX is a multi-qubit gate, so the 2Q T1 decays its flipped target.
+        three_qubit = QuantumCircuit()
+        three_qubit.x(0)
+        three_qubit.x(1)
+        three_qubit.ccx(0, 1, 2)
+        assert _exact_expectations(three_qubit, ["IIZ"], nm)[0] == pytest.approx(1.0, abs=1e-10)
+
+
+class TestNoiseLayerValidation:
+    """Execution modes reject layers they would otherwise silently ignore."""
+
+    UNCOVERED_BY_DAMPING = [
+        ("set_t1", (0, 0.1)),
+        ("set_t1_2q", (0, 0.1)),
+        ("set_thermal_relaxation", (0, 1e-6, 40e-6, 25e-6)),
+        ("set_phase_damping", (0, 0.1)),
+        ("set_coherent_depolarizing", (0, 0.01)),
+        ("set_correlated_ou", (0, 15.0, 0.5, 100e-9)),
+        ("set_crosstalk", (0, 1, 0.01)),
+        ("set_2q_depolarizing", (0, 1, 0.01)),
+        ("set_1q_gate_depolarizing", (0, 0.01)),
+        ("set_2q_gate_depolarizing", (0, 0.01)),
+        ("set_idle_noise", (0, 40e-6, 25e-6)),
+        ("set_generalized_amplitude_damping", (0, 0.1, 0.0)),
+    ]
+
+    @staticmethod
+    def _circuit():
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        return qc
+
+    def test_damping_covers_pauli_and_readout(self):
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.1)
+        nm.set_qubit_noise(1, 0.01, 0.02, 0.03)
+        nm.set_readout_error_symmetric(0, 0.05)
+        assert nm.compute_damping_covers_model()
+        result = self._circuit().noisy_estimate(["ZZ"], nm)
+        assert result["expectation_values"][0] == pytest.approx(
+            nm.compute_damping("ZZ") * result["ideal_expectation_values"][0])
+
+    @pytest.mark.parametrize("setter,args", UNCOVERED_BY_DAMPING)
+    def test_noisy_estimate_rejects_uncovered_layers(self, setter, args):
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.01)
+        getattr(nm, setter)(*args)
+        assert not nm.compute_damping_covers_model()
+        qc = self._circuit()
+        with pytest.raises(ValueError, match="all-gates Pauli"):
+            qc.noisy_estimate(["ZZ"], nm)
+        with pytest.raises(ValueError, match="all-gates Pauli"):
+            maestro.noisy_estimate(qc, ["ZZ"], nm)
+        with pytest.raises(ValueError, match="all-gates Pauli"):
+            maestro.noisy_estimate(CLIFFORD_BELL_NO_MEASURE_QASM, ["ZZ"], nm)
+
+    @pytest.mark.parametrize("setter,args", [
+        ("set_coherent_depolarizing", (0, 0.01)),
+        ("set_correlated_ou", (0, 15.0, 0.5, 100e-9)),
+        ("set_crosstalk", (0, 1, 0.01)),
+    ])
+    def test_pauli_injection_rejects_unapplied_layers(self, setter, args):
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.01)
+        getattr(nm, setter)(*args)
+        qc = self._circuit()
+        with pytest.raises(ValueError, match="full_noise"):
+            qc.noisy_estimate_montecarlo(["ZZ"], nm, noise_realizations=2)
+        qc.measure_all()
+        with pytest.raises(ValueError, match="full_noise"):
+            qc.noisy_execute(nm, shots=10)
+        # The combined injector applies all of them.
+        assert sum(qc.full_noise_execute(nm, shots=10)["counts"].values()) == 10
+
+    def test_coherent_execute_rejects_other_layers(self):
+        nm = maestro.NoiseModel()
+        nm.set_coherent_depolarizing(0, 0.01)
+        nm.set_depolarizing(1, 0.01)
+        qc = self._circuit()
+        with pytest.raises(ValueError, match="only coherent and readout"):
+            qc.coherent_estimate(["ZZ"], nm, noise_realizations=2)
+        qc.measure_all()
+        with pytest.raises(ValueError, match="only coherent and readout"):
+            qc.coherent_execute(nm, shots=10)
+
+    def test_coherent_execute_applies_readout(self):
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.z(0)
+        qc.measure_all()
+        nm = maestro.NoiseModel()
+        nm.set_coherent_dephasing(0, 0.01)  # Z rotations leave |0> alone
+        nm.set_readout_error(0, 1.0, 0.0)
+        result = qc.coherent_execute(nm, shots=20, noise_seed=3)
+        assert result["counts"] == {"1": 20}
+
+
+class TestNoiseSeedAlias:
+    @staticmethod
+    def _circuit(measure):
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        if measure:
+            qc.measure_all()
+        return qc
+
+    @staticmethod
+    def _model():
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.2)
+        nm.set_all_coherent_depolarizing(2, 0.01)
+        return nm
+
+    @pytest.mark.parametrize("name,args,key", [
+        ("full_noise_execute", (), "counts"),
+        ("noisy_fidelity", (), "fidelity"),
+        ("full_noise_estimate", (["ZZ", "XX"],), "expectation_values"),
+        ("coherent_estimate", (["ZZ", "XX"],), "expectation_values"),
+    ])
+    def test_seed_matches_noise_seed_for_methods_and_functions(self, name, args, key):
+        qc = self._circuit(measure=name == "full_noise_execute")
+        nm = self._model()
+        if name == "coherent_estimate":
+            nm = maestro.NoiseModel()
+            nm.set_all_coherent_depolarizing(2, 0.05)
+        kwargs = {"noise_realizations": 8}
+        positional = (args[0], nm) if args else (nm,)
+        expected = getattr(qc, name)(*positional, noise_seed=11, **kwargs)[key]
+        assert getattr(qc, name)(*positional, seed=11, **kwargs)[key] == expected
+        assert getattr(maestro, name)(qc, *positional, seed=11, **kwargs)[key] == expected
+
+    @pytest.mark.parametrize("name", ["noisy_execute", "coherent_execute"])
+    def test_seed_alias_on_execute_methods(self, name):
+        qc = self._circuit(measure=True)
+        nm = maestro.NoiseModel()
+        if name == "noisy_execute":
+            nm.set_all_depolarizing(2, 0.2)
+        else:
+            nm.set_all_coherent_depolarizing(2, 0.05)
+        expected = getattr(qc, name)(nm, shots=200, noise_seed=5)["counts"]
+        assert getattr(qc, name)(nm, shots=200, seed=5)["counts"] == expected
+        assert getattr(maestro, name)(qc, nm, shots=200, seed=5)["counts"] == expected
+
+    def test_noisy_estimate_montecarlo_seed_alias(self):
+        qc = self._circuit(measure=False)
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.2)
+        expected = qc.noisy_estimate_montecarlo(["ZZ"], nm, noise_realizations=8, noise_seed=4)
+        aliased = qc.noisy_estimate_montecarlo(["ZZ"], nm, noise_realizations=8, seed=4)
+        assert aliased["expectation_values"] == expected["expectation_values"]
+
+    def test_module_level_noisy_fidelity_is_bound(self):
+        assert callable(maestro.noisy_fidelity)
+        qc = self._circuit(measure=False)
+        nm = self._model()
+        method = qc.noisy_fidelity(nm, noise_realizations=5, noise_seed=2)
+        function = maestro.noisy_fidelity(qc, nm, noise_realizations=5, noise_seed=2)
+        assert function["fidelity"] == method["fidelity"]
+        assert 0.0 <= function["fidelity"] <= 1.0
+
+
+class TestNoiseModelPickle:
+    @staticmethod
+    def _configured():
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.05)
+        nm.set_t1_2q(1, 0.1)
+        nm.set_thermal_relaxation(2, 1e-6, 40e-6, 25e-6)
+        nm.set_phase_damping(0, 0.2)
+        nm.set_readout_error(1, 0.01, 0.03)
+        nm.set_kraus_channel([0], _AMPLITUDE_DAMPING_KRAUS)
+        nm.set_correlated_phase_flip(0, 1, 0.1, correlation=0.5)
+        return nm
+
+    def test_round_trip_preserves_channels(self):
+        from maestro.circuits import QuantumCircuit
+        nm = self._configured()
+        restored = pickle.loads(pickle.dumps(nm))
+        for predicate in ("has_any", "has_t1", "has_thermal_relaxation", "has_readout_error",
+                          "has_additional_quantum_channels", "compute_damping_covers_model"):
+            assert getattr(restored, predicate)() == getattr(nm, predicate)()
+        assert restored.get_t1_2q(1) == nm.get_t1_2q(1)
+
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.cx(0, 1)
+        qc.h(2)
+        observables = ["XII", "ZZI", "IIX"]
+        assert _exact_expectations(qc, observables, restored) == pytest.approx(
+            _exact_expectations(qc, observables, nm), abs=1e-12)
+
+    def test_pickle_after_rejected_setter(self):
+        nm = maestro.NoiseModel()
+        nm.set_depolarizing(0, 0.05)
+        with pytest.raises(ValueError):
+            nm.set_depolarizing(0, 2.0)
+        with pytest.raises(TypeError):
+            nm.set_depolarizing("zero", 0.1)
+        nm.set_t1(1, 0.1)
+        with pytest.raises(ValueError, match="double-count"):
+            nm.set_thermal_relaxation(1, 1e-6, 40e-6, 25e-6)
+
+        restored = pickle.loads(pickle.dumps(nm))
+        assert [name for name, _, _ in restored._call_log] == ["set_depolarizing", "set_t1"]
+        assert restored.get_t1_for_gate(1, False) == pytest.approx(0.1)
+        assert not restored.has_thermal_relaxation()

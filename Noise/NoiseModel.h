@@ -1365,12 +1365,45 @@ class NoiseModel
     /// True if any noise of any type has been configured.
     bool has_any() const
     {
-        return !noise_.empty() || !coherent_.empty() || !correlated_.empty() || !idle_noise_.empty() || !t1_.empty() || !t1_2q_.empty() ||
-               !crosstalk_.empty() || !readout_.empty() || !depol_2q_.empty() || !noise_1q_.empty() || !noise_2q_.empty() || !phase_damping_.empty() ||
-               has_thermal_relaxation() || has_additional_quantum_channels();
+        return has_non_readout_noise() || !readout_.empty();
+    }
+
+    /// True if any layer that acts on the quantum state (anything but the
+    /// classical readout error) has been configured.
+    bool has_non_readout_noise() const
+    {
+        return !coherent_.empty() || has_non_coherent_state_noise_();
+    }
+
+    /**
+     * True iff inject_noise() / inject_exact_noise() apply every configured
+     * layer. They do not apply coherent, correlated or crosstalk noise; those
+     * need inject_combined_noise(). Readout is attached separately.
+     */
+    bool inject_noise_covers_model() const
+    {
+        return coherent_.empty() && correlated_.empty() && crosstalk_.empty();
+    }
+
+    /**
+     * True iff inject_coherent_noise() applies every configured layer, i.e.
+     * only coherent rotations (and readout, which is attached separately) are
+     * configured.
+     */
+    bool inject_coherent_noise_covers_model() const
+    {
+        return !has_non_coherent_state_noise_();
     }
 
   private:
+    /// True if a state-acting layer other than coherent rotations is configured.
+    bool has_non_coherent_state_noise_() const
+    {
+        return !noise_.empty() || !correlated_.empty() || !idle_noise_.empty() || !t1_.empty() || !t1_2q_.empty() || !crosstalk_.empty() ||
+               !depol_2q_.empty() || !noise_1q_.empty() || !noise_2q_.empty() || !phase_damping_.empty() || has_thermal_relaxation() ||
+               has_additional_quantum_channels();
+    }
+
     /// Validate the effective gate-specific values, before a setter commits them.
     static void check_t1_thermal_stack_(int q, double one_qubit_gamma, double two_qubit_gamma, bool one_qubit_thermal, bool two_qubit_thermal)
     {

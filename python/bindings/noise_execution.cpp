@@ -111,7 +111,9 @@ using NoiseInjector = CircuitPtr (*)(const CircuitPtr &, const noise::NoiseModel
 
 static CircuitPtr inject_coherent_for_config(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, std::mt19937 &rng, const SimulatorConfig &)
 {
-    return noise::inject_coherent_noise(circuit, noise_model, rng);
+    auto noisy = noise::inject_coherent_noise(circuit, noise_model, rng);
+    noise::attach_readout_error(noisy, noise_model);
+    return noisy;
 }
 
 void require_realizations(int noise_realizations)
@@ -273,11 +275,27 @@ void require_circuit(const CircuitPtr &circuit)
         throw nb::value_error("Circuit is null.");
 }
 
+// The coherent injector applies only coherent rotations (plus readout), so
+// any other layer would be silently dropped; reject it as the JSON API does.
 static void require_coherent(const noise::NoiseModel &noise_model)
 {
     if (!noise_model.has_coherent())
         throw nb::value_error("NoiseModel has no coherent noise set. Use "
                               "set_coherent_depolarizing(), set_coherent_rotation(), etc.");
+    if (!noise_model.inject_coherent_noise_covers_model())
+        throw nb::value_error("coherent_execute/coherent_estimate apply only coherent and readout noise, "
+                              "but this NoiseModel has other layers. Use full_noise_execute or "
+                              "full_noise_estimate to apply all of them.");
+}
+
+// The Pauli/T1 injector does not apply coherent, correlated or crosstalk
+// layers, so a model with them would silently simulate something else.
+static void require_inject_noise_covers(const noise::NoiseModel &noise_model)
+{
+    if (!noise_model.inject_noise_covers_model())
+        throw nb::value_error("noisy_execute/noisy_estimate_montecarlo do not apply coherent, correlated "
+                              "or crosstalk noise, which this NoiseModel has. Use full_noise_execute or "
+                              "full_noise_estimate to apply all layers.");
 }
 
 void require_any_noise(const noise::NoiseModel &noise_model)
@@ -300,6 +318,7 @@ nb::dict NoisyExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_
                       std::optional<uint64_t> noise_seed)
 {
     require_circuit(circuit);
+    require_inject_noise_covers(noise_model);
     warn_thermal_approximation(noise_model, config);
     return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, inject_noise_for_config, nullptr);
 }
@@ -326,6 +345,7 @@ nb::dict NoisyEstimateMonteCarlo(const CircuitPtr &circuit, const nb::object &ob
                                  const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
 {
     require_circuit(circuit);
+    require_inject_noise_covers(noise_model);
     warn_thermal_approximation(noise_model, config);
     return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, inject_noise_for_config, nullptr);
 }
@@ -346,6 +366,69 @@ nb::dict FullNoiseEstimate(const CircuitPtr &circuit, const nb::object &observab
         require_any_noise(noise_model);
     warn_thermal_approximation(noise_model, config);
     return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, inject_combined_noise_for_config, "combined");
+}
+
+// Ideal expectation values scaled by compute_damping, which only the all-gates
+// Pauli layer contributes to; any other layer would be silently ignored.
+nb::dict NoisyEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, const SimulatorConfig &config)
+{
+    require_circuit(circuit);
+    if (!noise_model.compute_damping_covers_model())
+        throw nb::value_error("noisy_estimate models only the all-gates Pauli layer (set_depolarizing, "
+                              "set_dephasing, set_bit_flip, set_qubit_noise), but this NoiseModel has other "
+                              "layers. Use noisy_estimate_montecarlo or full_noise_estimate instead.");
+    auto paulis = ParseObservables(observables);
+    nb::dict result = estimate_core(circuit, paulis, config);
+
+    nb::list ideal = nb::cast<nb::list>(result["expectation_values"]);
+    nb::list noisy_vals;
+    for (size_t i = 0; i < paulis.size(); ++i)
+        noisy_vals.append(noise_model.compute_damping(paulis[i]) * nb::cast<double>(ideal[i]));
+
+    result["expectation_values"] = noisy_vals;
+    result["ideal_expectation_values"] = ideal;
+    return result;
+}
+
+nb::dict NoisyFidelity(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, int noise_realizations, const SimulatorConfig &config,
+                       std::optional<uint64_t> noise_seed)
+{
+    require_circuit(circuit);
+    require_realizations(noise_realizations);
+    if (!has_circuit_channels(circuit))
+        require_any_noise(noise_model);
+    const auto ideal = without_circuit_channels(circuit);
+
+    warn_thermal_approximation(noise_model, config);
+    auto rng = MakeNoiseRng(config, noise_seed);
+    double sum_fid = 0.0;
+    double sum_fid_sq = 0.0;
+
+    auto start = std::chrono::high_resolution_clock::now();
+    for (int r = 0; r < noise_realizations; ++r)
+    {
+        auto noisy = inject_combined_noise_for_config(circuit, noise_model, rng, config);
+        // Reset collapse must use a fresh seed for each realization.
+        auto realization_config = NoiseExecutionConfig(config, noise_seed, r);
+        if (!realization_config.seed)
+            realization_config.seed = rng();
+        double fid = noisy_fidelity_core(ideal, noisy, realization_config);
+        sum_fid += fid;
+        sum_fid_sq += fid * fid;
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+
+    double mean_fid = sum_fid / noise_realizations;
+    double var = (noise_realizations > 1) ? (sum_fid_sq - noise_realizations * mean_fid * mean_fid) / (noise_realizations - 1) : 0.0;
+    double se = std::sqrt(std::max(var, 0.0) / noise_realizations);
+
+    nb::dict out;
+    out["fidelity"] = mean_fid;
+    out["infidelity"] = 1.0 - mean_fid;
+    out["std_error"] = se;
+    out["time_taken"] = std::chrono::duration<double>(end - start).count();
+    out["noise_realizations"] = noise_realizations;
+    return out;
 }
 
 } // namespace maestro_bindings

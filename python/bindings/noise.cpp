@@ -317,48 +317,24 @@ void bind_noise(nb::module_ &m)
         .def("has_any", &noise::NoiseModel::has_any, "Return True if any noise of any type has been configured.");
 
     // --- Noisy Estimation (analytical — zero simulation overhead) ---
-    m.def(
-        "noisy_estimate",
-        [](std::shared_ptr<Circuits::Circuit<double>> circuit, const nb::object &observables, const noise::NoiseModel &noise_model,
-           const SimulatorConfig &config) {
-            auto paulis = ParseObservables(observables);
-            nb::dict result = estimate_core(circuit, paulis, config);
-
-            // Apply analytical Pauli noise damping
-            nb::list ideal = nb::cast<nb::list>(result["expectation_values"]);
-            nb::list noisy_vals;
-            for (size_t i = 0; i < paulis.size(); ++i)
-            {
-                double damping = noise_model.compute_damping(paulis[i]);
-                noisy_vals.append(damping * nb::cast<double>(ideal[i]));
-            }
-
-            nb::dict out = result;
-            out["expectation_values"] = noisy_vals;
-            out["ideal_expectation_values"] = ideal;
-            out["time_taken"] = result["time_taken"];
-            out["simulator"] = result["simulator"];
-            out["method"] = result["method"];
-            if (result.contains("gpu_device"))
-                out["gpu_device"] = result["gpu_device"];
-            return out;
-        },
-        "circuit"_a, "observables"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
-        "Compute expectation values with single-layer analytical Pauli "
-        "noise damping. Runs the noiseless simulation then applies the "
-        "damping factor -- zero simulation overhead compared to "
-        "noiseless.\n\n"
-        "WARNING -- this is a SINGLE-LAYER approximation, not an exact "
-        "result. The damping factor is exact only for one Pauli layer applied "
-        "immediately before measurement. A circuit that carries noise after "
-        "every gate is not modelled: Pauli channels do not commute through "
-        "non-Clifford gates, and the damping does not compound with the number "
-        "of noisy layers acting on each qubit. The returned values therefore "
-        "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
-        "Only the all-gates Pauli layer contributes; T1, thermal, coherent, "
-        "correlated and two-qubit layers are ignored entirely. Use "
-        "noisy_estimate_montecarlo(), or noisy_execute() with a density-matrix "
-        "or MPO method, when the magnitude of the noise matters.");
+    m.def("noisy_estimate", &NoisyEstimate, "circuit"_a, "observables"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
+          "Compute expectation values with single-layer analytical Pauli "
+          "noise damping. Runs the noiseless simulation then applies the "
+          "damping factor -- zero simulation overhead compared to "
+          "noiseless.\n\n"
+          "WARNING -- this is a SINGLE-LAYER approximation, not an exact "
+          "result. The damping factor is exact only for one Pauli layer applied "
+          "immediately before measurement. A circuit that carries noise after "
+          "every gate is not modelled: Pauli channels do not commute through "
+          "non-Clifford gates, and the damping does not compound with the number "
+          "of noisy layers acting on each qubit. The returned values therefore "
+          "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
+          "Only the all-gates Pauli layer is modelled; a NoiseModel with any "
+          "other layer (T1, thermal, coherent, correlated, gate-type or "
+          "two-qubit noise) raises ValueError, see compute_damping_covers_model(). "
+          "Readout error is ignored. Use noisy_estimate_montecarlo(), "
+          "full_noise_estimate(), or noisy_execute() with a density-matrix "
+          "or MPO method, when the magnitude of the noise matters.");
 
     // --- QASM variant ---
     m.def(
@@ -368,27 +344,7 @@ void bind_noise(nb::module_ &m)
             auto circuit = parser.ParseAndTranslate(qasm);
             if (parser.Failed() || !circuit)
                 throw nb::value_error("Failed to parse QASM string.");
-
-            auto paulis = ParseObservables(observables);
-            nb::dict result = estimate_core(circuit, paulis, config);
-
-            nb::list ideal = nb::cast<nb::list>(result["expectation_values"]);
-            nb::list noisy_vals;
-            for (size_t i = 0; i < paulis.size(); ++i)
-            {
-                double damping = noise_model.compute_damping(paulis[i]);
-                noisy_vals.append(damping * nb::cast<double>(ideal[i]));
-            }
-
-            nb::dict out = result;
-            out["expectation_values"] = noisy_vals;
-            out["ideal_expectation_values"] = ideal;
-            out["time_taken"] = result["time_taken"];
-            out["simulator"] = result["simulator"];
-            out["method"] = result["method"];
-            if (result.contains("gpu_device"))
-                out["gpu_device"] = result["gpu_device"];
-            return out;
+            return NoisyEstimate(circuit, observables, noise_model, config);
         },
         "qasm_circuit"_a, "observables"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
         "Compute expectation values from a QASM circuit with single-layer "
@@ -400,10 +356,11 @@ void bind_noise(nb::module_ &m)
         "non-Clifford gates, and the damping does not compound with the number "
         "of noisy layers acting on each qubit. The returned values therefore "
         "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
-        "Only the all-gates Pauli layer contributes; T1, thermal, coherent, "
-        "correlated and two-qubit layers are ignored entirely. Use "
-        "noisy_estimate_montecarlo(), or noisy_execute() with a density-matrix "
-        "or MPO method, when the magnitude of the noise matters.");
+        "Only the all-gates Pauli layer is modelled; a NoiseModel with any "
+        "other layer raises ValueError, see compute_damping_covers_model(). "
+        "Use noisy_estimate_montecarlo(), full_noise_estimate(), or "
+        "noisy_execute() with a density-matrix or MPO method, when the "
+        "magnitude of the noise matters.");
 
     // --- Gate-by-gate Monte Carlo Noisy Estimation ---
     m.def("noisy_estimate_montecarlo", &NoisyEstimateMonteCarlo, "circuit"_a, "observables"_a, "noise_model"_a, "noise_realizations"_a = 100,
@@ -411,13 +368,17 @@ void bind_noise(nb::module_ &m)
           "Gate-by-gate Monte Carlo noisy estimation. Injects random Pauli "
           "errors after every gate and averages expectation values over "
           "noise_realizations independent samples. More accurate than "
-          "analytical noisy_estimate for deep circuits.");
+          "analytical noisy_estimate for deep circuits. Coherent, correlated "
+          "and crosstalk noise are not applied and raise ValueError; use "
+          "full_noise_estimate for those.");
 
     m.def("noisy_execute", &NoisyExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = 64,
           "noise_seed"_a = nb::none(),
           "Execute with exact Pauli/T1 channels for density-matrix/MPO methods, "
           "or sampled trajectories for pure-state methods. Shots are distributed "
-          "evenly across 'noise_realizations' batches.");
+          "evenly across 'noise_realizations' batches. Coherent, correlated and "
+          "crosstalk noise are not applied and raise ValueError; use "
+          "full_noise_execute for those.");
 
     // =========================================================================
     // Coherent Noise: Execute
@@ -429,7 +390,8 @@ void bind_noise(nb::module_ &m)
           "After every gate, Rx/Ry/Rz rotations are injected with random ± "
           "signs. Each of 'noise_realizations' batches uses a different sign "
           "pattern. Supported by statevector, MPS, density-matrix, and MPO "
-          "methods (not Stabilizer).\n\n"
+          "methods (not Stabilizer). Readout error is applied; any other "
+          "non-coherent layer raises ValueError (use full_noise_execute).\n\n"
           "Example:\n"
           "    nm = maestro.NoiseModel()\n"
           "    nm.set_all_coherent_depolarizing(n_qubits, 0.001)\n"
@@ -483,6 +445,20 @@ void bind_noise(nb::module_ &m)
           "    nm.set_crosstalk(0, 1, 0.005)\n"
           "    nm.set_all_t1(n, 0.0003)\n"
           "    result = maestro.full_noise_estimate(qc, ['ZZ'], nm)\n");
+
+    // =========================================================================
+    // Noisy Fidelity (inner-product)
+    // =========================================================================
+
+    m.def("noisy_fidelity", &NoisyFidelity, "circuit"_a, "noise_model"_a, "noise_realizations"_a = 100, "config"_a = SimulatorConfig{},
+          "noise_seed"_a = nb::none(),
+          "Compute fidelity to the ideal unitary circuit state under noise.\n\n"
+          "Injects all configured noise types (correlated, coherent, "
+          "crosstalk, T1, Pauli) and averages |<psi_ideal|psi_noisy>|^2 "
+          "over noise realizations.\n\n"
+          "Returns dict with 'fidelity', 'infidelity', 'std_error', "
+          "'time_taken', 'noise_realizations'.\n\n"
+          "Example: maestro.noisy_fidelity(qc, nm, noise_realizations=200)");
 }
 
 } // namespace maestro_bindings
