@@ -7,12 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `maestro.sinter` runs Stim's own noise. `DEPOLARIZE1/2`, `X/Y/Z_ERROR` and
+  `PAULI_CHANNEL_1/2` translate to the new `QuantumCircuit.pauli_channel`, and
+  measurement flips such as `M(p)` to the new `measure(..., readout_error=p)`, so a
+  noisy Stim circuit such as SI1000 needs no `NoiseModel`. Pure-state and MPS
+  backends draw one Pauli per noise realization; density-matrix and MPO backends
+  apply the channel exactly. `E` and heralded noise still raise.
+- `MaestroCompiledSampler.sample_measurements(shots, seed=None)` returns the raw
+  measurement record.
+- `MaestroSinterSampler(noise_model=...)` also accepts a picklable
+  `task -> NoiseModel` callable, so one sampler serves a noise-strength sweep.
+- `QuantumCircuit.h/s/sdg(..., noiseless=True)` exempts a basis change from a
+  NoiseModel's gate noise.
+
+### Changed
+
+- **Breaking:** `set_coherent_depolarizing` (and `set_all_coherent_depolarizing`,
+  `set_coherent_strength`) is now isotropic: it rotates by ε = 2·arcsin(√p) about a
+  body diagonal (±1, ±1, ±1)/√3, whose Pauli twirl is exactly DEPOLARIZE1(p). It was
+  a Z rotation, so Z-basis logicals never saw it. `set_coherent_dephasing` keeps the
+  old behaviour.
+- Coherent setters replace only the component they name, so
+  `set_coherent_bit_flip` followed by `set_coherent_dephasing` keeps both axes.
+- **Breaking:** `MaestroSinterSampler` raises ValueError when no decoder resolves.
+  Under `sinter.collect`, `task.decoder` is the `custom_decoders` key; the key
+  `"maestro"` used to mean "undecoded" silently. Pass `decoder="pymatching"`, or
+  `decoder="vacuous"` for the undecoded rate.
+- The basis changes `maestro.sinter` inserts for `RX`, `RY`, `MX`, `MY`, `MRX` and
+  `MRY` are noiseless, so a NoiseModel adds gate noise only where Stim has gates.
+  `CLEAN_CIRCUIT_API_VERSION` is now 2.
+- A NoiseModel's readout error composes with a measurement's own readout error
+  instead of replacing it.
+
 ### Fixed
 
 - Noise-model call logs record only successful setters and snapshot mutable
   arguments, preserving their configured values during pickle and call-log replay.
 - Conflicting T1 and thermal-relaxation settings are rejected before changing the
   noise model, including uniform T1 updates across multiple qubits.
+- `NoiseModel` setters accessed on an instance keep their docstrings.
+- The docstrings of `set_2q_depolarizing` (Stim's DEPOLARIZE2, after any 2-qubit
+  gate on the pair) and `set_2q_gate_depolarizing` (independent single-qubit
+  depolarizing) now say how they differ.
 
 ## [0.3.9] - 2026-10-28
 

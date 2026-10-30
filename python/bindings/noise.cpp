@@ -33,23 +33,31 @@ void bind_noise(nb::module_ &m)
         .def("set_coherent_rotation", &noise::NoiseModel::set_coherent_rotation, "qubit"_a, "rx"_a, "ry"_a, "rz"_a,
              "Set per-qubit coherent noise as rotation angles (radians). "
              "After every gate on this qubit, Rx(±rx), Ry(±ry), Rz(±rz) "
-             "rotations are applied with random ± signs.")
+             "rotations are applied, with each ± sign drawn once per qubit "
+             "per noise realization. Replaces the X, Y and Z angles only; "
+             "set_coherent_depolarizing is kept.")
         .def("set_coherent_depolarizing", &noise::NoiseModel::set_coherent_depolarizing, "qubit"_a, "p"_a,
-             "Set coherent noise from a depolarizing probability. "
-             "Converts p to Rz angle ε = 2·arcsin(√p), matching the "
-             "infidelity of DEPOLARIZE1(p).")
+             "Set isotropic coherent noise calibrated to DEPOLARIZE1(p).\n\n"
+             "After every gate on this qubit, rotates by ε = 2·arcsin(√p) "
+             "about a body diagonal (±1, ±1, ±1)/√3 of the Bloch sphere, with "
+             "the signs drawn once per qubit per noise realization. The Pauli "
+             "twirl of that rotation is exactly DEPOLARIZE1(p), so it has the "
+             "same infidelity and affects X-, Y- and Z-basis measurements. "
+             "Composes with set_coherent_bit_flip/dephasing/rotation.")
         .def("set_coherent_dephasing", &noise::NoiseModel::set_coherent_dephasing, "qubit"_a, "p"_a,
-             "Set coherent dephasing noise: Rz rotation from probability p.")
+             "Set coherent dephasing noise: Rz rotation from probability p. "
+             "Replaces the Z angle only, so it composes with other axes.")
         .def("set_coherent_bit_flip", &noise::NoiseModel::set_coherent_bit_flip, "qubit"_a, "p"_a,
-             "Set coherent bit-flip noise: Rx rotation from probability p.")
+             "Set coherent bit-flip noise: Rx rotation from probability p. "
+             "Replaces the X angle only, so it composes with other axes.")
         .def("set_all_coherent_depolarizing", &noise::NoiseModel::set_all_coherent_depolarizing, "num_qubits"_a, "p"_a,
              "Set uniform coherent depolarizing noise on qubits [0, "
              "num_qubits).")
         .def("set_all_coherent_dephasing", &noise::NoiseModel::set_all_coherent_dephasing, "num_qubits"_a, "p"_a,
              "Set uniform coherent dephasing on qubits [0, num_qubits).")
         .def("set_coherent_strength", &noise::NoiseModel::set_coherent_strength, "num_qubits"_a, "p"_a,
-             "Convenience: set uniform coherent noise strength on all qubits. "
-             "Equivalent to set_all_coherent_depolarizing(n, p).")
+             "Convenience: set uniform isotropic coherent noise on qubits "
+             "[0, num_qubits). Equivalent to set_all_coherent_depolarizing(n, p).")
         .def("has_coherent", &noise::NoiseModel::has_coherent, "Return True if any coherent noise parameters have been set.")
         // ── Correlated (time-correlated) noise ──
         .def("set_correlated_ar1", &noise::NoiseModel::set_correlated_ar1, "qubit"_a, "phi"_a, "sigma_eta"_a, "after_1q"_a = true, "after_2q"_a = true,
@@ -274,11 +282,15 @@ void bind_noise(nb::module_ &m)
         .def("has_readout_error", &noise::NoiseModel::has_readout_error, "Return True if any readout error parameters have been set.")
         // ── Two-qubit depolarizing ──
         .def("set_2q_depolarizing", &noise::NoiseModel::set_2q_depolarizing, "q1"_a, "q2"_a, "p"_a,
-             "Set two-qubit depolarizing channel applied after CX/CZ gates "
-             "on (q1, q2).\n\n"
+             "Set a correlated two-qubit depolarizing channel applied after "
+             "every two-qubit gate on the pair (q1, q2).\n\n"
              "Channel: Λ(ρ) = (1-p)ρ + p/15 · Σ PρP†  "
-             "(15 non-identity two-qubit Paulis).\n"
-             "Applied ONLY after 2Q gates, separate from per-qubit noise.\n\n"
+             "(15 non-identity two-qubit Paulis), the same as Stim's "
+             "DEPOLARIZE2(p).\n"
+             "Applied ONLY after 2Q gates, separate from per-qubit noise. "
+             "Not to be confused with set_2q_gate_depolarizing(qubit, p), "
+             "which applies independent single-qubit depolarizing to each "
+             "qubit after its 2Q gates.\n\n"
              "Example: nm.set_2q_depolarizing(0, 1, 1.8e-3)")
         .def("has_any_2q_depolarizing", &noise::NoiseModel::has_any_2q_depolarizing, "Return True if any two-qubit depolarizing has been set.")
         // ── Gate-type-specific noise ──
@@ -288,60 +300,41 @@ void bind_noise(nb::module_ &m)
              "gates.\n\n"
              "Example: nm.set_1q_gate_depolarizing(0, 2.3e-4)")
         .def("set_2q_gate_depolarizing", &noise::NoiseModel::set_2q_gate_depolarizing, "qubit"_a, "p"_a,
-             "Set depolarizing noise applied only after two-qubit gates "
-             "involving this qubit.\n\n"
+             "Set single-qubit depolarizing noise (DEPOLARIZE1(p)) applied to "
+             "this qubit only after two-qubit gates involving it.\n\n"
+             "Each qubit of the gate gets an independent channel, so this is "
+             "NOT Stim's DEPOLARIZE2(p); for that use "
+             "set_2q_depolarizing(q1, q2, p).\n\n"
              "Example: nm.set_2q_gate_depolarizing(0, 1.8e-3)")
         .def("set_all_1q_gate_depolarizing", &noise::NoiseModel::set_all_1q_gate_depolarizing, "num_qubits"_a, "p"_a,
              "Set uniform 1Q gate depolarizing on qubits [0, num_qubits).")
         .def("set_all_2q_gate_depolarizing", &noise::NoiseModel::set_all_2q_gate_depolarizing, "num_qubits"_a, "p"_a,
-             "Set uniform 2Q gate depolarizing on qubits [0, num_qubits).")
+             "Set uniform single-qubit depolarizing after 2Q gates on qubits "
+             "[0, num_qubits). See set_2q_gate_depolarizing; for Stim's "
+             "DEPOLARIZE2 use set_2q_depolarizing on each coupled pair.")
         .def("has_1q_gate_noise", &noise::NoiseModel::has_1q_gate_noise, "Return True if any 1Q gate-specific noise has been set.")
         .def("has_2q_gate_noise", &noise::NoiseModel::has_2q_gate_noise, "Return True if any 2Q gate-specific noise has been set.")
         .def("has_any", &noise::NoiseModel::has_any, "Return True if any noise of any type has been configured.");
 
     // --- Noisy Estimation (analytical — zero simulation overhead) ---
-    m.def(
-        "noisy_estimate",
-        [](std::shared_ptr<Circuits::Circuit<double>> circuit, const nb::object &observables, const noise::NoiseModel &noise_model,
-           const SimulatorConfig &config) {
-            auto paulis = ParseObservables(observables);
-            nb::dict result = estimate_core(circuit, paulis, config);
-
-            // Apply analytical Pauli noise damping
-            nb::list ideal = nb::cast<nb::list>(result["expectation_values"]);
-            nb::list noisy_vals;
-            for (size_t i = 0; i < paulis.size(); ++i)
-            {
-                double damping = noise_model.compute_damping(paulis[i]);
-                noisy_vals.append(damping * nb::cast<double>(ideal[i]));
-            }
-
-            nb::dict out = result;
-            out["expectation_values"] = noisy_vals;
-            out["ideal_expectation_values"] = ideal;
-            out["time_taken"] = result["time_taken"];
-            out["simulator"] = result["simulator"];
-            out["method"] = result["method"];
-            if (result.contains("gpu_device"))
-                out["gpu_device"] = result["gpu_device"];
-            return out;
-        },
-        "circuit"_a, "observables"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
-        "Compute expectation values with single-layer analytical Pauli "
-        "noise damping. Runs the noiseless simulation then applies the "
-        "damping factor -- zero simulation overhead compared to "
-        "noiseless.\n\n"
-        "WARNING -- this is a SINGLE-LAYER approximation, not an exact "
-        "result. The damping factor is exact only for one Pauli layer applied "
-        "immediately before measurement. A circuit that carries noise after "
-        "every gate is not modelled: Pauli channels do not commute through "
-        "non-Clifford gates, and the damping does not compound with the number "
-        "of noisy layers acting on each qubit. The returned values therefore "
-        "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
-        "Only the all-gates Pauli layer contributes; T1, thermal, coherent, "
-        "correlated and two-qubit layers are ignored entirely. Use "
-        "noisy_estimate_montecarlo(), or noisy_execute() with a density-matrix "
-        "or MPO method, when the magnitude of the noise matters.");
+    m.def("noisy_estimate", &NoisyEstimate, "circuit"_a, "observables"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
+          "Compute expectation values with single-layer analytical Pauli "
+          "noise damping. Runs the noiseless simulation then applies the "
+          "damping factor -- zero simulation overhead compared to "
+          "noiseless.\n\n"
+          "WARNING -- this is a SINGLE-LAYER approximation, not an exact "
+          "result. The damping factor is exact only for one Pauli layer applied "
+          "immediately before measurement. A circuit that carries noise after "
+          "every gate is not modelled: Pauli channels do not commute through "
+          "non-Clifford gates, and the damping does not compound with the number "
+          "of noisy layers acting on each qubit. The returned values therefore "
+          "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
+          "Only the all-gates Pauli layer is modelled; a NoiseModel with any "
+          "other layer (T1, thermal, coherent, correlated, gate-type or "
+          "two-qubit noise) raises ValueError, see compute_damping_covers_model(). "
+          "Readout error is ignored. Use noisy_estimate_montecarlo(), "
+          "full_noise_estimate(), or noisy_execute() with a density-matrix "
+          "or MPO method, when the magnitude of the noise matters.");
 
     // --- QASM variant ---
     m.def(
@@ -351,27 +344,7 @@ void bind_noise(nb::module_ &m)
             auto circuit = parser.ParseAndTranslate(qasm);
             if (parser.Failed() || !circuit)
                 throw nb::value_error("Failed to parse QASM string.");
-
-            auto paulis = ParseObservables(observables);
-            nb::dict result = estimate_core(circuit, paulis, config);
-
-            nb::list ideal = nb::cast<nb::list>(result["expectation_values"]);
-            nb::list noisy_vals;
-            for (size_t i = 0; i < paulis.size(); ++i)
-            {
-                double damping = noise_model.compute_damping(paulis[i]);
-                noisy_vals.append(damping * nb::cast<double>(ideal[i]));
-            }
-
-            nb::dict out = result;
-            out["expectation_values"] = noisy_vals;
-            out["ideal_expectation_values"] = ideal;
-            out["time_taken"] = result["time_taken"];
-            out["simulator"] = result["simulator"];
-            out["method"] = result["method"];
-            if (result.contains("gpu_device"))
-                out["gpu_device"] = result["gpu_device"];
-            return out;
+            return NoisyEstimate(circuit, observables, noise_model, config);
         },
         "qasm_circuit"_a, "observables"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
         "Compute expectation values from a QASM circuit with single-layer "
@@ -383,10 +356,11 @@ void bind_noise(nb::module_ &m)
         "non-Clifford gates, and the damping does not compound with the number "
         "of noisy layers acting on each qubit. The returned values therefore "
         "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
-        "Only the all-gates Pauli layer contributes; T1, thermal, coherent, "
-        "correlated and two-qubit layers are ignored entirely. Use "
-        "noisy_estimate_montecarlo(), or noisy_execute() with a density-matrix "
-        "or MPO method, when the magnitude of the noise matters.");
+        "Only the all-gates Pauli layer is modelled; a NoiseModel with any "
+        "other layer raises ValueError, see compute_damping_covers_model(). "
+        "Use noisy_estimate_montecarlo(), full_noise_estimate(), or "
+        "noisy_execute() with a density-matrix or MPO method, when the "
+        "magnitude of the noise matters.");
 
     // --- Gate-by-gate Monte Carlo Noisy Estimation ---
     m.def("noisy_estimate_montecarlo", &NoisyEstimateMonteCarlo, "circuit"_a, "observables"_a, "noise_model"_a, "noise_realizations"_a = 100,
@@ -394,13 +368,17 @@ void bind_noise(nb::module_ &m)
           "Gate-by-gate Monte Carlo noisy estimation. Injects random Pauli "
           "errors after every gate and averages expectation values over "
           "noise_realizations independent samples. More accurate than "
-          "analytical noisy_estimate for deep circuits.");
+          "analytical noisy_estimate for deep circuits. Coherent, correlated "
+          "and crosstalk noise are not applied and raise ValueError; use "
+          "full_noise_estimate for those.");
 
     m.def("noisy_execute", &NoisyExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = 64,
           "noise_seed"_a = nb::none(),
           "Execute with exact Pauli/T1 channels for density-matrix/MPO methods, "
           "or sampled trajectories for pure-state methods. Shots are distributed "
-          "evenly across 'noise_realizations' batches.");
+          "evenly across 'noise_realizations' batches. Coherent, correlated and "
+          "crosstalk noise are not applied and raise ValueError; use "
+          "full_noise_execute for those.");
 
     // =========================================================================
     // Coherent Noise: Execute
@@ -412,7 +390,8 @@ void bind_noise(nb::module_ &m)
           "After every gate, Rx/Ry/Rz rotations are injected with random ± "
           "signs. Each of 'noise_realizations' batches uses a different sign "
           "pattern. Supported by statevector, MPS, density-matrix, and MPO "
-          "methods (not Stabilizer).\n\n"
+          "methods (not Stabilizer). Readout error is applied; any other "
+          "non-coherent layer raises ValueError (use full_noise_execute).\n\n"
           "Example:\n"
           "    nm = maestro.NoiseModel()\n"
           "    nm.set_all_coherent_depolarizing(n_qubits, 0.001)\n"
@@ -466,6 +445,20 @@ void bind_noise(nb::module_ &m)
           "    nm.set_crosstalk(0, 1, 0.005)\n"
           "    nm.set_all_t1(n, 0.0003)\n"
           "    result = maestro.full_noise_estimate(qc, ['ZZ'], nm)\n");
+
+    // =========================================================================
+    // Noisy Fidelity (inner-product)
+    // =========================================================================
+
+    m.def("noisy_fidelity", &NoisyFidelity, "circuit"_a, "noise_model"_a, "noise_realizations"_a = 100, "config"_a = SimulatorConfig{},
+          "noise_seed"_a = nb::none(),
+          "Compute fidelity to the ideal unitary circuit state under noise.\n\n"
+          "Injects all configured noise types (correlated, coherent, "
+          "crosstalk, T1, Pauli) and averages |<psi_ideal|psi_noisy>|^2 "
+          "over noise realizations.\n\n"
+          "Returns dict with 'fidelity', 'infidelity', 'std_error', "
+          "'time_taken', 'noise_realizations'.\n\n"
+          "Example: maestro.noisy_fidelity(qc, nm, noise_realizations=200)");
 }
 
 } // namespace maestro_bindings

@@ -47,6 +47,29 @@ def test_translate_clifford_gates():
     assert qc.num_qubits >= 2
 
 
+@pytest.mark.parametrize("simulation_type", ["Stabilizer", "MatrixProductState"])
+def test_sqrt_y_gates_match_stim(simulation_type):
+    """SQRT_Y used to become Ry(±π/2), which the stabilizer simulator rejects."""
+    circuit = stim.Circuit("R 0 1 2 3\nX 1 3\nSQRT_Y 0 1\nSQRT_Y_DAG 2 3\nMX 0 1 2 3")
+    config = maestro.SimulatorConfig(simulation_type=getattr(maestro.SimulationType, simulation_type))
+    measured = MaestroCompiledSampler(circuit, config=config, seed=1).sample_measurements(20)
+    expected = circuit.compile_sampler(seed=1).sample(1)[0]
+    assert (measured == expected).all()
+
+
+@pytest.mark.parametrize("gate", ["SQRT_Y", "SQRT_Y_DAG"])
+def test_sqrt_y_gates_get_gate_noise_once(gate):
+    """A NoiseModel adds noise once per SQRT_Y, after it, as after any other gate."""
+    nm = maestro.NoiseModel()
+    nm.set_all_1q_gate_depolarizing(1, 0.3)
+    config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Stabilizer)
+    circuit = stim.Circuit(f"R 0\n{gate} 0\nMX 0")
+    flips = MaestroCompiledSampler(circuit, noise_model=nm, config=config, seed=1).sample_measurements(20000)
+    ideal = circuit.compile_sampler().sample(1)[0, 0]
+    # DEPOLARIZE1(0.3) flips an X measurement with probability 0.2; twice, 0.32.
+    assert np.mean(flips[:, 0] != ideal) == pytest.approx(0.2, abs=0.02)
+
+
 def test_translate_non_clifford_gates():
     circuit_str = """
         T 0
@@ -118,16 +141,6 @@ def test_translate_my_and_mry():
         assert bitstring[3] == "0"
 
 
-def test_translate_y_error():
-    circuit = stim.Circuit("""
-        H 0
-        Y_ERROR(0.05) 0
-        M 0
-    """)
-    with pytest.raises(ValueError, match="Circuit-local noise"):
-        translate_stim_to_maestro(circuit)
-
-
 def test_translate_unsupported_instruction_raises():
     with pytest.raises(ValueError, match="Unsupported Stim instruction"):
         translate_stim_to_maestro("UNSUPPORTED_OP 0")
@@ -140,11 +153,55 @@ def test_translate_in_circuit_noise():
         CX 0 1
         DEPOLARIZE2(0.02) 0 1
         X_ERROR(0.005) 0
+        Y_ERROR(0.005) 0
         Z_ERROR(0.005) 1
-        M 0 1
+        M(0.01) 0 1
     """)
-    with pytest.raises(ValueError, match="Circuit-local noise"):
-        translate_stim_to_maestro(circuit)
+    _, _, num_meas = translate_stim_to_maestro(circuit)
+    assert num_meas == 2
+
+
+INVALID_NOISE = [
+    ("X_ERROR", [-0.1], [0]),                     # negative
+    ("DEPOLARIZE1", [-1.0], [0]),
+    ("DEPOLARIZE2", [-0.5], [0, 1]),
+    ("Y_ERROR", [1.5], [0]),                      # above one
+    ("X_ERROR", [float("nan")], [0]),
+    ("Z_ERROR", [float("inf")], [0]),
+    ("X_ERROR", [], [0]),                         # missing argument
+    ("PAULI_CHANNEL_1", [0.1, 0.2], [0]),
+    ("PAULI_CHANNEL_2", [0.01] * 14, [0, 1]),
+    ("X_ERROR", [0.1, 0.2], [0]),                 # extra argument
+    ("PAULI_CHANNEL_1", [0.1, 0.2, 0.3, 0.4], [0]),
+    ("X_ERROR", [0.0, 0.0], [0]),                 # zero probability is still checked
+    ("PAULI_CHANNEL_1", [0.5, 0.4, 0.2], [0]),    # sums above one
+    ("PAULI_CHANNEL_2", [0.07] * 15, [0, 1]),
+    ("M", [-0.1], [0]),                           # measurement flip probability
+    ("MX", [float("nan")], [0]),
+    ("M", [0.1, 0.2], [0]),
+]
+
+
+def _stim_line(name, args, targets):
+    parens = f"({','.join(repr(a) for a in args)})" if args else ""
+    return f"{name}{parens} {' '.join(map(str, targets))}"
+
+
+@pytest.mark.parametrize("name,args,targets", INVALID_NOISE)
+def test_translation_rejects_invalid_noise(name, args, targets):
+    """Strings and instruction lists bypass Stim's own checks, so translation
+    validates noise arguments the way Stim does."""
+    with pytest.raises(ValueError):
+        translate_stim_to_maestro(_stim_line(name, args, targets) + "\nM 0")
+    with pytest.raises(ValueError):
+        translate_stim_to_maestro([(name, args, targets), ("M", [], [0])])
+
+
+@pytest.mark.parametrize("line", ["DEPOLARIZE1(1) 0", "DEPOLARIZE2(1) 0 1", "X_ERROR(0) 0",
+                                  "PAULI_CHANNEL_1(0.2,0.3,0.5) 0", "M(1) 0", "MX 0"])
+def test_translation_accepts_boundary_noise(line):
+    stim.Circuit(line)  # Stim accepts these too
+    translate_stim_to_maestro(line + "\nM 0")
 
 
 def test_annotations_ignored():
@@ -336,7 +393,7 @@ def test_sinter_collect_clifford_baseline_repetition_code():
     )
     task = sinter.Task(circuit=circuit)
 
-    sampler = MaestroSinterSampler(chi=16)
+    sampler = MaestroSinterSampler(chi=16, decoder="vacuous")
     shots = 500
 
     # Sample with Maestro
@@ -377,7 +434,7 @@ def test_sinter_collect_clifford_baseline_surface_code():
     )
     task = sinter.Task(circuit=circuit)
 
-    sampler = MaestroSinterSampler(chi=32)
+    sampler = MaestroSinterSampler(chi=32, decoder="vacuous")
     shots = 400
 
     # Sample with Maestro
@@ -464,7 +521,7 @@ def test_sinter_collect_multiprocess_with_hardware_noise():
     nm.set_all_t1(3, 0.0001)
     nm.set_all_dephasing(3, 0.005)
 
-    sampler = MaestroSinterSampler(chi=16, noise_model=nm)
+    sampler = MaestroSinterSampler(chi=16, noise_model=nm, decoder="vacuous")
     stats = sinter.collect(
         num_workers=2,
         max_shots=100,
@@ -619,6 +676,40 @@ def test_checkpoint_zero_mismatch_surface_code():
     assert np.array_equal(obs_base, obs_chk)
 
 
+@pytest.mark.parametrize("enable_checkpoint", [False, True])
+def test_noise_only_qubit_keeps_measurement_width(enable_checkpoint):
+    """Qubit 3 carries only a channel, so identity draws used to drop it and
+    shorten some realizations' counts, failing the width check at random."""
+    sampler = MaestroCompiledSampler(
+        stim.Circuit("X_ERROR(0.5) 3\nM 1"), enable_checkpoint=enable_checkpoint)
+    for seed in range(10):
+        measurements = sampler.sample_measurements(32, seed=seed)
+        assert measurements.shape == (32, 1)
+        assert not measurements.any()
+
+
+def test_seeded_checkpoint_draws_fresh_batches():
+    """Each call of a seeded, checkpointed sampler must draw new samples; a
+    replayed batch would overstate the precision of collected error rates."""
+    circuit = stim.Circuit("H 0\nCNOT 0 1\nM 0 1")
+
+    def batches(sampler):
+        return ([sampler.sample_measurements(4096) for _ in range(3)] +
+                [sampler.sample_measurements(4096, seed=s) for s in (1, 2)])
+
+    sampler = MaestroCompiledSampler(circuit, seed=5, enable_checkpoint=True)
+    assert sampler.checkpoint_sim is not None
+    first = batches(sampler)
+    assert len({b.tobytes() for b in first}) == len(first)
+    # Bell pairs: the two measurements always agree.
+    assert all(np.array_equal(b[:, 0], b[:, 1]) for b in first)
+
+    # The sequence is reproducible, and an explicit seed reproduces its batch.
+    again = batches(MaestroCompiledSampler(circuit, seed=5, enable_checkpoint=True))
+    assert all(np.array_equal(a, b) for a, b in zip(first, again))
+    np.testing.assert_array_equal(sampler.sample_measurements(4096, seed=1), first[3])
+
+
 def test_checkpoint_with_external_noise_model():
     """Verify clean execution with external NoiseModel when checkpointing is enabled."""
     circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
@@ -736,9 +827,9 @@ def test_explicit_order_preserves_repeated_measurement_record():
     assert qc.execute(cfg, shots=16)["counts"] == {"1000": 16}
 
 
-@pytest.mark.parametrize("source", [stim.Circuit("R 0\nX_ERROR(0.1) 0\nM 0"),
-                                    stim.Circuit("M(0.1) 0"), stim.Circuit("M !0"),
-                                    "M !0", "CX rec[-1] 0"])
+@pytest.mark.parametrize("source", [stim.Circuit("R 0 1\nE(0.1) X0 X1\nM 0 1"),
+                                    stim.Circuit("R 0\nHERALDED_ERASE(0.1) 0\nM 0"),
+                                    stim.Circuit("M !0"), "M !0", "CX rec[-1] 0"])
 def test_unsupported_noise_and_targets_reject(source):
     with pytest.raises(ValueError):
         translate_stim_to_maestro(source)
@@ -900,3 +991,207 @@ def test_seeded_readout_is_independent_across_sinter_shots():
     assert first.shots == second.shots == 128
     assert first.errors == second.errors
     assert 32 < first.errors < 96
+
+
+# =============================================================================
+# Decoder resolution, per-task noise and raw measurements
+# =============================================================================
+
+
+@pytest.mark.parametrize("key", ["maestro", "my-maestro"])
+def test_custom_decoders_key_without_decoder_raises(key):
+    """Under sinter.collect task.decoder is the custom_decoders key; it must not
+    silently mean 'undecoded' ('maestro') or an unknown decoder (anything else)."""
+    circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
+    task = sinter.Task(circuit=circuit, decoder=key)
+    with pytest.raises(ValueError, match="custom_decoders key"):
+        MaestroSinterSampler(chi=16).compiled_sampler_for_task(task)
+
+
+def test_decoder_resolves_from_argument_or_builtin_key():
+    circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
+    explicit = MaestroSinterSampler(chi=16, decoder="vacuous").compiled_sampler_for_task(
+        sinter.Task(circuit=circuit, decoder="maestro"))
+    builtin_key = MaestroSinterSampler(chi=16).compiled_sampler_for_task(
+        sinter.Task(circuit=circuit, decoder="pymatching"))
+    assert explicit.compiled_decoder is not None
+    assert builtin_key.compiled_decoder is not None
+
+
+def _readout_noise_from_metadata(task):
+    nm = maestro.NoiseModel()
+    nm.set_all_readout_error(task.circuit.num_qubits, task.json_metadata["p"])
+    return nm
+
+
+def test_per_task_noise_model_callable_under_collect():
+    """noise_model may be a picklable task -> NoiseModel callable, so one sampler
+    serves a sweep over noise strength."""
+    circuit = stim.Circuit("I 0\nM 0\nOBSERVABLE_INCLUDE(0) rec[-1]")
+    tasks = [sinter.Task(circuit=circuit, json_metadata={"p": p}) for p in (0.0, 1.0)]
+    sampler = MaestroSinterSampler(chi=16, noise_model=_readout_noise_from_metadata, decoder="vacuous")
+    stats = sinter.collect(num_workers=2, max_shots=50, tasks=tasks,
+                           decoders=["maestro"], custom_decoders={"maestro": sampler})
+    assert {s.json_metadata["p"]: (s.errors, s.shots) for s in stats} == {0.0: (0, 50), 1.0: (50, 50)}
+
+
+def test_sample_measurements_is_the_record_behind_detection_events():
+    circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
+    nm = maestro.NoiseModel()
+    nm.set_all_depolarizing(circuit.num_qubits, 0.05)
+    sampler = MaestroCompiledSampler(circuit, noise_model=nm, chi=16)
+    meas = sampler.sample_measurements(64, seed=3)
+    assert meas.shape == (64, circuit.num_measurements) and meas.dtype == bool
+    dets, obs = circuit.compile_m2d_converter().convert(measurements=meas, separate_observables=True)
+    dets2, obs2 = sampler.sample_detection_events(64, seed=3)
+    assert np.array_equal(dets, dets2) and np.array_equal(obs, obs2)
+
+
+def test_coherent_depolarizing_reaches_z_basis_logical():
+    """Coherent depolarizing used to be a Z rotation, invisible to Z-basis memories."""
+    circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
+    nm = maestro.NoiseModel()
+    nm.set_all_coherent_depolarizing(circuit.num_qubits, 0.05)
+    _, obs = MaestroCompiledSampler(circuit, noise_model=nm, chi=16, seed=5).sample_detection_events(400)
+    assert obs.mean() > 0.02
+
+
+# =============================================================================
+# Stim noise carried in the circuit
+# =============================================================================
+
+
+def _records(circuit, shots=1, **kwargs):
+    return MaestroCompiledSampler(stim.Circuit(circuit), seed=7, **kwargs).sample_measurements(shots)
+
+
+def _certain_channels():
+    """Every Stim Pauli-noise term at probability one, so its effect is deterministic."""
+    yield from ("X_ERROR(1) 0", "Y_ERROR(1) 0", "Z_ERROR(1) 0")
+    for k in range(3):
+        yield f"PAULI_CHANNEL_1({', '.join('1' if i == k else '0' for i in range(3))}) 0"
+    for k in range(15):
+        yield f"PAULI_CHANNEL_2({', '.join('1' if i == k else '0' for i in range(15))}) 0 1"
+
+
+@pytest.mark.parametrize("basis", ["Z", "X"])
+@pytest.mark.parametrize("channel", list(_certain_channels()))
+def test_certain_pauli_noise_matches_stim(channel, basis):
+    """Pins the Pauli each argument means, including PAULI_CHANNEL_2's target order."""
+    reset, measure = ("R", "M") if basis == "Z" else ("RX", "MX")
+    text = f"{reset} 0 1\n{channel}\n{measure} 0 1"
+    assert np.array_equal(_records(text), stim.Circuit(text).compile_sampler().sample(1))
+
+
+@pytest.mark.parametrize("text", ["M(1) 0", "RX 0\nMX(1) 0", "RY 0\nMY(1) 0",
+                                  "X 0\nMR(1) 0\nM 0", "RX 0\nMRX(1) 0\nMX 0"])
+def test_measurement_flip_matches_stim(text):
+    """M(p) flips the record only; the post-measurement state is unchanged."""
+    assert np.array_equal(_records(text), stim.Circuit(text).compile_sampler().sample(1))
+
+
+@pytest.mark.parametrize("text, rate", [("R 0\nDEPOLARIZE1(0.75) 0\nM 0", 0.5),
+                                        ("R 0 1\nDEPOLARIZE2(0.6) 0 1\nM 0", 0.32),
+                                        ("M(0.25) 0", 0.25)])
+def test_noise_is_drawn_per_shot(text, rate):
+    flips = _records(text, shots=4000)[:, 0].mean()
+    assert abs(flips - rate) < 0.03
+
+
+def test_density_matrix_applies_channels_exactly():
+    cfg = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.DensityMatrix)
+    flips = _records("R 0\nDEPOLARIZE1(0.75) 0\nM 0", shots=2000, config=cfg)[:, 0].mean()
+    assert abs(flips - 0.5) < 0.04
+
+
+def test_checkpointed_prefix_with_circuit_noise():
+    """Noise after a checkpointed Bell-pair prefix: X on q1 turns it into |+>|1>."""
+    text = "R 0 1\nH 0\nCX 0 1\nX_ERROR(1) 1\nCX 0 1\nH 0\nM 0 1"
+    sampler = MaestroCompiledSampler(stim.Circuit(text), seed=3)
+    assert sampler.checkpoint_sim is not None
+    assert np.array_equal(sampler.sample_measurements(20), np.tile([[False, True]], (20, 1)))
+
+
+def test_noisy_stim_circuit_matches_stim_detection_rates():
+    """A generated circuit with every noise kind runs with Stim's own noise."""
+    circuit = stim.Circuit.generated(
+        "surface_code:rotated_memory_x", distance=3, rounds=2,
+        after_clifford_depolarization=0.01, before_round_data_depolarization=0.01,
+        after_reset_flip_probability=0.01, before_measure_flip_probability=0.01)
+    shots = 1000
+    dets, obs = MaestroCompiledSampler(circuit, seed=11).sample_detection_events(shots)
+    stim_dets, stim_obs = circuit.compile_detector_sampler(seed=11).sample(20000, separate_observables=True)
+    # Per-detector rates are ~0.05-0.1; 5 binomial sigmas at 1000 shots is ~0.045.
+    assert np.max(np.abs(dets.mean(axis=0) - stim_dets.mean(axis=0))) < 0.045
+    assert abs(dets.mean() - stim_dets.mean()) < 0.01
+    assert abs(obs.mean() - stim_obs.mean()) < 0.05
+
+
+def test_noise_model_readout_composes_with_measurement_flip():
+    nm = maestro.NoiseModel()
+    nm.set_readout_error_symmetric(0, 1.0)
+    assert not _records("M(1) 0", shots=10, noise_model=nm).any()
+
+
+def test_basis_changes_get_no_noise_model_gate_noise():
+    """RX and MX are primitives in Stim; their translated H gates are noiseless."""
+    nm = maestro.NoiseModel()
+    nm.set_depolarizing(0, 0.3)
+    assert not _records("RX 0\nMX 0", shots=500, noise_model=nm).any()
+    # A real H still gets the model's noise.
+    assert _records("RX 0\nH 0\nH 0\nMX 0", shots=500, noise_model=nm).any()
+
+
+def test_pauli_channel_needs_noise_realizations_on_pure_state():
+    qc = maestro.circuits.QuantumCircuit()
+    qc.pauli_channel([0], [0.25, 0.25, 0.25, 0.25])
+    qc.measure([(0, 0)])
+    with pytest.raises(Exception):
+        qc.execute(maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector), shots=4)
+    counts = qc.full_noise_execute(maestro.NoiseModel(), shots=2000, noise_realizations=2000, noise_seed=5)["counts"]
+    assert abs(counts.get("1", 0) / 2000 - 0.5) < 0.04
+
+
+def test_zero_probability_channel_runs_without_noise_model():
+    """Translation drops DEPOLARIZE1(0), so the sampler must not route it as noise."""
+    sampler = MaestroCompiledSampler(stim.Circuit("R 0\nDEPOLARIZE1(0) 0\nM 0"), enable_checkpoint=False, seed=1)
+    assert not sampler.has_circuit_noise
+    assert not sampler.sample_measurements(10).any()
+
+
+@pytest.mark.parametrize("channel", [
+    "X_ERROR(0.5)", "Y_ERROR(0.5)", "Z_ERROR(0.5)",
+    "DEPOLARIZE1(0.5)", "DEPOLARIZE2(0.5)",
+    "PAULI_CHANNEL_1(0.5, 0, 0)",
+    "PAULI_CHANNEL_2(0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)",
+])
+@pytest.mark.parametrize("enable_checkpoint, prefix", [
+    (False, ""), (True, ""), (True, "X 0\nX 0\n"),
+])
+def test_targetless_noise_runs_without_noise_model(channel, enable_checkpoint, prefix):
+    """Stim noise without targets is a no-op, including on the direct fallback path."""
+    circuit = stim.Circuit(f"{prefix}{channel}\nM 0")
+    sampler = MaestroCompiledSampler(circuit, enable_checkpoint=enable_checkpoint, seed=1)
+    assert (sampler.checkpoint_sim is not None) == bool(prefix)
+    assert np.array_equal(sampler.sample_measurements(10), np.zeros((10, 1), dtype=bool))
+
+
+@pytest.mark.parametrize("estimate", ["full_noise_estimate", "noisy_estimate_montecarlo"])
+def test_estimate_with_circuit_channel_on_statevector(estimate):
+    """The noiseless baseline must not replay an unsampled channel on a pure-state backend."""
+    qc = maestro.circuits.QuantumCircuit()
+    qc.pauli_channel([0], [0.75, 0.25, 0.0, 0.0])
+    cfg = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector)
+    cfg.auto_reduce = False
+    result = getattr(qc, estimate)(["Z"], maestro.NoiseModel(), noise_realizations=1000, config=cfg, noise_seed=3)
+    assert result["ideal_expectation_values"] == [pytest.approx(1.0)]
+    assert result["expectation_values"][0] == pytest.approx(0.5, abs=0.1)
+
+
+def test_noisy_fidelity_with_circuit_channel_on_statevector():
+    qc = maestro.circuits.QuantumCircuit()
+    qc.h(0)
+    qc.pauli_channel([0], [0.75, 0.0, 0.0, 0.25])
+    cfg = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector)
+    result = qc.noisy_fidelity(maestro.NoiseModel(), noise_realizations=1000, config=cfg, noise_seed=3)
+    assert result["fidelity"] == pytest.approx(0.75, abs=0.05)

@@ -109,9 +109,12 @@ std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_for_config(cons
 
 using NoiseInjector = CircuitPtr (*)(const CircuitPtr &, const noise::NoiseModel &, std::mt19937 &, const SimulatorConfig &);
 
-static CircuitPtr inject_coherent_for_config(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, std::mt19937 &rng, const SimulatorConfig &)
+static CircuitPtr inject_coherent_for_config(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, std::mt19937 &rng, const SimulatorConfig &config)
 {
-    return noise::inject_coherent_noise(circuit, noise_model, rng);
+    auto noisy = uses_exact_quantum_channels(config) ? noise::inject_coherent_noise_exact(circuit, noise_model, rng)
+                                                     : noise::inject_coherent_noise(circuit, noise_model, rng);
+    noise::attach_readout_error(noisy, noise_model);
+    return noisy;
 }
 
 void require_realizations(int noise_realizations)
@@ -164,6 +167,17 @@ static nb::dict execute_noise_batches(const CircuitPtr &circuit, const noise::No
     return out;
 }
 
+// The noiseless baseline of a circuit drops its own channel operations, which a
+// pure-state backend can only sample per realization, never run directly.
+CircuitPtr without_circuit_channels(const CircuitPtr &circuit)
+{
+    auto out = std::make_shared<Circuits::Circuit<double>>();
+    for (const auto &op : circuit->GetOperations())
+        if (op->GetType() != Circuits::OperationType::kQuantumChannel)
+            out->AddOperation(op);
+    return out;
+}
+
 // Averages expectation values over noise_realizations independent injections.
 static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model,
                                             int noise_realizations, const SimulatorConfig &config, std::optional<uint64_t> noise_seed, NoiseInjector inject,
@@ -175,7 +189,7 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
     const size_t n_obs = paulis.size();
     if (!n_obs)
     {
-        auto out = estimate_core(circuit, paulis, config);
+        auto out = estimate_core(without_circuit_channels(circuit), paulis, config);
         out["ideal_expectation_values"] = nb::list();
         out["noise_realizations"] = noise_realizations;
         out["cone_cache_hits"] = 0;
@@ -222,7 +236,7 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
     }
     auto end = std::chrono::high_resolution_clock::now();
 
-    nb::dict ideal_result = estimate_core(clean_circuit, paulis, config);
+    nb::dict ideal_result = estimate_core(without_circuit_channels(clean_circuit), paulis, config);
     nb::list noisy_vals, ideal_vals;
     nb::list ideal_ev = nb::cast<nb::list>(ideal_result["expectation_values"]);
     for (size_t i = 0; i < n_obs; ++i)
@@ -262,11 +276,27 @@ void require_circuit(const CircuitPtr &circuit)
         throw nb::value_error("Circuit is null.");
 }
 
+// The coherent injector applies only coherent rotations (plus readout), so
+// any other layer would be silently dropped; reject it as the JSON API does.
 static void require_coherent(const noise::NoiseModel &noise_model)
 {
     if (!noise_model.has_coherent())
         throw nb::value_error("NoiseModel has no coherent noise set. Use "
                               "set_coherent_depolarizing(), set_coherent_rotation(), etc.");
+    if (!noise_model.inject_coherent_noise_covers_model())
+        throw nb::value_error("coherent_execute/coherent_estimate apply only coherent and readout noise, "
+                              "but this NoiseModel has other layers. Use full_noise_execute or "
+                              "full_noise_estimate to apply all of them.");
+}
+
+// The Pauli/T1 injector does not apply coherent, correlated or crosstalk
+// layers, so a model with them would silently simulate something else.
+static void require_inject_noise_covers(const noise::NoiseModel &noise_model)
+{
+    if (!noise_model.inject_noise_covers_model())
+        throw nb::value_error("noisy_execute/noisy_estimate_montecarlo do not apply coherent, correlated "
+                              "or crosstalk noise, which this NoiseModel has. Use full_noise_execute or "
+                              "full_noise_estimate to apply all layers.");
 }
 
 void require_any_noise(const noise::NoiseModel &noise_model)
@@ -275,10 +305,21 @@ void require_any_noise(const noise::NoiseModel &noise_model)
         throw nb::value_error("NoiseModel has no noise configured.");
 }
 
+// Channel operations in the circuit itself (e.g. translated Stim noise) are
+// noise in their own right, even under an empty NoiseModel.
+bool has_circuit_channels(const CircuitPtr &circuit)
+{
+    for (const auto &op : circuit->GetOperations())
+        if (op->GetType() == Circuits::OperationType::kQuantumChannel)
+            return true;
+    return false;
+}
+
 nb::dict NoisyExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots, int noise_realizations,
                       std::optional<uint64_t> noise_seed)
 {
     require_circuit(circuit);
+    require_inject_noise_covers(noise_model);
     warn_thermal_approximation(noise_model, config);
     return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, inject_noise_for_config, nullptr);
 }
@@ -295,7 +336,8 @@ nb::dict FullNoiseExecute(const CircuitPtr &circuit, const noise::NoiseModel &no
                           std::optional<uint64_t> noise_seed)
 {
     require_circuit(circuit);
-    require_any_noise(noise_model);
+    if (!has_circuit_channels(circuit))
+        require_any_noise(noise_model);
     warn_thermal_approximation(noise_model, config);
     return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, inject_combined_noise_for_config, "combined");
 }
@@ -304,6 +346,7 @@ nb::dict NoisyEstimateMonteCarlo(const CircuitPtr &circuit, const nb::object &ob
                                  const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
 {
     require_circuit(circuit);
+    require_inject_noise_covers(noise_model);
     warn_thermal_approximation(noise_model, config);
     return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, inject_noise_for_config, nullptr);
 }
@@ -320,9 +363,73 @@ nb::dict FullNoiseEstimate(const CircuitPtr &circuit, const nb::object &observab
                            const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
 {
     require_circuit(circuit);
-    require_any_noise(noise_model);
+    if (!has_circuit_channels(circuit))
+        require_any_noise(noise_model);
     warn_thermal_approximation(noise_model, config);
     return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, inject_combined_noise_for_config, "combined");
+}
+
+// Ideal expectation values scaled by compute_damping, which only the all-gates
+// Pauli layer contributes to; any other layer would be silently ignored.
+nb::dict NoisyEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, const SimulatorConfig &config)
+{
+    require_circuit(circuit);
+    if (!noise_model.compute_damping_covers_model())
+        throw nb::value_error("noisy_estimate models only the all-gates Pauli layer (set_depolarizing, "
+                              "set_dephasing, set_bit_flip, set_qubit_noise), but this NoiseModel has other "
+                              "layers. Use noisy_estimate_montecarlo or full_noise_estimate instead.");
+    auto paulis = ParseObservables(observables);
+    nb::dict result = estimate_core(circuit, paulis, config);
+
+    nb::list ideal = nb::cast<nb::list>(result["expectation_values"]);
+    nb::list noisy_vals;
+    for (size_t i = 0; i < paulis.size(); ++i)
+        noisy_vals.append(noise_model.compute_damping(paulis[i]) * nb::cast<double>(ideal[i]));
+
+    result["expectation_values"] = noisy_vals;
+    result["ideal_expectation_values"] = ideal;
+    return result;
+}
+
+nb::dict NoisyFidelity(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, int noise_realizations, const SimulatorConfig &config,
+                       std::optional<uint64_t> noise_seed)
+{
+    require_circuit(circuit);
+    require_realizations(noise_realizations);
+    if (!has_circuit_channels(circuit))
+        require_any_noise(noise_model);
+    const auto ideal = without_circuit_channels(circuit);
+
+    warn_thermal_approximation(noise_model, config);
+    auto rng = MakeNoiseRng(config, noise_seed);
+    double sum_fid = 0.0;
+    double sum_fid_sq = 0.0;
+
+    auto start = std::chrono::high_resolution_clock::now();
+    for (int r = 0; r < noise_realizations; ++r)
+    {
+        auto noisy = inject_combined_noise_for_config(circuit, noise_model, rng, config);
+        // Reset collapse must use a fresh seed for each realization.
+        auto realization_config = NoiseExecutionConfig(config, noise_seed, r);
+        if (!realization_config.seed)
+            realization_config.seed = rng();
+        double fid = noisy_fidelity_core(ideal, noisy, realization_config);
+        sum_fid += fid;
+        sum_fid_sq += fid * fid;
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+
+    double mean_fid = sum_fid / noise_realizations;
+    double var = (noise_realizations > 1) ? (sum_fid_sq - noise_realizations * mean_fid * mean_fid) / (noise_realizations - 1) : 0.0;
+    double se = std::sqrt(std::max(var, 0.0) / noise_realizations);
+
+    nb::dict out;
+    out["fidelity"] = mean_fid;
+    out["infidelity"] = 1.0 - mean_fid;
+    out["std_error"] = se;
+    out["time_taken"] = std::chrono::duration<double>(end - start).count();
+    out["noise_realizations"] = noise_realizations;
+    return out;
 }
 
 } // namespace maestro_bindings

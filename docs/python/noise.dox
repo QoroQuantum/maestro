@@ -112,12 +112,19 @@
  * @code{.py}
  * nm = maestro.NoiseModel()
  *
- * # From depolarizing rate: angle epsilon = 2 * arcsin(sqrt(p))
+ * # From depolarizing rate: rotate by epsilon = 2 * arcsin(sqrt(p)) about a
+ * # body diagonal (+-1, +-1, +-1)/sqrt(3); its Pauli twirl is DEPOLARIZE1(p)
  * nm.set_coherent_depolarizing(qubit=0, p=0.01)
  * nm.set_all_coherent_depolarizing(num_qubits=5, p=0.001)
  *
+ * # Single-axis versions: Rz (dephasing) and Rx (bit flip)
+ * nm.set_coherent_dephasing(qubit=1, p=0.01)
+ *
  * # Explicit rotation angles in radians
  * nm.set_coherent_rotation(qubit=0, rx=0.01, ry=0.0, rz=0.05)
+ *
+ * # Each setter replaces only the component it names, so these compose:
+ * # qubit 0 now has the diagonal rotation and the explicit X/Y/Z angles.
  *
  * # Estimate expectation values under coherent noise
  * result = maestro.coherent_estimate(qc, ["ZZ", "XX"], nm, noise_realizations=100)

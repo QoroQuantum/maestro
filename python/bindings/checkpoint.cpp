@@ -55,8 +55,8 @@ class PrefixCheckpointedSimulator
     {
         if (!suffix_circuit)
             throw nb::value_error("suffix_circuit is null.");
-        if (shots <= 0)
-            shots = 1;
+        if (shots < 1)
+            throw nb::value_error("shots must be >= 1.");
 
         size_t total_cbits = std::max((size_t)num_qubits_, (size_t)num_measurements);
         const auto cbits_set = suffix_circuit->GetBits();
@@ -65,17 +65,31 @@ class PrefixCheckpointedSimulator
             total_cbits = std::max(total_cbits, *cbits_set.rbegin() + 1);
         }
 
-        const bool has_noise = (noise_model != nullptr) && noise_model->has_any();
+        // Circuit-level channels need per-realization injection like a model does.
+        static const noise::NoiseModel no_noise;
+        if (noise_model == nullptr)
+            noise_model = &no_noise;
+        const bool has_noise = noise_model->has_any() || has_circuit_channels(suffix_circuit);
         if (has_noise)
             warn_thermal_approximation(*noise_model, config_);
 
-        RequireNoiseSeed(noise_seed);
-        std::mt19937 rng(static_cast<uint32_t>(noise_seed.value_or(config_.seed.value_or(std::random_device{}()))));
-
-        if (noise_seed)
-        {
-            simulator_->SetSeed(*noise_seed);
-        }
+        // The config is fixed when the checkpoint is built, so unlike
+        // full_noise_execute its seed must not override the per-call seed:
+        // that would replay the same samples on every call. A call's
+        // noise_seed seeds both noise injection and measurement/readout. A
+        // seeded checkpoint called without one derives a fresh seed per call,
+        // so the sequence of calls is reproducible but no batch repeats.
+        if (!noise_seed && config_.seed)
+            noise_seed = Simulators::IState::DeriveSeed(*config_.seed, calls_) & UINT32_MAX;
+        auto call_config = config_;
+        call_config.seed.reset();
+        auto rng = MakeNoiseRng(call_config, noise_seed);
+        ++calls_;
+        // Each batch gets its own measurement stream derived from the call seed.
+        const auto seed_batch = [&](int batch) {
+            if (const auto seed = NoiseExecutionConfig(call_config, noise_seed, batch).seed)
+                simulator_->SetSeed(*seed);
+        };
 
         std::unordered_map<std::string, size_t> combined;
         auto start = std::chrono::high_resolution_clock::now();
@@ -85,6 +99,7 @@ class PrefixCheckpointedSimulator
 
             if (!has_noise)
             {
+                seed_batch(0);
                 Circuits::OperationState opState(total_cbits);
                 for (int s = 0; s < shots; ++s)
                 {
@@ -118,6 +133,7 @@ class PrefixCheckpointedSimulator
                         continue;
 
                     auto noisy_suffix = inject_combined_noise_for_config(suffix_circuit, *noise_model, rng, config_);
+                    seed_batch(b);
 
                     for (int s = 0; s < batch_shots; ++s)
                     {
@@ -171,6 +187,7 @@ class PrefixCheckpointedSimulator
     std::shared_ptr<Network::INetwork<double>> network_;
     std::shared_ptr<Simulators::ISimulator> simulator_;
     size_t max_bond_dim_ = 0;
+    uint64_t calls_ = 0; ///< execute_suffix calls, for per-call seeds
 };
 
 void bind_checkpoint(nb::module_ &m)

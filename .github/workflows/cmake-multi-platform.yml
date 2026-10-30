@@ -105,6 +105,15 @@ jobs:
         path: .ccache
         key: ccache-${{ runner.os }}-${{ github.sha }}
 
+    - name: Run noise binding and Sinter Python tests
+      env:
+        OMP_NUM_THREADS: "4"
+      run: |
+        python -m pip install -r tests/python/requirements.txt
+        # test_sinter.py skips itself when stim or sinter is missing; fail instead.
+        python -c "import stim, sinter, pymatching"
+        python -m pytest tests/python/test_bindings.py tests/python/test_sinter.py -q -rs
+
     - name: Run tests
       run: |
         if [ "${{ inputs.run_complete_test_suite }}" = "true" ]; then

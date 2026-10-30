@@ -269,7 +269,7 @@ CircuitPtr Inject(const CircuitPtr &circuit, const NoiseConfig &noise, std::mt19
         return circuit;
     CircuitPtr noisy;
     if (noise.mode == "coherent")
-        noisy = noise::inject_coherent_noise(circuit, noise.model, rng);
+        noisy = noise.exact ? noise::inject_coherent_noise_exact(circuit, noise.model, rng) : noise::inject_coherent_noise(circuit, noise.model, rng);
     else if (noise.mode == "pauli")
         noisy = noise.exact ? noise::inject_exact_noise(circuit, noise.model) : noise::inject_noise(circuit, noise.model, rng);
     else

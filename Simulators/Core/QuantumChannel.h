@@ -54,6 +54,16 @@ class QuantumChannel
     }
 
     /**
+     * Probabilities of a channel built by Pauli(), in Pauli()'s index order;
+     * empty for any other channel. Sampled (pure-state) noise injection uses
+     * them to draw one Pauli per realization instead of applying the channel.
+     */
+    const std::vector<double> &GetPauliProbabilities() const
+    {
+        return pauliProbabilities_;
+    }
+
+    /**
      * Compare two channels as MAPS, not as Kraus lists.
      *
      * The Kraus representation is not unique: {E_k} and {sum_j u_kj E_j} for any
@@ -182,7 +192,9 @@ class QuantumChannel
             }
             kraus.emplace_back(std::sqrt(probabilities[index]) * pauli);
         }
-        return QuantumChannel(std::move(kraus));
+        QuantumChannel channel(std::move(kraus));
+        channel.pauliProbabilities_ = probabilities;
+        return channel;
     }
 
     /**
@@ -457,6 +469,7 @@ class QuantumChannel
 
     KrausOperators krausOperators_;
     size_t numQubits_;
+    std::vector<double> pauliProbabilities_;
 };
 
 } // namespace Simulators

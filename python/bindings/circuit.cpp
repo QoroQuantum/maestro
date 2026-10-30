@@ -16,10 +16,39 @@ void bind_circuit(nb::module_ &m)
         .def("x", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::XGate<>>(q)); })
         .def("y", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::YGate<>>(q)); })
         .def("z", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::ZGate<>>(q)); })
-        .def("h", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::HadamardGate<>>(q)); })
+        // h, s and sdg are the basis changes of non-Z measurements and resets;
+        // noiseless=True keeps noise models from treating them as gates.
+        .def(
+            "h",
+            [](Circuits::Circuit<double> &s, Types::qubit_t q, bool noiseless) {
+                auto gate = std::make_shared<Circuits::HadamardGate<>>(q);
+                gate->SetNoiseless(noiseless);
+                s.AddOperation(gate);
+            },
+            "qubit"_a, "noiseless"_a = false,
+            "Apply a Hadamard gate. With noiseless=True, noise models add no "
+            "gate noise after it (for basis changes of a measurement or reset).")
         // Single Qubit Gates (Non-Parametric)
-        .def("s", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::SGate<>>(q)); })
-        .def("sdg", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::SdgGate<>>(q)); })
+        .def(
+            "s",
+            [](Circuits::Circuit<double> &s, Types::qubit_t q, bool noiseless) {
+                auto gate = std::make_shared<Circuits::SGate<>>(q);
+                gate->SetNoiseless(noiseless);
+                s.AddOperation(gate);
+            },
+            "qubit"_a, "noiseless"_a = false,
+            "Apply an S gate. With noiseless=True, noise models add no gate "
+            "noise after it (for basis changes of a measurement or reset).")
+        .def(
+            "sdg",
+            [](Circuits::Circuit<double> &s, Types::qubit_t q, bool noiseless) {
+                auto gate = std::make_shared<Circuits::SdgGate<>>(q);
+                gate->SetNoiseless(noiseless);
+                s.AddOperation(gate);
+            },
+            "qubit"_a, "noiseless"_a = false,
+            "Apply an S-dagger gate. With noiseless=True, noise models add no "
+            "gate noise after it (for basis changes of a measurement or reset).")
         .def("t", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::TGate<>>(q)); })
         .def("tdg", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::TdgGate<>>(q)); })
         .def("sx", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::SxGate<>>(q)); })
@@ -67,8 +96,20 @@ void bind_circuit(nb::module_ &m)
         .def("cswap", [](Circuits::Circuit<double> &s, Types::qubit_t c, Types::qubit_t a,
                          Types::qubit_t b) { s.AddOperation(std::make_shared<Circuits::CSwapGate<>>(c, a, b)); })
         // Measurement
-        .def("measure", [](Circuits::Circuit<double> &s,
-                           const std::vector<std::pair<Types::qubit_t, size_t>> &q) { s.AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(q)); })
+        .def(
+            "measure",
+            [](Circuits::Circuit<double> &s, const std::vector<std::pair<Types::qubit_t, size_t>> &q, double readout_error) {
+                auto measurement = std::make_shared<Circuits::MeasurementOperation<>>(q);
+                if (!std::isfinite(readout_error) || readout_error < 0.0 || readout_error > 1.0)
+                    throw nb::value_error("readout_error must be finite and in [0, 1].");
+                if (readout_error > 0.0)
+                    measurement->SetReadout(std::vector<Circuits::ReadoutRates>(q.size(), {readout_error, readout_error}));
+                s.AddOperation(measurement);
+            },
+            "qubits_and_bits"_a, "readout_error"_a = 0.0,
+            "Measure each (qubit, classical bit) pair.\n\n"
+            "readout_error flips each recorded result with that probability, "
+            "like Stim's M(p); a NoiseModel's readout error is applied on top.")
         .def("measure_all",
              [](Circuits::Circuit<double> &s) {
                  size_t n = s.GetMaxQubitIndex() + 1;
@@ -86,6 +127,23 @@ void bind_circuit(nb::module_ &m)
             "reset_qubits",
             [](Circuits::Circuit<double> &s, const std::vector<Types::qubit_t> &qubits) { s.AddOperation(std::make_shared<Circuits::Reset<>>(qubits)); },
             "qubits"_a, "Reset multiple qubits to |0>.")
+        // Noise channel
+        .def(
+            "pauli_channel",
+            [](Circuits::Circuit<double> &s, const Types::qubits_vector &qubits, const std::vector<double> &probabilities) {
+                s.AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(qubits, Simulators::QuantumChannel::Pauli(probabilities)));
+            },
+            "qubits"_a, "probabilities"_a,
+            "Apply a Pauli channel to one or two qubits, e.g. a Stim DEPOLARIZE1.\n\n"
+            "probabilities has 4**len(qubits) entries summing to one. Base-4 "
+            "digit k of an index selects I, X, Y or Z on qubits[k], so one "
+            "qubit is [pI, pX, pY, pZ] and two are II, XI, YI, ZI, IX, XX, ... "
+            "ZZ.\n\n"
+            "Density-matrix and MPO backends apply the channel exactly. "
+            "Pure-state and MPS backends sample one Pauli per noise "
+            "realization, so run the circuit through noisy_execute or "
+            "full_noise_execute with noise_realizations=shots; plain execute "
+            "rejects it there.")
         .def("remove_end_measurements", &Circuits::Circuit<double>::RemoveEndMeasurements,
              "Create a new circuit holding shared pointers to the original operations, with terminal measurements removed.")
 
@@ -182,6 +240,10 @@ void bind_circuit(nb::module_ &m)
                     throw nb::value_error("Circuit is null.");
                 if (target_state.empty())
                     throw nb::value_error("target_state must be a non-empty bitstring.");
+                // The path integral is noiseless; only readout is modelled here.
+                if (noise_model.has_non_readout_noise())
+                    throw nb::value_error("noisy_prob models only readout error, but this NoiseModel has gate noise. "
+                                          "Use noisy_execute or full_noise_execute to include it.");
 
                 const size_t n = target_state.size();
                 for (size_t i = 0; i < n; ++i)
@@ -216,39 +278,42 @@ void bind_circuit(nb::module_ &m)
 
                 if (noise_model.has_readout_error())
                 {
-                    // First-order readout error expansion:
-                    // P_noisy(b) ≈ Π(1-p_i) * P(b) + Σ_i [p_i * Π_{j≠i}(1-p_j)] * P(b⊕e_i)
-
-                    // Compute per-qubit flip probabilities for the target bitstring
-                    std::vector<double> p_flip(n);
+                    // First-order readout error expansion, with b the target:
+                    // P_noisy(b) ≈ Π_j(1-a_j)·P(b) + Σ_i c_i·Π_{j≠i}(1-a_j)·P(b⊕e_i)
+                    // where a_i = P(read ¬b_i | prepared b_i) flips away from b_i,
+                    // and c_i = P(read b_i | prepared ¬b_i) flips into it. The two
+                    // differ for asymmetric readout error.
+                    std::vector<double> p_flip_away(n, 0.0), p_flip_into(n, 0.0);
                     for (size_t i = 0; i < n; ++i)
                     {
                         const auto *re = noise_model.get_readout_error(static_cast<int>(i));
                         if (!re)
-                        {
-                            p_flip[i] = 0.0;
                             continue;
-                        }
-                        p_flip[i] = (target_state[i] == '0') ? re->p_meas1_prep0 : re->p_meas0_prep1;
+                        const bool zero = target_state[i] == '0';
+                        p_flip_away[i] = zero ? re->p_meas1_prep0 : re->p_meas0_prep1;
+                        p_flip_into[i] = zero ? re->p_meas0_prep1 : re->p_meas1_prep0;
                     }
 
-                    // 0-flip term: probability of no readout errors
-                    double no_flip_prob = 1.0;
-                    for (size_t i = 0; i < n; ++i)
-                        no_flip_prob *= (1.0 - p_flip[i]);
+                    // Π_{j≠skip}(1-a_j), computed directly so that a_i = 1 cannot
+                    // produce 0/0 by dividing it back out.
+                    auto keep_prob = [&](size_t skip) {
+                        double prob = 1.0;
+                        for (size_t j = 0; j < n; ++j)
+                            if (j != skip)
+                                prob *= 1.0 - p_flip_away[j];
+                        return prob;
+                    };
 
-                    double p_target = pi_prob(target_state);
-                    p_noisy = no_flip_prob * p_target;
+                    p_noisy = keep_prob(n) * pi_prob(target_state);
 
-                    // 1-flip terms: one readout error on qubit i
+                    // 1-flip terms: qubit i was prepared as ¬b_i and read as b_i
                     for (size_t i = 0; i < n; ++i)
                     {
-                        if (p_flip[i] <= 0.0)
+                        if (p_flip_into[i] <= 0.0)
                             continue;
                         std::string flipped = target_state;
                         flipped[i] = (flipped[i] == '0') ? '1' : '0';
-                        double one_flip_weight = p_flip[i] / (1.0 - p_flip[i]) * no_flip_prob;
-                        p_noisy += one_flip_weight * pi_prob(flipped);
+                        p_noisy += p_flip_into[i] * keep_prob(i) * pi_prob(flipped);
                     }
                 }
                 else
@@ -269,12 +334,16 @@ void bind_circuit(nb::module_ &m)
             "target_state"_a, "noise_model"_a,
             "Compute readout-corrected probability using path integral.\n\n"
             "When the noise model has readout error, uses first-order expansion:\n"
-            "P_noisy(b) ≈ Π(1-p_i)·P(b) + Σ_i p_i·Π_{j≠i}(1-p_j)·P(b⊕eᵢ)\n\n"
+            "P_noisy(b) ≈ Π_j(1-a_j)·P(b) + Σ_i c_i·Π_{j≠i}(1-a_j)·P(b⊕eᵢ)\n"
+            "where a_i = P(read ¬b_i | prepared b_i) and "
+            "c_i = P(read b_i | prepared ¬b_i).\n\n"
             "This requires n+1 path integral evaluations (target + n flipped "
             "variants).\n\n"
             "Args:\n"
             "    target_state: Bitstring like '10001001'.\n"
-            "    noise_model: NoiseModel with readout error set.\n\n"
+            "    noise_model: NoiseModel with readout error set. Any other "
+            "(gate) noise raises ValueError, since the path integral is "
+            "noiseless.\n\n"
             "Returns:\n"
             "    dict with 'probability', 'target_state', 'time_taken', "
             "'has_readout_error'.")
@@ -285,31 +354,7 @@ void bind_circuit(nb::module_ &m)
              "Execute with exact Pauli/T1 channels for density-matrix/MPO "
              "methods, or sampled trajectories for pure-state methods.\n\n"
              "Example: qc.noisy_execute(nm, shots=1000)")
-        .def(
-            "noisy_estimate",
-            [](std::shared_ptr<Circuits::Circuit<double>> self, const nb::object &observables, const noise::NoiseModel &noise_model,
-               const SimulatorConfig &config) {
-                auto paulis = ParseObservables(observables);
-                nb::dict result = estimate_core(self, paulis, config);
-
-                nb::list ideal = nb::cast<nb::list>(result["expectation_values"]);
-                nb::list noisy_vals;
-                for (size_t i = 0; i < paulis.size(); ++i)
-                {
-                    double damping = noise_model.compute_damping(paulis[i]);
-                    noisy_vals.append(damping * nb::cast<double>(ideal[i]));
-                }
-
-                nb::dict out = result;
-                out["expectation_values"] = noisy_vals;
-                out["ideal_expectation_values"] = ideal;
-                out["time_taken"] = result["time_taken"];
-                out["simulator"] = result["simulator"];
-                out["method"] = result["method"];
-                if (result.contains("gpu_device"))
-                    out["gpu_device"] = result["gpu_device"];
-                return out;
-            },
+        .def("noisy_estimate", &NoisyEstimate,
             "observables"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
             "Single-layer analytical noisy estimation (zero simulation "
             "overhead). Applies per-qubit Pauli damping to the ideal "
@@ -321,9 +366,11 @@ void bind_circuit(nb::module_ &m)
             "non-Clifford gates, and the damping does not compound with the number "
             "of noisy layers acting on each qubit. The returned values therefore "
             "UNDERESTIMATE the noise, increasingly so with circuit depth.\n\n"
-            "Only the all-gates Pauli layer contributes; T1, thermal, coherent, "
-            "correlated and two-qubit layers are ignored entirely. Use "
-            "noisy_estimate_montecarlo(), or noisy_execute() with a density-matrix "
+            "Only the all-gates Pauli layer is modelled; a NoiseModel with any "
+            "other layer (T1, thermal, coherent, correlated, gate-type or "
+            "two-qubit noise) raises ValueError, see "
+            "compute_damping_covers_model(). Use noisy_estimate_montecarlo(), "
+            "full_noise_estimate(), or noisy_execute() with a density-matrix "
             "or MPO method, when the magnitude of the noise matters."
             "\n\n"
             "Example: qc.noisy_estimate(['ZZ', 'XX'], nm)")
@@ -353,46 +400,7 @@ void bind_circuit(nb::module_ &m)
              "Estimate with combined noise (coherent + crosstalk + T1 + Pauli).\n\n"
              "Example: qc.full_noise_estimate(['ZZ', 'XX'], nm)")
         // ---- Noisy Fidelity (inner-product) ----
-        .def(
-            "noisy_fidelity",
-            [](std::shared_ptr<Circuits::Circuit<double>> self, const noise::NoiseModel &noise_model, int noise_realizations, const SimulatorConfig &config,
-               std::optional<uint64_t> noise_seed) {
-                require_circuit(self);
-                require_realizations(noise_realizations);
-                require_any_noise(noise_model);
-
-                warn_thermal_approximation(noise_model, config);
-                auto rng = MakeNoiseRng(config, noise_seed);
-                double sum_fid = 0.0;
-                double sum_fid_sq = 0.0;
-
-                auto start = std::chrono::high_resolution_clock::now();
-                for (int r = 0; r < noise_realizations; ++r)
-                {
-                    auto noisy = inject_combined_noise_for_config(self, noise_model, rng, config);
-                    // Reset collapse must use a fresh seed for each realization.
-                    auto realization_config = NoiseExecutionConfig(config, noise_seed, r);
-                    if (!realization_config.seed)
-                        realization_config.seed = rng();
-                    double fid = noisy_fidelity_core(self, noisy, realization_config);
-                    sum_fid += fid;
-                    sum_fid_sq += fid * fid;
-                }
-                auto end = std::chrono::high_resolution_clock::now();
-
-                double mean_fid = sum_fid / noise_realizations;
-                double var = (noise_realizations > 1) ? (sum_fid_sq - noise_realizations * mean_fid * mean_fid) / (noise_realizations - 1) : 0.0;
-                double se = std::sqrt(std::max(var, 0.0) / noise_realizations);
-                double mean_infid = 1.0 - mean_fid;
-
-                nb::dict out;
-                out["fidelity"] = mean_fid;
-                out["infidelity"] = mean_infid;
-                out["std_error"] = se;
-                out["time_taken"] = std::chrono::duration<double>(end - start).count();
-                out["noise_realizations"] = noise_realizations;
-                return out;
-            },
+        .def("noisy_fidelity", &NoisyFidelity,
             "noise_model"_a, "noise_realizations"_a = 100, "config"_a = SimulatorConfig{}, "noise_seed"_a = nb::none(),
             "Compute fidelity to the ideal unitary circuit state under noise.\n\n"
             "Injects all configured noise types (correlated, coherent, "

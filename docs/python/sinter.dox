@@ -88,18 +88,40 @@
  *     print(f"Errors: {sample.errors} / {sample.shots} (rate: {sample.errors / sample.shots:.4e})")
  * @endcode
  *
+ * `decoder=` is required here: under `sinter.collect`, `task.decoder` is the
+ * `custom_decoders` key ("maestro" above), not a decoder, and an unresolved key
+ * raises ValueError. Use `decoder="vacuous"` for the undecoded logical error
+ * rate. `noise_model` may also be a picklable `task -> NoiseModel` callable
+ * (a module-level function), so one sampler can serve a sweep whose noise
+ * strength is stored in `task.json_metadata`.
+ *
+ * To run the prior's own noise instead, pass the noisy circuit as the task
+ * circuit and omit `noise_model`; see @ref py_sinter_contract.
+ *
  * ---
  *
  * @section py_sinter_contract Clean-circuit execution contract
  *
- * `CLEAN_CIRCUIT_API_VERSION = 1` identifies translation with explicit initial
- * resets, measurement/reset basis handling, classical record ordering and
- * optional qubit allocation order. Measurement character k is classical bit k.
- * Unsupported embedded noise, measurement inversion and record-controlled
- * operations raise ValueError instead of silently changing their meaning.
- * Native `NoiseModel` execution remains supported. The previous translation of
- * instruction-local noise into a global hardware model was lossy and is removed.
- * No embedded-noise sampler or coherent conversion policy is included here.
+ * `CLEAN_CIRCUIT_API_VERSION = 2` identifies translation with explicit initial
+ * resets, measurement/reset basis handling, classical record ordering,
+ * optional qubit allocation order and exact Stim Pauli noise. Measurement
+ * character k is classical bit k. Correlated (`E`) and heralded noise,
+ * measurement inversion and record-controlled operations raise ValueError
+ * instead of silently changing their meaning.
+ *
+ * Stim's own noise is carried exactly, instruction by instruction:
+ * `DEPOLARIZE1/2`, `X/Y/Z_ERROR` and `PAULI_CHANNEL_1/2` become
+ * `QuantumCircuit.pauli_channel` operations, and measurement flips such as
+ * `M(p)` become per-measurement readout errors. A noisy Stim circuit (SI1000,
+ * for example) therefore runs with Stim's noise and needs no `NoiseModel`.
+ * Pure-state and MPS backends draw one Pauli per channel per shot; density
+ * matrix and MPO backends apply the channels exactly.
+ *
+ * A `NoiseModel`, if given, adds its hardware noise on top. It attaches noise
+ * after gates only, and the basis changes that translation inserts for `RX`,
+ * `RY`, `MX`, `MY`, `MRX` and `MRY` are marked noiseless, so the model adds
+ * gate noise exactly where Stim has gates. Its readout error composes with any
+ * `M(p)` flip.
  *
  * Counts must contain exactly the requested positive integer number of shots.
  * Unexpected record widths and nonzero padding raise ValueError. A caller's
@@ -132,5 +154,8 @@
  * det_samples, obs_samples = sampler.sample_detection_events(shots=1000)
  * print("Detection events shape:", det_samples.shape)  # (1000, num_detectors)
  * print("Observable flips shape:", obs_samples.shape)  # (1000, num_observables)
+ *
+ * # Or the raw measurement record, in Stim record order
+ * measurements = sampler.sample_measurements(shots=1000)  # (1000, num_measurements)
  * @endcode
  */

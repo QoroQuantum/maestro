@@ -11,6 +11,8 @@ void RequireNoiseSeed(std::optional<uint64_t> noise_seed);
 void require_circuit(const CircuitPtr &circuit);
 void require_realizations(int noise_realizations);
 void require_any_noise(const noise::NoiseModel &noise_model);
+bool has_circuit_channels(const CircuitPtr &circuit);
+CircuitPtr without_circuit_channels(const CircuitPtr &circuit);
 
 std::vector<std::string> ParseObservables(const nb::object &observables);
 void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config);
@@ -45,4 +47,7 @@ nb::dict CoherentEstimate(const CircuitPtr &circuit, const nb::object &observabl
                           const SimulatorConfig &config, std::optional<uint64_t> noise_seed);
 nb::dict FullNoiseEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, int noise_realizations,
                            const SimulatorConfig &config, std::optional<uint64_t> noise_seed);
+nb::dict NoisyEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, const SimulatorConfig &config);
+nb::dict NoisyFidelity(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, int noise_realizations, const SimulatorConfig &config,
+                       std::optional<uint64_t> noise_seed);
 } // namespace maestro_bindings
