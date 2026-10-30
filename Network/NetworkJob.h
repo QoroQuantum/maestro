@@ -63,6 +63,9 @@ template <typename Time = Types::time_type> class ExecuteJob
         if (optSim && optSim->GetType() == Simulators::SimulatorType::kQCSim &&
             (method == Simulators::SimulationType::kPauliPropagator || optSim->GetConfiguration("sampling_policy") == "reproducible_v1"))
             optSim->SetMultithreading(allowInternalMultithreading);
+        // Multithreading off has to hold for what the simulator calls on this thread too, not only for
+        // its own loops: a BLAS built on OpenMP would otherwise start a thread team for each shot worker.
+        threadBudget.Limit(SimulatorThreadLimit());
 
         // Per-shot streams must clone the original instruction seeds, not a
         // job-seeded copy (which would make classical RNGs depend on batching).
@@ -97,9 +100,10 @@ template <typename Time = Types::time_type> class ExecuteJob
             if (!optSim)
                 return;
             config.ApplyConfigurationToSimulator(optSim);
-            if (optSim->GetType() == Simulators::SimulatorType::kQCSim &&
-                (method == Simulators::SimulationType::kPauliPropagator || optSim->GetConfiguration("sampling_policy") == "reproducible_v1"))
+            if (optSim->GetType() != Simulators::SimulatorType::kQCSim || method == Simulators::SimulationType::kPauliPropagator ||
+                optSim->GetConfiguration("sampling_policy") == "reproducible_v1")
                 optSim->SetMultithreading(allowInternalMultithreading);
+            threadBudget.Limit(SimulatorThreadLimit());
             optSim->AllocateQubits(nrQubits);
             optSim->Initialize();
 
@@ -452,10 +456,16 @@ template <typename Time = Types::time_type> class ExecuteJob
       public:
         explicit ScopedInternalThreads(int threads)
         {
+            Limit(threads);
+        }
+
+        void Limit(int threads)
+        {
 #ifdef _OPENMP
             if (threads > 0)
             {
-                previous = omp_get_max_threads();
+                if (previous == 0)
+                    previous = omp_get_max_threads();
                 omp_set_num_threads(threads);
             }
 #else
@@ -476,6 +486,16 @@ template <typename Time = Types::time_type> class ExecuteJob
         int previous = 0;
 #endif
     };
+
+    int SimulatorThreadLimit() const
+    {
+#if defined(_OPENMP) && defined(_MSC_VER) && !defined(__clang__) && !defined(_OPENMP_LLVM_RUNTIME)
+        // Legacy MSVC OpenMP keeps this setting process-wide, per-worker save/restore would race.
+        return 0;
+#else
+        return optSim && !optSim->GetMultithreading() ? 1 : 0;
+#endif
+    }
 
     template <class Samples>
     void AccumulateSamples(Circuits::MeasurementOperation<Time> &measurement, const Samples &samples, Circuits::OperationState &state, ExecuteResults &target)

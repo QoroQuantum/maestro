@@ -935,6 +935,69 @@ class ThreadObservedX : public Circuits::XGate<>
     std::shared_ptr<std::atomic<int>> budget;
 };
 
+#if defined(_OPENMP) && !defined(NO_QISKIT_AER)
+class WorkerThreadsX : public Circuits::XGate<>
+{
+  public:
+    WorkerThreadsX(std::shared_ptr<std::atomic<size_t>> calls, std::shared_ptr<std::atomic<bool>> wrong)
+        : XGate(0), calls(std::move(calls)), wrong(std::move(wrong))
+    {
+    }
+
+    void Execute(const std::shared_ptr<Simulators::ISimulator> &sim, Circuits::OperationState &state) const override
+    {
+        if (sim->GetMultithreading() || omp_get_max_threads() != 1)
+            wrong->store(true);
+        ++*calls;
+        XGate::Execute(sim, state);
+    }
+
+    std::shared_ptr<Circuits::IOperation<>> Clone() const override
+    {
+        return std::make_shared<WorkerThreadsX>(*this);
+    }
+
+  private:
+    std::shared_ptr<std::atomic<size_t>> calls;
+    std::shared_ptr<std::atomic<bool>> wrong;
+};
+
+// Anything the simulator calls on a shot worker, a BLAS built on OpenMP for example, has to stay on
+// that thread when multithreading is off, for prepared simulators and for those the job creates.
+void WorkerThreadsFollowFlag()
+{
+    const int previous = omp_get_max_threads();
+    omp_set_num_threads(4);
+    for (bool prepared : {false, true})
+    {
+        const auto calls = std::make_shared<std::atomic<size_t>>(0);
+        const auto wrong = std::make_shared<std::atomic<bool>>(false);
+        auto circuit = CF::CreateCircuit();
+        circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+        circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+        circuit->AddOperation(std::make_shared<WorkerThreadsX>(calls, wrong));
+        circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+        Counts counts;
+        std::mutex mutex;
+        Network::ExecuteJob<> job(circuit, counts, 4, 2, 1, 1, Backend::kQiskitAer, Method::kMatrixProductState, mutex);
+        job.network = MakeNetwork(Backend::kQiskitAer, Method::kMatrixProductState);
+        job.optimiseMultipleShotsExecution = true;
+        if (prepared)
+        {
+            job.optSim = Simulators::SimulatorsFactory::CreateSimulator(Backend::kQiskitAer, Method::kMatrixProductState);
+            job.optSim->SetMultithreading(false);
+            job.optSim->AllocateQubits(2);
+            job.optSim->Initialize();
+            job.executedGates.assign(circuit->size(), false);
+        }
+        job.DoWork();
+        Check(calls->load() > 0 && !wrong->load(), "Shot worker kept its OpenMP team with multithreading off");
+        Check(omp_get_max_threads() == 4, "Shot worker leaked its thread limit into the caller");
+    }
+    omp_set_num_threads(previous);
+}
+#endif
+
 void LargeTrajectoryWorkers()
 {
     const auto calls = std::make_shared<std::atomic<size_t>>(0);
@@ -1761,6 +1824,9 @@ try
     LargeTrajectoryWorkers();
     LargeTrajectoryThreadBudget();
     SamplingJobThreading();
+#if defined(_OPENMP) && !defined(NO_QISKIT_AER)
+    WorkerThreadsFollowFlag();
+#endif
     TerminalDensityDispatch();
     SmallTrajectoryBudgets();
     IndependentShotStreams();
