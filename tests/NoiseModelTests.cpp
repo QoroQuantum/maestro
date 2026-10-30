@@ -273,6 +273,135 @@ BOOST_AUTO_TEST_CASE(T1AndThermalRelaxationCannotStack)
     BOOST_CHECK_THROW(thermalFirst.set_t1(0, 0.1), std::invalid_argument);
 }
 
+BOOST_AUTO_TEST_CASE(RejectedT1SettersLeaveTheModelUnchanged)
+{
+    struct Setter
+    {
+        const char *name;
+        void (*apply)(noise::NoiseModel &);
+    };
+
+    const Setter setters[] = {
+        {"set_t1", [](noise::NoiseModel &model) { model.set_t1(2, 0.1); }},
+        {"set_t1_from_time", [](noise::NoiseModel &model) { model.set_t1_from_time(2, 1e-6, 40e-6); }},
+        {"set_t1_2q", [](noise::NoiseModel &model) { model.set_t1_2q(2, 0.1); }},
+        {"set_t1_2q_from_time", [](noise::NoiseModel &model) { model.set_t1_2q_from_time(2, 1e-6, 40e-6); }},
+        {"set_all_t1", [](noise::NoiseModel &model) { model.set_all_t1(3, 0.1); }},
+    };
+
+    for (const auto &setter : setters)
+    {
+        for (const bool existing_t1 : {false, true})
+        {
+            BOOST_TEST_CONTEXT(setter.name << ", existing T1=" << existing_t1)
+            {
+                noise::NoiseModel model;
+                model.set_thermal_relaxation(2, 1e-6, 40e-6, 25e-6);
+                if (existing_t1)
+                {
+                    model.set_t1(0, 0.2);
+                    model.set_t1(1, 0.3);
+                    model.set_t1(2, 0.0);
+                    model.set_t1_2q(2, 0.0);
+                }
+
+                BOOST_CHECK_THROW(setter.apply(model), std::invalid_argument);
+
+                BOOST_TEST(model.has_t1() == existing_t1);
+                // The batch setter encounters the conflict last, after qubits 0 and 1.
+                BOOST_TEST(model.get_t1(0) == (existing_t1 ? 0.2 : 0.0));
+                BOOST_TEST(model.get_t1(1) == (existing_t1 ? 0.3 : 0.0));
+                BOOST_TEST(model.get_t1(2) == 0.0);
+                BOOST_TEST(model.get_t1_2q(2) == 0.0);
+                BOOST_REQUIRE(model.get_thermal_relaxation_params(2, false));
+                BOOST_TEST(model.get_thermal_relaxation_params(2, false)->duration == 1e-6);
+                BOOST_CHECK_NO_THROW(model.EnsureNoT1ThermalStack());
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(RejectedThermalSettersLeaveTheModelUnchanged)
+{
+    for (const bool t1_only_after_2q : {false, true})
+    {
+        for (const bool thermal_only_after_2q : {false, true})
+        {
+            BOOST_TEST_CONTEXT("2Q T1=" << t1_only_after_2q << ", 2Q thermal=" << thermal_only_after_2q)
+            {
+                noise::NoiseModel model;
+                model.set_thermal_relaxation(0, 2e-6, 40e-6, 25e-6);
+                if (t1_only_after_2q)
+                    model.set_t1_2q(1, 0.2);
+                else
+                    model.set_t1(1, 0.2);
+
+                if (thermal_only_after_2q)
+                    BOOST_CHECK_THROW(model.set_thermal_relaxation_2q(1, 1e-6, 40e-6, 25e-6), std::invalid_argument);
+                else
+                    BOOST_CHECK_THROW(model.set_thermal_relaxation(1, 1e-6, 40e-6, 25e-6), std::invalid_argument);
+
+                BOOST_TEST(model.get_t1(1) == (t1_only_after_2q ? 0.0 : 0.2));
+                BOOST_TEST(model.get_t1_2q(1) == 0.2);
+                BOOST_CHECK(model.get_thermal_relaxation_for_gate(1, false) == nullptr);
+                BOOST_CHECK(model.get_thermal_relaxation_for_gate(1, true) == nullptr);
+                BOOST_CHECK(model.get_thermal_relaxation_params(1, false) == nullptr);
+                BOOST_CHECK(model.get_thermal_relaxation_params(1, true) == nullptr);
+                BOOST_REQUIRE(model.get_thermal_relaxation_params(0, false));
+                BOOST_TEST(model.get_thermal_relaxation_params(0, false)->duration == 2e-6);
+                BOOST_CHECK_NO_THROW(model.EnsureNoT1ThermalStack());
+            }
+        }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(T1ThermalValidationPreservesZeroGammaAndGateOverrides)
+{
+    // Without a 2Q override, all-gates T1 also conflicts with 2Q-only thermal noise.
+    noise::NoiseModel fallback;
+    fallback.set_thermal_relaxation_2q(0, 1e-6, 40e-6, 25e-6);
+    BOOST_CHECK_THROW(fallback.set_t1(0, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(fallback.set_t1_from_time(0, 1e-6, 40e-6), std::invalid_argument);
+    BOOST_CHECK_THROW(fallback.set_all_t1(1, 0.1), std::invalid_argument);
+    BOOST_TEST(!fallback.has_t1());
+
+    // Explicit zero T1 channels can coexist with thermal relaxation in either order.
+    for (const bool thermal_first : {false, true})
+    {
+        noise::NoiseModel model;
+        if (thermal_first)
+            model.set_thermal_relaxation(0, 1e-6, 40e-6, 25e-6);
+        BOOST_CHECK_NO_THROW(model.set_t1(0, 0.0));
+        BOOST_CHECK_NO_THROW(model.set_t1_from_time(0, 0.0, 40e-6));
+        BOOST_CHECK_NO_THROW(model.set_t1_2q(0, 0.0));
+        BOOST_CHECK_NO_THROW(model.set_t1_2q_from_time(0, 1e-6, std::numeric_limits<double>::infinity()));
+        BOOST_CHECK_NO_THROW(model.set_all_t1(1, 0.0));
+        if (!thermal_first)
+            BOOST_CHECK_NO_THROW(model.set_thermal_relaxation(0, 1e-6, 40e-6, 25e-6));
+        BOOST_CHECK_NO_THROW(model.set_thermal_relaxation_2q(0, 2e-6, 40e-6, 25e-6));
+        BOOST_CHECK_NO_THROW(model.EnsureNoT1ThermalStack());
+    }
+
+    // Zero 2Q T1 overrides allow nonzero 1Q T1 alongside a 2Q thermal channel.
+    for (const bool thermal_first : {false, true})
+    {
+        noise::NoiseModel model;
+        model.set_t1_2q(0, 0.0);
+        if (thermal_first)
+            model.set_thermal_relaxation_2q(0, 1e-6, 40e-6, 25e-6);
+        BOOST_CHECK_NO_THROW(model.set_t1(0, 0.1));
+        BOOST_CHECK_NO_THROW(model.set_t1_from_time(0, 1e-6, 40e-6));
+        BOOST_CHECK_NO_THROW(model.set_all_t1(1, 0.2));
+        if (!thermal_first)
+            BOOST_CHECK_NO_THROW(model.set_thermal_relaxation_2q(0, 1e-6, 40e-6, 25e-6));
+        BOOST_TEST(model.get_t1_for_gate(0, false) == 0.2);
+        BOOST_TEST(model.get_t1_for_gate(0, true) == 0.0);
+        BOOST_CHECK_THROW(model.set_t1_2q(0, 0.3), std::invalid_argument);
+        BOOST_TEST(model.get_t1_for_gate(0, true) == 0.0);
+        BOOST_CHECK_NO_THROW(model.EnsureNoT1ThermalStack());
+    }
+}
+
 BOOST_AUTO_TEST_CASE(ThermalT2GreaterThanT1UsesSampledApproximation)
 {
     constexpr double duration = 1e-6;

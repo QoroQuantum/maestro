@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Noise-model call logs record only successful setters and snapshot mutable
+  arguments, preserving their configured values during pickle and call-log replay.
+- Conflicting T1 and thermal-relaxation settings are rejected before changing the
+  noise model, including uniform T1 updates across multiple qubits.
+
 ## [0.3.9] - 2026-10-28
 
 ### Added

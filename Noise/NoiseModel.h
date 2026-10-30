@@ -748,8 +748,8 @@ class NoiseModel
     void set_t1(int q, double gamma)
     {
         checked_probability_(gamma, "T1 decay probability");
+        check_t1_update_(q, gamma, false);
         t1_[q] = gamma;
-        EnsureNoT1ThermalStack();
     }
 
     /// Set uniform T1 decay probability on qubits 0..n-1.
@@ -757,8 +757,9 @@ class NoiseModel
     {
         checked_probability_(gamma, "T1 decay probability");
         for (int q = 0; q < n; ++q)
+            check_t1_update_(q, gamma, false);
+        for (int q = 0; q < n; ++q)
             t1_[q] = gamma;
-        EnsureNoT1ThermalStack();
     }
 
     /**
@@ -769,8 +770,7 @@ class NoiseModel
     {
         checked_duration_(gate_time_s, "T1 gate time");
         checked_time_constant_(t1_time_s, "T1");
-        t1_[q] = std::isinf(t1_time_s) ? 0.0 : -std::expm1(-gate_time_s / t1_time_s);
-        EnsureNoT1ThermalStack();
+        set_t1(q, std::isinf(t1_time_s) ? 0.0 : -std::expm1(-gate_time_s / t1_time_s));
     }
 
     /// Get T1 decay probability for a qubit (0 if not set).
@@ -834,9 +834,10 @@ class NoiseModel
         // Constructing the channel validates duration, T1, T2, T2 <= 2*T1 and
         // complete positivity, so an invalid configuration is rejected here
         // rather than at injection time, on either backend.
-        thermal_relaxation_.insert_or_assign(q, Simulators::QuantumChannel::ThermalRelaxation(gate_time_s, t1_s, t2_s, excited_population));
+        auto channel = Simulators::QuantumChannel::ThermalRelaxation(gate_time_s, t1_s, t2_s, excited_population);
+        check_t1_thermal_stack_(q, get_t1(q), get_t1_2q(q), true, true);
+        thermal_relaxation_.insert_or_assign(q, std::move(channel));
         thermal_relaxation_params_.insert_or_assign(q, ThermalRelaxation{gate_time_s, t1_s, t2_s, excited_population});
-        EnsureNoT1ThermalStack();
     }
 
     /**
@@ -846,9 +847,10 @@ class NoiseModel
      */
     void set_thermal_relaxation_2q(int q, double gate_time_s, double t1_s, double t2_s, double excited_population = 0.0)
     {
-        thermal_relaxation_2q_.insert_or_assign(q, Simulators::QuantumChannel::ThermalRelaxation(gate_time_s, t1_s, t2_s, excited_population));
+        auto channel = Simulators::QuantumChannel::ThermalRelaxation(gate_time_s, t1_s, t2_s, excited_population);
+        check_t1_thermal_stack_(q, get_t1(q), get_t1_2q(q), get_thermal_relaxation(q) != nullptr, true);
+        thermal_relaxation_2q_.insert_or_assign(q, std::move(channel));
         thermal_relaxation_params_2q_.insert_or_assign(q, ThermalRelaxation{gate_time_s, t1_s, t2_s, excited_population});
-        EnsureNoT1ThermalStack();
     }
 
     const Simulators::QuantumChannel *get_phase_damping(int q) const
@@ -913,8 +915,8 @@ class NoiseModel
     void set_t1_2q(int q, double gamma)
     {
         checked_probability_(gamma, "2Q T1 decay probability");
+        check_t1_update_(q, gamma, true);
         t1_2q_[q] = gamma;
-        EnsureNoT1ThermalStack();
     }
 
     /// Set T1 for 2Q gates from physical time constants.
@@ -922,8 +924,7 @@ class NoiseModel
     {
         checked_duration_(gate_time_s, "2Q T1 gate time");
         checked_time_constant_(t1_time_s, "T1");
-        t1_2q_[q] = std::isinf(t1_time_s) ? 0.0 : -std::expm1(-gate_time_s / t1_time_s);
-        EnsureNoT1ThermalStack();
+        set_t1_2q(q, std::isinf(t1_time_s) ? 0.0 : -std::expm1(-gate_time_s / t1_time_s));
     }
 
     /// Get T1 decay probability for 2Q gates (falls back to get_t1 if not set).
@@ -1202,18 +1203,7 @@ class NoiseModel
         for (const auto &entry : thermal_relaxation_2q_)
             qubits.insert(entry.first);
         for (const int q : qubits)
-        {
-            if (get_t1(q) != 0.0 && get_thermal_relaxation(q) != nullptr)
-                throw std::invalid_argument("set_t1 and set_thermal_relaxation both apply after 1-qubit "
-                                            "gates on qubit " +
-                                            std::to_string(q) + "; they would double-count T1. Use set_thermal_relaxation only.");
-            if (get_t1_for_gate(q, true) != 0.0 && get_thermal_relaxation_for_gate(q, true) != nullptr)
-                throw std::invalid_argument("T1 and thermal relaxation both apply after 2-qubit gates on "
-                                            "qubit " +
-                                            std::to_string(q) +
-                                            "; they would double-count T1. Use set_thermal_relaxation / "
-                                            "set_thermal_relaxation_2q only.");
-        }
+            check_t1_thermal_stack_(q, get_t1(q), get_t1_2q(q), get_thermal_relaxation(q) != nullptr, get_thermal_relaxation_for_gate(q, true) != nullptr);
     }
 
     // ── Gate-type-specific noise setters ──
@@ -1279,6 +1269,30 @@ class NoiseModel
     }
 
   private:
+    /// Validate the effective gate-specific values, before a setter commits them.
+    static void check_t1_thermal_stack_(int q, double one_qubit_gamma, double two_qubit_gamma, bool one_qubit_thermal, bool two_qubit_thermal)
+    {
+        if (one_qubit_gamma != 0.0 && one_qubit_thermal)
+            throw std::invalid_argument("set_t1 and set_thermal_relaxation both apply after 1-qubit "
+                                        "gates on qubit " +
+                                        std::to_string(q) + "; they would double-count T1. Use set_thermal_relaxation only.");
+        if (two_qubit_gamma != 0.0 && two_qubit_thermal)
+            throw std::invalid_argument("T1 and thermal relaxation both apply after 2-qubit gates on "
+                                        "qubit " +
+                                        std::to_string(q) +
+                                        "; they would double-count T1. Use set_thermal_relaxation / "
+                                        "set_thermal_relaxation_2q only.");
+    }
+
+    void check_t1_update_(int q, double gamma, bool is_2q) const
+    {
+        const auto override_it = t1_2q_.find(q);
+        const double one_qubit_gamma = is_2q ? get_t1(q) : gamma;
+        // An explicit 2Q override, including zero, takes precedence over all-gates T1.
+        const double two_qubit_gamma = is_2q ? gamma : (override_it == t1_2q_.end() ? gamma : override_it->second);
+        check_t1_thermal_stack_(q, one_qubit_gamma, two_qubit_gamma, get_thermal_relaxation(q) != nullptr, get_thermal_relaxation_for_gate(q, true) != nullptr);
+    }
+
     std::unordered_map<int, QubitNoise> noise_;
     std::unordered_map<int, CoherentNoise> coherent_;
     std::unordered_map<int, double> t1_;
