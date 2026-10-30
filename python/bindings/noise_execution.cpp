@@ -109,9 +109,10 @@ std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_for_config(cons
 
 using NoiseInjector = CircuitPtr (*)(const CircuitPtr &, const noise::NoiseModel &, std::mt19937 &, const SimulatorConfig &);
 
-static CircuitPtr inject_coherent_for_config(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, std::mt19937 &rng, const SimulatorConfig &)
+static CircuitPtr inject_coherent_for_config(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, std::mt19937 &rng, const SimulatorConfig &config)
 {
-    auto noisy = noise::inject_coherent_noise(circuit, noise_model, rng);
+    auto noisy = uses_exact_quantum_channels(config) ? noise::inject_coherent_noise_exact(circuit, noise_model, rng)
+                                                     : noise::inject_coherent_noise(circuit, noise_model, rng);
     noise::attach_readout_error(noisy, noise_model);
     return noisy;
 }

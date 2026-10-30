@@ -1190,6 +1190,91 @@ BOOST_AUTO_TEST_CASE(CircuitPauliChannelIsSampledOrKept)
     BOOST_CHECK(exact->GetOperations()[0]->GetType() == Circuits::OperationType::kQuantumChannel);
 }
 
+/**
+ * An identity draw adds no gate, but a realization must still reach the
+ * channel's qubit: count strings are as wide as the highest qubit touched, so
+ * dropping it would shorten some realizations' counts and not others.
+ */
+BOOST_AUTO_TEST_CASE(SampledIdentityKeepsCircuitWidth)
+{
+    auto circuit = std::make_shared<Circuits::Circuit<double>>();
+    circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{3}, Simulators::QuantumChannel::Pauli({1.0, 0.0, 0.0, 0.0})));
+    circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{1, 0}}));
+    const noise::NoiseModel noNoise;
+
+    std::mt19937 rng(1);
+    for (const auto &noisy : {noise::inject_noise(circuit, noNoise, rng), noise::inject_combined_noise(circuit, noNoise, rng),
+                              noise::inject_coherent_noise(circuit, noNoise, rng), noise::inject_correlated_noise(circuit, noNoise, rng)})
+    {
+        BOOST_CHECK_EQUAL(noisy->GetMaxQubitIndex(), 3u);
+        BOOST_REQUIRE_EQUAL(noisy->GetOperations().size(), 2u);
+        BOOST_CHECK(noisy->GetOperations()[1]->GetType() == Circuits::OperationType::kDelay);
+    }
+
+    // A drawn Pauli already touches the qubit, so nothing is added.
+    auto flipped = std::make_shared<Circuits::Circuit<double>>();
+    flipped->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{3}, Simulators::QuantumChannel::Pauli({0.0, 1.0, 0.0, 0.0})));
+    const auto noisy = noise::inject_noise(flipped, noNoise, rng);
+    BOOST_REQUIRE_EQUAL(noisy->GetOperations().size(), 1u);
+    BOOST_CHECK(std::dynamic_pointer_cast<Circuits::XGate<>>(noisy->GetOperations()[0]));
+}
+
+/**
+ * Coherent injection samples its rotation signs on every backend but, like the
+ * other injectors, keeps circuit-level channels exact for density-matrix/MPO
+ * execution. NoiseAdd's coherent layer follows its exact flag and, as its other
+ * layers do, attaches the model's readout error.
+ */
+BOOST_AUTO_TEST_CASE(CoherentInjectionKeepsCircuitChannelsExact)
+{
+    auto circuit = std::make_shared<Circuits::Circuit<double>>();
+    circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Simulators::QuantumChannel::Pauli({0.5, 0.5, 0.0, 0.0})));
+    circuit->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+    circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
+    noise::NoiseModel model;
+    model.set_coherent_rotation(0, 0.1, 0.0, 0.0);
+    model.set_readout_error(0, 0.2, 0.3);
+
+    const auto count = [](const std::shared_ptr<Circuits::Circuit<double>> &noisy, Circuits::OperationType type) {
+        size_t n = 0;
+        for (const auto &op : noisy->GetOperations())
+            n += op->GetType() == type;
+        return n;
+    };
+    const auto rotated = [](const std::shared_ptr<Circuits::Circuit<double>> &noisy) {
+        for (const auto &op : noisy->GetOperations())
+            if (std::dynamic_pointer_cast<Circuits::RxGate<>>(op))
+                return true;
+        return false;
+    };
+    const auto hasReadout = [](const std::shared_ptr<Circuits::Circuit<double>> &noisy) {
+        for (const auto &op : noisy->GetOperations())
+            if (op->GetType() == Circuits::OperationType::kMeasurement)
+                return std::static_pointer_cast<Circuits::MeasurementOperation<>>(op)->HasReadout();
+        return false;
+    };
+
+    std::mt19937 rng(3);
+    const auto exact = noise::inject_coherent_noise_exact(circuit, model, rng);
+    BOOST_CHECK_EQUAL(count(exact, Circuits::OperationType::kQuantumChannel), 1u);
+    BOOST_CHECK(rotated(exact));
+    const auto sampled = noise::inject_coherent_noise(circuit, model, rng);
+    BOOST_CHECK_EQUAL(count(sampled, Circuits::OperationType::kQuantumChannel), 0u);
+    BOOST_CHECK(rotated(sampled));
+
+    noise::NoiseAdd add;
+    add.seed(9);
+    for (const bool exactChannels : {true, false})
+    {
+        add.set_exact_channels(exactChannels);
+        const auto noisy = add.inject_coherent(circuit, model);
+        BOOST_CHECK_EQUAL(count(noisy, Circuits::OperationType::kQuantumChannel), exactChannels ? 1u : 0u);
+        BOOST_CHECK(rotated(noisy));
+        BOOST_CHECK(hasReadout(noisy));
+    }
+    BOOST_CHECK(!std::static_pointer_cast<Circuits::MeasurementOperation<>>(circuit->GetOperations()[2])->HasReadout());
+}
+
 /** A noiseless gate gets no injected noise, and gate and circuit copies keep the mark. */
 BOOST_AUTO_TEST_CASE(NoiselessGateGetsNoInjectedNoise)
 {

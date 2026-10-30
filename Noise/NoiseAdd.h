@@ -78,7 +78,8 @@ class NoiseAdd
     {
         // Coherent noise is a sampled unitary trajectory on every backend: there
         // is no single channel that reproduces a systematic miscalibration.
-        return inject_coherent_noise(circ, nm, rng);
+        // Circuit-level channels are still applied exactly on DM/MPO.
+        return Inject(circ, nm, Layer::Coherent);
     }
 
     std::shared_ptr<Circuits::Circuit<double>> inject_combined(const std::shared_ptr<Circuits::Circuit<double>> &circ, const NoiseModel &nm)
@@ -280,10 +281,13 @@ class NoiseAdd
     {
         if (!circuit)
             return nullptr;
+        CircuitPtr noisy;
         if (layer == Layer::Coherent)
-            return inject_coherent_noise(circuit, nm, rng);
-        auto noisy = layer == Layer::Pauli ? (exact_channels ? inject_exact_noise(circuit, nm) : inject_noise(circuit, nm, rng))
-                                           : (exact_channels ? inject_combined_noise_exact(circuit, nm, rng) : inject_combined_noise(circuit, nm, rng));
+            noisy = exact_channels ? inject_coherent_noise_exact(circuit, nm, rng) : inject_coherent_noise(circuit, nm, rng);
+        else if (layer == Layer::Pauli)
+            noisy = exact_channels ? inject_exact_noise(circuit, nm) : inject_noise(circuit, nm, rng);
+        else
+            noisy = exact_channels ? inject_combined_noise_exact(circuit, nm, rng) : inject_combined_noise(circuit, nm, rng);
         attach_readout_error(noisy, nm);
         return noisy;
     }

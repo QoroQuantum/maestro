@@ -1664,6 +1664,20 @@ inline void append_sampled_pauli_channel_(std::shared_ptr<Circuits::Circuit<doub
 }
 
 /**
+ * Keep a realization as wide as the circuit it came from. Count strings are
+ * as wide as the highest qubit an operation touches, and an identity draw from
+ * a circuit-level channel adds no gate, so a qubit touched only by channels
+ * would vanish from some realizations and shorten just their counts. A
+ * zero-length delay on the source's highest qubit holds its place.
+ */
+inline void keep_circuit_width_(const std::shared_ptr<Circuits::Circuit<double>> &out, const std::shared_ptr<Circuits::Circuit<double>> &circ)
+{
+    const auto highest = circ->GetMaxQubitIndex();
+    if (!circ->GetOperations().empty() && out->GetMaxQubitIndex() < highest)
+        out->AddOperation(std::make_shared<Circuits::Delay<>>(static_cast<Types::qubit_t>(highest), 0.0));
+}
+
+/**
  * Analytically integrate an OU fluctuator band over a continuous delay tau.
  *
  * Given current state y0 = y(0) and delay tau:
@@ -1888,6 +1902,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             }
         }
     }
+    keep_circuit_width_(out, circ);
     return out;
 }
 
@@ -2019,20 +2034,25 @@ inline void inject_coherent_rotations_(std::shared_ptr<Circuits::Circuit<double>
  * and average the results (like noisy_execute does with noise_realizations);
  * that ensemble is what averages over the sign of the miscalibration.
  *
+ * Circuit-level channels (e.g. translated Stim noise) are sampled to one Pauli
+ * per realization here; inject_coherent_noise_exact keeps them as channels
+ * for density-matrix/MPO backends. The rotation signs are sampled either way.
+ *
  * @param circ  Input circuit (not modified).
  * @param nm    NoiseModel with coherent noise parameters set.
  * @param rng   Random number generator for sign sampling.
  * @return New circuit with coherent rotation gates inserted.
  */
-inline std::shared_ptr<Circuits::Circuit<double>> inject_coherent_noise(const std::shared_ptr<Circuits::Circuit<double>> &circ, const NoiseModel &nm,
-                                                                        std::mt19937 &rng)
+inline std::shared_ptr<Circuits::Circuit<double>> inject_coherent_noise_impl_(const std::shared_ptr<Circuits::Circuit<double>> &circ, const NoiseModel &nm,
+                                                                              std::mt19937 &rng, bool exact_channels)
 {
     auto out = std::make_shared<Circuits::Circuit<double>>();
     CoherentSigns signs(rng);
 
     for (const auto &op : circ->GetOperations())
     {
-        if (op->GetType() == Circuits::OperationType::kQuantumChannel)
+        // Circuit-level channels are sampled here and applied exactly on DM/MPO.
+        if (!exact_channels && op->GetType() == Circuits::OperationType::kQuantumChannel)
         {
             append_sampled_pauli_channel_(out, op, rng);
             continue;
@@ -2045,7 +2065,21 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_coherent_noise(const st
         for (auto q : op->AffectedQubits())
             inject_coherent_rotations_(out, nm, q, signs);
     }
+    keep_circuit_width_(out, circ);
     return out;
+}
+
+inline std::shared_ptr<Circuits::Circuit<double>> inject_coherent_noise(const std::shared_ptr<Circuits::Circuit<double>> &circ, const NoiseModel &nm,
+                                                                        std::mt19937 &rng)
+{
+    return inject_coherent_noise_impl_(circ, nm, rng, false);
+}
+
+/** Coherent rotations, with circuit-level channels kept exact for DM/MPO execution. */
+inline std::shared_ptr<Circuits::Circuit<double>> inject_coherent_noise_exact(const std::shared_ptr<Circuits::Circuit<double>> &circ, const NoiseModel &nm,
+                                                                              std::mt19937 &rng)
+{
+    return inject_coherent_noise_impl_(circ, nm, rng, true);
 }
 
 /**
@@ -2172,6 +2206,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_correlated_noise(const 
             }
         }
     }
+    keep_circuit_width_(out, circ);
     return out;
 }
 
@@ -2438,6 +2473,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
             }
         }
     }
+    keep_circuit_width_(out, circ);
     return out;
 }
 

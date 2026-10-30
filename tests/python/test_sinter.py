@@ -610,6 +610,18 @@ def test_checkpoint_zero_mismatch_surface_code():
     assert np.array_equal(obs_base, obs_chk)
 
 
+@pytest.mark.parametrize("enable_checkpoint", [False, True])
+def test_noise_only_qubit_keeps_measurement_width(enable_checkpoint):
+    """Qubit 3 carries only a channel, so identity draws used to drop it and
+    shorten some realizations' counts, failing the width check at random."""
+    sampler = MaestroCompiledSampler(
+        stim.Circuit("X_ERROR(0.5) 3\nM 1"), enable_checkpoint=enable_checkpoint)
+    for seed in range(10):
+        measurements = sampler.sample_measurements(32, seed=seed)
+        assert measurements.shape == (32, 1)
+        assert not measurements.any()
+
+
 def test_seeded_checkpoint_draws_fresh_batches():
     """Each call of a seeded, checkpointed sampler must draw new samples; a
     replayed batch would overstate the precision of collected error rates."""

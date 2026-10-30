@@ -6317,6 +6317,59 @@ class TestNoiseLayerValidation:
         assert result["counts"] == {"1": 20}
 
 
+class TestCoherentCircuitChannels:
+    """Coherent modes sample rotation signs per realization, but keep circuit
+    channels exact on density-matrix/MPO backends; pure-state and MPS backends
+    sample one Pauli per realization."""
+
+    EXACT = [maestro.SimulationType.DensityMatrix, maestro.SimulationType.MatrixProductOperator]
+    SAMPLED = [maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState]
+
+    @staticmethod
+    def _circuit(measure=False):
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.pauli_channel([0], [0.5, 0.5, 0.0, 0.0])  # 50% bit flip
+        if measure:
+            qc.measure_all()
+        return qc
+
+    @staticmethod
+    def _model():
+        nm = maestro.NoiseModel()
+        nm.set_coherent_rotation(0, 0.0, 0.0, 0.0)
+        return nm
+
+    @pytest.mark.parametrize("method", EXACT)
+    def test_exact_estimate_keeps_channel(self, method):
+        qc, nm, config = self._circuit(), self._model(), _config(method)
+        for result in (qc.coherent_estimate(["Z"], nm, noise_realizations=1, config=config, noise_seed=5),
+                       maestro.coherent_estimate(qc, ["Z"], nm, noise_realizations=1, config=config, noise_seed=5)):
+            assert result["expectation_values"] == pytest.approx([0.0], abs=1e-10)
+
+    @pytest.mark.parametrize("method", EXACT)
+    def test_exact_execute_keeps_channel(self, method):
+        counts = self._circuit(measure=True).coherent_execute(
+            self._model(), shots=4000, noise_realizations=1, config=_config(method), noise_seed=5)["counts"]
+        # One realization still yields both outcomes, at the channel's 50%.
+        assert set(counts) == {"0", "1"}
+        assert counts["0"] / 4000 == pytest.approx(0.5, abs=0.05)
+
+    @pytest.mark.parametrize("method", SAMPLED)
+    def test_sampled_realization_draws_one_pauli(self, method):
+        qc, nm, config = self._circuit(), self._model(), _config(method)
+        z = qc.coherent_estimate(["Z"], nm, noise_realizations=1, config=config, noise_seed=5)["expectation_values"][0]
+        assert abs(z) == pytest.approx(1.0, abs=1e-10)
+        counts = self._circuit(measure=True).coherent_execute(
+            nm, shots=200, noise_realizations=1, config=config, noise_seed=5)["counts"]
+        assert len(counts) == 1 and sum(counts.values()) == 200
+
+    @pytest.mark.parametrize("method", SAMPLED)
+    def test_sampled_realizations_average_to_the_channel(self, method):
+        result = self._circuit().coherent_estimate(
+            ["Z"], self._model(), noise_realizations=400, config=_config(method), noise_seed=5)
+        assert result["expectation_values"][0] == pytest.approx(0.0, abs=0.2)
+
 class TestNoiseSeedAlias:
     @staticmethod
     def _circuit(measure):
