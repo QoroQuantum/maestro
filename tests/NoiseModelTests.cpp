@@ -263,6 +263,69 @@ BOOST_AUTO_TEST_CASE(CoherentNoiseSignIsSystematicWithinARealization)
     }
 }
 
+/** Parameters the injectors cannot use are rejected rather than ignored. */
+BOOST_AUTO_TEST_CASE(SettersRejectInvalidQubitsAndNonFiniteParameters)
+{
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
+    noise::NoiseModel noiseModel;
+
+    // AR(1) is stationary only for |phi| < 1, as the JSON API requires.
+    BOOST_CHECK_THROW(noiseModel.set_correlated_ar1(0, 1.0, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_correlated_ar1(0, -1.5, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_correlated_ar1(0, 0.5, -0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_correlated_ar1(0, nan, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_correlated_ar1(0, 0.5, inf), std::invalid_argument);
+
+    BOOST_CHECK_THROW(noiseModel.set_coherent_rotation(0, nan, 0.0, 0.0), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_coherent_rotation(0, 0.0, inf, 0.0), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_coherent_rotation(0, 0.0, 0.0, -inf), std::invalid_argument);
+
+    // A qubit is never its own spectator, so self-crosstalk would do nothing.
+    BOOST_CHECK_THROW(noiseModel.set_crosstalk(1, 1, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_crosstalk(0, 1, nan), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_crosstalk(0, 1, inf), std::invalid_argument);
+
+    BOOST_CHECK_THROW(noiseModel.set_multi_correlated_ou(0, {}, 1e-7), std::invalid_argument);
+
+    // Negative qubit keys never match a circuit qubit.
+    BOOST_CHECK_THROW(noiseModel.set_depolarizing(-1, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_qubit_noise(-1, 0.1, 0.0, 0.0), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_coherent_depolarizing(-1, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_coherent_rotation(-1, 0.1, 0.0, 0.0), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_correlated_ou(-1, 1.0, 0.5, 1e-7), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_correlated_ar1(-1, 0.5, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_t1(-1, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_t1_2q_from_time(-1, 1e-7, 1e-5), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_phase_damping(-1, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_generalized_amplitude_damping(-1, 0.1, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_thermal_relaxation(-1, 1e-6, 40e-6, 25e-6), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_thermal_relaxation_2q(-1, 1e-6, 40e-6, 25e-6), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_idle_noise(-1, 40e-6, 25e-6), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_readout_error(-1, 0.1, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_1q_gate_depolarizing(-1, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_2q_gate_depolarizing(-1, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_2q_depolarizing(-1, 0, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_correlated_phase_flip(0, -1, 0.1), std::invalid_argument);
+    BOOST_CHECK_THROW(noiseModel.set_crosstalk(-1, 0, 0.1), std::invalid_argument);
+
+    // A nonpositive count would silently configure nothing.
+    for (const int count : {0, -2})
+    {
+        BOOST_CHECK_THROW(noiseModel.set_all_depolarizing(count, 0.1), std::invalid_argument);
+        BOOST_CHECK_THROW(noiseModel.set_all_dephasing(count, 0.1), std::invalid_argument);
+        BOOST_CHECK_THROW(noiseModel.set_all_coherent_depolarizing(count, 0.1), std::invalid_argument);
+        BOOST_CHECK_THROW(noiseModel.set_all_coherent_dephasing(count, 0.1), std::invalid_argument);
+        BOOST_CHECK_THROW(noiseModel.set_all_correlated_ou(count, 1.0, 0.5, 1e-7), std::invalid_argument);
+        BOOST_CHECK_THROW(noiseModel.set_all_t1(count, 0.1), std::invalid_argument);
+        BOOST_CHECK_THROW(noiseModel.set_all_readout_error(count, 0.1), std::invalid_argument);
+        BOOST_CHECK_THROW(noiseModel.set_all_1q_gate_depolarizing(count, 0.1), std::invalid_argument);
+        BOOST_CHECK_THROW(noiseModel.set_all_2q_gate_depolarizing(count, 0.1), std::invalid_argument);
+    }
+
+    BOOST_TEST(!noiseModel.has_any());
+}
+
 BOOST_AUTO_TEST_CASE(T1AndThermalRelaxationCannotStack)
 {
     noise::NoiseModel noiseModel;
@@ -401,6 +464,84 @@ BOOST_AUTO_TEST_CASE(T1ThermalValidationPreservesZeroGammaAndGateOverrides)
         BOOST_TEST(model.get_t1_for_gate(0, true) == 0.0);
         BOOST_CHECK_NO_THROW(model.EnsureNoT1ThermalStack());
     }
+}
+
+/**
+ * The body-diagonal (coherent depolarizing) rotation and the per-axis
+ * rotations are separate miscalibrations, so their signs are drawn
+ * independently. With shared draws the Rx sign would always equal the sign
+ * of the diagonal's x component.
+ */
+BOOST_AUTO_TEST_CASE(DiagonalAndAxisCoherentSignsAreIndependent)
+{
+    noise::NoiseModel noiseModel;
+    noiseModel.set_coherent_depolarizing(0, 0.05);
+    noiseModel.set_coherent_rotation(0, 0.1, 0.0, 0.0);
+
+    auto circuit = std::make_shared<Circuits::Circuit<double>>();
+    circuit->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+
+    std::mt19937 rng(11);
+    constexpr int realizations = 2000;
+    int agreements = 0;
+    for (int realization = 0; realization < realizations; ++realization)
+    {
+        const auto noisy = noise::inject_coherent_noise(circuit, noiseModel, rng);
+        BOOST_REQUIRE_EQUAL(noisy->GetOperations().size(), 3u);
+        const auto diagonal = std::dynamic_pointer_cast<Circuits::UGate<>>(noisy->GetOperations()[1]);
+        const auto rx = std::dynamic_pointer_cast<Circuits::RxGate<>>(noisy->GetOperations()[2]);
+        BOOST_REQUIRE(diagonal && rx);
+        // diagonal_rotation_gate_ sets lambda + gamma = atan2(sx, sy), so its
+        // sine carries the sign of the diagonal's x component.
+        const bool diagonalX = std::sin(diagonal->GetLambda() + diagonal->GetGamma()) > 0.0;
+        const bool rotationX = rx->GetTheta() > 0.0;
+        agreements += diagonalX == rotationX;
+    }
+    BOOST_CHECK_GT(agreements, 0.4 * realizations);
+    BOOST_CHECK_LT(agreements, 0.6 * realizations);
+}
+
+/**
+ * Three-qubit gates take the per-qubit 2Q gate-type layers (Pauli, T1,
+ * thermal), as correlated noise's after_2q does, and never the 1Q-gate ones.
+ */
+BOOST_AUTO_TEST_CASE(ThreeQubitGatesUseTheMultiQubitGateLayers)
+{
+    auto circuit = std::make_shared<Circuits::Circuit<double>>();
+    circuit->AddOperation(std::make_shared<Circuits::CCXGate<>>(0, 1, 2));
+
+    noise::NoiseModel noiseModel;
+    noiseModel.set_t1_2q(0, 1.0);
+    noiseModel.set_2q_gate_depolarizing(1, 1.0);
+    noiseModel.set_thermal_relaxation_2q(2, 1e-6, 40e-6, 25e-6);
+    // 1Q-gate noise and the all-gates T1 must not apply after a CCX.
+    noiseModel.set_1q_gate_depolarizing(0, 1.0);
+    noiseModel.set_1q_gate_depolarizing(2, 1.0);
+    noiseModel.set_t1(1, 1.0);
+    noiseModel.set_t1_2q(1, 0.0);
+
+    const auto channelsOn = [](const std::shared_ptr<Circuits::Circuit<double>> &noisy, Types::qubit_t qubit) {
+        size_t count = 0;
+        for (const auto &op : noisy->GetOperations())
+            if (op->GetType() == Circuits::OperationType::kQuantumChannel && op->AffectedQubits() == Types::qubits_vector{qubit})
+                ++count;
+        return count;
+    };
+
+    std::mt19937 rng(5);
+    for (const auto &exact : {noise::inject_exact_noise(circuit, noiseModel), noise::inject_combined_noise_exact(circuit, noiseModel, rng)})
+    {
+        BOOST_CHECK_EQUAL(channelsOn(exact, 0), 1u); // 2Q T1 only
+        BOOST_CHECK_EQUAL(channelsOn(exact, 1), 1u); // 2Q-gate Pauli only
+        BOOST_CHECK_EQUAL(channelsOn(exact, 2), 1u); // 2Q thermal only
+    }
+
+    // On the sampled path the 2Q T1 of gamma=1 always resets qubit 0.
+    const auto sampled = noise::inject_noise(circuit, noiseModel, rng);
+    bool resetQubit0 = false;
+    for (const auto &op : sampled->GetOperations())
+        resetQubit0 = resetQubit0 || (op->GetType() == Circuits::OperationType::kReset && op->AffectedQubits() == Types::qubits_vector{0});
+    BOOST_TEST(resetQubit0);
 }
 
 BOOST_AUTO_TEST_CASE(ThermalT2GreaterThanT1UsesSampledApproximation)

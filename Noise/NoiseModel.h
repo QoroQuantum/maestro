@@ -110,6 +110,41 @@ inline double checked_time_constant_(double value, const char *name)
     return value;
 }
 
+/// Validate a finite real parameter, such as a rotation angle.
+inline double checked_finite_(double value, const char *name)
+{
+    if (!std::isfinite(value))
+        throw std::invalid_argument(std::string(name) + " must be finite");
+    return value;
+}
+
+/// Validate a qubit index. A negative key would never match a circuit qubit,
+/// so the setting would be silently ignored.
+inline int checked_qubit_(int q)
+{
+    if (q < 0)
+        throw std::invalid_argument("Qubit index must be nonnegative, got " + std::to_string(q));
+    return q;
+}
+
+/// Validate a distinct, nonnegative qubit pair.
+inline void checked_qubit_pair_(int q1, int q2, const char *what)
+{
+    checked_qubit_(q1);
+    checked_qubit_(q2);
+    if (q1 == q2)
+        throw std::invalid_argument(std::string(what) + " qubits must be distinct");
+}
+
+/// Validate the qubit count of a set_all_* setter, which would otherwise
+/// silently configure nothing.
+inline int checked_qubit_count_(int n)
+{
+    if (n <= 0)
+        throw std::invalid_argument("Qubit count must be positive, got " + std::to_string(n));
+    return n;
+}
+
 /// Per-qubit Pauli noise parameters.
 struct QubitNoise
 {
@@ -343,6 +378,7 @@ class NoiseModel
     /// Set arbitrary Pauli channel on a qubit.
     void set_qubit_noise(int q, double px, double py, double pz)
     {
+        checked_qubit_(q);
         checked_pauli_probabilities_(px, py, pz);
         noise_[q] = {px, py, pz};
     }
@@ -350,6 +386,7 @@ class NoiseModel
     /// Symmetric depolarizing: px = py = pz = p/3.
     void set_depolarizing(int q, double p)
     {
+        checked_qubit_(q);
         checked_probability_(p, "Depolarizing probability");
         noise_[q] = {p / 3.0, p / 3.0, p / 3.0};
     }
@@ -357,6 +394,7 @@ class NoiseModel
     /// Pure dephasing (Z noise only).
     void set_dephasing(int q, double p)
     {
+        checked_qubit_(q);
         checked_probability_(p, "Dephasing probability");
         noise_[q] = {0, 0, p};
     }
@@ -364,6 +402,7 @@ class NoiseModel
     /// Pure bit-flip (X noise only).
     void set_bit_flip(int q, double p)
     {
+        checked_qubit_(q);
         checked_probability_(p, "Bit-flip probability");
         noise_[q] = {p, 0, 0};
     }
@@ -371,6 +410,8 @@ class NoiseModel
     /// Apply uniform depolarizing noise to qubits 0..n-1.
     void set_all_depolarizing(int n, double p)
     {
+        checked_qubit_count_(n);
+        checked_probability_(p, "Depolarizing probability");
         for (int q = 0; q < n; ++q)
             set_depolarizing(q, p);
     }
@@ -378,6 +419,8 @@ class NoiseModel
     /// Apply uniform dephasing noise to qubits 0..n-1.
     void set_all_dephasing(int n, double p)
     {
+        checked_qubit_count_(n);
+        checked_probability_(p, "Dephasing probability");
         for (int q = 0; q < n; ++q)
             set_dephasing(q, p);
     }
@@ -390,6 +433,10 @@ class NoiseModel
     /// Set the X, Y and Z coherent rotation angles on a qubit (radians).
     void set_coherent_rotation(int q, double rx, double ry, double rz)
     {
+        checked_qubit_(q);
+        checked_finite_(rx, "Coherent X rotation angle");
+        checked_finite_(ry, "Coherent Y rotation angle");
+        checked_finite_(rz, "Coherent Z rotation angle");
         auto &cn = coherent_[q];
         cn.rx = rx;
         cn.ry = ry;
@@ -404,6 +451,7 @@ class NoiseModel
      */
     void set_coherent_depolarizing(int q, double p)
     {
+        checked_qubit_(q);
         checked_probability_(p, "Coherent depolarizing probability");
         coherent_[q].diag = (p > 0) ? 2.0 * std::asin(std::sqrt(p)) : 0.0;
     }
@@ -411,6 +459,7 @@ class NoiseModel
     /// Coherent dephasing: Rz rotation with angle from probability.
     void set_coherent_dephasing(int q, double p)
     {
+        checked_qubit_(q);
         checked_probability_(p, "Coherent dephasing probability");
         coherent_[q].rz = (p > 0) ? 2.0 * std::asin(std::sqrt(p)) : 0.0;
     }
@@ -418,6 +467,7 @@ class NoiseModel
     /// Coherent bit-flip: Rx rotation with angle from probability.
     void set_coherent_bit_flip(int q, double p)
     {
+        checked_qubit_(q);
         checked_probability_(p, "Coherent bit-flip probability");
         coherent_[q].rx = (p > 0) ? 2.0 * std::asin(std::sqrt(p)) : 0.0;
     }
@@ -425,6 +475,8 @@ class NoiseModel
     /// Apply uniform coherent depolarizing noise to qubits 0..n-1.
     void set_all_coherent_depolarizing(int n, double p)
     {
+        checked_qubit_count_(n);
+        checked_probability_(p, "Coherent depolarizing probability");
         for (int q = 0; q < n; ++q)
             set_coherent_depolarizing(q, p);
     }
@@ -432,6 +484,8 @@ class NoiseModel
     /// Apply uniform coherent dephasing to qubits 0..n-1.
     void set_all_coherent_dephasing(int n, double p)
     {
+        checked_qubit_count_(n);
+        checked_probability_(p, "Coherent dephasing probability");
         for (int q = 0; q < n; ++q)
             set_coherent_dephasing(q, p);
     }
@@ -477,6 +531,12 @@ class NoiseModel
      */
     void set_correlated_ar1(int q, double phi, double sigma_eta, bool after_1q = true, bool after_2q = true, bool stationary_init = true)
     {
+        checked_qubit_(q);
+        // Same constraint as the JSON API: only |phi| < 1 is stationary.
+        if (!std::isfinite(phi) || std::abs(phi) >= 1.0)
+            throw std::invalid_argument("AR(1) coefficient phi must be finite with abs(phi) < 1");
+        if (!std::isfinite(sigma_eta) || sigma_eta < 0.0)
+            throw std::invalid_argument("AR(1) sigma_eta must be finite and nonnegative");
         double one_minus_phi2 = 1.0 - phi * phi;
         double sigma_stat = (one_minus_phi2 > 1e-15) ? sigma_eta / std::sqrt(one_minus_phi2) : sigma_eta;
         double theta = (phi > 0.0 && phi < 1.0) ? -std::log(phi) : 1.0;
@@ -504,6 +564,7 @@ class NoiseModel
      */
     void set_correlated_ou(int q, double sigma, double alpha, double gate_time, bool after_1q = true, bool after_2q = true, bool stationary_init = true)
     {
+        checked_qubit_(q);
         OUBand band = make_ou_band_(sigma, alpha, gate_time, stationary_init, after_1q, after_2q);
         correlated_[q] = CorrelatedNoise{{band}, after_1q, after_2q};
     }
@@ -514,6 +575,7 @@ class NoiseModel
      */
     void set_correlated_ou_band(int q, double sigma, double alpha, double gate_time, bool after_1q = true, bool after_2q = true, bool stationary_init = true)
     {
+        checked_qubit_(q);
         OUBand band = make_ou_band_(sigma, alpha, gate_time, stationary_init, after_1q, after_2q);
         auto it = correlated_.find(q);
         if (it == correlated_.end())
@@ -535,6 +597,11 @@ class NoiseModel
     void set_multi_correlated_ou(int q, const std::vector<std::pair<double, double>> &bands, double gate_time, bool after_1q = true, bool after_2q = true,
                                  bool stationary_init = true)
     {
+        checked_qubit_(q);
+        // An empty band list would mark the qubit as correlated yet inject
+        // nothing, and would skip the gate_time check in make_ou_band_.
+        if (bands.empty())
+            throw std::invalid_argument("OU bands must not be empty");
         std::vector<OUBand> ou_bands;
         ou_bands.reserve(bands.size());
         for (const auto &[sigma, alpha] : bands)
@@ -561,6 +628,8 @@ class NoiseModel
     /// Set identical single-band OU correlated noise on qubits [0, n).
     void set_all_correlated_ou(int n, double sigma, double alpha, double gate_time, bool after_1q = true, bool after_2q = true, bool stationary_init = true)
     {
+        checked_qubit_count_(n);
+        make_ou_band_(sigma, alpha, gate_time); // validate before configuring any qubit
         for (int q = 0; q < n; ++q)
             set_correlated_ou(q, sigma, alpha, gate_time, after_1q, after_2q, stationary_init);
     }
@@ -655,6 +724,7 @@ class NoiseModel
      */
     void set_idle_noise(int q, double t1, double t2, double excited_population = 0.0, double detuning_hz = 0.0)
     {
+        checked_qubit_(q);
         checked_time_constant_(t1, "Idle T1");
         checked_time_constant_(t2, "Idle T2");
         checked_probability_(excited_population, "Idle excited population");
@@ -752,6 +822,7 @@ class NoiseModel
      */
     void set_t1(int q, double gamma)
     {
+        checked_qubit_(q);
         checked_probability_(gamma, "T1 decay probability");
         check_t1_update_(q, gamma, false);
         t1_[q] = gamma;
@@ -760,6 +831,7 @@ class NoiseModel
     /// Set uniform T1 decay probability on qubits 0..n-1.
     void set_all_t1(int n, double gamma)
     {
+        checked_qubit_count_(n);
         checked_probability_(gamma, "T1 decay probability");
         for (int q = 0; q < n; ++q)
             check_t1_update_(q, gamma, false);
@@ -773,6 +845,7 @@ class NoiseModel
      */
     void set_t1_from_time(int q, double gate_time_s, double t1_time_s)
     {
+        checked_qubit_(q);
         checked_duration_(gate_time_s, "T1 gate time");
         checked_time_constant_(t1_time_s, "T1");
         set_t1(q, std::isinf(t1_time_s) ? 0.0 : -std::expm1(-gate_time_s / t1_time_s));
@@ -802,6 +875,7 @@ class NoiseModel
      */
     void set_phase_damping(int q, double gamma)
     {
+        checked_qubit_(q);
         checked_probability_(gamma, "Phase-damping probability");
         phase_damping_.insert_or_assign(q, Simulators::QuantumChannel::PhaseDamping(gamma));
         // sqrt(1 - gamma) = 1 - 2p  =>  p = (1 - sqrt(1 - gamma)) / 2
@@ -811,6 +885,7 @@ class NoiseModel
     /** Pure phase damping with coherence exp(-gate_time/T_phi). */
     void set_phase_damping_from_time(int q, double gate_time_s, double t_phi_s)
     {
+        checked_qubit_(q);
         checked_duration_(gate_time_s, "Phase-damping gate time");
         checked_time_constant_(t_phi_s, "T_phi");
         const double gamma = std::isinf(t_phi_s) ? 0.0 : -std::expm1(-2.0 * gate_time_s / t_phi_s);
@@ -820,6 +895,7 @@ class NoiseModel
     /** Finite-temperature amplitude damping after every gate on a qubit. */
     void set_generalized_amplitude_damping(int q, double gamma, double excited_population)
     {
+        checked_qubit_(q);
         generalized_amplitude_damping_.insert_or_assign(q, Simulators::QuantumChannel::GeneralizedAmplitudeDamping(gamma, excited_population));
     }
 
@@ -836,6 +912,7 @@ class NoiseModel
      */
     void set_thermal_relaxation(int q, double gate_time_s, double t1_s, double t2_s, double excited_population = 0.0)
     {
+        checked_qubit_(q);
         // Constructing the channel validates duration, T1, T2, T2 <= 2*T1 and
         // complete positivity, so an invalid configuration is rejected here
         // rather than at injection time, on either backend.
@@ -846,12 +923,13 @@ class NoiseModel
     }
 
     /**
-     * Thermal relaxation applied only after two-qubit gates.
-     * When set, 2Q gates use this instead of the "all gates" relaxation --
-     * the usual case, since 2Q gates are longer than 1Q gates.
+     * Thermal relaxation applied only after multi-qubit (two or more qubit)
+     * gates. When set, those gates use this instead of the "all gates"
+     * relaxation -- the usual case, since 2Q gates are longer than 1Q gates.
      */
     void set_thermal_relaxation_2q(int q, double gate_time_s, double t1_s, double t2_s, double excited_population = 0.0)
     {
+        checked_qubit_(q);
         auto channel = Simulators::QuantumChannel::ThermalRelaxation(gate_time_s, t1_s, t2_s, excited_population);
         check_t1_thermal_stack_(q, get_t1(q), get_t1_2q(q), get_thermal_relaxation(q) != nullptr, true);
         thermal_relaxation_2q_.insert_or_assign(q, std::move(channel));
@@ -915,10 +993,12 @@ class NoiseModel
 
     // ── T1 gate-type-specific overrides ──
 
-    /// Set T1 decay probability applied only after two-qubit gates.
-    /// When set, 2Q gates use this gamma instead of the "all gates" value.
+    /// Set T1 decay probability applied only after multi-qubit (two or more
+    /// qubit) gates. When set, those gates use this gamma instead of the "all
+    /// gates" value.
     void set_t1_2q(int q, double gamma)
     {
+        checked_qubit_(q);
         checked_probability_(gamma, "2Q T1 decay probability");
         check_t1_update_(q, gamma, true);
         t1_2q_[q] = gamma;
@@ -927,6 +1007,7 @@ class NoiseModel
     /// Set T1 for 2Q gates from physical time constants.
     void set_t1_2q_from_time(int q, double gate_time_s, double t1_time_s)
     {
+        checked_qubit_(q);
         checked_duration_(gate_time_s, "2Q T1 gate time");
         checked_time_constant_(t1_time_s, "T1");
         set_t1_2q(q, std::isinf(t1_time_s) ? 0.0 : -std::expm1(-gate_time_s / t1_time_s));
@@ -958,6 +1039,10 @@ class NoiseModel
      */
     void set_crosstalk(int q1, int q2, double strength)
     {
+        // A gate on a qubit never rotates itself as its own spectator, so
+        // self-crosstalk would be silently ignored.
+        checked_qubit_pair_(q1, q2, "Crosstalk");
+        checked_finite_(strength, "Crosstalk strength");
         crosstalk_[q1][q2] = strength;
         crosstalk_[q2][q1] = strength;
     }
@@ -984,6 +1069,7 @@ class NoiseModel
      */
     void set_readout_error(int q, double p_meas1_prep0, double p_meas0_prep1)
     {
+        checked_qubit_(q);
         checked_probability_(p_meas1_prep0, "P(measure 1 | prepared 0)");
         checked_probability_(p_meas0_prep1, "P(measure 0 | prepared 1)");
         readout_[q] = {p_meas1_prep0, p_meas0_prep1};
@@ -992,6 +1078,7 @@ class NoiseModel
     /// Symmetric readout error: both directions use the same rate.
     void set_readout_error_symmetric(int q, double p_error)
     {
+        checked_qubit_(q);
         checked_probability_(p_error, "Readout error probability");
         readout_[q] = {p_error, p_error};
     }
@@ -999,6 +1086,7 @@ class NoiseModel
     /// Apply uniform symmetric readout error to qubits 0..n-1.
     void set_all_readout_error(int n, double p_error)
     {
+        checked_qubit_count_(n);
         checked_probability_(p_error, "Readout error probability");
         for (int q = 0; q < n; ++q)
             readout_[q] = {p_error, p_error};
@@ -1029,8 +1117,7 @@ class NoiseModel
      */
     void set_2q_depolarizing(int q1, int q2, double p)
     {
-        if (q1 == q2)
-            throw std::invalid_argument("Two-qubit depolarizing qubits must be distinct");
+        checked_qubit_pair_(q1, q2, "Two-qubit depolarizing");
         checked_probability_(p, "Two-qubit depolarizing probability");
         depol_2q_[q1][q2] = p;
         depol_2q_[q2][q1] = p;
@@ -1062,8 +1149,7 @@ class NoiseModel
      */
     void set_correlated_phase_flip(int q1, int q2, double probability, double correlation = 1.0)
     {
-        if (q1 == q2)
-            throw std::invalid_argument("Correlated phase-flip qubits must be distinct");
+        checked_qubit_pair_(q1, q2, "Correlated phase-flip");
         const auto channel = Simulators::QuantumChannel::CorrelatedPhaseFlip(probability, correlation);
         correlated_phase_flip_[q1].insert_or_assign(q2, channel);
         correlated_phase_flip_[q2].insert_or_assign(q1, channel);
@@ -1219,14 +1305,17 @@ class NoiseModel
     /// Per-qubit depolarizing applied only after single-qubit gates.
     void set_1q_gate_depolarizing(int q, double p)
     {
+        checked_qubit_(q);
         checked_probability_(p, "1Q-gate depolarizing probability");
         noise_1q_[q] = {p / 3.0, p / 3.0, p / 3.0};
     }
 
-    /// Per-qubit DEPOLARIZE1(p) applied only after two-qubit gates. For the
-    /// correlated 15-Pauli DEPOLARIZE2(p) channel use set_2q_depolarizing.
+    /// Per-qubit DEPOLARIZE1(p) applied only after multi-qubit (two or more
+    /// qubit) gates. For the correlated 15-Pauli DEPOLARIZE2(p) channel use
+    /// set_2q_depolarizing.
     void set_2q_gate_depolarizing(int q, double p)
     {
+        checked_qubit_(q);
         checked_probability_(p, "2Q-gate depolarizing probability");
         noise_2q_[q] = {p / 3.0, p / 3.0, p / 3.0};
     }
@@ -1234,6 +1323,8 @@ class NoiseModel
     /// Bulk: 1Q gate depolarizing on qubits 0..n-1.
     void set_all_1q_gate_depolarizing(int n, double p)
     {
+        checked_qubit_count_(n);
+        checked_probability_(p, "1Q-gate depolarizing probability");
         for (int q = 0; q < n; ++q)
             set_1q_gate_depolarizing(q, p);
     }
@@ -1241,6 +1332,8 @@ class NoiseModel
     /// Bulk: 2Q gate depolarizing on qubits 0..n-1.
     void set_all_2q_gate_depolarizing(int n, double p)
     {
+        checked_qubit_count_(n);
+        checked_probability_(p, "2Q-gate depolarizing probability");
         for (int q = 0; q < n; ++q)
             set_2q_gate_depolarizing(q, p);
     }
@@ -1610,7 +1703,10 @@ inline std::pair<double, double> integrate_ou_band_delay_(const OUBand &band, do
  * (X, Y, Z, or I) is applied according to the channel probabilities.
  *
  * Supports gate-type-specific noise: if 1Q/2Q gate noise maps are set,
- * they are applied in addition to the "all gates" channel.
+ * they are applied in addition to the "all gates" channel. Gates on three
+ * or more qubits (CCX, CSwap) count as 2Q gates for the per-qubit 2Q layers
+ * (2Q-gate Pauli, T1 and thermal relaxation), matching correlated noise's
+ * after_2q; pair channels such as set_2q_depolarizing apply to exactly two.
  */
 inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::shared_ptr<Circuits::Circuit<double>> &circ, const NoiseModel &nm,
                                                                      std::mt19937 &rng, bool exact_channels)
@@ -1687,7 +1783,9 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             continue;
 
         auto affected = op->AffectedQubits();
-        const bool is_2q = affected.size() == 2;
+        // Gates on two or more qubits (e.g. CCX, CSwap) take the "2Q" gate-type
+        // layers, as correlated noise does; pair channels need exactly two.
+        const bool is_multiq = affected.size() >= 2;
 
         for (auto q : affected)
         {
@@ -1696,7 +1794,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             // (1-gamma) instead of sqrt(1-gamma) -- a first-order error. Use
             // set_thermal_relaxation() to specify T1 and T2 together and get
             // matching coherence decay on both backend families when T2 <= T1.
-            double gamma = nm.get_t1_for_gate(static_cast<int>(q), is_2q);
+            double gamma = nm.get_t1_for_gate(static_cast<int>(q), is_multiq);
             if (exact_channels)
             {
                 if (gamma != 0.0)
@@ -1709,7 +1807,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             }
 
             // T1/T2 thermal relaxation (exact channel or equivalent reset+Z sample)
-            inject_thermal_relaxation_(out, nm, q, is_2q, exact_channels, dist, rng);
+            inject_thermal_relaxation_(out, nm, q, is_multiq, exact_channels, dist, rng);
 
             // Phase damping (identical to a phase flip, so exact on both paths)
             inject_phase_damping_(out, nm, q, exact_channels, dist, rng);
@@ -1725,27 +1823,13 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             }
 
             // Gate-type-specific channels
-            if (is_2q)
+            const auto *qn_gate = is_multiq ? nm.get_2q_gate_noise(static_cast<int>(q)) : nm.get_1q_gate_noise(static_cast<int>(q));
+            if (qn_gate)
             {
-                const auto *qn2 = nm.get_2q_gate_noise(static_cast<int>(q));
-                if (qn2)
-                {
-                    if (exact_channels)
-                        inject_1q_pauli_exact_(out, q, *qn2);
-                    else
-                        inject_1q_pauli_(out, q, *qn2, dist, rng);
-                }
-            }
-            else if (affected.size() == 1)
-            {
-                const auto *qn1 = nm.get_1q_gate_noise(static_cast<int>(q));
-                if (qn1)
-                {
-                    if (exact_channels)
-                        inject_1q_pauli_exact_(out, q, *qn1);
-                    else
-                        inject_1q_pauli_(out, q, *qn1, dist, rng);
-                }
+                if (exact_channels)
+                    inject_1q_pauli_exact_(out, q, *qn_gate);
+                else
+                    inject_1q_pauli_(out, q, *qn_gate, dist, rng);
             }
         }
 
@@ -1754,7 +1838,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
             inject_additional_exact_channels_(out, nm, affected);
 
         // Two-qubit depolarizing (correlated 2Q Pauli channel)
-        if (is_2q)
+        if (affected.size() == 2)
         {
             auto q1 = affected[0];
             auto q2 = affected[1];
@@ -1802,6 +1886,10 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_exact_noise(const std::
  * average is exactly the phase-flip channel with probability p = sin²(eps/2)
  * -- i.e. nothing beyond set_dephasing(p), and with none of the coherent
  * accumulation this model exists to capture.
+ *
+ * The body-diagonal rotation and the per-axis Rx/Ry/Rz rotations are separate
+ * miscalibrations, so each gets its own signs: sharing them would lock the
+ * sign of Rx to the x component of the diagonal, and so on.
  */
 class CoherentSigns
 {
@@ -1810,21 +1898,33 @@ class CoherentSigns
     {
     }
 
-    /// Signs for qubit q, drawn on first use and stable thereafter.
-    const std::array<double, 3> &for_qubit(int q)
+    /// Rx/Ry/Rz signs for qubit q, drawn on first use and stable thereafter.
+    const std::array<double, 3> &axes(int q)
     {
-        auto it = signs_.find(q);
-        if (it != signs_.end())
+        return draw_once_(axis_signs_, q);
+    }
+
+    /// Body-diagonal direction signs for qubit q, drawn independently of axes().
+    const std::array<double, 3> &diagonal(int q)
+    {
+        return draw_once_(diagonal_signs_, q);
+    }
+
+  private:
+    const std::array<double, 3> &draw_once_(std::unordered_map<int, std::array<double, 3>> &signs, int q)
+    {
+        auto it = signs.find(q);
+        if (it != signs.end())
             return it->second;
 
         std::bernoulli_distribution sign_dist(0.5);
         std::array<double, 3> drawn = {sign_dist(*rng_) ? 1.0 : -1.0, sign_dist(*rng_) ? 1.0 : -1.0, sign_dist(*rng_) ? 1.0 : -1.0};
-        return signs_.emplace(q, drawn).first->second;
+        return signs.emplace(q, drawn).first->second;
     }
 
-  private:
     std::mt19937 *rng_;
-    std::unordered_map<int, std::array<double, 3>> signs_;
+    std::unordered_map<int, std::array<double, 3>> axis_signs_;
+    std::unordered_map<int, std::array<double, 3>> diagonal_signs_;
 };
 
 /**
@@ -1857,9 +1957,12 @@ inline void inject_coherent_rotations_(std::shared_ptr<Circuits::Circuit<double>
     if (!cn)
         return;
 
-    const auto &sign = signs.for_qubit(static_cast<int>(q));
     if (std::abs(cn->diag) > 1e-15)
-        out->AddOperation(diagonal_rotation_gate_(q, cn->diag, sign));
+        out->AddOperation(diagonal_rotation_gate_(q, cn->diag, signs.diagonal(static_cast<int>(q))));
+    if (std::abs(cn->rx) <= 1e-15 && std::abs(cn->ry) <= 1e-15 && std::abs(cn->rz) <= 1e-15)
+        return;
+
+    const auto &sign = signs.axes(static_cast<int>(q));
     if (std::abs(cn->rx) > 1e-15)
         out->AddOperation(std::make_shared<Circuits::RxGate<>>(q, sign[0] * cn->rx));
     if (std::abs(cn->ry) > 1e-15)
@@ -2159,8 +2262,9 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
             continue;
 
         auto affected = op->AffectedQubits();
+        // Gates on two or more qubits take the "2Q" gate-type layers; pair
+        // channels need exactly two (see inject_noise_impl_).
         const bool is_multiq = affected.size() >= 2;
-        const bool is_2q = affected.size() == 2;
 
         // Helper: check if qubit is in the affected set
         auto is_affected = [&affected](int q) {
@@ -2234,7 +2338,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
         // ── 4. T1 amplitude damping (exact channel or legacy reset sample) ──
         for (auto q : affected)
         {
-            double gamma = nm.get_t1_for_gate(static_cast<int>(q), is_2q);
+            double gamma = nm.get_t1_for_gate(static_cast<int>(q), is_multiq);
             if (exact_channels)
             {
                 if (gamma != 0.0)
@@ -2249,7 +2353,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
             // T1/T2 thermal relaxation and phase damping. Both are driven from the
             // same physical parameters on either backend, so the coherence decay
             // matches; see inject_thermal_relaxation_.
-            inject_thermal_relaxation_(out, nm, q, is_2q, exact_channels, dist, rng);
+            inject_thermal_relaxation_(out, nm, q, is_multiq, exact_channels, dist, rng);
             inject_phase_damping_(out, nm, q, exact_channels, dist, rng);
         }
 
@@ -2269,27 +2373,13 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
         // ── 6. Gate-type-specific Pauli noise ──
         for (auto q : affected)
         {
-            if (is_2q)
+            const auto *qn_gate = is_multiq ? nm.get_2q_gate_noise(static_cast<int>(q)) : nm.get_1q_gate_noise(static_cast<int>(q));
+            if (qn_gate)
             {
-                const auto *qn2 = nm.get_2q_gate_noise(static_cast<int>(q));
-                if (qn2)
-                {
-                    if (exact_channels)
-                        inject_1q_pauli_exact_(out, q, *qn2);
-                    else
-                        inject_1q_pauli_(out, q, *qn2, dist, rng);
-                }
-            }
-            else if (affected.size() == 1)
-            {
-                const auto *qn1 = nm.get_1q_gate_noise(static_cast<int>(q));
-                if (qn1)
-                {
-                    if (exact_channels)
-                        inject_1q_pauli_exact_(out, q, *qn1);
-                    else
-                        inject_1q_pauli_(out, q, *qn1, dist, rng);
-                }
+                if (exact_channels)
+                    inject_1q_pauli_exact_(out, q, *qn_gate);
+                else
+                    inject_1q_pauli_(out, q, *qn_gate, dist, rng);
             }
         }
 
@@ -2298,7 +2388,7 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
             inject_additional_exact_channels_(out, nm, affected);
 
         // ── 8. Two-qubit depolarizing (correlated 2Q Pauli channel) ──
-        if (is_2q)
+        if (affected.size() == 2)
         {
             auto q1 = affected[0];
             auto q2 = affected[1];
