@@ -1159,6 +1159,23 @@ def test_zero_probability_channel_runs_without_noise_model():
     assert not sampler.sample_measurements(10).any()
 
 
+@pytest.mark.parametrize("channel", [
+    "X_ERROR(0.5)", "Y_ERROR(0.5)", "Z_ERROR(0.5)",
+    "DEPOLARIZE1(0.5)", "DEPOLARIZE2(0.5)",
+    "PAULI_CHANNEL_1(0.5, 0, 0)",
+    "PAULI_CHANNEL_2(0.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)",
+])
+@pytest.mark.parametrize("enable_checkpoint, prefix", [
+    (False, ""), (True, ""), (True, "X 0\nX 0\n"),
+])
+def test_targetless_noise_runs_without_noise_model(channel, enable_checkpoint, prefix):
+    """Stim noise without targets is a no-op, including on the direct fallback path."""
+    circuit = stim.Circuit(f"{prefix}{channel}\nM 0")
+    sampler = MaestroCompiledSampler(circuit, enable_checkpoint=enable_checkpoint, seed=1)
+    assert (sampler.checkpoint_sim is not None) == bool(prefix)
+    assert np.array_equal(sampler.sample_measurements(10), np.zeros((10, 1), dtype=bool))
+
+
 @pytest.mark.parametrize("estimate", ["full_noise_estimate", "noisy_estimate_montecarlo"])
 def test_estimate_with_circuit_channel_on_statevector(estimate):
     """The noiseless baseline must not replay an unsampled channel on a pure-state backend."""

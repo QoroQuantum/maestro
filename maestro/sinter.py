@@ -792,10 +792,10 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
             raise ValueError("Translated measurement count differs from the detector circuit")
         self.noise_model = noise_model
         # Pauli channels in the circuit need a fresh draw per shot, like a NoiseModel.
-        # Zero-probability channels are dropped by translation, so they don't count.
+        # Translation drops zero-probability and targetless channels, so they don't count.
         self.has_circuit_noise = any(
-            name in LOCAL_NOISE and _pauli_channel_probabilities(name, args)[1][0] < 1.0
-            for name, args, _ in _stim_instructions(task.circuit))
+            name in LOCAL_NOISE and targets and _pauli_channel_probabilities(name, args)[1][0] < 1.0
+            for name, args, targets in _stim_instructions(task.circuit))
 
         # Configure simulator
         if config is not None:
