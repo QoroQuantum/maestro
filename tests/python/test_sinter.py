@@ -610,6 +610,28 @@ def test_checkpoint_zero_mismatch_surface_code():
     assert np.array_equal(obs_base, obs_chk)
 
 
+def test_seeded_checkpoint_draws_fresh_batches():
+    """Each call of a seeded, checkpointed sampler must draw new samples; a
+    replayed batch would overstate the precision of collected error rates."""
+    circuit = stim.Circuit("H 0\nCNOT 0 1\nM 0 1")
+
+    def batches(sampler):
+        return ([sampler.sample_measurements(4096) for _ in range(3)] +
+                [sampler.sample_measurements(4096, seed=s) for s in (1, 2)])
+
+    sampler = MaestroCompiledSampler(circuit, seed=5, enable_checkpoint=True)
+    assert sampler.checkpoint_sim is not None
+    first = batches(sampler)
+    assert len({b.tobytes() for b in first}) == len(first)
+    # Bell pairs: the two measurements always agree.
+    assert all(np.array_equal(b[:, 0], b[:, 1]) for b in first)
+
+    # The sequence is reproducible, and an explicit seed reproduces its batch.
+    again = batches(MaestroCompiledSampler(circuit, seed=5, enable_checkpoint=True))
+    assert all(np.array_equal(a, b) for a, b in zip(first, again))
+    np.testing.assert_array_equal(sampler.sample_measurements(4096, seed=1), first[3])
+
+
 def test_checkpoint_with_external_noise_model():
     """Verify clean execution with external NoiseModel when checkpointing is enabled."""
     circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)

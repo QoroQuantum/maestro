@@ -6428,3 +6428,75 @@ class TestNoiseModelPickle:
         assert [name for name, _, _ in restored._call_log] == ["set_depolarizing", "set_t1"]
         assert restored.get_t1_for_gate(1, False) == pytest.approx(0.1)
         assert not restored.has_thermal_relaxation()
+
+
+class TestCheckpointNoiseSeeding:
+    @staticmethod
+    def _checkpoint(seed=None):
+        from maestro.circuits import QuantumCircuit
+        prefix = QuantumCircuit()
+        prefix.h(0)
+        prefix.h(1)
+        config = maestro.SimulatorConfig(seed=seed) if seed is not None else maestro.SimulatorConfig()
+        return maestro.PrefixCheckpointedSimulator(prefix, 2, config)
+
+    @staticmethod
+    def _suffix():
+        from maestro.circuits import QuantumCircuit
+        suffix = QuantumCircuit()
+        suffix.x(0)
+        suffix.cx(0, 1)
+        suffix.measure([(0, 0), (1, 1)])
+        return suffix
+
+    @staticmethod
+    def _model():
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(2, 0.2)
+        return nm
+
+    @pytest.mark.parametrize("shots", [0, -1])
+    def test_rejects_nonpositive_shots(self, shots):
+        with pytest.raises(ValueError, match="shots"):
+            self._checkpoint().execute_suffix(self._suffix(), shots=shots)
+
+    def test_rejects_noise_seed_wider_than_32_bits(self):
+        with pytest.raises(ValueError, match="32 bits"):
+            self._checkpoint().execute_suffix(self._suffix(), shots=10, noise_model=self._model(),
+                                              noise_seed=2**32)
+
+    def test_noise_seed_reproduces_repeated_calls(self):
+        checkpoint = self._checkpoint()
+        runs = [checkpoint.execute_suffix(self._suffix(), shots=400, noise_model=self._model(),
+                                          noise_realizations=16, noise_seed=21)["counts"]
+                for _ in range(2)]
+        assert runs[0] == runs[1]
+        assert sum(runs[0].values()) == 400
+        other = self._checkpoint().execute_suffix(self._suffix(), shots=400, noise_model=self._model(),
+                                                  noise_realizations=16, noise_seed=21)["counts"]
+        assert other == runs[0]
+
+    @pytest.mark.parametrize("noisy", [True, False])
+    def test_config_seed_gives_a_reproducible_sequence_of_fresh_batches(self, noisy):
+        """The config seed is fixed when the checkpoint is built, so each call
+        must continue the stream rather than replay the same samples."""
+        kwargs = {"noise_model": self._model(), "noise_realizations": 16} if noisy else {}
+
+        def calls(checkpoint):
+            return [checkpoint.execute_suffix(self._suffix(), shots=4096, **kwargs)["counts"]
+                    for _ in range(3)]
+
+        first = calls(self._checkpoint(seed=99))
+        assert len({tuple(sorted(c.items())) for c in first}) == 3
+        assert calls(self._checkpoint(seed=99)) == first
+
+    @pytest.mark.parametrize("noisy", [True, False])
+    def test_noise_seed_overrides_the_config_seed(self, noisy):
+        """A per-call seed drives that call, whatever seed the checkpoint holds."""
+        kwargs = {"noise_model": self._model(), "noise_realizations": 16} if noisy else {}
+        checkpoint = self._checkpoint(seed=99)
+        one = checkpoint.execute_suffix(self._suffix(), shots=4096, noise_seed=1, **kwargs)["counts"]
+        two = checkpoint.execute_suffix(self._suffix(), shots=4096, noise_seed=2, **kwargs)["counts"]
+        assert one != two
+        other_config = self._checkpoint(seed=5)
+        assert other_config.execute_suffix(self._suffix(), shots=4096, noise_seed=1, **kwargs)["counts"] == one
