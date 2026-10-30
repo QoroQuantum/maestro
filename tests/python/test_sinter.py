@@ -138,6 +138,49 @@ def test_translate_in_circuit_noise():
     assert num_meas == 2
 
 
+INVALID_NOISE = [
+    ("X_ERROR", [-0.1], [0]),                     # negative
+    ("DEPOLARIZE1", [-1.0], [0]),
+    ("DEPOLARIZE2", [-0.5], [0, 1]),
+    ("Y_ERROR", [1.5], [0]),                      # above one
+    ("X_ERROR", [float("nan")], [0]),
+    ("Z_ERROR", [float("inf")], [0]),
+    ("X_ERROR", [], [0]),                         # missing argument
+    ("PAULI_CHANNEL_1", [0.1, 0.2], [0]),
+    ("PAULI_CHANNEL_2", [0.01] * 14, [0, 1]),
+    ("X_ERROR", [0.1, 0.2], [0]),                 # extra argument
+    ("PAULI_CHANNEL_1", [0.1, 0.2, 0.3, 0.4], [0]),
+    ("X_ERROR", [0.0, 0.0], [0]),                 # zero probability is still checked
+    ("PAULI_CHANNEL_1", [0.5, 0.4, 0.2], [0]),    # sums above one
+    ("PAULI_CHANNEL_2", [0.07] * 15, [0, 1]),
+    ("M", [-0.1], [0]),                           # measurement flip probability
+    ("MX", [float("nan")], [0]),
+    ("M", [0.1, 0.2], [0]),
+]
+
+
+def _stim_line(name, args, targets):
+    parens = f"({','.join(repr(a) for a in args)})" if args else ""
+    return f"{name}{parens} {' '.join(map(str, targets))}"
+
+
+@pytest.mark.parametrize("name,args,targets", INVALID_NOISE)
+def test_translation_rejects_invalid_noise(name, args, targets):
+    """Strings and instruction lists bypass Stim's own checks, so translation
+    validates noise arguments the way Stim does."""
+    with pytest.raises(ValueError):
+        translate_stim_to_maestro(_stim_line(name, args, targets) + "\nM 0")
+    with pytest.raises(ValueError):
+        translate_stim_to_maestro([(name, args, targets), ("M", [], [0])])
+
+
+@pytest.mark.parametrize("line", ["DEPOLARIZE1(1) 0", "DEPOLARIZE2(1) 0 1", "X_ERROR(0) 0",
+                                  "PAULI_CHANNEL_1(0.2,0.3,0.5) 0", "M(1) 0", "MX 0"])
+def test_translation_accepts_boundary_noise(line):
+    stim.Circuit(line)  # Stim accepts these too
+    translate_stim_to_maestro(line + "\nM 0")
+
+
 def test_annotations_ignored():
     circuit = stim.Circuit("""
         QUBIT_COORDS(1, 2) 0

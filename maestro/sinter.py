@@ -168,13 +168,43 @@ def _stim_instructions(circuit: stim.Circuit | str | Any) -> list[tuple[str, lis
     return instructions
 
 
+# Parens arguments each Stim Pauli noise channel takes, as Stim requires.
+NOISE_ARGUMENT_COUNTS = {"DEPOLARIZE1": 1, "DEPOLARIZE2": 1, "X_ERROR": 1, "Y_ERROR": 1,
+                         "Z_ERROR": 1, "PAULI_CHANNEL_1": 3, "PAULI_CHANNEL_2": 15}
+
+
+def _check_probabilities(name: str, args: list[float]) -> None:
+    """Reject arguments of a Stim noise instruction that are not probabilities."""
+    for p in args:
+        if (isinstance(p, bool) or not isinstance(p, numbers.Real)
+                or not math.isfinite(p) or not 0.0 <= p <= 1.0):
+            raise ValueError(f"{name} arguments must be finite probabilities in [0, 1], got {p!r}")
+
+
+def _measurement_flip(name: str, args: list[float]) -> float:
+    """Stim's M(p) result-flip probability, validated as Stim does."""
+    if len(args) > 1:
+        raise ValueError(f"{name} takes 0 or 1 arguments, got {len(args)}")
+    _check_probabilities(name, args)
+    return float(args[0]) if args else 0.0
+
+
 def _pauli_channel_probabilities(name: str, args: list[float]) -> tuple[int, list[float]]:
     """Arity and QuantumCircuit.pauli_channel probabilities of a Stim Pauli noise channel.
 
     Base-4 digit k of a Maestro index is the Pauli (I, X, Y, Z) on target k.
     Stim lists PAULI_CHANNEL_2 arguments as IX, IY, ..., ZZ, the first letter
-    acting on the first target.
+    acting on the first target. Arguments are validated as Stim validates them,
+    so a string or instruction list that Stim would reject raises ValueError
+    here too, including zero-probability channels that are later dropped.
     """
+    expected = NOISE_ARGUMENT_COUNTS[name]
+    if len(args) != expected:
+        raise ValueError(f"{name} takes {expected} argument{'s' if expected > 1 else ''}, got {len(args)}")
+    _check_probabilities(name, args)
+    if name.startswith("PAULI_CHANNEL") and math.fsum(args) > 1.0 + 1e-12:
+        raise ValueError(f"{name} probabilities must sum to at most 1, got {math.fsum(args)!r}")
+
     if name == "DEPOLARIZE1":
         arity, errors = 1, {1: args[0] / 3, 2: args[0] / 3, 3: args[0] / 3}
     elif name in ("X_ERROR", "Y_ERROR", "Z_ERROR"):
@@ -245,7 +275,7 @@ def translate_stim_to_maestro(
                     "DEPOLARIZE2", "PAULI_CHANNEL_2"} and len(targets) % 2:
             raise ValueError(f"{name} requires pairs of qubit targets")
         # Stim's M(p) flips the recorded result, which is what readout error does.
-        flip = args[0] if name in MEASUREMENTS and args else 0.0
+        flip = _measurement_flip(name, args) if name in MEASUREMENTS else 0.0
         # --- Single-qubit Clifford gates ---
         if name == "I":
             for q in targets:
