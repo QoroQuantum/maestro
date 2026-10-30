@@ -1198,7 +1198,8 @@ BOOST_AUTO_TEST_CASE(CircuitPauliChannelIsSampledOrKept)
 BOOST_AUTO_TEST_CASE(SampledIdentityKeepsCircuitWidth)
 {
     auto circuit = std::make_shared<Circuits::Circuit<double>>();
-    circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{3}, Simulators::QuantumChannel::Pauli({1.0, 0.0, 0.0, 0.0})));
+    circuit->AddOperation(
+        std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{3}, Simulators::QuantumChannel::Pauli({1.0, 0.0, 0.0, 0.0})));
     circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{1, 0}}));
     const noise::NoiseModel noNoise;
 
@@ -1213,7 +1214,8 @@ BOOST_AUTO_TEST_CASE(SampledIdentityKeepsCircuitWidth)
 
     // A drawn Pauli already touches the qubit, so nothing is added.
     auto flipped = std::make_shared<Circuits::Circuit<double>>();
-    flipped->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{3}, Simulators::QuantumChannel::Pauli({0.0, 1.0, 0.0, 0.0})));
+    flipped->AddOperation(
+        std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{3}, Simulators::QuantumChannel::Pauli({0.0, 1.0, 0.0, 0.0})));
     const auto noisy = noise::inject_noise(flipped, noNoise, rng);
     BOOST_REQUIRE_EQUAL(noisy->GetOperations().size(), 1u);
     BOOST_CHECK(std::dynamic_pointer_cast<Circuits::XGate<>>(noisy->GetOperations()[0]));
@@ -1228,7 +1230,8 @@ BOOST_AUTO_TEST_CASE(SampledIdentityKeepsCircuitWidth)
 BOOST_AUTO_TEST_CASE(CoherentInjectionKeepsCircuitChannelsExact)
 {
     auto circuit = std::make_shared<Circuits::Circuit<double>>();
-    circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Simulators::QuantumChannel::Pauli({0.5, 0.5, 0.0, 0.0})));
+    circuit->AddOperation(
+        std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Simulators::QuantumChannel::Pauli({0.5, 0.5, 0.0, 0.0})));
     circuit->AddOperation(std::make_shared<Circuits::XGate<>>(0));
     circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
     noise::NoiseModel model;

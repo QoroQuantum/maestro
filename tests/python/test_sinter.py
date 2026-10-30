@@ -47,6 +47,29 @@ def test_translate_clifford_gates():
     assert qc.num_qubits >= 2
 
 
+@pytest.mark.parametrize("simulation_type", ["Stabilizer", "MatrixProductState"])
+def test_sqrt_y_gates_match_stim(simulation_type):
+    """SQRT_Y used to become Ry(±π/2), which the stabilizer simulator rejects."""
+    circuit = stim.Circuit("R 0 1 2 3\nX 1 3\nSQRT_Y 0 1\nSQRT_Y_DAG 2 3\nMX 0 1 2 3")
+    config = maestro.SimulatorConfig(simulation_type=getattr(maestro.SimulationType, simulation_type))
+    measured = MaestroCompiledSampler(circuit, config=config, seed=1).sample_measurements(20)
+    expected = circuit.compile_sampler(seed=1).sample(1)[0]
+    assert (measured == expected).all()
+
+
+@pytest.mark.parametrize("gate", ["SQRT_Y", "SQRT_Y_DAG"])
+def test_sqrt_y_gates_get_gate_noise_once(gate):
+    """A NoiseModel adds noise once per SQRT_Y, after it, as after any other gate."""
+    nm = maestro.NoiseModel()
+    nm.set_all_1q_gate_depolarizing(1, 0.3)
+    config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Stabilizer)
+    circuit = stim.Circuit(f"R 0\n{gate} 0\nMX 0")
+    flips = MaestroCompiledSampler(circuit, noise_model=nm, config=config, seed=1).sample_measurements(20000)
+    ideal = circuit.compile_sampler().sample(1)[0, 0]
+    # DEPOLARIZE1(0.3) flips an X measurement with probability 0.2; twice, 0.32.
+    assert np.mean(flips[:, 0] != ideal) == pytest.approx(0.2, abs=0.02)
+
+
 def test_translate_non_clifford_gates():
     circuit_str = """
         T 0

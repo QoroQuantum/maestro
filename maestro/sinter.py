@@ -314,13 +314,18 @@ def translate_stim_to_maestro(
             for q in targets:
                 qc.sxdg(q)
                 active_qubits.add(q)
+        # Ry(±π/2) would be exact but the stabilizer simulator rejects Ry, so
+        # these are H then X (or Z), equal up to global phase. The H is
+        # noiseless, so a NoiseModel adds gate noise once, after the gate.
         elif name == "SQRT_Y":
             for q in targets:
-                qc.ry(q, math.pi / 2.0)
+                qc.h(q, noiseless=True)
+                qc.x(q)
                 active_qubits.add(q)
         elif name == "SQRT_Y_DAG":
             for q in targets:
-                qc.ry(q, -math.pi / 2.0)
+                qc.h(q, noiseless=True)
+                qc.z(q)
                 active_qubits.add(q)
 
         # --- Parameterized single-qubit rotations & non-Clifford gates ---

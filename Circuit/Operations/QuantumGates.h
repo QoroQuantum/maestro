@@ -123,6 +123,9 @@ template <typename Time = Types::time_type> class IQuantumGate : public IGateOpe
  * directly from Base. Clone() copy-constructs the gate, so every member
  * (qubits, parameters, delay, the noiseless mark) carries over without each
  * gate listing them.
+ * A gate's constructor names this base as CloneableGate<Gate, Circuits::Base, Time>:
+ * unqualified, MSVC takes Base for the injected name of the inherited Base<Time>
+ * class rather than the template, and rejects it (C3200).
  * @tparam Gate The concrete gate template deriving from this class.
  * @tparam Base The gate interface it implements, e.g. SingleQubitGate.
  * @tparam Time The type of the execution delay.
@@ -548,7 +551,8 @@ template <typename Time = Types::time_type> class PhaseGate : public CloneableGa
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    PhaseGate(Types::qubit_t qubit = 0, double lambda = 0, Time delay = 0) : CloneableGate<PhaseGate, SingleQubitGate, Time>(qubit, delay), lambda(lambda)
+    PhaseGate(Types::qubit_t qubit = 0, double lambda = 0, Time delay = 0)
+        : CloneableGate<PhaseGate, Circuits::SingleQubitGate, Time>(qubit, delay), lambda(lambda)
     {
     }
 
@@ -666,7 +670,7 @@ template <typename Time = Types::time_type> class XGate : public CloneableGate<X
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    XGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<XGate, SingleQubitGate, Time>(qubit, delay)
+    XGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<XGate, Circuits::SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -745,7 +749,7 @@ template <typename Time = Types::time_type> class YGate : public CloneableGate<Y
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    YGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<YGate, SingleQubitGate, Time>(qubit, delay)
+    YGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<YGate, Circuits::SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -824,7 +828,7 @@ template <typename Time = Types::time_type> class ZGate : public CloneableGate<Z
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    ZGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<ZGate, SingleQubitGate, Time>(qubit, delay)
+    ZGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<ZGate, Circuits::SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -903,7 +907,7 @@ template <typename Time = Types::time_type> class HadamardGate : public Cloneabl
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    HadamardGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<HadamardGate, SingleQubitGate, Time>(qubit, delay)
+    HadamardGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<HadamardGate, Circuits::SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -995,7 +999,7 @@ template <typename Time = Types::time_type> class SGate : public CloneableGate<S
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    SGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<SGate, SingleQubitGate, Time>(qubit, delay)
+    SGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<SGate, Circuits::SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1074,7 +1078,7 @@ template <typename Time = Types::time_type> class SdgGate : public CloneableGate
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    SdgGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<SdgGate, SingleQubitGate, Time>(qubit, delay)
+    SdgGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<SdgGate, Circuits::SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1153,7 +1157,7 @@ template <typename Time = Types::time_type> class TGate : public CloneableGate<T
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    TGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<TGate, SingleQubitGate, Time>(qubit, delay)
+    TGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<TGate, Circuits::SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1218,7 +1222,7 @@ template <typename Time = Types::time_type> class TdgGate : public CloneableGate
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    TdgGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<TdgGate, SingleQubitGate, Time>(qubit, delay)
+    TdgGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<TdgGate, Circuits::SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1283,7 +1287,7 @@ template <typename Time = Types::time_type> class SxGate : public CloneableGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    SxGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<SxGate, SingleQubitGate, Time>(qubit, delay)
+    SxGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<SxGate, Circuits::SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1374,7 +1378,7 @@ template <typename Time = Types::time_type> class SxDagGate : public CloneableGa
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    SxDagGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<SxDagGate, SingleQubitGate, Time>(qubit, delay)
+    SxDagGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<SxDagGate, Circuits::SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1465,7 +1469,7 @@ template <typename Time = Types::time_type> class KGate : public CloneableGate<K
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    KGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<KGate, SingleQubitGate, Time>(qubit, delay)
+    KGate(Types::qubit_t qubit = 0, Time delay = 0) : CloneableGate<KGate, Circuits::SingleQubitGate, Time>(qubit, delay)
     {
     }
 
@@ -1621,7 +1625,7 @@ template <typename Time = Types::time_type> class RxGate : public CloneableGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    RxGate(Types::qubit_t qubit = 0, double theta = 0, Time delay = 0) : CloneableGate<RxGate, RotationGate, Time>(qubit, theta, delay)
+    RxGate(Types::qubit_t qubit = 0, double theta = 0, Time delay = 0) : CloneableGate<RxGate, Circuits::RotationGate, Time>(qubit, theta, delay)
     {
     }
 
@@ -1700,7 +1704,7 @@ template <typename Time = Types::time_type> class RyGate : public CloneableGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    RyGate(Types::qubit_t qubit = 0, double theta = 0, Time delay = 0) : CloneableGate<RyGate, RotationGate, Time>(qubit, theta, delay)
+    RyGate(Types::qubit_t qubit = 0, double theta = 0, Time delay = 0) : CloneableGate<RyGate, Circuits::RotationGate, Time>(qubit, theta, delay)
     {
     }
 
@@ -1779,7 +1783,7 @@ template <typename Time = Types::time_type> class RzGate : public CloneableGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa SingleQubitGate
      */
-    RzGate(Types::qubit_t qubit = 0, double theta = 0, Time delay = 0) : CloneableGate<RzGate, RotationGate, Time>(qubit, theta, delay)
+    RzGate(Types::qubit_t qubit = 0, double theta = 0, Time delay = 0) : CloneableGate<RzGate, Circuits::RotationGate, Time>(qubit, theta, delay)
     {
     }
 
@@ -1845,7 +1849,7 @@ template <typename Time = Types::time_type> class UGate : public CloneableGate<U
      * @sa SingleQubitGate
      */
     UGate(Types::qubit_t qubit = 0, double theta = 0, double phi = 0, double lambda = 0, double gamma = 0, Time delay = 0)
-        : CloneableGate<UGate, SingleQubitGate, Time>(qubit, delay), theta(theta), phi(phi), lambda(lambda), gamma(gamma)
+        : CloneableGate<UGate, Circuits::SingleQubitGate, Time>(qubit, delay), theta(theta), phi(phi), lambda(lambda), gamma(gamma)
     {
     }
 
@@ -2049,7 +2053,8 @@ template <typename Time = Types::time_type> class SwapGate : public CloneableGat
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    SwapGate(Types::qubit_t qubit1 = 0, Types::qubit_t qubit2 = 1, Time delay = 0) : CloneableGate<SwapGate, TwoQubitsGate, Time>(qubit1, qubit2, delay)
+    SwapGate(Types::qubit_t qubit1 = 0, Types::qubit_t qubit2 = 1, Time delay = 0)
+        : CloneableGate<SwapGate, Circuits::TwoQubitsGate, Time>(qubit1, qubit2, delay)
     {
     }
 
@@ -2130,7 +2135,7 @@ template <typename Time = Types::time_type> class CXGate : public CloneableGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CXGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CXGate, TwoQubitsGate, Time>(ctrl, target, delay)
+    CXGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CXGate, Circuits::TwoQubitsGate, Time>(ctrl, target, delay)
     {
     }
 
@@ -2209,7 +2214,7 @@ template <typename Time = Types::time_type> class CYGate : public CloneableGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CYGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CYGate, TwoQubitsGate, Time>(ctrl, target, delay)
+    CYGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CYGate, Circuits::TwoQubitsGate, Time>(ctrl, target, delay)
     {
     }
 
@@ -2288,7 +2293,7 @@ template <typename Time = Types::time_type> class CZGate : public CloneableGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CZGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CZGate, TwoQubitsGate, Time>(ctrl, target, delay)
+    CZGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CZGate, Circuits::TwoQubitsGate, Time>(ctrl, target, delay)
     {
     }
 
@@ -2369,7 +2374,7 @@ template <typename Time = Types::time_type> class CPGate : public CloneableGate<
      * @sa TwoQubitsGate
      */
     CPGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double lambda = 0, Time delay = 0)
-        : CloneableGate<CPGate, TwoQubitsGate, Time>(ctrl, target, delay), lambda(lambda)
+        : CloneableGate<CPGate, Circuits::TwoQubitsGate, Time>(ctrl, target, delay), lambda(lambda)
     {
     }
 
@@ -2537,7 +2542,7 @@ template <typename Time = Types::time_type> class CRxGate : public CloneableGate
      * @sa TwoQubitsGate
      */
     CRxGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double theta = 0, Time delay = 0)
-        : CloneableGate<CRxGate, ControlledRotationGate, Time>(ctrl, target, theta, delay)
+        : CloneableGate<CRxGate, Circuits::ControlledRotationGate, Time>(ctrl, target, theta, delay)
     {
     }
 
@@ -2617,7 +2622,7 @@ template <typename Time = Types::time_type> class CRyGate : public CloneableGate
      * @sa TwoQubitsGate
      */
     CRyGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double theta = 0, Time delay = 0)
-        : CloneableGate<CRyGate, ControlledRotationGate, Time>(ctrl, target, theta, delay)
+        : CloneableGate<CRyGate, Circuits::ControlledRotationGate, Time>(ctrl, target, theta, delay)
     {
     }
 
@@ -2697,7 +2702,7 @@ template <typename Time = Types::time_type> class CRzGate : public CloneableGate
      * @sa TwoQubitsGate
      */
     CRzGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double theta = 0, Time delay = 0)
-        : CloneableGate<CRzGate, ControlledRotationGate, Time>(ctrl, target, theta, delay)
+        : CloneableGate<CRzGate, Circuits::ControlledRotationGate, Time>(ctrl, target, theta, delay)
     {
     }
 
@@ -2762,7 +2767,7 @@ template <typename Time = Types::time_type> class CHGate : public CloneableGate<
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CHGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CHGate, TwoQubitsGate, Time>(ctrl, target, delay)
+    CHGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CHGate, Circuits::TwoQubitsGate, Time>(ctrl, target, delay)
     {
     }
 
@@ -2840,7 +2845,7 @@ template <typename Time = Types::time_type> class CSxGate : public CloneableGate
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CSxGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CSxGate, TwoQubitsGate, Time>(ctrl, target, delay)
+    CSxGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CSxGate, Circuits::TwoQubitsGate, Time>(ctrl, target, delay)
     {
     }
 
@@ -2918,7 +2923,8 @@ template <typename Time = Types::time_type> class CSxDagGate : public CloneableG
      * @param delay The time the quantum gate takes to execute.
      * @sa TwoQubitsGate
      */
-    CSxDagGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0) : CloneableGate<CSxDagGate, TwoQubitsGate, Time>(ctrl, target, delay)
+    CSxDagGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, Time delay = 0)
+        : CloneableGate<CSxDagGate, Circuits::TwoQubitsGate, Time>(ctrl, target, delay)
     {
     }
 
@@ -3001,7 +3007,7 @@ template <typename Time = Types::time_type> class CUGate : public CloneableGate<
      * @sa TwoQubitsGate
      */
     CUGate(Types::qubit_t ctrl = 0, Types::qubit_t target = 1, double theta = 0, double phi = 0, double lambda = 0, double gamma = 0, Time delay = 0)
-        : CloneableGate<CUGate, TwoQubitsGate, Time>(ctrl, target, delay), theta(theta), phi(phi), lambda(lambda), gamma(gamma)
+        : CloneableGate<CUGate, Circuits::TwoQubitsGate, Time>(ctrl, target, delay), theta(theta), phi(phi), lambda(lambda), gamma(gamma)
     {
     }
 
@@ -3192,7 +3198,7 @@ template <typename Time = Types::time_type> class CCXGate : public CloneableGate
      * @sa ThreeQubitsGate
      */
     CCXGate(Types::qubit_t ctrl1 = 0, Types::qubit_t ctrl2 = 1, Types::qubit_t target = 2, Time delay = 0)
-        : CloneableGate<CCXGate, ThreeQubitsGate, Time>(ctrl1, ctrl2, target, delay)
+        : CloneableGate<CCXGate, Circuits::ThreeQubitsGate, Time>(ctrl1, ctrl2, target, delay)
     {
     }
 
@@ -3259,7 +3265,7 @@ template <typename Time = Types::time_type> class CSwapGate : public CloneableGa
      * @sa ThreeQubitsGate
      */
     CSwapGate(Types::qubit_t ctrl = 0, Types::qubit_t target1 = 1, Types::qubit_t target2 = 2, Time delay = 0)
-        : CloneableGate<CSwapGate, ThreeQubitsGate, Time>(ctrl, target1, target2, delay)
+        : CloneableGate<CSwapGate, Circuits::ThreeQubitsGate, Time>(ctrl, target1, target2, delay)
     {
     }
 
