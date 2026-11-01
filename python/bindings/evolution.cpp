@@ -113,8 +113,8 @@ nb::dict incremental_evolve_core(std::shared_ptr<Circuits::Circuit<double>> init
     py_result["steps"] = steps_measured;
     py_result["time_taken"] = std::chrono::duration<double>(end - start).count();
     py_result["time_per_step"] = times_per_step;
-    py_result["simulator"] = (int)config.simulator_type;
-    py_result["method"] = (int)config.simulation_type;
+    py_result["simulator"] = config.simulator_type;
+    py_result["method"] = config.simulation_type;
     if (network->GetGpuDevice() >= 0)
         py_result["gpu_device"] = network->GetGpuDevice();
 

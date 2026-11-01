@@ -166,8 +166,8 @@ class PrefixCheckpointedSimulator
         nb::dict out;
         out["counts"] = py_counts;
         out["time_taken"] = std::chrono::duration<double>(end - start).count();
-        out["simulator"] = (int)config_.simulator_type;
-        out["method"] = (int)config_.simulation_type;
+        out["simulator"] = config_.simulator_type;
+        out["method"] = config_.simulation_type;
         if (max_bond_dim_ > 0)
         {
             out["max_bond_dim_reached"] = max_bond_dim_;

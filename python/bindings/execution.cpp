@@ -68,8 +68,8 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const 
     nb::dict py_result;
     py_result["counts"] = counts;
     py_result["time_taken"] = result.time_taken;
-    py_result["simulator"] = static_cast<int>(result.simulator);
-    py_result["method"] = static_cast<int>(result.method);
+    py_result["simulator"] = result.simulator;
+    py_result["method"] = result.method;
     py_result["sampling_components"] = result.components;
     py_result["largest_component_qubits"] = result.largest_component;
     if (result.gpu_device >= 0)
@@ -105,11 +105,11 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
     out["mean_cluster_qubits"] = plan.groups.empty() ? 0.0 : static_cast<double>(plan.total_cluster_qubits) / plan.groups.size();
     out["reduction_time"] = plan.reduction_time;
     out["time_taken"] = result.time_taken;
-    out["simulator"] = static_cast<int>(result.simulator);
-    out["method"] = static_cast<int>(result.method);
+    out["simulator"] = result.simulator;
+    out["method"] = result.method;
     nb::list methods;
     for (auto method : result.cluster_methods)
-        methods.append(static_cast<int>(method));
+        methods.append(method);
     out["cluster_methods"] = methods;
     // GPU estimates resolved without simulation retain -1 (no device used).
     if (result.simulator == Simulators::SimulatorType::kGpuSim || result.gpu_device >= 0)

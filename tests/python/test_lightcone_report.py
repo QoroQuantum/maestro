@@ -82,6 +82,7 @@ def test_exact_noise_spectators_and_metadata(method):
     )
     assert r["qubits_after"] == 1 and r["clusters_count"] == 1
     assert r["cluster_methods"] == [method.value]
+    assert r["cluster_methods"][0] is method and r["method"] is method
     assert r["expectation_values"] == pytest.approx([-1.0], abs=1e-12)
     assert r["reduction_time"] >= 0 and r["mean_cluster_qubits"] == 1
 
