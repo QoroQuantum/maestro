@@ -82,8 +82,7 @@ python benchmarks/estimator_mps.py --qubits 120 200
 python benchmarks/estimator_mps.py --qubits 120 200 --common-basis
 ```
 
-:::{admonition} To do
-:class: warning
-Add the remaining benchmarks: Linux and GPU hardware, memory use, the other
-simulation methods against Aer, and sampling as well as expectation values.
+:::{note}
+More benchmarks coming soon, including Linux and GPU hardware benchmarks, memory
+usage comparisons, other simulation methods against Aer, and shot-based sampling.
 :::

@@ -27,7 +27,7 @@ dashboard lists them.
 
 Students, and researchers affiliated with a university or research institute,
 can get a free licence to run the GPU plugin on their own machines and
-clusters. Apply at **[TODO: application form URL]**.
+clusters. Apply by emailing [team@qoroquantum.de](mailto:team@qoroquantum.de).
 
 To activate the licence on cluster nodes without internet access, contact us at
 [team@qoroquantum.de](mailto:team@qoroquantum.de).

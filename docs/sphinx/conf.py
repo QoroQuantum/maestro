@@ -113,6 +113,7 @@ linkcheck_timeout = 30
 # signatures show the public names and stay readable.
 _INTERNAL_MODULE = re.compile(r"\bmaestro\.maestro\.")
 _CONFIG_REPR = re.compile(r"SimulatorConfig\([^()]*\)")
+_EXAMPLE_HEADER_RE = re.compile(r"^(Example|Examples)(?:\s*\((.*?)\))?:\s*(.*)$")
 
 
 def _clean(text):
@@ -121,8 +122,60 @@ def _clean(text):
     return _CONFIG_REPR.sub("SimulatorConfig()", _INTERNAL_MODULE.sub("maestro.", text))
 
 
+def _format_examples(lines):
+    new_lines = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        stripped = line.strip()
+        m = _EXAMPLE_HEADER_RE.match(stripped)
+        if m:
+            heading, note, rest = m.groups()
+            rest = rest.strip()
+            indent = line[:len(line) - len(line.lstrip())]
+
+            # Skip prose descriptions starting with 'Example:' (e.g. 'qc.prob(...) returns...')
+            if rest and " returns " in rest:
+                new_lines.append(line)
+                i += 1
+                continue
+
+            if new_lines and new_lines[-1].strip():
+                new_lines.append("")
+
+            new_lines.append(f"{indent}Example:")
+            new_lines.append(f"{indent}    .. code-block:: python")
+            new_lines.append("")
+            if note:
+                new_lines.append(f"{indent}        # {note}")
+            if rest:
+                new_lines.append(f"{indent}        {rest}")
+                i += 1
+                continue
+
+            i += 1
+            while i < n:
+                curr = lines[i]
+                if not curr.strip():
+                    new_lines.append("")
+                    i += 1
+                    continue
+                if curr.startswith(" ") or curr.startswith("\t"):
+                    new_lines.append(f"{indent}    {curr}")
+                    i += 1
+                else:
+                    break
+            continue
+
+        new_lines.append(line)
+        i += 1
+    return new_lines
+
+
 def _clean_docstring(app, what, name, obj, options, lines):
-    lines[:] = [_clean(line) for line in lines]
+    cleaned = [_clean(line) for line in lines]
+    lines[:] = _format_examples(cleaned)
 
 
 def _clean_signatures(app, doctree):
@@ -147,6 +200,8 @@ def _drop_internal_aliases(app, env):
 
 
 def setup(app):
-    app.connect("autodoc-process-docstring", _clean_docstring)
+    # Connect with lower priority than default (500) so Napoleon (at 500) runs
+    # after _clean_docstring has formatted Examples as code blocks.
+    app.connect("autodoc-process-docstring", _clean_docstring, priority=400)
     app.connect("doctree-read", _clean_signatures)
     app.connect("env-updated", _drop_internal_aliases)
