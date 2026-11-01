@@ -30,5 +30,7 @@ jobs:
       - name: Install docs dependencies
         run: python -m pip install qoro-maestro -r docs/sphinx/requirements.txt
 
+      # -P keeps the checkout root off sys.path, so autodoc imports the wheel
+      # and not the checkout's maestro/ package, which has no compiled extension.
       - name: Check links
-        run: python -m sphinx -b linkcheck -D nb_execution_mode=off docs/sphinx docs/sphinx/_build/linkcheck
+        run: python -P -m sphinx -b linkcheck -D nb_execution_mode=off docs/sphinx docs/sphinx/_build/linkcheck
