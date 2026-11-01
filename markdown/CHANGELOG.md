@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documentation root, with a user guide, examples and API reference whose code
   examples run when the site is built. The C++ reference is now under `/cpp/`,
   and the old C++ and Python guide URLs redirect.
+- macOS wheels need macOS 15 or later, up from 14, because GitHub retired its
+  macOS 14 build machines. They remain Apple Silicon (arm64) only.
 
 ### Fixed
 
