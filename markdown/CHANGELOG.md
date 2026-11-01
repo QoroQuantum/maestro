@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-11-01
+
 ### Changed
 
 - Result dictionaries report `simulator`, `method` and `cluster_methods` as
@@ -14,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `print(result["simulator"])` shows `SimulatorType.QCSim`. Both enums are now
   integer enums, so the members still compare equal to the old values and
   `result["method"] == 0` keeps working.
+- The Python documentation moved from the Doxygen site to a new site at the
+  documentation root, with a user guide, examples and API reference whose code
+  examples run when the site is built. The C++ reference is now under `/cpp/`,
+  and the old C++ and Python guide URLs redirect.
+
+### Fixed
+
+- Docstrings in the Python bindings and `maestro.sinter` that contained text such
+  as `|0>` or `<psi|phi>` no longer produce reStructuredText warnings and errors
+  in the generated API reference.
 
 ## [0.3.10] - 2026-10-30
 
