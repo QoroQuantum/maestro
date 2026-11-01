@@ -136,14 +136,14 @@ RemoveAllOptimizationSimulatorsAndAdd(
 
 ## Python SDK
 
-For Python development, please see the comprehensive **Python User Guide** (`python_guide`):
+For Python development, see the [Python documentation](https://qoroquantum.github.io/maestro/):
 
-- **Getting Started:** Installation, `SimulatorConfig`, and quick execution (`py_quickstart`).
-- **Circuit Construction:** Programmatic `QuantumCircuit` builder and gate catalog (`py_circuits`).
-- **Backend Selection:** Statevector, MPS, Stabilizer, and Tensor Networks (`py_backends`).
-- **Observables & Metrics:** Expectation values, mirror fidelity, and time evolution (`py_algorithms`).
-- **Noise Modeling:** Hardware relaxation, CPTP channels, and Monte Carlo simulation (`py_noise`).
-- **HPC Accelerators:** Single-GPU, multi-GPU, and MPI distributed clusters (`py_hpc`).
+- [Getting started](https://qoroquantum.github.io/maestro/getting-started/first-circuit.html): installation and a first circuit.
+- [Building circuits](https://qoroquantum.github.io/maestro/user-guide/building-circuits.html): the `QuantumCircuit` builder and gate catalog.
+- [Choosing a simulation method](https://qoroquantum.github.io/maestro/user-guide/choosing-a-method.html): statevector, MPS, stabilizer and more.
+- [Expectation values](https://qoroquantum.github.io/maestro/user-guide/expectation-values.html): observables, mirror fidelity and time evolution.
+- [Noise and error correction](https://qoroquantum.github.io/maestro/user-guide/noise-and-qec.html): noise models and Stim/Sinter.
+- [GPU access](https://qoroquantum.github.io/maestro/getting-started/gpu-access.html) and [scaling](https://qoroquantum.github.io/maestro/user-guide/scaling.html): single GPU, multi-GPU and MPI.
 
 ### Sampling-order regression tests
 

@@ -1,0 +1,16 @@
+/* Side-by-side code comparisons (Coming from Qiskit) sit in half-width
+   columns. Furo's article column is narrow, so widen it on pages that have
+   them, and use a slightly smaller code font. */
+.sd-row .highlight pre {
+  font-size: 0.8em;
+}
+
+.content:has(.sd-row .highlight) {
+  width: 64em;
+  max-width: 100%;
+}
+
+/* The widened article leaves no room for Furo's right-hand "On this page" list. */
+.page:has(.sd-row .highlight) .toc-drawer {
+  display: none;
+}

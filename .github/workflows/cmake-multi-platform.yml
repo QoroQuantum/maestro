@@ -114,6 +114,15 @@ jobs:
         python -c "import stim, sinter, pymatching"
         python -m pytest tests/python/test_bindings.py tests/python/test_sinter.py -q -rs
 
+    - name: Build the Python docs
+      # Pages with code run against the module built above, and any Sphinx
+      # warning fails the build.
+      env:
+        OMP_NUM_THREADS: "4"
+      run: |
+        python -m pip install -r docs/sphinx/requirements.txt
+        PYTHONPATH=$PWD python -m sphinx -W --keep-going -b html docs/sphinx docs/sphinx/_build/html
+
     - name: Run tests
       run: |
         if [ "${{ inputs.run_complete_test_suite }}" = "true" ]; then
