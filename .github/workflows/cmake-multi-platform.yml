@@ -1,28 +1,41 @@
-name: Compiling and testing on Ubuntu
+name: Build and test
+
+# Two test suites:
+# - base: the Linux build with the quick C++ and Python tests. Runs on pull
+#   requests and, unless asked for full, before a release.
+# - full: base plus the slow randomized C++ suites and a Windows build of the
+#   Python bindings. Runs on every push to main, and on demand.
 
 on:
   pull_request:
     branches: [ "main" ]
+  push:
+    branches: [ "main" ]
   workflow_dispatch:
     inputs:
-      run_complete_test_suite:
-        description: "Run complete test suite (includes heavy/restricted tests)"
-        type: boolean
-        default: false
+      suite:
+        description: "Test suite: base (quick) or full (adds slow tests and the Windows build)"
+        type: choice
+        options: [ base, full ]
+        default: base
   workflow_call:
     inputs:
-      run_complete_test_suite:
-        description: "Run complete test suite (includes heavy/restricted tests)"
-        type: boolean
-        default: false
+      suite:
+        description: "Test suite: base (quick) or full (adds slow tests and the Windows build)"
+        type: string
+        default: base
 
 env:
   QCSIM_VERSION: "b545698117f353ed44c158ad68a4c7238a5e24cb"
   CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
-  build:
+  linux:
+    name: Linux
     runs-on: ubuntu-latest
+    env:
+      # Pull requests run base; pushes to main run full.
+      SUITE: ${{ inputs.suite || (github.event_name == 'push' && 'full') || 'base' }}
     # Toolchain, Boost, Eigen and Python come from .github/ci.Dockerfile.
     container:
       image: ghcr.io/qoroquantum/maestro-ci:latest
@@ -88,16 +101,10 @@ jobs:
       # Simulator translation units each need several GB during compilation.
       run: ninja -j2
 
-    - name: Run adjoint Python tests
-      env:
-        OMP_NUM_THREADS: "4"
-      run: |
-        cp maestro*.so maestro/
-        python -m pytest tests/python/test_adjoint.py -q
-
     - name: Show ccache stats
       run: ccache -s
 
+    # Saved before the tests, so a failing test doesn't cost the next run its cache.
     - name: Save ccache
       if: github.ref == 'refs/heads/main' && steps.restore-ccache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v5
@@ -105,14 +112,16 @@ jobs:
         path: .ccache
         key: ccache-${{ runner.os }}-${{ github.sha }}
 
-    - name: Run noise binding and Sinter Python tests
+    # 5. TESTS
+    - name: Run Python tests (bindings, adjoint, noise and Sinter)
       env:
         OMP_NUM_THREADS: "4"
       run: |
+        cp maestro*.so maestro/
         python -m pip install -r tests/python/requirements.txt
         # test_sinter.py skips itself when stim or sinter is missing; fail instead.
         python -c "import stim, sinter, pymatching"
-        python -m pytest tests/python/test_bindings.py tests/python/test_sinter.py -q -rs
+        python -m pytest tests/python/test_bindings.py tests/python/test_adjoint.py tests/python/test_sinter.py -q -rs
 
     - name: Build the Python docs
       # Pages with code run against the module built above, and any Sphinx
@@ -123,17 +132,15 @@ jobs:
         python -m pip install -r docs/sphinx/requirements.txt
         PYTHONPATH=$PWD python -m sphinx -W --keep-going -b html docs/sphinx docs/sphinx/_build/html
 
-    - name: Run tests
+    - name: Run C++ unit tests (${{ env.SUITE }} suite)
       run: |
-        if [ "${{ inputs.run_complete_test_suite }}" = "true" ]; then
-          echo "Running complete test suite..."
-          ./bin/tests --log_level=test_suite \
-            --run_test='!gpu_simulator_tests:!MPSSwapOptTests:!circuit_tests/RandomCircuitsTest*:!circuit_tests/RandomCircuitsOptimizationTest*:!mps_tests/RandomCircuitsTest*:!mps_tests/RandomCircuitsTest50*:!clifford_tests/RandomCircuitsTest*:!convsim_tests/RandomAerCircuitsTest*:!convsim_tests/RandomQcsimCircuitsTest*:!convsim_tests/RandomAerQcsimCircuitsTest*'
-        else
-          echo "Running fast test suite (excluding heavy/restricted tests)..."
-          ./bin/tests --log_level=test_suite \
-            --run_test='!gpu_simulator_tests:!MPSSwapOptTests:!circuit_tests/RandomCircuitsTest*:!circuit_tests/RandomCircuitsOptimizationTest*:!mps_tests/RandomCircuitsTest*:!mps_tests/RandomCircuitsTest50*:!clifford_tests/RandomCircuitsTest*:!convsim_tests/RandomAerCircuitsTest*:!convsim_tests/RandomQcsimCircuitsTest*:!convsim_tests/RandomAerQcsimCircuitsTest*:!ext_stabilizer_tests/RandomNonCliffordCircuitsTest*:!ext_stabilizer_tests/SaveRestoreMeasurementTest:!MpsNetwTests*'
+        # Skipped by every suite: they need a GPU, or take too long for CI.
+        filter='!gpu_simulator_tests:!MPSSwapOptTests:!circuit_tests/RandomCircuitsTest*:!circuit_tests/RandomCircuitsOptimizationTest*:!mps_tests/RandomCircuitsTest*:!mps_tests/RandomCircuitsTest50*:!clifford_tests/RandomCircuitsTest*:!convsim_tests/RandomAerCircuitsTest*:!convsim_tests/RandomQcsimCircuitsTest*:!convsim_tests/RandomAerQcsimCircuitsTest*'
+        if [ "$SUITE" != "full" ]; then
+          # Slow randomized comparisons, run by the full suite only.
+          filter="$filter"':!ext_stabilizer_tests/RandomNonCliffordCircuitsTest*:!ext_stabilizer_tests/SaveRestoreMeasurementTest:!MpsNetwTests*:!FusionNetwTests*:!qasm_tests/RandomCircuitsWithMeasAndReset*'
         fi
+        ./bin/tests --log_level=test_suite --run_test="$filter"
 
     - name: Run native request contract and MPI tests
       env:
@@ -146,8 +153,11 @@ jobs:
     - name: Check backend selection, tensor contractions, fusion, and sampling
       run: ctest --test-dir . --output-on-failure -R '^(backend_specialization|tensor_contractions|gate_fusion_tests|fusion_routing_tests|gpu_registry|sampling_order|causal_cone|parity_reduction)$'
 
-  adjoint-windows:
-    name: Adjoint tests (Windows)
+  # Full suite only. An MSVC build of the bindings, running the adjoint tests that
+  # cover its Windows-specific memory guard. The release wheels run them too.
+  windows:
+    name: Windows Python bindings
+    if: inputs.suite == 'full' || github.event_name == 'push'
     runs-on: windows-2022
     env:
       BOOST_ROOT: ${{ github.workspace }}/build/adjoint-deps/boost
