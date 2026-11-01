@@ -609,7 +609,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.8...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.11...HEAD
+[0.3.11]: https://github.com/QoroQuantum/maestro/compare/v0.3.10...v0.3.11
+[0.3.10]: https://github.com/QoroQuantum/maestro/compare/v0.3.9...v0.3.10
+[0.3.9]: https://github.com/QoroQuantum/maestro/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/QoroQuantum/maestro/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/QoroQuantum/maestro/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/QoroQuantum/maestro/compare/v0.3.5...v0.3.6
