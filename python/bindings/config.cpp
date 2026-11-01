@@ -253,7 +253,7 @@ void bind_config(nb::module_ &m)
     BindConfigField(config_class, "gpu_device", &SimulatorConfig::gpu_device, "CUDA-visible device ordinal, or None to use the default.");
     BindConfigField(config_class, "distributed_options", &SimulatorConfig::distributed_options,
                     "Distribution settings passed to Configure before allocation. Keys "
-                    "start with 'distributed_' or 'mpi_'. Defaults: first global qubits, "
+                    "start with ``distributed_`` or ``mpi_``. Defaults: first global qubits, "
                     "automatic Ex execution, visible GPUs. MPI calls must match across "
                     "ranks; mpi_communicator is mpi4py Comm.py2f().");
     BindConfigField(config_class, "disable_optimized_swapping", &SimulatorConfig::disable_optimized_swapping,
@@ -287,7 +287,7 @@ void bind_config(nb::module_ &m)
     BindConfigField(config_class, "mpo_hermitize_after_truncation", &SimulatorConfig::mpo_hermitize_after_truncation,
                     "Make the CPU MPO Hermitian again after each truncation.");
     BindConfigField(config_class, "pp_coefficient_threshold", &SimulatorConfig::pp_coefficient_threshold,
-                    "Pauli propagation: truncation passes drop strings whose |coefficient| "
+                    "Pauli propagation: truncation passes drop strings whose ``|coefficient|`` "
                     "is at most this value.");
     BindConfigField(config_class, "pp_max_pauli_weight", &SimulatorConfig::pp_max_pauli_weight,
                     "Pauli propagation: truncation passes drop strings acting on more "

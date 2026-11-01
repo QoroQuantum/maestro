@@ -122,11 +122,11 @@ void bind_circuit(nb::module_ &m)
         // Reset
         .def(
             "reset", [](Circuits::Circuit<double> &s, Types::qubit_t q) { s.AddOperation(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{q})); },
-            "qubit"_a, "Reset a qubit to |0>.")
+            "qubit"_a, "Reset a qubit to ``|0>``.")
         .def(
             "reset_qubits",
             [](Circuits::Circuit<double> &s, const std::vector<Types::qubit_t> &qubits) { s.AddOperation(std::make_shared<Circuits::Reset<>>(qubits)); },
-            "qubits"_a, "Reset multiple qubits to |0>.")
+            "qubits"_a, "Reset multiple qubits to ``|0>``.")
         // Noise channel
         .def(
             "pauli_channel",
@@ -165,7 +165,7 @@ void bind_circuit(nb::module_ &m)
                std::optional<nb::object> observables) { return mirror_fidelity_core(self, config, shots, full_amplitude, observables); },
             "config"_a = SimulatorConfig{}, "shots"_a = 1024, "full_amplitude"_a = false, "observables"_a = nb::none(),
             "Compute mirror fidelity: run circuit forward then its adjoint in "
-            "reverse, returning P(|0...0>). Uses shot-based sampling by "
+            "reverse, returning ``P(|0...0>)``. Uses shot-based sampling by "
             "default. Set full_amplitude=True for exact statevector "
             "computation (small circuits only). Pass observables (a Pauli "
             "string, ';'-separated string or list) to instead return the "
@@ -177,8 +177,8 @@ void bind_circuit(nb::module_ &m)
                 return inner_product_core(self, other, config);
             },
             "other"_a, "config"_a = SimulatorConfig{},
-            "Compute the inner product <psi_self|psi_other> = <0|U_self^dag "
-            "U_other|0> between this circuit's state and another circuit's "
+            "Compute the inner product ``<psi_self|psi_other> = <0|U_self^dag "
+            "U_other|0>`` between this circuit's state and another circuit's "
             "state, using ProjectOnZero.")
         .def(
             "prob",
@@ -227,7 +227,7 @@ void bind_circuit(nb::module_ &m)
             "target_state"_a,
             "Compute the probability of a specific output state using the "
             "Pauli path integral simulator.\n\n"
-            "Example: qc.prob('111') returns the probability of |111>.\n\n"
+            "Example: qc.prob('111') returns the probability of ``|111>``.\n\n"
             "Args:\n"
             "    target_state: Bitstring like '10001001' (qubit 0 leftmost).\n\n"
             "Returns:\n"
@@ -404,7 +404,7 @@ void bind_circuit(nb::module_ &m)
             "noise_model"_a, "noise_realizations"_a = 100, "config"_a = SimulatorConfig{}, "noise_seed"_a = nb::none(),
             "Compute fidelity to the ideal unitary circuit state under noise.\n\n"
             "Injects all configured noise types (correlated, coherent, "
-            "crosstalk, T1, Pauli) and averages |<psi_ideal|psi_noisy>|^2 "
+            "crosstalk, T1, Pauli) and averages ``|<psi_ideal|psi_noisy>|^2`` "
             "over noise realizations.\n\n"
             "Returns dict with 'fidelity', 'infidelity', 'std_error', "
             "'time_taken', 'noise_realizations'.\n\n"

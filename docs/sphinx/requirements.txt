@@ -1,0 +1,14 @@
+sphinx>=8
+furo>=2024.8
+myst-nb>=1.1
+sphinx-design>=0.6
+sphinx-copybutton>=0.5
+sphinx-reredirects>=0.1.5
+ipykernel
+matplotlib
+numpy
+stim>=1.14
+sinter>=1.14
+pymatching
+pennylane-maestro
+qiskit-maestro

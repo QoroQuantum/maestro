@@ -31,7 +31,7 @@ dependencies = ["nanobind-backend>=1.0"]
 
 [project.urls]
 Homepage = "https://github.com/QoroQuantum/maestro"
-Documentation = "https://github.com/QoroQuantum/maestro"
+Documentation = "https://qoroquantum.github.io/maestro/"
 Repository = "https://github.com/QoroQuantum/maestro"
 Issues = "https://github.com/QoroQuantum/maestro/issues"
 

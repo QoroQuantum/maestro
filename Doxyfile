@@ -80,7 +80,6 @@ INPUT                  = Circuit \
                          maestrolib \
                          qasm \
                          docs/groups.dox \
-                         docs/python \
                          mainpage.dox \
                          markdown \
                          Types.h

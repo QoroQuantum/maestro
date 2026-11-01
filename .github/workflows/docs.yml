@@ -1,4 +1,8 @@
-name: Deploy Doxygen Documentation
+name: Deploy Documentation
+
+# Publishes the Python docs (Sphinx) at the site root and the C++ reference
+# (Doxygen) under /cpp/. Run it after a release is on PyPI: the Python docs are
+# built against that release.
 
 on:
   workflow_dispatch:
@@ -19,6 +23,19 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v5
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the released package and docs dependencies
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          python -m pip install "qoro-maestro==${version}" -r docs/sphinx/requirements.txt
+
+      - name: Build the Python docs
+        run: python -m sphinx -b html docs/sphinx site
+
       - name: Install Doxygen
         env:
           NEEDRESTART_SUSPEND: 1
@@ -31,8 +48,32 @@ jobs:
           sudo cp doxygen-1.16.1/bin/doxygen /usr/local/bin/
           doxygen --version
 
-      - name: Run Doxygen
-        run: doxygen Doxyfile
+      - name: Build the C++ reference
+        run: |
+          doxygen Doxyfile
+          cp -r docs/html site/cpp
+
+      # The C++ pages used to live at the site root. Keep their old URLs working
+      # by redirecting each one to its new place under /cpp/. Paths Sphinx
+      # already uses, including the Python guide redirects, are left alone.
+      - name: Redirect old C++ reference URLs
+        run: |
+          python - <<'EOF'
+          import pathlib
+
+          site = pathlib.Path("site")
+          for page in (site / "cpp").rglob("*.html"):
+              rel = page.relative_to(site / "cpp")
+              old = site / rel
+              if old.exists():
+                  continue
+              target = "../" * (len(rel.parts) - 1) + "cpp/" + rel.as_posix()
+              old.parent.mkdir(parents=True, exist_ok=True)
+              old.write_text(
+                  f'<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url={target}">'
+                  f'<link rel="canonical" href="{target}"><a href="{target}">Moved to the C++ reference</a>'
+              )
+          EOF
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -40,7 +81,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './docs/html'
+          path: './site'
 
   deploy:
     needs: build
