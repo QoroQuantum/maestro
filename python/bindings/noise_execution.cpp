@@ -157,8 +157,8 @@ static nb::dict execute_noise_batches(const CircuitPtr &circuit, const noise::No
     nb::dict out;
     out["counts"] = py_counts;
     out["time_taken"] = std::chrono::duration<double>(end - start).count();
-    out["simulator"] = (int)config.simulator_type;
-    out["method"] = (int)config.simulation_type;
+    out["simulator"] = config.simulator_type;
+    out["method"] = config.simulation_type;
     out["noise_realizations"] = batches;
     out["sampling_components"] = sampling_components;
     out["largest_component_qubits"] = largest_component;

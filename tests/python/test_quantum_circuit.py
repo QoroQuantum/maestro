@@ -180,6 +180,9 @@ class TestExecutionFunctions:
         )
         assert res["simulator"] == maestro.SimulatorType.QCSim.value
         assert res["method"] == maestro.SimulationType.Statevector.value
+        # Results carry the enum members, which still equal the old integers.
+        assert res["simulator"] is maestro.SimulatorType.QCSim
+        assert res["method"] is maestro.SimulationType.Statevector
 
     def test_execute_mps(self):
         """Test execution with MPS simulation type"""
