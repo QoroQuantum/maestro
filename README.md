@@ -1,6 +1,6 @@
 # Maestro
 
-[![Built and tested on Ubuntu](https://github.com/QoroQuantum/maestro/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/QoroQuantum/maestro/actions/workflows/cmake-multi-platform.yml)
+[![Build and test](https://github.com/QoroQuantum/maestro/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/QoroQuantum/maestro/actions/workflows/cmake-multi-platform.yml)
 
 A unified interface for quantum circuit simulation, from your laptop to GPU workstations and MPI clusters. Build circuits in Python, import Qiskit circuits or OpenQASM 2.0, and run them through a common simulation API. Maestro also provides C/C++ interfaces and a native JSON request API.
 

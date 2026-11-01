@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-11-01
+
 ### Changed
 
 - Result dictionaries report `simulator`, `method` and `cluster_methods` as
@@ -14,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `print(result["simulator"])` shows `SimulatorType.QCSim`. Both enums are now
   integer enums, so the members still compare equal to the old values and
   `result["method"] == 0` keeps working.
+- The Python documentation moved from the Doxygen site to a new site at the
+  documentation root, with a user guide, examples and API reference whose code
+  examples run when the site is built. The C++ reference is now under `/cpp/`,
+  and the old C++ and Python guide URLs redirect.
+
+### Fixed
+
+- Docstrings in the Python bindings and `maestro.sinter` that contained text such
+  as `|0>` or `<psi|phi>` no longer produce reStructuredText warnings and errors
+  in the generated API reference.
 
 ## [0.3.10] - 2026-10-30
 
@@ -597,7 +609,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.8...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.11...HEAD
+[0.3.11]: https://github.com/QoroQuantum/maestro/compare/v0.3.10...v0.3.11
+[0.3.10]: https://github.com/QoroQuantum/maestro/compare/v0.3.9...v0.3.10
+[0.3.9]: https://github.com/QoroQuantum/maestro/compare/v0.3.8...v0.3.9
 [0.3.8]: https://github.com/QoroQuantum/maestro/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/QoroQuantum/maestro/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/QoroQuantum/maestro/compare/v0.3.5...v0.3.6
