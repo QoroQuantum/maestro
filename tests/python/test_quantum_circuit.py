@@ -1,6 +1,8 @@
 
-import pytest
+import json
 import math
+import pickle
+import pytest
 import maestro
 # from maestro.circuits import QuantumCircuit # This fails if maestro is a module not package
 
@@ -180,6 +182,41 @@ class TestExecutionFunctions:
         )
         assert res["simulator"] == maestro.SimulatorType.QCSim.value
         assert res["method"] == maestro.SimulationType.Statevector.value
+        # Results carry the enum members, which still equal the old integers.
+        assert res["simulator"] is maestro.SimulatorType.QCSim
+        assert res["method"] is maestro.SimulationType.Statevector
+        assert isinstance(res["simulator"], int)
+        assert isinstance(res["method"], int)
+        assert {maestro.SimulatorType.QCSim.value: "qcsim"}[res["simulator"]] == "qcsim"
+        assert {maestro.SimulationType.Statevector.value: "sv"}[res["method"]] == "sv"
+        json_res = json.loads(json.dumps(res))
+        assert json_res["simulator"] == maestro.SimulatorType.QCSim.value
+        assert json_res["method"] == maestro.SimulationType.Statevector.value
+        pickled_res = pickle.loads(pickle.dumps(res))
+        assert pickled_res["simulator"] is maestro.SimulatorType.QCSim
+        assert pickled_res["method"] is maestro.SimulationType.Statevector
+
+        est = qc.estimate(
+            observables="Z",
+            config=maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim,
+                simulation_type=maestro.SimulationType.Statevector,
+            ),
+        )
+        assert est["simulator"] is maestro.SimulatorType.QCSim
+        assert est["method"] is maestro.SimulationType.Statevector
+        assert est["cluster_methods"] == [maestro.SimulationType.Statevector.value]
+        assert est["cluster_methods"][0] is maestro.SimulationType.Statevector
+        assert isinstance(est["cluster_methods"][0], int)
+        assert {maestro.SimulationType.Statevector.value: "sv"}[est["cluster_methods"][0]] == "sv"
+        json_est = json.loads(json.dumps(est))
+        assert json_est["simulator"] == maestro.SimulatorType.QCSim.value
+        assert json_est["method"] == maestro.SimulationType.Statevector.value
+        assert json_est["cluster_methods"] == [maestro.SimulationType.Statevector.value]
+        pickled_est = pickle.loads(pickle.dumps(est))
+        assert pickled_est["simulator"] is maestro.SimulatorType.QCSim
+        assert pickled_est["method"] is maestro.SimulationType.Statevector
+        assert pickled_est["cluster_methods"][0] is maestro.SimulationType.Statevector
 
     def test_execute_mps(self):
         """Test execution with MPS simulation type"""

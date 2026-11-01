@@ -86,7 +86,7 @@ const char *const kConfigFields[] = {
 void bind_config(nb::module_ &m)
 {
     // --- Enums (must be registered before SimulatorConfig) ---
-    nb::enum_<Simulators::SimulatorType>(m, "SimulatorType")
+    nb::enum_<Simulators::SimulatorType>(m, "SimulatorType", nb::is_arithmetic())
         .value("QCSim", Simulators::SimulatorType::kQCSim)
 #ifndef NO_QISKIT_AER
         .value("QiskitAer", Simulators::SimulatorType::kQiskitAer)
@@ -99,7 +99,7 @@ void bind_config(nb::module_ &m)
         .value("QuestSim", Simulators::SimulatorType::kQuestSim)
         .export_values();
 
-    nb::enum_<Simulators::SimulationType>(m, "SimulationType")
+    nb::enum_<Simulators::SimulationType>(m, "SimulationType", nb::is_arithmetic())
         .value("Statevector", Simulators::SimulationType::kStatevector)
         .value("MatrixProductState", Simulators::SimulationType::kMatrixProductState)
         .value("Stabilizer", Simulators::SimulationType::kStabilizer)

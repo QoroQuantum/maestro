@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Result dictionaries report `simulator`, `method` and `cluster_methods` as
+  `SimulatorType` and `SimulationType` members instead of bare integers, so
+  `print(result["simulator"])` shows `SimulatorType.QCSim`. Both enums are now
+  integer enums, so the members still compare equal to the old values and
+  `result["method"] == 0` keeps working.
+
 ## [0.3.10] - 2026-10-30
 
 ### Added
