@@ -45,8 +45,10 @@
 
 #include "../../Utils/Library.h"
 
+#include <cmath>
 #include <complex>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -150,6 +152,16 @@ class GpuLibrary : public Utils::Library
         LOAD_TENSOR_QUERY(MPOSetBondDimensionSummaryCallback);
         LOAD_TENSOR_QUERY(MPSGetMaxBondDimension);
         LOAD_TENSOR_QUERY(MPOGetMaxBondDimension);
+        LOAD_TENSOR_QUERY(PauliPropGetOperatorCount);
+        LOAD_TENSOR_QUERY(PauliPropTruncateOperators);
+        LOAD_TENSOR_QUERY(PauliPropAllocateMemoryBytes);
+        LOAD_TENSOR_QUERY(PauliPropSetUseDoublePrecision);
+        LOAD_TENSOR_QUERY(PauliPropGetUseDoublePrecision);
+        LOAD_TENSOR_QUERY(PauliPropSetMaxFusedGates);
+        LOAD_TENSOR_QUERY(PauliPropSetSamplingCacheMaxNodes);
+        LOAD_TENSOR_QUERY(PauliPropGetExpectationValueChecked);
+        LOAD_TENSOR_QUERY(PauliPropMeasureQubitChecked);
+        LOAD_TENSOR_QUERY(PauliPropExpectationValues);
 #undef LOAD_TENSOR_QUERY
 
         return true;
@@ -4583,16 +4595,77 @@ class GpuLibrary : public Utils::Library
         return false;
     }
 
+    bool HasPauliPropOperatorCheckpoints() const noexcept
+    {
+        return fPauliPropGetOperatorCount && fPauliPropTruncateOperators;
+    }
+
+    unsigned long long PauliPropGetOperatorCount(void *obj) const noexcept
+    {
+        return obj && fPauliPropGetOperatorCount ? fPauliPropGetOperatorCount(obj) : std::numeric_limits<unsigned long long>::max();
+    }
+
+    bool PauliPropTruncateOperators(void *obj, unsigned long long count) const noexcept
+    {
+        return obj && fPauliPropTruncateOperators && fPauliPropTruncateOperators(obj, count) == 1;
+    }
+
+    bool PauliPropAllocateMemoryBytes(void *obj, unsigned long long bytes)
+    {
+        return obj && fPauliPropAllocateMemoryBytes && fPauliPropAllocateMemoryBytes(obj, bytes) == 1;
+    }
+
+    bool PauliPropSetUseDoublePrecision(void *obj, bool useDouble)
+    {
+        return obj && (fPauliPropSetUseDoublePrecision ? fPauliPropSetUseDoublePrecision(obj, useDouble) == 1 : !useDouble);
+    }
+
+    bool PauliPropGetUseDoublePrecision(void *obj) const
+    {
+        return obj && fPauliPropGetUseDoublePrecision && fPauliPropGetUseDoublePrecision(obj) == 1;
+    }
+
+    bool PauliPropSetMaxFusedGates(void *obj, int count)
+    {
+        if (!obj || !fPauliPropSetMaxFusedGates)
+            return false;
+        fPauliPropSetMaxFusedGates(obj, count);
+        return true;
+    }
+
+    bool PauliPropSetSamplingCacheMaxNodes(void *obj, unsigned long long count)
+    {
+        if (!obj || !fPauliPropSetSamplingCacheMaxNodes)
+            return false;
+        fPauliPropSetSamplingCacheMaxNodes(obj, count);
+        return true;
+    }
+
+    bool HasPauliPropExpectationValues() const
+    {
+        return fPauliPropExpectationValues != nullptr;
+    }
+
+    bool PauliPropExpectationValues(void *obj, int count, const char *const *paulis, double *values, int workers)
+    {
+        return obj && fPauliPropExpectationValues && fPauliPropExpectationValues(obj, count, paulis, values, workers) == 1;
+    }
+
     double PauliPropGetExpectationValue(void *obj)
     {
-        if (!obj)
-            return 0.0;
-        if (LibraryHandle)
-            return fPauliPropGetExpectationValue(obj);
+        if (!obj || !LibraryHandle)
+            throw std::runtime_error("Pauli propagator is not initialized");
+        double value = std::numeric_limits<double>::quiet_NaN();
+        if (fPauliPropGetExpectationValueChecked)
+        {
+            if (!fPauliPropGetExpectationValueChecked(obj, &value))
+                throw std::runtime_error("GPU Pauli expectation readback failed");
+        }
         else
-            throw std::runtime_error("GpuLibrary: Unable to get expectation value in pauli propagation "
-                                     "simulator");
-        return 0.0;
+            value = fPauliPropGetExpectationValue(obj);
+        if (!std::isfinite(value))
+            throw std::runtime_error("GPU Pauli expectation is not finite");
+        return value;
     }
 
     bool PauliPropExecute(void *obj)
@@ -4868,37 +4941,33 @@ class GpuLibrary : public Utils::Library
 
     double PauliPropQubitProbability0(void *obj, int qubit)
     {
-        if (!obj)
-            return 0.0;
-        if (LibraryHandle)
-            return fPauliPropQubitProbability0(obj, qubit);
-        else
-            throw std::runtime_error("GpuLibrary: Unable to get qubit probability 0 in pauli propagation "
-                                     "simulator");
-        return 0.0;
+        if (!obj || !LibraryHandle)
+            throw std::runtime_error("Pauli propagator is not initialized");
+        return fPauliPropQubitProbability0(obj, qubit);
     }
 
     double PauliPropProbability(void *obj, unsigned long long int outcome)
     {
-        if (!obj)
-            return 0.0;
-        if (LibraryHandle)
-            return fPauliPropProbability(obj, outcome);
-        else
-            throw std::runtime_error("GpuLibrary: Unable to get probability of outcome in pauli "
-                                     "propagation simulator");
-        return 0.0;
+        if (!obj || !LibraryHandle)
+            throw std::runtime_error("Pauli propagator is not initialized");
+        return fPauliPropProbability(obj, outcome);
     }
 
     bool PauliPropMeasureQubit(void *obj, int qubit)
     {
-        if (!obj)
-            return false;
-        if (LibraryHandle)
-            return fPauliPropMeasureQubit(obj, qubit) == 1;
+        if (!obj || !LibraryHandle)
+            throw std::runtime_error("Pauli propagator is not initialized");
+        int outcome = -1;
+        if (fPauliPropMeasureQubitChecked)
+        {
+            if (!fPauliPropMeasureQubitChecked(obj, qubit, &outcome))
+                throw std::runtime_error("GPU Pauli measurement failed");
+        }
         else
-            throw std::runtime_error("GpuLibrary: Unable to measure qubit in pauli propagation simulator");
-        return false;
+            outcome = fPauliPropMeasureQubit(obj, qubit);
+        if (outcome != 0 && outcome != 1)
+            throw std::runtime_error("GPU Pauli measurement failed");
+        return outcome != 0;
     }
 
     unsigned char *PauliPropSampleQubits(void *obj, const int *qubits, int nrQubits)
@@ -5240,6 +5309,16 @@ class GpuLibrary : public Utils::Library
     int (*fPauliPropGetNumGatesBetweenDeduplications)(void *) = nullptr;
     void (*fPauliPropSetNumGatesBetweenDeduplications)(void *, int) = nullptr;
     int (*fPauliPropClearOperators)(void *) = nullptr;
+    unsigned long long (*fPauliPropGetOperatorCount)(void *) = nullptr;
+    int (*fPauliPropTruncateOperators)(void *, unsigned long long) = nullptr;
+    int (*fPauliPropAllocateMemoryBytes)(void *, unsigned long long) = nullptr;
+    int (*fPauliPropSetUseDoublePrecision)(void *, int) = nullptr;
+    int (*fPauliPropGetUseDoublePrecision)(void *) = nullptr;
+    void (*fPauliPropSetMaxFusedGates)(void *, int) = nullptr;
+    void (*fPauliPropSetSamplingCacheMaxNodes)(void *, unsigned long long) = nullptr;
+    int (*fPauliPropGetExpectationValueChecked)(void *, double *) = nullptr;
+    int (*fPauliPropMeasureQubitChecked)(void *, int, int *) = nullptr;
+    int (*fPauliPropExpectationValues)(void *, int, const char *const *, double *, int) = nullptr;
     int (*fPauliPropAllocateMemory)(void *, double) = nullptr;
     double (*fPauliPropGetExpectationValue)(void *) = nullptr;
     int (*fPauliPropExecute)(void *) = nullptr;

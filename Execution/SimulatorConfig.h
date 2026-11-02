@@ -106,8 +106,7 @@ struct SimulatorConfig
     std::optional<std::string> mpo_svd_solver = std::nullopt;
     std::optional<std::string> tensor_network_svd_solver = std::nullopt;
 
-    // PauliPropagator truncation; the thresholds apply on each trim or
-    // deduplication pass.
+    // GPU thresholds apply at trim boundaries; QCSim also trims at deduplication boundaries.
     std::optional<double> pp_coefficient_threshold = std::nullopt;
     std::optional<size_t> pp_max_pauli_weight = std::nullopt;
     std::optional<int> pp_gates_between_trims = std::nullopt;
@@ -348,8 +347,8 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     // RemoveAllOptimizationSimulatorsAndAdd above.
     // PauliPropagator truncation settings are Configured before CreateSimulator;
     // the state replays its config map once the propagator exists, so they are
-    // applied then. Both thresholds are only consulted during a trim or
-    // deduplication pass; PauliPropagator simulations deduplicate by default.
+    // applied then. An omitted trim interval follows the effective deduplication
+    // interval when thresholds are supplied. Explicit trim settings take precedence.
     if (config.pp_coefficient_threshold)
     {
         std::ostringstream oss;
@@ -360,17 +359,22 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     {
         network->Configure("pauli_propagator_pauli_weight_threshold", std::to_string(*config.pp_max_pauli_weight).c_str());
     }
-    if (config.pp_gates_between_trims)
-    {
-        network->Configure("pauli_propagator_steps_between_trims", std::to_string(*config.pp_gates_between_trims).c_str());
-    }
     auto pp_gates_between_deduplications = config.pp_gates_between_deduplications;
+    const auto native_deduplication = config.native_options.find("pauli_propagator_num_gates_between_deduplications");
     if (!pp_gates_between_deduplications && config.simulation_type == Simulators::SimulationType::kPauliPropagator &&
-        !config.native_options.count("pauli_propagator_num_gates_between_deduplications"))
+        native_deduplication == config.native_options.end())
         pp_gates_between_deduplications = kDefaultPpGatesBetweenDeduplications;
     if (pp_gates_between_deduplications)
-    {
         network->Configure("pauli_propagator_num_gates_between_deduplications", std::to_string(*pp_gates_between_deduplications).c_str());
+
+    if (config.pp_gates_between_trims)
+        network->Configure("pauli_propagator_steps_between_trims", std::to_string(*config.pp_gates_between_trims).c_str());
+    else if (config.simulation_type == Simulators::SimulationType::kPauliPropagator && !config.native_options.count("pauli_propagator_steps_between_trims") &&
+             (config.pp_coefficient_threshold || config.pp_max_pauli_weight || config.native_options.count("pauli_propagator_coefficient_threshold") ||
+              config.native_options.count("pauli_propagator_pauli_weight_threshold")))
+    {
+        const auto interval = pp_gates_between_deduplications ? std::to_string(*pp_gates_between_deduplications) : native_deduplication->second;
+        network->Configure("pauli_propagator_steps_between_trims", interval.c_str());
     }
     if (config.path_integral_threshold)
     {

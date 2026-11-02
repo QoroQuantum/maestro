@@ -33,15 +33,20 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
                 pp = SimulatorsFactory::CreateGpuPauliPropagatorSimulatorUnique(gpuDevice);
                 if (pp)
                 {
-                    const bool res = pp->CreateSimulator(nrQubits);
+                    const bool res = pp->CreateSimulator(static_cast<int>(nrQubits));
                     if (!res)
                         throw std::runtime_error("GpuState::Initialize: Failed to create "
                                                  "and initialize the Pauli propagator state.");
+                    // Older plugins size their sampling buffers during allocation.
+                    if (!pp->SetWillUseSampling(true))
+                        throw std::runtime_error("GpuState::Initialize: Failed to enable Pauli sampling");
                     for (const auto &[key, value] : configuration.GetConfigMap())
                         if (key != "method")
                             Configure(key.c_str(), value.c_str());
-                    pp->SetWillUseSampling(true);
-                    if (!pp->AllocateMemory(0.9))
+                    const bool allocated = configuration.IsSet("pauli_propagator_memory_limit_bytes")
+                                               ? pp->AllocateMemoryBytes(configuration.GetConfigurationAsUnsigned("pauli_propagator_memory_limit_bytes"))
+                                               : pp->AllocateMemory(0.9);
+                    if (!allocated)
                         throw std::runtime_error("GpuState::Initialize: Failed to allocate memory for the "
                                                  "Pauli propagator state.");
                 }
@@ -58,7 +63,7 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
     void Reset() override
     {
         if (pp)
-            pp->ClearOperators();
+            RequirePauli(pp->ClearOperators());
         upcomingGateIndex = 0;
     }
 
@@ -90,9 +95,53 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
         }
         if (std::string(key) == "precision" || std::string(key) == "use_double_precision")
         {
-            Configuration::ParsePrecision(key, value);
+            const bool useDouble = Configuration::ParsePrecision(key, value);
+            if (pp && !pp->SetUseDoublePrecision(useDouble))
+                throw std::runtime_error("Cannot configure Pauli precision; update the GPU library");
             configuration.SetConfiguration(key, value);
             return;
+        }
+        const std::string setting(key);
+        if (setting == "pauli_propagator_memory_limit_bytes" || setting == "pauli_propagator_workers" || setting == "pauli_propagator_max_fused_gates" ||
+            setting == "pauli_propagator_sampling_cache_nodes")
+        {
+            unsigned long long parsed = 0;
+            const std::string text(value);
+            const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+            if (result.ec != std::errc() || result.ptr != text.data() + text.size() || (setting != "pauli_propagator_sampling_cache_nodes" && !parsed) ||
+                (setting == "pauli_propagator_workers" && parsed > 64) || (setting == "pauli_propagator_max_fused_gates" && parsed > 256) ||
+                parsed > static_cast<unsigned long long>(INT64_MAX))
+                throw std::invalid_argument("Invalid Pauli propagation configuration");
+            if (pp)
+            {
+                bool applied = true;
+                if (setting == "pauli_propagator_memory_limit_bytes")
+                    applied = pp->AllocateMemoryBytes(parsed);
+                else if (setting == "pauli_propagator_max_fused_gates")
+                    applied = pp->SetMaxFusedGates(parsed);
+                else if (setting == "pauli_propagator_sampling_cache_nodes")
+                    applied = pp->SetSamplingCacheMaxNodes(parsed);
+                if (!applied)
+                    throw std::runtime_error("Cannot configure Pauli propagation; check the memory budget and update the GPU library");
+            }
+            configuration.SetConfiguration(key, value);
+            return;
+        }
+        if (setting == "pauli_propagator_steps_between_trims" || setting == "pauli_propagator_num_gates_between_deduplications")
+        {
+            int interval = 0;
+            const std::string text(value);
+            const auto result = std::from_chars(text.data(), text.data() + text.size(), interval);
+            if (result.ec != std::errc() || result.ptr != text.data() + text.size() || interval < 1)
+                throw std::invalid_argument("Pauli intervals must be positive integers");
+        }
+        if (setting == "pauli_propagator_coefficient_threshold" || setting == "pauli_propagator_pauli_weight_threshold")
+        {
+            size_t end = 0;
+            const double threshold = std::stod(value, &end);
+            if (end != std::string(value).size() || !std::isfinite(threshold) || threshold < 0 ||
+                (setting == "pauli_propagator_pauli_weight_threshold" && (threshold > INT32_MAX || threshold != std::floor(threshold))))
+                throw std::invalid_argument("Invalid Pauli truncation threshold");
         }
         if (!configuration.WasApplied(key, value))
             configuration.SetConfiguration(key, value);
@@ -133,8 +182,6 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
             {
                 const int numGatesBetweenDeduplications = std::stoi(value);
                 pp->SetNumGatesBetweenDeduplications(numGatesBetweenDeduplications);
-                if (!configuration.IsSet("pauli_propagator_steps_between_trims"))
-                    pp->SetNumGatesBetweenTruncations(numGatesBetweenDeduplications);
             }
         }
     }
@@ -145,11 +192,9 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
             return {};
         if (std::string(key) == "precision" || std::string(key) == "use_double_precision")
         {
-            const bool useDouble = configuration.GetConfiguration("precision") == "double";
+            const bool useDouble = pp ? pp->GetUseDoublePrecision() : configuration.GetConfiguration("precision") == "double";
             return std::string(key) == "precision" ? (useDouble ? "double" : "single") : (useDouble ? "1" : "0");
         }
-        if (!key)
-            return {};
         if (std::string("method") == key)
             return MethodName();
         return configuration.GetConfiguration(key);
@@ -159,6 +204,8 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
     {
         if (pp)
             return 0;
+        if (num_qubits > static_cast<size_t>(INT_MAX) - nrQubits)
+            throw std::length_error("GPU Pauli qubit count exceeds the native API range");
         const size_t oldNrQubits = nrQubits;
         nrQubits += num_qubits;
         return oldNrQubits;
@@ -178,44 +225,44 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
             std::cerr << "Warning: The number of qubits to measure is larger than the "
                          "number of bits in the size_t type, the outcome will be undefined"
                       << std::endl;
+        const auto qb = CheckedQubits(qubits);
         size_t res = 0;
         size_t mask = 1ULL;
-        DontNotify();
         {
-            for (size_t qubit : qubits)
+            NotificationGuard guard(*this);
+            for (int qubit : qb)
             {
-                if (pp->MeasureQubit(static_cast<int>(qubit)))
+                if (pp->MeasureQubit(qubit))
                     res |= mask;
                 mask <<= 1;
             }
         }
-        Notify();
         NotifyObservers(qubits);
         return res;
     }
 
     std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override
     {
+        const auto qb = CheckedQubits(qubits);
         std::vector<bool> res(qubits.size(), false);
-        DontNotify();
         {
+            NotificationGuard guard(*this);
             for (size_t i = 0; i < qubits.size(); ++i)
-                res[i] = pp->MeasureQubit(static_cast<int>(qubits[i]));
+                res[i] = pp->MeasureQubit(qb[i]);
         }
-        Notify();
         NotifyObservers(qubits);
         return res;
     }
 
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
-        DontNotify();
+        const auto qb = CheckedQubits(qubits);
         {
-            for (size_t qubit : qubits)
-                if (pp->MeasureQubit(static_cast<int>(qubit)))
-                    pp->ApplyX(static_cast<int>(qubit));
+            NotificationGuard guard(*this);
+            for (int qubit : qb)
+                if (pp->MeasureQubit(qubit))
+                    RequirePauli(pp->ApplyX(qubit));
         }
-        Notify();
         NotifyObservers(qubits);
     }
 
@@ -264,15 +311,12 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
     {
         if (qubits.empty() || shots == 0)
             return {};
-        if (qubits.size() > sizeof(Types::qubit_t) * 8)
-            std::cerr << "Warning: The number of qubits to measure is larger than the "
-                         "number of bits in the Types::qubit_t type, the outcome will be "
-                         "undefined"
-                      << std::endl;
+        if (qubits.size() > std::numeric_limits<Types::qubit_t>::digits)
+            throw std::length_error("Packed Pauli samples exceed the outcome width; use SampleCountsMany");
         std::unordered_map<Types::qubit_t, Types::qubit_t> result;
-        DontNotify();
         {
-            std::vector<int> qb(qubits.begin(), qubits.end());
+            NotificationGuard guard(*this);
+            const auto qb = CheckedQubits(qubits);
             for (size_t shot = 0; shot < shots; ++shot)
             {
                 size_t meas = 0;
@@ -285,7 +329,6 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
                 ++result[meas];
             }
         }
-        Notify();
         NotifyObservers(qubits);
         return result;
     }
@@ -295,16 +338,15 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
         if (qubits.empty() || shots == 0)
             return {};
         std::unordered_map<std::vector<bool>, Types::qubit_t> result;
-        DontNotify();
         {
-            std::vector<int> qb(qubits.begin(), qubits.end());
+            NotificationGuard guard(*this);
+            const auto qb = CheckedQubits(qubits);
             for (size_t shot = 0; shot < shots; ++shot)
             {
                 const auto res = pp->SampleQubits(qb);
                 ++result[res];
             }
         }
-        Notify();
         NotifyObservers(qubits);
         return result;
     }
@@ -314,6 +356,13 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
         double result = 0.0;
         result = pp->ExpectationValue(pauliString);
         return result;
+    }
+
+    std::vector<double> ExpectationValues(const std::vector<std::string> &paulis) override
+    {
+        const int workers =
+            configuration.IsSet("pauli_propagator_workers") ? static_cast<int>(configuration.GetConfigurationAsUnsigned("pauli_propagator_workers")) : 1;
+        return pp->ExpectationValues(paulis, workers);
     }
 
     int GetGpuDevice() const override
@@ -350,181 +399,181 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
 
     void ApplyP(Types::qubit_t qubit, double lambda) override
     {
-        pp->ApplyP(qubit, lambda);
+        RequirePauli(pp->ApplyP(CheckedQubit(qubit), lambda));
         NotifyObservers({qubit});
     }
 
     void ApplyX(Types::qubit_t qubit) override
     {
-        pp->ApplyX(qubit);
+        RequirePauli(pp->ApplyX(CheckedQubit(qubit)));
         NotifyObservers({qubit});
     }
 
     void ApplyY(Types::qubit_t qubit) override
     {
-        pp->ApplyY(qubit);
+        RequirePauli(pp->ApplyY(CheckedQubit(qubit)));
         NotifyObservers({qubit});
     }
 
     void ApplyZ(Types::qubit_t qubit) override
     {
-        pp->ApplyZ(qubit);
+        RequirePauli(pp->ApplyZ(CheckedQubit(qubit)));
         NotifyObservers({qubit});
     }
 
     void ApplyH(Types::qubit_t qubit) override
     {
-        pp->ApplyH(qubit);
+        RequirePauli(pp->ApplyH(CheckedQubit(qubit)));
         NotifyObservers({qubit});
     }
 
     void ApplyS(Types::qubit_t qubit) override
     {
-        pp->ApplyS(qubit);
+        RequirePauli(pp->ApplyS(CheckedQubit(qubit)));
         NotifyObservers({qubit});
     }
 
     void ApplySDG(Types::qubit_t qubit) override
     {
-        pp->ApplySDG(qubit);
+        RequirePauli(pp->ApplySDG(CheckedQubit(qubit)));
         NotifyObservers({qubit});
     }
 
     void ApplyT(Types::qubit_t qubit) override
     {
-        pp->ApplyT(qubit);
+        RequirePauli(pp->ApplyT(CheckedQubit(qubit)));
         NotifyObservers({qubit});
     }
 
     void ApplyTDG(Types::qubit_t qubit) override
     {
-        pp->ApplyTDG(qubit);
+        RequirePauli(pp->ApplyTDG(CheckedQubit(qubit)));
         NotifyObservers({qubit});
     }
 
     void ApplySx(Types::qubit_t qubit) override
     {
-        pp->ApplySQRTX(qubit);
+        RequirePauli(pp->ApplySQRTX(CheckedQubit(qubit)));
         NotifyObservers({qubit});
     }
 
     void ApplySxDAG(Types::qubit_t qubit) override
     {
-        pp->ApplySxDAG(qubit);
+        RequirePauli(pp->ApplySxDAG(CheckedQubit(qubit)));
         NotifyObservers({qubit});
     }
 
     void ApplyK(Types::qubit_t qubit) override
     {
-        pp->ApplyK(qubit);
+        RequirePauli(pp->ApplyK(CheckedQubit(qubit)));
         NotifyObservers({qubit});
     }
 
     void ApplyRx(Types::qubit_t qubit, double theta) override
     {
-        pp->ApplyRX(qubit, theta);
+        RequirePauli(pp->ApplyRX(CheckedQubit(qubit), theta));
         NotifyObservers({qubit});
     }
 
     void ApplyRy(Types::qubit_t qubit, double theta) override
     {
-        pp->ApplyRY(qubit, theta);
+        RequirePauli(pp->ApplyRY(CheckedQubit(qubit), theta));
         NotifyObservers({qubit});
     }
 
     void ApplyRz(Types::qubit_t qubit, double theta) override
     {
-        pp->ApplyRZ(qubit, theta);
+        RequirePauli(pp->ApplyRZ(CheckedQubit(qubit), theta));
         NotifyObservers({qubit});
     }
 
     void ApplyU(Types::qubit_t qubit, double theta, double phi, double lambda, double gamma) override
     {
-        pp->ApplyU(qubit, theta, phi, lambda, gamma);
+        RequirePauli(pp->ApplyU(CheckedQubit(qubit), theta, phi, lambda, gamma));
         NotifyObservers({qubit});
     }
 
     void ApplyCX(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        pp->ApplyCX(ctrl_qubit, tgt_qubit);
+        RequirePauli(pp->ApplyCX(CheckedQubit(ctrl_qubit), CheckedQubit(tgt_qubit)));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCY(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        pp->ApplyCY(ctrl_qubit, tgt_qubit);
+        RequirePauli(pp->ApplyCY(CheckedQubit(ctrl_qubit), CheckedQubit(tgt_qubit)));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCZ(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        pp->ApplyCZ(ctrl_qubit, tgt_qubit);
+        RequirePauli(pp->ApplyCZ(CheckedQubit(ctrl_qubit), CheckedQubit(tgt_qubit)));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCP(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double lambda) override
     {
-        pp->ApplyCP(ctrl_qubit, tgt_qubit, lambda);
+        RequirePauli(pp->ApplyCP(CheckedQubit(ctrl_qubit), CheckedQubit(tgt_qubit), lambda));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
-        pp->ApplyCRX(ctrl_qubit, tgt_qubit, theta);
+        RequirePauli(pp->ApplyCRX(CheckedQubit(ctrl_qubit), CheckedQubit(tgt_qubit), theta));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRy(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
-        pp->ApplyCRY(ctrl_qubit, tgt_qubit, theta);
+        RequirePauli(pp->ApplyCRY(CheckedQubit(ctrl_qubit), CheckedQubit(tgt_qubit), theta));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCRz(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta) override
     {
-        pp->ApplyCRZ(ctrl_qubit, tgt_qubit, theta);
+        RequirePauli(pp->ApplyCRZ(CheckedQubit(ctrl_qubit), CheckedQubit(tgt_qubit), theta));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCH(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        pp->ApplyCH(ctrl_qubit, tgt_qubit);
+        RequirePauli(pp->ApplyCH(CheckedQubit(ctrl_qubit), CheckedQubit(tgt_qubit)));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSx(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        pp->ApplyCSX(ctrl_qubit, tgt_qubit);
+        RequirePauli(pp->ApplyCSX(CheckedQubit(ctrl_qubit), CheckedQubit(tgt_qubit)));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplyCSxDAG(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit) override
     {
-        pp->ApplyCSXDAG(ctrl_qubit, tgt_qubit);
+        RequirePauli(pp->ApplyCSXDAG(CheckedQubit(ctrl_qubit), CheckedQubit(tgt_qubit)));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
     void ApplySwap(Types::qubit_t qubit0, Types::qubit_t qubit1) override
     {
-        pp->ApplySWAP(qubit0, qubit1);
+        RequirePauli(pp->ApplySWAP(CheckedQubit(qubit0), CheckedQubit(qubit1)));
         NotifyObservers({qubit1, qubit0});
     }
 
     void ApplyCCX(Types::qubit_t qubit0, Types::qubit_t qubit1, Types::qubit_t qubit2) override
     {
-        pp->ApplyCCX(qubit0, qubit1, qubit2);
+        RequirePauli(pp->ApplyCCX(CheckedQubit(qubit0), CheckedQubit(qubit1), CheckedQubit(qubit2)));
         NotifyObservers({qubit0, qubit1, qubit2});
     }
 
     void ApplyCSwap(Types::qubit_t ctrl_qubit, Types::qubit_t qubit0, Types::qubit_t qubit1) override
     {
-        pp->ApplyCSwap(ctrl_qubit, qubit0, qubit1);
+        RequirePauli(pp->ApplyCSwap(CheckedQubit(ctrl_qubit), CheckedQubit(qubit0), CheckedQubit(qubit1)));
         NotifyObservers({qubit1, qubit0, ctrl_qubit});
     }
 
     void ApplyCU(Types::qubit_t ctrl_qubit, Types::qubit_t tgt_qubit, double theta, double phi, double lambda, double gamma) override
     {
-        pp->ApplyCU(ctrl_qubit, tgt_qubit, theta, phi, lambda, gamma);
+        RequirePauli(pp->ApplyCU(CheckedQubit(ctrl_qubit), CheckedQubit(tgt_qubit), theta, phi, lambda, gamma));
         NotifyObservers({tgt_qubit, ctrl_qubit});
     }
 
@@ -536,6 +585,49 @@ class GpuPauliPropagatorSimulator : public ImmediateGpuSimulator
     }
 
   protected:
+    class NotificationGuard
+    {
+      public:
+        explicit NotificationGuard(GpuPauliPropagatorSimulator &state) : state(state), enabled(state.NotificationsEnabled())
+        {
+            state.DontNotify();
+        }
+
+        ~NotificationGuard()
+        {
+            if (enabled)
+                state.Notify();
+            else
+                state.DontNotify();
+        }
+
+      private:
+        GpuPauliPropagatorSimulator &state;
+        bool enabled;
+    };
+
+    int CheckedQubit(Types::qubit_t qubit) const
+    {
+        if (qubit >= nrQubits || qubit > static_cast<Types::qubit_t>(INT_MAX))
+            throw std::out_of_range("Invalid Pauli qubit");
+        return static_cast<int>(qubit);
+    }
+
+    std::vector<int> CheckedQubits(const Types::qubits_vector &qubits) const
+    {
+        std::vector<int> result;
+        result.reserve(qubits.size());
+        for (auto qubit : qubits)
+            result.push_back(CheckedQubit(qubit));
+        return result;
+    }
+
+    static void RequirePauli(bool ok)
+    {
+        if (!ok)
+            throw std::runtime_error("GPU Pauli operation failed");
+    }
+
     std::unique_ptr<GpuPauliPropagator> pp;
 };
 } // namespace Simulators::Private

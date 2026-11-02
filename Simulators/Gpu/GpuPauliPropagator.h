@@ -19,6 +19,7 @@
 #include "GpuDeviceContext.h"
 
 #define _USE_MATH_DEFINES
+#include <initializer_list>
 #include <math.h>
 
 namespace Simulators
@@ -184,13 +185,61 @@ class GpuPauliPropagator
         return false;
     }
 
+    bool AllocateMemoryBytes(unsigned long long bytes)
+    {
+        return lib && lib->PauliPropAllocateMemoryBytes(obj, bytes);
+    }
+
+    bool SetUseDoublePrecision(bool useDouble)
+    {
+        return lib && lib->PauliPropSetUseDoublePrecision(obj, useDouble);
+    }
+
+    bool GetUseDoublePrecision() const
+    {
+        return lib && lib->PauliPropGetUseDoublePrecision(obj);
+    }
+
+    bool SetMaxFusedGates(int count)
+    {
+        return lib && lib->PauliPropSetMaxFusedGates(obj, count);
+    }
+
+    bool SetSamplingCacheMaxNodes(unsigned long long count)
+    {
+        return lib && lib->PauliPropSetSamplingCacheMaxNodes(obj, count);
+    }
+
+    std::vector<double> ExpectationValues(const std::vector<std::string> &paulis, int workers = 1)
+    {
+        if (!lib || !obj)
+            throw std::runtime_error("Pauli propagator is not initialized");
+        if (paulis.size() > static_cast<size_t>(std::numeric_limits<int>::max()))
+            throw std::length_error("Too many Pauli observables");
+        std::vector<double> values(paulis.size());
+        if (lib->HasPauliPropExpectationValues())
+        {
+            std::vector<const char *> strings;
+            for (const auto &pauli : paulis)
+                strings.push_back(pauli.c_str());
+            if (!lib->PauliPropExpectationValues(obj, strings.size(), strings.data(), values.data(), workers))
+                throw std::runtime_error("GPU Pauli observable batch failed");
+        }
+        else
+        {
+            for (size_t i = 0; i < paulis.size(); ++i)
+                values[i] = ExpectationValue(paulis[i]);
+        }
+        return values;
+    }
+
     double GetExpectationValue()
     {
         if (lib)
         {
             return lib->PauliPropGetExpectationValue(obj);
         }
-        return 0.0;
+        throw std::runtime_error("Pauli propagator is not initialized");
     }
 
     bool Execute()
@@ -204,15 +253,15 @@ class GpuPauliPropagator
 
     double ExpectationValue(const std::string &pauliStr)
     {
-        SetInPauliExpansionUnique(pauliStr);
-        Execute();
+        if (!SetInPauliExpansionUnique(pauliStr) || !Execute())
+            throw std::runtime_error("GPU Pauli expectation setup or execution failed");
         return GetExpectationValue();
     }
 
     double ExpectationValueMultiple(const std::vector<std::string> &pauliStrs, const std::vector<double> &coefficients)
     {
-        SetInPauliExpansionMultiple(pauliStrs, coefficients);
-        Execute();
+        if (!SetInPauliExpansionMultiple(pauliStrs, coefficients) || !Execute())
+            throw std::runtime_error("GPU Pauli expansion setup or execution failed");
         return GetExpectationValue();
     }
 
@@ -227,7 +276,7 @@ class GpuPauliPropagator
 
     bool SetInPauliExpansionMultiple(const std::vector<std::string> &pauliStrs, const std::vector<double> &coefficients)
     {
-        if (lib && !pauliStrs.empty() && pauliStrs.size() == coefficients.size())
+        if (lib && !pauliStrs.empty() && pauliStrs.size() == coefficients.size() && pauliStrs.size() <= static_cast<size_t>(std::numeric_limits<int>::max()))
         {
             std::vector<char *> cStrs(pauliStrs.size());
             for (size_t i = 0; i < pauliStrs.size(); ++i)
@@ -385,37 +434,43 @@ class GpuPauliPropagator
 
     bool ApplySDG(int qubit)
     {
-        if (!ApplyZ(qubit))
-            return false;
-        if (!ApplyS(qubit))
-            return false;
+        return RecordComposite({qubit}, {}, [&] {
+            if (!ApplyZ(qubit))
+                return false;
+            if (!ApplyS(qubit))
+                return false;
 
-        return true;
+            return true;
+        });
     }
 
     bool ApplyK(int qubit)
     {
-        if (!ApplyZ(qubit))
-            return false;
-        if (!ApplyS(qubit))
-            return false;
-        if (!ApplyH(qubit))
-            return false;
-        if (!ApplyS(qubit))
-            return false;
+        return RecordComposite({qubit}, {}, [&] {
+            if (!ApplyZ(qubit))
+                return false;
+            if (!ApplyS(qubit))
+                return false;
+            if (!ApplyH(qubit))
+                return false;
+            if (!ApplyS(qubit))
+                return false;
 
-        return true;
+            return true;
+        });
     }
 
     bool ApplySxDAG(int qubit)
     {
-        if (!ApplyS(qubit))
-            return false;
-        if (!ApplyH(qubit))
-            return false;
-        if (!ApplyS(qubit))
-            return false;
-        return true;
+        return RecordComposite({qubit}, {}, [&] {
+            if (!ApplyS(qubit))
+                return false;
+            if (!ApplyH(qubit))
+                return false;
+            if (!ApplyS(qubit))
+                return false;
+            return true;
+        });
     }
 
     bool ApplyP(int qubit, double lambda)
@@ -435,238 +490,264 @@ class GpuPauliPropagator
 
     bool ApplyU(int qubit, double theta, double phi, double lambda, double gamma = 0.0)
     {
-        if (!ApplyRZ(qubit, lambda))
-            return false;
-        if (!ApplyRY(qubit, theta))
-            return false;
-        if (!ApplyRZ(qubit, phi))
-            return false;
+        return RecordComposite({qubit}, {theta, phi, lambda, gamma}, [&] {
+            if (!ApplyRZ(qubit, lambda))
+                return false;
+            if (!ApplyRY(qubit, theta))
+                return false;
+            if (!ApplyRZ(qubit, phi))
+                return false;
 
-        return true;
+            return true;
+        });
     }
 
     bool ApplyCH(int controlQubit, int targetQubit)
     {
-        if (!ApplyH(targetQubit))
-            return false;
-        if (!ApplySDG(targetQubit))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyH(targetQubit))
-            return false;
-        if (!ApplyT(targetQubit))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyT(targetQubit))
-            return false;
-        if (!ApplyH(targetQubit))
-            return false;
-        if (!ApplyS(targetQubit))
-            return false;
-        if (!ApplyX(targetQubit))
-            return false;
-        if (!ApplyS(controlQubit))
-            return false;
+        return RecordComposite({controlQubit, targetQubit}, {}, [&] {
+            if (!ApplyH(targetQubit))
+                return false;
+            if (!ApplySDG(targetQubit))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyH(targetQubit))
+                return false;
+            if (!ApplyT(targetQubit))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyT(targetQubit))
+                return false;
+            if (!ApplyH(targetQubit))
+                return false;
+            if (!ApplyS(targetQubit))
+                return false;
+            if (!ApplyX(targetQubit))
+                return false;
+            if (!ApplyS(controlQubit))
+                return false;
 
-        return true;
+            return true;
+        });
     }
 
     bool ApplyCU(int controlQubit, int targetQubit, double theta, double phi, double lambda, double gamma = 0.0)
     {
-        if (gamma != 0.0)
-        {
-            if (!ApplyP(controlQubit, gamma))
+        return RecordComposite({controlQubit, targetQubit}, {theta, phi, lambda, gamma}, [&] {
+            if (gamma != 0.0)
+            {
+                if (!ApplyP(controlQubit, gamma))
+                    return false;
+            }
+            const double lambdaPlusPhiHalf = 0.5 * lambda + 0.5 * phi;
+            const double halfTheta = 0.5 * theta;
+            if (!ApplyP(targetQubit, 0.5 * lambda - 0.5 * phi))
                 return false;
-        }
-        const double lambdaPlusPhiHalf = 0.5 * (lambda + phi);
-        const double halfTheta = 0.5 * theta;
-        if (!ApplyP(targetQubit, 0.5 * (lambda - phi)))
-            return false;
-        if (!ApplyP(controlQubit, lambdaPlusPhiHalf))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyU(targetQubit, -halfTheta, 0, -lambdaPlusPhiHalf))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyU(targetQubit, halfTheta, phi, 0))
-            return false;
-        return true;
+            if (!ApplyP(controlQubit, lambdaPlusPhiHalf))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyU(targetQubit, -halfTheta, 0, -lambdaPlusPhiHalf))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyU(targetQubit, halfTheta, phi, 0))
+                return false;
+            return true;
+        });
     }
 
     bool ApplyCRX(int controlQubit, int targetQubit, double angle)
     {
-        const double halfAngle = angle * 0.5;
-        if (!ApplyH(targetQubit))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyRZ(targetQubit, -halfAngle))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyRZ(targetQubit, halfAngle))
-            return false;
-        if (!ApplyH(targetQubit))
-            return false;
-        return true;
+        return RecordComposite({controlQubit, targetQubit}, {angle}, [&] {
+            const double halfAngle = angle * 0.5;
+            if (!ApplyH(targetQubit))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyRZ(targetQubit, -halfAngle))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyRZ(targetQubit, halfAngle))
+                return false;
+            if (!ApplyH(targetQubit))
+                return false;
+            return true;
+        });
     }
 
     bool ApplyCRY(int controlQubit, int targetQubit, double angle)
     {
-        const double halfAngle = angle * 0.5;
-        if (!ApplyRY(targetQubit, halfAngle))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyRY(targetQubit, -halfAngle))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        return true;
+        return RecordComposite({controlQubit, targetQubit}, {angle}, [&] {
+            const double halfAngle = angle * 0.5;
+            if (!ApplyRY(targetQubit, halfAngle))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyRY(targetQubit, -halfAngle))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            return true;
+        });
     }
 
     bool ApplyCRZ(int controlQubit, int targetQubit, double angle)
     {
-        const double halfAngle = angle * 0.5;
-        if (!ApplyRZ(targetQubit, halfAngle))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyRZ(targetQubit, -halfAngle))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        return true;
+        return RecordComposite({controlQubit, targetQubit}, {angle}, [&] {
+            const double halfAngle = angle * 0.5;
+            if (!ApplyRZ(targetQubit, halfAngle))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyRZ(targetQubit, -halfAngle))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            return true;
+        });
     }
 
     bool ApplyCP(int controlQubit, int targetQubit, double lambda)
     {
-        const double halfAngle = lambda * 0.5;
-        if (!ApplyP(controlQubit, halfAngle))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyP(targetQubit, -halfAngle))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyP(targetQubit, halfAngle))
-            return false;
+        return RecordComposite({controlQubit, targetQubit}, {lambda}, [&] {
+            const double halfAngle = lambda * 0.5;
+            if (!ApplyP(controlQubit, halfAngle))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyP(targetQubit, -halfAngle))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyP(targetQubit, halfAngle))
+                return false;
 
-        return true;
+            return true;
+        });
     }
 
     bool ApplyCS(int controlQubit, int targetQubit)
     {
-        if (!ApplyT(controlQubit))
-            return false;
-        if (!ApplyT(targetQubit))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyTDG(targetQubit))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
+        return RecordComposite({controlQubit, targetQubit}, {}, [&] {
+            if (!ApplyT(controlQubit))
+                return false;
+            if (!ApplyT(targetQubit))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyTDG(targetQubit))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
 
-        return true;
+            return true;
+        });
     }
 
     bool ApplyCSDAG(int controlQubit, int targetQubit)
     {
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyT(targetQubit))
-            return false;
-        if (!ApplyCX(controlQubit, targetQubit))
-            return false;
-        if (!ApplyTDG(controlQubit))
-            return false;
-        if (!ApplyTDG(targetQubit))
-            return false;
+        return RecordComposite({controlQubit, targetQubit}, {}, [&] {
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyT(targetQubit))
+                return false;
+            if (!ApplyCX(controlQubit, targetQubit))
+                return false;
+            if (!ApplyTDG(controlQubit))
+                return false;
+            if (!ApplyTDG(targetQubit))
+                return false;
 
-        return true;
+            return true;
+        });
     }
 
     bool ApplyCSX(int controlQubit, int targetQubit)
     {
-        if (!ApplyH(targetQubit))
-            return false;
-        if (!ApplyCS(controlQubit, targetQubit))
-            return false;
-        if (!ApplyH(targetQubit))
-            return false;
+        return RecordComposite({controlQubit, targetQubit}, {}, [&] {
+            if (!ApplyH(targetQubit))
+                return false;
+            if (!ApplyCS(controlQubit, targetQubit))
+                return false;
+            if (!ApplyH(targetQubit))
+                return false;
 
-        return true;
+            return true;
+        });
     }
 
     bool ApplyCSXDAG(int controlQubit, int targetQubit)
     {
-        if (!ApplyH(targetQubit))
-            return false;
-        if (!ApplyCSDAG(controlQubit, targetQubit))
-            return false;
-        if (!ApplyH(targetQubit))
-            return false;
+        return RecordComposite({controlQubit, targetQubit}, {}, [&] {
+            if (!ApplyH(targetQubit))
+                return false;
+            if (!ApplyCSDAG(controlQubit, targetQubit))
+                return false;
+            if (!ApplyH(targetQubit))
+                return false;
 
-        return true;
+            return true;
+        });
     }
 
     bool ApplyCSwap(int controlQubit, int targetQubit1, int targetQubit2)
     {
-        const size_t q1 = controlQubit; // control
-        const size_t q2 = targetQubit1;
-        const size_t q3 = targetQubit2;
+        return RecordComposite({controlQubit, targetQubit1, targetQubit2}, {}, [&] {
+            const size_t q1 = controlQubit; // control
+            const size_t q2 = targetQubit1;
+            const size_t q3 = targetQubit2;
 
-        if (!ApplyCX(q3, q2))
-            return false;
-        if (!ApplyCSX(q2, q3))
-            return false;
-        if (!ApplyCX(q1, q2))
-            return false;
+            if (!ApplyCX(q3, q2))
+                return false;
+            if (!ApplyCSX(q2, q3))
+                return false;
+            if (!ApplyCX(q1, q2))
+                return false;
 
-        if (!ApplyP(q3, M_PI))
-            return false;
-        if (!ApplyP(q2, -M_PI_2))
-            return false;
+            if (!ApplyP(q3, M_PI))
+                return false;
+            if (!ApplyP(q2, -M_PI_2))
+                return false;
 
-        if (!ApplyCSX(q2, q3))
-            return false;
-        if (!ApplyCX(q1, q2))
-            return false;
+            if (!ApplyCSX(q2, q3))
+                return false;
+            if (!ApplyCX(q1, q2))
+                return false;
 
-        if (!ApplyP(q3, M_PI))
-            return false;
-        if (!ApplyCSX(q1, q3))
-            return false;
-        if (!ApplyCX(q3, q2))
-            return false;
+            if (!ApplyP(q3, M_PI))
+                return false;
+            if (!ApplyCSX(q1, q3))
+                return false;
+            if (!ApplyCX(q3, q2))
+                return false;
 
-        return true;
+            return true;
+        });
     }
 
     bool ApplyCCX(int controlQubit1, int controlQubit2, int targetQubit)
     {
-        const size_t q1 = controlQubit1; // control 1
-        const size_t q2 = controlQubit2; // control 2
-        const size_t q3 = targetQubit;   // target
+        return RecordComposite({controlQubit1, controlQubit2, targetQubit}, {}, [&] {
+            const size_t q1 = controlQubit1; // control 1
+            const size_t q2 = controlQubit2; // control 2
+            const size_t q3 = targetQubit;   // target
 
-        if (!ApplyCSX(q2, q3))
-            return false;
-        if (!ApplyCX(q1, q2))
-            return false;
-        if (!ApplyCSXDAG(q2, q3))
-            return false;
-        if (!ApplyCX(q1, q2))
-            return false;
-        if (!ApplyCSX(q1, q3))
-            return false;
+            if (!ApplyCSX(q2, q3))
+                return false;
+            if (!ApplyCX(q1, q2))
+                return false;
+            if (!ApplyCSXDAG(q2, q3))
+                return false;
+            if (!ApplyCX(q1, q2))
+                return false;
+            if (!ApplyCSX(q1, q3))
+                return false;
 
-        return true;
+            return true;
+        });
     }
 
     // to implement all gates, add:
@@ -724,51 +805,59 @@ class GpuPauliPropagator
 
     double QubitProbability0(int qubit)
     {
-        if (lib)
-        {
-            return lib->PauliPropQubitProbability0(obj, qubit);
-        }
-        return 0.0;
+        if (!lib || !obj)
+            throw std::runtime_error("Pauli propagator is not initialized");
+        const double value = lib->PauliPropQubitProbability0(obj, qubit);
+        if (!std::isfinite(value))
+            throw std::runtime_error("GPU Pauli probability failed");
+        return value;
     }
 
     double Probability(unsigned long long int outcome)
     {
-        if (lib)
-        {
-            return lib->PauliPropProbability(obj, outcome);
-        }
-        return 0.0;
+        if (!lib || !obj)
+            throw std::runtime_error("Pauli propagator is not initialized");
+        const double value = lib->PauliPropProbability(obj, outcome);
+        if (!std::isfinite(value))
+            throw std::runtime_error("GPU Pauli probability failed");
+        return value;
     }
 
     bool MeasureQubit(int qubit)
     {
-        if (lib)
-        {
-            return lib->PauliPropMeasureQubit(obj, qubit);
-        }
-        return false;
+        if (!lib || !obj)
+            throw std::runtime_error("Pauli propagator is not initialized");
+        return lib->PauliPropMeasureQubit(obj, qubit);
     }
 
     std::vector<bool> SampleQubits(const std::vector<int> &qubits)
     {
-        std::vector<bool> results;
-        if (lib && !qubits.empty())
+        if (qubits.empty())
+            return {};
+        if (!lib || !obj)
+            throw std::runtime_error("Pauli propagator is not initialized");
+        // The native conditional sampler takes distinct qubits. Map repeated output
+        // positions back to the same draw, preserving the public sampling contract.
+        std::vector<int> unique;
+        std::vector<size_t> positions;
+        std::unordered_map<int, size_t> indices;
+        for (int qubit : qubits)
         {
-            std::vector<int> cQubits = qubits;
-            unsigned char *res = lib->PauliPropSampleQubits(obj, qubits.data(), static_cast<int>(cQubits.size()));
-            if (!res)
-                return results;
-
-            results.reserve(cQubits.size());
-            for (size_t i = 0; i < cQubits.size(); ++i)
-            {
-                // results are encoded as bits
-                const bool bit = ((res[i / 8] >> (i % 8)) & 1) == 1;
-                results.push_back(bit);
-            }
-
-            lib->PauliPropFreeSampledQubits(res);
+            if (qubit < 0 || qubit >= GetNrQubits())
+                throw std::out_of_range("Invalid Pauli sampling qubit");
+            const auto [entry, inserted] = indices.emplace(qubit, unique.size());
+            if (inserted)
+                unique.push_back(qubit);
+            positions.push_back(entry->second);
         }
+        const auto release = [this](unsigned char *bits) { lib->PauliPropFreeSampledQubits(bits); };
+        std::unique_ptr<unsigned char, decltype(release)> bits(lib->PauliPropSampleQubits(obj, unique.data(), static_cast<int>(unique.size())), release);
+        if (!bits)
+            throw std::runtime_error("GPU Pauli sampling failed");
+        std::vector<bool> results;
+        results.reserve(qubits.size());
+        for (size_t position : positions)
+            results.push_back((bits.get()[position / 8] >> (position % 8)) & 1);
         return results;
     }
 
@@ -789,6 +878,48 @@ class GpuPauliPropagator
     }
 
   private:
+    template <class F> bool RecordComposite(std::initializer_list<int> qubits, std::initializer_list<double> angles, F &&record)
+    {
+        if (!lib || !obj)
+            return false;
+        for (auto it = qubits.begin(); it != qubits.end(); ++it)
+        {
+            if (*it < 0 || *it >= GetNrQubits())
+                return false;
+            for (auto other = qubits.begin(); other != it; ++other)
+                if (*other == *it)
+                    return false;
+        }
+        for (double angle : angles)
+            if (!std::isfinite(angle))
+                return false;
+        if (compositeDepth)
+            return record();
+        const bool checkpoint = lib->HasPauliPropOperatorCheckpoints();
+        const auto position = checkpoint ? lib->PauliPropGetOperatorCount(obj) : 0;
+
+        struct Rollback
+        {
+            GpuPauliPropagator &sim;
+            bool active;
+            unsigned long long position;
+
+            ~Rollback()
+            {
+                --sim.compositeDepth;
+                if (active)
+                    sim.lib->PauliPropTruncateOperators(sim.obj, position);
+            }
+        } rollback{*this, checkpoint, position};
+
+        ++compositeDepth;
+        if (!record())
+            return false;
+        rollback.active = false;
+        return true;
+    }
+
+    unsigned compositeDepth = 0;
     int device; // Fixed even when native creation is delayed or repeated.
     GpuDeviceContext lib;
     void *obj;

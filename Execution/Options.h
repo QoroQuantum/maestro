@@ -121,8 +121,10 @@ inline const std::vector<Option> &Options()
         {"mps_svd_solver", "", "string", "gpu_mps"},
         {"mpo_svd_solver", "", "string", "gpu_mpo"},
         {"tensor_network_svd_solver", "", "string", "gpu_tn"},
-        {"pp_workers", "pauli_propagator_workers", "integer", "cpu_pp"},
-        {"pp_sampling_cache_nodes", "pauli_propagator_sampling_cache_nodes", "integer", "cpu_pp"},
+        {"pp_workers", "pauli_propagator_workers", "integer", "pp"},
+        {"pp_sampling_cache_nodes", "pauli_propagator_sampling_cache_nodes", "integer", "pp"},
+        {"pp_memory_limit_bytes", "pauli_propagator_memory_limit_bytes", "positive_integer", "gpu_pp"},
+        {"pp_max_fused_gates", "pauli_propagator_max_fused_gates", "positive_integer", "gpu_pp"},
         {"pp_coefficient_threshold", "pauli_propagator_coefficient_threshold", "nonnegative", "pp"},
         {"pp_max_pauli_weight", "pauli_propagator_pauli_weight_threshold", "integer", "pp"},
         {"pp_gates_between_trims", "pauli_propagator_steps_between_trims", "positive_integer", "pp"},
@@ -178,6 +180,8 @@ inline bool Applies(const Option &option, const SimulatorConfig &config)
         return gpu && mpo;
     if (family == "gpu_tn")
         return gpu && method == Method::kTensorNetwork;
+    if (family == "gpu_pp")
+        return gpu && method == Method::kPauliPropagator;
     if (family == "cpu_pp")
         return method == Method::kPauliPropagator && backend == Backend::kQCSim;
     if (family == "pp")
@@ -245,7 +249,18 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
         if (name == "gpu_device")
             Require(UInt(value) <= INT_MAX, "gpu_device is too large");
         if (name == "pp_workers")
-            Require(UInt(value) <= 1024, "pp_workers exceeds 1024");
+        {
+            if (config.simulator_type == Backend::kGpuSim)
+                Require(UInt(value) >= 1 && UInt(value) <= 64, "GPU pp_workers must be in [1, 64]");
+            else
+                Require(UInt(value) <= 1024, "pp_workers exceeds 1024");
+        }
+        if (name == "pp_max_fused_gates")
+            Require(UInt(value) <= 256, "pp_max_fused_gates exceeds 256");
+        if (name == "pp_memory_limit_bytes" || name == "pp_sampling_cache_nodes")
+            Require(UInt(value) <= INT64_MAX, "Pauli memory/cache limit is too large");
+        if (name == "pp_gates_between_trims" || name == "pp_gates_between_deduplications")
+            Require(UInt(value) <= INT_MAX, "Pauli gate interval exceeds INT_MAX");
         if (name == "max_simulators")
             Require(UInt(value) <= 1024, "max_simulators exceeds 1024");
         if (name == "trajectory_policy")

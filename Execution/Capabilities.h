@@ -1,6 +1,7 @@
 // Additive discovery metadata for the native request contract.
 #pragma once
 #include "Options.h"
+#include "Request.h"
 #include "Json/NoiseJson.h"
 // Source consumers such as Composer do not run Maestro's CMake configuration.
 // Build identity is optional and must not prevent those consumers from
@@ -111,6 +112,10 @@ inline json::object OptionCapability(const Option &option)
     }
     if (name == "max_simulators" || name == "pp_workers")
         result["maximum"] = 1024;
+    if (name == "pp_workers")
+        result["constraints"] = json::array{json::object{{"backend", "gpu"}, {"minimum", 1}, {"maximum", 64}}};
+    if (name == "pp_max_fused_gates")
+        result["maximum"] = 256;
     if (name == "gpu_device")
         result["maximum"] = INT_MAX;
     if (name == "max_bond_dimension")

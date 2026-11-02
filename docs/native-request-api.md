@@ -224,6 +224,10 @@ are rejected. Small floating-point thresholds retain their precision.
 | `mps_svd_solver` | `` | string | gpu_mps |
 | `mpo_svd_solver` | `` | string | gpu_mpo |
 | `tensor_network_svd_solver` | `` | string | gpu_tn |
+| `pp_workers` | `pauli_propagator_workers` | integer | pp (GPU: 1–64; CPU: 0–1024) |
+| `pp_sampling_cache_nodes` | `pauli_propagator_sampling_cache_nodes` | integer | pp |
+| `pp_memory_limit_bytes` | `pauli_propagator_memory_limit_bytes` | positive_integer | gpu_pp |
+| `pp_max_fused_gates` | `pauli_propagator_max_fused_gates` | positive_integer (1–256) | gpu_pp |
 | `pp_coefficient_threshold` | `pauli_propagator_coefficient_threshold` | nonnegative | pp |
 | `pp_max_pauli_weight` | `pauli_propagator_pauli_weight_threshold` | integer | pp |
 | `pp_gates_between_trims` | `pauli_propagator_steps_between_trims` | positive_integer | pp |
@@ -235,7 +239,22 @@ GPU method. Precision is `single` or `double` and applies to Aer and the GPU
 backends. Truncation is `relative_max` or `discarded_weight`. `mps_sampling` is
 `probabilities` or `apply_measure`, and each SVD solver option is `gesvd`,
 `gesvdj`, `gesvdp` or `gesvdr`. Pauli propagation without a deduplication cadence
-deduplicates every 10 operations. Omitted seeds are generated randomly for each
+deduplicates at every tenth circuit index, including zero. When either Pauli
+threshold is supplied without a trim interval, the trim interval follows the
+effective deduplication interval, including an explicit native configuration key.
+With a threshold and neither interval supplied, both default to ten. Explicit trim intervals take precedence. GPU
+trimming and deduplication use separate intervals; QCSim additionally applies
+thresholds during every deduplication pass. Explicitly different intervals can
+therefore produce different approximate CPU/GPU results. GPU propagation also
+keeps the final trim, including when `INT_MAX` disables periodic trimming.
+Requests without thresholds retain the backend's trim default.
+GPU buffers grow within the configured budget (default 90% of available memory);
+selecting a budget does not allocate the expansion buffers. Independent budgets
+are limits, not reservations against other GPU users. GPU workers default to one
+and share that budget; memory pressure reduces concurrency automatically. Fused blocks default
+to 64 gates (one disables fusion), and the sampling cache defaults to 8192 nodes
+(zero disables caching). Larger worker counts can add overhead on small batches.
+Omitted seeds are generated randomly for each
 request. Specify an explicit simulator seed once, through `execution.seed` or
 the options object, to reproduce a run; zero is a valid explicit seed.
 
