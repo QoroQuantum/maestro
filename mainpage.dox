@@ -8,7 +8,7 @@
  * It abstracts the complexity of simulator configuration, enabling seamless execution
  * across CPUs, NVIDIA GPUs, and distributed MPI environments.
  *
- * - **Version:** 0.3.10
+ * - **Version:** 0.3.11
  * - **License:** GPL-3.0
  * - **Organisation:** [Qoro Quantum](https://qoroquantum.de)
  *
@@ -82,10 +82,10 @@
  *
  * | Documentation Pillar | Description |
  * |----------------------|-------------|
- * | @ref python_guide "Python User Guide" | Full Python SDK guide, circuits, backends, algorithms, and reference |
- * | @ref py_noise "Noise Simulation Manual" | Hardware-realistic noise models, thermal relaxation, and CPTP channels |
+ * | [Python documentation](https://qoroquantum.github.io/maestro/) | Python guide, examples and API reference |
+ * | [Noise and error correction](https://qoroquantum.github.io/maestro/user-guide/noise-and-qec.html) | Hardware-realistic noise models, thermal relaxation, and CPTP channels |
  * | @ref md_markdown_2TUTORIAL "C++ Developer Tutorial" | Complete C++ workflow, memory management, and compilation |
- * | @ref py_hpc "HPC & Hardware Acceleration" | NVIDIA GPU (single, multi-GPU & MPI cluster) and QuEST deployment |
+ * | [GPU access](https://qoroquantum.github.io/maestro/getting-started/gpu-access.html) | NVIDIA GPU (single, multi-GPU & MPI cluster) setup |
  * | @ref core "C++ API Reference" | C++ module groups, class hierarchies, and structs |
  *
  * ---

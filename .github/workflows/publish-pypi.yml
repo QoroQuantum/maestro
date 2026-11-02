@@ -9,6 +9,11 @@ on:
         description: "Skip CI tests / build (cmake-multi-platform)"
         type: boolean
         default: false
+      ci_suite:
+        description: "CI test suite: base (quick) or full (adds slow tests and the Windows build)"
+        type: choice
+        options: [ base, full ]
+        default: base
       from_run_id:
         description: "Optional: existing run ID to publish artifacts from (skips building)"
         type: string
@@ -34,11 +39,15 @@ env:
   MACOS_DYLD_PATH: $(brew --prefix)/lib:$(brew --prefix openblas)/lib:$(brew --prefix libomp)/lib
 
 jobs:
-  # CI tests run alongside the builds and must pass before upload (unless skipped)
+  # CI tests run alongside the builds and must pass before upload (unless
+  # skipped). Releases run the base suite unless ci_suite asks for full; the
+  # full suite runs on every push to main.
   ci:
     name: Run CI tests
     if: ${{ !inputs.skip_ci && !inputs.from_run_id }}
     uses: ./.github/workflows/cmake-multi-platform.yml
+    with:
+      suite: ${{ inputs.ci_suite || 'base' }}
 
   # Single source of the version being published, for both triggers: a release
   # whose tag disagrees with pyproject.toml fails here, before anything builds.
@@ -87,7 +96,7 @@ jobs:
       # One abi3 wheel per platform: cibuildwheel builds it for CPython 3.10 and
       # reuses it, testing only, for the later versions.
       matrix:
-        os: [ubuntu-latest, windows-2022, macos-14]
+        os: [ubuntu-latest, windows-2022, macos-15]
 
     steps:
       - uses: actions/checkout@v5
@@ -181,6 +190,15 @@ jobs:
           }
           echo "AER_INCLUDE_DIR=C:/qiskit-aer/src" >> $env:GITHUB_ENV
 
+      # clang from Xcode 16.3 on emits __kmpc_dispatch_deinit, which the libomp in
+      # torch <= 2.6 lacks. Maestro binds to torch's libomp when torch is
+      # installed, so a newer Xcode breaks importing Maestro next to old torch.
+      - name: Select Xcode 16.2 (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.2.app
+          clang --version
+
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.4.1
         env:
@@ -227,8 +245,10 @@ jobs:
             brew install boost openblas libomp ccache &&
             git clone --depth 1 https://github.com/QoroQuantum/qiskit-aer.git /tmp/qiskit-aer
 
+          # Homebrew's libomp and OpenBLAS, which delocate bundles, are built for
+          # the runner's macOS, so the wheel can't target anything older.
           CIBW_ENVIRONMENT_MACOS: >-
-            MACOSX_DEPLOYMENT_TARGET=14.0
+            MACOSX_DEPLOYMENT_TARGET=15.0
             AER_INCLUDE_DIR=/tmp/qiskit-aer/src
             CMAKE_ARGS="-DOpenMP_ROOT=$(brew --prefix libomp) -DOpenBLAS_ROOT=$(brew --prefix openblas) -DCMAKE_PREFIX_PATH=$(brew --prefix openblas)"
             DYLD_FALLBACK_LIBRARY_PATH=${{ env.MACOS_DYLD_PATH }}
@@ -258,7 +278,8 @@ jobs:
             pytest {project}/tests/python/test_bindings.py -q -k "TestGetStatevector or TestSparseStatevector or TestSimulatorConfigFields" &&
             pytest {project}/tests/python/test_adjoint.py -q
           # Also checks Maestro's libomp: alone with the Homebrew prefixes unreadable,
-          # then next to scikit-learn and torch, each in both import orders.
+          # then next to scikit-learn and torch, each in both import orders, and
+          # last next to torch 2.6, whose libomp is older (it has no Python 3.14 build).
           CIBW_TEST_COMMAND_MACOS: >-
             pytest {project}/tests/python/test_bindings.py -q -k "TestGetStatevector or TestSparseStatevector or TestSimulatorConfigFields" &&
             pytest {project}/tests/python/test_adjoint.py -q &&
@@ -269,7 +290,11 @@ jobs:
             python {project}/.github/scripts/check_macos_libomp.py maestro sklearn &&
             python -m pip install torch &&
             python {project}/.github/scripts/check_macos_libomp.py torch maestro &&
-            python {project}/.github/scripts/check_macos_libomp.py maestro torch maestro
+            python {project}/.github/scripts/check_macos_libomp.py maestro torch maestro &&
+            if python -c 'import sys; sys.exit(sys.version_info >= (3, 14))'; then
+            python -m pip install "torch<2.7" &&
+            python {project}/.github/scripts/check_macos_libomp.py torch maestro;
+            fi
           CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-* cp314-*"
           CIBW_SKIP: "*-musllinux_* *i686 *ppc64le *s390x"
 

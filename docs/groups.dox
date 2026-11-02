@@ -123,6 +123,6 @@
  * @defgroup python Python Bindings
  * @brief High-performance Python bindings via nanobind.
  *
- * @sa @ref python_guide "Python User Guide" for the complete guide and reference
+ * @sa [Python documentation](https://qoroquantum.github.io/maestro/) for the complete guide and reference
  * @sa @ref md_markdown_2TUTORIAL "C++ Tutorial" for C++ examples
  */

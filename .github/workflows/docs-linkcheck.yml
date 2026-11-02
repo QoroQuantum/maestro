@@ -1,0 +1,36 @@
+name: Check documentation links
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "docs/sphinx/**"
+      - "README.md"
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linkcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The released wheel is enough here: link checking imports maestro for
+      # the API pages but doesn't run the code cells.
+      - name: Install docs dependencies
+        run: python -m pip install qoro-maestro -r docs/sphinx/requirements.txt
+
+      # -P keeps the checkout root off sys.path, so autodoc imports the wheel
+      # and not the checkout's maestro/ package, which has no compiled extension.
+      - name: Check links
+        run: python -P -m sphinx -b linkcheck -D nb_execution_mode=off docs/sphinx docs/sphinx/_build/linkcheck

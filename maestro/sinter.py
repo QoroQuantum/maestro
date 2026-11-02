@@ -561,7 +561,7 @@ def split_stim_prefix_suffix(
 def count_nontrivial_prefix_gates(circuit: stim.Circuit | str | Any) -> tuple[int, int]:
     """Count non-trivial (two-qubit, single-qubit) operations in a prefix circuit.
 
-    Trivial operations include resets to |0> (R, RZ), coordinates (QUBIT_COORDS,
+    Trivial operations include resets to ``|0>`` (R, RZ), coordinates (QUBIT_COORDS,
     SHIFT_COORDS), and ticks (TICK). Non-trivial operations include 2-qubit entangling
     gates and 1-qubit gates/rotations or non-Z basis resets (RX, RY).
 

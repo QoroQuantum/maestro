@@ -134,7 +134,7 @@ void bind_noise(nb::module_ &m)
              "    qubit: Qubit index.\n"
              "    t1: T1 relaxation time in seconds.\n"
              "    t2: T2 dephasing time in seconds (T2 <= 2*T1).\n"
-             "    excited_population: Equilibrium |1> state population (default "
+             "    excited_population: Equilibrium ``|1>`` state population (default "
              "0.0).\n"
              "    detuning_hz: Coherent detuning frequency in Hz (default 0.0).\n")
         .def("has_idle_noise", &noise::NoiseModel::has_idle_noise, "Return True if any idle noise parameters have been set.")
@@ -454,7 +454,7 @@ void bind_noise(nb::module_ &m)
           "noise_seed"_a = nb::none(),
           "Compute fidelity to the ideal unitary circuit state under noise.\n\n"
           "Injects all configured noise types (correlated, coherent, "
-          "crosstalk, T1, Pauli) and averages |<psi_ideal|psi_noisy>|^2 "
+          "crosstalk, T1, Pauli) and averages ``|<psi_ideal|psi_noisy>|^2`` "
           "over noise realizations.\n\n"
           "Returns dict with 'fidelity', 'infidelity', 'std_error', "
           "'time_taken', 'noise_realizations'.\n\n"

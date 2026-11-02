@@ -169,7 +169,7 @@ void bind_api(nb::module_ &m)
            std::optional<nb::object> observables) { return mirror_fidelity_core(circuit, config, shots, full_amplitude, observables); },
         "circuit"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "full_amplitude"_a = false, "observables"_a = nb::none(),
         "Compute mirror fidelity: run a circuit forward then its adjoint in "
-        "reverse, returning P(|0...0>). Uses shot-based sampling by "
+        "reverse, returning ``P(|0...0>)``. Uses shot-based sampling by "
         "default. Set full_amplitude=True for exact statevector "
         "computation (small circuits only). Pass observables (a Pauli "
         "string, ';'-separated string or list) to instead return the "
@@ -181,7 +181,7 @@ void bind_api(nb::module_ &m)
         [](const std::shared_ptr<Circuits::Circuit<double>> &circuit_1, const std::shared_ptr<Circuits::Circuit<double>> &circuit_2,
            const SimulatorConfig &config) { return inner_product_core(circuit_1, circuit_2, config); },
         "circuit_1"_a, "circuit_2"_a, "config"_a = SimulatorConfig{},
-        "Compute the inner product <psi_1|psi_2> = <0|U1^dag U2|0> between "
+        "Compute the inner product ``<psi_1|psi_2> = <0|U1^dag U2|0>`` between "
         "two circuits' output states, using ProjectOnZero.");
 
     // =========================================================================
@@ -235,7 +235,7 @@ void bind_api(nb::module_ &m)
         "Compute the probability of a specific output state using the Pauli "
         "path integral simulator.\n\n"
         "This is the path integral's key advantage: it computes a single "
-        "amplitude <target_state|U|0...0> without building the full "
+        "amplitude ``<target_state|U|0...0>`` without building the full "
         "statevector, making it efficient for large circuits with few "
         "branching gates.\n\n"
         "Args:\n"

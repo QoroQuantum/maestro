@@ -77,3 +77,6 @@ __pycache__/
 *.pyo
 
 /examples
+
+# Sphinx docs build output
+docs/sphinx/_build/

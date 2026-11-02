@@ -4,7 +4,7 @@
 # =============================================================================
 
 PROJECT_NAME           = "Maestro"
-PROJECT_NUMBER         = "0.3.10"
+PROJECT_NUMBER         = "0.3.11"
 PROJECT_BRIEF          = "Unified interface for quantum circuit simulation"
 PROJECT_LOGO           = markdown/favicon.ico
 PROJECT_ICON           = markdown/favicon.ico
@@ -80,7 +80,6 @@ INPUT                  = Circuit \
                          maestrolib \
                          qasm \
                          docs/groups.dox \
-                         docs/python \
                          mainpage.dox \
                          markdown \
                          Types.h
