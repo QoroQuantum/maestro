@@ -216,10 +216,9 @@ void SamplingBudgetRequests()
             };
             const auto expected = run(32768, 0);
             // Pin successful budgets inside and above the reported gaps, in both precisions.
-            const std::vector<size_t> budgets = weight == 4
-                                                    ? (precision ? std::vector<size_t>{768, 1024} : std::vector<size_t>{602, 614, 626, 640, 768})
-                                                    : (precision ? std::vector<size_t>{3502, 3513, 3584, 4096}
-                                                                 : std::vector<size_t>{2980, 3072, 3430, 3462, 3502, 3513, 4096});
+            const std::vector<size_t> budgets =
+                weight == 4 ? (precision ? std::vector<size_t>{768, 1024} : std::vector<size_t>{602, 614, 626, 640, 768})
+                            : (precision ? std::vector<size_t>{3502, 3513, 3584, 4096} : std::vector<size_t>{2980, 3072, 3430, 3462, 3502, 3513, 4096});
             for (size_t cache : {0, 8192})
                 for (size_t kib : budgets)
                     Check(run(kib, cache) == expected, "sampling budget or cache changed seeded request counts");
@@ -239,27 +238,52 @@ void QubitValidation()
         Near(sim->ExpectationValue("IIZ"), 1.);
     };
     using Q = Types::qubit_t;
-    const std::function<void(Q)> gates[]{
-        [&](Q q) { sim->ApplyP(q, .3); }, [&](Q q) { sim->ApplyX(q); }, [&](Q q) { sim->ApplyY(q); },
-        [&](Q q) { sim->ApplyZ(q); }, [&](Q q) { sim->ApplyH(q); }, [&](Q q) { sim->ApplyS(q); },
-        [&](Q q) { sim->ApplySDG(q); }, [&](Q q) { sim->ApplyT(q); }, [&](Q q) { sim->ApplyTDG(q); },
-        [&](Q q) { sim->ApplySx(q); }, [&](Q q) { sim->ApplySxDAG(q); }, [&](Q q) { sim->ApplyK(q); },
-        [&](Q q) { sim->ApplyRx(q, .3); }, [&](Q q) { sim->ApplyRy(q, .3); }, [&](Q q) { sim->ApplyRz(q, .3); },
-        [&](Q q) { sim->ApplyU(q, .3, .4, .5, .6); },
-        [&](Q q) { sim->ApplyCX(q, 2); }, [&](Q q) { sim->ApplyCX(2, q); },
-        [&](Q q) { sim->ApplyCY(q, 2); }, [&](Q q) { sim->ApplyCY(2, q); },
-        [&](Q q) { sim->ApplyCZ(q, 2); }, [&](Q q) { sim->ApplyCZ(2, q); },
-        [&](Q q) { sim->ApplyCP(q, 2, .3); }, [&](Q q) { sim->ApplyCP(2, q, .3); },
-        [&](Q q) { sim->ApplyCRx(q, 2, .3); }, [&](Q q) { sim->ApplyCRx(2, q, .3); },
-        [&](Q q) { sim->ApplyCRy(q, 2, .3); }, [&](Q q) { sim->ApplyCRy(2, q, .3); },
-        [&](Q q) { sim->ApplyCRz(q, 2, .3); }, [&](Q q) { sim->ApplyCRz(2, q, .3); },
-        [&](Q q) { sim->ApplyCH(q, 2); }, [&](Q q) { sim->ApplyCH(2, q); },
-        [&](Q q) { sim->ApplyCSx(q, 2); }, [&](Q q) { sim->ApplyCSx(2, q); },
-        [&](Q q) { sim->ApplyCSxDAG(q, 2); }, [&](Q q) { sim->ApplyCSxDAG(2, q); },
-        [&](Q q) { sim->ApplySwap(q, 2); }, [&](Q q) { sim->ApplySwap(2, q); },
-        [&](Q q) { sim->ApplyCU(q, 2, .3, .4, .5, .6); }, [&](Q q) { sim->ApplyCU(2, q, .3, .4, .5, .6); },
-        [&](Q q) { sim->ApplyCCX(q, 1, 2); }, [&](Q q) { sim->ApplyCCX(0, q, 2); }, [&](Q q) { sim->ApplyCCX(0, 1, q); },
-        [&](Q q) { sim->ApplyCSwap(q, 1, 2); }, [&](Q q) { sim->ApplyCSwap(0, q, 2); }, [&](Q q) { sim->ApplyCSwap(0, 1, q); }};
+    const std::function<void(Q)> gates[]{[&](Q q) { sim->ApplyP(q, .3); },
+                                         [&](Q q) { sim->ApplyX(q); },
+                                         [&](Q q) { sim->ApplyY(q); },
+                                         [&](Q q) { sim->ApplyZ(q); },
+                                         [&](Q q) { sim->ApplyH(q); },
+                                         [&](Q q) { sim->ApplyS(q); },
+                                         [&](Q q) { sim->ApplySDG(q); },
+                                         [&](Q q) { sim->ApplyT(q); },
+                                         [&](Q q) { sim->ApplyTDG(q); },
+                                         [&](Q q) { sim->ApplySx(q); },
+                                         [&](Q q) { sim->ApplySxDAG(q); },
+                                         [&](Q q) { sim->ApplyK(q); },
+                                         [&](Q q) { sim->ApplyRx(q, .3); },
+                                         [&](Q q) { sim->ApplyRy(q, .3); },
+                                         [&](Q q) { sim->ApplyRz(q, .3); },
+                                         [&](Q q) { sim->ApplyU(q, .3, .4, .5, .6); },
+                                         [&](Q q) { sim->ApplyCX(q, 2); },
+                                         [&](Q q) { sim->ApplyCX(2, q); },
+                                         [&](Q q) { sim->ApplyCY(q, 2); },
+                                         [&](Q q) { sim->ApplyCY(2, q); },
+                                         [&](Q q) { sim->ApplyCZ(q, 2); },
+                                         [&](Q q) { sim->ApplyCZ(2, q); },
+                                         [&](Q q) { sim->ApplyCP(q, 2, .3); },
+                                         [&](Q q) { sim->ApplyCP(2, q, .3); },
+                                         [&](Q q) { sim->ApplyCRx(q, 2, .3); },
+                                         [&](Q q) { sim->ApplyCRx(2, q, .3); },
+                                         [&](Q q) { sim->ApplyCRy(q, 2, .3); },
+                                         [&](Q q) { sim->ApplyCRy(2, q, .3); },
+                                         [&](Q q) { sim->ApplyCRz(q, 2, .3); },
+                                         [&](Q q) { sim->ApplyCRz(2, q, .3); },
+                                         [&](Q q) { sim->ApplyCH(q, 2); },
+                                         [&](Q q) { sim->ApplyCH(2, q); },
+                                         [&](Q q) { sim->ApplyCSx(q, 2); },
+                                         [&](Q q) { sim->ApplyCSx(2, q); },
+                                         [&](Q q) { sim->ApplyCSxDAG(q, 2); },
+                                         [&](Q q) { sim->ApplyCSxDAG(2, q); },
+                                         [&](Q q) { sim->ApplySwap(q, 2); },
+                                         [&](Q q) { sim->ApplySwap(2, q); },
+                                         [&](Q q) { sim->ApplyCU(q, 2, .3, .4, .5, .6); },
+                                         [&](Q q) { sim->ApplyCU(2, q, .3, .4, .5, .6); },
+                                         [&](Q q) { sim->ApplyCCX(q, 1, 2); },
+                                         [&](Q q) { sim->ApplyCCX(0, q, 2); },
+                                         [&](Q q) { sim->ApplyCCX(0, 1, q); },
+                                         [&](Q q) { sim->ApplyCSwap(q, 1, 2); },
+                                         [&](Q q) { sim->ApplyCSwap(0, q, 2); },
+                                         [&](Q q) { sim->ApplyCSwap(0, 1, q); }};
     sim->SetSeed(975);
     const auto expected = sim->SampleCounts({0, 1, 2}, 24);
     for (Q invalid : {Q{3}, Q{INT_MAX} + 1, Q{1} << 32, (Q{1} << 32) + 1, std::numeric_limits<Q>::max()})
@@ -275,9 +299,12 @@ void QubitValidation()
         {
             sim->SetSeed(975);
             Reject([&] {
-                if (operation == 0) sim->Measure({0, invalid});
-                else if (operation == 1) sim->MeasureMany({0, invalid});
-                else sim->ApplyReset({1, invalid});
+                if (operation == 0)
+                    sim->Measure({0, invalid});
+                else if (operation == 1)
+                    sim->MeasureMany({0, invalid});
+                else
+                    sim->ApplyReset({1, invalid});
             });
             unchanged();
             Check(sim->SampleCounts({0, 1, 2}, 24) == expected, "invalid measurement/reset advanced the RNG");

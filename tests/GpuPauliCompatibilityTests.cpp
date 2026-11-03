@@ -17,8 +17,14 @@ void Check(bool value, const char *message)
 template <class F> void Reject(F &&f)
 {
     bool rejected = false;
-    try { f(); }
-    catch (const std::exception &) { rejected = true; }
+    try
+    {
+        f();
+    }
+    catch (const std::exception &)
+    {
+        rejected = true;
+    }
     Check(rejected, "uninitialized Pauli wrapper accepted a result");
 }
 
