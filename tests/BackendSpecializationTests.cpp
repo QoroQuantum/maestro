@@ -521,6 +521,35 @@ void IndependentCloneSnapshots()
         }
     std::cout << "PASS independent clone snapshot replacement and lifetime\n";
 }
+
+// A measurement suspends observer notifications only while it runs.
+void MeasureNotifications()
+{
+    struct Observer : ISimulatorObserver
+    {
+        size_t count = 0;
+
+        void Update(const Types::qubits_vector &) override
+        {
+            ++count;
+        }
+    };
+
+    for (const auto &method : methods)
+    {
+        auto sim = SimulatorsFactory::CreateImmediateSimulatorUnique(SimulatorType::kQCSim, method.type);
+        auto observer = std::make_shared<Observer>();
+        sim->RegisterObserver(observer);
+        sim->AllocateQubits(2);
+        sim->Initialize();
+        sim->ApplyX(0);
+        Check(sim->Measure({0, 1}) == 1, "measurement returned the wrong outcome");
+        sim->ApplyX(1);
+        if (observer->count != 3)
+            throw std::runtime_error(std::string(method.name) + " measurement left observer notifications disabled");
+    }
+    std::cout << "PASS measurement observer notifications\n";
+}
 } // namespace
 
 int main(int argc, char **argv)
@@ -535,7 +564,10 @@ int main(int argc, char **argv)
         ConsecutiveMeasurements();
         IndependentCloneSnapshots();
         if (!publicOnly)
+        {
+            MeasureNotifications();
             GpuSelection();
+        }
     }
     catch (const std::exception &error)
     {

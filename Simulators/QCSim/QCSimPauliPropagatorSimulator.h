@@ -135,6 +135,8 @@ class QCSimPauliPropagatorSimulator : public ImmediateQCSimSimulator
                     result |= mask;
                 mask <<= 1;
             }
+            Notify();
+            NotifyObservers(qubits);
             return result;
         }
     }
