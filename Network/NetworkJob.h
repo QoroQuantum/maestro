@@ -99,13 +99,14 @@ template <typename Time = Types::time_type> class ExecuteJob
             optSim = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
             if (!optSim)
                 return;
-            config.ApplyConfigurationToSimulator(optSim);
+            ApplyConfiguration(optSim);
             if (optSim->GetType() != Simulators::SimulatorType::kQCSim || method == Simulators::SimulationType::kPauliPropagator ||
                 optSim->GetConfiguration("sampling_policy") == "reproducible_v1")
                 optSim->SetMultithreading(allowInternalMultithreading);
             threadBudget.Limit(SimulatorThreadLimit());
             optSim->AllocateQubits(nrQubits);
             optSim->Initialize();
+            ApplyTransientSeed(optSim);
 
             OptimizeMPSInitialQubitsMap(optSim, dcirc, nrQubits);
 
@@ -194,7 +195,11 @@ template <typename Time = Types::time_type> class ExecuteJob
             if (independentShotStreams)
             {
                 const uint64_t seed = Simulators::IState::DeriveSeed(trajectorySeed, firstShot + i);
-                optSim->SetSeed(seed); // Backend and readout have separate streams.
+                // Backend and readout have separate streams.
+                if (transientSeed)
+                    optSim->SeedForExecution(seed);
+                else
+                    optSim->SetSeed(seed);
                 dcirc = shotCircuit->CloneForExecution(Simulators::IState::DeriveSeed(seed, 0x434c415353494341ULL));
             }
             if (optimiseMultipleShots)
@@ -442,6 +447,26 @@ template <typename Time = Types::time_type> class ExecuteJob
         return curCnt;
     }
 
+    // A transient seed is left out of the simulator configuration. It seeds the
+    // job's streams through ApplyTransientSeed once the simulator is initialized.
+    void ApplyConfiguration(const std::shared_ptr<Simulators::ISimulator> &sim) const
+    {
+        if (!transientSeed)
+        {
+            config.ApplyConfigurationToSimulator(sim);
+            return;
+        }
+        auto unseeded = config;
+        unseeded.RemoveConfiguration("seed");
+        unseeded.ApplyConfigurationToSimulator(sim);
+    }
+
+    void ApplyTransientSeed(const std::shared_ptr<Simulators::ISimulator> &sim) const
+    {
+        if (transientSeed)
+            sim->SeedForExecution(std::stoull(config.GetConfiguration("seed")));
+    }
+
   private:
     void ConfigureTrajectoryArithmetic()
     {
@@ -673,6 +698,9 @@ template <typename Time = Types::time_type> class ExecuteJob
     int internalThreads = 0;
     // Distinguishes jobs even when the caller did not configure a simulator seed.
     uint64_t randomStream = 0;
+    // The network is unseeded: the seed in config derives this job's streams,
+    // but the network may keep the job's simulator, which must stay unseeded.
+    bool transientSeed = false;
     bool independentShotStreams = false;
     uint64_t trajectorySeed = 0;
     size_t firstShot = 0;

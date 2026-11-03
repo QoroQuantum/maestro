@@ -190,7 +190,21 @@ void TestLegacySeeds()
                 FreeResult(result);
             Check(estimateRejected, "Legacy estimator accepted a malformed seed");
         }
-        run(123);
+        const auto seeded = run(123);
+
+        // Omitting the seed on a reused handle restores unseeded execution.
+        auto unseeded = [&] {
+            auto *raw = SimpleExecute(simulator.handle, circuit, "{\"shots\":512}");
+            Check(raw != nullptr, "Legacy unseeded execution failed");
+            const auto result = j::parse(raw);
+            FreeResult(raw);
+            return result.at("counts");
+        };
+        const auto first = unseeded();
+        const auto second = unseeded();
+        const auto third = unseeded();
+        Check(first != second || second != third, "Omitted legacy seed kept the previous seed");
+        Check(run(123) == seeded, "Legacy seed stopped reproducing after unseeded execution");
     }
 }
 

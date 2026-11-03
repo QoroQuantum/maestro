@@ -146,6 +146,17 @@ class IState
     }
 
     /**
+     * Seed every random stream for the current execution without configuring a
+     * seed. An unseeded simulator stays unseeded: its configuration does not
+     * report this seed and reinitializing it draws fresh entropy. Backends that
+     * cannot separate the two configure the seed, as SetSeed does.
+     */
+    virtual void SeedForExecution(uint64_t seed)
+    {
+        SetSeed(seed);
+    }
+
+    /**
      * @brief Uniform random number in [0, 1) from the auxiliary stream.
      *
      * Used for classical post-processing that happens during execution, such as

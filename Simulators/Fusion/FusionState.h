@@ -87,6 +87,13 @@ class FusionState : public ISimulator
         immediate_->SetSeed(seed);
     }
 
+    void SeedForExecution(uint64_t seed) override
+    {
+        Flush();
+        SeedAuxiliaryRng(seed);
+        immediate_->SeedForExecution(seed);
+    }
+
     void FlushPendingGates() override
     {
         cache_.Flush([this](const auto &block) { Emit(block); });
@@ -732,7 +739,10 @@ class FusionState : public ISimulator
         copy.saved_ = saved_;
         copy.destructiveSaved_ = destructiveSaved_;
         copy.cache_.SetWidth(copy.GetGateFusionMaxQubits());
-        const auto seed = copy.immediate_->GetConfiguration("seed");
+        // An unseeded backend clone keeps its derived root as its sampling seed.
+        auto seed = copy.immediate_->GetConfiguration("seed");
+        if (seed.empty())
+            seed = copy.immediate_->GetConfiguration("sampling_seed");
         if (!seed.empty())
             copy.SeedAuxiliaryRng(std::stoull(seed));
         // Flush above either completed the pending planned block or invalidated

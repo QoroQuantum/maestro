@@ -47,14 +47,16 @@ static void *InitializeMaestro(bool mute)
 }
 
 // Legacy configuration uses JSON integers, including zero and the full uint64
-// range. Reject malformed seeds without throwing across this C ABI.
+// range. Reject malformed seeds without throwing across this C ABI. A missing
+// seed restores unseeded execution, like the other legacy defaults.
 static bool ConfigureLegacySeed(Network::INetwork<> &network, const boost::json::value &config)
 {
-    if (!config.is_object())
-        return true;
-    const auto *value = config.as_object().if_contains("seed");
+    const auto *value = config.is_object() ? config.as_object().if_contains("seed") : nullptr;
     if (!value)
+    {
+        network.RemoveConfiguration("seed");
         return true;
+    }
     uint64_t seed;
     if (value->is_uint64())
         seed = value->as_uint64();

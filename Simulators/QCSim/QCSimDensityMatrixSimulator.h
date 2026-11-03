@@ -144,11 +144,7 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
             configuration.SetConfiguration(key, value);
         if (std::string("seed") == key)
         {
-            const uint64_t seed = std::stoull(value);
-            SeedAuxiliaryRng(seed);
-            SeedSampling(seed);
-            if (densityMatrix)
-                SeedBackend(densityMatrix.get(), seed);
+            SeedForExecution(std::stoull(value));
             return;
         }
         if (std::string(key) == "pauli_propagator_workers")
@@ -157,6 +153,14 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
             if (workers > 1024)
                 throw std::invalid_argument("pauli_propagator_workers exceeds 1024");
         }
+    }
+
+    void SeedForExecution(uint64_t seed) override
+    {
+        SeedAuxiliaryRng(seed);
+        SeedSampling(seed);
+        if (densityMatrix)
+            SeedBackend(densityMatrix.get(), seed);
     }
 
     size_t AllocateQubits(size_t num_qubits) override
@@ -699,7 +703,12 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
             cloned->Configure(key.c_str(), value.c_str());
         // Native DensityMatrix copying includes its RNG. Replace every stream
         // before publishing the clone, even when the parent was randomly seeded.
-        cloned->SetSeed(seed);
+        // A clone of an unseeded simulator stays unseeded, so reinitializing it
+        // draws fresh entropy instead of replaying its clone stream.
+        if (configuration.IsSet("seed"))
+            cloned->SetSeed(seed);
+        else
+            cloned->SeedForExecution(seed);
         return cloned;
     }
 

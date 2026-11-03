@@ -227,11 +227,20 @@ void AdaptiveStreams(SimulationType method, SimulatorType type = SimulatorType::
     for (size_t draw = 0; draw < 20; ++draw)
         auxiliary.push_back(unseeded->RandomUniform());
     auto child = unseeded->Clone();
+    const auto childReadout = child->RandomUniform();
     const auto draws = child->SampleCountsMany({0, 1, 2}, 8192);
     Require(child->GetConfiguration("sampling_seed") != root, "unseeded clone copied its parent's effective seed");
     Require(draws != unseeded->Clone()->SampleCountsMany({0, 1, 2}, 8192), "unseeded siblings duplicated their draws");
+    // A clone of an unseeded simulator is unseeded as well.
+    Require(!child->GetConfigMap().count("seed"), "unseeded clone configured its clone seed");
     if (type == SimulatorType::kQCSim)
     {
+        auto clone = unseeded->Clone();
+        const auto cloneRoot = clone->GetConfiguration("sampling_seed");
+        clone->Clear();
+        clone->AllocateQubits(2);
+        clone->Initialize();
+        Require(clone->GetConfiguration("sampling_seed") != cloneRoot, "unseeded clone reinitialization replayed its clone stream");
         auto fresh = SimulatorsFactory::CreateSimulatorUnique(type, method);
         fresh->AllocateQubits(2);
         fresh->Initialize();
@@ -249,6 +258,8 @@ void AdaptiveStreams(SimulationType method, SimulatorType type = SimulatorType::
     for (const auto expected : auxiliary)
         Require(unseeded->RandomUniform() == expected, "recorded random root cannot replay the readout stream");
     Require(unseeded->Clone()->SampleCountsMany({0, 1, 2}, 8192) == draws, "recorded random root cannot replay clone streams");
+    unseeded->SetSeed(std::stoull(root));
+    Require(unseeded->Clone()->RandomUniform() == childReadout, "recorded random root cannot replay clone readout");
 }
 
 // Structural changes are part of a continuing execution. Compare the draws

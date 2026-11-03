@@ -62,11 +62,7 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
             configuration.SetConfiguration(key, value);
         if (std::string("seed") == key)
         {
-            const uint64_t seed = std::stoull(value);
-            SeedAuxiliaryRng(seed);
-            SeedSampling(seed);
-            if (pathIntegralSimulator)
-                pathIntegralSimulator->SetSeed(seed);
+            SeedForExecution(std::stoull(value));
             return;
         }
         if (std::string(key) == "pauli_propagator_workers")
@@ -82,6 +78,14 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
                 pathIntegralSimulator->SetTrimValue(configuration.GetConfigurationAsDouble(key));
             }
         }
+    }
+
+    void SeedForExecution(uint64_t seed) override
+    {
+        SeedAuxiliaryRng(seed);
+        SeedSampling(seed);
+        if (pathIntegralSimulator)
+            pathIntegralSimulator->SetSeed(seed);
     }
 
     size_t AllocateQubits(size_t num_qubits) override
@@ -688,7 +692,12 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
             cloned->pathIntegralSimulator = pathIntegralSimulator->Clone();
         for (const auto &[key, value] : configuration.GetConfigMap())
             cloned->Configure(key.c_str(), value.c_str());
-        cloned->SetSeed(seed);
+        // A clone of an unseeded simulator stays unseeded, so reinitializing it
+        // draws fresh entropy instead of replaying its clone stream.
+        if (configuration.IsSet("seed"))
+            cloned->SetSeed(seed);
+        else
+            cloned->SeedForExecution(seed);
         return cloned;
     }
 

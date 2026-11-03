@@ -240,19 +240,23 @@ class ImmediateCompositeSimulator : public ISimulator
         config.SetConfiguration(key, value);
 
         if (std::string("seed") == key)
-        {
-            const uint64_t seed = std::stoull(value);
-            samplingSeed = seed;
-            nextCloneStream = nextRestoreStream = nextInitialization = nextSplitStream = 0;
-            SeedAuxiliaryRng(seed);
-            for (auto &[id, simulator] : simulators)
-                simulator->SetSeed(DeriveSeed(seed, id));
-        }
+            SeedForExecution(std::stoull(value));
         else
         {
             for (auto &[id, simulator] : simulators)
                 simulator->Configure(key, value);
         }
+    }
+
+    // The children are always seeded; only the composite's own configuration
+    // distinguishes a seeded composite from an unseeded one.
+    void SeedForExecution(uint64_t seed) override
+    {
+        samplingSeed = seed;
+        nextCloneStream = nextRestoreStream = nextInitialization = nextSplitStream = 0;
+        SeedAuxiliaryRng(seed);
+        for (auto &[id, simulator] : simulators)
+            simulator->SetSeed(DeriveSeed(seed, id));
     }
 
     /**
@@ -1431,7 +1435,11 @@ class ImmediateCompositeSimulator : public ISimulator
         if (includeSnapshot && savedState)
             clone->savedState = static_cast<ImmediateCompositeSimulator *>(savedState.get())->CloneStateForExecution(DeriveSeed(seed, 0x53415645ULL), false);
 
-        clone->SetSeed(seed);
+        // A clone of an unseeded composite stays unseeded.
+        if (config.IsSet("seed"))
+            clone->SetSeed(seed);
+        else
+            clone->SeedForExecution(seed);
         return clone;
     }
 

@@ -1524,6 +1524,39 @@ void ExecuteTrajectoryPreservesState()
             }
 }
 
+// A single-shot trajectory on an unseeded network seeds only its execution.
+// Neither the simulator Execute keeps nor the configuration the next run
+// captures from it may turn the network's later executions deterministic.
+void UnseededExecuteStaysUnseeded()
+{
+    auto circuit = CF::CreateCircuit();
+    for (Types::qubit_t qubit = 0; qubit < 4; ++qubit)
+        circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, qubit));
+    circuit->AddOperation(CF::CreateGate(Gate::kTGateType, 0)); // Not Clifford: keep the selected method.
+    circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}, {2, 2}, {3, 3}}));
+    circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    for (auto method : {Method::kStatevector, Method::kDensityMatrix, Method::kPathIntegral})
+        for (bool host : {false, true})
+            for (bool prepared : {false, true})
+            {
+                const std::string context =
+                    " (method=" + std::to_string(static_cast<int>(method)) + ", host=" + std::to_string(host) + ", prepared=" + std::to_string(prepared) + ")";
+                auto network = MakeNetwork(Backend::kQCSim, method, 4, 4);
+                network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+                network->SetOptimizeSimulator(prepared);
+                if (host)
+                    network->ExecuteOnHost(circuit, 0);
+                else
+                    network->Execute(circuit);
+                Check(network->GetSimulator()->GetConfiguration("seed").empty(), "Unseeded Execute configured its trajectory seed" + context);
+                const auto first = network->RepeatedExecute(circuit, 256);
+                const auto second = network->RepeatedExecute(circuit, 256);
+                Check(network->GetSimulator()->GetConfiguration("seed").empty(), "Network captured a trajectory seed after Execute" + context);
+                Check(first != second, "Unseeded executions after Execute replayed one stream" + context);
+            }
+}
+
 void DistributedSimulatorReuse()
 {
     std::vector<Backend> backends{Backend::kQCSim};
@@ -1813,6 +1846,7 @@ try
     ConditionalBitHelpers();
     HostSimulatorReuse();
     ExecuteTrajectoryPreservesState();
+    UnseededExecuteStaysUnseeded();
     DistributedSimulatorReuse();
     RandomJobs();
     RandomSeedPolicy();

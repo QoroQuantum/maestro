@@ -86,6 +86,11 @@ template <typename Time = Types::time_type> class Configuration
         simulatorConfig.SetConfiguration(key, value);
     }
 
+    void RemoveConfiguration(const std::string &key)
+    {
+        simulatorConfig.RemoveConfiguration(key);
+    }
+
     /**
      * @brief Check if a configuration value is set.
      *

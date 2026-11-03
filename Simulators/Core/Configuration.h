@@ -191,6 +191,18 @@ class Configuration
     }
 
     /**
+     * @brief Remove a configuration value.
+     *
+     * Remove a configuration value, if set, so the simulator default applies.
+     *
+     * @param key The key of the configuration value.
+     */
+    void RemoveConfiguration(const std::string &key)
+    {
+        configMap.erase(key);
+    }
+
+    /**
      * @brief Check if a configuration value is set.
      *
      * Check if a configuration value is set for the simulator.

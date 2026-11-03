@@ -321,6 +321,17 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
     virtual void Configure(const char *key, const char *value) = 0;
 
     /**
+     * @brief Removes a configuration option.
+     *
+     * Removes an option set with Configure, so its default applies again. A
+     * simulator that already carries the option is recreated: simulators cannot
+     * drop an applied option, and executions capture the simulator settings.
+     *
+     * @param key The key of the configuration option.
+     */
+    virtual void RemoveConfiguration(const char *key) = 0;
+
+    /**
      * @brief Create the scheduler for the network.
      *
      * Creates the scheduler for the network.

@@ -1228,6 +1228,16 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             simulator->Configure(key, value);
     }
 
+    void RemoveConfiguration(const char *key) override
+    {
+        if (!key)
+            return;
+
+        configuration.RemoveConfiguration(key);
+        if (simulator && simulator->GetConfigMap().count(key))
+            CreateSimulator(simulator->GetType(), simulator->GetSimulationType());
+    }
+
     /**
      * @brief Get the simulator for the network.
      *
@@ -2739,6 +2749,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             job->curMaxBondDim = &curMaxBondDim;
             job->config = ExecutionConfiguration(type, qubits);
             job->config.SetConfiguration("seed", std::to_string(Simulators::IState::DeriveSeed(seed, block)));
+            // Execute() keeps the last job's simulator, and the next run captures
+            // its configuration: an unseeded network must stay unseeded.
+            job->transientSeed = !configuration.IsSet("seed");
             job->randomStream = block;
             job->independentShotStreams = independentShots;
             job->trajectorySeed = Simulators::IState::DeriveSeed(seed, 0x53484f545f5631ULL);
@@ -2749,7 +2762,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             if (continueExecution)
             {
                 job->optSim = simulator;
-                job->config.ApplyConfigurationToSimulator(job->optSim);
+                job->ApplyConfiguration(job->optSim);
+                job->ApplyTransientSeed(job->optSim);
                 job->executedGates.assign(circuit->size(), false);
             }
             last = job;
