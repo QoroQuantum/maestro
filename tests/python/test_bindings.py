@@ -73,6 +73,8 @@ assert parent_unseeded not in children
 assert all(in_child(lambda: counts(seeded)) == parent_seeded for _ in range(3))
 """
 
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows does not provide os.fork")
 def test_forked_children_draw_independent_unseeded_streams():
     """Children inherit the parent's seed state at fork; each must still sample
     its own stream, while an explicit seed replays in every process."""
