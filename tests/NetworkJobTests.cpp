@@ -946,8 +946,13 @@ class WorkerThreadsX : public Circuits::XGate<>
 
     void Execute(const std::shared_ptr<Simulators::ISimulator> &sim, Circuits::OperationState &state) const override
     {
-        if (sim->GetMultithreading() || omp_get_max_threads() != 1)
+        if (sim->GetMultithreading())
             wrong->store(true);
+#if !defined(_MSC_VER) || defined(__clang__) || defined(_OPENMP_LLVM_RUNTIME)
+        // Shot workers set this limit except on legacy MSVC OpenMP, where it is process-wide.
+        if (omp_get_max_threads() != 1)
+            wrong->store(true);
+#endif
         ++*calls;
         XGate::Execute(sim, state);
     }
