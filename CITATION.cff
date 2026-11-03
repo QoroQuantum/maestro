@@ -6,6 +6,6 @@ authors:
   - family-names: DiAdamo
     given-names: Stephen
 title: "Maestro: Multi-Backend Quantum Simulation Orchestration Engine"
-version: 0.3.11
+version: 0.3.12
 url: "https://github.com/QoroQuantum/maestro"
-date-released: 2026-11-01
+date-released: 2026-11-03

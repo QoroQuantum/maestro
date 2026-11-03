@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-11-03
+
+### Added
+
+- GPU Pauli propagation takes `pp_memory_limit_bytes`, a memory budget (default
+  90% of available GPU memory), and `pp_max_fused_gates`, the largest fused block
+  (1–256, default 64; one disables fusion). `pp_workers` (1–64 on GPU, default
+  one) and `pp_sampling_cache_nodes` (default 8192, zero disables caching) now
+  apply to the GPU backend as well as QCSim.
+
+### Fixed
+
+- Unseeded calls no longer read hardware entropy for every simulator they build.
+  A `simple_estimate`, `simple_execute` or `get_statevector` call constructed
+  `std::random_device` about 13 times; on x86 Linux each one executes RDSEED,
+  which all cores share, so a small-circuit call cost about 0.5 ms and parallel
+  processes slowed each other down. Entropy is now drawn once per process, and
+  again in a forked child. A small-circuit call takes about 45 µs, and 8
+  concurrent processes take about 65 µs per call instead of 4.3 ms. Seeded
+  results are unchanged.
+
 ## [0.3.11] - 2026-11-01
 
 ### Changed
@@ -611,7 +632,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.11...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.12...HEAD
+[0.3.12]: https://github.com/QoroQuantum/maestro/compare/v0.3.11...v0.3.12
 [0.3.11]: https://github.com/QoroQuantum/maestro/compare/v0.3.10...v0.3.11
 [0.3.10]: https://github.com/QoroQuantum/maestro/compare/v0.3.9...v0.3.10
 [0.3.9]: https://github.com/QoroQuantum/maestro/compare/v0.3.8...v0.3.9
