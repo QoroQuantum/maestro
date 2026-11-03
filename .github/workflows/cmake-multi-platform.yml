@@ -26,7 +26,7 @@ on:
         default: base
 
 env:
-  QCSIM_VERSION: "b545698117f353ed44c158ad68a4c7238a5e24cb"
+  QCSIM_VERSION: "ebc28be4731ab38bfaaaf3baf83d12fa7abefed5"
   CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:

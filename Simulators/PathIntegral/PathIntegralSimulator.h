@@ -302,6 +302,10 @@ class PathIntegralSimulator
 
     double ExpectationValue(const std::string &pauliStringOrig)
     {
+#ifdef QC_PATH_INTEGRAL_DIRECT_EXPECTATION
+        return simulator.ExpectationValue(pauliStringOrig);
+#else
+
         // save current amplitudes
         const auto &currentAmplitudes = simulator.GetAmplitudes();
         auto amplitudes = currentAmplitudes;
@@ -345,6 +349,7 @@ class PathIntegralSimulator
         }
 
         return expectation;
+#endif
     }
 
     void ApplyGate(const QC::Gates::AppliedGate<> &gate)
