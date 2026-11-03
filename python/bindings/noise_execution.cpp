@@ -69,7 +69,7 @@ std::mt19937 MakeNoiseRng(const SimulatorConfig &config, std::optional<uint64_t>
         noise_seed = Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options) & UINT32_MAX;
     if (noise_seed)
         return std::mt19937(static_cast<uint32_t>(*noise_seed));
-    return std::mt19937(std::random_device{}());
+    return std::mt19937(static_cast<uint32_t>(Utils::RandomStream::FreshSeed()));
 }
 
 // Keep simulator randomness separate from circuit-noise injection. An explicit

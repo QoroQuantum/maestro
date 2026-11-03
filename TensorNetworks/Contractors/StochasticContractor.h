@@ -16,6 +16,7 @@
 #ifndef __STOCHASTIC_CONTRACTOR_H_
 #define __STOCHASTIC_CONTRACTOR_H_ 1
 
+#include "../../Utils/RandomStream.h"
 #include "BaseContractor.h"
 
 #include <boost/container_hash/hash.hpp>
@@ -38,7 +39,7 @@ class StochasticContractor : public BaseContractor
      * Constructs the Stochastic Tensor Contractor.
      * Initializes the random number generator.
      */
-    StochasticContractor() : gen(std::random_device{}())
+    StochasticContractor() : gen(Utils::RandomStream::FreshSeed())
     {
     }
 

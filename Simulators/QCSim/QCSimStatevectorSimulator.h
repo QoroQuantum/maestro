@@ -208,7 +208,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         if (nrQubits != 0)
         {
             InitializeSamplingSeed();
-            state = std::make_unique<SamplingQubitRegister>(nrQubits);
+            state = std::make_unique<SamplingQubitRegister>(nrQubits, Utils::RandomStream::FreshNativeSeed());
             samplingSupportQubits = savedSamplingSupportQubits = 0;
             SeedBackend(state.get(), samplingSeed);
             SetMultithreading(enableMultithreading);
@@ -253,7 +253,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         nrQubits = num_qubits;
         Initialize();
         {
-            state = std::make_unique<SamplingQubitRegister>(nrQubits, amplitudes);
+            state = std::make_unique<SamplingQubitRegister>(nrQubits, amplitudes, Utils::RandomStream::FreshNativeSeed());
             state->SetMultithreading(enableMultithreading);
             SeedBackend(state.get(), samplingSeed);
             UpdateSamplingSupport();

@@ -1218,7 +1218,7 @@ class IState
 
     std::unordered_set<std::shared_ptr<ISimulatorObserver>> observers; /**< The registered observers. */
     bool notifyObservers = true;                                       /**< A flag to indicate if observers should be notified. */
-    std::mt19937_64 auxRng{std::random_device{}()};                    /**< Auxiliary stream, see RandomUniform. */
+    std::mt19937_64 auxRng{Utils::RandomStream::FreshSeed()};          /**< Auxiliary stream, see RandomUniform. */
     std::uniform_real_distribution<double> auxUniform{0.0, 1.0};
 };
 

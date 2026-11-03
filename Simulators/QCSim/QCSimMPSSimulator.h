@@ -29,7 +29,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         if (nrQubits != 0)
         {
             {
-                mpsSimulator = std::make_unique<QC::TensorNetworks::MPSSimulator>(nrQubits);
+                mpsSimulator = std::make_unique<QC::TensorNetworks::MPSSimulator>(nrQubits, Utils::RandomStream::FreshNativeSeed());
                 if (!useOptimalMeetingPosition)
                     mpsSimulator->SetUseOptimalMeetingPosition(false);
                 InstallBondSummary(*mpsSimulator, bondDimensionCallback);

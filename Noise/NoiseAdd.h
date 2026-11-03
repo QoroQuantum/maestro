@@ -31,7 +31,7 @@ namespace noise
 class NoiseAdd
 {
   public:
-    NoiseAdd() : rng(std::random_device{}())
+    NoiseAdd() : rng(Utils::RandomStream::FreshSeed())
     {
     }
 

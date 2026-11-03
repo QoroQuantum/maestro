@@ -19,6 +19,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "../Utils/RandomStream.h"
 #include "Contractors/TensorContractor.h"
 #include "TensorNode.h"
 
@@ -42,7 +43,7 @@ class TensorNetwork
      *
      * @param numQubits The number of qubits in the network.
      */
-    TensorNetwork(size_t numQubits) : rng(std::random_device{}()), uniformZeroOne(0, 1)
+    TensorNetwork(size_t numQubits) : rng(Utils::RandomStream::FreshSeed()), uniformZeroOne(0, 1)
     {
         lastTensors.resize(numQubits);
         lastTensorsSuper.resize(numQubits);

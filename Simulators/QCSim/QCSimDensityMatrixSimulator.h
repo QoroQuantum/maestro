@@ -54,7 +54,7 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
         {
             InitializeSamplingSeed();
             {
-                densityMatrix = std::make_unique<SamplingDensityMatrix>(nrQubits);
+                densityMatrix = std::make_unique<SamplingDensityMatrix>(nrQubits, Utils::RandomStream::FreshNativeSeed());
                 SeedBackend(densityMatrix.get(), samplingSeed);
             }
             SetMultithreading(enableMultithreading);
