@@ -29,7 +29,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         if (nrQubits != 0)
         {
             {
-                mpoSimulator = std::make_unique<QC::TensorNetworks::MPOSimulator>(nrQubits);
+                mpoSimulator = std::make_unique<QC::TensorNetworks::MPOSimulator>(nrQubits, Utils::RandomStream::FreshNativeSeed());
                 if (!useOptimalMeetingPosition)
                     mpoSimulator->SetUseOptimalMeetingPosition(false);
                 InstallBondSummary(*mpoSimulator, bondDimensionCallback);

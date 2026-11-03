@@ -42,6 +42,48 @@ def test_concurrent_first_calls_initialise_once(attempt):
     assert result.returncode == 0, result.stderr
 
 
+_FORKED_STREAMS = """
+import os
+import maestro
+
+qasm = 'OPENQASM 2.0; include "qelib1.inc"; qreg q[4]; creg c[4]; h q; measure q -> c;'
+seeded = maestro.SimulatorConfig(seed=7)
+
+def counts(config=None):
+    result = maestro.simple_execute(qasm, config, 512) if config else maestro.simple_execute(qasm, shots=512)
+    return repr(sorted(result["counts"].items()))
+
+def in_child(fn):
+    read_end, write_end = os.pipe()
+    pid = os.fork()
+    if pid == 0:
+        os.close(read_end)
+        os.write(write_end, fn().encode())
+        os._exit(0)
+    os.close(write_end)
+    with os.fdopen(read_end) as pipe:
+        out = pipe.read()
+    os.waitpid(pid, 0)
+    return out
+
+parent_unseeded, parent_seeded = counts(), counts(seeded)
+children = [in_child(counts) for _ in range(8)]
+assert len(set(children)) == len(children), children
+assert parent_unseeded not in children
+assert all(in_child(lambda: counts(seeded)) == parent_seeded for _ in range(3))
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows does not provide os.fork")
+def test_forked_children_draw_independent_unseeded_streams():
+    """Children inherit the parent's seed state at fork; each must still sample
+    its own stream, while an explicit seed replays in every process."""
+    result = subprocess.run(
+        [sys.executable, "-c", _FORKED_STREAMS], capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize(
     "method",
     [maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState],

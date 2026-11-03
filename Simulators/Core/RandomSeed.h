@@ -32,7 +32,6 @@ inline uint64_t GenerateRandomSeed(SimulatorType type, const std::unordered_map<
         throw std::runtime_error("MPI GPU execution requires Linux");
 #endif
     }
-    std::random_device entropy;
-    return std::uniform_int_distribution<uint64_t>{}(entropy);
+    return Utils::RandomStream::FreshSeed();
 }
 } // namespace Simulators

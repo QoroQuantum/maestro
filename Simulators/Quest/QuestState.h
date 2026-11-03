@@ -17,6 +17,7 @@
 
 #ifdef INCLUDED_BY_FACTORY
 
+#include "../../Utils/RandomStream.h"
 #include "../../Utils/Sampling/Alias.h"
 #include "QuestLibSim.h"
 
@@ -43,7 +44,7 @@ namespace Private
 class QuestState : public ISimulator
 {
   public:
-    QuestState() : rng(std::random_device{}()), uniformZeroOne(0, 1)
+    QuestState() : rng(Utils::RandomStream::FreshSeed()), uniformZeroOne(0, 1)
     {
     }
 

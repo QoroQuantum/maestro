@@ -65,9 +65,7 @@ class AerState : public ISimulator
      */
     AerState()
     {
-        std::random_device rd;
-
-        rng.seed(rd());
+        rng.seed(Utils::RandomStream::FreshSeed());
         Configure("method", "statevector");
     }
 

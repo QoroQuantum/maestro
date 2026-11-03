@@ -16,6 +16,7 @@
 #ifndef _RANDOM_OP_H_
 #define _RANDOM_OP_H_
 
+#include "../../Utils/RandomStream.h"
 #include "Operations.h"
 #include <random>
 
@@ -217,8 +218,7 @@ template <typename Time = Types::time_type> class Random : public IOperation<Tim
   private:
     static size_t GenerateSeed()
     {
-        std::random_device entropy;
-        return std::uniform_int_distribution<size_t>{}(entropy);
+        return static_cast<size_t>(Utils::RandomStream::FreshSeed());
     }
 
     std::vector<size_t> indices;                   /**< The indices of the classical bits to be set
