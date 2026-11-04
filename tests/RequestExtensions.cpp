@@ -410,10 +410,62 @@ void TestResultEnvelopeLimit(uint64_t limit)
     }
     Check(boundary, "The result-envelope limit was never exercised");
 }
+
+// Mixed-state counterparts of inner_product and noisy_fidelity read the prepared
+// density matrix or MPO directly; pure-state methods reject them.
+void TestMixedStateQueries()
+{
+    const double h = std::sqrt(0.5);
+    for (const char *method : {"density_matrix", "matrix_product_operator"})
+    {
+        auto fidelity = Request("fidelity_with_statevector", 2, "h q[0]; cx q[0],q[1];", method);
+        fidelity["target_statevector"] = j::array{j::array{h, 0}, j::array{0, 0}, j::array{0, 0}, j::array{h, 0}};
+        Near(Real(Call(fidelity).at("fidelity")), 1);
+        fidelity["target_statevector"] = j::array{j::array{1, 0}, j::array{0, 0}, j::array{0, 0}, j::array{0, 0}};
+        Near(Real(Call(fidelity).at("fidelity")), 0.5);
+        Call(fidelity, true, true);
+        fidelity["target_statevector"] = j::array{j::array{1, 0}, j::array{1, 0}, j::array{0, 0}, j::array{0, 0}};
+        Check(ErrorCode(Call(fidelity, false)) == "invalid_input", "An unnormalized target statevector was accepted");
+        fidelity["target_statevector"] = j::array{j::array{1, 0}};
+        Check(ErrorCode(Call(fidelity, false)) == "invalid_input", "A target statevector of the wrong size was accepted");
+
+        auto overlap = Request("density_matrix_overlap", 1, "h q[0];", method);
+        overlap["other_circuit"] = Request("estimate", 1, "h q[0];").at("circuit");
+        Near(Real(Call(overlap).at("overlap").as_array()[0]), 1);
+        overlap["other_circuit"] = Request("estimate", 1, "x q[0];").at("circuit");
+        Near(Real(Call(overlap).at("overlap").as_array()[0]), 0.5);
+        Call(overlap, true, true);
+    }
+    auto pure = Request("fidelity_with_statevector", 1, "h q[0];");
+    pure["target_statevector"] = j::array{j::array{1, 0}, j::array{0, 0}};
+    Check(ErrorCode(Call(pure, false)) == "unsupported_capability", "A pure-state fidelity_with_statevector was accepted");
+    auto misplaced = Request("execute", 1, "h q[0];");
+    misplaced["target_statevector"] = j::array{j::array{1, 0}, j::array{0, 0}};
+    Check(ErrorCode(Call(misplaced, false)) == "invalid_input", "target_statevector on execute was accepted");
+}
+
+// A checkpoint prefix's terminal measurements are removed, so readout on them
+// is refused; suffix measurements still apply it.
+void TestCheckpointPrefixReadout()
+{
+    auto measure = Gate("measure", {0});
+    measure["readout_error"] = 1;
+    auto checkpoint = Instructions("checkpoint_batch", 1, {Gate("x", {0}), measure});
+    checkpoint["suffixes"] = j::array{Instructions("execute", 1, {Gate("measure", {0})}).at("circuit")};
+    for (const bool validate : {false, true})
+        Check(ErrorCode(Call(checkpoint, false, validate)) == "unsupported_capability", "Readout on a checkpoint prefix was silently ignored");
+    checkpoint = Instructions("checkpoint_batch", 1, {Gate("x", {0})});
+    checkpoint["suffixes"] = j::array{Instructions("execute", 1, {measure}).at("circuit")};
+    const auto suffix = Call(checkpoint).at("results").at(0).as_object();
+    Check(Count(suffix, "0") > 0 && Count(suffix, "1") == 0, "Readout on a checkpoint suffix was not applied");
+}
 } // namespace
 
 void TestNativeExtensions(const j::object &capabilities)
 {
+    Check(capabilities.at("mixed_state_queries").at("max_target_statevector_qubits").to_number<int>() == 20, "Mixed-state queries were not advertised");
+    TestMixedStateQueries();
+    TestCheckpointPrefixReadout();
     bool adjoint = false;
     for (const auto &operation : capabilities.at("operations").as_array())
         adjoint = adjoint || operation == "adjoint_jacobian";

@@ -43,11 +43,20 @@ const std::set<std::string> operations{"execute",
                                        "validate",
                                        "adjoint_expectation_values",
                                        "adjoint_jacobian",
-                                       "adjoint_vjp"};
+                                       "adjoint_vjp",
+                                       "density_matrix_overlap",
+                                       "fidelity_with_statevector"};
 
 bool AdjointOperation(const std::string &operation)
 {
     return operation == "adjoint_expectation_values" || operation == "adjoint_jacobian" || operation == "adjoint_vjp";
+}
+
+// Mixed-state counterparts of inner_product and noisy_fidelity, which need a
+// pure state: they read the prepared density matrix or MPO directly.
+bool MixedStateQuery(const std::string &operation)
+{
+    return operation == "density_matrix_overlap" || operation == "fidelity_with_statevector";
 }
 
 // Per-measurement readout rates: a symmetric flip probability, or the two
@@ -772,10 +781,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
 {
     Require(depth <= 4, "Batch nesting exceeds four levels");
     Require(UInt(Field(request, "schema_version")) == SchemaVersion, "Unsupported native schema_version");
-    Keys(request, {"schema_version", "operation",    "circuit",      "simulator",     "execution",           "noise",     "observables",
-                   "outputs",        "basis_states", "target_state", "other_circuit", "step_circuit",        "steps",     "suffixes",
-                   "requests",       "diagnostics",  "maintenance",  "keep_qubits",   "max_output_elements", "operators", "expectation_operators",
-                   "move_qubits",    "pauli",        "row_state",    "col_state",     "parameter_rows",      "cotangents"});
+    Keys(request, {"schema_version", "operation",    "circuit",      "simulator",     "execution",           "noise",      "observables",
+                   "outputs",        "basis_states", "target_state", "other_circuit", "step_circuit",        "steps",      "suffixes",
+                   "requests",       "diagnostics",  "maintenance",  "keep_qubits",   "max_output_elements", "operators",  "expectation_operators",
+                   "move_qubits",    "pauli",        "row_state",    "col_state",     "parameter_rows",      "cotangents", "target_statevector"});
     const auto operation = String(Field(request, "operation"));
     Supported(operations.count(operation), "Unknown operation: " + operation);
     // A known field for another operation must not bypass nested validation or
@@ -784,7 +793,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         {"observables", {"estimate", "incremental_evolve", "diagnostics", "mirror_fidelity", "adjoint_expectation_values", "adjoint_jacobian", "adjoint_vjp"}},
         {"basis_states", {"statevector", "amplitudes", "probabilities"}},
         {"target_state", {"state_probability"}},
-        {"other_circuit", {"inner_product"}},
+        {"other_circuit", {"inner_product", "density_matrix_overlap"}},
+        {"target_statevector", {"fidelity_with_statevector"}},
         {"step_circuit", {"incremental_evolve"}},
         {"steps", {"incremental_evolve"}},
         {"suffixes", {"checkpoint_batch"}},
@@ -879,12 +889,16 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
                        ? input.circuit->RemoveEndMeasurements()
                        : Unmeasured(input.circuit, operation == "inner_product" || operation == "mirror_fidelity" || operation == "noisy_fidelity");
     std::vector<ParsedCircuit> additional;
-    if (operation == "inner_product")
+    if (operation == "inner_product" || operation == "density_matrix_overlap")
     {
         additional.push_back(ParseCircuit(Object(Field(request, "other_circuit"))));
         SameSize(input, additional.back());
         rejectReadout(additional.back().circuit);
-        additional.back().circuit = Unmeasured(additional.back().circuit, true);
+        // A mixed-state overlap prepares each state on its own, so channels and
+        // resets are allowed; the pure-state inner product needs U(first)^dagger.
+        additional.back().circuit = Unmeasured(additional.back().circuit, operation == "inner_product");
+        if (operation == "density_matrix_overlap" && noise.enabled)
+            ValidateNoisyCircuit(additional.back().circuit);
     }
     if (operation == "incremental_evolve")
     {
@@ -906,6 +920,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
     }
     if (operation == "checkpoint_batch")
     {
+        // Only suffix measurements are sampled. The prefix's terminal measurements
+        // are removed below, so readout on them would be dropped silently.
+        Supported(!HasMeasurementReadout(input.circuit), "Measurement readout_error applies to checkpoint suffixes only; "
+                                                         "prefix measurements are removed");
         circuit = Unmeasured(input.circuit, true, "checkpoint_batch prefix");
         Supported(noise.mode != "analytical", "Checkpoint suffixes require explicit noise evolution");
         const auto &suffixes = Array(Field(request, "suffixes"));
@@ -933,8 +951,11 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
     const bool mirrorObservables = operation == "mirror_fidelity" && !observables.empty();
     if (amplitudes || operation == "inner_product" || (operation == "mirror_fidelity" && !mirrorObservables) || operation == "noisy_fidelity")
         Supported(!Mixed(config), "A mixed state has no unique statevector or pure-state overlap");
-    Supported(!noise.enabled || operation == "execute" || operation == "estimate" || (query && noise.exact && noise.realizations == 1) ||
-                  operation == "noisy_fidelity" || operation == "checkpoint_batch",
+    if (MixedStateQuery(operation))
+        Supported(MixedStateQueryApplies(config), operation + " requires the qcsim or gpu backend with density_matrix or matrix_product_operator");
+    Supported(!noise.enabled || operation == "execute" || operation == "estimate" ||
+                  ((query || MixedStateQuery(operation)) && noise.exact && noise.realizations == 1) || operation == "noisy_fidelity" ||
+                  operation == "checkpoint_batch",
               "This operation requires a single exact noisy state or an explicit "
               "batch");
     if (operation == "noisy_fidelity")
@@ -979,6 +1000,25 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         for (size_t q = 0; q < std::min(size_t{64}, state.size()); ++q)
             if (state[q] == '1')
                 target |= uint64_t{1} << q;
+    }
+    Eigen::VectorXcd targetVector;
+    if (operation == "fidelity_with_statevector")
+    {
+        Supported(input.qubits <= MaxTargetStatevectorQubits,
+                  "fidelity_with_statevector supports at most " + std::to_string(MaxTargetStatevectorQubits) + " qubits");
+        const auto &entries = Array(Field(request, "target_statevector"));
+        const size_t dimension = size_t{1} << input.qubits;
+        Require(entries.size() == dimension, "target_statevector needs 2^num_qubits [real, imaginary] amplitudes");
+        targetVector.resize(static_cast<Eigen::Index>(dimension));
+        double norm = 0;
+        for (size_t i = 0; i < dimension; ++i)
+        {
+            const auto amplitude = Complex(entries[i]);
+            targetVector[static_cast<Eigen::Index>(i)] = amplitude;
+            norm += std::norm(amplitude);
+        }
+        // Maestro computes <psi|rho|psi>/Tr(rho) and does not rescale psi.
+        Require(std::abs(norm - 1) <= 1e-6, "target_statevector must be normalized");
     }
     if (operation == "diagnostics")
     {
@@ -1259,7 +1299,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
         return result;
     }
-    Context context(input, config, query);
+    // Mixed-state queries compare whole registers, so no network ancilla may be added.
+    Context context(input, config, query || MixedStateQuery(operation));
     auto simulator = context.simulator();
     // Validation remains silent; warn once per execution, not per realization.
     if (!noise.thermal_approximation_warning.empty())
@@ -1315,6 +1356,20 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         }
         result["expectation_values"] = std::move(values);
         result["realization_standard_errors"] = std::move(errors);
+    }
+    else if (operation == "fidelity_with_statevector")
+    {
+        Prepare(context, Inject(circuit, noise, rng), input.clbits);
+        result["fidelity"] = simulator->FidelityWithStatevector(targetVector);
+    }
+    else if (operation == "density_matrix_overlap")
+    {
+        // Both states use the same backend and noise model; the overlap needs two
+        // registers of one simulator type.
+        Prepare(context, Inject(circuit, noise, rng), input.clbits);
+        Context other(additional[0], config, true);
+        Prepare(other, Inject(additional[0].circuit, noise, rng), input.clbits);
+        result["overlap"] = Complex(simulator->DensityMatrixOverlap(*other.simulator()));
     }
     else if (query)
     {

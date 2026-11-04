@@ -34,6 +34,17 @@ inline const std::set<std::string> &DiagnosticNames()
     return names;
 }
 
+// density_matrix_overlap and fidelity_with_statevector read the prepared mixed
+// state directly, which the QCSim and GPU density-matrix/MPO simulators provide.
+inline bool MixedStateQueryApplies(const SimulatorConfig &config)
+{
+    return (config.simulator_type == Backend::kQCSim || config.simulator_type == Backend::kGpuSim) && Mixed(config);
+}
+
+// fidelity_with_statevector reads a dense target of 2^n amplitudes, the same
+// bound as a full basis output (max_output_elements at most 1,048,576).
+constexpr size_t MaxTargetStatevectorQubits = 20;
+
 // These are parser-level capabilities. Optional plugins still require runtime
 // probing; discovery never initializes a GPU or loads a user's circuit.
 inline bool DiagnosticApplies(const std::string &name, const SimulatorConfig &config)
@@ -187,9 +198,13 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
         {"differentiable_gates", json::object{{"p", 1}, {"rx", 1}, {"ry", 1}, {"rz", 1}, {"cp", 1}, {"crx", 1}, {"cry", 1}, {"crz", 1}, {"u", 3}, {"cu", 4}}},
         {"max_qubits", 63},
         {"max_probability_qubits", 24}};
+    const json::object mixedStateQueries{{"operations", json::array{"density_matrix_overlap", "fidelity_with_statevector"}},
+                                         {"supported_configurations", Configurations([](const auto &config) { return MixedStateQueryApplies(config); })},
+                                         {"max_target_statevector_qubits", MaxTargetStatevectorQubits}};
     return {{"schema_version", SchemaVersion},
             {"instructions", instructions},
             {"adjoint", adjoint},
+            {"mixed_state_queries", mixedStateQueries},
             {"api", "maestro.native.request"},
             {"build", json::object{{"version", MAESTRO_BUILD_VERSION}, {"source_revision", MAESTRO_SOURCE_REVISION}}},
             {"capability_scope", "validation"},

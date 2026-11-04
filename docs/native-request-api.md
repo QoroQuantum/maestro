@@ -105,9 +105,10 @@ symmetric probability, and `{"p_meas1_prep0": p, "p_meas0_prep1": q}` gives the
 two rates of the `readout` noise channel. A noise model's readout error composes
 with the measurement's own rates. Like model readout, it applies to measurement
 counts only: `execute` and `checkpoint_batch` accept it, and other operations
-reject it instead of silently dropping it. That includes the adjoint operations
-and the nested `other_circuit` and `step_circuit`, whose terminal measurements
-are otherwise removed.
+reject it instead of silently dropping it. That includes the adjoint operations,
+the nested `other_circuit` and `step_circuit`, and the `checkpoint_batch` prefix,
+whose terminal measurements are otherwise removed. A checkpoint applies readout
+on its suffix measurements only.
 
 `pauli_channel` applies a Pauli channel to one or two qubits. `probabilities`
 has `4**len(qubits)` entries summing to one; base-4 digit `k` of an index selects
@@ -148,6 +149,8 @@ they cannot override the simulator or specify their own launch profiles.
 | `state_probability` | `target_state` | Probability of a q0-first bitstring |
 | `diagnostics` | `diagnostics`, `maintenance`, `keep_qubits` | Mixed-state diagnostics/reduced density matrix; MPS/MPO maintenance |
 | `inner_product` | `other_circuit` | Complex overlap of two unitary preparations |
+| `density_matrix_overlap` | `other_circuit` | `Tr(rho sigma)` of two mixed-state preparations, as `overlap` |
+| `fidelity_with_statevector` | `target_statevector` | `<psi|rho|psi> / Tr(rho)` against a normalized pure target, as `fidelity` |
 | `mirror_fidelity` | optional `observables` | Fidelity of the preparation followed by its inverse; with observables, their expectations on that mirror state |
 | `noisy_fidelity` | coherent `noise` | Ideal-versus-noisy unitary fidelity across realizations |
 | `incremental_evolve` | `step_circuit`, ordered `steps`, `observables` | Prepare once, advance to each step, observe without reset |
@@ -171,9 +174,28 @@ State queries remove terminal measurements; mid-circuit measurements are rejecte
 for these queries. Overlap/fidelity require unitary circuits. Incremental evolution
 accepts explicit Kraus instructions in the step circuit for exact noisy evolution;
 a top-level stochastic noise model is rejected for this operation. State queries
-with top-level noise require a single exact realization. No mixed-state vector or
-pure-state overlap is advertised for density matrices/MPOs. Individual methods may
-have narrower numerical-query support and return a native error.
+with top-level noise require a single exact realization. No statevector or
+pure-state overlap is advertised for density matrices/MPOs; their counterparts
+are the two mixed-state queries below. Individual methods may have narrower
+numerical-query support and return a native error.
+
+`density_matrix_overlap` and `fidelity_with_statevector` read the prepared
+density matrix or MPO directly, as the Python `density_matrix_overlap` and
+`fidelity_with_statevector` simulator methods do. They require fixed selection of
+the `qcsim` or `gpu` backend with `density_matrix` or `matrix_product_operator`.
+Their circuits may contain resets and channel instructions; terminal measurements
+are removed and mid-circuit measurements rejected. A top-level noise model must
+use exact evaluation with one realization and applies to both overlap circuits.
+
+`density_matrix_overlap` prepares `circuit` and `other_circuit` (identical
+register sizes) on separate registers of the same backend and returns
+`overlap = [real, imaginary]`, the unnormalized Hilbert-Schmidt product
+`Tr(rho sigma)`; it is 1 for identical pure states. `fidelity_with_statevector`
+returns `fidelity`, `<psi|rho|psi> / Tr(rho)` clamped to `[0, 1]`.
+`target_statevector` lists `2^num_qubits` amplitudes as `[real, imaginary]` pairs
+in `qubit_0_least_significant` order, for at most 20 qubits (and within
+`max_request_bytes`). It must be normalized to within `1e-6`; Maestro does not
+rescale it.
 
 ## Adjoint differentiation
 
@@ -554,8 +576,9 @@ thermal/idle relaxation, phase/generalized amplitude damping, correlated AR1/OU/
 OU-band/multiband/one-over-f noise, crosstalk, analytical damping, seeded repeatability,
 invalid parameters, optimization comparisons and MPS bond-limit effects. It also
 checks `rxx`/`rzz` instructions against QASM, `noiseless` and `readout_error`
-fields, exact and sampled `pauli_channel` instructions, observable mirror
-fidelity, and adjoint values, Jacobians and VJPs against finite differences of
+fields (including checkpoint-prefix readout rejection), exact and sampled
+`pauli_channel` instructions, observable mirror fidelity, mixed-state overlap and
+statevector fidelity, and adjoint values, Jacobians and VJPs against finite differences of
 `estimate`, with their shape and backend rejections. A separate
 C consumer calls all four request functions and `FreeResult` through the public
 header and linked library. Linux CI enables these contract tests; the Windows wheel
@@ -765,7 +788,9 @@ name with its parameter count (including `rxx` and `rzz`), `operations` lists
 optional field (`noiseless`, `readout_error`, `probabilities`, ...) to the
 instructions that accept it. `adjoint` lists the adjoint operations, their
 `supported_configurations`, readout kinds, differentiable gates with their
-parameter counts, `max_qubits` and `max_probability_qubits`. Clients can detect
+parameter counts, `max_qubits` and `max_probability_qubits`. `mixed_state_queries`
+lists `density_matrix_overlap` and `fidelity_with_statevector`, their
+`supported_configurations` and `max_target_statevector_qubits`. Clients can detect
 these features here without sending probe requests.
 
 ### Automatic CPU MPS/MPO routing
