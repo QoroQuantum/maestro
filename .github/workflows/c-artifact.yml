@@ -1,0 +1,117 @@
+name: C/C++ artifact
+
+# Builds libmaestro.so with its C headers and bundled runtime libraries for an
+# existing release tag, and attaches the archives to that tag's GitHub release.
+# Run it by hand after the PyPI release is out. It never builds or uploads
+# Python packages, and adding assets does not re-trigger the PyPI workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and attach to (e.g. v0.3.12)"
+        required: true
+        type: string
+      upload:
+        description: "Attach the archives to the release (untick for a dry run)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            platform: linux/amd64
+            runner: ubuntu-latest
+            aer: "ON"
+          # Qiskit Aer uses x86-only intrinsics, so ARM builds go without it.
+          - arch: aarch64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            aer: "OFF"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      # Build scripts come from this workflow's commit, so older tags that
+      # predate them can still be built.
+      - name: Check out build scripts
+        uses: actions/checkout@v5
+        with:
+          path: tools
+
+      - name: Check out ${{ inputs.tag }}
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag }}
+          path: src
+
+      - name: Check the tag matches its version
+        run: |
+          version=$(grep -m1 '^version' src/pyproject.toml | cut -d'"' -f2)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match pyproject.toml version v$version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "COMMIT=$(git -C src rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build in manylinux_2_28
+        run: |
+          docker run --rm --platform "${{ matrix.platform }}" -v "$GITHUB_WORKSPACE:/work" -w /work \
+            -e VERSION -e COMMIT -e AER="${{ matrix.aer }}" -e JOBS=2 \
+            "quay.io/pypa/manylinux_2_28_${{ matrix.arch }}" \
+            bash tools/.github/scripts/build_c_artifact.sh src out
+
+      # A slim image has no compiler, Boost, OpenBLAS or OpenMP, so this
+      # fails if the archive relies on anything it does not bundle.
+      - name: Check the archive on a clean image
+        run: |
+          docker run --rm --platform "${{ matrix.platform }}" -v "$GITHUB_WORKSPACE:/work:ro" -w /work python:3.12-slim \
+            python tools/.github/scripts/check_c_artifact.py \
+            "out/maestro-c-${VERSION}-linux-${{ matrix.arch }}.tar.gz"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: maestro-c-${{ matrix.arch }}
+          path: out/*.tar.gz
+          if-no-files-found: error
+
+  upload:
+    name: Attach to release
+    needs: build
+    if: inputs.upload
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: maestro-c-*
+          path: dist
+          merge-multiple: true
+
+      - name: Upload archives and checksums
+        working-directory: dist
+        run: |
+          gh release view "$TAG" > /dev/null
+          version="${TAG#v}"
+          sha256sum maestro-c-*.tar.gz > "maestro-c-${version}-SHA256SUMS"
+          cat "maestro-c-${version}-SHA256SUMS"
+          # --clobber makes a rerun replace earlier uploads for this tag.
+          gh release upload "$TAG" maestro-c-*.tar.gz "maestro-c-${version}-SHA256SUMS" --clobber
