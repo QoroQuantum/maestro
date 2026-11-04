@@ -1,6 +1,7 @@
 // Versioned native computational API. No Python types or runtime are used.
 #include "Request.h"
 
+#include "AdjointDifferentiation.h"
 #include "Capabilities.h"
 #include "CircuitHelpers.h"
 #include "Estimation.h"
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <random>
 
 namespace MaestroExecution
@@ -25,9 +27,81 @@ using Clock = std::chrono::steady_clock;
 
 namespace
 {
-const std::set<std::string> operations{"execute",         "estimate",      "statevector",    "probabilities", "amplitudes",         "state_probability",
-                                       "mirror_fidelity", "inner_product", "noisy_fidelity", "diagnostics",   "incremental_evolve", "checkpoint_batch",
-                                       "batch",           "validate"};
+const std::set<std::string> operations{"execute",
+                                       "estimate",
+                                       "statevector",
+                                       "probabilities",
+                                       "amplitudes",
+                                       "state_probability",
+                                       "mirror_fidelity",
+                                       "inner_product",
+                                       "noisy_fidelity",
+                                       "diagnostics",
+                                       "incremental_evolve",
+                                       "checkpoint_batch",
+                                       "batch",
+                                       "validate",
+                                       "adjoint_expectation_values",
+                                       "adjoint_jacobian",
+                                       "adjoint_vjp"};
+
+bool AdjointOperation(const std::string &operation)
+{
+    return operation == "adjoint_expectation_values" || operation == "adjoint_jacobian" || operation == "adjoint_vjp";
+}
+
+// Per-measurement readout rates: a symmetric flip probability, or the two
+// asymmetric rates named like the readout noise channel.
+Circuits::ReadoutRates ParseReadoutRates(const json::value &value)
+{
+    const auto probability = [](double p, const char *name) {
+        Require(p >= 0 && p <= 1, std::string(name) + " must be in [0, 1]");
+        return p;
+    };
+    if (value.is_number())
+    {
+        const double p = probability(Number(value), "readout_error");
+        return {p, p};
+    }
+    const auto &object = Object(value);
+    Keys(object, {"p_meas1_prep0", "p_meas0_prep1"});
+    return {probability(Number(Field(object, "p_meas1_prep0")), "p_meas1_prep0"), probability(Number(Field(object, "p_meas0_prep1")), "p_meas0_prep1")};
+}
+
+// qelib1.inc's two-qubit rotations have no gate type; expand them exactly as
+// the QASM parser does: cx; rz; cx (between Hadamards for rxx).
+json::array ExpandInstruction(const json::object &instruction)
+{
+    const auto name = String(Field(instruction, "name"));
+    if (name != "rzz" && name != "rxx")
+        return {instruction};
+    const auto &qubits = Array(Field(instruction, "qubits"));
+    Require(qubits.size() == 2, "Gate " + name + " requires exactly 2 qubits");
+    const auto gate = [&](const char *gateName, json::array targets, const json::value *params = nullptr) {
+        json::object expanded{{"name", gateName}, {"qubits", std::move(targets)}};
+        if (params)
+            expanded["params"] = *params;
+        if (const auto *condition = instruction.if_contains("conditional_reg"))
+            expanded["conditional_reg"] = *condition;
+        return expanded;
+    };
+    json::array result;
+    const bool xBasis = name == "rxx";
+    if (xBasis)
+    {
+        result.emplace_back(gate("h", {qubits[0]}));
+        result.emplace_back(gate("h", {qubits[1]}));
+    }
+    result.emplace_back(gate("cx", {qubits[0], qubits[1]}));
+    result.emplace_back(gate("rz", {qubits[1]}, &instruction.at("params")));
+    result.emplace_back(gate("cx", {qubits[0], qubits[1]}));
+    if (xBasis)
+    {
+        result.emplace_back(gate("h", {qubits[0]}));
+        result.emplace_back(gate("h", {qubits[1]}));
+    }
+    return result;
+}
 
 struct ParsedCircuit
 {
@@ -65,7 +139,8 @@ ParsedCircuit ParseCircuit(const json::object &object)
         {
             auto instruction = Object(value);
             const auto name = String(Field(instruction, "name"));
-            Keys(instruction, {"name", "qubits", "clbits", "params", "conditional_reg", "duration", "operators"});
+            Keys(instruction,
+                 {"name", "qubits", "clbits", "params", "conditional_reg", "duration", "operators", "probabilities", "noiseless", "readout_error"});
             Types::qubits_vector targets;
             std::set<uint64_t> unique;
             for (const auto &q : Array(Field(instruction, "qubits")))
@@ -74,9 +149,13 @@ ParsedCircuit ParseCircuit(const json::object &object)
                 targets.push_back(UInt(q));
             }
             Require(!targets.empty(), "Instruction requires qubits");
-            if (name == "reset" || name == "delay" || name == "kraus")
+            Require(name != "measure" || !instruction.contains("noiseless"), "noiseless applies only to gates");
+            Require(name == "measure" || !instruction.contains("readout_error"), "readout_error applies only to measurement");
+            Require(name == "pauli_channel" || !instruction.contains("probabilities"), "probabilities applies only to Pauli channel instructions");
+            if (name == "reset" || name == "delay" || name == "kraus" || name == "pauli_channel")
             {
-                Require(!instruction.contains("conditional_reg") && !instruction.contains("params") && !instruction.contains("clbits"),
+                Require(!instruction.contains("conditional_reg") && !instruction.contains("params") && !instruction.contains("clbits") &&
+                            !instruction.contains("noiseless"),
                         "Unsupported fields on native channel/reset/delay");
                 Require(name == "delay" || !instruction.contains("duration"), "duration applies only to delay instructions");
                 Require(name == "kraus" || !instruction.contains("operators"), "operators applies only to Kraus instructions");
@@ -88,6 +167,16 @@ ParsedCircuit ParseCircuit(const json::object &object)
                     Require(duration >= 0, "Negative delay");
                     for (auto q : targets)
                         circuit->AddOperation(Circuits::CircuitFactory<>::CreateDelay(q, duration));
+                }
+                else if (name == "pauli_channel")
+                {
+                    // Base-4 digit k of an index selects I, X, Y or Z on qubits[k].
+                    Require(targets.size() <= 2, "Pauli channel instructions require one or two qubits");
+                    std::vector<double> probabilities;
+                    for (const auto &value : Array(Field(instruction, "probabilities")))
+                        probabilities.push_back(Number(value));
+                    Require(probabilities.size() == (size_t{1} << (2 * targets.size())), "A Pauli channel needs 4**len(qubits) probabilities");
+                    circuit->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(targets, Simulators::QuantumChannel::Pauli(probabilities)));
                 }
                 else
                 {
@@ -113,11 +202,17 @@ ParsedCircuit ParseCircuit(const json::object &object)
                 if (const auto *params = instruction.if_contains("params"))
                     for (const auto &param : Array(*params))
                         Number(param);
-                const std::map<std::string, size_t> arities{{"p", 1},  {"rx", 1}, {"ry", 1},  {"rz", 1},  {"u", 3},   {"u1", 1}, {"u2", 2},
-                                                            {"u3", 3}, {"cp", 1}, {"crx", 1}, {"cry", 1}, {"crz", 1}, {"cu", 4}};
+                const std::map<std::string, size_t> arities{{"p", 1},  {"rx", 1},  {"ry", 1},  {"rz", 1},  {"u", 3},  {"u1", 1},  {"u2", 2}, {"u3", 3},
+                                                            {"cp", 1}, {"crx", 1}, {"cry", 1}, {"crz", 1}, {"cu", 4}, {"rxx", 1}, {"rzz", 1}};
                 const auto params = instruction.if_contains("params") ? Array(instruction.at("params")) : json::array{};
                 Require(params.size() == (arities.count(name) ? arities.at(name) : 0), "Incorrect gate parameter count");
                 Require(name == "measure" || !instruction.contains("clbits"), "clbits applies only to measurement");
+                const bool noiseless = instruction.contains("noiseless") && Boolean(instruction.at("noiseless"));
+                std::optional<Circuits::ReadoutRates> readout;
+                if (const auto *value = instruction.if_contains("readout_error"))
+                    readout = ParseReadoutRates(*value);
+                instruction.erase("noiseless");
+                instruction.erase("readout_error");
                 if (const auto *condition = instruction.if_contains("conditional_reg"))
                 {
                     const auto bit = condition->is_array()
@@ -143,10 +238,11 @@ ParsedCircuit ParseCircuit(const json::object &object)
                 {
                     instruction["name"] = "u";
                 }
+                const auto expanded = ExpandInstruction(instruction);
                 CircuitPtr parsed;
                 try
                 {
-                    parsed = parser.ParseCircuit(json::serialize(json::array{instruction}).c_str());
+                    parsed = parser.ParseCircuit(json::serialize(expanded).c_str());
                 }
                 catch (const std::runtime_error &error)
                 {
@@ -155,8 +251,21 @@ ParsedCircuit ParseCircuit(const json::object &object)
                     // exceptions from simulator execution or resource allocation.
                     throw Error("invalid_input", "Invalid instruction: " + std::string(error.what()));
                 }
-                Require(parsed && parsed->GetOperations().size() == 1, "Invalid instruction");
-                circuit->AddOperation(parsed->GetOperations().front());
+                Require(parsed && parsed->GetOperations().size() == expanded.size(), "Invalid instruction");
+                for (const auto &operation : parsed->GetOperations())
+                {
+                    // Noise models add no gate noise after a noiseless gate; an
+                    // expanded rxx/rzz is noiseless as a whole.
+                    if (noiseless)
+                        operation->SetNoiseless();
+                    if (readout && (readout->p_meas1_prep0 > 0 || readout->p_meas0_prep1 > 0))
+                    {
+                        auto measurement = std::dynamic_pointer_cast<Circuits::MeasurementOperation<>>(operation);
+                        Require(measurement != nullptr, "readout_error applies only to measurement");
+                        measurement->SetReadout(std::vector<Circuits::ReadoutRates>(measurement->GetQubits().size(), *readout));
+                    }
+                    circuit->AddOperation(operation);
+                }
             }
         }
     }
@@ -287,9 +396,45 @@ void ValidateNoisyCircuit(const CircuitPtr &circuit)
         const auto type = op->GetType();
         Supported(type == Circuits::OperationType::kGate || type == Circuits::OperationType::kConditionalGate ||
                       type == Circuits::OperationType::kMeasurement || type == Circuits::OperationType::kConditionalMeasurement ||
-                      type == Circuits::OperationType::kReset || type == Circuits::OperationType::kDelay,
+                      type == Circuits::OperationType::kReset || type == Circuits::OperationType::kDelay || type == Circuits::OperationType::kQuantumChannel,
                   "Noise injection requires a flattened circuit of gates, "
-                  "measurements, resets and delays");
+                  "measurements, resets, delays and channels");
+    }
+}
+
+bool HasChannels(const CircuitPtr &circuit)
+{
+    for (const auto &op : circuit->GetOperations())
+        if (op->GetType() == Circuits::OperationType::kQuantumChannel)
+            return true;
+    return false;
+}
+
+bool HasMeasurementReadout(const CircuitPtr &circuit)
+{
+    for (const auto &op : circuit->GetOperations())
+        if (const auto measurement = std::dynamic_pointer_cast<Circuits::MeasurementOperation<>>(op); measurement && measurement->HasReadout())
+            return true;
+    return false;
+}
+
+// Mixed-state backends apply circuit channels exactly unless trajectories were
+// requested. Otherwise each noise realization samples one Pauli per channel,
+// which only Pauli channels and the noise injectors support.
+void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, const NoiseConfig &noise)
+{
+    const bool sampled = noise.enabled && !noise.exact && noise.mode != "analytical";
+    for (const auto &op : circuit->GetOperations())
+    {
+        if (op->GetType() != Circuits::OperationType::kQuantumChannel)
+            continue;
+        if (Mixed(config) && !sampled)
+            continue;
+        const auto channel = std::static_pointer_cast<Circuits::QuantumChannelOperation<>>(op);
+        Supported(!channel->GetChannel().GetPauliProbabilities().empty(),
+                  "Explicit Kraus instructions require density_matrix or MPO with exact evaluation; only Pauli channels can be sampled");
+        Supported(sampled, "Pauli channel instructions on pure-state backends require a noise block with trajectory evaluation; "
+                           "set noise.realizations to the shot count for independent draws");
     }
 }
 
@@ -424,6 +569,198 @@ json::object Metadata(Context &context, const SimulatorConfig &config, bool exec
     }
     return result;
 }
+
+// Overflow-checked element count for output bounds.
+uint64_t Elements(std::initializer_list<uint64_t> factors)
+{
+    uint64_t result = 1;
+    for (const auto factor : factors)
+    {
+        Require(factor == 0 || result <= UINT64_MAX / factor, "Adjoint output size overflows");
+        result *= factor;
+    }
+    return result;
+}
+
+json::array Matrix(const std::vector<double> &values, size_t rows, size_t cols)
+{
+    json::array result;
+    result.reserve(rows);
+    for (size_t row = 0; row < rows; ++row)
+    {
+        json::array line;
+        line.reserve(cols);
+        for (size_t col = 0; col < cols; ++col)
+            line.emplace_back(values[row * cols + col]);
+        result.emplace_back(std::move(line));
+    }
+    return result;
+}
+
+// Adjoint differentiation of a unitary circuit on QCSim's CPU statevector, as
+// AdjointProgram in Python. Readouts are Pauli strings, weighted Pauli sums
+// ({"terms": [[coefficient, pauli], ...]}) or basis-state probabilities of some
+// qubits ({"probabilities": [qubits]}, first listed qubit least significant).
+// The differentiable parameters are the gate angles in circuit order: one for
+// p, rx, ry, rz, cp, crx, cry and crz; theta, phi, lambda for u; four for cu.
+json::object RunAdjoint(const json::object &request, const std::string &operation, const SimulatorConfig &config, const ParsedCircuit &input,
+                        const NoiseConfig &noise, bool validate, uint64_t limit)
+{
+    Supported(config.simulation_type == Method::kStatevector && (config.simulator_type == Backend::kQCSim || config.simulator_type == Backend::kCompositeQCSim),
+              "Adjoint differentiation requires the qcsim or composite_qcsim statevector");
+    Supported(!noise.enabled, "Adjoint differentiation requires a noiseless unitary circuit");
+    Supported(input.qubits <= Adjoint::kMaxQubits, "Adjoint differentiation supports at most 63 qubits");
+    // Terminal measurements are ignored, as for estimate; anything else non-unitary is rejected.
+    const auto circuit = input.circuit->RemoveEndMeasurements();
+    std::unique_ptr<Adjoint::Program> program;
+    try
+    {
+        program = std::make_unique<Adjoint::Program>(*circuit);
+    }
+    catch (const std::invalid_argument &error)
+    {
+        throw Error("invalid_input", error.what());
+    }
+
+    const auto pauli = [&](const json::value &value) {
+        const auto text = String(value);
+        Require(text.size() == input.qubits && text.find_first_not_of("IXYZ") == std::string::npos,
+                "Observables must be I/X/Y/Z strings of num_qubits characters (q0 first)");
+        return text;
+    };
+    std::vector<Adjoint::Readout> readouts;
+    const auto &items = Array(Field(request, "observables"));
+    Require(!items.empty() && items.size() <= 100000, "Adjoint operations require 1..100000 observables");
+    for (const auto &item : items)
+    {
+        if (item.is_string())
+        {
+            readouts.push_back(Adjoint::Readout::Expectation({{1., pauli(item)}}));
+            continue;
+        }
+        const auto &readout = Object(item);
+        Keys(readout, {"terms", "probabilities"});
+        Require(readout.size() == 1, "An observable object needs exactly one of terms or probabilities");
+        if (const auto *terms = readout.if_contains("terms"))
+        {
+            Adjoint::Observable observable;
+            for (const auto &term : Array(*terms))
+            {
+                const auto &pair = Array(term);
+                Require(pair.size() == 2, "Observable terms must be [coefficient, pauli] pairs");
+                observable.emplace_back(Number(pair[0]), pauli(pair[1]));
+            }
+            Require(!observable.empty() && observable.size() <= 100000, "An observable needs 1..100000 terms");
+            readouts.push_back(Adjoint::Readout::Expectation(std::move(observable)));
+        }
+        else
+        {
+            std::vector<Types::qubit_t> qubits;
+            for (const auto &q : Array(readout.at("probabilities")))
+            {
+                Require(UInt(q) < input.qubits, "Probabilities qubit exceeds num_qubits");
+                qubits.push_back(static_cast<Types::qubit_t>(UInt(q)));
+            }
+            readouts.push_back(Adjoint::Readout::Probabilities(std::move(qubits)));
+        }
+    }
+    const size_t numValues = Adjoint::Columns(readouts);
+    const size_t numParams = program->NumParams();
+
+    size_t numRows = 1;
+    std::vector<double> rows;
+    if (const auto *value = request.if_contains("parameter_rows"))
+    {
+        const auto &values = Array(*value);
+        Require(!values.empty() && values.size() <= limit, "parameter_rows needs 1..max_output_elements rows");
+        numRows = values.size();
+        rows.reserve(Elements({numRows, numParams}));
+        for (const auto &row : values)
+        {
+            const auto &entries = Array(row);
+            Require(entries.size() == numParams, "Each parameter row needs num_parameters (" + std::to_string(numParams) + ") values");
+            for (const auto &entry : entries)
+                rows.push_back(Number(entry));
+        }
+    }
+    else
+        rows = program->DefaultParams();
+
+    uint64_t outputs = Elements({numRows, numValues});
+    if (operation == "adjoint_jacobian")
+        outputs += Elements({numRows, numValues, numParams});
+    if (operation == "adjoint_vjp")
+        outputs += Elements({numRows, numParams});
+    Require(outputs <= limit, "Adjoint output exceeds max_output_elements");
+
+    std::vector<double> cotangents;
+    if (operation == "adjoint_vjp")
+    {
+        const auto &values = Array(Field(request, "cotangents"));
+        Require(values.size() == numRows, "cotangents needs one row per parameter row");
+        cotangents.reserve(outputs);
+        for (const auto &row : values)
+        {
+            const auto &entries = Array(row);
+            Require(entries.size() == numValues, "Each cotangent row needs num_values (" + std::to_string(numValues) + ") values");
+            for (const auto &entry : entries)
+                cotangents.push_back(Number(entry));
+        }
+    }
+
+    json::object result{{"schema_version", SchemaVersion},
+                        {"operation", operation},
+                        {"backend", BackendName(config.simulator_type)},
+                        {"method", MethodName(config.simulation_type)},
+                        {"num_qubits", input.qubits},
+                        {"num_parameters", numParams},
+                        {"num_values", numValues}};
+    if (validate)
+    {
+        result["valid"] = true;
+        return result;
+    }
+    const auto start = Clock::now();
+    const bool cone = config.enable_causal_cone_reduction;
+    std::vector<double> values, jacobian, vjp;
+    if (operation == "adjoint_expectation_values")
+        values = program->Values(readouts, rows, numRows, cone);
+    else if (operation == "adjoint_jacobian")
+        program->Jacobian(readouts, rows, numRows, cone, values, jacobian);
+    else
+        program->VectorJacobianProduct(readouts, cotangents, rows, numRows, cone, values, vjp);
+
+    json::array defaults;
+    for (const double value : program->DefaultParams())
+        defaults.emplace_back(value);
+    result.erase("backend");
+    result.erase("method");
+    result["num_clbits"] = input.clbits;
+    result["circuit_parameters"] = std::move(defaults);
+    result["expectation_values"] = Matrix(values, numRows, numValues);
+    if (operation == "adjoint_jacobian")
+    {
+        json::array batch;
+        for (size_t row = 0; row < numRows; ++row)
+        {
+            std::vector<double> block(jacobian.begin() + static_cast<std::ptrdiff_t>(row * numValues * numParams),
+                                      jacobian.begin() + static_cast<std::ptrdiff_t>((row + 1) * numValues * numParams));
+            batch.emplace_back(Matrix(block, numValues, numParams));
+        }
+        result["jacobian"] = std::move(batch);
+    }
+    if (operation == "adjoint_vjp")
+        result["vjp"] = Matrix(vjp, numRows, numParams);
+    result["execution_metadata"] = json::object{{"backend", BackendName(config.simulator_type)},
+                                                {"method", MethodName(config.simulation_type)},
+                                                {"selection", "fixed"},
+                                                {"differentiation", "adjoint"},
+                                                {"causal_cone_reduction", cone}};
+    result["time_taken"] = std::chrono::duration<double>(Clock::now() - start).count();
+    result["probability_order"] = "first_listed_qubit_least_significant";
+    Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
+    return result;
+}
 } // namespace
 
 json::object Capabilities()
@@ -438,13 +775,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
     Keys(request, {"schema_version", "operation",    "circuit",      "simulator",     "execution",           "noise",     "observables",
                    "outputs",        "basis_states", "target_state", "other_circuit", "step_circuit",        "steps",     "suffixes",
                    "requests",       "diagnostics",  "maintenance",  "keep_qubits",   "max_output_elements", "operators", "expectation_operators",
-                   "move_qubits",    "pauli",        "row_state",    "col_state"});
+                   "move_qubits",    "pauli",        "row_state",    "col_state",     "parameter_rows",      "cotangents"});
     const auto operation = String(Field(request, "operation"));
     Supported(operations.count(operation), "Unknown operation: " + operation);
     // A known field for another operation must not bypass nested validation or
     // appear to configure a computation which never reads it.
     const std::map<std::string, std::set<std::string>> operationFields{
-        {"observables", {"estimate", "incremental_evolve", "diagnostics"}},
+        {"observables", {"estimate", "incremental_evolve", "diagnostics", "mirror_fidelity", "adjoint_expectation_values", "adjoint_jacobian", "adjoint_vjp"}},
         {"basis_states", {"statevector", "amplitudes", "probabilities"}},
         {"target_state", {"state_probability"}},
         {"other_circuit", {"inner_product"}},
@@ -461,8 +798,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         {"pauli", {"diagnostics"}},
         {"row_state", {"diagnostics"}},
         {"col_state", {"diagnostics"}},
-
-        {"max_output_elements", {"statevector", "amplitudes", "probabilities", "diagnostics", "incremental_evolve"}}};
+        {"parameter_rows", {"adjoint_expectation_values", "adjoint_jacobian", "adjoint_vjp"}},
+        {"cotangents", {"adjoint_vjp"}},
+        {"max_output_elements",
+         {"statevector", "amplitudes", "probabilities", "diagnostics", "incremental_evolve", "adjoint_expectation_values", "adjoint_jacobian", "adjoint_vjp"}}};
     for (const auto &entry : request)
     {
         const auto field = std::string(entry.key());
@@ -512,12 +851,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
     if (const auto *devices = distribution.if_contains("devices"))
         Require(Array(*devices).size() < (uint64_t{1} << input.qubits), "Distribution requires at least one local qubit");
     auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits);
-    for (const auto &op : input.circuit->GetOperations())
-        Supported(op->GetType() != Circuits::OperationType::kQuantumChannel || Mixed(config), "Explicit Kraus instructions require density_matrix or MPO");
-    const auto observables = Observables(request, input.qubits);
     const auto limit = UInt(request, "max_output_elements", 65536);
     Require(limit > 0 && limit <= 1048576, "max_output_elements must be in [1,1048576]");
     Require(!request.contains("outputs"), "Use operation-specific queries instead of outputs");
+    if (AdjointOperation(operation))
+        return RunAdjoint(request, operation, config, input, noise, validate, limit);
+    CheckChannels(input.circuit, config, noise);
+    const auto observables = Observables(request, input.qubits);
     if (operation == "estimate" || operation == "incremental_evolve")
         Require(!observables.empty(), "This operation requires observables");
     Supported(!noise.enabled || config.fixed_backend, "Noise requires fixed backend selection");
@@ -568,9 +908,16 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
                 ValidateNoisyCircuit(additional.back().circuit);
         }
     }
+    bool circuitChannels = HasChannels(input.circuit), measurementReadout = HasMeasurementReadout(input.circuit);
     for (const auto &other : additional)
-        for (const auto &op : other.circuit->GetOperations())
-            Supported(op->GetType() != Circuits::OperationType::kQuantumChannel || Mixed(config), "Explicit Kraus instructions require density_matrix or MPO");
+    {
+        CheckChannels(other.circuit, config, noise);
+        circuitChannels = circuitChannels || HasChannels(other.circuit);
+        measurementReadout = measurementReadout || HasMeasurementReadout(other.circuit);
+    }
+    Require(!noise.enabled || noise.channel_count > 0 || circuitChannels,
+            "noise.channels may be empty only when the circuit's channel instructions supply the noise");
+    Supported(!measurementReadout || operation == "execute" || operation == "checkpoint_batch", "Measurement readout_error applies to measurement counts only");
     const bool amplitudes = operation == "statevector" || operation == "amplitudes";
     const bool query = amplitudes || operation == "probabilities" || operation == "state_probability" || operation == "diagnostics";
     if (amplitudes || operation == "inner_product" || operation == "mirror_fidelity" || operation == "noisy_fidelity")
@@ -1137,6 +1484,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
     {
         // Build U(first)^dagger U(second). Every nonmeasurement operation was
         // checked above; unsupported adjoints fail instead of silently cloning.
+        // With observables, mirror_fidelity returns <0|M^dag O M|0> for each Pauli
+        // O of the executed mirror M instead of P(|0...0>): 1 for Z-type strings
+        // under exact evolution, and lower where the backend truncated.
+        const bool mirrorObservables = operation == "mirror_fidelity" && !observables.empty();
         double sum = 0, squares = 0;
         std::complex<double> overlap;
         for (size_t r = 0; r < realizations; ++r)
@@ -1149,6 +1500,11 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
                 if (auto adjoint = adjoint_gate(*it))
                     combined->AddOperation(adjoint);
             Prepare(context, combined, input.clbits);
+            if (mirrorObservables)
+            {
+                result["expectation_values"] = Expectations(simulator, observables);
+                continue;
+            }
             overlap = simulator->ProjectOnZero();
             const auto fidelity = std::norm(overlap);
             sum += fidelity;
@@ -1156,7 +1512,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         }
         if (operation == "inner_product")
             result["inner_product"] = Complex(overlap);
-        else
+        else if (!mirrorObservables)
         {
             const auto mean = sum / realizations;
             result["fidelity"] = mean;
@@ -1202,6 +1558,11 @@ template <typename Function> char *NativeBoundary(Function function) noexcept
         catch (const std::invalid_argument &error)
         {
             envelope = {{"ok", false}, {"error", json::object{{"code", "invalid_input"}, {"message", error.what()}}}};
+        }
+        catch (const MaestroExecution::Adjoint::MemoryLimitError &error)
+        {
+            // A refused allocation estimate, not an exhausted heap: keep its reason.
+            envelope = {{"ok", false}, {"error", json::object{{"code", "insufficient_resources"}, {"message", error.what()}}}};
         }
         catch (const std::bad_alloc &)
         {

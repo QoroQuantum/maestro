@@ -57,6 +57,8 @@ struct NoiseConfig
     std::string mode = "combined";
     uint32_t seed = 0;
     size_t realizations = 1;
+    // Zero only when the circuit's own channel instructions supply the noise.
+    size_t channel_count = 0;
     json::array approximations;
     std::string thermal_approximation_warning;
 };
@@ -81,8 +83,13 @@ inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig 
     result.seed = static_cast<uint32_t>(seed);
     std::set<std::pair<std::string, uint64_t>> configured;
     std::set<std::pair<std::string, Types::qubits_vector>> configuredPairs;
-    const auto &channels = Array(Field(object, "channels"));
-    Require(!channels.empty() && channels.size() <= 100000, "Invalid channel count");
+    // Channels may be omitted only to sample a circuit's own channel
+    // instructions; Run() rejects an empty model for circuits without them.
+    static const json::array none;
+    const auto *channelsValue = object.if_contains("channels");
+    const auto &channels = channelsValue ? Array(*channelsValue) : none;
+    Require(channels.size() <= 100000, "Invalid channel count");
+    result.channel_count = channels.size();
     for (const auto &item : channels)
     {
         const auto &channel = Object(item);

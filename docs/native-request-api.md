@@ -77,17 +77,47 @@ and an optional single `conditional_reg`. Native additions are:
 
 ```json
 [
-  {"name":"x", "qubits":[0]},
+  {"name":"x", "qubits":[0], "noiseless":true},
+  {"name":"rzz", "qubits":[0,1], "params":[0.7]},
   {"name":"delay", "qubits":[0], "duration":0.000001},
   {"name":"kraus", "qubits":[0], "operators":[[0,1,1,0]]},
+  {"name":"pauli_channel", "qubits":[0], "probabilities":[0.97,0.01,0.01,0.01]},
   {"name":"reset", "qubits":[0]},
-  {"name":"measure", "qubits":[0], "clbits":[0]}
+  {"name":"measure", "qubits":[0], "clbits":[0], "readout_error":0.01}
 ]
 ```
 
 Kraus matrices are flat row-major arrays with real or complex entries and require
 one/two targets and a mixed-state backend. Identity instructions remain present
 for noise injection. Gate parameter counts and U1/U2/U3 conventions are checked.
+
+`rxx` and `rzz` take one angle and two qubits. They expand exactly as the QASM
+parser expands qelib1.inc's gates: `cx; rz; cx`, between Hadamards on both
+qubits for `rxx`. A `conditional_reg` applies to every expanded gate.
+
+`noiseless: true` on a gate (including an expanded `rxx`/`rzz`) exempts it from
+injected gate noise, like Python's `h/s/sdg(..., noiseless=True)`. Use it for
+basis changes that belong to a non-Z measurement or reset. It is rejected on
+measurements and non-gate instructions.
+
+`readout_error` on a measurement flips each recorded result: a number gives a
+symmetric probability, and `{"p_meas1_prep0": p, "p_meas0_prep1": q}` gives the
+two rates of the `readout` noise channel. A noise model's readout error composes
+with the measurement's own rates. Like model readout, it applies to measurement
+counts only: `execute` and `checkpoint_batch` accept it, and other operations
+reject it instead of silently dropping it.
+
+`pauli_channel` applies a Pauli channel to one or two qubits. `probabilities`
+has `4**len(qubits)` entries summing to one; base-4 digit `k` of an index selects
+I, X, Y or Z on `qubits[k]`, so one qubit is `[pI, pX, pY, pZ]` and two are
+`II, XI, YI, ZI, IX, XX, ... ZZ`. Density-matrix and MPO methods apply it exactly.
+Pure-state and MPS methods sample one Pauli per noise realization: the request
+needs a `noise` block with trajectory evaluation, whose `channels` may then be
+omitted. Set `noise.realizations` to the shot count for independent draws per
+shot, as with Python's `noisy_execute(..., noise_realizations=shots)`. A general
+`kraus` instruction cannot be sampled and still needs exact mixed-state evaluation.
+Circuit `kraus` and `pauli_channel` instructions combine with a `noise` model:
+exact evaluation keeps them in place and adds the model's channels around them.
 
 Operation-specific fields are accepted only by the operations listed below.
 For example, `other_circuit` on `execute` is an input error, even if that nested
@@ -116,12 +146,21 @@ they cannot override the simulator or specify their own launch profiles.
 | `state_probability` | `target_state` | Probability of a q0-first bitstring |
 | `diagnostics` | `diagnostics`, `maintenance`, `keep_qubits` | Mixed-state diagnostics/reduced density matrix; MPS/MPO maintenance |
 | `inner_product` | `other_circuit` | Complex overlap of two unitary preparations |
-| `mirror_fidelity` | — | Fidelity of the preparation followed by its inverse |
+| `mirror_fidelity` | optional `observables` | Fidelity of the preparation followed by its inverse; with observables, their expectations on that mirror state |
 | `noisy_fidelity` | coherent `noise` | Ideal-versus-noisy unitary fidelity across realizations |
 | `incremental_evolve` | `step_circuit`, ordered `steps`, `observables` | Prepare once, advance to each step, observe without reset |
 | `checkpoint_batch` | `suffixes`, `execution.shots` | Save ideal prefix, restore for each suffix/shot; noise applies to suffixes only |
 | `batch` | `requests` | Independent native requests in one worker; validate all members first |
 | `validate` | circuit/configuration | Validation response only |
+| `adjoint_expectation_values` | `observables`, optional `parameter_rows` | Readout values for each parameter row |
+| `adjoint_jacobian` | `observables`, optional `parameter_rows` | Values and their adjoint Jacobian |
+| `adjoint_vjp` | `observables`, `cotangents`, optional `parameter_rows` | Values and the vector–Jacobian product |
+
+With `observables`, `mirror_fidelity` returns `expectation_values`, the value of
+`<0|M† O M|0>` for each Pauli string `O` and the executed mirror `M`, instead of
+`fidelity`. Z-type strings give 1 under exact evolution and less where the
+backend truncated, so this measures truncation error per observable. The gate
+sequence runs on the configured backend as given, as in Python.
 
 State queries remove terminal measurements; mid-circuit measurements are rejected
 for these queries. Overlap/fidelity require unitary circuits. Incremental evolution
@@ -130,6 +169,59 @@ a top-level stochastic noise model is rejected for this operation. State queries
 with top-level noise require a single exact realization. No mixed-state vector or
 pure-state overlap is advertised for density matrices/MPOs. Individual methods may
 have narrower numerical-query support and return a native error.
+
+## Adjoint differentiation
+
+The three `adjoint_*` operations expose Python's `AdjointProgram`: exact,
+batched values and reverse-mode derivatives of a unitary circuit on QCSim's CPU
+statevector (`qcsim` or `composite_qcsim`, method `statevector`). Noise is
+rejected; terminal measurements are ignored as for `estimate`, and any other
+non-unitary operation is an input error. Registers are limited to 63 qubits.
+
+The differentiable parameters are the gate angles in circuit order: one for
+`p`, `rx`, `ry`, `rz`, `cp`, `crx`, `cry` and `crz`; `theta, phi, lambda` for
+`u` (its global phase stays fixed); four for `cu`. QASM `parameters` bindings
+and the `u1/u2/u3`, `rxx`, `rzz` expansions contribute their resulting angles.
+Results report `num_parameters` and the circuit's own values as
+`circuit_parameters`, in that order.
+
+Each `observables` entry is one readout:
+
+- a Pauli string, one character per qubit (q0 first), giving one value;
+- `{"terms": [[coefficient, pauli], ...]}`, a real weighted sum, giving one value;
+- `{"probabilities": [q, ...]}`, 1–24 distinct qubits, giving `2**k` values
+  with the first listed qubit as the least significant bit of the outcome index.
+
+Values are placed side by side in readout order; `num_values` is their total.
+`parameter_rows` is an array of rows of `num_parameters` angles, each replacing
+all circuit parameters; omitted means one row with the circuit's own values.
+
+```json
+{
+  "schema_version": 2,
+  "operation": "adjoint_jacobian",
+  "circuit": {"num_qubits": 2,
+              "source": "OPENQASM 2.0; qreg q[2]; ry(0.4) q[0]; cx q[0],q[1]; rx(0.9) q[1];"},
+  "observables": ["ZI", {"terms": [[0.5, "ZZ"], [2, "XI"]]}, {"probabilities": [1]}],
+  "parameter_rows": [[0.4, 0.9], [1.2, -0.3]]
+}
+```
+
+| Operation | Result fields |
+|---|---|
+| `adjoint_expectation_values` | `expectation_values[row][value]` |
+| `adjoint_jacobian` | also `jacobian[row][value][parameter]` |
+| `adjoint_vjp` | also `vjp[row][parameter]`, from `cotangents[row][value]` |
+
+`adjoint_jacobian` runs one backward sweep per value; `adjoint_vjp` runs one per
+row for all readouts, so it is the cheaper choice for a scalar loss.
+`simulator.options.enable_causal_cone_reduction` (default true) drops gates
+outside the readouts' joint cone; their parameters get an exactly zero
+derivative. The total number of returned numbers is bounded by
+`max_output_elements`. Validation reports `num_parameters` and `num_values`
+without computing. A request whose state memory would exceed the machine's
+physical or cgroup memory fails with `insufficient_resources` and the reason.
+Results are deterministic and carry no `seed`.
 
 Diagnostics are `trace`, `purity` (defaults), `trace_of_square`,
 `hermiticity_residual`, `is_hermitian`, and `partial_trace`, for density
@@ -217,7 +309,17 @@ are rejected. Small floating-point thresholds retain their precision.
 | `mps_routing_legacy_cap` | same | boolean | QCSim/GPU MPS and MPO |
 | `optimize_circuit` | `` | boolean | all |
 | `gate_fusion` | `` | boolean | all |
+| `auto_reduce` | `` | boolean | all (default true) |
+| `enable_causal_cone_reduction` | `` | boolean | all (default true) |
+| `enable_observable_clustering` | `` | boolean | all (default true) |
+| `max_cluster_qubits` | `` | positive_integer | all |
+| `min_cluster_qubits` | `` | positive_integer (≤ `max_cluster_qubits`) | all |
+| `observable_error_tolerance` | `` | number in (0, 1] | all |
+| `allow_reset_marginalization` | `` | boolean | all (default false) |
+| `enable_sampling_reduction` | `` | boolean | all (default false) |
 | `max_simulators` | `max_simulators` | positive_integer | all |
+| `trajectory_policy` | `trajectory_policy` | `block_v1` or `shot_v1` (default) | QCSim statevector, density matrix, path integral |
+| `trajectory_max_memory_mb` | `trajectory_max_memory_mb` | positive_integer | QCSim statevector and density matrix |
 | `mpo_kraus_completeness_check` | `matrix_product_operator_kraus_completeness_check` | string | mpo |
 | `mpo_restore_trace_after_truncation` | `matrix_product_operator_restore_trace_after_truncation` | boolean | mpo |
 | `mpo_hermitize_after_truncation` | `matrix_product_operator_hermitize_after_truncation` | boolean | mpo |
@@ -258,6 +360,23 @@ Omitted seeds are generated randomly for each
 request. Specify an explicit simulator seed once, through `execution.seed` or
 the options object, to reproduce a run; zero is a valid explicit seed.
 
+Estimation reductions run before simulation. `enable_causal_cone_reduction`
+drops operations outside the observables' cones, `auto_reduce` removes
+check-generated invariant subspaces (parity reduction), and
+`enable_observable_clustering` splits observables with disjoint cones into
+groups simulated on compact registers. `max_cluster_qubits` caps a group's width
+(unset: 20 for dense statevectors, 10 for density matrices; oversized cones stay
+whole), and `min_cluster_qubits` batches small disjoint cones up to that width.
+`observable_error_tolerance` opts into bounded backward Pauli evaluation of exact
+noisy channels with that absolute error budget per expectation; unset keeps the
+reduction exact. `allow_reset_marginalization` averages over unobserved reset
+outcomes, preserving ensemble values but not individual trajectories.
+`enable_sampling_reduction` samples disjoint measurement cones independently for
+`execute`; it is exact but opt-in, because it changes a seeded run's random
+streams. Estimates report `auto_reduced`, `qubits_before`, `qubits_after`,
+`clusters_count`, `largest_cluster_qubits`, `mean_cluster_qubits`,
+`cluster_methods`, `expectation_error_bounds` and `bounded_observables`.
+
 `gate_fusion` forces fusion on or off on eligible methods. When omitted, fusion
 is on except for CPU statevectors below 11 qubits and CPU density matrices below
 5 qubits, where it costs more than it saves. It is independent of
@@ -274,7 +393,9 @@ representations of the same setting.
 ## Noise models
 
 Noise channels are declarative entries with `kind`, nonempty `targets`, and the
-parameters below. Probabilities must be physical; time constants accept the string
+parameters below. `channels` may be empty or omitted only when the circuit's own
+`pauli_channel`/`kraus` instructions supply the noise, for example to sample a
+Pauli channel on a pure-state method. Probabilities must be physical; time constants accept the string
 `infinity`. Durations are seconds. Pair channels have exactly two targets; generic
 Kraus channels have one or two. Correlated OU bands can be accumulated. Other
 repeated settings that would replace an existing setting are rejected.
@@ -423,7 +544,11 @@ Build with `BUILD_PYTHON_BINDINGS=OFF`, `MAESTRO_BUILD_REQUEST_TESTS=ON`, and op
 the rebuilt library on the runtime search path. The public-API suite covers
 thermal/idle relaxation, phase/generalized amplitude damping, correlated AR1/OU/
 OU-band/multiband/one-over-f noise, crosstalk, analytical damping, seeded repeatability,
-invalid parameters, optimization comparisons and MPS bond-limit effects. A separate
+invalid parameters, optimization comparisons and MPS bond-limit effects. It also
+checks `rxx`/`rzz` instructions against QASM, `noiseless` and `readout_error`
+fields, exact and sampled `pauli_channel` instructions, observable mirror
+fidelity, and adjoint values, Jacobians and VJPs against finite differences of
+`estimate`, with their shape and backend rejections. A separate
 C consumer calls all four request functions and `FreeResult` through the public
 header and linked library. Linux CI enables these contract tests; the Windows wheel
 dry-run workflow also runs the DLL consumer, API and CLI tests.
@@ -625,6 +750,15 @@ accepts zero for unlimited bond dimension); `constraints` narrow choices (Aer
 truncation supports only `discarded_weight`). Cross-field and size constraints
 remain enforced by request validation. Catalog support does not probe optional
 plugins, GPU hardware or licensing, and is not a promise of runtime readiness.
+
+`instructions` describes the instruction-array format: `gates` lists each gate
+name with its parameter count (including `rxx` and `rzz`), `operations` lists
+`measure`, `reset`, `delay`, `kraus` and `pauli_channel`, and `fields` maps each
+optional field (`noiseless`, `readout_error`, `probabilities`, ...) to the
+instructions that accept it. `adjoint` lists the adjoint operations, their
+`supported_configurations`, readout kinds, differentiable gates with their
+parameter counts, `max_qubits` and `max_probability_qubits`. Clients can detect
+these features here without sending probe requests.
 
 ### Automatic CPU MPS/MPO routing
 

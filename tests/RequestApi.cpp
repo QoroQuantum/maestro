@@ -19,6 +19,7 @@ void TestFusionPublicInterfaces();
 void TestPauliPropagatorDedupDefault();
 void TestAutomaticGpuMixedStateFallback();
 void TestFixedBackendShotReuse();
+void TestNativeExtensions(const j::object &capabilities);
 
 void Check(bool condition, const char *message)
 {
@@ -428,6 +429,7 @@ try
         }
     }
     Check(operatorQuery && precision && workers, "Incomplete discovery metadata");
+    TestNativeExtensions(caps);
 
     Check(!caps.at("python_required").as_bool(), "Native API must not require Python");
     Check(caps.at("schema_version").as_int64() == 2, "Wrong native schema");

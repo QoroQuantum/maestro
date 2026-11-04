@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The native request API (and so the local server and QRMI) reaches the newer
+  Python features:
+  - `adjoint_expectation_values`, `adjoint_jacobian` and `adjoint_vjp` run
+    `AdjointProgram` on the CPU statevector, with Pauli, weighted-sum and
+    probability readouts, batched `parameter_rows` and VJP `cotangents`.
+  - `mirror_fidelity` accepts `observables` and returns their expectations on
+    the mirror state, as Python's `mirror_fidelity(observables=...)` does.
+  - Instruction arrays accept `rxx` and `rzz` (expanded as in QASM), `noiseless`
+    on gates, `readout_error` on measurements (symmetric or asymmetric), and
+    `pauli_channel`. Mixed-state methods apply Pauli channels exactly; pure-state
+    methods sample them per realization from a trajectory `noise` block, whose
+    `channels` may then be omitted.
+  - Capabilities list the instruction format (`instructions`) and the adjoint
+    operations (`adjoint`), so clients can detect these features.
+  - An adjoint request whose state would exceed the machine's memory fails with
+    `insufficient_resources` and the reason.
+
 ## [0.3.12] - 2026-11-03
 
 ### Added

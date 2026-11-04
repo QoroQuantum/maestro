@@ -159,7 +159,37 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
         noiseKinds.emplace_back(entry.first);
     for (const auto &operation : operations)
         names.emplace_back(operation);
+    // Instruction-array circuits: gate names with their parameter counts, the
+    // non-gate instructions, and the optional per-instruction fields.
+    json::array gates;
+    for (const auto &[name, count] : std::vector<std::pair<const char *, int>>{
+             {"id", 0}, {"x", 0},   {"y", 0},     {"z", 0},  {"h", 0},   {"s", 0},   {"sdg", 0}, {"t", 0},  {"tdg", 0},  {"sx", 0},  {"sxdg", 0},  {"k", 0},
+             {"p", 1},  {"rx", 1},  {"ry", 1},    {"rz", 1}, {"u", 3},   {"u1", 1},  {"u2", 2},  {"u3", 3}, {"swap", 0}, {"cx", 0},  {"cy", 0},    {"cz", 0},
+             {"ch", 0}, {"csx", 0}, {"csxdg", 0}, {"cp", 1}, {"crx", 1}, {"cry", 1}, {"crz", 1}, {"cu", 4}, {"rxx", 1},  {"rzz", 1}, {"cswap", 0}, {"ccx", 0}})
+        gates.emplace_back(json::object{{"name", name}, {"params", count}});
+    const json::object instructions{{"gates", std::move(gates)},
+                                    {"operations", json::array{"measure", "reset", "delay", "kraus", "pauli_channel"}},
+                                    {"fields", json::object{{"conditional_reg", json::array{"gates"}},
+                                                            {"noiseless", json::array{"gates"}},
+                                                            {"readout_error", json::array{"measure"}},
+                                                            {"clbits", json::array{"measure"}},
+                                                            {"duration", json::array{"delay"}},
+                                                            {"operators", json::array{"kraus"}},
+                                                            {"probabilities", json::array{"pauli_channel"}}}},
+                                    {"channel_evaluation",
+                                     "Mixed-state methods apply kraus and pauli_channel exactly; pure-state methods sample pauli_channel per noise "
+                                     "realization and need a trajectory noise block, whose channels may then be omitted"}};
+    const json::object adjoint{
+        {"operations", json::array{"adjoint_expectation_values", "adjoint_jacobian", "adjoint_vjp"}},
+        {"supported_configurations",
+         json::array{json::object{{"backend", "qcsim"}, {"method", "statevector"}}, json::object{{"backend", "composite_qcsim"}, {"method", "statevector"}}}},
+        {"readouts", json::array{"pauli", "terms", "probabilities"}},
+        {"differentiable_gates", json::object{{"p", 1}, {"rx", 1}, {"ry", 1}, {"rz", 1}, {"cp", 1}, {"crx", 1}, {"cry", 1}, {"crz", 1}, {"u", 3}, {"cu", 4}}},
+        {"max_qubits", 63},
+        {"max_probability_qubits", 24}};
     return {{"schema_version", SchemaVersion},
+            {"instructions", instructions},
+            {"adjoint", adjoint},
             {"api", "maestro.native.request"},
             {"build", json::object{{"version", MAESTRO_BUILD_VERSION}, {"source_revision", MAESTRO_SOURCE_REVISION}}},
             {"capability_scope", "validation"},
