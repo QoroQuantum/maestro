@@ -71,7 +71,9 @@ with tempfile.TemporaryDirectory() as scratch:
     if result.get("ok") is not True:
         raise SystemExit(f"Bell circuit failed: {result}")
     counts = result["counts"]
-    if set(counts) - {"00", "11"} or sum(counts.values()) != 200:
+    # Both outcomes must appear: a library that skipped the gates would give
+    # only "00". With 200 shots a real Bell state misses one with p = 2**-199.
+    if set(counts) != {"00", "11"} or any(count <= 0 for count in counts.values()) or sum(counts.values()) != 200:
         raise SystemExit(f"unexpected Bell counts: {counts}")
     print("Bell counts:", counts)
     print(f"{archive.name}: OK")
