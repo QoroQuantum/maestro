@@ -105,7 +105,9 @@ symmetric probability, and `{"p_meas1_prep0": p, "p_meas0_prep1": q}` gives the
 two rates of the `readout` noise channel. A noise model's readout error composes
 with the measurement's own rates. Like model readout, it applies to measurement
 counts only: `execute` and `checkpoint_batch` accept it, and other operations
-reject it instead of silently dropping it.
+reject it instead of silently dropping it. That includes the adjoint operations
+and the nested `other_circuit` and `step_circuit`, whose terminal measurements
+are otherwise removed.
 
 `pauli_channel` applies a Pauli channel to one or two qubits. `probabilities`
 has `4**len(qubits)` entries summing to one; base-4 digit `k` of an index selects
@@ -160,7 +162,10 @@ With `observables`, `mirror_fidelity` returns `expectation_values`, the value of
 `<0|M† O M|0>` for each Pauli string `O` and the executed mirror `M`, instead of
 `fidelity`. Z-type strings give 1 under exact evolution and less where the
 backend truncated, so this measures truncation error per observable. The gate
-sequence runs on the configured backend as given, as in Python.
+sequence runs on the configured backend as given, as in Python. Because it only
+takes expectations of the executed mirror state, observable mode also accepts
+`density_matrix` and `matrix_product_operator`; plain mirror fidelity, a
+pure-state overlap, does not.
 
 State queries remove terminal measurements; mid-circuit measurements are rejected
 for these queries. Overlap/fidelity require unitary circuits. Incremental evolution
@@ -528,7 +533,10 @@ The local server's administrator-owned profiles launch this executable.
 
 ## Bounds, exclusions, and tests
 
-Requests are bounded to 16 MiB and serialized results to 64 MiB. Basis outputs
+Requests are bounded to 16 MiB and serialized results to 64 MiB
+(`max_result_bytes`). The bound covers the complete emitted document, including
+the `ok`/`schema_version` envelope and a batch's wrapper; a larger result fails
+with `invalid_input`. Basis outputs
 have a default limit of 65,536 elements and a hard limit of 1,048,576 through
 `max_output_elements`; selected indices avoid a full statevector export.
 Basis-index queries require fewer than 63 qubits. Batches allow 256 members and

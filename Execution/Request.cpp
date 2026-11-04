@@ -854,6 +854,14 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
     const auto limit = UInt(request, "max_output_elements", 65536);
     Require(limit > 0 && limit <= 1048576, "max_output_elements must be in [1,1048576]");
     Require(!request.contains("outputs"), "Use operation-specific queries instead of outputs");
+    // Measurement readout_error changes recorded counts only. Check every parsed
+    // circuit before its terminal measurements are removed, so operations that
+    // never sample reject it instead of dropping it silently.
+    const auto rejectReadout = [&](const CircuitPtr &parsed) {
+        Supported(operation == "execute" || operation == "checkpoint_batch" || !HasMeasurementReadout(parsed),
+                  "Measurement readout_error applies to measurement counts only");
+    };
+    rejectReadout(input.circuit);
     if (AdjointOperation(operation))
         return RunAdjoint(request, operation, config, input, noise, validate, limit);
     CheckChannels(input.circuit, config, noise);
@@ -875,6 +883,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
     {
         additional.push_back(ParseCircuit(Object(Field(request, "other_circuit"))));
         SameSize(input, additional.back());
+        rejectReadout(additional.back().circuit);
         additional.back().circuit = Unmeasured(additional.back().circuit, true);
     }
     if (operation == "incremental_evolve")
@@ -883,6 +892,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
                                   "circuit channels");
         additional.push_back(ParseCircuit(Object(Field(request, "step_circuit"))));
         SameSize(input, additional.back());
+        rejectReadout(additional.back().circuit);
         additional.back().circuit = Unmeasured(additional.back().circuit);
         const auto &steps = Array(Field(request, "steps"));
         Require(!steps.empty() && steps.size() <= limit, "Invalid observation steps");
@@ -908,19 +918,20 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
                 ValidateNoisyCircuit(additional.back().circuit);
         }
     }
-    bool circuitChannels = HasChannels(input.circuit), measurementReadout = HasMeasurementReadout(input.circuit);
+    bool circuitChannels = HasChannels(input.circuit);
     for (const auto &other : additional)
     {
         CheckChannels(other.circuit, config, noise);
         circuitChannels = circuitChannels || HasChannels(other.circuit);
-        measurementReadout = measurementReadout || HasMeasurementReadout(other.circuit);
     }
     Require(!noise.enabled || noise.channel_count > 0 || circuitChannels,
             "noise.channels may be empty only when the circuit's channel instructions supply the noise");
-    Supported(!measurementReadout || operation == "execute" || operation == "checkpoint_batch", "Measurement readout_error applies to measurement counts only");
     const bool amplitudes = operation == "statevector" || operation == "amplitudes";
     const bool query = amplitudes || operation == "probabilities" || operation == "state_probability" || operation == "diagnostics";
-    if (amplitudes || operation == "inner_product" || operation == "mirror_fidelity" || operation == "noisy_fidelity")
+    // Observable mirror evaluation only takes expectations of the executed mirror
+    // state, which mixed-state backends provide; it needs no pure-state overlap.
+    const bool mirrorObservables = operation == "mirror_fidelity" && !observables.empty();
+    if (amplitudes || operation == "inner_product" || (operation == "mirror_fidelity" && !mirrorObservables) || operation == "noisy_fidelity")
         Supported(!Mixed(config), "A mixed state has no unique statevector or pure-state overlap");
     Supported(!noise.enabled || operation == "execute" || operation == "estimate" || (query && noise.exact && noise.realizations == 1) ||
                   operation == "noisy_fidelity" || operation == "checkpoint_batch",
@@ -1487,7 +1498,6 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         // With observables, mirror_fidelity returns <0|M^dag O M|0> for each Pauli
         // O of the executed mirror M instead of P(|0...0>): 1 for Z-type strings
         // under exact evolution, and lower where the backend truncated.
-        const bool mirrorObservables = operation == "mirror_fidelity" && !observables.empty();
         double sum = 0, squares = 0;
         std::complex<double> overlap;
         for (size_t r = 0; r < realizations; ++r)
@@ -1595,7 +1605,16 @@ template <typename Function> char *NativeBoundary(Function function) noexcept
         try
         {
             envelope["schema_version"] = MaestroExecution::SchemaVersion;
-            const auto value = json::serialize(envelope);
+            auto value = json::serialize(envelope);
+            // max_result_bytes bounds the complete document, envelope included,
+            // so a transport can size its frames from the advertised limit alone.
+            if (value.size() > MaestroExecution::MaxResultBytes)
+            {
+                envelope = {{"ok", false},
+                            {"error", json::object{{"code", "invalid_input"}, {"message", "Result exceeds native result limit"}}},
+                            {"schema_version", MaestroExecution::SchemaVersion}};
+                value = json::serialize(envelope);
+            }
             auto *output = new char[value.size() + 1];
             std::memcpy(output, value.c_str(), value.size() + 1);
             return output;

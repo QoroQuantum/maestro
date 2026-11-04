@@ -1,7 +1,11 @@
 // Native request contract for instruction-level noise, two-qubit rotations,
-// observable mirror fidelity and adjoint differentiation. No Python or GPU.
+// observable mirror fidelity, adjoint differentiation and the result-size bound.
+// No Python or GPU.
+#include "../maestrolib/Interface.h"
+#include <algorithm>
 #include <boost/json.hpp>
 #include <cmath>
+#include <cstdint>
 #include <string>
 namespace j = boost::json;
 void Check(bool, const char *);
@@ -85,6 +89,35 @@ void TestInstructionNoiseFields()
     auto estimate = Instructions("estimate", 1, {measure});
     estimate["observables"] = j::array{"Z"};
     Check(ErrorCode(Call(estimate, false)) == "unsupported_capability", "Readout on an estimate was silently ignored");
+    // Operations which remove terminal measurements still reject their readout:
+    // adjoint differentiation, batched or not, and nested overlap/evolution circuits.
+    for (const char *operation : {"adjoint_expectation_values", "adjoint_jacobian", "adjoint_vjp"})
+    {
+        auto adjoint = Instructions(operation, 1, {Gate("ry", {0}, {0.4}), measure});
+        adjoint["observables"] = j::array{"Z"};
+        if (std::string(operation) == "adjoint_vjp")
+            adjoint["cotangents"] = j::array{j::array{1}};
+        for (const bool validate : {false, true})
+            Check(ErrorCode(Call(adjoint, false, validate)) == "unsupported_capability", "Readout on an adjoint operation was silently ignored");
+        const j::object batch{{"schema_version", 2}, {"operation", "batch"}, {"requests", j::array{adjoint}}};
+        Check(ErrorCode(Call(batch, false)) == "unsupported_capability", "Readout in a batched adjoint operation was silently ignored");
+    }
+    const auto measured = Instructions("estimate", 1, {Gate("ry", {0}, {0.4}), measure}).at("circuit");
+    const auto unannotated = Instructions("estimate", 1, {Gate("ry", {0}, {0.4}), Gate("measure", {0})}).at("circuit");
+    auto overlap = Instructions("inner_product", 1, {Gate("ry", {0}, {0.4})});
+    auto evolve = Instructions("incremental_evolve", 1, {Gate("ry", {0}, {0.4})});
+    evolve["steps"] = j::array{1};
+    evolve["observables"] = j::array{"Z"};
+    for (auto *nested : {&overlap, &evolve})
+    {
+        const char *field = nested == &overlap ? "other_circuit" : "step_circuit";
+        (*nested)[field] = measured;
+        for (const bool validate : {false, true})
+            Check(ErrorCode(Call(*nested, false, validate)) == "unsupported_capability", "Readout in a nested circuit was silently ignored");
+        // A terminal measurement without readout is still removed and accepted.
+        (*nested)[field] = unannotated;
+        Call(*nested);
+    }
     for (const auto &value : {j::value(1.5), j::value(-0.1), j::value("0.1"), j::value(j::object{{"p_meas1_prep0", 0.1}})})
     {
         measure["readout_error"] = value;
@@ -196,6 +229,23 @@ void TestObservableMirrorFidelity()
     Near(Real(Call(request).at("expectation_values").at(0)), 1);
     request["observables"] = j::array{"ZZZ"};
     Check(ErrorCode(Call(request, false)) == "invalid_input", "A mismatched mirror observable was accepted");
+
+    // Mirror expectations need no pure-state overlap, so mixed-state methods
+    // evaluate them as Python does. Plain mirror fidelity remains pure-state only.
+    for (const char *method : {"density_matrix", "matrix_product_operator"})
+    {
+        request = Request("mirror_fidelity", 2, body, method);
+        request["observables"] = j::array{"ZZ", "ZI", "XX", "IZ"};
+        const auto mixed = Call(request).at("expectation_values").as_array();
+        Check(mixed.size() == 4, "Mixed-state mirror observables have the wrong shape");
+        Near(Real(mixed[0]), 1);
+        Near(Real(mixed[1]), 1);
+        Near(Real(mixed[2]), 0);
+        Near(Real(mixed[3]), 1);
+        Call(request, true, true);
+        request.erase("observables");
+        Check(ErrorCode(Call(request, false)) == "unsupported_capability", "Mixed-state mirror fidelity was accepted");
+    }
 }
 
 double Expectation(const std::string &body, const char *observable)
@@ -299,6 +349,67 @@ void TestAdjointDifferentiation()
     const j::object batch{{"schema_version", 2}, {"operation", "batch"}, {"requests", j::array{request}}};
     Near(Real(Call(batch).at("results").at(0).at("expectation_values").at(0).at(0)), std::cos(0.1));
 }
+
+std::string RawRun(const j::object &request)
+{
+    char *result = MaestroRunRequestJson(j::serialize(request).c_str());
+    Check(result != nullptr, "Null native result");
+    std::string output(result);
+    FreeResult(result);
+    return output;
+}
+
+// One-shot counts of an all-|0> register: one key of `clbits` characters, so the
+// serialized result grows by exactly one byte per classical bit.
+j::object WideCounts(size_t qubits, size_t clbits, size_t shots)
+{
+    j::array source;
+    for (size_t q = 0; q < qubits; ++q)
+        source.emplace_back(j::object{{"name", "h"}, {"qubits", j::array{q}}});
+    for (size_t q = 0; q < qubits; ++q)
+        source.emplace_back(j::object{{"name", "measure"}, {"qubits", j::array{q}}, {"clbits", j::array{q}}});
+    auto request = Request("execute", qubits, "");
+    request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", qubits}, {"num_clbits", clbits}, {"source", std::move(source)}};
+    request["execution"] = j::object{{"shots", shots}, {"seed", 7}};
+    return request;
+}
+
+// max_result_bytes bounds the whole emitted document. Member results are checked
+// before the batch envelope and "ok" are added, so a result just under the limit
+// must still be refused once that envelope would take it over.
+void TestResultEnvelopeLimit(uint64_t limit)
+{
+    // Distinct outcomes of eight random qubits, each one a 1e6-bit counts key.
+    const auto keys = Call(WideCounts(8, 8, 256)).at("counts").as_object().size();
+    const size_t clbits = std::min<size_t>(1000000, (limit - 600000) / keys);
+    auto bulk = WideCounts(8, clbits, 256);
+    j::object batch{{"schema_version", 2}, {"operation", "batch"}, {"requests", j::array{bulk, WideCounts(1, 1, 1)}}};
+    size_t tune = 1;
+    bool boundary = false;
+    for (int attempt = 0; attempt < 12 && !boundary; ++attempt)
+    {
+        Check(tune >= 1 && tune <= 1000000, "Result-limit probe left the classical register range");
+        batch["requests"].as_array()[1] = WideCounts(1, tune, 1);
+        const auto output = RawRun(batch);
+        Check(output.size() <= limit, "A native result exceeded max_result_bytes");
+        const auto value = j::parse(output).as_object();
+        if (value.at("ok").as_bool())
+        {
+            // Aim the member results at the middle of the envelope's overhang.
+            const auto results = j::serialize(value.at("results")).size();
+            const auto envelope = output.size() - results;
+            const auto target = static_cast<int64_t>(limit - envelope / 2);
+            tune = static_cast<size_t>(static_cast<int64_t>(tune) + target - static_cast<int64_t>(results));
+            continue;
+        }
+        const std::string message(value.at("error").at("message").as_string().c_str());
+        boundary = message == "Result exceeds native result limit";
+        Check(boundary || message == "Batch results exceed native result limit", "Unexpected result-limit failure");
+        if (!boundary)
+            tune -= std::min<size_t>(tune - 1, 64);
+    }
+    Check(boundary, "The result-envelope limit was never exercised");
+}
 } // namespace
 
 void TestNativeExtensions(const j::object &capabilities)
@@ -316,4 +427,5 @@ void TestNativeExtensions(const j::object &capabilities)
     TestPauliChannelInstructions();
     TestObservableMirrorFidelity();
     TestAdjointDifferentiation();
+    TestResultEnvelopeLimit(capabilities.at("max_result_bytes").to_number<uint64_t>());
 }
