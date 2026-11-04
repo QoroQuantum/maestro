@@ -1027,10 +1027,6 @@ void LargeTrajectoryWorkers()
         for (int team : {1, 3, 8})
             for (size_t workers : {1, 2, 3, 8})
             {
-#ifdef _OPENMP
-                omp_set_num_threads(team);
-                budget->store(std::max(1, team / static_cast<int>(std::min<size_t>(workers, 5))));
-#endif
                 auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector, 3, 15);
                 // This checks the fixed 256-shot compatibility policy's teams.
                 network->Configure("trajectory_policy", "block_v1");
@@ -1038,6 +1034,13 @@ void LargeTrajectoryWorkers()
                 network->Configure("seed", "1099511627776");
                 network->SetMaxSimulators(workers);
                 network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+#ifdef _OPENMP
+                omp_set_num_threads(team);
+                // The network caps workers at the hardware thread count (2 on a
+                // small CI runner), and 1027 shots make five 256-shot blocks.
+                const size_t outer = std::min<size_t>(network->GetMaxSimulators(), 5);
+                budget->store(std::max(1, team / static_cast<int>(outer)));
+#endif
                 calls->store(0);
                 wrong->store(false);
                 const auto actual = onHost ? network->RepeatedExecuteOnHost(circuit, 0, 1027) : network->RepeatedExecute(circuit, 1027);
