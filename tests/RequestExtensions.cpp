@@ -96,7 +96,7 @@ void TestInstructionNoiseFields()
         auto adjoint = Instructions(operation, 1, {Gate("ry", {0}, {0.4}), measure});
         adjoint["observables"] = j::array{"Z"};
         if (std::string(operation) == "adjoint_vjp")
-            adjoint["cotangents"] = j::array{j::array{1}};
+            adjoint["cotangents"] = j::array(1, j::array{1});
         for (const bool validate : {false, true})
             Check(ErrorCode(Call(adjoint, false, validate)) == "unsupported_capability", "Readout on an adjoint operation was silently ignored");
         const j::object batch{{"schema_version", 2}, {"operation", "batch"}, {"requests", j::array{adjoint}}};
@@ -186,7 +186,7 @@ void TestPauliChannelInstructions()
     conditional["conditional_reg"] = 0;
     Check(ErrorCode(Call(Instructions("execute", 1, {conditional}, "density_matrix"), false)) == "invalid_input", "Conditional channel was accepted");
     // General Kraus channels still need exact mixed-state evaluation.
-    auto kraus = Instructions("execute", 1, {j::object{{"name", "kraus"}, {"qubits", j::array{0}}, {"operators", j::array{j::array{0, 1, 1, 0}}}}});
+    auto kraus = Instructions("execute", 1, {j::object{{"name", "kraus"}, {"qubits", j::array{0}}, {"operators", j::array(1, j::array{0, 1, 1, 0})}}});
     kraus["noise"] = j::object{{"realizations", 4}};
     Check(ErrorCode(Call(kraus, false)) == "unsupported_capability", "A Kraus channel was sampled on a pure state");
     // Exact model noise keeps circuit channels: bit flip 0.1 after x, then a
@@ -292,7 +292,7 @@ void TestAdjointDifferentiation()
 
     request = Request("adjoint_vjp", 2, body(params[0], params[1], params[2]));
     request["observables"] = j::array{"ZI", j::object{{"terms", j::array{j::array{0.5, "ZZ"}, j::array{2, "XI"}}}}};
-    request["cotangents"] = j::array{j::array{2, -1}};
+    request["cotangents"] = j::array(1, j::array{2, -1});
     const auto vjp = Call(request).at("vjp").at(0).as_array();
     for (size_t k = 0; k < 3; ++k)
         Near(Real(vjp[k]), 2 * Real(jacobian[0].at(k)) - Real(jacobian[1].at(k)));
@@ -307,12 +307,12 @@ void TestAdjointDifferentiation()
         Check(ErrorCode(Call(document, false)) == code, message);
     };
     auto bad = request;
-    bad["parameter_rows"] = j::array{j::array{1, 2}};
+    bad["parameter_rows"] = j::array(1, j::array{1, 2});
     rejected(bad, "invalid_input", "A short parameter row was accepted");
     bad = request;
     bad["operation"] = "adjoint_vjp";
     rejected(bad, "invalid_input", "A VJP without cotangents was accepted");
-    bad["cotangents"] = j::array{j::array{1, 0}};
+    bad["cotangents"] = j::array(1, j::array{1, 0});
     rejected(bad, "invalid_input", "Short cotangents were accepted");
     bad = request;
     bad["max_output_elements"] = 4;
@@ -322,10 +322,10 @@ void TestAdjointDifferentiation()
     rejected(bad, "invalid_input", "Repeated probability qubits were accepted");
     bad["observables"] = j::array{j::object{{"terms", j::array{}}}};
     rejected(bad, "invalid_input", "An empty weighted observable was accepted");
-    bad["observables"] = j::array{j::object{{"terms", j::array{j::array{1, "Z"}}}}};
+    bad["observables"] = j::array{j::object{{"terms", j::array(1, j::array{1, "Z"})}}};
     rejected(bad, "invalid_input", "A short Pauli term was accepted");
     bad = request;
-    bad["cotangents"] = j::array{j::array{1}};
+    bad["cotangents"] = j::array(1, j::array{1});
     rejected(bad, "invalid_input", "cotangents were accepted by a Jacobian");
     bad = request;
     bad["simulator"].as_object()["method"] = "matrix_product_state";
@@ -338,7 +338,7 @@ void TestAdjointDifferentiation()
     rejected(bad, "invalid_input", "Adjoint differentiation accepted a mid-circuit measurement");
     bad = request;
     bad["operation"] = "estimate";
-    bad["parameter_rows"] = j::array{j::array{1, 2, 3}};
+    bad["parameter_rows"] = j::array(1, j::array{1, 2, 3});
     bad["observables"] = j::array{"ZI"};
     rejected(bad, "invalid_input", "parameter_rows was accepted by estimate");
 
@@ -426,7 +426,7 @@ void TestMixedStateQueries()
         Call(fidelity, true, true);
         fidelity["target_statevector"] = j::array{j::array{1, 0}, j::array{1, 0}, j::array{0, 0}, j::array{0, 0}};
         Check(ErrorCode(Call(fidelity, false)) == "invalid_input", "An unnormalized target statevector was accepted");
-        fidelity["target_statevector"] = j::array{j::array{1, 0}};
+        fidelity["target_statevector"] = j::array(1, j::array{1, 0});
         Check(ErrorCode(Call(fidelity, false)) == "invalid_input", "A target statevector of the wrong size was accepted");
 
         auto overlap = Request("density_matrix_overlap", 1, "h q[0];", method);
