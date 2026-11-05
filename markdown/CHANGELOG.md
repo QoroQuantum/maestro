@@ -25,6 +25,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     operations (`adjoint`), so clients can detect these features.
   - An adjoint request whose state would exceed the machine's memory fails with
     `insufficient_resources` and the reason.
+- `NoiseModel.native_channels(num_qubits, include_readout=True)` returns a Python
+  noise model as the `channels` of a native request's `noise` block, built from
+  its recorded setter calls, so the same model runs through the native API, the
+  local server and QRMI. Channels on qubits beyond `num_qubits` are left out, a
+  later setting replaces an earlier one on the same channel and targets, and
+  `include_readout=False` drops readout errors for estimates, which reject them.
+  A model that re-sets T1 around thermal relaxation can depend on the order of
+  those calls, which the channels do not keep, and the native request then
+  rejects it.
 
 ## [0.3.12] - 2026-11-03
 

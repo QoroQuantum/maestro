@@ -1,8 +1,12 @@
-"""NoiseModel call logs preserve successful mutations for pickle and replay."""
+"""NoiseModel call logs preserve successful mutations for pickle, replay and
+native-request export."""
 
 import copy
+import json
+import math
 import pickle
 
+import numpy as np
 import pytest
 
 import maestro
@@ -120,6 +124,84 @@ def test_every_mutator_is_recorded_once_and_can_be_replayed(name, args):
     assert restored._call_log == expected_log
     assert query_state(restored) == expected_state
     assert query_state(replay_call_log(model._call_log)) == expected_state
+
+
+@pytest.mark.parametrize("name,args", MUTATING_CALLS.items(), ids=MUTATING_CALLS)
+def test_every_mutator_exports_a_native_channel(name, args):
+    model = maestro.NoiseModel()
+    getattr(model, name)(*args)
+
+    channels = model.native_channels(num_qubits=2)
+
+    assert channels
+    json.dumps(channels, allow_nan=False)
+
+
+def test_native_channels_expand_shorthands_and_keep_the_last_setting():
+    model = maestro.NoiseModel()
+    model.set_all_depolarizing(3, 0.01)
+    model.set_depolarizing(1, 0.05)
+    model.set_t1_from_time(0, gate_time_s=1e-7, t1_time_s=math.inf)
+
+    assert model.native_channels(3) == [
+        {"kind": "depolarizing", "targets": [0], "probability": 0.01},
+        {"kind": "depolarizing", "targets": [2], "probability": 0.01},
+        {"kind": "depolarizing", "targets": [1], "probability": 0.05},
+        {"kind": "t1", "targets": [0], "duration": 1e-7, "t1": "infinity"},
+    ]
+
+
+def test_native_channels_cover_only_the_circuits_qubits_and_readout_on_request():
+    model = maestro.NoiseModel()
+    model.set_crosstalk(0, 3, 0.02)
+    model.set_t1(3, 0.001)
+    model.set_readout_error(np.int64(1), 0.01, 0.02)
+
+    readout = {"kind": "readout", "targets": [1], "p_meas1_prep0": 0.01, "p_meas0_prep1": 0.02}
+    assert model.native_channels(2) == [readout]
+    assert model.native_channels(2, include_readout=False) == []
+
+
+def test_native_channels_keep_pair_targets_in_call_order():
+    model = maestro.NoiseModel()
+    model.set_crosstalk(1, 0, 0.02)
+    model.set_correlated_phase_flip(q1=0, q2=1, probability=0.1)
+
+    assert model.native_channels(2) == [
+        {"kind": "crosstalk", "targets": [1, 0], "strength": 0.02},
+        {"kind": "correlated_phase_flip", "targets": [0, 1], "probability": 0.1},
+    ]
+
+
+def test_native_channels_flatten_kraus_operators_and_keep_every_ou_band():
+    model = maestro.NoiseModel()
+    model.set_kraus_channel([0], [[[0, -1j], [1j, 0]]])
+    model.set_correlated_ou_band(1, 15.0, 0.5, 1e-7)
+    model.set_correlated_ou_band(1, 20.0, 2.0, 1e-7)
+
+    kraus, *bands = model.native_channels(2)
+
+    assert kraus == {
+        "kind": "kraus",
+        "targets": [0],
+        "operators": [[[0.0, 0.0], [0.0, -1.0], [0.0, 1.0], [0.0, 0.0]]],
+    }
+    assert [(band["kind"], band["sigma"]) for band in bands] == [
+        ("correlated_ou_band", 15.0),
+        ("correlated_ou_band", 20.0),
+    ]
+
+
+def test_native_channels_derive_ou_strength_from_total_power():
+    model = maestro.NoiseModel()
+    model.set_all_correlated_from_power(2, power=1e-3, alpha=0.5, gate_time=1e-7)
+
+    channels = model.native_channels(2)
+
+    assert [channel["targets"] for channel in channels] == [[0], [1]]
+    assert channels[0]["kind"] == "correlated_ou"
+    assert channels[0]["sigma"] == pytest.approx(math.sqrt(1e-3 / (2 * math.pi * 0.5 * 1e-7)))
+    assert "power" not in channels[0]
 
 
 @pytest.mark.parametrize("value,error", [("invalid", TypeError), (-0.1, ValueError)])

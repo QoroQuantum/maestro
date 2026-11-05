@@ -1,8 +1,12 @@
 """Maestro quantum circuit simulation library."""
 
+import ast
 import copyreg
 from copy import deepcopy as _deepcopy
 import functools
+import math
+import numbers
+import re
 import sys
 from .maestro import *
 from . import maestro as _raw_maestro
@@ -10,6 +14,79 @@ from . import maestro as _raw_maestro
 # Re-export submodules
 circuits = _raw_maestro.circuits
 sys.modules[__name__ + ".circuits"] = circuits
+
+
+#: Setters whose native channel kind is not their name without ``set_``, a
+#: leading ``all_`` or a trailing ``_from_time``.
+_NATIVE_KIND_EXCEPTIONS = {
+    "set_qubit_noise": "pauli",
+    "set_idle_noise": "idle",
+    "set_kraus_channel": "kraus",
+    "set_readout_error": "readout",
+    "set_readout_error_symmetric": "readout",
+    "set_all_readout_error": "readout",
+    "set_coherent_strength": "coherent_depolarizing",
+    "set_1_over_f_noise": "one_over_f",
+    "set_2q_depolarizing": "pair_depolarizing",
+    "set_1q_gate_depolarizing": "gate_depolarizing_1q",
+    "set_all_1q_gate_depolarizing": "gate_depolarizing_1q",
+    "set_2q_gate_depolarizing": "gate_depolarizing_2q",
+    "set_all_2q_gate_depolarizing": "gate_depolarizing_2q",
+    "set_all_correlated_from_power": "correlated_ou",
+}
+
+#: Setter parameters whose native field is not their name without ``_s``.
+_NATIVE_FIELD_EXCEPTIONS = {
+    "p": "probability",
+    "p_error": "probability",
+    "kraus_operators": "operators",
+    "gate_time_s": "duration",
+    "t1_time_s": "t1",
+}
+
+
+def _native_kind(method):
+    return _NATIVE_KIND_EXCEPTIONS.get(method) or re.sub(r"^set_(all_)?|_from_time$", "", method)
+
+
+def _native_field(name):
+    return _NATIVE_FIELD_EXCEPTIONS.get(name) or re.sub(r"_s$", "", name)
+
+_TARGET_PARAMS = frozenset({"qubit", "num_qubits", "q1", "q2", "targets"})
+
+
+@functools.lru_cache(maxsize=None)
+def _setter_parameters(method):
+    """A setter's parameter names in call order, read from its binding's signature."""
+    signature = getattr(_raw_maestro.NoiseModel, method).__nb_signature__[0][0]
+    function = ast.parse(re.sub(r"\\=?\d+", "...", signature) + ": ...").body[0]
+    return tuple(arg.arg for arg in function.args.args[1:])
+
+
+def _native_value(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    if isinstance(value, numbers.Real):
+        return "infinity" if math.isinf(value) else float(value)
+    return [_native_value(item) for item in value]
+
+
+def _native_operators(operators):
+    """Kraus matrices as flat row-major ``[real, imaginary]`` entries."""
+    return [[[complex(entry).real, complex(entry).imag] for row in operator for entry in row]
+            for operator in operators]
+
+
+def _native_targets(values):
+    if "num_qubits" in values:
+        return [[q] for q in range(values["num_qubits"])]
+    if "q1" in values:
+        return [[values["q1"], values["q2"]]]
+    if "targets" in values:
+        return [list(values["targets"])]
+    return [[values["qubit"]]]
 
 
 def _rebuild_noise_model(call_log):
@@ -42,6 +119,41 @@ class NoiseModel(_raw_maestro.NoiseModel):
 
     def __reduce__(self):
         return (_rebuild_noise_model, (self._call_log,))
+
+    def native_channels(self, num_qubits, include_readout=True):
+        """The model as the ``channels`` of a native request's ``noise`` block,
+        for a circuit of ``num_qubits`` qubits.
+
+        Each recorded setter call becomes the channel that applies it, and a
+        later call replaces an earlier one on the same channel and targets,
+        except OU bands, which accumulate. Channels on qubits the circuit lacks
+        are left out, and so are readout errors unless ``include_readout``.
+        A model that re-sets T1 around thermal relaxation can depend on the
+        order of those calls, which the channels do not keep, and is then
+        rejected by the native request.
+        """
+        channels = []
+        for method, args, kwargs in self._call_log:
+            kind = _native_kind(method)
+            if kind == "readout" and not include_readout:
+                continue
+            values = dict(zip(_setter_parameters(method), args)) | kwargs
+            if method == "set_all_correlated_from_power":
+                values["sigma"] = math.sqrt(values.pop("power") / (
+                    values["num_qubits"] * math.pi * values["alpha"] * values["gate_time"]))
+            fields = {
+                _native_field(name):
+                    _native_operators(value) if name == "kraus_operators" else _native_value(value)
+                for name, value in values.items() if name not in _TARGET_PARAMS
+            }
+            for targets in _native_targets(values):
+                targets = [int(q) for q in targets]
+                if any(q >= num_qubits for q in targets):
+                    continue
+                if kind != "correlated_ou_band":
+                    channels = [c for c in channels if (c["kind"], c["targets"]) != (kind, targets)]
+                channels.append({"kind": kind, "targets": targets, **fields})
+        return channels
 
 
 def _rebuild_simulator_config(d):
