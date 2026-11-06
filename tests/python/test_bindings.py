@@ -5593,6 +5593,7 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "trajectory_policy": "shot_v1",
     "trajectory_max_memory_mb": 64,
     "max_simulators": 4,
+    "counts_policy": "frame_v1",
     "mps_routing_virtual_bonds": True,
     "mps_routing_truncation_weight": 0.5,
     "mps_routing_strategy": "legacy",

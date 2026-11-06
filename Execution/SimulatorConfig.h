@@ -1,9 +1,11 @@
 // Shared native configuration. This header has no Python dependency.
 #pragma once
 #include "Simulators/Core/RandomSeed.h"
+#include "Utils/Threads/RealizationWorkers.h"
 #include "maestrolib/Interface.h"
 #include "maestrolib/Maestro.h"
 #include <algorithm>
+#include <cmath>
 #include <iomanip>
 #include <limits>
 #include <optional>
@@ -151,6 +153,10 @@ struct SimulatorConfig
     std::optional<std::string> trajectory_policy;
     std::optional<size_t> trajectory_max_memory_mb;
     std::optional<size_t> max_simulators;
+    // auto accelerates unseeded counts that the ordinary executor could run on
+    // the stabilizer; legacy retains the existing stream; frame_v1 also opts
+    // seeded requests and other automatically selected methods in.
+    std::string counts_policy = "auto";
     std::unordered_map<std::string, std::string> native_options;
 
     // Throws std::invalid_argument for an unsupported combination or value.
@@ -170,6 +176,7 @@ struct SimulatorConfig
         if (gpu_device && *gpu_device < 0)
             throw std::invalid_argument("gpu_device must be nonnegative");
         RequireOneOf(trajectory_policy, {"block_v1", "shot_v1"}, "trajectory_policy");
+        RequireOneOf(counts_policy, {"auto", "legacy", "frame_v1"}, "counts_policy");
         if (trajectory_max_memory_mb && (!*trajectory_max_memory_mb || *trajectory_max_memory_mb > (std::numeric_limits<size_t>::max() >> 20)))
             throw std::invalid_argument("trajectory_max_memory_mb must be a positive representable MiB count");
         if (max_cluster_qubits && !*max_cluster_qubits)
@@ -199,6 +206,115 @@ struct SimulatorConfig
     }
 };
 
+// The realization state a method holds, for realization memory budgets
+// (Utils::RealizationStateBytes); none when its size has no known bound.
+inline std::optional<Utils::RealizationState> RealizationStateOf(Simulators::SimulationType method)
+{
+    using Method = Simulators::SimulationType;
+    switch (method)
+    {
+    case Method::kStatevector:
+        return Utils::RealizationState::kStatevector;
+    case Method::kDensityMatrix:
+        return Utils::RealizationState::kDensityMatrix;
+    case Method::kStabilizer:
+        return Utils::RealizationState::kStabilizer;
+    case Method::kMatrixProductState:
+        return Utils::RealizationState::kMatrixProductState;
+    case Method::kMatrixProductOperator:
+        return Utils::RealizationState::kMatrixProductOperator;
+    default:
+        return std::nullopt;
+    }
+}
+
+// The configured MPS/MPO bond cap, or 0 when none is set.
+inline size_t ConfiguredBondCap(const SimulatorConfig &config)
+{
+    if (config.max_bond_dimension)
+        return *config.max_bond_dimension;
+    auto value =
+        config.native_options.find(config.simulation_type == Simulators::SimulationType::kMatrixProductOperator ? "matrix_product_operator_max_bond_dimension"
+                                                                                                                : "matrix_product_state_max_bond_dimension");
+    if (value == config.native_options.end())
+        value = config.native_options.find("matrix_product_state_max_bond_dimension");
+    return value == config.native_options.end() ? 0 : static_cast<size_t>(std::stoull(value->second));
+}
+
+// The soft realization memory budget in MiB (trajectory_max_memory_mb).
+inline size_t RealizationBudgetMB(const SimulatorConfig &config)
+{
+    if (config.trajectory_max_memory_mb)
+        return *config.trajectory_max_memory_mb;
+    const auto value = config.native_options.find("trajectory_max_memory_mb");
+    return value == config.native_options.end() ? 1024 : static_cast<size_t>(std::stoull(value->second));
+}
+
+// Bytes of one realization on `qubits` qubits, or 0 when unbounded or unknown.
+inline long double RealizationBytes(const SimulatorConfig &config, size_t qubits)
+{
+    const auto state = RealizationStateOf(config.simulation_type);
+    if (!state)
+        return 0;
+    const bool tensor = *state == Utils::RealizationState::kMatrixProductState || *state == Utils::RealizationState::kMatrixProductOperator;
+    const size_t bond = tensor ? ConfiguredBondCap(config) : 0;
+    if (tensor && !bond)
+        return 0;
+    const long double bytes = Utils::RealizationStateBytes(*state, qubits, bond);
+    return std::isfinite(bytes) && bytes < static_cast<long double>(std::numeric_limits<size_t>::max()) ? bytes : 0;
+}
+
+inline bool HasCandidateList(const SimulatorConfig &config)
+{
+    return !config.fixed_backend && !config.optimization_candidates.empty();
+}
+
+inline bool CandidateListAdmitsStabilizer(const SimulatorConfig &config)
+{
+    for (const auto &[type, method] : config.optimization_candidates)
+        if (type == Simulators::SimulatorType::kQCSim && method == Simulators::SimulationType::kStabilizer)
+            return true;
+    return false;
+}
+
+// Whether the ordinary executor could itself run this request on the QCSim
+// stabilizer simulator. ConfigureNetwork restricts automatic selection to the
+// requested method, or to optimization_candidates when they are supplied: an
+// explicit list replaces the requested method, so a requested Stabilizer
+// method is admitted only if the list contains it too.
+inline bool AdmitsStabilizerExecution(const SimulatorConfig &config)
+{
+    return HasCandidateList(config) ? CandidateListAdmitsStabilizer(config) : config.simulation_type == Simulators::SimulationType::kStabilizer;
+}
+
+// Whether a request may use reference frames: a QCSim Stabilizer request, or
+// automatic selection that permits the stabilizer. An explicit candidate list
+// names every backend the request allows and replaces the requested pair
+// (ConfigureNetwork), so it decides on its own: frames need the QCSim
+// stabilizer in it, whatever the requested backend.
+inline bool AdmitsReferenceFrames(const SimulatorConfig &config)
+{
+    if (HasCandidateList(config))
+        return CandidateListAdmitsStabilizer(config);
+    return config.simulator_type == Simulators::SimulatorType::kQCSim &&
+           (config.simulation_type == Simulators::SimulationType::kStabilizer || !config.fixed_backend);
+}
+
+// Seed zero is explicit too. Only an absent seed permits automatic policy changes.
+// auto never replaces a method the ordinary executor would honor. frame_v1 is an
+// explicit opt-in and may replace an automatically selected method, but an
+// explicit candidate list names every backend the request allows: frame_v1
+// uses the stabilizer only if that list includes it. Sampling reduction keeps
+// the ordinary executor, which splits disjoint measurement cones.
+inline bool PreferFrameCounts(const SimulatorConfig &config, std::optional<uint64_t> noise_seed = std::nullopt)
+{
+    if (!AdmitsReferenceFrames(config) || config.enable_sampling_reduction)
+        return false;
+    if (config.counts_policy == "frame_v1")
+        return true;
+    return config.counts_policy == "auto" && AdmitsStabilizerExecution(config) && !config.seed && !noise_seed;
+}
+
 // Native Configure keys for typed options without a one-to-one key. Precision
 // sets both precision aliases for compatibility with existing callers.
 inline std::vector<std::pair<std::string, std::string>> TypedNativeOptions(const SimulatorConfig &config)
@@ -217,8 +333,10 @@ inline std::vector<std::pair<std::string, std::string>> TypedNativeOptions(const
     return options;
 }
 
-// Helper to configure the simulation network
-inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long int handle, const SimulatorConfig &config)
+// Helper to configure the simulation network. A nonzero allocationQubits sizes a
+// fixed CPU backend to exactly that register; zero keeps the network default,
+// which also allocates each host's network-entangled qubit.
+inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long int handle, const SimulatorConfig &config, size_t allocationQubits = 0)
 {
     config.Validate();
     if (Simulators::IsDistributedGpuSimulator(config.simulator_type) && config.simulation_type != Simulators::SimulationType::kStatevector)
@@ -261,6 +379,7 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
 
     network->Configure("gate_fusion", !config.gate_fusion ? "auto" : *config.gate_fusion ? "true" : "false");
     network->SetOptimizeSimulator(!config.fixed_backend);
+    network->Configure("counts_policy", config.counts_policy.c_str());
     network->GetController()->SetOptimizeCircuit(config.optimize_circuit);
     for (const auto &[key, value] : config.native_options)
         network->Configure(key.c_str(), value.c_str());
@@ -387,7 +506,8 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     // Distribution must be selected before circuit mapping: its configured
     // register and MPI control flow must not depend on the CPU optimizer.
     if (config.fixed_backend || Simulators::IsDistributedGpuSimulator(config.simulator_type))
-        network->CreateSimulator(config.simulator_type, config.simulation_type);
+        network->CreateSimulator(config.simulator_type, config.simulation_type,
+                                 Simulators::IsDistributedGpuSimulator(config.simulator_type) ? 0 : allocationQubits);
     else if (config.simulator_type == Simulators::SimulatorType::kGpuSim && (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
                                                                              config.simulation_type == Simulators::SimulationType::kMatrixProductOperator))
         // Automatic selection retains this CPU simulator when the GPU is absent.

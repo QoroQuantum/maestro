@@ -5,6 +5,8 @@
 #include "Capabilities.h"
 #include "CircuitHelpers.h"
 #include "Estimation.h"
+#include "ReferenceFrameSampler.h"
+#include "SampleRecords.h"
 #include "Sampling.h"
 #include "maestrolib/Interface.h"
 #include "maestrolib/Json.h"
@@ -398,6 +400,23 @@ CircuitPtr Inject(const CircuitPtr &circuit, const NoiseConfig &noise, std::mt19
     return noisy;
 }
 
+// Inject(plan.circuit(), noise, rng) for a plan built from noise.model, without
+// per-realization model lookups. Realization loops build the plan once.
+CircuitPtr Inject(const noise::NoiseInjectionPlan &plan, const NoiseConfig &noise, std::mt19937 &rng)
+{
+    if (!noise.enabled || noise.mode == "analytical")
+        return plan.circuit();
+    CircuitPtr noisy;
+    if (noise.mode == "coherent")
+        noisy = plan.Coherent(rng, noise.exact);
+    else if (noise.mode == "pauli")
+        noisy = noise.exact ? plan.ExactPauli() : plan.Pauli(rng);
+    else
+        noisy = plan.Combined(rng, noise.exact);
+    plan.AttachReadout(noisy);
+    return noisy;
+}
+
 void ValidateNoisyCircuit(const CircuitPtr &circuit)
 {
     for (const auto &op : circuit->GetOperations())
@@ -527,6 +546,7 @@ template <class Result> json::object ReductionMetadata(const Result &execution, 
     options["enable_observable_clustering"] = config.enable_observable_clustering;
     options["allow_reset_marginalization"] = config.allow_reset_marginalization;
     options["enable_sampling_reduction"] = config.enable_sampling_reduction;
+    options["counts_policy"] = config.counts_policy;
     if (config.max_cluster_qubits)
         options["max_cluster_qubits"] = *config.max_cluster_qubits;
     if (config.min_cluster_qubits)
@@ -559,6 +579,7 @@ json::object Metadata(Context &context, const SimulatorConfig &config, bool exec
     for (const auto &[key, value] : TypedNativeOptions(config))
         options[key] = value;
     options["seed"] = config.seed.value_or(0);
+    options["counts_policy"] = config.counts_policy;
     const json::value requestedFusion = config.gate_fusion ? json::value(*config.gate_fusion) : json::value();
     if (config.gate_fusion)
         options["gate_fusion"] = *config.gate_fusion;
@@ -777,7 +798,7 @@ json::object Capabilities()
     return NativeCapabilities(operations);
 }
 
-json::object Run(const json::object &request, bool validate, unsigned depth)
+json::object Run(const json::object &request, bool validate, unsigned depth, ShotRows *rows)
 {
     Require(depth <= 4, "Batch nesting exceeds four levels");
     Require(UInt(Field(request, "schema_version")) == SchemaVersion, "Unsupported native schema_version");
@@ -837,10 +858,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
     }
     auto config = ParseConfig(Sub(request, "simulator"));
     const auto &execution = Sub(request, "execution");
-    Keys(execution, {"shots", "seed"});
+    Keys(execution, {"shots", "seed", "return_samples"});
     Require(!execution.contains("shots") || operation == "execute" || operation == "checkpoint_batch", "execution.shots does not apply to " + operation);
     const size_t shots = UInt(execution, "shots", 1024);
     Require(shots > 0 && shots <= 1000000000, "shots must be in [1,1000000000]");
+    Require(!execution.contains("return_samples") || operation == "execute", "execution.return_samples does not apply to " + operation);
+    const bool return_samples = Boolean(execution, "return_samples", false);
+    Require(!rows || return_samples, "Packed shot rows require an execute request with return_samples");
     if (execution.contains("seed"))
     {
         Require(!Sub(Sub(request, "simulator"), "options").contains("seed"), "Specify seed only once");
@@ -1164,6 +1188,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
                     Supported(Mixed(config), "This maintenance action requires density_matrix or MPO");
             }
     }
+    if (return_samples)
+    {
+        Supported(!Simulators::IsDistributedGpuSimulator(config.simulator_type), "return_samples is not available for distributed GPU execution");
+        // A JSON row is a quoted bitstring and a separator; packed rows have no such bound.
+        Require(rows || input.clbits + 3 <= MaxResultBytes / shots,
+                "Shot rows would exceed the native result limit; use MaestroRunRequestSamples for packed rows");
+    }
     if (validate || operation == "validate")
         return {{"schema_version", SchemaVersion},
                 {"operation", operation},
@@ -1173,10 +1204,127 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
     const auto start = Clock::now();
     // Resolve an omitted seed only after validation. MPI execution obtains one
     // shared random seed, while validation needs neither entropy nor collectives.
+    const bool prefer_frame_counts = PreferFrameCounts(config);
     if (!config.seed)
     {
         config.seed = Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options);
         noise.seed = static_cast<uint32_t>(*config.seed);
+    }
+    if (operation == "execute" && return_samples)
+    {
+        // The row samplers shared with Python and C++ (SampleRecords.h).
+        if (!noise.thermal_approximation_warning.empty())
+            std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
+        ShotRecords records;
+        if (noise.enabled)
+        {
+            NoisyExecutionOptions options;
+            options.layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+            options.rows = true;
+            options.exact_channels = noise.exact;
+            records = ExecuteNoisy(circuit, noise.model, config, shots, noise.realizations, noise.seed, options);
+        }
+        else
+            records = SampleCircuitRows(circuit, config, shots);
+        if (records.shots != shots || records.rows.size() != SampleStorageSize(records.shots, records.width))
+            throw Error("native_failure", "Backend did not return the requested shot rows");
+        // Columns follow the declared classical register, as count keys do.
+        const size_t columns = std::min(records.width, input.clbits);
+        json::object result{{"schema_version", SchemaVersion}, {"operation", operation}, {"num_qubits", input.qubits}, {"num_clbits", input.clbits}};
+        if (rows)
+        {
+            rows->shots = shots;
+            rows->width = input.clbits;
+            rows->data.assign(SampleStorageSize(shots, input.clbits), 0);
+            for (size_t shot = 0; shot < shots; ++shot)
+                std::copy_n(records.rows.data() + shot * records.width, columns, rows->data.data() + shot * input.clbits);
+        }
+        else
+        {
+            json::array samples;
+            samples.reserve(shots);
+            std::string row(input.clbits, '0');
+            for (size_t shot = 0; shot < shots; ++shot)
+            {
+                const uint8_t *record = records.rows.data() + shot * records.width;
+                for (size_t bit = 0; bit < columns; ++bit)
+                    row[bit] = record[bit] ? '1' : '0';
+                samples.emplace_back(row);
+            }
+            result["samples"] = std::move(samples);
+        }
+        SamplingResult executed;
+        executed.simulator = records.simulator;
+        executed.method = records.method;
+        executed.gpu_device = records.gpu_device;
+        executed.gate_fusion = records.gate_fusion;
+        executed.gate_fusion_max_qubits = records.gate_fusion_max_qubits;
+        auto metadata = ReductionMetadata(executed, config);
+        metadata["sampling_strategy"] = records.sampling_strategy;
+        result["shots"] = shots;
+        result["sampling_components"] = records.components;
+        result["largest_component_qubits"] = records.largest_component;
+        result["seed"] = *config.seed;
+        result["execution_metadata"] = std::move(metadata);
+        result["time_taken"] = std::chrono::duration<double>(Clock::now() - start).count();
+        result["count_order"] = "classical_bit_0_first";
+        result["basis_order"] = "qubit_0_least_significant";
+        if (records.max_bond_dimension)
+            result["max_bond_dim_reached"] = records.max_bond_dimension;
+        if (noise.enabled)
+            result["noise"] = json::object{{"mode", noise.mode},
+                                           {"evaluation", noise.exact ? "exact_channels" : "trajectories"},
+                                           {"seed", noise.seed},
+                                           {"realizations", records.realizations},
+                                           {"approximations", noise.approximations}};
+        Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
+        return result;
+    }
+    if (operation == "execute" && prefer_frame_counts && (!noise.enabled || noise.realizations >= shots) && noise.mode != "coherent" &&
+        noise.model.inject_noise_covers_model())
+    {
+        auto channels = noise::inject_exact_noise(circuit, noise.model);
+        noise::attach_readout_error(channels, noise.model);
+        if (auto plan = CompileReferenceSampler(channels, input.qubits, input.clbits))
+        {
+            // This path returns before the ordinary executor's warning below.
+            if (!noise.thermal_approximation_warning.empty())
+                std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
+            const auto seed = noise.enabled ? Simulators::IState::DeriveSeed(*config.seed, noise.seed) : *config.seed;
+            Counts counts;
+            for (const auto &[bits, count] : plan->SampleCounts(shots, seed))
+                counts[Bits(bits, input.clbits)] += count;
+            SamplingResult frame;
+            frame.simulator = Simulators::SimulatorType::kQCSim;
+            frame.method = Simulators::SimulationType::kStabilizer;
+            frame.components = 1;
+            frame.largest_component = input.qubits;
+            auto metadata = ReductionMetadata(frame, config);
+            metadata["sampling_strategy"] = "reference_frame_v1";
+            // Replaying the returned seed also requires the resolved policy.
+            metadata["configured_options"].as_object()["counts_policy"] = "frame_v1";
+            json::object result{{"schema_version", SchemaVersion},
+                                {"operation", operation},
+                                {"num_qubits", input.qubits},
+                                {"num_clbits", input.clbits},
+                                {"counts", EncodeCounts(counts)},
+                                {"shots", shots},
+                                {"sampling_components", 1},
+                                {"largest_component_qubits", input.qubits},
+                                {"seed", *config.seed},
+                                {"execution_metadata", std::move(metadata)},
+                                {"time_taken", std::chrono::duration<double>(Clock::now() - start).count()},
+                                {"count_order", "classical_bit_0_first"},
+                                {"basis_order", "qubit_0_least_significant"}};
+            if (noise.enabled)
+                result["noise"] = json::object{{"mode", noise.mode},
+                                               {"evaluation", noise.exact ? "exact_channels" : "trajectories"},
+                                               {"seed", noise.seed},
+                                               {"realizations", std::min(shots, noise.realizations)},
+                                               {"approximations", noise.approximations}};
+            Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
+            return result;
+        }
     }
     if (operation == "estimate" && !Simulators::IsDistributedGpuSimulator(config.simulator_type))
     {
@@ -1188,6 +1336,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         size_t bounded = 0;
         EstimationCache cache;
         EstimationResult last;
+        const noise::NoiseInjectionPlan plan(circuit, noise.model);
         size_t largest = 0, clusters = 0, total_qubits = 0, total_clusters = 0;
         double reduction_time = 0;
         bool reduced = false;
@@ -1197,7 +1346,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
             execution_config.seed = Simulators::IState::DeriveSeed(*config.seed, r);
             if (noise.enabled && noise.mode != "analytical")
                 execution_config.auto_reduce = false;
-            last = EstimateCircuit(Inject(circuit, noise, rng), observables, execution_config, noise.enabled && noise.mode != "analytical" ? &cache : nullptr);
+            last = EstimateCircuit(Inject(plan, noise, rng), observables, execution_config, noise.enabled && noise.mode != "analytical" ? &cache : nullptr);
             largest = std::max(largest, last.plan.qubits_after);
             clusters = std::max(clusters, last.plan.groups.size());
             total_qubits += last.plan.total_cluster_qubits;
@@ -1266,12 +1415,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         const auto realizations = std::min(shots, noise.enabled && noise.mode != "analytical" ? noise.realizations : size_t{1});
         Counts counts;
         SamplingResult last;
+        const noise::NoiseInjectionPlan plan(circuit, noise.model);
         size_t largest = 0, components = 0;
         for (size_t r = 0; r < realizations; ++r)
         {
             auto local_config = config;
             local_config.seed = Simulators::IState::DeriveSeed(*config.seed, r);
-            last = SampleCircuit(Inject(circuit, noise, rng), local_config, shots / realizations + (r < shots % realizations));
+            last = SampleCircuit(Inject(plan, noise, rng), local_config, shots / realizations + (r < shots % realizations));
             largest = std::max(largest, last.largest_component);
             components = std::max(components, last.components);
             for (const auto &[outcome, count] : last.counts)
@@ -1290,6 +1440,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
                             {"time_taken", std::chrono::duration<double>(Clock::now() - start).count()},
                             {"count_order", "classical_bit_0_first"},
                             {"basis_order", "qubit_0_least_significant"}};
+        if (!last.sampling_strategy.empty())
+            result["execution_metadata"].as_object()["sampling_strategy"] = last.sampling_strategy;
         if (noise.enabled)
             result["noise"] = json::object{{"mode", noise.mode},
                                            {"evaluation", noise.exact ? "exact_channels" : "trajectories"},
@@ -1299,13 +1451,19 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
         return result;
     }
-    // Mixed-state queries compare whole registers, so no network ancilla may be added.
-    Context context(input, config, query || MixedStateQuery(operation));
+    // Mixed-state queries compare whole registers, so no network ancilla may be
+    // added. Checkpoints save and restore the register on every shot, so an
+    // unused ancilla would double statevector and quadruple density-matrix work.
+    Context context(input, config, query || MixedStateQuery(operation) || operation == "checkpoint_batch");
+    // Execution metadata describes the network that ran last (parallel execute).
+    Context *metadata_context = &context;
+    std::vector<std::unique_ptr<Context>> metadata_contexts;
     auto simulator = context.simulator();
     // Validation remains silent; warn once per execution, not per realization.
     if (!noise.thermal_approximation_warning.empty())
         std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
     std::mt19937 rng(noise.seed);
+    const noise::NoiseInjectionPlan plan(circuit, noise.model);
     json::object result{{"schema_version", SchemaVersion}, {"operation", operation}, {"num_qubits", input.qubits}, {"num_clbits", input.clbits}};
     size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : 1;
     if (operation == "execute" || operation == "checkpoint_batch")
@@ -1313,14 +1471,60 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
     if (operation == "execute")
     {
         Counts counts;
-        for (size_t r = 0; r < realizations; ++r)
+        // One shot per realization makes each realization's result depend only
+        // on its own seed, so CPU QCSim realizations may run on several networks
+        // without changing seeded counts. Realizations with several shots keep
+        // the shared network: their inner shot workers set seeded partitions.
+        size_t workers = 1;
+        if (realizations > 1 && realizations == shots && config.simulator_type == Simulators::SimulatorType::kQCSim)
+            if (const long double bytes = RealizationBytes(config, input.qubits + 1); bytes > 0)
+                workers = Utils::LimitRealizationWorkersByMemory(Utils::RealizationWorkerCount(realizations, config.max_simulators.value_or(0)),
+                                                                 static_cast<size_t>(bytes), RealizationBudgetMB(config), 1, 2);
+        if (workers <= 1)
+            for (size_t r = 0; r < realizations; ++r)
+            {
+                auto noisy = Inject(plan, noise, rng);
+                const auto count = shots / realizations + (r < shots % realizations ? 1 : 0);
+                context.network->Configure("seed", std::to_string(Simulators::IState::DeriveSeed(*config.seed, r)).c_str());
+                const auto raw = context.network->RepeatedExecuteOnHost(noisy, 0, count);
+                for (const auto &entry : raw)
+                    counts[Bits(entry.first, input.clbits)] += entry.second;
+            }
+        else
         {
-            auto noisy = Inject(circuit, noise, rng);
-            const auto count = shots / realizations + (r < shots % realizations ? 1 : 0);
-            context.network->Configure("seed", std::to_string(Simulators::IState::DeriveSeed(*config.seed, r)).c_str());
-            const auto raw = context.network->RepeatedExecuteOnHost(noisy, 0, count);
-            for (const auto &entry : raw)
-                counts[Bits(entry.first, input.clbits)] += entry.second;
+            // Worker 0 uses the request's network; the others get their own,
+            // created here, serially. Metadata then describes the network that
+            // ran the last realization, as after the serial loop.
+            std::vector<std::unique_ptr<Context>> extra;
+            std::vector<Context *> contexts{&context};
+            for (size_t worker = 1; worker < workers; ++worker)
+            {
+                extra.push_back(std::make_unique<Context>(input, config));
+                contexts.push_back(extra.back().get());
+            }
+            std::vector<Counts> local(workers);
+            std::vector<size_t> latest(workers, 0);
+            std::vector<char> ran(workers, 0);
+            Utils::RunRealizations(
+                realizations, workers, [&](size_t) { return Inject(plan, noise, rng); },
+                [&](size_t worker, size_t r, CircuitPtr noisy) {
+                    auto &network = contexts[worker]->network;
+                    network->Configure("seed", std::to_string(Simulators::IState::DeriveSeed(*config.seed, r)).c_str());
+                    for (const auto &entry : network->RepeatedExecuteOnHost(noisy, 0, 1))
+                        local[worker][Bits(entry.first, input.clbits)] += entry.second;
+                    latest[worker] = std::max(latest[worker], r);
+                    ran[worker] = 1;
+                });
+            size_t last = 0;
+            for (size_t worker = 0; worker < workers; ++worker)
+            {
+                for (const auto &[bits, count] : local[worker])
+                    counts[bits] += count;
+                if (ran[worker] && latest[worker] >= latest[last])
+                    last = worker;
+            }
+            metadata_context = contexts[last];
+            metadata_contexts = std::move(extra);
         }
         uint64_t total = 0;
         for (const auto &entry : counts)
@@ -1335,7 +1539,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         std::vector<double> sums(observables.size(), 0), squares(observables.size(), 0);
         for (size_t r = 0; r < realizations; ++r)
         {
-            const auto noisy = Inject(circuit, noise, rng);
+            const auto noisy = Inject(plan, noise, rng);
             context.network->Configure("seed", std::to_string(Simulators::IState::DeriveSeed(*config.seed, r)).c_str());
             const auto values = context.network->ExecuteOnHostExpectations(noisy, 0, observables);
             Require(values.size() == sums.size(), "Backend returned an invalid expectation vector");
@@ -1524,11 +1728,12 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         size_t bond = 0;
         for (const auto &suffix : additional)
         {
+            const noise::NoiseInjectionPlan suffixPlan(suffix.circuit, noise.model);
             Counts counts;
             const size_t samples = std::min(realizations, shots);
             for (size_t r = 0; r < samples; ++r)
             {
-                const auto noisy = Inject(suffix.circuit, noise, rng);
+                const auto noisy = Inject(suffixPlan, noise, rng);
                 const size_t repetitions = shots / samples + (r < shots % samples ? 1 : 0);
                 for (size_t shot = 0; shot < repetitions; ++shot)
                 {
@@ -1557,7 +1762,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
         std::complex<double> overlap;
         for (size_t r = 0; r < realizations; ++r)
         {
-            const auto second = operation == "inner_product" ? additional[0].circuit : Inject(circuit, noise, rng);
+            const auto second = operation == "inner_product" ? additional[0].circuit : Inject(plan, noise, rng);
             auto combined = std::make_shared<Circuit>();
             for (const auto &op : second->GetOperations())
                 combined->AddOperation(op->Clone());
@@ -1585,7 +1790,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth)
                 realizations > 1 ? std::sqrt(std::max(0.0, (squares - realizations * mean * mean) / (realizations - 1) / realizations)) : 0;
         }
     }
-    result["execution_metadata"] = Metadata(context, config, operation == "execute" || operation == "estimate");
+    result["execution_metadata"] = Metadata(*metadata_context, config, operation == "execute" || operation == "estimate");
     result["seed"] = *config.seed;
     result["time_taken"] = std::chrono::duration<double>(Clock::now() - start).count();
     result["count_order"] = "classical_bit_0_first";
@@ -1695,6 +1900,98 @@ boost::json::object ParseRequest(const char *request)
     MaestroExecution::Require(!error, "Invalid JSON: " + error.message());
     return MaestroExecution::Object(value);
 }
+
+// Packed shot rows: ceil(width / 64) words per row, classical bit b at bit
+// b % 64 of the row's word b / 64.
+size_t RowWords(size_t width)
+{
+    return (width + 63) / 64;
+}
+
+size_t PackedWords(size_t shots, size_t width)
+{
+    const size_t words = RowWords(width);
+    MaestroExecution::Require(!words || shots <= std::numeric_limits<size_t>::max() / words, "Packed shot rows overflow");
+    return shots * words;
+}
+
+void PackRows(const uint8_t *bytes, size_t shots, size_t width, unsigned long long *out)
+{
+    const size_t words = RowWords(width);
+    std::fill(out, out + shots * words, 0ULL);
+    for (size_t shot = 0; shot < shots; ++shot)
+    {
+        const uint8_t *row = bytes + shot * width;
+        unsigned long long *target = out + shot * words;
+        for (size_t bit = 0; bit < width; ++bit)
+            if (row[bit])
+                target[bit / 64] |= 1ULL << (bit % 64);
+    }
+}
+
+// An execute request with return_samples, its rows packed into the caller's
+// buffer instead of JSON. Without a buffer, only validates and sizes it.
+boost::json::object RunSamples(const boost::json::object &request, unsigned long long *rows, size_t capacity)
+{
+    using namespace MaestroExecution;
+    Require(request.contains("operation") && String(request.at("operation")) == "execute", "Packed shot rows require operation execute");
+    auto copy = request;
+    if (!copy.contains("execution"))
+        copy["execution"] = boost::json::object{};
+    Require(copy["execution"].is_object(), "execution must be an object");
+    copy["execution"].as_object()["return_samples"] = true;
+    const auto input = ParseCircuit(Object(Field(copy, "circuit")));
+    const size_t shots = UInt(copy["execution"].as_object(), "shots", 1024);
+    const size_t words = PackedWords(shots, input.clbits);
+    ShotRows sink;
+    if (!rows)
+    {
+        Run(copy, true, 0, &sink);
+        return {{"schema_version", SchemaVersion},     {"operation", "execute"}, {"valid", true}, {"shots", shots}, {"num_clbits", input.clbits},
+                {"row_words", RowWords(input.clbits)}, {"required_words", words}};
+    }
+    Require(capacity >= words, "capacity must be at least shots * row_words words");
+    auto result = Run(copy, false, 0, &sink);
+    if (sink.shots != shots || sink.width != input.clbits || sink.data.size() != shots * input.clbits)
+        throw Error("native_failure", "Backend did not return the requested shot rows");
+    PackRows(sink.data.data(), sink.shots, sink.width, rows);
+    result["row_words"] = RowWords(input.clbits);
+    return result;
+}
+
+// A noisy Clifford circuit compiled once to reference frames: "circuit", and
+// optionally "simulator" and "noise" (incoherent Pauli-mixture channels) as in
+// an execute request.
+std::unique_ptr<MaestroExecution::ReferenceFrameSampler> CompileFrameSampler(const boost::json::object &request)
+{
+    using namespace MaestroExecution;
+    Keys(request, {"schema_version", "circuit", "simulator", "noise"});
+    Require(UInt(Field(request, "schema_version")) == SchemaVersion, "Unsupported native schema_version");
+    // Accept exactly what an execute request accepts: the same circuit,
+    // simulator and noise validation. Frames run on the QCSim stabilizer, so
+    // an omitted simulator means that one rather than execute's statevector.
+    boost::json::object execute{{"schema_version", SchemaVersion},
+                                {"operation", "execute"},
+                                {"circuit", Field(request, "circuit")},
+                                {"simulator", boost::json::object{{"backend", "qcsim"}, {"method", "stabilizer"}}}};
+    for (const char *key : {"simulator", "noise"})
+        if (const auto *value = request.if_contains(key))
+            execute[key] = *value;
+    Run(execute, true);
+    const auto config = ParseConfig(Sub(execute, "simulator"));
+    const auto input = ParseCircuit(Object(Field(request, "circuit")));
+    const auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits);
+    Supported(AdmitsReferenceFrames(config),
+              "Reference frames require the qcsim stabilizer: a stabilizer method, or automatic selection whose candidates include it");
+    Supported(!noise.enabled || noise.mode == "pauli" || noise.mode == "combined", "Reference frames apply pauli or combined noise only");
+    Supported(noise.model.inject_noise_covers_model(), "Reference frames cannot represent coherent, correlated or crosstalk noise");
+    auto channels = noise::inject_exact_noise(input.circuit, noise.model);
+    noise::attach_readout_error(channels, noise.model);
+    auto plan = CompileReferenceSampler(channels, input.qubits, input.clbits);
+    Supported(plan.has_value(), "Reference frames do not apply: they need measurements, Clifford gates and Pauli-mixture channels, "
+                                "without classical control");
+    return std::make_unique<ReferenceFrameSampler>(std::move(*plan));
+}
 } // namespace
 
 extern "C"
@@ -1707,6 +2004,102 @@ extern "C"
     char *MaestroValidateRequestJson(const char *request)
     {
         return NativeBoundary([&] { return MaestroExecution::Run(ParseRequest(request), true); });
+    }
+
+    char *MaestroRunRequestSamples(const char *request, unsigned long long *rows, size_t capacity)
+    {
+        return NativeBoundary([&] { return RunSamples(ParseRequest(request), rows, capacity); });
+    }
+
+    void *MaestroCreateReferenceFrameSampler(const char *request, char **error)
+    {
+        if (error)
+            *error = nullptr;
+        std::unique_ptr<MaestroExecution::ReferenceFrameSampler> created;
+        char *envelope = NativeBoundary([&] {
+            created = CompileFrameSampler(ParseRequest(request));
+            return boost::json::object{{"num_qubits", created->Qubits()}, {"num_clbits", created->Width()}};
+        });
+        if (created)
+        {
+            FreeResult(envelope);
+            return created.release();
+        }
+        if (error)
+            *error = envelope;
+        else
+            FreeResult(envelope);
+        return nullptr;
+    }
+
+    void MaestroDestroyReferenceFrameSampler(void *sampler)
+    {
+        delete static_cast<MaestroExecution::ReferenceFrameSampler *>(sampler);
+    }
+
+    int MaestroReferenceFrameSamplerShape(void *sampler, size_t *qubits, size_t *clbits)
+    {
+        if (!sampler || !qubits || !clbits)
+            return 0;
+        const auto &plan = *static_cast<const MaestroExecution::ReferenceFrameSampler *>(sampler);
+        *qubits = plan.Qubits();
+        *clbits = plan.Width();
+        return 1;
+    }
+
+    int MaestroReferenceFrameSampleBits(void *sampler, size_t shots, unsigned long long seed, unsigned long long *rows, size_t capacity)
+    {
+        if (!sampler)
+            return 0;
+        try
+        {
+            const auto &plan = *static_cast<const MaestroExecution::ReferenceFrameSampler *>(sampler);
+            if (!shots)
+                return 1;
+            if (!rows || capacity < PackedWords(shots, plan.Width()))
+                return 0;
+            const auto bytes = plan.Sample(shots, seed);
+            PackRows(bytes.data(), shots, plan.Width(), rows);
+            return 1;
+        }
+        catch (...)
+        {
+            return 0;
+        }
+    }
+
+    int MaestroReferenceFrameSampleCountsBits(void *sampler, size_t shots, unsigned long long seed, unsigned long long *rows, unsigned long long *counts,
+                                              size_t capacity, size_t *written)
+    {
+        if (!sampler || !written)
+            return 0;
+        try
+        {
+            *written = 0;
+            const auto &plan = *static_cast<const MaestroExecution::ReferenceFrameSampler *>(sampler);
+            if (!shots)
+                return 1;
+            const size_t words = RowWords(plan.Width());
+            if (!rows || !counts || capacity < shots || (words && capacity > std::numeric_limits<size_t>::max() / words))
+                return 0;
+            const auto outcomes = plan.SampleCounts(shots, seed);
+            for (const auto &[bits, count] : outcomes)
+            {
+                unsigned long long *target = rows + *written * words;
+                std::fill(target, target + words, 0ULL);
+                for (size_t bit = 0; bit < bits.size(); ++bit)
+                    if (bits[bit])
+                        target[bit / 64] |= 1ULL << (bit % 64);
+                counts[*written] = count;
+                ++*written;
+            }
+            return 1;
+        }
+        catch (...)
+        {
+            *written = 0;
+            return 0;
+        }
     }
 
     char *MaestroGetCapabilitiesJson()

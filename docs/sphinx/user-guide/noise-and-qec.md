@@ -119,7 +119,21 @@ print(maestro.noisy_execute(measured, noise, shots=1024, noise_realizations=64, 
 
 In the estimate functions, `noise_realizations` is the number of independent
 noise samples averaged. In the execute functions, it is the number of batches
-the shots are split into, so at most `shots` batches run.
+the shots are split into, so at most `shots` batches run. On QCSim,
+realizations run on several worker threads at once, within `max_simulators`
+and the `trajectory_max_memory_mb` budget; each realization keeps its own
+random streams, so seeded results do not depend on the worker count.
+
+The execute functions also accept `return_samples=True`, which returns each
+shot's record as a `(shots, clbits)` `uint8` array under `samples` (see
+{ref}`py_raw_samples`). With one realization per shot and no seed, the default
+`counts_policy="auto"` samples Clifford circuits with Pauli, readout and
+phase-damping noise through reference frames
+(`sampling_strategy: "reference_frame_v1"`) and runs other realizations directly
+(`"trajectory_v1"`); seeded calls keep their earlier sequences (see
+{ref}`py_counts_policy`). {py:class}`maestro.PrefixCheckpointedSimulator`
+simulates a shared noiseless prefix once and samples noisy suffixes from it; see
+{doc}`/user-guide/expectation-values`.
 
 (py_noise_coherent)=
 ## Coherent errors
@@ -199,6 +213,11 @@ pairwise.set_2q_depolarizing(q1=0, q2=1, p=1.8e-3)  # after two-qubit gates such
 print(pairwise.has_crosstalk(), pairwise.has_any_2q_depolarizing())
 ```
 
+Crosstalk rotates neighbours of each noisy gate's qubits. A neighbour the
+circuit never touches stays in `|0>`, where the rotation is a global phase:
+Maestro simulates only the circuit's qubits, and count keys are padded with
+zeros up to the highest spectator, as in earlier releases.
+
 (py_noise_readout)=
 ## Readout error
 
@@ -227,8 +246,10 @@ flips away from `"11"`, such as `"00"`, don't contribute.
 `set_all_readout_error(num_qubits, p_error)` sets a symmetric rate on every
 qubit.
 
-The `noise_seed` argument (also accepted as `seed`) seeds noise injection and, unless
-`SimulatorConfig.seed` is set, measurement and readout randomness as well. An
+The `noise_seed` argument (also accepted as `seed`, including by
+`PrefixCheckpointedSimulator.execute_suffix`) is an unsigned 32-bit integer. It
+seeds noise injection and, unless `SimulatorConfig.seed` is set, measurement and
+readout randomness as well. An
 explicit config seed takes precedence for simulator randomness. Without a seed,
 each call uses fresh random streams. Each noise realization derives its own
 simulator seed, so seeded runs are reproducible without repeating readout draws

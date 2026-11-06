@@ -94,8 +94,8 @@ std::string GenerateRandomPauliString(int nrQubits, std::mt19937 &g)
     return pauli;
 }
 
-void CheckCountsAgainstStatevector(const std::unordered_map<std::vector<bool>, size_t> &counts,
-                                   const std::unordered_map<std::vector<bool>, size_t> &statevectorCounts, size_t shots)
+void CheckCountsAgainstStatevector(const Circuits::Circuit<>::ExecuteResults &counts, const Circuits::Circuit<>::ExecuteResults &statevectorCounts,
+                                   size_t shots)
 {
     size_t totalCounts = 0;
     for (const auto &[outcome, count] : counts)

@@ -1,13 +1,99 @@
+#include "Execution/ReferenceFrameSampler.h"
 #include "Simulators/PathIntegral/PathIntegralSimulator.h"
 #include "core.h"
 #include "module.h"
 #include "qasm/QasmCirc.h"
+#include "samples.h"
 
 namespace maestro_bindings
 {
 
 void bind_api(nb::module_ &m)
 {
+    using MaestroExecution::ReferenceFrameSampler;
+    const auto resolve_seed = [](std::optional<uint64_t> seed) { return seed ? *seed : Utils::RandomStream::FreshSeed(); };
+    const auto require_shots = [](int shots) {
+        if (shots < 0)
+            throw nb::value_error("shots must be nonnegative");
+        return static_cast<size_t>(shots);
+    };
+    nb::class_<ReferenceFrameSampler>(m, "ReferenceFrameSampler",
+                                      "A noisy Clifford circuit compiled to reference frames (see compile_reference_sampler).\n\n"
+                                      "Every call draws independent shots from the compiled plan without re-simulating the "
+                                      "tableau, which suits repeated QEC batches. Equal seeds give equal rows.")
+        .def(
+            "sample",
+            [resolve_seed, require_shots](const ReferenceFrameSampler &plan, int shots, std::optional<uint64_t> seed) {
+                const size_t count = require_shots(shots);
+                const auto start = std::chrono::steady_clock::now();
+                std::vector<uint8_t> samples;
+                {
+                    nb::gil_scoped_release release;
+                    samples = plan.Sample(count, resolve_seed(seed));
+                }
+                nb::dict out;
+                out["samples"] = MakeSamples(std::move(samples), count, plan.Width());
+                out["sampling_strategy"] = "reference_frame_v1";
+                out["simulator"] = Simulators::SimulatorType::kQCSim;
+                out["method"] = Simulators::SimulationType::kStabilizer;
+                out["time_taken"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+                return out;
+            },
+            "shots"_a, "seed"_a = nb::none(),
+            "Draw shots rows. Returns a dict with 'samples', a (shots, num_clbits) uint8 array in classical-bit order, "
+            "and 'sampling_strategy' 'reference_frame_v1'. An omitted seed draws fresh entropy.")
+        .def(
+            "sample_counts",
+            [resolve_seed, require_shots](const ReferenceFrameSampler &plan, int shots, std::optional<uint64_t> seed) {
+                const size_t count = require_shots(shots);
+                const auto start = std::chrono::steady_clock::now();
+                MaestroExecution::FrameOutcomes outcomes;
+                {
+                    nb::gil_scoped_release release;
+                    outcomes = plan.SampleCounts(count, resolve_seed(seed));
+                }
+                nb::dict out;
+                out["counts"] = CountsDict(outcomes);
+                out["sampling_strategy"] = "reference_frame_v1";
+                out["simulator"] = Simulators::SimulatorType::kQCSim;
+                out["method"] = Simulators::SimulationType::kStabilizer;
+                out["time_taken"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+                return out;
+            },
+            "shots"_a, "seed"_a = nb::none(),
+            "The histogram of exactly the rows sample(shots, seed) draws: 'counts' maps classical-bit-0-first bitstrings "
+            "to counts.")
+        .def_prop_ro("num_qubits", &ReferenceFrameSampler::Qubits, "Qubits of the compiled register.")
+        .def_prop_ro("num_clbits", &ReferenceFrameSampler::Width, "Columns of each row: the classical register width.");
+    m.attr("_ReferenceFrameSampler") = m.attr("ReferenceFrameSampler");
+    const auto compile_reference = [](const CircuitPtr &circuit, const noise::NoiseModel *model, const SimulatorConfig &config) -> nb::object {
+        require_circuit(circuit);
+        config.Validate();
+        static const noise::NoiseModel no_noise;
+        if (!model)
+            model = &no_noise;
+        if (!MaestroExecution::AdmitsReferenceFrames(config) || !model->inject_noise_covers_model())
+            return nb::none();
+        std::optional<ReferenceFrameSampler> plan;
+        {
+            nb::gil_scoped_release release;
+            auto channels = noise::inject_exact_noise(circuit, *model);
+            noise::attach_readout_error(channels, *model);
+            plan = MaestroExecution::CompileReferenceSampler(channels, std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1), ClassicalWidth(circuit));
+        }
+        if (plan)
+            return nb::cast(std::move(*plan));
+        return nb::none();
+    };
+    m.def("compile_reference_sampler", compile_reference, "circuit"_a, "noise_model"_a.none() = nb::none(), "config"_a = SimulatorConfig{},
+          "Compile a Clifford circuit, with the incoherent channels of noise_model as independent per-shot channels, into a "
+          "reusable ReferenceFrameSampler. The channels must be Pauli mixtures: Pauli and depolarizing noise, phase damping, "
+          "dephasing with T1 infinite, and readout errors qualify; amplitude damping and finite-T1 relaxation do not. "
+          "Returns None when frames do not apply: non-Clifford gates, classical control, other channels, no measurements, "
+          "coherent/correlated/crosstalk noise, or a config that excludes the QCSim stabilizer (another backend, or a fixed "
+          "non-Stabilizer method).");
+    m.def("_compile_reference_sampler", compile_reference, "circuit"_a, "noise_model"_a.none() = nb::none(), "config"_a = SimulatorConfig{});
+
     // --- QASM Tools ---
     nb::class_<qasm::QasmToCirc<double>>(m, "QasmToCirc")
         .def(nb::init<>())
@@ -37,12 +123,12 @@ void bind_api(nb::module_ &m)
 
     // 1. simple_execute (Overloaded)
     // Variant A: Circuit Object
-    m.def("simple_execute", &execute_core, "circuit"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024);
+    m.def("simple_execute", &execute_core, "circuit"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "return_samples"_a = false);
 
     // Variant B: QASM String
     m.def(
         "simple_execute",
-        [](const std::string &qasm, const SimulatorConfig &config, int shots) {
+        [](const std::string &qasm, const SimulatorConfig &config, int shots, bool return_samples) {
             qasm::QasmToCirc<> parser;
             auto circuit = parser.ParseAndTranslate(qasm);
             if (parser.Failed() || !circuit)
@@ -50,9 +136,9 @@ void bind_api(nb::module_ &m)
                 // IMPROVEMENT: Throw error instead of silent failure
                 throw nb::value_error("Failed to parse QASM string.");
             }
-            return execute_core(circuit, config, shots);
+            return execute_core(circuit, config, shots, return_samples);
         },
-        "qasm_circuit"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024);
+        "qasm_circuit"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "return_samples"_a = false);
 
     // 2. simple_estimate (Overloaded)
     // Variant A: Circuit Object

@@ -24,6 +24,16 @@ int maestro_request_c_header_test(void)
         MaestroApplyOperator(0, 0, 0, 0, 0) || MaestroMoveAtBeginningOfChain(0, 0, 0) || MaestroSampleCountsBits(0, 0, 0, 0, 0, 0, 0, 0) ||
         MaestroMeasureBits(0, 0, 0, 0))
         return 0;
+    /* Packed shot rows and reference frame sampler handles. */
+    if (MaestroCreateReferenceFrameSampler(0, 0) || MaestroReferenceFrameSamplerShape(0, 0, 0) || MaestroReferenceFrameSampleBits(0, 0, 0, 0, 0) ||
+        MaestroReferenceFrameSampleCountsBits(0, 0, 0, 0, 0, 0, 0))
+        return 0;
+    MaestroDestroyReferenceFrameSampler(0);
+    {
+        char *rows = MaestroRunRequestSamples(0, 0, 0); /* a null request is an error envelope */
+        if (!rows || accepted(rows))
+            return 0;
+    }
     const char *request = "{\"schema_version\":2,\"operation\":\"state_probability\",\"target_state\":\"1\",\"circuit\":{\"num_qubits\":1,\"source\":"
                           "\"OPENQASM 2.0; qreg q[1]; x q[0];\"}}";
     return accepted(MaestroGetCapabilitiesJson()) && accepted(MaestroValidateRequestJson(request)) && accepted(MaestroRunRequestJson(request)) &&

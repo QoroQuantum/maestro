@@ -411,6 +411,14 @@ endif()
 set(MAESTROSRC maestrolib/Interface.cpp Execution/Request.cpp Execution/Estimation.h Execution/Estimation.cpp
     Execution/Sampling.h
     Execution/Sampling.cpp
+    Execution/ReferenceFrameSampler.cpp
+    Execution/SampleRecords.h
+    Execution/SampleRecords.cpp
+    Execution/NoisyEstimation.h
+    Execution/NoisyEstimation.cpp
+    Execution/PrefixCheckpoint.h
+    Execution/PrefixCheckpoint.cpp
+    Utils/Threads/RealizationWorkers.cpp
     Execution/Transforms/ConeAnalysis.h
     Execution/Transforms/PauliCone.h
     Execution/Transforms/BoundedPauli.h
@@ -637,6 +645,22 @@ endif()
 if(COMPILE_TESTS)
     enable_testing()
 
+    find_package(Threads REQUIRED)
+    add_executable(realization_workers_tests tests/RealizationWorkersTests.cpp)
+    target_compile_definitions(realization_workers_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX MAESTRO_REALIZATION_NOISE_TESTS)
+    target_link_libraries(realization_workers_tests PRIVATE maestro Threads::Threads Boost::json)
+    target_include_directories(realization_workers_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(realization_workers_tests PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    add_test(NAME realization_workers COMMAND realization_workers_tests)
+
+    add_executable(reference_frame_sampler_tests tests/ReferenceFrameSamplerTests.cpp)
+    target_compile_definitions(reference_frame_sampler_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX)
+    target_link_libraries(reference_frame_sampler_tests PRIVATE maestro)
+    target_include_directories(reference_frame_sampler_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME reference_frame_sampler COMMAND reference_frame_sampler_tests)
+
     add_executable(alias_sampling_tests tests/AliasSamplingTests.cpp)
     target_compile_definitions(alias_sampling_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX)
     if(OpenMP_CXX_FOUND)
@@ -814,8 +838,15 @@ if(COMPILE_TESTS)
 
     # Unity test: sampling_order_tests
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/SamplingOrderTests.cpp")
-        add_executable(sampling_order_tests ${MAESTRO_FACTORY_SRC} tests/SamplingOrderTests.cpp)
+        # The test includes Aer's headers to construct Aer simulators directly, and
+        # those headers define non-inline globals. Linking libmaestro as well would
+        # give the process two definitions; ELF interposition then registers two
+        # destructors for one object and aborts at exit. So the executable
+        # compiles its own factory and the realization budget instead.
+        add_executable(sampling_order_tests ${MAESTRO_FACTORY_SRC} Utils/Threads/RealizationWorkers.cpp tests/SamplingOrderTests.cpp)
         set_target_properties(sampling_order_tests PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 0)
+        # The budget's entry point is declared for libmaestro's DLL boundary.
+        target_compile_definitions(sampling_order_tests PRIVATE MAESTRO_EXPORTS)
         target_link_libraries(sampling_order_tests PRIVATE Boost::serialization ${CMAKE_DL_LIBS}
             $<TARGET_PROPERTY:maestro,INTERFACE_LINK_LIBRARIES>)
         target_compile_options(sampling_order_tests PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_COMPILE_OPTIONS>)

@@ -228,7 +228,7 @@ class IndividualSimulator : public ISimulator
 
                 // compute the new amplitudes
 
-                const size_t localQubitMask = 1ULL << localQubit;
+                const size_t localQubitMask = Types::BitAt(localQubit);
                 const size_t maskLow = localQubitMask - 1ULL;
                 const size_t maskHigh = ~maskLow;
                 const size_t qubitMask = qubitOutcome ? localQubitMask : 0ULL;
@@ -264,7 +264,7 @@ class IndividualSimulator : public ISimulator
                                                                                        // initialization, it will be set anyway
 
                 // compute the new amplitudes
-                const size_t localQubitMask = 1ULL << localQubit;
+                const size_t localQubitMask = Types::BitAt(localQubit);
                 const size_t maskLow = localQubitMask - 1ULL;
                 const size_t maskHigh = ~maskLow;
                 const size_t qubitMask = qubitOutcome ? localQubitMask : 0ULL;
@@ -379,8 +379,8 @@ class IndividualSimulator : public ISimulator
         Types::qubit_t res = 0;
 
         for (auto [origQubit, localQubit] : qubitsMap)
-            if (outcome & (1ULL << localQubit))
-                res |= (1ULL << origQubit);
+            if (outcome & Types::BitAt(localQubit))
+                res |= Types::BitAt(origQubit);
 
         return res;
     }
@@ -398,8 +398,8 @@ class IndividualSimulator : public ISimulator
         Types::qubit_t res = 0;
 
         for (auto [origQubit, localQubit] : qubitsMap)
-            if (outcome & (1ULL << origQubit))
-                res |= (1ULL << localQubit);
+            if (outcome & Types::BitAt(origQubit))
+                res |= Types::BitAt(localQubit);
 
         return res;
     }
@@ -708,6 +708,21 @@ class IndividualSimulator : public ISimulator
     std::vector<bool> MeasureMany(const Types::qubits_vector &qubits) override
     {
         return ConvertOutcomeFromLocal(simulator->MeasureMany(ConvertQubits(qubits)));
+    }
+
+    /**
+     * @brief Measures one qubit, given by its global id.
+     *
+     * Makes the same simulator call as Measure, so it draws the same random
+     * numbers, but needs no bitmask indexed by global qubit ids: those cannot
+     * hold ids of 64 or more.
+     *
+     * @param qubit The global id of the qubit to measure.
+     * @return The outcome.
+     */
+    bool MeasureOne(Types::qubit_t qubit)
+    {
+        return simulator->Measure(ConvertQubits({qubit})) != 0;
     }
 
     /**
@@ -1607,7 +1622,7 @@ class IndividualSimulator : public ISimulator
 
             // compute the new amplitudes
 
-            const size_t localQubitMask = 1ULL << localQubit;
+            const size_t localQubitMask = Types::BitAt(localQubit);
             const size_t maskLow = localQubitMask - 1ULL;
             const size_t maskHigh = ~maskLow;
             const size_t qubitMask = qubitOutcome ? localQubitMask : 0ULL;
@@ -1695,7 +1710,7 @@ class IndividualSimulator : public ISimulator
             newAmplitudes.resize(nrBasisStates);
 
             // compute the new amplitudes
-            const size_t localQubitMask = 1ULL << localQubit;
+            const size_t localQubitMask = Types::BitAt(localQubit);
             const size_t maskLow = localQubitMask - 1ULL;
             const size_t maskHigh = ~maskLow;
             const size_t qubitMask = qubitOutcome ? localQubitMask : 0ULL;

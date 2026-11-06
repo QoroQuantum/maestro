@@ -50,10 +50,10 @@ namespace Circuits
 template <typename Time = Types::time_type> class Circuit : public IOperation<Time>
 {
   public:
-    using ExecuteResults = std::unordered_map<std::vector<bool>, size_t>;  /**< The results of the execution of the
-                                                                              circuit. */
-    using BitMapping = std::unordered_map<Types::qubit_t, Types::qubit_t>; /**< The (qu)bit mapping for
-                                                                              remapping. */
+    using ExecuteResults = std::unordered_map<std::vector<bool>, size_t, Types::BitsHash>; /**< The results of the execution of
+                                                                                              the circuit. */
+    using BitMapping = std::unordered_map<Types::qubit_t, Types::qubit_t>;                 /**< The (qu)bit mapping for
+                                                                                              remapping. */
 
     using Operation = IOperation<Time>;                 /**< The operation type. */
     using OperationPtr = std::shared_ptr<Operation>;    /**< The shared pointer to

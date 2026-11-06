@@ -350,6 +350,71 @@ void TestTypedTrajectoryConfiguration()
     }
 }
 
+void TestFrameCountPolicy()
+{
+    using namespace MaestroExecution;
+    for (const char *policy : {"auto", "legacy", "frame_v1"})
+    {
+        const auto config = ParseConfig(json::object{{"backend", "qcsim"}, {"method", "stabilizer"}, {"options", json::object{{"counts_policy", policy}}}});
+        Check(config.counts_policy == policy, "Counts policy parser lost the option");
+        auto seeded = config;
+        seeded.seed = 0;
+        Check(PreferFrameCounts(seeded) == (std::string(policy) == "frame_v1"), "Counts policy treated seed zero as unseeded");
+        Check(PreferFrameCounts(config) == (std::string(policy) != "legacy"), "Unseeded counts policy selection");
+        // auto keeps a requested non-Stabilizer method unless the automatic
+        // candidates admit the stabilizer; frame_v1 needs automatic selection.
+        for (const char *selection : {"fixed", "automatic", "candidates"})
+        {
+            const std::string mode(selection);
+            json::object simulator{{"backend", "qcsim"},
+                                   {"method", "statevector"},
+                                   {"selection", mode == "fixed" ? "fixed" : "automatic"},
+                                   {"options", json::object{{"counts_policy", policy}}}};
+            if (mode == "candidates")
+                simulator["candidates"] =
+                    json::array{json::object{{"backend", "qcsim"}, {"method", "statevector"}}, json::object{{"backend", "qcsim"}, {"method", "stabilizer"}}};
+            const auto statevector = ParseConfig(simulator);
+            const bool automatic = mode != "fixed";
+            const bool expected = std::string(policy) == "frame_v1" ? automatic : std::string(policy) == "auto" && mode == "candidates";
+            Check(PreferFrameCounts(statevector) == expected, "Unseeded non-Stabilizer counts policy selection");
+            auto seededStatevector = statevector;
+            seededStatevector.seed = 0;
+            Check(PreferFrameCounts(seededStatevector) == (automatic && std::string(policy) == "frame_v1"), "Seeded non-Stabilizer counts policy selection");
+        }
+        // An explicit candidate list names every allowed backend. It replaces a
+        // requested Stabilizer method too, and binds frame_v1 as well as auto.
+        for (const char *method : {"stabilizer", "statevector"})
+            for (const bool listed : {false, true})
+            {
+                json::array candidates{json::object{{"backend", "qcsim"}, {"method", "statevector"}}};
+                if (listed)
+                    candidates.push_back(json::object{{"backend", "qcsim"}, {"method", "stabilizer"}});
+                const auto restricted = ParseConfig(json::object{{"backend", "qcsim"},
+                                                                 {"method", method},
+                                                                 {"selection", "automatic"},
+                                                                 {"candidates", candidates},
+                                                                 {"options", json::object{{"counts_policy", policy}}}});
+                const bool expected = listed && std::string(policy) != "legacy";
+                Check(PreferFrameCounts(restricted) == expected, "A frame policy bypassed the request's candidate list");
+            }
+    }
+    for (const char *invalid : {"", "frame", "FRAME_V1"})
+    {
+        auto config = SimulatorConfig{};
+        config.counts_policy = invalid;
+        bool rejected = false;
+        try
+        {
+            config.Validate();
+        }
+        catch (const std::invalid_argument &)
+        {
+            rejected = true;
+        }
+        Check(rejected, "Unknown counts policy accepted");
+    }
+}
+
 void TestGateFusionConfiguration()
 {
     using namespace MaestroExecution;

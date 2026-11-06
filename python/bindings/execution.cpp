@@ -1,7 +1,9 @@
 #include "Execution/Estimation.h"
+#include "Execution/ReferenceFrameSampler.h"
 #include "Execution/Sampling.h"
 #include "core.h"
 #include "runtime.h"
+#include "samples.h"
 #include <numeric>
 
 namespace maestro_bindings
@@ -36,13 +38,34 @@ std::vector<std::string> ParseObservables(const nb::object &observables)
 }
 
 // Core Execution Logic
-nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots)
+nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots, bool return_samples)
 {
     if (!circuit)
         throw nb::value_error("Circuit is null.");
 
     if (shots < 0)
         throw nb::value_error("shots must be nonnegative");
+    if (return_samples)
+    {
+        MaestroExecution::ShotRecords records;
+        {
+            nb::gil_scoped_release release;
+            records = MaestroExecution::SampleCircuitRows(circuit, config, static_cast<size_t>(shots));
+        }
+        nb::dict out;
+        out["samples"] = MakeSamples(std::move(records.rows), records.shots, records.width);
+        out["simulator"] = records.simulator;
+        out["method"] = records.method;
+        out["sampling_components"] = records.components;
+        out["largest_component_qubits"] = records.largest_component;
+        out["sampling_strategy"] = records.sampling_strategy;
+        if (records.gpu_device >= 0)
+            out["gpu_device"] = records.gpu_device;
+        if (records.max_bond_dimension)
+            out["max_bond_dim_reached"] = records.max_bond_dimension;
+        out["time_taken"] = records.time_taken;
+        return out;
+    }
     MaestroExecution::SamplingResult result;
     {
         nb::gil_scoped_release release;
@@ -72,6 +95,8 @@ nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const 
     py_result["method"] = result.method;
     py_result["sampling_components"] = result.components;
     py_result["largest_component_qubits"] = result.largest_component;
+    if (!result.sampling_strategy.empty())
+        py_result["sampling_strategy"] = result.sampling_strategy;
     if (result.gpu_device >= 0)
         py_result["gpu_device"] = result.gpu_device;
     if (result.max_bond_dimension)

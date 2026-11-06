@@ -25,6 +25,10 @@ except ImportError:
 
 import maestro
 
+# The documented entry points; the remaining helpers are internal.
+__all__ = ["MaestroCompiledSampler", "MaestroSinterSampler", "translate_stim_to_maestro"]
+
+
 def validate_shots(shots: int) -> int:
     """Validate that shots is a positive integer."""
     if isinstance(shots, bool) or not isinstance(shots, numbers.Integral) or shots <= 0:
@@ -58,6 +62,44 @@ def counts_to_measurements(
     if sum(weights) != shots:
         raise ValueError(f"Maestro returned {sum(weights)} shots, expected {shots}")
     return np.repeat(np.asarray(rows, dtype=bool).reshape(len(rows), num_measurements), weights, axis=0)
+
+
+def samples_to_measurements(
+    samples: np.ndarray,
+    num_measurements: int,
+    shots: int,
+    *,
+    storage_width: int | None = None,
+) -> np.ndarray:
+    """Validate raw shot rows; column k is classical measurement bit k."""
+    rows = np.asarray(samples)
+    if rows.ndim != 2 or rows.shape[0] != shots:
+        raise ValueError("Maestro sample matrix shape does not match the requested shots")
+    if rows.dtype not in (np.dtype(bool), np.dtype(np.uint8)) or np.any(rows > 1):
+        raise ValueError("Maestro samples must contain boolean or uint8 values in {0, 1}")
+    if storage_width is not None and rows.shape[1] == storage_width and storage_width > num_measurements:
+        if np.any(rows[:, num_measurements:]):
+            raise ValueError("Nonzero data outside the declared measurement record")
+        rows = rows[:, :num_measurements]
+    if rows.shape[1] != num_measurements:
+        raise ValueError(f"Maestro measurement width/content mismatch: expected {num_measurements}")
+    # Both accepted dtypes use one byte. Values are already canonical 0/1,
+    # so a bool view retains the native allocation without another matrix copy.
+    return rows.view(np.bool_)
+
+
+def _sample_result(execute, *args, **kwargs):
+    """Prefer raw rows while retaining support for older native extensions."""
+    try:
+        return execute(*args, return_samples=True, **kwargs)
+    except TypeError as error:
+        message = str(error)
+        if "return_samples" not in message or not (
+            "unexpected keyword" in message or "incompatible function arguments" in message
+        ):
+            raise
+        return execute(*args, **kwargs)
+
 
 CLEAN_CIRCUIT_API_VERSION = 2
 LOCAL_NOISE = {'DEPOLARIZE1', 'DEPOLARIZE2', 'X_ERROR', 'Y_ERROR', 'Z_ERROR',
@@ -692,7 +734,8 @@ class MaestroSinterSampler(sinter.Sampler):
                 ``task -> NoiseModel | None`` for per-task noise (for example read
                 from ``task.json_metadata``). With ``sinter.collect(num_workers>1)``
                 the callable must be picklable, e.g. a module-level function.
-            device: Optional target device string.
+            device: Reserved; currently unused. Select a GPU through ``config``
+                (``gpu_device``) or ``use_gpu`` instead.
             config: Optional pre-configured Maestro SimulatorConfig.
             decoder: Decoder for tasks, e.g. 'pymatching', or 'vacuous' for the
                 undecoded logical error rate. Required under ``sinter.collect``
@@ -810,13 +853,22 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
         if self.seed is not None:
             self.config.seed = self.seed
 
+        # A full-circuit frame plan also covers clean Clifford suffixes. Compile
+        # it before allocating a checkpoint, whose requested MPS backend would
+        # otherwise replay those suffixes for every shot.
+        self._reference_sampler = None
+        compile_reference = getattr(maestro, "_compile_reference_sampler", None)
+        if compile_reference is not None:
+            self._reference_sampler = compile_reference(
+                self.qc, self.noise_model if self.noise_model is not None else maestro.NoiseModel(), self.config)
+
         # Prefix state checkpointing setup
         self.checkpoint_sim = None
         self.prefix_qc = None
         self.suffix_qc = None
         self.suffix_noise_model = None
 
-        if self.enable_checkpoint:
+        if self.enable_checkpoint and self._reference_sampler is None:
             has_ext_noise = (
                 self.external_noise_model is not None and self.external_noise_model.has_any()
             )
@@ -887,20 +939,24 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
         rng = np.random.default_rng(seed) if seed is not None else self._rng
         run_seed = int(rng.integers(0, 2**31))
         self.config.seed = run_seed
-        if self.checkpoint_sim is not None:
-            res = self.checkpoint_sim.execute_suffix(
+        if self._reference_sampler is not None:
+            res = self._reference_sampler.sample(shots, run_seed)
+        elif self.checkpoint_sim is not None:
+            res = _sample_result(self.checkpoint_sim.execute_suffix,
                 self.suffix_qc, shots=shots, noise_model=self.suffix_noise_model,
                 noise_realizations=shots, noise_seed=run_seed,
                 num_measurements=self.num_measurements)
         elif self.has_circuit_noise or (self.noise_model is not None and self.noise_model.has_any()):
-            res = self.qc.full_noise_execute(
+            res = _sample_result(self.qc.full_noise_execute,
                 self.noise_model if self.noise_model is not None else maestro.NoiseModel(),
                 self.config, shots=shots, noise_realizations=shots, noise_seed=run_seed)
         else:
-            res = self.qc.execute(self.config, shots=shots)
-        return counts_to_measurements(res.get("counts", {}), self.num_measurements, shots,
-                                      storage_width=max(self.num_qubits if self.checkpoint_sim is not None
-                                                        else self.qc.num_qubits, self.num_measurements))
+            res = _sample_result(self.qc.execute, self.config, shots=shots)
+        storage_width = max(self.num_qubits if self.checkpoint_sim is not None else self.qc.num_qubits,
+                            self.num_measurements)
+        if "samples" in res:
+            return samples_to_measurements(res["samples"], self.num_measurements, shots, storage_width=storage_width)
+        return counts_to_measurements(res.get("counts", {}), self.num_measurements, shots, storage_width=storage_width)
 
     def sample(
         self, suggested_shots: int = 1, shots: int | None = None, seed: int | None = None
@@ -964,7 +1020,11 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
 
         Returns:
             A boolean numpy array of shape (shots, num_measurements), with
-            columns in Stim measurement-record order.
+            columns in Stim measurement-record order. Frames, QCSim direct
+            trajectories and checkpoints keep each shot's record together. The
+            histogram fallbacks (MPS, MPO and tensor networks) shuffle complete
+            records within each noise realization, so rows are exchangeable
+            rather than chronological.
         """
         return self._measurements(shots, seed)
 

@@ -1171,6 +1171,15 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             const std::string policy(value);
             if (policy != "block_v1" && policy != "shot_v1")
                 throw std::invalid_argument("trajectory_policy must be block_v1 or shot_v1");
+            // The constructor's default is not a request: an explicit policy also
+            // opts the non-dense QCSim methods into logical shot streams.
+            configuration.SetConfiguration("trajectory_policy_explicit", "true");
+        }
+        if (std::string("counts_policy") == key)
+        {
+            const std::string policy(value);
+            if (policy != "auto" && policy != "legacy" && policy != "frame_v1")
+                throw std::invalid_argument("counts_policy must be auto, legacy or frame_v1");
         }
         if (std::string("trajectory_max_memory_mb") == key)
         {
@@ -2626,9 +2635,17 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
     bool UsesReproducibleSampling(Simulators::SimulatorType type, Simulators::SimulationType method) const
     {
-        return type == Simulators::SimulatorType::kQCSim && configuration.GetConfiguration("sampling_policy") != "legacy" &&
-               (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kDensityMatrix ||
-                method == Simulators::SimulationType::kPathIntegral);
+        if (type != Simulators::SimulatorType::kQCSim || configuration.GetConfiguration("sampling_policy") == "legacy")
+            return false;
+        if (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kDensityMatrix ||
+            method == Simulators::SimulationType::kPathIntegral)
+            return true;
+        // Other methods keep their existing seeded sequences, whose shot
+        // partition follows the worker count, unless a trajectory policy was
+        // requested explicitly: then their streams follow logical shots too.
+        return configuration.GetConfiguration("trajectory_policy_explicit") == "true" &&
+               (method == Simulators::SimulationType::kStabilizer || method == Simulators::SimulationType::kExtendedStabilizer ||
+                method == Simulators::SimulationType::kMatrixProductState || method == Simulators::SimulationType::kMatrixProductOperator);
     }
 
     void ExecuteLogicalShotBlocks(const std::shared_ptr<Circuits::Circuit<Time>> &circuit, ExecuteResults &results, size_t shots, size_t workers, size_t qubits,
@@ -2641,7 +2658,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         workers = std::max<size_t>(1, workers);
 #ifdef _OPENMP
         // Outer jobs count against the same CPU budget as their internal teams.
-        int threadBudget = omp_in_parallel() ? 1 : std::max(1, omp_get_max_threads());
+        int threadBudget =
+            omp_in_parallel() || Utils::RealizationDetail::IsRealizationWorker() ? 1 : std::max(1, Utils::RealizationDetail::CallerOpenMPBudget());
         workers = std::min(workers, static_cast<size_t>(threadBudget));
 #endif
         if (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kDensityMatrix)
@@ -2677,6 +2695,34 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             else
                 workers = 1;
         }
+        else if (method == Simulators::SimulationType::kStabilizer || method == Simulators::SimulationType::kMatrixProductState ||
+                 method == Simulators::SimulationType::kMatrixProductOperator)
+        {
+            // An explicit trajectory policy brings these methods here. Budget
+            // them like dense states where their size is bounded: a tableau
+            // always, MPS and MPO under a bond-dimension cap.
+            const bool mpo = method == Simulators::SimulationType::kMatrixProductOperator;
+            const auto state = method == Simulators::SimulationType::kStabilizer ? Utils::RealizationState::kStabilizer
+                               : mpo                                             ? Utils::RealizationState::kMatrixProductOperator
+                                                                                 : Utils::RealizationState::kMatrixProductState;
+            size_t bond = 0;
+            if (state != Utils::RealizationState::kStabilizer)
+            {
+                const char *key = mpo && configuration.IsSet("matrix_product_operator_max_bond_dimension") ? "matrix_product_operator_max_bond_dimension"
+                                                                                                           : "matrix_product_state_max_bond_dimension";
+                if (configuration.IsSet(key))
+                    bond = std::stoull(configuration.GetConfiguration(key));
+            }
+            const long double bytes = Utils::RealizationStateBytes(state, qubits, bond);
+            if (bytes > 0 && bytes < static_cast<long double>(std::numeric_limits<size_t>::max()))
+            {
+                const size_t mb =
+                    configuration.IsSet("trajectory_max_memory_mb") ? std::stoull(configuration.GetConfiguration("trajectory_max_memory_mb")) : 1024;
+                // The same copies as above: a prepared source and checkpoint, or
+                // a checkpoint per worker.
+                workers = Utils::LimitRealizationWorkersByMemory(workers, static_cast<size_t>(bytes), mb, prepared ? 2 : 0, prepared ? 1 : 2);
+            }
+        }
         // shot_v1 streams do not depend on the worker count, so tiny states can
         // skip workers whose dispatch would cost more than their shots.
         if (independentShots && trajectoryMinWorkerMicros > 0)
@@ -2711,19 +2757,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             internalThreads = static_cast<int>(std::max<size_t>(1, static_cast<size_t>(threadBudget) / workers));
 #endif
 #if defined(_OPENMP) && defined(_MSC_VER) && !defined(__clang__) && !defined(_OPENMP_LLVM_RUNTIME)
-        // Legacy MSVC OpenMP keeps this setting process-wide. Set it once before
-        // starting jobs; per-worker save/restore races with other active jobs.
-        struct RestoreThreadLimit
-        {
-            const int previous = omp_get_max_threads();
-
-            ~RestoreThreadLimit()
-            {
-                omp_set_num_threads(previous);
-            }
-        } restoreThreadLimit;
-
-        omp_set_num_threads(internalThreads);
+        // Share the process limit with noisy-realization dispatchers and other
+        // networks. The final participant restores the original caller budget.
+        Utils::RealizationDetail::ScopedProcessOpenMPBudget processBudget(internalThreads);
 #endif
         std::shared_ptr<ExecuteJob<Time>> last;
         for (size_t begin = 0, block = 0; begin < shots; ++block)

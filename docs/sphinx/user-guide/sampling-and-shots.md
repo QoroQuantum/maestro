@@ -70,6 +70,84 @@ print(result["method"] == maestro.SimulationType.Statevector)
 They also compare equal to the integers that releases up to 0.3.10 returned, so
 existing checks such as `result["method"] == 0` keep working.
 
+(py_raw_samples)=
+## Raw shot records
+
+Pass `return_samples=True` to get each shot's classical record instead of a
+histogram. The result then has `samples`, a `numpy.uint8` array of shape
+`(shots, clbits)`, in place of `counts`; column `k` is classical bit `k`, the
+same position as character `k` of a count key. `execute`, `noisy_execute`,
+`coherent_execute`, `full_noise_execute` and
+`PrefixCheckpointedSimulator.execute_suffix` all accept it.
+
+```{code-cell} python
+bell = QuantumCircuit()
+bell.h(0)
+bell.cx(0, 1)
+bell.measure_all()
+rows = bell.execute(shots=5, return_samples=True)
+print(rows["samples"], rows["sampling_strategy"])
+```
+
+`sampling_strategy` says how the shots were drawn:
+
+| Value | Meaning |
+|-------|---------|
+| `reference_frame_v1` | Noisy-Clifford reference frames: one stabilizer simulation, then Pauli frames per shot |
+| `terminal_v1` | One prepared state sampled for every shot (terminal measurements only) |
+| `trajectory_v1` | Each shot, or each noise realization, executed on its own |
+
+Rows keep each shot's record together. Frames, direct trajectories and
+checkpoints also keep shot order; MPS, MPO and tensor networks, and every
+method with `enable_sampling_reduction=True`, sample a histogram and shuffle
+complete records within each noise realization, so their rows are exchangeable
+rather than chronological.
+
+(py_reference_frame_sampler)=
+### Reusing compiled reference frames
+
+When the same noisy Clifford circuit is sampled batch after batch, as in a
+decoding loop, compile it once. `compile_reference_sampler` applies the
+incoherent channels of a noise model as independent per-shot channels and
+returns a `ReferenceFrameSampler`, or `None` when frames do not apply. The
+channels must be Pauli mixtures: Pauli and depolarizing noise, phase damping,
+dephasing with infinite T1 and readout errors qualify, while amplitude damping
+and finite-T1 relaxation do not. Non-Clifford gates, classical control,
+coherent, correlated or crosstalk noise, and a non-QCSim backend also return
+`None`:
+
+```{code-cell} python
+model = maestro.NoiseModel()
+model.set_bit_flip(1, 0.1)
+sampler = maestro.compile_reference_sampler(bell, model)
+batch = sampler.sample(1000, seed=7)["samples"]
+counts = sampler.sample_counts(1000, seed=7)["counts"]
+print(sampler.num_qubits, sampler.num_clbits, batch.shape, counts)
+```
+
+Each call draws new shots from the compiled plan; equal seeds give equal rows,
+and `sample_counts` is the histogram of exactly the rows `sample` returns for the
+same seed. The native request API, C++ (`Execution/SampleRecords.h`) and the C ABI
+offer the same rows and compiled frames; see `docs/native-request-api.md`.
+
+(py_counts_policy)=
+## How counts are sampled
+
+`SimulatorConfig.counts_policy` chooses how QCSim counts are drawn:
+
+| Policy | Behavior |
+|--------|----------|
+| `"auto"` (default) | Unseeded requests that the stabilizer simulator could run use reference frames; unseeded noisy requests with one realization per shot otherwise run their realizations directly. Seeded requests keep their earlier sequences. |
+| `"legacy"` | Always the earlier executor |
+| `"frame_v1"` | Frames even with seeds, for any supported circuit and noise |
+
+`sampling_policy` selects the lower-level statevector, density-matrix and
+path-integral sampler, and `trajectory_policy` the random streams of dynamic
+circuits (`"shot_v1"`, the default, gives counts independent of the worker
+count; `"block_v1"` keeps earlier seeded counts). Setting `trajectory_policy`
+explicitly also gives stabilizer, extended-stabilizer, MPS and MPO dynamic
+circuits worker-independent streams.
+
 (py_circuit_measure)=
 ## Measurement
 

@@ -6,7 +6,10 @@ namespace MaestroExecution
 {
 using OperationPtr = std::shared_ptr<Circuits::IOperation<double>>;
 
-inline OperationPtr adjoint_gate(const OperationPtr &op)
+// The adjoint of a gate, or null for a non-gate operation. A gate without an
+// implemented adjoint throws, or is returned cloned when clone_unsupported is
+// set (the Python bindings' historical fallback).
+inline OperationPtr adjoint_gate(const OperationPtr &op, bool clone_unsupported = false)
 {
     if (op->GetType() != Circuits::OperationType::kGate)
         return nullptr;
@@ -82,6 +85,8 @@ inline OperationPtr adjoint_gate(const OperationPtr &op)
         return std::make_shared<Circuits::CUGate<>>(gate->GetQubit(0), gate->GetQubit(1), -params[0], -params[2], -params[1], -params[3]);
 
     default:
+        if (clone_unsupported)
+            return op->Clone();
         throw Error("unsupported_capability", "Adjoint is not implemented for this gate");
     }
 }

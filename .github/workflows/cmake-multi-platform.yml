@@ -113,7 +113,7 @@ jobs:
         key: ccache-${{ runner.os }}-${{ github.sha }}
 
     # 5. TESTS
-    - name: Run Python tests (bindings, adjoint, noise and Sinter)
+    - name: Run Python tests (bindings, adjoint, noise, sampling and Sinter)
       env:
         OMP_NUM_THREADS: "4"
       run: |
@@ -121,7 +121,7 @@ jobs:
         python -m pip install -r tests/python/requirements.txt
         # test_sinter.py skips itself when stim or sinter is missing; fail instead.
         python -c "import stim, sinter, pymatching"
-        python -m pytest tests/python/test_bindings.py tests/python/test_adjoint.py tests/python/test_sinter.py -q -rs
+        python -m pytest tests/python/test_bindings.py tests/python/test_adjoint.py tests/python/test_sinter.py tests/python/test_sampling_*.py -q -rs
 
     - name: Build the Python docs
       # Pages with code run against the module built above, and any Sphinx
@@ -151,10 +151,11 @@ jobs:
       run: ctest --test-dir . --output-on-failure -R '^maestro_composer_integration$'
 
     - name: Check backend selection, tensor contractions, fusion, and sampling
-      run: ctest --test-dir . --output-on-failure -R '^(backend_specialization|tensor_contractions|gate_fusion_tests|fusion_routing_tests|gpu_registry|gpu_pauli_legacy|gpu_pauli_checkpoints|sampling_order|causal_cone|parity_reduction)$'
+      run: ctest --test-dir . --output-on-failure -R '^(backend_specialization|tensor_contractions|gate_fusion_tests|fusion_routing_tests|gpu_registry|gpu_pauli_legacy|gpu_pauli_checkpoints|sampling_order|causal_cone|parity_reduction|realization_workers|reference_frame_sampler|adaptive_sampling|network_jobs)$'
 
   # Full suite only. An MSVC build of the bindings, running the adjoint tests that
-  # cover its Windows-specific memory guard. The release wheels run them too.
+  # cover its Windows-specific memory guard and the sampling suites, including the
+  # MSVC-only seeded 0.3.13 fixture. The release wheels run them too.
   windows:
     name: Windows Python bindings
     if: inputs.suite == 'full' || github.event_name == 'push'
@@ -204,7 +205,7 @@ jobs:
     - name: Build Python bindings
       run: cmake --build build --config Release --target maestro_py --parallel 2 -- /nodeReuse:false
 
-    - name: Run adjoint Python tests
+    - name: Run adjoint and sampling Python tests
       run: |
         Copy-Item build/Release/maestro*.pyd maestro/
-        python -c "import os, pytest; dll_dirs = [os.add_dll_directory(os.path.abspath('build/bin')), os.add_dll_directory(os.path.join(os.environ['BOOST_ROOT'], 'bin'))]; raise SystemExit(pytest.main(['tests/python/test_adjoint.py', '-q']))"
+        python -c "import glob, os, pytest; dll_dirs = [os.add_dll_directory(os.path.abspath('build/bin')), os.add_dll_directory(os.path.join(os.environ['BOOST_ROOT'], 'bin'))]; raise SystemExit(pytest.main(['tests/python/test_adjoint.py', *sorted(glob.glob('tests/python/test_sampling_*.py')), '-q', '-rs']))"

@@ -14,6 +14,7 @@
 #define _NETWORK_JOB_H
 
 #include "../Types.h"
+#include "../Utils/Threads/RealizationWorkers.h"
 #include "../Utils/Threads/ThreadsPool.h"
 
 #include "../Simulators/Core/RandomSeed.h"
@@ -486,7 +487,9 @@ template <typename Time = Types::time_type> class ExecuteJob
 
         void Limit(int threads)
         {
-#ifdef _OPENMP
+#if defined(_OPENMP) && defined(_MSC_VER) && !defined(__clang__) && !defined(_OPENMP_LLVM_RUNTIME)
+            processBudget.Limit(threads);
+#elif defined(_OPENMP)
             if (threads > 0)
             {
                 if (previous == 0)
@@ -500,14 +503,16 @@ template <typename Time = Types::time_type> class ExecuteJob
 
         ~ScopedInternalThreads()
         {
-#ifdef _OPENMP
+#if defined(_OPENMP) && (!defined(_MSC_VER) || defined(__clang__) || defined(_OPENMP_LLVM_RUNTIME))
             if (previous > 0)
                 omp_set_num_threads(previous);
 #endif
         }
 
       private:
-#ifdef _OPENMP
+#if defined(_OPENMP) && defined(_MSC_VER) && !defined(__clang__) && !defined(_OPENMP_LLVM_RUNTIME)
+        Utils::RealizationDetail::ScopedProcessOpenMPBudget processBudget{0};
+#elif defined(_OPENMP)
         int previous = 0;
 #endif
     };

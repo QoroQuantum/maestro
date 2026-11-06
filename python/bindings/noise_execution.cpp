@@ -1,120 +1,26 @@
+#include "Execution/NoisyEstimation.h"
 #include "core.h"
+#include "samples.h"
 
 namespace maestro_bindings
 {
-
-// Density-matrix and QCSim MPO configurations can retain the full ensemble in
-// one state. Route their Markovian noise through circuit channel operations;
-// pure-state/MPS configurations retain the legacy trajectory implementation.
-static bool uses_exact_quantum_channels(const SimulatorConfig &config)
-{
-    // Composite simulators still contain pure-state components and cannot
-    // represent ensemble channels exactly as a single mixed state.
-    const bool qcsim = config.simulator_type == Simulators::SimulatorType::kQCSim;
-    const bool gpu = config.simulator_type == Simulators::SimulatorType::kGpuSim;
-#ifndef NO_QISKIT_AER
-    const bool aer = config.simulator_type == Simulators::SimulatorType::kQiskitAer;
-#else
-    const bool aer = false;
-#endif
-
-    return (qcsim && (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
-                      config.simulation_type == Simulators::SimulationType::kMatrixProductOperator)) ||
-           (aer && config.simulation_type == Simulators::SimulationType::kDensityMatrix) ||
-           (gpu && (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
-                    config.simulation_type == Simulators::SimulationType::kMatrixProductOperator));
-}
+using MaestroExecution::NoiseLayer;
 
 // Warn at the execution boundary, while holding the GIL, rather than once
 // per injected realization. The shared model retains its calibrated channels.
 void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config)
 {
-    if (uses_exact_quantum_channels(config) || noise_model.has_additional_quantum_channels())
+    const auto message = MaestroExecution::ThermalApproximationWarning(noise_model, MaestroExecution::UsesExactQuantumChannels(config));
+    if (message.empty())
         return;
-    const auto qubits = noise_model.thermal_approximation_qubits();
-    if (qubits.empty())
-        return;
-    std::ostringstream message;
-    message << "Sampled thermal approximation for circuit qubits [";
-    for (size_t i = 0; i < qubits.size(); ++i)
-    {
-        if (i)
-            message << ", ";
-        message << qubits[i];
-    }
-    message << "]: effective T2 clamped to T1. Use density matrix or a supported "
-               "MPO backend to preserve calibrated T2. Kraus trajectories are "
-               "not supported by Maestro's current SV/MPS noise path.";
-    if (PyErr_WarnEx(PyExc_RuntimeWarning, message.str().c_str(), 1) < 0)
+    if (PyErr_WarnEx(PyExc_RuntimeWarning, message.c_str(), 1) < 0)
         throw nb::python_error();
 }
 
-// The noise seed is 32 bits, as in the JSON API's noise.seed.
-void RequireNoiseSeed(std::optional<uint64_t> noise_seed)
+// One realization drawn from the plan, with this configuration's channel rule.
+static CircuitPtr inject_planned(NoiseLayer layer, const noise::NoiseInjectionPlan &plan, std::mt19937 &rng, const SimulatorConfig &config)
 {
-    if (noise_seed && *noise_seed > UINT32_MAX)
-        throw nb::value_error("noise_seed must fit in 32 bits");
-}
-
-// An omitted noise seed falls back to the config seed's low 32 bits, as in the
-// JSON API, so SimulatorConfig(seed=...) alone reproduces the injected noise.
-// All MPI ranks must submit the same stochastic circuit, so MPI resolves an
-// unseeded call once and shares it with measurement/readout execution.
-std::mt19937 MakeNoiseRng(const SimulatorConfig &config, std::optional<uint64_t> &noise_seed)
-{
-    RequireNoiseSeed(noise_seed);
-    if (!noise_seed && config.seed)
-        noise_seed = *config.seed & UINT32_MAX;
-    else if (!noise_seed && config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim)
-        noise_seed = Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options) & UINT32_MAX;
-    if (noise_seed)
-        return std::mt19937(static_cast<uint32_t>(*noise_seed));
-    return std::mt19937(static_cast<uint32_t>(Utils::RandomStream::FreshSeed()));
-}
-
-// Keep simulator randomness separate from circuit-noise injection. An explicit
-// config seed takes precedence; otherwise the noise seed also seeds
-// measurement/readout and reset collapse. Every batch needs its own stream,
-// including one-shot executions and expectation-value realizations.
-SimulatorConfig NoiseExecutionConfig(const SimulatorConfig &config, std::optional<uint64_t> noise_seed, uint64_t batch)
-{
-    auto execution_config = config;
-    // Noisy workflows retain their requested backend, even for realizations
-    // in which stochastic injection happens to insert no error.
-    execution_config.auto_reduce = false;
-    if (!execution_config.seed && noise_seed)
-        execution_config.seed = *noise_seed;
-    if (execution_config.seed)
-        execution_config.seed = Simulators::IState::DeriveSeed(*execution_config.seed, batch);
-    return execution_config;
-}
-
-std::shared_ptr<Circuits::Circuit<double>> inject_noise_for_config(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
-                                                                   const noise::NoiseModel &noise_model, std::mt19937 &rng, const SimulatorConfig &config)
-{
-    auto noisy = uses_exact_quantum_channels(config) ? noise::inject_exact_noise(circuit, noise_model) : noise::inject_noise(circuit, noise_model, rng);
-    noise::attach_readout_error(noisy, noise_model);
-    return noisy;
-}
-
-std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_for_config(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
-                                                                            const noise::NoiseModel &noise_model, std::mt19937 &rng,
-                                                                            const SimulatorConfig &config)
-{
-    auto noisy = uses_exact_quantum_channels(config) ? noise::inject_combined_noise_exact(circuit, noise_model, rng)
-                                                     : noise::inject_combined_noise(circuit, noise_model, rng);
-    noise::attach_readout_error(noisy, noise_model);
-    return noisy;
-}
-
-using NoiseInjector = CircuitPtr (*)(const CircuitPtr &, const noise::NoiseModel &, std::mt19937 &, const SimulatorConfig &);
-
-static CircuitPtr inject_coherent_for_config(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, std::mt19937 &rng, const SimulatorConfig &config)
-{
-    auto noisy = uses_exact_quantum_channels(config) ? noise::inject_coherent_noise_exact(circuit, noise_model, rng)
-                                                     : noise::inject_coherent_noise(circuit, noise_model, rng);
-    noise::attach_readout_error(noisy, noise_model);
-    return noisy;
+    return MaestroExecution::InjectPlanned(layer, plan, rng, MaestroExecution::UsesExactQuantumChannels(config));
 }
 
 void require_realizations(int noise_realizations)
@@ -124,44 +30,46 @@ void require_realizations(int noise_realizations)
 }
 
 // Shots are split across min(shots, noise_realizations) batches, each with its
-// own injected noise; the result reports the number of batches used.
+// own injected noise; the result reports the number of batches used. The
+// algorithm is MaestroExecution::ExecuteNoisy, shared with C++ callers.
 static nb::dict execute_noise_batches(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots,
-                                      int noise_realizations, std::optional<uint64_t> noise_seed, NoiseInjector inject, const char *noise_type)
+                                      int noise_realizations, std::optional<uint64_t> noise_seed, NoiseLayer layer, const char *noise_type, bool return_samples)
 {
     if (shots < 1)
         throw nb::value_error("shots must be >= 1.");
     require_realizations(noise_realizations);
-    auto rng = MakeNoiseRng(config, noise_seed);
-    const int batches = std::min(shots, noise_realizations);
-    const int base_batch = shots / batches;
-    const int leftover = shots % batches;
-
-    std::unordered_map<std::string, size_t> combined;
-    size_t sampling_components = 0, largest_component = 0;
-    auto start = std::chrono::high_resolution_clock::now();
-    for (int b = 0; b < batches; ++b)
+    MaestroExecution::NoisyExecutionOptions options;
+    options.layer = layer;
+    options.rows = return_samples;
+    MaestroExecution::ShotRecords records;
     {
-        auto noisy = inject(circuit, noise_model, rng, config);
-        nb::dict r = execute_core(noisy, NoiseExecutionConfig(config, noise_seed, b), base_batch + (b < leftover ? 1 : 0));
-        sampling_components = std::max(sampling_components, nb::cast<size_t>(r["sampling_components"]));
-        largest_component = std::max(largest_component, nb::cast<size_t>(r["largest_component_qubits"]));
-        for (auto item : nb::cast<nb::dict>(r["counts"]))
-            combined[nb::cast<std::string>(nb::str(item.first))] += nb::cast<size_t>(item.second);
+        nb::gil_scoped_release release;
+        records = MaestroExecution::ExecuteNoisy(circuit, noise_model, config, static_cast<size_t>(shots), static_cast<size_t>(noise_realizations), noise_seed,
+                                                 options);
     }
-    auto end = std::chrono::high_resolution_clock::now();
-
-    nb::dict py_counts;
-    for (const auto &[k, v] : combined)
-        py_counts[k.c_str()] = v;
 
     nb::dict out;
-    out["counts"] = py_counts;
-    out["time_taken"] = std::chrono::duration<double>(end - start).count();
-    out["simulator"] = config.simulator_type;
-    out["method"] = config.simulation_type;
-    out["noise_realizations"] = batches;
-    out["sampling_components"] = sampling_components;
-    out["largest_component_qubits"] = largest_component;
+    if (return_samples)
+    {
+        out["samples"] = MakeSamples(std::move(records.rows), records.shots, records.width);
+        out["sampling_strategy"] = records.sampling_strategy;
+    }
+    else
+    {
+        if (!records.sampling_strategy.empty())
+            out["sampling_strategy"] = records.sampling_strategy;
+        out["counts"] = CountsDict(records.counts);
+    }
+    if (records.gpu_device >= 0)
+        out["gpu_device"] = records.gpu_device;
+    if (records.max_bond_dimension)
+        out["max_bond_dim_reached"] = records.max_bond_dimension;
+    out["time_taken"] = records.time_taken;
+    out["simulator"] = records.simulator;
+    out["method"] = records.method;
+    out["noise_realizations"] = records.realizations;
+    out["sampling_components"] = records.components;
+    out["largest_component_qubits"] = records.largest_component;
     if (noise_type)
         out["noise_type"] = noise_type;
     return out;
@@ -171,24 +79,20 @@ static nb::dict execute_noise_batches(const CircuitPtr &circuit, const noise::No
 // pure-state backend can only sample per realization, never run directly.
 CircuitPtr without_circuit_channels(const CircuitPtr &circuit)
 {
-    auto out = std::make_shared<Circuits::Circuit<double>>();
-    for (const auto &op : circuit->GetOperations())
-        if (op->GetType() != Circuits::OperationType::kQuantumChannel)
-            out->AddOperation(op);
-    return out;
+    return MaestroExecution::WithoutCircuitChannels(circuit);
 }
 
-// Averages expectation values over noise_realizations independent injections.
+// Averages expectation values over noise_realizations independent injections;
+// the loop is MaestroExecution::EstimateNoisy, which runs realization workers.
 static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model,
-                                            int noise_realizations, const SimulatorConfig &config, std::optional<uint64_t> noise_seed, NoiseInjector inject,
+                                            int noise_realizations, const SimulatorConfig &config, std::optional<uint64_t> noise_seed, NoiseLayer layer,
                                             const char *noise_type)
 {
     require_realizations(noise_realizations);
     auto paulis = ParseObservables(observables);
-    auto rng = MakeNoiseRng(config, noise_seed);
-    const size_t n_obs = paulis.size();
-    if (!n_obs)
+    if (paulis.empty())
     {
+        RequireNoiseSeed(noise_seed);
         auto out = estimate_core(without_circuit_channels(circuit), paulis, config);
         out["ideal_expectation_values"] = nb::list();
         out["noise_realizations"] = noise_realizations;
@@ -197,74 +101,35 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
             out["noise_type"] = noise_type;
         return out;
     }
-    std::vector<double> sum_vals(n_obs, 0.0), error_bounds(n_obs, 0.0);
-    size_t bounded_observables = 0;
-    MaestroExecution::EstimationCache cache;
-
-    auto clean_circuit = circuit->RemoveEndMeasurements();
-
-    auto start = std::chrono::high_resolution_clock::now();
-    bool any_reduced = false;
-    int qubits_before = 0;
-    int qubits_after = 0;
-    size_t clusters_count = 0, total_clusters = 0;
-    double total_cluster_qubits = 0, reduction_time = 0;
-    nb::list cluster_methods;
-    for (int r = 0; r < noise_realizations; ++r)
+    MaestroExecution::NoisyEstimate result;
     {
-        auto noisy = inject(clean_circuit, noise_model, rng, config);
-        nb::dict result = estimate_core(noisy, paulis, NoiseExecutionConfig(config, noise_seed, r), &cache);
-        if (result.contains("auto_reduced") && nb::cast<bool>(result["auto_reduced"]))
-            any_reduced = true;
-        if (result.contains("qubits_before"))
-            qubits_before = std::max(qubits_before, nb::cast<int>(result["qubits_before"]));
-        if (result.contains("qubits_after"))
-            qubits_after = std::max(qubits_after, nb::cast<int>(result["qubits_after"]));
-        const auto count = nb::cast<size_t>(result["clusters_count"]);
-        clusters_count = std::max(clusters_count, count);
-        total_clusters += count;
-        total_cluster_qubits += count * nb::cast<double>(result["mean_cluster_qubits"]);
-        reduction_time += nb::cast<double>(result["reduction_time"]);
-        cluster_methods = nb::cast<nb::list>(result["cluster_methods"]);
-        bounded_observables = std::max(bounded_observables, nb::cast<size_t>(result["bounded_observables"]));
-        const auto bounds = nb::cast<std::vector<double>>(result["expectation_error_bounds"]);
-        for (size_t i = 0; i < n_obs; ++i)
-            error_bounds[i] += bounds[i] / noise_realizations;
-        nb::list ev = nb::cast<nb::list>(result["expectation_values"]);
-        for (size_t i = 0; i < n_obs; ++i)
-            sum_vals[i] += nb::cast<double>(ev[i]);
+        nb::gil_scoped_release release;
+        result = MaestroExecution::EstimateNoisy(circuit, paulis, noise_model, static_cast<size_t>(noise_realizations), config, noise_seed, layer);
     }
-    auto end = std::chrono::high_resolution_clock::now();
-
-    nb::dict ideal_result = estimate_core(without_circuit_channels(clean_circuit), paulis, config);
-    nb::list noisy_vals, ideal_vals;
-    nb::list ideal_ev = nb::cast<nb::list>(ideal_result["expectation_values"]);
-    for (size_t i = 0; i < n_obs; ++i)
-    {
-        noisy_vals.append(sum_vals[i] / noise_realizations);
-        ideal_vals.append(nb::cast<double>(ideal_ev[i]));
-    }
-
     nb::dict out;
-    out["expectation_values"] = noisy_vals;
-    out["ideal_expectation_values"] = ideal_vals;
-    out["time_taken"] = std::chrono::duration<double>(end - start).count();
-    out["simulator"] = ideal_result["simulator"];
-    out["method"] = ideal_result["method"];
-    if (ideal_result.contains("gpu_device"))
-        out["gpu_device"] = ideal_result["gpu_device"];
+    out["expectation_values"] = nb::cast(result.values);
+    out["ideal_expectation_values"] = nb::cast(result.ideal_values);
+    out["time_taken"] = result.time_taken;
+    out["simulator"] = result.ideal.simulator;
+    out["method"] = result.ideal.method;
+    // GPU estimates resolved without simulation retain -1 (no device used).
+    if (result.ideal.simulator == Simulators::SimulatorType::kGpuSim || result.ideal.gpu_device >= 0)
+        out["gpu_device"] = result.ideal.gpu_device;
     out["noise_realizations"] = noise_realizations;
-    out["auto_reduced"] = any_reduced;
-    out["expectation_error_bounds"] = nb::cast(error_bounds);
-    out["bounded_observables"] = bounded_observables;
-    out["cone_cache_hits"] = cache.hits;
-    out["qubits_before"] = qubits_before;
-    out["qubits_after"] = qubits_after;
-    out["clusters_count"] = clusters_count;
-    out["largest_cluster_qubits"] = qubits_after;
-    out["mean_cluster_qubits"] = total_clusters ? total_cluster_qubits / total_clusters : 0;
-    out["reduction_time"] = reduction_time;
-    out["cluster_methods"] = cluster_methods;
+    out["auto_reduced"] = result.auto_reduced;
+    out["expectation_error_bounds"] = nb::cast(result.error_bounds);
+    out["bounded_observables"] = result.bounded_observables;
+    out["cone_cache_hits"] = result.cone_cache_hits;
+    out["qubits_before"] = result.qubits_before;
+    out["qubits_after"] = result.qubits_after;
+    out["clusters_count"] = result.clusters_count;
+    out["largest_cluster_qubits"] = result.qubits_after;
+    out["mean_cluster_qubits"] = result.mean_cluster_qubits;
+    out["reduction_time"] = result.reduction_time;
+    nb::list methods;
+    for (auto method : result.cluster_methods)
+        methods.append(method);
+    out["cluster_methods"] = methods;
     if (noise_type)
         out["noise_type"] = noise_type;
     return out;
@@ -316,30 +181,30 @@ bool has_circuit_channels(const CircuitPtr &circuit)
 }
 
 nb::dict NoisyExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots, int noise_realizations,
-                      std::optional<uint64_t> noise_seed)
+                      std::optional<uint64_t> noise_seed, bool return_samples)
 {
     require_circuit(circuit);
     require_inject_noise_covers(noise_model);
     warn_thermal_approximation(noise_model, config);
-    return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, inject_noise_for_config, nullptr);
+    return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, NoiseLayer::kPauli, nullptr, return_samples);
 }
 
 nb::dict CoherentExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots, int noise_realizations,
-                         std::optional<uint64_t> noise_seed)
+                         std::optional<uint64_t> noise_seed, bool return_samples)
 {
     require_circuit(circuit);
     require_coherent(noise_model);
-    return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, inject_coherent_for_config, "coherent");
+    return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, NoiseLayer::kCoherent, "coherent", return_samples);
 }
 
 nb::dict FullNoiseExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots, int noise_realizations,
-                          std::optional<uint64_t> noise_seed)
+                          std::optional<uint64_t> noise_seed, bool return_samples)
 {
     require_circuit(circuit);
     if (!has_circuit_channels(circuit))
         require_any_noise(noise_model);
     warn_thermal_approximation(noise_model, config);
-    return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, inject_combined_noise_for_config, "combined");
+    return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, NoiseLayer::kCombined, "combined", return_samples);
 }
 
 nb::dict NoisyEstimateMonteCarlo(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, int noise_realizations,
@@ -348,7 +213,7 @@ nb::dict NoisyEstimateMonteCarlo(const CircuitPtr &circuit, const nb::object &ob
     require_circuit(circuit);
     require_inject_noise_covers(noise_model);
     warn_thermal_approximation(noise_model, config);
-    return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, inject_noise_for_config, nullptr);
+    return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, NoiseLayer::kPauli, nullptr);
 }
 
 nb::dict CoherentEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, int noise_realizations,
@@ -356,7 +221,7 @@ nb::dict CoherentEstimate(const CircuitPtr &circuit, const nb::object &observabl
 {
     require_circuit(circuit);
     require_coherent(noise_model);
-    return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, inject_coherent_for_config, "coherent");
+    return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, NoiseLayer::kCoherent, "coherent");
 }
 
 nb::dict FullNoiseEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, int noise_realizations,
@@ -366,7 +231,7 @@ nb::dict FullNoiseEstimate(const CircuitPtr &circuit, const nb::object &observab
     if (!has_circuit_channels(circuit))
         require_any_noise(noise_model);
     warn_thermal_approximation(noise_model, config);
-    return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, inject_combined_noise_for_config, "combined");
+    return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, NoiseLayer::kCombined, "combined");
 }
 
 // Ideal expectation values scaled by compute_damping, which only the all-gates
@@ -398,36 +263,17 @@ nb::dict NoisyFidelity(const CircuitPtr &circuit, const noise::NoiseModel &noise
     require_realizations(noise_realizations);
     if (!has_circuit_channels(circuit))
         require_any_noise(noise_model);
-    const auto ideal = without_circuit_channels(circuit);
-
     warn_thermal_approximation(noise_model, config);
-    auto rng = MakeNoiseRng(config, noise_seed);
-    double sum_fid = 0.0;
-    double sum_fid_sq = 0.0;
-
-    auto start = std::chrono::high_resolution_clock::now();
-    for (int r = 0; r < noise_realizations; ++r)
+    MaestroExecution::NoisyFidelityResult result;
     {
-        auto noisy = inject_combined_noise_for_config(circuit, noise_model, rng, config);
-        // Reset collapse must use a fresh seed for each realization.
-        auto realization_config = NoiseExecutionConfig(config, noise_seed, r);
-        if (!realization_config.seed)
-            realization_config.seed = rng();
-        double fid = noisy_fidelity_core(ideal, noisy, realization_config);
-        sum_fid += fid;
-        sum_fid_sq += fid * fid;
+        nb::gil_scoped_release release;
+        result = MaestroExecution::NoisyFidelity(circuit, noise_model, static_cast<size_t>(noise_realizations), config, noise_seed);
     }
-    auto end = std::chrono::high_resolution_clock::now();
-
-    double mean_fid = sum_fid / noise_realizations;
-    double var = (noise_realizations > 1) ? (sum_fid_sq - noise_realizations * mean_fid * mean_fid) / (noise_realizations - 1) : 0.0;
-    double se = std::sqrt(std::max(var, 0.0) / noise_realizations);
-
     nb::dict out;
-    out["fidelity"] = mean_fid;
-    out["infidelity"] = 1.0 - mean_fid;
-    out["std_error"] = se;
-    out["time_taken"] = std::chrono::duration<double>(end - start).count();
+    out["fidelity"] = result.fidelity;
+    out["infidelity"] = 1.0 - result.fidelity;
+    out["std_error"] = result.std_error;
+    out["time_taken"] = result.time_taken;
     out["noise_realizations"] = noise_realizations;
     return out;
 }

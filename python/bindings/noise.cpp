@@ -373,19 +373,19 @@ void bind_noise(nb::module_ &m)
           "full_noise_estimate for those.");
 
     m.def("noisy_execute", &NoisyExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = 64,
-          "noise_seed"_a = nb::none(),
+          "noise_seed"_a = nb::none(), "return_samples"_a = false,
           "Execute with exact Pauli/T1 channels for density-matrix/MPO methods, "
           "or sampled trajectories for pure-state methods. Shots are distributed "
           "evenly across 'noise_realizations' batches. Coherent, correlated and "
           "crosstalk noise are not applied and raise ValueError; use "
-          "full_noise_execute for those.");
+          "full_noise_execute for those." MAESTRO_NOISY_EXECUTE_DOC);
 
     // =========================================================================
     // Coherent Noise: Execute
     // =========================================================================
 
     m.def("coherent_execute", &CoherentExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = 64,
-          "noise_seed"_a = nb::none(),
+          "noise_seed"_a = nb::none(), "return_samples"_a = false,
           "Execute a circuit with sampled coherent over/under-rotation errors. "
           "After every gate, Rx/Ry/Rz rotations are injected with random ± "
           "signs. Each of 'noise_realizations' batches uses a different sign "
@@ -395,7 +395,7 @@ void bind_noise(nb::module_ &m)
           "Example:\n"
           "    nm = maestro.NoiseModel()\n"
           "    nm.set_all_coherent_depolarizing(n_qubits, 0.001)\n"
-          "    result = maestro.coherent_execute(qc, nm, shots=1000)\n");
+          "    result = maestro.coherent_execute(qc, nm, shots=1000)\n" MAESTRO_NOISY_EXECUTE_DOC);
 
     // =========================================================================
     // Coherent Noise: Estimate (Monte Carlo averaged)
@@ -419,7 +419,7 @@ void bind_noise(nb::module_ &m)
     // =========================================================================
 
     m.def("full_noise_execute", &FullNoiseExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = 64,
-          "noise_seed"_a = nb::none(),
+          "noise_seed"_a = nb::none(), "return_samples"_a = false,
           "Execute a circuit with combined noise (coherent + crosstalk + T1 + "
           "Pauli). Density-matrix/MPO methods apply Markovian T1 and Pauli layers "
           "as exact channels; trajectory-only layers remain sampled.\n\n"
@@ -429,7 +429,7 @@ void bind_noise(nb::module_ &m)
           "    nm.set_crosstalk(0, 1, 0.005)\n"
           "    nm.set_all_t1(n, 0.0003)\n"
           "    nm.set_all_depolarizing(n, 0.001)\n"
-          "    result = maestro.full_noise_execute(qc, nm, shots=1000)\n");
+          "    result = maestro.full_noise_execute(qc, nm, shots=1000)\n" MAESTRO_NOISY_EXECUTE_DOC);
 
     // =========================================================================
     // Combined Noise: Estimate (all layers in one call)

@@ -17,6 +17,23 @@ struct SamplingResult
     bool gate_fusion = false;
     size_t gate_fusion_max_qubits = 0;
     double time_taken = 0;
+    std::string sampling_strategy;
+};
+
+// A worker owns its session. Reusing the network avoids creating a public
+// handle for every noisy realization; each sample still maps its own circuit.
+class SamplingSession
+{
+  public:
+    MAESTRO_TRANSFORM_API SamplingSession(size_t width, const SimulatorConfig &config);
+    MAESTRO_TRANSFORM_API ~SamplingSession();
+    SamplingSession(const SamplingSession &) = delete;
+    SamplingSession &operator=(const SamplingSession &) = delete;
+    MAESTRO_TRANSFORM_API SamplingResult Sample(const std::shared_ptr<Circuits::Circuit<double>> &circuit, size_t shots, std::optional<uint64_t> seed);
+
+  private:
+    unsigned long handle = 0;
+    std::shared_ptr<Network::INetwork<double>> network;
 };
 
 // Histogram-level random pairing; memory scales with occupied outcomes. Sparse

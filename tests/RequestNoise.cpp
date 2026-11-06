@@ -1,9 +1,13 @@
 // Numerical contract tests through the public request API, without Python/GPU.
+#include "../maestrolib/Interface.h"
 #include <boost/json.hpp>
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 namespace j = boost::json;
 void Check(bool, const char *);
 void Near(double, double);
@@ -310,8 +314,366 @@ void TestFixedBackendNoisyShots()
 }
 } // namespace
 
+std::vector<std::string> Rows(const j::object &result)
+{
+    std::vector<std::string> rows;
+    for (const auto &row : result.at("samples").as_array())
+        rows.emplace_back(row.as_string());
+    return rows;
+}
+
+j::object Native(char *result)
+{
+    Check(result != nullptr, "Null native result");
+    const std::string text(result);
+    FreeResult(result);
+    return j::parse(text).as_object();
+}
+
+size_t Mismatches(const std::vector<std::string> &rows, size_t a, size_t b)
+{
+    size_t count = 0;
+    for (const auto &row : rows)
+        count += row[a] != row[b];
+    return count;
+}
+
+// execute with return_samples: each sampler, noise, limits and replay.
+void TestShotRows()
+{
+    struct Case
+    {
+        const char *method, *body, *strategy;
+    };
+
+    const char *bell = "h q[0]; cx q[0],q[1]; measure q -> c;";
+    // The third classical bit stays unwritten.
+    const char *wideBell = "h q[0]; cx q[0],q[1]; measure q[0] -> c[0]; measure q[1] -> c[1];";
+    for (const auto &item : {Case{"stabilizer", wideBell, "reference_frame_v1"}, Case{"statevector", wideBell, "terminal_v1"},
+                             // The CX uses measured qubit 0, so every shot replays.
+                             Case{"statevector", "h q[0]; measure q[0] -> c[0]; cx q[0],q[1]; measure q[1] -> c[1];", "trajectory_v1"}})
+    {
+        auto request = Request("execute", 2, item.body, item.method, 3);
+        request["execution"].as_object()["shots"] = 200;
+        request["execution"].as_object()["return_samples"] = true;
+        const auto result = Call(request);
+        const auto reported = j::serialize(result.at("execution_metadata").at("sampling_strategy"));
+        Check(result.at("execution_metadata").at("sampling_strategy") == item.strategy,
+              ("Native rows reported " + reported + " for " + item.method + ": " + item.body).c_str());
+        Check(!result.contains("counts") && result.at("shots") == 200, "Native rows changed the result shape");
+        const auto rows = Rows(result);
+        Check(rows.size() == 200, "Native rows lost shots");
+        size_t ones = 0;
+        for (const auto &row : rows)
+        {
+            Check(row.size() == 3 && row[2] == '0' && row[0] == row[1], "Native Bell rows lost their width or correlation");
+            ones += row[0] == '1';
+        }
+        Check(ones > 60 && ones < 140, "Native Bell rows are not balanced");
+        Check(Rows(Call(request)) == rows, "Seeded native rows did not replay");
+    }
+
+    for (const char *method : {"statevector", "stabilizer"})
+    {
+        auto noisy = Request("execute", 2, bell, method);
+        noisy["execution"].as_object()["shots"] = 150;
+        noisy["execution"].as_object()["return_samples"] = true;
+        noisy["noise"] = j::object{{"mode", "pauli"},
+                                   {"evaluation", "trajectories"},
+                                   {"realizations", 150},
+                                   {"channels", j::array{j::object{{"kind", "bit_flip"}, {"targets", j::array{0}}, {"probability", 0.2}}}}};
+        const auto result = Call(noisy);
+        const bool frames = std::string(method) == "stabilizer";
+        Check(result.at("execution_metadata").at("sampling_strategy") == (frames ? "reference_frame_v1" : "trajectory_v1"),
+              "Noisy native rows reported the wrong sampler");
+        Check(result.at("noise").at("realizations") == 150, "Noisy native rows lost their realizations");
+        const auto rows = Rows(result);
+        // Only the flip after the CX separates the qubits: about 30 of 150 rows.
+        const auto split = Mismatches(rows, 0, 1);
+        Check(rows.size() == 150 && split > 10 && split < 60, "Noisy native rows have the wrong error rate");
+        Check(Rows(Call(noisy)) == rows, "Seeded noisy native rows did not replay");
+    }
+
+    auto estimate = Request("estimate", 1, "h q[0];");
+    estimate["observables"] = j::array{"Z"};
+    estimate["execution"].as_object()["return_samples"] = true;
+    Check(Call(estimate, false).at("error").at("code") == "invalid_input", "return_samples applied to an estimate");
+    auto huge = Request("execute", 2, bell);
+    huge["execution"].as_object()["shots"] = 1000000000;
+    huge["execution"].as_object()["return_samples"] = true;
+    Check(Call(huge, false, true).at("error").at("code") == "invalid_input", "JSON rows exceeded the result limit");
+
+    // Packed rows: 70 classical bits take two words per row.
+    auto wide = Request("execute", 2, "h q[0]; cx q[0],q[1]; measure q[0] -> c[0]; measure q[1] -> c[69];", "statevector", 70);
+    wide["execution"].as_object()["shots"] = 64;
+    const auto text = j::serialize(wide);
+    const auto query = Native(MaestroRunRequestSamples(text.c_str(), nullptr, 0));
+    Check(query.at("ok") == true && query.at("num_clbits") == 70 && query.at("row_words") == 2 && query.at("required_words") == 128,
+          "Packed row query reported the wrong size");
+    std::vector<unsigned long long> words(128, ~0ULL);
+    Check(Native(MaestroRunRequestSamples(text.c_str(), words.data(), 127)).at("ok") == false, "Packed rows accepted a short buffer");
+    const auto packed = Native(MaestroRunRequestSamples(text.c_str(), words.data(), words.size()));
+    Check(packed.at("ok") == true && !packed.contains("samples") && packed.at("row_words") == 2, "Packed rows changed the result shape");
+    Check(packed.at("execution_metadata").at("sampling_strategy") == "terminal_v1", "Packed rows reported the wrong sampler");
+    wide["execution"].as_object()["return_samples"] = true;
+    const auto rows = Rows(Call(wide));
+    for (size_t shot = 0; shot < rows.size(); ++shot)
+    {
+        Check((words[2 * shot + 1] >> 6) == 0, "Packed rows set bits beyond the register");
+        for (size_t bit = 0; bit < 70; ++bit)
+            Check(((words[2 * shot + bit / 64] >> (bit % 64)) & 1ULL) == (rows[shot][bit] == '1' ? 1ULL : 0ULL), "Packed rows differ from JSON rows");
+    }
+    auto unknownOperation = wide;
+    unknownOperation["operation"] = "estimate";
+    Check(Native(MaestroRunRequestSamples(j::serialize(unknownOperation).c_str(), nullptr, 0)).at("ok") == false, "Packed rows accepted an estimate");
+}
+
+// Reference frames compiled once and sampled through the C handle.
+void TestFrameSamplerHandle()
+{
+    auto circuit = Request("execute", 2, "h q[0]; cx q[0],q[1]; measure q[0] -> c[0]; measure q[1] -> c[69];", "stabilizer", 70).at("circuit");
+    const auto text = j::serialize(j::object{
+        {"schema_version", 2},
+        {"circuit", circuit},
+        {"simulator", j::object{{"backend", "qcsim"}, {"method", "stabilizer"}}},
+        {"noise", j::object{{"mode", "pauli"}, {"channels", j::array{j::object{{"kind", "bit_flip"}, {"targets", j::array{0}}, {"probability", 0.2}}}}}}});
+    char *error = nullptr;
+    void *sampler = MaestroCreateReferenceFrameSampler(text.c_str(), &error);
+    Check(sampler != nullptr && error == nullptr, "Frame sampler handle did not compile");
+    size_t qubits = 0, clbits = 0;
+    Check(MaestroReferenceFrameSamplerShape(sampler, &qubits, &clbits) == 1 && qubits == 2 && clbits == 70, "Frame sampler reported the wrong shape");
+    const size_t shots = 500;
+    std::vector<unsigned long long> first(2 * shots), again(2 * shots), other(2 * shots);
+    Check(MaestroReferenceFrameSampleBits(sampler, shots, 9, first.data(), first.size()) == 1, "Frame sampler rows failed");
+    Check(MaestroReferenceFrameSampleBits(sampler, shots, 9, again.data(), again.size()) == 1 && again == first, "Seeded frame rows did not replay");
+    Check(MaestroReferenceFrameSampleBits(sampler, shots, 10, other.data(), other.size()) == 1 && other != first, "Frame seeds reused one stream");
+    Check(MaestroReferenceFrameSampleBits(sampler, shots, 9, other.data(), other.size() - 1) == 0, "Frame rows accepted a short buffer");
+    std::map<std::pair<unsigned long long, unsigned long long>, unsigned long long> histogram;
+    size_t split = 0;
+    for (size_t shot = 0; shot < shots; ++shot)
+    {
+        ++histogram[{first[2 * shot], first[2 * shot + 1]}];
+        split += (first[2 * shot] & 1ULL) != ((first[2 * shot + 1] >> 5) & 1ULL);
+    }
+    Check(split > 60 && split < 140, "Frame rows have the wrong error rate");
+    std::vector<unsigned long long> distinct(2 * shots), counts(shots);
+    size_t written = 0;
+    Check(MaestroReferenceFrameSampleCountsBits(sampler, shots, 9, distinct.data(), counts.data(), shots, &written) == 1, "Frame counts failed");
+    Check(written == histogram.size(), "Frame counts and rows disagree on distinct outcomes");
+    for (size_t entry = 0; entry < written; ++entry)
+        Check(histogram[{distinct[2 * entry], distinct[2 * entry + 1]}] == counts[entry], "Frame counts are not the histogram of the same rows");
+    Check(MaestroReferenceFrameSampleCountsBits(sampler, shots, 9, distinct.data(), counts.data(), shots - 1, &written) == 0,
+          "Frame counts accepted a short buffer");
+    MaestroDestroyReferenceFrameSampler(sampler);
+    MaestroDestroyReferenceFrameSampler(nullptr);
+
+    // An omitted simulator is the QCSim stabilizer, so a Clifford circuit
+    // compiles and a non-Clifford one fails for its gates.
+    const auto plain = j::serialize(j::object{{"schema_version", 2}, {"circuit", circuit}});
+    sampler = MaestroCreateReferenceFrameSampler(plain.c_str(), nullptr);
+    Check(sampler != nullptr, "An omitted simulator did not compile a Clifford circuit to frames");
+    MaestroDestroyReferenceFrameSampler(sampler);
+    auto t = Request("execute", 1, "t q[0]; measure q -> c;", "stabilizer").at("circuit");
+    const auto nonClifford = j::serialize(j::object{{"schema_version", 2}, {"circuit", t}});
+    Check(MaestroCreateReferenceFrameSampler(nonClifford.c_str(), nullptr) == nullptr, "A non-Clifford circuit compiled to frames");
+    error = nullptr;
+    Check(MaestroCreateReferenceFrameSampler(nonClifford.c_str(), &error) == nullptr && error != nullptr, "Frame sampler failure lost its error");
+    const auto failure = Native(error).at("error").as_object();
+    Check(failure.at("code") == "unsupported_capability", "Frame sampler failure has the wrong code");
+    Check(std::string(failure.at("message").as_string()).find("Clifford gates") != std::string::npos,
+          "A non-Clifford circuit was rejected for its simulator, not its gates");
+    size_t ignored = 0;
+    Check(MaestroReferenceFrameSamplerShape(nullptr, &ignored, &ignored) == 0 && MaestroReferenceFrameSampleBits(nullptr, 1, 0, nullptr, 0) == 0,
+          "Null frame sampler accepted");
+
+    // The handle accepts what an execute request accepts, and a candidate list
+    // admits frames only when it includes the QCSim stabilizer.
+    const auto compile = [&](const j::object &simulator, const j::object &noise, const char *code) {
+        j::object request{{"schema_version", 2}, {"circuit", circuit}, {"simulator", simulator}};
+        if (!noise.empty())
+            request["noise"] = noise;
+        char *failure = nullptr;
+        void *handle = MaestroCreateReferenceFrameSampler(j::serialize(request).c_str(), &failure);
+        const bool compiled = handle != nullptr;
+        MaestroDestroyReferenceFrameSampler(handle);
+        if (failure)
+            Check(code && Native(failure).at("error").at("code") == code, "Frame sampler rejected a request with the wrong code");
+        return compiled;
+    };
+    const auto automatic = [](const char *method) {
+        return j::object{{"backend", "qcsim"},
+                         {"method", "statevector"},
+                         {"selection", "automatic"},
+                         {"candidates", j::array{j::object{{"backend", "qcsim"}, {"method", method}}}}};
+    };
+    const j::object fixedStabilizer{{"backend", "qcsim"}, {"method", "stabilizer"}};
+    Check(compile(automatic("stabilizer"), {}, nullptr), "Candidates with the stabilizer did not admit frames");
+    Check(!compile(automatic("statevector"), {}, "unsupported_capability"), "Frames ignored a candidate list without the stabilizer");
+    Check(!compile(fixedStabilizer, j::object{{"mode", "pauli"}}, "invalid_input"), "Frames accepted noise without channels");
+    const j::object flip{{"mode", "pauli"}, {"channels", j::array{j::object{{"kind", "bit_flip"}, {"targets", j::array{0}}, {"probability", 0.2}}}}};
+    Check(!compile(automatic("stabilizer"), flip, "unsupported_capability"), "Frames accepted noise without fixed selection");
+}
+
+// Rows honor automatic selection and candidate lists as counts do, and packed
+// noisy rows are the JSON rows of the same request.
+void TestRowSelection()
+{
+    const auto automatic = [](j::object request, const char *method) {
+        auto &simulator = request["simulator"].as_object();
+        simulator["selection"] = "automatic";
+        simulator["candidates"] = j::array{j::object{{"backend", "qcsim"}, {"method", method}}};
+        request["execution"].as_object()["shots"] = 100;
+        request["execution"].as_object()["return_samples"] = true;
+        return request;
+    };
+    const char *bell = "h q[0]; cx q[0],q[1]; measure q -> c;";
+    auto result = Call(automatic(Request("execute", 2, bell), "statevector"));
+    Check(result.at("execution_metadata").at("sampling_strategy") != "reference_frame_v1", "Rows used frames that the candidate list excludes");
+    Check(result.at("execution_metadata").at("method") == "statevector" && Rows(result).size() == 100, "Rows left the candidate list");
+    result = Call(automatic(Request("execute", 2, bell), "stabilizer"));
+    Check(result.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1", "Rows skipped frames that the candidate list admits");
+    // A non-Clifford circuit runs on the candidate, not on the requested method.
+    result = Call(automatic(Request("execute", 2, "t q[0]; h q[0]; cx q[0],q[1]; measure q -> c;"), "matrix_product_state"));
+    Check(result.at("execution_metadata").at("method") == "matrix_product_state", "Rows ran outside the candidate list");
+    const auto rows = Rows(result);
+    Check(rows.size() == 100 && Mismatches(rows, 0, 1) == 0, "Candidate rows lost their correlation");
+    // The list replaces the requested backend, so a QCSim stabilizer candidate
+    // admits frames whatever that backend is.
+    auto composite = automatic(Request("execute", 2, bell), "stabilizer");
+    composite["simulator"].as_object()["backend"] = "composite_qcsim";
+    for (const bool samples : {true, false})
+    {
+        composite["execution"].as_object()["return_samples"] = samples;
+        // Seeded counts take frames only on request.
+        composite["simulator"].as_object()["options"] = j::object{{"counts_policy", samples ? "auto" : "frame_v1"}};
+        const auto metadata = Call(composite).at("execution_metadata").as_object();
+        Check(metadata.at("sampling_strategy") == "reference_frame_v1" && metadata.at("backend") == "qcsim" && metadata.at("method") == "stabilizer",
+              "A stabilizer candidate under another requested backend did not admit frames");
+    }
+    // Sampling reduction splits rows into disjoint measurement cones as it does
+    // counts, so it keeps the network executor instead of frames or one session.
+    for (const char *method : {"stabilizer", "statevector"})
+    {
+        auto pairs = Request("execute", 4, "h q[0]; cx q[0],q[1]; h q[2]; cx q[2],q[3]; measure q -> c;", method);
+        pairs["execution"].as_object()["shots"] = 64;
+        pairs["execution"].as_object()["return_samples"] = true;
+        pairs["simulator"].as_object()["options"] = j::object{{"enable_sampling_reduction", true}};
+        result = Call(pairs);
+        Check(result.at("sampling_components") == 2 && result.at("execution_metadata").at("sampling_strategy") != "reference_frame_v1",
+              "Rows ignored sampling reduction");
+        const auto split = Rows(result);
+        Check(split.size() == 64 && Mismatches(split, 0, 1) == 0 && Mismatches(split, 2, 3) == 0, "Reduced rows lost their correlations");
+    }
+
+    // Packed noisy rows, from frames (a realization per shot) and from the
+    // trajectory fallback (shared realizations).
+    for (const size_t realizations : {120, 30})
+    {
+        auto noisy = Request("execute", 2, bell, "stabilizer");
+        noisy["execution"].as_object()["shots"] = 120;
+        noisy["noise"] = j::object{{"mode", "pauli"},
+                                   {"evaluation", "trajectories"},
+                                   {"realizations", realizations},
+                                   {"channels", j::array{j::object{{"kind", "bit_flip"}, {"targets", j::array{0}}, {"probability", 0.2}}}}};
+        const auto text = j::serialize(noisy);
+        std::vector<unsigned long long> words(120);
+        const auto packed = Native(MaestroRunRequestSamples(text.c_str(), words.data(), words.size()));
+        Check(packed.at("ok") == true && packed.at("noise").at("realizations") == realizations, "Packed noisy rows failed");
+        Check((packed.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1") == (realizations == 120),
+              "Packed noisy rows reported the wrong sampler");
+        noisy["execution"].as_object()["return_samples"] = true;
+        const auto json = Rows(Call(noisy));
+        for (size_t shot = 0; shot < json.size(); ++shot)
+            Check(((words[shot] & 1ULL) != 0) == (json[shot][0] == '1') && ((words[shot] & 2ULL) != 0) == (json[shot][1] == '1'),
+                  "Packed noisy rows differ from their JSON rows");
+    }
+}
+
+// SimpleExecute's counts_policy: frames for unseeded Clifford counts under auto,
+// on request under frame_v1, never under legacy or for seeded auto calls.
+void TestLegacyCountsPolicy()
+{
+    GetMaestroObjectWithMute();
+    const auto catalog = Native(MaestroGetCapabilitiesJson());
+    int backend = -1;
+    for (const auto &entry : catalog.at("backends").as_array())
+        if (entry.at("name") == "qcsim")
+            backend = entry.at("legacy_id").to_number<int>();
+    Check(backend >= 0, "Missing QCSim backend");
+
+    struct Simulator
+    {
+        unsigned long handle = CreateSimpleSimulator(2);
+
+        ~Simulator()
+        {
+            DestroySimpleSimulator(handle);
+        }
+    } simulator;
+
+    Check(simulator.handle != 0 && RemoveAllOptimizationSimulatorsAndAdd(simulator.handle, backend, 2) == 1, "Cannot configure a legacy stabilizer");
+    const char *circuit = "OPENQASM 2.0; qreg q[2]; creg c[2]; h q[0]; cx q[0],q[1]; measure q->c;";
+    const auto run = [&](const j::object &options) {
+        auto *raw = SimpleExecute(simulator.handle, circuit, j::serialize(options).c_str());
+        Check(raw != nullptr, "Legacy execution failed");
+        const auto result = j::parse(raw).as_object();
+        FreeResult(raw);
+        uint64_t total = 0;
+        for (const auto &entry : result.at("counts").as_object())
+        {
+            Check(entry.key() == "00" || entry.key() == "11", "Legacy Bell counts lost their correlation");
+            total += entry.value().to_number<uint64_t>();
+        }
+        Check(total == 300, "Legacy counts lost shots");
+        return result;
+    };
+    const auto framed = [](const j::object &result) {
+        const auto *strategy = result.if_contains("sampling_strategy");
+        return strategy && *strategy == "reference_frame_v1";
+    };
+    Check(framed(run({{"shots", 300}})), "Unseeded legacy Clifford counts did not use frames");
+    Check(!framed(run({{"shots", 300}, {"counts_policy", "legacy"}})), "Legacy policy used frames");
+    Check(!framed(run({{"shots", 300}, {"seed", 5}})), "Seeded auto legacy counts changed their sequence");
+    const auto explicitFrames = run({{"shots", 300}, {"seed", 5}, {"counts_policy", "frame_v1"}});
+    Check(framed(explicitFrames) && explicitFrames.at("method") == "stabilizer", "frame_v1 did not select frames");
+    Check(run({{"shots", 300}, {"seed", 5}, {"counts_policy", "frame_v1"}}).at("counts") == explicitFrames.at("counts"), "Seeded legacy frames did not replay");
+    for (const auto &policy : j::array{"frames", 1, nullptr})
+    {
+        auto *raw = SimpleExecute(simulator.handle, circuit, j::serialize(j::object{{"shots", 10}, {"counts_policy", policy}}).c_str());
+        const bool rejected = raw == nullptr;
+        if (raw)
+            FreeResult(raw);
+        Check(rejected, "Malformed legacy counts_policy was accepted");
+    }
+
+    // Only a trajectory_policy in a call's configuration opts a dynamic
+    // stabilizer circuit into logical shot streams; omitting it keeps the 0.3.13
+    // sequence, on a fresh handle and on one an earlier call configured.
+    const char *dynamic = "OPENQASM 2.0; qreg q[2]; creg c[2]; h q[0]; measure q[0] -> c[0]; h q[0]; cx q[0],q[1]; measure q[1] -> c[1];";
+    const auto counts = [&](unsigned long handle, const j::object &options) {
+        auto *raw = SimpleExecute(handle, dynamic, j::serialize(options).c_str());
+        Check(raw != nullptr, "Legacy dynamic execution failed");
+        const auto result = j::parse(raw).as_object();
+        FreeResult(raw);
+        return result.at("counts");
+    };
+    const j::object omitted{{"shots", 400}, {"seed", 7}, {"max_simulators", 1}};
+    auto chosen = omitted;
+    chosen["trajectory_policy"] = "shot_v1";
+    Simulator fresh;
+    Check(fresh.handle != 0 && RemoveAllOptimizationSimulatorsAndAdd(fresh.handle, backend, 2) == 1, "Cannot configure a legacy stabilizer");
+    const auto earlier = counts(fresh.handle, omitted);
+    const auto logical = counts(simulator.handle, chosen);
+    Check(logical != earlier, "Omitting trajectory_policy opted a stabilizer into logical shot streams");
+    Check(counts(simulator.handle, omitted) == earlier, "A reused handle kept an earlier explicit trajectory_policy");
+}
+
 void TestRequestNoiseAndOptions()
 {
+    TestShotRows();
+    TestFrameSamplerHandle();
+    TestRowSelection();
+    TestLegacyCountsPolicy();
     TestReadoutExecution();
     TestThermalApproximation();
     TestFixedBackendNoisyShots();
@@ -351,6 +713,43 @@ void TestRequestNoiseAndOptions()
     // A spectator rotation has a known effect; selecting the wrong qubit fails.
     request = Estimate("h q[1]; x q[0];", {"IX"}, Channel("crosstalk", {{"strength", 0.3}}, {0, 1}), "statevector", 2);
     Near(Real(Call(request).at("expectation_values").at(0)), std::cos(0.3));
+
+    // One-shot noise realizations may run on several networks; each keeps its
+    // own seed, so seeded counts must not depend on the worker count. Stabilizer
+    // and MPS requests also accept the realization memory budget.
+    for (const char *method : {"statevector", "density_matrix", "stabilizer", "matrix_product_state"})
+    {
+        auto noisy = Request("execute", 2, "h q[0]; cx q[0],q[1]; h q[1]; measure q->c;", method);
+        noisy["execution"].as_object()["shots"] = 96;
+        noisy["noise"] = j::object{{"channels", j::array{Channel("depolarizing", {{"probability", 0.2}})}}, {"seed", 31}, {"realizations", 96}};
+        noisy["simulator"].as_object()["options"] = j::object{{"max_simulators", 1}, {"trajectory_max_memory_mb", 64}};
+        if (std::string(method) == "matrix_product_state")
+            noisy["simulator"].as_object()["options"].as_object()["max_bond_dimension"] = 4;
+        const auto serial = Call(noisy).at("counts");
+        noisy["simulator"].as_object()["options"].as_object()["max_simulators"] = 4;
+        Check(Call(noisy).at("counts") == serial, "Parallel native noise realizations changed seeded counts");
+    }
+    // An explicit trajectory policy is accepted for the non-dense methods it now opts in.
+    for (const char *method : {"stabilizer", "extended_stabilizer", "matrix_product_state", "matrix_product_operator"})
+    {
+        auto opted = Request("execute", 1, "h q[0]; measure q->c; reset q[0]; h q[0]; measure q->c;", method);
+        opted["simulator"].as_object()["options"] = j::object{{"trajectory_policy", "shot_v1"}, {"max_simulators", 1}};
+        const auto serial = Call(opted).at("counts");
+        opted["simulator"].as_object()["options"].as_object()["max_simulators"] = 4;
+        Check(Call(opted).at("counts") == serial, "An explicit trajectory policy left non-dense counts worker-dependent");
+    }
+
+    // Noise targets lie in the declared register, so a crosstalk spectator can
+    // never fall outside a fixed native register, checkpoint suffixes included.
+    request = Request("checkpoint_batch", 1, "h q[0];");
+    request["suffixes"] = j::array{Request("execute", 1, "h q[0]; measure q->c;").at("circuit")};
+    request["noise"] = j::object{{"channels", j::array{Channel("crosstalk", {{"strength", 0.3}}, {0, 1})}}, {"seed", 23}};
+    for (bool validate : {false, true})
+    {
+        const auto error = Call(request, false, validate).at("error").as_object();
+        Check(std::string(error.at("message").as_string()).find("Noise target is invalid") != std::string::npos,
+              "A noise target outside the declared register was accepted");
+    }
 
     const j::array correlated{Channel("correlated_ar1", {{"phi", 0.5}, {"sigma_eta", 0.4}}),
                               Channel("correlated_ou", {{"sigma", 0.4}, {"alpha", 2}, {"gate_time", 0.1}}),

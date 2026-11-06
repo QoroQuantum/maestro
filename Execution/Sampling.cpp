@@ -1,4 +1,5 @@
 #include "Sampling.h"
+#include "ReferenceFrameSampler.h"
 #include "SimulatorConfig.h"
 #include "Transforms/ConeAnalysis.h"
 #include "Json/Json.h"
@@ -286,7 +287,8 @@ std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits
         if (config.fixed_backend &&
             (network->GetSimulator()->GetType() != config.simulator_type || network->GetSimulator()->GetSimulationType() != config.simulation_type))
             throw Error("backend_unavailable", "Requested fixed backend/method is unavailable");
-        if (config.native_options.count("gpu_device") && network->GetSimulator()->GetGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
+        if (!Simulators::IsDistributedGpuSimulator(config.simulator_type) && config.native_options.count("gpu_device") &&
+            network->GetSimulator()->GetGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
             throw Error("backend_unavailable", "Requested GPU device was not selected");
         const auto counts = network->RepeatedExecuteOnHost(reduced, 0, shots);
         // Hypergeometric bucket splits have the same distribution as pairing
@@ -308,6 +310,58 @@ std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits
     return result;
 }
 
+SamplingSession::SamplingSession(size_t width, const SimulatorConfig &config)
+{
+    config.Validate();
+    if (width > static_cast<size_t>(std::numeric_limits<int>::max()))
+        throw std::invalid_argument("Circuit width exceeds the simulator limit");
+    GetMaestroObjectWithMute();
+    handle = CreateSimpleSimulator(static_cast<int>(std::max(size_t{1}, width)));
+    if (!handle)
+        throw std::runtime_error("Failed to create sampling simulator");
+    try
+    {
+        network = ConfigureNetwork(handle, config);
+        if (!network || !network->GetSimulator())
+            throw Error("backend_unavailable", "Requested backend could not be created");
+        if (config.fixed_backend &&
+            (network->GetSimulator()->GetType() != config.simulator_type || network->GetSimulator()->GetSimulationType() != config.simulation_type))
+            throw Error("backend_unavailable", "Requested fixed backend/method is unavailable");
+    }
+    catch (...)
+    {
+        DestroySimpleSimulator(handle);
+        throw;
+    }
+}
+
+SamplingSession::~SamplingSession()
+{
+    if (handle)
+        DestroySimpleSimulator(handle);
+}
+
+SamplingResult SamplingSession::Sample(const std::shared_ptr<Circuits::Circuit<double>> &circuit, size_t shots, std::optional<uint64_t> seed)
+{
+    if (!circuit)
+        throw std::invalid_argument("Sampling requires a non-null circuit");
+    const auto start = std::chrono::steady_clock::now();
+    if (seed)
+        network->Configure("seed", std::to_string(*seed).c_str());
+    SamplingResult result;
+    result.counts = network->RepeatedExecuteOnHost(circuit, 0, shots);
+    result.components = 1;
+    result.largest_component = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);
+    result.simulator = network->GetLastSimulatorType();
+    result.method = network->GetLastSimulationType();
+    result.gpu_device = network->GetLastGpuDevice();
+    result.max_bond_dimension = network->GetCurrentMaxBondDimension();
+    result.gate_fusion = network->WasGateFusionEnabled();
+    result.gate_fusion_max_qubits = network->GetLastGateFusionMaxQubits();
+    result.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    return result;
+}
+
 SamplingResult SampleCircuit(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const SimulatorConfig &config, size_t shots)
 {
     if (!circuit)
@@ -316,6 +370,28 @@ SamplingResult SampleCircuit(const std::shared_ptr<Circuits::Circuit<double>> &c
     if (auto reduced = SampleDisjointCones(circuit, config, shots))
         return std::move(*reduced);
     const auto start = std::chrono::steady_clock::now();
+    if (PreferFrameCounts(config) && (config.counts_policy == "frame_v1" || circuit->IsClifford()))
+    {
+        const auto bits = circuit->GetBits();
+        const size_t width = std::max(std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1), bits.empty() ? size_t{0} : *bits.rbegin() + 1);
+        if (auto plan = CompileReferenceSampler(circuit, std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1), width))
+        {
+            SamplingResult result;
+            const auto seed = config.seed ? *config.seed : Utils::RandomStream::FreshSeed();
+            // Outcomes are distinct: one insertion each, no merging.
+            auto outcomes = plan->SampleCounts(shots, seed);
+            result.counts.reserve(outcomes.size());
+            for (auto &[outcome, count] : outcomes)
+                result.counts.emplace(std::move(outcome), count);
+            result.components = 1;
+            result.largest_component = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);
+            result.simulator = Simulators::SimulatorType::kQCSim;
+            result.method = Simulators::SimulationType::kStabilizer;
+            result.sampling_strategy = "reference_frame_v1";
+            result.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+            return result;
+        }
+    }
     GetMaestroObjectWithMute();
     const auto width = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);
     const auto handle = CreateSimpleSimulator(static_cast<int>(width));

@@ -78,6 +78,7 @@ const char *const kConfigFields[] = {
     "trajectory_policy",
     "trajectory_max_memory_mb",
     "max_simulators",
+    "counts_policy",
     "mps_routing_virtual_bonds",
     "mps_routing_truncation_weight",
     "mps_routing_strategy",
@@ -131,7 +132,7 @@ void bind_config(nb::module_ &m)
            std::optional<std::string> trajectory_policy, std::optional<size_t> trajectory_max_memory_mb, std::optional<size_t> max_simulators,
            std::optional<bool> mps_routing_virtual_bonds, std::optional<double> mps_routing_truncation_weight, std::optional<std::string> mps_routing_strategy,
            std::optional<size_t> min_cluster_qubits, std::optional<double> observable_error_tolerance, bool enable_sampling_reduction,
-           bool allow_reset_marginalization) {
+           bool allow_reset_marginalization, std::string counts_policy) {
             SimulatorConfig config;
             config.simulator_type = simulator_type;
             config.simulation_type = simulation_type;
@@ -168,6 +169,7 @@ void bind_config(nb::module_ &m)
             config.trajectory_policy = std::move(trajectory_policy);
             config.trajectory_max_memory_mb = trajectory_max_memory_mb;
             config.max_simulators = max_simulators;
+            config.counts_policy = std::move(counts_policy);
             config.mps_routing_virtual_bonds = mps_routing_virtual_bonds;
             config.mps_routing_truncation_weight = mps_routing_truncation_weight;
             config.mps_routing_strategy = std::move(mps_routing_strategy);
@@ -187,7 +189,12 @@ void bind_config(nb::module_ &m)
         "auto_reduce"_a = defaults.auto_reduce, "trajectory_policy"_a = nb::none(), "trajectory_max_memory_mb"_a.noconvert() = nb::none(),
         "max_simulators"_a.noconvert() = nb::none(), "mps_routing_virtual_bonds"_a = nb::none(), "mps_routing_truncation_weight"_a = nb::none(),
         "mps_routing_strategy"_a = nb::none(), "min_cluster_qubits"_a.noconvert() = nb::none(), "observable_error_tolerance"_a = nb::none(),
-        "enable_sampling_reduction"_a = defaults.enable_sampling_reduction, "allow_reset_marginalization"_a = defaults.allow_reset_marginalization);
+        "enable_sampling_reduction"_a = defaults.enable_sampling_reduction, "allow_reset_marginalization"_a = defaults.allow_reset_marginalization,
+        "counts_policy"_a = defaults.counts_policy);
+
+    BindConfigField(config_class, "counts_policy", &SimulatorConfig::counts_policy,
+                    "'auto' uses eligible frame counts only without explicit seeds; 'legacy' retains trajectory counts; "
+                    "'frame_v1' also permits seeded frame counts with its own reproducible sequence. Unsupported circuits retain the trajectory fallback.");
 
     BindConfigField(config_class, "allow_reset_marginalization", &SimulatorConfig::allow_reset_marginalization,
                     "Allow ensemble-equivalent reset marginalization; individual trajectories can change.");
@@ -205,14 +212,19 @@ void bind_config(nb::module_ &m)
                     "Nonnegative overflow penalty relative to capped runtime cost. Default 1; zero charges runtime alone.");
 
     BindConfigField(config_class, "trajectory_policy", &SimulatorConfig::trajectory_policy,
-                    "QCSim statevector, density-matrix and path-integral dynamic circuits: "
-                    "'block_v1' preserves existing seeded counts; 'shot_v1' distributes individual "
-                    "shots with streams independent of worker count. The policies give different "
-                    "seeded sequences. None uses 'shot_v1'. Terminal sampling is unaffected.");
+                    "QCSim dynamic circuits: 'block_v1' preserves existing seeded counts; 'shot_v1' "
+                    "distributes individual shots with streams independent of worker count. The "
+                    "policies give different seeded sequences. On statevector, density-matrix and "
+                    "path-integral runs None uses 'shot_v1'. Stabilizer, extended-stabilizer, MPS and "
+                    "MPO runs use a policy only when it is set; None keeps their earlier, "
+                    "worker-dependent seeded sequences. Terminal sampling is unaffected.");
     BindConfigField<false>(config_class, "trajectory_max_memory_mb", &SimulatorConfig::trajectory_max_memory_mb,
-                           "Positive MiB estimate limiting concurrent QCSim dense trajectories. "
-                           "None uses 1024 MiB. This is a soft concurrency budget, not a process "
-                           "memory limit; at least one worker is allowed.");
+                           "Positive MiB estimate limiting concurrent QCSim work: dense trajectory "
+                           "shots (and, under an explicit trajectory_policy, stabilizer and bounded MPS/MPO "
+                           "shots), and parallel noise realizations (executions, estimates, fidelities) and "
+                           "checkpoint suffixes of statevector, density-matrix, stabilizer and bounded MPS/MPO runs. None "
+                           "uses 1024 MiB. This is a soft concurrency budget, not a process memory "
+                           "limit; at least one worker is allowed.");
     BindConfigField<false>(config_class, "max_simulators", &SimulatorConfig::max_simulators,
                            "Maximum concurrent simulators, from 1 to 1024. None keeps the network "
                            "default; CPU and trajectory memory budgets may reduce concurrency.");
@@ -283,9 +295,9 @@ void bind_config(nb::module_ &m)
                     "identity: 'ignore', 'warn' or 'strict' (raise). None uses the "
                     "default.");
     BindConfigField(config_class, "mpo_restore_trace_after_truncation", &SimulatorConfig::mpo_restore_trace_after_truncation,
-                    "Rescale the CPU MPO to unit trace after each truncation.");
+                    "Rescale the MPO (CPU or GPU) to unit trace after each truncation.");
     BindConfigField(config_class, "mpo_hermitize_after_truncation", &SimulatorConfig::mpo_hermitize_after_truncation,
-                    "Make the CPU MPO Hermitian again after each truncation.");
+                    "Make the MPO (CPU or GPU) Hermitian again after each truncation.");
     BindConfigField(config_class, "pp_coefficient_threshold", &SimulatorConfig::pp_coefficient_threshold,
                     "Pauli propagation: truncation passes drop strings whose ``|coefficient|`` "
                     "is at most this value.");

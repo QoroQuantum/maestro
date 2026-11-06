@@ -452,7 +452,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
                     size_t mask = 1ULL;
                     for (auto q : qubits)
                     {
-                        const size_t qubitMask = 1ULL << q;
+                        const size_t qubitMask = Types::BitAt(q);
                         if ((measRaw & qubitMask) != 0)
                             meas |= mask;
                         mask <<= 1ULL;
@@ -469,7 +469,7 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
                     size_t mask = 1ULL;
                     for (auto q : qubits)
                     {
-                        const size_t qubitMask = 1ULL << q;
+                        const size_t qubitMask = Types::BitAt(q);
                         if ((measRaw & qubitMask) != 0)
                             meas |= mask;
                         mask <<= 1ULL;

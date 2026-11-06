@@ -567,7 +567,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
                 Types::qubit_t packed = 0;
                 for (size_t i = 0; i < qubits.size(); ++i)
                     if (measured.at(static_cast<Eigen::Index>(qubits[i])))
-                        packed |= 1ULL << i;
+                        packed |= Types::BitAt(i);
                 ++result[packed];
             }
         }
@@ -703,7 +703,7 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
             Types::qubit_t result = 0;
             for (size_t qubit = 0; qubit < nrQubits; ++qubit)
                 if (measured.at(static_cast<Eigen::Index>(qubit)))
-                    result |= 1ULL << qubit;
+                    result |= Types::BitAt(qubit);
             return result;
         }
     }

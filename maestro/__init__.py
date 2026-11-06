@@ -1,19 +1,23 @@
 """Maestro quantum circuit simulation library."""
 
-import ast
-import copyreg
+# Standard modules carry a leading underscore so that `from maestro import *`
+# exports only Maestro's API.
+import ast as _ast
+import copyreg as _copyreg
 from copy import deepcopy as _deepcopy
-import functools
-import math
-import numbers
-import re
-import sys
+import functools as _functools
+import math as _math
+import numbers as _numbers
+import re as _re
+import sys as _sys
 from .maestro import *
 from . import maestro as _raw_maestro
+if hasattr(_raw_maestro, "_compile_reference_sampler"):
+    _compile_reference_sampler = _raw_maestro._compile_reference_sampler
 
 # Re-export submodules
 circuits = _raw_maestro.circuits
-sys.modules[__name__ + ".circuits"] = circuits
+_sys.modules[__name__ + ".circuits"] = circuits
 
 
 #: Setters whose native channel kind is not their name without ``set_``, a
@@ -46,30 +50,30 @@ _NATIVE_FIELD_EXCEPTIONS = {
 
 
 def _native_kind(method):
-    return _NATIVE_KIND_EXCEPTIONS.get(method) or re.sub(r"^set_(all_)?|_from_time$", "", method)
+    return _NATIVE_KIND_EXCEPTIONS.get(method) or _re.sub(r"^set_(all_)?|_from_time$", "", method)
 
 
 def _native_field(name):
-    return _NATIVE_FIELD_EXCEPTIONS.get(name) or re.sub(r"_s$", "", name)
+    return _NATIVE_FIELD_EXCEPTIONS.get(name) or _re.sub(r"_s$", "", name)
 
 _TARGET_PARAMS = frozenset({"qubit", "num_qubits", "q1", "q2", "targets"})
 
 
-@functools.lru_cache(maxsize=None)
+@_functools.lru_cache(maxsize=None)
 def _setter_parameters(method):
     """A setter's parameter names in call order, read from its binding's signature."""
     signature = getattr(_raw_maestro.NoiseModel, method).__nb_signature__[0][0]
-    function = ast.parse(re.sub(r"\\=?\d+", "...", signature) + ": ...").body[0]
+    function = _ast.parse(_re.sub(r"\\=?\d+", "...", signature) + ": ...").body[0]
     return tuple(arg.arg for arg in function.args.args[1:])
 
 
 def _native_value(value):
     if isinstance(value, bool):
         return value
-    if isinstance(value, numbers.Integral):
+    if isinstance(value, _numbers.Integral):
         return int(value)
-    if isinstance(value, numbers.Real):
-        return "infinity" if math.isinf(value) else float(value)
+    if isinstance(value, _numbers.Real):
+        return "infinity" if _math.isinf(value) else float(value)
     return [_native_value(item) for item in value]
 
 
@@ -107,7 +111,7 @@ class NoiseModel(_raw_maestro.NoiseModel):
     def __getattribute__(self, name):
         attr = super().__getattribute__(name)
         if callable(attr) and name.startswith("set_"):
-            @functools.wraps(attr)
+            @_functools.wraps(attr)
             def wrapper(*args, **kwargs):
                 # Snapshot mutable inputs before the native model can change.
                 saved_args, saved_kwargs = _deepcopy((args, kwargs))
@@ -139,8 +143,8 @@ class NoiseModel(_raw_maestro.NoiseModel):
                 continue
             values = dict(zip(_setter_parameters(method), args)) | kwargs
             if method == "set_all_correlated_from_power":
-                values["sigma"] = math.sqrt(values.pop("power") / (
-                    values["num_qubits"] * math.pi * values["alpha"] * values["gate_time"]))
+                values["sigma"] = _math.sqrt(values.pop("power") / (
+                    values["num_qubits"] * _math.pi * values["alpha"] * values["gate_time"]))
             fields = {
                 _native_field(name):
                     _native_operators(value) if name == "kraus_operators" else _native_value(value)
@@ -165,16 +169,25 @@ def _reduce_simulator_config(cfg):
     return (_rebuild_simulator_config, ({name: getattr(cfg, name) for name in fields},))
 
 
-copyreg.pickle(_raw_maestro.SimulatorConfig, _reduce_simulator_config)
+_copyreg.pickle(_raw_maestro.SimulatorConfig, _reduce_simulator_config)
 
 
 def _wrap_noise_seed(fn):
+    """Accept ``seed=`` as an alias of ``noise_seed=``, keeping fn's metadata."""
+    @_functools.wraps(fn)
     def _wrapped(*args, **kwargs):
-        if "seed" in kwargs and "noise_seed" not in kwargs:
+        if "seed" in kwargs:
+            if "noise_seed" in kwargs:
+                raise TypeError("pass either seed or noise_seed, not both")
             kwargs["noise_seed"] = kwargs.pop("seed")
         return fn(*args, **kwargs)
-    _wrapped.__name__ = getattr(fn, "__name__", "wrapped")
-    _wrapped.__doc__ = getattr(fn, "__doc__", None)
+    # nanobind publishes signatures here rather than to inspect.
+    for _attribute in ("__nb_signature__", "__text_signature__"):
+        if hasattr(fn, _attribute):
+            try:
+                setattr(_wrapped, _attribute, getattr(fn, _attribute))
+            except (AttributeError, TypeError):
+                pass
     return _wrapped
 
 
@@ -193,3 +206,5 @@ for _fn_name in _NOISE_SEED_FUNCTIONS:
     # The QuantumCircuit methods of the same name take seed= too.
     setattr(circuits.QuantumCircuit, _fn_name,
             _wrap_noise_seed(getattr(circuits.QuantumCircuit, _fn_name)))
+# Checkpoint suffixes take seed= too.
+PrefixCheckpointedSimulator.execute_suffix = _wrap_noise_seed(PrefixCheckpointedSimulator.execute_suffix)

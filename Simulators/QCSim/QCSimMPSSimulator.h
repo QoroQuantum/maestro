@@ -333,7 +333,7 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                         size_t mask = 1ULL;
                         for (auto q : qubits)
                         {
-                            const size_t qubitMask = 1ULL << q;
+                            const size_t qubitMask = Types::BitAt(q);
                             if (measRaw & qubitMask)
                                 meas |= mask;
                             mask <<= 1ULL;

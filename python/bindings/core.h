@@ -1,13 +1,28 @@
 #pragma once
 #include "Execution/Estimation.h"
+#include "Execution/SampleRecords.h"
 #include "common.h"
+
+// Shared tail of the noisy execute docstrings (functions and methods).
+#define MAESTRO_NOISY_EXECUTE_DOC                                                                                                                              \
+    "\n\nnoise_seed (also accepted as seed) is an unsigned 32-bit integer. It seeds noise injection and, "                                                     \
+    "unless config.seed is set, measurement and readout. return_samples=True returns 'samples', a "                                                            \
+    "(shots, clbits) uint8 array of shot records, instead of 'counts'. Results report 'sampling_strategy' "                                                    \
+    "when a dedicated sampler ran: 'reference_frame_v1' (noisy-Clifford frames), 'trajectory_v1' (each "                                                       \
+    "realization executed directly) or 'terminal_v1'. SimulatorConfig.counts_policy ('auto', 'legacy', "                                                       \
+    "'frame_v1') selects them; seeded calls under 'auto' keep their earlier sequences."
 
 namespace maestro_bindings
 {
 using CircuitPtr = std::shared_ptr<Circuits::Circuit<double>>;
 using OperationPtr = std::shared_ptr<Circuits::IOperation<double>>;
 
-void RequireNoiseSeed(std::optional<uint64_t> noise_seed);
+// Noise seeding and injection shared with the native API (Execution/SampleRecords.h).
+using MaestroExecution::CloneSamplingCircuitForExecution;
+using MaestroExecution::MakeNoiseRng;
+using MaestroExecution::NoiseExecutionConfig;
+using MaestroExecution::RequireNoiseSeed;
+
 void require_circuit(const CircuitPtr &circuit);
 void require_realizations(int noise_realizations);
 void require_any_noise(const noise::NoiseModel &noise_model);
@@ -15,15 +30,9 @@ bool has_circuit_channels(const CircuitPtr &circuit);
 CircuitPtr without_circuit_channels(const CircuitPtr &circuit);
 
 std::vector<std::string> ParseObservables(const nb::object &observables);
+// Emits ThermalApproximationWarning as a Python RuntimeWarning, once per call.
 void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config);
-std::mt19937 MakeNoiseRng(const SimulatorConfig &config, std::optional<uint64_t> &noise_seed);
-SimulatorConfig NoiseExecutionConfig(const SimulatorConfig &config, std::optional<uint64_t> noise_seed, uint64_t batch);
-std::shared_ptr<Circuits::Circuit<double>> inject_noise_for_config(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
-                                                                   const noise::NoiseModel &noise_model, std::mt19937 &rng, const SimulatorConfig &config);
-std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_for_config(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
-                                                                            const noise::NoiseModel &noise_model, std::mt19937 &rng,
-                                                                            const SimulatorConfig &config);
-nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots);
+nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots, bool return_samples = false);
 nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const std::vector<std::string> &paulis, const SimulatorConfig &config,
                        MaestroExecution::EstimationCache *cache = nullptr);
 std::vector<std::complex<double>> statevector_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config);
@@ -31,16 +40,14 @@ nb::object mirror_fidelity_core(std::shared_ptr<Circuits::Circuit<double>> circu
                                 const std::optional<nb::object> &observables = std::nullopt);
 std::complex<double> inner_product_core(const std::shared_ptr<Circuits::Circuit<double>> &circuit_1,
                                         const std::shared_ptr<Circuits::Circuit<double>> &circuit_2, const SimulatorConfig &config);
-double noisy_fidelity_core(const std::shared_ptr<Circuits::Circuit<double>> &ideal, const std::shared_ptr<Circuits::Circuit<double>> &noisy,
-                           const SimulatorConfig &config);
 nb::dict incremental_evolve_core(std::shared_ptr<Circuits::Circuit<double>> init_circuit, std::shared_ptr<Circuits::Circuit<double>> trotter_step,
                                  const std::vector<int> &measure_at_steps, const std::vector<std::string> &paulis, const SimulatorConfig &config);
 nb::dict NoisyExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots, int noise_realizations,
-                      std::optional<uint64_t> noise_seed);
+                      std::optional<uint64_t> noise_seed, bool return_samples = false);
 nb::dict CoherentExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots, int noise_realizations,
-                         std::optional<uint64_t> noise_seed);
+                         std::optional<uint64_t> noise_seed, bool return_samples = false);
 nb::dict FullNoiseExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots, int noise_realizations,
-                          std::optional<uint64_t> noise_seed);
+                          std::optional<uint64_t> noise_seed, bool return_samples = false);
 nb::dict NoisyEstimateMonteCarlo(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, int noise_realizations,
                                  const SimulatorConfig &config, std::optional<uint64_t> noise_seed);
 nb::dict CoherentEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, int noise_realizations,

@@ -255,7 +255,7 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
             Types::qubit_t result = 0;
             for (size_t qubit = 0; qubit < nrQubits; ++qubit)
                 if (sampler->Measure(qubit))
-                    result |= 1ULL << qubit;
+                    result |= Types::BitAt(qubit);
             return result;
         }
     }

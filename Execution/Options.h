@@ -114,7 +114,8 @@ inline const std::vector<Option> &Options()
         {"enable_sampling_reduction", "", "boolean", "all"},
         {"max_simulators", "max_simulators", "positive_integer", "all"},
         {"trajectory_policy", "trajectory_policy", "string", "cpu_trajectory"},
-        {"trajectory_max_memory_mb", "trajectory_max_memory_mb", "positive_integer", "cpu_dense"},
+        {"counts_policy", "", "string", "all"},
+        {"trajectory_max_memory_mb", "trajectory_max_memory_mb", "positive_integer", "cpu_realization"},
         {"mpo_kraus_completeness_check", "matrix_product_operator_kraus_completeness_check", "string", "mpo"},
         {"mpo_restore_trace_after_truncation", "matrix_product_operator_restore_trace_after_truncation", "boolean", "mpo"},
         {"mpo_hermitize_after_truncation", "matrix_product_operator_hermitize_after_truncation", "boolean", "mpo"},
@@ -145,10 +146,18 @@ inline bool Applies(const Option &option, const SimulatorConfig &config)
     const bool mpo = method == Method::kMatrixProductOperator;
     if (family == "all")
         return true;
+    // Dense and path-integral trajectories always use logical shot streams;
+    // an explicit policy opts the stabilizer and tensor-chain methods in.
     if (family == "cpu_trajectory")
-        return backend == Backend::kQCSim && (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kPathIntegral);
-    if (family == "cpu_dense")
-        return backend == Backend::kQCSim && (method == Method::kStatevector || method == Method::kDensityMatrix);
+        return backend == Backend::kQCSim && (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kPathIntegral ||
+                                              method == Method::kStabilizer || method == Method::kExtendedStabilizer || mps || mpo);
+    // Methods whose concurrent trajectory shots or noise realizations are
+    // budgeted: dense shot workers, stabilizer and bounded MPS/MPO shot
+    // workers under an explicit trajectory policy, and parallel native and
+    // Python realizations.
+    if (family == "cpu_realization")
+        return backend == Backend::kQCSim &&
+               (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kStabilizer || mps || mpo);
     if (family == "device")
         return gpu || distributed;
     if (family == "precision")
@@ -265,6 +274,8 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
             Require(UInt(value) <= 1024, "max_simulators exceeds 1024");
         if (name == "trajectory_policy")
             choice(value, {"block_v1", "shot_v1"}, key);
+        if (name == "counts_policy")
+            choice(value, {"auto", "legacy", "frame_v1"}, key);
         if (name == "trajectory_max_memory_mb")
             Require(UInt(value) <= (std::numeric_limits<size_t>::max() >> 20), "trajectory_max_memory_mb is too large");
         if (name == "truncation_mode")
@@ -300,6 +311,8 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
             config.allow_reset_marginalization = Boolean(value);
         else if (name == "enable_sampling_reduction")
             config.enable_sampling_reduction = Boolean(value);
+        else if (name == "counts_policy")
+            config.counts_policy = choice(value, {"auto", "legacy", "frame_v1"}, key);
         else if (name == "observable_error_tolerance")
             config.observable_error_tolerance = Number(value);
         else if (name == "min_cluster_qubits")

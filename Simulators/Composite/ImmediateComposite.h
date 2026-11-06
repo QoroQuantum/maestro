@@ -392,7 +392,7 @@ class ImmediateCompositeSimulator : public ISimulator
         DontNotify();
         for (Types::qubit_t qubit : qubits)
         {
-            const bool outcome = GetSimulator(qubit)->Measure({qubit}) != 0;
+            const bool outcome = GetSimulator(qubit)->MeasureOne(qubit);
             if (outcome)
                 res |= mask;
             mask <<= 1;
@@ -420,7 +420,7 @@ class ImmediateCompositeSimulator : public ISimulator
         for (size_t q = 0; q < qubits.size(); ++q)
         {
             Types::qubit_t qubit = qubits[q];
-            const bool outcome = GetSimulator(qubit)->Measure({qubit}) != 0;
+            const bool outcome = GetSimulator(qubit)->MeasureOne(qubit);
             if (outcome)
                 res[q] = true;
 
@@ -591,7 +591,7 @@ class ImmediateCompositeSimulator : public ISimulator
                 size_t mask = 1ULL;
                 for (auto q : qubits)
                 {
-                    const size_t qubitMask = 1ULL << q;
+                    const size_t qubitMask = Types::BitAt(q);
                     if ((measRaw & qubitMask) != 0)
                         meas |= mask;
                     mask <<= 1ULL;
@@ -611,7 +611,7 @@ class ImmediateCompositeSimulator : public ISimulator
                 size_t mask = 1ULL;
                 for (auto q : qubits)
                 {
-                    const size_t qubitMask = 1ULL << q;
+                    const size_t qubitMask = Types::BitAt(q);
                     if ((measRaw & qubitMask) != 0)
                         meas |= mask;
                     mask <<= 1ULL;

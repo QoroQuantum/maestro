@@ -214,7 +214,7 @@ class QCSimPauliPropagatorSimulator : public ImmediateQCSimSimulator
                 size_t meas = 0;
                 for (size_t i = 0; i < bits.size(); ++i)
                     if (bits[i])
-                        meas |= (1ULL << i);
+                        meas |= Types::BitAt(i);
                 result[meas] += count;
             }
         }
@@ -300,7 +300,7 @@ class QCSimPauliPropagatorSimulator : public ImmediateQCSimSimulator
             for (size_t i = 0; i < res.size(); ++i)
             {
                 if (res[i])
-                    result |= (1ULL << i);
+                    result |= Types::BitAt(i);
             }
             return result;
         }

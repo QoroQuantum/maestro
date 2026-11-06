@@ -49,7 +49,7 @@ The constructor takes every option by keyword only.
 | `mps_sampling` | `str` | `"probabilities"` | MPS shot sampling: `"probabilities"` samples without collapsing the state, `"apply_measure"` measures and restores it per shot |
 | `mps_svd_solver`, `mpo_svd_solver`, `tensor_network_svd_solver` | `str` or `None` | `None` | GPU SVD solver: `"gesvd"`, `"gesvdj"`, `"gesvdp"` or `"gesvdr"`; see {ref}`py_mps_gpu_svd` (GPU access only) |
 | `mpo_kraus_completeness_check` | `str` or `None` | `None` | MPO handling of incomplete Kraus sets: `"ignore"`, `"warn"` or `"strict"` |
-| `mpo_restore_trace_after_truncation`, `mpo_hermitize_after_truncation` | `bool` | `False` | Renormalize the CPU MPO after each truncation |
+| `mpo_restore_trace_after_truncation`, `mpo_hermitize_after_truncation` | `bool` | `False` | Renormalize the MPO (CPU or GPU) after each truncation |
 | `pp_coefficient_threshold` | `float` or `None` | `None` | Pauli propagation: drop strings whose coefficient magnitude is at most this |
 | `pp_max_pauli_weight` | `int` or `None` | `None` | Pauli propagation: drop strings acting on more qubits than this |
 | `pp_gates_between_trims`, `pp_gates_between_deduplications` | `int` or `None` | `None` | Pauli propagation: how often, in primitive operations, to apply the two thresholds; deduplication also merges repeated strings. Unset, PauliPropagator deduplicates every 10 operations. |
@@ -62,8 +62,9 @@ The constructor takes every option by keyword only.
 | `observable_error_tolerance` | `float` or `None` | `None` | Opt-in absolute error budget for bounded backward evaluation of exact noisy channels |
 | `enable_sampling_reduction` | `bool` | `False` | Sample disjoint measurement lightcones independently and exactly; changes seeded random streams |
 | `allow_reset_marginalization` | `bool` | `False` | Allow ensemble-equivalent reset marginalization; individual trajectories can change |
-| `trajectory_policy` | `str` or `None` | `None` | QCSim statevector, density-matrix and path-integral dynamic circuits: `"shot_v1"` (default) gives streams independent of worker count; `"block_v1"` keeps earlier seeded counts. Terminal sampling is unaffected. |
-| `trajectory_max_memory_mb` | `int` or `None` | `None` | Soft budget in MiB for concurrent QCSim dense trajectories; `None` uses 1024. At least one worker always runs. |
+| `trajectory_policy` | `str` or `None` | `None` | QCSim dynamic circuits: `"shot_v1"` gives streams independent of worker count; `"block_v1"` keeps earlier seeded counts. Statevector, density-matrix and path-integral runs default to `"shot_v1"`. Stabilizer, extended-stabilizer, MPS and MPO runs use a policy only when it is set; `None` keeps their earlier, worker-dependent seeded sequences. Terminal sampling is unaffected. |
+| `trajectory_max_memory_mb` | `int` or `None` | `None` | Soft budget in MiB for concurrent QCSim work: dense trajectory shots (and, under an explicit `trajectory_policy`, stabilizer and bounded MPS/MPO shots), and the parallel noise realizations (of executions, Monte Carlo estimates and fidelities) and checkpoint suffixes of statevector, density-matrix, stabilizer and bounded MPS/MPO runs. `None` uses 1024. At least one worker always runs. |
+| `counts_policy` | `str` | `"auto"` | How QCSim counts are sampled. `"auto"` uses noisy-Clifford reference frames for unseeded requests that the stabilizer simulator could itself run, and direct trajectories for other unseeded independent noisy realizations; seeded requests keep their earlier sequences. `"legacy"` always uses the earlier executor. `"frame_v1"` opts into frames even with seeds and for automatically selected methods. Results report `sampling_strategy`. |
 | `max_simulators` | `int` or `None` | `None` | Maximum concurrent simulators, from 1 to 1024. `None` keeps the default; memory budgets may lower it. |
 
 ```{code-cell} python

@@ -107,6 +107,11 @@ inline json::object OptionCapability(const Option &option)
         result["enum"] = json::array{"block_v1", "shot_v1"};
         result["default"] = "shot_v1";
     }
+    if (name == "counts_policy")
+    {
+        result["enum"] = json::array{"auto", "legacy", "frame_v1"};
+        result["default"] = "auto";
+    }
     if (type == "integer" || type == "nonnegative")
         result["minimum"] = 0;
     else if (type == "positive_integer")

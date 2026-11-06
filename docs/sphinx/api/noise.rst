@@ -14,3 +14,6 @@ Noise
 .. autofunction:: full_noise_estimate
 .. autofunction:: full_noise_execute
 .. autofunction:: noisy_fidelity
+.. autofunction:: compile_reference_sampler
+.. autoclass:: ReferenceFrameSampler
+   :members:

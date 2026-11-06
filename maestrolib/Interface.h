@@ -71,6 +71,60 @@ extern "C"
 #endif
         char *MaestroFinalizeDistributedMpiGpuJson(void);
 
+// Packed shot rows, for row counts beyond the JSON result limit. A row holds
+// ceil(num_clbits / 64) words; classical bit b is bit b % 64 of word b / 64.
+//
+// MaestroRunRequestSamples runs an "execute" request as if it set
+// execution.return_samples, writing its shots rows in shot order to rows.
+// capacity counts words and must be at least shots * row_words. With rows
+// null, nothing executes: the request is validated and the result reports
+// "shots", "num_clbits", "row_words" and "required_words". Otherwise the result
+// is the execute result without "samples". Results and errors are JSON as for
+// MaestroRunRequestJson; free them with FreeResult.
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+        char *MaestroRunRequestSamples(const char *request, unsigned long long *rows, size_t capacity);
+
+// A noisy Clifford circuit compiled once to reference frames, for repeated
+// batches without re-simulating its tableau. request is a JSON object with
+// "schema_version" 2, "circuit" and optionally "simulator" (by default the QCSim
+// stabilizer) and "noise", validated as a native execute request would be. The
+// simulator must admit the QCSim stabilizer, and the noise must consist of
+// Pauli-mixture channels (Pauli, phase damping, readout errors; not amplitude
+// damping or finite-T1 relaxation). Returns null when frames do not apply, and
+// then, when error is not null, stores an error JSON in *error for FreeResult.
+// Release the sampler with MaestroDestroyReferenceFrameSampler; concurrent
+// sampling calls are safe.
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+        void *MaestroCreateReferenceFrameSampler(const char *request, char **error);
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+        void MaestroDestroyReferenceFrameSampler(void *sampler);
+// Qubits of the compiled register and classical bits of each row. Returns 1 on success.
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+        int MaestroReferenceFrameSamplerShape(void *sampler, size_t *qubits, size_t *clbits);
+// shots packed rows; capacity counts words. Equal seeds give equal rows.
+// Returns 1 on success, 0 on invalid arguments or failure.
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+        int MaestroReferenceFrameSampleBits(void *sampler, size_t shots, unsigned long long seed, unsigned long long *rows, size_t capacity);
+// The histogram of exactly the rows MaestroReferenceFrameSampleBits draws for
+// the same shots and seed: each distinct row once, packed, with its count.
+// capacity counts entries and must be >= shots: rows needs capacity * row
+// words, counts capacity entries. *written receives the distinct rows.
+#ifdef _WIN32
+    __declspec(dllexport)
+#endif
+        int MaestroReferenceFrameSampleCountsBits(void *sampler, size_t shots, unsigned long long seed, unsigned long long *rows, unsigned long long *counts,
+                                                  size_t capacity, size_t *written);
+
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
@@ -417,6 +471,11 @@ extern "C"
 #ifdef _WIN32
     __declspec(dllexport)
 #endif
+        // Samples shots outcomes of width qubits without collapsing the state. Each
+        // distinct outcome is written once: width bytes (one per qubit, 0 or 1) in
+        // outcomes and its count in counts. capacity counts entries and must be >=
+        // shots, so outcomes needs capacity * width bytes and counts capacity
+        // entries; *written receives the distinct outcomes. Returns 1 on success.
         int MaestroSampleCountsBits(void *sim, const unsigned long int *qubits, size_t width, size_t shots, unsigned char *outcomes, unsigned long long *counts,
                                     size_t capacity, size_t *written);
 #ifdef _WIN32

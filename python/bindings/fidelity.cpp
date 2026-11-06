@@ -313,44 +313,4 @@ std::complex<double> inner_product_core(const std::shared_ptr<Circuits::Circuit<
     return result;
 }
 
-// Fidelity to the ideal unitary circuit's pure state. Unlike inner_product,
-// retain the noisy forward resets/channels and read a probability, which is
-// supported by both pure-state and density-matrix/MPO backends.
-double noisy_fidelity_core(const std::shared_ptr<Circuits::Circuit<double>> &ideal, const std::shared_ptr<Circuits::Circuit<double>> &noisy,
-                           const SimulatorConfig &config)
-{
-    auto combined = std::make_shared<Circuits::Circuit<double>>();
-    // Fidelity is evaluated before terminal readout, as in inner_product.
-    for (const auto &op : noisy->GetOperations())
-    {
-        if (op->GetType() != Circuits::OperationType::kMeasurement)
-            combined->AddOperation(op->Clone());
-    }
-    const auto &ideal_ops = ideal->GetOperations();
-    for (auto it = ideal_ops.rbegin(); it != ideal_ops.rend(); ++it)
-    {
-        auto adj = adjoint_gate(*it);
-        if (adj)
-            combined->AddOperation(adj);
-    }
-
-    const int num_qubits = std::max(1, static_cast<int>(combined->GetMaxQubitIndex()) + 1);
-    ScopedSimulator sim(num_qubits);
-    if (sim.handle == 0)
-        throw std::runtime_error("Failed to create simulator handle.");
-    auto network = ConfigureNetwork(sim.handle, config);
-    if (!network)
-        throw std::runtime_error("Failed to configure network.");
-    network->CreateSimulator(config.simulator_type, config.simulation_type);
-    auto simulator = network->GetSimulator();
-    if (!simulator)
-        throw std::runtime_error("noisy_fidelity: requested backend is unavailable.");
-    if (config.seed)
-        simulator->SetSeed(*config.seed);
-    Circuits::OperationState state(num_qubits);
-    nb::gil_scoped_release release;
-    combined->ExecuteBD(simulator, state);
-    return simulator->Probability(0);
-}
-
 } // namespace maestro_bindings

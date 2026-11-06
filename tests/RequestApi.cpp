@@ -15,6 +15,7 @@ void TestNetworkBondDefaults();
 void TestGateFusionConfiguration();
 void TestVirtualRoutingConfiguration();
 void TestTypedTrajectoryConfiguration();
+void TestFrameCountPolicy();
 void TestFusionPublicInterfaces();
 void TestPauliPropagatorDedupDefault();
 void TestAutomaticGpuMixedStateFallback();
@@ -56,6 +57,123 @@ j::object Call(const j::object &request, bool success = true, bool validate = fa
         throw std::runtime_error(input + "\n" + output);
     ++checks;
     return parsed;
+}
+
+void TestFrameCountRequests()
+{
+    auto request = Request("execute", 2, "h q[0]; cx q[0],q[1]; measure q -> c;", "stabilizer");
+    request["execution"].as_object()["seed"] = 0;
+    request["simulator"].as_object()["options"] = j::object{{"counts_policy", "legacy"}};
+    const auto legacy = Call(request);
+    request["simulator"].as_object()["options"] = j::object{{"counts_policy", "auto"}};
+    Check(Call(request).at("counts") == legacy.at("counts"), "Automatic seeded native counts changed the legacy sequence");
+    request["simulator"].as_object()["options"] = j::object{{"counts_policy", "frame_v1"}};
+    const auto framed = Call(request);
+    Check(framed.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1", "Explicit native frame counts did not select frames");
+    Check(Call(request).at("counts") == framed.at("counts"), "Seeded native frame counts did not replay");
+    request["execution"].as_object().erase("seed");
+    request["simulator"].as_object()["options"] = j::object{{"counts_policy", "auto"}};
+    const auto automatic = Call(request);
+    Check(automatic.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1", "Unseeded native counts did not select frames");
+    const auto resolved = automatic.at("execution_metadata").at("configured_options").at("counts_policy");
+    Check(resolved == "frame_v1", "Native metadata did not record the resolved count policy");
+    request["execution"].as_object()["seed"] = automatic.at("seed");
+    request["simulator"].as_object()["options"] = j::object{{"counts_policy", resolved}};
+    Check(Call(request).at("counts") == automatic.at("counts"), "Native frame seed and resolved policy did not replay");
+
+    auto noisy = Request("execute", 2, "h q[0]; cx q[0],q[1]; measure q[0]->c[0]; h q[1]; measure q[1]->c[3];", "stabilizer", 5);
+    noisy["execution"].as_object().erase("seed");
+    noisy["execution"].as_object()["shots"] = 137;
+    noisy["noise"] =
+        j::object{{"mode", "pauli"},
+                  {"evaluation", "trajectories"},
+                  {"realizations", 137},
+                  {"channels", j::array{j::object{{"kind", "bit_flip"}, {"targets", j::array{0}}, {"probability", 0.13}},
+                                        j::object{{"kind", "readout"}, {"targets", j::array{1}}, {"p_meas1_prep0", 0.17}, {"p_meas0_prep1", 0.29}}}}};
+    noisy["simulator"].as_object()["options"] = j::object{{"counts_policy", "auto"}};
+    const auto noisyAutomatic = Call(noisy);
+    Check(noisyAutomatic.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1", "Unseeded noisy native counts did not select frames");
+    Check(noisyAutomatic.at("noise").at("realizations").to_number<size_t>() == 137, "Noisy frame metadata lost independent realizations");
+    const auto noisyPolicy = noisyAutomatic.at("execution_metadata").at("configured_options").at("counts_policy");
+    Check(noisyPolicy == "frame_v1", "Noisy native metadata did not record the resolved count policy");
+    uint64_t total = 0;
+    for (const auto &entry : noisyAutomatic.at("counts").as_object())
+    {
+        Check(entry.key().size() == 5, "Noisy native frame counts changed declared classical width");
+        total += entry.value().to_number<uint64_t>();
+    }
+    Check(total == 137, "Noisy native frame counts lost shots");
+
+    auto replay = noisy;
+    replay["execution"].as_object()["seed"] = noisyAutomatic.at("seed");
+    replay["noise"].as_object()["seed"] = noisyAutomatic.at("noise").at("seed");
+    replay["simulator"].as_object()["options"] = j::object{{"counts_policy", noisyPolicy}};
+    const auto noisyReplay = Call(replay);
+    Check(noisyReplay.at("counts") == noisyAutomatic.at("counts"), "Returned noisy frame seeds and resolved policy did not replay");
+    Check(noisyReplay.at("seed") == noisyAutomatic.at("seed") && noisyReplay.at("noise").at("seed") == noisyAutomatic.at("noise").at("seed"),
+          "Noisy native replay changed its returned seeds");
+
+    // An explicit candidate list without the stabilizer binds both frame
+    // policies, even for a requested Stabilizer method: the listed backend runs.
+    for (const char *policy : {"auto", "frame_v1"})
+    {
+        auto restricted = Request("execute", 2, "h q[0]; cx q[0],q[1]; measure q -> c;", "stabilizer");
+        restricted["execution"].as_object().erase("seed");
+        auto &simulator = restricted["simulator"].as_object();
+        simulator["selection"] = "automatic";
+        simulator["candidates"] = j::array{j::object{{"backend", "qcsim"}, {"method", "statevector"}}};
+        simulator["options"] = j::object{{"counts_policy", policy}};
+        const auto result = Call(restricted);
+        const auto &metadata = result.at("execution_metadata").as_object();
+        const auto *strategy = metadata.if_contains("sampling_strategy");
+        Check(!(strategy && *strategy == "reference_frame_v1") && metadata.at("method") == "statevector",
+              "A frame policy replaced the backend an explicit candidate list allows");
+    }
+
+    // auto keeps a requested non-Stabilizer method, also under automatic
+    // selection, unless the request's candidate list admits the stabilizer.
+    for (const char *selection : {"fixed", "automatic", "candidates"})
+    {
+        const std::string mode(selection);
+        auto statevector = Request("execute", 2, "h q[0]; cx q[0],q[1]; measure q -> c;", "statevector");
+        statevector["execution"].as_object().erase("seed");
+        auto &simulator = statevector["simulator"].as_object();
+        simulator["selection"] = mode == "fixed" ? "fixed" : "automatic";
+        if (mode == "candidates")
+            simulator["candidates"] =
+                j::array{j::object{{"backend", "qcsim"}, {"method", "statevector"}}, j::object{{"backend", "qcsim"}, {"method", "stabilizer"}}};
+        const auto result = Call(statevector);
+        const auto *strategy = result.at("execution_metadata").as_object().if_contains("sampling_strategy");
+        const bool framed = strategy && *strategy == "reference_frame_v1";
+        Check(framed == (mode == "candidates"), "Automatic native counts replaced a method the ordinary executor would honor");
+        uint64_t total = 0;
+        for (const auto &entry : result.at("counts").as_object())
+        {
+            Check(entry.key() == "00" || entry.key() == "11", "Native Bell counts left the Bell support");
+            total += entry.value().to_number<uint64_t>();
+        }
+        Check(total == 80 && result.at("shots").to_number<uint64_t>() == 80, "Native Bell counts lost shots");
+    }
+
+    // Either explicit seed source, including zero, must keep automatic counts
+    // on the previous stream. The public noise seed also seeds measurements
+    // when no simulator seed was supplied.
+    for (const bool simulatorSeed : {false, true})
+    {
+        auto seeded = noisy;
+        if (simulatorSeed)
+            seeded["execution"].as_object()["seed"] = 0;
+        else
+            seeded["noise"].as_object()["seed"] = 0;
+        seeded["simulator"].as_object()["options"] = j::object{{"counts_policy", "legacy"}};
+        const auto oldCounts = Call(seeded);
+        seeded["simulator"].as_object()["options"] = j::object{{"counts_policy", "auto"}};
+        const auto seededAutomatic = Call(seeded);
+        Check(seededAutomatic.at("seed").to_number<uint64_t>() == 0, "Native automatic counts lost explicit seed zero");
+        Check(seededAutomatic.at("counts") == oldCounts.at("counts"), "Native noisy seed zero changed the legacy histogram");
+        const auto *strategy = seededAutomatic.at("execution_metadata").as_object().if_contains("sampling_strategy");
+        Check(!strategy || *strategy != "reference_frame_v1", "Explicit native seed zero incorrectly selected automatic frames");
+    }
 }
 
 double Real(const j::value &value)
@@ -807,6 +925,8 @@ try
     TestGateFusionConfiguration();
     TestVirtualRoutingConfiguration();
     TestTypedTrajectoryConfiguration();
+    TestFrameCountPolicy();
+    TestFrameCountRequests();
     TestFusionPublicInterfaces();
     TestFusionMetadata();
     TestPauliPropagatorDedupDefault();

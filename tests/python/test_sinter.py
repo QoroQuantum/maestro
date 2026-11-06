@@ -19,6 +19,12 @@ from maestro.sinter import (
 )
 
 
+@pytest.fixture
+def disable_compiled_reference_sampler(monkeypatch):
+    """Keep checkpoint-specific tests on the checkpoint fallback path."""
+    monkeypatch.setattr(maestro, "_compile_reference_sampler", lambda *args: None, raising=False)
+
+
 # =============================================================================
 # Circuit Translation Tests
 # =============================================================================
@@ -642,6 +648,7 @@ def test_split_stim_prefix_suffix_boundaries():
     assert prefix == "R 0\nH 0"
 
 
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
 def test_checkpoint_zero_mismatch_repetition_code():
     """Verify 0 mismatch between baseline and checkpointed simulation on repetition code."""
     circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
@@ -659,6 +666,7 @@ def test_checkpoint_zero_mismatch_repetition_code():
     assert np.array_equal(obs_base, obs_chk)
 
 
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
 def test_checkpoint_zero_mismatch_surface_code():
     """Verify 0 mismatch between baseline and checkpointed simulation on rotated surface code."""
     circuit = stim.Circuit.generated("surface_code:rotated_memory_z", distance=3, rounds=3)
@@ -677,6 +685,7 @@ def test_checkpoint_zero_mismatch_surface_code():
 
 
 @pytest.mark.parametrize("enable_checkpoint", [False, True])
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
 def test_noise_only_qubit_keeps_measurement_width(enable_checkpoint):
     """Qubit 3 carries only a channel, so identity draws used to drop it and
     shorten some realizations' counts, failing the width check at random."""
@@ -688,6 +697,7 @@ def test_noise_only_qubit_keeps_measurement_width(enable_checkpoint):
         assert not measurements.any()
 
 
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
 def test_seeded_checkpoint_draws_fresh_batches():
     """Each call of a seeded, checkpointed sampler must draw new samples; a
     replayed batch would overstate the precision of collected error rates."""
@@ -710,6 +720,7 @@ def test_seeded_checkpoint_draws_fresh_batches():
     np.testing.assert_array_equal(sampler.sample_measurements(4096, seed=1), first[3])
 
 
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
 def test_checkpoint_with_external_noise_model():
     """Verify clean execution with external NoiseModel when checkpointing is enabled."""
     circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
@@ -729,6 +740,7 @@ def test_checkpoint_with_external_noise_model():
     assert obs.shape[0] == 50
 
 
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
 def test_checkpoint_sinter_sample_task_stats():
     """Verify Sinter task sampling works with checkpointed simulator."""
     circuit = stim.Circuit.generated("repetition_code:memory", distance=3, rounds=2)
@@ -774,6 +786,7 @@ def test_count_nontrivial_prefix_gates():
     assert count_nontrivial_prefix_gates(s_nontrivial) == (1, 1)
 
 
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
 def test_trivial_prefix_falls_back_to_direct_execution():
     """Verify trivial prefix (only resets/coords) bypasses checkpoint simulator."""
     c = stim.Circuit("""
@@ -790,6 +803,7 @@ def test_trivial_prefix_falls_back_to_direct_execution():
     assert stats.shots == 20
 
 
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
 def test_nontrivial_prefix_enables_checkpoint_simulator():
     """Verify non-trivial prefix (with 2q or 1q gates) instantiates checkpoint simulator."""
     c = stim.Circuit("""
@@ -1104,6 +1118,7 @@ def test_density_matrix_applies_channels_exactly():
     assert abs(flips - 0.5) < 0.04
 
 
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
 def test_checkpointed_prefix_with_circuit_noise():
     """Noise after a checkpointed Bell-pair prefix: X on q1 turns it into |+>|1>."""
     text = "R 0 1\nH 0\nCX 0 1\nX_ERROR(1) 1\nCX 0 1\nH 0\nM 0 1"
@@ -1168,6 +1183,7 @@ def test_zero_probability_channel_runs_without_noise_model():
 @pytest.mark.parametrize("enable_checkpoint, prefix", [
     (False, ""), (True, ""), (True, "X 0\nX 0\n"),
 ])
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
 def test_targetless_noise_runs_without_noise_model(channel, enable_checkpoint, prefix):
     """Stim noise without targets is a no-op, including on the direct fallback path."""
     circuit = stim.Circuit(f"{prefix}{channel}\nM 0")
@@ -1195,3 +1211,9 @@ def test_noisy_fidelity_with_circuit_channel_on_statevector():
     cfg = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector)
     result = qc.noisy_fidelity(maestro.NoiseModel(), noise_realizations=1000, config=cfg, noise_seed=3)
     assert result["fidelity"] == pytest.approx(0.75, abs=0.05)
+
+
+def test_sinter_public_api_is_the_documented_entry_points():
+    import maestro.sinter as module
+    assert set(module.__all__) == {"MaestroCompiledSampler", "MaestroSinterSampler", "translate_stim_to_maestro"}
+    assert all(callable(getattr(module, name)) for name in module.__all__)

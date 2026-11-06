@@ -13,6 +13,17 @@ char *MaestroValidateRequestJson(const char *request);
 char *MaestroRunRequestJson(const char *request);
 char *MaestroFinalizeDistributedMpiGpuJson(void);
 void FreeResult(char *result);
+
+/* Packed shot rows and compiled reference frames; see "Shot rows". */
+char *MaestroRunRequestSamples(const char *request, unsigned long long *rows, size_t capacity);
+void *MaestroCreateReferenceFrameSampler(const char *request, char **error);
+int MaestroReferenceFrameSamplerShape(void *sampler, size_t *qubits, size_t *clbits);
+int MaestroReferenceFrameSampleBits(void *sampler, size_t shots, unsigned long long seed,
+                                    unsigned long long *rows, size_t capacity);
+int MaestroReferenceFrameSampleCountsBits(void *sampler, size_t shots, unsigned long long seed,
+                                          unsigned long long *rows, unsigned long long *counts,
+                                          size_t capacity, size_t *written);
+void MaestroDestroyReferenceFrameSampler(void *sampler);
 ```
 
 Each call returns an owned UTF-8 JSON string; release it with `FreeResult`, including
@@ -142,7 +153,7 @@ they cannot override the simulator or specify their own launch profiles.
 
 | Operation | Additional fields | Output/semantics |
 |---|---|---|
-| `execute` | `execution.shots` (default 1024) | Measured counts; total shots is not multiplied by realizations |
+| `execute` | `execution.shots` (default 1024), optional `execution.return_samples` | Measured counts, or `samples` (one bitstring per shot; see [Shot rows](#shot-rows)); total shots is not multiplied by realizations |
 | `estimate` | `observables` | Exact observable evaluation per realization, mean and realization standard errors |
 | `statevector`, `amplitudes` | optional `basis_states` | Pure-state amplitudes; these two names have the same output shape |
 | `probabilities` | optional `basis_states` | Selected or full basis probabilities |
@@ -328,8 +339,8 @@ are rejected. Small floating-point thresholds retain their precision.
 | `gpu_device` | `gpu_device` | integer | device |
 | `seed` | `seed` | integer | all |
 | `mps_sampling` | `` | string | mps |
-| `disable_optimized_swapping` | `` | boolean | mps |
-| `lookahead_depth` | `` | lookahead | mps |
+| `disable_optimized_swapping` | `` | boolean | mps, mpo |
+| `lookahead_depth` | `` | lookahead | mps, mpo |
 | `mps_routing_strategy` | same | string | QCSim MPS and MPO |
 | `mps_routing_virtual_bonds` | same | boolean | QCSim/GPU MPS and MPO |
 | `mps_routing_truncation_weight` | same | nonnegative | QCSim/GPU MPS and MPO |
@@ -345,8 +356,9 @@ are rejected. Small floating-point thresholds retain their precision.
 | `allow_reset_marginalization` | `` | boolean | all (default false) |
 | `enable_sampling_reduction` | `` | boolean | all (default false) |
 | `max_simulators` | `max_simulators` | positive_integer | all |
-| `trajectory_policy` | `trajectory_policy` | `block_v1` or `shot_v1` (default) | QCSim statevector, density matrix, path integral |
-| `trajectory_max_memory_mb` | `trajectory_max_memory_mb` | positive_integer | QCSim statevector and density matrix |
+| `trajectory_policy` | `trajectory_policy` | `block_v1` or `shot_v1` (default) | QCSim statevector, density matrix, path integral; opt-in for stabilizer, extended stabilizer, MPS and MPO |
+| `trajectory_max_memory_mb` | `trajectory_max_memory_mb` | positive_integer | QCSim statevector, density matrix, stabilizer, MPS and MPO |
+| `counts_policy` | `` | `auto` (default), `legacy` or `frame_v1` | all (frames run only on QCSim) |
 | `mpo_kraus_completeness_check` | `matrix_product_operator_kraus_completeness_check` | string | mpo |
 | `mpo_restore_trace_after_truncation` | `matrix_product_operator_restore_trace_after_truncation` | boolean | mpo |
 | `mpo_hermitize_after_truncation` | `matrix_product_operator_hermitize_after_truncation` | boolean | mpo |
@@ -399,8 +411,8 @@ noisy channels with that absolute error budget per expectation; unset keeps the
 reduction exact. `allow_reset_marginalization` averages over unobserved reset
 outcomes, preserving ensemble values but not individual trajectories.
 `enable_sampling_reduction` samples disjoint measurement cones independently for
-`execute`; it is exact but opt-in, because it changes a seeded run's random
-streams. Estimates report `auto_reduced`, `qubits_before`, `qubits_after`,
+`execute`, counts and rows alike (neither then uses reference frames); it is
+exact but opt-in, because it changes a seeded run's random streams. Estimates report `auto_reduced`, `qubits_before`, `qubits_after`,
 `clusters_count`, `largest_cluster_qubits`, `mean_cluster_qubits`,
 `cluster_methods`, `expectation_error_bounds` and `bounded_observables`.
 
@@ -500,7 +512,15 @@ An explicit simulator seed (`execution.seed` or `simulator.options.seed`,
 including zero) controls measurements and readout. Otherwise, an explicit
 `noise.seed` also seeds the simulator; if neither is supplied, execution generates
 a fresh random uint64 seed and reports it in the result's `seed` field. Reusing
-that seed with the same request reproduces the run. MPI ranks share the generated
+that seed with the same request and the reported
+`execution_metadata.configured_options.counts_policy` reproduces the run. The
+policy matters for unseeded `execute` requests: under the default `auto`, an
+unseeded request that the stabilizer simulator could run uses noisy-Clifford
+reference frames, reports `execution_metadata.sampling_strategy:
+"reference_frame_v1"` and rewrites `configured_options.counts_policy` to
+`"frame_v1"`, while a seeded `auto` request keeps the earlier executor and its
+counts. Replaying with `counts_policy: "frame_v1"` therefore reproduces such a
+run; replaying with `auto` returns the earlier executor's counts for that seed. MPI ranks share the generated
 seed through their communicator; validation alone does not generate a seed or
 require MPI initialization.
 `noise.seed` is a uint32 (default lower 32 bits of the simulator seed) and drives
@@ -524,6 +544,15 @@ nonnegative JSON integer in the uint64 range. Invalid seed types/ranges return
 the legacy null-result failure. Repeating a seed reseeds an existing handle as
 well as a fresh worker; omitting it leaves the simulator's seed configuration
 unchanged.
+
+`SimpleExecute` also accepts `counts_policy` (`auto`, `legacy` or `frame_v1`,
+as in `simulator.options`). Under `auto`, an unseeded Clifford circuit on a
+network that admits the QCSim stabilizer is counted from reference frames, and
+the result reports `"sampling_strategy": "reference_frame_v1"`; seeded calls and
+`legacy` keep the network executor. A `trajectory_policy` in the configuration
+object also gives that call's stabilizer, extended-stabilizer, MPS and MPO
+dynamic circuits logical shot streams. Omitting it keeps their 0.3.13 seeded
+sequences, even on a handle that an earlier call configured with one.
 
 Fidelity operations use ideal inverse preparation. Delays are identity operations
 in that inverse; `noisy_fidelity` applies coherent gate noise only to the forward
@@ -605,6 +634,104 @@ the request did not set `gate_fusion`; an explicit boolean is also echoed in
 `execution_metadata.configured_options.gate_fusion`. `enabled`
 and `max_qubits` describe Maestro fusion on the backend actually executed,
 including automatic method selection; they do not describe native Aer/Ex fusion.
+
+### Counts policy and sampling strategy
+
+`simulator.options.counts_policy` selects how QCSim `execute` counts are sampled.
+`auto` (the default) uses noisy-Clifford reference frames for unseeded requests
+that the ordinary executor could itself run on the stabilizer simulator; seeded
+requests keep the earlier executor and its seeded counts. `legacy` always keeps
+the earlier executor. `frame_v1` opts into frames even with seeds, and for
+automatically selected methods. An explicit `candidates` list names every
+backend a request allows and replaces the requested one, so neither policy uses
+frames unless the list includes the QCSim stabilizer, and either may when it
+does, whatever the requested backend. Frames need a supported Clifford circuit, Pauli or readout
+noise, Kraus channels that are exact Pauli mixtures (phase damping, for
+example) and, with noise, one realization per shot; other requests fall back.
+
+When frames run, `execution_metadata.sampling_strategy` is `"reference_frame_v1"`,
+the reported backend and method are `qcsim` and `stabilizer`,
+`sampling_components` is 1, and `configured_options.counts_policy` is
+`"frame_v1"` so that replaying the returned seeds reproduces the run (see the
+seed section above). Shot rows (below) always report `sampling_strategy`;
+counts from the ordinary executor omit it.
+
+With one realization per shot, noisy CPU QCSim `execute` requests run their
+realizations on several networks at once, within `max_simulators` and
+`trajectory_max_memory_mb`. Each realization keeps its own seed, so seeded
+counts do not depend on the worker count. Realizations with several shots, and
+`checkpoint_batch` suffixes, whose measurements continue one simulator stream,
+run in order.
+
+### Shot rows
+
+`execution.return_samples: true` (`execute` only) returns `samples` instead of
+`counts`: `shots` bitstrings, each `num_clbits` characters long, classical bit 0
+first (`count_order`). Each row is one shot's complete record. Frames and direct
+sessions keep shot order. Rows from the network executor (MPS, MPO and tensor
+networks, and any method under a `candidates` list or `enable_sampling_reduction`)
+are drawn from a histogram of each noise realization and shuffled within it, so
+they are exchangeable rather than chronological. Classical bits that no measurement writes
+read `0`. Seeded rows replay exactly. Rows drawn from one noise realization are
+exchangeable, and so are the rows of a noiseless request or of one with a
+realization per shot: any leading slice of those is a uniform subsample of the
+run. With fewer `noise.realizations` than shots, consecutive rows share a
+realization, so a leading slice draws from the first realizations only.
+`execution_metadata.sampling_strategy` says how the rows were drawn:
+
+| Strategy | Rows |
+| --- | --- |
+| `reference_frame_v1` | Noisy-Clifford reference frames: a Stabilizer method, or automatic selection whose `candidates`, if listed, include the QCSim stabilizer; a supported Clifford circuit and, with noise, one realization per shot |
+| `terminal_v1` | One prepared state sampled for every row (terminal measurements only) |
+| `trajectory_v1` | Each shot, or each noise realization, executed on its own |
+
+Rows use frames whenever they apply; `counts_policy` governs counts only. A
+`candidates` list names every backend the request allows, for rows as for
+counts: rows run on the backend selected from it, and the metadata reports that
+backend. With noise, the shots are divided between `noise.realizations` as for counts, and
+`noise.realizations` in the result reports the number used. Rows are the
+algorithm of Python's `return_samples=True` and of the C++
+`MaestroExecution::SampleCircuitRows` and `MaestroExecution::ExecuteNoisy`
+(`Execution/SampleRecords.h`). Distributed GPU execution does not support rows.
+
+A JSON row costs `num_clbits + 3` bytes, so `shots * (num_clbits + 3)` must fit
+`max_result_bytes`; validation rejects larger requests. `MaestroRunRequestSamples`
+has no such bound. It runs an `execute` request as if `return_samples` were set
+and writes packed rows: each row holds `ceil(num_clbits / 64)` words
+(`row_words`), and classical bit `b` is bit `b % 64` of the row's word `b / 64`.
+`capacity` counts words and must be at least `shots * row_words`. With `rows`
+null nothing executes: the request is validated and the result reports `shots`,
+`num_clbits`, `row_words` and `required_words`, so a caller can size its buffer
+first without sampling twice. Otherwise the result is the execute result without
+`samples`. Errors and ownership follow `MaestroRunRequestJson`.
+
+`MaestroCreateReferenceFrameSampler` compiles a noisy Clifford circuit once, for
+repeated batches (QEC decoding loops, for example) without re-simulating its
+tableau. Its request is a JSON object with `schema_version: 2`, `circuit`, and
+optionally `simulator` and `noise`, validated as an `execute` request would be.
+An omitted `simulator` means the QCSim `stabilizer` method (not `execute`'s
+statevector default). Noise needs fixed selection of the `stabilizer` method, as
+in `execute`. The simulator must admit the QCSim stabilizer: the `stabilizer`
+method, or automatic selection whose `candidates`, if listed, include it. The noise must use `mode` `pauli` or
+`combined` with Pauli-mixture channels: Pauli channels, phase damping and readout
+errors qualify; amplitude damping, finite-T1 relaxation and coherent, correlated
+or crosstalk channels do not. When frames do not apply it returns null and, if
+`error` is not null, stores an error JSON (code `unsupported_capability` for an
+unsupported circuit) for `FreeResult`. `MaestroReferenceFrameSamplerShape` stores
+the compiled register's qubits and the classical bits of each row, which set its
+`ceil(clbits / 64)` words, and returns 1 on success.
+`MaestroReferenceFrameSampleBits` writes `shots` packed rows (as above; `capacity`
+counts words) and returns 1 on success. Equal seeds give equal rows.
+`MaestroReferenceFrameSampleCountsBits` writes the histogram of exactly those rows:
+each distinct row once, packed, with its count; `capacity` counts entries and must
+be at least `shots`. Sampling calls on one handle may run concurrently. Release
+the handle with `MaestroDestroyReferenceFrameSampler`. Python exposes the same
+compiled plan as `maestro.compile_reference_sampler`.
+
+Noise targets must lie in the declared register. Python's
+`NoiseModel.native_channels(num_qubits)` therefore leaves out channels on
+qubits beyond `num_qubits`, including crosstalk spectators there, whose
+rotations on an untouched `|0>` are a global phase.
 
 
 ### CPU and GPU MPO (Hastings implementation)

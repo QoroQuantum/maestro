@@ -379,7 +379,7 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
                 Types::qubit_t packed = 0;
                 for (size_t i = 0; i < qubits.size(); ++i)
                     if ((measured & (1ULL << qubits[i])) != 0)
-                        packed |= 1ULL << i;
+                        packed |= Types::BitAt(i);
                 ++result[packed];
             }
         }

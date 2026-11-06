@@ -12,8 +12,10 @@
 #include <composer/Estimators/ExecutionEstimator.h>
 #endif
 
+#include "../Execution/ReferenceFrameSampler.h"
 #include "../Simulators/Core/Factory.h"
 #include "../Simulators/Core/GenericGateValidation.h"
+#include "../Utils/RandomStream.h"
 
 #include "Maestro.h"
 
@@ -137,6 +139,7 @@ static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boos
     try
     {
         std::string policy = "shot_v1";
+        bool explicitPolicy = false;
         uint64_t workers = 0;
         uint64_t memoryMb = 1024;
         if (config.is_object())
@@ -148,6 +151,7 @@ static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boos
                 policy = std::string(value->as_string());
                 if (policy != "block_v1" && policy != "shot_v1")
                     return false;
+                explicitPolicy = true;
             }
             if (const auto *value = config.as_object().if_contains("max_simulators"))
             {
@@ -178,12 +182,70 @@ static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boos
             network.SetMaxSimulators(static_cast<size_t>(workers));
         network.Configure("trajectory_max_memory_mb", std::to_string(memoryMb).c_str());
         network.Configure("trajectory_policy", policy.c_str());
+        // Configure marks any policy explicit, which opts the stabilizer and
+        // tensor-chain methods into logical shot streams. Only a policy in this
+        // call's configuration does so; a reused handle forgets an earlier one,
+        // so omitted policies keep those methods' 0.3.13 seeded sequences.
+        if (!explicitPolicy)
+            network.RemoveConfiguration("trajectory_policy_explicit");
         return true;
     }
     catch (const std::exception &)
     {
         return false;
     }
+}
+
+// SimpleExecute's optional counts_policy: auto (default), legacy or frame_v1.
+static bool ParseLegacyCountsPolicy(const boost::json::value &config, std::string &policy)
+{
+    policy = "auto";
+    const auto *value = config.is_object() ? config.as_object().if_contains("counts_policy") : nullptr;
+    if (!value)
+        return true;
+    if (!value->is_string())
+        return false;
+    policy = std::string(value->as_string());
+    return policy == "auto" || policy == "legacy" || policy == "frame_v1";
+}
+
+// Counts from compiled reference frames, under the rule MaestroExecution::
+// SampleCircuit applies: frame_v1 samples any circuit frames compile, auto only
+// an unseeded Clifford circuit, so seeded calls keep their sequences. The
+// network must admit the QCSim stabilizer (a fixed Stabilizer method, or a
+// candidate set that includes it) and hold the circuit on its single host.
+static std::optional<Network::INetwork<>::ExecuteResults> LegacyFrameCounts(Network::INetwork<> &network, const std::shared_ptr<Circuits::Circuit<>> &circuit,
+                                                                            size_t shots, const std::string &policy, const boost::json::value &config)
+{
+    if (policy == "legacy" || !shots || !circuit)
+        return std::nullopt;
+    std::optional<uint64_t> seed;
+    if (const auto *value = config.is_object() ? config.as_object().if_contains("seed") : nullptr)
+        seed = value->is_uint64() ? value->as_uint64() : static_cast<uint64_t>(value->as_int64());
+    if (policy == "auto" && (seed || !circuit->IsClifford()))
+        return std::nullopt;
+    const auto simulator = network.GetSimulator();
+    if (!simulator || simulator->GetType() != Simulators::SimulatorType::kQCSim || network.GetNumHosts() != 1)
+        return std::nullopt;
+    const bool allowsStabilizer = network.GetOptimizeSimulator()
+                                      ? network.OptimizationSimulatorExists(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStabilizer)
+                                      : simulator->GetSimulationType() == Simulators::SimulationType::kStabilizer;
+    if (!allowsStabilizer)
+        return std::nullopt;
+    const auto bits = circuit->GetBits();
+    const size_t qubits = std::max<size_t>(1, circuit->GetMaxQubitIndex() + 1);
+    if (bits.empty() || qubits > network.GetNumQubitsForHost(0))
+        return std::nullopt;
+    const size_t width = std::max(network.GetNumClassicalBits(), *bits.rbegin() + 1);
+    const auto plan = MaestroExecution::CompileReferenceSampler(circuit, qubits, width);
+    if (!plan)
+        return std::nullopt;
+    auto outcomes = plan->SampleCounts(shots, seed ? *seed : Utils::RandomStream::FreshSeed());
+    Network::INetwork<>::ExecuteResults counts;
+    counts.reserve(outcomes.size());
+    for (auto &[outcome, count] : outcomes)
+        counts.emplace(std::move(outcome), count);
+    return counts;
 }
 
 template <int Dimension> static Eigen::Matrix<std::complex<double>, Dimension, Dimension> ReadGateMatrix(const double *buffer)
@@ -732,6 +794,9 @@ extern "C"
             return nullptr;
         if (!ConfigureLegacySeed(*network, configJson))
             return nullptr;
+        std::string countsPolicy;
+        if (!ParseLegacyCountsPolicy(configJson, countsPolicy))
+            return nullptr;
 
         if (configJson.is_object())
         {
@@ -799,7 +864,8 @@ extern "C"
 
         // TODO: get from config the allowed simulators types and so on, if set
         auto start = std::chrono::high_resolution_clock::now();
-        auto results = network->RepeatedExecuteOnHost(circuit, 0, nrShots);
+        auto frames = LegacyFrameCounts(*network, circuit, nrShots, countsPolicy, configJson);
+        auto results = frames ? std::move(*frames) : network->RepeatedExecuteOnHost(circuit, 0, nrShots);
         auto end = std::chrono::high_resolution_clock::now();
 
         std::chrono::duration<double> duration = end - start;
@@ -830,10 +896,13 @@ extern "C"
         const auto trajectory = network->GetSimulator() ? network->GetSimulator()->GetConfiguration("trajectory_policy") : std::string();
         response.emplace("trajectory_policy", trajectory.empty() ? "shot_v1" : trajectory);
         response.emplace("time_taken", timeStr);
-        response.emplace("gate_fusion",
-                         boost::json::object{{"enabled", network->WasGateFusionEnabled()}, {"max_qubits", network->GetLastGateFusionMaxQubits()}});
+        // Frames run no simulator: report the stabilizer they stand in for.
+        response.emplace("gate_fusion", boost::json::object{{"enabled", frames ? false : network->WasGateFusionEnabled()},
+                                                            {"max_qubits", frames ? 0 : network->GetLastGateFusionMaxQubits()}});
+        if (frames)
+            response.emplace("sampling_strategy", "reference_frame_v1");
 
-        auto simulatorType = network->GetLastSimulatorType();
+        auto simulatorType = frames ? Simulators::SimulatorType::kQCSim : network->GetLastSimulatorType();
 
         switch (simulatorType)
         {
@@ -873,7 +942,7 @@ extern "C"
             break;
         }
 
-        auto simulationType = network->GetLastSimulationType();
+        auto simulationType = frames ? Simulators::SimulationType::kStabilizer : network->GetLastSimulationType();
         switch (simulationType)
         {
         case Simulators::SimulationType::kStatevector:

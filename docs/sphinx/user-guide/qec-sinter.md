@@ -28,11 +28,12 @@ print("detection events:", maestro_events.shape)
 print(f"detection event rate: Maestro {maestro_events.mean():.4f}, Stim {stim_events.mean():.4f}")
 ```
 
-Maestro runs the circuit gate by gate with Stim's own noise, so its
-detection-event rate matches Stim's sampler. For Clifford circuits with Pauli
-noise, Stim's own sampler is the natural choice. Maestro covers what a
-stabilizer simulator can't: non-Clifford gates, coherent or device-level noise
-from a `NoiseModel`, and MPS or density-matrix simulation.
+Maestro carries Stim's own noise exactly, so its detection-event rate matches
+Stim's sampler. For Clifford circuits with Pauli noise, Maestro compiles
+noisy-Clifford reference frames, as Stim does, and samples them natively
+(`sampling_strategy: "reference_frame_v1"`). It also covers what a stabilizer
+simulator can't: non-Clifford gates, coherent or device-level noise from a
+`NoiseModel`, and MPS or density-matrix simulation.
 
 (py_sinter_install)=
 ## Install
@@ -51,7 +52,7 @@ need [PyMatching](https://pypi.org/project/PyMatching/).
 |-------------------|-------------|
 | `MaestroCompiledSampler` | A `sinter.CompiledSampler` for one circuit. Call it directly to sample detection events or measurement records. |
 | `MaestroSinterSampler` | A `sinter.Sampler`. Pass it to `sinter.collect()` in `custom_decoders`. |
-| `translate_stim_to_maestro(circuit, qubit_order=None)` | Converts a clean Stim circuit, extended gate string or instruction tuples into `(QuantumCircuit, NoiseModel, measurement_count)`. |
+| `translate_stim_to_maestro(circuit, *, qubit_order=None)` | Converts a clean Stim circuit, extended gate string or instruction tuples into `(QuantumCircuit, NoiseModel, measurement_count)`. |
 
 Both samplers accept a `SimulatorConfig` (`config=`) and a `NoiseModel`
 (`noise_model=`). `MaestroCompiledSampler` also returns raw measurement
@@ -160,4 +161,6 @@ Unexpected record widths and nonzero padding raise `ValueError`. A caller's
 an explicit per-call seed replays that call without consuming the stream.
 `MaestroSinterSampler` rejects `seed` and `config.seed`, because `collect`
 worker identities aren't available for reproducible stream partitioning.
-Histograms don't preserve the chronological order of shots.
+Frames, direct trajectories and checkpoints keep each shot's record and shot
+order; MPS, MPO and tensor-network histograms shuffle complete records within
+each noise realization, so their rows are exchangeable rather than chronological.
