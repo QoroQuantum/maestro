@@ -8,6 +8,7 @@
 #include "ReferenceFrameSampler.h"
 #include "SampleRecords.h"
 #include "Sampling.h"
+#include "TerminalSampling.h"
 #include "maestrolib/Interface.h"
 #include "maestrolib/Json.h"
 #include "qasm/QasmCirc.h"
@@ -54,8 +55,9 @@ bool AdjointOperation(const std::string &operation)
     return operation == "adjoint_expectation_values" || operation == "adjoint_jacobian" || operation == "adjoint_vjp";
 }
 
-// Mixed-state counterparts of inner_product and noisy_fidelity, which need a
-// pure state: they read the prepared density matrix or MPO directly.
+// Mixed-state counterparts of inner_product and fidelity, which read the
+// prepared density matrix or MPO directly (noisy_fidelity applies to mixed
+// states itself: it reads P(0...0) after the ideal circuit's adjoint).
 bool MixedStateQuery(const std::string &operation)
 {
     return operation == "density_matrix_overlap" || operation == "fidelity_with_statevector";
@@ -340,14 +342,17 @@ struct Context
         handle = maestro->CreateSimpleSimulator(circuit.qubits, circuit.clbits);
         try
         {
-            network = ConfigureNetwork(handle, config);
-            if (!network || !network->GetSimulator())
-                throw Error("backend_unavailable", "Requested backend could not be created");
             // A single-host network reserves an internal entanglement qubit.
             // Direct queries describe only the declared logical register; bulk
             // readers and bit-vector queries must not include that unused ancilla.
-            if ((exactRegister || config.simulation_type == Simulators::SimulationType::kMatrixProductOperator) &&
-                network->GetSimulator()->GetNumberOfQubits() != circuit.qubits)
+            // Allocate that register from the start: the ancilla would double a
+            // statevector and quadruple a density matrix, and might not fit.
+            const bool exactWidth = exactRegister || config.simulation_type == Simulators::SimulationType::kMatrixProductOperator;
+            network = ConfigureNetwork(handle, config, exactWidth ? circuit.qubits : 0);
+            if (!network || !network->GetSimulator())
+                throw Error("backend_unavailable", "Requested backend could not be created");
+            // Automatic selection's placeholder may still differ; replace it.
+            if (exactWidth && network->GetSimulator()->GetNumberOfQubits() != circuit.qubits)
                 network->CreateSimulator(network->GetSimulator()->GetType(), network->GetSimulator()->GetSimulationType(), circuit.qubits);
             if (config.fixed_backend &&
                 (network->GetSimulator()->GetType() != config.simulator_type || network->GetSimulator()->GetSimulationType() != config.simulation_type))
@@ -432,10 +437,7 @@ void ValidateNoisyCircuit(const CircuitPtr &circuit)
 
 bool HasChannels(const CircuitPtr &circuit)
 {
-    for (const auto &op : circuit->GetOperations())
-        if (op->GetType() == Circuits::OperationType::kQuantumChannel)
-            return true;
-    return false;
+    return circuit->HasQuantumChannels();
 }
 
 bool HasMeasurementReadout(const CircuitPtr &circuit)
@@ -454,6 +456,13 @@ void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, con
     const bool sampled = noise.enabled && !noise.exact && noise.mode != "analytical";
     for (const auto &op : circuit->GetOperations())
     {
+        // Nested channels execute as part of their circuit; they need the same
+        // backend support as top-level ones.
+        if (op->GetType() == Circuits::OperationType::kComposite)
+        {
+            CheckChannels(std::static_pointer_cast<Circuits::Circuit<>>(op), config, noise);
+            continue;
+        }
         if (op->GetType() != Circuits::OperationType::kQuantumChannel)
             continue;
         if (Mixed(config) && !sampled)
@@ -904,6 +913,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         Require(!observables.empty(), "This operation requires observables");
     Supported(!noise.enabled || config.fixed_backend, "Noise requires fixed backend selection");
     Supported(noise.mode != "analytical" || operation == "estimate", "Analytical noise is an estimator approximation");
+    Supported(!noise.prefix || operation == "checkpoint_batch", "noise.prefix applies to checkpoint_batch prefixes only");
     Supported(!noise.model.has_readout_error() || operation == "execute" || operation == "checkpoint_batch",
               "Readout noise applies to measurement counts only");
     if (noise.enabled)
@@ -912,6 +922,24 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                    : operation == "estimate"
                        ? input.circuit->RemoveEndMeasurements()
                        : Unmeasured(input.circuit, operation == "inner_product" || operation == "mirror_fidelity" || operation == "noisy_fidelity");
+    const bool stochastic_estimation = operation == "estimate" && HasStochasticEvolution(circuit, UsesExactQuantumChannels(config));
+    if (noise.enabled)
+    {
+        const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+        const bool estimator = operation == "estimate" || operation == "noisy_fidelity";
+        noise.policy =
+            ResolveNoiseRealizations(noise.requested_realizations, noise.model, config, layer, estimator ? 100 : 64, circuit, estimator, noise.exact);
+        noise.realizations = noise.mode == "analytical" ? 1 : noise.policy.realizations;
+        if (noise.policy.stochastic_noise && noise.mode != "analytical")
+            AddApproximation(noise, "finite_noise_realizations");
+        Supported(noise.mode != "analytical" || !stochastic_estimation,
+                  "Analytical damping requires deterministic evolution; use combined noise to average measurement branches");
+        // Averaging finitely many branches approximates an ensemble expectation.
+        // Counts draw each shot's branch from its exact distribution instead:
+        // stochastic_execution reports that, but it is no approximation.
+        if (stochastic_estimation)
+            AddApproximation(noise, "finite_measurement_trajectories");
+    }
     std::vector<ParsedCircuit> additional;
     if (operation == "inner_product" || operation == "density_matrix_overlap")
     {
@@ -959,6 +987,27 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             if (noise.enabled)
                 ValidateNoisyCircuit(additional.back().circuit);
         }
+        if (noise.enabled && noise.prefix)
+        {
+            // The saved prefix evolves once, so noise applied to it must be
+            // deterministic there: exact channels without sampled layers.
+            const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+            const auto prefixPolicy = ResolveNoiseRealizations(std::nullopt, noise.model, config, layer, 64, circuit, false, noise.exact);
+            Supported(noise.exact && !prefixPolicy.stochastic_noise,
+                      "noise.prefix requires deterministic exact evaluation: density_matrix or matrix_product_operator without coherent or "
+                      "correlated noise");
+        }
+        if (noise.enabled)
+        {
+            // The policy above saw only the unitary prefix. The suffixes hold the
+            // sampled channels and the branches (reported per suffix below).
+            noise.policy.stochastic_execution = false;
+            if (!noise.exact)
+                for (const auto &suffix : additional)
+                    noise.policy.stochastic_noise = noise.policy.stochastic_noise || suffix.circuit->HasQuantumChannels();
+            if (noise.policy.stochastic_noise)
+                AddApproximation(noise, "finite_noise_realizations");
+        }
     }
     bool circuitChannels = HasChannels(input.circuit);
     for (const auto &other : additional)
@@ -973,7 +1022,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // Observable mirror evaluation only takes expectations of the executed mirror
     // state, which mixed-state backends provide; it needs no pure-state overlap.
     const bool mirrorObservables = operation == "mirror_fidelity" && !observables.empty();
-    if (amplitudes || operation == "inner_product" || (operation == "mirror_fidelity" && !mirrorObservables) || operation == "noisy_fidelity")
+    if (amplitudes || operation == "inner_product" || (operation == "mirror_fidelity" && !mirrorObservables))
         Supported(!Mixed(config), "A mixed state has no unique statevector or pure-state overlap");
     if (MixedStateQuery(operation))
         Supported(MixedStateQueryApplies(config), operation + " requires the qcsim or gpu backend with density_matrix or matrix_product_operator");
@@ -982,8 +1031,11 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                   operation == "checkpoint_batch",
               "This operation requires a single exact noisy state or an explicit "
               "batch");
+    // <psi|rho|psi> for every noise layer: sampled Pauli/T1/coherent
+    // trajectories on pure states, exact channels on density matrices and MPOs
+    // (as Python noisy_fidelity). Analytical damping is rejected above.
     if (operation == "noisy_fidelity")
-        Supported(noise.enabled && noise.mode == "coherent", "Noisy fidelity supports unitary coherent noise only");
+        Supported(noise.enabled, "Noisy fidelity requires a noise block");
     json::array basis;
     if (amplitudes || operation == "probabilities")
         basis = Basis(request, input.qubits, limit);
@@ -1272,11 +1324,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         if (records.max_bond_dimension)
             result["max_bond_dim_reached"] = records.max_bond_dimension;
         if (noise.enabled)
-            result["noise"] = json::object{{"mode", noise.mode},
-                                           {"evaluation", noise.exact ? "exact_channels" : "trajectories"},
-                                           {"seed", noise.seed},
-                                           {"realizations", records.realizations},
-                                           {"approximations", noise.approximations}};
+            result["noise"] = NoiseMetadata(noise, records.realizations);
         Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
         return result;
     }
@@ -1317,11 +1365,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                                 {"count_order", "classical_bit_0_first"},
                                 {"basis_order", "qubit_0_least_significant"}};
             if (noise.enabled)
-                result["noise"] = json::object{{"mode", noise.mode},
-                                               {"evaluation", noise.exact ? "exact_channels" : "trajectories"},
-                                               {"seed", noise.seed},
-                                               {"realizations", std::min(shots, noise.realizations)},
-                                               {"approximations", noise.approximations}};
+                result["noise"] = NoiseMetadata(noise, std::min(shots, noise.realizations));
             Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
             return result;
         }
@@ -1331,7 +1375,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         if (!noise.thermal_approximation_warning.empty())
             std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
         std::mt19937 rng(noise.seed);
-        const size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : 1;
+        const size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : stochastic_estimation ? kMeasurementTrajectories : 1;
         std::vector<double> sums(observables.size()), squares(observables.size()), bounds(observables.size());
         size_t bounded = 0;
         EstimationCache cache;
@@ -1374,6 +1418,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         for (auto method : last.cluster_methods)
             methods.emplace_back(MethodName(method));
         auto metadata = ReductionMetadata(last, config);
+        metadata["stochastic_execution"] = stochastic_estimation;
+        metadata["measurement_trajectories"] = stochastic_estimation ? realizations : size_t{0};
+        metadata["estimate_evaluation"] = stochastic_estimation || noise.policy.stochastic_noise ? "trajectory_average" : "deterministic";
         json::object result{{"schema_version", SchemaVersion},
                             {"operation", operation},
                             {"num_qubits", input.qubits},
@@ -1397,13 +1444,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                             {"count_order", "classical_bit_0_first"},
                             {"basis_order", "qubit_0_least_significant"}};
         if (noise.enabled)
-            result["noise"] = json::object{{"mode", noise.mode},
-                                           {"evaluation", noise.mode == "analytical" ? "analytical_approximation"
-                                                          : noise.exact              ? "exact_channels"
-                                                                                     : "trajectories"},
-                                           {"seed", noise.seed},
-                                           {"realizations", realizations},
-                                           {"approximations", noise.approximations}};
+            result["noise"] = NoiseMetadata(noise, realizations);
+        if (realizations == 1 && (stochastic_estimation || noise.policy.stochastic_noise))
+            result["realization_standard_errors"] = nullptr;
         Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
         return result;
     }
@@ -1443,18 +1486,14 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         if (!last.sampling_strategy.empty())
             result["execution_metadata"].as_object()["sampling_strategy"] = last.sampling_strategy;
         if (noise.enabled)
-            result["noise"] = json::object{{"mode", noise.mode},
-                                           {"evaluation", noise.exact ? "exact_channels" : "trajectories"},
-                                           {"seed", noise.seed},
-                                           {"realizations", realizations},
-                                           {"approximations", noise.approximations}};
+            result["noise"] = NoiseMetadata(noise, realizations);
         Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
         return result;
     }
     // Mixed-state queries compare whole registers, so no network ancilla may be
     // added. Checkpoints save and restore the register on every shot, so an
     // unused ancilla would double statevector and quadruple density-matrix work.
-    Context context(input, config, query || MixedStateQuery(operation) || operation == "checkpoint_batch");
+    Context context(input, config, query || MixedStateQuery(operation) || operation == "checkpoint_batch" || operation == "noisy_fidelity");
     // Execution metadata describes the network that ran last (parallel execute).
     Context *metadata_context = &context;
     std::vector<std::unique_ptr<Context>> metadata_contexts;
@@ -1465,7 +1504,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     std::mt19937 rng(noise.seed);
     const noise::NoiseInjectionPlan plan(circuit, noise.model);
     json::object result{{"schema_version", SchemaVersion}, {"operation", operation}, {"num_qubits", input.qubits}, {"num_clbits", input.clbits}};
-    size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : 1;
+    // As in the non-distributed estimate, a dynamic estimate without sampled
+    // noise still averages measurement branches.
+    size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : stochastic_estimation ? kMeasurementTrajectories : 1;
     if (operation == "execute" || operation == "checkpoint_batch")
         realizations = std::min(realizations, shots);
     if (operation == "execute")
@@ -1559,7 +1600,11 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                                                  : 0.0);
         }
         result["expectation_values"] = std::move(values);
-        result["realization_standard_errors"] = std::move(errors);
+        // One sample of a stochastic estimate cannot estimate its uncertainty.
+        if (realizations == 1 && (stochastic_estimation || noise.policy.stochastic_noise))
+            result["realization_standard_errors"] = nullptr;
+        else
+            result["realization_standard_errors"] = std::move(errors);
     }
     else if (operation == "fidelity_with_statevector")
     {
@@ -1722,22 +1767,61 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     }
     else if (operation == "checkpoint_batch")
     {
-        Prepare(context, circuit, input.clbits);
+        // noise.prefix: the prefix's noise evolves once, as exact channels. It
+        // draws from its own generator, so the suffixes' noise stream is the
+        // same as with an ideal prefix.
+        auto prefixCircuit = circuit;
+        if (noise.enabled && noise.prefix)
+        {
+            std::mt19937 prefixRng(noise.seed ^ 0x70726566u);
+            prefixCircuit = Inject(noise::NoiseInjectionPlan(circuit, noise.model), noise, prefixRng);
+        }
+        Prepare(context, prefixCircuit, input.clbits);
         simulator->SaveState();
         json::array outputs;
         size_t bond = 0;
+        // Dynamic suffixes evolve their deterministic head once on a copy of the
+        // restored prefix when two more states fit the realization budget. Each
+        // copy draws from its own stream derived from the request seed.
+        const bool reuse_heads = HeadCopyFits(config, input.qubits);
+        const uint64_t head_streams = Simulators::IState::DeriveSeed(*config.seed, 0x6865616473ULL);
+        uint64_t head_stream = 0;
         for (const auto &suffix : additional)
         {
+            // A suffix continues the saved prefix, so even a leading pure-state
+            // reset may branch. Its shots sample those branches exactly.
+            const bool stochastic_suffix = HasStochasticEvolution(suffix.circuit, simulator->SupportsQuantumChannels(), false);
+            noise.policy.stochastic_execution = noise.policy.stochastic_execution || stochastic_suffix;
             const noise::NoiseInjectionPlan suffixPlan(suffix.circuit, noise.model);
             Counts counts;
+            size_t terminal_batches = 0, trajectory_batches = 0;
             const size_t samples = std::min(realizations, shots);
             for (size_t r = 0; r < samples; ++r)
             {
                 const auto noisy = Inject(suffixPlan, noise, rng);
                 const size_t repetitions = shots / samples + (r < shots % samples ? 1 : 0);
+                simulator->RestoreState();
+                simulator->SetGatesCounter(0);
+                simulator->SetUpcomingGates(noisy->GetOperations());
+                Circuits::OperationState terminal_state(input.clbits);
+                if (repetitions > 1 && PreservesSavedStateWhileSampling(*simulator) &&
+                    SamplePreparedTerminal(
+                        *noisy, simulator, repetitions, terminal_state, Simulators::IState::DeriveSeed(*config.seed, r),
+                        [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond))
+                {
+                    ++terminal_batches;
+                    continue;
+                }
+                ++trajectory_batches;
+                Circuits::OperationState head_state(input.clbits);
+                if (reuse_heads && SampleSharedHead(
+                                       *noisy, simulator, repetitions, head_state, Simulators::IState::DeriveSeed(head_streams, head_stream++),
+                                       [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond))
+                    continue;
                 for (size_t shot = 0; shot < repetitions; ++shot)
                 {
-                    simulator->RestoreState();
+                    if (shot > 0)
+                        simulator->RestoreState();
                     simulator->SetGatesCounter(0);
                     simulator->SetUpcomingGates(noisy->GetOperations());
                     Circuits::OperationState state(input.clbits);
@@ -1745,11 +1829,17 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                     ++counts[Bits(state.GetAllBits(), input.clbits)];
                 }
             }
-            outputs.emplace_back(json::object{{"counts", EncodeCounts(counts)}, {"shots", shots}});
+            outputs.emplace_back(json::object{{"counts", EncodeCounts(counts)},
+                                              {"shots", shots},
+                                              {"sampling_strategy", terminal_batches && !trajectory_batches ? "terminal_v1"
+                                                                    : !terminal_batches                     ? "trajectory_v1"
+                                                                                                            : "mixed_v1"},
+                                              {"stochastic_execution", stochastic_suffix},
+                                              {"realizations", samples}});
         }
         result["results"] = std::move(outputs);
         if (noise.enabled)
-            result["noise_scope"] = "suffix_only_ideal_prefix";
+            result["noise_scope"] = noise.prefix ? "prefix_and_suffix" : "suffix_only_ideal_prefix";
     }
     else
     {
@@ -1775,8 +1865,16 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 result["expectation_values"] = Expectations(simulator, observables);
                 continue;
             }
-            overlap = simulator->ProjectOnZero();
-            const auto fidelity = std::norm(overlap);
+            // A mixed state's fidelity to U|0> is P(0...0) after U^dagger. Exact
+            // channels need no projection; a pure state's overlap is reported too.
+            double fidelity = 0;
+            if (operation == "noisy_fidelity" && Mixed(config))
+                fidelity = simulator->Probability(0);
+            else
+            {
+                overlap = simulator->ProjectOnZero();
+                fidelity = std::norm(overlap);
+            }
             sum += fidelity;
             squares += fidelity * fidelity;
         }
@@ -1786,23 +1884,30 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         {
             const auto mean = sum / realizations;
             result["fidelity"] = mean;
-            result["standard_error"] =
-                realizations > 1 ? std::sqrt(std::max(0.0, (squares - realizations * mean * mean) / (realizations - 1) / realizations)) : 0;
+            // As in Python noisy_fidelity: one sampled disturbance has no
+            // estimable uncertainty, rather than none.
+            if (realizations == 1 && noise.enabled && (noise.policy.stochastic_noise || noise.policy.stochastic_execution))
+                result["standard_error"] = nullptr;
+            else
+                result["standard_error"] =
+                    realizations > 1 ? std::sqrt(std::max(0.0, (squares - realizations * mean * mean) / (realizations - 1) / realizations)) : 0;
         }
     }
     result["execution_metadata"] = Metadata(*metadata_context, config, operation == "execute" || operation == "estimate");
+    if (operation == "estimate")
+    {
+        // Distributed estimates report their evaluation like the local path.
+        auto &metadata = result["execution_metadata"].as_object();
+        metadata["stochastic_execution"] = stochastic_estimation;
+        metadata["measurement_trajectories"] = stochastic_estimation ? realizations : size_t{0};
+        metadata["estimate_evaluation"] = stochastic_estimation || noise.policy.stochastic_noise ? "trajectory_average" : "deterministic";
+    }
     result["seed"] = *config.seed;
     result["time_taken"] = std::chrono::duration<double>(Clock::now() - start).count();
     result["count_order"] = "classical_bit_0_first";
     result["basis_order"] = "qubit_0_least_significant";
     if (noise.enabled)
-        result["noise"] = json::object{{"mode", noise.mode},
-                                       {"evaluation", noise.mode == "analytical" ? "analytical_approximation"
-                                                      : noise.exact              ? "exact_channels"
-                                                                                 : "trajectories"},
-                                       {"seed", noise.seed},
-                                       {"realizations", realizations},
-                                       {"approximations", noise.approximations}};
+        result["noise"] = NoiseMetadata(noise, realizations);
     Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
     return result;
 }

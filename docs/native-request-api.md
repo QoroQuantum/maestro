@@ -68,7 +68,12 @@ This returns expectations `[0.8,0.36]`. Backend/method defaults are
 `qcsim/statevector`; selection defaults to `fixed`. Unavailable fixed selections
 fail; they do not return a substitute backend's calculation. `selection:"automatic"`
 and optional `candidates:[{backend,method},...]` retain optimizer selection for
-ideal execute/estimate. Results identify the backend/method actually used.
+ideal execute/estimate. Results identify the backend/method actually used, which
+is always one of the listed candidates: without a cost model the first listed
+candidate that can hold the register runs (a 40-qubit density matrix yields to a
+listed MPO), and Clifford circuits move to a stabilizer only as a listed
+backend/method pair. When no listed candidate can be created, the request fails
+instead of running an unlisted backend; this includes a one-entry list.
 
 Fixed selection preserves multi-shot reuse: eligible circuits evolve once per
 execution job and sample repeatedly. Circuits with intermediate measurements,
@@ -163,9 +168,9 @@ they cannot override the simulator or specify their own launch profiles.
 | `density_matrix_overlap` | `other_circuit` | `Tr(rho sigma)` of two mixed-state preparations, as `overlap` |
 | `fidelity_with_statevector` | `target_statevector` | `<psi|rho|psi> / Tr(rho)` against a normalized pure target, as `fidelity` |
 | `mirror_fidelity` | optional `observables` | Fidelity of the preparation followed by its inverse; with observables, their expectations on that mirror state |
-| `noisy_fidelity` | coherent `noise` | Ideal-versus-noisy unitary fidelity across realizations |
+| `noisy_fidelity` | `noise` (any mode but `analytical`) | Ideal-versus-noisy fidelity `<psi|rho|psi>` across realizations; exact on DM/MPO |
 | `incremental_evolve` | `step_circuit`, ordered `steps`, `observables` | Prepare once, advance to each step, observe without reset |
-| `checkpoint_batch` | `suffixes`, `execution.shots` | Save ideal prefix, restore for each suffix/shot; noise applies to suffixes only |
+| `checkpoint_batch` | `suffixes`, `execution.shots` | Save the prefix, restore for each suffix/shot; noise applies to suffixes, and with `noise.prefix` to the prefix too |
 | `batch` | `requests` | Independent native requests in one worker; validate all members first |
 | `validate` | circuit/configuration | Validation response only |
 | `adjoint_expectation_values` | `observables`, optional `parameter_rows` | Readout values for each parameter row |
@@ -523,15 +528,55 @@ counts. Replaying with `counts_policy: "frame_v1"` therefore reproduces such a
 run; replaying with `auto` returns the earlier executor's counts for that seed. MPI ranks share the generated
 seed through their communicator; validation alone does not generate a seed or
 require MPI initialization.
+`noise.prefix: true` (`checkpoint_batch` only) also applies the noise to the saved
+prefix, once, as exact channels; it requires deterministic exact evaluation
+(`density_matrix` or `matrix_product_operator`, without coherent or correlated
+noise) and reports `noise_scope: "prefix_and_suffix"` instead of
+`"suffix_only_ideal_prefix"`. The prefix draws from its own generator, so the
+suffixes' noise stream is unchanged.
 `noise.seed` is a uint32 (default lower 32 bits of the simulator seed) and drives
 circuit-noise injection independently of measurement/readout randomness.
-`realizations` defaults to 1 for exact channels and 64 otherwise. Execute divides
+Omitted, `null`, or `"auto"` `realizations` selects one realization for deterministic
+exact-channel evolution. Sampled noise or residual coherent/OU/1/f disturbances
+use 64 for execution and 100 for estimation/fidelity. Explicit positive counts
+are honored. `noise.requested_realizations`, `realizations_policy`,
+`stochastic_noise`, and `stochastic_execution` distinguish the request from the
+work performed; finite disturbance sampling is reported even with exact channels.
+Execute divides
 its total shots between realizations; estimator standard errors describe variation
 between realizations, not hardware shot error. Multi-shot reuse stays within each
 injected realization. Injected Pauli/coherent errors remain fixed for that
-realization; resets on evolved qubits, measurement outcomes, and readout flips
-remain per-shot operations. Exact channels evolve the density matrix/MPO before
-sampling. Selecting a fixed backend preserves these rules.
+realization. Measurement outcomes and readout flips remain per-shot operations;
+DM/MPO resets are deterministic channels and run once when no recorded
+measurement branch intervenes. Exact channels evolve the density matrix/MPO before
+sampling, including fixed CPU MPO and eligible checkpoint suffixes. Terminal
+checkpoint suffixes are also sampled from one prepared state on QCSim statevector,
+stabilizer and MPS backends; a suffix reset on those pure-state backends still runs
+per shot, since the saved state may be entangled. Each checkpoint result reports its
+`sampling_strategy` (`terminal_v1`, `trajectory_v1`, or `mixed_v1` when only some
+realizations could be sampled from one state), `stochastic_execution`, and effective
+`realizations`. Recorded branches in `execute` and `checkpoint_batch` set
+`stochastic_execution`; each shot samples its branch from the exact distribution,
+so they add no approximation. A dynamic checkpoint suffix evolves its
+deterministic head once on a copy of the restored prefix when all four retained
+states (the checkpoint's live state and saved prefix, the copy and its saved
+head) fit `trajectory_max_memory_mb`; its branches still run per shot, each copy drawing a
+measurement stream derived from the request seed. Nested circuits that end in
+measurements are inlined, so they count as terminal measurements. `finite_measurement_trajectories` marks estimates
+that average finitely many branches.
+
+Dynamic estimates automatically average 100 measurement trajectories when no
+count is specified, including estimates without an external noise model.
+`execution_metadata.estimate_evaluation` identifies `trajectory_average` versus
+`deterministic`, and `measurement_trajectories` reports branch work. A stochastic
+estimate with one explicit realization returns `null` standard errors rather than
+claiming zero uncertainty; `noisy_fidelity` with one sampled realization likewise
+returns a `null` `standard_error`. Distributed-GPU estimates follow the same rules.
+On pure-state backends a reset that precedes every other operation on its qubit
+leaves `|0>` and does not make an estimate stochastic; a later reset does.
+Analytical damping requires deterministic evolution.
+The current noise-model injector does not attach gate noise to conditional gates;
+averaging their measurement branches does not extend that injection support.
 Repeating the same seeds/configuration is deterministic within the same
 backend/runtime; cross-backend bitwise identity
 is not promised. Checkpoint suffixes consume sequential noise, readout and simulator
@@ -555,9 +600,11 @@ dynamic circuits logical shot streams. Omitting it keeps their 0.3.13 seeded
 sequences, even on a handle that an earlier call configured with one.
 
 Fidelity operations use ideal inverse preparation. Delays are identity operations
-in that inverse; `noisy_fidelity` applies coherent gate noise only to the forward
-preparation and rejects idle/relaxation channels. It does not model a physical
-mirror experiment with noise and elapsed-time effects on both halves.
+in that inverse; `noisy_fidelity` applies its noise only to the forward
+preparation: sampled Pauli/T1/coherent trajectories on pure states, or exact
+channels on density-matrix/MPO backends, where it reads `P(0...0)` after the
+inverse. It does not model a physical mirror experiment with noise and
+elapsed-time effects on both halves.
 
 ## Distribution and lifecycle
 
@@ -684,6 +731,7 @@ realization, so a leading slice draws from the first realizations only.
 | `reference_frame_v1` | Noisy-Clifford reference frames: a Stabilizer method, or automatic selection whose `candidates`, if listed, include the QCSim stabilizer; a supported Clifford circuit and, with noise, one realization per shot |
 | `terminal_v1` | One prepared state sampled for every row (terminal measurements only) |
 | `trajectory_v1` | Each shot, or each noise realization, executed on its own |
+| `mixed_v1` | Checkpoint suffixes only: some realizations sampled from one prepared state, others shot by shot |
 
 Rows use frames whenever they apply; `counts_policy` governs counts only. A
 `candidates` list names every backend the request allows, for rows as for
@@ -900,6 +948,15 @@ version), `build.source_revision` (Git revision captured at CMake configuration,
 with `-dirty` for tracked modifications, or `unknown` in source archives), and
 `capability_scope: "validation"`. These identifiers are informational; use the
 catalog and request validation for feature negotiation.
+
+`noise` describes the noise block: its `modes`, `evaluations`, the
+`exact_configurations` that apply channels exactly, how omitted, `null` or `"auto"`
+`realizations` resolve (`automatic`), the reported `metadata`, and
+`checkpoint_prefix` (the `prefix` field and its requirements). `estimate` lists the
+`evaluations` and the number of `dynamic_measurement_trajectories`. `noisy_fidelity`
+lists its modes and configurations, including the exact mixed-state ones.
+`automatic_selection` states the rules for `candidates`, and `sampling_strategies`
+the `sampling_strategy` values results may report.
 
 `diagnostics` lists names and `supported_configurations` backend/method pairs.
 Each option also lists `supported_configurations`, and where applicable `enum`,

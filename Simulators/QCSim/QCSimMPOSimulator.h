@@ -578,6 +578,23 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
 
     std::unordered_map<std::vector<bool>, Types::qubit_t> SampleCountsMany(const Types::qubits_vector &qubits, size_t shots = 1000) override
     {
+        // Accumulate narrow outcomes as integers and materialize each distinct
+        // bit vector once. Native MPO sampling keeps the same per-shot RNG
+        // sequence, without allocating/hashing a bit vector for every draw.
+        if (qubits.size() <= sizeof(Types::qubit_t) * 8)
+        {
+            const auto packedCounts = SampleCounts(qubits, shots);
+            std::unordered_map<std::vector<bool>, Types::qubit_t> result;
+            result.reserve(packedCounts.size());
+            for (const auto &[outcome, count] : packedCounts)
+            {
+                std::vector<bool> bits(qubits.size());
+                for (size_t i = 0; i < qubits.size(); ++i)
+                    bits[i] = (outcome & Types::BitAt(i)) != 0;
+                result.emplace(std::move(bits), count);
+            }
+            return result;
+        }
         if (mpoSimulator)
             for (auto q : qubits)
                 if (q >= nrQubits)
@@ -588,10 +605,10 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         DontNotify();
         {
             const std::set<Eigen::Index> qubitsSet(qubits.begin(), qubits.end());
+            std::vector<bool> packed(qubits.size(), false);
             for (size_t shot = 0; shot < shots; ++shot)
             {
                 const auto measured = mpoSimulator->MeasureNoCollapse(qubitsSet);
-                std::vector<bool> packed(qubits.size(), false);
                 for (size_t i = 0; i < qubits.size(); ++i)
                     packed[i] = measured.at(static_cast<Eigen::Index>(qubits[i]));
                 ++result[packed];

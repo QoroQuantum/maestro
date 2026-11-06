@@ -56,6 +56,91 @@ class SingleHostRemapper : public Distribution::IRemapper<>
         return Distribution::RemapperType::kLayersRemapper;
     }
 };
+
+void TestPreparedNestedResetAfterMeasurement()
+{
+    using namespace MaestroExecution;
+    using CF = Circuits::CircuitFactory<>;
+    using Gate = Circuits::QuantumGateType;
+    constexpr size_t shots = 4096;
+    for (const auto method : {Method::kDensityMatrix, Method::kMatrixProductOperator})
+        for (const bool fusion : {false, true})
+        {
+            auto nestedCalls = std::make_shared<std::atomic<size_t>>(0);
+            auto circuit = CF::CreateCircuit();
+            circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+            circuit->AddOperation(CF::CreateGate(Gate::kCXGateType, 0, 5));
+            circuit->AddOperation(CF::CreateMeasurement({{0, 3}}));
+            auto inner = CF::CreateCircuit();
+            inner->AddOperation(CF::CreateReset({5}));
+            inner->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 5));
+            inner->AddOperation(std::make_shared<CountedX>(2, nestedCalls));
+            inner->AddOperation(CF::CreateGate(Gate::kCZGateType, 2, 5));
+            auto outer = CF::CreateCircuit();
+            outer->AddOperation(inner);
+            circuit->AddOperation(outer);
+            circuit->AddOperation(CF::CreateMeasurement({{5, 0}, {2, 4}}));
+            Check(!circuit->HasOpsAfterMeasurements(true), "Disjoint deterministic composite prevented terminal mixed-state sampling");
+
+            auto baseline = Simulators::SimulatorsFactory::CreateSimulator(Backend::kQCSim, method);
+            baseline->Configure("gate_fusion", fusion ? "true" : "false");
+            baseline->SetMultithreading(false);
+            baseline->AllocateQubits(6);
+            baseline->Initialize();
+            baseline->SetLookaheadDepth(4);
+            baseline->SetSeed(1123);
+            Circuits::Circuit<>::ExecuteResults repeated;
+            Circuits::OperationState state(5);
+            for (size_t shot = 0; shot < shots; ++shot)
+            {
+                baseline->Reset();
+                baseline->SetGatesCounter(0);
+                baseline->SetUpcomingGates(circuit->GetOperations());
+                circuit->ExecuteBD(baseline, state);
+                ++repeated[state.GetAllBits()];
+            }
+            Check(*nestedCalls == shots, "Repeated reference did not execute the nested circuit each shot");
+
+            for (const bool onHost : {false, true})
+            {
+                const unsigned long handle = CreateSimpleSimulator(6);
+                try
+                {
+                    SimulatorConfig config;
+                    config.simulation_type = method;
+                    config.fixed_backend = true;
+                    config.optimize_circuit = false;
+                    config.max_simulators = 4;
+                    config.gate_fusion = fusion;
+                    config.lookahead_depth = 4;
+                    config.seed = 1123;
+                    auto network = ConfigureNetwork(handle, config);
+                    network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+                    *nestedCalls = 0;
+                    const auto prepared = onHost ? network->RepeatedExecuteOnHost(circuit, 0, shots) : network->RepeatedExecute(circuit, shots);
+                    Check(*nestedCalls == 1, "Nested deterministic reset circuit was evolved more than once");
+                    Check(prepared.size() == 4 && repeated.size() == 4, "Nested circuit lost an earlier measurement record");
+                    for (const auto &[bits, count] : repeated)
+                    {
+                        // Both network paths retain the allocated classical
+                        // register when restoring the circuit's original mapping.
+                        auto expectedBits = bits;
+                        expectedBits.resize(6, false);
+                        const auto found = prepared.find(expectedBits);
+                        Check(bits[4] && !bits[1] && !bits[2] && found != prepared.end(), "Nested circuit changed classical bit mapping");
+                        Check(std::abs(double(count) / shots - 0.25) < 0.06 && std::abs(double(found->second) / shots - double(count) / shots) < 0.08,
+                              "Prepared mixed state disagrees with repeated nested measurement/reset evolution");
+                    }
+                }
+                catch (...)
+                {
+                    DestroySimpleSimulator(handle);
+                    throw;
+                }
+                DestroySimpleSimulator(handle);
+            }
+        }
+}
 } // namespace
 
 void TestFixedBackendShotReuse()
@@ -64,96 +149,123 @@ void TestFixedBackendShotReuse()
     using CF = Circuits::CircuitFactory<>;
     using Gate = Circuits::QuantumGateType;
     GetMaestroObjectWithMute();
-    constexpr size_t shots = 128;
-
+    TestPreparedNestedResetAfterMeasurement();
     for (const char *method : {"statevector", "matrix_product_state", "density_matrix", "matrix_product_operator"})
         for (bool onHost : {true, false})
-            for (size_t workers : {size_t{1}, size_t{2}})
-                for (int scenario : {0, 1, 2, 3})
-                {
-                    struct NetworkHandle
+            for (size_t workers : {size_t{1}, size_t{4}})
+                for (size_t shots : {size_t{128}, size_t{131}})
+                    for (int scenario : {0, 1, 2, 3, 4, 5, 6})
                     {
-                        unsigned long handle = CreateSimpleSimulator(2);
-
-                        ~NetworkHandle()
+                        struct NetworkHandle
                         {
-                            DestroySimpleSimulator(handle);
-                        }
-                    } owner;
+                            unsigned long handle = CreateSimpleSimulator(2);
 
-                    Check(owner.handle != 0, "Cannot create network for shot reuse");
-                    // Exercise the native parser's default fixed selection and the same
-                    // ConfigureNetwork path used by native requests.
-                    auto config = ParseConfig(json::object{{"backend", "qcsim"}, {"method", method}});
-                    config.seed = 123;
-                    config.optimize_circuit = false;
-                    auto network = ConfigureNetwork(owner.handle, config);
-                    Check(network && !network->GetOptimizeSimulator(), "Fixed selection unexpectedly enabled backend optimization");
-                    network->SetMaxSimulators(workers);
-                    if (!onHost)
-                        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+                            ~NetworkHandle()
+                            {
+                                DestroySimpleSimulator(handle);
+                            }
+                        } owner;
 
-                    auto prefix = std::make_shared<std::atomic<size_t>>(0);
-                    auto suffix = std::make_shared<std::atomic<size_t>>(0);
-                    auto circuit = CF::CreateCircuit();
-                    circuit->AddOperation(std::make_shared<CountedX>(0, prefix));
-                    if (scenario == 1 || scenario == 3)
-                    {
-                        if (scenario == 1)
+                        Check(owner.handle != 0, "Cannot create network for shot reuse");
+                        // Exercise the native parser's default fixed selection and the same
+                        // ConfigureNetwork path used by native requests.
+                        auto config = ParseConfig(json::object{{"backend", "qcsim"}, {"method", method}});
+                        config.seed = 123;
+                        config.optimize_circuit = false;
+                        auto network = ConfigureNetwork(owner.handle, config);
+                        Check(network && !network->GetOptimizeSimulator(), "Fixed selection unexpectedly enabled backend optimization");
+                        network->SetMaxSimulators(workers);
+                        if (!onHost)
+                            network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+
+                        auto prefix = std::make_shared<std::atomic<size_t>>(0);
+                        auto suffix = std::make_shared<std::atomic<size_t>>(0);
+                        auto circuit = CF::CreateCircuit();
+                        circuit->AddOperation(std::make_shared<CountedX>(0, prefix));
+                        if (scenario == 1 || scenario == 3 || scenario == 6)
                         {
-                            circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
-                            circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+                            auto body = scenario == 6 ? CF::CreateCircuit() : circuit;
+                            if (scenario == 1 || scenario == 6)
+                            {
+                                body->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+                                body->AddOperation(CF::CreateMeasurement({{0, 0}}));
+                            }
+                            else
+                            {
+                                circuit->AddOperation(CF::CreateRandom({0}, 123));
+                            }
+                            body->AddOperation(CF::CreateSimpleConditionalGate(CF::CreateGate(Gate::kXGateType, 1), 0));
+                            body->AddOperation(std::make_shared<CountedX>(1, suffix));
+                            body->AddOperation(CF::CreateMeasurement({{1, 1}}));
+                            if (scenario == 6)
+                                circuit->AddOperation(body);
                         }
                         else
                         {
-                            circuit->AddOperation(CF::CreateRandom({0}, 123));
+                            if (scenario == 2 || scenario == 5)
+                            {
+                                auto body = scenario == 5 ? CF::CreateCircuit() : circuit;
+                                body->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+                                body->AddOperation(CF::CreateGate(Gate::kCXGateType, 0, 1));
+                                body->AddOperation(CF::CreateReset({0}));
+                                body->AddOperation(std::make_shared<CountedX>(0, suffix));
+                                if (scenario == 5)
+                                    circuit->AddOperation(body);
+                            }
+                            else if (scenario == 4)
+                            {
+                                auto inner = CF::CreateCircuit();
+                                inner->AddOperation(std::make_shared<CountedX>(1, suffix));
+                                inner->AddOperation(CF::CreateGate(Gate::kXGateType, 1));
+                                auto outer = CF::CreateCircuit();
+                                outer->AddOperation(inner);
+                                circuit->AddOperation(outer);
+                            }
+                            circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
                         }
-                        circuit->AddOperation(CF::CreateSimpleConditionalGate(CF::CreateGate(Gate::kXGateType, 1), 0));
-                        circuit->AddOperation(std::make_shared<CountedX>(1, suffix));
-                        circuit->AddOperation(CF::CreateMeasurement({{1, 1}}));
-                    }
-                    else
-                    {
-                        if (scenario == 2)
-                        {
-                            circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
-                            circuit->AddOperation(CF::CreateGate(Gate::kCXGateType, 0, 1));
-                            circuit->AddOperation(CF::CreateReset({0}));
-                            circuit->AddOperation(std::make_shared<CountedX>(0, suffix));
-                        }
-                        circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
-                    }
 
-                    // Terminal dense sampling uses one job. Default per-shot
-                    // trajectories share this short request across available workers,
-                    // executing the common prefix once per job, never once per shot.
-                    const bool reproducibleSampling = config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix;
-                    size_t jobs = reproducibleSampling && scenario == 0 ? 1 : workers;
+                        // Mixed-state resets and deterministic nested circuits belong
+                        // to the shared evolution. Genuine classical branches still
+                        // replay their suffix per shot.
+                        const bool exactChannels = config.simulation_type == Method::kDensityMatrix || config.simulation_type == Method::kMatrixProductOperator;
+                        const bool reproducibleSampling = config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix;
+                        const bool terminal = scenario == 0 || scenario == 4 || (exactChannels && (scenario == 2 || scenario == 5));
+                        const std::string context = std::string(method) + " scenario=" + std::to_string(scenario) + " workers=" + std::to_string(workers) +
+                                                    " shots=" + std::to_string(shots) + " on_host=" + std::to_string(onHost);
+                        Check(circuit->HasOpsAfterMeasurements(exactChannels) != terminal, "Terminal classification disagrees with backend reset semantics");
+                        size_t jobs = terminal && (reproducibleSampling || exactChannels) ? 1 : workers;
 #ifdef _OPENMP
-                    if (reproducibleSampling)
-                        jobs = std::min(jobs, static_cast<size_t>(std::max(1, omp_get_max_threads())));
+                        if (reproducibleSampling)
+                            jobs = std::min(jobs, static_cast<size_t>(std::max(1, omp_get_max_threads())));
 #endif
-                    for (int repeat = 0; repeat < 2; ++repeat)
-                    {
-                        *prefix = 0;
-                        *suffix = 0;
-                        const auto counts = onHost ? network->RepeatedExecuteOnHost(circuit, 0, shots) : network->RepeatedExecute(circuit, shots);
-                        Check(prefix->load() == jobs, "Fixed backend re-executed the common prefix per shot");
-                        Check(suffix->load() == (scenario ? shots : 0), "Measurement-dependent operations were not executed per shot");
-                        Check(network->GetLastSimulatorType() == Backend::kQCSim && network->GetLastSimulationType() == config.simulation_type,
-                              "Shot reuse changed the fixed backend or method");
-                        size_t total = 0;
-                        for (const auto &[bits, count] : counts)
+                        if (!reproducibleSampling && jobs > 1)
+                            jobs = (shots + shots / jobs - 1) / (shots / jobs);
+                        for (int repeat = 0; repeat < 2; ++repeat)
                         {
-                            Check(bits.size() == 2, "Shot reuse changed classical width");
-                            Check((scenario == 1 || scenario == 3) ? bits[0] != bits[1] : bits[0] && (scenario == 2 || !bits[1]),
-                                  "Shot reuse changed measurement/reset/conditional results");
-                            total += count;
+                            *prefix = 0;
+                            *suffix = 0;
+                            const auto counts = onHost ? network->RepeatedExecuteOnHost(circuit, 0, shots) : network->RepeatedExecute(circuit, shots);
+                            Check(prefix->load() == jobs,
+                                  (context + ": expected " + std::to_string(jobs) + " prefix executions, got " + std::to_string(prefix->load())).c_str());
+                            Check(suffix->load() == (scenario == 0 ? 0
+                                                     : terminal    ? jobs
+                                                                   : shots),
+                                  (context + ": shared evolution or per-shot suffix execution count changed").c_str());
+                            Check(network->GetLastSimulatorType() == Backend::kQCSim && network->GetLastSimulationType() == config.simulation_type,
+                                  "Shot reuse changed the fixed backend or method");
+                            size_t total = 0;
+                            for (const auto &[bits, count] : counts)
+                            {
+                                Check(bits.size() == 2, "Shot reuse changed classical width");
+                                Check((scenario == 1 || scenario == 3 || scenario == 6) ? bits[0] != bits[1]
+                                                                                        : bits[0] && (scenario == 2 || scenario == 5 || !bits[1]),
+                                      "Shot reuse changed measurement/reset/conditional results");
+                                total += count;
+                            }
+                            Check(total == shots, "Shot reuse lost counts");
+                            Check(counts.size() == (scenario == 0 || scenario == 4 ? 1 : 2), "Independent shots reused one measurement/reset outcome");
                         }
-                        Check(total == shots, "Shot reuse lost counts");
-                        Check(counts.size() == (scenario ? 2 : 1), "Independent shots reused one measurement/reset outcome");
                     }
-                }
 }
 
 void TestRequestSeedParsing()

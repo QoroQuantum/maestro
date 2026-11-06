@@ -7,6 +7,7 @@ namespace maestro_bindings
 
 void bind_noise(nb::module_ &m)
 {
+    m.def("_resolve_noise_realizations", &ResolveSamplingRealizations, "circuit"_a, "noise_model"_a, "config"_a, "fallback"_a, "estimation"_a = false);
     // =========================================================================
     // Noise Modeling
     // =========================================================================
@@ -363,7 +364,7 @@ void bind_noise(nb::module_ &m)
         "magnitude of the noise matters.");
 
     // --- Gate-by-gate Monte Carlo Noisy Estimation ---
-    m.def("noisy_estimate_montecarlo", &NoisyEstimateMonteCarlo, "circuit"_a, "observables"_a, "noise_model"_a, "noise_realizations"_a = 100,
+    m.def("noisy_estimate_montecarlo", &NoisyEstimateMonteCarlo, "circuit"_a, "observables"_a, "noise_model"_a, "noise_realizations"_a = nb::none(),
           "config"_a = SimulatorConfig{}, "noise_seed"_a = nb::none(),
           "Gate-by-gate Monte Carlo noisy estimation. Injects random Pauli "
           "errors after every gate and averages expectation values over "
@@ -372,7 +373,7 @@ void bind_noise(nb::module_ &m)
           "and crosstalk noise are not applied and raise ValueError; use "
           "full_noise_estimate for those.");
 
-    m.def("noisy_execute", &NoisyExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = 64,
+    m.def("noisy_execute", &NoisyExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = nb::none(),
           "noise_seed"_a = nb::none(), "return_samples"_a = false,
           "Execute with exact Pauli/T1 channels for density-matrix/MPO methods, "
           "or sampled trajectories for pure-state methods. Shots are distributed "
@@ -384,8 +385,8 @@ void bind_noise(nb::module_ &m)
     // Coherent Noise: Execute
     // =========================================================================
 
-    m.def("coherent_execute", &CoherentExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = 64,
-          "noise_seed"_a = nb::none(), "return_samples"_a = false,
+    m.def("coherent_execute", &CoherentExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024,
+          "noise_realizations"_a = nb::none(), "noise_seed"_a = nb::none(), "return_samples"_a = false,
           "Execute a circuit with sampled coherent over/under-rotation errors. "
           "After every gate, Rx/Ry/Rz rotations are injected with random ± "
           "signs. Each of 'noise_realizations' batches uses a different sign "
@@ -401,8 +402,8 @@ void bind_noise(nb::module_ &m)
     // Coherent Noise: Estimate (Monte Carlo averaged)
     // =========================================================================
 
-    m.def("coherent_estimate", &CoherentEstimate, "circuit"_a, "observables"_a, "noise_model"_a, "noise_realizations"_a = 100, "config"_a = SimulatorConfig{},
-          "noise_seed"_a = nb::none(),
+    m.def("coherent_estimate", &CoherentEstimate, "circuit"_a, "observables"_a, "noise_model"_a, "noise_realizations"_a = nb::none(),
+          "config"_a = SimulatorConfig{}, "noise_seed"_a = nb::none(),
           "Estimate expectation values with coherent noise (rotation errors). "
           "Injects systematic Rx/Ry/Rz rotations after every gate and averages "
           "expectation values over noise_realizations independent sign samples. "
@@ -418,8 +419,8 @@ void bind_noise(nb::module_ &m)
     // Combined Noise: Execute (all layers in one call)
     // =========================================================================
 
-    m.def("full_noise_execute", &FullNoiseExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = 64,
-          "noise_seed"_a = nb::none(), "return_samples"_a = false,
+    m.def("full_noise_execute", &FullNoiseExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024,
+          "noise_realizations"_a = nb::none(), "noise_seed"_a = nb::none(), "return_samples"_a = false,
           "Execute a circuit with combined noise (coherent + crosstalk + T1 + "
           "Pauli). Density-matrix/MPO methods apply Markovian T1 and Pauli layers "
           "as exact channels; trajectory-only layers remain sampled.\n\n"
@@ -435,7 +436,7 @@ void bind_noise(nb::module_ &m)
     // Combined Noise: Estimate (all layers in one call)
     // =========================================================================
 
-    m.def("full_noise_estimate", &FullNoiseEstimate, "circuit"_a, "observables"_a, "noise_model"_a, "noise_realizations"_a = 100,
+    m.def("full_noise_estimate", &FullNoiseEstimate, "circuit"_a, "observables"_a, "noise_model"_a, "noise_realizations"_a = nb::none(),
           "config"_a = SimulatorConfig{}, "noise_seed"_a = nb::none(),
           "Estimate expectation values with combined noise (coherent + crosstalk "
           "+ T1 + Pauli). All configured noise layers are applied per gate.\n\n"
@@ -450,7 +451,7 @@ void bind_noise(nb::module_ &m)
     // Noisy Fidelity (inner-product)
     // =========================================================================
 
-    m.def("noisy_fidelity", &NoisyFidelity, "circuit"_a, "noise_model"_a, "noise_realizations"_a = 100, "config"_a = SimulatorConfig{},
+    m.def("noisy_fidelity", &NoisyFidelity, "circuit"_a, "noise_model"_a, "noise_realizations"_a = nb::none(), "config"_a = SimulatorConfig{},
           "noise_seed"_a = nb::none(),
           "Compute fidelity to the ideal unitary circuit state under noise.\n\n"
           "Injects all configured noise types (correlated, coherent, "

@@ -5597,6 +5597,8 @@ NON_DEFAULT_CONFIG_FIELDS = {
     "mps_routing_virtual_bonds": True,
     "mps_routing_truncation_weight": 0.5,
     "mps_routing_strategy": "legacy",
+    "fixed_backend": True,
+    "optimization_candidates": [(maestro.SimulatorType.QCSim, maestro.SimulationType.DensityMatrix)],
 }
 
 

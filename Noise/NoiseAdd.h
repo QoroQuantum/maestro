@@ -13,6 +13,7 @@
 #define __NOISE_ADD_H_
 
 #include "../Execution/Estimation.h"
+#include "../Execution/NoisePolicy.h"
 #include "../Execution/ReferenceFrameSampler.h"
 #include "NoiseModel.h"
 
@@ -20,6 +21,7 @@
 #include "../Simulators/Core/RandomSeed.h"
 #include "../Utils/Threads/RealizationWorkers.h"
 
+#include <algorithm>
 #include <cmath>
 #include <complex>
 #include <functional>
@@ -29,7 +31,7 @@
 #include <sstream>
 #include <vector>
 
-#define MAESTRO_NOISE_ADD_VERSION 4
+#define MAESTRO_NOISE_ADD_VERSION 5
 
 namespace noise
 {
@@ -52,11 +54,12 @@ class NoiseAdd
      * channels that have no stochastic realization (generalized amplitude
      * damping, correlated phase flips, custom Kraus maps).
      *
-     * Off by default, which keeps the sampled behavior that pure-state and MPS
-     * backends require. NoiseAdd cannot detect the backend on its own: the
-     * network only reports which simulator it used after a circuit has run.
-     * The Python bindings pick the path automatically from SimulatorConfig
-     * (see uses_exact_quantum_channels in Bindings.cpp).
+     * Execute/estimate calls infer this from the backend the network will run
+     * unless explicitly overridden: its current simulator, or, when the network
+     * selects its backend, every optimization candidate (a network configured
+     * for automatic selection holds only a placeholder simulator). An inferred
+     * exact backend is pinned on the execution clone. Injection without a
+     * network remains sampled until set_exact_channels(true) is called.
      */
     // Bindings may supply a language-level warning (e.g. Python RuntimeWarning).
     void set_warning_handler(std::function<void(const std::string &)> handler)
@@ -66,7 +69,19 @@ class NoiseAdd
 
     void set_exact_channels(bool exact)
     {
+        exact_channels_override = exact;
         exact_channels = exact;
+    }
+
+    void set_automatic_channels()
+    {
+        exact_channels_override.reset();
+        exact_channels = false;
+    }
+
+    const MaestroExecution::NoiseRealizationPolicy &last_realization_policy() const
+    {
+        return last_policy;
     }
 
     bool uses_exact_channels() const
@@ -105,42 +120,42 @@ class NoiseAdd
 
     Circuits::Circuit<>::ExecuteResults noisy_execute(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
                                                       const std::shared_ptr<Network::INetwork<>> &network, size_t hostId, const NoiseModel &nm, int shots,
-                                                      int noise_realizations)
+                                                      std::optional<int> noise_realizations = std::nullopt)
     {
         return Execute(circuit, network, hostId, nm, shots, noise_realizations, Layer::Pauli);
     }
 
     Circuits::Circuit<>::ExecuteResults coherent_execute(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
                                                          const std::shared_ptr<Network::INetwork<>> &network, size_t hostId, const NoiseModel &nm, int shots,
-                                                         int noise_realizations)
+                                                         std::optional<int> noise_realizations = std::nullopt)
     {
         return Execute(circuit, network, hostId, nm, shots, noise_realizations, Layer::Coherent);
     }
 
     Circuits::Circuit<>::ExecuteResults full_noise_execute(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
                                                            const std::shared_ptr<Network::INetwork<>> &network, size_t hostId, const NoiseModel &nm, int shots,
-                                                           int noise_realizations)
+                                                           std::optional<int> noise_realizations = std::nullopt)
     {
         return Execute(circuit, network, hostId, nm, shots, noise_realizations, Layer::Combined);
     }
 
     Circuits::Circuit<>::ExecuteResults noisy_execute_distributed(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
                                                                   const std::shared_ptr<Network::INetwork<>> &network, const NoiseModel &nm, int shots,
-                                                                  int noise_realizations)
+                                                                  std::optional<int> noise_realizations = std::nullopt)
     {
         return Execute(circuit, network, std::nullopt, nm, shots, noise_realizations, Layer::Pauli);
     }
 
     Circuits::Circuit<>::ExecuteResults coherent_execute_distributed(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
                                                                      const std::shared_ptr<Network::INetwork<>> &network, const NoiseModel &nm, int shots,
-                                                                     int noise_realizations)
+                                                                     std::optional<int> noise_realizations = std::nullopt)
     {
         return Execute(circuit, network, std::nullopt, nm, shots, noise_realizations, Layer::Coherent);
     }
 
     Circuits::Circuit<>::ExecuteResults full_noise_execute_distributed(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
                                                                        const std::shared_ptr<Network::INetwork<>> &network, const NoiseModel &nm, int shots,
-                                                                       int noise_realizations)
+                                                                       std::optional<int> noise_realizations = std::nullopt)
     {
         return Execute(circuit, network, std::nullopt, nm, shots, noise_realizations, Layer::Combined);
     }
@@ -165,19 +180,21 @@ class NoiseAdd
 
     std::vector<double> noisy_estimate_montecarlo(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
                                                   const std::shared_ptr<Network::INetwork<>> &network, size_t hostId, const std::vector<std::string> &paulis,
-                                                  const NoiseModel &nm, int noise_realizations)
+                                                  const NoiseModel &nm, std::optional<int> noise_realizations = std::nullopt)
     {
         return Estimate(circuit, network, hostId, paulis, nm, noise_realizations, Layer::Pauli);
     }
 
     std::vector<double> coherent_estimate(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const std::shared_ptr<Network::INetwork<>> &network,
-                                          size_t hostId, const std::vector<std::string> &paulis, const NoiseModel &nm, int noise_realizations)
+                                          size_t hostId, const std::vector<std::string> &paulis, const NoiseModel &nm,
+                                          std::optional<int> noise_realizations = std::nullopt)
     {
         return Estimate(circuit, network, hostId, paulis, nm, noise_realizations, Layer::Coherent);
     }
 
     std::vector<double> full_noise_estimate(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const std::shared_ptr<Network::INetwork<>> &network,
-                                            size_t hostId, const std::vector<std::string> &paulis, const NoiseModel &nm, int noise_realizations)
+                                            size_t hostId, const std::vector<std::string> &paulis, const NoiseModel &nm,
+                                            std::optional<int> noise_realizations = std::nullopt)
     {
         return Estimate(circuit, network, hostId, paulis, nm, noise_realizations, Layer::Combined);
     }
@@ -203,21 +220,21 @@ class NoiseAdd
 
     std::vector<double> noisy_estimate_montecarlo_distributed(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
                                                               const std::shared_ptr<Network::INetwork<>> &network, const std::vector<std::string> &paulis,
-                                                              const NoiseModel &nm, int noise_realizations)
+                                                              const NoiseModel &nm, std::optional<int> noise_realizations = std::nullopt)
     {
         return Estimate(circuit, network, std::nullopt, paulis, nm, noise_realizations, Layer::Pauli);
     }
 
     std::vector<double> coherent_estimate_distributed(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
                                                       const std::shared_ptr<Network::INetwork<>> &network, const std::vector<std::string> &paulis,
-                                                      const NoiseModel &nm, int noise_realizations)
+                                                      const NoiseModel &nm, std::optional<int> noise_realizations = std::nullopt)
     {
         return Estimate(circuit, network, std::nullopt, paulis, nm, noise_realizations, Layer::Coherent);
     }
 
     std::vector<double> full_noise_estimate_distributed(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
                                                         const std::shared_ptr<Network::INetwork<>> &network, const std::vector<std::string> &paulis,
-                                                        const NoiseModel &nm, int noise_realizations)
+                                                        const NoiseModel &nm, std::optional<int> noise_realizations = std::nullopt)
     {
         return Estimate(circuit, network, std::nullopt, paulis, nm, noise_realizations, Layer::Combined);
     }
@@ -231,6 +248,93 @@ class NoiseAdd
     };
     using CircuitPtr = std::shared_ptr<Circuits::Circuit<double>>;
     using NetworkPtr = std::shared_ptr<Network::INetwork<>>;
+
+    struct ScopedChannels
+    {
+        bool &value;
+        bool previous;
+
+        ScopedChannels(bool &value, bool exact) : value(value), previous(value)
+        {
+            value = exact;
+        }
+
+        ~ScopedChannels()
+        {
+            value = previous;
+        }
+    };
+
+    using Backend = std::pair<Simulators::SimulatorType, Simulators::SimulationType>;
+
+    // Candidates that backend selection chooses from regardless of the
+    // network's current simulator, in the network's fixed order; empty when
+    // execution keeps that simulator. A network configured for automatic
+    // selection (ConfigureNetwork) holds a placeholder (an MPS, or a CPU MPO for
+    // a GPU mixed-state request) beside a one-candidate set, which always wins.
+    // A set of only mixed-state candidates is resolved without timing estimates
+    // too (keeping the current simulator when it is one of them). Larger sets
+    // keep the current simulator, which ConfigureNetwork makes their first
+    // listed candidate that fits. Distribution is never replaced.
+    static std::vector<Backend> DecisiveCandidates(const NetworkPtr &network)
+    {
+        const auto simulator = network->GetSimulator();
+        if (!network->GetOptimizeSimulator() || (simulator && Simulators::IsDistributedGpuSimulator(simulator->GetType())))
+            return {};
+        const auto &set = network->GetSimulatorsSet();
+        std::vector<Backend> candidates(set.begin(), set.end());
+        std::sort(candidates.begin(), candidates.end());
+        const bool mixed = std::all_of(candidates.begin(), candidates.end(), [](const Backend &candidate) {
+            return MaestroExecution::SupportsExactQuantumChannels(candidate.first, candidate.second);
+        });
+        return candidates.size() == 1 || (!candidates.empty() && mixed) ? candidates : std::vector<Backend>{};
+    }
+
+    // The backends execution can use, described as a configuration.
+    static MaestroExecution::SimulatorConfig ExecutionBackends(const NetworkPtr &network)
+    {
+        MaestroExecution::SimulatorConfig config;
+        config.fixed_backend = true;
+        if (const auto simulator = network->GetSimulator())
+        {
+            config.simulator_type = simulator->GetType();
+            config.simulation_type = simulator->GetSimulationType();
+        }
+        const auto candidates = DecisiveCandidates(network);
+        if (!candidates.empty())
+        {
+            config.fixed_backend = false;
+            config.optimization_candidates = candidates;
+        }
+        return config;
+    }
+
+    // The single backend a pinned execution keeps, as SimpleDisconnectedNetwork
+    // selects it: the current simulator when it is a candidate (or no set
+    // decides), else the first candidate in the fixed order.
+    static std::optional<Backend> PinnedBackend(const NetworkPtr &network)
+    {
+        std::optional<Backend> current;
+        if (const auto simulator = network->GetSimulator())
+            current = Backend{simulator->GetType(), simulator->GetSimulationType()};
+        const auto candidates = DecisiveCandidates(network);
+        if (candidates.empty() || (candidates.size() > 1 && current && std::find(candidates.begin(), candidates.end(), *current) != candidates.end()))
+            return current;
+        return candidates.front();
+    }
+
+    MaestroExecution::NoiseRealizationPolicy ResolvePolicy(const CircuitPtr &circuit, const NetworkPtr &network, const NoiseModel &model,
+                                                           std::optional<int> requested, Layer layer, bool estimation)
+    {
+        if (requested && *requested <= 0)
+            throw std::invalid_argument("noise_realizations must be positive");
+        const auto config = ExecutionBackends(network);
+        const auto selected = layer == Layer::Pauli      ? MaestroExecution::NoiseLayer::kPauli
+                              : layer == Layer::Coherent ? MaestroExecution::NoiseLayer::kCoherent
+                                                         : MaestroExecution::NoiseLayer::kCombined;
+        return MaestroExecution::ResolveNoiseRealizations(requested ? std::optional<size_t>(static_cast<size_t>(*requested)) : std::nullopt, model, config,
+                                                          selected, estimation ? 100 : 64, circuit, estimation, exact_channels_override);
+    }
 
     struct ExecutionContext
     {
@@ -266,9 +370,11 @@ class NoiseAdd
         execution_network->SetMaxSimulators(network->GetMaxSimulators());
         // Timing-based backend selection changes the random sequence between
         // otherwise identical calls. Exact channels also require the chosen
-        // mixed-state backend to survive optimization.
-        if (simulator && (base_seed || exact_channels))
-            execution_network->RemoveAllOptimizationSimulatorsAndAdd(simulator->GetType(), simulator->GetSimulationType());
+        // mixed-state backend to survive optimization. Pin the backend that
+        // selection would use, not a placeholder simulator outside the set.
+        if (base_seed || exact_channels)
+            if (const auto pinned = PinnedBackend(network))
+                execution_network->RemoveAllOptimizationSimulatorsAndAdd(pinned->first, pinned->second);
         return {std::move(execution_network), base_seed};
     }
 
@@ -314,16 +420,18 @@ class NoiseAdd
     }
 
     // Whether the network samples every shot of a batch from one prepared
-    // state on a single thread: terminal measurements on a dense QCSim method
-    // (SimpleDisconnectedNetwork runs those with one thread).
+    // state: terminal measurements on a dense QCSim method (run with one
+    // thread) or a QCSim MPO (whose workers only clone the prepared state, and
+    // realization worker networks have one simulator each).
     static bool SamplesFromOnePreparedState(const CircuitPtr &circuit, const NetworkPtr &network)
     {
-        const auto simulator = network->GetSimulator();
-        if (!simulator || simulator->GetType() != Simulators::SimulatorType::kQCSim || circuit->HasOpsAfterMeasurements())
+        const auto backend = PinnedBackend(network);
+        if (!backend || backend->first != Simulators::SimulatorType::kQCSim ||
+            circuit->HasOpsAfterMeasurements(MaestroExecution::SupportsExactQuantumChannels(backend->first, backend->second)))
             return false;
-        const auto method = simulator->GetSimulationType();
+        const auto method = backend->second;
         return method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kDensityMatrix ||
-               method == Simulators::SimulationType::kPathIntegral;
+               method == Simulators::SimulationType::kPathIntegral || method == Simulators::SimulationType::kMatrixProductOperator;
     }
 
     void SeedExecution(const ExecutionContext &execution)
@@ -524,15 +632,20 @@ class NoiseAdd
     }
 
     Circuits::Circuit<>::ExecuteResults Execute(const CircuitPtr &circuit, const NetworkPtr &network, std::optional<size_t> host, const NoiseModel &nm,
-                                                int shots, int realizations, Layer layer)
+                                                int shots, std::optional<int> requested_realizations, Layer layer)
     {
         if (shots < 0)
             throw std::invalid_argument("shots must be nonnegative");
+        if (requested_realizations && *requested_realizations <= 0)
+            throw std::invalid_argument("noise_realizations must be positive");
         if (!network || !circuit || shots == 0)
             return {};
+        last_policy = ResolvePolicy(circuit, network, nm, requested_realizations, layer, false);
+        const ScopedChannels channels(exact_channels, last_policy.exact_channels);
         if (layer != Layer::Coherent)
             WarnThermalApproximation(nm);
-        const int batches = std::min(shots, std::max(1, realizations));
+        const int batches = static_cast<int>(std::min(static_cast<size_t>(shots), last_policy.realizations));
+        last_policy.realizations = static_cast<size_t>(batches);
         if (auto counts = FrameCounts(circuit, network, host, nm, shots, batches, layer))
             return std::move(*counts);
         auto execution = PrepareExecution(network);
@@ -579,12 +692,15 @@ class NoiseAdd
     }
 
     std::vector<double> Estimate(const CircuitPtr &circuit, const NetworkPtr &network, std::optional<size_t> host, const std::vector<std::string> &paulis,
-                                 const NoiseModel &nm, int realizations, Layer layer)
+                                 const NoiseModel &nm, std::optional<int> requested_realizations, Layer layer)
     {
-        if (realizations <= 0)
+        if (requested_realizations && *requested_realizations <= 0)
             throw std::invalid_argument("noise_realizations must be positive");
         if (!network || !circuit || paulis.empty())
             return {};
+        last_policy = ResolvePolicy(circuit, network, nm, requested_realizations, layer, true);
+        const int realizations = static_cast<int>(last_policy.realizations);
+        const ScopedChannels channels(exact_channels, last_policy.exact_channels);
         if (layer != Layer::Coherent)
             WarnThermalApproximation(nm);
         auto cleanCircuit = circuit->RemoveEndMeasurements();
@@ -628,6 +744,8 @@ class NoiseAdd
     }
 
     bool exact_channels = false;
+    std::optional<bool> exact_channels_override;
+    MaestroExecution::NoiseRealizationPolicy last_policy;
     std::mt19937 rng;
     std::optional<uint64_t> public_seed;
     uint64_t next_simulator_stream = 0;

@@ -87,12 +87,14 @@ def test_reset_marginalization_preserves_ensemble_mean_not_trajectory():
     c.reset(1)
     r = c.estimate("ZI", cfg(allow_reset_marginalization=True))
     assert r["qubits_after"] == 1 and abs(r["expectation_values"][0]) < 1e-12
-    strict = [c.estimate("ZI", cfg(seed=s)) for s in range(96)]
-    assert all(
-        r["qubits_after"] == 2 and abs(r["expectation_values"][0]) > 0.99
-        for r in strict
-    )
-    assert abs(sum(r["expectation_values"][0] for r in strict) / len(strict)) < 0.25
+    # Without marginalization the reset keeps its wire and collapses a branch
+    # per execution: estimate averages measurement trajectories of +-1.
+    strict = c.estimate("ZI", cfg(seed=5))
+    assert strict["qubits_after"] == 2
+    assert strict["estimate_evaluation"] == "trajectory_average"
+    assert strict["measurement_trajectories"] == 100
+    assert abs(strict["expectation_values"][0]) < 0.35
+    assert strict["realization_standard_errors"][0] > 0.05
     c.x(2)  # Allow structural sampling to remove a spectator wire.
     c.measure([(0, 0)])
     strict_sample = c.execute(cfg(seed=72, enable_sampling_reduction=True), 80)

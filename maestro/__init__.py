@@ -14,6 +14,8 @@ from .maestro import *
 from . import maestro as _raw_maestro
 if hasattr(_raw_maestro, "_compile_reference_sampler"):
     _compile_reference_sampler = _raw_maestro._compile_reference_sampler
+if hasattr(_raw_maestro, "_resolve_noise_realizations"):
+    _resolve_noise_realizations = _raw_maestro._resolve_noise_realizations
 
 # Re-export submodules
 circuits = _raw_maestro.circuits

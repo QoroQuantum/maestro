@@ -391,8 +391,9 @@ void NoiseClonePolicy()
             add.seed(42);
             const auto counts = add.noisy_execute(circuit, network, 0, model, 56, 7);
             Check(counts.size() == 1 && counts.begin()->second == 56 && !counts.begin()->first[0], "Noise realization batching changed the output");
-            // Terminal density batches now share one prepared distribution too.
-            const size_t jobs = method == Method::kStatevector || method == Method::kDensityMatrix ? 1 : workers;
+            // Both mixed-state methods prepare once per explicitly requested
+            // realization, independent of the sampling worker budget.
+            const size_t jobs = method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kMatrixProductOperator ? 1 : workers;
             Check(calls->load() == 2 * 7 * jobs, "Noise clone optimized away gates or replayed the prefix per shot");
         }
 }
@@ -1258,6 +1259,197 @@ void TerminalDensityDispatch()
         }
 }
 
+void TerminalMpoDispatch()
+{
+    // A CPU MPO draws each terminal shot by a serial contraction. Shot workers
+    // may share that work only by cloning one prepared MPO, never by evolving
+    // the circuit again: with backend selection (which prepares the MPO) and
+    // with a fixed backend (prepared by the network itself).
+    for (bool prepared : {false, true})
+        for (bool onHost : {false, true})
+            for (size_t workers : {1, 4})
+                for (bool seeded : {false, true})
+                {
+                    auto calls = std::make_shared<std::atomic<size_t>>(0);
+                    auto circuit = CF::CreateCircuit();
+                    circuit->AddOperation(std::make_shared<CountedX>(calls));
+                    circuit->AddOperation(std::make_shared<CountedX>(calls));
+                    circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+                    circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+                    auto measurement = std::static_pointer_cast<Circuits::MeasurementOperation<>>(CF::CreateMeasurement({{0, 0}, {1, 1}}));
+                    measurement->SetReadout({{1., 1.}, {0., 0.}});
+                    circuit->AddOperation(measurement);
+                    auto network = MakeNetwork(Backend::kQCSim, Method::kMatrixProductOperator);
+                    network->SetOptimizeSimulator(prepared);
+                    network->SetMaxSimulators(workers);
+                    if (seeded)
+                        network->Configure("seed", "81");
+                    network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+                    const auto counts = onHost ? network->RepeatedExecuteOnHost(circuit, 0, 2000) : network->RepeatedExecute(circuit, 2000);
+                    Check(calls->load() == 2, "Terminal MPO sampling repeated preparation across workers");
+                    Check(counts.size() == 2 && counts.at({true, false}) + counts.at({false, true}) == 2000,
+                          "Terminal MPO sampling lost Bell correlations or readout flips");
+                    // Identical clone streams would still balance on average;
+                    // they cannot leave both outcomes this close to 1000.
+                    Check(counts.at({true, false}) > 850 && counts.at({false, true}) > 850, "Terminal MPO workers sampled a biased distribution");
+                    Check(network->GetLastSimulationType() == Method::kMatrixProductOperator, "Terminal MPO sampling changed the backend");
+                }
+}
+
+void NestedTerminalMeasurementsShareThePrefix()
+{
+    // A nested circuit that ends by measuring is inlined: its gates evolve
+    // once and the shots are sampled, not replayed.
+    for (const auto method : {Method::kStatevector, Method::kDensityMatrix, Method::kMatrixProductOperator})
+        for (bool onHost : {false, true})
+        {
+            auto calls = std::make_shared<std::atomic<size_t>>(0);
+            auto nested = CF::CreateCircuit();
+            nested->AddOperation(std::make_shared<CountedX>(calls));
+            nested->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 1));
+            nested->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
+            auto circuit = CF::CreateCircuit();
+            circuit->AddOperation(nested);
+            auto network = MakeNetwork(Backend::kQCSim, method);
+            network->SetMaxSimulators(4);
+            network->Configure("seed", "5");
+            network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+            const auto counts = onHost ? network->RepeatedExecuteOnHost(circuit, 0, 2000) : network->RepeatedExecute(circuit, 2000);
+            Check(calls->load() == 1, "A nested terminal measurement replayed its prefix per shot");
+            Check(counts.size() == 2 && counts.at({true, false}) > 850 && counts.at({true, true}) > 850, "Inlined nested measurements changed the outcome");
+            Check(nested->GetOperations().size() == 3, "Inlining modified the caller's nested circuit");
+        }
+}
+
+void KeptMixedCandidateIsPrepared()
+{
+    // Several mixed-state candidates: the network's current one is chosen
+    // first and prepared afresh, even after host execution cleared it, so
+    // terminal MPO workers can clone it.
+    auto network = std::make_shared<Net>(Types::qubits_vector{2}, std::vector<size_t>{2});
+    network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kMatrixProductOperator);
+    network->AddOptimizationSimulator(Backend::kQCSim, Method::kDensityMatrix);
+    network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductOperator);
+    network->SetOptimizeSimulator(true);
+    network->GetSimulator()->Clear();
+    auto circuit = CF::CreateCircuit();
+    circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+    circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    size_t shots = 100;
+    auto type = Backend::kQCSim;
+    auto method = Method::kMatrixProductOperator;
+    std::vector<bool> executed;
+    const auto prepared = network->ChooseBestSimulator(circuit, shots, 2, 2, 2, type, method, executed);
+    Check(prepared && method == Method::kMatrixProductOperator && prepared->GetNumberOfQubits() == 2,
+          "The kept mixed-state candidate was not prepared for shot workers");
+
+    for (bool onHost : {false, true})
+    {
+        auto calls = std::make_shared<std::atomic<size_t>>(0);
+        auto terminal = CF::CreateCircuit();
+        terminal->AddOperation(std::make_shared<CountedX>(calls));
+        terminal->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 1));
+        terminal->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
+        network->SetMaxSimulators(4);
+        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+        const auto counts = onHost ? network->RepeatedExecuteOnHost(terminal, 0, 2000) : network->RepeatedExecute(terminal, 2000);
+        Check(calls->load() == 1 && network->GetLastSimulationType() == Method::kMatrixProductOperator, "The kept MPO candidate was evolved more than once");
+        Check(counts.size() == 2 && counts.at({true, false}) > 850 && counts.at({true, true}) > 850, "The kept MPO candidate sampled wrongly");
+    }
+}
+
+class ThreadingNetwork : public Net
+{
+  public:
+    using Net::ExecutionThreads;
+    using Net::Net;
+};
+
+void ClearedMpoStillSamplesInParallel()
+{
+    // [MPO, statevector] without an estimator keeps the network's MPO, which
+    // host execution has cleared. Terminal workers must still get a prepared
+    // MPO of the host register to clone, not fall back to one worker.
+    auto network = std::make_shared<ThreadingNetwork>(Types::qubits_vector{2}, std::vector<size_t>{2});
+    network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kMatrixProductOperator);
+    network->AddOptimizationSimulator(Backend::kQCSim, Method::kStatevector);
+    network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductOperator);
+    network->SetOptimizeSimulator(true);
+    network->SetMaxSimulators(4);
+    network->GetSimulator()->Clear();
+    auto calls = std::make_shared<std::atomic<size_t>>(0);
+    auto circuit = CF::CreateCircuit();
+    circuit->AddOperation(std::make_shared<CountedX>(calls));
+    circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 1));
+    circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
+    std::shared_ptr<Simulators::ISimulator> prepared;
+    std::vector<bool> executed;
+    const auto threads = network->ExecutionThreads(circuit, 2, 2, 2, 1000, Backend::kQCSim, Method::kMatrixProductOperator, true, prepared, executed);
+    Check(threads == 4 && prepared && prepared->GetNumberOfQubits() == 2 && calls->load() == 1, "A cleared MPO forced terminal sampling onto one worker");
+
+    for (bool onHost : {false, true})
+    {
+        calls->store(0);
+        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+        const auto counts = onHost ? network->RepeatedExecuteOnHost(circuit, 0, 2000) : network->RepeatedExecute(circuit, 2000);
+        Check(calls->load() == 1 && network->GetLastSimulationType() == Method::kMatrixProductOperator,
+              "The mixed/pure fallback evolved its MPO more than once");
+        Check(counts.size() == 2 && counts.at({true, false}) > 850 && counts.at({true, true}) > 850, "The mixed/pure fallback sampled wrongly");
+    }
+}
+
+void ClassicalBitIdsDoNotDeferWires()
+{
+    // A deferred conditional reads classical bit c3. That says nothing about
+    // wire q3: the deterministic gate on q3 belongs to the shared prefix.
+    auto circuit = CF::CreateCircuit();
+    circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+    circuit->AddOperation(CF::CreateMeasurement({{0, 3}}));
+    circuit->AddOperation(CF::CreateConditionalGate(std::static_pointer_cast<Circuits::IGateOperation<>>(CF::CreateGate(Gate::kXGateType, 0)),
+                                                    std::make_shared<Circuits::EqualCondition>(std::vector<size_t>{3}, std::vector<bool>{true})));
+    circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 3));
+    circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    for (const bool exact : {false, true})
+    {
+        Circuits::OperationState state(4);
+        const auto mask = circuit->ExecuteNonMeasurements(nullptr, state, nullptr, exact);
+        Check(mask == std::vector<bool>({false, false, true, false}), "A classical bit ID deferred the gate on the same-numbered wire");
+    }
+}
+
+void MixedStateCandidates()
+{
+    // Several mixed-state candidates have no cost model. Selection must still
+    // choose one of them, not keep a placeholder simulator outside the set
+    // (which cannot apply the channel), even without an estimator.
+    for (const bool clifford : {false, true})
+    {
+        auto network = std::make_shared<Net>(Types::qubits_vector{2}, std::vector<size_t>{2});
+        network->GetController()->SetOptimizeCircuit(false);
+        network->SetInitialQubitsMapOptimization(false);
+        network->SetMPSOptimizeSwaps(false);
+        network->SetMaxSimulators(1);
+        network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kDensityMatrix);
+        network->AddOptimizationSimulator(Backend::kQCSim, Method::kMatrixProductOperator);
+        network->CreateSimulator(); // the MPS placeholder ConfigureNetwork leaves
+        network->SetOptimizeSimulator(true);
+        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+        auto circuit = CF::CreateCircuit();
+        circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+        if (!clifford)
+            circuit->AddOperation(
+                std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Simulators::QuantumChannel::AmplitudeDamping(1.)));
+        circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+        const auto counts = network->RepeatedExecute(circuit, 64);
+        const auto method = network->GetLastSimulationType();
+        Check(method == Method::kDensityMatrix || method == Method::kMatrixProductOperator,
+              "Mixed-state candidates fell back to a non-candidate backend (method " + std::to_string(static_cast<int>(method)) +
+                  (clifford ? ", Clifford)" : ", channel)"));
+        Check(counts.size() == 1 && counts.begin()->second == 64 && counts.begin()->first[0] == clifford,
+              "Mixed-state candidate execution changed the outcome");
+    }
+}
+
 void SmallTrajectoryBudgets()
 {
     for (auto method : {Method::kStatevector, Method::kDensityMatrix})
@@ -1447,6 +1639,38 @@ void SharedReset()
 
 void TrailingReset()
 {
+    // Deferred classical operations must not block an unrelated reset merely
+    // because a compacted classical bit has the same numeric ID as its qubit.
+    for (const size_t firstBit : {size_t{1}, size_t{3}})
+        for (const bool exact : {false, true})
+            for (const bool used : {false, true})
+            {
+                auto prefix = CF::CreateCircuit();
+                if (used)
+                    prefix->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 1));
+                prefix->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+                prefix->AddOperation(CF::CreateMeasurement({{0, 0}}));
+                prefix->AddOperation(CF::CreateCircuit({CF::CreateRandom({firstBit, firstBit + 1}, 0)}));
+                prefix->AddOperation(CF::CreateReset({1}));
+                Circuits::OperationState state(7);
+                const auto mask = prefix->ExecuteNonMeasurements(nullptr, state, nullptr, exact);
+                Check(mask.size() == 3 && mask[2] == (exact || !used), "Classical bit numbering changed reset prefix eligibility");
+            }
+    // Genuine deferred quantum operations, including those inside an opaque
+    // composite, must keep a mixed-state reset in the per-shot suffix.
+    for (const int nested : {0, 1, 2})
+    {
+        auto prefix = CF::CreateCircuit();
+        auto measured = CF::CreateMeasurement({{1, 0}});
+        prefix->AddOperation(nested == 1 ? CF::CreateCircuit({measured}) : measured);
+        if (nested == 2)
+            prefix->AddOperation(CF::CreateCircuit({CF::CreateGate(Gate::kXGateType, 1)}));
+        prefix->AddOperation(CF::CreateReset({1}));
+        Circuits::OperationState state(2);
+        const auto mask = prefix->ExecuteNonMeasurements(nullptr, state, nullptr, true);
+        Check(mask == std::vector<bool>(nested == 2 ? 3 : 2, false), "Mixed-state reset crossed a deferred quantum dependency");
+    }
+
     // Sampled T1 noise injects resets after the last gate. Without a later
     // measurement they must still run instead of being deferred and dropped.
     auto circuit = CF::CreateCircuit();
@@ -1870,6 +2094,12 @@ try
     WorkerThreadsFollowFlag();
 #endif
     TerminalDensityDispatch();
+    TerminalMpoDispatch();
+    NestedTerminalMeasurementsShareThePrefix();
+    KeptMixedCandidateIsPrepared();
+    ClearedMpoStillSamplesInParallel();
+    ClassicalBitIdsDoNotDeferWires();
+    MixedStateCandidates();
     SmallTrajectoryBudgets();
     IndependentShotStreams();
     QCSimSamplingRandomStreams(Method::kStabilizer);

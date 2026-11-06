@@ -82,6 +82,8 @@ const char *const kConfigFields[] = {
     "mps_routing_virtual_bonds",
     "mps_routing_truncation_weight",
     "mps_routing_strategy",
+    "fixed_backend",
+    "optimization_candidates",
 };
 
 void bind_config(nb::module_ &m)
@@ -132,10 +134,13 @@ void bind_config(nb::module_ &m)
            std::optional<std::string> trajectory_policy, std::optional<size_t> trajectory_max_memory_mb, std::optional<size_t> max_simulators,
            std::optional<bool> mps_routing_virtual_bonds, std::optional<double> mps_routing_truncation_weight, std::optional<std::string> mps_routing_strategy,
            std::optional<size_t> min_cluster_qubits, std::optional<double> observable_error_tolerance, bool enable_sampling_reduction,
-           bool allow_reset_marginalization, std::string counts_policy) {
+           bool allow_reset_marginalization, std::string counts_policy, bool fixed_backend,
+           std::vector<std::pair<Simulators::SimulatorType, Simulators::SimulationType>> optimization_candidates) {
             SimulatorConfig config;
             config.simulator_type = simulator_type;
             config.simulation_type = simulation_type;
+            config.fixed_backend = fixed_backend;
+            config.optimization_candidates = std::move(optimization_candidates);
             config.max_bond_dimension = max_bond_dimension;
             config.singular_value_threshold = singular_value_threshold;
             config.truncation_mode = std::move(truncation_mode);
@@ -190,7 +195,18 @@ void bind_config(nb::module_ &m)
         "max_simulators"_a.noconvert() = nb::none(), "mps_routing_virtual_bonds"_a = nb::none(), "mps_routing_truncation_weight"_a = nb::none(),
         "mps_routing_strategy"_a = nb::none(), "min_cluster_qubits"_a.noconvert() = nb::none(), "observable_error_tolerance"_a = nb::none(),
         "enable_sampling_reduction"_a = defaults.enable_sampling_reduction, "allow_reset_marginalization"_a = defaults.allow_reset_marginalization,
-        "counts_policy"_a = defaults.counts_policy);
+        "counts_policy"_a = defaults.counts_policy, "fixed_backend"_a = defaults.fixed_backend, "optimization_candidates"_a = defaults.optimization_candidates);
+
+    BindConfigField(config_class, "optimization_candidates", &SimulatorConfig::optimization_candidates,
+                    "With fixed_backend=False, the (SimulatorType, SimulationType) pairs automatic selection may choose from, "
+                    "replacing simulator_type/simulation_type. Without a cost model the first listed candidate that can hold the "
+                    "register runs; a Clifford circuit moves to a stabilizer only as a listed pair, and a list none of whose "
+                    "candidates can be created raises instead of running another backend. Exact noise channels are used only "
+                    "when every candidate applies them (density matrix, MPO). Empty (the default) keeps the requested pair. "
+                    "Distributed GPU backends cannot be candidates.");
+
+    BindConfigField(config_class, "fixed_backend", &SimulatorConfig::fixed_backend,
+                    "Require the selected simulator and method; disable automatic backend replacement, including reference-frame sampling.");
 
     BindConfigField(config_class, "counts_policy", &SimulatorConfig::counts_policy,
                     "'auto' uses eligible frame counts only without explicit seeds; 'legacy' retains trajectory counts; "

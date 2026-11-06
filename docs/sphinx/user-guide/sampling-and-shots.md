@@ -96,12 +96,15 @@ print(rows["samples"], rows["sampling_strategy"])
 | `reference_frame_v1` | Noisy-Clifford reference frames: one stabilizer simulation, then Pauli frames per shot |
 | `terminal_v1` | One prepared state sampled for every shot (terminal measurements only) |
 | `trajectory_v1` | Each shot, or each noise realization, executed on its own |
+| `mixed_v1` | Some noise realizations sampled from one prepared state, others (such as one-shot realizations of an uneven split) executed shot by shot |
 
-Rows keep each shot's record together. Frames, direct trajectories and
-checkpoints also keep shot order; MPS, MPO and tensor networks, and every
-method with `enable_sampling_reduction=True`, sample a histogram and shuffle
-complete records within each noise realization, so their rows are exchangeable
-rather than chronological.
+Rows keep each shot's record together. Frames and direct dynamic trajectories
+keep shot order. Terminal sampling, including eligible mixed-state checkpoint
+suffixes, and network histogram sampling shuffle complete records within each
+noise realization, so those rows are exchangeable rather than chronological.
+Dynamic raw sampling reuses deterministic prefixes while retaining the complete
+per-shot measurement history. Nested circuits are inlined first, so one that
+ends in measurements counts as terminal.
 
 (py_reference_frame_sampler)=
 ### Reusing compiled reference frames

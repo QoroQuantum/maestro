@@ -1989,6 +1989,108 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         return std::any_of(operations.begin(), operations.end(), [](const auto &op) { return op->GetType() == OperationType::kComposite; });
     }
 
+    // A copy in which every nested circuit is replaced by its operations,
+    // recursively (the operations themselves are shared). Nested circuits read
+    // and write the enclosing classical state (ExecuteOperation), so this
+    // changes no result; it lets terminal extraction and prefix sharing see
+    // the measurements and gates a nested circuit holds.
+    std::shared_ptr<Circuit<Time>> InlinedComposites() const
+    {
+        OperationsVector flat;
+        flat.reserve(operations.size());
+        AppendInlined(flat);
+        return std::make_shared<Circuit<Time>>(flat);
+    }
+
+    // Whether any operation, including those inside nested circuits, is an
+    // explicit quantum channel.
+    bool HasQuantumChannels() const
+    {
+        return std::any_of(operations.begin(), operations.end(), [](const auto &op) {
+            return op->GetType() == OperationType::kQuantumChannel ||
+                   (op->GetType() == OperationType::kComposite && std::static_pointer_cast<Circuit<Time>>(op)->HasQuantumChannels());
+        });
+    }
+
+    void AppendInlined(OperationsVector &flat) const
+    {
+        for (const auto &op : operations)
+            if (op->GetType() == OperationType::kComposite)
+                std::static_pointer_cast<Circuit<Time>>(op)->AppendInlined(flat);
+            else
+                flat.push_back(op);
+    }
+
+    // Whether evolving this circuit observes no random classical result. Unlike
+    // HasOnlyDeterministicOperations, which classifies operations shared by a
+    // prefix, this follows the evolution from a fresh |0...0> register when
+    // freshRegister is set: a pure-state reset before any operation on its wire
+    // then leaves |0> unchanged. Mixed-state resets are always deterministic
+    // channels. touched carries the wires used so far across nested circuits.
+    bool HasDeterministicEvolution(bool exactChannels, bool freshRegister, std::unordered_set<Types::qubit_t> &touched) const
+    {
+        for (const auto &op : operations)
+        {
+            switch (op->GetType())
+            {
+            case OperationType::kGate:
+            case OperationType::kQuantumChannel:
+            case OperationType::kDelay:
+                break;
+            case OperationType::kNoOp:
+                continue; // a barrier neither changes nor uses a wire
+            case OperationType::kReset:
+                if (!exactChannels)
+                {
+                    if (!freshRegister)
+                        return false;
+                    for (const auto qubit : op->AffectedQubits())
+                        if (touched.find(qubit) != touched.end())
+                            return false;
+                }
+                break;
+            case OperationType::kComposite:
+                if (!std::static_pointer_cast<Circuit<Time>>(op)->HasDeterministicEvolution(exactChannels, freshRegister, touched))
+                    return false;
+                continue; // the nested operations recorded their own wires
+            default:
+                return false;
+            }
+            for (const auto qubit : op->AffectedQubits())
+                touched.insert(qubit);
+        }
+        return true;
+    }
+
+    // These operations can be prepared once without observing a classical result.
+    // A mixed-state reset is a deterministic channel; a pure-state reset may
+    // sample a branch and must remain in the per-shot suffix.
+    bool HasOnlyDeterministicOperations(bool exactChannels = false) const
+    {
+        for (const auto &op : operations)
+        {
+            switch (op->GetType())
+            {
+            case OperationType::kGate:
+            case OperationType::kQuantumChannel:
+            case OperationType::kDelay:
+            case OperationType::kNoOp:
+                break;
+            case OperationType::kReset:
+                if (!exactChannels)
+                    return false;
+                break;
+            case OperationType::kComposite:
+                if (!std::static_pointer_cast<Circuit<Time>>(op)->HasOnlyDeterministicOperations(exactChannels))
+                    return false;
+                break;
+            default:
+                return false;
+            }
+        }
+        return true;
+    }
+
     /**
      * @brief Checks if the circuit has measurements that are followed by
      * operations that affect the measured qubits.
@@ -1996,11 +2098,12 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      * Checks if the circuit has measurements that are followed by operations that
      * affect the measured qubits.
      *
+     * @param exactChannels Whether resets can be evolved as deterministic mixed-state channels.
      * @return True if the circuit has measurements that are followed by
      * operations that affect the measured qubits, or has a reset that is not
      * the first operation on its qubit, false otherwise.
      */
-    bool HasOpsAfterMeasurements() const
+    bool HasOpsAfterMeasurements(bool exactChannels = false) const
     {
         std::unordered_set<Types::qubit_t> measuredQubits;
         std::unordered_set<Types::qubit_t> affectedQubits;
@@ -2008,11 +2111,9 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
         for (const auto &op : operations)
         {
-            // Prefix execution and terminal-measurement extraction treat composites
-            // as opaque operations. Run them per shot, including gate-only
-            // composites, until those optimizations can inspect their contents
-            // consistently.
-            if (op->GetType() == OperationType::kComposite)
+            // Deterministic nested circuits execute as one prefix operation. Keep
+            // composites with classical results opaque to terminal extraction.
+            if (op->GetType() == OperationType::kComposite && !std::static_pointer_cast<Circuit<Time>>(op)->HasOnlyDeterministicOperations(exactChannels))
                 return true;
             const auto qubits = op->AffectedQubits();
 
@@ -2039,6 +2140,14 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                 return true;
             else if (op->GetType() == OperationType::kReset)
             {
+                if (exactChannels)
+                {
+                    for (const auto qbit : qubits)
+                        if (measuredQubits.find(qbit) != measuredQubits.end())
+                            return true;
+                    affectedQubits.insert(qubits.begin(), qubits.end());
+                    continue;
+                }
                 // resets in the middle of the circuit are treated as measurements
                 for (const auto qbit : qubits)
                 {
@@ -2088,8 +2197,11 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      * @sa ISimulator
      * @sa OperationState
      */
-    std::vector<bool> ExecuteNonMeasurements(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim = nullptr) const
+    std::vector<bool> ExecuteNonMeasurements(const std::shared_ptr<Simulators::ISimulator> &sim, OperationState &state, size_t *curMaxBondDim = nullptr,
+                                             bool exactChannels = false) const
     {
+        if (sim)
+            exactChannels = sim->SupportsQuantumChannels();
         // With gate fusion, the look-ahead routing of an MPS/MPO follows the
         // simulator's upcoming operations in order, and stepping over an operation
         // that is deferred to the shots breaks that plan for the rest of this
@@ -2100,7 +2212,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         if (planExecutionOrder)
         {
             OperationState dryState(state);
-            mask = ExecuteNonMeasurements(nullptr, dryState);
+            mask = ExecuteNonMeasurements(nullptr, dryState, nullptr, exactChannels);
             planExecutionOrder = std::find(mask.begin(), mask.end(), true) != mask.end() && std::find(mask.begin(), mask.end(), false) != mask.end();
         }
         if (planExecutionOrder)
@@ -2120,7 +2232,13 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         std::vector<bool> executedOps;
         executedOps.reserve(operations.size());
 
+        // Quantum wires of every operation deferred to the shots, and classical
+        // bits those operations write or read. The two index spaces are kept
+        // apart: classical bit c_k says nothing about wire q_k, so remapping
+        // classical registers must not move operations into or out of the
+        // shared prefix.
         std::unordered_set<Types::qubit_t> measuredQubits;
+        std::unordered_set<size_t> deferredBits;
         std::unordered_set<Types::qubit_t> affectedQubits;
 
         bool executionStopped = false;
@@ -2134,14 +2252,19 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
             if (op->GetType() == OperationType::kMeasurement || op->GetType() == OperationType::kConditionalMeasurement ||
                 op->GetType() == OperationType::kRandomGen || op->GetType() == OperationType::kConditionalRandomGen)
+            {
                 measuredQubits.insert(qubits.begin(), qubits.end());
+                const auto bits = op->AffectedBits();
+                deferredBits.insert(bits.begin(), bits.end());
+            }
             else if (op->GetType() == OperationType::kReset)
             {
-                // if it's the first op on qubit(s), execute it, otherwise treat it as a
-                // measurement
+                // Mixed-state resets are channels unless they follow a deferred
+                // measurement/operation on the same wire. Pure-state resets may
+                // only be shared before that wire has been used.
                 executed = true;
                 for (auto qubit : qubits)
-                    if (affectedQubits.find(qubit) != affectedQubits.end())
+                    if (exactChannels ? measuredQubits.find(qubit) != measuredQubits.end() : affectedQubits.find(qubit) != affectedQubits.end())
                     {
                         executed = false;
                         break;
@@ -2167,14 +2290,16 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                 // following gate that affects those qubits
 
                 bool canExecute =
-                    op->GetType() == OperationType::kGate || op->GetType() == OperationType::kQuantumChannel || op->GetType() == OperationType::kDelay;
+                    op->GetType() == OperationType::kGate || op->GetType() == OperationType::kQuantumChannel || op->GetType() == OperationType::kDelay ||
+                    op->GetType() == OperationType::kNoOp ||
+                    (op->GetType() == OperationType::kComposite && std::static_pointer_cast<Circuit<Time>>(op)->HasOnlyDeterministicOperations(exactChannels));
 
                 if (canExecute) // a conditional gate cannot be executed, it needs
                                 // something executed at each shot, either a
                                 // measurement or a random number generated
                 {
                     for (auto bit : bits)
-                        if (measuredQubits.find(bit) != measuredQubits.end())
+                        if (deferredBits.find(bit) != deferredBits.end())
                         {
                             canExecute = false;
                             break;
@@ -2200,7 +2325,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
                 {
                     // this is a 'trick', if it cannot execute, then neither can any
                     // following gate that affects any of the already involved qubits
-                    measuredQubits.insert(bits.begin(), bits.end());
+                    deferredBits.insert(bits.begin(), bits.end());
                     measuredQubits.insert(qubits.begin(), qubits.end());
                 }
             }
@@ -2209,6 +2334,7 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
 
             if (!executed)
             {
+                // Every deferred operation already recorded its wires in measuredQubits.
                 executionStopped = true;
                 if (sim && sim->IsGateFusionEnabled())
                 {

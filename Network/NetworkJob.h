@@ -76,7 +76,8 @@ template <typename Time = Types::time_type> class ExecuteJob
         Circuits::OperationState state;
         state.AllocateBits(nrCbits);
 
-        const bool hasMeasurementsOnlyAtEnd = !dcirc->HasOpsAfterMeasurements();
+        const bool hasMeasurementsOnlyAtEnd = !dcirc->HasOpsAfterMeasurements(method == Simulators::SimulationType::kDensityMatrix ||
+                                                                              method == Simulators::SimulationType::kMatrixProductOperator);
         const bool optimiseMultipleShots = optimiseMultipleShotsExecution;
         const bool specialOptimizationForStatevector = optimiseMultipleShots && method == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
 
@@ -249,7 +250,8 @@ template <typename Time = Types::time_type> class ExecuteJob
         Circuits::OperationState state;
         state.AllocateBits(nrCbits);
 
-        const bool hasMeasurementsOnlyAtEnd = !dcirc->HasOpsAfterMeasurements();
+        const bool hasMeasurementsOnlyAtEnd = !dcirc->HasOpsAfterMeasurements(method == Simulators::SimulationType::kDensityMatrix ||
+                                                                              method == Simulators::SimulationType::kMatrixProductOperator);
         const bool optimiseMultipleShots = optimiseMultipleShotsExecution;
         const bool specialOptimizationForStatevector = optimiseMultipleShots && method == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
 

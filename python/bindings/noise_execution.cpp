@@ -23,17 +23,44 @@ static CircuitPtr inject_planned(NoiseLayer layer, const noise::NoiseInjectionPl
     return MaestroExecution::InjectPlanned(layer, plan, rng, MaestroExecution::UsesExactQuantumChannels(config));
 }
 
-void require_realizations(int noise_realizations)
+void require_realizations(std::optional<int> noise_realizations)
 {
-    if (noise_realizations < 1)
+    if (noise_realizations && *noise_realizations < 1)
         throw nb::value_error("noise_realizations must be >= 1.");
+}
+
+static std::optional<size_t> requested_realizations(std::optional<int> requested)
+{
+    require_realizations(requested);
+    return requested ? std::optional<size_t>(static_cast<size_t>(*requested)) : std::nullopt;
+}
+
+void AddNoisePolicyMetadata(nb::dict &out, const MaestroExecution::NoiseRealizationPolicy &policy)
+{
+    out["noise_realizations_requested"] = policy.requested ? nb::cast(*policy.requested) : nb::none();
+    out["noise_realizations_policy"] = policy.requested ? "explicit" : "auto";
+    out["noise_evaluation"] = policy.exact_channels ? "exact_channels" : "trajectories";
+    out["stochastic_noise"] = policy.stochastic_noise;
+    out["stochastic_execution"] = policy.stochastic_execution;
+}
+
+size_t ResolveSamplingRealizations(const CircuitPtr &circuit, const nb::object &noise_model, const SimulatorConfig &config, int fallback, bool estimation)
+{
+    require_circuit(circuit);
+    if (fallback < 1)
+        throw nb::value_error("fallback must be >= 1.");
+    const noise::NoiseModel empty;
+    const auto &model = noise_model.is_none() ? empty : nb::cast<const noise::NoiseModel &>(noise_model);
+    return MaestroExecution::ResolveNoiseRealizations(std::nullopt, model, config, NoiseLayer::kCombined, static_cast<size_t>(fallback), circuit, estimation)
+        .realizations;
 }
 
 // Shots are split across min(shots, noise_realizations) batches, each with its
 // own injected noise; the result reports the number of batches used. The
 // algorithm is MaestroExecution::ExecuteNoisy, shared with C++ callers.
 static nb::dict execute_noise_batches(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots,
-                                      int noise_realizations, std::optional<uint64_t> noise_seed, NoiseLayer layer, const char *noise_type, bool return_samples)
+                                      std::optional<int> noise_realizations, std::optional<uint64_t> noise_seed, NoiseLayer layer, const char *noise_type,
+                                      bool return_samples)
 {
     if (shots < 1)
         throw nb::value_error("shots must be >= 1.");
@@ -44,8 +71,8 @@ static nb::dict execute_noise_batches(const CircuitPtr &circuit, const noise::No
     MaestroExecution::ShotRecords records;
     {
         nb::gil_scoped_release release;
-        records = MaestroExecution::ExecuteNoisy(circuit, noise_model, config, static_cast<size_t>(shots), static_cast<size_t>(noise_realizations), noise_seed,
-                                                 options);
+        records = MaestroExecution::ExecuteNoisy(circuit, noise_model, config, static_cast<size_t>(shots), requested_realizations(noise_realizations),
+                                                 noise_seed, options);
     }
 
     nb::dict out;
@@ -68,6 +95,7 @@ static nb::dict execute_noise_batches(const CircuitPtr &circuit, const noise::No
     out["simulator"] = records.simulator;
     out["method"] = records.method;
     out["noise_realizations"] = records.realizations;
+    AddNoisePolicyMetadata(out, records.policy);
     out["sampling_components"] = records.components;
     out["largest_component_qubits"] = records.largest_component;
     if (noise_type)
@@ -85,26 +113,15 @@ CircuitPtr without_circuit_channels(const CircuitPtr &circuit)
 // Averages expectation values over noise_realizations independent injections;
 // the loop is MaestroExecution::EstimateNoisy, which runs realization workers.
 static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model,
-                                            int noise_realizations, const SimulatorConfig &config, std::optional<uint64_t> noise_seed, NoiseLayer layer,
-                                            const char *noise_type)
+                                            std::optional<int> noise_realizations, const SimulatorConfig &config, std::optional<uint64_t> noise_seed,
+                                            NoiseLayer layer, const char *noise_type)
 {
     require_realizations(noise_realizations);
     auto paulis = ParseObservables(observables);
-    if (paulis.empty())
-    {
-        RequireNoiseSeed(noise_seed);
-        auto out = estimate_core(without_circuit_channels(circuit), paulis, config);
-        out["ideal_expectation_values"] = nb::list();
-        out["noise_realizations"] = noise_realizations;
-        out["cone_cache_hits"] = 0;
-        if (noise_type)
-            out["noise_type"] = noise_type;
-        return out;
-    }
     MaestroExecution::NoisyEstimate result;
     {
         nb::gil_scoped_release release;
-        result = MaestroExecution::EstimateNoisy(circuit, paulis, noise_model, static_cast<size_t>(noise_realizations), config, noise_seed, layer);
+        result = MaestroExecution::EstimateNoisy(circuit, paulis, noise_model, requested_realizations(noise_realizations), config, noise_seed, layer);
     }
     nb::dict out;
     out["expectation_values"] = nb::cast(result.values);
@@ -115,7 +132,11 @@ static nb::dict estimate_noise_realizations(const CircuitPtr &circuit, const nb:
     // GPU estimates resolved without simulation retain -1 (no device used).
     if (result.ideal.simulator == Simulators::SimulatorType::kGpuSim || result.ideal.gpu_device >= 0)
         out["gpu_device"] = result.ideal.gpu_device;
-    out["noise_realizations"] = noise_realizations;
+    out["noise_realizations"] = result.realizations;
+    AddNoisePolicyMetadata(out, result.policy);
+    const bool stochastic = result.policy.stochastic_noise || result.policy.stochastic_execution;
+    out["estimate_evaluation"] = stochastic ? "trajectory_average" : "deterministic";
+    out["realization_standard_errors"] = stochastic && result.realizations < 2 ? nb::object(nb::none()) : nb::cast(result.standard_errors);
     out["auto_reduced"] = result.auto_reduced;
     out["expectation_error_bounds"] = nb::cast(result.error_bounds);
     out["bounded_observables"] = result.bounded_observables;
@@ -174,14 +195,11 @@ void require_any_noise(const noise::NoiseModel &noise_model)
 // noise in their own right, even under an empty NoiseModel.
 bool has_circuit_channels(const CircuitPtr &circuit)
 {
-    for (const auto &op : circuit->GetOperations())
-        if (op->GetType() == Circuits::OperationType::kQuantumChannel)
-            return true;
-    return false;
+    return circuit->HasQuantumChannels();
 }
 
-nb::dict NoisyExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots, int noise_realizations,
-                      std::optional<uint64_t> noise_seed, bool return_samples)
+nb::dict NoisyExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots,
+                      std::optional<int> noise_realizations, std::optional<uint64_t> noise_seed, bool return_samples)
 {
     require_circuit(circuit);
     require_inject_noise_covers(noise_model);
@@ -189,16 +207,16 @@ nb::dict NoisyExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_
     return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, NoiseLayer::kPauli, nullptr, return_samples);
 }
 
-nb::dict CoherentExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots, int noise_realizations,
-                         std::optional<uint64_t> noise_seed, bool return_samples)
+nb::dict CoherentExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots,
+                         std::optional<int> noise_realizations, std::optional<uint64_t> noise_seed, bool return_samples)
 {
     require_circuit(circuit);
     require_coherent(noise_model);
     return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, NoiseLayer::kCoherent, "coherent", return_samples);
 }
 
-nb::dict FullNoiseExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots, int noise_realizations,
-                          std::optional<uint64_t> noise_seed, bool return_samples)
+nb::dict FullNoiseExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, int shots,
+                          std::optional<int> noise_realizations, std::optional<uint64_t> noise_seed, bool return_samples)
 {
     require_circuit(circuit);
     if (!has_circuit_channels(circuit))
@@ -207,8 +225,8 @@ nb::dict FullNoiseExecute(const CircuitPtr &circuit, const noise::NoiseModel &no
     return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, NoiseLayer::kCombined, "combined", return_samples);
 }
 
-nb::dict NoisyEstimateMonteCarlo(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, int noise_realizations,
-                                 const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
+nb::dict NoisyEstimateMonteCarlo(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model,
+                                 std::optional<int> noise_realizations, const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
 {
     require_circuit(circuit);
     require_inject_noise_covers(noise_model);
@@ -216,7 +234,7 @@ nb::dict NoisyEstimateMonteCarlo(const CircuitPtr &circuit, const nb::object &ob
     return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, NoiseLayer::kPauli, nullptr);
 }
 
-nb::dict CoherentEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, int noise_realizations,
+nb::dict CoherentEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, std::optional<int> noise_realizations,
                           const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
 {
     require_circuit(circuit);
@@ -224,8 +242,8 @@ nb::dict CoherentEstimate(const CircuitPtr &circuit, const nb::object &observabl
     return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, NoiseLayer::kCoherent, "coherent");
 }
 
-nb::dict FullNoiseEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model, int noise_realizations,
-                           const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
+nb::dict FullNoiseEstimate(const CircuitPtr &circuit, const nb::object &observables, const noise::NoiseModel &noise_model,
+                           std::optional<int> noise_realizations, const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
 {
     require_circuit(circuit);
     if (!has_circuit_channels(circuit))
@@ -243,6 +261,11 @@ nb::dict NoisyEstimate(const CircuitPtr &circuit, const nb::object &observables,
         throw nb::value_error("noisy_estimate models only the all-gates Pauli layer (set_depolarizing, "
                               "set_dephasing, set_bit_flip, set_qubit_noise), but this NoiseModel has other "
                               "layers. Use noisy_estimate_montecarlo or full_noise_estimate instead.");
+    // Damping scales one deterministic expectation; it cannot describe noise
+    // acting between measurement branches (the native estimate rejects it too).
+    if (MaestroExecution::HasStochasticEvolution(circuit, MaestroExecution::UsesExactQuantumChannels(config)))
+        throw nb::value_error("noisy_estimate (analytical damping) requires deterministic evolution; mid-circuit measurements and classical "
+                              "control need noisy_estimate_montecarlo or full_noise_estimate to average measurement branches.");
     auto paulis = ParseObservables(observables);
     nb::dict result = estimate_core(circuit, paulis, config);
 
@@ -256,7 +279,7 @@ nb::dict NoisyEstimate(const CircuitPtr &circuit, const nb::object &observables,
     return result;
 }
 
-nb::dict NoisyFidelity(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, int noise_realizations, const SimulatorConfig &config,
+nb::dict NoisyFidelity(const CircuitPtr &circuit, const noise::NoiseModel &noise_model, std::optional<int> noise_realizations, const SimulatorConfig &config,
                        std::optional<uint64_t> noise_seed)
 {
     require_circuit(circuit);
@@ -267,14 +290,17 @@ nb::dict NoisyFidelity(const CircuitPtr &circuit, const noise::NoiseModel &noise
     MaestroExecution::NoisyFidelityResult result;
     {
         nb::gil_scoped_release release;
-        result = MaestroExecution::NoisyFidelity(circuit, noise_model, static_cast<size_t>(noise_realizations), config, noise_seed);
+        result = MaestroExecution::NoisyFidelity(circuit, noise_model, requested_realizations(noise_realizations), config, noise_seed);
     }
     nb::dict out;
     out["fidelity"] = result.fidelity;
     out["infidelity"] = 1.0 - result.fidelity;
-    out["std_error"] = result.std_error;
+    const bool stochastic = result.policy.stochastic_noise || result.policy.stochastic_execution;
+    out["std_error"] = stochastic && result.realizations < 2 ? nb::object(nb::none()) : nb::cast(result.std_error);
     out["time_taken"] = result.time_taken;
-    out["noise_realizations"] = noise_realizations;
+    out["noise_realizations"] = result.realizations;
+    AddNoisePolicyMetadata(out, result.policy);
+    out["estimate_evaluation"] = stochastic ? "trajectory_average" : "deterministic";
     return out;
 }
 

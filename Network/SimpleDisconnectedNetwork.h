@@ -20,8 +20,11 @@
 #include "QubitRegister.h"
 #include "SimpleController.h"
 #include "SimpleHost.h"
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <charconv>
+#include <optional>
 
 #include "../Simulators/TensorNetworks/MPSDummySimulator.h"
 
@@ -618,6 +621,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         if (!simulator)
             return {};
+        InlineTerminalComposites();
 
         auto simType = simulator->GetType();
         if (distCirc->HasOpsAfterMeasurements() && (
@@ -639,14 +643,12 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 #endif
         )
         {
-            method = Simulators::SimulationType::kStabilizer;
-
-            if (simType == Simulators::SimulatorType::kCompositeQCSim)
-                simType = Simulators::SimulatorType::kQCSim;
-#ifndef NO_QISKIT_AER
-            else if (simType == Simulators::SimulatorType::kCompositeQiskitAer)
-                simType = Simulators::SimulatorType::kQiskitAer;
-#endif
+            // Only to a stabilizer backend the candidate set lists.
+            if (const auto stabilizer = StabilizerBackend(simType))
+            {
+                method = Simulators::SimulationType::kStabilizer;
+                simType = *stabilizer;
+            }
         }
 
         ExecuteResults res;
@@ -676,27 +678,14 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         lastFusionEnabled = false;
 
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
-        size_t nrThreads = GetMaxSimulators();
-
-#ifdef __linux__
-        if (Simulators::IsGpuSimulator(simType))
-            nrThreads = 1;
-        else
-#endif
-            if (((method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
-                  method == Simulators::SimulationType::kDensityMatrix) &&
-                 !distCirc->HasOpsAfterMeasurements()) ||
-                simType == Simulators::SimulatorType::kQuestSim)
-            nrThreads = 1;
-
-        nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
+        const bool terminalSampling = !distCirc->HasOpsAfterMeasurements(IsMixedStateMethod(method));
+        const size_t nrThreads = ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbitsResults, shots, simType, method, terminalSampling, optSim, executed);
 
         std::mutex resultsMutex;
 
         auto dcirc = distCirc;
 
-        if (reproducibleSampling && dcirc->HasOpsAfterMeasurements() &&
-            (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))
+        if (reproducibleSampling && !terminalSampling && (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))
         {
             ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbitsResults, simType, method, optSim, executed, resultsMutex);
         }
@@ -738,7 +727,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 };
                 job->curMaxBondDim = &curMaxBondDim;
 
-                job->config = ExecutionConfiguration(simType, nrQubits);
+                job->config = ExecutionConfiguration(simType, nrQubits, method);
                 job->randomStream = jobStream++;
                 if (configuration.IsSet("seed"))
                 {
@@ -775,7 +764,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             };
             job->curMaxBondDim = &curMaxBondDim;
 
-            job->config = ExecutionConfiguration(simType, nrQubits);
+            job->config = ExecutionConfiguration(simType, nrQubits, method);
 
             if (optSim)
             {
@@ -862,6 +851,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         if (!simulator || !distCirc)
             return {};
+        InlineTerminalComposites();
 
         auto simType = simulator->GetType();
 
@@ -885,14 +875,12 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 #endif
         )
         {
-            method = Simulators::SimulationType::kStabilizer;
-
-            if (simType == Simulators::SimulatorType::kCompositeQCSim)
-                simType = Simulators::SimulatorType::kQCSim;
-#ifndef NO_QISKIT_AER
-            else if (simType == Simulators::SimulatorType::kCompositeQiskitAer)
-                simType = Simulators::SimulatorType::kQiskitAer;
-#endif
+            // Only to a stabilizer backend the candidate set lists.
+            if (const auto stabilizer = StabilizerBackend(simType))
+            {
+                method = Simulators::SimulationType::kStabilizer;
+                simType = *stabilizer;
+            }
         }
 
         ExecuteResults res;
@@ -915,30 +903,16 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         lastFusionEnabled = false;
 
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
-        size_t nrThreads = GetMaxSimulators();
-
-#ifdef __linux__
-        if (Simulators::IsGpuSimulator(simType))
-            nrThreads = 1;
-        else
-#endif
-            if (((method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
-                  method == Simulators::SimulationType::kDensityMatrix) &&
-                 !distCirc->HasOpsAfterMeasurements()) ||
-                simType == Simulators::SimulatorType::kQuestSim)
-            nrThreads = 1;
-
-        nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
-
+        const bool terminalSampling = !distCirc->HasOpsAfterMeasurements(IsMixedStateMethod(method));
         // WARNING: be sure to not put this above ChooseBestSimulator, as that one
         // can change the shots value!
+        const size_t nrThreads = ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbits, shots, simType, method, terminalSampling, optSim, executed);
 
         std::mutex resultsMutex;
 
         auto dcirc = distCirc;
 
-        if (reproducibleSampling && dcirc->HasOpsAfterMeasurements() &&
-            (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))
+        if (reproducibleSampling && !terminalSampling && (shots > 1 || (shots == 1 && configuration.GetConfiguration("trajectory_policy") == "shot_v1")))
         {
             ExecuteLogicalShotBlocks(dcirc, res, shots, nrThreads, nrQubits, nrCbits, nrCbits, simType, method, optSim, executed, resultsMutex);
         }
@@ -972,7 +946,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 };
                 job->curMaxBondDim = &curMaxBondDim;
 
-                job->config = ExecutionConfiguration(simType, nrQubits);
+                job->config = ExecutionConfiguration(simType, nrQubits, method);
                 job->randomStream = jobStream++;
                 if (configuration.IsSet("seed"))
                 {
@@ -1009,7 +983,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             };
             job->curMaxBondDim = &curMaxBondDim;
 
-            job->config = ExecutionConfiguration(simType, nrQubits);
+            job->config = ExecutionConfiguration(simType, nrQubits, method);
 
             if (optSim)
             {
@@ -1131,7 +1105,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         if (simulator)
         {
             const size_t allocationQubits = nrQubits == 0 ? GetNumQubits() + GetNumNetworkEntangledQubits() : nrQubits;
-            ExecutionConfiguration(simType, allocationQubits).ApplyConfigurationToSimulator(simulator);
+            ExecutionConfiguration(simType, allocationQubits, simExecType).ApplyConfigurationToSimulator(simulator);
 
             simulator->AllocateQubits(allocationQubits);
             simulator->Initialize();
@@ -2289,7 +2263,12 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         if (!optimizeSimulator)
             return nullptr;
 
-        if ((!simulatorsEstimator || !simulatorsEstimator->IsInitialized()) && simulatorsForOptimizations.size() != 1)
+        // Mixed-state candidates are never ranked by the estimator, so a set made
+        // only of them is resolved below without it.
+        const bool onlyMixedStateCandidates =
+            !simulatorsForOptimizations.empty() && std::all_of(simulatorsForOptimizations.begin(), simulatorsForOptimizations.end(),
+                                                               [](const auto &candidate) { return IsMixedStateMethod(candidate.second); });
+        if ((!simulatorsEstimator || !simulatorsEstimator->IsInitialized()) && simulatorsForOptimizations.size() != 1 && !onlyMixedStateCandidates)
             return nullptr;
 
         // when multithreading is set to true it means it needs a multithreaded
@@ -2381,37 +2360,65 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             simulatorTypes.emplace_back(Simulators::SimulatorType::kQuestSim, Simulators::SimulationType::kStatevector);
 
         // Honor a singleton optimization set (e.g. density_matrix) even if it is
-        // not in the hardcoded candidate list. Skip backends that cannot actually
-        // be constructed, such as GPU MPS when the GPU library is missing: the
+        // not in the hardcoded candidate list, and likewise several mixed-state
+        // candidates, which have no cost model. Among several, the network's
+        // current backend comes first when it is one of them (ConfigureNetwork
+        // allocated the first listed candidate that fits); the others follow in
+        // a fixed (enumeration) order, never a placeholder outside the set. The
+        // chosen backend is prepared afresh, as for a singleton, so terminal
+        // shot workers can clone it even after host execution cleared the
+        // network's simulator.
+        // A candidate whose register cannot be allocated (a density matrix of
+        // 40 qubits) yields to the next. Skip backends that cannot actually be
+        // constructed, such as GPU MPS when the GPU library is missing: the
         // caller then keeps the network simulator instead of recording 0 shots.
-        if (simulatorTypes.empty() && simulatorsForOptimizations.size() == 1)
-        {
-            const auto candidate = *simulatorsForOptimizations.begin();
-            if (candidate.first == Simulators::SimulatorType::kGpuSim && !Simulators::SimulatorsFactory::IsGpuLibraryAvailable())
-                return nullptr;
-            if (Simulators::SimulatorsFactory::CreateSimulator(candidate.first, candidate.second))
-                simulatorTypes.push_back(candidate);
-        }
-
+        std::vector<std::pair<Simulators::SimulatorType, Simulators::SimulationType>> unranked;
         if (simulatorTypes.empty())
-            return nullptr;
-        else if (simulatorTypes.size() == 1)
         {
-            const auto candidateType = simulatorTypes[0].first;
-            const auto candidateMethod = simulatorTypes[0].second;
+            for (const auto &candidate : simulatorsForOptimizations)
+                if (simulatorsForOptimizations.size() == 1 || IsMixedStateMethod(candidate.second))
+                    unranked.push_back(candidate);
+            std::sort(unranked.begin(), unranked.end());
+            if (const auto current = std::find(unranked.begin(), unranked.end(), std::make_pair(simType, method)); current != unranked.end())
+                std::rotate(unranked.begin(), current, current + 1);
+            unranked.erase(std::remove_if(unranked.begin(), unranked.end(),
+                                          [](const auto &candidate) {
+                                              return candidate.first == Simulators::SimulatorType::kGpuSim &&
+                                                     !Simulators::SimulatorsFactory::IsGpuLibraryAvailable();
+                                          }),
+                           unranked.end());
+            if (unranked.empty())
+                return nullptr;
+        }
+        else if (simulatorTypes.size() == 1)
+            unranked = simulatorTypes;
 
-            std::shared_ptr<Simulators::ISimulator> sim = Simulators::SimulatorsFactory::CreateSimulator(candidateType, candidateMethod);
-            if (sim)
+        if (!unranked.empty())
+        {
+            for (size_t index = 0; index < unranked.size(); ++index)
             {
-                simType = candidateType;
-                method = candidateMethod;
+                const auto [candidateType, candidateMethod] = unranked[index];
+                std::shared_ptr<Simulators::ISimulator> sim = Simulators::SimulatorsFactory::CreateSimulator(candidateType, candidateMethod);
+                if (!sim)
+                    continue;
                 configuration.ApplyConfigurationToSimulator(sim);
-
-                if (method == Simulators::SimulationType::kMatrixProductState || method == Simulators::SimulationType::kMatrixProductOperator)
+                try
                 {
                     sim->AllocateQubits(nrQubits);
                     sim->Initialize();
+                }
+                catch (const std::exception &)
+                {
+                    // This register does not fit the candidate; another may hold it.
+                    if (index + 1 == unranked.size())
+                        throw;
+                    continue;
+                }
+                simType = candidateType;
+                method = candidateMethod;
 
+                if (method == Simulators::SimulationType::kMatrixProductState || method == Simulators::SimulationType::kMatrixProductOperator)
+                {
                     sim->setGrowthFactorGate(growthFactorGate);
                     sim->setGrowthFactorSwap(growthFactorSwap);
                     sim->SetLookaheadDepth(lookaheadDepth);
@@ -2419,16 +2426,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
                     OptimizeMPSInitialQubitsMap(sim, dcirc, nrQubits);
                 }
-                else
-                {
-                    sim->AllocateQubits(nrQubits);
-                    sim->Initialize();
-                }
 
                 if (!dontRunCircuitStart)
                 {
                     if (sim->GetType() == Simulators::SimulatorType::kQCSim)
-                        sim->Configure("reproducible_trajectory", dcirc->HasOpsAfterMeasurements() ? "true" : "false");
+                        sim->Configure("reproducible_trajectory", dcirc->HasOpsAfterMeasurements(sim->SupportsQuantumChannels()) ? "true" : "false");
                     sim->SetMultithreading(true);
                     Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed,
                                                                                             &curMaxBondDim);
@@ -2438,8 +2440,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 return sim;
             }
 
-            // Singleton backend cannot be constructed (typical for GPU on CI).
-            // Leave simType/method unchanged so RepeatedExecuteOnHost keeps the
+            // The backend cannot be constructed (typical for GPU on CI). Leave
+            // simType/method unchanged so RepeatedExecuteOnHost keeps the
             // network simulator instead of recording empty counts.
             return nullptr;
         }
@@ -2469,7 +2471,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             if (!dontRunCircuitStart)
             {
                 if (sim->GetType() == Simulators::SimulatorType::kQCSim)
-                    sim->Configure("reproducible_trajectory", dcirc->HasOpsAfterMeasurements() ? "true" : "false");
+                    sim->Configure("reproducible_trajectory", dcirc->HasOpsAfterMeasurements(sim->SupportsQuantumChannels()) ? "true" : "false");
                 sim->SetMultithreading(true);
                 Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(dcirc, nrQubits, nrCbits, nrResultCbits, sim, executed, &curMaxBondDim);
             }
@@ -2633,6 +2635,117 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         GetState().SetResultsInOrder(results);
     }
 
+    // Nested circuits read and write the enclosing classical state, so inlining
+    // them changes no result. When that leaves only terminal measurements, as
+    // for a nested circuit that ends by measuring, the shots are sampled from
+    // one prepared state instead of replayed. Other circuits keep their nesting.
+    void InlineTerminalComposites()
+    {
+        if (!distCirc || !distCirc->HasCompositeOperations())
+            return;
+        auto inlined = distCirc->InlinedComposites();
+        if (!inlined->HasOpsAfterMeasurements(true))
+            distCirc = std::move(inlined);
+    }
+
+    // The stabilizer backend automatic selection may move a Clifford circuit
+    // to: the current backend's own (a composite maps to its plain backend)
+    // when the candidate set lists it, else another listed stabilizer backend;
+    // none when no listed pair is a stabilizer. An empty set admits all.
+    std::optional<Simulators::SimulatorType> StabilizerBackend(Simulators::SimulatorType simType) const
+    {
+        auto own = simType;
+        if (own == Simulators::SimulatorType::kCompositeQCSim)
+            own = Simulators::SimulatorType::kQCSim;
+#ifndef NO_QISKIT_AER
+        else if (own == Simulators::SimulatorType::kCompositeQiskitAer)
+            own = Simulators::SimulatorType::kQiskitAer;
+        const std::array<Simulators::SimulatorType, 2> stabilizers{Simulators::SimulatorType::kQCSim, Simulators::SimulatorType::kQiskitAer};
+#else
+        const std::array<Simulators::SimulatorType, 1> stabilizers{Simulators::SimulatorType::kQCSim};
+#endif
+        if (std::find(stabilizers.begin(), stabilizers.end(), own) != stabilizers.end() &&
+            OptimizationSimulatorExists(own, Simulators::SimulationType::kStabilizer))
+            return own;
+        for (const auto type : stabilizers)
+            if (OptimizationSimulatorExists(type, Simulators::SimulationType::kStabilizer))
+                return type;
+        return std::nullopt;
+    }
+
+    // Methods holding a mixed state: resets and Kraus channels evolve as
+    // deterministic channels instead of sampled branches.
+    static bool IsMixedStateMethod(Simulators::SimulationType method)
+    {
+        return method == Simulators::SimulationType::kDensityMatrix || method == Simulators::SimulationType::kMatrixProductOperator;
+    }
+
+    // Shot workers for one execution. Dense states draw every terminal shot
+    // from one prepared distribution, so extra workers would only repeat its
+    // preparation. A CPU MPO draws each terminal shot by a serial contraction:
+    // workers help, but only by sampling clones of one prepared state. Without
+    // one from backend selection, prepare it here once; if that is impossible,
+    // keep a single worker rather than evolving the MPO once per worker.
+    size_t ExecutionThreads(const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, size_t shots,
+                            Simulators::SimulatorType simType, Simulators::SimulationType method, bool terminalSampling,
+                            std::shared_ptr<Simulators::ISimulator> &optSim, std::vector<bool> &executed)
+    {
+        size_t nrThreads = GetMaxSimulators();
+#ifdef __linux__
+        if (Simulators::IsGpuSimulator(simType))
+            return 1;
+#endif
+        if (simType == Simulators::SimulatorType::kQuestSim ||
+            (terminalSampling && (method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kPathIntegral ||
+                                  method == Simulators::SimulationType::kDensityMatrix)))
+            return 1;
+        nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
+        if (method == Simulators::SimulationType::kMatrixProductOperator && terminalSampling && nrThreads > 1)
+        {
+            if (!optSim)
+                optSim = PrepareTerminalState(dcirc, nrQubits, nrCbits, nrResultCbits, simType, method, executed);
+            if (!optSim)
+                return 1;
+        }
+        return nrThreads;
+    }
+
+    // A new simulator of the selected backend on exactly this register, with
+    // every non-measurement operation applied, for shot workers to clone. It
+    // does not depend on the network's simulator, which host execution may
+    // have cleared or sized for another register (whichever path selected the
+    // MPO: a fixed backend, a kept candidate or an estimator-less fallback).
+    // Null when the backend cannot hold the register.
+    std::shared_ptr<Simulators::ISimulator> PrepareTerminalState(const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits, size_t nrCbits,
+                                                                 size_t nrResultCbits, Simulators::SimulatorType simType, Simulators::SimulationType method,
+                                                                 std::vector<bool> &executed)
+    {
+        std::shared_ptr<Simulators::ISimulator> prepared = Simulators::SimulatorsFactory::CreateSimulator(simType, method);
+        if (!prepared)
+            return nullptr;
+        ExecutionConfiguration(simType, nrQubits, method).ApplyConfigurationToSimulator(prepared);
+        try
+        {
+            prepared->AllocateQubits(nrQubits);
+            prepared->Initialize();
+        }
+        catch (const std::exception &)
+        {
+            return nullptr; // the single-worker path reports what does not fit
+        }
+        prepared->setGrowthFactorGate(growthFactorGate);
+        prepared->setGrowthFactorSwap(growthFactorSwap);
+        prepared->SetLookaheadDepth(lookaheadDepth);
+        prepared->SetLookaheadDepthWithHeuristic(lookaheadDepthWithHeuristic);
+        auto circuit = dcirc; // the layout planner takes a mutable handle
+        OptimizeMPSInitialQubitsMap(prepared, circuit, nrQubits);
+        prepared->SetMultithreading(true);
+        Estimators::SimulatorsEstimatorInterface<Time>::ExecuteUpToMeasurements(dcirc, nrQubits, nrCbits, nrResultCbits, prepared, executed, &curMaxBondDim);
+        // Each worker samples its own clone; avoid nested thread pools there.
+        prepared->SetMultithreading(false);
+        return prepared;
+    }
+
     bool UsesReproducibleSampling(Simulators::SimulatorType type, Simulators::SimulationType method) const
     {
         if (type != Simulators::SimulatorType::kQCSim || configuration.GetConfiguration("sampling_policy") == "legacy")
@@ -2783,7 +2896,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                 lastFusionEnabled.store(actual.IsGateFusionEnabled());
             };
             job->curMaxBondDim = &curMaxBondDim;
-            job->config = ExecutionConfiguration(type, qubits);
+            job->config = ExecutionConfiguration(type, qubits, method);
             job->config.SetConfiguration("seed", std::to_string(Simulators::IState::DeriveSeed(seed, block)));
             // Execute() keeps the last job's simulator, and the next run captures
             // its configuration: an unseeded network must stay unseeded.
@@ -2834,11 +2947,15 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return std::max<size_t>(1, static_cast<size_t>(micros / trajectoryMinWorkerMicros));
     }
 
-    Configuration<Time> ExecutionConfiguration(Simulators::SimulatorType type, size_t qubits) const
+    Configuration<Time> ExecutionConfiguration(Simulators::SimulatorType type, size_t qubits, Simulators::SimulationType method) const
     {
         auto result = configuration;
         if (type == Simulators::SimulatorType::kQCSim)
-            result.SetConfiguration("reproducible_trajectory", distCirc && distCirc->HasOpsAfterMeasurements() ? "true" : "false");
+            result.SetConfiguration("reproducible_trajectory",
+                                    distCirc && distCirc->HasOpsAfterMeasurements(method == Simulators::SimulationType::kDensityMatrix ||
+                                                                                  method == Simulators::SimulationType::kMatrixProductOperator)
+                                        ? "true"
+                                        : "false");
         const auto found = resolvedDistributedDevices.find(type);
         if (!Simulators::IsDistributedGpuSimulator(type) || !configuration.GetConfiguration("distributed_devices").empty() ||
             found == resolvedDistributedDevices.end())

@@ -129,6 +129,92 @@ def test_raw_samples_survive_checkpoint_destruction():
     assert np.isin(rows, [0, 1]).all()
 
 
+def _mixed_checkpoint(method, workers=1):
+    prefix = QuantumCircuit()
+    prefix.h(0)
+    prefix.cx(0, 1)
+    config = maestro.SimulatorConfig(
+        simulation_type=method, fixed_backend=True, seed=29,
+        max_simulators=workers, max_bond_dimension=16,
+    )
+    return maestro.PrefixCheckpointedSimulator(prefix, 2, config)
+
+
+@pytest.mark.parametrize("method", [maestro.SimulationType.DensityMatrix,
+                                    maestro.SimulationType.MatrixProductOperator])
+def test_mixed_checkpoint_prepares_terminal_suffix_once_and_preserves_prefix(method):
+    suffix = QuantumCircuit()
+    suffix.pauli_channel([0], [0.8, 0.2, 0.0, 0.0])
+    suffix.measure([(1, 0), (0, 2)])
+    suffix.measure([(1, 3)])
+    model = maestro.NoiseModel()
+    model.set_readout_error_symmetric(0, 0.1)
+    kwargs = dict(shots=2048, noise_model=model, return_samples=True)
+    checkpoint = _mixed_checkpoint(method)
+    first = checkpoint.execute_suffix(suffix, **kwargs)
+    second = checkpoint.execute_suffix(suffix, **kwargs)
+    for result in (first, second):
+        assert result["method"] == method
+        assert result["noise_realizations"] == 1
+        assert result["sampling_strategy"] == "terminal_v1"
+        rows = result["samples"]
+        assert rows.shape == (2048, 4)
+        assert not rows[:, 1].any()
+        np.testing.assert_array_equal(rows[:, 0], rows[:, 3])
+        assert abs(np.mean(rows[:, 0] != rows[:, 2]) - 0.26) < 0.04
+    assert not np.array_equal(first["samples"], second["samples"])
+    replay = _mixed_checkpoint(method)
+    np.testing.assert_array_equal(first["samples"], replay.execute_suffix(suffix, **kwargs)["samples"])
+    np.testing.assert_array_equal(second["samples"], replay.execute_suffix(suffix, **kwargs)["samples"])
+    seeded = checkpoint.execute_suffix(suffix, noise_seed=7, **kwargs)
+    np.testing.assert_array_equal(seeded["samples"], checkpoint.execute_suffix(suffix, noise_seed=7, **kwargs)["samples"])
+
+    # Sampling a noisy suffix must never replace the saved Bell-pair prefix.
+    undo = QuantumCircuit()
+    undo.cx(0, 1)
+    undo.h(0)
+    undo.measure([(0, 0), (1, 1)])
+    clean = checkpoint.execute_suffix(undo, shots=31)
+    assert clean["counts"] == {"00": 31}
+    assert clean["sampling_strategy"] == "terminal_v1"
+
+
+@pytest.mark.parametrize("method", [maestro.SimulationType.DensityMatrix,
+                                    maestro.SimulationType.MatrixProductOperator])
+def test_mixed_checkpoint_honors_explicit_realizations_and_row_histogram(method):
+    suffix = QuantumCircuit()
+    suffix.pauli_channel([0], [0.7, 0.3, 0.0, 0.0])
+    suffix.measure([(0, 2), (1, 0)])
+    kwargs = dict(shots=301, noise_realizations=7, noise_seed=11)
+    counts = _mixed_checkpoint(method).execute_suffix(suffix, **kwargs)
+    rows = _mixed_checkpoint(method, workers=4).execute_suffix(suffix, return_samples=True, **kwargs)
+    assert counts["noise_realizations"] == rows["noise_realizations"] == 7
+    assert counts["sampling_strategy"] == rows["sampling_strategy"] == "terminal_v1"
+    assert counts["counts"] == _histogram(rows["samples"])
+
+
+@pytest.mark.parametrize("method", [maestro.SimulationType.DensityMatrix,
+                                    maestro.SimulationType.MatrixProductOperator])
+def test_mixed_checkpoint_keeps_dynamic_records_and_batches_unobserved_reset(method):
+    model = maestro.NoiseModel()
+    model.set_readout_error_symmetric(0, 0.1)
+    dynamic = _mixed_checkpoint(method).execute_suffix(
+        _suffix(), shots=257, noise_model=model, return_samples=True)
+    assert dynamic["noise_realizations"] == 1
+    assert dynamic["sampling_strategy"] == "trajectory_v1"
+    assert dynamic["samples"].shape == (257, 4)
+    assert not dynamic["samples"][:, [1, 3]].any()
+    reset = maestro.QasmToCirc().parse_and_translate(
+        "OPENQASM 3.0; qubit[2] q; bit[3] c; h q[0]; reset q[0]; x q[0]; "
+        "c[2] = measure q[0]; c[0] = measure q[1];"
+    )
+    result = _mixed_checkpoint(method).execute_suffix(reset, shots=257, return_samples=True)
+    assert result["sampling_strategy"] == "terminal_v1"
+    assert result["samples"][:, 2].all()
+    assert not result["samples"][:, 1].any()
+    assert 80 < result["samples"][:, 0].sum() < 180
+
+
 def test_sinter_raw_matrix_validates_shape_values_and_padding():
     pytest.importorskip("sinter")
     pytest.importorskip("stim")
@@ -300,3 +386,30 @@ def test_monte_carlo_estimates_and_fidelity_do_not_depend_on_worker_count(method
     assert fidelities[1]["fidelity"] == pytest.approx(fidelities[0]["fidelity"], abs=1e-12)
     assert fidelities[1]["std_error"] == pytest.approx(fidelities[0]["std_error"], abs=1e-12)
     assert 0.3 < fidelities[0]["fidelity"] < 0.999
+
+
+@pytest.mark.parametrize("method", [maestro.SimulationType.Statevector,
+                                    maestro.SimulationType.Stabilizer,
+                                    maestro.SimulationType.MatrixProductState])
+def test_pure_checkpoint_samples_terminal_suffix_once_and_keeps_reset_branches(method):
+    checkpoint = _checkpoint(method)
+    suffix = QuantumCircuit()
+    suffix.measure([(0, 0), (1, 1)])
+    first = checkpoint.execute_suffix(suffix, shots=2000, return_samples=True)
+    assert first["sampling_strategy"] == "terminal_v1"
+    rows = first["samples"]
+    np.testing.assert_array_equal(rows[:, 0], rows[:, 1])
+    assert 800 < rows[:, 0].sum() < 1200
+    # The saved Bell pair survives terminal sampling.
+    undo = QuantumCircuit()
+    undo.cx(0, 1)
+    undo.h(0)
+    undo.measure([(0, 0), (1, 1)])
+    assert checkpoint.execute_suffix(undo, shots=64)["counts"] == {"00": 64}
+    # A reset on the entangled saved state collapses a branch per shot.
+    reset = QuantumCircuit()
+    reset.reset(0)
+    reset.measure([(1, 1)])
+    result = checkpoint.execute_suffix(reset, shots=400, return_samples=True)
+    assert result["sampling_strategy"] == "trajectory_v1"
+    assert 120 < result["samples"][:, 1].sum() < 280

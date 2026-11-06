@@ -206,10 +206,52 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
     const json::object mixedStateQueries{{"operations", json::array{"density_matrix_overlap", "fidelity_with_statevector"}},
                                          {"supported_configurations", Configurations([](const auto &config) { return MixedStateQueryApplies(config); })},
                                          {"max_target_statevector_qubits", MaxTargetStatevectorQubits}};
+    const auto mixedConfigurations = Configurations([](const auto &config) { return Mixed(config); });
+    // The noise block: how realization counts resolve and what is reported.
+    const json::object noise{
+        {"modes", json::array{"combined", "pauli", "coherent", "analytical"}},
+        {"evaluations", json::array{"auto", "exact", "trajectories"}},
+        {"exact_configurations", mixedConfigurations},
+        {"realizations",
+         json::object{
+             {"accepts", json::array{"positive_integer", "null", "auto"}},
+             {"maximum", 1000000},
+             {"automatic", json::object{{"deterministic_exact_channels", 1},
+                                        {"sampled_execute", 64},
+                                        {"sampled_estimate", 100},
+                                        {"sampled_noisy_fidelity", 100},
+                                        {"rule", "one realization when exact channels need no sampled disturbance (coherent, correlated) and, for "
+                                                 "estimates, the circuit records no branch; explicit counts are honored, capped to shots for execution"}}}}},
+        {"metadata", json::array{"mode", "evaluation", "seed", "realizations", "requested_realizations", "realizations_policy", "stochastic_noise",
+                                 "stochastic_execution", "approximations"}},
+        {"checkpoint_prefix", json::object{{"field", "prefix"},
+                                           {"operations", json::array{"checkpoint_batch"}},
+                                           {"requires", "deterministic exact evaluation: no coherent or correlated layers"},
+                                           {"supported_configurations", mixedConfigurations},
+                                           {"noise_scope", json::array{"suffix_only_ideal_prefix", "prefix_and_suffix"}}}}};
+    const json::object estimate{{"evaluations", json::array{"deterministic", "trajectory_average"}},
+                                {"dynamic_measurement_trajectories", kMeasurementTrajectories},
+                                {"metadata", json::array{"stochastic_execution", "measurement_trajectories", "estimate_evaluation"}},
+                                {"single_stochastic_realization_standard_errors", "null"}};
+    const json::object noisyFidelity{{"modes", json::array{"combined", "pauli", "coherent"}},
+                                     {"supported_configurations", Configurations([](const auto &) { return true; })},
+                                     {"exact_configurations", mixedConfigurations},
+                                     {"mixed_state_evaluation", "P(0...0) after the ideal circuit's adjoint"},
+                                     {"single_stochastic_realization_standard_error", "null"}};
+    const json::object automaticSelection{{"candidates", "simulator.candidates with selection automatic"},
+                                          {"fallback", "first listed candidate that can hold the register"},
+                                          {"stabilizer_shortcut", "Clifford circuits move to a stabilizer only as a listed backend/method pair"},
+                                          {"unavailable", "error; an unlisted backend never runs"},
+                                          {"exact_channels", "only when every candidate applies them"}};
     return {{"schema_version", SchemaVersion},
             {"instructions", instructions},
             {"adjoint", adjoint},
             {"mixed_state_queries", mixedStateQueries},
+            {"noise", noise},
+            {"estimate", estimate},
+            {"noisy_fidelity", noisyFidelity},
+            {"automatic_selection", automaticSelection},
+            {"sampling_strategies", json::array{"reference_frame_v1", "terminal_v1", "trajectory_v1", "mixed_v1"}},
             {"api", "maestro.native.request"},
             {"build", json::object{{"version", MAESTRO_BUILD_VERSION}, {"source_revision", MAESTRO_SOURCE_REVISION}}},
             {"capability_scope", "validation"},

@@ -270,8 +270,9 @@ class ExecutionCost
     {
         // sampling works very differenty for such circuits
         Circuits::OperationState dummyState;
-        const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurements();
-        const std::vector<bool> executedOps = circuit->ExecuteNonMeasurements(nullptr, dummyState);
+        const bool exactChannels = method == Simulators::SimulationType::kDensityMatrix || method == Simulators::SimulationType::kMatrixProductOperator;
+        const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurements(exactChannels);
+        const std::vector<bool> executedOps = circuit->ExecuteNonMeasurements(nullptr, dummyState, nullptr, exactChannels);
 
         const size_t dif = circuit->size() - executedOps.size();
 
@@ -742,7 +743,7 @@ class ExecutionCost
         Types::qubits_vector qubitsSampled(nrQubitsSampled);
         std::iota(qubitsSampled.begin(), qubitsSampled.end(), 0);
 
-        const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurements();
+        const bool hasMeasurementsInTheMiddle = circuit->HasOpsAfterMeasurements(sim->SupportsQuantumChannels());
 
         auto start = std::chrono::high_resolution_clock::now();
 

@@ -23,7 +23,9 @@ struct NoisyEstimate
     std::vector<double> ideal_values;
     // Mean of the realizations' truncation bounds.
     std::vector<double> error_bounds;
+    std::vector<double> standard_errors;
     size_t realizations = 0;
+    NoiseRealizationPolicy policy;
     bool auto_reduced = false;
     size_t bounded_observables = 0;
     // Reduction-plan reuses. Workers start from a cache warmed by realization
@@ -51,8 +53,9 @@ struct NoisyEstimate
 // so results do not depend on the worker count. Empty observables return the
 // baseline's metadata only. Emits no warnings: see ThermalApproximationWarning.
 MAESTRO_TRANSFORM_API NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<std::string> &observables,
-                                                  const noise::NoiseModel &noise_model, size_t noise_realizations, const SimulatorConfig &config,
-                                                  std::optional<uint64_t> noise_seed, NoiseLayer layer, std::optional<bool> exact_channels = std::nullopt);
+                                                  const noise::NoiseModel &noise_model, std::optional<size_t> requested_realizations,
+                                                  const SimulatorConfig &config, std::optional<uint64_t> noise_seed, NoiseLayer layer,
+                                                  std::optional<bool> exact_channels = std::nullopt);
 
 // |<ideal|noisy>|^2 of one realization: the noisy circuit without its terminal
 // measurements followed by the ideal circuit's adjoint, read as P(|0...0>).
@@ -63,6 +66,7 @@ struct NoisyFidelityResult
     double fidelity = 0;
     double std_error = 0;
     size_t realizations = 0;
+    NoiseRealizationPolicy policy;
     double time_taken = 0;
 };
 
@@ -70,6 +74,7 @@ struct NoisyFidelityResult
 // circuit to its channel-free ideal, with the standard error of that mean.
 // Realizations run on workers; each keeps its seeds, so results do not depend
 // on the worker count.
-MAESTRO_TRANSFORM_API NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model, size_t noise_realizations,
-                                                        const SimulatorConfig &config, std::optional<uint64_t> noise_seed);
+MAESTRO_TRANSFORM_API NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model,
+                                                        std::optional<size_t> requested_realizations, const SimulatorConfig &config,
+                                                        std::optional<uint64_t> noise_seed);
 } // namespace MaestroExecution

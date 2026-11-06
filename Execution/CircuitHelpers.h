@@ -8,9 +8,21 @@ using OperationPtr = std::shared_ptr<Circuits::IOperation<double>>;
 
 // The adjoint of a gate, or null for a non-gate operation. A gate without an
 // implemented adjoint throws, or is returned cloned when clone_unsupported is
-// set (the Python bindings' historical fallback).
+// set (the Python bindings' historical fallback). A nested circuit yields the
+// nested circuit of its operations' adjoints in reverse order; like the top
+// level, its non-gate operations are omitted, so callers validate that it is
+// unitary.
 inline OperationPtr adjoint_gate(const OperationPtr &op, bool clone_unsupported = false)
 {
+    if (op->GetType() == Circuits::OperationType::kComposite)
+    {
+        const auto &nested = std::static_pointer_cast<Circuits::Circuit<double>>(op)->GetOperations();
+        auto adjoint = std::make_shared<Circuits::Circuit<double>>();
+        for (auto it = nested.rbegin(); it != nested.rend(); ++it)
+            if (auto inverse = adjoint_gate(*it, clone_unsupported))
+                adjoint->AddOperation(inverse);
+        return adjoint;
+    }
     if (op->GetType() != Circuits::OperationType::kGate)
         return nullptr;
 

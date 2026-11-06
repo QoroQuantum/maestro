@@ -803,6 +803,126 @@ def test_trivial_prefix_falls_back_to_direct_execution():
     assert stats.shots == 20
 
 
+def test_split_stops_at_collapsing_pure_state_reset():
+    text = "R 0 1\nH 0\nCX 0 1\nR 0\nM 1"
+    # Initial resets of untouched qubits stay; a reset of a used qubit ends it.
+    assert split_stim_prefix_suffix(text)[2] == 3
+    assert split_stim_prefix_suffix(stim.Circuit(text))[2] == 3
+    assert split_stim_prefix_suffix(text, exact_resets=True)[2] == 4
+    assert split_stim_prefix_suffix("R 0\nRX 1\nH 0\nRY 0\nM 0")[2] == 3
+
+
+@pytest.mark.parametrize("method", ["Statevector", "MatrixProductState", "DensityMatrix"])
+def test_checkpoint_never_freezes_a_collapsed_reset_branch(method):
+    config = maestro.SimulatorConfig(simulation_type=getattr(maestro.SimulationType, method),
+                                     fixed_backend=True, max_bond_dimension=16)
+    sampler = MaestroCompiledSampler(stim.Circuit("H 0\nCX 0 1\nR 0\nM 1"), config=config, enable_checkpoint=True, seed=5)
+    rows = sampler.sample_measurements(1000, seed=11)
+    assert 400 < rows[:, 0].sum() < 600
+
+
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
+@pytest.mark.parametrize("method", [maestro.SimulationType.DensityMatrix,
+                                    maestro.SimulationType.MatrixProductOperator])
+def test_exact_backend_checkpoints_deterministic_external_noise(method):
+    model = maestro.NoiseModel()
+    model.set_bit_flip(0, 0.2)
+    config = maestro.SimulatorConfig(simulation_type=method, fixed_backend=True, max_bond_dimension=16)
+    c = stim.Circuit("R 0 1\nH 0\nCX 0 1\nTICK\nM 0 1\nDETECTOR rec[-1] rec[-2]")
+    sampler = MaestroCompiledSampler(c, config=config, noise_model=model, enable_checkpoint=True, seed=3)
+    assert sampler.checkpoint_sim is not None
+    # The deterministic external model joined the prefix, which ends at M.
+    assert sampler.checkpoint_cut_index == 4
+    reference = MaestroCompiledSampler(c, config=config, noise_model=model, enable_checkpoint=False, seed=3)
+    dets, _ = sampler.sample_detection_events(shots=4000, seed=3)
+    base, _ = reference.sample_detection_events(shots=4000, seed=3)
+    assert abs(dets[:, 0].mean() - base[:, 0].mean()) < 0.04
+    assert 0.1 < dets[:, 0].mean() < 0.5
+    # Coherent noise stays sampled, so the prefix ends at the first gate.
+    coherent = maestro.NoiseModel()
+    coherent.set_coherent_rotation(0, 0.2, 0.0, 0.0)
+    sampled = MaestroCompiledSampler(c, config=config, noise_model=coherent, enable_checkpoint=True, seed=3)
+    assert sampled.checkpoint_cut_index in (None, 1)
+
+
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
+@pytest.mark.parametrize("method", [maestro.SimulationType.DensityMatrix,
+                                    maestro.SimulationType.MatrixProductOperator])
+def test_exact_prefix_noise_trims_outside_crosstalk_spectators(method):
+    # Spectator 4 lies outside the 2-qubit register: it stays in |0>, so the
+    # checkpoint keeps its reuse instead of silently disabling it.
+    model = maestro.NoiseModel()
+    model.set_bit_flip(0, 0.1)
+    model.set_crosstalk(0, 4, 0.3)
+    config = maestro.SimulatorConfig(simulation_type=method, fixed_backend=True, max_bond_dimension=16)
+    c = stim.Circuit("R 0 1\nH 0\nCX 0 1\nTICK\nM 0 1\nDETECTOR rec[-1] rec[-2]")
+    sampler = MaestroCompiledSampler(c, config=config, noise_model=model, enable_checkpoint=True, seed=3)
+    assert sampler.checkpoint_sim is not None
+    assert sampler.checkpoint_cut_index == 4
+    dets, _ = sampler.sample_detection_events(shots=2000, seed=3)
+    assert 0.02 < dets[:, 0].mean() < 0.3
+    prefix = maestro.circuits.QuantumCircuit()
+    prefix.x(0)
+    checkpoint = maestro.PrefixCheckpointedSimulator(prefix, 1, config, prefix_noise_model=model)
+    suffix = maestro.circuits.QuantumCircuit()
+    suffix.measure([(0, 0)])
+    rows = checkpoint.execute_suffix(suffix, shots=4000, return_samples=True)["samples"]
+    assert abs(rows[:, 0].mean() - 0.9) < 0.03
+
+
+def test_checkpoint_prefix_noise_must_be_deterministic():
+    prefix = maestro.circuits.QuantumCircuit()
+    prefix.x(0)
+    model = maestro.NoiseModel()
+    model.set_bit_flip(0, 0.25)
+    exact = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.DensityMatrix, fixed_backend=True)
+    checkpoint = maestro.PrefixCheckpointedSimulator(prefix, 1, exact, prefix_noise_model=model)
+    suffix = maestro.circuits.QuantumCircuit()
+    suffix.measure([(0, 0)])
+    rows = checkpoint.execute_suffix(suffix, shots=4000, return_samples=True)["samples"]
+    assert abs(rows[:, 0].mean() - 0.75) < 0.03
+    pure = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector, fixed_backend=True)
+    with pytest.raises(ValueError, match="deterministic"):
+        maestro.PrefixCheckpointedSimulator(prefix, 1, pure, prefix_noise_model=model)
+
+
+def test_split_keeps_exact_in_circuit_noise_in_prefix():
+    noisy = "R 0\nH 0\nDEPOLARIZE1(0.01) 0\nCX 0 1\nM 0"
+    prefix, _, cut = split_stim_prefix_suffix(noisy, deterministic_noise=True)
+    assert cut == 4
+    assert prefix == "R 0\nH 0\nDEPOLARIZE1(0.01) 0\nCX 0 1"
+    _, _, cut = split_stim_prefix_suffix(stim.Circuit(noisy), deterministic_noise=True)
+    assert cut == 4
+    # An external model is injected per suffix gate: it still ends the prefix.
+    _, _, cut = split_stim_prefix_suffix(noisy, has_external_noise=True, deterministic_noise=True)
+    assert cut == 1
+    # Without exact channels, in-circuit noise needs a draw per shot.
+    _, _, cut = split_stim_prefix_suffix(noisy)
+    assert cut == 2
+
+
+@pytest.mark.usefixtures("disable_compiled_reference_sampler")
+@pytest.mark.parametrize("method", [maestro.SimulationType.DensityMatrix,
+                                    maestro.SimulationType.MatrixProductOperator])
+def test_exact_backend_checkpoints_in_circuit_noise(method):
+    c = stim.Circuit("""
+        R 0 1
+        H 0
+        CX 0 1
+        X_ERROR(0.2) 0
+        TICK
+        M 0 1
+        DETECTOR rec[-1] rec[-2]
+    """)
+    config = maestro.SimulatorConfig(simulation_type=method, fixed_backend=True, max_bond_dimension=16)
+    sampler = MaestroCompiledSampler(c, config=config, enable_checkpoint=True, seed=3)
+    assert sampler.checkpoint_sim is not None
+    # The exact channel joined the checkpoint, which ends at the measurement.
+    assert sampler.checkpoint_cut_index == 5
+    dets, _ = sampler.sample_detection_events(shots=4000, seed=3)
+    assert dets[:, 0].mean() == pytest.approx(0.2, abs=0.03)
+
+
 @pytest.mark.usefixtures("disable_compiled_reference_sampler")
 def test_nontrivial_prefix_enables_checkpoint_simulator():
     """Verify non-trivial prefix (with 2q or 1q gates) instantiates checkpoint simulator."""
@@ -1113,9 +1233,45 @@ def test_noise_is_drawn_per_shot(text, rate):
 
 
 def test_density_matrix_applies_channels_exactly():
-    cfg = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.DensityMatrix)
+    cfg = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.DensityMatrix, fixed_backend=True)
     flips = _records("R 0\nDEPOLARIZE1(0.75) 0\nM 0", shots=2000, config=cfg)[:, 0].mean()
     assert abs(flips - 0.5) < 0.04
+
+
+@pytest.mark.parametrize("method", [maestro.SimulationType.DensityMatrix,
+                                    maestro.SimulationType.MatrixProductOperator])
+@pytest.mark.parametrize("checkpoint", [False, True])
+def test_mixed_sinter_reuses_exact_channels(monkeypatch, method, checkpoint):
+    import maestro.sinter as integration
+
+    results = []
+    sample_result = integration._sample_result
+
+    def trace_sample(*args, **kwargs):
+        result = sample_result(*args, **kwargs)
+        results.append(result)
+        return result
+
+    monkeypatch.setattr(integration, "_sample_result", trace_sample)
+    config = maestro.SimulatorConfig(simulation_type=method, fixed_backend=True,
+                                     max_simulators=1, max_bond_dimension=16)
+    sampler = integration.MaestroCompiledSampler(
+        stim.Circuit("H 0\nCX 0 1\nX_ERROR(0.25) 0\nM 0 1"),
+        config=config, enable_checkpoint=checkpoint, seed=31)
+    assert sampler._reference_sampler is None
+    assert (sampler.checkpoint_sim is not None) == checkpoint
+    rows = sampler.sample_measurements(2048, seed=7)
+    assert results[-1]["method"] == method
+    if checkpoint:
+        # The exact channel evolved once with the checkpointed prefix, which
+        # ends at the measurement: the suffix injects no noise at all.
+        assert sampler.checkpoint_cut_index == 3
+        assert results[-1]["noise_realizations"] == 0
+        assert results[-1]["sampling_strategy"] == "terminal_v1"
+    else:
+        assert results[-1]["noise_realizations"] == 1
+    assert abs(np.mean(rows[:, 0] != rows[:, 1]) - 0.25) < 0.04
+    np.testing.assert_array_equal(rows, sampler.sample_measurements(2048, seed=7))
 
 
 @pytest.mark.usefixtures("disable_compiled_reference_sampler")

@@ -4,6 +4,8 @@
 #include "core.h"
 #include "runtime.h"
 #include "samples.h"
+#include <algorithm>
+#include <cmath>
 #include <numeric>
 
 namespace maestro_bindings
@@ -113,15 +115,48 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
         throw nb::value_error("Circuit is null.");
 
     MaestroExecution::EstimationResult result;
+    // A recorded mid-circuit measurement or classical control selects a
+    // branch per execution, on every backend. As the native estimate request
+    // does, average a fixed number of measurement trajectories instead of
+    // returning one random branch; seeded trajectories derive their seeds.
+    const bool stochastic = MaestroExecution::HasStochasticEvolution(circuit, MaestroExecution::UsesExactQuantumChannels(config));
+    const size_t trajectories = stochastic && !observables.empty() ? MaestroExecution::kMeasurementTrajectories : 1;
+    std::vector<double> sums(observables.size(), 0.0), squares(observables.size(), 0.0), bounds(observables.size(), 0.0);
+    double time_taken = 0;
     {
         nb::gil_scoped_release release;
-        result = MaestroExecution::EstimateCircuit(circuit, observables, config, cache);
+        for (size_t r = 0; r < trajectories; ++r)
+        {
+            auto trajectory_config = config;
+            if (trajectories > 1 && config.seed)
+                trajectory_config.seed = Simulators::IState::DeriveSeed(*config.seed, r);
+            result = MaestroExecution::EstimateCircuit(circuit, observables, trajectory_config, cache);
+            time_taken += result.time_taken;
+            for (size_t i = 0; i < observables.size(); ++i)
+            {
+                sums[i] += result.values[i];
+                squares[i] += result.values[i] * result.values[i];
+                bounds[i] += result.plan.error_bounds[i] / trajectories;
+            }
+        }
+    }
+    std::vector<double> values(observables.size()), errors(observables.size(), 0.0);
+    for (size_t i = 0; i < observables.size(); ++i)
+    {
+        values[i] = sums[i] / trajectories;
+        if (trajectories > 1)
+            errors[i] = std::sqrt(std::max(0.0, (squares[i] - trajectories * values[i] * values[i]) / (trajectories - 1) / trajectories));
     }
     const auto &plan = result.plan;
     nb::dict out;
-    out["expectation_values"] = nb::cast(result.values);
+    out["expectation_values"] = nb::cast(values);
+    out["stochastic_execution"] = stochastic;
+    out["measurement_trajectories"] = stochastic ? trajectories : size_t{0};
+    out["estimate_evaluation"] = stochastic ? "trajectory_average" : "deterministic";
+    if (stochastic)
+        out["realization_standard_errors"] = nb::cast(errors);
     out["auto_reduced"] = plan.auto_reduced;
-    out["expectation_error_bounds"] = nb::cast(plan.error_bounds);
+    out["expectation_error_bounds"] = nb::cast(trajectories > 1 ? bounds : plan.error_bounds);
     out["bounded_observables"] = plan.bounded_observables;
     out["qubits_before"] = plan.qubits_before;
     out["qubits_after"] = plan.qubits_after;
@@ -129,7 +164,7 @@ nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const
     out["largest_cluster_qubits"] = plan.qubits_after;
     out["mean_cluster_qubits"] = plan.groups.empty() ? 0.0 : static_cast<double>(plan.total_cluster_qubits) / plan.groups.size();
     out["reduction_time"] = plan.reduction_time;
-    out["time_taken"] = result.time_taken;
+    out["time_taken"] = time_taken;
     out["simulator"] = result.simulator;
     out["method"] = result.method;
     nb::list methods;

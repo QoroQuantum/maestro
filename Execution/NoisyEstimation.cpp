@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace MaestroExecution
 {
@@ -13,30 +14,40 @@ RecordCircuitPtr WithoutCircuitChannels(const RecordCircuitPtr &circuit)
 {
     auto out = std::make_shared<Circuits::Circuit<double>>();
     for (const auto &op : circuit->GetOperations())
-        if (op->GetType() != Circuits::OperationType::kQuantumChannel)
+        if (op->GetType() == Circuits::OperationType::kComposite)
+        {
+            // Nested channels are noise too; rebuild only circuits that hold one.
+            const auto nested = std::static_pointer_cast<Circuits::Circuit<double>>(op);
+            out->AddOperation(nested->HasQuantumChannels() ? WithoutCircuitChannels(nested) : op);
+        }
+        else if (op->GetType() != Circuits::OperationType::kQuantumChannel)
             out->AddOperation(op);
     return out;
 }
 
 NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<std::string> &observables, const noise::NoiseModel &noise_model,
-                            size_t noise_realizations, const SimulatorConfig &config, std::optional<uint64_t> noise_seed, NoiseLayer layer,
+                            std::optional<size_t> requested_realizations, const SimulatorConfig &config, std::optional<uint64_t> noise_seed, NoiseLayer layer,
                             std::optional<bool> exact_channels)
 {
     if (!circuit)
         throw std::invalid_argument("Circuit is null.");
-    if (noise_realizations < 1)
-        throw std::invalid_argument("noise_realizations must be >= 1.");
     auto rng = MakeNoiseRng(config, noise_seed);
     NoisyEstimate out;
+    out.policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, layer, 100, circuit, true, exact_channels);
+    const size_t noise_realizations = out.policy.realizations;
     out.realizations = noise_realizations;
     if (observables.empty())
     {
         out.ideal = EstimateCircuit(WithoutCircuitChannels(circuit), observables, config);
+        out.ideal_values = out.ideal.values;
+        out.qubits_before = out.ideal.plan.qubits_before;
+        out.qubits_after = out.ideal.plan.qubits_after;
+        out.time_taken = out.ideal.time_taken;
         return out;
     }
     const size_t count = observables.size();
     const auto clean = circuit->RemoveEndMeasurements();
-    const bool exact = exact_channels.value_or(UsesExactQuantumChannels(config));
+    const bool exact = out.policy.exact_channels;
     const noise::NoiseInjectionPlan plan(clean, noise_model);
 
     // What the aggregate needs of each realization, kept in realization order.
@@ -88,7 +99,7 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     out.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 
     // Summed in realization order, as a serial loop would.
-    std::vector<double> sums(count, 0.0);
+    std::vector<double> sums(count, 0.0), squares(count, 0.0);
     out.error_bounds.assign(count, 0.0);
     size_t total_clusters = 0;
     double total_cluster_qubits = 0;
@@ -109,6 +120,7 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
         {
             out.error_bounds[i] += record.bounds[i] / noise_realizations;
             sums[i] += record.values[i];
+            squares[i] += record.values[i] * record.values[i];
         }
     }
     out.cluster_methods = realizations.back().methods;
@@ -117,9 +129,30 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     for (const auto &cache : caches)
         out.cone_cache_hits += cache.hits;
     out.values.resize(count);
+    out.standard_errors.resize(count);
     for (size_t i = 0; i < count; ++i)
+    {
         out.values[i] = sums[i] / noise_realizations;
-    out.ideal = EstimateCircuit(WithoutCircuitChannels(clean), observables, config);
+        if (noise_realizations > 1)
+            out.standard_errors[i] =
+                std::sqrt(std::max(0.0, (squares[i] - noise_realizations * out.values[i] * out.values[i]) / (noise_realizations - 1) / noise_realizations));
+    }
+    const auto ideal = WithoutCircuitChannels(clean);
+    // A dynamic baseline must average the same kind of measurement branches as
+    // the noisy estimate. Returning one randomly collapsed ideal state makes
+    // comparison with the noisy ensemble meaningless.
+    const size_t ideal_realizations = HasStochasticEvolution(ideal, UsesExactQuantumChannels(config)) ? noise_realizations : 1;
+    std::vector<double> ideal_sums(count, 0.0);
+    EstimationCache ideal_cache;
+    for (size_t r = 0; r < ideal_realizations; ++r)
+    {
+        const auto ideal_config = ideal_realizations > 1 ? NoiseExecutionConfig(config, noise_seed, r) : config;
+        out.ideal = EstimateCircuit(ideal, observables, ideal_config, &ideal_cache);
+        for (size_t i = 0; i < count; ++i)
+            ideal_sums[i] += out.ideal.values[i];
+    }
+    for (size_t i = 0; i < count; ++i)
+        out.ideal.values[i] = ideal_sums[i] / ideal_realizations;
     out.ideal_values = out.ideal.values;
     return out;
 }
@@ -128,9 +161,11 @@ double RealizationFidelity(const RecordCircuitPtr &ideal, const RecordCircuitPtr
 {
     auto combined = std::make_shared<Circuits::Circuit<double>>();
     // Fidelity is evaluated before terminal readout, as in inner_product.
-    for (const auto &op : noisy->GetOperations())
-        if (op->GetType() != Circuits::OperationType::kMeasurement)
-            combined->AddOperation(op->Clone());
+    // This includes conditional terminal readout. NoisyFidelity validates that
+    // no genuinely intermediate measurement remains in the input circuit.
+    const auto before_readout = noisy->RemoveEndMeasurements();
+    for (const auto &op : before_readout->GetOperations())
+        combined->AddOperation(op->Clone());
     const auto &ideal_ops = ideal->GetOperations();
     for (auto it = ideal_ops.rbegin(); it != ideal_ops.rend(); ++it)
         if (auto adjoint = adjoint_gate(*it, true))
@@ -152,11 +187,22 @@ double RealizationFidelity(const RecordCircuitPtr &ideal, const RecordCircuitPtr
 
     if (!handle.value)
         throw std::runtime_error("Failed to create simulator handle.");
-    auto network = ConfigureNetwork(handle.value, config);
+    // Exactly the circuit's register: the default allocation also adds the
+    // host's network-entangled qubit (2x statevector, 4x density-matrix work).
+    const size_t register_qubits = static_cast<size_t>(num_qubits);
+    auto network = ConfigureNetwork(handle.value, config, register_qubits);
     if (!network)
         throw std::runtime_error("Failed to configure network.");
-    network->CreateSimulator(config.simulator_type, config.simulation_type);
     auto simulator = network->GetSimulator();
+    // A fixed backend was already created at this width; replace only an
+    // automatic-selection placeholder (or another width).
+    if (!simulator || simulator->GetType() != config.simulator_type || simulator->GetSimulationType() != config.simulation_type ||
+        (!Simulators::IsDistributedGpuSimulator(config.simulator_type) && simulator->GetNumberOfQubits() != register_qubits))
+    {
+        network->CreateSimulator(config.simulator_type, config.simulation_type,
+                                 Simulators::IsDistributedGpuSimulator(config.simulator_type) ? 0 : register_qubits);
+        simulator = network->GetSimulator();
+    }
     if (!simulator)
         throw std::runtime_error("noisy_fidelity: requested backend is unavailable.");
     if (config.seed)
@@ -166,17 +212,59 @@ double RealizationFidelity(const RecordCircuitPtr &ideal, const RecordCircuitPtr
     return simulator->Probability(0);
 }
 
-NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model, size_t noise_realizations,
-                                  const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
+namespace
+{
+// The unitary that the ideal circuit applies to a fresh register. A reset
+// before any other operation on its wire (all NoisyFidelity admits) prepares
+// its target from |0>: nothing for |0>, an X for |1>. The adjoint of that X
+// then undoes the preparation in RealizationFidelity.
+RecordCircuitPtr PreparedUnitary(const RecordCircuitPtr &circuit)
+{
+    auto out = std::make_shared<Circuits::Circuit<double>>();
+    for (const auto &op : circuit->GetOperations())
+        if (op->GetType() == Circuits::OperationType::kReset)
+        {
+            const auto reset = std::static_pointer_cast<Circuits::Reset<double>>(op);
+            const auto &qubits = reset->GetQubits();
+            const auto &targets = reset->GetResetTargets();
+            for (size_t i = 0; i < qubits.size() && i < targets.size(); ++i)
+                if (targets[i])
+                    out->AddOperation(std::make_shared<Circuits::XGate<double>>(qubits[i]));
+        }
+        else if (op->GetType() == Circuits::OperationType::kComposite)
+            out->AddOperation(PreparedUnitary(std::static_pointer_cast<Circuits::Circuit<double>>(op)));
+        else
+            out->AddOperation(op);
+    return out;
+}
+} // namespace
+
+NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model, std::optional<size_t> requested_realizations,
+                                  const SimulatorConfig &requested_config, std::optional<uint64_t> noise_seed)
 {
     if (!circuit)
         throw std::invalid_argument("Circuit is null.");
-    if (noise_realizations < 1)
-        throw std::invalid_argument("noise_realizations must be >= 1.");
-    const auto ideal = WithoutCircuitChannels(circuit);
-    auto rng = MakeNoiseRng(config, noise_seed);
-    const bool exact = UsesExactQuantumChannels(config);
+    // Inspect measurements before stripping channels: a measurement before an
+    // explicit channel is not a terminal readout even if the ideal omits it.
+    // Gates, delays, barriers, channels (noise, absent from the ideal) and
+    // nested circuits of them are admitted, as are resets that precede every
+    // other operation on their wire: on the fresh register they prepare |0> or
+    // |1>, which the ideal state includes (PreparedUnitary).
+    const auto before_readout = circuit->RemoveEndMeasurements();
+    std::unordered_set<Types::qubit_t> touched;
+    if (!before_readout->HasDeterministicEvolution(false, true, touched))
+        throw std::invalid_argument("noisy_fidelity requires a unitary ideal circuit; mid-circuit measurements, resets after other operations "
+                                    "on their qubit and classical control are unsupported.");
+    const auto ideal = PreparedUnitary(WithoutCircuitChannels(circuit));
     const noise::NoiseInjectionPlan plan(circuit, noise_model);
+    const size_t qubits = std::max({size_t{1}, circuit->GetMaxQubitIndex() + 1, plan.RegisterWidth()});
+    // Each realization creates its simulator explicitly: policy, allocation and
+    // workers must all describe the one backend a candidate list resolves to.
+    const auto config = ResolveCandidateBackend(requested_config, qubits);
+    const auto policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, NoiseLayer::kCombined, 100, circuit, true);
+    const size_t noise_realizations = policy.realizations;
+    auto rng = MakeNoiseRng(config, noise_seed);
+    const bool exact = policy.exact_channels;
 
     struct Realization
     {
@@ -184,7 +272,6 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
         SimulatorConfig config;
     };
 
-    const size_t qubits = std::max({size_t{1}, circuit->GetMaxQubitIndex() + 1, plan.RegisterWidth()});
     const size_t workers = SamplingWorkers(config, noise_realizations, qubits);
     std::vector<double> fidelities(noise_realizations);
     const auto start = std::chrono::steady_clock::now();
@@ -202,6 +289,7 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
         [&](size_t, size_t r, Realization realization) { fidelities[r] = RealizationFidelity(ideal, realization.circuit, realization.config); });
 
     NoisyFidelityResult out;
+    out.policy = policy;
     out.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     out.realizations = noise_realizations;
     double sum = 0, squares = 0;

@@ -704,6 +704,13 @@ if(COMPILE_TESTS)
     target_include_directories(sampling_benchmarks PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_INCLUDE_DIRECTORIES>)
     set_property(TARGET sampling_benchmarks PROPERTY LINK_DIRECTORIES $<TARGET_PROPERTY:maestro,INTERFACE_LINK_DIRECTORIES>)
 
+    add_executable(mpo_sampling_benchmarks EXCLUDE_FROM_ALL tests/MPOSamplingBenchmarks.cpp)
+    target_link_libraries(mpo_sampling_benchmarks PRIVATE Boost::serialization ${CMAKE_DL_LIBS}
+        $<TARGET_PROPERTY:maestro,INTERFACE_LINK_LIBRARIES>)
+    target_compile_options(mpo_sampling_benchmarks PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_COMPILE_OPTIONS>)
+    target_include_directories(mpo_sampling_benchmarks PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_INCLUDE_DIRECTORIES>)
+    set_property(TARGET mpo_sampling_benchmarks PROPERTY LINK_DIRECTORIES $<TARGET_PROPERTY:maestro,INTERFACE_LINK_DIRECTORIES>)
+
     add_executable(composite_sampling_benchmarks EXCLUDE_FROM_ALL tests/CompositeSamplingBenchmarks.cpp)
     target_link_libraries(composite_sampling_benchmarks PRIVATE maestro)
     target_compile_options(composite_sampling_benchmarks PRIVATE $<TARGET_PROPERTY:maestro,INTERFACE_COMPILE_OPTIONS>)
@@ -834,6 +841,27 @@ if(COMPILE_TESTS)
             endif()
             target_compile_options(tests PRIVATE ${OpenMP_CXX_FLAGS})
         endif()
+    endif()
+
+    # Focused reuse of the mixed-state/noise suites for iteration without
+    # rebuilding the full simulator test executable. The same cases remain in tests.
+    add_executable(mixed_state_noise_tests EXCLUDE_FROM_ALL tests/Tests.cpp tests/NoiseModelTests.cpp
+        tests/QCSimDensityMatrixTests.cpp tests/QCSimMPOTests.cpp)
+    if(QAER)
+        target_sources(mixed_state_noise_tests PRIVATE tests/AerTests.cpp)
+    endif()
+    target_link_libraries(mixed_state_noise_tests PRIVATE $<GENEX_EVAL:$<TARGET_PROPERTY:tests,LINK_LIBRARIES>>)
+    target_compile_options(mixed_state_noise_tests PRIVATE $<TARGET_PROPERTY:tests,COMPILE_OPTIONS>)
+    target_compile_definitions(mixed_state_noise_tests PRIVATE $<TARGET_PROPERTY:tests,COMPILE_DEFINITIONS>)
+    target_include_directories(mixed_state_noise_tests PRIVATE $<TARGET_PROPERTY:tests,INCLUDE_DIRECTORIES>)
+    target_link_directories(mixed_state_noise_tests PRIVATE $<TARGET_PROPERTY:tests,LINK_DIRECTORIES>)
+    add_dependencies(mixed_state_noise_tests maestro)
+    if(MSVC AND NOT Boost_USE_STATIC_LIBS)
+        # add_executable also inherits directory-wide link libraries. Match
+        # tests above so its embedded Boost.Test framework is not DLL-imported.
+        get_target_property(mixed_state_test_libraries mixed_state_noise_tests LINK_LIBRARIES)
+        list(REMOVE_ITEM mixed_state_test_libraries Boost::dynamic_linking)
+        set_property(TARGET mixed_state_noise_tests PROPERTY LINK_LIBRARIES "${mixed_state_test_libraries}")
     endif()
 
     # Unity test: sampling_order_tests
@@ -1040,7 +1068,7 @@ if(MAESTRO_BUILD_REQUEST_TESTS)
                 ENVIRONMENT "LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/tensor_mock_${variant}:${CMAKE_BINARY_DIR}:$ENV{LD_LIBRARY_PATH}")
         endforeach()
     endif()
-    add_executable(maestro_request_tests tests/RequestApi.cpp tests/RequestNoise.cpp tests/RequestOptions.cpp tests/RequestExtensions.cpp
+    add_executable(maestro_request_tests tests/RequestApi.cpp tests/RequestNoise.cpp tests/RequestOptions.cpp tests/RequestExtensions.cpp tests/MixedStateExecutionTests.cpp
                                          tests/RequestHeader.c)
     target_include_directories(maestro_request_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(maestro_request_tests PRIVATE maestro Boost::json)

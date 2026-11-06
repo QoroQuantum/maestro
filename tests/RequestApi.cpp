@@ -20,6 +20,7 @@ void TestFusionPublicInterfaces();
 void TestPauliPropagatorDedupDefault();
 void TestAutomaticGpuMixedStateFallback();
 void TestFixedBackendShotReuse();
+void TestMixedStateExecution();
 void TestNativeExtensions(const j::object &capabilities);
 
 void Check(bool condition, const char *message)
@@ -917,6 +918,7 @@ try
     Call(nested, false, true);
     TestLightconeEstimation();
     TestRequestNoiseAndOptions();
+    TestMixedStateExecution();
     TestLegacySeeds();
     TestTrajectoryOptions();
     TestNativeRandomSeeds();

@@ -1,4 +1,5 @@
 #include "SampleRecords.h"
+#include "TerminalSampling.h"
 
 #include "../Utils/Threads/RealizationWorkers.h"
 
@@ -74,24 +75,67 @@ class RawSamplingSession
             optimized->Optimize();
             execution_circuit = std::move(optimized);
         }
+        // Nested circuits share the enclosing classical state, so inlining them
+        // changes no result; their terminal measurements and gates then take
+        // part in terminal sampling and prefix sharing (after optimization,
+        // which never entered them).
+        if (execution_circuit->HasCompositeOperations())
+            execution_circuit = execution_circuit->InlinedComposites();
         if (!execution_circuit->GetOperations().empty() && execution_circuit->GetMaxQubitIndex() >= registerQubits)
             throw std::runtime_error("Sampling circuit touches qubit " + std::to_string(execution_circuit->GetMaxQubitIndex()) + " outside its " +
                                      std::to_string(registerQubits) + "-qubit register");
         Circuits::OperationState state(width);
         // A single shot keeps its trajectory, so one-shot noisy realizations
         // retain their seeded rows.
-        if (shots > 1 && HasOnlyTerminalMeasurements(*execution_circuit, width))
+        if (shots > 1 && CanSampleTerminal(*execution_circuit, *simulator, width, true))
         {
-            SampleTerminal(*execution_circuit, shots, seed, state, output, width);
+            simulator->Reset();
+            SamplePreparedTerminal(
+                *execution_circuit, simulator, shots, state, seed,
+                [&](size_t row, const Circuits::OperationState &sample) {
+                    const auto &bits = sample.GetAllBits();
+                    for (size_t bit = 0; bit < width; ++bit)
+                        output[row * width + bit] = bit < bits.size() && bits[bit];
+                },
+                &maxBondDimension, true);
             ++terminalCalls;
             return;
         }
-        for (size_t shot = 0; shot < shots; ++shot)
+        // Save only deterministic quantum work. On pure-state backends resets,
+        // including nested ones, can consume measurement randomness even when
+        // their outcome is known; keep the legacy replay stream for those
+        // circuits. Gate-only nested circuits are prefix work like gates.
+        bool reusePrefix = shots > 1 && (simulator->SupportsQuantumChannels() ||
+                                         std::none_of(execution_circuit->GetOperations().begin(), execution_circuit->GetOperations().end(), [](const auto &op) {
+                                             return op->GetType() == Circuits::OperationType::kReset ||
+                                                    (op->GetType() == Circuits::OperationType::kComposite &&
+                                                     !std::static_pointer_cast<Circuits::Circuit<double>>(op)->HasOnlyDeterministicOperations(false));
+                                         }));
+        auto suffix = execution_circuit;
+        if (reusePrefix)
         {
             simulator->Reset();
             simulator->SetGatesCounter(0);
+            auto executed = execution_circuit->ExecuteNonMeasurements(simulator, state, &maxBondDimension);
+            const size_t prefix_operations =
+                execution_circuit->GetOperations().size() - executed.size() + static_cast<size_t>(std::count(executed.begin(), executed.end(), true));
+            if (prefix_operations == 0)
+                reusePrefix = false; // nothing to share: a saved |0> only adds a state copy per shot
+            else
+            {
+                suffix = execution_circuit->RemoveExecutedOperations(executed);
+                simulator->SaveState();
+            }
+        }
+        for (size_t shot = 0; shot < shots; ++shot)
+        {
+            if (reusePrefix)
+                simulator->RestoreState();
+            else
+                simulator->Reset();
+            simulator->SetGatesCounter(0);
             state.Reset();
-            execution_circuit->ExecuteBD(simulator, state, &maxBondDimension);
+            suffix->ExecuteBD(simulator, state, &maxBondDimension);
             const auto &bits = state.GetAllBits();
             for (size_t bit = 0; bit < width; ++bit)
                 output[shot * width + bit] = bit < bits.size() && bits[bit];
@@ -130,75 +174,6 @@ class RawSamplingSession
     static bool MergingChangesResults(Simulators::SimulationType method)
     {
         return method != Simulators::SimulationType::kStatevector && method != Simulators::SimulationType::kDensityMatrix;
-    }
-
-    // Every operation the shared prefix defers must be a measurement. Classical
-    // control, random bits, composites and mid-circuit resets already make
-    // HasOpsAfterMeasurements true; the dry run also rejects any other deferred
-    // operation rather than silently dropping it.
-    static bool HasOnlyTerminalMeasurements(const Circuits::Circuit<double> &circuit, size_t width)
-    {
-        if (circuit.HasOpsAfterMeasurements())
-            return false;
-        Circuits::OperationState dry(width);
-        const auto executed = circuit.ExecuteNonMeasurements(nullptr, dry);
-        const auto &operations = circuit.GetOperations();
-        const size_t first = operations.size() - executed.size();
-        for (size_t i = first; i < operations.size(); ++i)
-            if (!executed[i - first] && operations[i]->GetType() != Circuits::OperationType::kMeasurement)
-                return false;
-        return true;
-    }
-
-    // Prepare the state once and draw every row from it, as the count path does.
-    // Readout flips are drawn per row. Rows are exchangeable, so they receive a
-    // seeded random order: any leading slice is then a uniform subsample.
-    void SampleTerminal(const Circuits::Circuit<double> &circuit, size_t shots, std::optional<uint64_t> seed, Circuits::OperationState &state, uint8_t *output,
-                        size_t width)
-    {
-        simulator->Reset();
-        simulator->SetGatesCounter(0);
-        state.Reset();
-        const auto executed = circuit.ExecuteNonMeasurements(simulator, state, &maxBondDimension);
-        const auto measurements = circuit.GetLastMeasurements(executed, false);
-        const auto write = [&](size_t row) {
-            const auto &bits = state.GetAllBits();
-            uint8_t *target = output + row * width;
-            for (size_t bit = 0; bit < width; ++bit)
-                target[bit] = bit < bits.size() && bits[bit];
-        };
-        const auto &qubits = measurements->GetQubits();
-        if (qubits.empty())
-        {
-            for (size_t row = 0; row < shots; ++row)
-                write(row);
-            return;
-        }
-
-        const auto order = SampleRowOrder::Permutation(shots, seed, SampleRowOrder::kTerminalStream);
-
-        const auto histogram = simulator->SampleCountsMany(qubits, shots);
-        // Hash-map iteration order is not portable; draw readout in outcome order.
-        using Outcome = std::pair<const std::vector<bool>, Types::qubit_t>;
-        std::vector<const Outcome *> outcomes;
-        outcomes.reserve(histogram.size());
-        for (const auto &outcome : histogram)
-            outcomes.push_back(&outcome);
-        std::sort(outcomes.begin(), outcomes.end(), [](const Outcome *a, const Outcome *b) { return a->first < b->first; });
-
-        Simulators::ISimulator *readout = measurements->HasReadout() ? simulator.get() : nullptr;
-        size_t row = 0;
-        for (const auto *outcome : outcomes)
-            for (Types::qubit_t copy = 0; copy < outcome->second; ++copy)
-            {
-                if (row >= shots)
-                    throw std::runtime_error("Sampling returned too many shots");
-                state.Reset();
-                measurements->SetStateFromSample(outcome->first, state, readout);
-                write(order[row++]);
-            }
-        if (row != shots)
-            throw std::runtime_error("Sampling returned an incomplete shot matrix");
     }
 
     unsigned long handle = 0;
@@ -299,7 +274,7 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
             const auto result = SampleCircuit(circuit, single, shots);
             CopyCountSamples(result, records.rows.data(), shots, records.width, config.seed);
             records.max_bond_dimension = result.max_bond_dimension;
-            terminal = shots > 1 && !circuit->HasOpsAfterMeasurements();
+            terminal = shots > 1 && !circuit->HasOpsAfterMeasurements(UsesExactQuantumChannels(config));
             RecordFusion(records, result);
             // Automatic selection may have chosen another backend.
             records.simulator = result.simulator;
@@ -316,20 +291,20 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
 }
 
 ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config, size_t shots,
-                         size_t noise_realizations, std::optional<uint64_t> noise_seed, const NoisyExecutionOptions &options)
+                         std::optional<size_t> noise_realizations, std::optional<uint64_t> noise_seed, const NoisyExecutionOptions &options)
 {
     if (!circuit)
         throw std::invalid_argument("Circuit is null.");
     if (shots < 1)
         throw std::invalid_argument("shots must be >= 1.");
-    if (noise_realizations < 1)
-        throw std::invalid_argument("noise_realizations must be >= 1.");
     config.Validate();
     const bool return_samples = options.rows;
     const bool exact = options.exact_channels.value_or(UsesExactQuantumChannels(config));
     const NoiseLayer layer = options.layer;
     auto rng = MakeNoiseRng(config, noise_seed);
-    const size_t batches = std::min(shots, noise_realizations);
+    auto policy = ResolveNoiseRealizations(noise_realizations, noise_model, config, layer, 64, circuit, false, exact);
+    const size_t batches = std::min(shots, policy.realizations);
+    policy.realizations = batches;
     const size_t base_batch = shots / batches;
     const size_t leftover = shots % batches;
 
@@ -379,9 +354,9 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     // one prepared state (terminal measurements on a dense method) run
     // single-threaded there anyway, so realization workers only add parallelism.
     using Method = Simulators::SimulationType;
-    const bool prepared_batches =
-        !config.seed && !noise_seed && !circuit->HasOpsAfterMeasurements() &&
-        (config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix || config.simulation_type == Method::kPathIntegral);
+    const bool prepared_batches = !config.seed && !noise_seed && !circuit->HasOpsAfterMeasurements(UsesExactQuantumChannels(config)) &&
+                                  (config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix ||
+                                   config.simulation_type == Method::kMatrixProductOperator || config.simulation_type == Method::kPathIntegral);
     const size_t workers = (return_samples || batches == shots || prepared_batches) ? SamplingWorkers(config, batches, budget_qubits) : 1;
     std::vector<SamplingResult> results(workers);
     std::vector<std::unique_ptr<SamplingSession>> sessions(workers);
@@ -403,6 +378,7 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
 
     std::vector<ExecutedBackend> executed(workers);
     ShotRecords records;
+    records.policy = policy;
     records.shots = shots;
     records.width = width;
     FrameOutcomes frame_counts;
@@ -498,7 +474,8 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
                     {
                         CopyCountSamples(result, samples + first * width, count, width, execution_config.seed);
                         // The network samples terminal measurements from one prepared state.
-                        ++(count > 1 && !noisy->HasOpsAfterMeasurements() ? network_terminal : network_trajectory)[worker];
+                        ++(count > 1 && !noisy->HasOpsAfterMeasurements(UsesExactQuantumChannels(execution_config)) ? network_terminal
+                                                                                                                    : network_trajectory)[worker];
                     }
                     else
                         for (const auto &[bits, n] : result.counts)
@@ -576,8 +553,13 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
             terminal_calls += network_terminal[worker];
             trajectory_calls += network_trajectory[worker];
         }
-        // terminal_v1 only when every realization was drawn from one prepared state.
-        records.sampling_strategy = reference ? "reference_frame_v1" : terminal_calls && !trajectory_calls ? "terminal_v1" : "trajectory_v1";
+        // terminal_v1 only when every realization was drawn from one prepared
+        // state; mixed_v1 when some were (e.g. uneven splits leave one-shot
+        // realizations, which keep their trajectory), as checkpoints report.
+        records.sampling_strategy = reference                             ? "reference_frame_v1"
+                                    : terminal_calls && !trajectory_calls ? "terminal_v1"
+                                    : terminal_calls                      ? "mixed_v1"
+                                                                          : "trajectory_v1";
         return records;
     }
 

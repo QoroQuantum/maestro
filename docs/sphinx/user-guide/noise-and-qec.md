@@ -47,7 +47,11 @@ for more physical detail:
 | `noisy_fidelity` | N inner products | Every noise layer | Fidelity to the ideal state |
 | `qc.noisy_prob` | Path integral | Readout error correction | Single-outcome probabilities |
 
-N is `noise_realizations`. {doc}`/examples/noise-modes` compares the analytical
+N is the effective `noise_realizations`. Its default, `None`, selects one
+realization for deterministic density-matrix/MPO evolution. Sampled noise uses
+64 realizations for execution and 100 for estimation/fidelity. An explicit
+positive count is honored (execution caps it at `shots`). Noisy estimates also
+compute an ideal baseline. {doc}`/examples/noise-modes` compares the analytical
 and Monte Carlo modes on one circuit.
 
 (py_noise_model)=
@@ -195,13 +199,72 @@ flipped = QuantumCircuit()
 flipped.x(0)
 flipped.cx(0, 1)
 for method in ["DensityMatrix", "MatrixProductOperator"]:
-    config = maestro.SimulatorConfig(simulation_type=getattr(maestro.SimulationType, method))
+    config = maestro.SimulatorConfig(simulation_type=getattr(maestro.SimulationType, method), fixed_backend=True)
     print(method, flipped.full_noise_estimate(["ZI", "IZ"], exact, config=config)["expectation_values"])
 ```
 
 The statevector backend rejects these channels with a `ValueError` instead of
 approximating them. `set_phase_damping_from_time(qubit, gate_time_s, t_phi_s)`
 sets phase damping from a dephasing time.
+
+With `noise_realizations=None` (the default), these Markovian channels evolve
+once. Terminal measurement counts and raw rows are then sampled from the prepared
+state, with independent classical readout errors. Unrecorded resets are also
+deterministic channels on mixed-state backends, so they do not require shot replay.
+Checkpoint suffixes use the same preparation-and-sampling path, as do terminal
+checkpoint suffixes on QCSim statevector, stabilizer and MPS backends. QCSim supports
+DM and MPO, Aer supports DM, and the Linux GPU backend supports DM and MPO. A CPU
+MPO samples terminal shots on several workers by cloning its one prepared state,
+with `fixed_backend=True` or with automatic selection.
+
+Exact channel evaluation does not average every kind of noise. Coherent error
+signs are drawn once per realization and held across the circuit; OU/1/f models
+also sample disturbances. These retain multiple realizations on DM/MPO. Results
+report `noise_realizations_requested`, `noise_realizations_policy`,
+`noise_evaluation`, `stochastic_noise`, and `stochastic_execution` separately.
+MPO truncation remains an approximation even with exact channels.
+
+Recorded intermediate measurements and feedback require measurement branches.
+Counts preserve each shot's classical history. For their expectation values,
+`qc.estimate` averages 100 measurement trajectories on every backend, as native
+`estimate` requests do (seeded runs derive one seed per trajectory), and
+`qc.noisy_estimate_montecarlo(observables, maestro.NoiseModel(), config=config)`
+averages branches with an explicit count, including the ideal baseline. The
+analytical `qc.noisy_estimate` rejects such circuits: damping scales a single
+deterministic expectation. Stochastic estimates report
+`estimate_evaluation="trajectory_average"` and `realization_standard_errors`;
+with only one realization the standard error is `None`, since it cannot be
+estimated. On pure-state backends a reset that precedes every other operation on
+its qubit leaves `|0>` and is not a branch; a later reset is.
+`noisy_fidelity` requires a unitary ideal circuit (terminal measurements are
+ignored; leading resets, including resets to `|1>`, and gate-only nested
+circuits are allowed).
+
+The current model injector does not attach gate noise to conditional gates or
+recurse into nested circuits. Flatten composites before model injection, including
+readout noise. Branch averaging preserves measurement and feedback behavior but
+does not expand that noise-injection support.
+
+`fixed_backend=True` pins the requested simulator and method. This is useful when
+comparing DM/MPO behavior: automatic selection may otherwise use a reference-frame
+sampler for eligible Clifford circuits. Sinter uses one realization for
+deterministic mixed-state noise and retains independent per-shot disturbances for
+its stochastic fallback paths. On DM/MPO its checkpoint also keeps in-circuit
+Pauli channels and resets before the first measurement, and a deterministic
+external noise model, so they evolve once per sampler. On pure-state backends the
+checkpoint ends at a reset of a qubit already used, which may collapse a branch.
+`PrefixCheckpointedSimulator(prefix, n, config, prefix_noise_model=model)` applies
+such deterministic noise to a prefix (it raises `ValueError` otherwise); crosstalk
+spectators outside the register stay in `|0>` and only contribute a phase, as for
+suffixes. Dynamic checkpoint suffixes evolve their deterministic head once per
+realization when all four retained states (the checkpoint's live state and saved
+prefix, the copy and its saved head) fit `trajectory_max_memory_mb`, then replay
+only their branches.
+
+The C++ `noise::NoiseAdd` infers exact channels from the backend the network
+will run: a fixed simulator, or the candidate an automatically selecting network
+always takes (`ConfigureNetwork` with `fixed_backend=false` leaves only a
+placeholder simulator beside it). Seeded or exact executions pin that candidate.
 
 (py_noise_crosstalk)=
 ## Crosstalk and two-qubit errors

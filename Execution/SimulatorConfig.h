@@ -1,17 +1,19 @@
 // Shared native configuration. This header has no Python dependency.
 #pragma once
-#include "Simulators/Core/RandomSeed.h"
-#include "Utils/Threads/RealizationWorkers.h"
-#include "maestrolib/Interface.h"
-#include "maestrolib/Maestro.h"
+#include "../Simulators/Core/RandomSeed.h"
+#include "../Utils/Threads/RealizationWorkers.h"
+#include "../maestrolib/Interface.h"
+#include "../maestrolib/Maestro.h"
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <iomanip>
 #include <limits>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <vector>
 
@@ -203,6 +205,10 @@ struct SimulatorConfig
         for (const auto &entry : distributed_options)
             if (entry.first.compare(0, 12, "distributed_") != 0 && entry.first.compare(0, 4, "mpi_") != 0)
                 throw std::invalid_argument("distributed_options accepts only distributed_* and mpi_* keys");
+        // Distribution is an explicit execution choice, never selected automatically.
+        for (const auto &candidate : optimization_candidates)
+            if (Simulators::IsDistributedGpuSimulator(candidate.first))
+                throw std::invalid_argument("Distribution cannot be an automatic candidate");
     }
 };
 
@@ -508,6 +514,39 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     if (config.fixed_backend || Simulators::IsDistributedGpuSimulator(config.simulator_type))
         network->CreateSimulator(config.simulator_type, config.simulation_type,
                                  Simulators::IsDistributedGpuSimulator(config.simulator_type) ? 0 : allocationQubits);
+    else if (HasCandidateList(config))
+    {
+        // An explicit candidate list names every backend the request allows,
+        // one or several. Without a cost model, selection starts from the
+        // network's simulator when it is one of them: allocate the first listed
+        // candidate whose register fits (a density matrix of 40 qubits yields
+        // to a listed MPO). When none can be created, report that instead of
+        // running a placeholder outside the list. (Without a list, a GPU
+        // mixed-state request below keeps its CPU fallback.)
+        bool created = false;
+        std::exception_ptr failure;
+        for (const auto &[type, method] : config.optimization_candidates)
+        {
+            try
+            {
+                network->CreateSimulator(type, method, allocationQubits);
+            }
+            catch (const std::exception &)
+            {
+                failure = std::current_exception();
+                continue; // a failed allocation leaves an unusable simulator behind
+            }
+            const auto simulator = network->GetSimulator();
+            if ((created = simulator && simulator->GetType() == type && simulator->GetSimulationType() == method))
+                break;
+        }
+        if (!created)
+        {
+            if (failure)
+                std::rethrow_exception(failure);
+            throw std::runtime_error("No optimization candidate backend is available");
+        }
+    }
     else if (config.simulator_type == Simulators::SimulatorType::kGpuSim && (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
                                                                              config.simulation_type == Simulators::SimulationType::kMatrixProductOperator))
         // Automatic selection retains this CPU simulator when the GPU is absent.
@@ -523,5 +562,54 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     }
 
     return network;
+}
+
+// The one backend that code creating its simulator explicitly (checkpoints,
+// noisy fidelity) uses, so that noise policy, allocation and metadata agree:
+// the requested pair, the sole candidate of an automatic list, or the first
+// listed candidate whose register of `qubits` qubits can be allocated, as
+// ConfigureNetwork chooses. The result is fixed to that backend. Several
+// candidates are probed by allocating them in turn.
+inline SimulatorConfig ResolveCandidateBackend(const SimulatorConfig &config, size_t qubits)
+{
+    if (!HasCandidateList(config))
+        return config;
+    auto resolved = config;
+    resolved.fixed_backend = true;
+    resolved.optimization_candidates.clear();
+    if (config.optimization_candidates.size() == 1)
+    {
+        std::tie(resolved.simulator_type, resolved.simulation_type) = config.optimization_candidates.front();
+        return resolved;
+    }
+    const size_t width = std::max<size_t>(1, qubits);
+    if (width > static_cast<size_t>(std::numeric_limits<int>::max()))
+        throw std::invalid_argument("Circuit width exceeds the simulator limit");
+    GetMaestroObjectWithMute();
+    std::exception_ptr failure;
+    for (const auto &[type, method] : config.optimization_candidates)
+    {
+        resolved.simulator_type = type;
+        resolved.simulation_type = method;
+        const auto handle = CreateSimpleSimulator(static_cast<int>(width));
+        if (!handle)
+            continue;
+        bool usable = false;
+        try
+        {
+            const auto network = ConfigureNetwork(handle, resolved, width);
+            usable = network && network->GetSimulator();
+        }
+        catch (...)
+        {
+            failure = std::current_exception();
+        }
+        DestroySimpleSimulator(handle);
+        if (usable)
+            return resolved;
+    }
+    if (failure)
+        std::rethrow_exception(failure);
+    throw std::runtime_error("No optimization candidate can hold the register");
 }
 } // namespace MaestroExecution

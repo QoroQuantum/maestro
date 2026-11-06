@@ -1,4 +1,5 @@
 #pragma once
+#include "../NoisePolicy.h"
 #include "../Options.h"
 #include "Noise/NoiseModel.h"
 
@@ -54,9 +55,14 @@ struct NoiseConfig
     noise::NoiseModel model;
     bool enabled = false;
     bool exact = false;
+    // checkpoint_batch: also apply the noise to the prefix, once (exact and
+    // deterministic only), instead of keeping an ideal prefix.
+    bool prefix = false;
     std::string mode = "combined";
     uint32_t seed = 0;
     size_t realizations = 1;
+    std::optional<size_t> requested_realizations;
+    NoiseRealizationPolicy policy;
     // Zero only when the circuit's own channel instructions supply the noise.
     size_t channel_count = 0;
     json::array approximations;
@@ -68,16 +74,25 @@ inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig 
     NoiseConfig result;
     if (object.empty())
         return result;
-    Keys(object, {"mode", "evaluation", "realizations", "seed", "channels"});
+    Keys(object, {"mode", "evaluation", "realizations", "seed", "channels", "prefix"});
     result.enabled = true;
+    result.prefix = Boolean(object, "prefix", false);
     result.mode = String(object, "mode", "combined");
     Require(result.mode == "combined" || result.mode == "pauli" || result.mode == "coherent" || result.mode == "analytical", "Unknown noise mode");
     const auto evaluation = String(object, "evaluation", "auto");
     Require(evaluation == "auto" || evaluation == "exact" || evaluation == "trajectories", "Unknown noise evaluation");
     result.exact = evaluation == "exact" || (evaluation == "auto" && Mixed(config));
     Supported(!result.exact || Mixed(config), "Exact noise requires density_matrix or matrix_product_operator");
-    result.realizations = UInt(object, "realizations", result.exact ? 1 : 64);
-    Require(result.realizations > 0 && result.realizations <= 1000000, "Invalid noise realization count");
+    if (const auto *value = object.if_contains("realizations"); value && !value->is_null())
+    {
+        if (value->is_string())
+            Require(String(*value) == "auto", "Noise realizations must be a positive integer or auto");
+        else
+        {
+            result.requested_realizations = UInt(*value);
+            Require(*result.requested_realizations > 0 && *result.requested_realizations <= 1000000, "Invalid noise realization count");
+        }
+    }
     const auto seed = UInt(object, "seed", config.seed.value_or(0) & UINT32_MAX);
     Require(seed <= UINT32_MAX, "noise.seed must fit in 32 bits");
     result.seed = static_cast<uint32_t>(seed);
@@ -281,12 +296,37 @@ inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig 
     }
     if (!result.exact && result.model.has_t1())
         result.approximations.emplace_back("sampled_T1_reset");
-    if (!result.exact && result.mode != "analytical")
+    const auto layer = result.mode == "pauli" ? NoiseLayer::kPauli : result.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+    result.policy = ResolveNoiseRealizations(result.requested_realizations, result.model, config, layer, 64, {}, false, result.exact);
+    result.realizations = result.mode == "analytical" ? 1 : result.policy.realizations;
+    if (result.policy.stochastic_noise && result.mode != "analytical")
         result.approximations.emplace_back("finite_noise_realizations");
     if (result.mode == "analytical")
         result.approximations.emplace_back("terminal_Pauli_damping");
     if (config.simulation_type == Method::kMatrixProductOperator)
         result.approximations.emplace_back("MPO_truncation");
     return result;
+}
+
+// Records an approximation once, however many stages report it.
+inline void AddApproximation(NoiseConfig &noise, const char *name)
+{
+    if (std::find(noise.approximations.begin(), noise.approximations.end(), json::value(name)) == noise.approximations.end())
+        noise.approximations.emplace_back(name);
+}
+
+inline json::object NoiseMetadata(const NoiseConfig &noise, size_t realizations)
+{
+    return {{"mode", noise.mode},
+            {"evaluation", noise.mode == "analytical" ? "analytical_approximation"
+                           : noise.exact              ? "exact_channels"
+                                                      : "trajectories"},
+            {"seed", noise.seed},
+            {"realizations", realizations},
+            {"requested_realizations", noise.requested_realizations ? json::value(*noise.requested_realizations) : json::value(nullptr)},
+            {"realizations_policy", noise.requested_realizations ? "explicit" : "auto"},
+            {"stochastic_noise", noise.policy.stochastic_noise},
+            {"stochastic_execution", noise.policy.stochastic_execution},
+            {"approximations", noise.approximations}};
 }
 } // namespace MaestroExecution

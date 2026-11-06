@@ -3,6 +3,7 @@
 #pragma once
 
 #include "../Noise/NoiseModel.h"
+#include "NoisePolicy.h"
 #include "ReferenceFrameSampler.h"
 #include "Sampling.h"
 #include "SimulatorConfig.h"
@@ -184,35 +185,6 @@ inline std::vector<size_t> Permutation(size_t shots, std::optional<uint64_t> see
 }
 } // namespace SampleRowOrder
 
-// Which layers of a NoiseModel a noisy execution injects.
-enum class NoiseLayer
-{
-    kPauli,    // Pauli/T1 layers: noisy_execute
-    kCoherent, // coherent rotations: coherent_execute
-    kCombined  // every layer: full_noise_execute
-};
-
-// Density-matrix and QCSim MPO configurations can retain the full ensemble in
-// one state. Their Markovian noise is applied as circuit channel operations;
-// pure-state/MPS configurations sample trajectories.
-inline bool UsesExactQuantumChannels(const SimulatorConfig &config)
-{
-    // Composite simulators still contain pure-state components and cannot
-    // represent ensemble channels exactly as a single mixed state.
-    const bool qcsim = config.simulator_type == Simulators::SimulatorType::kQCSim;
-    const bool gpu = config.simulator_type == Simulators::SimulatorType::kGpuSim;
-#ifndef NO_QISKIT_AER
-    const bool aer = config.simulator_type == Simulators::SimulatorType::kQiskitAer;
-#else
-    const bool aer = false;
-#endif
-    return (qcsim && (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
-                      config.simulation_type == Simulators::SimulationType::kMatrixProductOperator)) ||
-           (aer && config.simulation_type == Simulators::SimulationType::kDensityMatrix) ||
-           (gpu && (config.simulation_type == Simulators::SimulationType::kDensityMatrix ||
-                    config.simulation_type == Simulators::SimulationType::kMatrixProductOperator));
-}
-
 // The warning for a sampled thermal approximation, or empty. Callers emit it
 // once per execution, not per realization.
 inline std::string ThermalApproximationWarning(const noise::NoiseModel &noise_model, bool exact_channels)
@@ -308,6 +280,7 @@ inline RecordCircuitPtr InjectPlanned(NoiseLayer layer, const noise::NoiseInject
 // Shot records of one execution: a row matrix, or distinct records and counts.
 struct ShotRecords
 {
+    NoiseRealizationPolicy policy;
     // Row-major shots x width bytes (0 or 1), classical bit 0 first, when rows
     // were requested. Rows are exchangeable: any leading slice of a seeded
     // matrix is a uniform subsample of it.
@@ -355,6 +328,6 @@ struct NoisyExecutionOptions
 // configuration's counts_policy) come from compiled reference frames. Emits no
 // warnings: see ThermalApproximationWarning.
 MAESTRO_TRANSFORM_API ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config,
-                                               size_t shots, size_t noise_realizations, std::optional<uint64_t> noise_seed,
+                                               size_t shots, std::optional<size_t> noise_realizations, std::optional<uint64_t> noise_seed,
                                                const NoisyExecutionOptions &options);
 } // namespace MaestroExecution

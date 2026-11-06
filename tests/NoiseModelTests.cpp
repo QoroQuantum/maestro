@@ -1361,4 +1361,188 @@ BOOST_AUTO_TEST_CASE(ModelReadoutComposesWithMeasurementReadout)
     BOOST_CHECK_CLOSE(rates[0].p_meas0_prep1, 0.2 * (1 - 0.3) + 0.8 * 0.4, 1e-9);
 }
 
+BOOST_AUTO_TEST_CASE(NoiseAddInfersExactChannelsAndAutomaticRealizations)
+{
+    for (const auto method : {Simulators::SimulationType::kDensityMatrix, Simulators::SimulationType::kMatrixProductOperator})
+    {
+        auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{1}, std::vector<size_t>{1});
+        network->CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+        network->SetMaxSimulators(1);
+        auto circuit = std::make_shared<Circuits::Circuit<>>();
+        circuit->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+        circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
+        noise::NoiseModel model;
+        model.set_bit_flip(0, 0.5);
+        noise::NoiseAdd add;
+        add.seed(31);
+        const auto counts = add.noisy_execute(circuit, network, 0, model, 512);
+        BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
+        BOOST_CHECK(add.last_realization_policy().exact_channels);
+        BOOST_CHECK(!add.last_realization_policy().requested);
+        BOOST_REQUIRE_EQUAL(counts.size(), 2u);
+        for (const auto &[bits, count] : counts)
+            BOOST_CHECK_GT(count, 150u);
+        const auto exact = add.noisy_estimate_montecarlo(circuit, network, 0, {"Z"}, model);
+        BOOST_REQUIRE_EQUAL(exact.size(), 1u);
+        BOOST_CHECK_SMALL(exact[0], kTolerance);
+        BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
+        add.noisy_estimate_montecarlo(circuit, network, 0, {"Z"}, model, 3);
+        BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 3u);
+        BOOST_REQUIRE(add.last_realization_policy().requested);
+        BOOST_CHECK_EQUAL(*add.last_realization_policy().requested, 3u);
+        add.set_exact_channels(false);
+        const auto trajectory = add.noisy_estimate_montecarlo(circuit, network, 0, {"Z"}, model, 1);
+        BOOST_CHECK_SMALL(std::abs(trajectory[0]) - 1.0, kTolerance);
+        BOOST_CHECK(!add.last_realization_policy().exact_channels);
+        add.set_automatic_channels();
+        add.noisy_estimate_montecarlo(circuit, network, 0, {"Z"}, model);
+        BOOST_CHECK(add.last_realization_policy().exact_channels);
+        BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
+        BOOST_CHECK_THROW(add.noisy_execute(circuit, network, 0, model, 8, 0), std::invalid_argument);
+        // Inference is scoped to execution; injection alone retains its explicit policy.
+        BOOST_CHECK(!add.uses_exact_channels());
+    }
+}
+
+BOOST_AUTO_TEST_CASE(AutomaticNoisePolicyRetainsStochasticLayersAndRecognizesDeterministicOperations)
+{
+    MaestroExecution::SimulatorConfig config;
+    config.simulator_type = Simulators::SimulatorType::kQCSim;
+    config.simulation_type = Simulators::SimulationType::kDensityMatrix;
+    auto circuit = HadamardCircuit();
+    circuit->AddOperation(std::make_shared<Circuits::NoOperation<>>());
+    auto nested = std::make_shared<Circuits::Circuit<>>();
+    nested->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+    circuit->AddOperation(nested);
+    circuit->AddOperation(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{0}));
+    noise::NoiseModel model;
+    auto policy = MaestroExecution::ResolveNoiseRealizations(std::nullopt, model, config, MaestroExecution::NoiseLayer::kCombined, 100, circuit, true);
+    BOOST_CHECK_EQUAL(policy.realizations, 1u);
+    BOOST_CHECK(!policy.stochastic_execution);
+    // Forcing sampled noise does not turn a native density-matrix reset into collapse.
+    policy = MaestroExecution::ResolveNoiseRealizations(std::nullopt, model, config, MaestroExecution::NoiseLayer::kCombined, 100, circuit, true, false);
+    BOOST_CHECK_EQUAL(policy.realizations, 100u);
+    BOOST_CHECK(!policy.stochastic_execution);
+    model.set_coherent_rotation(0, 0.1, 0.0, 0.0);
+    policy = MaestroExecution::ResolveNoiseRealizations(std::nullopt, model, config, MaestroExecution::NoiseLayer::kCombined, 100, circuit, true);
+    BOOST_CHECK_EQUAL(policy.realizations, 100u);
+    BOOST_CHECK(policy.stochastic_noise);
+    model = noise::NoiseModel{};
+    model.set_correlated_ou(0, 0.2, 1.0, 0.1);
+    policy = MaestroExecution::ResolveNoiseRealizations(std::nullopt, model, config, MaestroExecution::NoiseLayer::kCombined, 64, circuit);
+    BOOST_CHECK_EQUAL(policy.realizations, 64u);
+    BOOST_CHECK(policy.stochastic_noise);
+    auto measured = HadamardCircuit();
+    measured->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
+    measured->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+    model = noise::NoiseModel{};
+    policy = MaestroExecution::ResolveNoiseRealizations(std::nullopt, model, config, MaestroExecution::NoiseLayer::kPauli, 64, measured);
+    BOOST_CHECK_EQUAL(policy.realizations, 1u);
+    BOOST_CHECK(policy.stochastic_execution);
+    policy = MaestroExecution::ResolveNoiseRealizations(std::nullopt, model, config, MaestroExecution::NoiseLayer::kPauli, 100, measured, true);
+    BOOST_CHECK_EQUAL(policy.realizations, 100u);
+}
+
+BOOST_AUTO_TEST_CASE(PureStateLeadingResetsAndNestedChannelsFollowTheEvolution)
+{
+    MaestroExecution::SimulatorConfig config;
+    config.simulator_type = Simulators::SimulatorType::kQCSim;
+    config.simulation_type = Simulators::SimulationType::kStatevector;
+    noise::NoiseModel model;
+    // A reset before any other operation on its wire leaves a fresh |0>.
+    auto leading = std::make_shared<Circuits::Circuit<>>();
+    leading->AddOperation(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{0, 1}));
+    leading->AddOperation(std::make_shared<Circuits::NoOperation<>>());
+    auto nested = std::make_shared<Circuits::Circuit<>>();
+    nested->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+    leading->AddOperation(nested);
+    leading->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+    BOOST_CHECK(!MaestroExecution::HasStochasticEvolution(leading, false));
+    auto policy = MaestroExecution::ResolveNoiseRealizations(std::nullopt, model, config, MaestroExecution::NoiseLayer::kCombined, 100, leading, true);
+    BOOST_CHECK(!policy.stochastic_execution);
+    // A checkpoint suffix continues an arbitrary saved state.
+    BOOST_CHECK(MaestroExecution::HasStochasticEvolution(leading, false, false));
+    policy = MaestroExecution::ResolveNoiseRealizations(std::nullopt, model, config, MaestroExecution::NoiseLayer::kCombined, 64, leading, false, std::nullopt,
+                                                        false);
+    BOOST_CHECK(policy.stochastic_execution);
+    // After a nested gate on its wire, a reset may collapse a superposition.
+    auto later = std::make_shared<Circuits::Circuit<>>();
+    later->AddOperation(nested);
+    later->AddOperation(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{0}));
+    BOOST_CHECK(MaestroExecution::HasStochasticEvolution(later, false));
+    BOOST_CHECK(!MaestroExecution::HasStochasticEvolution(later, true));
+
+    // Nested channels are sampled noise on pure-state backends too.
+    auto channels = std::make_shared<Circuits::Circuit<>>();
+    auto inner = std::make_shared<Circuits::Circuit<>>();
+    inner->AddOperation(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, Simulators::QuantumChannel::AmplitudeDamping(.1)));
+    channels->AddOperation(inner);
+    BOOST_CHECK(channels->HasQuantumChannels());
+    policy = MaestroExecution::ResolveNoiseRealizations(std::nullopt, model, config, MaestroExecution::NoiseLayer::kCombined, 64, channels);
+    BOOST_CHECK(policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 64u);
+}
+
+BOOST_AUTO_TEST_CASE(ExactChannelsRequireEveryCandidateBackend)
+{
+    using Backend = Simulators::SimulatorType;
+    using Method = Simulators::SimulationType;
+    MaestroExecution::SimulatorConfig config;
+    config.simulator_type = Backend::kQCSim;
+    config.simulation_type = Method::kStatevector;
+    config.optimization_candidates = {{Backend::kQCSim, Method::kDensityMatrix}};
+    BOOST_CHECK(MaestroExecution::UsesExactQuantumChannels(config));
+    config.optimization_candidates.emplace_back(Backend::kQCSim, Method::kMatrixProductOperator);
+    BOOST_CHECK(MaestroExecution::UsesExactQuantumChannels(config));
+    config.optimization_candidates.emplace_back(Backend::kQCSim, Method::kStatevector);
+    BOOST_CHECK(!MaestroExecution::UsesExactQuantumChannels(config));
+    config.simulation_type = Method::kDensityMatrix;
+    config.optimization_candidates = {{Backend::kQCSim, Method::kStatevector}};
+    BOOST_CHECK(!MaestroExecution::UsesExactQuantumChannels(config));
+    // A fixed backend ignores the candidate list, as ConfigureNetwork does.
+    config.fixed_backend = true;
+    BOOST_CHECK(MaestroExecution::UsesExactQuantumChannels(config));
+}
+
+BOOST_AUTO_TEST_CASE(NoiseAddFollowsAutomaticallySelectedMixedStateBackend)
+{
+    // ConfigureNetwork's automatic selection leaves an MPS placeholder beside
+    // the one requested candidate. NoiseAdd must infer exact channels from the
+    // candidate and, when seeded, pin it rather than the placeholder.
+    for (const auto method : {Simulators::SimulationType::kDensityMatrix, Simulators::SimulationType::kMatrixProductOperator})
+        for (const bool seeded : {false, true})
+        {
+            auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{1}, std::vector<size_t>{1});
+            network->RemoveAllOptimizationSimulatorsAndAdd(Simulators::SimulatorType::kQCSim, method);
+            network->CreateSimulator();
+            network->SetOptimizeSimulator(true);
+            network->SetMaxSimulators(1);
+            auto circuit = std::make_shared<Circuits::Circuit<>>();
+            circuit->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+            circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
+            noise::NoiseModel model;
+            model.set_bit_flip(0, 0.25);
+            noise::NoiseAdd add;
+            if (seeded)
+                add.seed(17);
+            const auto counts = add.noisy_execute(circuit, network, 0, model, 2000);
+            BOOST_CHECK(add.last_realization_policy().exact_channels);
+            BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
+            size_t zeros = 0, total = 0;
+            for (const auto &[bits, count] : counts)
+            {
+                total += count;
+                if (!bits.empty() && !bits[0])
+                    zeros += count;
+            }
+            BOOST_CHECK_EQUAL(total, 2000u);
+            BOOST_CHECK_GT(zeros, 380u);
+            BOOST_CHECK_LT(zeros, 620u);
+            const auto estimate = add.noisy_estimate_montecarlo(circuit, network, 0, {"Z"}, model);
+            BOOST_REQUIRE_EQUAL(estimate.size(), 1u);
+            BOOST_CHECK_SMALL(estimate[0] + 0.5, kTolerance);
+            BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
+        }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

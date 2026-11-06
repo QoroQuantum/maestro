@@ -101,6 +101,14 @@ def _sample_result(execute, *args, **kwargs):
         return execute(*args, **kwargs)
 
 
+def _noise_realizations(circuit, noise_model, config, shots):
+    """Integrate exact channels once while preserving independent trajectory shots."""
+    resolve = getattr(maestro, "_resolve_noise_realizations", None)
+    if resolve is None:
+        return shots
+    return resolve(circuit, noise_model, config, shots)
+
+
 CLEAN_CIRCUIT_API_VERSION = 2
 LOCAL_NOISE = {'DEPOLARIZE1', 'DEPOLARIZE2', 'X_ERROR', 'Y_ERROR', 'Z_ERROR',
                'PAULI_CHANNEL_1', 'PAULI_CHANNEL_2'}
@@ -529,6 +537,8 @@ STIM_MEASURE_INSTRUCTIONS = {
     "MPP",
 }
 
+STIM_RESET_INSTRUCTIONS = {"R", "RZ", "RX", "RY"}
+
 STIM_ANNOTATIONS = {
     "TICK",
     "QUBIT_COORDS",
@@ -541,19 +551,43 @@ STIM_ANNOTATIONS = {
 def split_stim_prefix_suffix(
     circuit: stim.Circuit | str | Any,
     has_external_noise: bool = False,
+    deterministic_noise: bool = False,
+    exact_resets: bool = False,
 ) -> tuple[Any, Any, int]:
     """Split a Stim circuit into a deterministic prefix and suffix.
 
     The prefix contains all deterministic operations prior to the first
-    noise channel or stochastic measurement.
+    noise channel, stochastic measurement or collapsing reset.
 
     Args:
         circuit: A stim.Circuit, circuit string, or wrapper object.
-        has_external_noise: Whether an external noise model applies to gates.
+        has_external_noise: Whether an external noise model applies to gates
+            that the prefix does not carry.
+        deterministic_noise: Whether in-circuit Pauli channels evolve as exact
+            channels (a density-matrix or MPO backend). They are then part of
+            the deterministic prefix, which ends at the first measurement.
+        exact_resets: Whether resets evolve as deterministic channels (a
+            density-matrix or MPO backend). Otherwise a reset of a qubit that
+            an earlier instruction used may collapse a superposition, so the
+            prefix ends there: a saved prefix would replay one random branch
+            for every shot. Resets of untouched qubits leave |0> and stay.
 
     Returns:
         A tuple of (prefix_circuit, suffix_circuit, cut_index).
     """
+    used: set[int] = set()
+
+    def cuts(name, targets):
+        if name in STIM_MEASURE_INSTRUCTIONS:
+            return True
+        if name in STIM_NOISE_INSTRUCTIONS and not (deterministic_noise and name in LOCAL_NOISE):
+            return True
+        if name in STIM_RESET_INSTRUCTIONS and not exact_resets and used.intersection(targets):
+            return True
+        if name not in STIM_ANNOTATIONS:
+            used.update(targets)
+        return False
+
     if isinstance(circuit, str):
         lines = circuit.strip().splitlines()
         parsed = []
@@ -564,8 +598,8 @@ def split_stim_prefix_suffix(
         has_in_circuit_noise = any(n in STIM_NOISE_INSTRUCTIONS for n, _, _, _ in parsed)
         has_noise = has_in_circuit_noise or has_external_noise
         cut_idx = len(parsed)
-        for idx, (name, args, _, _) in enumerate(parsed):
-            if name in STIM_MEASURE_INSTRUCTIONS or name in STIM_NOISE_INSTRUCTIONS:
+        for idx, (name, args, targets, _) in enumerate(parsed):
+            if cuts(name, targets):
                 cut_idx = idx
                 break
             if has_external_noise and name not in STIM_ANNOTATIONS and not (name in ("R", "RZ") and not args):
@@ -577,7 +611,8 @@ def split_stim_prefix_suffix(
 
     elif hasattr(circuit, "circuit_str"):
         prefix_str, suffix_str, cut_idx = split_stim_prefix_suffix(
-            circuit.circuit_str, has_external_noise=has_external_noise
+            circuit.circuit_str, has_external_noise=has_external_noise,
+            deterministic_noise=deterministic_noise, exact_resets=exact_resets,
         )
         return circuit.__class__(prefix_str), circuit.__class__(suffix_str), cut_idx
 
@@ -585,7 +620,7 @@ def split_stim_prefix_suffix(
         flat = list(circuit.flattened())
         cut_idx = len(flat)
         for idx, inst in enumerate(flat):
-            if inst.name in STIM_MEASURE_INSTRUCTIONS or inst.name in STIM_NOISE_INSTRUCTIONS:
+            if cuts(inst.name, [t.qubit_value for t in inst.targets_copy() if t.is_qubit_target]):
                 cut_idx = idx
                 break
             if has_external_noise and inst.name not in STIM_ANNOTATIONS and not (inst.name in ("R", "RZ") and not inst.gate_args_copy()):
@@ -864,6 +899,7 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
 
         # Prefix state checkpointing setup
         self.checkpoint_sim = None
+        self.checkpoint_cut_index = None
         self.prefix_qc = None
         self.suffix_qc = None
         self.suffix_noise_model = None
@@ -872,9 +908,23 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
             has_ext_noise = (
                 self.external_noise_model is not None and self.external_noise_model.has_any()
             )
+            # On a backend that applies channels exactly (one automatic
+            # realization of an empty model), the circuit's Pauli channels and
+            # resets need no per-shot draw, so the checkpoint can retain them
+            # and end only at the first measurement. A pure-state prefix ends
+            # at a reset that may collapse. An external model joins the prefix
+            # when it is deterministic there too; otherwise it is injected per
+            # suffix gate, so the prefix ends at the first gate.
+            resolve = getattr(maestro, "_resolve_noise_realizations", None)
+            exact_backend = resolve is not None and resolve(self.qc, maestro.NoiseModel(), self.config, 2) == 1
+            prefix_noise_model = None
+            if has_ext_noise and exact_backend and resolve(self.qc, self.external_noise_model, self.config, 2) == 1:
+                prefix_noise_model = self.external_noise_model
             prefix_c, suffix_c, cut_idx = split_stim_prefix_suffix(
-                task.circuit, has_external_noise=has_ext_noise
+                task.circuit, has_external_noise=has_ext_noise and prefix_noise_model is None,
+                deterministic_noise=exact_backend, exact_resets=exact_backend,
             )
+            self.checkpoint_cut_index = cut_idx
             self.prefix_qc, _, _ = translate_stim_to_maestro(prefix_c, qubit_order=self.qubit_order)
             self.suffix_qc, suffix_in_circuit_noise, _ = translate_stim_to_maestro(suffix_c)
 
@@ -895,7 +945,8 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
                 try:
                     qubits_for_sim = max(self.num_qubits, prefix_num_q, suffix_num_q, 1)
                     self.checkpoint_sim = maestro.PrefixCheckpointedSimulator(
-                        self.prefix_qc, qubits_for_sim, self.config
+                        self.prefix_qc, qubits_for_sim, self.config,
+                        prefix_noise_model=prefix_noise_model,
                     )
                 except Exception:
                     self.checkpoint_sim = None
@@ -944,12 +995,14 @@ class MaestroCompiledSampler(sinter.CompiledSampler):
         elif self.checkpoint_sim is not None:
             res = _sample_result(self.checkpoint_sim.execute_suffix,
                 self.suffix_qc, shots=shots, noise_model=self.suffix_noise_model,
-                noise_realizations=shots, noise_seed=run_seed,
+                noise_realizations=_noise_realizations(
+                    self.suffix_qc, self.suffix_noise_model, self.config, shots), noise_seed=run_seed,
                 num_measurements=self.num_measurements)
         elif self.has_circuit_noise or (self.noise_model is not None and self.noise_model.has_any()):
+            noise_model = self.noise_model if self.noise_model is not None else maestro.NoiseModel()
             res = _sample_result(self.qc.full_noise_execute,
-                self.noise_model if self.noise_model is not None else maestro.NoiseModel(),
-                self.config, shots=shots, noise_realizations=shots, noise_seed=run_seed)
+                noise_model, self.config, shots=shots,
+                noise_realizations=_noise_realizations(self.qc, noise_model, self.config, shots), noise_seed=run_seed)
         else:
             res = _sample_result(self.qc.execute, self.config, shots=shots)
         storage_width = max(self.num_qubits if self.checkpoint_sim is not None else self.qc.num_qubits,

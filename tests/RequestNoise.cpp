@@ -668,8 +668,256 @@ void TestLegacyCountsPolicy()
     Check(counts(simulator.handle, omitted) == earlier, "A reused handle kept an earlier explicit trajectory_policy");
 }
 
+void TestAutomaticMixedStateNoise()
+{
+    for (const char *method : {"density_matrix", "matrix_product_operator"})
+    {
+        auto request = Estimate("x q[0];", {"Z"}, Channel("bit_flip", {{"probability", 0.25}}), method);
+        auto result = Call(request);
+        Near(Real(result.at("expectation_values").at(0)), -0.5);
+        Check(result.at("noise").at("realizations") == 1 && result.at("noise").at("requested_realizations").is_null(),
+              "Deterministic mixed-state noise did not choose one automatic realization");
+        request["noise"].as_object()["realizations"] = 3;
+        result = Call(request);
+        Check(result.at("noise").at("realizations") == 3 && result.at("noise").at("realizations_policy") == "explicit",
+              "Explicit mixed-state realizations were discarded");
+        for (const auto &automatic : j::array{nullptr, "auto"})
+        {
+            request["noise"].as_object()["realizations"] = automatic;
+            Check(Call(request).at("noise").at("realizations") == 1, "Automatic JSON realization spelling changed behavior");
+        }
+
+        request = Estimate("h q[0];", {"Z"}, Channel("coherent_rotation", {{"rx", 0.0}, {"ry", std::acos(-1.0) / 2}, {"rz", 0.0}}), method);
+        result = Call(request);
+        Check(result.at("noise").at("realizations") == 100 && result.at("noise").at("stochastic_noise").as_bool(),
+              "Exact channels suppressed coherent disorder averaging");
+        Check(std::abs(Real(result.at("expectation_values").at(0))) < 0.4, "Coherent default retained a single disorder state");
+        Check(!result.at("noise").at("approximations").as_array().empty(), "Mixed coherent sampling approximation was hidden");
+        request["noise"].as_object()["realizations"] = 1;
+        result = Call(request);
+        Near(std::abs(Real(result.at("expectation_values").at(0))), 1.0);
+        Check(result.at("realization_standard_errors").is_null(), "A single sampled disturbance claimed zero uncertainty");
+
+        request = Request("estimate", 2, "h q[0]; measure q[0]->c[0]; if(c==1) x q[1];", method);
+        request["observables"] = j::array{"IZ"};
+        result = Call(request);
+        Check(std::abs(Real(result.at("expectation_values").at(0))) < 0.4, "Dynamic mixed-state estimate retained one measurement branch");
+        Check(result.at("execution_metadata").at("measurement_trajectories") == 100, "Dynamic branch averaging metadata missing");
+
+        request = Request("checkpoint_batch", 2, "h q[0]; cx q[0],q[1];", method);
+        request["suffixes"] = j::array{Request("execute", 2, "reset q[0]; measure q->c;", method).at("circuit"),
+                                       Request("execute", 2, "cx q[0],q[1]; h q[0]; measure q->c;", method).at("circuit")};
+        request["execution"].as_object()["shots"] = 512;
+        result = Call(request);
+        const auto &outputs = result.at("results").as_array();
+        Check(outputs.at(0).at("sampling_strategy") == "terminal_v1" && outputs.at(1).at("sampling_strategy") == "terminal_v1",
+              "Mixed-state checkpoint suffixes did not use terminal sampling");
+        Check(outputs.at(0).at("counts").as_object().size() == 2 && outputs.at(1).at("counts") == j::object{{"00", 512}},
+              "Checkpoint suffix sampling lost its mixed state or overwrote the saved prefix");
+        Check(result.at("results") == Call(request).at("results"), "Checkpoint terminal sampling did not replay its seed");
+
+        request["suffixes"] = j::array{Request("execute", 2, "measure q[0]->c[0]; if(c==1) x q[1]; measure q->c;", method).at("circuit")};
+        request["noise"] = j::object{{"channels", j::array{Channel("bit_flip", {{"probability", 0.0}})}}};
+        result = Call(request);
+        // Each shot samples its branch exactly: stochastic, but no approximation.
+        const auto &approximations = result.at("noise").at("approximations").as_array();
+        Check(result.at("noise").at("stochastic_execution").as_bool() && result.at("results").at(0).at("stochastic_execution").as_bool() &&
+                  std::find(approximations.begin(), approximations.end(), j::value("finite_measurement_trajectories")) == approximations.end(),
+              "Checkpoint dynamic suffix misreported its measurement branches");
+        request["operation"] = "execute";
+        request["circuit"] = Request("execute", 2, "h q[0]; measure q[0]->c[0]; if(c==1) x q[1]; measure q->c;", method).at("circuit");
+        request.erase("suffixes");
+        result = Call(request);
+        const auto &execute_approximations = result.at("noise").at("approximations").as_array();
+        Check(result.at("noise").at("stochastic_execution").as_bool() && std::find(execute_approximations.begin(), execute_approximations.end(),
+                                                                                   j::value("finite_measurement_trajectories")) == execute_approximations.end(),
+              "Dynamic execute labelled exact branch sampling an approximation");
+    }
+
+    // Pure-state estimates: a reset before any other operation on its wire
+    // leaves |0>, so the estimate stays a single deterministic evaluation.
+    auto leading = Request("estimate", 2, "reset q[0]; reset q[1]; h q[0]; cx q[0],q[1];", "statevector");
+    leading["observables"] = j::array{"XX"};
+    auto result = Call(leading);
+    Near(Real(result.at("expectation_values").at(0)), 1.0);
+    Check(result.at("execution_metadata").at("estimate_evaluation") == "deterministic" && result.at("execution_metadata").at("measurement_trajectories") == 0,
+          "A leading pure-state reset turned the estimate into trajectory averaging");
+    auto later = Request("estimate", 2, "h q[0]; cx q[0],q[1]; reset q[0];", "statevector");
+    later["observables"] = j::array{"IZ"};
+    result = Call(later);
+    Check(result.at("execution_metadata").at("estimate_evaluation") == "trajectory_average" &&
+              result.at("execution_metadata").at("measurement_trajectories") == 100,
+          "A collapsing pure-state reset did not average its branches");
+    Check(std::abs(Real(result.at("expectation_values").at(0))) < 0.4, "Pure-state reset branches were not averaged");
+
+    // One sampled coherent disturbance has no estimable fidelity uncertainty.
+    auto fidelity = Request("noisy_fidelity", 1, "h q[0];");
+    fidelity["noise"] =
+        j::object{{"mode", "coherent"}, {"realizations", 1}, {"channels", j::array{Channel("coherent_rotation", {{"rx", 0.1}, {"ry", 0.0}, {"rz", 0.0}})}}};
+    result = Call(fidelity);
+    Check(result.at("standard_error").is_null(), "A single sampled fidelity claimed zero uncertainty");
+    fidelity["noise"].as_object()["realizations"] = 4;
+    Check(!Call(fidelity).at("standard_error").is_null(), "Sampled fidelity lost its standard error");
+
+    // Pure-state checkpoints batch terminal suffixes too, keeping the prefix.
+    auto checkpoint = Request("checkpoint_batch", 2, "h q[0]; cx q[0],q[1];");
+    checkpoint["suffixes"] =
+        j::array{Request("execute", 2, "measure q->c;").at("circuit"), Request("execute", 2, "cx q[0],q[1]; h q[0]; measure q->c;").at("circuit"),
+                 Request("execute", 2, "reset q[0]; measure q->c;").at("circuit")};
+    checkpoint["execution"].as_object()["shots"] = 400;
+    result = Call(checkpoint);
+    const auto &outputs = result.at("results").as_array();
+    Check(outputs.at(0).at("sampling_strategy") == "terminal_v1" && outputs.at(0).at("counts").as_object().size() == 2,
+          "Pure-state terminal checkpoint suffix was not batch sampled");
+    Check(outputs.at(1).at("counts") == j::object{{"00", 400}}, "Pure-state terminal checkpoint sampling overwrote the prefix");
+    Check(outputs.at(2).at("sampling_strategy") == "trajectory_v1" && outputs.at(2).at("counts").as_object().size() == 2,
+          "A pure-state suffix reset shared one branch");
+
+    // A dynamic suffix evolves its deterministic head once and still samples
+    // its branch per shot: H H on q1 is the identity, then feedback clears q1.
+    for (const char *method : {"statevector", "density_matrix", "matrix_product_operator"})
+    {
+        auto dynamic = Request("checkpoint_batch", 2, "h q[0]; cx q[0],q[1];", method);
+        dynamic["suffixes"] = j::array{Request("execute", 2, "h q[1]; h q[1]; measure q[0]->c[0]; if(c==1) x q[1]; measure q->c;", method).at("circuit")};
+        dynamic["execution"].as_object()["shots"] = 600;
+        const auto &counts = Call(dynamic).at("results").at(0).at("counts").as_object();
+        Check(counts.size() == 2 && counts.at("00").as_int64() > 200 && counts.at("10").as_int64() > 200, "A shared dynamic suffix head changed its branches");
+    }
+
+    // JSON noisy_fidelity covers mixed states and every sampled layer.
+    for (const char *method : {"density_matrix", "matrix_product_operator"})
+    {
+        auto mixed = Request("noisy_fidelity", 1, "x q[0];", method);
+        mixed["noise"] = j::object{{"channels", j::array{Channel("bit_flip", {{"probability", 0.25}})}}};
+        result = Call(mixed);
+        Near(Real(result.at("fidelity")), 0.75);
+        Check(result.at("noise").at("realizations") == 1 && result.at("noise").at("evaluation") == "exact_channels",
+              "Mixed-state noisy fidelity did not evolve exact channels once");
+    }
+    auto sampled = Request("noisy_fidelity", 1, "x q[0];");
+    sampled["noise"] = j::object{{"realizations", 2000}, {"channels", j::array{Channel("bit_flip", {{"probability", 0.25}})}}};
+    result = Call(sampled);
+    Check(std::abs(Real(result.at("fidelity")) - 0.75) < 0.04 && !result.at("standard_error").is_null(), "Sampled Pauli noisy fidelity is wrong");
+
+    // Automatic candidate lists stay inside the list without a cost model:
+    // the first listed candidate that can hold the register runs.
+    const auto automatic = [](size_t qubits, const std::string &body, std::initializer_list<const char *> methods) {
+        auto request = Request("execute", qubits, body);
+        auto &simulator = request["simulator"].as_object();
+        simulator["selection"] = "automatic";
+        j::array candidates;
+        for (const char *method : methods)
+            candidates.push_back(j::object{{"backend", "qcsim"}, {"method", method}});
+        simulator["candidates"] = std::move(candidates);
+        return request;
+    };
+    for (const char *body : {"h q[0]; t q[0]; measure q -> c;", "h q[0]; measure q -> c;"})
+        Check(Call(automatic(1, body, {"density_matrix", "statevector"})).at("execution_metadata").at("method") == "density_matrix",
+              "Automatic selection ran a backend outside its candidate list");
+    std::string wide;
+    for (size_t qubit = 0; qubit < 40; qubit += 2)
+        wide += "x q[" + std::to_string(qubit) + "]; ";
+    wide += "measure q -> c;";
+    result = Call(automatic(40, wide, {"density_matrix", "matrix_product_operator"}));
+    Check(result.at("execution_metadata").at("method") == "matrix_product_operator" && result.at("counts").as_object().size() == 1,
+          "An impossible density matrix was chosen over a listed MPO");
+
+    // The Clifford shortcut moves only to a listed (backend, stabilizer) pair.
+    const auto listed = [](size_t qubits, const std::string &body, std::initializer_list<std::pair<const char *, const char *>> pairs) {
+        auto request = Request("execute", qubits, body);
+        auto &simulator = request["simulator"].as_object();
+        simulator["selection"] = "automatic";
+        j::array candidates;
+        for (const auto &[backend, method] : pairs)
+            candidates.push_back(j::object{{"backend", backend}, {"method", method}});
+        simulator["candidates"] = std::move(candidates);
+        return request;
+    };
+    const std::string clifford = "h q[0]; cx q[0],q[1]; measure q -> c;";
+    result = Call(listed(2, clifford, {{"qcsim", "density_matrix"}, {"qcsim", "stabilizer"}}));
+    Check(result.at("execution_metadata").at("backend") == "qcsim" && result.at("execution_metadata").at("method") == "stabilizer",
+          "A listed QCSim stabilizer was not used for a Clifford circuit");
+    bool aer = true;
+    try
+    {
+        auto probe = Request("execute", 2, clifford, "stabilizer");
+        probe["simulator"].as_object()["backend"] = "aer";
+        Call(probe);
+    }
+    catch (const std::exception &)
+    {
+        aer = false; // Aer is not built in
+    }
+    if (aer)
+    {
+        result = Call(listed(2, clifford, {{"qcsim", "density_matrix"}, {"aer", "stabilizer"}}));
+        Check(result.at("execution_metadata").at("backend") == "aer" && result.at("execution_metadata").at("method") == "stabilizer",
+              "The Clifford shortcut ran an unlisted stabilizer pair");
+    }
+
+    // When no listed candidate can hold the register, report it instead of
+    // running an unlisted placeholder.
+    Call(listed(40, wide, {{"qcsim", "density_matrix"}, {"quest", "statevector"}}), false);
+    // A one-entry list too: it runs its sole candidate or reports failure.
+    result = Call(listed(1, "h q[0]; t q[0]; measure q -> c;", {{"qcsim", "density_matrix"}}));
+    Check(result.at("execution_metadata").at("method") == "density_matrix", "A sole listed candidate did not run");
+    bool quest = true;
+    try
+    {
+        auto probe = Request("execute", 1, "h q[0]; measure q -> c;");
+        probe["simulator"].as_object()["backend"] = "quest";
+        Call(probe);
+    }
+    catch (const std::exception &)
+    {
+        quest = false; // QuEST is not available here
+    }
+    if (!quest)
+        Call(listed(1, "h q[0]; t q[0]; measure q -> c;", {{"quest", "statevector"}}), false);
+
+    // noise.prefix applies deterministic exact noise to the checkpoint prefix once.
+    for (const char *method : {"density_matrix", "matrix_product_operator"})
+    {
+        auto prefixed = Request("checkpoint_batch", 1, "x q[0];", method);
+        prefixed["suffixes"] = j::array{Request("execute", 1, "measure q -> c;", method).at("circuit")};
+        prefixed["execution"].as_object()["shots"] = 4000;
+        prefixed["noise"] = j::object{{"prefix", true}, {"channels", j::array{Channel("bit_flip", {{"probability", 0.25}})}}};
+        result = Call(prefixed);
+        Check(result.at("noise_scope") == "prefix_and_suffix", "Prefix noise scope missing");
+        const auto &counts = result.at("results").at(0).at("counts").as_object();
+        Check(std::abs(static_cast<double>(counts.at("1").as_int64()) / 4000 - 0.75) < 0.03, "Prefix noise was not applied once");
+        prefixed["noise"].as_object()["prefix"] = false;
+        Check(Call(prefixed).at("results").at(0).at("counts") == j::object{{"1", 4000}}, "An ideal prefix gained noise");
+    }
+    auto sampledPrefix = Request("checkpoint_batch", 1, "x q[0];");
+    sampledPrefix["suffixes"] = j::array{Request("execute", 1, "measure q -> c;").at("circuit")};
+    sampledPrefix["noise"] = j::object{{"prefix", true}, {"channels", j::array{Channel("bit_flip", {{"probability", 0.25}})}}};
+    Call(sampledPrefix, false); // a pure-state prefix would freeze one sampled draw
+    auto coherentPrefix = Request("checkpoint_batch", 1, "x q[0];", "density_matrix");
+    coherentPrefix["suffixes"] = sampledPrefix.at("suffixes");
+    coherentPrefix["noise"] = j::object{{"prefix", true}, {"channels", j::array{Channel("coherent_rotation", {{"rx", 0.1}, {"ry", 0.0}, {"rz", 0.0}})}}};
+    Call(coherentPrefix, false);
+    auto prefixElsewhere = Request("execute", 1, "x q[0]; measure q -> c;", "density_matrix");
+    prefixElsewhere["noise"] = j::object{{"prefix", true}, {"channels", j::array{Channel("bit_flip", {{"probability", 0.25}})}}};
+    Call(prefixElsewhere, false);
+
+    // Capabilities describe the realization policy, prefix noise and selection.
+    char *catalogText = MaestroGetCapabilitiesJson();
+    const auto catalog = j::parse(catalogText).as_object();
+    FreeResult(catalogText);
+    Check(catalog.at("noise").at("realizations").at("accepts") == j::array{"positive_integer", "null", "auto"} &&
+              catalog.at("noise").at("checkpoint_prefix").at("field") == "prefix" && !catalog.at("noise").at("exact_configurations").as_array().empty(),
+          "Capabilities omit the noise realization policy");
+    const auto &strategies = catalog.at("sampling_strategies").as_array();
+    Check(std::find(strategies.begin(), strategies.end(), j::value("mixed_v1")) != strategies.end() &&
+              catalog.at("estimate").at("dynamic_measurement_trajectories") == 100 &&
+              !catalog.at("noisy_fidelity").at("exact_configurations").as_array().empty() && catalog.at("automatic_selection").is_object(),
+          "Capabilities omit estimate, fidelity or selection rules");
+}
+
 void TestRequestNoiseAndOptions()
 {
+    TestAutomaticMixedStateNoise();
     TestShotRows();
     TestFrameSamplerHandle();
     TestRowSelection();
