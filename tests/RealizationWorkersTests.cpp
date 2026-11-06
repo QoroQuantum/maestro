@@ -984,19 +984,23 @@ void NoiseAddParallelEstimatesAndBatches()
         }
 
     // Unseeded: 8 realizations of 250 shots each, sampled from one prepared state.
+    // Each realization draws its Pauli errors once for all 250 of its shots, so
+    // bit-flip noise would move the correlated count in steps of 250 (with
+    // depolarizing p = 0.05, two broken realizations happen ~9% of the time).
+    // Dephasing never changes ZZ parity: every correct shot stays correlated.
     const auto observed = std::make_shared<Threads>();
     auto bell = std::make_shared<Circuits::Circuit<>>();
     bell->AddOperation(std::make_shared<ObserveH>(observed));
     bell->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
     bell->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}, {1, 1}}));
-    noise::NoiseModel flips;
-    flips.set_all_depolarizing(2, 0.05);
+    noise::NoiseModel dephasing;
+    dephasing.set_all_dephasing(2, 0.05);
     for (const auto method : {Method::kStatevector, Method::kDensityMatrix})
     {
         observed->values.clear();
         noise::NoiseAdd unseeded;
         unseeded.set_exact_channels(method == Method::kDensityMatrix);
-        const auto counts = unseeded.noisy_execute(bell, makeNetwork(4, method, nullptr), 0, flips, 2000, 8);
+        const auto counts = unseeded.noisy_execute(bell, makeNetwork(4, method, nullptr), 0, dephasing, 2000, 8);
         size_t total = 0, correlated = 0;
         for (const auto &[bits, count] : counts)
         {
@@ -1004,7 +1008,7 @@ void NoiseAddParallelEstimatesAndBatches()
             correlated += bits.size() >= 2 && bits[0] == bits[1] ? count : 0;
         }
         Require(total == 2000, "parallel multi-shot batches lost shots");
-        Require(correlated > 1600, "parallel multi-shot batches lost Bell correlations");
+        Require(correlated == total, "parallel multi-shot batches lost Bell correlations");
         if (parallelMachine)
             Require(!observed->values.count(std::this_thread::get_id()), "unseeded multi-shot batches did not dispatch to worker threads");
     }
