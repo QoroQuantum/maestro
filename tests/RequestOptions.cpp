@@ -233,7 +233,8 @@ void TestFixedBackendShotReuse()
                         const std::string context = std::string(method) + " scenario=" + std::to_string(scenario) + " workers=" + std::to_string(workers) +
                                                     " shots=" + std::to_string(shots) + " on_host=" + std::to_string(onHost);
                         Check(circuit->HasOpsAfterMeasurements(exactChannels) != terminal, "Terminal classification disagrees with backend reset semantics");
-                        size_t jobs = terminal && (reproducibleSampling || exactChannels) ? 1 : workers;
+                        // SetMaxSimulators caps the workers at the hardware thread count.
+                        size_t jobs = terminal && (reproducibleSampling || exactChannels) ? 1 : network->GetMaxSimulators();
 #ifdef _OPENMP
                         if (reproducibleSampling)
                             jobs = std::min(jobs, static_cast<size_t>(std::max(1, omp_get_max_threads())));
