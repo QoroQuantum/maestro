@@ -241,6 +241,8 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
     const json::object automaticSelection{{"candidates", "simulator.candidates with selection automatic"},
                                           {"fallback", "first listed candidate that can hold the register"},
                                           {"stabilizer_shortcut", "Clifford circuits move to a stabilizer only as a listed backend/method pair"},
+                                          {"non_clifford_stabilizer", "a listed stabilizer never runs a non-Clifford circuit"},
+                                          {"failure", "when no listed candidate runs, the first candidate's error is reported"},
                                           {"unavailable", "error; an unlisted backend never runs"},
                                           {"exact_channels", "only when every candidate applies them"}};
     return {{"schema_version", SchemaVersion},

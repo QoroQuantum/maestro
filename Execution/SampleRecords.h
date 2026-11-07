@@ -68,11 +68,12 @@ inline bool PreferDirectTrajectoryCounts(const SimulatorConfig &config, std::opt
 
 inline size_t SamplingWorkers(const SimulatorConfig &config, size_t realizations, size_t qubits)
 {
-    if (config.simulator_type != Simulators::SimulatorType::kQCSim)
+    if (!RunsOnlyQCSim(config))
         return 1;
     auto workers = Utils::RealizationWorkerCount(realizations, config.max_simulators.value_or(0));
-    // Unknown/unbounded state sizes cannot promise a memory limit.
-    const long double state_bytes = RealizationBytes(config, qubits);
+    // Unknown/unbounded state sizes cannot promise a memory limit. A candidate
+    // list is sized for the largest register any of its entries needs.
+    const long double state_bytes = MaxRealizationBytes(config, qubits);
     if (!(state_bytes > 0))
         return 1;
     workers = Utils::LimitRealizationWorkersByMemory(workers, static_cast<size_t>(state_bytes), RealizationBudgetMB(config), 0, 2);

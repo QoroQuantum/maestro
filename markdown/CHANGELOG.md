@@ -7,6 +7,103 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `INetwork::CaptureSimulatorSettings()` copies the settings made directly on
+  the network's simulator into the network, for code that re-creates the
+  simulator. Composer's parallel scheduler calls it, so a setting made only on
+  the simulator (a bond cap) holds for every scheduled run, not just the
+  first.
+
+### Changed
+
+- A network's simulator is documented and treated as a backend template
+  (`INetwork::CreateSimulator`). Executions size their own register.
+  `kBackendPlaceholderQubits` (2) is the width to create a backend that only
+  selects execution, and configured backends are created at that width.
+- Without a cost model, a configured candidate list decides automatic
+  selection. The network simulator's backend runs first when it is listed,
+  then the others in the order they were added, on the register the circuit
+  maps to. A simulator outside a configured list never runs. The list a
+  network starts with is not configured, so its simulator still decides.
+  `GetOptimizationCandidates()` returns the configured list. Either way, and
+  with or without a seed, a Clifford circuit may move to a stabilizer backend
+  the list admits (QCSim's or Aer's for the default list); this is now
+  documented.
+
+### Fixed
+
+- Candidate lists were tested at the declared width. One active qubit of a
+  40-qubit circuit now runs on a listed density matrix. A requested MPO with a
+  lone density-matrix candidate no longer fails with a size overflow.
+- `incremental_evolve` drives, and reports, the backend a candidate list
+  resolves to, not the requested pair.
+- Automatic GPU requests accept an explicit `gpu_device`, and their metadata
+  reports the device that ran.
+- Executing a network without a simulator no longer creates one. A failed run
+  restores the network's state and keeps its simulator.
+- Clones, and the noise helpers that run on them, keep settings made directly
+  on the network's simulator. Execution clones no longer copy a large register,
+  and noisy-run worker budgets count only the registers that stay allocated.
+- `noise::NoiseAdd::last_execution()` reports the backend a noisy run used
+  (Composer binds it as `NoiseAdd.last_execution()`). It reports nothing for
+  a run that executed no network: zero shots, or observables that planning
+  resolved.
+- With a cost model, a configured candidate list still runs one of its own
+  candidates when the model cannot rank the list, chooses nothing, or picks a
+  candidate that cannot be created, allocate the register or run the start of
+  the circuit (a statevector at 70 qubits falls back to a listed MPO).
+- A network simulator created as a stabilizer no longer makes the cost model
+  rank stabilizer backends for a non-Clifford circuit.
+- A configured list whose candidates cannot run reports the first failure, in
+  any order. Before, with QuEST not loaded, `[density matrix, QuEST]` (when the
+  density matrix could not hold the register) and `[stabilizer, QuEST]` (for a
+  non-Clifford circuit) ran the network's own simulator, outside the list.
+- A zero-shot `RepeatedExecute` or `RepeatedExecuteOnHost` runs nothing and
+  leaves the network's simulator, with its register and state, as it was. It
+  reset them before.
+- `Schedulers::ExecuteJob` keeps what its host network threw (`error`) instead
+  of terminating the worker thread, so a scheduler can report it.
+- A network that has a scheduler is freed when its last reference goes. The
+  scheduler, which the network owns through its controller, held the network
+  strongly, so neither was ever destroyed. `IScheduler` now holds it weakly, and
+  `GetNetwork()` returns null once the network is gone.
+- Selection never runs a listed stabilizer for a non-Clifford circuit: it
+  counts as a failed candidate, after the others. When it is the only reason
+  a list cannot run, the error is a runtime error, like the stabilizer's own
+  rejection of a non-Clifford gate (Python `RuntimeError`, request API
+  `native_failure`). The capabilities' `automatic_selection` states this rule
+  and the first-failure rule. NetQASM and discrete-event
+  networks, which do not run the circuit's start while selecting, installed it
+  and failed only in the shots, reporting that error instead of the first
+  candidate's. Selection also moves on when a candidate cannot run the start of
+  the circuit, as it does when one cannot allocate the register.
+- A run that throws leaves the network's simulator with the backend and
+  creation width it had. NetQASM and discrete-event networks kept the backend
+  selection had installed (a retry with automatic selection off then ran on
+  it), and a simple network kept a cleared register. A simulator the failed run
+  did not touch stays as it is, and an MPI distributed one is re-created only
+  when the run left none, since that is collective across ranks.
+- Seeded or exact-channel noise turns off the cost model on its execution
+  clones (`SetCostModelEnabled`) instead of pinning one backend, so a listed
+  candidate that fits (an MPO or MPS where a density matrix cannot) still
+  runs.
+- Noisy fidelity tests candidates on the register it evaluates: a terminal
+  measurement on an otherwise unused qubit no longer rejects a listed density
+  matrix. Its backend probe no longer outlives the first realization.
+- Realization workers are sized for the largest register a candidate list
+  may need, for the crosstalk spectators injection adds, and on networks that
+  run on their whole layout. Noisy expectation values (`NoiseAdd` and
+  `EstimateNoisy`) also count the idle qubits an observable names, which the
+  host executor allocates.
+- A whole-network `Execute()` on a NetQASM or discrete-event network under
+  automatic selection starts from |0>, as on a simple network: only fixed
+  selection continues a prepared state.
+- Removing a network option keeps the settings made directly on its
+  simulator.
+- Distributed request metadata describes the placement of the register that
+  ran.
+
 ## [0.3.13] - 2026-11-05
 
 ### Added

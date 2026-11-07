@@ -20,6 +20,8 @@ void TestFusionPublicInterfaces();
 void TestPauliPropagatorDedupDefault();
 void TestAutomaticGpuMixedStateFallback();
 void TestFixedBackendShotReuse();
+void TestNetworkSimulatorPlaceholders();
+void TestCandidateWorkerBudget();
 void TestMixedStateExecution();
 void TestNativeExtensions(const j::object &capabilities);
 
@@ -510,11 +512,34 @@ void TestFusionMetadata()
           "backend");
 }
 
+// Without a cost model the first listed candidate whose register holds the
+// circuit as execution maps it runs: one active qubit of a 40-qubit
+// declaration fits a density matrix. The requested method never sizes the
+// register automatic selection prepares, so a requested MPO with a lone
+// density-matrix candidate runs too.
+void TestCandidateWidthRequests()
+{
+    auto request = Request("execute", 40, "x q[0]; measure q[0] -> c[0];");
+    auto &simulator = request["simulator"].as_object();
+    simulator["selection"] = "automatic";
+    simulator["candidates"] =
+        j::array{j::object{{"backend", "qcsim"}, {"method", "density_matrix"}}, j::object{{"backend", "qcsim"}, {"method", "matrix_product_operator"}}};
+    Check(Call(request).at("execution_metadata").at("method") == "density_matrix", "A candidate was tested at the declared width, not the mapped one");
+    simulator["method"] = "matrix_product_operator";
+    simulator["candidates"] = j::array{j::object{{"backend", "qcsim"}, {"method", "density_matrix"}}};
+    const auto lone = Call(request);
+    Check(lone.at("execution_metadata").at("method") == "density_matrix" && lone.at("counts").as_object().size() == 1,
+          "The requested MPO method sized a density-matrix candidate at the declared width");
+}
+
 int main()
 try
 {
     Check(maestro_request_c_header_test(), "C header/ABI ownership check failed");
     TestFixedBackendShotReuse();
+    TestNetworkSimulatorPlaceholders();
+    TestCandidateWidthRequests();
+    TestCandidateWorkerBudget();
     char *capabilities = MaestroGetCapabilitiesJson();
     Check(capabilities != nullptr, "Missing capabilities");
     auto caps = j::parse(capabilities).as_object();

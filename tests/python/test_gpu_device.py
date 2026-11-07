@@ -155,13 +155,9 @@ def test_one_qubit_tensor_estimates(backend, method, case):
         observables, expected = ["IIII"], [1.0]
     before = repr(config)
     result = circuit.estimate(observables, config)
-    expected_method = (
-        maestro.SimulationType.Statevector
-        if case != "identity"
-        and backend == maestro.SimulatorType.Gpu
-        and method == maestro.SimulationType.TensorNetwork
-        else method
-    )
+    # Every method keeps one-qubit groups; the GPU tensor network holds them in
+    # a two-qubit network itself.
+    expected_method = method
     assert result["expectation_values"] == pytest.approx(expected, abs=1e-5)
     assert result["qubits_after"] == (0 if case == "identity" else 1)
     assert result["clusters_count"] == (
@@ -178,7 +174,8 @@ def test_one_qubit_tensor_estimates(backend, method, case):
 
 
 @pytest.mark.parametrize("reverse", [False, True])
-def test_gpu_tensor_network_mixed_cluster_methods(reverse):
+def test_gpu_tensor_network_one_and_two_qubit_clusters(reverse):
+    """Clusters of one and of two qubits both run on the GPU tensor network."""
     if not maestro.is_gpu_available():
         pytest.skip("GPU plugin/device unavailable")
     circuit = maestro.circuits.QuantumCircuit()
@@ -187,7 +184,7 @@ def test_gpu_tensor_network_mixed_cluster_methods(reverse):
     circuit.cx(1, 2)
     observables = ["ZII", "IZZ"]
     expected = [-1.0, 1.0]
-    methods = [maestro.SimulationType.Statevector.value, maestro.SimulationType.TensorNetwork.value]
+    methods = [maestro.SimulationType.TensorNetwork.value] * 2
     if reverse:
         observables.reverse()
         expected.reverse()
@@ -225,8 +222,139 @@ def test_gpu_tensor_network_parity_reduced_to_one_qubit():
     result = circuit.estimate(observables, config)
     assert result["auto_reduced"]
     assert result["qubits_after"] == 1
-    assert result["cluster_methods"] == [maestro.SimulationType.Statevector.value]
+    assert result["cluster_methods"] == [maestro.SimulationType.TensorNetwork.value]
     assert result["expectation_values"] == pytest.approx(expected["expectation_values"], abs=1e-5)
+
+
+@pytest.mark.parametrize("fixed", [False, True])
+def test_gpu_tensor_network_one_qubit_registers(fixed):
+    """One-qubit registers run on the GPU tensor network itself.
+
+    cuTensorNet needs two qubits; the simulator holds a one-qubit register in a
+    two-qubit network. Before that, these returned no counts or wrong values
+    without an error.
+    """
+    if not maestro.is_gpu_available():
+        pytest.skip("GPU plugin/device unavailable")
+    tn = maestro.SimulationType.TensorNetwork
+    config = maestro.SimulatorConfig(
+        simulator_type=maestro.SimulatorType.Gpu, simulation_type=tn, gpu_device=0, fixed_backend=fixed,
+    )
+    cpu = maestro.SimulatorConfig()
+    # A one-qubit circuit, and a wider one whose execution maps a single qubit.
+    # rz keeps the outcomes deterministic without making the circuit Clifford.
+    one = maestro.circuits.QuantumCircuit()
+    one.x(0)
+    one.rz(0, 0.3)
+    one.measure([(0, 0)])
+    sparse = maestro.circuits.QuantumCircuit()
+    sparse.x(2)
+    sparse.rz(2, 0.3)
+    sparse.measure([(2, 0)])
+    for circuit in (one, sparse):
+        result = circuit.execute(config, 32)
+        assert result["counts"] == circuit.execute(cpu, 32)["counts"]
+        assert result["method"] == tn.value
+    # Disjoint one-qubit components are each sampled on the tensor network.
+    split = maestro.circuits.QuantumCircuit()
+    split.x(0)
+    split.rz(0, 0.3)
+    split.x(3)
+    split.rz(3, 0.5)
+    split.measure([(0, 0), (3, 1)])
+    reduced = maestro.SimulatorConfig(
+        simulator_type=maestro.SimulatorType.Gpu, simulation_type=tn, gpu_device=0, fixed_backend=fixed,
+        enable_sampling_reduction=True,
+    )
+    result = split.execute(reduced, 32)
+    assert result["sampling_components"] == 2 and result["largest_component_qubits"] == 1
+    assert result["counts"] == split.execute(cpu, 32)["counts"]
+    assert result["method"] == tn.value
+    # Estimates of a one-qubit register, which are no longer padded or moved.
+    rotated = maestro.circuits.QuantumCircuit()
+    rotated.ry(0, 0.7)
+    estimate = rotated.estimate(["Z", "X"], config)
+    assert estimate["expectation_values"] == pytest.approx([math.cos(0.7), math.sin(0.7)], abs=1e-5)
+    assert estimate["qubits_after"] == 1
+    assert set(estimate["cluster_methods"]) == {tn.value}
+
+
+def test_native_automatic_gpu_device():
+    """Automatic GPU selection checks and reports the device that ran, not the
+    network's CPU backend placeholder."""
+    if not maestro.is_gpu_available():
+        pytest.skip("GPU plugin/device unavailable")
+    import ctypes
+    import json
+    from pathlib import Path
+
+    lib = ctypes.CDLL(str(Path(maestro.__file__).parent / "libmaestro.so"))
+    lib.MaestroRunRequestJson.argtypes = [ctypes.c_char_p]
+    lib.MaestroRunRequestJson.restype = ctypes.c_void_p
+    lib.FreeResult.argtypes = [ctypes.c_void_p]
+    for options in ({"gpu_device": 0}, {}):
+        request = {
+            "schema_version": 2,
+            "operation": "execute",
+            "circuit": {
+                "format": "openqasm",
+                "num_qubits": 2,
+                "num_clbits": 2,
+                "source": "OPENQASM 2.0;\nqreg q[2]; creg c[2];\nx q[0]; measure q -> c;",
+            },
+            "simulator": {"backend": "gpu", "method": "statevector", "selection": "automatic", "options": options},
+            "execution": {"seed": 7, "shots": 8},
+        }
+        ptr = lib.MaestroRunRequestJson(json.dumps(request).encode())
+        assert ptr
+        try:
+            out = json.loads(ctypes.string_at(ptr))
+        finally:
+            lib.FreeResult(ptr)
+        assert out["ok"], out
+        metadata = out["execution_metadata"]
+        assert metadata["backend"] == "gpu" and metadata["gpu_device"] == 0, metadata
+        assert out["counts"] == {"10": 8}
+
+
+def test_native_distributed_metadata_describes_the_register_that_ran():
+    """Distributed placement metadata describes the executed register (the
+    three declared qubits), not the network's re-created simulator, which
+    also counts the host's entanglement qubit."""
+    if not maestro.is_gpu_available():
+        pytest.skip("GPU plugin/device unavailable")
+    import ctypes
+    import json
+    from pathlib import Path
+
+    lib = ctypes.CDLL(str(Path(maestro.__file__).parent / "libmaestro.so"))
+    lib.MaestroRunRequestJson.argtypes = [ctypes.c_char_p]
+    lib.MaestroRunRequestJson.restype = ctypes.c_void_p
+    lib.FreeResult.argtypes = [ctypes.c_void_p]
+    request = {
+        "schema_version": 2,
+        "operation": "execute",
+        "circuit": {
+            "format": "openqasm",
+            "num_qubits": 3,
+            "num_clbits": 3,
+            "source": "OPENQASM 2.0;\nqreg q[3]; creg c[3];\nx q[0]; measure q -> c;",
+        },
+        "simulator": {"backend": "distributed_gpu", "method": "statevector", "selection": "fixed"},
+        "execution": {"seed": 7, "shots": 8},
+    }
+    ptr = lib.MaestroRunRequestJson(json.dumps(request).encode())
+    assert ptr
+    try:
+        out = json.loads(ctypes.string_at(ptr))
+    finally:
+        lib.FreeResult(ptr)
+    if not out["ok"] and out["error"]["code"] == "backend_unavailable":
+        pytest.skip(out["error"]["message"])
+    assert out["ok"], out
+    assert out["counts"] == {"100": 8}
+    layout = out["execution_metadata"]["distribution"]["distributed_qubit_layout"]
+    assert len(layout.split(",")) == 3, layout
 
 
 def test_json_gpu_placement():

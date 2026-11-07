@@ -121,13 +121,6 @@ print(result["qubits_after"], result["clusters_count"])
 % ["XXII", "IIXX"] on two identical Bell pairs (h/cx on both). Explain how
 % diagonal observables and identical groups are counted, then document it here.
 
-:::{admonition} Requires GPU access
-:class: note
-GPU TensorNetwork estimates whose effective register is a single qubit run on
-the GPU Statevector of the same device instead, because cuTensorNet's MPS
-factorization needs at least two qubits. See {doc}`/getting-started/gpu-access`.
-:::
-
 (py_circuits_cluster_budget)=
 ### Bounding group size
 

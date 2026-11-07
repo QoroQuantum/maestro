@@ -69,8 +69,10 @@ MAESTRO_TRANSFORM_API EstimationResult EstimateCircuit(const std::shared_ptr<Cir
 
 // Adapt an already-configured native network without changing its configuration.
 // Multi-host distributed execution retains its existing placement contract.
+// executed, when given, reports whether the network ran: planning may resolve
+// every observable (identities, zero factors) without it.
 MAESTRO_TRANSFORM_API std::vector<double> EstimateOnNetwork(const std::shared_ptr<Circuits::Circuit<double>> &circuit,
                                                             const std::vector<std::string> &observables,
                                                             const std::shared_ptr<Network::INetwork<double>> &network, std::optional<size_t> host,
-                                                            bool auto_reduce = false, EstimationCache *cache = nullptr);
+                                                            bool auto_reduce = false, EstimationCache *cache = nullptr, bool *executed = nullptr);
 } // namespace MaestroExecution

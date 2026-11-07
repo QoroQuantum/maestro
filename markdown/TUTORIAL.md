@@ -132,6 +132,57 @@ RemoveAllOptimizationSimulatorsAndAdd(
 );
 ```
 
+### The network's simulator (C++)
+
+`INetwork::CreateSimulator(type, method, nrQubits)` creates a backend template,
+not the register a simple network's execution runs on:
+
+- Its type and method select the backend. With `SetOptimizeSimulator(false)`
+  they are the only record of the fixed backend. Automatic selection starts
+  from them when they are a configured candidate, and never runs them outside a
+  configured candidate list (`GetOptimizationCandidates`).
+- It carries the simulator configuration. Settings made on it directly reach
+  executions and clones too; call `CaptureSimulatorSettings()` before you
+  re-create it yourself, or they go with the old simulator.
+- Its presence says that simulation is wanted. A network without one does not
+  simulate (a NetQASM network may only translate the circuit), and executing
+  it does not create one.
+
+`Execute*`, `RepeatedExecute*` and their `OnHost` variants on a simple network
+size their own register for the circuit they map (the qubits it uses, usually
+fewer than the default width, which counts each host's entanglement qubit).
+They clear, replace or re-create the network's simulator when automatic
+selection is on, several shot workers or trajectory blocks run, or the widths
+differ. NetQASM and discrete-event networks run their shots on the network's
+simulator itself, resized to the whole network's layout.
+
+Use the network's simulator as a register only when you allocate exactly the
+width you need and operate on `GetSimulator()` yourself, or when a
+whole-network `Execute()` continues a state you prepared on it with
+`SetOptimizeSimulator(false)` at the default width. Automatic selection may
+prepare a fresh register even for the same backend (it does whenever a
+configured candidate list or a cost model chooses), so only fixed selection
+guarantees continuity. With automatic selection on, a Clifford circuit may
+also move to a stabilizer backend the candidate list admits (for the default
+list, QCSim's or Aer's), with or without a cost model or a seed; list no
+stabilizer to keep it elsewhere. `ExecuteOnHost()` and repeated shots always
+start from |0>. Do not keep a `GetSimulator()` pointer
+across network calls: the network may install another simulator, and the
+pointer keeps the old register allocated. After a run, `GetLastSimulatorType()`,
+`GetLastSimulationType()`, `GetLastGpuDevice()` and `WasGateFusionEnabled()`
+describe the backend that ran. `NoiseAdd` runs on clones and reports its own
+runs through `last_execution()`.
+
+Otherwise, either keep the default simulator (a QCSim MPS of bond dimension 1,
+cheap at any width) and pick the backend with
+`RemoveAllOptimizationSimulatorsAndAdd`, or create the backend with
+`INetwork<>::kBackendPlaceholderQubits` qubits. A dense backend (statevector,
+density matrix, GPU) created at the default width allocates the whole network
+plus the entanglement qubit (2x a statevector, 4x a density matrix), only to be
+discarded. Re-creation after an execution, `Clone()` and
+`RemoveConfiguration()` keep the width the simulator was created with
+(`GetSimulatorQubits()`).
+
 ---
 
 ## Python SDK

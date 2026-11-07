@@ -72,8 +72,13 @@ ideal execute/estimate. Results identify the backend/method actually used, which
 is always one of the listed candidates: without a cost model the first listed
 candidate that can hold the register runs (a 40-qubit density matrix yields to a
 listed MPO), and Clifford circuits move to a stabilizer only as a listed
-backend/method pair. When no listed candidate can be created, the request fails
-instead of running an unlisted backend; this includes a one-entry list.
+backend/method pair. A listed stabilizer never runs a non-Clifford circuit. When
+no listed candidate can be created, the request fails instead of running an
+unlisted backend; this includes a one-entry list. When candidates can be created
+but none can run the circuit, the request fails with the first one's error: for
+a stabilizer asked to run a non-Clifford circuit that is `native_failure`, as
+when the stabilizer itself rejects the gate; for a register too large for a
+backend it is that backend's own error.
 
 Fixed selection preserves multi-shot reuse: eligible circuits evolve once per
 execution job and sample repeatedly. Circuits with intermediate measurements,

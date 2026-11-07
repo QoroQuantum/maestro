@@ -499,7 +499,9 @@ void ThresholdCadenceParity()
                         if (cadence)
                             config.pp_gates_between_deduplications = cadence;
                     }
-                    auto network = ConfigureNetwork(owner.handle, config);
+                    // The gates below drive the simulator directly: ask for the
+                    // register, as network execution would size its own.
+                    auto network = ConfigureNetwork(owner.handle, config, 4);
                     Check(network && network->GetSimulator(), "create cadence parity simulator");
                     auto sim = network->GetSimulator();
                     Check(sim->GetConfiguration("pauli_propagator_steps_between_trims") == std::to_string(cadence ? cadence : 10),

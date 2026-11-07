@@ -342,25 +342,40 @@ struct Context
         handle = maestro->CreateSimpleSimulator(circuit.qubits, circuit.clbits);
         try
         {
-            // A single-host network reserves an internal entanglement qubit.
-            // Direct queries describe only the declared logical register; bulk
-            // readers and bit-vector queries must not include that unused ancilla.
-            // Allocate that register from the start: the ancilla would double a
-            // statevector and quadruple a density matrix, and might not fit.
-            const bool exactWidth = exactRegister || config.simulation_type == Simulators::SimulationType::kMatrixProductOperator;
+            // exactRegister: the caller drives the simulator itself. A single-host
+            // network reserves an internal entanglement qubit, which direct
+            // queries must not include; allocate exactly the declared register
+            // from the start (the ancilla would double a statevector and
+            // quadruple a density matrix, and might not fit). Otherwise the
+            // network executes on its own register and its simulator only
+            // selects the backend. A fixed bond-1 MPO costs nothing at full
+            // width, and single-worker execution then reuses it. Automatic
+            // selection prepares its own register, whatever the requested
+            // method: a candidate list may not even hold the declared width.
+            const bool exactWidth =
+                exactRegister || (config.fixed_backend && config.simulation_type == Simulators::SimulationType::kMatrixProductOperator);
             network = ConfigureNetwork(handle, config, exactWidth ? circuit.qubits : 0);
             if (!network || !network->GetSimulator())
                 throw Error("backend_unavailable", "Requested backend could not be created");
             // Automatic selection's placeholder may still differ; replace it.
+            // Copy its backend first: a pointer alive across the call would keep
+            // the old register allocated next to the new one.
             if (exactWidth && network->GetSimulator()->GetNumberOfQubits() != circuit.qubits)
-                network->CreateSimulator(network->GetSimulator()->GetType(), network->GetSimulator()->GetSimulationType(), circuit.qubits);
+            {
+                const auto type = network->GetSimulator()->GetType();
+                const auto method = network->GetSimulator()->GetSimulationType();
+                network->CreateSimulator(type, method, circuit.qubits);
+            }
             if (config.fixed_backend &&
                 (network->GetSimulator()->GetType() != config.simulator_type || network->GetSimulator()->GetSimulationType() != config.simulation_type))
                 throw Error("backend_unavailable", "Requested fixed backend/method is unavailable; fallback "
                                                    "is disabled");
             // Distributed placement is validated during backend initialization;
             // MPI and multi-device states report -1 instead of one GPU ordinal.
-            if (!Simulators::IsDistributedGpuSimulator(config.simulator_type) && config.native_options.count("gpu_device") &&
+            // Only a fixed backend runs on this simulator: automatic selection
+            // creates its GPU backend on the configured device itself (or fails),
+            // and Metadata checks the device that ran.
+            if (config.fixed_backend && !Simulators::IsDistributedGpuSimulator(config.simulator_type) && config.native_options.count("gpu_device") &&
                 network->GetSimulator()->GetGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
                 throw Error("backend_unavailable", "Requested GPU device was not selected");
         }
@@ -596,14 +611,30 @@ json::object Metadata(Context &context, const SimulatorConfig &config, bool exec
                                          {"enabled", executed ? context.network->WasGateFusionEnabled() : simulator->IsGateFusionEnabled()},
                                          {"max_qubits", executed ? context.network->GetLastGateFusionMaxQubits() : simulator->GetGateFusionMaxQubits()}};
     result["configured_options"] = std::move(options);
-    if (Simulators::IsGpuSimulator(simulator->GetType()))
+    // After an execution the simulator is the restored backend placeholder,
+    // which may not even be a GPU one: report the device that ran.
+    if (executed)
+    {
+        const auto ran = context.network->GetLastSimulatorType();
+        const int device = context.network->GetLastGpuDevice();
+        if (ran == Simulators::SimulatorType::kGpuSim && config.native_options.count("gpu_device") &&
+            device != std::stoi(config.native_options.at("gpu_device")))
+            throw Error("backend_unavailable", "Requested GPU device was not selected");
+        if (Simulators::IsGpuSimulator(ran))
+            result["gpu_device"] = device;
+    }
+    else if (Simulators::IsGpuSimulator(simulator->GetType()))
         result["gpu_device"] = simulator->GetGpuDevice();
     if (Simulators::IsDistributedGpuSimulator(simulator->GetType()))
     {
         json::object placement;
-        for (const char *key :
-             {"distributed_shard_devices", "distributed_configured_global_qubits", "distributed_qubit_layout", "distributed_backend", "precision"})
-            placement[key] = simulator->GetConfiguration(key);
+        for (const char *key : Network::INetwork<double>::kDistributedPlacementKeys)
+        {
+            // After an execution, where the register that ran was placed: the
+            // network's re-created simulator may have another width.
+            const auto executedValue = executed ? context.network->GetLastDistributedPlacement(key) : std::optional<std::string>();
+            placement[key] = executedValue ? *executedValue : simulator->GetConfiguration(key);
+        }
         result["distribution"] = std::move(placement);
     }
     return result;
@@ -1490,14 +1521,21 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
         return result;
     }
-    // Mixed-state queries compare whole registers, so no network ancilla may be
-    // added. Checkpoints save and restore the register on every shot, so an
-    // unused ancilla would double statevector and quadruple density-matrix work.
-    Context context(input, config, query || MixedStateQuery(operation) || operation == "checkpoint_batch" || operation == "noisy_fidelity");
+    // Only execute and estimate run on the network, which allocates its own
+    // register; the network simulator is then just a backend placeholder.
+    // Every other operation drives the simulator directly and needs exactly the
+    // declared register: mixed-state queries compare whole registers, and the
+    // network's entanglement ancilla would double statevector and quadruple
+    // density-matrix work (checkpoints, overlaps, mirrors, evolution).
+    const bool networkExecuted = operation == "execute" || operation == "estimate";
+    Context context(input, config, !networkExecuted);
     // Execution metadata describes the network that ran last (parallel execute).
     Context *metadata_context = &context;
     std::vector<std::unique_ptr<Context>> metadata_contexts;
-    auto simulator = context.simulator();
+    // Only direct operations drive the simulator. Holding it through network
+    // executions would keep the register the first realization grew alive
+    // after the network installs its placeholder again.
+    auto simulator = networkExecuted ? nullptr : context.simulator();
     // Validation remains silent; warn once per execution, not per realization.
     if (!noise.thermal_approximation_warning.empty())
         std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
@@ -1517,10 +1555,15 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         // without changing seeded counts. Realizations with several shots keep
         // the shared network: their inner shot workers set seeded partitions.
         size_t workers = 1;
-        if (realizations > 1 && realizations == shots && config.simulator_type == Simulators::SimulatorType::kQCSim)
-            if (const long double bytes = RealizationBytes(config, input.qubits + 1); bytes > 0)
+        if (realizations > 1 && realizations == shots && RunsOnlyQCSim(config))
+        {
+            // Each worker's network maps the circuit to its own register (at most
+            // the declared qubits; the network's ancilla is never allocated),
+            // for whichever backend selection runs.
+            if (const long double bytes = MaxRealizationBytes(config, input.qubits); bytes > 0)
                 workers = Utils::LimitRealizationWorkersByMemory(Utils::RealizationWorkerCount(realizations, config.max_simulators.value_or(0)),
                                                                  static_cast<size_t>(bytes), RealizationBudgetMB(config), 1, 2);
+        }
         if (workers <= 1)
             for (size_t r = 0; r < realizations; ++r)
             {

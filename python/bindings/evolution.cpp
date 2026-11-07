@@ -27,7 +27,18 @@ nb::dict incremental_evolve_core(std::shared_ptr<Circuits::Circuit<double>> init
     for (const auto &p : paulis)
         num_qubits = std::max(num_qubits, (int)p.length());
 
-    ScopedSimulator sim(num_qubits);
+    // Evolution drives the simulator itself: resolve the one backend it runs
+    // and allocate exactly its register, without the network's entanglement
+    // qubit. That is the requested pair, or the first listed candidate whose
+    // register fits (automatic selection without candidates allows only the
+    // requested pair). Probing several candidates already configured the
+    // winner's network, register included: adopt it rather than allocate the
+    // register again.
+    const size_t register_qubits = static_cast<size_t>(num_qubits);
+    unsigned long int probed = 0;
+    auto resolved = ResolveCandidateBackend(config, register_qubits, probed);
+    resolved.fixed_backend = true;
+    ScopedSimulator sim(num_qubits, probed);
     if (sim.handle == 0)
         throw std::runtime_error("incremental_evolve: failed to create simulator handle.");
 
@@ -41,14 +52,9 @@ nb::dict incremental_evolve_core(std::shared_ptr<Circuits::Circuit<double>> init
     nb::list bond_dim_evolution;
     nb::list times_per_step;
 
-    auto network = ConfigureNetwork(sim.handle, config);
+    auto network = probed ? static_cast<Maestro *>(GetMaestroObject())->GetSimpleSimulator(sim.handle) : ConfigureNetwork(sim.handle, resolved, register_qubits);
     if (!network)
         throw std::runtime_error("incremental_evolve: failed to configure network.");
-
-    // Simulator and simulation types need to be set explicitely.
-    // ConfigureNetwork returns a dummy QCSim MPS simulator, backend must be set
-    // after Network at runtime
-    network->CreateSimulator(config.simulator_type, config.simulation_type);
     auto simulator = network->GetSimulator();
     if (!simulator)
         throw std::runtime_error("incremental_evolve: requested simulator/simulation type is not "
@@ -113,8 +119,9 @@ nb::dict incremental_evolve_core(std::shared_ptr<Circuits::Circuit<double>> init
     py_result["steps"] = steps_measured;
     py_result["time_taken"] = std::chrono::duration<double>(end - start).count();
     py_result["time_per_step"] = times_per_step;
-    py_result["simulator"] = config.simulator_type;
-    py_result["method"] = config.simulation_type;
+    // The backend evolution drove, which a candidate list may have chosen.
+    py_result["simulator"] = simulator->GetType();
+    py_result["method"] = simulator->GetSimulationType();
     if (network->GetGpuDevice() >= 0)
         py_result["gpu_device"] = network->GetGpuDevice();
 

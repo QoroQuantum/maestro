@@ -26,7 +26,7 @@ void CausalConeTransform::Apply(TransformContext &ctx)
     auto &circuit = ctx.circuit;
     auto &paulis = ctx.observables;
     const auto &operations = circuit->GetOperations();
-    if (!CanTraceCone(circuit, paulis, HasEnsembleState(ctx.config.simulation_type), ctx.config.allow_reset_marginalization))
+    if (!CanTraceCone(circuit, paulis, HasEnsembleState(ctx.config), ctx.config.allow_reset_marginalization))
         return;
 
     size_t width = circuit->GetMaxQubitIndex() + 1;
@@ -58,7 +58,7 @@ void CausalConeTransform::Apply(TransformContext &ctx)
         const auto qubits = op->AffectedQubits();
         if (!std::any_of(qubits.begin(), qubits.end(), [&](size_t q) { return (x[q] | z[q]) != 0; }))
             continue;
-        if (!TracePauliOperation(op, x, z, HasEnsembleState(ctx.config.simulation_type) || ctx.config.allow_reset_marginalization))
+        if (!TracePauliOperation(op, x, z, HasEnsembleState(ctx.config) || ctx.config.allow_reset_marginalization))
             continue;
         retained.push_back(op);
         for (auto q : qubits)

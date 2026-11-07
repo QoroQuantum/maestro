@@ -4985,6 +4985,26 @@ class TestCorrelatedNoiseExecution:
         assert 0.0 <= result['fidelity'] <= 1.0
         assert abs(result['fidelity'] + result['infidelity'] - 1.0) < 1e-12
 
+    def test_noisy_fidelity_candidates_ignore_terminal_measurements(self):
+        """Candidates are tested on the register fidelity evaluates: a terminal
+        measurement on q39 is dropped, so the listed density matrix holds the
+        circuit and applies the bit flip exactly."""
+        from maestro.circuits import QuantumCircuit
+
+        nm = maestro.NoiseModel()
+        nm.set_bit_flip(0, 0.25)
+        types, methods = maestro.SimulatorType, maestro.SimulationType
+        config = maestro.SimulatorConfig(
+            fixed_backend=False,
+            optimization_candidates=[(types.QCSim, methods.DensityMatrix), (types.QCSim, methods.MatrixProductState)],
+        )
+        for measured in (1, 39):
+            qc = QuantumCircuit()
+            qc.x(0)
+            qc.measure([(measured, 0)])
+            result = maestro.noisy_fidelity(qc, nm, noise_realizations=1, config=config, noise_seed=7)
+            assert result["fidelity"] == pytest.approx(0.75)
+
     def test_noisy_fidelity_no_noise_raises(self):
         """Should raise if no noise is configured at all."""
         from maestro.circuits import QuantumCircuit
@@ -5190,6 +5210,29 @@ class TestCorrelatedNoisePhysics:
 
 class TestIncrementalEvolve:
     """Test the incremental_evolve function for time evolution."""
+
+    def test_candidate_list_selects_the_driven_backend(self):
+        """Evolution drives the backend a candidate list resolves to, not the
+        requested pair, and reports it: a bond-1 MPS cannot hold a Bell pair."""
+        from maestro.circuits import QuantumCircuit
+
+        init = QuantumCircuit()
+        init.h(0)
+        init.cx(0, 1)
+        step = QuantumCircuit()
+        step.rz(0, 0.0)
+        types, methods = maestro.SimulatorType, maestro.SimulationType
+        for requested in (methods.MatrixProductState, methods.DensityMatrix):
+            config = maestro.SimulatorConfig(
+                simulator_type=types.QCSim,
+                simulation_type=requested,
+                max_bond_dimension=1,
+                fixed_backend=False,
+                optimization_candidates=[(types.QCSim, methods.DensityMatrix)],
+            )
+            result = maestro.incremental_evolve(init, step, [1], ["XX"], config)
+            assert result["method"] == methods.DensityMatrix
+            assert result["expectation_values"][0][0] == pytest.approx(1.0)
 
     def test_function_exists(self):
         """Test that incremental_evolve is exposed in the module."""

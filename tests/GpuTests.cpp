@@ -252,6 +252,48 @@ BOOST_DATA_TEST_CASE(random_circuits_test, numGates, nGates)
     }
 }
 
+// cuTensorNet cannot factor a one-qubit network, so the simulator holds a
+// one-qubit register in a two-qubit network. Every query must still describe
+// the one requested qubit; on a one-qubit network they returned wrong values
+// without an error.
+BOOST_AUTO_TEST_CASE(one_qubit_tensor_network)
+{
+    if (!Simulators::SimulatorsFactory::InitGpuLibrary())
+    {
+        BOOST_TEST_MESSAGE("GPU library unavailable");
+        return;
+    }
+    auto sim = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kGpuSim, Simulators::SimulationType::kTensorNetwork);
+    if (!sim)
+        return;
+    sim->AllocateQubits(1);
+    sim->Initialize();
+    BOOST_TEST(sim->GetNumberOfQubits() == 1U);
+
+    sim->ApplyX(0);
+    BOOST_CHECK_CLOSE(sim->ExpectationValue("Z"), -1.0, 1e-3);
+    BOOST_CHECK_SMALL(sim->Probability(0), 1e-5);
+    BOOST_CHECK_CLOSE(sim->Probability(1), 1.0, 1e-3);
+    const auto probabilities = sim->AllProbabilities();
+    BOOST_TEST(probabilities.size() == 2U);
+    BOOST_CHECK_CLOSE(probabilities[1], 1.0, 1e-3);
+    const auto counts = sim->SampleCounts({0}, 64);
+    BOOST_TEST(counts.size() == 1U);
+    BOOST_TEST(counts.begin()->first == 1U);
+    BOOST_TEST(counts.begin()->second == 64U);
+    BOOST_TEST((sim->MeasureNoCollapseMany() == std::vector<bool>{true}));
+
+    sim->ApplyH(0); // |->
+    BOOST_CHECK_CLOSE(sim->ExpectationValue("X"), -1.0, 1e-3);
+    BOOST_CHECK_SMALL(sim->ExpectationValue("Z"), 1e-5);
+    sim->ApplyH(0);
+    BOOST_TEST(sim->Measure({0}) == 1U);
+
+    sim->Reset();
+    BOOST_CHECK_CLOSE(sim->ExpectationValue("Z"), 1.0, 1e-3);
+    BOOST_CHECK_CLOSE(std::abs(sim->ProjectOnZero()), 1.0, 1e-3);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 #endif

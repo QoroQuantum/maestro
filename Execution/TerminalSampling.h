@@ -123,7 +123,7 @@ inline constexpr size_t kHeadCopyRetainedStates = 4;
 
 inline bool HeadCopyFits(const SimulatorConfig &config, size_t qubits)
 {
-    const long double bytes = RealizationBytes(config, qubits);
+    const long double bytes = MaxRealizationBytes(config, qubits);
     const size_t budget = RealizationBudgetMB(config);
     return bytes > 0 && budget <= (std::numeric_limits<size_t>::max() >> 20) && kHeadCopyRetainedStates * bytes <= static_cast<long double>(budget << 20);
 }

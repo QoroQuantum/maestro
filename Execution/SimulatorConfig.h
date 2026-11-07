@@ -275,6 +275,55 @@ inline bool HasCandidateList(const SimulatorConfig &config)
     return !config.fixed_backend && !config.optimization_candidates.empty();
 }
 
+// The register bytes of the most demanding backend a request may run: a
+// candidate list replaces the requested pair, and selection may run any of
+// its entries. 0 when one of them has no known bound (an MPS without a bond
+// cap), so that callers keep a single worker.
+inline long double MaxRealizationBytes(const SimulatorConfig &config, size_t qubits)
+{
+    if (!HasCandidateList(config))
+        return RealizationBytes(config, qubits);
+    long double largest = 0;
+    for (const auto &[type, method] : config.optimization_candidates)
+    {
+        auto candidate = config;
+        candidate.simulator_type = type;
+        candidate.simulation_type = method;
+        candidate.fixed_backend = true;
+        candidate.optimization_candidates.clear();
+        const long double bytes = RealizationBytes(candidate, qubits);
+        if (!(bytes > 0))
+            return 0;
+        largest = std::max(largest, bytes);
+    }
+    return largest;
+}
+
+// Whether every backend a request may run is a QCSim one (realization workers
+// rely on its thread budget).
+inline bool RunsOnlyQCSim(const SimulatorConfig &config)
+{
+    if (!HasCandidateList(config))
+        return config.simulator_type == Simulators::SimulatorType::kQCSim;
+    return std::all_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
+                       [](const auto &candidate) { return candidate.first == Simulators::SimulatorType::kQCSim; });
+}
+
+// Whether every backend a request may run evolves an ensemble (a density
+// matrix or MPO), so planning may treat resets and channels outside the
+// observable support as maps that cancel. A candidate list replaces the
+// requested pair, and selection may run any of its entries.
+inline bool HasEnsembleState(const SimulatorConfig &config)
+{
+    const auto ensemble = [](Simulators::SimulationType method) {
+        return method == Simulators::SimulationType::kDensityMatrix || method == Simulators::SimulationType::kMatrixProductOperator;
+    };
+    if (HasCandidateList(config))
+        return std::all_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
+                           [&](const auto &candidate) { return ensemble(candidate.second); });
+    return ensemble(config.simulation_type);
+}
+
 inline bool CandidateListAdmitsStabilizer(const SimulatorConfig &config)
 {
     for (const auto &[type, method] : config.optimization_candidates)
@@ -339,9 +388,18 @@ inline std::vector<std::pair<std::string, std::string>> TypedNativeOptions(const
     return options;
 }
 
-// Helper to configure the simulation network. A nonzero allocationQubits sizes a
-// fixed CPU backend to exactly that register; zero keeps the network default,
-// which also allocates each host's network-entangled qubit.
+// Helper to configure the simulation network. The network's simulator selects
+// the backend; network execution allocates its own register (see
+// INetwork::CreateSimulator). allocationQubits says how it is used:
+//  - 0: the network executes. A fixed backend or a candidate gets a placeholder
+//    of INetwork::kBackendPlaceholderQubits qubits, never a dense register of
+//    the whole network that execution would discard. Distribution keeps the
+//    whole network's register, on which it executes.
+//  - nonzero: the caller operates on GetSimulator() itself. A fixed backend,
+//    a distributed one or the first fitting candidate gets exactly that
+//    register.
+// Automatic selection without candidates keeps the cheap default placeholder
+// either way; a caller that needs a register replaces it.
 inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long int handle, const SimulatorConfig &config, size_t allocationQubits = 0)
 {
     config.Validate();
@@ -509,27 +567,42 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
         network->Configure("path_integral_threshold", val.c_str());
     }
 
+    // A backend placeholder: the network executes on a register of its own.
+    const size_t placeholderQubits = Network::INetwork<double>::kBackendPlaceholderQubits;
+
     // Distribution must be selected before circuit mapping: its configured
     // register and MPI control flow must not depend on the CPU optimizer.
-    if (config.fixed_backend || Simulators::IsDistributedGpuSimulator(config.simulator_type))
-        network->CreateSimulator(config.simulator_type, config.simulation_type,
-                                 Simulators::IsDistributedGpuSimulator(config.simulator_type) ? 0 : allocationQubits);
+    // Network execution runs on the whole network's register; a caller that
+    // operates on the simulator itself gets exactly its own register.
+    if (Simulators::IsDistributedGpuSimulator(config.simulator_type))
+        network->CreateSimulator(config.simulator_type, config.simulation_type, allocationQubits);
+    else if (config.fixed_backend)
+        // The simulator records the fixed backend; it still validates that the
+        // backend (and its GPU device) can be created.
+        network->CreateSimulator(config.simulator_type, config.simulation_type, allocationQubits ? allocationQubits : placeholderQubits);
     else if (HasCandidateList(config))
     {
         // An explicit candidate list names every backend the request allows,
-        // one or several. Without a cost model, selection starts from the
-        // network's simulator when it is one of them: allocate the first listed
-        // candidate whose register fits (a density matrix of 40 qubits yields
-        // to a listed MPO). When none can be created, report that instead of
-        // running a placeholder outside the list. (Without a list, a GPU
-        // mixed-state request below keeps its CPU fallback.)
+        // one or several, in order. Network execution selects among them on
+        // the register it maps (INetwork::GetOptimizationCandidates): the
+        // first listed candidate whose register fits, starting from the
+        // network's simulator. So it only needs a placeholder of the first
+        // listed candidate that can be constructed; probing the declared width
+        // would reject a density matrix that holds the qubits a circuit uses.
+        // A caller that operates on the simulator itself (allocationQubits)
+        // gets the first listed candidate whose register of that width can be
+        // allocated (a density matrix of 40 qubits yields to a listed MPO).
+        // When none can be created, report that instead of running a
+        // placeholder outside the list. (Without a list, a GPU mixed-state
+        // request below keeps its CPU fallback.)
+        const size_t width = allocationQubits ? allocationQubits : placeholderQubits;
         bool created = false;
         std::exception_ptr failure;
         for (const auto &[type, method] : config.optimization_candidates)
         {
             try
             {
-                network->CreateSimulator(type, method, allocationQubits);
+                network->CreateSimulator(type, method, width);
             }
             catch (const std::exception &)
             {
@@ -569,9 +642,14 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
 // the requested pair, the sole candidate of an automatic list, or the first
 // listed candidate whose register of `qubits` qubits can be allocated, as
 // ConfigureNetwork chooses. The result is fixed to that backend. Several
-// candidates are probed by allocating them in turn.
-inline SimulatorConfig ResolveCandidateBackend(const SimulatorConfig &config, size_t qubits)
+// candidates are probed by allocating them in turn, each on a network of its
+// own: `probed` receives the handle of the one that held the register,
+// configured with the result and allocationQubits = max(1, qubits), or 0 when
+// nothing was probed. The caller owns it, and should adopt it rather than
+// allocate that register a second time.
+inline SimulatorConfig ResolveCandidateBackend(const SimulatorConfig &config, size_t qubits, unsigned long &probed)
 {
+    probed = 0;
     if (!HasCandidateList(config))
         return config;
     auto resolved = config;
@@ -604,12 +682,25 @@ inline SimulatorConfig ResolveCandidateBackend(const SimulatorConfig &config, si
         {
             failure = std::current_exception();
         }
-        DestroySimpleSimulator(handle);
         if (usable)
+        {
+            probed = handle;
             return resolved;
+        }
+        DestroySimpleSimulator(handle);
     }
     if (failure)
         std::rethrow_exception(failure);
     throw std::runtime_error("No optimization candidate can hold the register");
+}
+
+// The same, for callers whose registers differ from the probed one.
+inline SimulatorConfig ResolveCandidateBackend(const SimulatorConfig &config, size_t qubits)
+{
+    unsigned long probed = 0;
+    auto resolved = ResolveCandidateBackend(config, qubits, probed);
+    if (probed)
+        DestroySimpleSimulator(probed);
+    return resolved;
 }
 } // namespace MaestroExecution

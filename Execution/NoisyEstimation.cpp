@@ -3,6 +3,7 @@
 #include "../Utils/Threads/RealizationWorkers.h"
 #include "CircuitHelpers.h"
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <stdexcept>
@@ -61,7 +62,11 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     };
 
     std::vector<Realization> realizations(noise_realizations);
-    const size_t qubits = std::max({size_t{1}, clean->GetMaxQubitIndex() + 1, plan.RegisterWidth()});
+    // Each realization's register also holds the idle qubits its observables
+    // name: the host executor keeps every position of a Pauli string.
+    size_t qubits = std::max({size_t{1}, clean->GetMaxQubitIndex() + 1, plan.RegisterWidth()});
+    for (const auto &observable : observables)
+        qubits = std::max(qubits, observable.size());
     const size_t workers = SamplingWorkers(config, noise_realizations, qubits);
     // A cache serves one thread (EstimationCache).
     std::vector<EstimationCache> caches(workers);
@@ -157,7 +162,29 @@ NoisyEstimate EstimateNoisy(const RecordCircuitPtr &circuit, const std::vector<s
     return out;
 }
 
-double RealizationFidelity(const RecordCircuitPtr &ideal, const RecordCircuitPtr &noisy, const SimulatorConfig &config)
+namespace
+{
+// A configured handle a realization takes over instead of allocating its
+// register again: the backend probe of a candidate list. The first realization
+// to run takes it, so it never outlives that realization: one of another
+// width replaces its register (freeing the probe's) before allocating.
+struct SpareRegister
+{
+    std::atomic<unsigned long> handle{0};
+
+    unsigned long Take()
+    {
+        return handle.exchange(0);
+    }
+
+    ~SpareRegister()
+    {
+        if (const auto left = handle.exchange(0))
+            DestroySimpleSimulator(left);
+    }
+};
+
+double RealizationFidelityOn(const RecordCircuitPtr &ideal, const RecordCircuitPtr &noisy, const SimulatorConfig &config, SpareRegister *spare)
 {
     auto combined = std::make_shared<Circuits::Circuit<double>>();
     // Fidelity is evaluated before terminal readout, as in inner_product.
@@ -173,6 +200,9 @@ double RealizationFidelity(const RecordCircuitPtr &ideal, const RecordCircuitPtr
 
     const int num_qubits = std::max(1, static_cast<int>(combined->GetMaxQubitIndex()) + 1);
     GetMaestroObjectWithMute();
+    // The spare was configured for this backend; the seed below replaces the
+    // probe's, and a width mismatch replaces its register.
+    const unsigned long adopted = spare ? spare->Take() : 0;
 
     struct Handle
     {
@@ -183,24 +213,26 @@ double RealizationFidelity(const RecordCircuitPtr &ideal, const RecordCircuitPtr
             if (value)
                 DestroySimpleSimulator(value);
         }
-    } handle{CreateSimpleSimulator(num_qubits)};
+    } handle{adopted ? adopted : CreateSimpleSimulator(num_qubits)};
 
     if (!handle.value)
         throw std::runtime_error("Failed to create simulator handle.");
     // Exactly the circuit's register: the default allocation also adds the
     // host's network-entangled qubit (2x statevector, 4x density-matrix work).
     const size_t register_qubits = static_cast<size_t>(num_qubits);
-    auto network = ConfigureNetwork(handle.value, config, register_qubits);
+    auto network = adopted ? static_cast<Maestro *>(GetMaestroObject())->GetSimpleSimulator(handle.value)
+                           : ConfigureNetwork(handle.value, config, register_qubits);
     if (!network)
         throw std::runtime_error("Failed to configure network.");
     auto simulator = network->GetSimulator();
     // A fixed backend was already created at this width; replace only an
-    // automatic-selection placeholder (or another width).
+    // automatic-selection placeholder (or another width), releasing it first
+    // so that the two registers never coexist.
     if (!simulator || simulator->GetType() != config.simulator_type || simulator->GetSimulationType() != config.simulation_type ||
-        (!Simulators::IsDistributedGpuSimulator(config.simulator_type) && simulator->GetNumberOfQubits() != register_qubits))
+        simulator->GetNumberOfQubits() != register_qubits)
     {
-        network->CreateSimulator(config.simulator_type, config.simulation_type,
-                                 Simulators::IsDistributedGpuSimulator(config.simulator_type) ? 0 : register_qubits);
+        simulator.reset();
+        network->CreateSimulator(config.simulator_type, config.simulation_type, register_qubits);
         simulator = network->GetSimulator();
     }
     if (!simulator)
@@ -210,6 +242,12 @@ double RealizationFidelity(const RecordCircuitPtr &ideal, const RecordCircuitPtr
     Circuits::OperationState state(num_qubits);
     combined->ExecuteBD(simulator, state);
     return simulator->Probability(0);
+}
+} // namespace
+
+double RealizationFidelity(const RecordCircuitPtr &ideal, const RecordCircuitPtr &noisy, const SimulatorConfig &config)
+{
+    return RealizationFidelityOn(ideal, noisy, config, nullptr);
 }
 
 namespace
@@ -257,10 +295,20 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
                                     "on their qubit and classical control are unsupported.");
     const auto ideal = PreparedUnitary(WithoutCircuitChannels(circuit));
     const noise::NoiseInjectionPlan plan(circuit, noise_model);
-    const size_t qubits = std::max({size_t{1}, circuit->GetMaxQubitIndex() + 1, plan.RegisterWidth()});
+    // The register each realization evaluates: fidelity drops terminal
+    // readout, so a measured qubit no gate touches is not part of it, while a
+    // crosstalk spectator of the noise is (RealizationFidelity).
+    size_t qubits = std::max<size_t>(1, before_readout->GetMaxQubitIndex() + 1);
+    for (const auto spectator : plan.Spectators())
+        qubits = std::max(qubits, spectator + 1);
     // Each realization creates its simulator explicitly: policy, allocation and
-    // workers must all describe the one backend a candidate list resolves to.
-    const auto config = ResolveCandidateBackend(requested_config, qubits);
+    // workers must all describe the one backend a candidate list resolves to,
+    // tested on that register. Probing several candidates allocates the
+    // winner's register; the first realization takes it over.
+    SpareRegister spare;
+    unsigned long probed = 0;
+    const auto config = ResolveCandidateBackend(requested_config, qubits, probed);
+    spare.handle = probed;
     const auto policy = ResolveNoiseRealizations(requested_realizations, noise_model, config, NoiseLayer::kCombined, 100, circuit, true);
     const size_t noise_realizations = policy.realizations;
     auto rng = MakeNoiseRng(config, noise_seed);
@@ -286,7 +334,7 @@ NoisyFidelityResult NoisyFidelity(const RecordCircuitPtr &circuit, const noise::
                 realization_config.seed = rng();
             return Realization{std::move(noisy), std::move(realization_config)};
         },
-        [&](size_t, size_t r, Realization realization) { fidelities[r] = RealizationFidelity(ideal, realization.circuit, realization.config); });
+        [&](size_t, size_t r, Realization realization) { fidelities[r] = RealizationFidelityOn(ideal, realization.circuit, realization.config, &spare); });
 
     NoisyFidelityResult out;
     out.policy = policy;

@@ -5,6 +5,7 @@
 #include "../Noise/NoiseAdd.h"
 
 #include <array>
+#include <cmath>
 #include <atomic>
 #include <chrono>
 #include <iostream>
@@ -2069,6 +2070,619 @@ void ForkWithIdleWorkers()
 
 } // namespace
 
+// Bell pair preparation that is not a Clifford circuit (T and its adjoint keep
+// the state), so selection does not move it to a listed stabilizer.
+std::shared_ptr<Circuit> NonCliffordBell()
+{
+    auto bell = CF::CreateCircuit();
+    bell->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+    bell->AddOperation(CF::CreateGate(Gate::kCXGateType, 0, 1));
+    bell->AddOperation(CF::CreateGate(Gate::kTGateType, 0));
+    bell->AddOperation(CF::CreateGate(Gate::kTdgGateType, 0));
+    return bell;
+}
+
+void QuietNetwork(Net &network)
+{
+    network.GetController()->SetOptimizeCircuit(false);
+    network.SetInitialQubitsMapOptimization(false);
+    network.SetMPSOptimizeSwaps(false);
+    network.SetMaxSimulators(1);
+}
+
+void ConfiguredCandidatesDecide()
+{
+    using Pair = std::pair<Backend, Method>;
+    const std::vector<std::string> xx{"XX"};
+    {
+        // Without a cost model a configured list decides: a bond-1 MPS
+        // placeholder outside {statevector, stabilizer}, which cannot hold a
+        // Bell pair, must not execute it, not even through seeded noise.
+        auto network = std::make_shared<Net>(Types::qubits_vector{2}, std::vector<size_t>{2});
+        QuietNetwork(*network);
+        network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kStatevector);
+        network->AddOptimizationSimulator(Backend::kQCSim, Method::kStabilizer);
+        network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductState, Network::INetwork<>::kBackendPlaceholderQubits);
+        network->Configure("matrix_product_state_max_bond_dimension", "1");
+        network->SetOptimizeSimulator(true);
+        Check(network->GetOptimizationCandidates() == std::vector<Pair>{{Backend::kQCSim, Method::kStatevector}, {Backend::kQCSim, Method::kStabilizer}},
+              "The configured candidates lost their order");
+        noise::NoiseAdd add;
+        add.seed(17);
+        const auto noisy = add.noisy_estimate_montecarlo(NonCliffordBell(), network, 0, xx, noise::NoiseModel{}, 1);
+        Check(noisy.size() == 1 && std::abs(noisy[0] - 1) < 1e-9, "Seeded noise pinned a placeholder outside the candidate list");
+        Check(add.last_execution().valid && add.last_execution().method == Method::kStatevector, "The noise helper misreported the backend it ran");
+        const auto values = network->ExecuteOnHostExpectations(NonCliffordBell(), 0, xx);
+        Check(values.size() == 1 && std::abs(values[0] - 1) < 1e-9 && network->GetLastSimulationType() == Method::kStatevector,
+              "A placeholder outside the candidate list executed");
+    }
+    {
+        // The constructor's default list is no request: the simulator's backend runs.
+        auto network = std::make_shared<Net>(Types::qubits_vector{2}, std::vector<size_t>{2});
+        QuietNetwork(*network);
+        network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductOperator);
+        network->SetOptimizeSimulator(true);
+        Check(network->GetOptimizationCandidates().empty(), "The default candidate list counted as configured");
+        auto circuit = CF::CreateCircuit();
+        circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+        circuit->AddOperation(CF::CreateGate(Gate::kTGateType, 0));
+        circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+        const auto counts = network->RepeatedExecuteOnHost(circuit, 0, 16);
+        Check(counts.size() == 1 && counts.begin()->second == 16 && network->GetLastSimulationType() == Method::kMatrixProductOperator,
+              "The default candidate list replaced the network's backend");
+    }
+    {
+        // The first listed candidate whose register holds the circuit as
+        // execution maps it: a density matrix for one active qubit of a
+        // 40-qubit host, the listed MPO for all 40.
+        auto network = std::make_shared<Net>(Types::qubits_vector{40}, std::vector<size_t>{40});
+        QuietNetwork(*network);
+        network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kDensityMatrix);
+        network->AddOptimizationSimulator(Backend::kQCSim, Method::kMatrixProductOperator);
+        network->CreateSimulator(Backend::kQCSim, Method::kDensityMatrix, Network::INetwork<>::kBackendPlaceholderQubits);
+        network->SetOptimizeSimulator(true);
+        for (size_t width : {size_t{1}, size_t{40}})
+        {
+            auto circuit = CF::CreateCircuit();
+            std::vector<std::pair<Types::qubit_t, size_t>> measured;
+            for (size_t q = 0; q < width; ++q)
+            {
+                circuit->AddOperation(CF::CreateGate(Gate::kXGateType, q));
+                measured.emplace_back(q, q);
+            }
+            circuit->AddOperation(CF::CreateMeasurement(measured));
+            const auto counts = network->RepeatedExecuteOnHost(circuit, 0, 8);
+            Check(counts.size() == 1 && counts.begin()->second == 8, "Mapped-width candidate selection lost shots");
+            Check(network->GetLastSimulationType() == (width == 1 ? Method::kDensityMatrix : Method::kMatrixProductOperator),
+                  "Candidates were not tried in order on the register execution maps");
+        }
+    }
+}
+
+class ExposedNetwork : public Net
+{
+  public:
+    using Net::Net;
+
+    bool Recreates() const
+    {
+        return recreateIfNeeded;
+    }
+};
+
+void NetworkSimulatorLifecycle()
+{
+    auto circuit = CF::CreateCircuit();
+    circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    const std::vector<std::string> z{"Z"};
+    {
+        // A network without a simulator does not simulate (a derived one may
+        // only translate), and executing it must not create one.
+        auto network = std::make_shared<Net>(Types::qubits_vector{1}, std::vector<size_t>{1});
+        network->Execute(circuit);
+        network->ExecuteOnHost(circuit, 0);
+        network->ExecuteExpectations(circuit, z);
+        // A host expectation query needs a state, so it reports the missing one.
+        bool threw = false;
+        try
+        {
+            network->ExecuteOnHostExpectations(circuit, 0, z);
+        }
+        catch (const std::runtime_error &)
+        {
+            threw = true;
+        }
+        Check(threw, "A host expectation query ran without a simulator");
+        Check(!network->GetSimulator(), "Executing a network without a simulator created one");
+        Check(network->RepeatedExecute(circuit, 4).empty(), "A network without a simulator simulated");
+    }
+    {
+        // A host execution that throws must restore recreation.
+        auto network = std::make_shared<ExposedNetwork>(Types::qubits_vector{2}, std::vector<size_t>{2});
+        network->SetOptimizeSimulator(false);
+        network->CreateSimulator(Backend::kQCSim, Method::kStatevector, Network::INetwork<>::kBackendPlaceholderQubits);
+        auto wide = CF::CreateCircuit();
+        for (Types::qubit_t q = 0; q < 4; ++q)
+            wide->AddOperation(CF::CreateGate(Gate::kXGateType, q));
+        bool threw = false;
+        try
+        {
+            network->ExecuteOnHost(wide, 0);
+        }
+        catch (const std::exception &)
+        {
+            threw = true;
+        }
+        Check(threw && network->Recreates(), "A failed host execution left recreation disabled");
+    }
+    {
+        // A whole-network run that cannot allocate its register (a density
+        // matrix of 33 qubits) throws. It must clear the observables it
+        // installed, restore recreation and keep the backend template.
+        auto network = std::make_shared<ExposedNetwork>(Types::qubits_vector{32}, std::vector<size_t>{32});
+        network->SetOptimizeSimulator(false);
+        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+        network->CreateSimulator(Backend::kQCSim, Method::kDensityMatrix, Network::INetwork<>::kBackendPlaceholderQubits);
+        const std::vector<std::string> wideObservables{std::string(40, 'Z')};
+        bool threw = false;
+        try
+        {
+            network->ExecuteExpectations(circuit, wideObservables);
+        }
+        catch (const std::exception &)
+        {
+            threw = true;
+        }
+        Check(threw, "A whole-network run of a 33-qubit density matrix did not fail");
+        Check(network->Recreates(), "A failed expectation run left recreation disabled");
+        Check(bool(network->GetSimulator()), "A failed run lost the network's backend template");
+        // Observables left installed would widen this mapping past the host.
+        const auto counts = network->RepeatedExecuteOnHost(circuit, 0, 8);
+        Check(counts.size() == 1 && counts.begin()->second == 8 && counts.begin()->first[0], "A failed expectation run left its observables installed");
+    }
+}
+
+void ClonesCarryTheBackend()
+{
+    const std::vector<std::string> xx{"XX"};
+    {
+        // A setting made only on the network's simulator reaches clones, so the
+        // noise helpers, which run on clones, use it as ordinary execution does.
+        auto network = MakeNetwork(Backend::kQCSim, Method::kMatrixProductState);
+        network->GetSimulator()->Configure("matrix_product_state_max_bond_dimension", "1");
+        Check(network->Clone()->GetSimulator()->GetConfiguration("matrix_product_state_max_bond_dimension") == "1",
+              "A clone dropped a setting made on the network's simulator");
+        noise::NoiseAdd add;
+        add.seed(17);
+        const auto noisy = add.noisy_estimate_montecarlo(NonCliffordBell(), network, 0, xx, noise::NoiseModel{}, 1);
+        const auto direct = network->ExecuteOnHostExpectations(NonCliffordBell(), 0, xx);
+        Check(noisy.size() == 1 && direct.size() == 1 && std::abs(direct[0]) < 1e-9 && std::abs(noisy[0]) < 1e-9,
+              "Noisy estimation ran without a setting made on the network's simulator");
+    }
+    {
+        // An execution clone never copies the source's register; Clone() keeps
+        // the creation width.
+        auto network = std::make_shared<Net>(Types::qubits_vector{10}, std::vector<size_t>{10});
+        network->CreateSimulator(Backend::kQCSim, Method::kStatevector, 10);
+        const auto pristine = network->Clone();
+        const auto execution = network->CloneForExecution(Network::INetwork<>::kBackendPlaceholderQubits);
+        Check(pristine->GetSimulatorQubits() == 10 && pristine->GetSimulator()->GetNumberOfQubits() == 10, "Clone() changed the creation width");
+        Check(execution->GetSimulatorQubits() == Network::INetwork<>::kBackendPlaceholderQubits &&
+                  execution->GetSimulator()->GetNumberOfQubits() == Network::INetwork<>::kBackendPlaceholderQubits &&
+                  execution->GetSimulator()->GetSimulationType() == Method::kStatevector,
+              "An execution clone allocated the source's register");
+    }
+}
+
+// A cost model that estimates nothing it is offered: selection must still keep
+// to a configured list.
+class NoChoiceCostModel : public Estimators::SimulatorsEstimatorInterface<>
+{
+  public:
+    bool IsInitialized() const override
+    {
+        return true;
+    }
+
+    std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(const std::vector<std::pair<Backend, Method>> &, std::shared_ptr<Circuit> &, size_t &, size_t,
+                                                                size_t, size_t, Backend &, Method &, std::vector<bool> &, const long long int, const double,
+                                                                const std::string &, const std::string &, size_t, const std::vector<std::string> *,
+                                                                bool) const override
+    {
+        return nullptr;
+    }
+};
+
+// A cost model that chooses the first candidate it is offered, and records
+// every offer.
+class FirstChoiceCostModel : public Estimators::SimulatorsEstimatorInterface<>
+{
+  public:
+    explicit FirstChoiceCostModel(std::shared_ptr<std::vector<std::pair<Backend, Method>>> offers) : offers(std::move(offers))
+    {
+    }
+
+    bool IsInitialized() const override
+    {
+        return true;
+    }
+
+    std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(const std::vector<std::pair<Backend, Method>> &candidates, std::shared_ptr<Circuit> &,
+                                                                size_t &, size_t, size_t, size_t, Backend &type, Method &method, std::vector<bool> &,
+                                                                const long long int, const double, const std::string &, const std::string &, size_t,
+                                                                const std::vector<std::string> *, bool) const override
+    {
+        offers->insert(offers->end(), candidates.begin(), candidates.end());
+        if (candidates.empty())
+            return nullptr;
+        type = candidates.front().first;
+        method = candidates.front().second;
+        return Simulators::SimulatorsFactory::CreateSimulator(type, method);
+    }
+
+  private:
+    std::shared_ptr<std::vector<std::pair<Backend, Method>>> offers;
+};
+
+class CostModelNetwork : public Net
+{
+  public:
+    using Net::Net;
+
+    void InstallCostModel(std::unique_ptr<Estimators::SimulatorsEstimatorInterface<>> model = std::make_unique<NoChoiceCostModel>())
+    {
+        simulatorsEstimator = std::move(model);
+    }
+};
+
+void CostModelKeepsToTheList()
+{
+    auto circuit = CF::CreateCircuit();
+    circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    circuit->AddOperation(CF::CreateGate(Gate::kTGateType, 0));
+    circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    for (const bool rankable : {false, true})
+    {
+        // Unrankable: the cost model estimates neither a tensor network nor a
+        // stabilizer (the circuit is not Clifford). Rankable: it is offered a
+        // statevector and a path integral but chooses neither. Either way a
+        // listed candidate runs, not the MPS placeholder outside the list.
+        auto network = std::make_shared<CostModelNetwork>(Types::qubits_vector{2}, std::vector<size_t>{2});
+        QuietNetwork(*network);
+        const auto first = rankable ? Method::kStatevector : Method::kTensorNetwork;
+        network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, first);
+        network->AddOptimizationSimulator(Backend::kQCSim, rankable ? Method::kPathIntegral : Method::kStabilizer);
+        network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductState, Network::INetwork<>::kBackendPlaceholderQubits);
+        network->SetOptimizeSimulator(true);
+        network->InstallCostModel();
+        Check(network->HasCostModel(), "The test cost model is not active");
+        const auto counts = network->RepeatedExecuteOnHost(circuit, 0, 8);
+        Check(counts.size() == 1 && counts.begin()->second == 8 && counts.begin()->first[0], "Cost-model selection changed the outcome");
+        Check(network->GetLastSimulationType() == first, "A cost model that chose nothing let a backend outside the list run");
+    }
+    {
+        // Seeded noise with a cost model keeps the fallback among mixed-state
+        // candidates: a 32-qubit product state is no density matrix, but the
+        // listed MPO holds it.
+        auto network = std::make_shared<CostModelNetwork>(Types::qubits_vector{32}, std::vector<size_t>{32});
+        QuietNetwork(*network);
+        network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kDensityMatrix);
+        network->AddOptimizationSimulator(Backend::kQCSim, Method::kMatrixProductOperator);
+        network->CreateSimulator(Backend::kQCSim, Method::kDensityMatrix, Network::INetwork<>::kBackendPlaceholderQubits);
+        network->SetOptimizeSimulator(true);
+        network->InstallCostModel();
+        auto wide = CF::CreateCircuit();
+        std::vector<std::pair<Types::qubit_t, size_t>> measured;
+        for (Types::qubit_t q = 0; q < 32; ++q)
+        {
+            wide->AddOperation(CF::CreateGate(Gate::kXGateType, q));
+            measured.emplace_back(q, q);
+        }
+        wide->AddOperation(CF::CreateMeasurement(measured));
+        noise::NoiseAdd add;
+        add.seed(11);
+        const auto counts = add.noisy_execute(wide, network, 0, noise::NoiseModel{}, 4, 1);
+        Check(counts.size() == 1 && counts.begin()->second == 4, "Seeded noise lost the candidate that holds the register");
+        Check(add.last_execution().valid && add.last_execution().method == Method::kMatrixProductOperator,
+              "Seeded noise pinned a candidate that cannot hold the register");
+    }
+    {
+        // Seeded noise keeps the fallback with a pure-state candidate listed
+        // too: the 32-qubit product state runs on the listed MPS.
+        auto network = std::make_shared<CostModelNetwork>(Types::qubits_vector{32}, std::vector<size_t>{32});
+        QuietNetwork(*network);
+        network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kDensityMatrix);
+        network->AddOptimizationSimulator(Backend::kQCSim, Method::kMatrixProductState);
+        network->CreateSimulator(Backend::kQCSim, Method::kDensityMatrix, Network::INetwork<>::kBackendPlaceholderQubits);
+        network->SetOptimizeSimulator(true);
+        network->InstallCostModel();
+        auto wide = CF::CreateCircuit();
+        std::vector<std::pair<Types::qubit_t, size_t>> measured;
+        for (Types::qubit_t q = 0; q < 32; ++q)
+        {
+            wide->AddOperation(CF::CreateGate(Gate::kXGateType, q));
+            measured.emplace_back(q, q);
+        }
+        wide->AddOperation(CF::CreateGate(Gate::kTGateType, 0));
+        wide->AddOperation(CF::CreateMeasurement(measured));
+        noise::NoiseAdd add;
+        add.seed(11);
+        const auto counts = add.noisy_execute(wide, network, 0, noise::NoiseModel{}, 4, 1);
+        Check(counts.size() == 1 && counts.begin()->second == 4 && add.last_execution().method == Method::kMatrixProductState,
+              "Seeded noise dropped the listed MPS that holds the register");
+    }
+    for (const bool costModel : {false, true})
+    {
+        // The one candidate a cost model ranks (QuEST) may not be loaded: the
+        // other listed one runs, not the MPS placeholder.
+        auto network = std::make_shared<CostModelNetwork>(Types::qubits_vector{2}, std::vector<size_t>{2});
+        QuietNetwork(*network);
+        network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQuestSim, Method::kStatevector);
+        network->AddOptimizationSimulator(Backend::kQCSim, Method::kExtendedStabilizer);
+        network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductState, Network::INetwork<>::kBackendPlaceholderQubits);
+        network->SetOptimizeSimulator(true);
+        if (costModel)
+            network->InstallCostModel();
+        const auto counts = network->RepeatedExecuteOnHost(circuit, 0, 4);
+        const auto ran = std::make_pair(network->GetLastSimulatorType(), network->GetLastSimulationType());
+        Check(counts.size() == 1 && counts.begin()->second == 4, "The listed fallback lost shots");
+        Check(ran == std::make_pair(Backend::kQuestSim, Method::kStatevector) || ran == std::make_pair(Backend::kQCSim, Method::kExtendedStabilizer),
+              "An unloadable ranked candidate let a backend outside the list run");
+    }
+    for (const auto attachment : {Method::kMatrixProductState, Method::kStabilizer})
+        for (const bool costModel : {false, true})
+        {
+            // A listed stabilizer cannot run a non-Clifford circuit: the next
+            // listed candidate runs it, also when the network's simulator is a
+            // stabilizer, which does not make the circuit Clifford.
+            auto network = std::make_shared<CostModelNetwork>(Types::qubits_vector{2}, std::vector<size_t>{2});
+            QuietNetwork(*network);
+            network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kStabilizer);
+            network->AddOptimizationSimulator(Backend::kQCSim, Method::kTensorNetwork);
+            network->CreateSimulator(Backend::kQCSim, attachment, Network::INetwork<>::kBackendPlaceholderQubits);
+            network->SetOptimizeSimulator(true);
+            if (costModel)
+                network->InstallCostModel();
+            auto nonClifford = CF::CreateCircuit();
+            nonClifford->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+            nonClifford->AddOperation(CF::CreateGate(Gate::kTGateType, 0));
+            nonClifford->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+            nonClifford->AddOperation(CF::CreateMeasurement({{0, 0}}));
+            const auto counts = network->RepeatedExecuteOnHost(nonClifford, 0, 4);
+            size_t total = 0;
+            for (const auto &entry : counts)
+                total += entry.second;
+            Check(total == 4 && network->GetLastSimulationType() == Method::kTensorNetwork, "A listed stabilizer ran a non-Clifford circuit");
+        }
+    {
+        // No statevector of 62 qubits can be allocated (Eigen refuses 2^62
+        // amplitudes), so the candidate the cost model ranks fails before it
+        // runs. The configured list then falls back to its other candidates:
+        // past the one ranked statevector to the listed MPO, and past the
+        // statevector the cost model chose to the listed MPS.
+        auto wide = CF::CreateCircuit();
+        std::vector<std::pair<Types::qubit_t, size_t>> measured;
+        for (Types::qubit_t q = 0; q < 62; ++q)
+        {
+            wide->AddOperation(CF::CreateGate(Gate::kXGateType, q));
+            measured.emplace_back(q, q);
+        }
+        wide->AddOperation(CF::CreateGate(Gate::kTGateType, 0));
+        wide->AddOperation(CF::CreateMeasurement(measured));
+        if (!Simulators::SimulatorsFactory::CreateSimulator(Backend::kQuestSim, Method::kStatevector))
+        {
+            // A stabilizer cannot run the non-Clifford circuit and QuEST cannot
+            // be created, in either order and with or without a cost model:
+            // the stabilizer's failure is reported, and the MPS network
+            // simulator outside the list never runs.
+            auto nonClifford = CF::CreateCircuit();
+            nonClifford->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+            nonClifford->AddOperation(CF::CreateGate(Gate::kTGateType, 0));
+            nonClifford->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+            nonClifford->AddOperation(CF::CreateMeasurement({{0, 0}}));
+            for (const bool questFirst : {false, true})
+                for (const bool costModel : {false, true})
+                    for (const bool whole : {false, true})
+                {
+                    auto network = std::make_shared<CostModelNetwork>(Types::qubits_vector{2}, std::vector<size_t>{2});
+                    QuietNetwork(*network);
+                    network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+                    const auto quest = std::make_pair(Backend::kQuestSim, Method::kStatevector);
+                    const auto stabilizer = std::make_pair(Backend::kQCSim, Method::kStabilizer);
+                    const auto first = questFirst ? quest : stabilizer;
+                    const auto second = questFirst ? stabilizer : quest;
+                    network->RemoveAllOptimizationSimulatorsAndAdd(first.first, first.second);
+                    network->AddOptimizationSimulator(second.first, second.second);
+                    network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductState, Network::INetwork<>::kBackendPlaceholderQubits);
+                    network->SetOptimizeSimulator(true);
+                    if (costModel)
+                        network->InstallCostModel();
+                    const auto attached = network->GetSimulator();
+                    bool reported = false;
+                    try
+                    {
+                        if (whole)
+                            network->RepeatedExecute(nonClifford, 4);
+                        else
+                            network->RepeatedExecuteOnHost(nonClifford, 0, 4);
+                    }
+                    catch (const std::exception &)
+                    {
+                        reported = true;
+                    }
+                    Check(reported, "A stabilizer list that could not run fell back to a simulator outside it");
+                    // The rejected run leaves the network's simulator as it was.
+                    const auto kept = network->GetSimulator();
+                    Check(kept && kept->GetSimulationType() == Method::kMatrixProductState &&
+                              kept->GetNumberOfQubits() == Network::INetwork<>::kBackendPlaceholderQubits,
+                          "A rejected run changed the network's simulator");
+                    // A whole-network run without a cost model does not clear
+                    // the simulator before selection, so the rejection leaves
+                    // the same one, not a re-created copy.
+                    if (whole && !costModel)
+                        Check(kept == attached, "A run that did not touch the network's simulator re-created it");
+                    network->SetOptimizeSimulator(false);
+                    size_t total = 0;
+                    for (const auto &entry : network->RepeatedExecuteOnHost(nonClifford, 0, 4))
+                        total += entry.second;
+                    Check(total == 4, "The network's own backend could not run after a rejected run");
+                }
+            {
+                // When several candidates fail, the first one's failure is
+                // reported: the density matrix's, not that of the stabilizer
+                // tried last for the non-Clifford circuit.
+                auto network = std::make_shared<Net>(Types::qubits_vector{32}, std::vector<size_t>{32});
+                QuietNetwork(*network);
+                network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kStabilizer);
+                network->AddOptimizationSimulator(Backend::kQCSim, Method::kDensityMatrix);
+                network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductState, Network::INetwork<>::kBackendPlaceholderQubits);
+                network->SetOptimizeSimulator(true);
+                auto dense = CF::CreateCircuit();
+                std::vector<std::pair<Types::qubit_t, size_t>> all;
+                for (Types::qubit_t q = 0; q < 32; ++q)
+                {
+                    dense->AddOperation(CF::CreateGate(Gate::kXGateType, q));
+                    all.emplace_back(q, q);
+                }
+                dense->AddOperation(CF::CreateGate(Gate::kTGateType, 0));
+                dense->AddOperation(CF::CreateMeasurement(all));
+                std::string message;
+                try
+                {
+                    network->RepeatedExecuteOnHost(dense, 0, 4);
+                }
+                catch (const std::exception &error)
+                {
+                    message = error.what();
+                }
+                Check(message.find("Density-matrix") != std::string::npos, "A later candidate's failure hid the first one's");
+            }
+            for (const bool questFirst : {false, true})
+            {
+                // QuEST is not loaded. A density matrix cannot hold the
+                // 32-qubit register and QuEST cannot be created, in either
+                // order: the density matrix's failure is reported, and the MPS
+                // network simulator outside the list never runs.
+                auto network = std::make_shared<Net>(Types::qubits_vector{32}, std::vector<size_t>{32});
+                QuietNetwork(*network);
+                const auto first = questFirst ? std::make_pair(Backend::kQuestSim, Method::kStatevector) : std::make_pair(Backend::kQCSim, Method::kDensityMatrix);
+                const auto second = questFirst ? std::make_pair(Backend::kQCSim, Method::kDensityMatrix) : std::make_pair(Backend::kQuestSim, Method::kStatevector);
+                network->RemoveAllOptimizationSimulatorsAndAdd(first.first, first.second);
+                network->AddOptimizationSimulator(second.first, second.second);
+                network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductState, Network::INetwork<>::kBackendPlaceholderQubits);
+                network->SetOptimizeSimulator(true);
+                auto dense = CF::CreateCircuit();
+                std::vector<std::pair<Types::qubit_t, size_t>> all;
+                for (Types::qubit_t q = 0; q < 32; ++q)
+                {
+                    dense->AddOperation(CF::CreateGate(Gate::kXGateType, q));
+                    all.emplace_back(q, q);
+                }
+                dense->AddOperation(CF::CreateGate(Gate::kTGateType, 0));
+                dense->AddOperation(CF::CreateMeasurement(all));
+                bool reported = false;
+                try
+                {
+                    network->RepeatedExecuteOnHost(dense, 0, 4);
+                }
+                catch (const std::exception &)
+                {
+                    reported = true;
+                }
+                Check(reported, "A list whose candidates could not run fell back to a simulator outside it");
+            }
+        }
+        for (const bool chosen : {false, true})
+        {
+            auto network = std::make_shared<CostModelNetwork>(Types::qubits_vector{62}, std::vector<size_t>{62});
+            QuietNetwork(*network);
+            network->RemoveAllOptimizationSimulatorsAndAdd(Backend::kQCSim, Method::kStatevector);
+            if (chosen)
+            {
+                // A bond cap lets the cost model rank the MPS too.
+                network->Configure("matrix_product_state_max_bond_dimension", "1");
+                network->AddOptimizationSimulator(Backend::kQCSim, Method::kMatrixProductState);
+            }
+            network->AddOptimizationSimulator(Backend::kQCSim, Method::kMatrixProductOperator);
+            network->CreateSimulator(Backend::kQCSim, Method::kMatrixProductState, Network::INetwork<>::kBackendPlaceholderQubits);
+            network->SetOptimizeSimulator(true);
+            auto offers = std::make_shared<std::vector<std::pair<Backend, Method>>>();
+            if (chosen)
+                network->InstallCostModel(std::make_unique<FirstChoiceCostModel>(offers));
+            else
+                network->InstallCostModel();
+            const auto counts = network->RepeatedExecuteOnHost(wide, 0, 4);
+            Check(counts.size() == 1 && counts.begin()->second == 4 &&
+                      std::all_of(counts.begin()->first.begin(), counts.begin()->first.end(), [](bool bit) { return bit; }),
+                  "The fallback after a failed ranked candidate changed the outcome");
+            Check(network->GetLastSimulationType() == (chosen ? Method::kMatrixProductState : Method::kMatrixProductOperator),
+                  "A ranked candidate that could not be allocated skipped the configured list");
+            if (chosen)
+                Check(!offers->empty() && offers->front() == std::make_pair(Backend::kQCSim, Method::kStatevector),
+                      "The cost model was not offered the statevector");
+        }
+    }
+}
+
+// A zero-shot repeated execution runs nothing: the network's simulator keeps
+// its register and the state prepared on it.
+void ZeroShotsLeaveTheSimulator()
+{
+    auto x = CF::CreateCircuit();
+    x->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    x->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    for (const bool automatic : {false, true})
+    {
+        auto network = std::make_shared<Net>(Types::qubits_vector{2}, std::vector<size_t>{2});
+        QuietNetwork(*network);
+        network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+        network->CreateSimulator(Backend::kQCSim, Method::kStatevector);
+        network->SetOptimizeSimulator(automatic);
+        const auto simulator = network->GetSimulator();
+        simulator->ApplyX(0);
+        Check(network->RepeatedExecute(x, 0).empty() && network->RepeatedExecuteOnHost(x, 0, 0).empty(), "A zero-shot execution returned results");
+        Check(network->GetSimulator() == simulator && std::abs(simulator->Probability(1) - 1.0) < 1e-12,
+              "A zero-shot execution reset the network's simulator");
+    }
+}
+
+void NoiseRecordsAndOptionRemoval()
+{
+    auto x = CF::CreateCircuit();
+    x->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    x->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    {
+        // Only runs that executed a network leave an execution record.
+        auto network = MakeNetwork(Backend::kQCSim, Method::kStatevector);
+        noise::NoiseAdd add;
+        add.seed(5);
+        add.noisy_execute(x, network, 0, noise::NoiseModel{}, 4, 1);
+        Check(add.last_execution().valid, "A noisy run left no execution record");
+        add.noisy_execute(x, network, 0, noise::NoiseModel{}, 0, 1);
+        Check(!add.last_execution().valid, "A zero-shot call kept the previous execution record");
+        add.noisy_execute(x, network, 0, noise::NoiseModel{}, 4, 1);
+        const std::vector<std::string> identity{"II"};
+        add.noisy_estimate_montecarlo(x, network, 0, identity, noise::NoiseModel{}, 1);
+        Check(!add.last_execution().valid, "An estimate that planning resolved without a network reported a backend");
+        // A network without a simulator does not simulate, and records no run.
+        auto translating = std::make_shared<Net>(Types::qubits_vector{1}, std::vector<size_t>{1});
+        translating->SetMaxSimulators(1);
+        Check(add.noisy_execute(x, translating, 0, noise::NoiseModel{}, 4, 1).empty() && !translating->GetSimulator() && !add.last_execution().valid,
+              "A network that did not simulate left an execution record");
+    }
+    {
+        // Removing an option re-creates the simulator with the settings made
+        // directly on it, not only those of the network.
+        auto network = MakeNetwork(Backend::kQCSim, Method::kMatrixProductState);
+        network->GetSimulator()->Configure("matrix_product_state_max_bond_dimension", "1");
+        network->Configure("seed", "3");
+        network->RemoveConfiguration("seed");
+        Check(network->GetSimulator()->GetConfiguration("matrix_product_state_max_bond_dimension") == "1",
+              "Removing an option dropped a setting made on the network's simulator");
+    }
+}
+
 int main()
 try
 {
@@ -2100,6 +2714,12 @@ try
     ClearedMpoStillSamplesInParallel();
     ClassicalBitIdsDoNotDeferWires();
     MixedStateCandidates();
+    ConfiguredCandidatesDecide();
+    NetworkSimulatorLifecycle();
+    ClonesCarryTheBackend();
+    CostModelKeepsToTheList();
+    ZeroShotsLeaveTheSimulator();
+    NoiseRecordsAndOptionRemoval();
     SmallTrajectoryBudgets();
     IndependentShotStreams();
     QCSimSamplingRandomStreams(Method::kStabilizer);

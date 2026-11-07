@@ -15,6 +15,7 @@
 #ifndef _SCHEDULER_INTERFACE_H_
 #define _SCHEDULER_INTERFACE_H_
 
+#include <exception>
 #include "../Network/Network.h"
 #include "../Utils/Threads/ThreadsPool.h"
 
@@ -88,13 +89,21 @@ template <typename Time = Types::time_type> struct ExecuteJob
     std::shared_ptr<Circuits::Circuit<Time>> circ;
     size_t nrShots = 0;
     ExecuteResults results;
+    std::exception_ptr error; /**< What the host network threw, for the caller to rethrow: the job runs on a pool thread. */
 
     void DoWork()
     {
         if (!hostNetwork || !circ || nrShots == 0)
             return;
 
-        results = hostNetwork->RepeatedExecuteOnHost(circ, h, nrShots);
+        try
+        {
+            results = hostNetwork->RepeatedExecuteOnHost(circ, h, nrShots);
+        }
+        catch (...)
+        {
+            error = std::current_exception();
+        }
     }
 
     size_t GetJobCount() const
@@ -121,14 +130,29 @@ template <typename Time = Types::time_type> class IScheduler : public std::enabl
 
     virtual ~IScheduler() = default;
 
+    /**
+     * @brief Set the network the scheduler schedules and executes circuits on.
+     *
+     * The scheduler refers to its network weakly: the network owns its
+     * scheduler (through its controller), so a strong reference would keep
+     * both, and the network's simulator register, alive forever.
+     *
+     * @param n The network.
+     */
     virtual void SetNetwork(const std::shared_ptr<NetworkClass> &n)
     {
         network = n;
     }
 
+    /**
+     * @brief Get the network the scheduler schedules and executes circuits on.
+     *
+     * @return The network, or null once it is gone: a scheduler kept past its
+     * network can no longer execute.
+     */
     std::shared_ptr<NetworkClass> GetNetwork() const
     {
-        return network;
+        return network.lock();
     }
 
     /**
@@ -191,7 +215,7 @@ template <typename Time = Types::time_type> class IScheduler : public std::enabl
     virtual Network::SchedulerType GetType() const = 0;
 
   private:
-    std::shared_ptr<NetworkClass> network; /**< The network to schedule and execute circuits on. */
+    std::weak_ptr<NetworkClass> network; /**< The network to schedule and execute circuits on, held weakly (see SetNetwork). */
 };
 } // namespace Schedulers
 

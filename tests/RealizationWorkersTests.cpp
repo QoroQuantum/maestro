@@ -742,35 +742,117 @@ void NoiseAddBudgetsNetworkAllocation()
         std::thread::id caller;
     };
 
-    for (size_t budgetMB : {size_t{1}, size_t{2}, size_t{8}})
+    for (size_t hostQubits : {size_t{14}, size_t{16}})
+        for (size_t budgetMB : {size_t{1}, size_t{2}, size_t{8}})
+        {
+            // The caller's register stays allocated while workers run: a
+            // whole-network statevector of 15 qubits (512 KiB) on a 14-qubit
+            // host, of 17 qubits (2 MiB) on a 16-qubit one. Worker clones hold
+            // only backend placeholders and each realization's register is the
+            // one qubit the circuit uses, so the 512 KiB caller leaves room for
+            // workers within 1 MiB, while the 2 MiB one exhausts 1-2 MiB alone
+            // and forces a serial fallback.
+            auto network =
+                std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{hostQubits}, std::vector<size_t>{hostQubits});
+            network->Configure("trajectory_max_memory_mb", std::to_string(budgetMB).c_str());
+            network->SetMaxSimulators(4);
+            network->SetOptimizeSimulator(false);
+            network->GetController()->SetOptimizeCircuit(false);
+            network->CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector);
+            auto foreign = std::make_shared<std::atomic<bool>>(false);
+            auto circuit = std::make_shared<Circuits::Circuit<>>();
+            circuit->AddOperation(std::make_shared<ObserveThreadX>(foreign, std::this_thread::get_id()));
+            circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
+            noise::NoiseModel model;
+            model.set_bit_flip(0, 0.1);
+            noise::NoiseAdd add;
+            add.seed(23);
+            const auto counts = add.noisy_execute(circuit, network, 0, model, 41, 41);
+            size_t total = 0;
+            for (const auto &entry : counts)
+                total += entry.second;
+            Require(total == 41, "memory-limited noisy execution lost shots");
+            if (hostQubits == 16 && budgetMB <= 2)
+                Require(!foreign->load(), "the caller's retained register was left out of the worker budget");
+            else if (Utils::RealizationWorkerCount(41, network->GetMaxSimulators()) > 1)
+                Require(foreign->load(), "placeholder worker clones were budgeted as whole-network registers");
+        }
     {
-        // A 14-qubit cloned register is 256 KiB even though the circuit uses
-        // one qubit. Two retained registers plus four copies/workspaces per
-        // worker force a serial fallback at 1-2 MiB. No large allocation is
-        // needed to expose an estimator that budgets only the circuit width.
-        auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{14}, std::vector<size_t>{14});
-        network->Configure("trajectory_max_memory_mb", std::to_string(budgetMB).c_str());
+        // Crosstalk adds rotations on eight spectators of the one-qubit
+        // circuit: each realization holds a nine-qubit density matrix (4 MiB),
+        // which a 1 MiB budget cannot multiply across workers.
+        auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{9}, std::vector<size_t>{1});
+        network->Configure("trajectory_max_memory_mb", "1");
         network->SetMaxSimulators(4);
         network->SetOptimizeSimulator(false);
         network->GetController()->SetOptimizeCircuit(false);
-        network->CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector);
+        network->CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kDensityMatrix, Network::INetwork<>::kBackendPlaceholderQubits);
         auto foreign = std::make_shared<std::atomic<bool>>(false);
         auto circuit = std::make_shared<Circuits::Circuit<>>();
         circuit->AddOperation(std::make_shared<ObserveThreadX>(foreign, std::this_thread::get_id()));
         circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
         noise::NoiseModel model;
-        model.set_bit_flip(0, 0.1);
+        for (int q = 1; q < 9; ++q)
+            model.set_crosstalk(0, q, 0.125);
         noise::NoiseAdd add;
-        add.seed(23);
-        const auto counts = add.noisy_execute(circuit, network, 0, model, 41, 41);
+        add.seed(11);
+        const auto counts = add.full_noise_execute(circuit, network, 0, model, 8, 8);
         size_t total = 0;
         for (const auto &entry : counts)
             total += entry.second;
-        Require(total == 41, "memory-limited noisy execution lost shots");
-        if (budgetMB <= 2)
-            Require(!foreign->load(), "small circuit hid full-network worker allocations or retained registers");
-        else if (Utils::RealizationWorkerCount(41, network->GetMaxSimulators()) > 1)
-            Require(foreign->load(), "ample network memory budget disabled parallel realizations");
+        Require(total == 8, "spectator noisy execution lost shots");
+        Require(!foreign->load(), "crosstalk spectators were left out of the realization worker budget");
+    }
+    for (const std::string observable : {"X", "XZZZZZZZZ"})
+    {
+        // An expectation run allocates every position its observables name,
+        // idle ones included: a nine-qubit Pauli string makes each realization
+        // a nine-qubit density matrix (4 MiB), which a 1 MiB budget cannot
+        // multiply across workers, while a one-qubit observable leaves room.
+        const bool wide = observable.size() > 1;
+        noise::NoiseModel model;
+        model.set_bit_flip(0, 0.125);
+        const auto observed = [](const std::shared_ptr<std::atomic<bool>> &foreign) {
+            auto circuit = std::make_shared<Circuits::Circuit<>>();
+            circuit->AddOperation(std::make_shared<ObserveThreadX>(foreign, std::this_thread::get_id()));
+            return circuit;
+        };
+        const auto check = [&](const std::shared_ptr<std::atomic<bool>> &foreign, const char *serialMessage, const char *parallelMessage) {
+            if (wide)
+                Require(!foreign->load(), serialMessage);
+            else if (Utils::RealizationWorkerCount(8, 4) > 1)
+                Require(foreign->load(), parallelMessage);
+        };
+        {
+            auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{9}, std::vector<size_t>{1});
+            network->Configure("trajectory_max_memory_mb", "1");
+            network->SetMaxSimulators(4);
+            network->SetOptimizeSimulator(false);
+            network->GetController()->SetOptimizeCircuit(false);
+            network->CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kDensityMatrix,
+                                     Network::INetwork<>::kBackendPlaceholderQubits);
+            auto foreign = std::make_shared<std::atomic<bool>>(false);
+            noise::NoiseAdd add;
+            add.seed(11);
+            const auto values = add.full_noise_estimate(observed(foreign), network, 0, {observable}, model, 8);
+            Require(values.size() == 1 && std::isfinite(values[0]), "noisy estimate lost its value");
+            check(foreign, "observable qubits were left out of the noisy estimate worker budget",
+                  "a one-qubit observable serialized the noisy estimate workers");
+        }
+        {
+            MaestroExecution::SimulatorConfig config;
+            config.simulator_type = Simulators::SimulatorType::kQCSim;
+            config.simulation_type = Simulators::SimulationType::kDensityMatrix;
+            config.fixed_backend = true;
+            config.max_simulators = 4;
+            config.trajectory_max_memory_mb = 1;
+            auto foreign = std::make_shared<std::atomic<bool>>(false);
+            const auto estimate =
+                MaestroExecution::EstimateNoisy(observed(foreign), {observable}, model, 8, config, 11, MaestroExecution::NoiseLayer::kCombined);
+            Require(estimate.values.size() == 1 && estimate.realizations == 8, "library noisy estimate lost realizations");
+            check(foreign, "observable qubits were left out of the library noisy estimate worker budget",
+                  "a one-qubit observable serialized the library noisy estimate workers");
+        }
     }
     for (bool pinned : {false, true})
     {

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace MaestroExecution
 {
@@ -17,7 +18,20 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
         num_qubits_ = std::max(1, static_cast<int>(prefix->GetMaxQubitIndex()) + 1);
     // The simulator is created explicitly below: resolve a candidate list to the
     // one backend it creates, so suffix noise policy and metadata describe it.
-    config_ = ResolveCandidateBackend(config, static_cast<size_t>(num_qubits_));
+    // Probing several candidates already configures the network built below,
+    // register included; adopt it instead of allocating the register again.
+    unsigned long probed = 0;
+    config_ = ResolveCandidateBackend(config, static_cast<size_t>(num_qubits_), probed);
+    struct ProbeGuard
+    {
+        unsigned long &handle;
+
+        ~ProbeGuard()
+        {
+            if (handle)
+                DestroySimpleSimulator(handle);
+        }
+    } probe_guard{probed};
     auto executed_prefix = prefix;
     if (prefix && prefix_noise && prefix_noise->has_any())
     {
@@ -36,7 +50,8 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
             executed_prefix = noise::drop_outside_spectator_phases(executed_prefix, register_qubits);
     }
     GetMaestroObjectWithMute();
-    handle_ = CreateSimpleSimulator(num_qubits_);
+    const bool adopted = probed != 0;
+    handle_ = adopted ? std::exchange(probed, 0UL) : CreateSimpleSimulator(num_qubits_);
     if (handle_ == 0)
         throw std::runtime_error("PrefixCheckpointedSimulator: failed to create simulator handle.");
     try
@@ -45,13 +60,17 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
         // also adds the host's network-entangled qubit (2x statevector, 4x
         // density-matrix work), which may not even fit.
         const size_t register_qubits = static_cast<size_t>(num_qubits_);
-        network_ = ConfigureNetwork(handle_, config_, register_qubits);
+        network_ = adopted ? static_cast<Maestro *>(GetMaestroObject())->GetSimpleSimulator(handle_) : ConfigureNetwork(handle_, config_, register_qubits);
         if (!network_)
             throw std::runtime_error("PrefixCheckpointedSimulator: failed to configure network.");
-        // A fixed backend already has this register; replace a placeholder.
-        const auto created = network_->GetSimulator();
-        if (!created || created->GetType() != config_.simulator_type || created->GetSimulationType() != config_.simulation_type ||
-            created->GetNumberOfQubits() != register_qubits)
+        // A fixed backend already has this register; replace a placeholder. No
+        // pointer to it may survive the replacement, or both stay allocated.
+        const bool replace = [&] {
+            const auto created = network_->GetSimulator();
+            return !created || created->GetType() != config_.simulator_type || created->GetSimulationType() != config_.simulation_type ||
+                   created->GetNumberOfQubits() != register_qubits;
+        }();
+        if (replace)
             network_->CreateSimulator(config_.simulator_type, config_.simulation_type, register_qubits);
         simulator_ = network_->GetSimulator();
         if (!simulator_)

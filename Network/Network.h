@@ -15,9 +15,12 @@
 #ifndef _NETWORK_INTERFACE_H_
 #define _NETWORK_INTERFACE_H_
 
+#include <array>
 #include <boost/container_hash/hash.hpp>
 #include <complex>
 #include <memory>
+#include <optional>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -84,10 +87,11 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
      * @brief Execute the circuit on the network.
      *
      * Execute the circuit on the network, using the controller for distributing
-     * the operations to the hosts. The base class functionality is used for
-     * circuit distribution, but then the distributed circuit is converted to
-     * netqasm. Ensure the quantum computing simulator and the netqasm virtual
-     * machines have been created before calling this.
+     * the operations to the hosts, once. A network without a simulator does not
+     * simulate and stays without one. Only fixed selection, at the whole
+     * network's width, guarantees that the run continues a state prepared on
+     * the network's simulator (see CreateSimulator); automatic selection may
+     * start it from |0>.
      *
      * @param circuit The circuit to execute.
      * @sa Circuits::Circuit
@@ -184,7 +188,10 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
      * distributed to the hosts depends on the specific interface implementations.
      *
      * @param circuit The circuit to execute.
-     * @param shots The number of times to repeat the execution.
+     * @param shots The number of times to repeat the execution. With none,
+     * nothing runs: no results, and the network's simulator keeps its register
+     * and state. A run that throws leaves the network's simulator with the
+     * backend and creation width it had.
      * @return A vector of maps with the results of each circuit execution, where
      * the key is the state as a vector of bools and the value is the number of
      * times it was measured.
@@ -222,7 +229,10 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
      *
      * @param circuit The circuit to execute.
      * @param hostId The id of the host to execute the circuit on.
-     * @param shots The number of times to repeat the execution.
+     * @param shots The number of times to repeat the execution. With none,
+     * nothing runs: no results, and the network's simulator keeps its register
+     * and state. A run that throws leaves the network's simulator with the
+     * backend and creation width it had.
      * @return A vector of maps with the results of each circuit execution, where
      * the key is the state as a vector of bools and the value is the number of
      * times it was measured.
@@ -271,31 +281,103 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
     virtual std::vector<ExecuteResults> ExecuteScheduled(const std::vector<Schedulers::ExecuteCircuit<Time>> &circuits) = 0;
 
     /**
+     * @brief Register width of a backend placeholder.
+     *
+     * The width to create the network simulator with when it only selects the
+     * backend (see CreateSimulator). It costs next to nothing to allocate for
+     * any backend, and GPU backends may need at least two qubits.
+     */
+    static constexpr size_t kBackendPlaceholderQubits = 2;
+
+    /**
      * @brief Create the simulator for the network.
      *
-     * Creates the simulator for the network.
-     * Call this only after the network topology has been set up.
-     * Should create the simulator with the proper number of qubits for the whole
-     * network and also set up a 'classical state' for the whole network and
-     * distribute the qubits and cbits to the hosts. The nrQubits parameter is
-     * used internally to allocate a simulator for a single host only - if a
-     * circuit is executed on a single host. Let it to the default value - 0 - to
-     * allocate the number of qubits for the whole network.
+     * Call this only after the network topology has been set up. It also sets
+     * up the classical state of the whole network.
+     *
+     * The network's simulator is first of all a backend template, not the
+     * register a simple network's execution runs on:
+     *  - its type and method tell execution which backend to use. With
+     *    SetOptimizeSimulator(false) it is the only record of the fixed
+     *    backend. Automatic selection starts from it when it is one of the
+     *    configured candidates, and never runs it outside a configured list
+     *    (see GetOptimizationCandidates);
+     *  - it carries the simulator configuration; settings made on it directly
+     *    reach executions and clones too;
+     *  - its presence marks that simulation is wanted at all. A network
+     *    without one does not simulate (a derived one may only translate the
+     *    circuit, e.g. to netqasm), and executing it does not create one.
+     *
+     * A simple network sizes its own register for the circuit it maps (the
+     * qubits it uses, usually fewer than the default width, which counts each
+     * host's entanglement qubit), and clears, replaces or re-creates this
+     * simulator whenever automatic selection is on, several shot workers or
+     * trajectory blocks run, or the widths differ. Netqasm and discrete-event
+     * networks run their shots on this simulator itself, resized to the whole
+     * network's layout. Rely on this simulator's register only when
+     *  - the caller allocates exactly the register it needs (nrQubits) and
+     *    operates on GetSimulator() itself, or
+     *  - a whole-network Execute() continues a state prepared on it, with
+     *    SetOptimizeSimulator(false) and at the width that execution uses, the
+     *    default one. Automatic selection may prepare a fresh register even of
+     *    the same backend (it does whenever a configured candidate list or a
+     *    cost model chooses), so only fixed selection guarantees continuity.
+     *    ExecuteOnHost() and repeated shots always start from |0>.
+     *
+     * Do not keep a GetSimulator() pointer across a network call: the network
+     * may install another simulator, and the pointer keeps the old register
+     * allocated. After an execution, GetLastSimulatorType(),
+     * GetLastSimulationType(), GetLastGpuDevice() and WasGateFusionEnabled()
+     * describe the backend that ran; this simulator may not. Helpers that run
+     * on a clone of the network (noise::NoiseAdd) report their own runs.
+     *
+     * Three widths differ: the creation width (nrQubits, GetSimulatorQubits),
+     * the current width of GetSimulator() (an execution that keeps its final
+     * state may change it), and the width execution maps a circuit to.
+     *
+     * Creating it costs what allocating its register costs. The default, a QCSim
+     * MPS of bond dimension 1, is cheap at any width. A dense backend
+     * (statevector, density matrix, GPU, ...) of the whole network is not: the
+     * entanglement qubit alone doubles a statevector and quadruples a density
+     * matrix, and a simple network's execution throws the register away. To
+     * choose such a backend for execution, create it with
+     * kBackendPlaceholderQubits qubits, or keep the default simulator and set
+     * the optimization candidates.
      *
      * @param simType The type of the simulator to create.
      * @param simExecType The type of the simulation - statevector, composite,
      * matrix product state, stabilizer, tensor network...
-     * @param nrQubits The number of qubits to allocate for the simulator. Default
-     * is 0 - allocate the number of qubits for the whole network.
+     * @param nrQubits The number of qubits to allocate. 0 (default) allocates the
+     * whole network, including each host's entanglement qubit. Implementations
+     * keep this width when they re-create the simulator after an execution, in
+     * Clone() and in RemoveConfiguration().
      * @sa Simulators::SimulatorType
      */
     virtual void CreateSimulator(Simulators::SimulatorType simType = Simulators::SimulatorType::kQCSim,
                                  Simulators::SimulationType simExecType = Simulators::SimulationType::kMatrixProductState, size_t nrQubits = 0) = 0;
 
     /**
+     * @brief The width the network simulator was created with.
+     *
+     * The nrQubits given to the last CreateSimulator call, 0 for the whole
+     * network. Code that frees and later re-creates the network's simulator
+     * passes it back so that a placeholder stays a placeholder.
+     *
+     * @return The requested width, or 0 for the whole network.
+     */
+    virtual size_t GetSimulatorQubits() const
+    {
+        return 0;
+    }
+
+    /**
      * @brief Get the simulator for the network.
      *
-     * Get the simulator for the network.
+     * The backend template (see CreateSimulator), or nullptr for a network that
+     * does not simulate. Its register describes an execution only when the
+     * caller drove it directly or the execution kept its final state; a
+     * finished run is described by the GetLast* methods. Do not keep the
+     * pointer across network calls.
      *
      * @return The simulator for the network.
      * @sa Simulators::ISimulator
@@ -330,6 +412,19 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
      * @param key The key of the configuration option.
      */
     virtual void RemoveConfiguration(const char *key) = 0;
+
+    /**
+     * @brief Keeps the settings made directly on the network's simulator.
+     *
+     * Copies the settings made with GetSimulator()->Configure into the
+     * network's configuration, which every simulator the network creates
+     * receives (executions and clones already import them). Call it before
+     * re-creating the simulator with CreateSimulator, as a scheduler that runs
+     * on clones does, or those settings are lost with the old simulator.
+     */
+    virtual void CaptureSimulatorSettings()
+    {
+    }
 
     /**
      * @brief Create the scheduler for the network.
@@ -770,10 +865,33 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
     /**
      * @brief Clone the network.
      *
-     * Clone the network in a pristine state.
+     * Clone the network in a pristine state: the topology, the execution
+     * settings (including those set directly on the simulator) and a fresh
+     * simulator of the same backend and creation width (see
+     * GetSimulatorQubits), never the quantum state.
      * @return A shared pointer to the cloned network.
      */
     virtual std::shared_ptr<INetwork<Time>> Clone() const = 0;
+
+    /**
+     * @brief Clone the network for execution only.
+     *
+     * Like Clone(), but the clone's simulator is created with simulatorQubits
+     * qubits, for a clone that only executes: a simple network allocates its
+     * own register for each execution, so a backend placeholder
+     * (kBackendPlaceholderQubits) avoids allocating the source's register a
+     * second time. Networks that execute on their simulator itself (netqasm,
+     * discrete events) or keep a configured register (distribution) return
+     * Clone().
+     *
+     * @param simulatorQubits The creation width of the clone's simulator.
+     * @return A shared pointer to the cloned network.
+     */
+    virtual std::shared_ptr<INetwork<Time>> CloneForExecution(size_t simulatorQubits) const
+    {
+        (void)simulatorQubits;
+        return Clone();
+    }
 
     /**
      * @brief Get the distributed circuit.
@@ -901,6 +1019,95 @@ template <typename Time = Types::time_type> class INetwork : public std::enable_
      * otherwise.
      */
     virtual bool OptimizationSimulatorExists(Simulators::SimulatorType type, Simulators::SimulationType kind) const = 0;
+
+    /**
+     * @brief The configured optimization candidates, in the order they were
+     * added.
+     *
+     * AddOptimizationSimulator, RemoveOptimizationSimulator and
+     * RemoveAllOptimizationSimulatorsAndAdd configure the list. Without a cost
+     * model (HasCostModel), automatic selection runs a configured candidate:
+     * the network simulator's backend when it is listed, else the first listed
+     * one whose register can be allocated. For a non-Clifford circuit, a
+     * listed stabilizer is never run: it counts as a candidate that failed,
+     * after the others. It never runs a simulator outside a
+     * configured list, unless no listed backend can be constructed at all (a
+     * missing GPU library): when none runs, the first failure is reported. The
+     * default list a network starts with is not
+     * configured: without a cost model, the network's simulator then decides.
+     *
+     * Either way, a Clifford circuit may move to a stabilizer backend the list
+     * admits (for the default list, QCSim's or Aer's), with or without a cost
+     * model or a seed. List no stabilizer, or turn automatic selection off, to
+     * keep Clifford circuits on another backend.
+     *
+     * @return The configured candidates in order, empty if the list was never
+     * configured (or was emptied).
+     */
+    virtual std::vector<SimulatorPair> GetOptimizationCandidates() const
+    {
+        return {};
+    }
+
+    /**
+     * @brief Whether automatic selection ranks candidates with a cost model.
+     *
+     * With one, selection among several pure-state candidates depends on
+     * timing estimates; without one, it is deterministic (see
+     * GetOptimizationCandidates).
+     *
+     * @return True if a cost model is initialized.
+     */
+    virtual bool HasCostModel() const
+    {
+        return false;
+    }
+
+    /**
+     * @brief Enable or disable the cost model for backend selection.
+     *
+     * Disabled, selection is deterministic: a configured candidate list is
+     * tried in order, and otherwise the network simulator's backend runs (see
+     * GetOptimizationCandidates). Clones keep the setting. Seeded noise and
+     * exact channels use it on their execution clones, so that a timing
+     * estimate neither changes the random sequence nor picks a backend that
+     * cannot apply the channels, while the list keeps its fallbacks. It does
+     * not stop a Clifford circuit from moving to a stabilizer backend the list
+     * admits (see GetOptimizationCandidates).
+     *
+     * @param enabled Whether a loaded cost model may rank candidates.
+     */
+    virtual void SetCostModelEnabled(bool enabled)
+    {
+        (void)enabled;
+    }
+
+    /**
+     * @brief The settings describing where a distributed backend placed its
+     * register.
+     */
+    static constexpr std::array<const char *, 5> kDistributedPlacementKeys{"distributed_shard_devices", "distributed_configured_global_qubits",
+                                                                           "distributed_qubit_layout", "distributed_backend", "precision"};
+
+    /**
+     * @brief A placement setting of the distributed register the last
+     * execution ran on.
+     *
+     * After an execution on a distributed backend, what GetConfiguration(key)
+     * reported for the executing register (one of kDistributedPlacementKeys),
+     * which the network's re-created simulator may not share: it can have
+     * another width. Empty otherwise.
+     *
+     * @param key The placement setting.
+     * @return Its value for the register that ran (possibly empty, such as
+     * the global qubits of a register on one shard), or nothing if the last
+     * execution did not record it.
+     */
+    virtual std::optional<std::string> GetLastDistributedPlacement(const std::string &key) const
+    {
+        (void)key;
+        return std::nullopt;
+    }
 
     /**
      * @brief Get the maximum number of simulators that can be used in the
