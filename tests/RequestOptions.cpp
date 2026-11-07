@@ -374,6 +374,47 @@ void TestPauliPropagatorDedupDefault()
     Check(cadence(SimulatorConfig{}).empty(), "A statevector simulation got a deduplication cadence");
 }
 
+void TestPauliTuningForwarding()
+{
+    using namespace MaestroExecution;
+    GetMaestroObjectWithMute();
+    const std::pair<std::optional<uint64_t> SimulatorConfig::*, const char *> fields[] = {
+        {&SimulatorConfig::pp_workers, "pauli_propagator_workers"},
+        {&SimulatorConfig::pp_max_fused_gates, "pauli_propagator_max_fused_gates"},
+        {&SimulatorConfig::pp_memory_limit_bytes, "pauli_propagator_memory_limit_bytes"},
+        {&SimulatorConfig::pp_sampling_cache_nodes, "pauli_propagator_sampling_cache_nodes"}};
+    const auto stored = [&](const SimulatorConfig &config) {
+        struct NetworkHandle
+        {
+            unsigned long handle = CreateSimpleSimulator(2);
+            ~NetworkHandle()
+            {
+                DestroySimpleSimulator(handle);
+            }
+        } owner;
+        Check(owner.handle != 0, "Cannot create network for Pauli tuning");
+        const auto network = ConfigureNetwork(owner.handle, config);
+        Check(bool(network) && network->GetSimulator(), "Cannot configure Pauli tuning network");
+        std::vector<std::string> values;
+        for (const auto &field : fields)
+            values.push_back(network->GetSimulator()->GetConfiguration(field.second));
+        return values;
+    };
+
+    SimulatorConfig config;
+    config.simulation_type = Method::kPauliPropagator;
+    config.fixed_backend = true;
+    for (const auto &value : stored(config))
+        Check(value.empty(), "An unset Pauli tuning option reached the backend");
+
+    // Zero is a valid cache size (caching off) and must not be dropped as unset.
+    config.pp_workers = 3;
+    config.pp_max_fused_gates = 17;
+    config.pp_memory_limit_bytes = 1ull << 33;
+    config.pp_sampling_cache_nodes = 0;
+    Check(stored(config) == std::vector<std::string>{"3", "17", "8589934592", "0"}, "Typed Pauli tuning options did not reach the backend");
+}
+
 void TestAutomaticGpuMixedStateFallback()
 {
     using namespace MaestroExecution;

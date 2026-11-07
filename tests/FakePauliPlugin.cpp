@@ -14,6 +14,10 @@ struct State
 
 int failAfter = -1;
 State *lastCreated = nullptr;
+#ifdef PAULI_CHECKPOINT_PLUGIN
+// Arguments of the most recent tuning and batch calls; -1 until called.
+long long lastMemoryBytes = -1, lastMaxFusedGates = -1, lastCacheNodes = -1, lastBatchWorkers = -1, lastBatchCount = -1;
+#endif
 
 int Add(void *p)
 {
@@ -85,6 +89,11 @@ extern "C"
     int PauliPropSetSeed(void *, unsigned long long)
     {
         return 1;
+    }
+
+    // Network configuration sets the default deduplication cadence.
+    void PauliPropSetNumGatesBetweenDeduplications(void *, int)
+    {
     }
 
     int PauliPropSetWillUseSampling(void *p, int enabled)
@@ -198,6 +207,42 @@ extern "C"
             return 0;
         s.gates = count;
         return 1;
+    }
+
+    // The tuning and batch symbols of newer plugins, recorded for the tests.
+    int PauliPropAllocateMemoryBytes(void *p, unsigned long long bytes)
+    {
+        lastMemoryBytes = static_cast<long long>(bytes);
+        return PauliPropAllocateMemory(p, 0);
+    }
+
+    void PauliPropSetMaxFusedGates(void *, int count)
+    {
+        lastMaxFusedGates = count;
+    }
+
+    void PauliPropSetSamplingCacheMaxNodes(void *, unsigned long long count)
+    {
+        lastCacheNodes = static_cast<long long>(count);
+    }
+
+    int PauliPropExpectationValues(void *, int count, const char *const *, double *values, int workers)
+    {
+        lastBatchCount = count;
+        lastBatchWorkers = workers;
+        for (int i = 0; i < count; ++i)
+            values[i] = 1.0;
+        return 1;
+    }
+
+    // Last memory budget, fused-gate limit, cache size, batch worker count and batch size.
+    void PauliTestLastTuning(long long *out)
+    {
+        out[0] = lastMemoryBytes;
+        out[1] = lastMaxFusedGates;
+        out[2] = lastCacheNodes;
+        out[3] = lastBatchWorkers;
+        out[4] = lastBatchCount;
     }
 #endif
 }
