@@ -780,7 +780,9 @@ void TestAutomaticMixedStateNoise()
         auto dynamic = Request("checkpoint_batch", 2, "h q[0]; cx q[0],q[1];", method);
         dynamic["suffixes"] = j::array{Request("execute", 2, "h q[1]; h q[1]; measure q[0]->c[0]; if(c==1) x q[1]; measure q->c;", method).at("circuit")};
         dynamic["execution"].as_object()["shots"] = 600;
-        const auto &counts = Call(dynamic).at("results").at(0).at("counts").as_object();
+        // Keep the result alive: at() returns a reference into it.
+        result = Call(dynamic);
+        const auto &counts = result.at("results").at(0).at("counts").as_object();
         Check(counts.size() == 2 && counts.at("00").as_int64() > 200 && counts.at("10").as_int64() > 200, "A shared dynamic suffix head changed its branches");
     }
 
@@ -799,8 +801,9 @@ void TestAutomaticMixedStateNoise()
     result = Call(sampled);
     Check(std::abs(Real(result.at("fidelity")) - 0.75) < 0.04 && !result.at("standard_error").is_null(), "Sampled Pauli noisy fidelity is wrong");
 
-    // Automatic candidate lists stay inside the list without a cost model:
-    // the first listed candidate that can hold the register runs.
+    // Automatic candidate lists stay inside the list. Without a cost model the
+    // first listed candidate that can hold the register runs; Composer builds
+    // have one and may pick any listed candidate.
     const auto automatic = [](size_t qubits, const std::string &body, std::initializer_list<const char *> methods) {
         auto request = Request("execute", qubits, body);
         auto &simulator = request["simulator"].as_object();
@@ -812,8 +815,14 @@ void TestAutomaticMixedStateNoise()
         return request;
     };
     for (const char *body : {"h q[0]; t q[0]; measure q -> c;", "h q[0]; measure q -> c;"})
-        Check(Call(automatic(1, body, {"density_matrix", "statevector"})).at("execution_metadata").at("method") == "density_matrix",
-              "Automatic selection ran a backend outside its candidate list");
+    {
+        const auto chosen = Call(automatic(1, body, {"density_matrix", "statevector"})).at("execution_metadata").at("method");
+#ifdef MAESTRO_ENABLE_COMPOSER
+        Check(chosen == "density_matrix" || chosen == "statevector", "Automatic selection ran a backend outside its candidate list");
+#else
+        Check(chosen == "density_matrix", "Automatic selection without a cost model skipped the first listed candidate");
+#endif
+    }
     std::string wide;
     for (size_t qubit = 0; qubit < 40; qubit += 2)
         wide += "x q[" + std::to_string(qubit) + "]; ";

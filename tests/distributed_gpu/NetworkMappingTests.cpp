@@ -324,7 +324,7 @@ void Placement()
     net->resolvedDistributedDevices[Type::kDistGpuSim] = "2,3,4,5";
     for (size_t n : {8, 2, 1, 8})
     {
-        const auto cfg = net->ExecutionConfiguration(Type::kDistGpuSim, n);
+        const auto cfg = net->ExecutionConfiguration(Type::kDistGpuSim, n, Method::kStatevector);
         const auto want = n == 1 ? "2" : n == 2 ? "2,3" : "2,3,4,5";
         Require(cfg.GetConfiguration("distributed_devices") == want, "automatic shard resizing");
         net->simulator->Configure("distributed_devices", want);
@@ -332,11 +332,14 @@ void Placement()
         Require(net->configuration.GetConfiguration("distributed_devices").empty(), "resolved devices became user settings");
     }
     net->resolvedDistributedDevices[Type::kDistMpiGpuSim] = "0,0,0,0";
-    Require(net->ExecutionConfiguration(Type::kDistMpiGpuSim, 1).GetConfiguration("distributed_devices") == "0,0,0,0", "MPI ranks were shrunk");
+    Require(net->ExecutionConfiguration(Type::kDistMpiGpuSim, 1, Method::kStatevector).GetConfiguration("distributed_devices") == "0,0,0,0",
+            "MPI ranks were shrunk");
     net->configuration.SetConfiguration("distributed_global_qubits", "0,1");
-    Require(net->ExecutionConfiguration(Type::kDistGpuSim, 1).GetConfiguration("distributed_devices") == "2,3,4,5", "explicit globals overridden");
+    Require(net->ExecutionConfiguration(Type::kDistGpuSim, 1, Method::kStatevector).GetConfiguration("distributed_devices") == "2,3,4,5",
+            "explicit globals overridden");
     net->Configure("distributed_devices", "6,7");
-    Require(net->ExecutionConfiguration(Type::kDistGpuSim, 1).GetConfiguration("distributed_devices") == "6,7", "explicit shards overridden");
+    Require(net->ExecutionConfiguration(Type::kDistGpuSim, 1, Method::kStatevector).GetConfiguration("distributed_devices") == "6,7",
+            "explicit shards overridden");
     Require(net->resolvedDistributedDevices.empty(), "new device selection retained old placement");
 }
 
