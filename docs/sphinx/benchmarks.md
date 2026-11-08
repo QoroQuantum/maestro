@@ -58,7 +58,11 @@ depth equal to the number of qubits:
 | 24 | 2.8 s | 1.7 s | 1.7× | 30 s | 1.8 s | 17× |
 | 28 | 62 s | 35 s | 1.8× | 663 s | 34 s | 19× |
 | 30 | 289 s | 157 s | 1.8× | 3,038 s | 157 s | 19× |
-| 32 | 1,321 s | 717 s | 1.8× | over 1 h | 714 s | |
+| 32 | 1,321 s | 717 s | 1.8× | over 1 h | 714 s | over 5× |
+
+At 32 qubits `lightning.qubit` passed the 1-hour limit, so "over 5×" is a
+lower bound: the 1-hour limit divided by Maestro's time. The other "over"
+speed-ups on this page are bounds of the same kind.
 
 Quantum-volume circuits give the same picture: 1.8× against Aer at 32 qubits.
 `lightning.qubit` also used three times the memory (50 GB at 30 qubits,
@@ -188,8 +192,11 @@ the times compare like for like:
 | 32 | 2.1 s / 1.3 s | 1.6× | 15 s / 6.6 s | 2.2× |
 | 64 | 9.9 s / 3.9 s | 2.5× | 82 s / 21 s | 3.8× |
 | 128 | 58 s / 12 s | 4.8× | 518 s / 73 s | 7.1× |
-| 256 | 391 s / 35 s | 9.9× | over 1 h / 239 s | |
-| 512 | | | over 1 h / 466 s | |
+| 256 | 391 s / 35 s | 9.9× | over 1 h / 239 s | over 15× |
+| 512 | not run | not run | over 1 h / 466 s | over 7× |
+
+Bond dimension 512 was not run at 28 qubits because 256 is already exact
+there.
 
 At 28 qubits, bond dimension 256 matches the exact statevector to 8 × 10⁻⁶ in
 every ⟨Z⟩, in 35 s on Maestro against 391 s on Aer. At 100 qubits only Maestro
@@ -288,11 +295,12 @@ state and keeps going:
 | Qubits | Aer density matrix | Maestro density matrix | `default.mixed` | Maestro MPO | MPO against Aer |
 |---:|---:|---:|---:|---:|---:|
 | 15 | 93 s, 16 GB | 621 s, 64 GB | over 1 h | 0.60 s | 3 × 10⁻⁶ |
-| 16 | 404 s, 64 GB | out of memory | | 0.67 s | 2 × 10⁻⁶ |
-| 17 | out of memory | | | 0.68 s | |
-| 50 | | | | 3.2 s | |
-| 100 | | | | 6.5 s | |
+| 16 | 404 s, 64 GB | out of memory | not run | 0.67 s | 2 × 10⁻⁶ |
+| 17 | out of memory | not run | not run | 0.68 s | no reference |
+| 50 | not run | not run | not run | 3.2 s | no reference |
+| 100 | not run | not run | not run | 6.5 s | no reference |
 
+Once a simulator runs out of memory or time, larger sizes are not run for it.
 The last column is the largest difference in any ⟨Z⟩ between the MPO, with
 its bond dimension capped at 128, and Aer's exact density matrix.
 
@@ -317,8 +325,8 @@ absolute error) of a bond-dimension-512 MPO. At 10⁻⁴:
 |---|---:|---:|---:|
 | Depolarizing, 20 | 0.87 s | 185 s | 299 s |
 | Depolarizing, 50 | 3.0 s | 430 s | 692 s |
-| Depolarizing and damping, 20 | 0.87 s | about 3.8 h (extrapolated) | |
-| Depolarizing and damping, 50 | 3.1 s | about 17 h (extrapolated) | |
+| Depolarizing and damping, 20 | 0.87 s | about 3.8 h (extrapolated) | not run |
+| Depolarizing and damping, 50 | 3.1 s | about 17 h (extrapolated) | not run |
 
 Extrapolated times assume the error keeps falling as one over the square root
 of the number of trajectories; the runs themselves stopped at the 1-hour limit.
@@ -350,7 +358,7 @@ two (MPS and statevector):
 | 32 | 1,000,000 | 2,032 s | 368 s | 38 s | 53× |
 | 50 | 10,000 | 49 s | 5.4 s | 2.8 s | 17× |
 | 50 | 100,000 | 491 s | 55 s | 8.7 s | 56× |
-| 50 | 1,000,000 | over 1 h | 613 s | 68 s | |
+| 50 | 1,000,000 | over 1 h | 613 s | 68 s | over 50× |
 
 Maestro's MPS is 4 to 9 times faster than Aer's. On statevectors, at 20 qubits
 and 10,000 shots, Maestro took 127 s against Aer's 615 s. At 100,000 shots
