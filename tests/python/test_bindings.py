@@ -1043,6 +1043,26 @@ class TestStabilizerSimulation:
         total = sum(counts.values())
         assert total == 10000
 
+    @pytest.mark.parametrize("shots", [10, 1000])
+    def test_fixed_stabilizer_rejects_t_gate(self, shots):
+        """A fixed stabilizer's shot workers meeting a T gate used to abort the process."""
+        from maestro.circuits import QuantumCircuit
+        qc = QuantumCircuit()
+        qc.h(0)
+        qc.t(0)
+        qc.measure_all()
+        config = maestro.SimulatorConfig(
+            simulator_type=maestro.SimulatorType.QCSim,
+            simulation_type=maestro.SimulationType.Stabilizer,
+            fixed_backend=True,
+        )
+        with pytest.raises(RuntimeError, match="non-clifford"):
+            qc.execute(config=config, shots=shots)
+        nm = maestro.NoiseModel()
+        nm.set_all_depolarizing(1, 0.01)
+        with pytest.raises(RuntimeError, match="non-clifford"):
+            maestro.noisy_execute(qc, nm, config=config, shots=shots)
+
 
 class TestPauliPropagatorSimulation:
     """Test the Pauli Propagator simulation backend"""

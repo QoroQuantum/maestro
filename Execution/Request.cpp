@@ -13,6 +13,7 @@
 #include "maestrolib/Json.h"
 #include "qasm/QasmCirc.h"
 #include "Json/NoiseJson.h"
+#include <algorithm>
 #include <chrono>
 #include <climits>
 #include <complex>
@@ -490,6 +491,41 @@ void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, con
     }
 }
 
+// Channels are left to CheckChannels: a pure-state backend admits only sampled
+// Pauli channels, which run as Pauli gates.
+bool RunsOnStabilizer(const std::shared_ptr<Circuits::IOperation<>> &op)
+{
+    if (op->GetType() == Circuits::OperationType::kQuantumChannel)
+        return true;
+    if (op->GetType() == Circuits::OperationType::kComposite)
+    {
+        const auto &operations = std::static_pointer_cast<Circuit>(op)->GetOperations();
+        return std::all_of(operations.begin(), operations.end(), RunsOnStabilizer);
+    }
+    return op->IsClifford();
+}
+
+// A fixed stabilizer applies Clifford gates only; another gate would fail while
+// the shots run. Check the circuit as it runs: the network optimizes a copy
+// first unless optimize_circuit is off (T;T becomes S), while direct
+// operations apply the circuit as given.
+void CheckStabilizerGates(const CircuitPtr &circuit, const SimulatorConfig &config, bool networkExecuted)
+{
+    if (!config.fixed_backend || config.simulation_type != Simulators::SimulationType::kStabilizer)
+        return;
+    auto executed = circuit;
+    if (networkExecuted && config.optimize_circuit)
+    {
+        // Optimize replaces operations and never enters nested circuits, so a
+        // new container leaves the request's circuit unchanged.
+        executed = std::make_shared<Circuit>(circuit->GetOperations());
+        executed->Optimize();
+    }
+    const auto &operations = executed->GetOperations();
+    Supported(std::all_of(operations.begin(), operations.end(), RunsOnStabilizer),
+              "The stabilizer method supports only Clifford gates; the circuit has a non-Clifford gate");
+}
+
 using Counts = std::map<std::string, uint64_t>;
 
 json::object EncodeCounts(const Counts &counts)
@@ -939,6 +975,12 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     if (AdjointOperation(operation))
         return RunAdjoint(request, operation, config, input, noise, validate, limit);
     CheckChannels(input.circuit, config, noise);
+    // Estimates and disjoint sampling run only the gates inside the
+    // observables' or measurements' cones, so a non-Clifford gate outside them
+    // never reaches the stabilizer; the simulator's own error covers the rest.
+    const bool checkStabilizer = operation != "validate" && operation != "estimate" && !(operation == "execute" && config.enable_sampling_reduction);
+    if (checkStabilizer)
+        CheckStabilizerGates(input.circuit, config, operation == "execute");
     const auto observables = Observables(request, input.qubits);
     if (operation == "estimate" || operation == "incremental_evolve")
         Require(!observables.empty(), "This operation requires observables");
@@ -1044,6 +1086,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     for (const auto &other : additional)
     {
         CheckChannels(other.circuit, config, noise);
+        if (checkStabilizer)
+            CheckStabilizerGates(other.circuit, config, false);
         circuitChannels = circuitChannels || HasChannels(other.circuit);
     }
     Require(!noise.enabled || noise.channel_count > 0 || circuitChannels,

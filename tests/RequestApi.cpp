@@ -532,10 +532,54 @@ void TestCandidateWidthRequests()
           "The requested MPO method sized a density-matrix candidate at the declared width");
 }
 
+void TestStabilizerNonClifford()
+{
+    // A fixed stabilizer met the T gate on a shot worker, which terminated the
+    // process. Validation rejects it instead, before any shot runs.
+    const auto rejected = [](j::object request, const char *message) {
+        Check(Call(request, false, true).at("error").at("code") == "unsupported_capability", message);
+        Check(Call(request, false).at("error").at("code") == "unsupported_capability", message);
+    };
+    for (size_t shots : {1, 10, 1000})
+        for (bool seeded : {false, true})
+        {
+            auto request = Request("execute", 1, "h q[0]; t q[0]; measure q -> c;", "stabilizer");
+            request["execution"].as_object()["shots"] = shots;
+            if (!seeded)
+                request["execution"].as_object().erase("seed");
+            rejected(request, "A fixed stabilizer accepted a T gate");
+            request["execution"].as_object()["return_samples"] = true;
+            rejected(request, "A fixed stabilizer sampled rows of a T gate");
+        }
+    rejected(Request("execute", 2, "h q[0]; cx q[0],q[1]; t q[1]; measure q -> c;", "stabilizer"), "A fixed stabilizer accepted an entangled T gate");
+    rejected(Request("probabilities", 1, "h q[0]; t q[0];", "stabilizer"), "A stabilizer query accepted a T gate");
+    // The network optimizes the circuit first: T;T becomes the Clifford S.
+    auto merged = Request("execute", 1, "h q[0]; t q[0]; t q[0]; measure q -> c;", "stabilizer");
+    Check(Call(merged).at("shots").to_number<size_t>() == 80, "A fixed stabilizer rejected T;T, which runs as S");
+    merged["simulator"].as_object()["options"] = j::object{{"optimize_circuit", false}};
+    rejected(merged, "An unoptimized fixed stabilizer accepted T;T");
+    // A gate outside the measured cone never reaches a disjoint sampler.
+    auto disjoint = Request("execute", 2, "t q[1]; h q[0]; measure q[0] -> c[0];", "stabilizer", 1);
+    disjoint["simulator"].as_object()["options"] = j::object{{"enable_sampling_reduction", true}};
+    Check(Call(disjoint).at("shots").to_number<size_t>() == 80, "Disjoint sampling rejected a T gate outside the measured cone");
+    // Inside the cone the simulator rejects the gate on shot workers: an error
+    // result, not a terminated process.
+    disjoint["circuit"].as_object()["source"] = "OPENQASM 2.0;\nqreg q[2]; creg c[1];\nh q[0]; t q[0]; measure q[0] -> c[0];";
+    disjoint["execution"].as_object()["shots"] = 1000;
+    Check(Call(disjoint, false).at("error").at("code") == "native_failure", "A stabilizer shot worker's error was not reported");
+    // The same for an estimate: only the observable's cone runs.
+    auto estimate = Request("estimate", 2, "t q[1]; h q[0];", "stabilizer");
+    estimate["observables"] = j::array{"XI"};
+    Near(Real(Call(estimate).at("expectation_values").as_array()[0]), 1);
+    estimate["circuit"].as_object()["source"] = "OPENQASM 2.0;\nqreg q[2]; creg c[2];\nh q[0]; t q[0];";
+    Check(Call(estimate, false).at("error").at("code") == "native_failure", "A stabilizer estimate accepted a T gate in the cone");
+}
+
 int main()
 try
 {
     Check(maestro_request_c_header_test(), "C header/ABI ownership check failed");
+    TestStabilizerNonClifford();
     TestFixedBackendShotReuse();
     TestNetworkSimulatorPlaceholders();
     TestCandidateWidthRequests();

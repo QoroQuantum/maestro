@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An exception thrown by a network's shot worker (a stabilizer meeting a T
+  gate) terminated the process. `Utils::ThreadsPool` now keeps the first one,
+  skips the jobs still queued and rethrows it from `WaitForFinish()`, so
+  Python raises `RuntimeError` and a native request returns `native_failure`.
+  A native request for a fixed `stabilizer` method whose circuit has a
+  non-Clifford gate, after the network's optimizer (`T;T` runs as `S`), is
+  rejected before any shot runs with `unsupported_capability`. Estimates and
+  disjoint sampling, which run only the gates in their cones, keep the
+  simulator's own error.
 - Candidate lists were tested at the declared width. One active qubit of a
   40-qubit circuit now runs on a listed density matrix. A requested MPO with a
   lone density-matrix candidate no longer fails with a size overflow.

@@ -1935,6 +1935,88 @@ void ThreadsPoolReleasesFinishedJobs()
     }
 }
 
+struct ThrowingPoolJob
+{
+    std::shared_ptr<std::atomic<size_t>> runs;
+    bool fails = false;
+
+    void DoWork()
+    {
+        ++*runs;
+        if (fails)
+            throw std::runtime_error("pool job failed");
+    }
+
+    size_t GetJobCount() const
+    {
+        return 1;
+    }
+};
+
+void ThreadsPoolRethrowsJobFailures()
+{
+    // An exception escaping a worker terminated the process. The waiter
+    // rethrows the first one once every job is counted (those queued after
+    // it are skipped), and the next batch runs as usual.
+    Utils::ThreadsPool<ThrowingPoolJob> pool;
+    pool.Resize(4);
+    const auto runs = std::make_shared<std::atomic<size_t>>(0);
+    for (int round = 0; round < 20; ++round)
+    {
+        pool.SetFinishLimit(64);
+        for (int i = 0; i < 64; ++i)
+            pool.AddRunJob(std::make_shared<ThrowingPoolJob>(ThrowingPoolJob{runs, i % 8 == 3}));
+        std::string message;
+        try
+        {
+            pool.WaitForFinish();
+        }
+        catch (const std::runtime_error &error)
+        {
+            message = error.what();
+        }
+        Check(message == "pool job failed", "A pool job's exception did not reach the waiter");
+        runs->store(0);
+        pool.SetFinishLimit(32);
+        for (int i = 0; i < 32; ++i)
+            pool.AddRunJob(std::make_shared<ThrowingPoolJob>(ThrowingPoolJob{runs, false}));
+        pool.WaitForFinish();
+        Check(runs->load() == 32, "A failed batch kept the pool from running the next one");
+    }
+}
+
+void StabilizerShotWorkersReportFailures()
+{
+    // A stabilizer's shot blocks meet the T gate on pool workers. The
+    // rejection reaches the caller as an exception, and the network then runs
+    // a Clifford circuit as usual.
+    auto network = MakeNetwork(Backend::kQCSim, Method::kStabilizer, 1, 1);
+    network->SetMaxSimulators(4);
+    network->SetTrajectoryMinWorkerMicros(0);
+    auto circuit = CF::CreateCircuit();
+    circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+    circuit->AddOperation(CF::CreateGate(Gate::kTGateType, 0));
+    circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    for (size_t shots : {10, 1027})
+    {
+        std::string message;
+        try
+        {
+            network->RepeatedExecuteOnHost(circuit, 0, shots);
+        }
+        catch (const std::runtime_error &error)
+        {
+            message = error.what();
+        }
+        Check(message.find("non-clifford") != std::string::npos, "A stabilizer's shot workers did not report the T gate: " + message);
+    }
+    auto clifford = CF::CreateCircuit();
+    clifford->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    clifford->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    const auto counts = network->RepeatedExecuteOnHost(clifford, 0, 1027);
+    Check(counts.size() == 1 && counts.begin()->first[0] && counts.begin()->second == 1027, "A failed stabilizer run broke the next one");
+}
+
 #ifdef MAESTRO_POOL_FORK_HANDLERS
 void ForkWhileWaitingForJobs()
 {
@@ -2729,6 +2811,8 @@ try
     NoiseEstimateResetStreams();
     ThreadsPoolResize();
     ThreadsPoolReleasesFinishedJobs();
+    ThreadsPoolRethrowsJobFailures();
+    StabilizerShotWorkersReportFailures();
 #ifdef MAESTRO_POOL_FORK_HANDLERS
     ForkWhileWaitingForJobs();
 #endif
