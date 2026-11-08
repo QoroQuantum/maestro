@@ -31,7 +31,7 @@ class PrefixCheckpointedSimulator
         const auto requested = noise_realizations ? std::optional<size_t>(static_cast<size_t>(*noise_realizations)) : std::nullopt;
         static const noise::NoiseModel no_noise;
         if (MaestroExecution::PrefixCheckpoint::HasNoise(suffix_circuit, noise_model))
-            warn_thermal_approximation(noise_model ? *noise_model : no_noise, config_);
+            warn_thermal_approximation(noise_model ? *noise_model : no_noise, config_, suffix_circuit);
 
         MaestroExecution::ShotRecords records;
         {

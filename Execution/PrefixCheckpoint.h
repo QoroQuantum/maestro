@@ -41,7 +41,11 @@ class PrefixCheckpoint
     // usual trajectory default otherwise. A call's
     // noise_seed (32 bits) seeds injection, measurement and readout. A seeded
     // checkpoint called without one derives a new seed per call, so a sequence
-    // of calls replays without repeating a batch. Not safe for concurrent calls.
+    // of calls replays without repeating a batch. On the QCSim extended
+    // stabilizer, after a gate-only prefix, noisy suffixes that frames support
+    // run on batched Pauli frames (extended_frame_v1) when PreferExtendedFrames
+    // admits the call: unseeded under counts_policy auto, or frame_v1.
+    // Not safe for concurrent calls.
     MAESTRO_TRANSFORM_API ShotRecords ExecuteSuffix(const RecordCircuitPtr &suffix, size_t shots, const noise::NoiseModel *noise_model,
                                                     std::optional<size_t> noise_realizations, std::optional<uint64_t> noise_seed, size_t num_measurements,
                                                     bool rows);
@@ -70,5 +74,9 @@ class PrefixCheckpoint
     std::shared_ptr<Simulators::ISimulator> simulator_;
     size_t max_bond_dim_ = 0;
     uint64_t calls_ = 0; // ExecuteSuffix calls, for per-call seeds
+    // The ideal gate-only prefix of an extended_stabilizer checkpoint, which
+    // batched frames evolve once per call for noisy suffixes.
+    RecordCircuitPtr frame_prefix_;
+    bool frame_prefix_usable_ = false;
 };
 } // namespace MaestroExecution

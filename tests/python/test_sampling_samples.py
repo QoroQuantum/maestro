@@ -476,6 +476,48 @@ def test_public_reference_frame_sampler_rejects_what_frames_cannot_represent():
     assert maestro.compile_reference_sampler(clifford, None, gpu) is None
 
 
+def test_noisy_reference_frames_keep_the_scalar_seed_and_thermal_rules():
+    """noise_seed drives circuit errors and config.seed the outcomes; clamped thermal noise keeps trajectories."""
+    flipped = QuantumCircuit()
+    flipped.x(0)
+    flipped.measure([(0, 0)])
+    flip = maestro.NoiseModel()
+    flip.set_bit_flip(0, 0.3)
+
+    def rows(circuit, model, seed, noise_seed):
+        result = circuit.noisy_execute(model, config=_config(maestro.SimulationType.Stabilizer, seed=seed), shots=200, noise_realizations=200,
+                                       noise_seed=noise_seed, return_samples=True)
+        assert result["sampling_strategy"] == "reference_frame_v1"
+        return result["samples"]
+
+    # A deterministic measurement: only the noise seed decides a row.
+    assert np.array_equal(rows(flipped, flip, 1, 7), rows(flipped, flip, 2, 7))
+    assert not np.array_equal(rows(flipped, flip, 1, 7), rows(flipped, flip, 1, 8))
+    # A random measurement with noise elsewhere: only the measurement seed.
+    random = QuantumCircuit()
+    random.h(0)
+    random.x(1)
+    random.measure([(0, 0)])
+    aside = maestro.NoiseModel()
+    aside.set_bit_flip(1, 0.3)
+    assert np.array_equal(rows(random, aside, 1, 7), rows(random, aside, 1, 8))
+    assert not np.array_equal(rows(random, aside, 1, 7), rows(random, aside, 2, 7))
+    # Trajectories clamp T2 > T1 to T1; exact channels on frames would not.
+    clifford = QuantumCircuit()
+    clifford.h(0)
+    clifford.s(0)
+    clifford.h(0)
+    clifford.measure([(0, 0)])
+    exact = maestro.NoiseModel()
+    exact.set_thermal_relaxation(0, 1.0, 1.0, 1.0, 0.5)
+    rows(clifford, exact, 3, 3)
+    window = maestro.NoiseModel()
+    window.set_thermal_relaxation(0, 1.0, 1.0, 2.0, 0.5)
+    result = clifford.noisy_execute(window, config=_config(maestro.SimulationType.Stabilizer, seed=3), shots=200, noise_realizations=200,
+                                    noise_seed=3, return_samples=True)
+    assert result.get("sampling_strategy") != "reference_frame_v1"
+
+
 @pytest.mark.parametrize("method", [maestro.SimulationType.Stabilizer, maestro.SimulationType.Statevector])
 def test_rows_follow_sampling_reduction_like_counts(method):
     circuit = QuantumCircuit()

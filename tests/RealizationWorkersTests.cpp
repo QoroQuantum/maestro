@@ -698,6 +698,57 @@ void NoiseAddFrameCountPolicies()
     const auto baseline = legacySparse.noisy_execute(sparse, makeNetwork("legacy"), 0, certain, 83, 83);
     Require(counts == baseline && counts.size() == 1 && counts.at(std::vector<bool>(5, false)) == 83,
             "frame counts changed sparse classical output width or network padding");
+
+    const auto measured = [](std::initializer_list<std::shared_ptr<Circuits::IOperation<>>> gates) {
+        auto circuit = std::make_shared<Circuits::Circuit<>>();
+        for (const auto &gate : gates)
+            circuit->AddOperation(gate);
+        circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
+        return circuit;
+    };
+    // Frames inject exact channels: thermal noise that the trajectories clamp
+    // (T1 < T2 <= 2 T1), and warn about, keeps the trajectories.
+    const auto twice = measured({std::make_shared<Circuits::HadamardGate<>>(0), std::make_shared<Circuits::HadamardGate<>>(0)});
+    for (const double t2 : {2.0, 1.0})
+    {
+        noise::NoiseModel thermal;
+        thermal.set_thermal_relaxation(0, 1.0, 1.0, t2, 0.5);
+        noise::NoiseAdd framedAdd, legacyAdd;
+        for (auto *add : {&framedAdd, &legacyAdd})
+        {
+            add->set_warning_handler([](const std::string &) {});
+            add->seed(4);
+        }
+        const bool same = framedAdd.full_noise_execute(twice, makeNetwork("frame_v1"), 0, thermal, 2000, 2000) ==
+                          legacyAdd.full_noise_execute(twice, makeNetwork("legacy"), 0, thermal, 2000, 2000);
+        Require(same == (t2 > 1.0), t2 > 1.0 ? "clamped thermal noise ran on frames" : "unclamped thermal noise left frames");
+    }
+
+    // Frame errors follow the noise seed and outcomes the simulator seed, as
+    // on the trajectories, so either can change alone.
+    const auto seededFrames = [&](const std::shared_ptr<Circuits::Circuit<>> &circuit, const noise::NoiseModel &model, const char *simulatorSeed,
+                                  unsigned noiseSeed) {
+        auto network = makeNetwork("frame_v1");
+        network->Configure("seed", simulatorSeed);
+        noise::NoiseAdd add;
+        add.seed(noiseSeed);
+        return add.full_noise_execute(circuit, network, 0, model, 2000, 2000);
+    };
+    const auto flipped = measured({std::make_shared<Circuits::XGate<>>(0)});
+    noise::NoiseModel flip;
+    flip.set_bit_flip(0, 0.3);
+    Require(seededFrames(flipped, flip, "1", 7) == seededFrames(flipped, flip, "2", 7), "the simulator seed changed frame errors");
+    Require(seededFrames(flipped, flip, "1", 7) != seededFrames(flipped, flip, "1", 8), "the noise seed did not drive frame errors");
+    const auto coin = measured({std::make_shared<Circuits::HadamardGate<>>(0), std::make_shared<Circuits::XGate<>>(1)});
+    noise::NoiseModel aside;
+    aside.set_bit_flip(1, 0.3);
+    Require(seededFrames(coin, aside, "1", 7) == seededFrames(coin, aside, "1", 8), "the noise seed changed frame outcomes");
+    Require(seededFrames(coin, aside, "1", 7) != seededFrames(coin, aside, "2", 7), "the simulator seed did not drive frame outcomes");
+
+    // A null circuit injects to null, warning or not.
+    noise::NoiseAdd nullInjector;
+    Require(!nullInjector.inject(nullptr, flip) && !nullInjector.inject_combined(nullptr, flip), "a null circuit did not inject to null");
+
     bool rejected = false;
     try
     {

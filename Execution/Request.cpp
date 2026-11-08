@@ -1,5 +1,6 @@
 // Versioned native computational API. No Python types or runtime are used.
 #include "Request.h"
+#include "ExtendedFrameSampler.h"
 
 #include "AdjointDifferentiation.h"
 #include "Capabilities.h"
@@ -973,7 +974,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     };
     rejectReadout(input.circuit);
     if (AdjointOperation(operation))
+    {
+        RefineThermalApproximation(noise, {input.circuit.get()});
         return RunAdjoint(request, operation, config, input, noise, validate, limit);
+    }
     CheckChannels(input.circuit, config, noise);
     // Estimates and disjoint sampling run only the gates inside the
     // observables' or measurements' cones, so a non-Clifford gate outside them
@@ -1081,6 +1085,16 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             if (noise.policy.stochastic_noise)
                 AddApproximation(noise, "finite_noise_realizations");
         }
+    }
+    {
+        // The circuits the model's noise acts on: checkpoint suffixes (and the
+        // prefix with noise.prefix), or the request's circuits.
+        std::vector<const Circuits::Circuit<double> *> noisy;
+        if (operation != "checkpoint_batch" || noise.prefix)
+            noisy.push_back(input.circuit.get());
+        for (const auto &other : additional)
+            noisy.push_back(other.circuit.get());
+        RefineThermalApproximation(noise, noisy);
     }
     bool circuitChannels = HasChannels(input.circuit);
     for (const auto &other : additional)
@@ -1332,6 +1346,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // Resolve an omitted seed only after validation. MPI execution obtains one
     // shared random seed, while validation needs neither entropy nor collectives.
     const bool prefer_frame_counts = PreferFrameCounts(config);
+    // Extended-stabilizer frames, decided the same way: an unseeded auto
+    // request opts in before it receives the seed that replays it.
+    const bool prefer_extended_frames = PreferExtendedFrames(config);
     if (!config.seed)
     {
         config.seed = Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options);
@@ -1349,7 +1366,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             options.layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
             options.rows = true;
             options.exact_channels = noise.exact;
-            records = ExecuteNoisy(circuit, noise.model, config, shots, noise.realizations, noise.seed, options);
+            auto frame_config = config;
+            if (prefer_extended_frames)
+                frame_config.counts_policy = "frame_v1";
+            records = ExecuteNoisy(circuit, noise.model, frame_config, shots, noise.realizations, noise.seed, options);
         }
         else
             records = SampleCircuitRows(circuit, config, shots);
@@ -1388,6 +1408,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         executed.gate_fusion_max_qubits = records.gate_fusion_max_qubits;
         auto metadata = ReductionMetadata(executed, config);
         metadata["sampling_strategy"] = records.sampling_strategy;
+        // Replaying the returned seed also requires the resolved policy.
+        if (records.sampling_strategy == "extended_frame_v1")
+            metadata["configured_options"].as_object()["counts_policy"] = "frame_v1";
         result["shots"] = shots;
         result["sampling_components"] = records.components;
         result["largest_component_qubits"] = records.largest_component;
@@ -1403,8 +1426,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
         return result;
     }
+    // Exact channels would keep a calibrated T2 that the trajectories clamp to
+    // T1 (thermal_T2_clamped_to_T1), so that window keeps the trajectories.
     if (operation == "execute" && prefer_frame_counts && (!noise.enabled || noise.realizations >= shots) && noise.mode != "coherent" &&
-        noise.model.inject_noise_covers_model())
+        noise.model.inject_noise_covers_model() && !(noise.enabled && noise.model.has_thermal_in_sampled_overdephasing_regime_on(*circuit)))
     {
         auto channels = noise::inject_exact_noise(circuit, noise.model);
         noise::attach_readout_error(channels, noise.model);
@@ -1413,9 +1438,11 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             // This path returns before the ordinary executor's warning below.
             if (!noise.thermal_approximation_warning.empty())
                 std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
-            const auto seed = noise.enabled ? Simulators::IState::DeriveSeed(*config.seed, noise.seed) : *config.seed;
+            // The noise seed drives channel errors and the request seed the
+            // measurements and readout, as on the trajectory path.
+            const ReferenceFrameSampler::Seeds seeds{noise.enabled ? uint64_t(noise.seed) : *config.seed, *config.seed};
             Counts counts;
-            for (const auto &[bits, count] : plan->SampleCounts(shots, seed))
+            for (const auto &[bits, count] : plan->SampleCounts(shots, seeds))
                 counts[Bits(bits, input.clbits)] += count;
             SamplingResult frame;
             frame.simulator = Simulators::SimulatorType::kQCSim;
@@ -1441,6 +1468,50 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                                 {"basis_order", "qubit_0_least_significant"}};
             if (noise.enabled)
                 result["noise"] = NoiseMetadata(noise, std::min(shots, noise.realizations));
+            Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
+            return result;
+        }
+    }
+    // Noisy extended_stabilizer counts on batched frames, under the realization
+    // schedule: shots of one realization share its errors. Exact channels ask
+    // for the channel itself and keep the ordinary executor, as do circuits
+    // and noise the frames cannot represent.
+    if (operation == "execute" && prefer_extended_frames && noise.enabled && !noise.exact && (noise.mode == "pauli" || noise.mode == "combined"))
+    {
+        const size_t realizations = std::min(shots, noise.realizations);
+        std::vector<uint8_t> unused;
+        FrameOutcomes outcomes;
+        if (SampleExtendedFrames(circuit, noise.model, config, input.qubits, input.clbits, shots, realizations, noise.seed, *config.seed, false, unused,
+                                 outcomes))
+        {
+            if (!noise.thermal_approximation_warning.empty())
+                std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
+            Counts counts;
+            for (const auto &[bits, count] : outcomes)
+                counts[Bits(bits, input.clbits)] += count;
+            SamplingResult frame;
+            frame.simulator = Simulators::SimulatorType::kQCSim;
+            frame.method = Simulators::SimulationType::kExtendedStabilizer;
+            frame.components = 1;
+            frame.largest_component = input.qubits;
+            auto metadata = ReductionMetadata(frame, config);
+            metadata["sampling_strategy"] = "extended_frame_v1";
+            // Replaying the returned seed also requires the resolved policy.
+            metadata["configured_options"].as_object()["counts_policy"] = "frame_v1";
+            json::object result{{"schema_version", SchemaVersion},
+                                {"operation", operation},
+                                {"num_qubits", input.qubits},
+                                {"num_clbits", input.clbits},
+                                {"counts", EncodeCounts(counts)},
+                                {"shots", shots},
+                                {"sampling_components", 1},
+                                {"largest_component_qubits", input.qubits},
+                                {"seed", *config.seed},
+                                {"execution_metadata", std::move(metadata)},
+                                {"time_taken", std::chrono::duration<double>(Clock::now() - start).count()},
+                                {"count_order", "classical_bit_0_first"},
+                                {"basis_order", "qubit_0_least_significant"}};
+            result["noise"] = NoiseMetadata(noise, realizations);
             Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
             return result;
         }
@@ -1586,6 +1657,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     std::mt19937 rng(noise.seed);
     const noise::NoiseInjectionPlan plan(circuit, noise.model);
     json::object result{{"schema_version", SchemaVersion}, {"operation", operation}, {"num_qubits", input.qubits}, {"num_clbits", input.clbits}};
+    // Whether a checkpoint_batch suffix ran on extended-stabilizer frames.
+    bool frame_suffixes = false;
     // As in the non-distributed estimate, a dynamic estimate without sampled
     // noise still averages measurement branches.
     size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : stochastic_estimation ? kMeasurementTrajectories : 1;
@@ -1873,6 +1946,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         const bool reuse_heads = HeadCopyFits(config, input.qubits);
         const uint64_t head_streams = Simulators::IState::DeriveSeed(*config.seed, 0x6865616473ULL);
         uint64_t head_stream = 0;
+        // Noisy suffixes after an ideal gate-only prefix may run on frames.
+        const bool frame_prefix = prefer_extended_frames && noise.enabled && !noise.exact && !noise.prefix &&
+                                  (noise.mode == "pauli" || noise.mode == "combined") && IsGateOnlyCircuit(*circuit);
+        bool extended_suffixes = false;
         for (const auto &suffix : additional)
         {
             // A suffix continues the saved prefix, so even a leading pure-state
@@ -1883,6 +1960,30 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             Counts counts;
             size_t terminal_batches = 0, trajectory_batches = 0;
             const size_t samples = std::min(realizations, shots);
+            // Extended-stabilizer frames evolve a gate-only prefix once and the
+            // noisy suffix for a batch of shots at a time; the realization
+            // schedule is the same.
+            if (frame_prefix)
+            {
+                std::vector<uint8_t> unused;
+                FrameOutcomes outcomes;
+                // Each suffix has its own noise and measurement streams.
+                const uint64_t noise_stream = Simulators::IState::DeriveSeed(noise.seed, outputs.size());
+                const uint64_t measurement_stream = Simulators::IState::DeriveSeed(*config.seed, outputs.size());
+                if (SampleExtendedFrames(suffix.circuit, noise.model, config, input.qubits, input.clbits, shots, samples, noise_stream, measurement_stream,
+                                         false, unused, outcomes, circuit))
+                {
+                    for (const auto &[bits, count] : outcomes)
+                        counts[Bits(bits, input.clbits)] += count;
+                    outputs.emplace_back(json::object{{"counts", EncodeCounts(counts)},
+                                                      {"shots", shots},
+                                                      {"sampling_strategy", "extended_frame_v1"},
+                                                      {"stochastic_execution", stochastic_suffix},
+                                                      {"realizations", samples}});
+                    extended_suffixes = true;
+                    continue;
+                }
+            }
             for (size_t r = 0; r < samples; ++r)
             {
                 const auto noisy = Inject(suffixPlan, noise, rng);
@@ -1927,6 +2028,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         result["results"] = std::move(outputs);
         if (noise.enabled)
             result["noise_scope"] = noise.prefix ? "prefix_and_suffix" : "suffix_only_ideal_prefix";
+        frame_suffixes = extended_suffixes;
     }
     else
     {
@@ -1981,6 +2083,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         }
     }
     result["execution_metadata"] = Metadata(*metadata_context, config, operation == "execute" || operation == "estimate");
+    // Replaying the returned seed also requires the resolved policy.
+    if (frame_suffixes)
+        if (auto *options = result["execution_metadata"].as_object().if_contains("configured_options"); options && options->is_object())
+            options->as_object()["counts_policy"] = "frame_v1";
     if (operation == "estimate")
     {
         // Distributed estimates report their evaluation like the local path.
@@ -2151,10 +2257,56 @@ boost::json::object RunSamples(const boost::json::object &request, unsigned long
     return result;
 }
 
-// A noisy Clifford circuit compiled once to reference frames: "circuit", and
-// optionally "simulator" and "noise" (incoherent Pauli-mixture channels) as in
-// an execute request.
-std::unique_ptr<MaestroExecution::ReferenceFrameSampler> CompileFrameSampler(const boost::json::object &request)
+// The compiled sampler behind the C handle: reference frames on the QCSim
+// stabilizer, or batched extended-stabilizer frames on extended_stabilizer.
+// Both draw independent noise per shot. Sampling is const and concurrent
+// calls are safe.
+struct FrameSamplerHandle
+{
+    std::optional<MaestroExecution::ReferenceFrameSampler> reference;
+    std::optional<MaestroExecution::ExtendedFrameSampler> extended;
+    size_t workers = 16;
+    size_t budgetMB = 1024;
+
+    size_t Qubits() const
+    {
+        return reference ? reference->Qubits() : extended->Qubits();
+    }
+
+    size_t Width() const
+    {
+        return reference ? reference->Width() : extended->Width();
+    }
+
+    std::vector<uint8_t> Sample(size_t shots, uint64_t seed) const
+    {
+        if (reference)
+            return reference->Sample(shots, seed);
+        std::vector<uint8_t> rows;
+        MaestroExecution::FrameOutcomes unused;
+        // The soft budget of execute: a shot that alone exceeds it runs by
+        // itself beyond it rather than failing the call by its outcomes.
+        extended->SampleWithin(shots, shots, {seed, seed}, true, workers, budgetMB, rows, unused, true);
+        return rows;
+    }
+
+    MaestroExecution::FrameOutcomes SampleCounts(size_t shots, uint64_t seed) const
+    {
+        if (reference)
+            return reference->SampleCounts(shots, seed);
+        std::vector<uint8_t> unused;
+        MaestroExecution::FrameOutcomes counts;
+        extended->SampleWithin(shots, shots, {seed, seed}, false, workers, budgetMB, unused, counts, true);
+        return counts;
+    }
+};
+
+// A noisy circuit compiled once to frames: "circuit", and optionally
+// "simulator" and "noise" (incoherent Pauli-mixture channels) as in an
+// execute request. The QCSim stabilizer (the default) compiles Clifford
+// circuits to reference frames; the QCSim extended_stabilizer compiles its
+// whole gate set to batched extended-stabilizer frames.
+std::unique_ptr<FrameSamplerHandle> CompileFrameSampler(const boost::json::object &request)
 {
     using namespace MaestroExecution;
     Keys(request, {"schema_version", "circuit", "simulator", "noise"});
@@ -2173,6 +2325,22 @@ std::unique_ptr<MaestroExecution::ReferenceFrameSampler> CompileFrameSampler(con
     const auto config = ParseConfig(Sub(execute, "simulator"));
     const auto input = ParseCircuit(Object(Field(request, "circuit")));
     const auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits);
+    auto handle = std::make_unique<FrameSamplerHandle>();
+    if (config.simulator_type == Simulators::SimulatorType::kQCSim && config.simulation_type == Simulators::SimulationType::kExtendedStabilizer &&
+        !HasCandidateList(config) && !config.enable_sampling_reduction)
+    {
+        Supported(!noise.enabled || noise.mode == "pauli" || noise.mode == "combined", "Extended frames apply pauli or combined noise only");
+        Supported(noise.model.inject_noise_covers_model(), "Extended frames cannot represent coherent, correlated or crosstalk noise");
+        auto channels = noise::inject_exact_noise(input.circuit, noise.model);
+        noise::attach_readout_error(channels, noise.model);
+        auto plan = CompileExtendedFrameSampler(channels, input.qubits, input.clbits);
+        Supported(plan.has_value(), "Extended frames do not apply: they need measurements, extended_stabilizer gates and Pauli-mixture channels, "
+                                    "without classical control");
+        handle->extended = std::move(*plan);
+        handle->workers = config.max_simulators.value_or(0);
+        handle->budgetMB = RealizationBudgetMB(config);
+        return handle;
+    }
     Supported(AdmitsReferenceFrames(config),
               "Reference frames require the qcsim stabilizer: a stabilizer method, or automatic selection whose candidates include it");
     Supported(!noise.enabled || noise.mode == "pauli" || noise.mode == "combined", "Reference frames apply pauli or combined noise only");
@@ -2182,7 +2350,8 @@ std::unique_ptr<MaestroExecution::ReferenceFrameSampler> CompileFrameSampler(con
     auto plan = CompileReferenceSampler(channels, input.qubits, input.clbits);
     Supported(plan.has_value(), "Reference frames do not apply: they need measurements, Clifford gates and Pauli-mixture channels, "
                                 "without classical control");
-    return std::make_unique<ReferenceFrameSampler>(std::move(*plan));
+    handle->reference = std::move(*plan);
+    return handle;
 }
 } // namespace
 
@@ -2207,7 +2376,7 @@ extern "C"
     {
         if (error)
             *error = nullptr;
-        std::unique_ptr<MaestroExecution::ReferenceFrameSampler> created;
+        std::unique_ptr<FrameSamplerHandle> created;
         char *envelope = NativeBoundary([&] {
             created = CompileFrameSampler(ParseRequest(request));
             return boost::json::object{{"num_qubits", created->Qubits()}, {"num_clbits", created->Width()}};
@@ -2226,14 +2395,14 @@ extern "C"
 
     void MaestroDestroyReferenceFrameSampler(void *sampler)
     {
-        delete static_cast<MaestroExecution::ReferenceFrameSampler *>(sampler);
+        delete static_cast<FrameSamplerHandle *>(sampler);
     }
 
     int MaestroReferenceFrameSamplerShape(void *sampler, size_t *qubits, size_t *clbits)
     {
         if (!sampler || !qubits || !clbits)
             return 0;
-        const auto &plan = *static_cast<const MaestroExecution::ReferenceFrameSampler *>(sampler);
+        const auto &plan = *static_cast<const FrameSamplerHandle *>(sampler);
         *qubits = plan.Qubits();
         *clbits = plan.Width();
         return 1;
@@ -2245,7 +2414,7 @@ extern "C"
             return 0;
         try
         {
-            const auto &plan = *static_cast<const MaestroExecution::ReferenceFrameSampler *>(sampler);
+            const auto &plan = *static_cast<const FrameSamplerHandle *>(sampler);
             if (!shots)
                 return 1;
             if (!rows || capacity < PackedWords(shots, plan.Width()))
@@ -2268,7 +2437,7 @@ extern "C"
         try
         {
             *written = 0;
-            const auto &plan = *static_cast<const MaestroExecution::ReferenceFrameSampler *>(sampler);
+            const auto &plan = *static_cast<const FrameSamplerHandle *>(sampler);
             if (!shots)
                 return 1;
             const size_t words = RowWords(plan.Width());

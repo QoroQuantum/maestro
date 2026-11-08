@@ -7,10 +7,11 @@ namespace maestro_bindings
 using MaestroExecution::NoiseLayer;
 
 // Warn at the execution boundary, while holding the GIL, rather than once
-// per injected realization. The shared model retains its calibrated channels.
-void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config)
+// per injected realization, for the relaxation the circuit draws. The shared
+// model retains its calibrated channels.
+void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config, const CircuitPtr &circuit)
 {
-    const auto message = MaestroExecution::ThermalApproximationWarning(noise_model, MaestroExecution::UsesExactQuantumChannels(config));
+    const auto message = MaestroExecution::ThermalApproximationWarning(noise_model, MaestroExecution::UsesExactQuantumChannels(config), *circuit);
     if (message.empty())
         return;
     if (PyErr_WarnEx(PyExc_RuntimeWarning, message.c_str(), 1) < 0)
@@ -203,7 +204,7 @@ nb::dict NoisyExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_
 {
     require_circuit(circuit);
     require_inject_noise_covers(noise_model);
-    warn_thermal_approximation(noise_model, config);
+    warn_thermal_approximation(noise_model, config, circuit);
     return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, NoiseLayer::kPauli, nullptr, return_samples);
 }
 
@@ -221,7 +222,7 @@ nb::dict FullNoiseExecute(const CircuitPtr &circuit, const noise::NoiseModel &no
     require_circuit(circuit);
     if (!has_circuit_channels(circuit))
         require_any_noise(noise_model);
-    warn_thermal_approximation(noise_model, config);
+    warn_thermal_approximation(noise_model, config, circuit);
     return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, NoiseLayer::kCombined, "combined", return_samples);
 }
 
@@ -230,7 +231,7 @@ nb::dict NoisyEstimateMonteCarlo(const CircuitPtr &circuit, const nb::object &ob
 {
     require_circuit(circuit);
     require_inject_noise_covers(noise_model);
-    warn_thermal_approximation(noise_model, config);
+    warn_thermal_approximation(noise_model, config, circuit);
     return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, NoiseLayer::kPauli, nullptr);
 }
 
@@ -248,7 +249,7 @@ nb::dict FullNoiseEstimate(const CircuitPtr &circuit, const nb::object &observab
     require_circuit(circuit);
     if (!has_circuit_channels(circuit))
         require_any_noise(noise_model);
-    warn_thermal_approximation(noise_model, config);
+    warn_thermal_approximation(noise_model, config, circuit);
     return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, NoiseLayer::kCombined, "combined");
 }
 
@@ -286,7 +287,7 @@ nb::dict NoisyFidelity(const CircuitPtr &circuit, const noise::NoiseModel &noise
     require_realizations(noise_realizations);
     if (!has_circuit_channels(circuit))
         require_any_noise(noise_model);
-    warn_thermal_approximation(noise_model, config);
+    warn_thermal_approximation(noise_model, config, circuit);
     MaestroExecution::NoisyFidelityResult result;
     {
         nb::gil_scoped_release release;

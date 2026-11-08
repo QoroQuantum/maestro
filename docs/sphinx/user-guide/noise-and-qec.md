@@ -135,9 +135,38 @@ shot's record as a `(shots, clbits)` `uint8` array under `samples` (see
 phase-damping noise through reference frames
 (`sampling_strategy: "reference_frame_v1"`) and runs other realizations directly
 (`"trajectory_v1"`); seeded calls keep their earlier sequences (see
-{ref}`py_counts_policy`). {py:class}`maestro.PrefixCheckpointedSimulator`
+{ref}`py_counts_policy`). Unseeded `extended_stabilizer` runs with Pauli,
+readout and phase-damping noise use batched Pauli frames under any realization
+schedule (`sampling_strategy: "extended_frame_v1"`). A batch of shots shares one
+Clifford basis, and shots of one realization share its errors. Some runs keep
+scalar trajectories:
+
+- circuits with classical control;
+- non-Pauli noise such as amplitude damping;
+- thermal relaxation with T2 > T1 on a qubit the circuit relaxes;
+- relaxation that sampled execution draws as resets when shots share a
+  realization: T1, or thermal or idle relaxation with a finite T1, after a gate
+  (or, for idle relaxation, a delay) on that qubit.
+
+`counts_policy="frame_v1"` opts seeded runs in. As for scalar runs, `noise_seed`
+drives the circuit errors and `config.seed` the measurements and readout, on
+reference frames as on batched frames. Frames share `trajectory_max_memory_mb`
+among their batches, and their rows depend on neither the budget nor
+`max_simulators`. Like the trajectories' budget, it is soft: a shot that alone
+exceeds it runs by itself beyond it, with the draws it would have had.
+Reference frames keep trajectories where those clamp T2 to T1.
+{py:class}`maestro.PrefixCheckpointedSimulator`
 simulates a shared noiseless prefix once and samples noisy suffixes from it; see
-{doc}`/user-guide/expectation-values`.
+{doc}`/user-guide/expectation-values`. On `extended_stabilizer`, after a
+gate-only prefix, its noisy suffixes use the same frames.
+`maestro.compile_reference_sampler` with an `ExtendedStabilizer` config returns a
+reusable `ExtendedFrameSampler`, which `maestro.sinter` uses for such tasks. Its
+`noise_realizations` below the shot count raises `ValueError` when the circuit's
+noise includes relaxation that `noisy_execute` draws as a reset. Its memory
+budget is soft, as `noisy_execute`'s. Compiled samplers apply channels exactly,
+so where `noisy_execute` clamps T2 to T1 they keep T2. `noisy_execute` warns
+about the clamp only for qubits whose relaxation the circuit draws (a gate, or
+for idle noise a delay, on them).
 
 (py_noise_coherent)=
 ## Coherent errors

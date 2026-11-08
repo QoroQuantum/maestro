@@ -119,6 +119,18 @@ void TestThermalApproximation()
         }
     }
 
+    // The clamp is reported only where the circuit draws it: idle relaxation
+    // without delays, and a zero-duration gate relaxation (the identity), are
+    // not approximated.
+    {
+        auto idle = Estimate("h q[0];", {"XI"}, Channel("idle", {{"t1", 1.0}, {"t2", 2.0}}), "statevector", 2);
+        idle["noise"].as_object()["realizations"] = 256;
+        ThermalCall(idle, false);
+        auto instant = Estimate("h q[0];", {"XI"}, Channel("thermal_relaxation", {{"duration", 0.0}, {"t1", 1.0}, {"t2", 2.0}}), "statevector", 2);
+        instant["noise"].as_object()["realizations"] = 256;
+        ThermalCall(instant, false);
+    }
+
     // Accepting sampled thermal approximations must not admit exact-only maps
     // or an explicit exact evaluation on a pure-state method.
     auto thermal = Channel("thermal_relaxation", {{"duration", 0.3}, {"t1", 1.0}, {"t2", 1.5}});
@@ -924,8 +936,161 @@ void TestAutomaticMixedStateNoise()
           "Capabilities omit estimate, fidelity or selection rules");
 }
 
+// Batched extended-stabilizer frames: unseeded auto requests (counts, rows and
+// checkpoint suffixes) opt in before receiving their seed and report the policy
+// that replays them; seeded requests keep scalar trajectories unless
+// counts_policy is frame_v1. The frame handle compiles extended_stabilizer
+// requests too.
+void TestExtendedFrameRequests()
+{
+    const char *body = "h q[0]; t q[0]; cx q[0],q[1]; h q[1]; t q[1]; h q[1]; measure q -> c;";
+    const j::object noise{{"mode", "pauli"},
+                          {"evaluation", "trajectories"},
+                          {"channels", j::array{Channel("depolarizing", {{"probability", 0.05}}), Channel("bit_flip", {{"probability", 0.1}}, j::array{1})}}};
+    const auto prepare = [&](const char *operation, const char *source, bool seeded, const char *policy, bool rows) {
+        auto request = Request(operation, 2, source, "extended_stabilizer");
+        request["noise"] = noise;
+        auto &execution = request["execution"].as_object();
+        execution["shots"] = 400;
+        if (!seeded)
+            execution.erase("seed");
+        if (rows)
+            execution["return_samples"] = true;
+        if (policy)
+            request["simulator"].as_object()["options"] = j::object{{"counts_policy", policy}};
+        return request;
+    };
+    // The ordinary counts executor reports no strategy.
+    const auto strategy = [](const j::object &result) {
+        const auto *value = result.at("execution_metadata").as_object().if_contains("sampling_strategy");
+        return value ? std::string(value->as_string()) : std::string();
+    };
+    const auto replay = [](j::object request, const j::object &result) {
+        request["execution"].as_object()["seed"] = result.at("seed");
+        request["simulator"].as_object()["options"] =
+            j::object{{"counts_policy", result.at("execution_metadata").at("configured_options").at("counts_policy")}};
+        return Call(request);
+    };
+    for (const bool rows : {false, true})
+    {
+        const auto request = prepare("execute", body, false, nullptr, rows);
+        const auto result = Call(request);
+        Check(strategy(result) == "extended_frame_v1", "Unseeded native extended_stabilizer shots did not use frames");
+        Check(result.at("execution_metadata").at("configured_options").at("counts_policy") == "frame_v1", "Frame results do not report their policy");
+        const auto again = replay(request, result);
+        Check(strategy(again) == "extended_frame_v1" && (rows ? Rows(again) == Rows(result) : again.at("counts") == result.at("counts")),
+              "Native frame shots did not replay from their seed and policy");
+        if (rows)
+            Check(Rows(result).size() == 400, "Native frame rows lost shots");
+        else
+        {
+            uint64_t total = 0;
+            for (const auto &entry : result.at("counts").as_object())
+                total += entry.value().as_int64();
+            Check(total == 400, "Native frame counts lost shots");
+        }
+        Check(strategy(Call(prepare("execute", body, true, nullptr, rows))) != "extended_frame_v1", "A seeded auto request changed its sampler");
+        const auto opted = Call(prepare("execute", body, true, "frame_v1", rows));
+        Check(strategy(opted) == "extended_frame_v1", "frame_v1 did not opt a seeded request in");
+    }
+
+    // The trajectory memory budget applies to extended_stabilizer frames.
+    auto budgeted = prepare("execute", body, false, nullptr, false);
+    budgeted["simulator"].as_object()["options"] = j::object{{"trajectory_max_memory_mb", 128}};
+    Check(strategy(Call(budgeted)) == "extended_frame_v1", "A budgeted extended_stabilizer request did not use frames");
+
+    // Checkpoint suffixes after an ideal gate-only prefix.
+    auto checkpoint = prepare("checkpoint_batch", "h q[0]; t q[0]; cx q[0],q[1];", false, nullptr, false);
+    checkpoint["suffixes"] =
+        j::array{Request("execute", 2, "h q[1]; t q[1]; h q[1]; measure q -> c;").at("circuit"), Request("execute", 2, "measure q -> c;").at("circuit")};
+    auto batch = Call(checkpoint);
+    for (const auto &suffix : batch.at("results").as_array())
+    {
+        Check(suffix.at("sampling_strategy") == "extended_frame_v1", "Checkpoint suffixes did not use frames");
+        uint64_t total = 0;
+        for (const auto &entry : suffix.at("counts").as_object())
+            total += entry.value().as_int64();
+        Check(total == 400, "Checkpoint frame counts lost shots");
+    }
+    Check(batch.at("execution_metadata").at("configured_options").at("counts_policy") == "frame_v1", "Checkpoint frames do not report their policy");
+    const auto again = replay(checkpoint, batch);
+    Check(again.at("results") == batch.at("results"), "Checkpoint frame suffixes did not replay");
+
+    // The frame handle: any extended_stabilizer circuit, independent noise per shot.
+    auto circuit = Request("execute", 2, "h q[0]; t q[0]; cx q[0],q[1]; measure q[0] -> c[0]; measure q[1] -> c[69];", "extended_stabilizer", 70).at("circuit");
+    const auto text = j::serialize(j::object{
+        {"schema_version", 2}, {"circuit", circuit}, {"simulator", j::object{{"backend", "qcsim"}, {"method", "extended_stabilizer"}}}, {"noise", noise}});
+    char *error = nullptr;
+    void *sampler = MaestroCreateReferenceFrameSampler(text.c_str(), &error);
+    Check(sampler != nullptr && error == nullptr, "An extended_stabilizer frame handle did not compile");
+    size_t qubits = 0, clbits = 0;
+    Check(MaestroReferenceFrameSamplerShape(sampler, &qubits, &clbits) == 1 && qubits == 2 && clbits == 70, "Extended frame handle shape");
+    const size_t shots = 600;
+    std::vector<unsigned long long> first(2 * shots), second(2 * shots);
+    Check(MaestroReferenceFrameSampleBits(sampler, shots, 5, first.data(), first.size()) == 1 &&
+              MaestroReferenceFrameSampleBits(sampler, shots, 5, second.data(), second.size()) == 1 && first == second,
+          "Extended frame handle rows did not replay");
+    std::map<std::pair<unsigned long long, unsigned long long>, unsigned long long> histogram;
+    size_t ones = 0;
+    for (size_t shot = 0; shot < shots; ++shot)
+    {
+        ++histogram[{first[2 * shot], first[2 * shot + 1]}];
+        ones += first[2 * shot] & 1ULL;
+    }
+    // H T on |0> gives P(1) = 1/2, moved little by the noise.
+    Check(ones > 220 && ones < 380, "Extended frame handle rows have the wrong distribution");
+    std::vector<unsigned long long> distinct(2 * shots), counts(shots);
+    size_t written = 0;
+    Check(MaestroReferenceFrameSampleCountsBits(sampler, shots, 5, distinct.data(), counts.data(), shots, &written) == 1 && written == histogram.size(),
+          "Extended frame handle counts failed");
+    for (size_t entry = 0; entry < written; ++entry)
+        Check(histogram[{distinct[2 * entry], distinct[2 * entry + 1]}] == counts[entry], "Extended frame counts are not the histogram of its rows");
+    MaestroDestroyReferenceFrameSampler(sampler);
+    const auto budgetedHandle = j::serialize(
+        j::object{{"schema_version", 2},
+                  {"circuit", circuit},
+                  {"simulator", j::object{{"backend", "qcsim"}, {"method", "extended_stabilizer"}, {"options", j::object{{"trajectory_max_memory_mb", 128}}}}},
+                  {"noise", noise}});
+    sampler = MaestroCreateReferenceFrameSampler(budgetedHandle.c_str(), nullptr);
+    Check(sampler != nullptr, "An extended frame handle rejected its memory budget");
+    MaestroDestroyReferenceFrameSampler(sampler);
+    // The handle's budget is soft, as execute's: a shot that alone exceeds
+    // it runs beyond it with the rows of an ample budget.
+    std::string rotations;
+    for (int q = 0; q < 17; ++q)
+        rotations += "ry(1.2) q[" + std::to_string(q) + "]; ";
+    const auto wide = Request("execute", 17, rotations + "measure q -> c;", "extended_stabilizer").at("circuit");
+    std::vector<unsigned long long> tight(2), ample(2);
+    for (const auto &[megabytes, rows] : {std::pair<int, std::vector<unsigned long long> *>{1, &tight}, {128, &ample}})
+    {
+        const auto handle = j::serialize(
+            j::object{{"schema_version", 2},
+                      {"circuit", wide},
+                      {"simulator",
+                       j::object{{"backend", "qcsim"}, {"method", "extended_stabilizer"}, {"options", j::object{{"trajectory_max_memory_mb", megabytes}}}}}});
+        sampler = MaestroCreateReferenceFrameSampler(handle.c_str(), nullptr);
+        Check(sampler != nullptr && MaestroReferenceFrameSampleBits(sampler, 2, 7, rows->data(), rows->size()) == 1,
+              "An extended frame handle failed a shot above its budget");
+        MaestroDestroyReferenceFrameSampler(sampler);
+    }
+    Check(tight == ample, "The extended frame handle's budget changed its rows");
+    // Classical control keeps scalar trajectories: no frame handle.
+    auto controlled =
+        Request("execute", 1, "h q[0]; t q[0]; measure q[0] -> c[0]; if(c==1) x q[0]; measure q[0] -> c[0];", "extended_stabilizer").at("circuit");
+    error = nullptr;
+    Check(MaestroCreateReferenceFrameSampler(
+              j::serialize(
+                  j::object{{"schema_version", 2}, {"circuit", controlled}, {"simulator", j::object{{"backend", "qcsim"}, {"method", "extended_stabilizer"}}}})
+                  .c_str(),
+              &error) == nullptr &&
+              error != nullptr,
+          "Classical control compiled to extended frames");
+    FreeResult(error);
+}
+
 void TestRequestNoiseAndOptions()
 {
+    TestExtendedFrameRequests();
     TestAutomaticMixedStateNoise();
     TestShotRows();
     TestFrameSamplerHandle();

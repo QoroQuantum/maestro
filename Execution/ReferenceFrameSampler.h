@@ -92,15 +92,27 @@ class ReferenceFrameSampler
         return frameQubits_;
     }
 
+    // Channel errors draw from the noise seed; measurement outcomes and
+    // readout errors from the measurement seed, as in scalar execution, so
+    // either can change without changing the other's draws. One seed for
+    // both gives the rows of Sample(shots, seed).
+    struct Seeds
+    {
+        uint64_t noise = 0;
+        uint64_t measurement = 0;
+    };
+
     // Row-major bytes in classical-register order, including unused zero bits.
     // The rows are deterministic for a seed and independent of worker
     // scheduling, and the first n rows do not depend on the requested count.
     MAESTRO_TRANSFORM_API std::vector<uint8_t> Sample(size_t shots, uint64_t seed) const;
+    MAESTRO_TRANSFORM_API std::vector<uint8_t> Sample(size_t shots, Seeds seeds) const;
 
     // The histogram of precisely the same seeded rows as Sample(). Scratch
     // storage is bounded by one batch, independently of the requested shots;
     // the returned histogram still grows with the number of distinct outcomes.
     MAESTRO_TRANSFORM_API FrameOutcomes SampleCounts(size_t shots, uint64_t seed) const;
+    MAESTRO_TRANSFORM_API FrameOutcomes SampleCounts(size_t shots, Seeds seeds) const;
 
   private:
     enum class Kind : uint8_t
@@ -157,7 +169,7 @@ class ReferenceFrameSampler
     size_t frameQubits_ = 0;
     std::vector<Instruction> instructions_;
 
-    void ForEachBatch(size_t shots, uint64_t seed, const std::function<void(size_t, size_t, const std::vector<uint64_t> &)> &consume) const;
+    void ForEachBatch(size_t shots, Seeds seeds, const std::function<void(size_t, size_t, const std::vector<uint64_t> &)> &consume) const;
 
     friend MAESTRO_TRANSFORM_API std::optional<ReferenceFrameSampler> CompileReferenceSampler(const std::shared_ptr<Circuits::Circuit<double>> &, size_t,
                                                                                               size_t);

@@ -512,9 +512,11 @@ not imply untruncated MPO evolution or remove stochastic coherent realizations.
 For thermal relaxation (including two-qubit gate and idle noise) with
 `T1 < T2 <= 2*T1`, sampled execution follows Python: it uses effective `T2 = T1`
 instead of rejecting the request. Results identify this approximation as
-`thermal_T2_clamped_to_T1` in `noise.approximations`. Execution emits one warning
-listing the affected qubits to stderr, which the local server retains in task
-logs; validation alone does not emit it. Exact density-matrix/MPO execution keeps
+`thermal_T2_clamped_to_T1` in `noise.approximations` when the request's noisy
+circuits draw such relaxation (a gate, or for idle noise a positive delay, on the
+qubit; a zero duration is the identity and is not clamped). Execution emits one
+warning listing the affected qubits to stderr, which the local server retains in
+task logs; validation alone does not emit it. Exact density-matrix/MPO execution keeps
 the calibrated T2. Unphysical `T2 > 2*T1` and exact-only channels on sampled
 backends remain errors.
 
@@ -699,7 +701,10 @@ backend a request allows and replaces the requested one, so neither policy uses
 frames unless the list includes the QCSim stabilizer, and either may when it
 does, whatever the requested backend. Frames need a supported Clifford circuit, Pauli or readout
 noise, Kraus channels that are exact Pauli mixtures (phase damping, for
-example) and, with noise, one realization per shot; other requests fall back.
+example) and, with noise, one realization per shot; other requests fall back,
+as does thermal noise in the T1 < T2 <= 2 T1 window, which the trajectories
+clamp (`thermal_T2_clamped_to_T1`). `noise.seed` drives the circuit errors and
+the execution seed the measurements and readout, as on the trajectories.
 
 When frames run, `execution_metadata.sampling_strategy` is `"reference_frame_v1"`,
 the reported backend and method are `qcsim` and `stabilizer`,
@@ -734,6 +739,7 @@ realization, so a leading slice draws from the first realizations only.
 | Strategy | Rows |
 | --- | --- |
 | `reference_frame_v1` | Noisy-Clifford reference frames: a Stabilizer method, or automatic selection whose `candidates`, if listed, include the QCSim stabilizer; a supported Clifford circuit and, with noise, one realization per shot |
+| `extended_frame_v1` | Batched Pauli frames for a noisy QCSim `extended_stabilizer` request without `candidates`: an unseeded request under `counts_policy: "auto"`, or any request under `"frame_v1"`. The result's `configured_options.counts_policy` is then `"frame_v1"`, which replays it with the returned `seed`. Applies to Pauli or combined noise without exact channels, with readout, measurements and resets and no classical control. Rows of one noise realization share its errors. `noise.seed` drives the circuit errors and the execution seed drives measurements and readout. Relaxation that sampled execution draws as resets (T1, or thermal or idle relaxation with a finite T1, on a qubit the circuit gates or delays) needs one realization per shot, and thermal noise with T2 > T1 on such a qubit keeps scalar trajectories. The memory budget is soft: a shot that alone exceeds it runs by itself beyond it. Noisy `execute` counts and each `checkpoint_batch` suffix after a gate-only prefix report the same strategy |
 | `terminal_v1` | One prepared state sampled for every row (terminal measurements only) |
 | `trajectory_v1` | Each shot, or each noise realization, executed on its own |
 | `mixed_v1` | Checkpoint suffixes only: some realizations sampled from one prepared state, others shot by shot |
@@ -780,6 +786,21 @@ each distinct row once, packed, with its count; `capacity` counts entries and mu
 be at least `shots`. Sampling calls on one handle may run concurrently. Release
 the handle with `MaestroDestroyReferenceFrameSampler`. Python exposes the same
 compiled plan as `maestro.compile_reference_sampler`.
+
+With `simulator` set to the QCSim `extended_stabilizer` method (fixed selection,
+no `candidates`), the same handle compiles any circuit of that method's gates to
+batched extended-stabilizer frames: shots in batches that share one Clifford
+basis, each with independent noise and its own Pauli frame and amplitudes. The
+noise rules are the same as for reference frames, and channels apply exactly:
+in the T1 < T2 <= 2 T1 window, where `execute` clamps T2 to T1, the handle keeps
+T2. Sampling runs at most 16 batches at once, or fewer under `max_simulators`,
+within `trajectory_max_memory_mb`, which also pays for the cached noiseless
+head. A batch that does not fit runs afterwards, alone, with the rest of the
+budget, split down to single shots. Every shot draws from streams of its own,
+and a measurement draws the shot's physical outcome, so rows depend on the seed
+only, never on the batch, the budget, the worker count or the host. The budget
+is soft, as for `execute` and its trajectories: a shot that alone exceeds it runs
+by itself beyond it, with the draws it would have had.
 
 Noise targets must lie in the declared register. Python's
 `NoiseModel.native_channels(num_qubits)` therefore leaves out channels on

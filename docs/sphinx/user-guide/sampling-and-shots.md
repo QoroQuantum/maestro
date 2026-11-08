@@ -94,6 +94,7 @@ print(rows["samples"], rows["sampling_strategy"])
 | Value | Meaning |
 |-------|---------|
 | `reference_frame_v1` | Noisy-Clifford reference frames: one stabilizer simulation, then Pauli frames per shot |
+| `extended_frame_v1` | Noisy `extended_stabilizer` shots in batches that share one Clifford basis, with a Pauli frame and amplitudes per shot (Pauli noise, readout, measurements and resets; no classical control) |
 | `terminal_v1` | One prepared state sampled for every shot (terminal measurements only) |
 | `trajectory_v1` | Each shot, or each noise realization, executed on its own |
 | `mixed_v1` | Some noise realizations sampled from one prepared state, others (such as one-shot realizations of an uneven split) executed shot by shot |

@@ -1,3 +1,4 @@
+#include "Execution/ExtendedFrameSampler.h"
 #include "Execution/ReferenceFrameSampler.h"
 #include "Simulators/PathIntegral/PathIntegralSimulator.h"
 #include "core.h"
@@ -66,20 +67,132 @@ void bind_api(nb::module_ &m)
         .def_prop_ro("num_qubits", &ReferenceFrameSampler::Qubits, "Qubits of the compiled register.")
         .def_prop_ro("num_clbits", &ReferenceFrameSampler::Width, "Columns of each row: the classical register width.");
     m.attr("_ReferenceFrameSampler") = m.attr("ReferenceFrameSampler");
+
+    // Batched extended-stabilizer frames behind the same interface. Workers
+    // and the amplitude memory budget come from the compiling config.
+    struct ExtendedFramePlan
+    {
+        MaestroExecution::ExtendedFrameSampler plan;
+        size_t workers = 16;
+        size_t budget_mb = 1024;
+        // noisy_execute realizes T1 relaxation as a reset drawn once per
+        // realization; frames draw a Pauli per shot instead, which changes the
+        // correlations between the shots that share a realization. Set when
+        // the compiled circuit's noise can draw such a reset.
+        bool sampled_resets = false;
+
+        size_t Realizations(size_t shots, std::optional<int> realizations) const
+        {
+            if (realizations && *realizations < 1)
+                throw nb::value_error("noise_realizations must be >= 1.");
+            const size_t count = realizations ? std::min(shots, static_cast<size_t>(*realizations)) : shots;
+            if (count < shots && sampled_resets)
+                throw nb::value_error("noise_realizations below shots is not supported with finite-T1 relaxation on the circuit's qubits: "
+                                      "noisy_execute shares a sampled reset within each realization, which frames cannot represent. Omit "
+                                      "noise_realizations, or use noisy_execute.");
+            return count;
+        }
+    };
+
+    nb::class_<ExtendedFramePlan>(m, "ExtendedFrameSampler",
+                                  "A noisy extended_stabilizer circuit compiled to batched Pauli frames (see compile_reference_sampler).\n\n"
+                                  "Every call draws shots in batches that share one Clifford basis, with a Pauli frame and amplitudes per "
+                                  "shot. By default every shot has independent noise; noise_realizations shares one draw of the circuit's "
+                                  "errors among the shots of each realization, as noisy_execute does, and raises ValueError when the circuit's "
+                                  "noise includes finite-T1 relaxation, which noisy_execute realizes as a shared reset. Equal seeds give equal "
+                                  "rows, whatever the worker count or memory budget. The budget is soft, as noisy_execute's: a shot that alone "
+                                  "exceeds it runs by itself beyond it.")
+        .def(
+            "sample",
+            [resolve_seed, require_shots](const ExtendedFramePlan &self, int shots, std::optional<uint64_t> seed, std::optional<int> noise_realizations) {
+                const size_t count = require_shots(shots);
+                const size_t realizations = self.Realizations(count, noise_realizations);
+                const auto start = std::chrono::steady_clock::now();
+                std::vector<uint8_t> samples;
+                MaestroExecution::FrameOutcomes unused;
+                {
+                    // A soft budget, as noisy_execute's: a shot that alone exceeds it
+                    // runs by itself beyond it. A strict one would fail calls by their
+                    // outcomes, and a caller's retry elsewhere would redraw those.
+                    nb::gil_scoped_release release;
+                    const uint64_t drawn = resolve_seed(seed);
+                    self.plan.SampleWithin(count, realizations, {drawn, drawn}, true, self.workers, self.budget_mb, samples, unused, true);
+                }
+                samples.resize(count * self.plan.Width());
+                nb::dict out;
+                out["samples"] = MakeSamples(std::move(samples), count, self.plan.Width());
+                out["sampling_strategy"] = "extended_frame_v1";
+                out["simulator"] = Simulators::SimulatorType::kQCSim;
+                out["method"] = Simulators::SimulationType::kExtendedStabilizer;
+                out["noise_realizations"] = realizations;
+                out["time_taken"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+                return out;
+            },
+            "shots"_a, "seed"_a = nb::none(), "noise_realizations"_a = nb::none(),
+            "Draw shots rows. Returns a dict with 'samples', a (shots, num_clbits) uint8 array in classical-bit order, "
+            "and 'sampling_strategy' 'extended_frame_v1'. An omitted seed draws fresh entropy.")
+        .def(
+            "sample_counts",
+            [resolve_seed, require_shots](const ExtendedFramePlan &self, int shots, std::optional<uint64_t> seed, std::optional<int> noise_realizations) {
+                const size_t count = require_shots(shots);
+                const size_t realizations = self.Realizations(count, noise_realizations);
+                const auto start = std::chrono::steady_clock::now();
+                std::vector<uint8_t> unused;
+                MaestroExecution::FrameOutcomes outcomes;
+                {
+                    nb::gil_scoped_release release;
+                    const uint64_t drawn = resolve_seed(seed);
+                    self.plan.SampleWithin(count, realizations, {drawn, drawn}, false, self.workers, self.budget_mb, unused, outcomes, true);
+                }
+                nb::dict out;
+                out["counts"] = CountsDict(outcomes);
+                out["sampling_strategy"] = "extended_frame_v1";
+                out["simulator"] = Simulators::SimulatorType::kQCSim;
+                out["method"] = Simulators::SimulationType::kExtendedStabilizer;
+                out["noise_realizations"] = realizations;
+                out["time_taken"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+                return out;
+            },
+            "shots"_a, "seed"_a = nb::none(), "noise_realizations"_a = nb::none(),
+            "The histogram of exactly the rows sample(shots, seed, noise_realizations) draws: 'counts' maps "
+            "classical-bit-0-first bitstrings to counts.")
+        .def_prop_ro(
+            "num_qubits", [](const ExtendedFramePlan &self) { return self.plan.Qubits(); }, "Qubits of the compiled register.")
+        .def_prop_ro("num_clbits", [](const ExtendedFramePlan &self) { return self.plan.Width(); }, "Columns of each row: the classical register width.");
     const auto compile_reference = [](const CircuitPtr &circuit, const noise::NoiseModel *model, const SimulatorConfig &config) -> nb::object {
         require_circuit(circuit);
         config.Validate();
         static const noise::NoiseModel no_noise;
         if (!model)
             model = &no_noise;
-        if (!MaestroExecution::AdmitsReferenceFrames(config) || !model->inject_noise_covers_model())
+        if (!model->inject_noise_covers_model())
+            return nb::none();
+        const size_t qubits = std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1);
+        const size_t width = ClassicalWidth(circuit);
+        // The QCSim extended stabilizer runs its whole gate set on batched frames.
+        if (config.simulator_type == Simulators::SimulatorType::kQCSim && config.simulation_type == Simulators::SimulationType::kExtendedStabilizer &&
+            !MaestroExecution::HasCandidateList(config) && !config.enable_sampling_reduction)
+        {
+            std::optional<MaestroExecution::ExtendedFrameSampler> plan;
+            {
+                nb::gil_scoped_release release;
+                auto channels = noise::inject_exact_noise(circuit, *model);
+                noise::attach_readout_error(channels, *model);
+                plan = MaestroExecution::CompileExtendedFrameSampler(channels, qubits, width);
+            }
+            if (!plan)
+                return nb::none();
+            return nb::cast(ExtendedFramePlan{std::move(*plan), config.max_simulators.value_or(0), MaestroExecution::RealizationBudgetMB(config),
+                                              model->has_sampled_resets_on(*circuit)});
+        }
+        if (!MaestroExecution::AdmitsReferenceFrames(config))
             return nb::none();
         std::optional<ReferenceFrameSampler> plan;
         {
             nb::gil_scoped_release release;
             auto channels = noise::inject_exact_noise(circuit, *model);
             noise::attach_readout_error(channels, *model);
-            plan = MaestroExecution::CompileReferenceSampler(channels, std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1), ClassicalWidth(circuit));
+            plan = MaestroExecution::CompileReferenceSampler(channels, qubits, width);
         }
         if (plan)
             return nb::cast(std::move(*plan));
@@ -88,10 +201,15 @@ void bind_api(nb::module_ &m)
     m.def("compile_reference_sampler", compile_reference, "circuit"_a, "noise_model"_a.none() = nb::none(), "config"_a = SimulatorConfig{},
           "Compile a Clifford circuit, with the incoherent channels of noise_model as independent per-shot channels, into a "
           "reusable ReferenceFrameSampler. The channels must be Pauli mixtures: Pauli and depolarizing noise, phase damping, "
-          "dephasing with T1 infinite, and readout errors qualify; amplitude damping and finite-T1 relaxation do not. "
-          "Returns None when frames do not apply: non-Clifford gates, classical control, other channels, no measurements, "
-          "coherent/correlated/crosstalk noise, or a config that excludes the QCSim stabilizer (another backend, or a fixed "
-          "non-Stabilizer method).");
+          "dephasing with T1 infinite, and readout errors qualify; amplitude damping and finite-T1 relaxation do not, except "
+          "at excited population 0.5, where relaxation is a Pauli mixture. Channels apply exactly: where noisy_execute "
+          "clamps T2 to T1 (T1 < T2 <= 2 T1, with a ThermalApproximationWarning), compiled samplers keep T2. "
+          "With a QCSim ExtendedStabilizer config (no candidate list or sampling reduction), any circuit of its gates "
+          "compiles instead into an ExtendedFrameSampler: batched Pauli frames sharing one Clifford basis, with the same "
+          "sample/sample_counts interface and an optional noise_realizations. "
+          "Returns None when frames do not apply: non-Clifford gates (except on ExtendedStabilizer), classical control, other "
+          "channels, no measurements, coherent/correlated/crosstalk noise, or a config that excludes the QCSim stabilizer "
+          "(another backend, or a fixed method other than Stabilizer and ExtendedStabilizer).");
     m.def("_compile_reference_sampler", compile_reference, "circuit"_a, "noise_model"_a.none() = nb::none(), "config"_a = SimulatorConfig{});
 
     // --- QASM Tools ---

@@ -86,7 +86,10 @@ process matrix in the Pauli basis: phase damping, for example, is a Z flip with
 still fall back. Noisy count calls also require one independent realization
 per shot. Shared-noise realizations, coherent or unsupported operations,
 incompatible fixed backends, and sampling-reduction requests keep their
-ordinary execution path. Non-Clifford circuits never use frames. A request for `frame_v1` never approximates an
+ordinary execution path, as does thermal noise in the T1 < T2 <= 2 T1 window,
+which trajectories clamp to T1. As on trajectories, the noise seed drives the
+circuit errors and the measurement seed the outcomes and readout, so either can
+change alone. Non-Clifford circuits never use frames. A request for `frame_v1` never approximates an
 unsupported channel or coherent rotation as Pauli noise. Calls that use frames
 report `"sampling_strategy": "reference_frame_v1"` and the actual Stabilizer
 method where execution metadata is returned.
@@ -219,9 +222,13 @@ and the resolved policy together: supplying a returned seed while leaving
 `counts_policy="auto"` selects the seeded ordinary path instead. Keep the
 circuit, noise configuration, backend selection and logical request unchanged.
 Native C++ `NoiseAdd` helpers accept the same network configuration key; their
-frame optimization is limited to supported local single-host execution. These
-objects advance their RNG streams between calls; reseed the object and replay
-the same call sequence to reproduce an earlier run.
+frame optimization is limited to supported local single-host execution. Their
+frames keep the trajectories' rules: the object's noise stream drives circuit
+errors and the simulator seed the measurements and readout, so either can change
+alone, and thermal noise in the T1 < T2 <= 2 T1 window, which the trajectories
+clamp, keeps the trajectories. These objects advance their RNG streams between
+calls; reseed the object and replay the same call sequence to reproduce an
+earlier run.
 
 ## Python shot matrices and noisy Clifford sampling
 
@@ -375,6 +382,37 @@ for compilation once; equal seeds give equal rows, and `sample_counts` is the
 histogram of exactly the rows `sample` draws. The C ABI exposes the same plan as
 a handle (`MaestroCreateReferenceFrameSampler`). `_compile_reference_sampler`
 remains as an alias for `maestro.sinter` and older callers.
+
+With a QCSim `ExtendedStabilizer` config, `compile_reference_sampler` returns an
+`ExtendedFrameSampler` for any circuit of that method's gates. It compiles to
+batched extended-stabilizer frames (`extended_frame_v1`) behind the same
+`sample`/`sample_counts` interface, plus an optional `noise_realizations` that
+shares each realization's errors among its shots. When the circuit's noise
+includes relaxation that `noisy_execute` realizes as a reset shared within each
+realization (T1, or thermal or idle relaxation with a finite T1, on a qubit the
+circuit gates or delays), it accepts only one realization per shot (`ValueError`
+otherwise). Both compiled samplers apply the exact channels: in the
+T1 < T2 <= 2 T1 window, where `noisy_execute` clamps T2 to T1 and warns, they
+keep T2. Every shot draws from streams of its own, and a measurement draws the
+shot's physical outcome, so equal seeds give equal rows whatever the batch, the
+worker count or `trajectory_max_memory_mb`. That budget is soft, as for
+`noisy_execute`: a shot that alone exceeds it runs by itself beyond it, with the
+draws it would have had. `maestro.sinter` therefore samples an `ExtendedStabilizer`
+task on frames.
+
+Unseeded noisy `extended_stabilizer` sampling runs on the same frames from every
+entry point:
+
+- Python: `noisy_execute` and `full_noise_execute`, and
+  `PrefixCheckpointedSimulator.execute_suffix` after a gate-only prefix.
+- C++: `ExecuteNoisy` and `PrefixCheckpoint`; `SampleExtendedFrames` in
+  `Execution/SampleRecords.h` is the shared entry point.
+- Native requests: `execute` counts and rows, and `checkpoint_batch` suffixes.
+
+`counts_policy="frame_v1"` opts seeded calls in. There the memory budget is
+soft, as for trajectories: a shot that alone exceeds it runs by itself beyond it,
+with the draws it would have had, instead of a scalar retry that would draw it
+again.
 
 ## Reproducibility and clones
 

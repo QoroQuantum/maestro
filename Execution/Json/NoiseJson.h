@@ -69,6 +69,23 @@ struct NoiseConfig
     std::string thermal_approximation_warning;
 };
 
+// The warning for the sampled T2 clamp on these qubits.
+inline std::string ThermalClampWarning(const std::vector<int> &qubits)
+{
+    std::ostringstream message;
+    message << "Sampled thermal approximation for circuit qubits [";
+    for (size_t i = 0; i < qubits.size(); ++i)
+    {
+        if (i)
+            message << ", ";
+        message << qubits[i];
+    }
+    message << "]: effective T2 clamped to T1. Use density matrix or a supported "
+               "MPO backend to preserve calibrated T2. Kraus trajectories are "
+               "not supported by Maestro's current SV/MPS noise path.";
+    return message.str();
+}
+
 inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig &config, size_t qubits)
 {
     NoiseConfig result;
@@ -280,18 +297,7 @@ inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig 
         if (!qubits.empty())
         {
             result.approximations.emplace_back("thermal_T2_clamped_to_T1");
-            std::ostringstream message;
-            message << "Sampled thermal approximation for circuit qubits [";
-            for (size_t i = 0; i < qubits.size(); ++i)
-            {
-                if (i)
-                    message << ", ";
-                message << qubits[i];
-            }
-            message << "]: effective T2 clamped to T1. Use density matrix or a supported "
-                       "MPO backend to preserve calibrated T2. Kraus trajectories are "
-                       "not supported by Maestro's current SV/MPS noise path.";
-            result.thermal_approximation_warning = message.str();
+            result.thermal_approximation_warning = ThermalClampWarning(qubits);
         }
     }
     if (!result.exact && result.model.has_t1())
@@ -313,6 +319,35 @@ inline void AddApproximation(NoiseConfig &noise, const char *name)
 {
     if (std::find(noise.approximations.begin(), noise.approximations.end(), json::value(name)) == noise.approximations.end())
         noise.approximations.emplace_back(name);
+}
+
+// ParseNoise reports the T2 clamp for the whole model. Once the request's
+// noisy circuits are known, keep it (and its warning) only for the qubits
+// whose relaxation they draw in the clamped window.
+inline void RefineThermalApproximation(NoiseConfig &noise, const std::vector<const Circuits::Circuit<double> *> &circuits)
+{
+    if (noise.thermal_approximation_warning.empty())
+        return;
+    std::vector<int> qubits;
+    for (const auto *circuit : circuits)
+        if (circuit)
+        {
+            const auto on = noise.model.thermal_approximation_qubits_on(*circuit);
+            qubits.insert(qubits.end(), on.begin(), on.end());
+        }
+    std::sort(qubits.begin(), qubits.end());
+    qubits.erase(std::unique(qubits.begin(), qubits.end()), qubits.end());
+    if (!qubits.empty())
+    {
+        noise.thermal_approximation_warning = ThermalClampWarning(qubits);
+        return;
+    }
+    noise.thermal_approximation_warning.clear();
+    json::array kept;
+    for (const auto &value : noise.approximations)
+        if (value != json::value("thermal_T2_clamped_to_T1"))
+            kept.push_back(value);
+    noise.approximations = std::move(kept);
 }
 
 inline json::object NoiseMetadata(const NoiseConfig &noise, size_t realizations)

@@ -253,7 +253,7 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
             {"estimate", estimate},
             {"noisy_fidelity", noisyFidelity},
             {"automatic_selection", automaticSelection},
-            {"sampling_strategies", json::array{"reference_frame_v1", "terminal_v1", "trajectory_v1", "mixed_v1"}},
+            {"sampling_strategies", json::array{"reference_frame_v1", "extended_frame_v1", "terminal_v1", "trajectory_v1", "mixed_v1"}},
             {"api", "maestro.native.request"},
             {"build", json::object{{"version", MAESTRO_BUILD_VERSION}, {"source_revision", MAESTRO_SOURCE_REVISION}}},
             {"capability_scope", "validation"},

@@ -10,8 +10,9 @@
     "noise_seed (also accepted as seed) is an unsigned 32-bit integer. It seeds noise injection and, "                                                         \
     "unless config.seed is set, measurement and readout. return_samples=True returns 'samples', a "                                                            \
     "(shots, clbits) uint8 array of shot records, instead of 'counts'. Results report 'sampling_strategy' "                                                    \
-    "when a dedicated sampler ran: 'reference_frame_v1' (noisy-Clifford frames), 'trajectory_v1' (each "                                                       \
-    "realization executed directly) or 'terminal_v1'. SimulatorConfig.counts_policy ('auto', 'legacy', "                                                       \
+    "when a dedicated sampler ran: 'reference_frame_v1' (noisy-Clifford frames), 'extended_frame_v1' "                                                         \
+    "(batched extended-stabilizer frames), 'trajectory_v1' (each realization executed directly) or "                                                           \
+    "'terminal_v1'. SimulatorConfig.counts_policy ('auto', 'legacy', "                                                                                         \
     "'frame_v1') selects them; seeded calls under 'auto' keep their earlier sequences."
 
 namespace maestro_bindings
@@ -36,7 +37,7 @@ CircuitPtr without_circuit_channels(const CircuitPtr &circuit);
 
 std::vector<std::string> ParseObservables(const nb::object &observables);
 // Emits ThermalApproximationWarning as a Python RuntimeWarning, once per call.
-void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config);
+void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config, const CircuitPtr &circuit);
 nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots, bool return_samples = false);
 nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const std::vector<std::string> &paulis, const SimulatorConfig &config,
                        MaestroExecution::EstimationCache *cache = nullptr);

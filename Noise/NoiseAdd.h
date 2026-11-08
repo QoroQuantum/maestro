@@ -109,7 +109,8 @@ class NoiseAdd
 
     std::shared_ptr<Circuits::Circuit<double>> inject(const std::shared_ptr<Circuits::Circuit<double>> &circ, const NoiseModel &nm)
     {
-        WarnThermalApproximation(nm);
+        if (circ)
+            WarnThermalApproximation(nm, *circ);
         return Inject(circ, nm, Layer::Pauli);
     }
 
@@ -123,7 +124,8 @@ class NoiseAdd
 
     std::shared_ptr<Circuits::Circuit<double>> inject_combined(const std::shared_ptr<Circuits::Circuit<double>> &circ, const NoiseModel &nm)
     {
-        WarnThermalApproximation(nm);
+        if (circ)
+            WarnThermalApproximation(nm, *circ);
         return Inject(circ, nm, Layer::Combined);
     }
 
@@ -546,11 +548,12 @@ class NoiseAdd
         return noisy;
     }
 
-    void WarnThermalApproximation(const NoiseModel &nm) const
+    // For the relaxation this circuit draws in the clamped window only.
+    void WarnThermalApproximation(const NoiseModel &nm, const Circuits::Circuit<double> &circuit) const
     {
         if (exact_channels || nm.has_additional_quantum_channels())
             return;
-        const auto qubits = nm.thermal_approximation_qubits();
+        const auto qubits = nm.thermal_approximation_qubits_on(circuit);
         if (qubits.empty())
             return;
         std::ostringstream message;
@@ -705,9 +708,11 @@ class NoiseAdd
                                           ? network->OptimizationSimulatorExists(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStabilizer)
                                           : stabilizerMethod;
         const bool admitsStabilizer = allowsStabilizer && (stabilizerMethod || !exact_channels);
+        // Frames inject exact channels, which keep a calibrated T2 that the
+        // trajectories clamp to T1 (and warn about): that window keeps them.
         if (policy == "legacy" || !allowsStabilizer || (policy == "auto" && (baseSeed || !admitsStabilizer)) || !host || *host != 0 ||
             network->GetNumHosts() != 1 || batches != shots || simulator->GetType() != Simulators::SimulatorType::kQCSim || layer == Layer::Coherent ||
-            !nm.inject_noise_covers_model())
+            !nm.inject_noise_covers_model() || (!exact_channels && nm.has_thermal_in_sampled_overdephasing_regime_on(*circuit)))
             return std::nullopt;
         const size_t width = std::max<size_t>(1, circuit->GetMaxQubitIndex() + 1);
         if (width > network->GetNumQubitsForHost(*host))
@@ -727,13 +732,16 @@ class NoiseAdd
         // Frame sampling is an explicit new seeded policy. Its per-call noise
         // seed advances this object's stream; reserve the same simulator-stream
         // indices as the realization executor before a later policy switch.
+        // As on the trajectories, circuit errors draw from the noise stream and
+        // measurements and readout from the simulator stream, so either seed
+        // can change alone; without a simulator seed both follow the noise.
         const uint64_t high = rng();
         const uint64_t noiseSeed = (high << 32) | static_cast<uint64_t>(rng());
-        const uint64_t seed =
-            baseSeed ? Simulators::IState::DeriveSeed(Simulators::IState::DeriveSeed(*baseSeed, next_simulator_stream), noiseSeed) : noiseSeed;
+        const MaestroExecution::ReferenceFrameSampler::Seeds seeds{noiseSeed,
+                                                                   baseSeed ? Simulators::IState::DeriveSeed(*baseSeed, next_simulator_stream) : noiseSeed};
         if (baseSeed)
             next_simulator_stream += static_cast<uint64_t>(batches);
-        auto outcomes = plan->SampleCounts(static_cast<size_t>(shots), seed);
+        auto outcomes = plan->SampleCounts(static_cast<size_t>(shots), seeds);
         Circuits::Circuit<>::ExecuteResults counts;
         counts.reserve(outcomes.size());
         for (auto &[bits, count] : outcomes)
@@ -754,7 +762,7 @@ class NoiseAdd
         last_policy = ResolvePolicy(circuit, network, nm, requested_realizations, layer, false);
         const ScopedChannels channels(exact_channels, last_policy.exact_channels);
         if (layer != Layer::Coherent)
-            WarnThermalApproximation(nm);
+            WarnThermalApproximation(nm, *circuit);
         const int batches = static_cast<int>(std::min(static_cast<size_t>(shots), last_policy.realizations));
         last_policy.realizations = static_cast<size_t>(batches);
         if (auto counts = FrameCounts(circuit, network, host, nm, shots, batches, layer))
@@ -824,7 +832,7 @@ class NoiseAdd
         const int realizations = static_cast<int>(last_policy.realizations);
         const ScopedChannels channels(exact_channels, last_policy.exact_channels);
         if (layer != Layer::Coherent)
-            WarnThermalApproximation(nm);
+            WarnThermalApproximation(nm, *circuit);
         auto cleanCircuit = circuit->RemoveEndMeasurements();
         auto execution = PrepareExecution(network);
         std::vector<double> values(paulis.size(), 0.0);

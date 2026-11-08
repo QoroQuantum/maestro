@@ -324,11 +324,11 @@ struct ThermalRelaxation
      * True when the sampled reset+Z mixture reproduces the exact channel's
      * coherence decay exp(-duration/T2). False in the T1 < T2 <= 2*T1 window,
      * where the mixture over-dephases and a density-matrix or MPO backend is
-     * required.
+     * required, unless the duration is zero: both are then the identity.
      */
     bool sampled_realization_is_exact() const
     {
-        if (!std::isfinite(t1) || !std::isfinite(t2))
+        if (!(duration > 0.0) || !std::isfinite(t1) || !std::isfinite(t2))
             return true;
         return t2 <= t1 * (1.0 + 1e-12);
     }
@@ -1238,6 +1238,82 @@ class NoiseModel
         return qubits;
     }
 
+    /**
+     * True if sampled (pure-state) injection realizes configured noise as
+     * resets drawn once per noise realization: legacy T1, and thermal or idle
+     * relaxation with a finite T1. Shots that share a realization then share
+     * the reset, which no Pauli-frame draw reproduces. Relaxation with an
+     * infinite T1 never resets: it draws only the phase flip a frame draws.
+     * has_sampled_resets_on() counts only relaxation a circuit can draw.
+     */
+    bool has_sampled_resets() const
+    {
+        if (has_t1())
+            return true;
+        for (const auto *params : {&thermal_relaxation_params_, &thermal_relaxation_params_2q_})
+            for (const auto &entry : *params)
+                if (entry.second.decay_probability() > 0.0)
+                    return true;
+        for (const auto &entry : idle_noise_)
+            if (!std::isinf(entry.second.t1))
+                return true;
+        return false;
+    }
+
+    /**
+     * has_sampled_resets() for one circuit: true if sampled injection of it
+     * can draw a reset. That takes a gate on a qubit whose T1 or thermal
+     * decay probability for the gate's type is nonzero, or a positive delay
+     * on a qubit with a finite idle T1; noise on qubits the circuit never
+     * gates or delays, and zero-probability T1, never resets.
+     */
+    bool has_sampled_resets_on(const Circuits::Circuit<double> &circuit) const
+    {
+        return any_relaxation_site_(
+            circuit,
+            [this](int q, bool multi) {
+                const auto *params = get_thermal_relaxation_params(q, multi);
+                return get_t1_for_gate(q, multi) > 0.0 || (params && params->decay_probability() > 0.0);
+            },
+            [this](int q, double duration) {
+                const auto *idle = get_idle_noise(q);
+                return idle && ThermalRelaxation{duration, idle->t1, idle->t2, idle->excited_population}.decay_probability() > 0.0;
+            });
+    }
+
+    /** has_thermal_in_sampled_overdephasing_regime() for the relaxation one circuit draws. */
+    bool has_thermal_in_sampled_overdephasing_regime_on(const Circuits::Circuit<double> &circuit) const
+    {
+        return any_relaxation_site_(
+            circuit, [this](int q, bool multi) { return clamps_after_gate_(q, multi); },
+            [this](int q, double duration) { return clamps_on_delay_(q, duration); });
+    }
+
+    /**
+     * thermal_approximation_qubits() for the relaxation one circuit draws: the
+     * qubits where sampled execution of it clamps T2 to T1, in increasing
+     * order. Empty when the circuit never gates or delays such a qubit.
+     */
+    std::vector<int> thermal_approximation_qubits_on(const Circuits::Circuit<double> &circuit) const
+    {
+        std::vector<int> qubits;
+        any_relaxation_site_(
+            circuit,
+            [&](int q, bool multi) {
+                if (clamps_after_gate_(q, multi))
+                    qubits.push_back(q);
+                return false;
+            },
+            [&](int q, double duration) {
+                if (clamps_on_delay_(q, duration))
+                    qubits.push_back(q);
+                return false;
+            });
+        std::sort(qubits.begin(), qubits.end());
+        qubits.erase(std::unique(qubits.begin(), qubits.end()), qubits.end());
+        return qubits;
+    }
+
     /** True if any thermal layer requires the sampled T2 approximation. */
     bool has_thermal_in_sampled_overdephasing_regime() const
     {
@@ -1450,6 +1526,49 @@ class NoiseModel
     /// build an equivalent reset+Z mixture instead of rejecting the model.
     std::unordered_map<int, ThermalRelaxation> thermal_relaxation_params_;
     std::unordered_map<int, ThermalRelaxation> thermal_relaxation_params_2q_;
+
+    // Whether sampled relaxation after a gate (multi: on two or more qubits)
+    // or on a delay of this duration clamps T2 to T1 on qubit q.
+    bool clamps_after_gate_(int q, bool multi) const
+    {
+        const auto *params = get_thermal_relaxation_params(q, multi);
+        return params && !params->sampled_realization_is_exact();
+    }
+
+    bool clamps_on_delay_(int q, double duration) const
+    {
+        const auto *idle = get_idle_noise(q);
+        return idle && !ThermalRelaxation{duration, idle->t1, idle->t2, idle->excited_population}.sampled_realization_is_exact();
+    }
+
+    // Where sampled injection relaxes qubits, as inject_noise_impl_ walks the
+    // circuit: gate(q, multi) for each qubit of a gate that takes noise
+    // (multi: two or more qubits), delay(q, duration) for each qubit of a
+    // positive delay. True as soon as one of them is.
+    template <class OnGate, class OnDelay> static bool any_relaxation_site_(const Circuits::Circuit<double> &circuit, OnGate &&gate, OnDelay &&delay)
+    {
+        for (const auto &op : circuit.GetOperations())
+        {
+            if (op->GetType() == Circuits::OperationType::kDelay)
+            {
+                const auto delayed = std::dynamic_pointer_cast<Circuits::Delay<double>>(op);
+                const double duration = delayed ? delayed->GetDuration() : 0.0;
+                if (duration <= 1e-15)
+                    continue;
+                for (const auto q : op->AffectedQubits())
+                    if (delay(static_cast<int>(q), duration))
+                        return true;
+                continue;
+            }
+            if (op->GetType() != Circuits::OperationType::kGate || op->IsNoiseless())
+                continue;
+            const auto qubits = op->AffectedQubits();
+            for (const auto q : qubits)
+                if (gate(static_cast<int>(q), qubits.size() >= 2))
+                    return true;
+        }
+        return false;
+    }
     std::unordered_map<int, std::unordered_map<int, Simulators::QuantumChannel>> correlated_phase_flip_;
     std::vector<ConfiguredKrausChannel> kraus_channels_;
 };

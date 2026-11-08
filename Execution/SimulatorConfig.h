@@ -370,6 +370,23 @@ inline bool PreferFrameCounts(const SimulatorConfig &config, std::optional<uint6
     return config.counts_policy == "auto" && AdmitsStabilizerExecution(config) && !config.seed && !noise_seed;
 }
 
+// Whether noisy extended_stabilizer shots may run on batched Pauli frames
+// (ExtendedFrameSampler): the QCSim extended stabilizer itself, as a direct
+// session runs it, so not a candidate list (the network selects from it) or
+// sampling reduction (the network splits measurement cones). The frames draw
+// another random sequence than scalar trajectories, so as for frame counts
+// auto changes only unseeded requests, frame_v1 opts seeded ones in and
+// legacy keeps the scalar trajectories.
+inline bool PreferExtendedFrames(const SimulatorConfig &config, std::optional<uint64_t> noise_seed = std::nullopt)
+{
+    if (config.simulator_type != Simulators::SimulatorType::kQCSim || config.simulation_type != Simulators::SimulationType::kExtendedStabilizer ||
+        HasCandidateList(config) || config.enable_sampling_reduction)
+        return false;
+    if (config.counts_policy == "frame_v1")
+        return true;
+    return config.counts_policy == "auto" && !config.seed && !noise_seed;
+}
+
 // Native Configure keys for typed options without a one-to-one key. Precision
 // sets both precision aliases for compatibility with existing callers.
 inline std::vector<std::pair<std::string, std::string>> TypedNativeOptions(const SimulatorConfig &config)

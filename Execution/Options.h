@@ -153,11 +153,11 @@ inline bool Applies(const Option &option, const SimulatorConfig &config)
                                               method == Method::kStabilizer || method == Method::kExtendedStabilizer || mps || mpo);
     // Methods whose concurrent trajectory shots or noise realizations are
     // budgeted: dense shot workers, stabilizer and bounded MPS/MPO shot
-    // workers under an explicit trajectory policy, and parallel native and
-    // Python realizations.
+    // workers under an explicit trajectory policy, parallel native and
+    // Python realizations, and extended-stabilizer frame batches.
     if (family == "cpu_realization")
-        return backend == Backend::kQCSim &&
-               (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kStabilizer || mps || mpo);
+        return backend == Backend::kQCSim && (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kStabilizer ||
+                                              method == Method::kExtendedStabilizer || mps || mpo);
     if (family == "device")
         return gpu || distributed;
     if (family == "precision")

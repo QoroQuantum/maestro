@@ -92,7 +92,9 @@ extern "C"
 // stabilizer) and "noise", validated as a native execute request would be. The
 // simulator must admit the QCSim stabilizer, and the noise must consist of
 // Pauli-mixture channels (Pauli, phase damping, readout errors; not amplitude
-// damping or finite-T1 relaxation). Returns null when frames do not apply, and
+// damping or finite-T1 relaxation). A fixed QCSim extended_stabilizer simulator
+// instead compiles any circuit of its gates to batched extended-stabilizer
+// frames, with the same noise rules. Returns null when frames do not apply, and
 // then, when error is not null, stores an error JSON in *error for FreeResult.
 // Release the sampler with MaestroDestroyReferenceFrameSampler; concurrent
 // sampling calls are safe.

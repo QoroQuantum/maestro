@@ -3,6 +3,7 @@
 #include "../Circuit/Circuit.h"
 #include "../Utils/RandomStream.h"
 #include "Clifford.h"
+#include "PauliFrameKernels.h"
 
 #include <algorithm>
 #include <array>
@@ -14,11 +15,8 @@
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
+#include <utility>
 #include <vector>
-
-#if defined(_WIN32) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__)
-#define MAESTRO_FRAME_LITTLE_ENDIAN 1
-#endif
 
 namespace MaestroExecution
 {
@@ -56,222 +54,19 @@ class ReferenceTableau : public QC::Clifford::StabilizerSimulator
     }
 };
 
-// Above this rate a uniform draw per lane is cheaper than a logarithm per error.
-constexpr double kDenseErrorRate = 1.0 / 16;
+using FrameKernels::ForEachError;
+using FrameKernels::PauliMixture;
+using FrameKernels::Stream;
+using FrameKernels::WriteBits;
 
 template <class Rate> Rate MakeRate(double rate)
 {
-    Rate result;
-    result.rate = std::clamp(rate, 0.0, 1.0);
-    if (result.rate > 0 && result.rate < 1)
-    {
-        const double logSurvival = std::log1p(-result.rate);
-        // Retain the existing arithmetic and seeded rows at ordinary rates.
-        // Subnormal rates can have a finite logarithm whose reciprocal is not
-        // representable; their gaps use division instead of multiplying infinity.
-        if (-logSurvival > 1.0 / std::numeric_limits<double>::max())
-            result.inverseLogSurvival = 1.0 / logSurvival;
-    }
-    return result;
+    return FrameKernels::MakeRate<Rate>(rate);
 }
 
-// xoshiro256++, seeded through SplitMix64. Seeding is a few multiplications,
-// so every random instruction can own an independent stream in every batch.
-class Stream
-{
-  public:
-    explicit Stream(uint64_t seed) noexcept
-    {
-        for (auto &word : state)
-        {
-            seed += 0x9e3779b97f4a7c15ULL;
-            uint64_t value = seed;
-            value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
-            value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
-            word = value ^ (value >> 31);
-        }
-    }
-
-    uint64_t Next() noexcept
-    {
-        const uint64_t result = Rotate(state[0] + state[3], 23) + state[0];
-        const uint64_t shifted = state[1] << 17;
-        state[2] ^= state[0];
-        state[3] ^= state[1];
-        state[1] ^= state[2];
-        state[0] ^= state[3];
-        state[2] ^= shifted;
-        state[3] = Rotate(state[3], 45);
-        return result;
-    }
-
-    // [0, 1) and (0, 1], each from 53 bits of one engine word.
-    double Uniform() noexcept
-    {
-        return static_cast<double>(Next() >> 11) * 0x1.0p-53;
-    }
-
-    double UniformPositive() noexcept
-    {
-        return static_cast<double>((Next() >> 11) + 1) * 0x1.0p-53;
-    }
-
-  private:
-    static uint64_t Rotate(uint64_t value, int bits) noexcept
-    {
-        return (value << bits) | (value >> (64 - bits));
-    }
-
-    uint64_t state[4];
-};
-
-// Calls hit(lane) for every lane in [0, lanes) independently with probability
-// rate, in increasing lane order. Sparse rates draw geometric gaps between
-// errors: P(gap >= k) = (1 - rate)^k. Draws, including any hit() makes from the
-// same stream, follow lane order, so fewer lanes observe a prefix of the events.
-template <class Hit> void ForEachError(Stream &stream, double rate, double inverseLogSurvival, size_t lanes, Hit &&hit)
-{
-    if (rate <= 0)
-        return;
-    if (rate >= 1)
-    {
-        for (size_t lane = 0; lane < lanes; ++lane)
-            hit(lane);
-        return;
-    }
-    if (rate >= kDenseErrorRate)
-    {
-        for (size_t lane = 0; lane < lanes; ++lane)
-            if (stream.Uniform() < rate)
-                hit(lane);
-        return;
-    }
-    for (size_t lane = 0; lane < lanes; ++lane)
-    {
-        const double logDraw = std::log(stream.UniformPositive());
-        double gap;
-        if (inverseLogSurvival != 0)
-            gap = std::floor(logDraw * inverseLogSurvival);
-        else
-        {
-            const double logSurvival = std::log1p(-rate);
-            // Reject gaps beyond this batch before dividing: the quotient can
-            // itself overflow for a microscopic rate, but its exact size is
-            // irrelevant once it exceeds the remaining lanes.
-            if (logDraw <= static_cast<double>(lanes - lane) * logSurvival)
-                return;
-            gap = std::floor(logDraw / logSurvival);
-        }
-        if (!(gap < static_cast<double>(lanes - lane)))
-            return;
-        lane += static_cast<size_t>(gap);
-        hit(lane);
-    }
-}
-
-// In place: bit c of block[r] becomes bit r of block[c].
-void Transpose64(std::array<uint64_t, 64> &block) noexcept
-{
-    uint64_t mask = 0x00000000FFFFFFFFULL;
-    for (unsigned j = 32; j != 0; j >>= 1, mask ^= mask << j)
-        for (unsigned k = 0; k < 64; k = ((k | j) + 1) & ~j)
-        {
-            const uint64_t swapped = ((block[k] >> j) ^ block[k | j]) & mask;
-            block[k] ^= swapped << j;
-            block[k | j] ^= swapped;
-        }
-}
-
-// Bit i of bits becomes byte out[i] (0 or 1), for i < count.
-void WriteBits(uint64_t bits, uint8_t *out, size_t count) noexcept
-{
-    size_t i = 0;
-    for (; i + 8 <= count; i += 8, bits >>= 8)
-    {
-        // Byte k keeps bit k of the replicated byte, then is normalized to 0 or 1.
-        const uint64_t selected = ((bits & 0xFF) * 0x0101010101010101ULL) & 0x8040201008040201ULL;
-        const uint64_t bytes = ((selected + 0x7F7F7F7F7F7F7F7FULL) >> 7) & 0x0101010101010101ULL;
-#ifdef MAESTRO_FRAME_LITTLE_ENDIAN
-        std::memcpy(out + i, &bytes, sizeof(bytes));
-#else
-        for (size_t k = 0; k < 8; ++k)
-            out[i + k] = static_cast<uint8_t>(bytes >> (8 * k));
-#endif
-    }
-    for (; i < count; ++i, bits >>= 1)
-        out[i] = static_cast<uint8_t>(bits & 1U);
-}
-
-// A classical column word becomes one packed row word after transposition.
-// Both output formats consume exactly the same immutable batch columns.
 template <class Consumer> void TransposeBatch(const std::vector<uint64_t> &classical, size_t width, size_t lanes, Consumer &&consume)
 {
-    std::array<uint64_t, 64> block;
-    const size_t words = (lanes + 63) / 64;
-    for (size_t w = 0; w < words && width; ++w)
-    {
-        const size_t laneCount = std::min<size_t>(64, lanes - 64 * w);
-        for (size_t base = 0; base < width; base += 64)
-        {
-            const size_t count = std::min<size_t>(64, width - base);
-            for (size_t r = 0; r < 64; ++r)
-                block[r] = r < count ? classical[(base + r) * ReferenceFrameSampler::kBatchWords + w] : 0;
-            Transpose64(block);
-            consume(64 * w, base, count, laneCount, block);
-        }
-    }
-}
-
-// A channel given only by Kraus operators (phase damping, for example) is
-// still a Pauli channel when its process matrix in the Pauli basis is
-// diagonal. With K_i = sum_a c_ia P_a, chi_ab = sum_i c_ia conj(c_ib), and the
-// channel is sum_a chi_aa P_a rho P_a exactly when every off-diagonal chi_ab
-// vanishes. P_a follows QuantumChannel::Pauli: base-4 digit k of a (I, X, Y,
-// Z) acts on target k. Returns the probabilities, or nothing for any other
-// channel (amplitude damping, incomplete Kraus sets, three or more targets).
-std::vector<double> PauliMixture(const Simulators::QuantumChannel &channel, size_t targets)
-{
-    if (targets < 1 || targets > 2)
-        return {};
-    const size_t terms = targets == 1 ? 4 : 16;
-    const double dimension = targets == 1 ? 2.0 : 4.0;
-    const auto &kraus = channel.GetKrausOperators();
-    if (kraus.empty() || kraus.front().rows() != static_cast<Eigen::Index>(dimension))
-        return {};
-    std::vector<Simulators::QuantumChannel::Matrix> paulis;
-    paulis.reserve(terms);
-    for (size_t a = 0; a < terms; ++a)
-    {
-        std::vector<double> single(terms, 0.0);
-        single[a] = 1.0;
-        paulis.push_back(Simulators::QuantumChannel::Pauli(single).GetKrausOperators().front());
-    }
-    std::vector<std::vector<std::complex<double>>> coefficients(kraus.size(), std::vector<std::complex<double>>(terms));
-    for (size_t i = 0; i < kraus.size(); ++i)
-        for (size_t a = 0; a < terms; ++a)
-            coefficients[i][a] = (paulis[a].adjoint() * kraus[i]).trace() / dimension;
-    constexpr double tolerance = 1e-12;
-    std::vector<double> probabilities(terms, 0.0);
-    double total = 0;
-    for (size_t a = 0; a < terms; ++a)
-        for (size_t b = 0; b < terms; ++b)
-        {
-            std::complex<double> chi = 0;
-            for (size_t i = 0; i < kraus.size(); ++i)
-                chi += coefficients[i][a] * std::conj(coefficients[i][b]);
-            if (a == b)
-            {
-                if (chi.real() < -tolerance || std::abs(chi.imag()) > tolerance)
-                    return {};
-                probabilities[a] = std::max(0.0, chi.real());
-                total += probabilities[a];
-            }
-            else if (std::abs(chi) > tolerance)
-                return {};
-        }
-    if (std::abs(total - 1.0) > 1e-10)
-        return {};
-    return probabilities;
+    FrameKernels::TransposeBatch(classical, width, lanes, ReferenceFrameSampler::kBatchWords, std::forward<Consumer>(consume));
 }
 } // namespace
 
@@ -511,10 +306,15 @@ std::optional<ReferenceFrameSampler> CompileReferenceSampler(const std::shared_p
 
 std::vector<uint8_t> ReferenceFrameSampler::Sample(size_t shots, uint64_t seed) const
 {
+    return Sample(shots, Seeds{seed, seed});
+}
+
+std::vector<uint8_t> ReferenceFrameSampler::Sample(size_t shots, Seeds seeds) const
+{
     if (width_ != 0 && shots > std::numeric_limits<size_t>::max() / width_)
         throw std::length_error("Reference-frame sample matrix exceeds addressable memory");
     std::vector<uint8_t> result(shots * width_);
-    ForEachBatch(shots, seed, [&](size_t start, size_t lanes, const std::vector<uint64_t> &classical) {
+    ForEachBatch(shots, seeds, [&](size_t start, size_t lanes, const std::vector<uint64_t> &classical) {
         TransposeBatch(classical, width_, lanes, [&](size_t first, size_t base, size_t count, size_t laneCount, const auto &block) {
             for (size_t lane = 0; lane < laneCount; ++lane)
                 WriteBits(block[lane], result.data() + (start + first + lane) * width_ + base, count);
@@ -525,6 +325,11 @@ std::vector<uint8_t> ReferenceFrameSampler::Sample(size_t shots, uint64_t seed) 
 
 FrameOutcomes ReferenceFrameSampler::SampleCounts(size_t shots, uint64_t seed) const
 {
+    return SampleCounts(shots, Seeds{seed, seed});
+}
+
+FrameOutcomes ReferenceFrameSampler::SampleCounts(size_t shots, Seeds seeds) const
+{
     FrameOutcomes result;
     if (!shots)
         return result;
@@ -534,7 +339,7 @@ FrameOutcomes ReferenceFrameSampler::SampleCounts(size_t shots, uint64_t seed) c
         throw std::length_error("Reference-frame count scratch exceeds addressable memory");
     std::vector<uint64_t> rows(batchLanes * rowWords), key(rowWords);
     std::unordered_map<std::vector<uint64_t>, size_t, FrameDetail::PackedRowHash> packed;
-    ForEachBatch(shots, seed, [&](size_t, size_t lanes, const std::vector<uint64_t> &classical) {
+    ForEachBatch(shots, seeds, [&](size_t, size_t lanes, const std::vector<uint64_t> &classical) {
         TransposeBatch(classical, width_, lanes, [&](size_t first, size_t base, size_t, size_t laneCount, const auto &block) {
             for (size_t lane = 0; lane < laneCount; ++lane)
                 rows[(first + lane) * rowWords + base / 64] = block[lane];
@@ -557,7 +362,7 @@ FrameOutcomes ReferenceFrameSampler::SampleCounts(size_t shots, uint64_t seed) c
     return result;
 }
 
-void ReferenceFrameSampler::ForEachBatch(size_t shots, uint64_t seed, const std::function<void(size_t, size_t, const std::vector<uint64_t> &)> &consume) const
+void ReferenceFrameSampler::ForEachBatch(size_t shots, Seeds seeds, const std::function<void(size_t, size_t, const std::vector<uint64_t> &)> &consume) const
 {
     if (!shots)
         return;
@@ -579,7 +384,10 @@ void ReferenceFrameSampler::ForEachBatch(size_t shots, uint64_t seed, const std:
         std::fill(x.begin(), x.end(), 0);
         std::fill(z.begin(), z.end(), 0);
         std::fill(classical.begin(), classical.end(), 0);
-        const uint64_t batchSeed = Utils::RandomStream::Derive(seed, batch);
+        // Gauges and readout draw from the measurement seed, channel errors
+        // from the noise seed, with the streams one seed used for both.
+        const uint64_t measurementSeed = Utils::RandomStream::Derive(seeds.measurement, batch);
+        const uint64_t noiseSeed = Utils::RandomStream::Derive(seeds.noise, batch);
 
         for (size_t index = 0; index < instructions_.size(); ++index)
         {
@@ -641,7 +449,7 @@ void ReferenceFrameSampler::ForEachBatch(size_t shots, uint64_t seed, const std:
             case Kind::Reset: {
                 if (instruction.random)
                 {
-                    Stream stream(Utils::RandomStream::Derive(batchSeed, 2 * index));
+                    Stream stream(Utils::RandomStream::Derive(measurementSeed, 2 * index));
                     for (size_t w = 0; w < words; ++w)
                         gauge[w] = stream.Next() & active[w];
                     for (const auto q : instruction.gaugeX)
@@ -665,7 +473,7 @@ void ReferenceFrameSampler::ForEachBatch(size_t shots, uint64_t seed, const std:
                     values[w] = (xa[w] ^ reference) & active[w];
                 if (instruction.readout.rate > 0)
                 {
-                    Stream stream(Utils::RandomStream::Derive(batchSeed, 2 * index + 1));
+                    Stream stream(Utils::RandomStream::Derive(measurementSeed, 2 * index + 1));
                     const double candidate = instruction.readout.rate;
                     ForEachError(stream, candidate, instruction.readout.inverseLogSurvival, lanes, [&](size_t lane) {
                         const uint64_t bit = uint64_t(1) << (lane % 64);
@@ -679,7 +487,7 @@ void ReferenceFrameSampler::ForEachBatch(size_t shots, uint64_t seed, const std:
             }
             case Kind::Channel: {
                 uint64_t *xb = x.data() + instruction.second * W, *zb = z.data() + instruction.second * W;
-                Stream stream(Utils::RandomStream::Derive(batchSeed, 2 * index + 1));
+                Stream stream(Utils::RandomStream::Derive(noiseSeed, 2 * index + 1));
                 const PauliTerm *terms = instruction.terms.data();
                 const PauliTerm *last = terms + instruction.terms.size() - 1;
                 ForEachError(stream, instruction.error.rate, instruction.error.inverseLogSurvival, lanes, [&](size_t lane) {

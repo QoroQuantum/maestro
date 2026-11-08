@@ -84,6 +84,16 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
         if (executed_prefix && !executed_prefix->GetOperations().empty())
             executed_prefix->ExecuteBD(simulator_, state, &max_bond_dim_);
         simulator_->SaveState();
+        // A prefix with measurements or resets collapsed once here, so every
+        // suffix shot shares that branch: frames, which branch per shot, then
+        // keep away. The extended stabilizer has no prefix noise (it needs
+        // exact channels).
+        frame_prefix_usable_ = config_.simulator_type == Simulators::SimulatorType::kQCSim &&
+                               config_.simulation_type == Simulators::SimulationType::kExtendedStabilizer && executed_prefix == prefix &&
+                               (!prefix || IsGateOnlyCircuit(*prefix));
+        // A snapshot: the caller may edit its circuit after the state was saved.
+        if (frame_prefix_usable_ && prefix)
+            frame_prefix_ = std::static_pointer_cast<Circuits::Circuit<double>>(prefix->Clone());
     }
     catch (...)
     {
@@ -213,6 +223,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
     };
     const auto start = std::chrono::steady_clock::now();
     size_t terminal_calls = 0, trajectory_calls = 0;
+    bool extended = false;
 
     if (!has_noise)
     {
@@ -224,6 +235,22 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         else
             ++trajectory_calls;
     }
+    else if (frame_prefix_usable_ && !policy.exact_channels && PreferExtendedFrames(call_config, noise_seed) && [&] {
+                 // Batched frames: the prefix evolves once, each batch of shots
+                 // follows the noisy suffix together, realization schedule kept.
+                 const size_t batches = std::min(shots, policy.realizations);
+                 FrameOutcomes outcomes;
+                 const uint64_t seed = noise_seed ? Simulators::IState::DeriveSeed(*noise_seed, 0x6672616d6573ULL) : Utils::RandomStream::FreshSeed();
+                 if (!SampleExtendedFrames(suffix, *noise_model, call_config, static_cast<size_t>(num_qubits_), total_cbits, shots, batches, seed, seed, rows,
+                                           records.rows, outcomes, frame_prefix_))
+                     return false;
+                 for (auto &entry : outcomes)
+                     combined[std::move(entry.first)] += entry.second;
+                 records.realizations = batches;
+                 records.policy.realizations = batches;
+                 return true;
+             }())
+        extended = true;
     else
     {
         const size_t batches = std::min(shots, policy.realizations);
@@ -296,7 +323,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
     }
     records.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     records.max_bond_dimension = max_bond_dim_;
-    records.sampling_strategy = trajectory_calls == 0 ? "terminal_v1" : terminal_calls == 0 ? "trajectory_v1" : "mixed_v1";
+    records.sampling_strategy = extended ? "extended_frame_v1" : trajectory_calls == 0 ? "terminal_v1" : terminal_calls == 0 ? "trajectory_v1" : "mixed_v1";
     if (!rows)
     {
         records.counts.reserve(combined.size());
