@@ -29,8 +29,9 @@ class PrefixCheckpoint
 
     // Sample suffix from the saved state. Terminal measurements on mixed-state
     // and QCSim statevector/stabilizer/MPS backends reuse one prepared suffix
-    // state per realization (PreservesSavedStateWhileSampling); other
-    // executions, and pure-state suffixes with resets, replay per shot.
+    // state per realization. QCSim path integral and extended stabilizer also
+    // preserve the saved state when multinomial counts are enabled. Pure-state
+    // suffixes with resets replay per shot (PreservesSavedStateWhileSampling).
     // Records span
     // max(qubits, num_measurements, the suffix's highest classical bit + 1)
     // bits; replayed rows keep shot order, prepared-state rows are shuffled

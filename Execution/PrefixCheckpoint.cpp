@@ -22,6 +22,7 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
     // register included; adopt it instead of allocating the register again.
     unsigned long probed = 0;
     config_ = ResolveCandidateBackend(config, static_cast<size_t>(num_qubits_), probed);
+
     struct ProbeGuard
     {
         unsigned long &handle;
@@ -32,6 +33,7 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
                 DestroySimpleSimulator(handle);
         }
     } probe_guard{probed};
+
     auto executed_prefix = prefix;
     if (prefix && prefix_noise && prefix_noise->has_any())
     {
@@ -141,6 +143,13 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
     // The suffix continues the saved prefix state, not a fresh register.
     const auto policy = ResolveNoiseRealizations(noise_realizations, *noise_model, config_, NoiseLayer::kCombined, 64, suffix, false, std::nullopt, false);
 
+    // A checkpoint can alternate raw rows, explicit per-call seeds and counts.
+    // Resolve the policy before creating batch seeds and before cloning workers.
+    const bool multinomial =
+        !rows && shots > 1 && simulator_->IsQcsim() && !simulator_->GetConfigMap().count("sampling_policy") && PreferMultinomialCounts(config_, noise_seed);
+    if (simulator_->IsQcsim() && (simulator_->GetConfiguration("counts_policy") == "multinomial_v1") != multinomial)
+        simulator_->Configure("counts_policy", multinomial ? "multinomial_v1" : "legacy");
+
     // The config is fixed when the checkpoint is built, so unlike
     // full_noise_execute its seed must not override the per-call seed: that
     // would replay the same samples on every call. A call's noise_seed seeds
@@ -170,7 +179,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
     Circuits::Circuit<>::ExecuteResults combined;
     if (rows)
         records.rows.assign(SampleStorageSize(shots, total_cbits), 0);
-    const auto record = [&](const Circuits::OperationState &state, size_t shot, Circuits::Circuit<>::ExecuteResults &counts) {
+    const auto record = [&](const Circuits::OperationState &state, size_t shot, Circuits::Circuit<>::ExecuteResults &counts, size_t amount = 1) {
         const auto &bits = state.GetAllBits();
         const size_t written = std::min(bits.size(), total_cbits);
         if (rows)
@@ -184,7 +193,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
             std::vector<bool> key(total_cbits, false);
             for (size_t i = 0; i < written; ++i)
                 key[i] = bits[i];
-            ++counts[std::move(key)];
+            counts[std::move(key)] += amount;
         }
     };
     // The sampler operates on the current state without replacing the saved
@@ -201,11 +210,16 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         // may branch on a pure-state backend, so CanSampleTerminal sends any
         // pure-state reset to the shot path. Backends whose sampler uses the
         // save slot also replay shots, keeping the prefix intact.
-        if (batch_shots > 1 && PreservesSavedStateWhileSampling(*simulator) &&
-            SamplePreparedTerminal(
-                *circuit, simulator, batch_shots, state, seed,
-                [&](size_t shot, const Circuits::OperationState &sample) { record(sample, first_shot + shot, counts); }, &max_bond))
-            return true;
+        if (batch_shots > 1 && PreservesSavedStateWhileSampling(*simulator, multinomial))
+        {
+            TerminalCountSink writeCounts;
+            if (multinomial)
+                writeCounts = [&](size_t count, const Circuits::OperationState &sample) { record(sample, 0, counts, count); };
+            if (SamplePreparedTerminal(
+                    *circuit, simulator, batch_shots, state, seed,
+                    [&](size_t shot, const Circuits::OperationState &sample) { record(sample, first_shot + shot, counts); }, &max_bond, false, writeCounts))
+                return true;
+        }
         if (reuse_heads && SampleSharedHead(
                                *circuit, simulator, batch_shots, state, seed,
                                [&](size_t shot, const Circuits::OperationState &sample) { record(sample, first_shot + shot, counts); }, &max_bond))

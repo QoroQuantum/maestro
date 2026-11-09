@@ -196,7 +196,7 @@ static bool ConfigureLegacyTrajectories(Network::INetwork<> &network, const boos
     }
 }
 
-// SimpleExecute's optional counts_policy: auto (default), legacy or frame_v1.
+// SimpleExecute accepts the same count policies as native requests.
 static bool ParseLegacyCountsPolicy(const boost::json::value &config, std::string &policy)
 {
     policy = "auto";
@@ -206,7 +206,7 @@ static bool ParseLegacyCountsPolicy(const boost::json::value &config, std::strin
     if (!value->is_string())
         return false;
     policy = std::string(value->as_string());
-    return policy == "auto" || policy == "legacy" || policy == "frame_v1";
+    return policy == "auto" || policy == "legacy" || policy == "frame_v1" || policy == "multinomial_v1";
 }
 
 // Counts from compiled reference frames, under the rule MaestroExecution::
@@ -217,7 +217,7 @@ static bool ParseLegacyCountsPolicy(const boost::json::value &config, std::strin
 static std::optional<Network::INetwork<>::ExecuteResults> LegacyFrameCounts(Network::INetwork<> &network, const std::shared_ptr<Circuits::Circuit<>> &circuit,
                                                                             size_t shots, const std::string &policy, const boost::json::value &config)
 {
-    if (policy == "legacy" || !shots || !circuit)
+    if (policy == "legacy" || policy == "multinomial_v1" || !shots || !circuit)
         return std::nullopt;
     std::optional<uint64_t> seed;
     if (const auto *value = config.is_object() ? config.as_object().if_contains("seed") : nullptr)
@@ -865,6 +865,8 @@ extern "C"
         // TODO: get from config the allowed simulators types and so on, if set
         auto start = std::chrono::high_resolution_clock::now();
         auto frames = LegacyFrameCounts(*network, circuit, nrShots, countsPolicy, configJson);
+        const bool explicitSeed = configJson.is_object() && configJson.as_object().contains("seed");
+        network->Configure("counts_policy", countsPolicy == "auto" && !explicitSeed && !frames ? "multinomial_v1" : countsPolicy.c_str());
         auto results = frames ? std::move(*frames) : network->RepeatedExecuteOnHost(circuit, 0, nrShots);
         auto end = std::chrono::high_resolution_clock::now();
 

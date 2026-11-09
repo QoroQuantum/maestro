@@ -6,6 +6,8 @@
 #include "QCSimTensorUtils.h"
 #include "RoutingMap.h"
 
+#include <optional>
+
 namespace Simulators::Private
 {
 class QCSimTensorChainSimulator : public TensorChainRouting<QCSimGateSimulator>
@@ -58,6 +60,42 @@ class QCSimTensorChainSimulator : public TensorChainRouting<QCSimGateSimulator>
     }
 
   protected:
+    // One distinct measured qubit, possibly repeated. Its marginal comes from a
+    // single chain contraction and one binomial draw splits all shots; native
+    // terminal sampling contracts once per shot instead. probabilityZero(q)
+    // returns P(q = 0) for a logical qubit, or nothing when the native sampler
+    // must keep the request. No RNG is consumed before that decision.
+    template <bool Many, class ProbabilityZero>
+    bool SingleQubitCounts(const Types::qubits_vector &qubits, size_t shots, Utils::Sampling::Counts<Many> &result, const ProbabilityZero &probabilityZero)
+    {
+        if (qubits.empty() || !Utils::Sampling::PreferMultinomial(shots, 2) || !AllowMultinomialCounts() ||
+            !std::all_of(qubits.begin(), qubits.end(), [&](auto q) { return q == qubits.front(); }))
+            return false;
+        const std::optional<double> marginal = probabilityZero(qubits.front());
+        if (!marginal)
+            return false;
+        const double prob0 = *marginal;
+        if (!std::isfinite(prob0))
+            throw std::domain_error("Tensor-chain sampling requires a finite marginal probability");
+        const size_t zeros = Utils::Sampling::BinomialCount(shots, std::clamp(prob0, 0., 1.), [&] { return Utils::RandomStream::Uniform(rng); });
+        if constexpr (Many)
+        {
+            if (zeros)
+                result.emplace(std::vector<bool>(qubits.size(), false), zeros);
+            if (shots > zeros)
+                result.emplace(std::vector<bool>(qubits.size(), true), shots - zeros);
+        }
+        else
+        {
+            if (zeros)
+                result.emplace(0, zeros);
+            if (shots > zeros)
+                result.emplace(Types::BitAt(qubits.size()) - 1, shots - zeros);
+        }
+        NotifyObservers(qubits);
+        return true;
+    }
+
     explicit QCSimTensorChainSimulator(bool isOperatorChain) : TensorChainRouting(isOperatorChain, true)
     {
         meetingPositionCallback = [this](const auto &bonds) -> QC::TensorNetworks::MPSSimulatorInterface::IndexType {

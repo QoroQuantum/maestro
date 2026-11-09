@@ -8,8 +8,11 @@
 #include "../Simulators/Composite/Individual.h"
 #include "../Simulators/QCSim/QCSimDensityMatrixSimulator.h"
 #include "../Simulators/QCSim/QCSimExtendedStabilizerSimulator.h"
+#include "../Simulators/QCSim/QCSimPathIntegralSimulator.h"
 #include "../Simulators/QCSim/QCSimStabilizerSimulator.h"
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 
@@ -164,6 +167,534 @@ void PathIntegralWideSampling()
         for (size_t bit = 0; bit < selected.size(); ++bit)
             Require(singleMany[bit] == bool((single >> bit) & 1), "wide single-shot count formats disagree");
     }
+}
+
+void MultinomialBackendCounts(SimulationType method)
+{
+    constexpr size_t shots = 65536;
+    auto sim = SimulatorsFactory::CreateSimulatorUnique(SimulatorType::kQCSim, method);
+    sim->AllocateQubits(3);
+    sim->Initialize();
+    sim->ApplyRy(1, 2. * std::asin(.5));
+    sim->ApplyCX(1, 2);
+    // Tensor chains split counts for one distinct measured qubit only.
+    const bool mps = method == SimulationType::kMatrixProductState || method == SimulationType::kMatrixProductOperator;
+    const Types::qubits_vector qubits = mps ? Types::qubits_vector{1, 1, 1} : Types::qubits_vector{2, 1, 2};
+    sim->SetSeed(0);
+    const auto original = sim->SampleCounts(qubits, shots);
+    const auto originalNext = sim->SampleCountsMany(qubits, shots);
+
+    sim->Configure("counts_policy", "multinomial_v1");
+    sim->SetSeed(0);
+    const auto counts = sim->SampleCounts(qubits, shots);
+    Require(counts.size() == 2 && counts.at(0) + counts.at(7) == shots, "multinomial sampling lost correlated or repeated bits");
+    Require(std::abs(double(counts.at(7)) - .25 * shots) < 7 * std::sqrt(.1875 * shots), "wrong multinomial marginal");
+    sim->SetSeed(0);
+    Types::qubits_vector wide(80, 1);
+    if (!mps)
+        wide.front() = 2;
+    const auto many = sim->SampleCountsMany(wide, shots);
+    Require(many.size() == 2 && many.at(std::vector<bool>(80, false)) == counts.at(0) && many.at(std::vector<bool>(80, true)) == counts.at(7),
+            "wide multinomial counts changed seeded counts or repeated-bit projection");
+
+    sim->Configure("sampling_policy", "reproducible_v1");
+    sim->SetSeed(0);
+    Require(sim->SampleCounts(qubits, shots) == original && sim->SampleCountsMany(qubits, shots) == originalNext,
+            "pinning the seeded sampler changed the previous histogram or subsequent RNG stream");
+}
+
+void SingleSiteMPSMultinomial()
+{
+    constexpr size_t shots = 65536;
+    auto sim = SimulatorsFactory::CreateSimulatorUnique(SimulatorType::kQCSim, SimulationType::kMatrixProductState);
+    sim->AllocateQubits(1);
+    sim->Initialize();
+    sim->Configure("counts_policy", "multinomial_v1");
+    sim->SetSeed(0);
+    const Types::qubits_vector selected(64, 0);
+    Require(sim->SampleCounts(selected, shots) == Utils::Sampling::Counts<false>{{0, shots}}, "single-site MPS emitted a zero-count bin");
+    sim->ApplyX(0);
+    Require(sim->SampleCounts(selected, shots) == Utils::Sampling::Counts<false>{{UINT64_MAX, shots}}, "single-site MPS lost the high packed bit");
+    sim->ApplyH(0);
+    std::mt19937_64 rng(0);
+    const auto zeros = Utils::Sampling::BinomialCount(shots, .5, [&] { return Utils::RandomStream::Uniform(rng); });
+    Require(sim->SampleCounts(selected, shots).at(0) == zeros, "single-site MPS did not use the count sampler");
+}
+
+void StatevectorSpanCounts()
+{
+    auto sim = SimulatorsFactory::CreateSimulatorUnique(SimulatorType::kQCSim, SimulationType::kStatevector);
+    sim->AllocateQubits(15);
+    sim->Initialize();
+    for (size_t q = 0; q < 11; ++q)
+        if (q != 4 && q != 7)
+            sim->ApplyH(q);
+    sim->ApplyRy(4, 2. * std::asin(.5));
+    sim->ApplyX(7);
+    sim->ApplyCX(4, 7);
+    const Types::qubits_vector qubits{7, 4, 7, 14};
+    sim->Configure("counts_policy", "multinomial_v1");
+    sim->SetSeed(123);
+    constexpr size_t shots = 65536;
+    const auto counts = sim->SampleCounts(qubits, shots);
+    Require(counts.size() == 2 && counts.at(5) + counts.at(2) == shots && std::abs(double(counts.at(2)) - .25 * shots) < 7 * std::sqrt(.1875 * shots),
+            "projected statevector counts lost a gap, a duplicate, a zero high bit or the joint probability");
+    sim->SetSeed(123);
+    const auto many = sim->SampleCountsMany(qubits, shots);
+    Require(many.at({true, false, true, false}) == counts.at(5) && many.at({false, true, false, false}) == counts.at(2),
+            "measured span projection changed between count formats");
+}
+
+// Measured bits in three bytes of the basis index use the gathered marginal.
+// Its fixed chunks give the same seeded counts with and without threads.
+void StatevectorGatheredMarginal()
+{
+    constexpr size_t shots = 65536;
+    const auto sample = [&](bool threads) {
+        auto sim = SimulatorsFactory::CreateSimulatorUnique(SimulatorType::kQCSim, SimulationType::kStatevector);
+        sim->AllocateQubits(18);
+        sim->Initialize();
+        sim->SetMultithreading(threads);
+        for (size_t q = 0; q < 17; ++q)
+            if (q != 9)
+                sim->ApplyH(q);
+        sim->ApplyRy(9, 2. * std::asin(.5));
+        sim->ApplyCX(1, 17);
+        sim->Configure("counts_policy", "multinomial_v1");
+        sim->SetSeed(5);
+        return sim->SampleCounts({17, 9, 1, 9}, shots);
+    };
+    const auto counts = sample(true);
+    Require(counts == sample(false), "gathered statevector marginal depends on the thread count");
+    size_t total = 0;
+    for (const auto &[key, hits] : counts)
+    {
+        Require(key == 0 || key == 5 || key == 10 || key == 15, "gathered marginal lost a correlation or a repeated bit");
+        total += hits;
+    }
+    const auto close = [&](Types::qubit_t key, double p) {
+        return counts.count(key) && std::abs(double(counts.at(key)) - p * shots) < 7. * std::sqrt(p * (1. - p) * shots);
+    };
+    Require(total == shots && close(0, .375) && close(5, .375) && close(10, .125) && close(15, .125), "wrong gathered statevector marginal");
+}
+
+// A truncated MPO can have negative populations. The native sampler clamps each
+// conditional probability; the one-qubit marginal must not replace it there.
+void MPOTruncationKeepsNativeSampler()
+{
+    const auto sample = [](const char *policy, const char *bond, size_t shots) {
+        auto sim = SimulatorsFactory::CreateSimulatorUnique(SimulatorType::kQCSim, SimulationType::kMatrixProductOperator);
+        sim->AllocateQubits(3);
+        if (bond)
+            sim->Configure("matrix_product_operator_max_bond_dimension", bond);
+        sim->Initialize();
+        const double pi = std::acos(-1.);
+        sim->ApplyH(0);
+        sim->ApplyRy(2, 3. * pi / 4.);
+        sim->ApplyCX(2, 1);
+        sim->ApplyH(2);
+        sim->ApplyCX(2, 1);
+        sim->ApplyCX(0, 1);
+        sim->ApplyRy(2, pi / 4.);
+        sim->Configure("counts_policy", policy);
+        sim->SetSeed(71);
+        return sim->SampleCounts({2}, shots);
+    };
+    // A cap of two truncates this circuit: the marginal would give about 8%
+    // ones and the native sampler about 36% (the exact answer is 50%).
+    Require(sample("multinomial_v1", "2", 256) == sample("legacy", "2", 256), "a truncated MPO left the native sampler");
+    // Any applied cap keeps the native sampler, even one never reached; an
+    // operator without limits uses the count path.
+    Require(sample("multinomial_v1", "16", 4096) == sample("legacy", "16", 4096), "a capped MPO left the native sampler");
+    Require(sample("multinomial_v1", nullptr, 4096) != sample("legacy", nullptr, 4096), "an exact MPO skipped the count path");
+}
+
+// QCSim changes an MPO's bonds without reporting them on several paths. The
+// truncation guard must hold across each of them.
+void MPOTruncationHistoryPersists()
+{
+    const auto make = [](size_t qubits) {
+        auto sim = SimulatorsFactory::CreateSimulatorUnique(SimulatorType::kQCSim, SimulationType::kMatrixProductOperator);
+        sim->AllocateQubits(qubits);
+        sim->Configure("matrix_product_operator_max_bond_dimension", "2");
+        sim->Initialize();
+        return sim;
+    };
+    const auto agree = [](Simulators::ISimulator &sim, Types::qubit_t qubit, size_t shots) {
+        const auto draw = [&](const char *policy) {
+            sim.Configure("counts_policy", policy);
+            sim.SetSeed(71);
+            return sim.SampleCounts({qubit}, shots);
+        };
+        return draw("multinomial_v1") == draw("legacy");
+    };
+    // Saving, resetting and restoring brings back the truncated operator.
+    auto restored = make(3);
+    const double pi = std::acos(-1.);
+    restored->ApplyH(0);
+    restored->ApplyRy(2, 3. * pi / 4.);
+    restored->ApplyCX(2, 1);
+    restored->ApplyH(2);
+    restored->ApplyCX(2, 1);
+    restored->ApplyCX(0, 1);
+    restored->ApplyRy(2, pi / 4.);
+    restored->SaveState();
+    restored->Reset();
+    restored->RestoreState();
+    Require(agree(*restored, 2, 8192), "a restored truncated MPO left the native sampler");
+    // A basis mixture installs larger bonds without reporting them; Trim then cuts them.
+    auto mixture = make(4);
+    mixture->InitializeToMixtureOfBasisStates(4, std::vector<std::pair<Types::qubit_t, double>>{{0, 1.}, {1, 1.}, {4, 1.}, {5, 1.}, {6, 1.}, {9, 1.}});
+    mixture->Trim();
+    Require(agree(*mixture, 3, 8192), "a trimmed MPO mixture left the native sampler");
+    // Hermitizing doubles the bonds and trims them back to the cap.
+    auto hermitized = make(3);
+    hermitized->ApplyH(0);
+    hermitized->ApplyCX(0, 1);
+    hermitized->ApplyRy(2, pi / 3.);
+    hermitized->ApplyCX(1, 2);
+    hermitized->HermitizeDensityMatrix();
+    Require(agree(*hermitized, 2, 8192), "a hermitized MPO left the native sampler");
+}
+
+// Below a trace of machine epsilon the marginal cannot normalize; the native
+// sampler rescales along the chain and keeps such a positive operator.
+void MPOSmallTraceKeepsNativeSampler()
+{
+    const auto sample = [](const char *policy) {
+        auto sim = SimulatorsFactory::CreateSimulatorUnique(SimulatorType::kQCSim, SimulationType::kMatrixProductOperator);
+        sim->AllocateQubits(1);
+        sim->Initialize();
+        sim->ApplyH(0);
+        sim->ApplyOperator({0}, Eigen::MatrixXcd::Identity(2, 2) * 1e-9, false);
+        sim->Configure("counts_policy", policy);
+        sim->SetSeed(5);
+        return sim->SampleCounts({0}, 1024);
+    };
+    const auto counts = sample("multinomial_v1");
+    Require(counts == sample("legacy") && counts.size() == 2, "an MPO with a tiny trace lost its native sampler");
+}
+
+// Installs retained rows of a path-integral state directly.
+struct PathProbe : Private::QCSimPathIntegralSimulator
+{
+    // The two rows of a one-qubit state.
+    void Retain(const std::complex<double> &zero, const std::complex<double> &one)
+    {
+        RetainRows({zero, one});
+    }
+
+    // One row per amplitude, labelled by its index.
+    void RetainRows(const std::vector<std::complex<double>> &rows)
+    {
+        auto &amplitudes = pathIntegralSimulator->Amplitudes();
+        amplitudes.clear();
+        for (size_t index = 0; index < rows.size(); ++index)
+        {
+            QC::PathIntegral::FastVectorBool key(nrQubits);
+            for (size_t q = 0; q < nrQubits; ++q)
+                key.set(q, ((index >> q) & 1) != 0);
+            amplitudes[key] = rows[index];
+        }
+    }
+};
+
+// A pruned path-integral state whose two equal retained weights are subnormal.
+// QCSim's one-shot target rounds to the subnormal grid; one-shot calls must
+// follow the same law as a batch.
+void PathIntegralTinyOneShot()
+{
+    PathProbe sim;
+    sim.AllocateQubits(1);
+    sim.Initialize();
+    const std::complex<double> amplitude(std::sqrt(3. * std::numeric_limits<double>::denorm_min()), 0.);
+    sim.Retain(amplitude, amplitude);
+    constexpr size_t calls = 20000;
+    const double tolerance = 6. * std::sqrt(calls / 4.);
+    sim.SetSeed(123);
+    size_t zeros = 0;
+    for (size_t call = 0; call < calls; ++call)
+    {
+        const auto counts = sim.SampleCounts({0}, 1);
+        zeros += counts.count(0) ? counts.at(0) : 0;
+    }
+    Require(std::abs(double(zeros) - calls / 2.) < tolerance, "one-shot path-integral sampling of a tiny state is biased");
+    sim.SetSeed(123);
+    const auto batch = sim.SampleCounts({0}, calls);
+    Require(batch.count(0) && std::abs(double(batch.at(0)) - calls / 2.) < tolerance, "batched path-integral sampling of a tiny state is biased");
+}
+
+// Amplitudes so small that their squares underflow, partly (2^-537, where the
+// 0.3 square vanishes) or fully (2^-540), or so large that they overflow,
+// must still give the 70/30 law of their ratios, in a batch and in one-shot
+// calls. The modes are the snapshot sampler; the bounded fallback, taken with
+// a 1 MiB budget after 2^17 - 2 zero rows; and sampling_policy=legacy, whose
+// alias table serves up to 63 qubits and whose wide table serves 64.
+void PathIntegralExtremeAmplitudes()
+{
+    enum class Mode
+    {
+        Snapshot,
+        Bounded,
+        Legacy,
+        LegacyWide
+    };
+    for (const Mode mode : {Mode::Snapshot, Mode::Bounded, Mode::Legacy, Mode::LegacyWide})
+        for (const double scale : {0x1p-540, 0x1p-537, 0x1p600})
+        {
+            PathProbe sim;
+            const size_t width = mode == Mode::Bounded ? 17 : mode == Mode::LegacyWide ? 64 : 1;
+            sim.AllocateQubits(width);
+            sim.Initialize();
+            if (mode == Mode::Bounded)
+                sim.Configure("sampling_max_memory_mb", "1");
+            if (mode == Mode::Legacy || mode == Mode::LegacyWide)
+                sim.Configure("sampling_policy", "legacy");
+            std::vector<std::complex<double>> rows(mode == Mode::Bounded ? size_t{1} << width : 2);
+            rows[rows.size() - 2] = {std::sqrt(.7) * scale, 0.};
+            rows.back() = {0., std::sqrt(.3) * scale};
+            sim.RetainRows(rows);
+            sim.SetSeed(41);
+            const auto ones = [&](size_t shots) -> size_t {
+                if (mode == Mode::LegacyWide)
+                {
+                    const auto counts = sim.SampleCountsMany({0}, shots);
+                    const auto found = counts.find(std::vector<bool>{true});
+                    return found == counts.end() ? 0 : size_t(found->second);
+                }
+                const auto counts = sim.SampleCounts({0}, shots);
+                return counts.count(1) ? size_t(counts.at(1)) : 0;
+            };
+            constexpr size_t shots = 20000, calls = 2000;
+            Require(std::abs(double(ones(shots)) - .3 * shots) < 6. * std::sqrt(.21 * shots), "extreme path-integral amplitudes lost their batch law");
+            size_t oneShots = 0;
+            for (size_t call = 0; call < calls; ++call)
+                oneShots += ones(1);
+            Require(std::abs(double(oneShots) - .3 * calls) < 6. * std::sqrt(.21 * calls), "extreme path-integral amplitudes lost their one-shot law");
+        }
+}
+
+// Amplitudes are rescaled only when a square would underflow or overflow.
+// Sixteen common rows and 256 rows whose squares are the smallest double,
+// scaled by 2^401, keep every square representable and must keep the sampler
+// and seeded counts of the ordinary scale. At 2^-405 the tiny rows' squares
+// vanish, as in earlier builds; the counts must match those of zero rows.
+void PathIntegralScaleKeepsSampler()
+{
+    const auto sample = [](const std::vector<std::complex<double>> &rows, const char *policy, uint64_t seed) {
+        PathProbe sim;
+        sim.AllocateQubits(9);
+        sim.Initialize();
+        sim.Configure("counts_policy", policy);
+        sim.RetainRows(rows);
+        sim.SetSeed(seed);
+        return sim.SampleCounts({0, 1, 2, 3, 4, 5, 6, 7, 8}, 368);
+    };
+    const auto fixture = [](double common, double tiny) {
+        std::vector<std::complex<double>> rows(272, {tiny, 0.});
+        std::fill(rows.begin(), rows.begin() + 16, std::complex<double>(common, 0.));
+        return rows;
+    };
+    const auto ordinary = fixture(1., 0x1p-537), huge = fixture(0x1p401, 0x1p-136);
+    const auto faint = fixture(0x1p-405, 0x1p-715), vanished = fixture(0x1p-405, 0.);
+    for (const char *policy : {"multinomial_v1", "legacy"})
+        for (uint64_t seed = 0; seed < 64; ++seed)
+        {
+            Require(sample(ordinary, policy, seed) == sample(huge, policy, seed), "a representable amplitude scale changed the counts");
+            Require(sample(faint, policy, seed) == sample(vanished, policy, seed), "a representable amplitude scale revived vanished rows");
+        }
+}
+
+// An observer's error after a one-shot draw must reach the caller. It is not
+// an overflow, so the state must not be sampled a second time.
+void PathIntegralObserverError()
+{
+    struct Throwing : ISimulatorObserver
+    {
+        size_t calls = 0;
+
+        void Update(const Types::qubits_vector &) override
+        {
+            if (++calls == 1)
+                throw std::domain_error("observer failure");
+        }
+    };
+    PathProbe sim;
+    sim.AllocateQubits(1);
+    sim.Initialize();
+    const std::complex<double> half(std::sqrt(.5), 0.);
+    sim.Retain(half, half);
+    const auto observer = std::make_shared<Throwing>();
+    sim.RegisterObserver(observer);
+    bool propagated = false;
+    try
+    {
+        sim.SampleCounts({0}, 1);
+    }
+    catch (const std::domain_error &)
+    {
+        propagated = true;
+    }
+    Require(propagated, "a one-shot observer error was swallowed");
+    Require(observer->calls == 1, "a one-shot observer error sampled the state again");
+}
+
+struct ExtendedProbe : Private::QCSimExtendedStabilizerSimulator
+{
+    void EnableApproximation()
+    {
+        extendedStabilizer->SetApproximationPolicy(QC::ExtendedStabilizerApproximationPolicy::Approximate(0., 4));
+    }
+
+    static std::vector<double> Cleared(std::vector<double> weights, double norm)
+    {
+        ClearRoundingResidue(weights, norm);
+        return weights;
+    }
+
+    std::vector<double> Weights(const std::vector<size_t> &selected) const
+    {
+        return FrameMarginalWeights(selected);
+    }
+
+    bool Marginal(const Types::qubits_vector &qubits, size_t shots, Utils::Sampling::Counts<false> &counts)
+    {
+        return TryMarginalCounts<false>(qubits, shots, counts);
+    }
+};
+
+// Interference and correlations make some outcomes impossible. The marginal
+// must still be used and must never draw those outcomes. A few ulps below zero
+// are cleared; a materially negative weight is kept, so the caller falls back.
+void ExtendedRoundingResidue()
+{
+    const auto cleared = ExtendedProbe::Cleared({2., -1e-15, 1.5, 0.5}, 1.);
+    Require(cleared[1] == 0. && cleared[0] == 2. && cleared[2] == 1.5 && cleared[3] == .5, "extended marginal kept rounding residue");
+    Require(ExtendedProbe::Cleared({2.5, -1e-6, 1.5, 0.}, 1.)[1] < 0., "extended marginal hid a materially negative weight");
+    for (int k = 1; k <= 24; ++k)
+    {
+        ExtendedProbe sim;
+        sim.AllocateQubits(4);
+        sim.Initialize();
+        sim.ApplyRy(0, .37 * k);
+        sim.ApplyH(1);
+        sim.ApplyT(1);
+        sim.ApplyRy(1, .23 * k);
+        sim.ApplyCX(1, 2);
+        sim.ApplyRy(0, -.37 * k);
+        sim.ApplyCX(2, 3);
+        sim.Configure("counts_policy", "multinomial_v1");
+        Utils::Sampling::Counts<false> counts;
+        Require(sim.Marginal({0, 1, 2, 3}, 4096, counts), "extended marginal fell back on rounding residue");
+        size_t total = 0;
+        for (const auto &[key, hits] : counts)
+        {
+            Require(!(key & 1) && ((key >> 1) & 1) == ((key >> 2) & 1) && ((key >> 2) & 1) == ((key >> 3) & 1),
+                    "extended marginal drew an impossible outcome");
+            total += hits;
+        }
+        Require(total == 4096, "extended marginal lost shots");
+    }
+}
+
+// About a million components, all diagonal for the measured qubit. Parity
+// moments lost its 1.6e-11 probability to rounding; sums of squared
+// amplitudes by outcome keep it, as the statevector does.
+void ExtendedDiagonalPrecision()
+{
+    ExtendedProbe sim;
+    sim.AllocateQubits(20);
+    sim.Initialize();
+    for (size_t q = 1; q < 20; ++q)
+        sim.ApplyRy(q, 1.568);
+    sim.ApplyRy(0, 8e-6);
+    const auto weights = sim.Weights({0});
+    const double exact = std::pow(std::sin(4e-6), 2);
+    Require(std::abs(weights[1] / (weights[0] + weights[1]) - exact) < 1e-6 * exact, "extended diagonal marginal lost a small probability");
+    sim.Configure("counts_policy", "multinomial_v1");
+    size_t ones = 0;
+    for (const uint64_t seed : {73, 74, 75, 76})
+    {
+        sim.SetSeed(seed);
+        const auto counts = sim.SampleCounts({0}, size_t{1} << 40);
+        ones += counts.count(1) ? counts.at(1) : 0;
+    }
+    const double expected = 4. * std::ldexp(exact, 40);
+    Require(std::abs(double(ones) - expected) < 6. * std::sqrt(expected), "extended diagonal counts lost a small probability");
+}
+
+// Approximate pruning cannot change a single stabilizer component, so its
+// multi-bit marginal is sampled jointly too.
+void ExtendedApproximateStabilizerState()
+{
+    ExtendedProbe sim;
+    sim.AllocateQubits(4);
+    sim.Initialize();
+    sim.EnableApproximation();
+    sim.ApplyH(0);
+    sim.ApplyCX(0, 1);
+    sim.ApplyCX(1, 3);
+    sim.Configure("counts_policy", "multinomial_v1");
+    sim.SetSeed(9);
+    Utils::Sampling::Counts<false> counts;
+    Require(sim.Marginal({0, 1, 3}, 4096, counts), "approximate stabilizer state skipped its joint marginal");
+    Require(counts.size() == 2 && counts.at(0) + counts.at(7) == 4096 && std::abs(double(counts.at(7)) - 2048.) < 7. * 32.,
+            "approximate stabilizer marginal lost its correlation");
+}
+
+void ExtendedMultinomial(bool approximate)
+{
+    struct Probe : Private::QCSimExtendedStabilizerSimulator
+    {
+        void EnableApproximation()
+        {
+            extendedStabilizer->SetApproximationPolicy(QC::ExtendedStabilizerApproximationPolicy::Approximate(0., 4));
+        }
+
+        bool UsesMarginal(const Types::qubits_vector &qubits, size_t shots)
+        {
+            Utils::Sampling::Counts<true> counts;
+            return TryMarginalCounts<true>(qubits, shots, counts);
+        }
+    };
+
+    Probe sim;
+    sim.AllocateQubits(5);
+    sim.Initialize();
+    if (approximate)
+        sim.EnableApproximation();
+    // H T H gives P(1) = sin^2(pi/8). Qubit 0 stores the complement and 4 is unmeasured.
+    sim.ApplyH(2);
+    sim.ApplyT(2);
+    sim.ApplyH(2);
+    sim.ApplyX(0);
+    sim.ApplyCX(2, 0);
+    sim.ApplyH(4);
+    constexpr size_t shots = 4096;
+    const double p = (1. - std::sqrt(.5)) / 2.;
+    const auto close = [&](size_t hits) { return std::abs(hits - shots * p) < 7. * std::sqrt(shots * p * (1. - p)); };
+    const Types::qubits_vector selected{2, 0, 2};
+    sim.SetSeed(731);
+    const auto original = sim.SampleCounts(selected, shots);
+    const auto next = sim.SampleCountsMany(selected, 33);
+    sim.Configure("counts_policy", "multinomial_v1");
+    Require(sim.UsesMarginal(selected, shots) == !approximate && sim.UsesMarginal({2, 2}, shots), "extended marginal dispatch changed approximation semantics");
+    sim.SetSeed(731);
+    const auto packed = sim.SampleCounts(selected, shots);
+    Require(packed.size() == 2 && packed.at(2) + packed.at(5) == shots && close(packed.at(5)), "extended interference or marginal correlation lost");
+    sim.SetSeed(731);
+    const auto many = sim.SampleCountsMany(selected, shots);
+    Require(many.size() == 2 && many.at({false, true, false}) == packed.at(2) && many.at({true, false, true}) == packed.at(5),
+            "extended count formats disagree");
+    if (approximate)
+        Require(packed == original && sim.SampleCountsMany(selected, 33) == next, "multi-bit approximate measurements bypassed the native sampler");
+
+    sim.SetSeed(731);
+    const auto single = sim.SampleCountsMany(Types::qubits_vector(75, 2), shots);
+    Require(single.size() == 2 && close(single.at(std::vector<bool>(75, true))), "extended single-site marginal lost repeated bits or interference");
+    sim.Configure("sampling_policy", "reproducible_v1");
+    sim.SetSeed(731);
+    Require(sim.SampleCounts(selected, shots) == original && sim.SampleCountsMany(selected, 33) == next, "extended pinned policy changed seeded counts");
 }
 
 void AdaptiveStreams(SimulationType method, SimulatorType type = SimulatorType::kQCSim)
@@ -967,6 +1498,25 @@ int main(int argc, char **argv)
         for (const auto method : {SimulationType::kStatevector, SimulationType::kDensityMatrix})
             run("QCSim seeded batch sampling " + std::to_string(int(method)), [&] { SeededBatchSampling(method); });
         run("QCSim legacy density sampling sequence", [&] { SeededBatchSampling(SimulationType::kDensityMatrix, true); });
+        for (const auto method :
+             {SimulationType::kStatevector, SimulationType::kDensityMatrix, SimulationType::kPathIntegral, SimulationType::kMatrixProductState,
+              SimulationType::kMatrixProductOperator})
+            run("QCSim multinomial counts " + std::to_string(int(method)), [&] { MultinomialBackendCounts(method); });
+        run("QCSim single-site MPS multinomial sampling", SingleSiteMPSMultinomial);
+        run("QCSim multinomial statevector span", StatevectorSpanCounts);
+        run("QCSim gathered statevector marginal", StatevectorGatheredMarginal);
+        run("QCSim truncated MPO keeps native sampling", MPOTruncationKeepsNativeSampler);
+        run("QCSim MPO truncation history persists", MPOTruncationHistoryPersists);
+        run("QCSim small-trace MPO keeps native sampling", MPOSmallTraceKeepsNativeSampler);
+        run("QCSim extended marginal rounding residue", ExtendedRoundingResidue);
+        run("QCSim extended diagonal marginal precision", ExtendedDiagonalPrecision);
+        run("QCSim tiny path-integral one-shot sampling", PathIntegralTinyOneShot);
+        run("QCSim extreme path-integral amplitudes", PathIntegralExtremeAmplitudes);
+        run("QCSim path-integral amplitude scale", PathIntegralScaleKeepsSampler);
+        run("QCSim path-integral one-shot observer error", PathIntegralObserverError);
+        run("QCSim approximate extended stabilizer marginal", ExtendedApproximateStabilizerState);
+        run("QCSim exact extended multinomial", [] { ExtendedMultinomial(false); });
+        run("QCSim approximate extended multinomial", [] { ExtendedMultinomial(true); });
         for (const auto method : {SimulationType::kStatevector, SimulationType::kDensityMatrix, SimulationType::kPathIntegral})
             run("QCSim adaptive streams " + std::to_string(int(method)), [&] { AdaptiveStreams(method); });
         run("Composite adaptive streams", [&] { AdaptiveStreams(SimulationType::kStatevector, SimulatorType::kCompositeQCSim); });

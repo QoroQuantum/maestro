@@ -46,6 +46,12 @@ inline const std::vector<std::string> &MpsSamplingModes()
     return values;
 }
 
+inline const std::vector<std::string> &CountsPolicies()
+{
+    static const std::vector<std::string> values{"auto", "legacy", "frame_v1", "multinomial_v1"};
+    return values;
+}
+
 inline const std::vector<std::string> &MpsRoutingStrategies()
 {
     static const std::vector<std::string> values{"combined", "legacy"};
@@ -155,9 +161,8 @@ struct SimulatorConfig
     std::optional<std::string> trajectory_policy;
     std::optional<size_t> trajectory_max_memory_mb;
     std::optional<size_t> max_simulators;
-    // auto accelerates unseeded counts that the ordinary executor could run on
-    // the stabilizer; legacy retains the existing stream; frame_v1 also opts
-    // seeded requests and other automatically selected methods in.
+    // auto may optimize unseeded counts. Explicit versioned policies also
+    // opt seeded requests into their respective reproducible streams.
     std::string counts_policy = "auto";
     std::unordered_map<std::string, std::string> native_options;
 
@@ -178,7 +183,7 @@ struct SimulatorConfig
         if (gpu_device && *gpu_device < 0)
             throw std::invalid_argument("gpu_device must be nonnegative");
         RequireOneOf(trajectory_policy, {"block_v1", "shot_v1"}, "trajectory_policy");
-        RequireOneOf(counts_policy, {"auto", "legacy", "frame_v1"}, "counts_policy");
+        RequireOneOf(counts_policy, CountsPolicies(), "counts_policy");
         if (trajectory_max_memory_mb && (!*trajectory_max_memory_mb || *trajectory_max_memory_mb > (std::numeric_limits<size_t>::max() >> 20)))
             throw std::invalid_argument("trajectory_max_memory_mb must be a positive representable MiB count");
         if (max_cluster_qubits && !*max_cluster_qubits)
@@ -368,6 +373,33 @@ inline bool PreferFrameCounts(const SimulatorConfig &config, std::optional<uint6
     if (config.counts_policy == "frame_v1")
         return true;
     return config.counts_policy == "auto" && AdmitsStabilizerExecution(config) && !config.seed && !noise_seed;
+}
+
+// Resolve this at the counts entry point, while user and internally generated
+// seeds can still be distinguished. The backend makes the cost-based decision
+// once it knows the actual measurement distribution.
+inline bool PreferMultinomialCounts(const SimulatorConfig &config, std::optional<uint64_t> noise_seed = std::nullopt)
+{
+    if (config.counts_policy == "multinomial_v1")
+        return true;
+    if (config.counts_policy != "auto" || config.seed || noise_seed)
+        return false;
+    // Native C++ callers can pass the same settings through ConfigureNetwork's
+    // option maps. Preserve their explicit seed and sampler overrides too.
+    if (config.native_options.count("seed") || config.native_options.count("counts_policy") || config.native_options.count("sampling_policy"))
+        return false;
+    const auto supports = [](Simulators::SimulatorType backend, Simulators::SimulationType method) {
+        using Method = Simulators::SimulationType;
+        return backend == Simulators::SimulatorType::kQCSim &&
+               (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kPathIntegral ||
+                method == Method::kMatrixProductState || method == Method::kMatrixProductOperator || method == Method::kExtendedStabilizer);
+    };
+    if (!HasCandidateList(config))
+        return supports(config.simulator_type, config.simulation_type);
+    for (const auto &[backend, method] : config.optimization_candidates)
+        if (supports(backend, method))
+            return true;
+    return false;
 }
 
 // Whether noisy extended_stabilizer shots may run on batched Pauli frames

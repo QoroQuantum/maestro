@@ -5,6 +5,10 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
 
+#include <algorithm>
+#include <array>
+#include <limits>
+
 namespace Simulators::Private
 {
 // Composite joins/splits replace amplitudes within an existing execution.
@@ -197,9 +201,115 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
     using SamplingPlan = Utils::Sampling::Prepared<SamplingProbability>;
 
+    SamplingPlan PrepareSampling(size_t shots, Utils::Sampling::Options options) const
+    {
+        return SamplingPlan(size_t{1} << samplingSupportQubits, shots, SamplingProbability{&state->getRegisterStorage()}, options);
+    }
+
     SamplingPlan PrepareSampling(size_t shots) const
     {
-        return SamplingPlan(size_t{1} << samplingSupportQubits, shots, SamplingProbability{&state->getRegisterStorage()}, SamplingOptions());
+        return PrepareSampling(shots, SamplingOptions());
+    }
+
+    // Up to 12 distinct measured bits inside the exact support are projected
+    // into a joint marginal during one pass over the state; bits above the
+    // support are zero. The marginal then needs a few binomial draws instead of
+    // one per populated row. A contiguous selection projects with one shift and
+    // mask, any other through one table lookup per touched byte of the index.
+    // Fixed chunks, independent of the thread count, keep the sums reproducible.
+    template <bool Many>
+    bool SampleMarginalCounts(const Types::qubits_vector &qubits, size_t shots, Utils::Sampling::Options options, Utils::Sampling::Counts<Many> &result)
+    {
+        std::vector<size_t> distinct;
+        for (const size_t q : qubits)
+            if (q < samplingSupportQubits && std::find(distinct.begin(), distinct.end(), q) == distinct.end())
+                distinct.push_back(q);
+        constexpr size_t maxMarginalBits = 12;
+        if (distinct.empty() || distinct.size() > maxMarginalBits)
+            return false;
+        std::sort(distinct.begin(), distinct.end());
+        const size_t states = size_t{1} << samplingSupportQubits, outcomes = size_t{1} << distinct.size();
+        const size_t budget = (options.memoryBytes - 4096) / sizeof(double);
+        if (outcomes > states / 8 || !Utils::Sampling::PreferMultinomial(shots, outcomes) || outcomes > budget)
+            return false;
+
+        // Small chunks keep a 2^18-row pass parallel. Their partial marginals
+        // must stay within the budget, and zeroing and reducing them must stay
+        // small beside the pass: at most one partial entry per 64 rows. The
+        // count depends only on the sizes, never on the thread count.
+        constexpr size_t chunkRows = size_t{1} << 13;
+        const size_t chunks =
+            std::min({size_t{256}, std::max<size_t>(1, states / chunkRows), budget / outcomes, std::max<size_t>(1, states / (64 * outcomes))});
+        const size_t rowsPerChunk = (states + chunks - 1) / chunks;
+        std::vector<double> marginal(chunks * outcomes, 0.);
+        options.memoryBytes -= marginal.size() * sizeof(double);
+
+        const size_t low = distinct.front();
+        const bool contiguous = distinct.back() - low + 1 == distinct.size();
+        struct ByteTable
+        {
+            unsigned shift;
+            std::array<uint16_t, 256> value;
+        };
+        std::vector<ByteTable> tables;
+        if (!contiguous)
+            for (size_t j = 0; j < distinct.size(); ++j)
+            {
+                const unsigned shift = static_cast<unsigned>(distinct[j] / 8 * 8);
+                if (tables.empty() || tables.back().shift != shift)
+                    tables.push_back({shift, {}});
+                auto &value = tables.back().value;
+                for (size_t v = 0; v < 256; ++v)
+                    if ((v >> (distinct[j] - shift)) & 1)
+                        value[v] = static_cast<uint16_t>(value[v] | (1U << j));
+            }
+
+        const SamplingProbability probability{&state->getRegisterStorage()};
+        const int threads = Utils::Sampling::Threads(options.multithreading, states);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (threads > 1) num_threads(threads)
+#endif
+        for (long long chunk = 0; chunk < static_cast<long long>(chunks); ++chunk)
+        {
+            double *local = marginal.data() + static_cast<size_t>(chunk) * outcomes;
+            const size_t begin = static_cast<size_t>(chunk) * rowsPerChunk, end = std::min(states, begin + rowsPerChunk);
+            if (contiguous)
+                for (size_t row = begin; row < end; ++row)
+                    local[(row >> low) & (outcomes - 1)] += probability(row);
+            else
+                for (size_t row = begin; row < end; ++row)
+                {
+                    size_t index = 0;
+                    for (const auto &table : tables)
+                        index |= table.value[(row >> table.shift) & 0xFF];
+                    local[index] += probability(row);
+                }
+        }
+        // Each outcome adds its chunks in a fixed order, so splitting the
+        // outcomes across threads keeps the sums reproducible.
+        const int reductionThreads = Utils::Sampling::Threads(options.multithreading, chunks * outcomes);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) if (reductionThreads > 1) num_threads(reductionThreads)
+#endif
+        for (long long outcome = 0; outcome < static_cast<long long>(outcomes); ++outcome)
+            for (size_t chunk = 1; chunk < chunks; ++chunk)
+                marginal[static_cast<size_t>(outcome)] += marginal[chunk * outcomes + static_cast<size_t>(outcome)];
+
+        // Marginal bit position of each physical qubit inside the support. One
+        // entry per support qubit, however many times a qubit is requested.
+        std::array<uint8_t, std::numeric_limits<size_t>::digits> position{};
+        for (size_t j = 0; j < distinct.size(); ++j)
+            position[distinct[j]] = static_cast<uint8_t>(j);
+        const Utils::Sampling::Prepared plan(
+            outcomes, shots, [&](size_t row) { return marginal[row]; }, options);
+        result = Utils::Sampling::Count<Many>(
+            plan, shots, qubits.size(),
+            [&](size_t row, size_t bit) {
+                const size_t q = qubits[bit];
+                return q < samplingSupportQubits && ((row >> position[q]) & 1) != 0;
+            },
+            [&] { return Utils::RandomStream::Uniform(rng); });
+        return true;
     }
 
   public:
@@ -908,7 +1018,18 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
             NotifyObservers(qubits);
             return result;
         }
-        const auto plan = PrepareSampling(shots);
+        auto options = SamplingOptions();
+        options.multinomialCounts = AllowMultinomialCounts();
+        if (options.multinomialCounts && shots >= 256)
+        {
+            Utils::Sampling::Counts<Many> result;
+            if (SampleMarginalCounts<Many>(qubits, shots, options, result))
+            {
+                NotifyObservers(qubits);
+                return result;
+            }
+        }
+        const auto plan = PrepareSampling(shots, options);
         auto result = Utils::Sampling::Count<Many>(
             plan, shots, qubits.size(), [&](size_t row, size_t bit) { return ((row >> qubits[bit]) & 1) != 0; },
             [&] { return Utils::RandomStream::Uniform(rng); });

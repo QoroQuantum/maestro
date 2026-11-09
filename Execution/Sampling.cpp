@@ -275,6 +275,8 @@ std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits
         } cleanup{handle};
 
         auto local_config = config;
+        if (PreferMultinomialCounts(config))
+            local_config.counts_policy = "multinomial_v1";
         local_config.seed = Simulators::IState::DeriveSeed(seed, 2 * c);
         auto network = ConfigureNetwork(handle, local_config);
         if (!network || !network->GetSimulator())
@@ -412,6 +414,8 @@ SamplingResult SampleCircuit(const std::shared_ptr<Circuits::Circuit<double>> &c
     auto network = ConfigureNetwork(handle, config);
     if (!network || !network->GetSimulator())
         throw Error("backend_unavailable", "Requested backend could not be created");
+    if (config.counts_policy == "auto" && PreferMultinomialCounts(config))
+        network->Configure("counts_policy", "multinomial_v1");
     if (config.fixed_backend &&
         (network->GetSimulator()->GetType() != config.simulator_type || network->GetSimulator()->GetSimulationType() != config.simulation_type))
         throw Error("backend_unavailable", "Requested fixed backend/method is unavailable");

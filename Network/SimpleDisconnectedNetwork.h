@@ -16,6 +16,7 @@
 #define _SIMPLE_NETWORK_H_
 
 #include "../Estimators/SimulatorsEstimatorInterface.h"
+#include "../Utils/Sampling/Multinomial.h"
 #include "NetworkJob.h"
 #include "QubitRegister.h"
 #include "SimpleController.h"
@@ -25,6 +26,7 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <cstdlib>
 #include <optional>
 
 #include "../Simulators/TensorNetworks/MPSDummySimulator.h"
@@ -746,8 +748,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         lastDistributedPlacement.clear();
 
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
-        const bool terminalSampling = !distCirc->HasOpsAfterMeasurements(IsMixedStateMethod(method));
-        const size_t nrThreads = ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbitsResults, shots, simType, method, terminalSampling, optSim, executed);
+        size_t measuredWidth;
+        const bool terminalSampling = !distCirc->HasOpsAfterMeasurementsWithWidth(IsMixedStateMethod(method), measuredWidth);
+        const size_t nrThreads = ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbitsResults, shots, simType, method, terminalSampling, measuredWidth, optSim, executed);
 
         std::mutex resultsMutex;
 
@@ -982,10 +985,11 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         lastDistributedPlacement.clear();
 
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
-        const bool terminalSampling = !distCirc->HasOpsAfterMeasurements(IsMixedStateMethod(method));
+        size_t measuredWidth;
+        const bool terminalSampling = !distCirc->HasOpsAfterMeasurementsWithWidth(IsMixedStateMethod(method), measuredWidth);
         // WARNING: be sure to not put this above ChooseBestSimulator, as that one
         // can change the shots value!
-        const size_t nrThreads = ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbits, shots, simType, method, terminalSampling, optSim, executed);
+        const size_t nrThreads = ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbits, shots, simType, method, terminalSampling, measuredWidth, optSim, executed);
 
         std::mutex resultsMutex;
 
@@ -1228,8 +1232,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         if (std::string("counts_policy") == key)
         {
             const std::string policy(value);
-            if (policy != "auto" && policy != "legacy" && policy != "frame_v1")
-                throw std::invalid_argument("counts_policy must be auto, legacy or frame_v1");
+            if (policy != "auto" && policy != "legacy" && policy != "frame_v1" && policy != "multinomial_v1")
+                throw std::invalid_argument("counts_policy must be auto, legacy, frame_v1 or multinomial_v1");
         }
         if (std::string("trajectory_max_memory_mb") == key)
         {
@@ -3055,7 +3059,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     // one from backend selection, prepare it here once; if that is impossible,
     // keep a single worker rather than evolving the MPO once per worker.
     size_t ExecutionThreads(const std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t nrQubits, size_t nrCbits, size_t nrResultCbits, size_t shots,
-                            Simulators::SimulatorType simType, Simulators::SimulationType method, bool terminalSampling,
+                            Simulators::SimulatorType simType, Simulators::SimulationType method, bool terminalSampling, size_t measuredWidth,
                             std::shared_ptr<Simulators::ISimulator> &optSim, std::vector<bool> &executed)
     {
         size_t nrThreads = GetMaxSimulators();
@@ -3068,6 +3072,30 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                                   method == Simulators::SimulationType::kDensityMatrix)))
             return 1;
         nrThreads = std::min(nrThreads, std::max<size_t>(shots, 1ULL));
+        // Splitting the batch could put every worker below the backend's
+        // crossover and independently repeat the same state preparation.
+        if (nrThreads > 1 && terminalSampling && simType == Simulators::SimulatorType::kQCSim &&
+            (method == Simulators::SimulationType::kExtendedStabilizer || method == Simulators::SimulationType::kMatrixProductState ||
+             method == Simulators::SimulationType::kMatrixProductOperator) &&
+            !configuration.IsSet("sampling_policy") && configuration.GetConfiguration("counts_policy") == "multinomial_v1")
+        {
+            if (method == Simulators::SimulationType::kExtendedStabilizer && Utils::Sampling::PreferExtendedMarginalCounts(shots, measuredWidth))
+                return 1;
+            if (method == Simulators::SimulationType::kMatrixProductState && measuredWidth == 1 && Utils::Sampling::PreferMultinomial(shots, 2) &&
+                (!configuration.IsSet("mps_sample_measure_algorithm") || configuration.GetConfiguration("mps_sample_measure_algorithm") == "mps_probabilities"))
+                return 1;
+            // One marginal contraction replaces the per-shot chain sweeps that
+            // worker clones of the prepared MPO would otherwise share. A
+            // truncating MPO keeps the native sampler, so keep its workers.
+            const auto truncates = [&](const char *key) {
+                const auto value = configuration.GetConfiguration(key);
+                return !value.empty() && std::strtod(value.c_str(), nullptr) > 0.;
+            };
+            if (method == Simulators::SimulationType::kMatrixProductOperator && measuredWidth == 1 && Utils::Sampling::PreferMultinomial(shots, 2) &&
+                !truncates("matrix_product_state_max_bond_dimension") && !truncates("matrix_product_operator_max_bond_dimension") &&
+                !truncates("matrix_product_state_truncation_threshold") && !truncates("matrix_product_operator_truncation_threshold"))
+                return 1;
+        }
         if (method == Simulators::SimulationType::kMatrixProductOperator && terminalSampling && nrThreads > 1)
         {
             if (!optSim)

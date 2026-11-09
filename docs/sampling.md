@@ -23,14 +23,26 @@ for each selected component's minimum scratch allowance and a shared draw batch.
 
 ## Count execution dispatch
 
-`SimulatorConfig.counts_policy` selects whether count-returning execution can
-use the compiled Clifford/Pauli-frame sampler. Its default is `"auto"`:
+`SimulatorConfig.counts_policy` selects the strategy for count-returning execution. Its default is `"auto"`.
 
 | Policy | Count execution |
 | --- | --- |
-| `auto` | Use frames for eligible QCSim requests only when both the simulator seed and noise seed are absent, and only where the ordinary executor could itself run the request on the stabilizer simulator (see below). |
+| `auto` | With no simulator or noise seed, use eligible frames as described below. Eligible QCSim terminal count batches can also use multinomial sampling. Explicit seeds keep their earlier sequence. |
 | `legacy` | Keep the ordinary count/trajectory executor and never select the new frame-count path. |
 | `frame_v1` | Opt into frame counts even with explicit seeds. Other requested QCSim methods can use frames when backend optimization permits a stabilizer implementation. Unsupported requests fall back. |
+| `multinomial_v1` | Allow the terminal sampler to draw counts by conditional binomials, including with explicit seeds. Small batches and unsupported distributions use the existing backend sampler. |
+
+The adaptive count policy supports QCSim statevector, density matrix, retained
+path-integral rows, a single MPS output bit, a single bit of an MPO without a bond
+cap or truncation threshold, and small extended-stabilizer
+readouts. Rows expected to receive at most two shots are grouped per block, so a
+concentrated distribution with a long tail of tiny amplitudes also qualifies.
+A bare simulator opts in with `Configure("counts_policy", "multinomial_v1")`.
+An explicit low-level `sampling_policy` pins the earlier sampler. Seeded
+`multinomial_v1` sequences use Boost.Random's binomial generator. The
+[implementation report](multinomial-sampling.md) describes the measured
+crossovers, scope of each backend, tensor-size costs and commands for
+reproducing the benchmarks.
 
 `auto` never replaces a method the ordinary executor would honor:
 
@@ -433,7 +445,9 @@ stream for the same request. Reordered and duplicate selected qubits retain
 their caller-specified positions.
 
 Statevector and path-integral one-shot calls keep the native direct sampler and
-native RNG stream. Statevector one-shot sampling fixes the native summation path
+native RNG stream. QCSim's path-integral sampler weighs a state with an extreme
+retained total from rescaled amplitudes, still with one draw from its stream
+(see [Dispatch and memory](#dispatch-and-memory)). Statevector one-shot sampling fixes the native summation path
 to serial, independently of the threading flag. Direct measurement APIs still
 use their native RNG streams. Under `reproducible_v1`, statevector measurement
 and reset also retain the native serial scan and probability-summation order,
@@ -606,6 +620,45 @@ number of stored rows, independent of the number of qubits.
   candidate rows are positive, alias tables and histograms compact those rows,
   preserving their original indices. Zero-mass blocks are skipped during table
   construction; small positive probabilities are never pruned.
+* A total weight outside `[2^-900, 2^900]`, which only an unnormalized input can
+  have, is shifted by an exact power of two before any table is built: a tiny
+  total up into `[0.5, 1)`, a huge one down to just below `2^900`. Finite
+  weights whose sum overflows in row order are first summed again scaled down
+  by `2^-128`, so they are accepted. Random targets are then never rounded to
+  the subnormal grid and no subtotal can overflow. The counts equal those of the
+  same relative weights at ordinary scale whenever every weight stays
+  representable after the shift; a row pushed below the smallest double becomes
+  zero, which can change the sampler chosen and so the seeded counts, though not
+  the distribution of any reachable outcome.
+* Path-integral amplitudes are scaled by an exact power of two before squaring
+  only when a probability would otherwise vanish or overflow in `|a|^2`. The
+  batch sampler rejects such a state while validating it, before its first
+  draw: when the total of the squares is below `2^-970`, or when a square
+  overflows. The amplitudes are then scaled up, so that the largest component
+  lies in `[0.5, 1)`, or down, so that it lies just below `2^511`, and the
+  state is sampled again. Every other state keeps its squared magnitudes, as in
+  earlier builds, with no extra pass. Beside a total of at least `2^-970`, a row
+  whose square underflowed lies more than `2^104` below the total: its real and
+  imaginary squares can each round to zero.
+* One-shot path-integral calls use QCSim's direct sampler. It weighs a retained
+  total below `2^-900`, or one that overflows, from amplitudes scaled the same
+  way into `[0.5, 1)`, and draws one uniform from its stream either way.
+  QCSim's collapsing qubit measurement does the same, and so does the alias
+  table of `sampling_policy=legacy` batches, so legacy one-shots and batches
+  follow the same law. Ordinary states keep their unscaled weights.
+* Seeded counts for these inputs, a total weight outside `[2^-900, 2^900]` (for
+  a path integral, the total of the squared amplitudes, including one that
+  overflows), differ from earlier builds. Those builds sampled tiny totals with
+  a bias against the first and toward the last populated row, could drop rare
+  rows of huge totals, and rejected or zeroed extreme path-integral
+  amplitudes. A one-shot or measurement on a state that earlier builds
+  rejected before drawing now draws from QCSim's stream, which shifts later
+  one-shots and measurements on that simulator. A batch on such a state now
+  draws from Maestro's batch stream, one draw per shot under
+  `sampling_policy=legacy`. That shifts later batches on that simulator, while
+  QCSim's stream is unaffected. Reseed the simulator to replay an earlier
+  sequence after such a call. This is the one exception to replaying earlier
+  seeded counts.
 * Alias construction is selected when `S >= max(512, M/4)` and its table fits the
   explicit scratch budget. Otherwise CDF lookup is used. Small CDFs can retain
   within-block cumulative probabilities; large serial CDF batches sort uniforms

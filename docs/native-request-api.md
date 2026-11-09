@@ -368,7 +368,7 @@ are rejected. Small floating-point thresholds retain their precision.
 | `max_simulators` | `max_simulators` | positive_integer | all |
 | `trajectory_policy` | `trajectory_policy` | `block_v1` or `shot_v1` (default) | QCSim statevector, density matrix, path integral; opt-in for stabilizer, extended stabilizer, MPS and MPO |
 | `trajectory_max_memory_mb` | `trajectory_max_memory_mb` | positive_integer | QCSim statevector, density matrix, stabilizer, MPS and MPO |
-| `counts_policy` | `` | `auto` (default), `legacy` or `frame_v1` | all (frames run only on QCSim) |
+| `counts_policy` | `` | `auto` (default), `legacy`, `frame_v1` or `multinomial_v1` | all (specialized samplers run on QCSim) |
 | `mpo_kraus_completeness_check` | `matrix_product_operator_kraus_completeness_check` | string | mpo |
 | `mpo_restore_trace_after_truncation` | `matrix_product_operator_restore_trace_after_truncation` | boolean | mpo |
 | `mpo_hermitize_after_truncation` | `matrix_product_operator_hermitize_after_truncation` | boolean | mpo |
@@ -532,7 +532,9 @@ reference frames, reports `execution_metadata.sampling_strategy:
 "reference_frame_v1"` and rewrites `configured_options.counts_policy` to
 `"frame_v1"`, while a seeded `auto` request keeps the earlier executor and its
 counts. Replaying with `counts_policy: "frame_v1"` therefore reproduces such a
-run; replaying with `auto` returns the earlier executor's counts for that seed. MPI ranks share the generated
+run; replaying with `auto` returns the earlier executor's counts for that seed.
+Unseeded QCSim count requests that may use multinomial terminal sampling
+likewise report `"multinomial_v1"`, so a stored seed alone does not replay them. MPI ranks share the generated
 seed through their communicator; validation alone does not generate a seed or
 require MPI initialization.
 `noise.prefix: true` (`checkpoint_batch` only) also applies the noise to the saved
@@ -597,7 +599,7 @@ the legacy null-result failure. Repeating a seed reseeds an existing handle as
 well as a fresh worker; omitting it leaves the simulator's seed configuration
 unchanged.
 
-`SimpleExecute` also accepts `counts_policy` (`auto`, `legacy` or `frame_v1`,
+`SimpleExecute` also accepts `counts_policy` (`auto`, `legacy`, `frame_v1` or `multinomial_v1`,
 as in `simulator.options`). Under `auto`, an unseeded Clifford circuit on a
 network that admits the QCSim stabilizer is counted from reference frames, and
 the result reports `"sampling_strategy": "reference_frame_v1"`; seeded calls and
@@ -692,6 +694,12 @@ including automatic method selection; they do not describe native Aer/Ex fusion.
 ### Counts policy and sampling strategy
 
 `simulator.options.counts_policy` selects how QCSim `execute` counts are sampled.
+`multinomial_v1` permits conditional-binomial sampling for terminal counts
+when the backend can cheaply obtain a sufficiently populated distribution.
+Unseeded `auto` requests can select this policy after frame eligibility is
+resolved. Replay using the returned seed and the reported
+`execution_metadata.configured_options.counts_policy`. The policy permits the
+optimization; the local count sampler checks its cost for each batch.
 `auto` (the default) uses noisy-Clifford reference frames for unseeded requests
 that the ordinary executor could itself run on the stabilizer simulator; seeded
 requests keep the earlier executor and its seeded counts. `legacy` always keeps

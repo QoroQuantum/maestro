@@ -72,6 +72,25 @@ def test_unseeded_plain_counts_use_frames_automatically():
     assert 400 < counts["11"] < 624
 
 
+@pytest.mark.parametrize("method", [maestro.SimulationType.Statevector, maestro.SimulationType.ExtendedStabilizer])
+def test_multinomial_count_policy_preserves_raw_records(method):
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    circuit.t(0)
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.measure_all()
+    shots = 4096
+    config = _config("multinomial_v1", seed=0, method=method)
+    counts = _assert_histogram(circuit.execute(config=config, shots=shots), shots, 2)
+    assert set(counts) == {"00", "11"}
+    assert counts == circuit.execute(config=config, shots=shots)["counts"]
+    original = _config("legacy", seed=0, method=method)
+    rows = circuit.execute(config=config, shots=shots, return_samples=True)["samples"]
+    previous = circuit.execute(config=original, shots=shots, return_samples=True)["samples"]
+    np.testing.assert_array_equal(rows, previous)
+
+
 def test_unseeded_noisy_counts_compile_model_and_circuit_channels():
     circuit, model = _noisy_bell()
     result = circuit.full_noise_execute(model, config=_config(), shots=1024, noise_realizations=1024)

@@ -705,6 +705,73 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
     std::unique_ptr<PathIntegralSimulator> pathIntegralSimulator;
 
   private:
+    // A squared magnitude can underflow or overflow before the sampler can
+    // rescale the weights. The sampler then rejects the state before its first
+    // draw: a total of squares below 2^-970 with TotalUnderflow, a square that
+    // overflows as an invalid weight. The amplitudes are scaled by an exact
+    // power of two before squaring, up so that the largest component lies in
+    // [0.5, 1) or down so that it lies just below 2^511, and the state is
+    // sampled again. Weights keep their ratios, and every other state keeps
+    // its squared magnitudes at no cost. Beside a total of at least 2^-970, a
+    // row whose real and imaginary squares both underflowed lies more than 2^104
+    // below the total.
+    static constexpr double minAmplitudeTotal = 0x1p-970;
+
+    static int AmplitudeShiftFor(double largestComponent, bool overflow)
+    {
+        if (!(largestComponent > 0.) || !std::isfinite(largestComponent))
+            return 0;
+        int exponent = 0;
+        std::frexp(largestComponent, &exponent);
+        return overflow ? std::min(0, 511 - exponent) : std::max(0, -exponent);
+    }
+
+    // Only states that need a shift pay for this scan.
+    template <class Amplitudes> static double LargestComponent(const Amplitudes &amplitudes)
+    {
+        double largest = 0.;
+        for (const auto &entry : amplitudes)
+        {
+            const double re = std::abs(entry.second.real()), im = std::abs(entry.second.imag());
+            if (re > largest)
+                largest = re;
+            if (im > largest)
+                largest = im;
+        }
+        return largest;
+    }
+
+    static double ScaledNorm(const std::complex<double> &amplitude, int shift)
+    {
+        return shift ? std::norm(std::complex<double>(std::ldexp(amplitude.real(), shift), std::ldexp(amplitude.imag(), shift))) : std::norm(amplitude);
+    }
+
+    // Runs sample(0) and, when the sampler rejected the unscaled squares
+    // before drawing, sample(shift) with the amplitude shift that fixes them.
+    template <class Amplitudes, class Sample> static auto WithAmplitudeShift(const Amplitudes &amplitudes, const Sample &sample)
+    {
+        int shift = 0;
+        try
+        {
+            return sample(0);
+        }
+        catch (const Utils::Sampling::TotalUnderflow &)
+        {
+            // No shift applies only when every amplitude is zero.
+            shift = AmplitudeShiftFor(LargestComponent(amplitudes), false);
+            if (!shift)
+                Utils::Sampling::CheckMass(0.);
+        }
+        catch (const std::domain_error &)
+        {
+            // Retry only when an amplitude's square overflowed.
+            shift = AmplitudeShiftFor(LargestComponent(amplitudes), true);
+            if (!shift)
+                throw;
+        }
+        return sample(shift);
+    }
+
     template <bool Many> Utils::Sampling::Counts<Many> SamplePrepared(const Types::qubits_vector &qubits, size_t shots)
     {
         if (qubits.empty() || !shots)
@@ -712,7 +779,9 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
         Utils::Sampling::ValidateQubits(qubits, nrQubits, Many);
         if (shots == 1)
         {
-            // Native direct sampling already normalizes the retained mass.
+            // Native direct sampling normalizes the retained mass, weighs a
+            // state with an extreme total from rescaled amplitudes, and draws
+            // one uniform from QCSim's stream.
             // Project from the full label, including packed subsets above bit 63.
             const auto row = pathIntegralSimulator->MeasureNoCollapse();
             auto result = Utils::Sampling::Single<Many>(qubits.size(), [&](size_t bit) { return row.get(qubits[bit]); });
@@ -721,15 +790,24 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
         }
         const auto &amplitudes = pathIntegralSimulator->Amplitudes();
         auto options = SamplingOptions();
+        options.multinomialCounts = AllowMultinomialCounts();
+        options.minimumTotal = minAmplitudeTotal;
         const size_t count = amplitudes.size();
         if (count > (options.memoryBytes - 4096) / (sizeof(double) + sizeof(const uint64_t *)))
         {
             // AmplitudeMap only exposes sequential iteration. Sweep bounded
             // target batches when a random-access snapshot would exceed the
             // budget, borrowing the original full-width labels as we visit them.
-            auto result = Utils::Sampling::CountCdfRange<Many>(
-                amplitudes, shots, qubits.size(), [](const auto &row) { return std::norm(row.second); },
-                [&](const auto &row, size_t bit) { return row.first.get(qubits[bit]); }, [&] { return Utils::RandomStream::Uniform(rng); }, options);
+            const auto bit = [&](const auto &row, size_t b) { return row.first.get(qubits[b]); };
+            const auto uniform = [&] { return Utils::RandomStream::Uniform(rng); };
+            auto result = WithAmplitudeShift(amplitudes, [&](int amplitudeShift) {
+                if (!amplitudeShift)
+                    return Utils::Sampling::CountCdfRange<Many>(
+                        amplitudes, shots, qubits.size(), [](const auto &row) { return std::norm(row.second); }, bit, uniform, options);
+                return Utils::Sampling::CountCdfRange<Many>(
+                    amplitudes, shots, qubits.size(), [amplitudeShift](const auto &row) { return ScaledNorm(row.second, amplitudeShift); }, bit,
+                    uniform, options);
+            });
             NotifyObservers(qubits);
             return result;
         }
@@ -746,15 +824,23 @@ class QCSimPathIntegralSimulator : public QCSimGateSimulator
             probabilities.push_back(std::norm(entry.second));
             labels.push_back(entry.first.getWords());
         }
-        const Utils::Sampling::Prepared plan(
-            count, shots, [&](size_t row) { return probabilities[row]; }, options);
-        auto result = Utils::Sampling::Count<Many>(
-            plan, shots, qubits.size(),
-            [&](size_t row, size_t bit) {
-                const auto q = qubits[bit];
-                return ((labels[row][q / 64] >> (q % 64)) & 1) != 0;
-            },
-            [&] { return Utils::RandomStream::Uniform(rng); });
+        auto result = WithAmplitudeShift(amplitudes, [&](int amplitudeShift) {
+            if (amplitudeShift)
+            {
+                size_t row = 0;
+                for (const auto &entry : amplitudes)
+                    probabilities[row++] = ScaledNorm(entry.second, amplitudeShift);
+            }
+            const Utils::Sampling::Prepared plan(
+                count, shots, [&](size_t row) { return probabilities[row]; }, options);
+            return Utils::Sampling::Count<Many>(
+                plan, shots, qubits.size(),
+                [&](size_t row, size_t bit) {
+                    const auto q = qubits[bit];
+                    return ((labels[row][q / 64] >> (q % 64)) & 1) != 0;
+                },
+                [&] { return Utils::RandomStream::Uniform(rng); });
+        });
         NotifyObservers(qubits);
         return result;
     }

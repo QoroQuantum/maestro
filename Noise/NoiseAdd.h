@@ -691,8 +691,10 @@ class NoiseAdd
         auto policy = simulator->GetConfiguration("counts_policy");
         if (policy.empty())
             policy = "auto";
+        if (policy == "multinomial_v1")
+            return std::nullopt; // The terminal backend samples each noise realization.
         if (policy != "auto" && policy != "legacy" && policy != "frame_v1")
-            throw std::invalid_argument("counts_policy must be auto, legacy or frame_v1");
+            throw std::invalid_argument("counts_policy must be auto, legacy, frame_v1 or multinomial_v1");
         auto baseSeed = public_seed;
         const auto configuredSeed = simulator->GetConfiguration("seed");
         if (!configuredSeed.empty())
@@ -768,6 +770,13 @@ class NoiseAdd
         if (auto counts = FrameCounts(circuit, network, host, nm, shots, batches, layer))
             return std::move(*counts);
         auto execution = PrepareExecution(network);
+        if (!execution.seed && shots > batches)
+        {
+            const auto simulator = network->GetSimulator();
+            const auto policy = simulator ? simulator->GetConfiguration("counts_policy") : std::string{};
+            if ((policy.empty() || policy == "auto") && MaestroExecution::PreferMultinomialCounts(ExecutionBackends(network)))
+                execution.network->Configure("counts_policy", "multinomial_v1");
+        }
         Circuits::Circuit<>::ExecuteResults combined;
         const NoiseInjectionPlan plan(circuit, nm);
         // A one-shot realization depends only on its own seed, so it may run on

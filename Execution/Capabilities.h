@@ -85,6 +85,8 @@ inline json::object OptionCapability(const Option &option)
         choices = &Precisions();
     else if (name == "mps_sampling")
         choices = &MpsSamplingModes();
+    else if (name == "counts_policy")
+        choices = &CountsPolicies();
     else if (name == "mps_routing_strategy")
         choices = &MpsRoutingStrategies();
     else if (name == "truncation_mode")
@@ -108,10 +110,7 @@ inline json::object OptionCapability(const Option &option)
         result["default"] = "shot_v1";
     }
     if (name == "counts_policy")
-    {
-        result["enum"] = json::array{"auto", "legacy", "frame_v1"};
         result["default"] = "auto";
-    }
     if (type == "integer" || type == "nonnegative")
         result["minimum"] = 0;
     else if (type == "positive_integer")

@@ -13,7 +13,9 @@
     "when a dedicated sampler ran: 'reference_frame_v1' (noisy-Clifford frames), 'extended_frame_v1' "                                                         \
     "(batched extended-stabilizer frames), 'trajectory_v1' (each realization executed directly) or "                                                           \
     "'terminal_v1'. SimulatorConfig.counts_policy ('auto', 'legacy', "                                                                                         \
-    "'frame_v1') selects them; seeded calls under 'auto' keep their earlier sequences."
+    "'frame_v1', 'multinomial_v1') controls count sampling. Seeded calls under 'auto' retain their earlier sequences, except "     \
+    "for unnormalized inputs whose total weight (for path integrals, the total of the squared amplitudes) lies outside "      \
+    "[2^-900, 2^900] or overflows."
 
 namespace maestro_bindings
 {

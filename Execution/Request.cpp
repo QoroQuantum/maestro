@@ -1349,6 +1349,12 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // Extended-stabilizer frames, decided the same way: an unseeded auto
     // request opts in before it receives the seed that replays it.
     const bool prefer_extended_frames = PreferExtendedFrames(config);
+    // A checkpoint can contain a mixture of frame and ordinary suffixes.
+    // Keep those requests on a single replayable frame policy.
+    const bool resolve_terminal_counts =
+        (operation == "execute" && !return_samples) || (operation == "checkpoint_batch" && !(prefer_extended_frames && noise.enabled));
+    if (resolve_terminal_counts && shots > 1 && PreferMultinomialCounts(config))
+        config.counts_policy = "multinomial_v1";
     if (!config.seed)
     {
         config.seed = Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options);
@@ -1984,6 +1990,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                     continue;
                 }
             }
+            TerminalCountSink writeCounts;
+            if (samples < shots && config.counts_policy == "multinomial_v1" && simulator->IsQcsim() && !simulator->GetConfigMap().count("sampling_policy"))
+                writeCounts = [&](size_t count, const Circuits::OperationState &state) { counts[Bits(state.GetAllBits(), input.clbits)] += count; };
             for (size_t r = 0; r < samples; ++r)
             {
                 const auto noisy = Inject(suffixPlan, noise, rng);
@@ -1992,10 +2001,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 simulator->SetGatesCounter(0);
                 simulator->SetUpcomingGates(noisy->GetOperations());
                 Circuits::OperationState terminal_state(input.clbits);
-                if (repetitions > 1 && PreservesSavedStateWhileSampling(*simulator) &&
+                if (repetitions > 1 && PreservesSavedStateWhileSampling(*simulator, static_cast<bool>(writeCounts)) &&
                     SamplePreparedTerminal(
                         *noisy, simulator, repetitions, terminal_state, Simulators::IState::DeriveSeed(*config.seed, r),
-                        [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond))
+                        [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond, false, writeCounts))
                 {
                     ++terminal_batches;
                     continue;

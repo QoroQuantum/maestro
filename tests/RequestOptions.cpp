@@ -470,6 +470,13 @@ void TestTypedTrajectoryConfiguration()
 void TestFrameCountPolicy()
 {
     using namespace MaestroExecution;
+    for (const auto &[key, value] :
+         std::vector<std::pair<std::string, std::string>>{{"seed", "0"}, {"sampling_policy", "reproducible_v1"}, {"counts_policy", "legacy"}})
+    {
+        SimulatorConfig configured;
+        configured.native_options[key] = value;
+        Check(!PreferMultinomialCounts(configured), "Automatic multinomial policy bypassed an explicit native option");
+    }
     for (const char *policy : {"auto", "legacy", "frame_v1"})
     {
         const auto config = ParseConfig(json::object{{"backend", "qcsim"}, {"method", "stabilizer"}, {"options", json::object{{"counts_policy", policy}}}});

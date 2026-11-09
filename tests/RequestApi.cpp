@@ -423,7 +423,14 @@ void TestNativeRandomSeeds()
             Check(first.at("noise").at("seed").to_number<uint32_t>() == static_cast<uint32_t>(first.at("seed").to_number<uint64_t>()),
                   "Default noise seed did not follow the generated execution seed");
         request["execution"].as_object()["seed"] = first.at("seed");
-        Check(Call(request).at("counts") == first.at("counts"), "Returned random seed cannot reproduce native sampling/readout");
+        request["simulator"].as_object()["options"] = j::object{{"counts_policy", first.at("execution_metadata").at("configured_options").at("counts_policy")}};
+        Check(Call(request).at("counts") == first.at("counts"), "Returned seed and resolved policy cannot reproduce native sampling/readout");
+        // Existing results from the ordinary sampler still replay with their
+        // seed alone under auto, including noise and independent readout.
+        request["simulator"].as_object()["options"] = j::object{{"counts_policy", "legacy"}};
+        const auto ordinary = Call(request);
+        request["simulator"].as_object().erase("options");
+        Check(Call(request).at("counts") == ordinary.at("counts"), "Historical native counts no longer replay with their seed alone");
         for (uint64_t seed : {uint64_t{0}, UINT64_MAX})
         {
             request["execution"].as_object()["seed"] = seed;
@@ -744,6 +751,18 @@ try
     result = Call(request);
     Near(Real(result.at("results").at(0).at("counts").at("1")), 80);
     Near(Real(result.at("results").at(1).at("counts").at("0")), 80);
+    auto extendedCheckpoint = request;
+    extendedCheckpoint["simulator"].as_object()["method"] = "extended_stabilizer";
+    extendedCheckpoint["simulator"].as_object()["options"] = j::object{{"counts_policy", "multinomial_v1"}};
+    extendedCheckpoint["execution"].as_object()["shots"] = 4096;
+    const auto repeatedMeasurement = extendedCheckpoint.at("suffixes").at(0);
+    extendedCheckpoint["suffixes"].as_array().push_back(repeatedMeasurement);
+    const auto suffixResults = Call(extendedCheckpoint).at("results").as_array();
+    for (size_t index = 0; index < suffixResults.size(); ++index)
+    {
+        Check(suffixResults[index].at("sampling_strategy") == "terminal_v1", "Extended-stabilizer count batch replayed the checkpoint");
+        Near(Real(suffixResults[index].at("counts").at(index == 1 ? "0" : "1")), 4096);
+    }
     for (const auto &launch : j::array{nullptr, j::object{{"profile", "local"}, {"ranks", 2}}})
     {
         auto nested = request;

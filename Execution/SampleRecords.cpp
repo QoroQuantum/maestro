@@ -32,6 +32,8 @@ class RawSamplingSession
         {
             auto fixed = config;
             fixed.fixed_backend = true;
+            if (fixed.counts_policy == "multinomial_v1")
+                fixed.counts_policy = "legacy";
             // A default network simulator also allocates each host's entangled
             // qubit: one idle qubit doubles statevector and quadruples density-
             // matrix work. Allocate the circuit's register exactly, once.
@@ -286,6 +288,8 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
             // terminal measurements are sampled from one prepared state.
             auto single = config;
             single.max_simulators = 1;
+            if (single.counts_policy == "auto" || single.counts_policy == "multinomial_v1")
+                single.counts_policy = "legacy";
             const auto result = SampleCircuit(circuit, single, shots);
             CopyCountSamples(result, records.rows.data(), shots, records.width, config.seed);
             records.max_bond_dimension = result.max_bond_dimension;
@@ -485,9 +489,9 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
                 const size_t count = base_batch + (batch < leftover ? 1 : 0);
                 const size_t first = batch * base_batch + std::min(batch, leftover);
                 auto execution_config = NoiseExecutionConfig(config, noise_seed, batch);
-                // Only the complete request may select a new count policy.
-                // Injected shared realizations retain their existing sequence.
-                execution_config.counts_policy = "legacy";
+                // Frames are selected for the entire request. Terminal counts
+                // may be batched only within this realization's distribution.
+                execution_config.counts_policy = !return_samples && count > 1 && PreferMultinomialCounts(config, noise_seed) ? "multinomial_v1" : "legacy";
                 if (direct && !execution_config.seed)
                     execution_config.seed = Simulators::IState::DeriveSeed(unseeded_measurements, batch);
                 // Raw rows on the network executor (MPS, MPO, other backends) run

@@ -2105,6 +2105,17 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
      */
     bool HasOpsAfterMeasurements(bool exactChannels = false) const
     {
+        size_t measuredWidth;
+        return HasOpsAfterMeasurementsWithWidth(exactChannels, measuredWidth);
+    }
+
+    // As HasOpsAfterMeasurements, and report the number of distinct measured
+    // qubits when all measurements can be sampled together. Early exits for
+    // dynamic circuits leave the width zero. A separate name keeps
+    // &Circuit::HasOpsAfterMeasurements unambiguous for callers that bind it.
+    bool HasOpsAfterMeasurementsWithWidth(bool exactChannels, size_t &measuredWidth) const
+    {
+        measuredWidth = 0;
         std::unordered_set<Types::qubit_t> measuredQubits;
         std::unordered_set<Types::qubit_t> affectedQubits;
         std::unordered_set<Types::qubit_t> resetQubits;
@@ -2180,6 +2191,8 @@ template <typename Time = Types::time_type> class Circuit : public IOperation<Ti
         // A trailing mid-circuit reset still has to run. ExecuteNonMeasurements
         // defers it like a measurement, and the terminal-measurement path would
         // drop it (e.g. sampled T1 noise before an expectation value).
+        if (resetQubits.empty())
+            measuredWidth = measuredQubits.size();
         return !resetQubits.empty();
     }
 

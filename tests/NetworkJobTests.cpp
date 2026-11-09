@@ -1366,6 +1366,57 @@ class ThreadingNetwork : public Net
     using Net::Net;
 };
 
+void MultinomialTerminalDispatch()
+{
+    auto network = std::make_shared<ThreadingNetwork>(Types::qubits_vector{10}, std::vector<size_t>{10});
+    network->SetMaxSimulators(4);
+    network->Configure("counts_policy", "multinomial_v1");
+    auto circuit = CF::CreateCircuit();
+    std::shared_ptr<Simulators::ISimulator> prepared;
+    std::vector<bool> executed;
+    const auto workers = [&](Method method, size_t bits, size_t shots, bool terminal = true) {
+        return network->ExecutionThreads(circuit, 10, 10, 10, shots, Backend::kQCSim, method, terminal, bits, prepared, executed);
+    };
+    Check(workers(Method::kExtendedStabilizer, 8, 2048) == 1 && workers(Method::kExtendedStabilizer, 8, 2047) == 4, "Extended marginal crossover ignored");
+    Check(workers(Method::kExtendedStabilizer, 9, 8192) == 4 && workers(Method::kExtendedStabilizer, 1, 2048, false) == 4,
+          "Unsupported extended sampling lost its parallel workers");
+    Check(workers(Method::kMatrixProductState, 1, 256) == 1 && workers(Method::kMatrixProductState, 2, 8192) == 4,
+          "MPS marginal dispatch used the wrong measurement width");
+    Check(workers(Method::kMatrixProductOperator, 1, 256) == 1, "MPO marginal dispatch split its batch");
+    // A truncating MPO keeps the native sampler, and with it the shot workers.
+    network->Configure("matrix_product_state_max_bond_dimension", "8");
+    Check(workers(Method::kMatrixProductOperator, 1, 256) != 1, "A truncating MPO lost its shot workers");
+    network->RemoveConfiguration("matrix_product_state_max_bond_dimension");
+    prepared.reset();
+    network->Configure("mps_sample_measure_algorithm", "mps_apply_measure");
+    Check(workers(Method::kMatrixProductState, 1, 8192) == 4, "Explicit MPS measurement algorithm lost its parallel workers");
+    network->Configure("sampling_policy", "reproducible_v1");
+    Check(workers(Method::kExtendedStabilizer, 1, 8192) == 4, "Explicit sampling policy changed terminal shot partitioning");
+
+    // Both public entry points should pass the distinct measured width and
+    // draw one batch with the same seed regardless of the worker limit.
+    for (auto method : {Method::kMatrixProductState, Method::kMatrixProductOperator, Method::kExtendedStabilizer})
+    {
+        auto net = MakeNetwork(Backend::kQCSim, method);
+        net->Configure("counts_policy", "multinomial_v1");
+        auto measured = CF::CreateCircuit();
+        measured->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+        measured->AddOperation(CF::CreateMeasurement({{0, 0}, {0, 1}}));
+        for (bool onHost : {true, false})
+        {
+            net->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+            const auto run = [&](size_t limit) {
+                net->SetMaxSimulators(limit);
+                net->Configure("seed", "0");
+                return onHost ? net->RepeatedExecuteOnHost(measured, 0, 256) : net->RepeatedExecute(measured, 256);
+            };
+            const auto one = run(1);
+            Check(one == run(4) && one.size() == 2 && one.at({false, false}) + one.at({true, true}) == 256,
+                  "Terminal count policy split a seeded marginal batch");
+        }
+    }
+}
+
 void ClearedMpoStillSamplesInParallel()
 {
     // [MPO, statevector] without an estimator keeps the network's MPO, which
@@ -1385,7 +1436,7 @@ void ClearedMpoStillSamplesInParallel()
     circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
     std::shared_ptr<Simulators::ISimulator> prepared;
     std::vector<bool> executed;
-    const auto threads = network->ExecutionThreads(circuit, 2, 2, 2, 1000, Backend::kQCSim, Method::kMatrixProductOperator, true, prepared, executed);
+    const auto threads = network->ExecutionThreads(circuit, 2, 2, 2, 1000, Backend::kQCSim, Method::kMatrixProductOperator, true, 2, prepared, executed);
     Check(threads == 4 && prepared && prepared->GetNumberOfQubits() == 2 && calls->load() == 1, "A cleared MPO forced terminal sampling onto one worker");
 
     for (bool onHost : {false, true})
@@ -2794,6 +2845,7 @@ try
     NestedTerminalMeasurementsShareThePrefix();
     KeptMixedCandidateIsPrepared();
     ClearedMpoStillSamplesInParallel();
+    MultinomialTerminalDispatch();
     ClassicalBitIdsDoNotDeferWires();
     MixedStateCandidates();
     ConfiguredCandidatesDecide();

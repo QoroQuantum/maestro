@@ -80,13 +80,15 @@ void PreparedStateContract(Method method)
     state.SetBit(1);
     state.SetBit(4);
     std::vector<bool> seen(67, false);
-    const bool sampled =
-        MaestroExecution::SamplePreparedTerminal(*terminal, simulator, seen.size(), state, 19, [&](size_t row, const Circuits::OperationState &sample) {
+    const bool sampled = MaestroExecution::SamplePreparedTerminal(
+        *terminal, simulator, seen.size(), state, 19,
+        [&](size_t row, const Circuits::OperationState &sample) {
             Check(row < seen.size() && !seen[row], "Terminal sampler emitted duplicate or invalid row indices");
             seen[row] = true;
             Check(sample.GetAllBits() == std::vector<bool>({true, true, true, false, true}),
                   "Terminal sampler lost initial bits, mapping, or per-occurrence readout");
-        });
+        },
+        nullptr, false, [](size_t, const auto &) { Check(false, "Readout errors were aggregated across shots"); });
     Check(sampled && calls->load() == 1, "Prepared-state sampler evolved the circuit more than once");
     Check(std::all_of(seen.begin(), seen.end(), [](bool value) { return value; }), "Terminal sampler omitted rows");
     simulator->RestoreState();
@@ -107,6 +109,80 @@ void PreparedStateContract(Method method)
           "Rejected terminal sampling changed circuit or classical execution state");
     Check(std::abs(simulator->Probability(2) - 1.0) < 1e-10 && simulator->RandomUniform() == reference->RandomUniform(),
           "Rejected terminal sampling changed the quantum state or RNG");
+}
+
+void CheckpointMultinomialCounts()
+{
+    constexpr size_t shots = 4096;
+    auto circuit = CF::CreateCircuit();
+    circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+    circuit->AddOperation(CF::CreateMeasurement({{0, 4}, {0, 1}}));
+    auto simulator = Simulator(Method::kStatevector);
+    simulator->Configure("counts_policy", "multinomial_v1");
+    Circuits::OperationState state(6);
+    state.SetBit(3); // unwritten bits keep their initial values
+    size_t total = 0, bins = 0;
+    Check(MaestroExecution::SamplePreparedTerminal(
+              *circuit, simulator, shots, state, 42, [](size_t, const auto &) { Check(false, "Count-only terminal measurement expanded individual rows"); },
+              nullptr, false,
+              [&](size_t count, const Circuits::OperationState &sample) {
+                  const auto &bits = sample.GetAllBits();
+                  Check(bits.size() == 6 && bits[3] && !bits[0] && !bits[2] && !bits[5] && bits[1] == bits[4], "Aggregated terminal bit mapping");
+                  total += count;
+                  ++bins;
+              }),
+          "Terminal measurements could not be aggregated");
+    Check(total == shots && bins == 2, "Expected one write per distinct terminal outcome");
+
+    auto config = Config(Method::kStatevector);
+    config.seed.reset();
+    config.counts_policy = "legacy";
+    const auto prefix = CF::CreateCircuit();
+    MaestroExecution::PrefixCheckpoint legacy(prefix, 2, config);
+    const auto run = [&](MaestroExecution::PrefixCheckpoint &checkpoint, std::optional<uint64_t> seed, bool rows) {
+        auto result = checkpoint.ExecuteSuffix(circuit, shots, nullptr, std::nullopt, seed, 6, rows);
+        std::sort(result.counts.begin(), result.counts.end());
+        return result;
+    };
+    const auto oldCounts = run(legacy, 42, false).counts;
+    const auto oldRows = run(legacy, 42, true).rows;
+    for (const std::string policy : {"auto", "multinomial_v1"})
+    {
+        config.counts_policy = policy;
+        MaestroExecution::PrefixCheckpoint checkpoint(prefix, 2, config);
+        const auto first = run(checkpoint, std::nullopt, false);
+        Check(first.width == 6 && first.counts.size() == 2 && first.rows.empty(), "Checkpoint count padding or storage changed");
+        const auto seeded = run(checkpoint, 42, false).counts;
+        if (policy == "auto")
+            Check(seeded == oldCounts, "Seeded checkpoint counts changed after an unseeded count call");
+        Check(run(checkpoint, 42, true).rows == oldRows, "Count policy changed seeded checkpoint raw rows");
+        Check(run(checkpoint, 42, false).counts == seeded, "Count replay changed after a raw checkpoint call");
+    }
+    // The small batches use the native fallback kernels. Both they and the
+    // multinomial kernels must leave the same saved prefix for the next suffix.
+    auto x = CF::CreateCircuit();
+    x->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    auto measure = CF::CreateCircuit();
+    measure->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    auto undo = CF::CreateCircuit();
+    undo->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+    undo->AddOperation(CF::CreateMeasurement({{0, 0}}));
+    for (auto method : {Method::kPathIntegral, Method::kExtendedStabilizer})
+    {
+        auto fixed = Config(method);
+        fixed.counts_policy = "multinomial_v1";
+        MaestroExecution::PrefixCheckpoint checkpoint(x, 1, fixed);
+        for (const size_t batch : {size_t{17}, shots})
+            for (const bool inverted : {true, false})
+            {
+                const auto result = checkpoint.ExecuteSuffix(inverted ? undo : measure, batch, nullptr, std::nullopt, 42, 1, false);
+                Check(result.sampling_strategy == "terminal_v1" && result.counts.size() == 1 &&
+                          result.counts.front() == std::make_pair(std::vector<bool>{!inverted}, batch),
+                      "Prepared count sampling overwrote its checkpoint or replayed the suffix");
+            }
+        Check(checkpoint.ExecuteSuffix(measure, 17, nullptr, std::nullopt, 42, 1, true).sampling_strategy == "trajectory_v1",
+              "Checkpoint count policy changed the existing raw-record execution path");
+    }
 }
 
 void CheckpointEvolutionCounts(Method method)
@@ -409,6 +485,7 @@ void NestedChannelsLeaveTheIdealBaseline()
 
 void TestMixedStateExecution()
 {
+    CheckpointMultinomialCounts();
     for (const auto method : {Method::kDensityMatrix, Method::kMatrixProductOperator})
     {
         PreparedStateContract(method);

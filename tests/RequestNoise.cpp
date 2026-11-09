@@ -601,6 +601,29 @@ void TestRowSelection()
     }
 }
 
+void TestMultinomialCountReplay()
+{
+    for (const char *method : {"statevector", "density_matrix", "path_integral", "matrix_product_state", "matrix_product_operator", "extended_stabilizer"})
+    {
+        auto request = Request("execute", 3, "h q[0]; t q[0]; h q[0]; cx q[0],q[1]; measure q[0] -> c[0];", method);
+        auto &execution = request["execution"].as_object();
+        execution["shots"] = 4096;
+        execution.erase("seed");
+        const auto fresh = Call(request);
+        const auto policy = fresh.at("execution_metadata").at("configured_options").at("counts_policy");
+        Check(policy == "multinomial_v1", "Unseeded terminal count policy is missing from replay metadata");
+        auto &simulator = request["simulator"].as_object();
+        execution["seed"] = fresh.at("seed");
+        simulator["options"] = j::object{{"counts_policy", policy}};
+        Check(Call(request).at("counts") == fresh.at("counts"), "Native terminal counts failed seed and policy replay");
+        execution["seed"] = 0;
+        simulator["options"] = j::object{{"counts_policy", "auto"}};
+        const auto seeded = Call(request);
+        simulator["options"] = j::object{{"counts_policy", "legacy"}};
+        Check(Call(request).at("counts") == seeded.at("counts"), "Seed zero changed its historical count sequence");
+    }
+}
+
 // SimpleExecute's counts_policy: frames for unseeded Clifford counts under auto,
 // on request under frame_v1, never under legacy or for seeded auto calls.
 void TestLegacyCountsPolicy()
@@ -1096,6 +1119,7 @@ void TestRequestNoiseAndOptions()
     TestFrameSamplerHandle();
     TestRowSelection();
     TestLegacyCountsPolicy();
+    TestMultinomialCountReplay();
     TestReadoutExecution();
     TestThermalApproximation();
     TestFixedBackendNoisyShots();
