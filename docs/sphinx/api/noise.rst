@@ -17,3 +17,5 @@ Noise
 .. autofunction:: compile_reference_sampler
 .. autoclass:: ReferenceFrameSampler
    :members:
+.. autoclass:: ExtendedFrameSampler
+   :members:

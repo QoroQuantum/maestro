@@ -409,7 +409,12 @@ print(ramsey.full_noise_execute(idle, shots=1024, seed=3)["counts"])
 ## Every layer together
 
 `full_noise_execute`, `full_noise_estimate` and `noisy_fidelity` apply every
-configured layer in physical order:
+configured layer in physical order. After each gate, configured channels act in
+order: correlated dephasing, coherent rotations, crosstalk on neighbour qubits,
+relaxation and damping (T1, thermal relaxation and phase damping) on each gate
+qubit, single-qubit Pauli noise, exact Kraus/CPTP channels, and two-qubit
+depolarizing on two-qubit gates; `noisy_execute` and `noisy_estimate_montecarlo`
+apply the incoherent subset in the same order:
 
 ```{code-cell} python
 device = maestro.NoiseModel()

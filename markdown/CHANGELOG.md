@@ -7,8 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.14] - 2026-11-10
+
 ### Added
 
+- Fast noisy sampling, shot rows and parallel realizations (`Execution/ReferenceFrameSampler`,
+  `Execution/SampleRecords`, `Execution/NoisyEstimation`, `Execution/PrefixCheckpoint`,
+  `Utils/Threads/RealizationWorkers`):
+  - Reference-frame (Pauli-frame) sampler for noisy Clifford circuits, used for
+    counts under `counts_policy` (`auto`, `legacy`, `frame_v1`), for shot rows,
+    and as a reusable compiled sampler (`compile_reference_sampler` /
+    `ReferenceFrameSampler` in Python and `MaestroCreateReferenceFrameSampler`
+    in the C ABI). Pauli-mixture Kraus channels such as phase damping compile to
+    frames.
+  - Shot rows (`return_samples=True` in Python, `execution.return_samples` in the
+    native JSON API, and `MaestroRunRequestSamples` in the C ABI) returning
+    per-shot classical bit matrices.
+  - Direct trajectory sessions, a precompiled `NoiseInjectionPlan`, and parallel
+    realization workers sharing `trajectory_max_memory_mb`; seeded results do
+    not depend on the worker count.
+- Batched Pauli-frame sampling for noisy QCSim `extended_stabilizer` circuits
+  (`ExtendedFrameBatch`, `ExtendedFrameSampler`, `extended_frame_v1`), exposed
+  through `ExecuteNoisy`, `PrefixCheckpoint`, native `execute` and
+  `checkpoint_batch`, `compile_reference_sampler`, and `maestro.sinter`.
+- Adaptive multinomial terminal count sampling (`Utils/Sampling/Multinomial.h`,
+  `counts_policy="multinomial_v1"`, and automatic unseeded selection under
+  `counts_policy="auto"`), drawing terminal histograms directly from outcome
+  probabilities via sequential binomial splits with rare-outcome grouping on
+  QCSim statevectors, density matrices, path integrals, 1-qubit MPS/MPO
+  marginals and up to 8-bit extended-stabilizer marginals.
+- Automatic realization policy (`Execution/NoisePolicy.h`) and prepared-state
+  reuse (`Execution/TerminalSampling.h`):
+  - Omitted `noise_realizations` (`None` in Python; omitted, `null` or `"auto"`
+    in JSON) resolves to 1 realization when exact density-matrix or MPO channels
+    make evolution deterministic, and 64 (counts) or 100 (estimates and
+    fidelity) otherwise.
+  - Terminal measurements on mixed-state backends and eligible QCSim
+    statevector, stabilizer and MPS runs sample one prepared state per
+    realization (`terminal_v1` / `mixed_v1`), including checkpoint suffixes and
+    exact prefix noise (`prefix_noise_model` / `noise.prefix`).
+  - `SimulatorConfig.optimization_candidates` bound in Python.
 - `INetwork::CaptureSimulatorSettings()` copies the settings made directly on
   the network's simulator into the network, for code that re-creates the
   simulator. Composer's parallel scheduler calls it, so a setting made only on
@@ -768,7 +806,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.13...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.14...HEAD
+[0.3.14]: https://github.com/QoroQuantum/maestro/compare/v0.3.13...v0.3.14
 [0.3.13]: https://github.com/QoroQuantum/maestro/compare/v0.3.12...v0.3.13
 [0.3.12]: https://github.com/QoroQuantum/maestro/compare/v0.3.11...v0.3.12
 [0.3.11]: https://github.com/QoroQuantum/maestro/compare/v0.3.10...v0.3.11

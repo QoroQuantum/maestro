@@ -453,10 +453,8 @@ threshold, limited its accuracy there. Its best error was 0.043.
   15 physical cores, with every simulator using 15 threads. The VMs agreed on a
   check workload to within 4%. CPU only.
 - **Software.** Python 3.12.16, Qiskit 2.6.2, Qiskit Aer 0.18.2, PennyLane
-  0.45.1, PennyLane Lightning 0.45.0, quimb 1.15.0, qiskit-maestro 0.1.0 and
-  pennylane-maestro 0.6.0. Maestro is version 0.3.14, measured on a
-  pre-release build from the `main` branch (commit `5787cc7`, after 0.3.13);
-  its noisy simulation paths are faster than 0.3.13's.
+  0.45.1, PennyLane Lightning 0.45.0, quimb 1.15.0, qoro-maestro 0.3.14,
+  qiskit-maestro 0.1.0 and pennylane-maestro 0.6.0.
 - **Timing.** The median of five runs after a warm-up run (three runs for a
   case over 60 s, one over 300 s, and the warm-up alone over 900 s), timing the
   whole call, including circuit conversion. Each run had a 1-hour limit and a
