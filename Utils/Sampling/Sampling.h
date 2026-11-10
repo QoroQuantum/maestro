@@ -3,6 +3,7 @@
 #include "../../Types.h"
 #include "../RandomStream.h"
 #include "AliasBase.h"
+#include "Multinomial.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -29,7 +30,8 @@ enum class Family
 {
     Auto,
     Cdf,
-    Alias
+    Alias,
+    Multinomial
 };
 
 struct Options
@@ -38,6 +40,12 @@ struct Options
     size_t memoryBytes = size_t{256} << 20;
     size_t batchSize = size_t{1} << 20;
     Family family = Family::Auto;
+    bool multinomialCounts = false;
+    // A caller whose weights can lose range before they reach the sampler,
+    // such as squared amplitudes, sets this to have a smaller total rejected
+    // with TotalUnderflow before any draw, and then samples rescaled inputs.
+    // Zero, the default, disables the check.
+    double minimumTotal = 0.;
 };
 
 // Validate before any parent or component configuration is mutated.
@@ -77,10 +85,39 @@ inline int Threads(bool permitted, size_t work)
     return 1;
 }
 
+// Totals outside [2^-900, 2^900] are shifted by an exact power of two before
+// sampling: tiny ones up into [0.5, 1), huge ones down to just below 2^900.
+// Below, thresholds and random targets would round to the subnormal grid;
+// above, separately accumulated subtotals could overflow. Ratios are
+// unchanged, so results equal those of the same relative weights at ordinary
+// scale whenever every weight stays representable, and totals inside the
+// range are untouched.
+inline constexpr double minUnscaledMass = 0x1p-900;
+inline constexpr double maxUnscaledMass = 0x1p900;
+
+inline bool NeedsMassShift(double total)
+{
+    return total < minUnscaledMass || total > maxUnscaledMass;
+}
+
 inline void CheckMass(double total)
 {
     if (!(total > 0.) || !std::isfinite(total))
         throw std::domain_error("Sampling requires finite positive probability mass");
+}
+
+// Thrown before any draw when the total weight is below Options::minimumTotal.
+struct TotalUnderflow : std::domain_error
+{
+    TotalUnderflow() : std::domain_error("Sampling total weight is below the requested minimum")
+    {
+    }
+};
+
+inline void CheckMinimumTotal(double total, const Options &options)
+{
+    if (total < options.minimumTotal)
+        throw TotalUnderflow();
 }
 
 class ProbabilityAlias : public AliasBase
@@ -160,6 +197,11 @@ template <class Probability> class Prepared
         prefix.resize(blocks + 1, 0.);
         masses.resize(blocks, 0.);
         std::vector<unsigned char> invalid(blocks, 0);
+        // The tail-grouping gate bounds its costs from each block's largest
+        // row. Record it only when that gate can run and the budget allows.
+        const bool considersGrouping = options.family == Family::Auto && options.multinomialCounts && shots >= 256;
+        std::vector<double> largest(considersGrouping && blocks <= (options.memoryBytes - IndexBytes() - blocks) / sizeof(double) ? blocks : 0, 0.);
+        const bool trackLargest = !largest.empty();
         const int threads = Threads(options.multithreading, count);
         size_t nonzero = 0;
 #ifdef _OPENMP
@@ -167,7 +209,7 @@ template <class Probability> class Prepared
 #endif
         for (int64_t b = 0; b < static_cast<int64_t>(blocks); ++b)
         {
-            double sum = 0.;
+            double sum = 0., top = 0.;
             size_t positive = 0;
             const size_t begin = size_t(b) * blockSize, end = std::min(count, begin + blockSize);
             for (size_t i = begin; i < end; ++i)
@@ -177,21 +219,97 @@ template <class Probability> class Prepared
                     invalid[b] = 1;
                 sum += p;
                 positive += p > 0.;
+                if (trackLargest && p > top)
+                    top = p;
             }
             masses[b] = sum;
             nonzero += positive;
+            if (trackLargest)
+                largest[b] = top;
         }
         if (std::find(invalid.begin(), invalid.end(), 1) != invalid.end())
             throw std::domain_error("Sampling probabilities must be finite and nonnegative");
         for (size_t b = 0; b < blocks; ++b)
             prefix[b + 1] = prefix[b] + masses[b];
         mass = prefix.back();
+        CheckMinimumTotal(mass, options);
+        // Shift every weight by an exact power of two, then recompute the
+        // block sums, positive rows and block maxima from the shifted weights.
+        const auto reshift = [&](int newShift) {
+            const int delta = newShift - shift;
+            shift = newShift;
+            const int64_t blockCount = static_cast<int64_t>(blocks);
+            size_t positiveRows = 0;
+            // A local copy: OpenMP clauses in a lambda cannot name its captures
+            // under newer MSVC (C2326).
+            const int team = threads;
+#ifdef _OPENMP
+#pragma omp parallel for if (team > 1) num_threads(team) schedule(static) reduction(+ : positiveRows)
+#endif
+            for (int64_t b = 0; b < blockCount; ++b)
+            {
+                double sum = 0.;
+                size_t positive = 0;
+                for (size_t i = size_t(b) * blockSize, end = std::min(count, i + blockSize); i < end; ++i)
+                {
+                    const double p = Weight(i);
+                    sum += p;
+                    positive += p > 0.;
+                }
+                masses[b] = sum;
+                positiveRows += positive;
+            }
+            nonzero = positiveRows;
+            for (double &top : largest)
+                top = std::ldexp(top, delta);
+            for (size_t b = 0; b < blocks; ++b)
+                prefix[b + 1] = prefix[b] + masses[b];
+            mass = prefix.back();
+        };
+        // Finite weights can still sum to infinity in this order, even when
+        // their exact total is finite. Sum them again shifted down by 2^-128;
+        // they are relative weights. The shift is exact for every weight of
+        // at least 2^-894. Smaller ones can round or become zero, but beside a
+        // total near DBL_MAX no shot count can reach them.
+        if (std::isinf(mass))
+            reshift(-128);
         CheckMass(mass);
+        // A tiny total rounds the rare threshold and the random targets to the
+        // subnormal grid, which biases the first and last populated rows; a
+        // huge one lets separately accumulated subtotals overflow. A tiny total
+        // is shifted up into [0.5, 1). A huge one is shifted down only to just
+        // below 2^900, so that a row representable at ordinary scale stays
+        // positive; rows far below that can become zero. See NeedsMassShift.
+        if (NeedsMassShift(mass))
+        {
+            int exponent = 0;
+            std::frexp(mass, &exponent);
+            reshift(shift + (mass < minUnscaledMass ? -exponent : 900 - exponent));
+        }
         std::vector<unsigned char>().swap(invalid);
         aliasCount = nonzero <= count / 4 ? nonzero : count;
 
         // Leave space for at least one batch, even if the table almost fills the budget.
         const size_t available = options.memoryBytes - IndexBytes();
+        if (options.family == Family::Multinomial || (options.family == Family::Auto && options.multinomialCounts && shots >= 256))
+        {
+            // One block's local prefix, plus at least one grouped-hit target.
+            const size_t local = std::min(count, blockSize);
+            if (local < available / sizeof(double))
+            {
+                if (options.family == Family::Multinomial || PreferMultinomialRows(shots, nonzero) || GroupsRareRows(shots, nonzero, largest))
+                {
+                    multinomial = true;
+                    rareBatch = std::min(size_t{1} << 16, available / sizeof(double) - local);
+                    return;
+                }
+            }
+            else if (options.family == Family::Multinomial)
+                throw std::length_error("Multinomial block exceeds the sampling scratch budget");
+        }
+        // The block maxima served only that decision. Release them before the
+        // alias or CDF tables, whose budget counts the permanent index alone.
+        std::vector<double>().swap(largest);
         const bool fitsAlias = available >= 1024 && aliasCount <= (available - 1024) / AliasRowBytes();
         const bool useAlias =
             options.family == Family::Alias || (options.family == Family::Auto && shots >= std::max<size_t>(512, aliasCount / 4) && fitsAlias);
@@ -199,7 +317,8 @@ template <class Probability> class Prepared
         {
             if (!fitsAlias)
                 throw std::length_error("Alias table exceeds the sampling scratch budget");
-            alias = std::make_unique<ProbabilityAlias>(aliasCount, count, mass, this->probability, blockSize, masses);
+            alias = std::make_unique<ProbabilityAlias>(
+                aliasCount, count, mass, [this](size_t row) { return Weight(row); }, blockSize, masses);
         }
         else if (count <= 65536 && available >= 1024 && count <= (available - 1024) / sizeof(double))
         {
@@ -209,7 +328,7 @@ template <class Probability> class Prepared
                 double sum = 0.;
                 const size_t begin = b * blockSize, end = std::min(count, begin + blockSize);
                 for (size_t i = begin; i < end; ++i)
-                    localCdf[i] = sum += this->probability(i);
+                    localCdf[i] = sum += Weight(i);
             }
         }
     }
@@ -236,7 +355,75 @@ template <class Probability> class Prepared
 
     Family Method() const
     {
-        return alias ? Family::Alias : Family::Cdf;
+        return multinomial ? Family::Multinomial : (alias ? Family::Alias : Family::Cdf);
+    }
+
+    template <class Insert, class Uniform> void CountMultinomial(size_t shots, const Insert &insert, Uniform &uniform) const
+    {
+        // Split a group's shot count between one member and all preceding
+        // members. Drawing the smaller side avoids losing a very small tail
+        // when the larger side's normalized probability rounds to one.
+        auto split = [&](size_t remaining, double member, double preceding) {
+            if (preceding == 0.)
+                return remaining;
+            const double total = member + preceding;
+            if (member <= preceding)
+                return BinomialCount(remaining, member / total, uniform);
+            return remaining - BinomialCount(remaining, preceding / total, uniform);
+        };
+        // Use the validated block weights and a bounded local prefix. Reading
+        // prefixes in reverse avoids subtracting nearly equal probability sums.
+        // Within a block, rows at or below the rare threshold form one group,
+        // placed after the other rows so that it splits first. Grouping turns
+        // a tail of tiny rows into one binomial and a few categorical draws.
+        const double threshold = RareThreshold(shots);
+        // Grouped hits never exceed the shots or a batch, so one reservation of
+        // that size holds every batch: the buffer never regrows, and never holds
+        // an old and a new allocation beyond the scratch budget.
+        const size_t targetCapacity = std::min(shots, rareBatch);
+        std::vector<double> before(std::min(count, blockSize)), targets;
+        for (size_t b = masses.size(); b > 0 && shots;)
+        {
+            --b;
+            if (masses[b] == 0.)
+                continue;
+            size_t localShots = split(shots, masses[b], prefix[b]);
+            shots -= localShots;
+            if (!localShots)
+                continue;
+            const size_t begin = b * blockSize;
+            const size_t size = std::min(blockSize, count - begin);
+            double common = 0., rare = 0.;
+            for (size_t i = 0; i < size; ++i)
+            {
+                before[i] = common;
+                const double weight = Weight(begin + i);
+                if (weight > threshold)
+                    common += weight;
+                else
+                    rare += weight;
+            }
+            const size_t rareShots = rare > 0. ? split(localShots, rare, common) : 0;
+            localShots -= rareShots;
+            for (size_t i = size; i > 0 && localShots;)
+            {
+                --i;
+                const double weight = Weight(begin + i);
+                if (weight > threshold)
+                {
+                    const size_t n = split(localShots, weight, before[i]);
+                    if (n)
+                        insert(begin + i, n);
+                    localShots -= n;
+                }
+            }
+            if (rareShots)
+            {
+                if (targets.capacity() < targetCapacity)
+                    targets.reserve(targetCapacity);
+                PlaceGroupedHits(begin, size, threshold, rare, rareShots, targets, insert, uniform);
+            }
+        }
     }
 
     const Options &Settings() const
@@ -268,7 +455,7 @@ template <class Probability> class Prepared
         size_t lastPositive = begin;
         for (size_t i = begin; i < end; ++i)
         {
-            const double p = probability(i);
+            const double p = Weight(i);
             if (p > 0.)
                 lastPositive = i;
             sum += p;
@@ -299,13 +486,13 @@ template <class Probability> class Prepared
                     previousBlock = b;
                     row = b * blockSize;
                     end = std::min(count, row + blockSize);
-                    sum = probability(row);
+                    sum = Weight(row);
                     lastPositive = row;
                 }
                 const double local = LocalTarget(target, b);
                 while (sum <= local && row + 1 < end)
                 {
-                    const double p = probability(++row);
+                    const double p = Weight(++row);
                     if (p > 0.)
                         lastPositive = row;
                     sum += p;
@@ -322,6 +509,114 @@ template <class Probability> class Prepared
     }
 
   private:
+    // A weight, shifted with the total when that is tiny.
+    double Weight(size_t row) const
+    {
+        const double p = probability(row);
+        return shift ? std::ldexp(p, shift) : p;
+    }
+
+    double RareThreshold(size_t shots) const
+    {
+        // Divide first: a finite mass near the largest double would overflow
+        // when doubled. Scaling by two is exact, so the order changes nothing else.
+        return shots ? mass / static_cast<double>(shots) * rareExpectedShots : 0.;
+    }
+
+    // Whether a long tail of tiny rows can be grouped. Each populated block and
+    // each common row costs a binomial draw, and each grouped hit a categorical
+    // draw. One serial pass over populated blocks stops as soon as either cost
+    // makes the per-shot samplers cheaper.
+    bool GroupsRareRows(size_t shots, size_t positiveRows, const std::vector<double> &largest) const
+    {
+        const size_t limit = shots / multinomialShotsPerDraw;
+        const size_t populated = static_cast<size_t>(std::count_if(masses.begin(), masses.end(), [](double m) { return m > 0.; }));
+        if (populated > limit)
+            return false;
+        const double threshold = RareThreshold(shots), rareLimit = maxRareMassFraction * mass;
+        // Bound both costs before reading rows. A block whose largest row is
+        // at most the threshold holds only grouped rows; one whose largest row
+        // exceeds it holds at least one common row. Without the per-block
+        // maxima, the block mass gives weaker bounds of the same kind. A
+        // spread distribution is rejected here.
+        const auto allGrouped = [&](size_t b) { return largest.empty() ? masses[b] <= threshold : largest[b] <= threshold; };
+        const auto hasCommon = [&](size_t b) { return largest.empty() ? masses[b] > threshold * static_cast<double>(blockSize) : largest[b] > threshold; };
+        size_t commonBlocks = 0;
+        double grouped = 0.;
+        for (size_t b = 0; b < masses.size(); ++b)
+        {
+            if (masses[b] == 0.)
+                continue;
+            if (allGrouped(b))
+                grouped += masses[b];
+            else if (hasCommon(b))
+                ++commonBlocks;
+        }
+        if (populated + commonBlocks > limit || grouped > rareLimit)
+            return false;
+        // Read only the blocks that mix both kinds of rows.
+        size_t draws = populated;
+        double rare = grouped;
+        for (size_t b = 0; b < masses.size(); ++b)
+        {
+            if (masses[b] == 0. || allGrouped(b))
+                continue;
+            for (size_t i = b * blockSize, end = std::min(count, i + blockSize); i < end; ++i)
+            {
+                const double weight = Weight(i);
+                if (weight > threshold ? ++draws > limit : (rare += weight) > rareLimit)
+                    return false;
+            }
+        }
+        // The per-shot alternative draws over the positive rows. A table small
+        // enough to stay in cache needs the same 24 shots per draw as plain rows.
+        return PreferMultinomialDraws(shots, draws, positiveRows);
+    }
+
+    // Place a group's hits as independent categorical draws over its rows.
+    // Normalized exponential spacings are sorted uniforms, so one sweep of the
+    // block assigns a batch without sorting. Batches bound the scratch.
+    // Targets and cumulative masses are compared as fractions of the group:
+    // scaling the targets by a subnormal group mass would round them to its grid.
+    template <class Insert, class Uniform>
+    void PlaceGroupedHits(size_t begin, size_t size, double threshold, double rare, size_t hits, std::vector<double> &targets, const Insert &insert,
+                          Uniform &uniform) const
+    {
+        const double last = std::nextafter(1., 0.);
+        while (hits)
+        {
+            const size_t batch = std::min(hits, rareBatch);
+            targets.resize(batch);
+            double total = 0.;
+            for (double &target : targets)
+                target = total -= std::log1p(-uniform());
+            total -= std::log1p(-uniform());
+            for (double &target : targets)
+                target = total > 0. ? std::min(target / total, last) : 0.;
+            size_t next = 0, lastRow = begin;
+            double cumulative = 0.;
+            for (size_t i = 0; i < size && next < batch; ++i)
+            {
+                const double weight = Weight(begin + i);
+                if (!(weight > 0.) || weight > threshold)
+                    continue;
+                // The same additions as the group's mass, so the last row
+                // reaches a fraction of exactly one and every target is placed.
+                cumulative += weight;
+                lastRow = begin + i;
+                const double reached = cumulative / rare;
+                const size_t first = next;
+                while (next < batch && targets[next] < reached)
+                    ++next;
+                if (next != first)
+                    insert(begin + i, next - first);
+            }
+            if (next < batch)
+                insert(lastRow, batch - next);
+            hits -= batch;
+        }
+    }
+
     static size_t BlockSize(size_t count, size_t shots, size_t budget)
     {
         if (budget < 4096)
@@ -362,10 +657,12 @@ template <class Probability> class Prepared
         return std::min(target - prefix[block], std::nextafter(masses[block], 0.));
     }
 
-    size_t count, blockSize = 256, aliasCount = 0;
+    size_t count, blockSize = 256, aliasCount = 0, rareBatch = 1;
+    int shift = 0;
     Probability probability;
     Options options;
     double mass = 0.;
+    bool multinomial = false;
     std::vector<double> prefix, masses, localCdf;
     std::unique_ptr<ProbabilityAlias> alias;
 };
@@ -420,50 +717,77 @@ Counts<Many> CountCdfRange(const Range &rows, size_t shots, size_t bits, const P
             throw std::domain_error("Sampling probabilities must be finite and nonnegative");
         mass += p;
     }
+    CheckMinimumTotal(mass, options);
+    // As in Prepared: an overflowing sum is taken again shifted down by
+    // 2^-128, and a total outside the ordinary range is shifted by an exact
+    // power of two (see NeedsMassShift). The sampler checks every weight and
+    // the total before its first draw.
+    int shift = 0;
+    const auto reshift = [&](int newShift) {
+        shift = newShift;
+        mass = 0.;
+        for (const auto &row : rows)
+            mass += std::ldexp(probability(row), shift);
+    };
+    if (std::isinf(mass))
+        reshift(-128);
     CheckMass(mass);
+    if (NeedsMassShift(mass))
+    {
+        int exponent = 0;
+        std::frexp(mass, &exponent);
+        reshift(shift + (mass < minUnscaledMass ? -exponent : 900 - exponent));
+    }
     const size_t batch = std::min({shots, options.batchSize, options.memoryBytes / sizeof(double)});
     std::vector<double> targets;
     targets.reserve(batch);
     std::vector<bool> key;
     if constexpr (Many)
         key.resize(bits);
-    for (size_t begin = 0; begin < shots;)
-    {
-        const size_t count = std::min(batch, shots - begin);
-        targets.resize(count);
-        for (double &target : targets)
-            target = std::min(uniform() * mass, std::nextafter(mass, 0.));
-        std::sort(targets.begin(), targets.end());
-        size_t sampled = 0;
-        double cumulative = 0.;
-        for (const auto &row : rows)
+    const auto draw = [&](const auto &weight) {
+        for (size_t begin = 0; begin < shots;)
         {
-            cumulative += probability(row);
-            const size_t first = sampled;
-            while (sampled < count && targets[sampled] < cumulative)
-                ++sampled;
-            if (sampled != first)
+            const size_t count = std::min(batch, shots - begin);
+            targets.resize(count);
+            for (double &target : targets)
+                target = std::min(uniform() * mass, std::nextafter(mass, 0.));
+            std::sort(targets.begin(), targets.end());
+            size_t sampled = 0;
+            double cumulative = 0.;
+            for (const auto &row : rows)
             {
-                if constexpr (Many)
+                cumulative += weight(row);
+                const size_t first = sampled;
+                while (sampled < count && targets[sampled] < cumulative)
+                    ++sampled;
+                if (sampled != first)
                 {
-                    for (size_t i = 0; i < bits; ++i)
-                        key[i] = bit(row, i);
-                    result[key] += sampled - first;
+                    if constexpr (Many)
+                    {
+                        for (size_t i = 0; i < bits; ++i)
+                            key[i] = bit(row, i);
+                        result[key] += sampled - first;
+                    }
+                    else
+                    {
+                        Types::qubit_t packed = 0;
+                        for (size_t i = 0; i < bits; ++i)
+                            if (bit(row, i))
+                                packed |= Types::qubit_t{1} << i;
+                        result[packed] += sampled - first;
+                    }
                 }
-                else
-                {
-                    Types::qubit_t packed = 0;
-                    for (size_t i = 0; i < bits; ++i)
-                        if (bit(row, i))
-                            packed |= Types::qubit_t{1} << i;
-                    result[packed] += sampled - first;
-                }
+                if (sampled == count)
+                    break;
             }
-            if (sampled == count)
-                break;
+            begin += count;
         }
-        begin += count;
-    }
+    };
+    // Ordinary inputs keep the caller's probability, with no per-row shift test.
+    if (shift)
+        draw([&](const auto &row) { return std::ldexp(probability(row), shift); });
+    else
+        draw(probability);
     return result;
 }
 
@@ -509,6 +833,11 @@ template <bool Many, class Plan, class Bit, class Uniform> Counts<Many> Count(co
         }
     };
 
+    if (plan.Method() == Family::Multinomial)
+    {
+        plan.CountMultinomial(shots, insert, uniform);
+        return result;
+    }
     std::vector<size_t> bins(histogram ? stride * threads : 0, 0);
     if (threads == 1 && (histogram || plan.Method() == Family::Alias || shots < 128 || count <= 65536))
     {

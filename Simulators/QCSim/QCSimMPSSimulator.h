@@ -317,10 +317,13 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
                          "number of bits in the size_t type, the outcome will be undefined"
                       << std::endl;
         std::unordered_map<Types::qubit_t, Types::qubit_t> result;
+        const bool probabilities = UseProbabilitySampling();
+        if (probabilities && TrySingleQubitCounts<false>(qubits, shots, result))
+            return result;
         DontNotify();
         {
             bool normal = true;
-            if (!configuration.IsSet("mps_sample_measure_algorithm") || configuration.GetConfiguration("mps_sample_measure_algorithm") == "mps_probabilities")
+            if (probabilities)
             {
                 const std::set<Eigen::Index> qset(qubits.begin(), qubits.end());
                 if (qset.size() == GetNumberOfQubits())
@@ -400,10 +403,13 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
         if (qubits.empty() || shots == 0)
             return {};
         std::unordered_map<std::vector<bool>, Types::qubit_t> result;
+        const bool probabilities = UseProbabilitySampling();
+        if (probabilities && TrySingleQubitCounts<true>(qubits, shots, result))
+            return result;
         DontNotify();
         {
             bool normal = true;
-            if (!configuration.IsSet("mps_sample_measure_algorithm") || configuration.GetConfiguration("mps_sample_measure_algorithm") == "mps_probabilities")
+            if (probabilities)
             {
                 const std::set<Eigen::Index> qset(qubits.begin(), qubits.end());
                 if (qset.size() == GetNumberOfQubits())
@@ -918,6 +924,18 @@ class QCSimMPSSimulator : public QCSimTensorChainSimulator
     }
 
   protected:
+    bool UseProbabilitySampling() const
+    {
+        return !configuration.IsSet("mps_sample_measure_algorithm") || configuration.GetConfiguration("mps_sample_measure_algorithm") == "mps_probabilities";
+    }
+
+    // The site's marginal uses its left bond only, O(chi^2), exactly as the
+    // native one-qubit sampler, which then draws every shot separately.
+    template <bool Many> bool TrySingleQubitCounts(const Types::qubits_vector &qubits, size_t shots, Utils::Sampling::Counts<Many> &result)
+    {
+        return SingleQubitCounts<Many>(qubits, shots, result, [&](Types::qubit_t q) { return std::optional<double>(mpsSimulator->GetProbability(q)); });
+    }
+
     std::vector<double> CurrentBondDimensions() const override
     {
         if (!mpsSimulator)

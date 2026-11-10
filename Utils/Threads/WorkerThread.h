@@ -15,6 +15,7 @@
 #define __WORKER_THREAD_H_
 
 #include <atomic>
+#include <exception>
 #include <mutex>
 #include <thread>
 
@@ -166,7 +167,20 @@ template <class ThreadsPool, class Job> class WorkerThread
                 ++threadsPool->Running;
                 lock.unlock();
 
-                job->DoWork();
+                // An exception escaping this thread would terminate the
+                // process. The pool keeps it for WaitForFinish(), and the
+                // job still counts as finished, so the waiter is released.
+                if (!threadsPool->Failed())
+                {
+                    try
+                    {
+                        job->DoWork();
+                    }
+                    catch (...)
+                    {
+                        threadsPool->RecordFailure(std::current_exception());
+                    }
+                }
                 const size_t count = job->GetJobCount();
                 // A job can own the pool's owner (execution jobs hold their
                 // network). Release it before it counts as finished, so the

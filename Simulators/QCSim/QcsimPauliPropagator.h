@@ -99,6 +99,29 @@ class QcsimPauliPropagator : public QC::PauliPropagator
     }
 
   private:
+    // Share of a table channel's extra outputs counted as lasting growth of
+    // the frontier, per channel. Measured with QCSim's NoiseBench: thermal
+    // relaxation after every gate of a kicked-Ising brickwork grew the exact
+    // frontier by 2.4% to 2.6% per channel on 16 qubits, where most of the
+    // register is in the observable's light cone, and by 0.2% to 0.6% on 64
+    // to 127 qubits (deduplication every ten operations, no threshold).
+    static constexpr double kChannelBranchWeight = 0.025;
+
+    // The widest column of the channel's Pauli transfer matrix: 1 for a
+    // channel that is diagonal in the Pauli basis (it never branches), whether
+    // it was built from Pauli probabilities or from Kraus operators.
+    static unsigned ChannelOutputs(const std::shared_ptr<Circuits::IOperation<>> &op)
+    {
+        const auto &channel = std::static_pointer_cast<Circuits::QuantumChannelOperation<>>(op)->GetChannel();
+        if (!channel.GetPauliProbabilities().empty())
+            return 1;
+        const auto qubits = static_cast<unsigned>(channel.GetNumberOfQubits());
+        if (qubits == 0 || qubits > 2)
+            return 1;
+        const auto compiled = QC::PauliDetail::CompileChannel(QC::PauliDetail::KrausTransfer(channel.GetKrausOperators(), qubits), qubits);
+        return compiled.diagonal ? 1 : compiled.table->maxOutputs;
+    }
+
     static double GetOpCost(const std::shared_ptr<Circuits::Circuit<>> &circuit, const std::shared_ptr<Circuits::IOperation<>> &op, int pos)
     {
         if (!circuit || !op || pos < 0 || pos >= static_cast<int>(circuit->size()))
@@ -120,12 +143,16 @@ class QcsimPauliPropagator : public QC::PauliPropagator
             }
             else if (op->GetType() == Circuits::OperationType::kReset)
             {
-                // a measurement followed by a conditional X gate, assume X half of the
-                // times
-                if (pos == 0)
-                    return 1.5;
-                const auto &prevOp = (*circuit)[pos - 1];
-                return 1.5 + GetOpCost(circuit, prevOp, pos - 1);
+                // The adjoint of an unrecorded reset acts in place: X and Y
+                // terms vanish and Z becomes the identity.
+                return 0.5;
+            }
+            else if (op->GetType() == Circuits::OperationType::kQuantumChannel)
+            {
+                // A diagonal channel scales each term; a table channel visits
+                // up to its widest column per term.
+                const auto outputs = ChannelOutputs(op);
+                return outputs == 1 ? 0.5 * static_cast<double>(op->AffectedQubits().size()) : static_cast<double>(outputs);
             }
             else if (op->GetType() == Circuits::OperationType::kConditionalGate)
             {
@@ -233,7 +260,17 @@ class QcsimPauliPropagator : public QC::PauliPropagator
             }
             else if (op->GetType() == Circuits::OperationType::kReset)
             {
-                return 2.;
+                return 1.; // deterministic: removes or shortens terms, never adds one
+            }
+            else if (op->GetType() == Circuits::OperationType::kQuantumChannel)
+            {
+                // GetCost compounds this factor over every operation, so the
+                // widest column would overstate a circuit with noise after each
+                // gate by 2^(channels). Only the labels of a term that the
+                // channel mixes branch, and the new terms are shorter ones
+                // that deduplication merges: see kChannelBranchWeight.
+                const auto outputs = ChannelOutputs(op);
+                return 1. + kChannelBranchWeight * static_cast<double>(outputs - 1);
             }
             else if (op->GetType() == Circuits::OperationType::kConditionalGate)
             {

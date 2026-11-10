@@ -14,6 +14,14 @@ struct ScopedSimulator
         handle = CreateSimpleSimulator(num_qubits);
     }
 
+    // Takes ownership of `adopted`, a handle configured elsewhere (a backend
+    // probe), or creates one of num_qubits qubits when it is 0.
+    ScopedSimulator(int num_qubits, unsigned long int adopted)
+    {
+        GetMaestroObjectWithMute();
+        handle = adopted ? adopted : CreateSimpleSimulator(num_qubits);
+    }
+
     ~ScopedSimulator()
     {
         if (handle != 0)

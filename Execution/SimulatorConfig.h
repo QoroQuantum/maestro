@@ -15,6 +15,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace MaestroExecution
@@ -43,6 +44,12 @@ inline const std::vector<std::string> &SvdSolvers()
 inline const std::vector<std::string> &MpsSamplingModes()
 {
     static const std::vector<std::string> values{"probabilities", "apply_measure"};
+    return values;
+}
+
+inline const std::vector<std::string> &CountsPolicies()
+{
+    static const std::vector<std::string> values{"auto", "legacy", "frame_v1", "multinomial_v1"};
     return values;
 }
 
@@ -182,9 +189,7 @@ struct SimulatorConfig
     std::optional<std::string> trajectory_policy;
     std::optional<size_t> trajectory_max_memory_mb;
     std::optional<size_t> max_simulators;
-    // auto accelerates unseeded counts that the ordinary executor could run on
-    // the stabilizer; legacy retains the existing stream; frame_v1 also opts
-    // seeded requests and other automatically selected methods in.
+    // auto allows adaptive terminal count sampling with or without a seed.
     std::string counts_policy = "auto";
     std::unordered_map<std::string, std::string> native_options;
 
@@ -205,7 +210,9 @@ struct SimulatorConfig
         if (gpu_device && *gpu_device < 0)
             throw std::invalid_argument("gpu_device must be nonnegative");
         RequireOneOf(trajectory_policy, {"block_v1", "shot_v1"}, "trajectory_policy");
-        RequireOneOf(counts_policy, {"auto", "legacy", "frame_v1"}, "counts_policy");
+        RequireOneOf(counts_policy, CountsPolicies(), "counts_policy");
+        if (const auto native = native_options.find("counts_policy"); native != native_options.end())
+            RequireOneOf(native->second, CountsPolicies(), "counts_policy");
         if (trajectory_max_memory_mb && (!*trajectory_max_memory_mb || *trajectory_max_memory_mb > (std::numeric_limits<size_t>::max() >> 20)))
             throw std::invalid_argument("trajectory_max_memory_mb must be a positive representable MiB count");
         if (max_cluster_qubits && !*max_cluster_qubits)
@@ -308,6 +315,57 @@ inline bool HasCandidateList(const SimulatorConfig &config)
     return !config.fixed_backend && !config.optimization_candidates.empty();
 }
 
+// The register bytes of the most demanding backend a request may run: a
+// candidate list replaces the requested pair, and selection may run any of
+// its entries. 0 when one of them has no known bound (an MPS without a bond
+// cap), so that callers keep a single worker.
+inline long double MaxRealizationBytes(const SimulatorConfig &config, size_t qubits)
+{
+    if (!HasCandidateList(config))
+        return RealizationBytes(config, qubits);
+    long double largest = 0;
+    for (const auto &[type, method] : config.optimization_candidates)
+    {
+        auto candidate = config;
+        candidate.simulator_type = type;
+        candidate.simulation_type = method;
+        candidate.fixed_backend = true;
+        candidate.optimization_candidates.clear();
+        const long double bytes = RealizationBytes(candidate, qubits);
+        if (!(bytes > 0))
+            return 0;
+        largest = std::max(largest, bytes);
+    }
+    return largest;
+}
+
+// Whether every backend a request may run is a QCSim one (realization workers
+// rely on its thread budget).
+inline bool RunsOnlyQCSim(const SimulatorConfig &config)
+{
+    if (!HasCandidateList(config))
+        return config.simulator_type == Simulators::SimulatorType::kQCSim;
+    return std::all_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
+                       [](const auto &candidate) { return candidate.first == Simulators::SimulatorType::kQCSim; });
+}
+
+// Whether every backend a request may run evolves an ensemble: a density
+// matrix or MPO, or the QCSim Pauli propagator, whose observable passes
+// through the adjoint channels. Planning may then treat resets and channels
+// outside the observable support as maps that cancel. A candidate list
+// replaces the requested pair, and selection may run any of its entries.
+inline bool HasEnsembleState(const SimulatorConfig &config)
+{
+    const auto ensemble = [](Simulators::SimulatorType type, Simulators::SimulationType method) {
+        return method == Simulators::SimulationType::kDensityMatrix || method == Simulators::SimulationType::kMatrixProductOperator ||
+               Simulators::EvolvesExactQuantumChannels(type, method);
+    };
+    if (HasCandidateList(config))
+        return std::all_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
+                           [&](const auto &candidate) { return ensemble(candidate.first, candidate.second); });
+    return ensemble(config.simulator_type, config.simulation_type);
+}
+
 inline bool CandidateListAdmitsStabilizer(const SimulatorConfig &config)
 {
     for (const auto &[type, method] : config.optimization_candidates)
@@ -339,7 +397,32 @@ inline bool AdmitsReferenceFrames(const SimulatorConfig &config)
            (config.simulation_type == Simulators::SimulationType::kStabilizer || !config.fixed_backend);
 }
 
-// Seed zero is explicit too. Only an absent seed permits automatic policy changes.
+// ConfigureNetwork applies native counts_policy after the typed option.
+inline const std::string &EffectiveCountsPolicy(const SimulatorConfig &config)
+{
+    const auto native = config.native_options.find("counts_policy");
+    return native == config.native_options.end() ? config.counts_policy : native->second;
+}
+
+// ConfigureNetwork applies a typed seed after the native option map.
+inline std::optional<uint64_t> EffectiveSamplingSeed(const SimulatorConfig &config)
+{
+    if (config.seed)
+        return config.seed;
+    const auto native = config.native_options.find("seed");
+    if (native != config.native_options.end())
+        return std::stoull(native->second);
+    return std::nullopt;
+}
+
+// Apply a resolved policy to a per-call copy, including native configurations.
+inline void SetCountsPolicy(SimulatorConfig &config, std::string policy)
+{
+    config.native_options.erase("counts_policy");
+    config.counts_policy = std::move(policy);
+}
+
+// Seed zero is explicit too. Only an absent seed permits automatic reference frames.
 // auto never replaces a method the ordinary executor would honor. frame_v1 is an
 // explicit opt-in and may replace an automatically selected method, but an
 // explicit candidate list names every backend the request allows: frame_v1
@@ -349,9 +432,53 @@ inline bool PreferFrameCounts(const SimulatorConfig &config, std::optional<uint6
 {
     if (!AdmitsReferenceFrames(config) || config.enable_sampling_reduction)
         return false;
-    if (config.counts_policy == "frame_v1")
+    const auto &policy = EffectiveCountsPolicy(config);
+    if (policy == "frame_v1")
         return true;
-    return config.counts_policy == "auto" && AdmitsStabilizerExecution(config) && !config.seed && !noise_seed;
+    return policy == "auto" && AdmitsStabilizerExecution(config) && !config.seed && !noise_seed && !config.native_options.count("seed");
+}
+
+// The backend makes the cost-based choice once it knows the distribution.
+// The optional noise seed remains accepted by existing C++ callers.
+inline bool PreferMultinomialCounts(const SimulatorConfig &config, std::optional<uint64_t> = std::nullopt)
+{
+    if (config.native_options.count("sampling_policy"))
+        return false;
+    const auto &policy = EffectiveCountsPolicy(config);
+    if (policy == "multinomial_v1")
+        return true;
+    if (policy != "auto")
+        return false;
+    const auto supports = [](Simulators::SimulatorType backend, Simulators::SimulationType method) {
+        using Method = Simulators::SimulationType;
+        return backend == Simulators::SimulatorType::kQCSim &&
+               (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kPathIntegral ||
+                method == Method::kMatrixProductState || method == Method::kMatrixProductOperator || method == Method::kExtendedStabilizer);
+    };
+    if (!HasCandidateList(config))
+        return supports(config.simulator_type, config.simulation_type);
+    for (const auto &[backend, method] : config.optimization_candidates)
+        if (supports(backend, method))
+            return true;
+    return false;
+}
+
+// Whether noisy extended_stabilizer shots may run on batched Pauli frames
+// (ExtendedFrameSampler): the QCSim extended stabilizer itself, as a direct
+// session runs it, so not a candidate list (the network selects from it) or
+// sampling reduction (the network splits measurement cones). The frames draw
+// another random sequence than scalar trajectories, so as for frame counts
+// auto changes only unseeded requests, frame_v1 opts seeded ones in and
+// legacy keeps the scalar trajectories.
+inline bool PreferExtendedFrames(const SimulatorConfig &config, std::optional<uint64_t> noise_seed = std::nullopt)
+{
+    if (config.simulator_type != Simulators::SimulatorType::kQCSim || config.simulation_type != Simulators::SimulationType::kExtendedStabilizer ||
+        HasCandidateList(config) || config.enable_sampling_reduction)
+        return false;
+    const auto &policy = EffectiveCountsPolicy(config);
+    if (policy == "frame_v1")
+        return true;
+    return policy == "auto" && !config.seed && !noise_seed && !config.native_options.count("seed");
 }
 
 // Native Configure keys for typed options without a one-to-one key. Precision
@@ -372,9 +499,18 @@ inline std::vector<std::pair<std::string, std::string>> TypedNativeOptions(const
     return options;
 }
 
-// Helper to configure the simulation network. A nonzero allocationQubits sizes a
-// fixed CPU backend to exactly that register; zero keeps the network default,
-// which also allocates each host's network-entangled qubit.
+// Helper to configure the simulation network. The network's simulator selects
+// the backend; network execution allocates its own register (see
+// INetwork::CreateSimulator). allocationQubits says how it is used:
+//  - 0: the network executes. A fixed backend or a candidate gets a placeholder
+//    of INetwork::kBackendPlaceholderQubits qubits, never a dense register of
+//    the whole network that execution would discard. Distribution keeps the
+//    whole network's register, on which it executes.
+//  - nonzero: the caller operates on GetSimulator() itself. A fixed backend,
+//    a distributed one or the first fitting candidate gets exactly that
+//    register.
+// Automatic selection without candidates keeps the cheap default placeholder
+// either way; a caller that needs a register replaces it.
 inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long int handle, const SimulatorConfig &config, size_t allocationQubits = 0)
 {
     config.Validate();
@@ -548,27 +684,42 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
         network->Configure("path_integral_threshold", val.c_str());
     }
 
+    // A backend placeholder: the network executes on a register of its own.
+    const size_t placeholderQubits = Network::INetwork<double>::kBackendPlaceholderQubits;
+
     // Distribution must be selected before circuit mapping: its configured
     // register and MPI control flow must not depend on the CPU optimizer.
-    if (config.fixed_backend || Simulators::IsDistributedGpuSimulator(config.simulator_type))
-        network->CreateSimulator(config.simulator_type, config.simulation_type,
-                                 Simulators::IsDistributedGpuSimulator(config.simulator_type) ? 0 : allocationQubits);
+    // Network execution runs on the whole network's register; a caller that
+    // operates on the simulator itself gets exactly its own register.
+    if (Simulators::IsDistributedGpuSimulator(config.simulator_type))
+        network->CreateSimulator(config.simulator_type, config.simulation_type, allocationQubits);
+    else if (config.fixed_backend)
+        // The simulator records the fixed backend; it still validates that the
+        // backend (and its GPU device) can be created.
+        network->CreateSimulator(config.simulator_type, config.simulation_type, allocationQubits ? allocationQubits : placeholderQubits);
     else if (HasCandidateList(config))
     {
         // An explicit candidate list names every backend the request allows,
-        // one or several. Without a cost model, selection starts from the
-        // network's simulator when it is one of them: allocate the first listed
-        // candidate whose register fits (a density matrix of 40 qubits yields
-        // to a listed MPO). When none can be created, report that instead of
-        // running a placeholder outside the list. (Without a list, a GPU
-        // mixed-state request below keeps its CPU fallback.)
+        // one or several, in order. Network execution selects among them on
+        // the register it maps (INetwork::GetOptimizationCandidates): the
+        // first listed candidate whose register fits, starting from the
+        // network's simulator. So it only needs a placeholder of the first
+        // listed candidate that can be constructed; probing the declared width
+        // would reject a density matrix that holds the qubits a circuit uses.
+        // A caller that operates on the simulator itself (allocationQubits)
+        // gets the first listed candidate whose register of that width can be
+        // allocated (a density matrix of 40 qubits yields to a listed MPO).
+        // When none can be created, report that instead of running a
+        // placeholder outside the list. (Without a list, a GPU mixed-state
+        // request below keeps its CPU fallback.)
+        const size_t width = allocationQubits ? allocationQubits : placeholderQubits;
         bool created = false;
         std::exception_ptr failure;
         for (const auto &[type, method] : config.optimization_candidates)
         {
             try
             {
-                network->CreateSimulator(type, method, allocationQubits);
+                network->CreateSimulator(type, method, width);
             }
             catch (const std::exception &)
             {
@@ -608,9 +759,14 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
 // the requested pair, the sole candidate of an automatic list, or the first
 // listed candidate whose register of `qubits` qubits can be allocated, as
 // ConfigureNetwork chooses. The result is fixed to that backend. Several
-// candidates are probed by allocating them in turn.
-inline SimulatorConfig ResolveCandidateBackend(const SimulatorConfig &config, size_t qubits)
+// candidates are probed by allocating them in turn, each on a network of its
+// own: `probed` receives the handle of the one that held the register,
+// configured with the result and allocationQubits = max(1, qubits), or 0 when
+// nothing was probed. The caller owns it, and should adopt it rather than
+// allocate that register a second time.
+inline SimulatorConfig ResolveCandidateBackend(const SimulatorConfig &config, size_t qubits, unsigned long &probed)
 {
+    probed = 0;
     if (!HasCandidateList(config))
         return config;
     auto resolved = config;
@@ -643,12 +799,25 @@ inline SimulatorConfig ResolveCandidateBackend(const SimulatorConfig &config, si
         {
             failure = std::current_exception();
         }
-        DestroySimpleSimulator(handle);
         if (usable)
+        {
+            probed = handle;
             return resolved;
+        }
+        DestroySimpleSimulator(handle);
     }
     if (failure)
         std::rethrow_exception(failure);
     throw std::runtime_error("No optimization candidate can hold the register");
+}
+
+// The same, for callers whose registers differ from the probed one.
+inline SimulatorConfig ResolveCandidateBackend(const SimulatorConfig &config, size_t qubits)
+{
+    unsigned long probed = 0;
+    auto resolved = ResolveCandidateBackend(config, qubits, probed);
+    if (probed)
+        DestroySimpleSimulator(probed);
+    return resolved;
 }
 } // namespace MaestroExecution

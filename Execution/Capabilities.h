@@ -85,6 +85,8 @@ inline json::object OptionCapability(const Option &option)
         choices = &Precisions();
     else if (name == "mps_sampling")
         choices = &MpsSamplingModes();
+    else if (name == "counts_policy")
+        choices = &CountsPolicies();
     else if (name == "mps_routing_strategy")
         choices = &MpsRoutingStrategies();
     else if (name == "truncation_mode")
@@ -108,10 +110,7 @@ inline json::object OptionCapability(const Option &option)
         result["default"] = "shot_v1";
     }
     if (name == "counts_policy")
-    {
-        result["enum"] = json::array{"auto", "legacy", "frame_v1"};
         result["default"] = "auto";
-    }
     if (type == "integer" || type == "nonnegative")
         result["minimum"] = 0;
     else if (type == "positive_integer")
@@ -206,12 +205,14 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
     const json::object mixedStateQueries{{"operations", json::array{"density_matrix_overlap", "fidelity_with_statevector"}},
                                          {"supported_configurations", Configurations([](const auto &config) { return MixedStateQueryApplies(config); })},
                                          {"max_target_statevector_qubits", MaxTargetStatevectorQubits}};
-    const auto mixedConfigurations = Configurations([](const auto &config) { return Mixed(config); });
+    // Exact noise needs exact channels, not a density matrix to read back:
+    // the QCSim Pauli propagator is included.
+    const auto exactConfigurations = Configurations([](const auto &config) { return ExactNoiseApplies(config); });
     // The noise block: how realization counts resolve and what is reported.
     const json::object noise{
         {"modes", json::array{"combined", "pauli", "coherent", "analytical"}},
         {"evaluations", json::array{"auto", "exact", "trajectories"}},
-        {"exact_configurations", mixedConfigurations},
+        {"exact_configurations", exactConfigurations},
         {"realizations",
          json::object{
              {"accepts", json::array{"positive_integer", "null", "auto"}},
@@ -227,7 +228,7 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
         {"checkpoint_prefix", json::object{{"field", "prefix"},
                                            {"operations", json::array{"checkpoint_batch"}},
                                            {"requires", "deterministic exact evaluation: no coherent or correlated layers"},
-                                           {"supported_configurations", mixedConfigurations},
+                                           {"supported_configurations", exactConfigurations},
                                            {"noise_scope", json::array{"suffix_only_ideal_prefix", "prefix_and_suffix"}}}}};
     const json::object estimate{{"evaluations", json::array{"deterministic", "trajectory_average"}},
                                 {"dynamic_measurement_trajectories", kMeasurementTrajectories},
@@ -235,12 +236,14 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
                                 {"single_stochastic_realization_standard_errors", "null"}};
     const json::object noisyFidelity{{"modes", json::array{"combined", "pauli", "coherent"}},
                                      {"supported_configurations", Configurations([](const auto &) { return true; })},
-                                     {"exact_configurations", mixedConfigurations},
+                                     {"exact_configurations", exactConfigurations},
                                      {"mixed_state_evaluation", "P(0...0) after the ideal circuit's adjoint"},
                                      {"single_stochastic_realization_standard_error", "null"}};
     const json::object automaticSelection{{"candidates", "simulator.candidates with selection automatic"},
                                           {"fallback", "first listed candidate that can hold the register"},
                                           {"stabilizer_shortcut", "Clifford circuits move to a stabilizer only as a listed backend/method pair"},
+                                          {"non_clifford_stabilizer", "a listed stabilizer never runs a non-Clifford circuit"},
+                                          {"failure", "when no listed candidate runs, the first candidate's error is reported"},
                                           {"unavailable", "error; an unlisted backend never runs"},
                                           {"exact_channels", "only when every candidate applies them"}};
     return {{"schema_version", SchemaVersion},
@@ -251,7 +254,7 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
             {"estimate", estimate},
             {"noisy_fidelity", noisyFidelity},
             {"automatic_selection", automaticSelection},
-            {"sampling_strategies", json::array{"reference_frame_v1", "terminal_v1", "trajectory_v1", "mixed_v1"}},
+            {"sampling_strategies", json::array{"reference_frame_v1", "extended_frame_v1", "terminal_v1", "trajectory_v1", "mixed_v1"}},
             {"api", "maestro.native.request"},
             {"build", json::object{{"version", MAESTRO_BUILD_VERSION}, {"source_revision", MAESTRO_SOURCE_REVISION}}},
             {"capability_scope", "validation"},

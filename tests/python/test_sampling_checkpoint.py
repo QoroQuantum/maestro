@@ -1,5 +1,6 @@
 """Raw checkpoint records preserve noise streams and classical bit positions."""
 
+import warnings
 from collections import Counter
 
 import numpy as np
@@ -13,13 +14,13 @@ def _histogram(samples):
     return dict(Counter("".join(str(int(bit)) for bit in row) for row in samples))
 
 
-def _checkpoint(method, workers=1, seed=29):
+def _checkpoint(method, workers=1, seed=29, policy="auto"):
     prefix = QuantumCircuit()
     prefix.h(0)
     prefix.cx(0, 1)
     config = maestro.SimulatorConfig(
         simulation_type=method, seed=seed, max_simulators=workers,
-        max_bond_dimension=16,
+        max_bond_dimension=16, counts_policy=policy,
     )
     return maestro.PrefixCheckpointedSimulator(prefix, 2, config)
 
@@ -80,6 +81,126 @@ def test_checkpoint_raw_call_stream_advances_and_explicit_seed_replays(noisy):
     a = checkpoint.execute_suffix(_suffix(), noise_seed=7, return_samples=True, **kwargs)["samples"]
     b = checkpoint.execute_suffix(_suffix(), noise_seed=7, return_samples=True, **kwargs)["samples"]
     np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("method", [maestro.SimulationType.Statevector, maestro.SimulationType.ExtendedStabilizer])
+@pytest.mark.parametrize("checkpoint_seed,call_seed", [(0, None), (None, 0)])
+def test_seeded_checkpoint_switches_between_terminal_counts_and_ordered_rows(method, checkpoint_seed, call_seed):
+    suffix = QuantumCircuit()
+    suffix.cx(0, 1)
+    suffix.ry(0, 0.37)
+    suffix.cx(0, 1)
+    suffix.measure([(0, 0), (1, 2)])
+    shots = 4096
+
+    def sequence(policy):
+        checkpoint = _checkpoint(method, seed=checkpoint_seed, policy=policy)
+        options = dict(shots=shots, noise_seed=call_seed)
+        first = checkpoint.execute_suffix(suffix, **options)["counts"]
+        rows = checkpoint.execute_suffix(suffix, return_samples=True, **options)["samples"]
+        last = checkpoint.execute_suffix(suffix, **options)["counts"]
+        return (first, last), rows
+
+    counts, rows = sequence("auto")
+    repeat, repeat_rows = sequence("auto")
+    adaptive, adaptive_rows = sequence("multinomial_v1")
+    historical, historical_rows = sequence("legacy")
+    assert counts == repeat == adaptive
+    assert counts != historical
+    for histogram in counts:
+        assert set(histogram) == {"000", "101"}
+        assert sum(histogram.values()) == shots
+    assert (counts[0] == counts[1]) == (call_seed is not None)
+    for expected in [repeat_rows, adaptive_rows, historical_rows]:
+        np.testing.assert_array_equal(rows, expected)
+
+
+@pytest.mark.parametrize("listed", [False, True])
+def test_rejected_noisy_suffix_leaves_a_seeded_checkpoint_unchanged(listed):
+    """A thermal warning raised as an error stops the call before it runs, so it takes no per-call seed."""
+    clean = QuantumCircuit()
+    clean.h(0)
+    clean.measure_all()
+    clamped = maestro.NoiseModel()
+    clamped.set_thermal_relaxation(0, 1.0, 1.0, 2.0)  # T2 > T1: sampled relaxation clamps it and warns
+    B, S = maestro.SimulatorType, maestro.SimulationType
+    backend = (dict(optimization_candidates=[(B.QCSim, S.Statevector), (B.QCSim, S.PauliPropagator)]) if listed
+               else dict(simulation_type=S.Statevector, fixed_backend=True))
+
+    def checkpoint():
+        return maestro.PrefixCheckpointedSimulator(QuantumCircuit(), 1, maestro.SimulatorConfig(seed=7, **backend))
+
+    fresh = checkpoint()
+    first = fresh.execute_suffix(clean, shots=200)["counts"]
+    second = fresh.execute_suffix(clean, shots=200)["counts"]
+    rejected = checkpoint()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        with pytest.raises(RuntimeWarning, match="T2 clamped to T1"):
+            rejected.execute_suffix(clean, shots=200, noise_model=clamped)
+    assert rejected.execute_suffix(clean, shots=200)["counts"] == first
+    # A call that only warns runs, and its successor then has the second seed.
+    warned = checkpoint()
+    with pytest.warns(RuntimeWarning, match="T2 clamped to T1"):
+        noisy = warned.execute_suffix(clean, shots=200, noise_model=clamped)
+    assert noisy["method"] == S.Statevector and noisy["noise_evaluation"] == "trajectories"
+    assert warned.execute_suffix(clean, shots=200)["counts"] == second
+
+
+def test_pauli_propagator_prefix_noise_is_exact_or_refused():
+    """The propagator evolves a noisy prefix once for the noise it applies exactly, and says why it refuses relaxation."""
+    prefix = QuantumCircuit()
+    prefix.h(0)
+    prefix.cx(0, 1)
+    suffix = QuantumCircuit()
+    suffix.measure([(0, 0), (1, 1)])
+    config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.PauliPropagator, fixed_backend=True, seed=3)
+    pauli = maestro.NoiseModel()
+    pauli.set_all_depolarizing(2, 0.05)
+    noisy = maestro.PrefixCheckpointedSimulator(prefix, 2, config, pauli).execute_suffix(suffix, shots=600)
+    ideal = maestro.PrefixCheckpointedSimulator(prefix, 2, config).execute_suffix(suffix, shots=600)
+    assert set(ideal["counts"]) == {"00", "11"} and noisy["sampling_strategy"] == "terminal_v1"
+    assert set(noisy["counts"]) - {"00", "11"}, "the prefix noise left no trace in the saved state"
+    # Exact suffix noise needs one realization there, as on a density matrix.
+    result = maestro.PrefixCheckpointedSimulator(prefix, 2, config).execute_suffix(suffix, shots=600, noise_model=pauli)
+    assert result["noise_evaluation"] == "exact_channels" and result["noise_realizations"] == 1
+    relaxing = maestro.NoiseModel()
+    relaxing.set_t1(0, 0.1)
+    with pytest.raises(ValueError, match="Pauli propagator samples relaxation"):
+        maestro.PrefixCheckpointedSimulator(prefix, 2, config, relaxing)
+    with pytest.raises(ValueError, match="density-matrix or MPO backend or on the QCSim Pauli propagator"):
+        statevector = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Statevector, fixed_backend=True, seed=3)
+        maestro.PrefixCheckpointedSimulator(prefix, 2, statevector, pauli)
+
+
+def test_pauli_propagator_checkpoint_counts_follow_the_policy():
+    """auto samples the saved prefix once; legacy keeps the per-shot replay and its seeded readout."""
+    prefix = QuantumCircuit()
+    prefix.h(0)
+    prefix.cx(0, 1)
+    suffix = QuantumCircuit()
+    suffix.ry(1, 0.4)
+    suffix.measure_all()
+    readout = maestro.NoiseModel()
+    readout.set_readout_error(0, 0.1, 0.05)
+
+    def run(policy, model=None, rows=False):
+        config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.PauliPropagator, fixed_backend=True, max_simulators=1,
+                                         seed=29, counts_policy=policy)
+        checkpoint = maestro.PrefixCheckpointedSimulator(prefix, 2, config)
+        return checkpoint.execute_suffix(suffix, shots=600, noise_model=model, return_samples=rows)
+
+    for model in (None, readout):
+        strategies = {}
+        for policy in ("auto", "legacy"):
+            result = run(policy, model)
+            strategies[policy] = result["sampling_strategy"]
+            assert sum(result["counts"].values()) == 600
+            assert result["counts"] == run(policy, model)["counts"]
+        assert strategies == {"auto": "terminal_v1", "legacy": "trajectory_v1"}
+    # Ordered rows keep their shot order under legacy as well.
+    assert run("legacy", rows=True)["sampling_strategy"] == "trajectory_v1"
+    assert run("auto", rows=True)["sampling_strategy"] == "terminal_v1"
 
 
 def test_raw_checkpoint_readout_precedes_classical_control():

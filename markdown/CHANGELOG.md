@@ -18,6 +18,215 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Out-of-range values raise `ValueError` when the config is built or a field is
   set, using the same limits as native requests.
 
+- The QCSim `pauli_propagator` evaluates noise channels exactly in one
+  execution. It applies the adjoint of each channel to the observable it
+  propagates, so expectation values, probabilities and samples describe the
+  noisy ensemble without trajectories. Pauli-type noise (Pauli, depolarizing,
+  dephasing, phase damping, correlated phase flips) now resolves to one exact
+  realization there instead of 64 or 100 sampled ones. Generalized amplitude
+  damping, Kraus channels and circuit `kraus`/`pauli_channel` instructions,
+  previously rejected on this method, are accepted. `noisy_fidelity` requests
+  run on it up to 24 qubits, and a deterministic noisy checkpoint prefix
+  (`prefix_noise_model`, `noise.prefix`) is evolved once on it.
+  `noise.exact_configurations` in the capabilities lists it.
+
+### Changed
+
+- An unrecorded reset on the QCSim `pauli_propagator` is a deterministic
+  channel: it draws no random number and inserts no projector. Circuits with
+  mid-circuit resets no longer replay per shot or average measurement
+  trajectories there, and seeded runs that contain a reset give different
+  (still valid) samples than before.
+- T1, thermal or idle relaxation that acts on the circuit keeps sampled
+  realizations on the `pauli_propagator` under automatic evaluation, since
+  exact relaxation without a truncation threshold fills the operator space of
+  the observable's light cone. `evaluation: "exact"` (requests) or
+  `NoiseAdd::set_exact_channels(true)` applies it exactly, with the calibrated
+  T2. Relaxation is judged by the channel it applies: a zero T1 probability,
+  relaxation towards equal populations (`excited_population` 0.5) and
+  relaxation on qubits the circuit never gates or delays are exact. A circuit
+  `kraus` instruction beside relaxation makes the whole request exact.
+- `checkpoint_batch` and `PrefixCheckpointedSimulator` suffixes on the QCSim
+  `pauli_propagator` sample terminal measurements from the saved prefix
+  instead of replaying every shot. Under `counts_policy` `auto`, seeded counts
+  with readout error and seeded raw rows therefore differ from earlier
+  releases (both remain valid samples). `legacy` keeps the per-shot replay and
+  its seeded results.
+- `amplitudes`, `statevector`, `inner_product` and `mirror_fidelity` (without
+  observables) requests on `pauli_propagator` are rejected when the request is
+  validated, with `unsupported_capability`, instead of failing in the backend.
+- `noise.approximations` lists `Pauli_truncation` when a `pauli_propagator`
+  request runs with a positive `pp_coefficient_threshold` or a
+  `pp_max_pauli_weight` below the register.
+- `noisy_execute` and `full_noise_execute` keep `counts_policy="auto"` for
+  shared-realization count batches when the request may run `CompositeQCSim`
+  (fixed, or in a candidate list), so its components sample them adaptively,
+  as native requests already did. Only a realization that could itself take
+  reference frames (unseeded, Clifford, with the QCSim stabilizer listed)
+  keeps the per-shot sampler. Seeded `auto` histograms of such runs change;
+  `legacy` reproduces the earlier ones.
+- The help of the noisy execute functions, the Qiskit migration guide and the
+  errors for channels that cannot be sampled name the QCSim `pauli_propagator`
+  beside density matrix and MPO.
+
+### Fixed
+
+- Count-only checkpoint suffixes no longer build a permutation of all shots
+  (8 bytes per shot), whatever the counts policy. With deterministic readout
+  they add each occupied outcome once; with readout errors they add the shots
+  one at a time, drawing the errors in the same order as before, so seeded
+  counts are unchanged.
+- `noisy_fidelity` and `PrefixCheckpointedSimulator.execute_suffix` decide the
+  "T2 clamped to T1" warning from the backend a candidate list resolves to.
+  A list such as density matrix then statevector ran exact channels and warned
+  all the same, which failed the call under `warnings.simplefilter("error")`.
+  `noisy_fidelity` with a candidate list, which it resolves inside the call,
+  now warns after the run; every other call still warns before it.
+
+## [0.3.14] - 2026-11-10
+
+### Added
+
+- Fast noisy sampling, shot rows and parallel realizations (`Execution/ReferenceFrameSampler`,
+  `Execution/SampleRecords`, `Execution/NoisyEstimation`, `Execution/PrefixCheckpoint`,
+  `Utils/Threads/RealizationWorkers`):
+  - Reference-frame (Pauli-frame) sampler for noisy Clifford circuits, used for
+    counts under `counts_policy` (`auto`, `legacy`, `frame_v1`), for shot rows,
+    and as a reusable compiled sampler (`compile_reference_sampler` /
+    `ReferenceFrameSampler` in Python and `MaestroCreateReferenceFrameSampler`
+    in the C ABI). Pauli-mixture Kraus channels such as phase damping compile to
+    frames.
+  - Shot rows (`return_samples=True` in Python, `execution.return_samples` in the
+    native JSON API, and `MaestroRunRequestSamples` in the C ABI) returning
+    per-shot classical bit matrices.
+  - Direct trajectory sessions, a precompiled `NoiseInjectionPlan`, and parallel
+    realization workers sharing `trajectory_max_memory_mb`; seeded results do
+    not depend on the worker count.
+- Batched Pauli-frame sampling for noisy QCSim `extended_stabilizer` circuits
+  (`ExtendedFrameBatch`, `ExtendedFrameSampler`, `extended_frame_v1`), exposed
+  through `ExecuteNoisy`, `PrefixCheckpoint`, native `execute` and
+  `checkpoint_batch`, `compile_reference_sampler`, and `maestro.sinter`.
+- Adaptive multinomial terminal count sampling (`Utils/Sampling/Multinomial.h`,
+  `counts_policy="multinomial_v1"`, and automatic unseeded selection under
+  `counts_policy="auto"`), drawing terminal histograms directly from outcome
+  probabilities via sequential binomial splits with rare-outcome grouping on
+  QCSim statevectors, density matrices, path integrals, 1-qubit MPS/MPO
+  marginals and up to 8-bit extended-stabilizer marginals.
+- Automatic realization policy (`Execution/NoisePolicy.h`) and prepared-state
+  reuse (`Execution/TerminalSampling.h`):
+  - Omitted `noise_realizations` (`None` in Python; omitted, `null` or `"auto"`
+    in JSON) resolves to 1 realization when exact density-matrix or MPO channels
+    make evolution deterministic, and 64 (counts) or 100 (estimates and
+    fidelity) otherwise.
+  - Terminal measurements on mixed-state backends and eligible QCSim
+    statevector, stabilizer and MPS runs sample one prepared state per
+    realization (`terminal_v1` / `mixed_v1`), including checkpoint suffixes and
+    exact prefix noise (`prefix_noise_model` / `noise.prefix`).
+  - `SimulatorConfig.optimization_candidates` bound in Python.
+- `INetwork::CaptureSimulatorSettings()` copies the settings made directly on
+  the network's simulator into the network, for code that re-creates the
+  simulator. Composer's parallel scheduler calls it, so a setting made only on
+  the simulator (a bond cap) holds for every scheduled run, not just the
+  first.
+
+### Changed
+
+- A network's simulator is documented and treated as a backend template
+  (`INetwork::CreateSimulator`). Executions size their own register.
+  `kBackendPlaceholderQubits` (2) is the width to create a backend that only
+  selects execution, and configured backends are created at that width.
+- Without a cost model, a configured candidate list decides automatic
+  selection. The network simulator's backend runs first when it is listed,
+  then the others in the order they were added, on the register the circuit
+  maps to. A simulator outside a configured list never runs. The list a
+  network starts with is not configured, so its simulator still decides.
+  `GetOptimizationCandidates()` returns the configured list. Either way, and
+  with or without a seed, a Clifford circuit may move to a stabilizer backend
+  the list admits (QCSim's or Aer's for the default list); this is now
+  documented.
+
+### Fixed
+
+- An exception thrown by a network's shot worker (a stabilizer meeting a T
+  gate) terminated the process. `Utils::ThreadsPool` now keeps the first one,
+  skips the jobs still queued and rethrows it from `WaitForFinish()`, so
+  Python raises `RuntimeError` and a native request returns `native_failure`.
+  A native request for a fixed `stabilizer` method whose circuit has a
+  non-Clifford gate, after the network's optimizer (`T;T` runs as `S`), is
+  rejected before any shot runs with `unsupported_capability`. Estimates and
+  disjoint sampling, which run only the gates in their cones, keep the
+  simulator's own error.
+- Candidate lists were tested at the declared width. One active qubit of a
+  40-qubit circuit now runs on a listed density matrix. A requested MPO with a
+  lone density-matrix candidate no longer fails with a size overflow.
+- `incremental_evolve` drives, and reports, the backend a candidate list
+  resolves to, not the requested pair.
+- Automatic GPU requests accept an explicit `gpu_device`, and their metadata
+  reports the device that ran.
+- Executing a network without a simulator no longer creates one. A failed run
+  restores the network's state and keeps its simulator.
+- Clones, and the noise helpers that run on them, keep settings made directly
+  on the network's simulator. Execution clones no longer copy a large register,
+  and noisy-run worker budgets count only the registers that stay allocated.
+- `noise::NoiseAdd::last_execution()` reports the backend a noisy run used
+  (Composer binds it as `NoiseAdd.last_execution()`). It reports nothing for
+  a run that executed no network: zero shots, or observables that planning
+  resolved.
+- With a cost model, a configured candidate list still runs one of its own
+  candidates when the model cannot rank the list, chooses nothing, or picks a
+  candidate that cannot be created, allocate the register or run the start of
+  the circuit (a statevector at 70 qubits falls back to a listed MPO).
+- A network simulator created as a stabilizer no longer makes the cost model
+  rank stabilizer backends for a non-Clifford circuit.
+- A configured list whose candidates cannot run reports the first failure, in
+  any order. Before, with QuEST not loaded, `[density matrix, QuEST]` (when the
+  density matrix could not hold the register) and `[stabilizer, QuEST]` (for a
+  non-Clifford circuit) ran the network's own simulator, outside the list.
+- A zero-shot `RepeatedExecute` or `RepeatedExecuteOnHost` runs nothing and
+  leaves the network's simulator, with its register and state, as it was. It
+  reset them before.
+- `Schedulers::ExecuteJob` keeps what its host network threw (`error`) instead
+  of terminating the worker thread, so a scheduler can report it.
+- A network that has a scheduler is freed when its last reference goes. The
+  scheduler, which the network owns through its controller, held the network
+  strongly, so neither was ever destroyed. `IScheduler` now holds it weakly, and
+  `GetNetwork()` returns null once the network is gone.
+- Selection never runs a listed stabilizer for a non-Clifford circuit: it
+  counts as a failed candidate, after the others. When it is the only reason
+  a list cannot run, the error is a runtime error, like the stabilizer's own
+  rejection of a non-Clifford gate (Python `RuntimeError`, request API
+  `native_failure`). The capabilities' `automatic_selection` states this rule
+  and the first-failure rule. NetQASM and discrete-event
+  networks, which do not run the circuit's start while selecting, installed it
+  and failed only in the shots, reporting that error instead of the first
+  candidate's. Selection also moves on when a candidate cannot run the start of
+  the circuit, as it does when one cannot allocate the register.
+- A run that throws leaves the network's simulator with the backend and
+  creation width it had. NetQASM and discrete-event networks kept the backend
+  selection had installed (a retry with automatic selection off then ran on
+  it), and a simple network kept a cleared register. A simulator the failed run
+  did not touch stays as it is, and an MPI distributed one is re-created only
+  when the run left none, since that is collective across ranks.
+- Seeded or exact-channel noise turns off the cost model on its execution
+  clones (`SetCostModelEnabled`) instead of pinning one backend, so a listed
+  candidate that fits (an MPO or MPS where a density matrix cannot) still
+  runs.
+- Noisy fidelity tests candidates on the register it evaluates: a terminal
+  measurement on an otherwise unused qubit no longer rejects a listed density
+  matrix. Its backend probe no longer outlives the first realization.
+- Realization workers are sized for the largest register a candidate list
+  may need, for the crosstalk spectators injection adds, and on networks that
+  run on their whole layout. Noisy expectation values (`NoiseAdd` and
+  `EstimateNoisy`) also count the idle qubits an observable names, which the
+  host executor allocates.
+- A whole-network `Execute()` on a NetQASM or discrete-event network under
+  automatic selection starts from |0>, as on a simple network: only fixed
+  selection continues a prepared state.
+- Removing a network option keeps the settings made directly on its
+  simulator.
+- Distributed request metadata describes the placement of the register that
+  ran.
+
 ## [0.3.13] - 2026-11-05
 
 ### Added
@@ -673,7 +882,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pre-commit hooks with clang-format code formatting
 - `CITATION.cff`, `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `INSTALL.md`
 
-[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.13...HEAD
+[Unreleased]: https://github.com/QoroQuantum/maestro/compare/v0.3.14...HEAD
+[0.3.14]: https://github.com/QoroQuantum/maestro/compare/v0.3.13...v0.3.14
 [0.3.13]: https://github.com/QoroQuantum/maestro/compare/v0.3.12...v0.3.13
 [0.3.12]: https://github.com/QoroQuantum/maestro/compare/v0.3.11...v0.3.12
 [0.3.11]: https://github.com/QoroQuantum/maestro/compare/v0.3.10...v0.3.11

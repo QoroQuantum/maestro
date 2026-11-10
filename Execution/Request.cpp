@@ -1,5 +1,6 @@
 // Versioned native computational API. No Python types or runtime are used.
 #include "Request.h"
+#include "ExtendedFrameSampler.h"
 
 #include "AdjointDifferentiation.h"
 #include "Capabilities.h"
@@ -13,6 +14,7 @@
 #include "maestrolib/Json.h"
 #include "qasm/QasmCirc.h"
 #include "Json/NoiseJson.h"
+#include <algorithm>
 #include <chrono>
 #include <climits>
 #include <complex>
@@ -342,25 +344,40 @@ struct Context
         handle = maestro->CreateSimpleSimulator(circuit.qubits, circuit.clbits);
         try
         {
-            // A single-host network reserves an internal entanglement qubit.
-            // Direct queries describe only the declared logical register; bulk
-            // readers and bit-vector queries must not include that unused ancilla.
-            // Allocate that register from the start: the ancilla would double a
-            // statevector and quadruple a density matrix, and might not fit.
-            const bool exactWidth = exactRegister || config.simulation_type == Simulators::SimulationType::kMatrixProductOperator;
+            // exactRegister: the caller drives the simulator itself. A single-host
+            // network reserves an internal entanglement qubit, which direct
+            // queries must not include; allocate exactly the declared register
+            // from the start (the ancilla would double a statevector and
+            // quadruple a density matrix, and might not fit). Otherwise the
+            // network executes on its own register and its simulator only
+            // selects the backend. A fixed bond-1 MPO costs nothing at full
+            // width, and single-worker execution then reuses it. Automatic
+            // selection prepares its own register, whatever the requested
+            // method: a candidate list may not even hold the declared width.
+            const bool exactWidth =
+                exactRegister || (config.fixed_backend && config.simulation_type == Simulators::SimulationType::kMatrixProductOperator);
             network = ConfigureNetwork(handle, config, exactWidth ? circuit.qubits : 0);
             if (!network || !network->GetSimulator())
                 throw Error("backend_unavailable", "Requested backend could not be created");
             // Automatic selection's placeholder may still differ; replace it.
+            // Copy its backend first: a pointer alive across the call would keep
+            // the old register allocated next to the new one.
             if (exactWidth && network->GetSimulator()->GetNumberOfQubits() != circuit.qubits)
-                network->CreateSimulator(network->GetSimulator()->GetType(), network->GetSimulator()->GetSimulationType(), circuit.qubits);
+            {
+                const auto type = network->GetSimulator()->GetType();
+                const auto method = network->GetSimulator()->GetSimulationType();
+                network->CreateSimulator(type, method, circuit.qubits);
+            }
             if (config.fixed_backend &&
                 (network->GetSimulator()->GetType() != config.simulator_type || network->GetSimulator()->GetSimulationType() != config.simulation_type))
                 throw Error("backend_unavailable", "Requested fixed backend/method is unavailable; fallback "
                                                    "is disabled");
             // Distributed placement is validated during backend initialization;
             // MPI and multi-device states report -1 instead of one GPU ordinal.
-            if (!Simulators::IsDistributedGpuSimulator(config.simulator_type) && config.native_options.count("gpu_device") &&
+            // Only a fixed backend runs on this simulator: automatic selection
+            // creates its GPU backend on the configured device itself (or fails),
+            // and Metadata checks the device that ran.
+            if (config.fixed_backend && !Simulators::IsDistributedGpuSimulator(config.simulator_type) && config.native_options.count("gpu_device") &&
                 network->GetSimulator()->GetGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
                 throw Error("backend_unavailable", "Requested GPU device was not selected");
         }
@@ -465,14 +482,50 @@ void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, con
         }
         if (op->GetType() != Circuits::OperationType::kQuantumChannel)
             continue;
-        if (Mixed(config) && !sampled)
+        if (ExactNoiseApplies(config) && !sampled)
             continue;
         const auto channel = std::static_pointer_cast<Circuits::QuantumChannelOperation<>>(op);
         Supported(!channel->GetChannel().GetPauliProbabilities().empty(),
-                  "Explicit Kraus instructions require density_matrix or MPO with exact evaluation; only Pauli channels can be sampled");
+                  "Explicit Kraus instructions require density_matrix, MPO or the qcsim pauli_propagator, with exact evaluation; only Pauli "
+                  "channels can be sampled");
         Supported(sampled, "Pauli channel instructions on pure-state backends require a noise block with trajectory evaluation; "
                            "set noise.realizations to the shot count for independent draws");
     }
+}
+
+// Channels are left to CheckChannels: a pure-state backend admits only sampled
+// Pauli channels, which run as Pauli gates.
+bool RunsOnStabilizer(const std::shared_ptr<Circuits::IOperation<>> &op)
+{
+    if (op->GetType() == Circuits::OperationType::kQuantumChannel)
+        return true;
+    if (op->GetType() == Circuits::OperationType::kComposite)
+    {
+        const auto &operations = std::static_pointer_cast<Circuit>(op)->GetOperations();
+        return std::all_of(operations.begin(), operations.end(), RunsOnStabilizer);
+    }
+    return op->IsClifford();
+}
+
+// A fixed stabilizer applies Clifford gates only; another gate would fail while
+// the shots run. Check the circuit as it runs: the network optimizes a copy
+// first unless optimize_circuit is off (T;T becomes S), while direct
+// operations apply the circuit as given.
+void CheckStabilizerGates(const CircuitPtr &circuit, const SimulatorConfig &config, bool networkExecuted)
+{
+    if (!config.fixed_backend || config.simulation_type != Simulators::SimulationType::kStabilizer)
+        return;
+    auto executed = circuit;
+    if (networkExecuted && config.optimize_circuit)
+    {
+        // Optimize replaces operations and never enters nested circuits, so a
+        // new container leaves the request's circuit unchanged.
+        executed = std::make_shared<Circuit>(circuit->GetOperations());
+        executed->Optimize();
+    }
+    const auto &operations = executed->GetOperations();
+    Supported(std::all_of(operations.begin(), operations.end(), RunsOnStabilizer),
+              "The stabilizer method supports only Clifford gates; the circuit has a non-Clifford gate");
 }
 
 using Counts = std::map<std::string, uint64_t>;
@@ -596,14 +649,30 @@ json::object Metadata(Context &context, const SimulatorConfig &config, bool exec
                                          {"enabled", executed ? context.network->WasGateFusionEnabled() : simulator->IsGateFusionEnabled()},
                                          {"max_qubits", executed ? context.network->GetLastGateFusionMaxQubits() : simulator->GetGateFusionMaxQubits()}};
     result["configured_options"] = std::move(options);
-    if (Simulators::IsGpuSimulator(simulator->GetType()))
+    // After an execution the simulator is the restored backend placeholder,
+    // which may not even be a GPU one: report the device that ran.
+    if (executed)
+    {
+        const auto ran = context.network->GetLastSimulatorType();
+        const int device = context.network->GetLastGpuDevice();
+        if (ran == Simulators::SimulatorType::kGpuSim && config.native_options.count("gpu_device") &&
+            device != std::stoi(config.native_options.at("gpu_device")))
+            throw Error("backend_unavailable", "Requested GPU device was not selected");
+        if (Simulators::IsGpuSimulator(ran))
+            result["gpu_device"] = device;
+    }
+    else if (Simulators::IsGpuSimulator(simulator->GetType()))
         result["gpu_device"] = simulator->GetGpuDevice();
     if (Simulators::IsDistributedGpuSimulator(simulator->GetType()))
     {
         json::object placement;
-        for (const char *key :
-             {"distributed_shard_devices", "distributed_configured_global_qubits", "distributed_qubit_layout", "distributed_backend", "precision"})
-            placement[key] = simulator->GetConfiguration(key);
+        for (const char *key : Network::INetwork<double>::kDistributedPlacementKeys)
+        {
+            // After an execution, where the register that ran was placed: the
+            // network's re-created simulator may have another width.
+            const auto executedValue = executed ? context.network->GetLastDistributedPlacement(key) : std::optional<std::string>();
+            placement[key] = executedValue ? *executedValue : simulator->GetConfiguration(key);
+        }
         result["distribution"] = std::move(placement);
     }
     return result;
@@ -894,6 +963,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     if (const auto *devices = distribution.if_contains("devices"))
         Require(Array(*devices).size() < (uint64_t{1} << input.qubits), "Distribution requires at least one local qubit");
     auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits);
+    // Automatic evaluation follows the circuit too. A checkpoint's noise acts
+    // on its suffixes, which are parsed further down and settle it there.
+    if (operation != "checkpoint_batch")
+        RefineAutomaticEvaluation(noise, config, input.qubits, {input.circuit.get()});
     const auto limit = UInt(request, "max_output_elements", 65536);
     Require(limit > 0 && limit <= 1048576, "max_output_elements must be in [1,1048576]");
     Require(!request.contains("outputs"), "Use operation-specific queries instead of outputs");
@@ -906,8 +979,17 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     };
     rejectReadout(input.circuit);
     if (AdjointOperation(operation))
+    {
+        RefineThermalApproximation(noise, {input.circuit.get()});
         return RunAdjoint(request, operation, config, input, noise, validate, limit);
+    }
     CheckChannels(input.circuit, config, noise);
+    // Estimates and disjoint sampling run only the gates inside the
+    // observables' or measurements' cones, so a non-Clifford gate outside them
+    // never reaches the stabilizer; the simulator's own error covers the rest.
+    const bool checkStabilizer = operation != "validate" && operation != "estimate" && !(operation == "execute" && config.enable_sampling_reduction);
+    if (checkStabilizer)
+        CheckStabilizerGates(input.circuit, config, operation == "execute");
     const auto observables = Observables(request, input.qubits);
     if (operation == "estimate" || operation == "incremental_evolve")
         Require(!observables.empty(), "This operation requires observables");
@@ -923,8 +1005,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                        ? input.circuit->RemoveEndMeasurements()
                        : Unmeasured(input.circuit, operation == "inner_product" || operation == "mirror_fidelity" || operation == "noisy_fidelity");
     const bool stochastic_estimation = operation == "estimate" && HasStochasticEvolution(circuit, UsesExactQuantumChannels(config));
-    if (noise.enabled)
-    {
+    // Runs again if a checkpoint's suffixes change the automatic evaluation.
+    const auto resolveNoisePolicy = [&] {
         const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
         const bool estimator = operation == "estimate" || operation == "noisy_fidelity";
         noise.policy =
@@ -939,7 +1021,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         // stochastic_execution reports that, but it is no approximation.
         if (stochastic_estimation)
             AddApproximation(noise, "finite_measurement_trajectories");
-    }
+    };
+    if (noise.enabled)
+        resolveNoisePolicy();
     std::vector<ParsedCircuit> additional;
     if (operation == "inner_product" || operation == "density_matrix_overlap")
     {
@@ -987,6 +1071,14 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             if (noise.enabled)
                 ValidateNoisyCircuit(additional.back().circuit);
         }
+        // The noise acts on the suffixes, and on the prefix with noise.prefix.
+        NoisyCircuits noisyCircuits;
+        if (noise.prefix)
+            noisyCircuits.push_back(input.circuit.get());
+        for (const auto &suffix : additional)
+            noisyCircuits.push_back(suffix.circuit.get());
+        if (RefineAutomaticEvaluation(noise, config, input.qubits, noisyCircuits))
+            resolveNoisePolicy();
         if (noise.enabled && noise.prefix)
         {
             // The saved prefix evolves once, so noise applied to it must be
@@ -994,8 +1086,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
             const auto prefixPolicy = ResolveNoiseRealizations(std::nullopt, noise.model, config, layer, 64, circuit, false, noise.exact);
             Supported(noise.exact && !prefixPolicy.stochastic_noise,
-                      "noise.prefix requires deterministic exact evaluation: density_matrix or matrix_product_operator without coherent or "
-                      "correlated noise");
+                      "noise.prefix requires deterministic exact evaluation: density_matrix, matrix_product_operator or the qcsim "
+                      "pauli_propagator, without coherent or correlated noise; relaxation on the pauli_propagator needs evaluation \"exact\"");
         }
         if (noise.enabled)
         {
@@ -1009,10 +1101,22 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 AddApproximation(noise, "finite_noise_realizations");
         }
     }
+    {
+        // The circuits the model's noise acts on: checkpoint suffixes (and the
+        // prefix with noise.prefix), or the request's circuits.
+        std::vector<const Circuits::Circuit<double> *> noisy;
+        if (operation != "checkpoint_batch" || noise.prefix)
+            noisy.push_back(input.circuit.get());
+        for (const auto &other : additional)
+            noisy.push_back(other.circuit.get());
+        RefineThermalApproximation(noise, noisy);
+    }
     bool circuitChannels = HasChannels(input.circuit);
     for (const auto &other : additional)
     {
         CheckChannels(other.circuit, config, noise);
+        if (checkStabilizer)
+            CheckStabilizerGates(other.circuit, config, false);
         circuitChannels = circuitChannels || HasChannels(other.circuit);
     }
     Require(!noise.enabled || noise.channel_count > 0 || circuitChannels,
@@ -1023,7 +1127,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // state, which mixed-state backends provide; it needs no pure-state overlap.
     const bool mirrorObservables = operation == "mirror_fidelity" && !observables.empty();
     if (amplitudes || operation == "inner_product" || (operation == "mirror_fidelity" && !mirrorObservables))
+    {
         Supported(!Mixed(config), "A mixed state has no unique statevector or pure-state overlap");
+        // It propagates an observable, with or without noise: it can return
+        // probabilities and expectation values, but it never holds a state.
+        Supported(config.simulation_type != Simulators::SimulationType::kPauliPropagator,
+                  "pauli_propagator holds no amplitudes; request probabilities, state_probability or expectation values");
+    }
     if (MixedStateQuery(operation))
         Supported(MixedStateQueryApplies(config), operation + " requires the qcsim or gpu backend with density_matrix or matrix_product_operator");
     Supported(!noise.enabled || operation == "execute" || operation == "estimate" ||
@@ -1036,6 +1146,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // (as Python noisy_fidelity). Analytical damping is rejected above.
     if (operation == "noisy_fidelity")
         Supported(noise.enabled, "Noisy fidelity requires a noise block");
+    // The propagator has no amplitudes: it reads the fidelity as P(0...0),
+    // through one projector per qubit, and each projector doubles its terms.
+    if (operation == "noisy_fidelity" && config.simulator_type == Simulators::SimulatorType::kQCSim &&
+        config.simulation_type == Simulators::SimulationType::kPauliPropagator)
+        Supported(input.qubits <= Adjoint::kMaxProbabilityQubits, "noisy_fidelity on pauli_propagator supports at most " +
+                                                                      std::to_string(Adjoint::kMaxProbabilityQubits) +
+                                                                      " qubits: its cost doubles with every qubit");
     json::array basis;
     if (amplitudes || operation == "probabilities")
         basis = Basis(request, input.qubits, limit);
@@ -1257,6 +1374,16 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // Resolve an omitted seed only after validation. MPI execution obtains one
     // shared random seed, while validation needs neither entropy nor collectives.
     const bool prefer_frame_counts = PreferFrameCounts(config);
+    // Extended-stabilizer frames, decided the same way: an unseeded auto
+    // request opts in before it receives the seed that replays it.
+    const bool prefer_extended_frames = PreferExtendedFrames(config);
+    // Frames are tried per suffix. Pin the ordinary fallback now, so that a
+    // checkpoint with no frame-compatible suffix can replay with its returned
+    // seed. If any suffix uses frames, metadata records frame_v1 for the mix.
+    if (operation == "checkpoint_batch" && config.counts_policy == "auto" && prefer_extended_frames && noise.enabled)
+        config.counts_policy = "legacy";
+    else if (((operation == "execute" && !return_samples) || operation == "checkpoint_batch") && shots > 1 && PreferMultinomialCounts(config))
+        config.counts_policy = "multinomial_v1";
     if (!config.seed)
     {
         config.seed = Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options);
@@ -1274,7 +1401,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             options.layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
             options.rows = true;
             options.exact_channels = noise.exact;
-            records = ExecuteNoisy(circuit, noise.model, config, shots, noise.realizations, noise.seed, options);
+            auto frame_config = config;
+            if (prefer_extended_frames)
+                frame_config.counts_policy = "frame_v1";
+            records = ExecuteNoisy(circuit, noise.model, frame_config, shots, noise.realizations, noise.seed, options);
         }
         else
             records = SampleCircuitRows(circuit, config, shots);
@@ -1313,6 +1443,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         executed.gate_fusion_max_qubits = records.gate_fusion_max_qubits;
         auto metadata = ReductionMetadata(executed, config);
         metadata["sampling_strategy"] = records.sampling_strategy;
+        // Replaying the returned seed also requires the resolved policy.
+        if (records.sampling_strategy == "extended_frame_v1")
+            metadata["configured_options"].as_object()["counts_policy"] = "frame_v1";
         result["shots"] = shots;
         result["sampling_components"] = records.components;
         result["largest_component_qubits"] = records.largest_component;
@@ -1328,8 +1461,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
         return result;
     }
+    // Exact channels would keep a calibrated T2 that the trajectories clamp to
+    // T1 (thermal_T2_clamped_to_T1), so that window keeps the trajectories.
     if (operation == "execute" && prefer_frame_counts && (!noise.enabled || noise.realizations >= shots) && noise.mode != "coherent" &&
-        noise.model.inject_noise_covers_model())
+        noise.model.inject_noise_covers_model() && !(noise.enabled && noise.model.has_thermal_in_sampled_overdephasing_regime_on(*circuit)))
     {
         auto channels = noise::inject_exact_noise(circuit, noise.model);
         noise::attach_readout_error(channels, noise.model);
@@ -1338,9 +1473,11 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             // This path returns before the ordinary executor's warning below.
             if (!noise.thermal_approximation_warning.empty())
                 std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
-            const auto seed = noise.enabled ? Simulators::IState::DeriveSeed(*config.seed, noise.seed) : *config.seed;
+            // The noise seed drives channel errors and the request seed the
+            // measurements and readout, as on the trajectory path.
+            const ReferenceFrameSampler::Seeds seeds{noise.enabled ? uint64_t(noise.seed) : *config.seed, *config.seed};
             Counts counts;
-            for (const auto &[bits, count] : plan->SampleCounts(shots, seed))
+            for (const auto &[bits, count] : plan->SampleCounts(shots, seeds))
                 counts[Bits(bits, input.clbits)] += count;
             SamplingResult frame;
             frame.simulator = Simulators::SimulatorType::kQCSim;
@@ -1366,6 +1503,50 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                                 {"basis_order", "qubit_0_least_significant"}};
             if (noise.enabled)
                 result["noise"] = NoiseMetadata(noise, std::min(shots, noise.realizations));
+            Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
+            return result;
+        }
+    }
+    // Noisy extended_stabilizer counts on batched frames, under the realization
+    // schedule: shots of one realization share its errors. Exact channels ask
+    // for the channel itself and keep the ordinary executor, as do circuits
+    // and noise the frames cannot represent.
+    if (operation == "execute" && prefer_extended_frames && noise.enabled && !noise.exact && (noise.mode == "pauli" || noise.mode == "combined"))
+    {
+        const size_t realizations = std::min(shots, noise.realizations);
+        std::vector<uint8_t> unused;
+        FrameOutcomes outcomes;
+        if (SampleExtendedFrames(circuit, noise.model, config, input.qubits, input.clbits, shots, realizations, noise.seed, *config.seed, false, unused,
+                                 outcomes))
+        {
+            if (!noise.thermal_approximation_warning.empty())
+                std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
+            Counts counts;
+            for (const auto &[bits, count] : outcomes)
+                counts[Bits(bits, input.clbits)] += count;
+            SamplingResult frame;
+            frame.simulator = Simulators::SimulatorType::kQCSim;
+            frame.method = Simulators::SimulationType::kExtendedStabilizer;
+            frame.components = 1;
+            frame.largest_component = input.qubits;
+            auto metadata = ReductionMetadata(frame, config);
+            metadata["sampling_strategy"] = "extended_frame_v1";
+            // Replaying the returned seed also requires the resolved policy.
+            metadata["configured_options"].as_object()["counts_policy"] = "frame_v1";
+            json::object result{{"schema_version", SchemaVersion},
+                                {"operation", operation},
+                                {"num_qubits", input.qubits},
+                                {"num_clbits", input.clbits},
+                                {"counts", EncodeCounts(counts)},
+                                {"shots", shots},
+                                {"sampling_components", 1},
+                                {"largest_component_qubits", input.qubits},
+                                {"seed", *config.seed},
+                                {"execution_metadata", std::move(metadata)},
+                                {"time_taken", std::chrono::duration<double>(Clock::now() - start).count()},
+                                {"count_order", "classical_bit_0_first"},
+                                {"basis_order", "qubit_0_least_significant"}};
+            result["noise"] = NoiseMetadata(noise, realizations);
             Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
             return result;
         }
@@ -1490,20 +1671,29 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         Require(json::serialize(result).size() <= MaxResultBytes, "Result exceeds native result limit");
         return result;
     }
-    // Mixed-state queries compare whole registers, so no network ancilla may be
-    // added. Checkpoints save and restore the register on every shot, so an
-    // unused ancilla would double statevector and quadruple density-matrix work.
-    Context context(input, config, query || MixedStateQuery(operation) || operation == "checkpoint_batch" || operation == "noisy_fidelity");
+    // Only execute and estimate run on the network, which allocates its own
+    // register; the network simulator is then just a backend placeholder.
+    // Every other operation drives the simulator directly and needs exactly the
+    // declared register: mixed-state queries compare whole registers, and the
+    // network's entanglement ancilla would double statevector and quadruple
+    // density-matrix work (checkpoints, overlaps, mirrors, evolution).
+    const bool networkExecuted = operation == "execute" || operation == "estimate";
+    Context context(input, config, !networkExecuted);
     // Execution metadata describes the network that ran last (parallel execute).
     Context *metadata_context = &context;
     std::vector<std::unique_ptr<Context>> metadata_contexts;
-    auto simulator = context.simulator();
+    // Only direct operations drive the simulator. Holding it through network
+    // executions would keep the register the first realization grew alive
+    // after the network installs its placeholder again.
+    auto simulator = networkExecuted ? nullptr : context.simulator();
     // Validation remains silent; warn once per execution, not per realization.
     if (!noise.thermal_approximation_warning.empty())
         std::cerr << "Warning: " << noise.thermal_approximation_warning << '\n';
     std::mt19937 rng(noise.seed);
     const noise::NoiseInjectionPlan plan(circuit, noise.model);
     json::object result{{"schema_version", SchemaVersion}, {"operation", operation}, {"num_qubits", input.qubits}, {"num_clbits", input.clbits}};
+    // Whether a checkpoint_batch suffix ran on extended-stabilizer frames.
+    bool frame_suffixes = false;
     // As in the non-distributed estimate, a dynamic estimate without sampled
     // noise still averages measurement branches.
     size_t realizations = noise.enabled && noise.mode != "analytical" ? noise.realizations : stochastic_estimation ? kMeasurementTrajectories : 1;
@@ -1517,10 +1707,15 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         // without changing seeded counts. Realizations with several shots keep
         // the shared network: their inner shot workers set seeded partitions.
         size_t workers = 1;
-        if (realizations > 1 && realizations == shots && config.simulator_type == Simulators::SimulatorType::kQCSim)
-            if (const long double bytes = RealizationBytes(config, input.qubits + 1); bytes > 0)
+        if (realizations > 1 && realizations == shots && RunsOnlyQCSim(config))
+        {
+            // Each worker's network maps the circuit to its own register (at most
+            // the declared qubits; the network's ancilla is never allocated),
+            // for whichever backend selection runs.
+            if (const long double bytes = MaxRealizationBytes(config, input.qubits); bytes > 0)
                 workers = Utils::LimitRealizationWorkersByMemory(Utils::RealizationWorkerCount(realizations, config.max_simulators.value_or(0)),
                                                                  static_cast<size_t>(bytes), RealizationBudgetMB(config), 1, 2);
+        }
         if (workers <= 1)
             for (size_t r = 0; r < realizations; ++r)
             {
@@ -1786,6 +1981,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         const bool reuse_heads = HeadCopyFits(config, input.qubits);
         const uint64_t head_streams = Simulators::IState::DeriveSeed(*config.seed, 0x6865616473ULL);
         uint64_t head_stream = 0;
+        // Noisy suffixes after an ideal gate-only prefix may run on frames.
+        const bool frame_prefix = prefer_extended_frames && noise.enabled && !noise.exact && !noise.prefix &&
+                                  (noise.mode == "pauli" || noise.mode == "combined") && IsGateOnlyCircuit(*circuit);
+        bool extended_suffixes = false;
         for (const auto &suffix : additional)
         {
             // A suffix continues the saved prefix, so even a leading pure-state
@@ -1796,6 +1995,39 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             Counts counts;
             size_t terminal_batches = 0, trajectory_batches = 0;
             const size_t samples = std::min(realizations, shots);
+            // Extended-stabilizer frames evolve a gate-only prefix once and the
+            // noisy suffix for a batch of shots at a time; the realization
+            // schedule is the same.
+            if (frame_prefix)
+            {
+                std::vector<uint8_t> unused;
+                FrameOutcomes outcomes;
+                // Each suffix has its own noise and measurement streams.
+                const uint64_t noise_stream = Simulators::IState::DeriveSeed(noise.seed, outputs.size());
+                const uint64_t measurement_stream = Simulators::IState::DeriveSeed(*config.seed, outputs.size());
+                if (SampleExtendedFrames(suffix.circuit, noise.model, config, input.qubits, input.clbits, shots, samples, noise_stream, measurement_stream,
+                                         false, unused, outcomes, circuit))
+                {
+                    for (const auto &[bits, count] : outcomes)
+                        counts[Bits(bits, input.clbits)] += count;
+                    outputs.emplace_back(json::object{{"counts", EncodeCounts(counts)},
+                                                      {"shots", shots},
+                                                      {"sampling_strategy", "extended_frame_v1"},
+                                                      {"stochastic_execution", stochastic_suffix},
+                                                      {"realizations", samples}});
+                    extended_suffixes = true;
+                    continue;
+                }
+            }
+            // A checkpoint returns counts only, so occupied outcomes are added
+            // whole whenever readout is deterministic, whatever sampler drew
+            // them: expanding them into shots first would only cost memory.
+            const TerminalCountSink writeCounts = [&](size_t count, const Circuits::OperationState &state) {
+                counts[Bits(state.GetAllBits(), input.clbits)] += count;
+            };
+            const bool multinomial =
+                samples < shots && config.counts_policy == "multinomial_v1" && simulator->IsQcsim() && !simulator->GetConfigMap().count("sampling_policy");
+            const bool legacy = EffectiveCountsPolicy(config) == "legacy";
             for (size_t r = 0; r < samples; ++r)
             {
                 const auto noisy = Inject(suffixPlan, noise, rng);
@@ -1804,10 +2036,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 simulator->SetGatesCounter(0);
                 simulator->SetUpcomingGates(noisy->GetOperations());
                 Circuits::OperationState terminal_state(input.clbits);
-                if (repetitions > 1 && PreservesSavedStateWhileSampling(*simulator) &&
+                if (repetitions > 1 && PreservesSavedStateWhileSampling(*simulator, multinomial, legacy) &&
                     SamplePreparedTerminal(
                         *noisy, simulator, repetitions, terminal_state, Simulators::IState::DeriveSeed(*config.seed, r),
-                        [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond))
+                        [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond, false, writeCounts))
                 {
                     ++terminal_batches;
                     continue;
@@ -1840,6 +2072,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         result["results"] = std::move(outputs);
         if (noise.enabled)
             result["noise_scope"] = noise.prefix ? "prefix_and_suffix" : "suffix_only_ideal_prefix";
+        frame_suffixes = extended_suffixes;
     }
     else
     {
@@ -1867,8 +2100,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             }
             // A mixed state's fidelity to U|0> is P(0...0) after U^dagger. Exact
             // channels need no projection; a pure state's overlap is reported too.
+            // The Pauli propagator has no amplitudes: it reads P(0...0) as well,
+            // for the ensemble of exact channels and for a sampled trajectory.
             double fidelity = 0;
-            if (operation == "noisy_fidelity" && Mixed(config))
+            if (operation == "noisy_fidelity" && simulator->SupportsQuantumChannels())
                 fidelity = simulator->Probability(0);
             else
             {
@@ -1894,6 +2129,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         }
     }
     result["execution_metadata"] = Metadata(*metadata_context, config, operation == "execute" || operation == "estimate");
+    // Replaying the returned seed also requires the resolved policy.
+    if (frame_suffixes)
+        if (auto *options = result["execution_metadata"].as_object().if_contains("configured_options"); options && options->is_object())
+            options->as_object()["counts_policy"] = "frame_v1";
     if (operation == "estimate")
     {
         // Distributed estimates report their evaluation like the local path.
@@ -2064,10 +2303,56 @@ boost::json::object RunSamples(const boost::json::object &request, unsigned long
     return result;
 }
 
-// A noisy Clifford circuit compiled once to reference frames: "circuit", and
-// optionally "simulator" and "noise" (incoherent Pauli-mixture channels) as in
-// an execute request.
-std::unique_ptr<MaestroExecution::ReferenceFrameSampler> CompileFrameSampler(const boost::json::object &request)
+// The compiled sampler behind the C handle: reference frames on the QCSim
+// stabilizer, or batched extended-stabilizer frames on extended_stabilizer.
+// Both draw independent noise per shot. Sampling is const and concurrent
+// calls are safe.
+struct FrameSamplerHandle
+{
+    std::optional<MaestroExecution::ReferenceFrameSampler> reference;
+    std::optional<MaestroExecution::ExtendedFrameSampler> extended;
+    size_t workers = 16;
+    size_t budgetMB = 1024;
+
+    size_t Qubits() const
+    {
+        return reference ? reference->Qubits() : extended->Qubits();
+    }
+
+    size_t Width() const
+    {
+        return reference ? reference->Width() : extended->Width();
+    }
+
+    std::vector<uint8_t> Sample(size_t shots, uint64_t seed) const
+    {
+        if (reference)
+            return reference->Sample(shots, seed);
+        std::vector<uint8_t> rows;
+        MaestroExecution::FrameOutcomes unused;
+        // The soft budget of execute: a shot that alone exceeds it runs by
+        // itself beyond it rather than failing the call by its outcomes.
+        extended->SampleWithin(shots, shots, {seed, seed}, true, workers, budgetMB, rows, unused, true);
+        return rows;
+    }
+
+    MaestroExecution::FrameOutcomes SampleCounts(size_t shots, uint64_t seed) const
+    {
+        if (reference)
+            return reference->SampleCounts(shots, seed);
+        std::vector<uint8_t> unused;
+        MaestroExecution::FrameOutcomes counts;
+        extended->SampleWithin(shots, shots, {seed, seed}, false, workers, budgetMB, unused, counts, true);
+        return counts;
+    }
+};
+
+// A noisy circuit compiled once to frames: "circuit", and optionally
+// "simulator" and "noise" (incoherent Pauli-mixture channels) as in an
+// execute request. The QCSim stabilizer (the default) compiles Clifford
+// circuits to reference frames; the QCSim extended_stabilizer compiles its
+// whole gate set to batched extended-stabilizer frames.
+std::unique_ptr<FrameSamplerHandle> CompileFrameSampler(const boost::json::object &request)
 {
     using namespace MaestroExecution;
     Keys(request, {"schema_version", "circuit", "simulator", "noise"});
@@ -2086,6 +2371,22 @@ std::unique_ptr<MaestroExecution::ReferenceFrameSampler> CompileFrameSampler(con
     const auto config = ParseConfig(Sub(execute, "simulator"));
     const auto input = ParseCircuit(Object(Field(request, "circuit")));
     const auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits);
+    auto handle = std::make_unique<FrameSamplerHandle>();
+    if (config.simulator_type == Simulators::SimulatorType::kQCSim && config.simulation_type == Simulators::SimulationType::kExtendedStabilizer &&
+        !HasCandidateList(config) && !config.enable_sampling_reduction)
+    {
+        Supported(!noise.enabled || noise.mode == "pauli" || noise.mode == "combined", "Extended frames apply pauli or combined noise only");
+        Supported(noise.model.inject_noise_covers_model(), "Extended frames cannot represent coherent, correlated or crosstalk noise");
+        auto channels = noise::inject_exact_noise(input.circuit, noise.model);
+        noise::attach_readout_error(channels, noise.model);
+        auto plan = CompileExtendedFrameSampler(channels, input.qubits, input.clbits);
+        Supported(plan.has_value(), "Extended frames do not apply: they need measurements, extended_stabilizer gates and Pauli-mixture channels, "
+                                    "without classical control");
+        handle->extended = std::move(*plan);
+        handle->workers = config.max_simulators.value_or(0);
+        handle->budgetMB = RealizationBudgetMB(config);
+        return handle;
+    }
     Supported(AdmitsReferenceFrames(config),
               "Reference frames require the qcsim stabilizer: a stabilizer method, or automatic selection whose candidates include it");
     Supported(!noise.enabled || noise.mode == "pauli" || noise.mode == "combined", "Reference frames apply pauli or combined noise only");
@@ -2095,7 +2396,8 @@ std::unique_ptr<MaestroExecution::ReferenceFrameSampler> CompileFrameSampler(con
     auto plan = CompileReferenceSampler(channels, input.qubits, input.clbits);
     Supported(plan.has_value(), "Reference frames do not apply: they need measurements, Clifford gates and Pauli-mixture channels, "
                                 "without classical control");
-    return std::make_unique<ReferenceFrameSampler>(std::move(*plan));
+    handle->reference = std::move(*plan);
+    return handle;
 }
 } // namespace
 
@@ -2120,7 +2422,7 @@ extern "C"
     {
         if (error)
             *error = nullptr;
-        std::unique_ptr<MaestroExecution::ReferenceFrameSampler> created;
+        std::unique_ptr<FrameSamplerHandle> created;
         char *envelope = NativeBoundary([&] {
             created = CompileFrameSampler(ParseRequest(request));
             return boost::json::object{{"num_qubits", created->Qubits()}, {"num_clbits", created->Width()}};
@@ -2139,14 +2441,14 @@ extern "C"
 
     void MaestroDestroyReferenceFrameSampler(void *sampler)
     {
-        delete static_cast<MaestroExecution::ReferenceFrameSampler *>(sampler);
+        delete static_cast<FrameSamplerHandle *>(sampler);
     }
 
     int MaestroReferenceFrameSamplerShape(void *sampler, size_t *qubits, size_t *clbits)
     {
         if (!sampler || !qubits || !clbits)
             return 0;
-        const auto &plan = *static_cast<const MaestroExecution::ReferenceFrameSampler *>(sampler);
+        const auto &plan = *static_cast<const FrameSamplerHandle *>(sampler);
         *qubits = plan.Qubits();
         *clbits = plan.Width();
         return 1;
@@ -2158,7 +2460,7 @@ extern "C"
             return 0;
         try
         {
-            const auto &plan = *static_cast<const MaestroExecution::ReferenceFrameSampler *>(sampler);
+            const auto &plan = *static_cast<const FrameSamplerHandle *>(sampler);
             if (!shots)
                 return 1;
             if (!rows || capacity < PackedWords(shots, plan.Width()))
@@ -2181,7 +2483,7 @@ extern "C"
         try
         {
             *written = 0;
-            const auto &plan = *static_cast<const MaestroExecution::ReferenceFrameSampler *>(sampler);
+            const auto &plan = *static_cast<const FrameSamplerHandle *>(sampler);
             if (!shots)
                 return 1;
             const size_t words = RowWords(plan.Width());

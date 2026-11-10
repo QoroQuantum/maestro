@@ -119,9 +119,9 @@ Aer's primitives unchanged. Maestro may run a circuit on a faster engine than
 the one you asked for, such as a Clifford circuit on the stabilizer engine;
 results are unaffected, and each result's metadata records what ran.
 
-How MPS expectation values compare with Aer's on 100+ qubits is on the
-{ref}`benchmarks page <bench-mps-estimator>`: 6 to 7.5 times faster for a VQE
-energy evaluation.
+How MPS expectation values compare with Aer's is on the
+{ref}`benchmarks page <bench-mps-estimator>`: 5.5 times faster for a VQE energy
+evaluation at 50 qubits, rising to 17 times at 1,000.
 
 ## Time evolution
 
@@ -157,7 +157,8 @@ print(evolution.result()[0].data.evs.round(4))
 
 `PauliEvolutionGate` circuits synthesised with `LieTrotter(reps=k)` are
 recognised too. On the benchmarks page, measuring every step this way is 4.9
-times faster than Aer at 120 qubits and 7 times faster at 200. Incremental
+times faster than Aer at 100 qubits and 7.3 times faster at 200, and
+`run_evolution` is 38 and 58 times faster. Incremental
 evolution isn't used for PUBs with arrays of parameter values or for circuits
 that reset qubits, and `incremental_evolution=False` turns it off.
 
@@ -448,7 +449,7 @@ bit order, weighted observables, primitives, registers and `if_test` for you.
   p/3 each for X, Y and Z. Aer's `depolarizing_error(λ, 1)` corresponds to
   `p = 3λ/4`.
 - **Noise sampling in `noisy_execute`.** Aer draws noise for every shot.
-  `noisy_execute` draws `noise_realizations` noise samples (automatic: one for deterministic DM/MPO channels, otherwise 64) and
+  `noisy_execute` draws `noise_realizations` noise samples (automatic: one for deterministic exact channels, on density matrix, MPO, and the QCSim Pauli propagator for the noise it applies exactly by default; otherwise 64) and
   splits the shots among them, so counts vary more between runs unless you set
   `noise_realizations=shots`.
 - **No primitives or `save_*` instructions.** Call `execute`, `estimate` or

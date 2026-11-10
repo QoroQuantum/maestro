@@ -722,17 +722,20 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
             return {};
         Utils::Sampling::ValidateQubits(qubits, nrQubits, Many);
         const size_t states = densityMatrix->getNrBasisStates();
-        std::vector<size_t> selected, positions;
+        // Marginal bit position of each register qubit: one entry per register
+        // qubit, however many times the request repeats it.
+        std::vector<size_t> selected;
+        std::vector<uint8_t> position(nrQubits, 0);
         for (const auto q : qubits)
-        {
-            const auto found = std::find(selected.begin(), selected.end(), q);
-            positions.push_back(static_cast<size_t>(found - selected.begin()));
-            if (found == selected.end())
+            if (std::find(selected.begin(), selected.end(), q) == selected.end())
+            {
+                position[q] = static_cast<uint8_t>(selected.size());
                 selected.push_back(q);
-        }
+            }
         const bool marginal = selected.size() < nrQubits && selected.size() <= 12 && shots >= std::max<size_t>(256, states / 16);
         const size_t outcomes = marginal ? size_t{1} << selected.size() : states;
         auto options = SamplingOptions();
+        options.multinomialCounts = AllowMultinomialCounts();
         if (outcomes > (options.memoryBytes - 4096) / sizeof(double))
             throw std::length_error("Density sampling snapshot exceeds the scratch budget");
         options.memoryBytes -= outcomes * sizeof(double);
@@ -761,7 +764,7 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
         const Utils::Sampling::Prepared plan(
             outcomes, shots, [&](size_t row) { return probabilities[row]; }, options);
         auto result = Utils::Sampling::Count<Many>(
-            plan, shots, qubits.size(), [&](size_t row, size_t bit) { return ((row >> (marginal ? positions[bit] : qubits[bit])) & 1) != 0; },
+            plan, shots, qubits.size(), [&](size_t row, size_t bit) { return ((row >> (marginal ? position[qubits[bit]] : qubits[bit])) & 1) != 0; },
             [&] { return densityMatrix->SamplingUniform(); });
         NotifyObservers(qubits);
         return result;

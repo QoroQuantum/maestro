@@ -1,84 +1,135 @@
 # Maestro
 
 [![Build and test](https://github.com/QoroQuantum/maestro/actions/workflows/cmake-multi-platform.yml/badge.svg)](https://github.com/QoroQuantum/maestro/actions/workflows/cmake-multi-platform.yml)
+[![PyPI](https://img.shields.io/pypi/v/qoro-maestro)](https://pypi.org/project/qoro-maestro/)
+[![Python](https://img.shields.io/pypi/pyversions/qoro-maestro)](https://pypi.org/project/qoro-maestro/)
+[![Docs](https://img.shields.io/badge/docs-qoroquantum.github.io-blue)](https://qoroquantum.github.io/maestro/)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-green)](./LICENSE)
 
-A unified interface for quantum circuit simulation, from your laptop to GPU workstations and MPI clusters. Build circuits in Python, import Qiskit circuits or OpenQASM 2.0, and run them through a common simulation API. Maestro also provides C/C++ interfaces and a native JSON request API.
+**One API for simulating quantum circuits with any method: statevector, MPS, stabilizer, Pauli propagation, density matrix and more. Runs on a laptop CPU, NVIDIA GPUs, or an MPI cluster.**
 
-## What Maestro Can Do
-
-- **Simulate ideal and noisy circuits** — sample measurement outcomes, access states and probabilities, and run circuits with mid-circuit measurements, resets, and classical control.
-- **Choose the right simulation method** — statevector, density matrix, matrix product state (MPS), matrix product operator (MPO), tensor network, stabilizer, extended stabilizer, Pauli propagation, and path integral. Select a backend explicitly or use Maestro's prediction-based backend selection in network execution.
-- **Accelerate on GPUs and clusters** — use NVIDIA GPU backends, distribute a statevector across local GPUs, or scale across nodes with MPI.
-- **Model hardware noise** — Pauli and coherent errors, T1/T2 relaxation, crosstalk, readout errors, and time-correlated noise, with Monte Carlo execution and exact channel evolution on supported density-matrix and MPO backends.
-- **Study algorithms and error correction** — compute Pauli expectation values, inner products, and mirror fidelity; use Stim/Sinter integration for quantum error correction sampling.
-- **Tune performance** — gate fusion, optimized shot sampling, MPS/MPO swap routing, configurable tensor truncation, and parallel execution.
-
-## Quick Start
-
-Requires Python 3.10 or newer. Pre-built wheels are available for Linux, macOS, and Windows.
+Write a circuit once, then change one config field to switch from a 30-qubit statevector to a 100-qubit matrix product state, or from CPU to GPU. Already using Qiskit or PennyLane? Change one import and keep your code.
 
 ```bash
 pip install qoro-maestro
 ```
 
+## Quick start
+
 ```python
+import maestro
 from maestro.circuits import QuantumCircuit
 
 qc = QuantumCircuit()
 qc.h(0)
 qc.cx(0, 1)
-qc.measure([(0, 0), (1, 1)])
+qc.measure_all()
 
-result = qc.execute(shots=1024)
-print(result["counts"])  # Approximately {"00": 512, "11": 512}
+result = qc.execute(shots=1000)
+print(result["counts"])  # about {"00": 500, "11": 500}
 ```
 
-The default is CPU statevector simulation. Reuse the same circuit with a different backend by passing a `maestro.SimulatorConfig` to `execute()`.
-
-For source builds and the C++ library, see the [installation guide](https://qoroquantum.github.io/maestro/cpp/da/d03/md_markdown_2INSTALL.html).
-
-## CPU, GPU, and Distributed Execution
-
-| Execution | Supported methods |
-|-----------|-------------------|
-| CPU (QCSim; optional Qiskit Aer integration) | Statevector, density matrix, MPS, MPO, tensor network, stabilizer, extended stabilizer, Pauli propagation, path integral; availability varies by backend |
-| NVIDIA GPU | Statevector, density matrix, MPS, MPO, tensor network, Pauli propagation, using CUDA and NVIDIA cuQuantum libraries |
-| Local multi-GPU | Statevector distributed across GPUs within one node (`DistributedGpu`) |
-| MPI + GPU | Statevector distributed across MPI ranks and GPUs on one or multiple nodes (`DistributedMpiGpu`) |
-
-Maestro also supports p-block composite simulation and an optional QuEST statevector backend.
-
-With the GPU plugin installed, select a single GPU using:
+The default is a CPU statevector. To run the same circuit with another method, pass a `SimulatorConfig`:
 
 ```python
-import maestro
+config = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.MatrixProductState)
+result = qc.execute(shots=1000, config=config)
+```
 
+Requires Python 3.10+. Pre-built wheels are available for Linux, macOS and Windows.
+
+## Already using Qiskit or PennyLane?
+
+**Qiskit:** [`qiskit-maestro`](https://github.com/QoroQuantum/qiskit-maestro) provides a backend, Sampler and Estimator you can use in place of Aer:
+
+```bash
+pip install qiskit-maestro
+```
+
+```python
+from qiskit_maestro import MaestroBackend, MaestroSampler, MaestroEstimator
+
+backend = MaestroBackend()      # was AerSimulator()
+sampler = MaestroSampler()      # was StatevectorSampler()
+estimator = MaestroEstimator()  # was StatevectorEstimator()
+```
+
+On 120–200 qubit MPS workloads, `MaestroEstimator` is up to [7× faster than Aer's `EstimatorV2`](https://qoroquantum.github.io/maestro/benchmarks.html).
+
+**PennyLane:** [`pennylane-maestro`](https://github.com/QoroQuantum/pennylane-maestro) adds a Maestro device, including adjoint gradients for variational algorithms:
+
+```bash
+pip install pennylane-maestro
+```
+
+```python
+import pennylane as qml
+
+dev = qml.device("maestro.qubit", wires=2)  # was "default.qubit"
+```
+
+Maestro can also load OpenQASM 2.0 programs directly.
+
+## Features
+
+- **Many simulation methods behind one API:** statevector, density matrix, matrix product state (MPS), matrix product operator (MPO), tensor network, stabilizer, extended stabilizer, Pauli propagation and path integral. See [Choosing a simulation method](https://qoroquantum.github.io/maestro/user-guide/choosing-a-method.html) for which method suits which circuits.
+- **GPU and cluster scaling:** NVIDIA GPU backends built on cuQuantum, a statevector split across the GPUs in one node, or across nodes with MPI.
+- **Realistic noise:** Pauli and coherent errors, T1/T2 relaxation, crosstalk, readout errors and time-correlated noise. Noise runs as Monte Carlo trajectories, or as exact channels on density-matrix and MPO backends.
+- **Beyond sampling:** expectation values of Pauli observables, statevectors and probabilities, mid-circuit measurement with classical control, and [Stim/Sinter integration](https://qoroquantum.github.io/maestro/user-guide/qec-sinter.html) for error-correction studies.
+- **C/C++ and JSON interfaces:** link `libmaestro` directly, or send batch jobs through the [native JSON request API](docs/native-request-api.md). Neither needs Python.
+
+## Running on GPUs
+
+The pip package runs on the CPU. GPU backends come from a separate plugin, which you can access in three ways:
+
+- **Qoro cloud:** run on our GPUs with free starter credits.
+- **Free academic licence:** run the plugin on your own hardware.
+- **Enterprise site licence:** run it on your organization's infrastructure.
+
+See [Get GPU access](https://qoroquantum.github.io/maestro/getting-started/gpu-access.html) for details. Once the plugin is installed, select the GPU in the config:
+
+```python
 config = maestro.SimulatorConfig(
     simulator_type=maestro.SimulatorType.Gpu,
     simulation_type=maestro.SimulationType.Statevector,
-    gpu_device=0,
 )
-result = qc.execute(shots=1024, config=config)
+result = qc.execute(shots=1000, config=config)
 ```
 
-For larger statevectors, `DistributedGpu` spreads the state across local GPU memory. `DistributedMpiGpu` extends this to MPI clusters, allowing simulations beyond a single GPU's memory capacity. Both distributed backends currently support **statevector simulation only**.
+| Backend | Methods |
+|---|---|
+| `QCSim` (CPU, default) | All methods listed above |
+| `Gpu` | Statevector, density matrix, MPS, MPO, tensor network, Pauli propagation |
+| `DistributedGpu` | Statevector split across the GPUs in one node (Linux) |
+| `DistributedMpiGpu` | Statevector split across MPI ranks and nodes (Linux, CUDA-aware MPI) |
 
-GPU execution requires the corresponding acceleration plugin and compatible NVIDIA hardware and CUDA libraries. Distributed GPU plugins are Linux-only; MPI execution additionally requires CUDA-aware MPI. Run the same program on every rank, with matching simulation calls, using a launcher such as `mpirun`. See [Get GPU access](https://qoroquantum.github.io/maestro/getting-started/gpu-access.html) for plugin setup and licensing, and [Scaling: multi-GPU and MPI](https://qoroquantum.github.io/maestro/user-guide/scaling.html) for device selection and a complete MPI example.
+Optional Qiskit Aer and QuEST backends are also available. See [Scaling: multi-GPU and MPI](https://qoroquantum.github.io/maestro/user-guide/scaling.html) for a complete MPI example.
+
+## Related projects
+
+| Repository | What it is | Install |
+|---|---|---|
+| [qiskit-maestro](https://github.com/QoroQuantum/qiskit-maestro) | Qiskit provider: `MaestroBackend`, `MaestroSampler` and `MaestroEstimator` | `pip install qiskit-maestro` |
+| [pennylane-maestro](https://github.com/QoroQuantum/pennylane-maestro) | PennyLane device `maestro.qubit`, with adjoint gradients | `pip install pennylane-maestro` |
+| [maestro-demos](https://github.com/QoroQuantum/maestro-demos) | Example simulations written with Maestro | — |
 
 ## Documentation
 
-Browse the [Maestro documentation](https://qoroquantum.github.io/maestro/).
+Full documentation: **[qoroquantum.github.io/maestro](https://qoroquantum.github.io/maestro/)**
 
-- [Install and run your first circuit](https://qoroquantum.github.io/maestro/getting-started/first-circuit.html) · [Get GPU access](https://qoroquantum.github.io/maestro/getting-started/gpu-access.html) · [Coming from Qiskit Aer](https://qoroquantum.github.io/maestro/getting-started/coming-from-qiskit.html) · [PennyLane](https://qoroquantum.github.io/maestro/getting-started/pennylane.html)
-- [Building circuits](https://qoroquantum.github.io/maestro/user-guide/building-circuits.html) · [Choosing a simulation method](https://qoroquantum.github.io/maestro/user-guide/choosing-a-method.html) · [Sampling and shots](https://qoroquantum.github.io/maestro/user-guide/sampling-and-shots.html)
-- [Expectation values](https://qoroquantum.github.io/maestro/user-guide/expectation-values.html) · [Noise and error correction](https://qoroquantum.github.io/maestro/user-guide/noise-and-qec.html) · [QEC with Stim/Sinter](https://qoroquantum.github.io/maestro/user-guide/qec-sinter.html)
-- [Scaling: multi-GPU and MPI](https://qoroquantum.github.io/maestro/user-guide/scaling.html) · [Python API reference](https://qoroquantum.github.io/maestro/api/index.html)
-- [Source builds](https://qoroquantum.github.io/maestro/cpp/da/d03/md_markdown_2INSTALL.html) · [C++ tutorial](https://qoroquantum.github.io/maestro/cpp/da/d03/md_markdown_2TUTORIAL.html) · [C++ API reference](https://qoroquantum.github.io/maestro/cpp/annotated.html)
-- [Examples](https://github.com/QoroQuantum/maestro-demos) · [Release notes](https://qoroquantum.github.io/maestro/cpp/da/d02/md_markdown_2CHANGELOG.html)
+| | |
+|---|---|
+| **Get started** | [First circuit](https://qoroquantum.github.io/maestro/getting-started/first-circuit.html) · [Coming from Qiskit Aer](https://qoroquantum.github.io/maestro/getting-started/coming-from-qiskit.html) · [PennyLane](https://qoroquantum.github.io/maestro/getting-started/pennylane.html) · [GPU access](https://qoroquantum.github.io/maestro/getting-started/gpu-access.html) |
+| **Guides** | [Building circuits](https://qoroquantum.github.io/maestro/user-guide/building-circuits.html) · [Choosing a method](https://qoroquantum.github.io/maestro/user-guide/choosing-a-method.html) · [Sampling and shots](https://qoroquantum.github.io/maestro/user-guide/sampling-and-shots.html) · [Expectation values](https://qoroquantum.github.io/maestro/user-guide/expectation-values.html) · [Noise and QEC](https://qoroquantum.github.io/maestro/user-guide/noise-and-qec.html) · [Scaling](https://qoroquantum.github.io/maestro/user-guide/scaling.html) |
+| **Reference** | [Python API](https://qoroquantum.github.io/maestro/api/index.html) · [C++ API](https://qoroquantum.github.io/maestro/cpp/annotated.html) · [Native JSON API](docs/native-request-api.md) · [Benchmarks](https://qoroquantum.github.io/maestro/benchmarks.html) |
+| **C++ and source builds** | [Install from source](markdown/INSTALL.md) · [C++ tutorial](markdown/TUTORIAL.md) |
+| **More** | [Examples](https://github.com/QoroQuantum/maestro-demos) · [Changelog](markdown/CHANGELOG.md) · [Contributing](markdown/CONTRIBUTING.md) |
 
 ## Citation
 
-```latex
+If you use Maestro in your research, please cite:
+
+```bibtex
 @article{bertomeu2025maestro,
   title={Maestro: Intelligent Execution for Quantum Circuit Simulation},
   author={Bertomeu, Oriol and Ghayas, Hamzah and Roman, Adrian and DiAdamo, Stephen},
@@ -89,4 +140,4 @@ Browse the [Maestro documentation](https://qoroquantum.github.io/maestro/).
 
 ## License
 
-GPL-3.0 — see [LICENSE](./LICENSE) or <https://www.gnu.org/licenses/gpl-3.0.en.html>.
+Maestro is licensed under [GPL-3.0](./LICENSE). The GPU plugin is licensed separately; see [Get GPU access](https://qoroquantum.github.io/maestro/getting-started/gpu-access.html).

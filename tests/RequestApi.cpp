@@ -21,6 +21,8 @@ void TestPauliPropagatorDedupDefault();
 void TestPauliTuningForwarding();
 void TestAutomaticGpuMixedStateFallback();
 void TestFixedBackendShotReuse();
+void TestNetworkSimulatorPlaceholders();
+void TestCandidateWorkerBudget();
 void TestMixedStateExecution();
 void TestNativeExtensions(const j::object &capabilities);
 
@@ -157,9 +159,8 @@ void TestFrameCountRequests()
         Check(total == 80 && result.at("shots").to_number<uint64_t>() == 80, "Native Bell counts lost shots");
     }
 
-    // Either explicit seed source, including zero, must keep automatic counts
-    // on the previous stream. The public noise seed also seeds measurements
-    // when no simulator seed was supplied.
+    // Either explicit seed source, including zero, keeps a Stabilizer request
+    // off the automatic frame path. The noise seed also seeds measurements.
     for (const bool simulatorSeed : {false, true})
     {
         auto seeded = noisy;
@@ -175,6 +176,27 @@ void TestFrameCountRequests()
         Check(seededAutomatic.at("counts") == oldCounts.at("counts"), "Native noisy seed zero changed the legacy histogram");
         const auto *strategy = seededAutomatic.at("execution_metadata").as_object().if_contains("sampling_strategy");
         Check(!strategy || *strategy != "reference_frame_v1", "Explicit native seed zero incorrectly selected automatic frames");
+    }
+
+    auto terminal = noisy;
+    terminal["simulator"].as_object()["method"] = "statevector";
+    terminal["execution"].as_object()["shots"] = 512;
+    terminal["noise"].as_object()["realizations"] = 1;
+    terminal["noise"].as_object()["seed"] = 0;
+    auto &options = terminal["simulator"].as_object()["options"].as_object();
+    const auto automaticCounts = Call(terminal);
+    Check(automaticCounts.at("seed").to_number<uint64_t>() == 0 &&
+              automaticCounts.at("execution_metadata").at("configured_options").at("counts_policy") == "multinomial_v1",
+          "A noise-only seed disabled automatic terminal counts");
+    options["counts_policy"] = "multinomial_v1";
+    Check(Call(terminal).at("counts") == automaticCounts.at("counts"), "Noise-seeded automatic counts did not replay");
+    terminal["execution"].as_object()["return_samples"] = true;
+    options["counts_policy"] = "legacy";
+    const auto legacyRows = Call(terminal).at("samples");
+    for (const char *policy : {"auto", "multinomial_v1"})
+    {
+        options["counts_policy"] = policy;
+        Check(Call(terminal).at("samples") == legacyRows, "A count policy changed the ordered noise-seeded rows");
     }
 }
 
@@ -422,7 +444,12 @@ void TestNativeRandomSeeds()
             Check(first.at("noise").at("seed").to_number<uint32_t>() == static_cast<uint32_t>(first.at("seed").to_number<uint64_t>()),
                   "Default noise seed did not follow the generated execution seed");
         request["execution"].as_object()["seed"] = first.at("seed");
-        Check(Call(request).at("counts") == first.at("counts"), "Returned random seed cannot reproduce native sampling/readout");
+        request["simulator"].as_object()["options"] = j::object{{"counts_policy", first.at("execution_metadata").at("configured_options").at("counts_policy")}};
+        Check(Call(request).at("counts") == first.at("counts"), "Returned seed and resolved policy cannot reproduce native sampling/readout");
+        // This fixed statevector request resolves to the same adaptive policy
+        // with a returned seed as it did with the generated one.
+        request["simulator"].as_object().erase("options");
+        Check(Call(request).at("counts") == first.at("counts"), "The generated seed did not replay native automatic terminal counts");
         for (uint64_t seed : {uint64_t{0}, UINT64_MAX})
         {
             request["execution"].as_object()["seed"] = seed;
@@ -511,11 +538,78 @@ void TestFusionMetadata()
           "backend");
 }
 
+// Without a cost model the first listed candidate whose register holds the
+// circuit as execution maps it runs: one active qubit of a 40-qubit
+// declaration fits a density matrix. The requested method never sizes the
+// register automatic selection prepares, so a requested MPO with a lone
+// density-matrix candidate runs too.
+void TestCandidateWidthRequests()
+{
+    auto request = Request("execute", 40, "x q[0]; measure q[0] -> c[0];");
+    auto &simulator = request["simulator"].as_object();
+    simulator["selection"] = "automatic";
+    simulator["candidates"] =
+        j::array{j::object{{"backend", "qcsim"}, {"method", "density_matrix"}}, j::object{{"backend", "qcsim"}, {"method", "matrix_product_operator"}}};
+    Check(Call(request).at("execution_metadata").at("method") == "density_matrix", "A candidate was tested at the declared width, not the mapped one");
+    simulator["method"] = "matrix_product_operator";
+    simulator["candidates"] = j::array{j::object{{"backend", "qcsim"}, {"method", "density_matrix"}}};
+    const auto lone = Call(request);
+    Check(lone.at("execution_metadata").at("method") == "density_matrix" && lone.at("counts").as_object().size() == 1,
+          "The requested MPO method sized a density-matrix candidate at the declared width");
+}
+
+void TestStabilizerNonClifford()
+{
+    // A fixed stabilizer met the T gate on a shot worker, which terminated the
+    // process. Validation rejects it instead, before any shot runs.
+    const auto rejected = [](j::object request, const char *message) {
+        Check(Call(request, false, true).at("error").at("code") == "unsupported_capability", message);
+        Check(Call(request, false).at("error").at("code") == "unsupported_capability", message);
+    };
+    for (size_t shots : {1, 10, 1000})
+        for (bool seeded : {false, true})
+        {
+            auto request = Request("execute", 1, "h q[0]; t q[0]; measure q -> c;", "stabilizer");
+            request["execution"].as_object()["shots"] = shots;
+            if (!seeded)
+                request["execution"].as_object().erase("seed");
+            rejected(request, "A fixed stabilizer accepted a T gate");
+            request["execution"].as_object()["return_samples"] = true;
+            rejected(request, "A fixed stabilizer sampled rows of a T gate");
+        }
+    rejected(Request("execute", 2, "h q[0]; cx q[0],q[1]; t q[1]; measure q -> c;", "stabilizer"), "A fixed stabilizer accepted an entangled T gate");
+    rejected(Request("probabilities", 1, "h q[0]; t q[0];", "stabilizer"), "A stabilizer query accepted a T gate");
+    // The network optimizes the circuit first: T;T becomes the Clifford S.
+    auto merged = Request("execute", 1, "h q[0]; t q[0]; t q[0]; measure q -> c;", "stabilizer");
+    Check(Call(merged).at("shots").to_number<size_t>() == 80, "A fixed stabilizer rejected T;T, which runs as S");
+    merged["simulator"].as_object()["options"] = j::object{{"optimize_circuit", false}};
+    rejected(merged, "An unoptimized fixed stabilizer accepted T;T");
+    // A gate outside the measured cone never reaches a disjoint sampler.
+    auto disjoint = Request("execute", 2, "t q[1]; h q[0]; measure q[0] -> c[0];", "stabilizer", 1);
+    disjoint["simulator"].as_object()["options"] = j::object{{"enable_sampling_reduction", true}};
+    Check(Call(disjoint).at("shots").to_number<size_t>() == 80, "Disjoint sampling rejected a T gate outside the measured cone");
+    // Inside the cone the simulator rejects the gate on shot workers: an error
+    // result, not a terminated process.
+    disjoint["circuit"].as_object()["source"] = "OPENQASM 2.0;\nqreg q[2]; creg c[1];\nh q[0]; t q[0]; measure q[0] -> c[0];";
+    disjoint["execution"].as_object()["shots"] = 1000;
+    Check(Call(disjoint, false).at("error").at("code") == "native_failure", "A stabilizer shot worker's error was not reported");
+    // The same for an estimate: only the observable's cone runs.
+    auto estimate = Request("estimate", 2, "t q[1]; h q[0];", "stabilizer");
+    estimate["observables"] = j::array{"XI"};
+    Near(Real(Call(estimate).at("expectation_values").as_array()[0]), 1);
+    estimate["circuit"].as_object()["source"] = "OPENQASM 2.0;\nqreg q[2]; creg c[2];\nh q[0]; t q[0];";
+    Check(Call(estimate, false).at("error").at("code") == "native_failure", "A stabilizer estimate accepted a T gate in the cone");
+}
+
 int main()
 try
 {
     Check(maestro_request_c_header_test(), "C header/ABI ownership check failed");
+    TestStabilizerNonClifford();
     TestFixedBackendShotReuse();
+    TestNetworkSimulatorPlaceholders();
+    TestCandidateWidthRequests();
+    TestCandidateWorkerBudget();
     char *capabilities = MaestroGetCapabilitiesJson();
     Check(capabilities != nullptr, "Missing capabilities");
     auto caps = j::parse(capabilities).as_object();
@@ -676,6 +770,18 @@ try
     result = Call(request);
     Near(Real(result.at("results").at(0).at("counts").at("1")), 80);
     Near(Real(result.at("results").at(1).at("counts").at("0")), 80);
+    auto extendedCheckpoint = request;
+    extendedCheckpoint["simulator"].as_object()["method"] = "extended_stabilizer";
+    extendedCheckpoint["simulator"].as_object()["options"] = j::object{{"counts_policy", "multinomial_v1"}};
+    extendedCheckpoint["execution"].as_object()["shots"] = 4096;
+    const auto repeatedMeasurement = extendedCheckpoint.at("suffixes").at(0);
+    extendedCheckpoint["suffixes"].as_array().push_back(repeatedMeasurement);
+    const auto suffixResults = Call(extendedCheckpoint).at("results").as_array();
+    for (size_t index = 0; index < suffixResults.size(); ++index)
+    {
+        Check(suffixResults[index].at("sampling_strategy") == "terminal_v1", "Extended-stabilizer count batch replayed the checkpoint");
+        Near(Real(suffixResults[index].at("counts").at(index == 1 ? "0" : "1")), 4096);
+    }
     for (const auto &launch : j::array{nullptr, j::object{{"profile", "local"}, {"ranks", 2}}})
     {
         auto nested = request;

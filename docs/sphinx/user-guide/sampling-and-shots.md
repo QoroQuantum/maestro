@@ -94,6 +94,7 @@ print(rows["samples"], rows["sampling_strategy"])
 | Value | Meaning |
 |-------|---------|
 | `reference_frame_v1` | Noisy-Clifford reference frames: one stabilizer simulation, then Pauli frames per shot |
+| `extended_frame_v1` | Noisy `extended_stabilizer` shots in batches that share one Clifford basis, with a Pauli frame and amplitudes per shot (Pauli noise, readout, measurements and resets; no classical control) |
 | `terminal_v1` | One prepared state sampled for every shot (terminal measurements only) |
 | `trajectory_v1` | Each shot, or each noise realization, executed on its own |
 | `mixed_v1` | Some noise realizations sampled from one prepared state, others (such as one-shot realizations of an uneven split) executed shot by shot |
@@ -140,9 +141,18 @@ offer the same rows and compiled frames; see `docs/native-request-api.md`.
 
 | Policy | Behavior |
 |--------|----------|
-| `"auto"` (default) | Unseeded requests that the stabilizer simulator could run use reference frames; unseeded noisy requests with one realization per shot otherwise run their realizations directly. Seeded requests keep their earlier sequences. |
+| `"auto"` (default) | Eligible terminal counts use multinomial sampling with or without a seed. Unseeded requests may also use reference frames or direct noisy trajectories. |
 | `"legacy"` | Always the earlier executor |
 | `"frame_v1"` | Frames even with seeds, for any supported circuit and noise |
+| `"multinomial_v1"` | Draw eligible terminal histograms directly, including for seeded calls. The backend chooses from the measured shot count and support size. |
+
+`"auto"` counts can use multinomial sampling on QCSim statevectors,
+density matrices, path integrals, a single measured MPS qubit or MPO qubit without truncation limits, and small
+extended-stabilizer marginals. The speedup is largest when many shots repeat
+the same outcomes. Repeating a request with the same seed and configuration
+reproduces its histogram on the same build. Use `"legacy"` to select the
+per-shot count sampler used by earlier seeded requests. Ordered shot output
+continues to use its own sampling path.
 
 `sampling_policy` selects the lower-level statevector, density-matrix and
 path-integral sampler, and `trajectory_policy` the random streams of dynamic

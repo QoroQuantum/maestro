@@ -84,6 +84,24 @@ class NoiseAdd
         return last_policy;
     }
 
+    // The backend the last noisy execution or estimate ran on. Those run on
+    // clones of the caller's network (execution clones, realization workers),
+    // so the caller's network does not describe them: read this instead.
+    struct ExecutionRecord
+    {
+        bool valid = false; /**< False until a noisy run executed on a network. */
+        Simulators::SimulatorType simulator = Simulators::SimulatorType::kQCSim;
+        Simulators::SimulationType method = Simulators::SimulationType::kStatevector;
+        bool gate_fusion = false;
+        size_t gate_fusion_max_qubits = 0;
+        int gpu_device = -1;
+    };
+
+    const ExecutionRecord &last_execution() const
+    {
+        return last_record;
+    }
+
     bool uses_exact_channels() const
     {
         return exact_channels;
@@ -91,7 +109,8 @@ class NoiseAdd
 
     std::shared_ptr<Circuits::Circuit<double>> inject(const std::shared_ptr<Circuits::Circuit<double>> &circ, const NoiseModel &nm)
     {
-        WarnThermalApproximation(nm);
+        if (circ)
+            WarnThermalApproximation(nm, *circ);
         return Inject(circ, nm, Layer::Pauli);
     }
 
@@ -105,7 +124,8 @@ class NoiseAdd
 
     std::shared_ptr<Circuits::Circuit<double>> inject_combined(const std::shared_ptr<Circuits::Circuit<double>> &circ, const NoiseModel &nm)
     {
-        WarnThermalApproximation(nm);
+        if (circ)
+            WarnThermalApproximation(nm, *circ);
         return Inject(circ, nm, Layer::Combined);
     }
 
@@ -267,30 +287,23 @@ class NoiseAdd
 
     using Backend = std::pair<Simulators::SimulatorType, Simulators::SimulationType>;
 
-    // Candidates that backend selection chooses from regardless of the
-    // network's current simulator, in the network's fixed order; empty when
-    // execution keeps that simulator. A network configured for automatic
-    // selection (ConfigureNetwork) holds a placeholder (an MPS, or a CPU MPO for
-    // a GPU mixed-state request) beside a one-candidate set, which always wins.
-    // A set of only mixed-state candidates is resolved without timing estimates
-    // too (keeping the current simulator when it is one of them). Larger sets
-    // keep the current simulator, which ConfigureNetwork makes their first
-    // listed candidate that fits. Distribution is never replaced.
-    static std::vector<Backend> DecisiveCandidates(const NetworkPtr &network)
+    // The backends automatic selection may run instead of the network's
+    // simulator, in the order it tries them: the configured candidates
+    // (INetwork::GetOptimizationCandidates). Empty when execution keeps that
+    // simulator: selection is off, the network distributes (never replaced),
+    // or no list was configured. ConfigureNetwork always configures one; its
+    // simulator is then a placeholder of the first listed candidate.
+    static std::vector<Backend> SelectableCandidates(const NetworkPtr &network)
     {
         const auto simulator = network->GetSimulator();
         if (!network->GetOptimizeSimulator() || (simulator && Simulators::IsDistributedGpuSimulator(simulator->GetType())))
             return {};
-        const auto &set = network->GetSimulatorsSet();
-        std::vector<Backend> candidates(set.begin(), set.end());
-        std::sort(candidates.begin(), candidates.end());
-        const bool mixed = std::all_of(candidates.begin(), candidates.end(), [](const Backend &candidate) {
-            return MaestroExecution::SupportsExactQuantumChannels(candidate.first, candidate.second);
-        });
-        return candidates.size() == 1 || (!candidates.empty() && mixed) ? candidates : std::vector<Backend>{};
+        return network->GetOptimizationCandidates();
     }
 
-    // The backends execution can use, described as a configuration.
+    // The backends execution can use, described as a configuration. Exact
+    // channels then apply only when every candidate that may run supports
+    // them (MaestroExecution::UsesExactQuantumChannels).
     static MaestroExecution::SimulatorConfig ExecutionBackends(const NetworkPtr &network)
     {
         MaestroExecution::SimulatorConfig config;
@@ -300,7 +313,7 @@ class NoiseAdd
             config.simulator_type = simulator->GetType();
             config.simulation_type = simulator->GetSimulationType();
         }
-        const auto candidates = DecisiveCandidates(network);
+        const auto candidates = SelectableCandidates(network);
         if (!candidates.empty())
         {
             config.fixed_backend = false;
@@ -309,16 +322,16 @@ class NoiseAdd
         return config;
     }
 
-    // The single backend a pinned execution keeps, as SimpleDisconnectedNetwork
-    // selects it: the current simulator when it is a candidate (or no set
-    // decides), else the first candidate in the fixed order.
+    // The backend selection starts from: the network's simulator when it is
+    // listed (or no list was configured), else the first listed candidate.
+    // Never a placeholder outside the list.
     static std::optional<Backend> PinnedBackend(const NetworkPtr &network)
     {
         std::optional<Backend> current;
         if (const auto simulator = network->GetSimulator())
             current = Backend{simulator->GetType(), simulator->GetSimulationType()};
-        const auto candidates = DecisiveCandidates(network);
-        if (candidates.empty() || (candidates.size() > 1 && current && std::find(candidates.begin(), candidates.end(), *current) != candidates.end()))
+        const auto candidates = SelectableCandidates(network);
+        if (candidates.empty() || (current && std::find(candidates.begin(), candidates.end(), *current) != candidates.end()))
             return current;
         return candidates.front();
     }
@@ -364,17 +377,21 @@ class NoiseAdd
         }
         // Work on a pristine network so derived batch seeds never replace the
         // caller's configuration, including on exception paths.
-        auto execution_network = network->Clone();
+        auto execution_network = ExecutionClone(*network);
         if (!execution_network)
             throw std::runtime_error("Cannot clone network for noisy execution");
         execution_network->SetMaxSimulators(network->GetMaxSimulators());
-        // Timing-based backend selection changes the random sequence between
-        // otherwise identical calls. Exact channels also require the chosen
-        // mixed-state backend to survive optimization. Pin the backend that
-        // selection would use, not a placeholder simulator outside the set.
+        // Timing-based backend selection (a cost model) changes the random
+        // sequence between otherwise identical calls, and may rank away the
+        // mixed-state simulator exact channels need when no list says
+        // otherwise. Without it, selection is deterministic: a configured list
+        // is tried in order, falling back to the next candidate that fits, and
+        // otherwise the network simulator's backend runs. A Clifford circuit
+        // may still move to a stabilizer the list admits, seeded or not (see
+        // INetwork::GetOptimizationCandidates). Worker clones of the execution
+        // network keep the setting.
         if (base_seed || exact_channels)
-            if (const auto pinned = PinnedBackend(network))
-                execution_network->RemoveAllOptimizationSimulatorsAndAdd(pinned->first, pinned->second);
+            execution_network->SetCostModelEnabled(false);
         return {std::move(execution_network), base_seed};
     }
 
@@ -403,6 +420,33 @@ class NoiseAdd
             simulator->SetSeed(*seed);
     }
 
+    // A clone that only executes on the network. Simple networks size their own
+    // register for each execution, so the clone's simulator just selects the
+    // backend (INetwork::CreateSimulator) and never copies a register the
+    // network would discard, whatever width the caller's simulator has
+    // (INetwork::CloneForExecution). Distribution keeps its configured
+    // register, and other network types (netqasm, discrete events) may run
+    // their shots on the network's simulator itself.
+    static NetworkPtr ExecutionClone(const Network::INetwork<> &network)
+    {
+        auto cloned = network.CloneForExecution(Network::INetwork<>::kBackendPlaceholderQubits);
+        if (!cloned)
+            return cloned;
+        // A simple network whose clone still copied a larger register drops it.
+        const auto type = cloned->GetType();
+        if (type != Network::NetworkType::kSimpleDisconnectedNetwork && type != Network::NetworkType::kSimpleNetwork)
+            return cloned;
+        auto simulator = cloned->GetSimulator();
+        if (!simulator || Simulators::IsDistributedGpuSimulator(simulator->GetType()) ||
+            simulator->GetNumberOfQubits() <= Network::INetwork<>::kBackendPlaceholderQubits)
+            return cloned;
+        const auto backend = simulator->GetType();
+        const auto method = simulator->GetSimulationType();
+        simulator.reset(); // or the copied register stays allocated
+        cloned->CreateSimulator(backend, method, Network::INetwork<>::kBackendPlaceholderQubits);
+        return cloned;
+    }
+
     // Single-threaded clones of the execution network, one per worker.
     static std::vector<NetworkPtr> WorkerNetworks(const NetworkPtr &network, size_t workers)
     {
@@ -410,7 +454,7 @@ class NoiseAdd
         networks.reserve(workers);
         for (size_t worker = 0; worker < workers; ++worker)
         {
-            auto cloned = network->Clone();
+            auto cloned = ExecutionClone(*network);
             if (!cloned)
                 throw std::runtime_error("Cannot clone network for noisy realization worker");
             cloned->SetMaxSimulators(1);
@@ -432,6 +476,36 @@ class NoiseAdd
         const auto method = backend->second;
         return method == Simulators::SimulationType::kStatevector || method == Simulators::SimulationType::kDensityMatrix ||
                method == Simulators::SimulationType::kPathIntegral || method == Simulators::SimulationType::kMatrixProductOperator;
+    }
+
+    // The width of the register the caller's network keeps allocated.
+    static size_t RetainedQubits(const Network::INetwork<> &network)
+    {
+        const auto simulator = network.GetSimulator();
+        return simulator ? simulator->GetNumberOfQubits() : 0;
+    }
+
+    static ExecutionRecord Describe(const Network::INetwork<> &network)
+    {
+        ExecutionRecord record;
+        record.valid = true;
+        record.simulator = network.GetLastSimulatorType();
+        record.method = network.GetLastSimulationType();
+        record.gate_fusion = network.WasGateFusionEnabled();
+        record.gate_fusion_max_qubits = network.GetLastGateFusionMaxQubits();
+        record.gpu_device = network.GetLastGpuDevice();
+        return record;
+    }
+
+    // The worker network that ran the highest realization index, the one a
+    // serial loop would have run last.
+    static const NetworkPtr &LastWorker(const std::vector<NetworkPtr> &networks, const std::vector<size_t> &latest)
+    {
+        size_t last = 0;
+        for (size_t worker = 1; worker < networks.size(); ++worker)
+            if (latest[worker] > latest[last])
+                last = worker;
+        return networks[last];
     }
 
     void SeedExecution(const ExecutionContext &execution)
@@ -474,11 +548,12 @@ class NoiseAdd
         return noisy;
     }
 
-    void WarnThermalApproximation(const NoiseModel &nm) const
+    // For the relaxation this circuit draws in the clamped window only.
+    void WarnThermalApproximation(const NoiseModel &nm, const Circuits::Circuit<double> &circuit) const
     {
         if (exact_channels || nm.has_additional_quantum_channels())
             return;
-        const auto qubits = nm.thermal_approximation_qubits();
+        const auto qubits = nm.thermal_approximation_qubits_on(circuit);
         if (qubits.empty())
             return;
         std::ostringstream message;
@@ -497,7 +572,30 @@ class NoiseAdd
             std::cerr << "Warning: " << message.str() << '\n';
     }
 
-    static size_t RealizationWorkers(const CircuitPtr &circuit, const NetworkPtr &network, std::optional<size_t> host, size_t batches)
+    // network executes (an execution clone); retainedQubits is the width of the
+    // caller's register, which stays allocated while workers run.
+    // The width of a realization's circuit: injection adds crosstalk rotations
+    // on spectator qubits the circuit itself may not use.
+    static size_t RealizationWidth(const CircuitPtr &circuit, const NoiseInjectionPlan &plan)
+    {
+        size_t qubits = std::max<size_t>(1, circuit->GetMaxQubitIndex() + 1);
+        for (const auto spectator : plan.Spectators())
+            qubits = std::max(qubits, spectator + 1);
+        return qubits;
+    }
+
+    // The width an expectation run allocates for its observables: the host
+    // executor keeps every position of the longest Pauli string, idle ones
+    // included.
+    static size_t ObservableWidth(const std::vector<std::string> &paulis)
+    {
+        size_t width = 0;
+        for (const auto &pauli : paulis)
+            width = std::max(width, pauli.size());
+        return width;
+    }
+
+    static size_t RealizationWorkers(size_t realizationQubits, const NetworkPtr &network, std::optional<size_t> host, size_t batches, size_t retainedQubits)
     {
         const auto simulator = network->GetSimulator();
         // Accelerator and distributed runtimes retain their calling-thread and
@@ -517,14 +615,19 @@ class NoiseAdd
         size_t workers = Utils::RealizationWorkerCount(batches, network->GetMaxSimulators());
         if (workers <= 1)
             return workers;
-        // Clone() initializes a simulator for the full network, before the host
-        // executor can compact the circuit. Budget those allocations as well as
-        // the register actually used by a realization.
-        const size_t networkQubits = network->GetNumQubits();
-        const size_t entangledQubits = network->GetNumNetworkEntangledQubits();
-        if (entangledQubits > std::numeric_limits<size_t>::max() - networkQubits)
-            return 1;
-        const size_t qubits = std::max(std::max<size_t>(1, circuit->GetMaxQubitIndex() + 1), networkQubits + entangledQubits);
+        // A simple network's realization register is the circuit's: each
+        // worker's network maps it to the qubits it uses, and its clones hold
+        // only placeholders (ExecutionClone). Netqasm and discrete-event
+        // networks run on their simulator itself, which their clones copy:
+        // each worker's register is the whole layout, entanglement qubits
+        // included, and the execution clone keeps one more. The caller's
+        // simulator stays allocated while workers run, at whatever width it has.
+        const auto type = network->GetType();
+        const bool simple = type == Network::NetworkType::kSimpleDisconnectedNetwork || type == Network::NetworkType::kSimpleNetwork;
+        const size_t layoutQubits = network->GetNumQubits() + network->GetNumNetworkEntangledQubits();
+        const size_t qubits = std::max<size_t>(std::max<size_t>(1, realizationQubits), simple ? 0 : layoutQubits);
+        const size_t callerQubits = retainedQubits;
+        const size_t cloneQubits = simulator->GetNumberOfQubits();
         Utils::RealizationState state;
         size_t bond = 0, copiesPerWorker = 1;
         switch (simulator->GetSimulationType())
@@ -559,14 +662,24 @@ class NoiseAdd
         }
         // Shared with the Python realization executors (RealizationStateBytes).
         const long double bytes = Utils::RealizationStateBytes(state, qubits, bond);
-        if (!(bytes > 0) || !std::isfinite(bytes) || bytes >= static_cast<long double>(std::numeric_limits<size_t>::max()))
+        const long double limit = static_cast<long double>(std::numeric_limits<size_t>::max());
+        if (!(bytes > 0) || !std::isfinite(bytes) || bytes >= limit)
+            return 1;
+        const long double callerBytes = callerQubits ? Utils::RealizationStateBytes(state, callerQubits, bond) : 0.L;
+        const long double cloneBytes = cloneQubits ? Utils::RealizationStateBytes(state, cloneQubits, bond) : 0.L;
+        if (!std::isfinite(callerBytes) || callerBytes >= limit || !std::isfinite(cloneBytes) || cloneBytes >= limit)
             return 1;
         const auto configuredBudget = simulator->GetConfiguration("trajectory_max_memory_mb");
         const size_t budgetMB = configuredBudget.empty() ? 1024 : std::stoull(configuredBudget);
-        // The caller's register and PrepareExecution's clone stay alive while
-        // all worker clones execute. Other methods use a conservative workspace
+        // Reserved, in copies of a realization's register: the caller's
+        // register and the execution clone's, alive while all worker clones
+        // execute, and a spare. Other methods use a conservative workspace
         // estimate for a copy too, rather than treating retained states as free.
-        return Utils::LimitRealizationWorkersByMemory(workers, static_cast<size_t>(std::max(1.L, bytes)), budgetMB, 2, copiesPerWorker);
+        const long double retainedCopies = std::ceil(callerBytes / std::max(1.L, bytes)) + std::ceil(cloneBytes / std::max(1.L, bytes));
+        if (retainedCopies >= limit - 1)
+            return 1;
+        const size_t reserved = 1 + static_cast<size_t>(retainedCopies);
+        return Utils::LimitRealizationWorkersByMemory(workers, static_cast<size_t>(std::max(1.L, bytes)), budgetMB, reserved, copiesPerWorker);
     }
 
     std::optional<Circuits::Circuit<>::ExecuteResults> FrameCounts(const CircuitPtr &circuit, const NetworkPtr &network, std::optional<size_t> host,
@@ -578,8 +691,10 @@ class NoiseAdd
         auto policy = simulator->GetConfiguration("counts_policy");
         if (policy.empty())
             policy = "auto";
+        if (policy == "multinomial_v1")
+            return std::nullopt; // The terminal backend samples each noise realization.
         if (policy != "auto" && policy != "legacy" && policy != "frame_v1")
-            throw std::invalid_argument("counts_policy must be auto, legacy or frame_v1");
+            throw std::invalid_argument("counts_policy must be auto, legacy, frame_v1 or multinomial_v1");
         auto baseSeed = public_seed;
         const auto configuredSeed = simulator->GetConfiguration("seed");
         if (!configuredSeed.empty())
@@ -595,9 +710,11 @@ class NoiseAdd
                                           ? network->OptimizationSimulatorExists(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStabilizer)
                                           : stabilizerMethod;
         const bool admitsStabilizer = allowsStabilizer && (stabilizerMethod || !exact_channels);
+        // Frames inject exact channels, which keep a calibrated T2 that the
+        // trajectories clamp to T1 (and warn about): that window keeps them.
         if (policy == "legacy" || !allowsStabilizer || (policy == "auto" && (baseSeed || !admitsStabilizer)) || !host || *host != 0 ||
             network->GetNumHosts() != 1 || batches != shots || simulator->GetType() != Simulators::SimulatorType::kQCSim || layer == Layer::Coherent ||
-            !nm.inject_noise_covers_model())
+            !nm.inject_noise_covers_model() || (!exact_channels && nm.has_thermal_in_sampled_overdephasing_regime_on(*circuit)))
             return std::nullopt;
         const size_t width = std::max<size_t>(1, circuit->GetMaxQubitIndex() + 1);
         if (width > network->GetNumQubitsForHost(*host))
@@ -617,13 +734,16 @@ class NoiseAdd
         // Frame sampling is an explicit new seeded policy. Its per-call noise
         // seed advances this object's stream; reserve the same simulator-stream
         // indices as the realization executor before a later policy switch.
+        // As on the trajectories, circuit errors draw from the noise stream and
+        // measurements and readout from the simulator stream, so either seed
+        // can change alone; without a simulator seed both follow the noise.
         const uint64_t high = rng();
         const uint64_t noiseSeed = (high << 32) | static_cast<uint64_t>(rng());
-        const uint64_t seed =
-            baseSeed ? Simulators::IState::DeriveSeed(Simulators::IState::DeriveSeed(*baseSeed, next_simulator_stream), noiseSeed) : noiseSeed;
+        const MaestroExecution::ReferenceFrameSampler::Seeds seeds{noiseSeed,
+                                                                   baseSeed ? Simulators::IState::DeriveSeed(*baseSeed, next_simulator_stream) : noiseSeed};
         if (baseSeed)
             next_simulator_stream += static_cast<uint64_t>(batches);
-        auto outcomes = plan->SampleCounts(static_cast<size_t>(shots), seed);
+        auto outcomes = plan->SampleCounts(static_cast<size_t>(shots), seeds);
         Circuits::Circuit<>::ExecuteResults counts;
         counts.reserve(outcomes.size());
         for (auto &[bits, count] : outcomes)
@@ -634,6 +754,7 @@ class NoiseAdd
     Circuits::Circuit<>::ExecuteResults Execute(const CircuitPtr &circuit, const NetworkPtr &network, std::optional<size_t> host, const NoiseModel &nm,
                                                 int shots, std::optional<int> requested_realizations, Layer layer)
     {
+        last_record = {};
         if (shots < 0)
             throw std::invalid_argument("shots must be nonnegative");
         if (requested_realizations && *requested_realizations <= 0)
@@ -643,7 +764,7 @@ class NoiseAdd
         last_policy = ResolvePolicy(circuit, network, nm, requested_realizations, layer, false);
         const ScopedChannels channels(exact_channels, last_policy.exact_channels);
         if (layer != Layer::Coherent)
-            WarnThermalApproximation(nm);
+            WarnThermalApproximation(nm, *circuit);
         const int batches = static_cast<int>(std::min(static_cast<size_t>(shots), last_policy.realizations));
         last_policy.realizations = static_cast<size_t>(batches);
         if (auto counts = FrameCounts(circuit, network, host, nm, shots, batches, layer))
@@ -657,11 +778,13 @@ class NoiseAdd
         // samples from one prepared state run single-threaded there anyway, so
         // realization workers only add parallelism.
         const bool independent = batches == shots || (!execution.seed && SamplesFromOnePreparedState(circuit, execution.network));
-        const size_t workers = independent ? RealizationWorkers(circuit, execution.network, host, batches) : 1;
+        const size_t workers =
+            independent ? RealizationWorkers(RealizationWidth(circuit, plan), execution.network, host, batches, RetainedQubits(*network)) : 1;
         if (workers > 1)
         {
             const auto workerNetworks = WorkerNetworks(execution.network, workers);
             std::vector<Circuits::Circuit<>::ExecuteResults> localCounts(workers);
+            std::vector<size_t> latest(workers, 0);
 
             Utils::RunRealizations(
                 static_cast<size_t>(batches), workers, [&](size_t) { return NextRealization(plan, layer, execution); },
@@ -672,10 +795,15 @@ class NoiseAdd
                     const auto counts = workerNetwork->RepeatedExecuteOnHost(realization.circuit, *host, batchShots);
                     for (const auto &entry : counts)
                         localCounts[worker][entry.first] += entry.second;
+                    if (!counts.empty())
+                        latest[worker] = std::max(latest[worker], batch + 1);
                 });
             for (const auto &counts : localCounts)
                 for (const auto &entry : counts)
                     combined[entry.first] += entry.second;
+            // A network that did not simulate returned no counts.
+            if (std::any_of(latest.begin(), latest.end(), [](size_t ran) { return ran > 0; }))
+                last_record = Describe(*LastWorker(workerNetworks, latest));
             return combined;
         }
         for (int b = 0; b < batches; ++b)
@@ -688,12 +816,16 @@ class NoiseAdd
             for (const auto &entry : counts)
                 combined[entry.first] += entry.second;
         }
+        // A network that did not simulate (no simulator) returned no counts.
+        if (!combined.empty())
+            last_record = Describe(*execution.network);
         return combined;
     }
 
     std::vector<double> Estimate(const CircuitPtr &circuit, const NetworkPtr &network, std::optional<size_t> host, const std::vector<std::string> &paulis,
                                  const NoiseModel &nm, std::optional<int> requested_realizations, Layer layer)
     {
+        last_record = {};
         if (requested_realizations && *requested_realizations <= 0)
             throw std::invalid_argument("noise_realizations must be positive");
         if (!network || !circuit || paulis.empty())
@@ -702,7 +834,7 @@ class NoiseAdd
         const int realizations = static_cast<int>(last_policy.realizations);
         const ScopedChannels channels(exact_channels, last_policy.exact_channels);
         if (layer != Layer::Coherent)
-            WarnThermalApproximation(nm);
+            WarnThermalApproximation(nm, *circuit);
         auto cleanCircuit = circuit->RemoveEndMeasurements();
         auto execution = PrepareExecution(network);
         std::vector<double> values(paulis.size(), 0.0);
@@ -710,42 +842,58 @@ class NoiseAdd
         // Each realization's values depend only on its circuit and seed, so
         // workers may evaluate them in any order. They are summed in realization
         // order, as the serial loop does.
-        const size_t workers = RealizationWorkers(cleanCircuit, execution.network, host, static_cast<size_t>(realizations));
+        const size_t workers = RealizationWorkers(std::max(RealizationWidth(cleanCircuit, plan), ObservableWidth(paulis)), execution.network, host,
+                                                  static_cast<size_t>(realizations), RetainedQubits(*network));
         if (workers > 1)
         {
             const auto workerNetworks = WorkerNetworks(execution.network, workers);
             std::vector<MaestroExecution::EstimationCache> caches(workers);
             std::vector<std::vector<double>> samples(static_cast<size_t>(realizations));
+            std::vector<size_t> latest(workers, 0);
             Utils::RunRealizations(
                 static_cast<size_t>(realizations), workers, [&](size_t) { return NextRealization(plan, layer, execution); },
                 [&](size_t worker, size_t r, Realization realization) {
                     SeedNetwork(*workerNetworks[worker], realization.seed);
-                    samples[r] = MaestroExecution::EstimateOnNetwork(realization.circuit, paulis, workerNetworks[worker], host, false, &caches[worker]);
+                    bool executed = false;
+                    samples[r] = MaestroExecution::EstimateOnNetwork(realization.circuit, paulis, workerNetworks[worker], host, false, &caches[worker],
+                                                                     &executed);
+                    if (executed)
+                        latest[worker] = std::max(latest[worker], r + 1);
                 });
             for (const auto &sample : samples)
                 for (size_t i = 0; i < values.size() && i < sample.size(); ++i)
                     values[i] += sample[i];
             for (auto &value : values)
                 value /= realizations;
+            // Planning may resolve every observable without running a network.
+            if (std::any_of(latest.begin(), latest.end(), [](size_t ran) { return ran > 0; }))
+                last_record = Describe(*LastWorker(workerNetworks, latest));
             return values;
         }
         MaestroExecution::EstimationCache cache;
+        bool ran = false;
         for (int r = 0; r < realizations; ++r)
         {
             auto noisy = Inject(plan, layer);
             SeedExecution(execution);
-            const auto sample = MaestroExecution::EstimateOnNetwork(noisy, paulis, execution.network, host, false, &cache);
+            bool executed = false;
+            const auto sample = MaestroExecution::EstimateOnNetwork(noisy, paulis, execution.network, host, false, &cache, &executed);
+            ran = ran || executed;
             for (size_t i = 0; i < values.size(); ++i)
                 values[i] += sample[i];
         }
         for (auto &value : values)
             value /= realizations;
+        // Planning may resolve every observable without running the network.
+        if (ran)
+            last_record = Describe(*execution.network);
         return values;
     }
 
     bool exact_channels = false;
     std::optional<bool> exact_channels_override;
     MaestroExecution::NoiseRealizationPolicy last_policy;
+    ExecutionRecord last_record;
     std::mt19937 rng;
     std::optional<uint64_t> public_seed;
     uint64_t next_simulator_stream = 0;

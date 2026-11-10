@@ -219,14 +219,9 @@ std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits
             body->AddOperation(op);
         }
     }
-    if (measured.empty() || !CanTraceConeSupport(body, measured, HasEnsembleState(config.simulation_type), config.allow_reset_marginalization))
+    if (measured.empty() || !CanTraceConeSupport(body, measured, HasEnsembleState(config), config.allow_reset_marginalization))
         return std::nullopt;
     const auto cones = TraceMeasurementCones(body, measured);
-    // Preserve GPU tensor-network selection, which cannot sample a
-    // single-qubit component. Ordinary full-register sampling remains valid.
-    if (config.simulator_type == Simulators::SimulatorType::kGpuSim && config.simulation_type == Simulators::SimulationType::kTensorNetwork &&
-        std::any_of(cones.begin(), cones.end(), [](const auto &cone) { return cone.mapping.size() == 1; }))
-        return std::nullopt;
     if (cones.size() == 1 && cones.front().mapping.size() == width)
         return std::nullopt;
 
@@ -234,7 +229,8 @@ std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits
     result.components = cones.size();
     result.simulator = config.simulator_type;
     result.method = config.simulation_type;
-    const auto seed = config.seed ? *config.seed : Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options);
+    const auto configured_seed = EffectiveSamplingSeed(config);
+    const auto seed = configured_seed ? *configured_seed : Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options);
     Network::INetwork<double>::ExecuteResults joint{{std::vector<bool>(bits, false), shots}};
     for (size_t c = 0; c < cones.size(); ++c)
     {
@@ -280,6 +276,8 @@ std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits
         } cleanup{handle};
 
         auto local_config = config;
+        if (PreferMultinomialCounts(config))
+            SetCountsPolicy(local_config, "multinomial_v1");
         local_config.seed = Simulators::IState::DeriveSeed(seed, 2 * c);
         auto network = ConfigureNetwork(handle, local_config);
         if (!network || !network->GetSimulator())
@@ -287,10 +285,16 @@ std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits
         if (config.fixed_backend &&
             (network->GetSimulator()->GetType() != config.simulator_type || network->GetSimulator()->GetSimulationType() != config.simulation_type))
             throw Error("backend_unavailable", "Requested fixed backend/method is unavailable");
-        if (!Simulators::IsDistributedGpuSimulator(config.simulator_type) && config.native_options.count("gpu_device") &&
+        // Only a fixed backend runs on the network's simulator; automatic
+        // selection creates its GPU backend on the configured device, checked
+        // after the run.
+        if (config.fixed_backend && !Simulators::IsDistributedGpuSimulator(config.simulator_type) && config.native_options.count("gpu_device") &&
             network->GetSimulator()->GetGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
             throw Error("backend_unavailable", "Requested GPU device was not selected");
         const auto counts = network->RepeatedExecuteOnHost(reduced, 0, shots);
+        if (network->GetLastSimulatorType() == Simulators::SimulatorType::kGpuSim && config.native_options.count("gpu_device") &&
+            network->GetLastGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
+            throw Error("backend_unavailable", "Requested GPU device was not selected");
         // Hypergeometric bucket splits have the same distribution as pairing
         // independent random permutations, while preserving both marginals.
         joint = CombineIndependentCounts(joint, counts, original_bits, Simulators::IState::DeriveSeed(seed, 2 * c + 1));
@@ -370,14 +374,15 @@ SamplingResult SampleCircuit(const std::shared_ptr<Circuits::Circuit<double>> &c
     if (auto reduced = SampleDisjointCones(circuit, config, shots))
         return std::move(*reduced);
     const auto start = std::chrono::steady_clock::now();
-    if (PreferFrameCounts(config) && (config.counts_policy == "frame_v1" || circuit->IsClifford()))
+    if (PreferFrameCounts(config) && (EffectiveCountsPolicy(config) == "frame_v1" || circuit->IsClifford()))
     {
         const auto bits = circuit->GetBits();
         const size_t width = std::max(std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1), bits.empty() ? size_t{0} : *bits.rbegin() + 1);
         if (auto plan = CompileReferenceSampler(circuit, std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1), width))
         {
             SamplingResult result;
-            const auto seed = config.seed ? *config.seed : Utils::RandomStream::FreshSeed();
+            const auto configured_seed = EffectiveSamplingSeed(config);
+            const auto seed = configured_seed ? *configured_seed : Utils::RandomStream::FreshSeed();
             // Outcomes are distinct: one insertion each, no merging.
             auto outcomes = plan->SampleCounts(shots, seed);
             result.counts.reserve(outcomes.size());
@@ -414,7 +419,9 @@ SamplingResult SampleCircuit(const std::shared_ptr<Circuits::Circuit<double>> &c
     if (config.fixed_backend &&
         (network->GetSimulator()->GetType() != config.simulator_type || network->GetSimulator()->GetSimulationType() != config.simulation_type))
         throw Error("backend_unavailable", "Requested fixed backend/method is unavailable");
-    if (!Simulators::IsDistributedGpuSimulator(config.simulator_type) && config.native_options.count("gpu_device") &&
+    // Only a fixed backend runs on the network's simulator; automatic selection
+    // creates its GPU backend on the configured device, checked after the run.
+    if (config.fixed_backend && !Simulators::IsDistributedGpuSimulator(config.simulator_type) && config.native_options.count("gpu_device") &&
         network->GetSimulator()->GetGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
         throw Error("backend_unavailable", "Requested GPU device was not selected");
     SamplingResult result;
@@ -424,6 +431,9 @@ SamplingResult SampleCircuit(const std::shared_ptr<Circuits::Circuit<double>> &c
     result.simulator = network->GetLastSimulatorType();
     result.method = network->GetLastSimulationType();
     result.gpu_device = network->GetLastGpuDevice();
+    if (result.simulator == Simulators::SimulatorType::kGpuSim && config.native_options.count("gpu_device") &&
+        result.gpu_device != std::stoi(config.native_options.at("gpu_device")))
+        throw Error("backend_unavailable", "Requested GPU device was not selected");
     result.max_bond_dimension = network->GetCurrentMaxBondDimension();
     result.gate_fusion = network->WasGateFusionEnabled();
     result.gate_fusion_max_qubits = network->GetLastGateFusionMaxQubits();

@@ -63,6 +63,20 @@ def test_sqrt_y_gates_match_stim(simulation_type):
     assert (measured == expected).all()
 
 
+def test_extended_stabilizer_config_samples_on_extended_frames():
+    """An ExtendedStabilizer config compiles the task to batched extended-stabilizer frames."""
+    circuit = stim.Circuit("R 0 1\nH 0\nCX 0 1\nDEPOLARIZE1(0.1) 0 1\nM 0 1")
+    config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QCSim,
+                                     simulation_type=maestro.SimulationType.ExtendedStabilizer)
+    sampler = MaestroCompiledSampler(circuit, config=config, seed=3)
+    assert type(sampler._reference_sampler).__name__ == "ExtendedFrameSampler"
+    measured = sampler.sample_measurements(20000)
+    stabilizer = maestro.SimulatorConfig(simulation_type=maestro.SimulationType.Stabilizer)
+    reference = MaestroCompiledSampler(circuit, config=stabilizer, seed=3).sample_measurements(20000)
+    # Each qubit's X or Y error (probability 2/3 * 0.1) splits the Bell pair.
+    assert np.mean(measured[:, 0] != measured[:, 1]) == pytest.approx(np.mean(reference[:, 0] != reference[:, 1]), abs=0.02)
+
+
 @pytest.mark.parametrize("gate", ["SQRT_Y", "SQRT_Y_DAG"])
 def test_sqrt_y_gates_get_gate_noise_once(gate):
     """A NoiseModel adds noise once per SQRT_Y, after it, as after any other gate."""

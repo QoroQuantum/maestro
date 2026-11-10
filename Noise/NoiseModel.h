@@ -324,11 +324,11 @@ struct ThermalRelaxation
      * True when the sampled reset+Z mixture reproduces the exact channel's
      * coherence decay exp(-duration/T2). False in the T1 < T2 <= 2*T1 window,
      * where the mixture over-dephases and a density-matrix or MPO backend is
-     * required.
+     * required, unless the duration is zero: both are then the identity.
      */
     bool sampled_realization_is_exact() const
     {
-        if (!std::isfinite(t1) || !std::isfinite(t2))
+        if (!(duration > 0.0) || !std::isfinite(t1) || !std::isfinite(t2))
             return true;
         return t2 <= t1 * (1.0 + 1e-12);
     }
@@ -1238,6 +1238,82 @@ class NoiseModel
         return qubits;
     }
 
+    /**
+     * True if sampled (pure-state) injection realizes configured noise as
+     * resets drawn once per noise realization: legacy T1, and thermal or idle
+     * relaxation with a finite T1. Shots that share a realization then share
+     * the reset, which no Pauli-frame draw reproduces. Relaxation with an
+     * infinite T1 never resets: it draws only the phase flip a frame draws.
+     * has_sampled_resets_on() counts only relaxation a circuit can draw.
+     */
+    bool has_sampled_resets() const
+    {
+        if (has_t1())
+            return true;
+        for (const auto *params : {&thermal_relaxation_params_, &thermal_relaxation_params_2q_})
+            for (const auto &entry : *params)
+                if (entry.second.decay_probability() > 0.0)
+                    return true;
+        for (const auto &entry : idle_noise_)
+            if (!std::isinf(entry.second.t1))
+                return true;
+        return false;
+    }
+
+    /**
+     * has_sampled_resets() for one circuit: true if sampled injection of it
+     * can draw a reset. That takes a gate on a qubit whose T1 or thermal
+     * decay probability for the gate's type is nonzero, or a positive delay
+     * on a qubit with a finite idle T1; noise on qubits the circuit never
+     * gates or delays, and zero-probability T1, never resets.
+     */
+    bool has_sampled_resets_on(const Circuits::Circuit<double> &circuit) const
+    {
+        return any_relaxation_site_(
+            circuit,
+            [this](int q, bool multi) {
+                const auto *params = get_thermal_relaxation_params(q, multi);
+                return get_t1_for_gate(q, multi) > 0.0 || (params && params->decay_probability() > 0.0);
+            },
+            [this](int q, double duration) {
+                const auto *idle = get_idle_noise(q);
+                return idle && ThermalRelaxation{duration, idle->t1, idle->t2, idle->excited_population}.decay_probability() > 0.0;
+            });
+    }
+
+    /** has_thermal_in_sampled_overdephasing_regime() for the relaxation one circuit draws. */
+    bool has_thermal_in_sampled_overdephasing_regime_on(const Circuits::Circuit<double> &circuit) const
+    {
+        return any_relaxation_site_(
+            circuit, [this](int q, bool multi) { return clamps_after_gate_(q, multi); },
+            [this](int q, double duration) { return clamps_on_delay_(q, duration); });
+    }
+
+    /**
+     * thermal_approximation_qubits() for the relaxation one circuit draws: the
+     * qubits where sampled execution of it clamps T2 to T1, in increasing
+     * order. Empty when the circuit never gates or delays such a qubit.
+     */
+    std::vector<int> thermal_approximation_qubits_on(const Circuits::Circuit<double> &circuit) const
+    {
+        std::vector<int> qubits;
+        any_relaxation_site_(
+            circuit,
+            [&](int q, bool multi) {
+                if (clamps_after_gate_(q, multi))
+                    qubits.push_back(q);
+                return false;
+            },
+            [&](int q, double duration) {
+                if (clamps_on_delay_(q, duration))
+                    qubits.push_back(q);
+                return false;
+            });
+        std::sort(qubits.begin(), qubits.end());
+        qubits.erase(std::unique(qubits.begin(), qubits.end()), qubits.end());
+        return qubits;
+    }
+
     /** True if any thermal layer requires the sampled T2 approximation. */
     bool has_thermal_in_sampled_overdephasing_regime() const
     {
@@ -1265,6 +1341,61 @@ class NoiseModel
     bool requires_exact_quantum_channels() const
     {
         return has_additional_quantum_channels() || has_thermal_in_sampled_overdephasing_regime();
+    }
+
+    /**
+     * True if every channel that exact injection applies is diagonal in the
+     * Pauli basis: Pauli and depolarizing channels, dephasing, phase damping
+     * and correlated phase flips. Such a channel only scales a propagated
+     * Pauli term. Relaxation towards a state (T1, thermal or idle relaxation
+     * with a finite T1, generalized amplitude damping) is not diagonal: it
+     * also sends Z to the identity, which adds terms. Caller-supplied Kraus
+     * maps are counted as not diagonal.
+     *
+     * Relaxation is judged by the channel it applies, not by its kind: a
+     * zero T1 probability is the identity, and thermal or idle relaxation
+     * towards equal populations (excited_population 0.5) is unital, so it
+     * only scales. exact_channels_are_pauli_diagonal_on() counts only the
+     * relaxation one circuit draws.
+     */
+    bool exact_channels_are_pauli_diagonal() const
+    {
+        if (!generalized_amplitude_damping_.empty() || !kraus_channels_.empty())
+            return false;
+        for (const auto *rates : {&t1_, &t1_2q_})
+            for (const auto &entry : *rates)
+                if (entry.second != 0.0)
+                    return false;
+        for (const auto *params : {&thermal_relaxation_params_, &thermal_relaxation_params_2q_})
+            for (const auto &entry : *params)
+                if (sends_z_to_identity_(entry.second))
+                    return false;
+        for (const auto &entry : idle_noise_)
+            if (!std::isinf(entry.second.t1) && entry.second.excited_population != 0.5)
+                return false;
+        return true;
+    }
+
+    /**
+     * exact_channels_are_pauli_diagonal() for one circuit: true if the
+     * channels exact injection adds to it are all diagonal in the Pauli
+     * basis. Relaxation on qubits the circuit never gates, and idle
+     * relaxation without a positive delay, adds nothing.
+     */
+    bool exact_channels_are_pauli_diagonal_on(const Circuits::Circuit<double> &circuit) const
+    {
+        if (!generalized_amplitude_damping_.empty() || !kraus_channels_.empty())
+            return false;
+        return !any_relaxation_site_(
+            circuit,
+            [this](int q, bool multi) {
+                const auto *params = get_thermal_relaxation_params(q, multi);
+                return get_t1_for_gate(q, multi) != 0.0 || (params && sends_z_to_identity_(*params));
+            },
+            [this](int q, double duration) {
+                const auto *idle = get_idle_noise(q);
+                return idle && sends_z_to_identity_(ThermalRelaxation{duration, idle->t1, idle->t2, idle->excited_population});
+            });
     }
 
     /**
@@ -1450,6 +1581,56 @@ class NoiseModel
     /// build an equivalent reset+Z mixture instead of rejecting the model.
     std::unordered_map<int, ThermalRelaxation> thermal_relaxation_params_;
     std::unordered_map<int, ThermalRelaxation> thermal_relaxation_params_2q_;
+
+    // Whether sampled relaxation after a gate (multi: on two or more qubits)
+    // or on a delay of this duration clamps T2 to T1 on qubit q.
+    bool clamps_after_gate_(int q, bool multi) const
+    {
+        const auto *params = get_thermal_relaxation_params(q, multi);
+        return params && !params->sampled_realization_is_exact();
+    }
+
+    bool clamps_on_delay_(int q, double duration) const
+    {
+        const auto *idle = get_idle_noise(q);
+        return idle && !ThermalRelaxation{duration, idle->t1, idle->t2, idle->excited_population}.sampled_realization_is_exact();
+    }
+
+    // Whether the exact relaxation channel maps Z to a*I + b*Z with a != 0,
+    // which adds Pauli terms: a = decay_probability * (1 - 2 * excited_population).
+    static bool sends_z_to_identity_(const ThermalRelaxation &relaxation)
+    {
+        return relaxation.decay_probability() > 0.0 && relaxation.excited_population != 0.5;
+    }
+
+    // Where sampled injection relaxes qubits, as inject_noise_impl_ walks the
+    // circuit: gate(q, multi) for each qubit of a gate that takes noise
+    // (multi: two or more qubits), delay(q, duration) for each qubit of a
+    // positive delay. True as soon as one of them is.
+    template <class OnGate, class OnDelay> static bool any_relaxation_site_(const Circuits::Circuit<double> &circuit, OnGate &&gate, OnDelay &&delay)
+    {
+        for (const auto &op : circuit.GetOperations())
+        {
+            if (op->GetType() == Circuits::OperationType::kDelay)
+            {
+                const auto delayed = std::dynamic_pointer_cast<Circuits::Delay<double>>(op);
+                const double duration = delayed ? delayed->GetDuration() : 0.0;
+                if (duration <= 1e-15)
+                    continue;
+                for (const auto q : op->AffectedQubits())
+                    if (delay(static_cast<int>(q), duration))
+                        return true;
+                continue;
+            }
+            if (op->GetType() != Circuits::OperationType::kGate || op->IsNoiseless())
+                continue;
+            const auto qubits = op->AffectedQubits();
+            for (const auto q : qubits)
+                if (gate(static_cast<int>(q), qubits.size() >= 2))
+                    return true;
+        }
+        return false;
+    }
     std::unordered_map<int, std::unordered_map<int, Simulators::QuantumChannel>> correlated_phase_flip_;
     std::vector<ConfiguredKrausChannel> kraus_channels_;
 };
@@ -1906,7 +2087,7 @@ inline void append_sampled_pauli_channel_(std::shared_ptr<Circuits::Circuit<doub
     const auto &probabilities = channel_op->GetChannel().GetPauliProbabilities();
     if (probabilities.empty())
         throw std::invalid_argument("Only Pauli channels can be sampled on pure-state backends; use a "
-                                    "density-matrix or MPO backend for general Kraus channels");
+                                    "density-matrix or MPO backend, or the QCSim Pauli propagator, for general Kraus channels");
 
     std::uniform_real_distribution<double> dist(0.0, 1.0);
     double r = dist(rng);
@@ -2051,7 +2232,8 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
     nm.EnsureNoT1ThermalStack();
     if (!exact_channels && nm.has_additional_quantum_channels())
         throw std::invalid_argument("Generalized amplitude damping, correlated phase flips and arbitrary "
-                                    "Kraus channels require a density-matrix or MPO exact-noise backend");
+                                    "Kraus channels require a density-matrix or MPO exact-noise backend, or the QCSim Pauli "
+                                    "propagator");
 
     auto out = std::make_shared<Circuits::Circuit<double>>();
     std::uniform_real_distribution<double> dist(0.0, 1.0);
@@ -2531,7 +2713,8 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
     nm.EnsureNoT1ThermalStack();
     if (!exact_channels && nm.has_additional_quantum_channels())
         throw std::invalid_argument("Generalized amplitude damping, correlated phase flips and arbitrary "
-                                    "Kraus channels require a density-matrix or MPO exact-noise backend");
+                                    "Kraus channels require a density-matrix or MPO exact-noise backend, or the QCSim Pauli "
+                                    "propagator");
 
     auto out = std::make_shared<Circuits::Circuit<double>>();
     std::uniform_real_distribution<double> dist(0.0, 1.0);

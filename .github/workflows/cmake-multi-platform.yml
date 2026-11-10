@@ -26,7 +26,7 @@ on:
         default: base
 
 env:
-  QCSIM_VERSION: "ebc28be4731ab38bfaaaf3baf83d12fa7abefed5"
+  QCSIM_VERSION: "f69b4ac979e1af877a34fd48371997dd01e9bcb3"
   CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
@@ -151,7 +151,7 @@ jobs:
       run: ctest --test-dir . --output-on-failure -R '^maestro_composer_integration$'
 
     - name: Check backend selection, tensor contractions, fusion, and sampling
-      run: ctest --test-dir . --output-on-failure -R '^(backend_specialization|tensor_contractions|gate_fusion_tests|fusion_routing_tests|gpu_registry|gpu_pauli_legacy|gpu_pauli_checkpoints|sampling_order|causal_cone|parity_reduction|realization_workers|reference_frame_sampler|adaptive_sampling|network_jobs)$'
+      run: ctest --test-dir . --output-on-failure -R '^(backend_specialization|tensor_contractions|gate_fusion_tests|fusion_routing_tests|gpu_registry|gpu_pauli_legacy|gpu_pauli_checkpoints|sampling_order|causal_cone|parity_reduction|realization_workers|reference_frame_sampler|extended_frame_sampler|adaptive_sampling|network_jobs)$'
 
   # Full suite only. An MSVC build of the bindings, running the adjoint tests that
   # cover its Windows-specific memory guard and the sampling suites, including the

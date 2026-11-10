@@ -55,6 +55,7 @@ try
                              Case{"wide_product", 70, 2000, false, wide}})
     {
         MPOProbe sim;
+        sim.Configure("counts_policy", "legacy");
         sim.SetMultithreading(false);
         sim.AllocateQubits(test.qubits);
         sim.Initialize();

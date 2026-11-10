@@ -172,6 +172,11 @@ Mask TracePauliOperation(const std::shared_ptr<Circuits::IOperation<double>> &op
     Mask keep = 0;
     for (auto q : qs)
         keep |= x[q] | z[q];
+    // A Pauli channel is diagonal in the Pauli basis: it scales an observable
+    // without changing its axes or spreading it to the channel's other qubit.
+    if (op->GetType() == Circuits::OperationType::kQuantumChannel &&
+        !std::static_pointer_cast<Circuits::QuantumChannelOperation<double>>(op)->GetChannel().GetPauliProbabilities().empty())
+        return keep;
     for (auto q : qs)
     {
         if (marginalize_resets && op->GetType() == Circuits::OperationType::kReset)

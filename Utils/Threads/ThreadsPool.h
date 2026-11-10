@@ -16,10 +16,12 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <exception>
 #include <limits>
 #include <mutex>
 #include <new>
 #include <queue>
+#include <utility>
 #include <vector>
 
 #include <fstream>
@@ -240,21 +242,16 @@ class ThreadsPool
      * This function will block until the number of finished jobs reaches the
      * finish limit set by SetFinishLimit(). If no finish limit is set, it will
      * wait indefinitely.
+     * A job that threw counts as finished, as do the jobs skipped after it;
+     * once all of them are, the first exception a job threw is rethrown here,
+     * on the waiting thread, instead of terminating the worker's.
      */
     void WaitForFinish()
     {
-        do
-        {
-            std::unique_lock lock(FinishMutex);
-
-            if (FinishCount >= FinishLimit)
-                return;
-
-            ConditionFinish.wait(lock, [this] { return FinishCount >= FinishLimit; });
-
-            if (FinishCount >= FinishLimit)
-                return;
-        } while (true);
+        std::unique_lock lock(FinishMutex);
+        ConditionFinish.wait(lock, [this] { return FinishCount >= FinishLimit; });
+        if (Failure)
+            std::rethrow_exception(std::exchange(Failure, nullptr));
     }
 
     /**
@@ -317,9 +314,32 @@ class ThreadsPool
         std::unique_lock lock(FinishMutex);
         FinishLimit = limit;
         FinishCount = 0;
+        Failure = nullptr;
     }
 
   private:
+    /**
+     * @brief Keep the first exception a job threw, for WaitForFinish().
+     */
+    void RecordFailure(std::exception_ptr failure)
+    {
+        const std::lock_guard lock(FinishMutex);
+        if (!Failure)
+            Failure = std::move(failure);
+    }
+
+    /**
+     * @brief Whether a job threw since the finish limit was set.
+     *
+     * The jobs still queued then are counted without running: their results
+     * would be discarded with the exception.
+     */
+    bool Failed()
+    {
+        const std::lock_guard lock(FinishMutex);
+        return static_cast<bool>(Failure);
+    }
+
 #ifdef MAESTRO_POOL_FORK_HANDLERS
     void PrepareFork() override
     {
@@ -412,6 +432,7 @@ class ThreadsPool
     size_t FinishCount = 0;                                  /**< The number of finished jobs */
     size_t FinishLimit = std::numeric_limits<size_t>::max(); /**< The limit of the finished jobs to
                                                                 reach before notifying finish */
+    std::exception_ptr Failure;                              /**< The first exception a job threw, guarded by FinishMutex */
 
     std::queue<std::shared_ptr<Job>> JobsQueue; /**< The queue of the jobs to be executed */
     size_t Running = 0;                         /**< Jobs taken from the queue and not finished yet */

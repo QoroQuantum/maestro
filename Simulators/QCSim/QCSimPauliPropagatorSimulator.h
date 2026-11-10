@@ -154,20 +154,68 @@ class QCSimPauliPropagatorSimulator : public ImmediateQCSimSimulator
         return res;
     }
 
+    // An unrecorded reset is a channel. Its adjoint acts on the propagated
+    // observable deterministically: no outcome is drawn and no projector is
+    // inserted, so the recorded circuit keeps describing the whole ensemble.
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
-        DontNotify();
-        {
-            std::vector<int> qubitsInt(qubits.begin(), qubits.end());
-            const auto res = pp->Measure(qubitsInt);
-            for (size_t i = 0; i < res.size(); ++i)
-            {
-                if (res[i])
-                    pp->ApplyX(qubitsInt[i]);
-            }
-        }
-        Notify();
+        // All or nothing: a target outside the register leaves no reset behind.
+        for (const auto qubit : qubits)
+            if (qubit >= nrQubits)
+                throw std::out_of_range("Pauli qubit outside register");
+        for (const auto qubit : qubits)
+            pp->ApplyReset(static_cast<int>(qubit));
         NotifyObservers(qubits);
+    }
+
+    // The propagator applies the adjoint (Heisenberg) channel to the
+    // observable, so one recorded circuit gives the exact noisy ensemble
+    // average. There is no density matrix to read back: mixed-state queries
+    // remain with density_matrix and matrix_product_operator.
+    bool SupportsQuantumChannels() const override
+    {
+        return true;
+    }
+
+    void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel) override
+    {
+        if (targets.size() != channel.GetNumberOfQubits())
+            throw std::invalid_argument("The number of channel targets does not match its Kraus operators");
+        if (targets.empty() || targets.size() > 2)
+            throw std::invalid_argument("QCSim supports only one- and two-qubit local channels");
+        for (const auto target : targets)
+            if (target >= nrQubits)
+                throw std::invalid_argument("Quantum-channel qubit is out of range");
+        if (targets.size() == 2 && targets[0] == targets[1])
+            throw std::invalid_argument("Quantum-channel target qubits must be distinct");
+        if (!pp)
+            throw std::runtime_error("QCSim Pauli propagator is not initialized");
+        // Pauli() channels carry their probabilities, in the index order the
+        // propagator takes: digit i selects I, X, Y, Z on targets[i]. Any other
+        // channel is compiled from its Kraus operators; one that turns out to
+        // be diagonal (phase damping) still never branches.
+        const auto &probabilities = channel.GetPauliProbabilities();
+        const int first = static_cast<int>(targets[0]);
+        if (targets.size() == 1)
+        {
+            if (probabilities.size() == 4)
+                pp->ApplyPauliChannel(first, probabilities[1], probabilities[2], probabilities[3]);
+            else
+                pp->ApplyKrausChannel(channel.GetKrausOperators(), first);
+        }
+        else
+        {
+            const int second = static_cast<int>(targets[1]);
+            if (probabilities.size() == 16)
+            {
+                std::array<double, 16> values;
+                std::copy(probabilities.begin(), probabilities.end(), values.begin());
+                pp->ApplyTwoQubitPauliChannel(first, second, values);
+            }
+            else
+                pp->ApplyKrausChannel(channel.GetKrausOperators(), first, second);
+        }
+        NotifyObservers(targets);
     }
 
     double Probability(Types::qubit_t outcome) override

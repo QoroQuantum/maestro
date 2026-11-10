@@ -35,7 +35,7 @@ To activate the licence on cluster nodes without internet access, contact us at
 ## 3. On-premise for organizations
 
 For a site licence on your own infrastructure, including air-gapped licensing,
-see [Maestro Enterprise](https://maestro.qoroquantum.net).
+see [Maestro Enterprise](https://enterprise.qoroquantum.net/maestro/).
 
 (py_gpu_local)=
 ## Running GPU locally

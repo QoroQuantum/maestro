@@ -6,6 +6,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 namespace j = boost::json;
@@ -117,6 +118,18 @@ void TestThermalApproximation()
                 }
             }
         }
+    }
+
+    // The clamp is reported only where the circuit draws it: idle relaxation
+    // without delays, and a zero-duration gate relaxation (the identity), are
+    // not approximated.
+    {
+        auto idle = Estimate("h q[0];", {"XI"}, Channel("idle", {{"t1", 1.0}, {"t2", 2.0}}), "statevector", 2);
+        idle["noise"].as_object()["realizations"] = 256;
+        ThermalCall(idle, false);
+        auto instant = Estimate("h q[0];", {"XI"}, Channel("thermal_relaxation", {{"duration", 0.0}, {"t1", 1.0}, {"t2", 2.0}}), "statevector", 2);
+        instant["noise"].as_object()["realizations"] = 256;
+        ThermalCall(instant, false);
     }
 
     // Accepting sampled thermal approximations must not admit exact-only maps
@@ -589,6 +602,37 @@ void TestRowSelection()
     }
 }
 
+void TestMultinomialCountReplay()
+{
+    for (const char *method : {"statevector", "density_matrix", "path_integral", "matrix_product_state", "matrix_product_operator", "extended_stabilizer"})
+    {
+        auto request = Request("execute", 3, "h q[0]; t q[0]; h q[0]; cx q[0],q[1]; measure q[0] -> c[0];", method);
+        auto &execution = request["execution"].as_object();
+        execution["shots"] = 4096;
+        execution.erase("seed");
+        const auto fresh = Call(request);
+        const auto policy = fresh.at("execution_metadata").at("configured_options").at("counts_policy");
+        Check(policy == "multinomial_v1", "Unseeded terminal count policy is missing from replay metadata");
+        auto &simulator = request["simulator"].as_object();
+        execution["seed"] = fresh.at("seed");
+        simulator["options"] = j::object{{"counts_policy", policy}};
+        Check(Call(request).at("counts") == fresh.at("counts"), "Native terminal counts failed seed and policy replay");
+        execution["seed"] = 0;
+        simulator["options"] = j::object{{"counts_policy", "auto"}};
+        const auto seeded = Call(request);
+        Check(seeded.at("execution_metadata").at("configured_options").at("counts_policy") == "multinomial_v1",
+              "Seed zero prevented automatic terminal count sampling");
+        simulator["options"] = j::object{{"counts_policy", "multinomial_v1"}};
+        Check(Call(request).at("counts") == seeded.at("counts"), "Seeded automatic counts differ from the explicit multinomial policy");
+        if (std::string_view(method) == "statevector")
+        {
+            // Captured from the previous seeded default, with one worker.
+            simulator["options"] = j::object{{"counts_policy", "legacy"}, {"max_simulators", 1}};
+            Check(Call(request).at("counts") == j::object{{"000", 3502}, {"100", 594}}, "Explicit legacy did not replay historical statevector counts");
+        }
+    }
+}
+
 // SimpleExecute's counts_policy: frames for unseeded Clifford counts under auto,
 // on request under frame_v1, never under legacy or for seeded auto calls.
 void TestLegacyCountsPolicy()
@@ -780,7 +824,9 @@ void TestAutomaticMixedStateNoise()
         auto dynamic = Request("checkpoint_batch", 2, "h q[0]; cx q[0],q[1];", method);
         dynamic["suffixes"] = j::array{Request("execute", 2, "h q[1]; h q[1]; measure q[0]->c[0]; if(c==1) x q[1]; measure q->c;", method).at("circuit")};
         dynamic["execution"].as_object()["shots"] = 600;
-        const auto &counts = Call(dynamic).at("results").at(0).at("counts").as_object();
+        // Keep the result alive: at() returns a reference into it.
+        result = Call(dynamic);
+        const auto &counts = result.at("results").at(0).at("counts").as_object();
         Check(counts.size() == 2 && counts.at("00").as_int64() > 200 && counts.at("10").as_int64() > 200, "A shared dynamic suffix head changed its branches");
     }
 
@@ -799,8 +845,9 @@ void TestAutomaticMixedStateNoise()
     result = Call(sampled);
     Check(std::abs(Real(result.at("fidelity")) - 0.75) < 0.04 && !result.at("standard_error").is_null(), "Sampled Pauli noisy fidelity is wrong");
 
-    // Automatic candidate lists stay inside the list without a cost model:
-    // the first listed candidate that can hold the register runs.
+    // Automatic candidate lists stay inside the list. Without a cost model the
+    // first listed candidate that can hold the register runs; Composer builds
+    // have one and may pick any listed candidate.
     const auto automatic = [](size_t qubits, const std::string &body, std::initializer_list<const char *> methods) {
         auto request = Request("execute", qubits, body);
         auto &simulator = request["simulator"].as_object();
@@ -812,8 +859,14 @@ void TestAutomaticMixedStateNoise()
         return request;
     };
     for (const char *body : {"h q[0]; t q[0]; measure q -> c;", "h q[0]; measure q -> c;"})
-        Check(Call(automatic(1, body, {"density_matrix", "statevector"})).at("execution_metadata").at("method") == "density_matrix",
-              "Automatic selection ran a backend outside its candidate list");
+    {
+        const auto chosen = Call(automatic(1, body, {"density_matrix", "statevector"})).at("execution_metadata").at("method");
+#ifdef MAESTRO_ENABLE_COMPOSER
+        Check(chosen == "density_matrix" || chosen == "statevector", "Automatic selection ran a backend outside its candidate list");
+#else
+        Check(chosen == "density_matrix", "Automatic selection without a cost model skipped the first listed candidate");
+#endif
+    }
     std::string wide;
     for (size_t qubit = 0; qubit < 40; qubit += 2)
         wide += "x q[" + std::to_string(qubit) + "]; ";
@@ -915,13 +968,463 @@ void TestAutomaticMixedStateNoise()
           "Capabilities omit estimate, fidelity or selection rules");
 }
 
+// Batched extended-stabilizer frames: unseeded auto requests (counts, rows and
+// checkpoint suffixes) opt in before receiving their seed and report the policy
+// that replays them; seeded requests keep scalar trajectories unless
+// counts_policy is frame_v1. The frame handle compiles extended_stabilizer
+// requests too.
+void TestExtendedFrameRequests()
+{
+    const char *body = "h q[0]; t q[0]; cx q[0],q[1]; h q[1]; t q[1]; h q[1]; measure q -> c;";
+    const j::object noise{{"mode", "pauli"},
+                          {"evaluation", "trajectories"},
+                          {"channels", j::array{Channel("depolarizing", {{"probability", 0.05}}), Channel("bit_flip", {{"probability", 0.1}}, j::array{1})}}};
+    const auto prepare = [&](const char *operation, const char *source, bool seeded, const char *policy, bool rows) {
+        auto request = Request(operation, 2, source, "extended_stabilizer");
+        request["noise"] = noise;
+        auto &execution = request["execution"].as_object();
+        execution["shots"] = 400;
+        if (!seeded)
+            execution.erase("seed");
+        if (rows)
+            execution["return_samples"] = true;
+        if (policy)
+            request["simulator"].as_object()["options"] = j::object{{"counts_policy", policy}};
+        return request;
+    };
+    // The ordinary counts executor reports no strategy.
+    const auto strategy = [](const j::object &result) {
+        const auto *value = result.at("execution_metadata").as_object().if_contains("sampling_strategy");
+        return value ? std::string(value->as_string()) : std::string();
+    };
+    const auto replay = [](j::object request, const j::object &result) {
+        request["execution"].as_object()["seed"] = result.at("seed");
+        request["simulator"].as_object()["options"] =
+            j::object{{"counts_policy", result.at("execution_metadata").at("configured_options").at("counts_policy")}};
+        return Call(request);
+    };
+    for (const bool rows : {false, true})
+    {
+        const auto request = prepare("execute", body, false, nullptr, rows);
+        const auto result = Call(request);
+        Check(strategy(result) == "extended_frame_v1", "Unseeded native extended_stabilizer shots did not use frames");
+        Check(result.at("execution_metadata").at("configured_options").at("counts_policy") == "frame_v1", "Frame results do not report their policy");
+        const auto again = replay(request, result);
+        Check(strategy(again) == "extended_frame_v1" && (rows ? Rows(again) == Rows(result) : again.at("counts") == result.at("counts")),
+              "Native frame shots did not replay from their seed and policy");
+        if (rows)
+            Check(Rows(result).size() == 400, "Native frame rows lost shots");
+        else
+        {
+            uint64_t total = 0;
+            for (const auto &entry : result.at("counts").as_object())
+                total += entry.value().as_int64();
+            Check(total == 400, "Native frame counts lost shots");
+        }
+        Check(strategy(Call(prepare("execute", body, true, nullptr, rows))) != "extended_frame_v1", "A seeded auto request changed its sampler");
+        const auto opted = Call(prepare("execute", body, true, "frame_v1", rows));
+        Check(strategy(opted) == "extended_frame_v1", "frame_v1 did not opt a seeded request in");
+    }
+
+    // The trajectory memory budget applies to extended_stabilizer frames.
+    auto budgeted = prepare("execute", body, false, nullptr, false);
+    budgeted["simulator"].as_object()["options"] = j::object{{"trajectory_max_memory_mb", 128}};
+    Check(strategy(Call(budgeted)) == "extended_frame_v1", "A budgeted extended_stabilizer request did not use frames");
+
+    // Checkpoint suffixes after an ideal gate-only prefix.
+    auto checkpoint = prepare("checkpoint_batch", "h q[0]; t q[0]; cx q[0],q[1];", false, nullptr, false);
+    checkpoint["suffixes"] =
+        j::array{Request("execute", 2, "h q[1]; t q[1]; h q[1]; measure q -> c;").at("circuit"), Request("execute", 2, "measure q -> c;").at("circuit")};
+    auto batch = Call(checkpoint);
+    for (const auto &suffix : batch.at("results").as_array())
+    {
+        Check(suffix.at("sampling_strategy") == "extended_frame_v1", "Checkpoint suffixes did not use frames");
+        uint64_t total = 0;
+        for (const auto &entry : suffix.at("counts").as_object())
+            total += entry.value().as_int64();
+        Check(total == 400, "Checkpoint frame counts lost shots");
+    }
+    Check(batch.at("execution_metadata").at("configured_options").at("counts_policy") == "frame_v1", "Checkpoint frames do not report their policy");
+    const auto again = replay(checkpoint, batch);
+    Check(again.at("results") == batch.at("results"), "Checkpoint frame suffixes did not replay");
+
+    // An ineligible suffix follows the ordinary path even when another suffix
+    // uses frames. The single returned policy must replay both distributions.
+    auto mixed = checkpoint;
+    mixed["noise"].as_object()["realizations"] = 2;
+    mixed["suffixes"].as_array().push_back(Request("execute", 2, "measure q[0] -> c[0]; if(c==1) x q[1]; measure q -> c;").at("circuit"));
+    const auto mixedBatch = Call(mixed);
+    Check(mixedBatch.at("execution_metadata").at("configured_options").at("counts_policy") == "frame_v1" &&
+              mixedBatch.at("results").at(0).at("sampling_strategy") == "extended_frame_v1" &&
+              mixedBatch.at("results").as_array().back().at("sampling_strategy") != "extended_frame_v1",
+          "Mixed checkpoint suffixes did not preserve their frame and fallback choices");
+    Check(replay(mixed, mixedBatch).at("results") == mixedBatch.at("results"), "Mixed checkpoint frame and ordinary suffixes did not replay");
+
+    // Coherent noise excludes frames for every suffix. Returning auto here
+    // would promote the replay's explicit seed to the multinomial path.
+    auto noFrames = checkpoint;
+    noFrames["noise"] =
+        j::object{{"mode", "coherent"}, {"realizations", 1}, {"channels", j::array{Channel("coherent_rotation", {{"rx", 0.1}, {"ry", 0.0}, {"rz", 0.0}})}}};
+    const auto ordinaryBatch = Call(noFrames);
+    Check(ordinaryBatch.at("execution_metadata").at("configured_options").at("counts_policy") == "legacy",
+          "An unframed checkpoint did not record its fallback count policy");
+    Check(replay(noFrames, ordinaryBatch).at("results") == ordinaryBatch.at("results"), "Unframed checkpoint suffixes did not replay");
+
+    // The frame handle: any extended_stabilizer circuit, independent noise per shot.
+    auto circuit = Request("execute", 2, "h q[0]; t q[0]; cx q[0],q[1]; measure q[0] -> c[0]; measure q[1] -> c[69];", "extended_stabilizer", 70).at("circuit");
+    const auto text = j::serialize(j::object{
+        {"schema_version", 2}, {"circuit", circuit}, {"simulator", j::object{{"backend", "qcsim"}, {"method", "extended_stabilizer"}}}, {"noise", noise}});
+    char *error = nullptr;
+    void *sampler = MaestroCreateReferenceFrameSampler(text.c_str(), &error);
+    Check(sampler != nullptr && error == nullptr, "An extended_stabilizer frame handle did not compile");
+    size_t qubits = 0, clbits = 0;
+    Check(MaestroReferenceFrameSamplerShape(sampler, &qubits, &clbits) == 1 && qubits == 2 && clbits == 70, "Extended frame handle shape");
+    const size_t shots = 600;
+    std::vector<unsigned long long> first(2 * shots), second(2 * shots);
+    Check(MaestroReferenceFrameSampleBits(sampler, shots, 5, first.data(), first.size()) == 1 &&
+              MaestroReferenceFrameSampleBits(sampler, shots, 5, second.data(), second.size()) == 1 && first == second,
+          "Extended frame handle rows did not replay");
+    std::map<std::pair<unsigned long long, unsigned long long>, unsigned long long> histogram;
+    size_t ones = 0;
+    for (size_t shot = 0; shot < shots; ++shot)
+    {
+        ++histogram[{first[2 * shot], first[2 * shot + 1]}];
+        ones += first[2 * shot] & 1ULL;
+    }
+    // H T on |0> gives P(1) = 1/2, moved little by the noise.
+    Check(ones > 220 && ones < 380, "Extended frame handle rows have the wrong distribution");
+    std::vector<unsigned long long> distinct(2 * shots), counts(shots);
+    size_t written = 0;
+    Check(MaestroReferenceFrameSampleCountsBits(sampler, shots, 5, distinct.data(), counts.data(), shots, &written) == 1 && written == histogram.size(),
+          "Extended frame handle counts failed");
+    for (size_t entry = 0; entry < written; ++entry)
+        Check(histogram[{distinct[2 * entry], distinct[2 * entry + 1]}] == counts[entry], "Extended frame counts are not the histogram of its rows");
+    MaestroDestroyReferenceFrameSampler(sampler);
+    const auto budgetedHandle = j::serialize(
+        j::object{{"schema_version", 2},
+                  {"circuit", circuit},
+                  {"simulator", j::object{{"backend", "qcsim"}, {"method", "extended_stabilizer"}, {"options", j::object{{"trajectory_max_memory_mb", 128}}}}},
+                  {"noise", noise}});
+    sampler = MaestroCreateReferenceFrameSampler(budgetedHandle.c_str(), nullptr);
+    Check(sampler != nullptr, "An extended frame handle rejected its memory budget");
+    MaestroDestroyReferenceFrameSampler(sampler);
+    // The handle's budget is soft, as execute's: a shot that alone exceeds
+    // it runs beyond it with the rows of an ample budget.
+    std::string rotations;
+    for (int q = 0; q < 17; ++q)
+        rotations += "ry(1.2) q[" + std::to_string(q) + "]; ";
+    const auto wide = Request("execute", 17, rotations + "measure q -> c;", "extended_stabilizer").at("circuit");
+    std::vector<unsigned long long> tight(2), ample(2);
+    for (const auto &[megabytes, rows] : {std::pair<int, std::vector<unsigned long long> *>{1, &tight}, {128, &ample}})
+    {
+        const auto handle = j::serialize(
+            j::object{{"schema_version", 2},
+                      {"circuit", wide},
+                      {"simulator",
+                       j::object{{"backend", "qcsim"}, {"method", "extended_stabilizer"}, {"options", j::object{{"trajectory_max_memory_mb", megabytes}}}}}});
+        sampler = MaestroCreateReferenceFrameSampler(handle.c_str(), nullptr);
+        Check(sampler != nullptr && MaestroReferenceFrameSampleBits(sampler, 2, 7, rows->data(), rows->size()) == 1,
+              "An extended frame handle failed a shot above its budget");
+        MaestroDestroyReferenceFrameSampler(sampler);
+    }
+    Check(tight == ample, "The extended frame handle's budget changed its rows");
+    // Classical control keeps scalar trajectories: no frame handle.
+    auto controlled =
+        Request("execute", 1, "h q[0]; t q[0]; measure q[0] -> c[0]; if(c==1) x q[0]; measure q[0] -> c[0];", "extended_stabilizer").at("circuit");
+    error = nullptr;
+    Check(MaestroCreateReferenceFrameSampler(
+              j::serialize(
+                  j::object{{"schema_version", 2}, {"circuit", controlled}, {"simulator", j::object{{"backend", "qcsim"}, {"method", "extended_stabilizer"}}}})
+                  .c_str(),
+              &error) == nullptr &&
+              error != nullptr,
+          "Classical control compiled to extended frames");
+    FreeResult(error);
+}
+
+// The QCSim Pauli propagator applies channels to the observable it propagates.
+// One execution then gives the ensemble a density matrix gives: Pauli-type
+// noise by default, relaxation on request, and channels with no sampled form.
+void TestPauliPropagatorExactNoise()
+{
+    const char *propagator = "pauli_propagator";
+    const std::string body = "h q[0]; cx q[0],q[1]; ry(0.7) q[1]; rx(0.4) q[0];";
+    const j::array observables{"ZZ", "XI", "IY", "ZI", "XX"};
+    const auto run = [&](const j::object &channel, const char *evaluation, const char *expected, int realizations, bool compare) {
+        auto request = Estimate(body, observables, channel, propagator, 2);
+        if (evaluation)
+            request["noise"].as_object()["evaluation"] = evaluation;
+        const auto result = Call(request);
+        Check(result.at("noise").at("evaluation") == expected && result.at("noise").at("realizations") == realizations,
+              "Pauli propagator noise resolved to the wrong evaluation");
+        if (compare)
+        {
+            auto reference = Estimate(body, observables, channel, "density_matrix", 2);
+            SameExpectations(result, Call(reference));
+            Check(result.at("execution_metadata").at("estimate_evaluation") == "deterministic", "Exact propagator noise averaged trajectories");
+        }
+        return result;
+    };
+    // Diagonal in the Pauli basis: exact by default, one realization.
+    run(Channel("depolarizing", {{"probability", 0.2}}, {0, 1}), nullptr, "exact_channels", 1, true);
+    run(Channel("pauli", {{"px", 0.05}, {"py", 0.1}, {"pz", 0.2}}, {1}), nullptr, "exact_channels", 1, true);
+    run(Channel("dephasing", {{"probability", 0.15}}, {0}), nullptr, "exact_channels", 1, true);
+    run(Channel("phase_damping", {{"gamma", 0.3}}, {1}), nullptr, "exact_channels", 1, true);
+    run(Channel("gate_depolarizing_2q", {{"probability", 0.1}}, {0, 1}), nullptr, "exact_channels", 1, true);
+    // The caller can still sample them.
+    run(Channel("depolarizing", {{"probability", 0.2}}, {0, 1}), "trajectories", "trajectories", 100, false);
+
+    // Relaxation keeps its trajectories unless exact evaluation is requested;
+    // exact evaluation keeps the calibrated T2 above T1.
+    const auto thermal = Channel("thermal_relaxation", {{"duration", 1.0}, {"t1", 3.0}, {"t2", 5.0}, {"excited_population", 0.1}}, {0, 1});
+    auto result = run(thermal, nullptr, "trajectories", 100, false);
+    auto approximations = result.at("noise").at("approximations").as_array();
+    Check(std::find(approximations.begin(), approximations.end(), j::value("thermal_T2_clamped_to_T1")) != approximations.end(),
+          "Sampled propagator relaxation hid its T2 clamp");
+    result = run(thermal, "exact", "exact_channels", 1, true);
+    approximations = result.at("noise").at("approximations").as_array();
+    Check(std::find(approximations.begin(), approximations.end(), j::value("thermal_T2_clamped_to_T1")) == approximations.end(),
+          "Exact propagator relaxation reported a T2 clamp");
+    run(Channel("t1", {{"gamma", 0.3}}, {0}), nullptr, "trajectories", 100, false);
+    run(Channel("t1", {{"gamma", 0.3}}, {0}), "exact", "exact_channels", 1, true);
+    // No sampled form exists for this one: exact, where it was rejected before.
+    run(Channel("generalized_amplitude_damping", {{"gamma", 0.3}, {"excited_population", 0.2}}, {1}), nullptr, "exact_channels", 1, true);
+    // Coherent disorder is still sampled.
+    result = run(Channel("coherent_rotation", {{"rx", 0.0}, {"ry", 0.3}, {"rz", 0.0}}, {0}), nullptr, "exact_channels", 100, false);
+    Check(result.at("noise").at("stochastic_noise").as_bool(), "Exact propagator channels suppressed coherent averaging");
+
+    // Circuit channel instructions run in place, without a noise block.
+    const auto instructions = [&](const char *method) {
+        auto request = Request("estimate", 2, "", method);
+        const double a = std::sqrt(0.7), b = std::sqrt(0.3);
+        request["circuit"].as_object()["format"] = "instructions";
+        request["circuit"].as_object()["source"] = j::array{
+            j::object{{"name", "h"}, {"qubits", j::array{0}}}, j::object{{"name", "cx"}, {"qubits", j::array{0, 1}}},
+            j::object{{"name", "kraus"}, {"qubits", j::array{1}}, {"operators", j::array{j::array{1, 0, 0, a}, j::array{0, b, 0, 0}}}},
+            j::object{
+                {"name", "pauli_channel"}, {"qubits", j::array{0, 1}}, {"probabilities", j::array{0.7, 0.12, 0, 0, 0, 0, 0.1, 0, 0, 0, 0, 0, 0.08, 0, 0, 0}}},
+            j::object{{"name", "ry"}, {"qubits", j::array{0}}, {"params", j::array{0.6}}}};
+        request["observables"] = observables;
+        return Call(request);
+    };
+    SameExpectations(instructions(propagator), instructions("density_matrix"));
+
+    // An unrecorded reset is a deterministic channel: one evaluation, no
+    // measurement trajectories, and terminal counts from one recorded circuit.
+    auto reset = Request("estimate", 2, "h q[0]; cx q[0],q[1]; reset q[0]; h q[0];", propagator);
+    reset["observables"] = j::array{"XI", "IZ"};
+    result = Call(reset);
+    Near(Real(result.at("expectation_values").at(0)), 1.0);
+    Near(Real(result.at("expectation_values").at(1)), 0.0);
+    Check(result.at("execution_metadata").at("estimate_evaluation") == "deterministic" && result.at("execution_metadata").at("measurement_trajectories") == 0,
+          "A reset on the Pauli propagator averaged measurement trajectories");
+    auto counts = Request("execute", 2, "h q[0]; cx q[0],q[1]; reset q[0]; measure q->c;", propagator);
+    counts["execution"].as_object()["shots"] = 2000;
+    result = Call(counts);
+    const auto &histogram = result.at("counts").as_object();
+    Check(histogram.size() == 2 && histogram.contains("00") && histogram.contains("01") && std::abs(histogram.at("00").as_int64() - 1000) < 150,
+          "Reset counts on the Pauli propagator lost the mixed partner");
+
+    // Checkpoint suffixes sample from the saved prefix without replaying it,
+    // a reset included, and a noisy prefix is evolved once as exact channels.
+    auto checkpoint = Request("checkpoint_batch", 2, "h q[0]; cx q[0],q[1];", propagator);
+    checkpoint["suffixes"] = j::array{Request("execute", 2, "reset q[0]; measure q->c;", propagator).at("circuit"),
+                                      Request("execute", 2, "cx q[0],q[1]; h q[0]; measure q->c;", propagator).at("circuit")};
+    checkpoint["execution"].as_object()["shots"] = 512;
+    result = Call(checkpoint);
+    const auto &outputs = result.at("results").as_array();
+    Check(outputs.at(0).at("sampling_strategy") == "terminal_v1" && outputs.at(1).at("sampling_strategy") == "terminal_v1",
+          "Pauli propagator checkpoint suffixes did not use terminal sampling");
+    Check(outputs.at(0).at("counts").as_object().size() == 2 && outputs.at(1).at("counts") == j::object{{"00", 512}},
+          "Pauli propagator checkpoint sampling lost its mixed state or overwrote the saved prefix");
+    checkpoint["noise"] = j::object{{"prefix", true}, {"channels", j::array{Channel("depolarizing", {{"probability", 0.75}}, {1})}}};
+    result = Call(checkpoint);
+    Check(result.at("noise").at("evaluation") == "exact_channels" && result.at("results").at(1).at("counts").as_object().size() > 1,
+          "A noisy Pauli propagator prefix was not evolved as exact channels");
+    // Relaxation on the prefix is sampled by default there, which a prefix
+    // evolved once cannot be; exact evaluation applies it.
+    checkpoint["noise"] = j::object{{"prefix", true}, {"channels", j::array{Channel("t1", {{"gamma", 0.2}}, {0})}}};
+    Check(Call(checkpoint, false).at("error").at("code") == "unsupported_capability", "A sampled relaxation prefix was accepted on the propagator");
+    checkpoint["noise"].as_object()["evaluation"] = "exact";
+    Check(Call(checkpoint).at("noise").at("evaluation") == "exact_channels", "An exact relaxation prefix was refused on the propagator");
+
+    // Fidelity reads P(0...0) of the mixed state, up to the documented width.
+    const auto fidelity = [&](const char *method, size_t qubits) {
+        auto request = Request("noisy_fidelity", qubits, "h q[0]; cx q[0],q[1]; ry(0.7) q[1];", method);
+        request["noise"] = j::object{{"channels", j::array{Channel("depolarizing", {{"probability", 0.2}}, {0, 1})}}};
+        return request;
+    };
+    result = Call(fidelity(propagator, 2));
+    Near(Real(result.at("fidelity")), Real(Call(fidelity("density_matrix", 2)).at("fidelity")));
+    Check(result.at("noise").at("evaluation") == "exact_channels" && result.at("noise").at("realizations") == 1 && Real(result.at("standard_error")) == 0.0,
+          "Exact propagator fidelity was sampled");
+    Check(Call(fidelity(propagator, 25), false).at("error").at("code") == "unsupported_capability", "A wide propagator fidelity was not refused");
+
+    // Automatic evaluation follows what the channels do to the circuit.
+    const auto approximated = [](const j::object &output, const char *name) {
+        const auto &list = output.at("noise").at("approximations").as_array();
+        return std::find(list.begin(), list.end(), j::value(name)) != list.end();
+    };
+    // Thermal relaxation towards equal populations only scales terms: exact,
+    // with the calibrated T2 that sampled relaxation would clamp to T1.
+    const auto unital = Channel("thermal_relaxation", {{"duration", 1.0}, {"t1", 1.0}, {"t2", 2.0}, {"excited_population", 0.5}}, {0, 1});
+    result = run(unital, nullptr, "exact_channels", 1, true);
+    Check(result.at("noise").at("approximations").as_array().empty(), "Unital relaxation on the propagator reported an approximation");
+    const auto spectators = [&](const std::string &gates, const char *method) {
+        auto request = Request("estimate", 3, gates, method);
+        request["observables"] = j::array{"XII", "ZII", "YII"};
+        // A zero T1 probability on the gated qubit, T1 on a qubit no gate
+        // touches, and idle relaxation in a circuit without delays.
+        request["noise"] = j::object{{"seed", 23},
+                                     {"channels", j::array{Channel("depolarizing", {{"probability", 0.1}}, {0}), Channel("t1", {{"gamma", 0.0}}, {0}),
+                                                           Channel("t1", {{"gamma", 0.3}}, {1}), Channel("idle", {{"t1", 50.0}, {"t2", 60.0}}, {2})}}};
+        return Call(request);
+    };
+    result = spectators("h q[0]; ry(0.7) q[0];", propagator);
+    Check(result.at("noise").at("evaluation") == "exact_channels" && result.at("noise").at("realizations") == 1 &&
+              result.at("noise").at("approximations").as_array().empty(),
+          "Relaxation that never acts on the circuit kept its trajectories");
+    SameExpectations(result, spectators("h q[0]; ry(0.7) q[0];", "density_matrix"));
+    result = spectators("h q[0]; ry(0.7) q[0]; h q[1];", propagator);
+    Check(result.at("noise").at("evaluation") == "trajectories" && approximated(result, "sampled_T1_reset"), "Relaxation on a gated qubit was not sampled");
+
+    // A Kraus instruction cannot be sampled, so a relaxation model beside it
+    // is evaluated exactly too instead of refusing the request.
+    const double keep = std::sqrt(0.7), decay = std::sqrt(0.3);
+    const j::object damping{{"name", "kraus"}, {"qubits", j::array{0}}, {"operators", j::array{j::array{1, 0, 0, keep}, j::array{0, decay, 0, 0}}}};
+    const auto instructed = [&](const char *method, const char *evaluation) {
+        auto request = Request("estimate", 1, "", method);
+        request["circuit"].as_object()["format"] = "instructions";
+        request["circuit"].as_object()["source"] =
+            j::array{j::object{{"name", "h"}, {"qubits", j::array{0}}}, j::object{{"name", "ry"}, {"qubits", j::array{0}}, {"params", j::array{0.6}}}, damping};
+        request["observables"] = j::array{"Z", "X"};
+        request["noise"] = j::object{{"channels", j::array{Channel("t1", {{"gamma", 0.2}}, {0})}}};
+        if (evaluation)
+            request["noise"].as_object()["evaluation"] = evaluation;
+        return request;
+    };
+    result = Call(instructed(propagator, nullptr));
+    Check(result.at("noise").at("evaluation") == "exact_channels" && result.at("noise").at("realizations") == 1 && !approximated(result, "sampled_T1_reset"),
+          "A Kraus instruction beside relaxation was not evaluated exactly");
+    SameExpectations(result, Call(instructed("density_matrix", nullptr)));
+    Check(Call(instructed(propagator, nullptr), true, true).at("valid").as_bool(), "A Kraus instruction beside relaxation did not validate");
+    Check(Call(instructed(propagator, "trajectories"), false).at("error").at("code") == "unsupported_capability", "A Kraus instruction was sampled");
+    // The same in a checkpoint, where the instruction sits in a suffix and
+    // only the suffixes say what the relaxation acts on.
+    const auto measured = [&](j::array source, size_t qubits) {
+        j::array clbits, targets;
+        for (size_t q = 0; q < qubits; ++q)
+        {
+            targets.emplace_back(q);
+            clbits.emplace_back(q);
+        }
+        source.emplace_back(j::object{{"name", "measure"}, {"qubits", targets}, {"clbits", clbits}});
+        return j::object{{"format", "instructions"}, {"num_qubits", qubits}, {"num_clbits", qubits}, {"source", source}};
+    };
+    auto suffixed = Request("checkpoint_batch", 1, "h q[0];", propagator);
+    suffixed["suffixes"] = j::array{measured(j::array{damping}, 1)};
+    suffixed["noise"] = j::object{{"channels", j::array{Channel("t1", {{"gamma", 0.2}}, {0})}}};
+    result = Call(suffixed);
+    Check(result.at("noise").at("evaluation") == "exact_channels" && result.at("results").at(0).at("sampling_strategy") == "terminal_v1" &&
+              result.at("results").at(0).at("realizations") == 1,
+          "A Kraus instruction in a checkpoint suffix was not evaluated exactly");
+    auto idle = Request("checkpoint_batch", 2, "h q[0]; h q[1];", propagator);
+    idle["suffixes"] = j::array{Request("execute", 2, "ry(0.3) q[0]; measure q->c;", propagator).at("circuit")};
+    idle["noise"] = j::object{{"channels", j::array{Channel("depolarizing", {{"probability", 0.1}}, {0}), Channel("t1", {{"gamma", 0.3}}, {1})}}};
+    result = Call(idle);
+    Check(result.at("noise").at("evaluation") == "exact_channels" && !result.at("noise").at("stochastic_noise").as_bool() &&
+              result.at("noise").at("approximations").as_array().empty() && result.at("results").at(0).at("realizations") == 1,
+          "Relaxation that no checkpoint suffix draws kept its trajectories");
+    idle["suffixes"].as_array().emplace_back(Request("execute", 2, "h q[1]; measure q->c;", propagator).at("circuit"));
+    result = Call(idle);
+    Check(result.at("noise").at("evaluation") == "trajectories" && approximated(result, "sampled_T1_reset") &&
+              approximated(result, "finite_noise_realizations"),
+          "Relaxation that a checkpoint suffix draws was not sampled");
+
+    // The propagator holds no state: amplitude queries are refused when the
+    // request is validated, with or without noise, not when it runs.
+    for (const char *operation : {"amplitudes", "statevector", "inner_product", "mirror_fidelity"})
+        for (const bool noisy : {false, true})
+        {
+            auto request = Request(operation, 1, "h q[0];", propagator);
+            if (std::string(operation) == "inner_product")
+            {
+                const auto other = request.at("circuit");
+                request["other_circuit"] = other;
+            }
+            if (noisy)
+                request["noise"] = j::object{{"channels", j::array{Channel("depolarizing", {{"probability", 0.1}}, {0})}}};
+            for (const bool validate : {true, false})
+                Check(Call(request, false, validate).at("error").at("code") == "unsupported_capability",
+                      "An amplitude query on the propagator was not refused");
+        }
+    auto probabilities = Request("probabilities", 1, "h q[0];", propagator);
+    probabilities["noise"] = j::object{{"channels", j::array{Channel("depolarizing", {{"probability", 0.1}}, {0})}}};
+    Check(Call(probabilities, true, true).at("valid").as_bool(), "Noisy probabilities on the propagator did not validate");
+    Near(Real(Call(probabilities).at("probabilities").at(0)), 0.5);
+
+    // A truncation threshold in effect is reported beside exact channels.
+    const auto truncates = [&](const j::object &options) {
+        auto request = Estimate(body, observables, Channel("depolarizing", {{"probability", 0.05}}, {0, 1}), propagator, 2);
+        if (!options.empty())
+            request["simulator"].as_object()["options"] = options;
+        const auto output = Call(request);
+        Check(output.at("noise").at("evaluation") == "exact_channels", "A truncated propagator request changed its evaluation");
+        return approximated(output, "Pauli_truncation");
+    };
+    Check(!truncates({}) && !truncates({{"pp_coefficient_threshold", 0}}) && !truncates({{"pp_max_pauli_weight", 2}}),
+          "An untruncated propagator request reported truncation");
+    Check(truncates({{"pp_coefficient_threshold", 1e-3}}) && truncates({{"pp_max_pauli_weight", 1}}), "Active Pauli truncation was not reported");
+
+    // Checkpoint counts under the legacy policy keep the per-shot replay of
+    // earlier releases, which draws readout errors shot by shot; auto samples
+    // the recorded state once.
+    const auto replayed = [&](const char *policy, bool readout) {
+        auto request = Request("checkpoint_batch", 2, "h q[0]; cx q[0],q[1];", propagator);
+        auto suffix = measured(j::array{}, 2);
+        if (readout)
+            suffix["source"].as_array().back().as_object()["readout_error"] = 0.1;
+        request["suffixes"] = j::array{suffix};
+        if (policy)
+            request["simulator"].as_object()["options"] = j::object{{"counts_policy", policy}};
+        request["execution"].as_object()["shots"] = 256;
+        const auto output = Call(request).at("results").at(0).as_object();
+        int64_t total = 0;
+        for (const auto &entry : output.at("counts").as_object())
+            total += entry.value().as_int64();
+        Check(total == 256 && (readout || output.at("counts").as_object().size() == 2), "Checkpoint counts on the propagator are wrong");
+        return output.at("sampling_strategy") == "trajectory_v1";
+    };
+    Check(!replayed(nullptr, false) && !replayed(nullptr, true) && !replayed("multinomial_v1", true), "Automatic propagator checkpoints replayed their shots");
+    Check(replayed("legacy", false) && replayed("legacy", true), "Legacy propagator checkpoints did not replay their shots");
+
+    // Discovery lists the method for exact noise, on the CPU backend only.
+    char *text = MaestroGetCapabilitiesJson();
+    const auto catalog = j::parse(text).as_object();
+    FreeResult(text);
+    const auto lists = [&](const j::value &configurations, const char *backend) {
+        for (const auto &entry : configurations.as_array())
+            if (entry.at("backend") == backend && entry.at("method") == propagator)
+                return true;
+        return false;
+    };
+    const auto &capabilities = catalog.contains("capabilities") ? catalog.at("capabilities").as_object() : catalog;
+    Check(lists(capabilities.at("noise").at("exact_configurations"), "qcsim") && !lists(capabilities.at("noise").at("exact_configurations"), "gpu") &&
+              lists(capabilities.at("noisy_fidelity").at("exact_configurations"), "qcsim") &&
+              lists(capabilities.at("noise").at("checkpoint_prefix").at("supported_configurations"), "qcsim"),
+          "Capabilities do not list the Pauli propagator for exact noise");
+}
+
 void TestRequestNoiseAndOptions()
 {
+    TestExtendedFrameRequests();
     TestAutomaticMixedStateNoise();
+    TestPauliPropagatorExactNoise();
     TestShotRows();
     TestFrameSamplerHandle();
     TestRowSelection();
     TestLegacyCountsPolicy();
+    TestMultinomialCountReplay();
     TestReadoutExecution();
     TestThermalApproximation();
     TestFixedBackendNoisyShots();

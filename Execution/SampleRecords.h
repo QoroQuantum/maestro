@@ -63,16 +63,17 @@ inline bool SupportsDirectSamples(const SimulatorConfig &config)
 // per realization.
 inline bool PreferDirectTrajectoryCounts(const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
 {
-    return SupportsDirectSamples(config) && config.counts_policy == "auto" && !config.seed && !noise_seed;
+    return SupportsDirectSamples(config) && EffectiveCountsPolicy(config) == "auto" && !EffectiveSamplingSeed(config) && !noise_seed;
 }
 
 inline size_t SamplingWorkers(const SimulatorConfig &config, size_t realizations, size_t qubits)
 {
-    if (config.simulator_type != Simulators::SimulatorType::kQCSim)
+    if (!RunsOnlyQCSim(config))
         return 1;
     auto workers = Utils::RealizationWorkerCount(realizations, config.max_simulators.value_or(0));
-    // Unknown/unbounded state sizes cannot promise a memory limit.
-    const long double state_bytes = RealizationBytes(config, qubits);
+    // Unknown/unbounded state sizes cannot promise a memory limit. A candidate
+    // list is sized for the largest register any of its entries needs.
+    const long double state_bytes = MaxRealizationBytes(config, qubits);
     if (!(state_bytes > 0))
         return 1;
     workers = Utils::LimitRealizationWorkersByMemory(workers, static_cast<size_t>(state_bytes), RealizationBudgetMB(config), 0, 2);
@@ -185,13 +186,9 @@ inline std::vector<size_t> Permutation(size_t shots, std::optional<uint64_t> see
 }
 } // namespace SampleRowOrder
 
-// The warning for a sampled thermal approximation, or empty. Callers emit it
-// once per execution, not per realization.
-inline std::string ThermalApproximationWarning(const noise::NoiseModel &noise_model, bool exact_channels)
+// The warning for a sampled thermal approximation on these qubits, or empty.
+inline std::string ThermalApproximationMessage(const std::vector<int> &qubits)
 {
-    if (exact_channels || noise_model.has_additional_quantum_channels())
-        return {};
-    const auto qubits = noise_model.thermal_approximation_qubits();
     if (qubits.empty())
         return {};
     std::ostringstream message;
@@ -208,6 +205,23 @@ inline std::string ThermalApproximationWarning(const noise::NoiseModel &noise_mo
     return message.str();
 }
 
+// The warning for a sampled thermal approximation, or empty. Callers emit it
+// once per execution, not per realization. The circuit form names only the
+// qubits whose relaxation that circuit draws in the clamped window.
+inline std::string ThermalApproximationWarning(const noise::NoiseModel &noise_model, bool exact_channels)
+{
+    if (exact_channels || noise_model.has_additional_quantum_channels())
+        return {};
+    return ThermalApproximationMessage(noise_model.thermal_approximation_qubits());
+}
+
+inline std::string ThermalApproximationWarning(const noise::NoiseModel &noise_model, bool exact_channels, const Circuits::Circuit<double> &circuit)
+{
+    if (exact_channels || noise_model.has_additional_quantum_channels())
+        return {};
+    return ThermalApproximationMessage(noise_model.thermal_approximation_qubits_on(circuit));
+}
+
 // The noise seed is 32 bits, as in the JSON API's noise.seed.
 inline void RequireNoiseSeed(std::optional<uint64_t> noise_seed)
 {
@@ -222,8 +236,9 @@ inline void RequireNoiseSeed(std::optional<uint64_t> noise_seed)
 inline std::mt19937 MakeNoiseRng(const SimulatorConfig &config, std::optional<uint64_t> &noise_seed)
 {
     RequireNoiseSeed(noise_seed);
-    if (!noise_seed && config.seed)
-        noise_seed = *config.seed & UINT32_MAX;
+    const auto configured_seed = EffectiveSamplingSeed(config);
+    if (!noise_seed && configured_seed)
+        noise_seed = *configured_seed & UINT32_MAX;
     else if (!noise_seed && config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim)
         noise_seed = Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options) & UINT32_MAX;
     if (noise_seed)
@@ -241,6 +256,7 @@ inline SimulatorConfig NoiseExecutionConfig(const SimulatorConfig &config, std::
     // Noisy workflows retain their requested backend, even for realizations
     // in which stochastic injection happens to insert no error.
     execution_config.auto_reduce = false;
+    execution_config.seed = EffectiveSamplingSeed(config);
     if (!execution_config.seed && noise_seed)
         execution_config.seed = *noise_seed;
     if (execution_config.seed)
@@ -299,7 +315,7 @@ struct ShotRecords
     size_t max_bond_dimension = 0;
     // Noise realizations executed; zero for a noiseless execution.
     size_t realizations = 0;
-    // reference_frame_v1, terminal_v1 or trajectory_v1 when a dedicated
+    // reference_frame_v1, extended_frame_v1, terminal_v1 or trajectory_v1 when a dedicated
     // sampler drew the records; empty when the ordinary executor counted them.
     std::string sampling_strategy;
     double time_taken = 0;
@@ -330,4 +346,43 @@ struct NoisyExecutionOptions
 MAESTRO_TRANSFORM_API ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config,
                                                size_t shots, std::optional<size_t> noise_realizations, std::optional<uint64_t> noise_seed,
                                                const NoisyExecutionOptions &options);
+
+// Only gates (and delays or no-ops), including in nested circuits: a prefix
+// that evolves deterministically, so frames may evolve it once for all shots.
+inline bool IsGateOnlyCircuit(const Circuits::Circuit<double> &circuit)
+{
+    for (const auto &op : circuit.GetOperations())
+    {
+        if (!op)
+            return false;
+        const auto type = op->GetType();
+        if (type == Circuits::OperationType::kComposite)
+        {
+            if (!IsGateOnlyCircuit(*std::static_pointer_cast<Circuits::Circuit<double>>(op)))
+                return false;
+        }
+        else if (type != Circuits::OperationType::kGate && type != Circuits::OperationType::kNoOp && type != Circuits::OperationType::kDelay)
+            return false;
+    }
+    return true;
+}
+
+// Batched extended-stabilizer frames (sampling_strategy extended_frame_v1):
+// noise_model injected as exact channels after circuit's gates, readout
+// attached, and shots split into realizations as ExecuteNoisy splits them
+// (shots of one realization share its errors). prefix, when not null, is a
+// noiseless gate-only circuit applied before circuit, evolved once per call
+// as a checkpointed prefix is. noise_seed drives circuit errors and
+// measurement_seed the measurements and readout. Fills samples (rows, shots x
+// width bytes) or counts (width-bit keys). Returns false, having drawn
+// nothing, when frames do not apply: an unsupported circuit; coherent,
+// correlated or crosstalk noise; a non-Pauli channel; relaxation that sampled
+// execution draws as resets, when realizations are shared; or thermal noise
+// with T2 > T1, which sampled execution clamps. The memory budget is soft: a
+// shot that alone exceeds it runs by itself beyond it, keeping its draws.
+// Callers decide the policy (PreferExtendedFrames) and keep exact channels
+// and the coherent layer on their own executors.
+MAESTRO_TRANSFORM_API bool SampleExtendedFrames(const RecordCircuitPtr &circuit, const noise::NoiseModel &noise_model, const SimulatorConfig &config,
+                                                size_t qubits, size_t width, size_t shots, size_t realizations, uint64_t noise_seed, uint64_t measurement_seed,
+                                                bool rows, std::vector<uint8_t> &samples, FrameOutcomes &counts, const RecordCircuitPtr &prefix = nullptr);
 } // namespace MaestroExecution

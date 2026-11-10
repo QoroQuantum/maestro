@@ -153,11 +153,11 @@ inline bool Applies(const Option &option, const SimulatorConfig &config)
                                               method == Method::kStabilizer || method == Method::kExtendedStabilizer || mps || mpo);
     // Methods whose concurrent trajectory shots or noise realizations are
     // budgeted: dense shot workers, stabilizer and bounded MPS/MPO shot
-    // workers under an explicit trajectory policy, and parallel native and
-    // Python realizations.
+    // workers under an explicit trajectory policy, parallel native and
+    // Python realizations, and extended-stabilizer frame batches.
     if (family == "cpu_realization")
-        return backend == Backend::kQCSim &&
-               (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kStabilizer || mps || mpo);
+        return backend == Backend::kQCSim && (method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kStabilizer ||
+                                              method == Method::kExtendedStabilizer || mps || mpo);
     if (family == "device")
         return gpu || distributed;
     if (family == "precision")
@@ -269,7 +269,7 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
         if (name == "trajectory_policy")
             choice(value, {"block_v1", "shot_v1"}, key);
         if (name == "counts_policy")
-            choice(value, {"auto", "legacy", "frame_v1"}, key);
+            choice(value, CountsPolicies(), key);
         if (name == "trajectory_max_memory_mb")
             Require(UInt(value) <= (std::numeric_limits<size_t>::max() >> 20), "trajectory_max_memory_mb is too large");
         if (name == "truncation_mode")
@@ -306,7 +306,7 @@ inline SimulatorConfig ParseConfig(const json::object &simulator)
         else if (name == "enable_sampling_reduction")
             config.enable_sampling_reduction = Boolean(value);
         else if (name == "counts_policy")
-            config.counts_policy = choice(value, {"auto", "legacy", "frame_v1"}, key);
+            config.counts_policy = choice(value, CountsPolicies(), key);
         else if (name == "observable_error_tolerance")
             config.observable_error_tolerance = Number(value);
         else if (name == "min_cluster_qubits")

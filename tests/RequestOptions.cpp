@@ -1,7 +1,11 @@
 // Shared request/configuration checks require no MPI or GPU hardware.
 #include "../Circuit/Factory.h"
 #include "../Execution/Options.h"
+#include "../Execution/SampleRecords.h"
+#include <algorithm>
 #include <atomic>
+#include <complex>
+#include <iostream>
 
 void Check(bool, const char *);
 
@@ -233,7 +237,8 @@ void TestFixedBackendShotReuse()
                         const std::string context = std::string(method) + " scenario=" + std::to_string(scenario) + " workers=" + std::to_string(workers) +
                                                     " shots=" + std::to_string(shots) + " on_host=" + std::to_string(onHost);
                         Check(circuit->HasOpsAfterMeasurements(exactChannels) != terminal, "Terminal classification disagrees with backend reset semantics");
-                        size_t jobs = terminal && (reproducibleSampling || exactChannels) ? 1 : workers;
+                        // SetMaxSimulators caps the workers at the hardware thread count.
+                        size_t jobs = terminal && (reproducibleSampling || exactChannels) ? 1 : network->GetMaxSimulators();
 #ifdef _OPENMP
                         if (reproducibleSampling)
                             jobs = std::min(jobs, static_cast<size_t>(std::max(1, omp_get_max_threads())));
@@ -506,6 +511,27 @@ void TestTypedTrajectoryConfiguration()
 void TestFrameCountPolicy()
 {
     using namespace MaestroExecution;
+    SimulatorConfig configured;
+    for (const auto seed : {0, 123})
+    {
+        configured.seed = seed;
+        Check(PreferMultinomialCounts(configured) && PreferMultinomialCounts(configured, seed), "A typed simulator or noise seed disabled adaptive counts");
+        configured.seed.reset();
+        configured.native_options["seed"] = std::to_string(seed);
+        Check(EffectiveSamplingSeed(configured) == seed && PreferMultinomialCounts(configured), "A native seed disabled adaptive counts");
+    }
+    configured.counts_policy = "legacy";
+    configured.native_options["counts_policy"] = "auto";
+    Check(PreferMultinomialCounts(configured), "Native auto did not override the typed counts policy");
+    for (const char *policy : {"legacy", "frame_v1", "multinomial_v1"})
+    {
+        configured.native_options["counts_policy"] = policy;
+        Check(PreferMultinomialCounts(configured) == (std::string(policy) == "multinomial_v1"), "A native count policy was ignored");
+    }
+    configured.native_options["sampling_policy"] = "reproducible_v1";
+    Check(!PreferMultinomialCounts(configured), "A low-level sampler pin was ignored");
+    SetCountsPolicy(configured, "legacy");
+    Check(EffectiveCountsPolicy(configured) == "legacy" && !configured.native_options.count("counts_policy"), "A resolved counts policy was overridden");
     for (const char *policy : {"auto", "legacy", "frame_v1"})
     {
         const auto config = ParseConfig(json::object{{"backend", "qcsim"}, {"method", "stabilizer"}, {"options", json::object{{"counts_policy", policy}}}});
@@ -810,4 +836,226 @@ void TestVirtualRoutingConfiguration()
         }
         Check(rejected, "Invalid typed routing weight accepted");
     }
+}
+
+// The network simulator only selects the backend when the network executes
+// (INetwork::CreateSimulator). Configuring, executing, re-creating, cloning
+// and dropping options must not allocate a dense register of the whole network
+// that execution then discards. A caller-sized register keeps its exact width.
+void TestCandidateWorkerBudget()
+{
+    using namespace MaestroExecution;
+    // A lone density-matrix candidate needs 256 MiB at 12 qubits, the
+    // requested statevector 64 KiB: realization workers are sized for the
+    // backend that may run.
+    SimulatorConfig config;
+    config.simulator_type = Backend::kQCSim;
+    config.simulation_type = Method::kStatevector;
+    config.fixed_backend = false;
+    config.optimization_candidates = {{Backend::kQCSim, Method::kDensityMatrix}};
+    config.trajectory_max_memory_mb = 600;
+    config.max_simulators = 8;
+    Check(SamplingWorkers(config, 8, 12) == 1, "Realization workers were sized for the requested method, not the candidate");
+    config.optimization_candidates.clear();
+    if (Utils::RealizationWorkerCount(8, 8) > 1)
+        Check(SamplingWorkers(config, 8, 12) > 1, "A small statevector lost its realization workers");
+}
+
+void TestNetworkSimulatorPlaceholders()
+{
+    using namespace MaestroExecution;
+    using Backend = Simulators::SimulatorType;
+    using Method = Simulators::SimulationType;
+    using CF = Circuits::CircuitFactory<>;
+    using Gate = Circuits::QuantumGateType;
+    constexpr size_t placeholder = Network::INetwork<>::kBackendPlaceholderQubits;
+    constexpr int width = 6;
+    GetMaestroObjectWithMute();
+
+    struct NetworkHandle
+    {
+        unsigned long handle;
+
+        explicit NetworkHandle(int qubits) : handle(CreateSimpleSimulator(qubits))
+        {
+        }
+
+        ~NetworkHandle()
+        {
+            DestroySimpleSimulator(handle);
+        }
+    };
+
+    const auto measured = [] {
+        auto circuit = CF::CreateCircuit();
+        circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+        circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 1));
+        circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 1));
+        circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 4));
+        circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}, {4, 2}}));
+        return circuit;
+    };
+    const auto unmeasured = [] {
+        auto circuit = CF::CreateCircuit();
+        circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+        circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 2));
+        return circuit;
+    };
+    const auto checkCounts = [](const Circuits::Circuit<>::ExecuteResults &counts, size_t shots, const char *message) {
+        size_t total = 0;
+        for (const auto &[bits, count] : counts)
+        {
+            Check(bits.size() >= 3 && bits[0] && !bits[1] && bits[2], message);
+            total += count;
+        }
+        Check(total == shots, message);
+    };
+    const auto keeps = [](const std::shared_ptr<Network::INetwork<>> &network, Backend type, Method method, size_t qubits, const char *message) {
+        const auto simulator = network->GetSimulator();
+        Check(simulator && simulator->GetType() == type && simulator->GetSimulationType() == method && simulator->GetNumberOfQubits() == qubits, message);
+    };
+
+    for (const auto method : {Method::kStatevector, Method::kDensityMatrix})
+        for (size_t workers : {size_t{1}, size_t{4}})
+        {
+            SimulatorConfig config;
+            config.simulator_type = Backend::kQCSim;
+            config.simulation_type = method;
+            config.fixed_backend = true;
+            config.seed = 7;
+            config.max_simulators = workers;
+
+            // A fixed backend for network execution: a placeholder, kept by
+            // every execution and re-creation that follows.
+            NetworkHandle owner(width);
+            const auto network = ConfigureNetwork(owner.handle, config);
+            keeps(network, Backend::kQCSim, method, placeholder, "A fixed backend allocated a register for network execution");
+            checkCounts(network->RepeatedExecuteOnHost(measured(), 0, 64), 64, "Placeholder network sampled wrong counts");
+            keeps(network, Backend::kQCSim, method, placeholder, "Sampling re-created a full-width simulator");
+            const auto values = network->ExecuteOnHostExpectations(unmeasured(), 0, {"Z", "IZ", "IIZ"});
+            Check(values.size() == 3 && std::abs(values[0] + 1) < 1e-12 && std::abs(values[1] - 1) < 1e-12 && std::abs(values[2] + 1) < 1e-12,
+                  "Placeholder network returned wrong expectations");
+            keeps(network, Backend::kQCSim, method, placeholder, "An estimate re-created a full-width simulator");
+            if (method == Method::kStatevector)
+            {
+                const auto amplitudes = network->ExecuteOnHostAmplitudes(unmeasured(), 0);
+                Check(amplitudes.size() == 4 && std::abs(amplitudes[3] - std::complex<double>(1)) < 1e-12, "Placeholder network returned wrong amplitudes");
+                keeps(network, Backend::kQCSim, method, placeholder, "An amplitude query re-created a full-width simulator");
+            }
+            keeps(network->Clone(), Backend::kQCSim, method, placeholder, "A clone of a placeholder network allocated a register");
+
+            // A caller-sized register stays exactly that wide, without the
+            // network's entanglement qubit, when executions re-create it.
+            NetworkHandle exact(width);
+            const auto direct = ConfigureNetwork(exact.handle, config, width);
+            keeps(direct, Backend::kQCSim, method, width, "A caller-sized register has the wrong width");
+            direct->ExecuteOnHostExpectations(unmeasured(), 0, {"Z"});
+            keeps(direct, Backend::kQCSim, method, width, "An estimate re-created a caller-sized register at another width");
+            checkCounts(direct->RepeatedExecuteOnHost(measured(), 0, 16), 16, "Caller-sized network sampled wrong counts");
+            keeps(direct, Backend::kQCSim, method, width, "Sampling re-created a caller-sized register at another width");
+            direct->Configure("trajectory_max_memory_mb", "64");
+            direct->RemoveConfiguration("trajectory_max_memory_mb");
+            keeps(direct, Backend::kQCSim, method, width, "Dropping an option re-created a caller-sized register at another width");
+        }
+
+    // Clone() keeps whatever width the simulator was created with.
+    {
+        const auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(std::vector<Types::qubit_t>{width}, std::vector<size_t>{width});
+        network->CreateSimulator(Backend::kQCSim, Method::kDensityMatrix, placeholder);
+        Check(network->GetSimulatorQubits() == placeholder, "The network forgot its simulator's requested width");
+        keeps(network->Clone(), Backend::kQCSim, Method::kDensityMatrix, placeholder, "Clone() grew a placeholder");
+        network->CreateSimulator(Backend::kQCSim, Method::kStatevector, width);
+        keeps(network->Clone(), Backend::kQCSim, Method::kStatevector, width, "Clone() changed a caller-sized register");
+        network->CreateSimulator();
+        keeps(network->Clone(), Backend::kQCSim, Method::kMatrixProductState, width + 1, "Clone() changed the default simulator's width");
+    }
+
+    // Candidate lists: one candidate needs no probe; several are probed at the
+    // host's register (not the entanglement qubit) and leave a placeholder of
+    // the first that fits, which then executes.
+    using Candidates = std::vector<std::pair<Backend, Method>>;
+    for (const auto &candidates : {Candidates{{Backend::kQCSim, Method::kDensityMatrix}},
+                                   Candidates{{Backend::kQCSim, Method::kDensityMatrix}, {Backend::kQCSim, Method::kMatrixProductOperator}},
+                                   Candidates{{Backend::kQCSim, Method::kStatevector}, {Backend::kQCSim, Method::kMatrixProductState}}})
+    {
+        SimulatorConfig config;
+        config.optimization_candidates = candidates;
+        config.seed = 11;
+        NetworkHandle owner(width);
+        const auto network = ConfigureNetwork(owner.handle, config);
+        const auto [type, method] = candidates.front();
+        keeps(network, type, method, placeholder, "A candidate list allocated a register for network execution");
+        checkCounts(network->RepeatedExecuteOnHost(measured(), 0, 32), 32, "Candidate network sampled wrong counts");
+        // Composer's cost model ranks lists with pure-state candidates; one
+        // candidate, or only mixed-state ones, are resolved without it.
+#ifdef MAESTRO_ENABLE_COMPOSER
+        const bool ranked = std::any_of(candidates.begin(), candidates.end(), [](const auto &candidate) {
+            return candidate.second != Method::kDensityMatrix && candidate.second != Method::kMatrixProductOperator;
+        }) && candidates.size() > 1;
+#else
+        const bool ranked = false;
+#endif
+        Check(ranked || network->GetLastSimulationType() == method, "Candidate network did not run the first fitting candidate");
+        NetworkHandle exact(width);
+        keeps(ConfigureNetwork(exact.handle, config, width), type, method, width, "A caller-sized candidate has the wrong width");
+    }
+
+    // Every CPU backend runs a one-qubit circuit (the register a one-qubit
+    // circuit maps to), through the network and directly.
+    Candidates backends{{Backend::kQCSim, Method::kStatevector},
+                        {Backend::kQCSim, Method::kMatrixProductState},
+                        {Backend::kQCSim, Method::kStabilizer},
+                        {Backend::kQCSim, Method::kTensorNetwork},
+                        {Backend::kQCSim, Method::kPauliPropagator},
+                        {Backend::kQCSim, Method::kExtendedStabilizer},
+                        {Backend::kQCSim, Method::kDensityMatrix},
+                        {Backend::kQCSim, Method::kMatrixProductOperator},
+                        {Backend::kQCSim, Method::kPathIntegral},
+                        {Backend::kCompositeQCSim, Method::kStatevector}};
+#ifndef NO_QISKIT_AER
+    for (const auto method : {Method::kStatevector, Method::kMatrixProductState, Method::kStabilizer, Method::kTensorNetwork, Method::kExtendedStabilizer,
+                              Method::kDensityMatrix})
+        backends.emplace_back(Backend::kQiskitAer, method);
+    backends.emplace_back(Backend::kCompositeQiskitAer, Method::kStatevector);
+#endif
+    std::string failures;
+    for (const auto &[type, method] : backends)
+    {
+        const auto name = std::to_string(static_cast<int>(type)) + "/" + std::to_string(static_cast<int>(method));
+        try
+        {
+            SimulatorConfig config;
+            config.simulator_type = type;
+            config.simulation_type = method;
+            config.fixed_backend = true;
+            config.seed = 5;
+            NetworkHandle owner(1);
+            const auto network = ConfigureNetwork(owner.handle, config);
+            auto circuit = CF::CreateCircuit();
+            circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+            circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
+            const auto counts = network->RepeatedExecuteOnHost(circuit, 0, 8);
+            if (counts.size() != 1 || counts.begin()->second != 8 || !counts.begin()->first[0])
+                failures += " " + name + ":counts";
+            auto x = CF::CreateCircuit();
+            x->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
+            const auto values = network->ExecuteOnHostExpectations(x, 0, {"Z"});
+            if (values.size() != 1 || std::abs(values[0] + 1) > 1e-9)
+                failures += " " + name + ":expectation";
+
+            auto simulator = Simulators::SimulatorsFactory::CreateSimulator(type, method);
+            simulator->AllocateQubits(1);
+            simulator->Initialize();
+            simulator->ApplyX(0);
+            if (std::abs(simulator->ExpectationValue("Z") + 1) > 1e-9)
+                failures += " " + name + ":direct";
+        }
+        catch (const std::exception &e)
+        {
+            failures += " " + name + ":" + e.what();
+        }
+    }
+    if (!failures.empty())
+        std::cerr << "One-qubit backend failures:" << failures << '\n';
+    Check(failures.empty(), "A CPU backend rejects a one-qubit register");
 }

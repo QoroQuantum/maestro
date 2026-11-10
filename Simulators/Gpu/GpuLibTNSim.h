@@ -58,10 +58,16 @@ class GpuLibTNSim
             lib->DestroyTensorNet(obj);
     }
 
+    // cuTensorNet's MPS factorization needs at least two qubits; on a single
+    // qubit every query returned wrong values without failing. A one-qubit
+    // register is therefore held in a two-qubit network whose second qubit stays
+    // |0> and is never addressed: the plugin pads shorter amplitude bit lists
+    // with 0 and shorter Pauli strings with I, and gates, measurements and
+    // sampling name only the requested qubits. Callers keep their own width.
     bool Create(unsigned int nrQubits)
     {
         if (obj)
-            return lib->TNCreate(obj, nrQubits);
+            return lib->TNCreate(obj, nrQubits == 1 ? 2 : nrQubits);
 
         return false;
     }

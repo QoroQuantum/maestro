@@ -37,20 +37,6 @@ std::optional<size_t> ClusterBudget(const SimulatorConfig &config)
     return std::nullopt;
 }
 
-void PadFixedTensorNetwork(EstimationGroup &group, const SimulatorConfig &config)
-{
-    // The GPU tensor-network backend needs two qubits. Keep fixed selection by
-    // supplying an idle identity wire instead of changing backend or failing a
-    // request whose physical circuit was wide enough before cone reduction.
-    if (config.fixed_backend && config.simulator_type == Simulators::SimulatorType::kGpuSim &&
-        config.simulation_type == Simulators::SimulationType::kTensorNetwork && group.qubits == 1)
-    {
-        group.qubits = 2;
-        for (auto &p : group.observables)
-            p.resize(2, 'I');
-    }
-}
-
 bool SameUnitaryCircuit(const EstimationGroup &a, const EstimationGroup &b)
 {
     if (a.qubits != b.qubits)
@@ -87,7 +73,6 @@ void FinishGroup(EstimationGroup group, const SimulatorConfig &config, Estimatio
     if (group.indices.empty())
         return;
     group.qubits = Width(group.circuit, group.observables);
-    PadFixedTensorNetwork(group, config);
     for (auto &existing : plan.groups)
         if (SameUnitaryCircuit(existing, group))
         {
@@ -106,7 +91,7 @@ bool PrepareCached(const std::shared_ptr<Circuits::Circuit<double>> &circuit, co
 {
     if (config.auto_reduce || config.observable_error_tolerance || !config.enable_causal_cone_reduction ||
         Simulators::IsDistributedGpuSimulator(config.simulator_type) ||
-        !CanTraceCone(circuit, observables, HasEnsembleState(config.simulation_type), config.allow_reset_marginalization))
+        !CanTraceCone(circuit, observables, HasEnsembleState(config), config.allow_reset_marginalization))
         return false;
     std::vector<size_t> signature{Width(circuit, observables),
                                   static_cast<size_t>(config.simulator_type),
@@ -131,7 +116,7 @@ bool PrepareCached(const std::shared_ptr<Circuits::Circuit<double>> &circuit, co
         cache.groups.clear();
         cache.mappings.clear();
         if (config.enable_observable_clustering && BenefitsFromObservableClustering(config.simulator_type, config.simulation_type))
-            cache.groups = ClusterObservables(circuit, observables, ClusterBudget(config), HasEnsembleState(config.simulation_type), config.min_cluster_qubits,
+            cache.groups = ClusterObservables(circuit, observables, ClusterBudget(config), HasEnsembleState(config), config.min_cluster_qubits,
                                               false, config.allow_reset_marginalization);
         else
         {
@@ -216,11 +201,11 @@ EstimationPlan PrepareEstimation(const std::shared_ptr<Circuits::Circuit<double>
         if (!Simulators::IsDistributedGpuSimulator(config.simulator_type) && observables[i].find_first_not_of("Ii") == std::string::npos)
         {
             plan.resolved_values[i] = 1;
-            if (config.observable_error_tolerance && HasEnsembleState(config.simulation_type))
+            if (config.observable_error_tolerance && HasEnsembleState(config))
                 ++plan.bounded_observables;
             continue;
         }
-        if (config.observable_error_tolerance && HasEnsembleState(config.simulation_type) && !Simulators::IsDistributedGpuSimulator(config.simulator_type))
+        if (config.observable_error_tolerance && HasEnsembleState(config) && !Simulators::IsDistributedGpuSimulator(config.simulator_type))
             if (const auto value = EvaluateBoundedPauli(prepared, observables[i], *config.observable_error_tolerance, &bounded_workspace))
             {
                 plan.resolved_values[i] = value->value;
@@ -244,7 +229,7 @@ EstimationPlan PrepareEstimation(const std::shared_ptr<Circuits::Circuit<double>
     std::vector<std::vector<size_t>> groups;
     if (config.enable_causal_cone_reduction && config.enable_observable_clustering && paulis.size() > 1 &&
         !Simulators::IsDistributedGpuSimulator(config.simulator_type) && BenefitsFromObservableClustering(config.simulator_type, config.simulation_type))
-        groups = ClusterObservables(prepared, paulis, ClusterBudget(config), HasEnsembleState(config.simulation_type), config.min_cluster_qubits, true,
+        groups = ClusterObservables(prepared, paulis, ClusterBudget(config), HasEnsembleState(config), config.min_cluster_qubits, true,
                                     config.allow_reset_marginalization);
     else
     {
@@ -302,22 +287,24 @@ EstimationResult EstimateCircuit(const std::shared_ptr<Circuits::Circuit<double>
             }
         } cleanup{handle};
 
-        auto cluster_config = config;
-        if (!config.fixed_backend && group.qubits == 1 && config.simulator_type == Simulators::SimulatorType::kGpuSim &&
-            config.simulation_type == Simulators::SimulationType::kTensorNetwork)
-            cluster_config.simulation_type = Simulators::SimulationType::kStatevector;
-        auto network = ConfigureNetwork(handle, cluster_config);
+        auto network = ConfigureNetwork(handle, config);
         if (!network)
             throw std::runtime_error("Failed to configure network");
-        if (config.fixed_backend && (network->GetSimulator()->GetType() != cluster_config.simulator_type ||
-                                     network->GetSimulator()->GetSimulationType() != cluster_config.simulation_type))
+        if (config.fixed_backend &&
+            (network->GetSimulator()->GetType() != config.simulator_type || network->GetSimulator()->GetSimulationType() != config.simulation_type))
             throw Error("backend_unavailable", "Requested fixed backend/method is unavailable");
-        if (!Simulators::IsDistributedGpuSimulator(config.simulator_type) && config.native_options.count("gpu_device") &&
+        // Only a fixed backend runs on the network's simulator; automatic
+        // selection creates its GPU backend on the configured device, checked
+        // after the run.
+        if (config.fixed_backend && !Simulators::IsDistributedGpuSimulator(config.simulator_type) && config.native_options.count("gpu_device") &&
             network->GetSimulator()->GetGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
             throw Error("backend_unavailable", "Requested GPU device was not selected");
         const auto start = Clock::now();
         Scatter(result.values, group, network->ExecuteOnHostExpectations(group.circuit, 0, group.observables));
         result.time_taken += std::chrono::duration<double>(Clock::now() - start).count();
+        if (network->GetLastSimulatorType() == Simulators::SimulatorType::kGpuSim && config.native_options.count("gpu_device") &&
+            network->GetLastGpuDevice() != std::stoi(config.native_options.at("gpu_device")))
+            throw Error("backend_unavailable", "Requested GPU device was not selected");
         if (result.cluster_methods.empty())
         {
             result.simulator = network->GetLastSimulatorType();
@@ -334,24 +321,49 @@ EstimationResult EstimateCircuit(const std::shared_ptr<Circuits::Circuit<double>
 
 std::vector<double> EstimateOnNetwork(const std::shared_ptr<Circuits::Circuit<double>> &circuit, const std::vector<std::string> &observables,
                                       const std::shared_ptr<Network::INetwork<double>> &network, std::optional<size_t> host, bool auto_reduce,
-                                      EstimationCache *cache)
+                                      EstimationCache *cache, bool *executed)
 {
+    if (executed)
+        *executed = false;
     if (observables.empty())
         return {};
     const auto simulator = network->GetSimulator();
     if (!simulator || (!host && network->GetNumHosts() != 1))
+    {
+        // A network without a simulator does not simulate.
+        if (executed)
+            *executed = simulator != nullptr;
         return host ? network->ExecuteOnHostExpectations(circuit, *host, observables) : network->ExecuteExpectations(circuit, observables);
+    }
+    // Plan for every backend the network may run: its simulator's while
+    // selection keeps it, else any candidate selection may choose (a
+    // configured list, or the whole set a cost model ranks).
     SimulatorConfig config;
     config.simulator_type = simulator->GetType();
     config.simulation_type = simulator->GetSimulationType();
-    // Preparation must respect the minimum width of the network's existing
-    // backend, which this adapter does not reconfigure.
     config.fixed_backend = true;
+    if (network->GetOptimizeSimulator() && !Simulators::IsDistributedGpuSimulator(simulator->GetType()))
+    {
+        auto candidates = network->GetOptimizationCandidates();
+        if (candidates.empty() && network->HasCostModel())
+        {
+            const auto &set = network->GetSimulatorsSet();
+            candidates.assign(set.begin(), set.end());
+            std::sort(candidates.begin(), candidates.end());
+        }
+        if (!candidates.empty())
+        {
+            config.fixed_backend = false;
+            config.optimization_candidates = std::move(candidates);
+        }
+    }
     config.auto_reduce = auto_reduce;
     const auto plan = PrepareEstimation(circuit, observables, config, cache);
     auto values = plan.resolved_values;
     for (const auto &group : plan.groups)
         Scatter(values, group, network->ExecuteOnHostExpectations(group.circuit, host.value_or(0), group.observables));
+    if (executed)
+        *executed = !plan.groups.empty();
     return values;
 }
 } // namespace MaestroExecution

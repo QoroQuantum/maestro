@@ -15,13 +15,18 @@
 #undef min
 #undef max
 
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <limits>
+#include <map>
 #include <memory>
+#include <optional>
 #include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "../Circuit/Circuit.h"
@@ -1543,6 +1548,923 @@ BOOST_AUTO_TEST_CASE(NoiseAddFollowsAutomaticallySelectedMixedStateBackend)
             BOOST_CHECK_SMALL(estimate[0] + 0.5, kTolerance);
             BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
         }
+}
+
+// The QCSim Pauli propagator applies channels to the observable it propagates,
+// so it evaluates them exactly without holding a density matrix. Whether noise
+// injection uses that by default depends on the model: channels diagonal in
+// the Pauli basis only scale terms, while relaxation also sends Z to the
+// identity and, without a truncation threshold, fills the operator space of
+// the observable's light cone.
+BOOST_AUTO_TEST_CASE(PauliPropagatorExactChannelPolicyFollowsTheModel)
+{
+    using Backend = Simulators::SimulatorType;
+    using Method = Simulators::SimulationType;
+    BOOST_CHECK(Simulators::EvolvesExactQuantumChannels(Backend::kQCSim, Method::kPauliPropagator));
+    BOOST_CHECK(Simulators::EvolvesExactQuantumChannels(Backend::kQCSim, Method::kDensityMatrix));
+    BOOST_CHECK(Simulators::EvolvesExactQuantumChannels(Backend::kGpuSim, Method::kMatrixProductOperator));
+    // The GPU propagator still measures and flips on reset.
+    BOOST_CHECK(!Simulators::EvolvesExactQuantumChannels(Backend::kGpuSim, Method::kPauliPropagator));
+    BOOST_CHECK(!Simulators::EvolvesExactQuantumChannels(Backend::kQCSim, Method::kStatevector));
+    BOOST_CHECK(!Simulators::EvolvesExactQuantumChannels(Backend::kCompositeQCSim, Method::kStatevector));
+
+    MaestroExecution::SimulatorConfig propagator;
+    propagator.simulator_type = Backend::kQCSim;
+    propagator.simulation_type = Method::kPauliPropagator;
+    propagator.fixed_backend = true;
+    auto density = propagator, gpu = propagator;
+    density.simulation_type = Method::kDensityMatrix;
+    gpu.simulator_type = Backend::kGpuSim;
+    BOOST_CHECK(MaestroExecution::UsesExactQuantumChannels(propagator));
+    BOOST_CHECK(MaestroExecution::HasEnsembleState(propagator));
+    BOOST_CHECK(MaestroExecution::MayRunPauliPropagator(propagator));
+    BOOST_CHECK(!MaestroExecution::MayRunPauliPropagator(density));
+    BOOST_CHECK(!MaestroExecution::UsesExactQuantumChannels(gpu));
+    BOOST_CHECK(!MaestroExecution::HasEnsembleState(gpu));
+    auto mixed = propagator;
+    mixed.fixed_backend = false;
+    mixed.optimization_candidates = {{Backend::kQCSim, Method::kPauliPropagator}, {Backend::kQCSim, Method::kDensityMatrix}};
+    BOOST_CHECK(MaestroExecution::UsesExactQuantumChannels(mixed));
+    BOOST_CHECK(MaestroExecution::MayRunPauliPropagator(mixed));
+    mixed.optimization_candidates.emplace_back(Backend::kQCSim, Method::kStatevector);
+    BOOST_CHECK(!MaestroExecution::UsesExactQuantumChannels(mixed));
+
+    noise::NoiseModel pauli;
+    pauli.set_all_depolarizing(2, 0.1);
+    pauli.set_dephasing(0, 0.05);
+    pauli.set_qubit_noise(1, 0.01, 0.02, 0.03);
+    pauli.set_2q_depolarizing(0, 1, 0.02);
+    pauli.set_phase_damping(1, 0.1);
+    pauli.set_readout_error(0, 0.02, 0.01);
+    BOOST_CHECK(pauli.exact_channels_are_pauli_diagonal());
+    BOOST_CHECK(MaestroExecution::InjectsExactChannels(propagator, pauli));
+    BOOST_CHECK(MaestroExecution::InjectsExactChannels(density, pauli));
+    BOOST_CHECK(!MaestroExecution::InjectsExactChannels(gpu, pauli));
+
+    // Relaxation with a finite T1 is not diagonal, however it is configured.
+    noise::NoiseModel thermal, t1, idle;
+    thermal.set_thermal_relaxation(0, 1.0, 20.0, 15.0);
+    t1.set_t1(0, 0.1);
+    idle.set_idle_noise(0, 25.0, 25.0, 0.1);
+    for (const auto *model : {&thermal, &t1, &idle})
+    {
+        BOOST_CHECK(!model->exact_channels_are_pauli_diagonal());
+        BOOST_CHECK(!MaestroExecution::InjectsExactChannels(propagator, *model));
+        BOOST_CHECK(!MaestroExecution::InjectsExactChannels(mixed, *model));
+        // A mixed-state backend holds the state and is unaffected.
+        BOOST_CHECK(MaestroExecution::InjectsExactChannels(density, *model));
+    }
+    // An infinite T1 leaves pure dephasing, which is diagonal.
+    noise::NoiseModel dephasing;
+    dephasing.set_thermal_relaxation(0, 1.0, std::numeric_limits<double>::infinity(), 15.0);
+    BOOST_CHECK(dephasing.exact_channels_are_pauli_diagonal());
+    BOOST_CHECK(MaestroExecution::InjectsExactChannels(propagator, dephasing));
+    // Channels that cannot be sampled run exactly, with the whole model.
+    noise::NoiseModel damping = thermal;
+    damping.set_generalized_amplitude_damping(1, 0.1, 0.05);
+    BOOST_CHECK(!damping.exact_channels_are_pauli_diagonal());
+    BOOST_CHECK(MaestroExecution::InjectsExactChannels(propagator, damping));
+    noise::NoiseModel correlated;
+    correlated.set_correlated_phase_flip(0, 1, 0.05, 0.5);
+    BOOST_CHECK(correlated.exact_channels_are_pauli_diagonal());
+    BOOST_CHECK(MaestroExecution::InjectsExactChannels(propagator, correlated));
+
+    auto circuit = std::make_shared<Circuits::Circuit<>>();
+    circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+    circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+    const auto resolve = [&](const noise::NoiseModel &model, std::optional<bool> exact = std::nullopt) {
+        return MaestroExecution::ResolveNoiseRealizations(std::nullopt, model, propagator, MaestroExecution::NoiseLayer::kCombined, 100, circuit, true, exact);
+    };
+    auto policy = resolve(pauli);
+    BOOST_CHECK(policy.exact_channels && !policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 1u);
+    policy = resolve(thermal);
+    BOOST_CHECK(!policy.exact_channels && policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 100u);
+    policy = resolve(thermal, true);
+    BOOST_CHECK(policy.exact_channels && !policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 1u);
+    policy = resolve(damping);
+    BOOST_CHECK(policy.exact_channels);
+    BOOST_CHECK_EQUAL(policy.realizations, 1u);
+    // A caller can still sample a Pauli model.
+    policy = resolve(pauli, false);
+    BOOST_CHECK(!policy.exact_channels);
+    BOOST_CHECK_EQUAL(policy.realizations, 100u);
+    // Coherent disorder is sampled around the exact channels.
+    auto coherent = pauli;
+    coherent.set_all_coherent_depolarizing(2, 0.02);
+    policy = resolve(coherent);
+    BOOST_CHECK(policy.exact_channels && policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 100u);
+
+    // An unrecorded reset is a channel there: the evolution stays deterministic
+    // and terminal measurements can be sampled from one recorded circuit.
+    circuit->AddOperation(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{0}));
+    circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}, {1, 1}}));
+    BOOST_CHECK(!MaestroExecution::HasStochasticEvolution(circuit, MaestroExecution::UsesExactQuantumChannels(propagator)));
+    BOOST_CHECK(MaestroExecution::HasStochasticEvolution(circuit, MaestroExecution::UsesExactQuantumChannels(gpu)));
+    BOOST_CHECK(!circuit->HasOpsAfterMeasurements(MakeSimulator(Method::kPauliPropagator, 2)->SupportsQuantumChannels()));
+}
+
+// Automatic evaluation judges the channels a circuit receives by what they do.
+// Relaxation that is the identity or unital only scales terms, relaxation on
+// qubits the circuit never gates is not injected at all, and a Kraus
+// instruction cannot be sampled.
+BOOST_AUTO_TEST_CASE(PauliPropagatorExactChannelPolicyFollowsTheCircuit)
+{
+    using Channel = Simulators::QuantumChannel;
+    using MaestroExecution::InjectsExactChannels;
+    MaestroExecution::SimulatorConfig propagator;
+    propagator.simulator_type = Simulators::SimulatorType::kQCSim;
+    propagator.simulation_type = Simulators::SimulationType::kPauliPropagator;
+    propagator.fixed_backend = true;
+    auto statevector = propagator;
+    statevector.simulation_type = Simulators::SimulationType::kStatevector;
+
+    // Equal populations make thermal and idle relaxation unital at any T2, and
+    // a zero T1 probability (an infinite T1) is the identity.
+    noise::NoiseModel unital;
+    unital.set_thermal_relaxation(0, 1.0, 1.0, 2.0, 0.5);
+    unital.set_thermal_relaxation_2q(1, 1.0, 1.0, 1.5, 0.5);
+    unital.set_idle_noise(0, 25.0, 30.0, 0.5);
+    unital.set_t1(2, 0.0);
+    unital.set_t1_from_time(3, 1.0, std::numeric_limits<double>::infinity());
+    BOOST_CHECK(unital.has_sampled_resets());
+    BOOST_CHECK(unital.exact_channels_are_pauli_diagonal());
+    BOOST_CHECK(InjectsExactChannels(propagator, unital));
+    for (const double population : {0.0, 0.4, 0.6, 1.0})
+    {
+        auto biased = unital;
+        biased.set_thermal_relaxation(0, 1.0, 1.0, 2.0, population);
+        BOOST_CHECK(!biased.exact_channels_are_pauli_diagonal());
+        BOOST_CHECK(!InjectsExactChannels(propagator, biased));
+        biased = unital;
+        biased.set_idle_noise(0, 25.0, 30.0, population);
+        BOOST_CHECK(!biased.exact_channels_are_pauli_diagonal());
+    }
+    auto damped = unital;
+    damped.set_t1(2, 1e-6);
+    BOOST_CHECK(!damped.exact_channels_are_pauli_diagonal());
+
+    // Relaxation is injected where the circuit gates or delays a qubit.
+    const auto extended = [](const std::shared_ptr<Circuits::Circuit<>> &base, const std::shared_ptr<Circuits::IOperation<>> &op) {
+        auto result = std::make_shared<Circuits::Circuit<>>(base->GetOperations());
+        result->AddOperation(op);
+        return result;
+    };
+    auto circuit = std::make_shared<Circuits::Circuit<>>();
+    circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+    circuit->AddOperation(std::make_shared<Circuits::RyGate<>>(0, 0.4));
+    noise::NoiseModel elsewhere;
+    elsewhere.set_all_depolarizing(3, 0.1);
+    elsewhere.set_t1(1, 0.2);
+    elsewhere.set_idle_noise(2, 25.0, 25.0, 0.1);
+    BOOST_CHECK(!elsewhere.exact_channels_are_pauli_diagonal());
+    BOOST_CHECK(elsewhere.exact_channels_are_pauli_diagonal_on(*circuit));
+    BOOST_CHECK(!InjectsExactChannels(propagator, elsewhere));
+    BOOST_CHECK(InjectsExactChannels(propagator, elsewhere, *circuit));
+    // Only a backend that applies channels exactly is asked.
+    BOOST_CHECK(!InjectsExactChannels(statevector, elsewhere, *circuit));
+    const auto resolve = [&](const std::shared_ptr<Circuits::Circuit<>> &target) {
+        return MaestroExecution::ResolveNoiseRealizations(std::nullopt, elsewhere, propagator, MaestroExecution::NoiseLayer::kCombined, 100, target, true);
+    };
+    auto policy = resolve(circuit);
+    BOOST_CHECK(policy.exact_channels && !policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 1u);
+    const auto gated = extended(circuit, std::make_shared<Circuits::CXGate<>>(0, 1));
+    const auto delayed = extended(circuit, std::make_shared<Circuits::Delay<>>(2, 1e-3));
+    for (const auto &relaxing : {gated, delayed})
+    {
+        BOOST_CHECK(!elsewhere.exact_channels_are_pauli_diagonal_on(*relaxing));
+        BOOST_CHECK(!InjectsExactChannels(propagator, elsewhere, *relaxing));
+        policy = resolve(relaxing);
+        BOOST_CHECK(!policy.exact_channels && policy.stochastic_noise);
+        BOOST_CHECK_EQUAL(policy.realizations, 100u);
+    }
+    // A delay of no duration relaxes nothing.
+    BOOST_CHECK(elsewhere.exact_channels_are_pauli_diagonal_on(*extended(circuit, std::make_shared<Circuits::Delay<>>(2, 0.0))));
+
+    // A Kraus instruction has no sampled form: the relaxation beside it is
+    // then exact too, as with a Kraus channel of the model. A Pauli channel
+    // instruction can be sampled and decides nothing.
+    const auto instruction = [](const Channel &channel) { return std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, channel); };
+    const auto kraus = extended(gated, instruction(Channel::AmplitudeDamping(0.2)));
+    const auto pauli = extended(gated, instruction(Channel::Pauli(0.1, 0.0, 0.1)));
+    BOOST_CHECK(MaestroExecution::HasKrausInstruction(*kraus));
+    BOOST_CHECK(!MaestroExecution::HasKrausInstruction(*pauli));
+    BOOST_CHECK(InjectsExactChannels(propagator, elsewhere, *kraus));
+    BOOST_CHECK(!InjectsExactChannels(propagator, elsewhere, *pauli));
+    BOOST_CHECK(!InjectsExactChannels(statevector, elsewhere, *kraus));
+    policy = resolve(kraus);
+    BOOST_CHECK(policy.exact_channels && !policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 1u);
+    // A nested instruction counts, and so does any circuit of several (the
+    // suffixes of a checkpoint): one that draws relaxation samples them all,
+    // unless one holds a Kraus instruction.
+    auto nested = std::make_shared<Circuits::Circuit<>>();
+    nested->AddOperation(kraus);
+    BOOST_CHECK(MaestroExecution::HasKrausInstruction(*nested));
+    using MaestroExecution::NoisyCircuits;
+    BOOST_CHECK(InjectsExactChannels(propagator, elsewhere, NoisyCircuits{circuit.get(), circuit.get()}));
+    BOOST_CHECK(!InjectsExactChannels(propagator, elsewhere, NoisyCircuits{circuit.get(), gated.get()}));
+    BOOST_CHECK(!InjectsExactChannels(propagator, elsewhere, NoisyCircuits{gated.get(), pauli.get()}));
+    BOOST_CHECK(InjectsExactChannels(propagator, elsewhere, NoisyCircuits{gated.get(), nested.get()}));
+}
+
+BOOST_AUTO_TEST_CASE(NoiseAddInfersExactChannelsOnThePauliPropagator)
+{
+    using Method = Simulators::SimulationType;
+    const auto network = [](Method method) {
+        auto result = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{2}, std::vector<size_t>{2});
+        result->Configure("seed", "9");
+        result->CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+        result->SetMaxSimulators(1);
+        return result;
+    };
+    auto circuit = std::make_shared<Circuits::Circuit<>>();
+    circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+    circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+    circuit->AddOperation(std::make_shared<Circuits::RyGate<>>(1, 0.7));
+    const std::vector<std::string> observables{"ZZ", "XX", "ZI", "IY"};
+
+    noise::NoiseModel pauli;
+    pauli.set_all_depolarizing(2, 0.1);
+    pauli.set_qubit_noise(0, 0.01, 0.03, 0.05);
+    pauli.set_2q_depolarizing(0, 1, 0.04);
+    pauli.set_phase_damping(1, 0.2);
+    noise::NoiseAdd add, reference;
+    add.seed(3);
+    reference.seed(3);
+    auto values = add.full_noise_estimate(circuit, network(Method::kPauliPropagator), 0, observables, pauli);
+    BOOST_CHECK(add.last_realization_policy().exact_channels);
+    BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
+    auto expected = reference.full_noise_estimate(circuit, network(Method::kDensityMatrix), 0, observables, pauli);
+    BOOST_REQUIRE_EQUAL(values.size(), expected.size());
+    for (size_t i = 0; i < values.size(); ++i)
+        BOOST_CHECK_SMALL(values[i] - expected[i], 1e-9);
+
+    // Relaxation is sampled by default and exact on request, with T1 < T2 kept.
+    noise::NoiseModel thermal;
+    thermal.set_thermal_relaxation(0, 1.0, 3.0, 5.0, 0.1);
+    thermal.set_thermal_relaxation(1, 1.0, 4.0, 2.0);
+    thermal.set_thermal_relaxation_2q(0, 2.0, 3.0, 5.0, 0.1);
+    thermal.set_thermal_relaxation_2q(1, 2.0, 4.0, 2.0);
+    int warnings = 0;
+    add.set_warning_handler([&](const std::string &) { ++warnings; });
+    add.full_noise_estimate(circuit, network(Method::kPauliPropagator), 0, observables, thermal, 4);
+    BOOST_CHECK(!add.last_realization_policy().exact_channels);
+    BOOST_CHECK_EQUAL(warnings, 1); // sampled: T2 is clamped to T1 on qubit 0
+    add.set_exact_channels(true);
+    values = add.full_noise_estimate(circuit, network(Method::kPauliPropagator), 0, observables, thermal);
+    BOOST_CHECK(add.last_realization_policy().exact_channels);
+    BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
+    BOOST_CHECK_EQUAL(warnings, 1);
+    expected = reference.full_noise_estimate(circuit, network(Method::kDensityMatrix), 0, observables, thermal);
+    for (size_t i = 0; i < values.size(); ++i)
+        BOOST_CHECK_SMALL(values[i] - expected[i], 1e-9);
+    add.set_automatic_channels();
+
+    // Channels with no sampled form were rejected on this method before.
+    noise::NoiseModel damping;
+    damping.set_generalized_amplitude_damping(0, 0.2, 0.1);
+    damping.set_correlated_phase_flip(0, 1, 0.05, 0.5);
+    values = add.full_noise_estimate(circuit, network(Method::kPauliPropagator), 0, observables, damping);
+    BOOST_CHECK(add.last_realization_policy().exact_channels);
+    BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
+    expected = reference.full_noise_estimate(circuit, network(Method::kDensityMatrix), 0, observables, damping);
+    for (size_t i = 0; i < values.size(); ++i)
+        BOOST_CHECK_SMALL(values[i] - expected[i], 1e-9);
+}
+
+BOOST_AUTO_TEST_SUITE_END()
+
+// ---------------------------------------------------------------- method agreement
+//
+// NoiseAdd, the network path Composer's bindings call, realizes one noise model
+// as trajectories on pure-state methods, as exact channels on the density
+// matrix and MPO, and as Pauli frames on the stabilizer (counts_policy
+// frame_v1). For one circuit and one model every method must give the same
+// count distribution and expectation values, up to sampling error; the density
+// matrix is the reference. Runs are seeded, so the comparisons are
+// deterministic. Their bounds sit five standard errors out, and negative
+// controls show that the same checks reject noise 1.5 times stronger.
+
+namespace
+{
+using Method = Simulators::SimulationType;
+using Histogram = std::map<std::string, double>;
+using CircuitPtr = std::shared_ptr<Circuits::Circuit<>>;
+
+constexpr double kSigmas = 5.0;
+constexpr int kAgreementShots = 20000;
+constexpr int kReferenceShots = 40000;
+const std::vector<std::string> kAgreementObservables{"XIIX", "ZXIZ", "XYZI", "XXXX", "YXIY", "IIZI", "IZZX", "YYZZ"};
+
+template <class Gate, class... Args> void Append(const CircuitPtr &circuit, Args... args)
+{
+    circuit->AddOperation(std::make_shared<Gate>(args...));
+}
+
+void Measure(const CircuitPtr &circuit, size_t qubit, size_t bit)
+{
+    circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{qubit, bit}}));
+}
+
+// A Hadamard that counts its executions. Pauli frames never execute gates, so
+// a zero count shows that the frame sampler, not a fallback, produced counts.
+class CountedHadamard : public Circuits::HadamardGate<>
+{
+  public:
+    CountedHadamard(Types::qubit_t qubit, std::shared_ptr<std::atomic<size_t>> calls) : HadamardGate(qubit), calls(std::move(calls))
+    {
+    }
+
+    void Execute(const std::shared_ptr<Simulators::ISimulator> &simulator, Circuits::OperationState &state) const override
+    {
+        ++*calls;
+        HadamardGate::Execute(simulator, state);
+    }
+
+    std::shared_ptr<Circuits::IOperation<>> Clone() const override
+    {
+        return std::make_shared<CountedHadamard>(*this);
+    }
+
+    std::shared_ptr<Circuits::IOperation<>> Remap(const std::unordered_map<Types::qubit_t, Types::qubit_t> &qubits,
+                                                  const std::unordered_map<Types::qubit_t, Types::qubit_t> & = {}) const override
+    {
+        const auto mapped = qubits.find(GetQubit());
+        return std::make_shared<CountedHadamard>(mapped == qubits.end() ? GetQubit() : mapped->second, calls);
+    }
+
+  private:
+    std::shared_ptr<std::atomic<size_t>> calls;
+};
+
+// A generic four-qubit circuit: rotations, T gates and entanglers.
+CircuitPtr GenericCircuit(bool measure, bool delays = false)
+{
+    auto c = std::make_shared<Circuits::Circuit<>>();
+    Append<Circuits::HadamardGate<>>(c, 0);
+    Append<Circuits::RyGate<>>(c, 1, 0.7);
+    Append<Circuits::RxGate<>>(c, 2, 1.1);
+    Append<Circuits::HadamardGate<>>(c, 3);
+    Append<Circuits::CXGate<>>(c, 0, 1);
+    Append<Circuits::TGate<>>(c, 1);
+    Append<Circuits::CZGate<>>(c, 1, 2);
+    Append<Circuits::SGate<>>(c, 2);
+    Append<Circuits::RzGate<>>(c, 3, 0.5);
+    if (delays)
+    {
+        Append<Circuits::Delay<>>(c, 3, 3.0);
+        Append<Circuits::Delay<>>(c, 0, 1.5);
+    }
+    Append<Circuits::CXGate<>>(c, 2, 3);
+    Append<Circuits::RyGate<>>(c, 0, 0.4);
+    Append<Circuits::CXGate<>>(c, 3, 0);
+    Append<Circuits::HadamardGate<>>(c, 1);
+    Append<Circuits::TGate<>>(c, 2);
+    if (delays)
+        Append<Circuits::Delay<>>(c, 2, 2.0);
+    if (measure)
+        for (size_t q = 0; q < 4; ++q)
+            Measure(c, q, q);
+    return c;
+}
+
+// Noiseless records are (a, 1-a, 1-a, 1) for a random bit a, or with dynamic
+// (b, 1-a, 1-a, 1-b, a). Correlated, partly deterministic records make every
+// error visible; the uniform output of a generic Clifford circuit would hide
+// the noise strength.
+CircuitPtr CliffordCircuit(bool dynamic, const std::shared_ptr<std::atomic<size_t>> &calls)
+{
+    auto c = std::make_shared<Circuits::Circuit<>>();
+    c->AddOperation(std::make_shared<CountedHadamard>(0, calls));
+    Append<Circuits::CXGate<>>(c, 0, 1);
+    Append<Circuits::CXGate<>>(c, 1, 2);
+    Append<Circuits::XGate<>>(c, 3);
+    Append<Circuits::SGate<>>(c, 0);
+    Append<Circuits::CZGate<>>(c, 0, 3);
+    Append<Circuits::SdgGate<>>(c, 0);
+    Append<Circuits::CYGate<>>(c, 3, 1);
+    Append<Circuits::YGate<>>(c, 2);
+    Append<Circuits::SGate<>>(c, 1);
+    if (dynamic)
+    {
+        Measure(c, 0, 4);
+        c->AddOperation(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{0}));
+        Append<Circuits::HadamardGate<>>(c, 0);
+        Append<Circuits::CXGate<>>(c, 0, 3);
+    }
+    for (size_t q = 0; q < 4; ++q)
+        Measure(c, q, q);
+    return c;
+}
+
+// Mid-circuit measurement, classical control and a reused qubit.
+CircuitPtr DynamicCircuit()
+{
+    auto c = std::make_shared<Circuits::Circuit<>>();
+    Append<Circuits::HadamardGate<>>(c, 0);
+    Append<Circuits::TGate<>>(c, 0);
+    Append<Circuits::CXGate<>>(c, 0, 1);
+    Append<Circuits::RyGate<>>(c, 2, 0.8);
+    Measure(c, 0, 0);
+    c->AddOperation(std::make_shared<Circuits::ConditionalGate<>>(std::make_shared<Circuits::XGate<>>(2),
+                                                                  std::make_shared<Circuits::EqualCondition>(std::vector<size_t>{0}, std::vector<bool>{true})));
+    c->AddOperation(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{0}));
+    Append<Circuits::HadamardGate<>>(c, 0);
+    Append<Circuits::CZGate<>>(c, 0, 2);
+    Append<Circuits::TGate<>>(c, 2);
+    Append<Circuits::HadamardGate<>>(c, 2);
+    Append<Circuits::CXGate<>>(c, 2, 1);
+    Measure(c, 0, 1);
+    Measure(c, 1, 2);
+    Measure(c, 2, 3);
+    return c;
+}
+
+// Pauli channels of every kind the model offers, plus readout error.
+noise::NoiseModel PauliModel(double scale, int qubits = 4)
+{
+    noise::NoiseModel m;
+    m.set_all_depolarizing(qubits, 0.02 * scale);
+    m.set_dephasing(1, 0.03 * scale);
+    m.set_bit_flip(2, 0.02 * scale);
+    m.set_qubit_noise(0, 0.01 * scale, 0.005 * scale, 0.02 * scale);
+    m.set_2q_depolarizing(0, 1, 0.05 * scale);
+    m.set_all_2q_gate_depolarizing(qubits, 0.01 * scale);
+    m.set_phase_damping(2, 0.1 * scale);
+    m.set_readout_error(qubits - 1, 0.03 * scale, 0.06 * scale);
+    m.set_readout_error(0, 0.02 * scale, 0.01 * scale);
+    return m;
+}
+
+// Thermal relaxation with T2 <= T1 (where sampled resets are exact), idle
+// noise on delays, crosstalk, depolarizing and readout error. set_t1 is left
+// out: its sampled reset damps coherence by 1 - gamma, not sqrt(1 - gamma).
+noise::NoiseModel RelaxationModel(double scale)
+{
+    noise::NoiseModel m;
+    const double times[4][3] = {{20.0, 15.0, 0.0}, {30.0, 30.0, 0.1}, {25.0, 12.0, 0.05}, {40.0, 20.0, 0.0}};
+    for (int q = 0; q < 4; ++q)
+    {
+        m.set_thermal_relaxation(q, 1.0 * scale, times[q][0], times[q][1], times[q][2]);
+        m.set_thermal_relaxation_2q(q, 2.5 * scale, times[q][0], times[q][1], times[q][2]);
+    }
+    m.set_idle_noise(3, 30.0 / scale, 20.0 / scale, 0.0, 0.01);
+    m.set_idle_noise(0, 25.0 / scale, 25.0 / scale, 0.1);
+    m.set_crosstalk(0, 1, 0.08 * scale);
+    m.set_all_depolarizing(4, 0.005 * scale);
+    m.set_readout_error(1, 0.02 * scale, 0.05 * scale);
+    return m;
+}
+
+noise::NoiseModel DynamicModel(double scale)
+{
+    auto m = PauliModel(scale, 3);
+    const double t1[3] = {20.0, 30.0, 25.0};
+    for (int q = 0; q < 3; ++q)
+        m.set_thermal_relaxation(q, 1.0 * scale, t1[q], 0.8 * t1[q], 0.05);
+    return m;
+}
+
+// A four-qubit QCSim network that keeps the requested method.
+std::shared_ptr<Network::SimpleDisconnectedNetwork<>> AgreementNetwork(Method method, size_t bits, uint64_t seed, const char *policy = "legacy")
+{
+    auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{4}, std::vector<size_t>{bits});
+    network->Configure("seed", std::to_string(seed).c_str());
+    network->Configure("counts_policy", policy);
+    network->SetOptimizeSimulator(false);
+    network->GetController()->SetOptimizeCircuit(false);
+    network->CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+    return network;
+}
+
+// Counts from one method: an independent realization per shot on sampled
+// paths, the inferred exact channels on the density matrix and MPO.
+Histogram NoisyCounts(const CircuitPtr &circuit, const noise::NoiseModel &model, bool combined, Method method, bool exact, int shots, size_t bits,
+                      uint64_t seed, const char *policy = "legacy", bool frames = false)
+{
+    auto network = AgreementNetwork(method, bits, seed, policy);
+    noise::NoiseAdd add;
+    add.seed(static_cast<unsigned>(seed * 7 + 3));
+    const std::optional<int> realizations = exact ? std::nullopt : std::optional<int>(shots);
+    const auto results =
+        combined ? add.full_noise_execute(circuit, network, 0, model, shots, realizations) : add.noisy_execute(circuit, network, 0, model, shots, realizations);
+    BOOST_CHECK_EQUAL(add.last_realization_policy().exact_channels, exact);
+    BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, exact ? 1u : static_cast<size_t>(shots));
+    // Frames run no network, so they record no backend.
+    BOOST_CHECK_EQUAL(add.last_execution().valid, !frames);
+    if (add.last_execution().valid)
+        BOOST_CHECK(add.last_execution().method == method);
+    Histogram histogram;
+    double total = 0;
+    for (const auto &[outcome, count] : results)
+    {
+        std::string key(bits, '0');
+        for (size_t bit = 0; bit < bits && bit < outcome.size(); ++bit)
+            key[bit] = outcome[bit] ? '1' : '0';
+        histogram[key] += static_cast<double>(count);
+        total += static_cast<double>(count);
+    }
+    BOOST_CHECK_EQUAL(total, static_cast<double>(shots));
+    return histogram;
+}
+
+// Two-sample chi-square homogeneity statistic and its degrees of freedom.
+// Outcomes seen fewer than ten times in both samples together share one bin.
+std::pair<double, size_t> ChiSquare(const Histogram &a, const Histogram &b)
+{
+    double na = 0, nb = 0;
+    std::map<std::string, std::pair<double, double>> joined;
+    for (const auto &[key, count] : a)
+    {
+        na += count;
+        joined[key].first = count;
+    }
+    for (const auto &[key, count] : b)
+    {
+        nb += count;
+        joined[key].second = count;
+    }
+    const double ka = std::sqrt(nb / na), kb = std::sqrt(na / nb);
+    double statistic = 0, rareA = 0, rareB = 0;
+    size_t bins = 0;
+    const auto add = [&](double x, double y) {
+        statistic += (ka * x - kb * y) * (ka * x - kb * y) / (x + y);
+        ++bins;
+    };
+    for (const auto &[key, counts] : joined)
+    {
+        if (counts.first + counts.second < 10)
+        {
+            rareA += counts.first;
+            rareB += counts.second;
+        }
+        else
+            add(counts.first, counts.second);
+    }
+    if (rareA + rareB > 0)
+        add(rareA, rareB);
+    return {statistic, bins > 1 ? bins - 1 : 1};
+}
+
+// The chi-square quantile kSigmas standard normal deviations out (Wilson-Hilferty).
+double ChiSquareBound(size_t dof)
+{
+    const double h = 2.0 / (9.0 * static_cast<double>(dof));
+    return static_cast<double>(dof) * std::pow(1.0 - h + kSigmas * std::sqrt(h), 3);
+}
+
+struct Statistic
+{
+    std::string name;
+    double value, error;
+};
+
+// Averages, correlations and spread of a histogram: each bit's probability of
+// one, every pair's <Z_i Z_j>, and the mean and variance of the Hamming weight.
+std::vector<Statistic> Summarize(const Histogram &histogram)
+{
+    const size_t width = histogram.begin()->first.size();
+    double shots = 0;
+    for (const auto &[key, count] : histogram)
+        shots += count;
+    const auto average = [&](const auto &f) {
+        double sum = 0;
+        for (const auto &[key, count] : histogram)
+            sum += count * f(key);
+        return sum / shots;
+    };
+    const auto bit = [](const std::string &key, size_t i) { return key[i] == '1' ? 1.0 : 0.0; };
+    std::vector<Statistic> stats;
+    for (size_t i = 0; i < width; ++i)
+    {
+        const double p = average([&](const std::string &key) { return bit(key, i); });
+        stats.push_back({"P(bit " + std::to_string(i) + " = 1)", p, std::sqrt(p * (1 - p) / shots)});
+    }
+    for (size_t i = 0; i < width; ++i)
+        for (size_t j = i + 1; j < width; ++j)
+        {
+            const double c = average([&](const std::string &key) { return (1 - 2 * bit(key, i)) * (1 - 2 * bit(key, j)); });
+            stats.push_back({"<Z" + std::to_string(i) + "Z" + std::to_string(j) + ">", c, std::sqrt(std::max(1 - c * c, 0.0) / shots)});
+        }
+    const auto weight = [&](const std::string &key) {
+        double w = 0;
+        for (size_t i = 0; i < width; ++i)
+            w += bit(key, i);
+        return w;
+    };
+    const double mean = average(weight);
+    const double variance = average([&](const std::string &key) { return std::pow(weight(key) - mean, 2); });
+    const double fourth = average([&](const std::string &key) { return std::pow(weight(key) - mean, 4); });
+    stats.push_back({"weight mean", mean, std::sqrt(variance / shots)});
+    stats.push_back({"weight variance", variance, std::sqrt(std::max(fourth - variance * variance, 0.0) / shots)});
+    return stats;
+}
+
+// Every way two histograms differ by more than sampling explains.
+std::vector<std::string> CountDifferences(const Histogram &a, const Histogram &b, std::ostringstream &report)
+{
+    std::vector<std::string> failures;
+    const auto [statistic, dof] = ChiSquare(a, b);
+    const double bound = ChiSquareBound(dof);
+    report << "chi2 " << statistic << " (dof " << dof << ", bound " << bound << ")";
+    if (statistic > bound)
+        failures.push_back("distributions differ: chi2 " + std::to_string(statistic) + " > " + std::to_string(bound));
+    if (a.begin()->first.size() != b.begin()->first.size())
+    {
+        failures.push_back("different record widths");
+        return failures;
+    }
+    const auto sa = Summarize(a), sb = Summarize(b);
+    for (size_t i = 0; i < sa.size(); ++i)
+    {
+        const double error = std::hypot(sa[i].error, sb[i].error);
+        const double z = error > 0 ? std::abs(sa[i].value - sb[i].value) / error : (sa[i].value == sb[i].value ? 0.0 : INFINITY);
+        report << "; " << sa[i].name << " " << sa[i].value << " vs " << sb[i].value << " (z " << z << ")";
+        if (z > kSigmas)
+            failures.push_back(sa[i].name + ": " + std::to_string(sa[i].value) + " vs " + std::to_string(sb[i].value) + ", z " + std::to_string(z));
+    }
+    return failures;
+}
+
+void CheckSameCounts(const Histogram &a, const Histogram &b, const std::string &label)
+{
+    std::ostringstream report;
+    const auto failures = CountDifferences(a, b, report);
+    std::ostringstream message;
+    for (const auto &failure : failures)
+        message << failure << "; ";
+    BOOST_CHECK_MESSAGE(failures.empty(), label << ": " << message.str() << "statistics: " << report.str());
+}
+
+void CheckDifferentCounts(const Histogram &a, const Histogram &b, const std::string &label)
+{
+    std::ostringstream report;
+    BOOST_CHECK_MESSAGE(!CountDifferences(a, b, report).empty(),
+                        label << ": stronger noise passed every check, so the comparison has no power: " << report.str());
+}
+
+std::string Name(Method method)
+{
+    switch (method)
+    {
+    case Method::kStatevector:
+        return "statevector";
+    case Method::kMatrixProductState:
+        return "MPS";
+    case Method::kStabilizer:
+        return "stabilizer";
+    case Method::kTensorNetwork:
+        return "tensor network";
+    case Method::kPauliPropagator:
+        return "Pauli propagator";
+    case Method::kExtendedStabilizer:
+        return "extended stabilizer";
+    case Method::kPathIntegral:
+        return "path integral";
+    case Method::kDensityMatrix:
+        return "density matrix";
+    case Method::kMatrixProductOperator:
+        return "MPO";
+    default:
+        return "other";
+    }
+}
+
+// The exact expectation values: one realization of the exact channels, which
+// are inferred from the backend unless the caller asks for them.
+std::vector<double> ExactEstimate(const CircuitPtr &circuit, const noise::NoiseModel &model, bool combined, Method method, bool request = false)
+{
+    auto network = AgreementNetwork(method, 4, 5);
+    noise::NoiseAdd add;
+    add.seed(5);
+    if (request)
+        add.set_exact_channels(true);
+    const auto values = combined ? add.full_noise_estimate(circuit, network, 0, kAgreementObservables, model)
+                                 : add.noisy_estimate_montecarlo(circuit, network, 0, kAgreementObservables, model);
+    BOOST_CHECK(add.last_realization_policy().exact_channels);
+    BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
+    BOOST_REQUIRE_EQUAL(values.size(), kAgreementObservables.size());
+    return values;
+}
+
+struct BatchedEstimate
+{
+    std::vector<double> mean, error;
+};
+
+// NoiseAdd returns only realization averages, so the standard error comes
+// from independently seeded batches.
+BatchedEstimate MonteCarloEstimate(const CircuitPtr &circuit, const noise::NoiseModel &model, bool combined, Method method, size_t batches, int realizations,
+                                   uint64_t seed)
+{
+    const size_t n = kAgreementObservables.size();
+    std::vector<double> sum(n, 0.0), squares(n, 0.0);
+    for (size_t batch = 0; batch < batches; ++batch)
+    {
+        auto network = AgreementNetwork(method, 4, seed + batch);
+        noise::NoiseAdd add;
+        add.seed(static_cast<unsigned>(seed * 1009 + batch));
+        // These are the sampled trajectories. The Pauli propagator would
+        // otherwise evaluate the Pauli model exactly: see ExactEstimate.
+        add.set_exact_channels(false);
+        const auto values = combined ? add.full_noise_estimate(circuit, network, 0, kAgreementObservables, model, realizations)
+                                     : add.noisy_estimate_montecarlo(circuit, network, 0, kAgreementObservables, model, realizations);
+        BOOST_CHECK(!add.last_realization_policy().exact_channels);
+        BOOST_REQUIRE_EQUAL(values.size(), n);
+        for (size_t i = 0; i < n; ++i)
+        {
+            sum[i] += values[i];
+            squares[i] += values[i] * values[i];
+        }
+    }
+    BatchedEstimate result;
+    const double count = static_cast<double>(batches);
+    for (size_t i = 0; i < n; ++i)
+    {
+        const double mean = sum[i] / count;
+        result.mean.push_back(mean);
+        result.error.push_back(std::sqrt(std::max(squares[i] - count * mean * mean, 0.0) / (count - 1) / count));
+    }
+    return result;
+}
+
+// The observables whose Monte Carlo mean lies more than kSigmas standard
+// errors from the exact value.
+std::vector<std::string> EstimateDeviations(const BatchedEstimate &estimate, const std::vector<double> &exact)
+{
+    std::vector<std::string> deviations;
+    for (size_t i = 0; i < exact.size(); ++i)
+        if (std::abs(estimate.mean[i] - exact[i]) > kSigmas * estimate.error[i] + 1e-9)
+        {
+            std::ostringstream line;
+            line << "<" << kAgreementObservables[i] << "> " << estimate.mean[i] << " +- " << estimate.error[i] << " vs exact " << exact[i];
+            deviations.push_back(line.str());
+        }
+    return deviations;
+}
+} // namespace
+
+BOOST_AUTO_TEST_SUITE(noise_method_agreement_tests)
+
+BOOST_AUTO_TEST_CASE(NoiseAddCountsAgreeAcrossMethods)
+{
+    struct Case
+    {
+        Method method;
+        bool exact;
+        int shots;
+    };
+
+    const std::vector<Case> cases{{Method::kStatevector, false, kAgreementShots},
+                                  {Method::kMatrixProductState, false, kAgreementShots},
+                                  {Method::kMatrixProductOperator, true, kAgreementShots},
+                                  {Method::kTensorNetwork, false, 5000},
+                                  {Method::kPauliPropagator, false, 2000},
+                                  {Method::kPathIntegral, false, kAgreementShots},
+                                  {Method::kExtendedStabilizer, false, kAgreementShots}};
+    for (const bool relaxation : {false, true})
+    {
+        const auto circuit = GenericCircuit(true, relaxation);
+        const auto model = relaxation ? RelaxationModel(1.0) : PauliModel(1.0);
+        const auto reference = NoisyCounts(circuit, model, relaxation, Method::kDensityMatrix, true, kReferenceShots, 4, 4242);
+        uint64_t seed = relaxation ? 200 : 100;
+        for (const auto &test : cases)
+        {
+            // The Pauli propagator applies the Pauli model's channels, all
+            // diagonal in the Pauli basis, to the observable: exact, in one
+            // realization. Relaxation keeps its sampled trajectories there.
+            const bool exact = test.exact || (test.method == Method::kPauliPropagator && !relaxation);
+            CheckSameCounts(NoisyCounts(circuit, model, relaxation, test.method, exact, test.shots, 4, seed += 17), reference,
+                            Name(test.method) + (relaxation ? " relaxation" : " Pauli") + " counts vs density matrix");
+        }
+        // Negative control: 1.5x noise on the trajectories is detected.
+        const auto stronger = relaxation ? RelaxationModel(1.5) : PauliModel(1.5);
+        CheckDifferentCounts(NoisyCounts(circuit, stronger, relaxation, Method::kStatevector, false, kAgreementShots, 4, seed + 1), reference,
+                             std::string("statevector with 1.5x ") + (relaxation ? "relaxation" : "Pauli noise"));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(NoiseAddDynamicCircuitCountsAgreeAcrossMethods)
+{
+    // Each shot follows its own measured branch, sampled on trajectories and
+    // exactly on mixed states.
+    const auto circuit = DynamicCircuit();
+    const auto model = DynamicModel(1.0);
+    const auto reference = NoisyCounts(circuit, model, true, Method::kDensityMatrix, true, kReferenceShots, 4, 4244);
+    uint64_t seed = 400;
+    for (const auto &[method, exact] : std::vector<std::pair<Method, bool>>{
+             {Method::kStatevector, false}, {Method::kMatrixProductState, false}, {Method::kMatrixProductOperator, true}, {Method::kExtendedStabilizer, false}})
+        CheckSameCounts(NoisyCounts(circuit, model, true, method, exact, kAgreementShots, 4, seed += 17), reference,
+                        Name(method) + " dynamic circuit vs density matrix");
+    CheckDifferentCounts(NoisyCounts(circuit, DynamicModel(1.5), true, Method::kStatevector, false, kAgreementShots, 4, seed + 1), reference,
+                         "statevector dynamic circuit with 1.5x noise");
+}
+
+BOOST_AUTO_TEST_CASE(NoiseAddCliffordFramesAgreeWithDensityMatrix)
+{
+    for (const bool dynamic : {false, true})
+    {
+        const size_t bits = dynamic ? 5 : 4;
+        const std::string kind = dynamic ? "dynamic Clifford" : "Clifford";
+        auto calls = std::make_shared<std::atomic<size_t>>(0);
+        const auto circuit = CliffordCircuit(dynamic, calls);
+        const auto model = PauliModel(1.0);
+        const auto reference = NoisyCounts(circuit, model, false, Method::kDensityMatrix, true, kReferenceShots, bits, 4243);
+        calls->store(0);
+        const auto frames = NoisyCounts(circuit, model, false, Method::kStabilizer, false, kAgreementShots, bits, 301, "frame_v1", true);
+        BOOST_CHECK_MESSAGE(calls->load() == 0, kind << ": frame_v1 executed gates instead of sampling frames");
+        const auto trajectories = NoisyCounts(circuit, model, false, Method::kStabilizer, false, kAgreementShots, bits, 302);
+        BOOST_CHECK_MESSAGE(calls->load() > 0, kind << ": legacy stabilizer counts did not execute the circuit");
+        CheckSameCounts(frames, reference, kind + " stabilizer frames vs density matrix");
+        CheckSameCounts(trajectories, reference, kind + " stabilizer trajectories vs density matrix");
+        CheckSameCounts(frames, trajectories, kind + " stabilizer frames vs stabilizer trajectories");
+        CheckSameCounts(NoisyCounts(circuit, model, false, Method::kStatevector, false, kAgreementShots, bits, 303), reference,
+                        kind + " statevector vs density matrix");
+        CheckSameCounts(NoisyCounts(circuit, model, false, Method::kMatrixProductOperator, true, kAgreementShots, bits, 304), reference,
+                        kind + " MPO vs density matrix");
+        calls->store(0);
+        CheckDifferentCounts(NoisyCounts(circuit, PauliModel(1.5), false, Method::kStabilizer, false, kAgreementShots, bits, 305, "frame_v1", true), reference,
+                             kind + " stabilizer frames with 1.5x noise");
+        BOOST_CHECK_EQUAL(calls->load(), 0u);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(NoiseAddEstimatesAgreeAcrossMethods)
+{
+    struct Case
+    {
+        Method method;
+        size_t batches;
+        int realizations;
+    };
+
+    const std::vector<Case> cases{{Method::kStatevector, 20, 100},    {Method::kMatrixProductState, 20, 100}, {Method::kTensorNetwork, 20, 100},
+                                  {Method::kPauliPropagator, 10, 40}, {Method::kPathIntegral, 20, 100},       {Method::kExtendedStabilizer, 20, 100}};
+    for (const bool relaxation : {false, true})
+    {
+        const auto circuit = GenericCircuit(false, relaxation);
+        const auto model = relaxation ? RelaxationModel(1.0) : PauliModel(1.0);
+        const std::string kind = relaxation ? " relaxation" : " Pauli";
+        const auto exact = ExactEstimate(circuit, model, relaxation, Method::kDensityMatrix);
+        const auto mpo = ExactEstimate(circuit, model, relaxation, Method::kMatrixProductOperator);
+        for (size_t i = 0; i < exact.size(); ++i)
+            BOOST_CHECK_MESSAGE(std::abs(mpo[i] - exact[i]) < 1e-8, "MPO" << kind << " <" << kAgreementObservables[i] << ">: " << mpo[i] << " vs " << exact[i]);
+        // The Pauli propagator holds no mixed state, yet one realization of the
+        // channels applied to the observable gives the same ensemble average:
+        // inferred for the Pauli model, on request for relaxation.
+        const auto propagator = ExactEstimate(circuit, model, relaxation, Method::kPauliPropagator, relaxation);
+        for (size_t i = 0; i < exact.size(); ++i)
+            BOOST_CHECK_MESSAGE(std::abs(propagator[i] - exact[i]) < 1e-8,
+                                "Pauli propagator exact" << kind << " <" << kAgreementObservables[i] << ">: " << propagator[i] << " vs " << exact[i]);
+        uint64_t seed = relaxation ? 700 : 600;
+        for (const auto &test : cases)
+        {
+            const auto deviations =
+                EstimateDeviations(MonteCarloEstimate(circuit, model, relaxation, test.method, test.batches, test.realizations, seed += 31), exact);
+            std::ostringstream message;
+            for (const auto &line : deviations)
+                message << line << "; ";
+            BOOST_CHECK_MESSAGE(deviations.empty(), Name(test.method) << kind << " estimates vs density matrix: " << message.str());
+        }
+    }
+    // Negative control: 1.5x Pauli noise moves some estimate past the bound.
+    const auto stronger = MonteCarloEstimate(GenericCircuit(false), PauliModel(1.5), false, Method::kStatevector, 20, 100, 900);
+    BOOST_CHECK_MESSAGE(!EstimateDeviations(stronger, ExactEstimate(GenericCircuit(false), PauliModel(1.0), false, Method::kDensityMatrix)).empty(),
+                        "statevector estimates with 1.5x Pauli noise passed, so the comparison has no power");
+}
+
+BOOST_AUTO_TEST_CASE(NoiseAddTrajectoryMethodsAgreeRealizationByRealization)
+{
+    // Under one seed, Pauli noise injects the same circuits for every
+    // pure-state method. Each realization is then a noiseless simulation, so
+    // the averages agree to rounding: a difference is a simulator error on an
+    // injected circuit, not sampling noise.
+    const auto circuit = GenericCircuit(false);
+    const auto model = PauliModel(1.0);
+    const auto run = [&](Method method) {
+        auto network = AgreementNetwork(method, 4, 77);
+        noise::NoiseAdd add;
+        add.seed(78);
+        // Trajectories on every method: the Pauli propagator would otherwise
+        // apply this Pauli model exactly instead of sampling it.
+        add.set_exact_channels(false);
+        return add.noisy_estimate_montecarlo(circuit, network, 0, kAgreementObservables, model, 200);
+    };
+    const auto reference = run(Method::kStatevector);
+    for (const auto method :
+         {Method::kMatrixProductState, Method::kTensorNetwork, Method::kPauliPropagator, Method::kPathIntegral, Method::kExtendedStabilizer})
+    {
+        const auto values = run(method);
+        BOOST_REQUIRE_EQUAL(values.size(), reference.size());
+        for (size_t i = 0; i < values.size(); ++i)
+            BOOST_CHECK_MESSAGE(std::abs(values[i] - reference[i]) < 1e-9,
+                                Name(method) << " <" << kAgreementObservables[i] << ">: " << values[i] << " vs statevector " << reference[i]);
+    }
 }
 
 BOOST_AUTO_TEST_SUITE_END()

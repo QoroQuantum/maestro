@@ -5,6 +5,9 @@
 #define _USE_MATH_DEFINES
 #include <math.h>
 
+#include <optional>
+#include <type_traits>
+
 namespace Simulators::Private
 {
 // extended_stabilizer backend. Owns exactly one native QCSim implementation.
@@ -174,6 +177,11 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
                          "number of bits in the size_t type, the outcome will be undefined"
                       << std::endl;
         std::unordered_map<Types::qubit_t, Types::qubit_t> result;
+        if (TryMarginalCounts<false>(qubits, shots, result))
+        {
+            NotifyObservers(qubits);
+            return result;
+        }
         DontNotify();
         {
             const std::vector<size_t> selected(qubits.begin(), qubits.end());
@@ -191,6 +199,11 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
         if (qubits.empty() || shots == 0)
             return {};
         std::unordered_map<std::vector<bool>, Types::qubit_t> result;
+        if (TryMarginalCounts<true>(qubits, shots, result))
+        {
+            NotifyObservers(qubits);
+            return result;
+        }
         DontNotify();
         {
             const std::vector<size_t> selected(qubits.begin(), qubits.end());
@@ -466,6 +479,166 @@ class QCSimExtendedStabilizerSimulator : public ImmediateQCSimSimulator
     }
 
   protected:
+    template <bool Many> bool TryMarginalCounts(const Types::qubits_vector &qubits, size_t shots, Utils::Sampling::Counts<Many> &counts)
+    {
+        using namespace Utils::Sampling;
+        if (!PreferExtendedMarginalCounts(shots, 1) || !AllowMultinomialCounts())
+            return false;
+        ValidateQubits(qubits, nrQubits, Many);
+        // A Z parity on a subset is a Fourier coefficient of the joint
+        // distribution of those measured bits. Only the measured width enters
+        // the transform. Keep both the number of frame queries and scratch bounded.
+        // The output mapping is indexed by register qubit, so repeating a
+        // qubit in the request allocates nothing per requested bit.
+        std::vector<size_t> selected;
+        std::vector<uint8_t> position(nrQubits, 0);
+        for (const auto q : qubits)
+            if (std::find(selected.begin(), selected.end(), q) == selected.end())
+            {
+                if (selected.size() == maxExtendedMarginalBits)
+                    return false;
+                position[q] = static_cast<uint8_t>(selected.size());
+                selected.push_back(q);
+            }
+        // Each native frame shot may restore and collapse a private frame.
+        // The measured crossover is earlier than for an existing alias table.
+        if (!PreferExtendedMarginalCounts(shots, selected.size()))
+            return false;
+        // Pruning after a non-diagonal measurement can change the conditional
+        // state for the next measured bit. Preserve that sequential behavior.
+        // A single stabilizer component is measured without pruning.
+        if (selected.size() > 1 && extendedStabilizer->GetApproximationPolicy().mode != QC::ExtendedStabilizerApproximationMode::Exact &&
+            !SingleBasisComponent())
+            return false;
+
+        const auto weights = FrameMarginalWeights(selected);
+        // FrameMarginalWeights already zeroes rounding residue. A materially
+        // negative or nonfinite mass falls back before consuming RNG.
+        if (std::any_of(weights.begin(), weights.end(), [](double p) { return !(p >= 0. && std::isfinite(p)); }))
+            return false;
+        auto options = SamplingOptions();
+        options.family = Family::Multinomial;
+        auto probability = [&weights](size_t row) { return weights[row]; };
+        Prepared plan(weights.size(), shots, probability, options);
+        counts = Count<Many>(
+            plan, shots, qubits.size(), [&](size_t row, size_t bit) { return (row >> position[qubits[bit]]) & 1; },
+            [&] { return Utils::RandomStream::Uniform(rng); });
+        return true;
+    }
+
+    // One Clifford-basis component: an ordinary stabilizer state U|b>.
+    bool SingleBasisComponent() const
+    {
+        const auto &frames = extendedStabilizer->GetFrames();
+        return frames.size() == 1 && frames.front().GetFrameSize() == 1;
+    }
+
+    // Unnormalized joint weights of the selected bits, indexed by bit position.
+    std::vector<double> FrameMarginalWeights(const std::vector<size_t> &selected) const
+    {
+        const size_t outcomes = size_t{1} << selected.size();
+        if (SingleBasisComponent())
+        {
+            // One Clifford-basis component is uniform on an affine space.
+            // QCSim enumerates its selected support directly in Gray-code order.
+            std::vector<double> weights(outcomes, 0.);
+            const auto &frame = extendedStabilizer->GetFrames().front();
+            QC::Clifford::detail::BasisDistribution affine;
+            affine.BuildFromInverse(frame.cliffordBasis.ZImages(), selected, frame.signs.LabelWords(0));
+            affine.FillProbabilities(weights);
+            return weights;
+        }
+        if (auto weights = DiagonalFrameWeights(selected))
+            return std::move(*weights);
+        auto weights = FrameParityMoments(selected);
+        const double norm = weights[0];
+        InverseParityTransform(weights);
+        ClearRoundingResidue(weights, norm);
+        return weights;
+    }
+
+    // When no selected qubit's Z image has an X part, every component U|b> has
+    // a definite outcome: bit j is the image's sign xor parity(z_j & b). The
+    // labels are distinct, as QCSim's own diagonal measurement assumes, so the
+    // joint weights are sums of |amplitude|^2 by outcome. Positive sums keep
+    // a tiny probability accurate; differences of parity moments over many
+    // components would round it away. Costs one pass over the components.
+    std::optional<std::vector<double>> DiagonalFrameWeights(const std::vector<size_t> &selected) const
+    {
+        const auto &frame = extendedStabilizer->GetFrames().front();
+        using Image = std::decay_t<decltype(frame.cliffordBasis.ImageZ(0))>;
+        std::vector<Image> images;
+        images.reserve(selected.size());
+        for (const auto q : selected)
+        {
+            images.push_back(frame.cliffordBasis.ImageZ(q));
+            if (images.back().HasX())
+                return std::nullopt;
+        }
+        std::vector<double> weights(size_t{1} << selected.size(), 0.);
+        for (size_t component = 0; component < frame.GetFrameSize(); ++component)
+        {
+            const auto *label = frame.signs.LabelWords(component);
+            size_t outcome = 0;
+            for (size_t bit = 0; bit < images.size(); ++bit)
+            {
+                const auto &image = images[bit];
+                std::decay_t<decltype(*label)> parity = 0;
+                for (size_t word = 0; word < image.Words(); ++word)
+                    parity ^= image.Z.words[word] & label[word];
+                if (bool(image.PhaseSign) != ((QC::Clifford::detail::Popcount(parity) & 1U) != 0))
+                    outcome |= size_t{1} << bit;
+            }
+            weights[outcome] += std::norm(frame.amplitudes[component]);
+        }
+        return weights;
+    }
+
+    // An outcome of zero probability can come out of the transform as a few
+    // ulps below zero. The tolerance is 1e-12 in probability units; larger
+    // negative weights are kept so that the caller falls back.
+    static void ClearRoundingResidue(std::vector<double> &weights, double norm)
+    {
+        const double tolerance = 1e-12 * norm * static_cast<double>(weights.size());
+        for (double &weight : weights)
+            if (weight < 0. && weight >= -tolerance)
+                weight = 0.;
+    }
+
+    // <psi|Z_S|psi> for every subset S of the selected bits (bit b of the index
+    // selects selected[b]). The empty subset holds the squared norm, which the
+    // native measurement also divides by, rather than assuming exactly one.
+    std::vector<double> FrameParityMoments(const std::vector<size_t> &selected) const
+    {
+        const size_t outcomes = size_t{1} << selected.size();
+        std::vector<double> moments(outcomes, 0.);
+        for (const auto &amplitude : extendedStabilizer->GetFrames().front().amplitudes)
+            moments[0] += std::norm(amplitude);
+        std::string parity(*std::max_element(selected.begin(), selected.end()) + 1, 'I');
+        for (size_t mask = 1; mask < outcomes; ++mask)
+        {
+            for (size_t bit = 0; bit < selected.size(); ++bit)
+                parity[selected[bit]] = (mask >> bit) & 1 ? 'Z' : 'I';
+            moments[mask] = extendedStabilizer->ExpectationValue(parity);
+        }
+        return moments;
+    }
+
+    // Inverse Walsh-Hadamard transform. The shared normalization factor
+    // 1/outcomes cancels in the count sampler.
+    static void InverseParityTransform(std::vector<double> &weights)
+    {
+        const size_t outcomes = weights.size();
+        for (size_t stride = 1; stride < outcomes; stride *= 2)
+            for (size_t block = 0; block < outcomes; block += 2 * stride)
+                for (size_t i = block; i < block + stride; ++i)
+                {
+                    const double a = weights[i], b = weights[i + stride];
+                    weights[i] = a + b;
+                    weights[i + stride] = a - b;
+                }
+    }
+
     double ExtendedStabilizerBasisProbability(Types::qubit_t outcome) const
     {
         const size_t nrBasisStates = CheckedBasisStateCountForQueries();

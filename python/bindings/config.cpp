@@ -220,8 +220,9 @@ void bind_config(nb::module_ &m)
                     "Require the selected simulator and method; disable automatic backend replacement, including reference-frame sampling.");
 
     BindConfigField(config_class, "counts_policy", &SimulatorConfig::counts_policy,
-                    "'auto' uses eligible frame counts only without explicit seeds; 'legacy' retains trajectory counts; "
-                    "'frame_v1' also permits seeded frame counts with its own reproducible sequence. Unsupported circuits retain the trajectory fallback.");
+                    "'auto' allows adaptive multinomial terminal counts with or without a seed. Unseeded requests may also use frames or direct trajectories. "
+                    "'legacy' uses the ordinary sampler, 'frame_v1' enables frame counts, and 'multinomial_v1' selects adaptive terminal counts. "
+                    "On the same build, the same request, seed and policy reproduce the histogram.");
 
     BindConfigField(config_class, "allow_reset_marginalization", &SimulatorConfig::allow_reset_marginalization,
                     "Allow ensemble-equivalent reset marginalization; individual trajectories can change.");

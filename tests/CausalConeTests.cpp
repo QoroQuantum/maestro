@@ -190,24 +190,19 @@ int main()
             TransformPipeline::Run(no_op);
             Require(unchanged == original && no_op.applied_transforms.empty(), "No-op cone cloned its circuit");
 
+            // The GPU tensor-network simulator holds a one-qubit register in a
+            // two-qubit network itself, so planning keeps the circuit's width.
             SimulatorConfig fixed_gpu;
             fixed_gpu.simulator_type = Simulators::SimulatorType::kGpuSim;
             fixed_gpu.simulation_type = Simulators::SimulationType::kTensorNetwork;
             fixed_gpu.fixed_backend = true;
-            const auto padded = PrepareEstimation(original, {"Z"}, fixed_gpu);
-            Require(padded.qubits_after == 2 && padded.groups[0].observables == std::vector<std::string>{"ZI"},
-                    "Fixed GPU tensor network lost its minimum register width");
+            const auto unpadded = PrepareEstimation(original, {"Z"}, fixed_gpu);
+            Require(unpadded.qubits_after == 1 && unpadded.groups[0].observables == std::vector<std::string>{"Z"},
+                    "Fixed GPU tensor network widened a one-qubit group");
             EstimationCache gpu_cache;
-            const auto cached_pad = PrepareEstimation(original, {"Z"}, fixed_gpu, &gpu_cache);
-            Require(cached_pad.qubits_after == 2 && cached_pad.groups[0].observables == std::vector<std::string>{"ZI"},
-                    "Cached fixed GPU tensor network lost its minimum register width");
-            auto sampled = std::make_shared<Circuit>(*original);
-            sampled->AddOperation(Factory::CreateGate(Circuits::QuantumGateType::kHadamardGateType, 3));
-            sampled->AddOperation(Factory::CreateMeasurement({{0, 0}, {3, 1}}));
-            fixed_gpu.enable_sampling_reduction = true;
-            Require(!SampleDisjointCones(sampled, fixed_gpu, 10), "Fixed GPU tensor-network sampling attempted a one-qubit component");
-            fixed_gpu.fixed_backend = false;
-            Require(!SampleDisjointCones(sampled, fixed_gpu, 10), "Automatic GPU tensor-network sampling attempted a one-qubit component");
+            const auto cached = PrepareEstimation(original, {"Z"}, fixed_gpu, &gpu_cache);
+            Require(cached.qubits_after == 1 && cached.groups[0].observables == std::vector<std::string>{"Z"},
+                    "Cached fixed GPU tensor network widened a one-qubit group");
 
             EstimationCache cache;
             auto first = std::make_shared<Circuit>();

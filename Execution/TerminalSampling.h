@@ -4,6 +4,7 @@
 #include "SampleRecords.h"
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 
 namespace MaestroExecution
@@ -21,14 +22,26 @@ inline bool HasResetOperation(const Circuits::Circuit<double> &circuit)
 // adapters and the QCSim statevector, stabilizer and MPS adapters draw shots
 // without the save slot; tensor-network sampling, for one, saves and restores
 // its own state between draws, so checkpoints keep replaying shots there.
-inline bool PreservesSavedStateWhileSampling(const Simulators::ISimulator &simulator)
+inline bool PreservesSavedStateWhileSampling(const Simulators::ISimulator &simulator, bool multinomialCounts = false, bool legacyCounts = false)
 {
-    if (simulator.SupportsQuantumChannels())
-        return true;
     using Method = Simulators::SimulationType;
     const auto method = simulator.GetSimulationType();
-    return simulator.GetType() == Simulators::SimulatorType::kQCSim &&
-           (method == Method::kStatevector || method == Method::kStabilizer || method == Method::kMatrixProductState);
+    const bool qcsim = simulator.GetType() == Simulators::SimulatorType::kQCSim;
+    // The Pauli propagator replayed every shot before it applied channels.
+    // The legacy policy keeps that seeded stream: each shot draws its
+    // measurement and then its readout errors, an order that a histogram of
+    // the outcomes cannot reproduce.
+    if (legacyCounts && qcsim && method == Method::kPauliPropagator)
+        return false;
+    if (simulator.SupportsQuantumChannels())
+        return true;
+    if (!qcsim)
+        return false;
+    // Path-integral batches read the stored amplitudes. Extended stabilizer
+    // queries the frame or samples on a private clone. Older count and row
+    // policies keep replaying these two methods to retain their seeded streams.
+    return method == Method::kStatevector || method == Method::kStabilizer || method == Method::kMatrixProductState ||
+           (multinomialCounts && (method == Method::kPathIntegral || method == Method::kExtendedStabilizer));
 }
 
 // Nested circuits are inlined before analysis (Circuit::InlinedComposites):
@@ -60,8 +73,15 @@ inline bool CanSampleTerminal(const Circuits::Circuit<double> &input, const Simu
     return true;
 }
 
+using TerminalCountSink = std::function<void(size_t, const Circuits::OperationState &)>;
+
 // On success, evolves the deterministic part exactly once from the CURRENT
 // simulator state, then emits (row index, classical state) for every sample.
+// With a count sink it emits (count, state) instead and never calls the row
+// sink: one call per occupied outcome when readout is deterministic, and one
+// call of count 1 per shot when readout errors are drawn. Those are drawn in
+// the order the row path draws them, so both give the same seeded histogram,
+// but counts have no row order and so need no permutation of the shots.
 // Never resets the simulator or overwrites its saved checkpoint. A false result
 // leaves both quantum and classical state untouched, for the trajectory fallback.
 // Unwritten classical bits keep their input values. Readout is independent per
@@ -69,7 +89,7 @@ inline bool CanSampleTerminal(const Circuits::Circuit<double> &input, const Simu
 template <class RowSink>
 bool SamplePreparedTerminal(const Circuits::Circuit<double> &input, const std::shared_ptr<Simulators::ISimulator> &simulator, size_t shots,
                             Circuits::OperationState &state, std::optional<uint64_t> seed, RowSink &&write, size_t *maxBondDimension = nullptr,
-                            bool known_zero_initial_state = false)
+                            bool known_zero_initial_state = false, const TerminalCountSink &writeCounts = {})
 {
     const auto inlined = InlinedForSampling(input);
     const auto &circuit = inlined ? *inlined : input;
@@ -84,13 +104,34 @@ bool SamplePreparedTerminal(const Circuits::Circuit<double> &input, const std::s
     const auto &qubits = measurements->GetQubits();
     if (qubits.empty())
     {
-        for (size_t row = 0; row < shots; ++row)
-            write(row, state);
+        if (writeCounts && shots)
+            writeCounts(shots, state);
+        else
+            for (size_t row = 0; row < shots; ++row)
+                write(row, state);
         return true;
     }
     const Circuits::OperationState initial(state);
-    const auto order = SampleRowOrder::Permutation(shots, seed, SampleRowOrder::kTerminalStream);
+    const bool aggregate = writeCounts && !measurements->HasReadout();
+    const auto order = writeCounts ? std::vector<size_t>{} : SampleRowOrder::Permutation(shots, seed, SampleRowOrder::kTerminalStream);
     const auto histogram = simulator->SampleCountsMany(qubits, shots);
+    if (aggregate)
+    {
+        size_t remaining = shots;
+        for (const auto &[outcome, count] : histogram)
+        {
+            if (count > remaining)
+                throw std::runtime_error("Sampling returned too many shots");
+            remaining -= count;
+            state = initial;
+            measurements->SetStateFromSample(outcome, state);
+            if (count)
+                writeCounts(count, state);
+        }
+        if (remaining)
+            throw std::runtime_error("Sampling returned an incomplete histogram");
+        return true;
+    }
     using Outcome = std::pair<const std::vector<bool>, Types::qubit_t>;
     std::vector<const Outcome *> outcomes;
     outcomes.reserve(histogram.size());
@@ -106,7 +147,11 @@ bool SamplePreparedTerminal(const Circuits::Circuit<double> &input, const std::s
                 throw std::runtime_error("Sampling returned too many shots");
             state = initial;
             measurements->SetStateFromSample(outcome->first, state, readout);
-            write(order[row++], state);
+            if (writeCounts)
+                writeCounts(1, state);
+            else
+                write(order[row], state);
+            ++row;
         }
     if (row != shots)
         throw std::runtime_error("Sampling returned an incomplete shot matrix");
@@ -123,7 +168,7 @@ inline constexpr size_t kHeadCopyRetainedStates = 4;
 
 inline bool HeadCopyFits(const SimulatorConfig &config, size_t qubits)
 {
-    const long double bytes = RealizationBytes(config, qubits);
+    const long double bytes = MaxRealizationBytes(config, qubits);
     const size_t budget = RealizationBudgetMB(config);
     return bytes > 0 && budget <= (std::numeric_limits<size_t>::max() >> 20) && kHeadCopyRetainedStates * bytes <= static_cast<long double>(budget << 20);
 }

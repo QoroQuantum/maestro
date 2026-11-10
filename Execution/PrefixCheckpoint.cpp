@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace MaestroExecution
 {
@@ -17,14 +18,36 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
         num_qubits_ = std::max(1, static_cast<int>(prefix->GetMaxQubitIndex()) + 1);
     // The simulator is created explicitly below: resolve a candidate list to the
     // one backend it creates, so suffix noise policy and metadata describe it.
-    config_ = ResolveCandidateBackend(config, static_cast<size_t>(num_qubits_));
+    // Probing several candidates already configures the network built below,
+    // register included; adopt it instead of allocating the register again.
+    unsigned long probed = 0;
+    config_ = ResolveCandidateBackend(config, static_cast<size_t>(num_qubits_), probed);
+
+    struct ProbeGuard
+    {
+        unsigned long &handle;
+
+        ~ProbeGuard()
+        {
+            if (handle)
+                DestroySimpleSimulator(handle);
+        }
+    } probe_guard{probed};
+
+    config_.seed = EffectiveSamplingSeed(config_);
+    config_.native_options.erase("seed");
     auto executed_prefix = prefix;
     if (prefix && prefix_noise && prefix_noise->has_any())
     {
         const auto policy = ResolveNoiseRealizations(std::nullopt, *prefix_noise, config_, NoiseLayer::kCombined, 64, prefix);
+        // A backend that applies channels exactly and still samples is the
+        // Pauli propagator with relaxation (InjectsExactChannels).
+        if (!policy.exact_channels && UsesExactQuantumChannels(config_))
+            throw std::invalid_argument("Prefix noise must be deterministic: the QCSim Pauli propagator samples relaxation that acts on the "
+                                        "prefix (T1, thermal or idle noise towards unequal populations), which a prefix evolved once cannot be");
         if (!policy.exact_channels || policy.stochastic_noise)
-            throw std::invalid_argument("Prefix noise must be deterministic: exact channels on a density-matrix or MPO backend, "
-                                        "without coherent or correlated noise");
+            throw std::invalid_argument("Prefix noise must be deterministic: exact channels on a density-matrix or MPO backend or on the QCSim "
+                                        "Pauli propagator, without coherent or correlated noise");
         std::optional<uint64_t> seed = 0; // no sampled layer reads it
         auto rng = MakeNoiseRng(config_, seed);
         const noise::NoiseInjectionPlan plan(prefix, *prefix_noise);
@@ -36,7 +59,8 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
             executed_prefix = noise::drop_outside_spectator_phases(executed_prefix, register_qubits);
     }
     GetMaestroObjectWithMute();
-    handle_ = CreateSimpleSimulator(num_qubits_);
+    const bool adopted = probed != 0;
+    handle_ = adopted ? std::exchange(probed, 0UL) : CreateSimpleSimulator(num_qubits_);
     if (handle_ == 0)
         throw std::runtime_error("PrefixCheckpointedSimulator: failed to create simulator handle.");
     try
@@ -45,13 +69,17 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
         // also adds the host's network-entangled qubit (2x statevector, 4x
         // density-matrix work), which may not even fit.
         const size_t register_qubits = static_cast<size_t>(num_qubits_);
-        network_ = ConfigureNetwork(handle_, config_, register_qubits);
+        network_ = adopted ? static_cast<Maestro *>(GetMaestroObject())->GetSimpleSimulator(handle_) : ConfigureNetwork(handle_, config_, register_qubits);
         if (!network_)
             throw std::runtime_error("PrefixCheckpointedSimulator: failed to configure network.");
-        // A fixed backend already has this register; replace a placeholder.
-        const auto created = network_->GetSimulator();
-        if (!created || created->GetType() != config_.simulator_type || created->GetSimulationType() != config_.simulation_type ||
-            created->GetNumberOfQubits() != register_qubits)
+        // A fixed backend already has this register; replace a placeholder. No
+        // pointer to it may survive the replacement, or both stay allocated.
+        const bool replace = [&] {
+            const auto created = network_->GetSimulator();
+            return !created || created->GetType() != config_.simulator_type || created->GetSimulationType() != config_.simulation_type ||
+                   created->GetNumberOfQubits() != register_qubits;
+        }();
+        if (replace)
             network_->CreateSimulator(config_.simulator_type, config_.simulation_type, register_qubits);
         simulator_ = network_->GetSimulator();
         if (!simulator_)
@@ -65,6 +93,16 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
         if (executed_prefix && !executed_prefix->GetOperations().empty())
             executed_prefix->ExecuteBD(simulator_, state, &max_bond_dim_);
         simulator_->SaveState();
+        // A prefix with measurements or resets collapsed once here, so every
+        // suffix shot shares that branch: frames, which branch per shot, then
+        // keep away. The extended stabilizer has no prefix noise (it needs
+        // exact channels).
+        frame_prefix_usable_ = config_.simulator_type == Simulators::SimulatorType::kQCSim &&
+                               config_.simulation_type == Simulators::SimulationType::kExtendedStabilizer && executed_prefix == prefix &&
+                               (!prefix || IsGateOnlyCircuit(*prefix));
+        // A snapshot: the caller may edit its circuit after the state was saved.
+        if (frame_prefix_usable_ && prefix)
+            frame_prefix_ = std::static_pointer_cast<Circuits::Circuit<double>>(prefix->Clone());
     }
     catch (...)
     {
@@ -112,6 +150,16 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
     // The suffix continues the saved prefix state, not a fresh register.
     const auto policy = ResolveNoiseRealizations(noise_realizations, *noise_model, config_, NoiseLayer::kCombined, 64, suffix, false, std::nullopt, false);
 
+    // A checkpoint can alternate counts and ordered rows on the same simulator.
+    // Pin the sampler for this call before cloning its workers.
+    const bool multinomial =
+        !rows && shots > 1 && simulator_->IsQcsim() && !simulator_->GetConfigMap().count("sampling_policy") && PreferMultinomialCounts(config_);
+    const char *counts_policy = multinomial ? "multinomial_v1" : "legacy";
+    // What the caller asked for; the simulator is pinned to legacy for auto too.
+    const bool legacy = EffectiveCountsPolicy(config_) == "legacy";
+    if (simulator_->IsQcsim() && simulator_->GetConfiguration("counts_policy") != counts_policy)
+        simulator_->Configure("counts_policy", counts_policy);
+
     // The config is fixed when the checkpoint is built, so unlike
     // full_noise_execute its seed must not override the per-call seed: that
     // would replay the same samples on every call. A call's noise_seed seeds
@@ -141,7 +189,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
     Circuits::Circuit<>::ExecuteResults combined;
     if (rows)
         records.rows.assign(SampleStorageSize(shots, total_cbits), 0);
-    const auto record = [&](const Circuits::OperationState &state, size_t shot, Circuits::Circuit<>::ExecuteResults &counts) {
+    const auto record = [&](const Circuits::OperationState &state, size_t shot, Circuits::Circuit<>::ExecuteResults &counts, size_t amount = 1) {
         const auto &bits = state.GetAllBits();
         const size_t written = std::min(bits.size(), total_cbits);
         if (rows)
@@ -155,7 +203,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
             std::vector<bool> key(total_cbits, false);
             for (size_t i = 0; i < written; ++i)
                 key[i] = bits[i];
-            ++counts[std::move(key)];
+            counts[std::move(key)] += amount;
         }
     };
     // The sampler operates on the current state without replacing the saved
@@ -172,11 +220,18 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         // may branch on a pure-state backend, so CanSampleTerminal sends any
         // pure-state reset to the shot path. Backends whose sampler uses the
         // save slot also replay shots, keeping the prefix intact.
-        if (batch_shots > 1 && PreservesSavedStateWhileSampling(*simulator) &&
-            SamplePreparedTerminal(
-                *circuit, simulator, batch_shots, state, seed,
-                [&](size_t shot, const Circuits::OperationState &sample) { record(sample, first_shot + shot, counts); }, &max_bond))
-            return true;
+        if (batch_shots > 1 && PreservesSavedStateWhileSampling(*simulator, multinomial, legacy))
+        {
+            // Counts take occupied outcomes whole whenever readout is
+            // deterministic, whatever sampler drew them; rows need each shot.
+            TerminalCountSink writeCounts;
+            if (!rows)
+                writeCounts = [&](size_t count, const Circuits::OperationState &sample) { record(sample, 0, counts, count); };
+            if (SamplePreparedTerminal(
+                    *circuit, simulator, batch_shots, state, seed,
+                    [&](size_t shot, const Circuits::OperationState &sample) { record(sample, first_shot + shot, counts); }, &max_bond, false, writeCounts))
+                return true;
+        }
         if (reuse_heads && SampleSharedHead(
                                *circuit, simulator, batch_shots, state, seed,
                                [&](size_t shot, const Circuits::OperationState &sample) { record(sample, first_shot + shot, counts); }, &max_bond))
@@ -194,6 +249,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
     };
     const auto start = std::chrono::steady_clock::now();
     size_t terminal_calls = 0, trajectory_calls = 0;
+    bool extended = false;
 
     if (!has_noise)
     {
@@ -205,6 +261,22 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         else
             ++trajectory_calls;
     }
+    else if (frame_prefix_usable_ && !policy.exact_channels && PreferExtendedFrames(call_config, noise_seed) && [&] {
+                 // Batched frames: the prefix evolves once, each batch of shots
+                 // follows the noisy suffix together, realization schedule kept.
+                 const size_t batches = std::min(shots, policy.realizations);
+                 FrameOutcomes outcomes;
+                 const uint64_t seed = noise_seed ? Simulators::IState::DeriveSeed(*noise_seed, 0x6672616d6573ULL) : Utils::RandomStream::FreshSeed();
+                 if (!SampleExtendedFrames(suffix, *noise_model, call_config, static_cast<size_t>(num_qubits_), total_cbits, shots, batches, seed, seed, rows,
+                                           records.rows, outcomes, frame_prefix_))
+                     return false;
+                 for (auto &entry : outcomes)
+                     combined[std::move(entry.first)] += entry.second;
+                 records.realizations = batches;
+                 records.policy.realizations = batches;
+                 return true;
+             }())
+        extended = true;
     else
     {
         const size_t batches = std::min(shots, policy.realizations);
@@ -277,7 +349,7 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
     }
     records.time_taken = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     records.max_bond_dimension = max_bond_dim_;
-    records.sampling_strategy = trajectory_calls == 0 ? "terminal_v1" : terminal_calls == 0 ? "trajectory_v1" : "mixed_v1";
+    records.sampling_strategy = extended ? "extended_frame_v1" : trajectory_calls == 0 ? "terminal_v1" : terminal_calls == 0 ? "trajectory_v1" : "mixed_v1";
     if (!rows)
     {
         records.counts.reserve(combined.size());

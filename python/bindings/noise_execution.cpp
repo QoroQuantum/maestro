@@ -7,20 +7,26 @@ namespace maestro_bindings
 using MaestroExecution::NoiseLayer;
 
 // Warn at the execution boundary, while holding the GIL, rather than once
-// per injected realization. The shared model retains its calibrated channels.
-void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config)
+// per injected realization, for the relaxation the circuit draws. The shared
+// model retains its calibrated channels.
+void warn_thermal_approximation(const noise::NoiseModel &noise_model, bool exact_channels, const CircuitPtr &circuit)
 {
-    const auto message = MaestroExecution::ThermalApproximationWarning(noise_model, MaestroExecution::UsesExactQuantumChannels(config));
+    const auto message = MaestroExecution::ThermalApproximationWarning(noise_model, exact_channels, *circuit);
     if (message.empty())
         return;
     if (PyErr_WarnEx(PyExc_RuntimeWarning, message.c_str(), 1) < 0)
         throw nb::python_error();
 }
 
+void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config, const CircuitPtr &circuit)
+{
+    warn_thermal_approximation(noise_model, MaestroExecution::InjectsExactChannels(config, noise_model, *circuit), circuit);
+}
+
 // One realization drawn from the plan, with this configuration's channel rule.
 static CircuitPtr inject_planned(NoiseLayer layer, const noise::NoiseInjectionPlan &plan, std::mt19937 &rng, const SimulatorConfig &config)
 {
-    return MaestroExecution::InjectPlanned(layer, plan, rng, MaestroExecution::UsesExactQuantumChannels(config));
+    return MaestroExecution::InjectPlanned(layer, plan, rng, MaestroExecution::InjectsExactChannels(config, plan.model(), *plan.circuit()));
 }
 
 void require_realizations(std::optional<int> noise_realizations)
@@ -203,7 +209,7 @@ nb::dict NoisyExecute(const CircuitPtr &circuit, const noise::NoiseModel &noise_
 {
     require_circuit(circuit);
     require_inject_noise_covers(noise_model);
-    warn_thermal_approximation(noise_model, config);
+    warn_thermal_approximation(noise_model, config, circuit);
     return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, NoiseLayer::kPauli, nullptr, return_samples);
 }
 
@@ -221,7 +227,7 @@ nb::dict FullNoiseExecute(const CircuitPtr &circuit, const noise::NoiseModel &no
     require_circuit(circuit);
     if (!has_circuit_channels(circuit))
         require_any_noise(noise_model);
-    warn_thermal_approximation(noise_model, config);
+    warn_thermal_approximation(noise_model, config, circuit);
     return execute_noise_batches(circuit, noise_model, config, shots, noise_realizations, noise_seed, NoiseLayer::kCombined, "combined", return_samples);
 }
 
@@ -230,7 +236,7 @@ nb::dict NoisyEstimateMonteCarlo(const CircuitPtr &circuit, const nb::object &ob
 {
     require_circuit(circuit);
     require_inject_noise_covers(noise_model);
-    warn_thermal_approximation(noise_model, config);
+    warn_thermal_approximation(noise_model, config, circuit);
     return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, NoiseLayer::kPauli, nullptr);
 }
 
@@ -248,7 +254,7 @@ nb::dict FullNoiseEstimate(const CircuitPtr &circuit, const nb::object &observab
     require_circuit(circuit);
     if (!has_circuit_channels(circuit))
         require_any_noise(noise_model);
-    warn_thermal_approximation(noise_model, config);
+    warn_thermal_approximation(noise_model, config, circuit);
     return estimate_noise_realizations(circuit, observables, noise_model, noise_realizations, config, noise_seed, NoiseLayer::kCombined, "combined");
 }
 
@@ -286,12 +292,20 @@ nb::dict NoisyFidelity(const CircuitPtr &circuit, const noise::NoiseModel &noise
     require_realizations(noise_realizations);
     if (!has_circuit_channels(circuit))
         require_any_noise(noise_model);
-    warn_thermal_approximation(noise_model, config);
+    // Without a candidate list the configuration already decides, and the
+    // warning comes first: raised as an error, it stops the call before it
+    // runs. A list is resolved to one backend inside the call, so then only the
+    // result says whether relaxation was sampled.
+    const bool listed = MaestroExecution::HasCandidateList(config);
+    if (!listed)
+        warn_thermal_approximation(noise_model, config, circuit);
     MaestroExecution::NoisyFidelityResult result;
     {
         nb::gil_scoped_release release;
         result = MaestroExecution::NoisyFidelity(circuit, noise_model, requested_realizations(noise_realizations), config, noise_seed);
     }
+    if (listed)
+        warn_thermal_approximation(noise_model, result.policy.exact_channels, circuit);
     nb::dict out;
     out["fidelity"] = result.fidelity;
     out["infidelity"] = 1.0 - result.fidelity;

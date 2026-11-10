@@ -76,8 +76,9 @@ template <typename Time = Types::time_type> class ExecuteJob
         Circuits::OperationState state;
         state.AllocateBits(nrCbits);
 
-        const bool hasMeasurementsOnlyAtEnd = !dcirc->HasOpsAfterMeasurements(method == Simulators::SimulationType::kDensityMatrix ||
-                                                                              method == Simulators::SimulationType::kMatrixProductOperator);
+        // A reset is a deterministic channel wherever channels are exact.
+        const bool hasMeasurementsOnlyAtEnd =
+            !dcirc->HasOpsAfterMeasurements(optSim ? optSim->SupportsQuantumChannels() : Simulators::EvolvesExactQuantumChannels(simType, method));
         const bool optimiseMultipleShots = optimiseMultipleShotsExecution;
         const bool specialOptimizationForStatevector = optimiseMultipleShots && method == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
 
@@ -250,8 +251,9 @@ template <typename Time = Types::time_type> class ExecuteJob
         Circuits::OperationState state;
         state.AllocateBits(nrCbits);
 
-        const bool hasMeasurementsOnlyAtEnd = !dcirc->HasOpsAfterMeasurements(method == Simulators::SimulationType::kDensityMatrix ||
-                                                                              method == Simulators::SimulationType::kMatrixProductOperator);
+        // A reset is a deterministic channel wherever channels are exact.
+        const bool hasMeasurementsOnlyAtEnd =
+            !dcirc->HasOpsAfterMeasurements(optSim ? optSim->SupportsQuantumChannels() : Simulators::EvolvesExactQuantumChannels(simType, method));
         const bool optimiseMultipleShots = optimiseMultipleShotsExecution;
         const bool specialOptimizationForStatevector = optimiseMultipleShots && method == Simulators::SimulationType::kStatevector && hasMeasurementsOnlyAtEnd;
 

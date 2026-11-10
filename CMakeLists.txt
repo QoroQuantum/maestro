@@ -164,7 +164,7 @@ if(NOT DEFINED QCSIM_INCLUDE_DIR)
         FetchContent_Declare(
             qcsim
             GIT_REPOSITORY https://github.com/QoroQuantum/QCSim.git
-            GIT_TAG ebc28be4731ab38bfaaaf3baf83d12fa7abefed5
+            GIT_TAG f69b4ac979e1af877a34fd48371997dd01e9bcb3
         )
         FetchContent_GetProperties(qcsim)
         if(NOT qcsim_POPULATED)
@@ -660,6 +660,19 @@ if(COMPILE_TESTS)
     target_link_libraries(reference_frame_sampler_tests PRIVATE maestro)
     target_include_directories(reference_frame_sampler_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     add_test(NAME reference_frame_sampler COMMAND reference_frame_sampler_tests)
+
+    add_executable(extended_frame_sampler_tests tests/ExtendedFrameSamplerTests.cpp)
+    target_compile_definitions(extended_frame_sampler_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX)
+    target_link_libraries(extended_frame_sampler_tests PRIVATE maestro)
+    target_include_directories(extended_frame_sampler_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME extended_frame_sampler COMMAND extended_frame_sampler_tests)
+
+    # Manual before/after benchmark of noisy extended_stabilizer sampling.
+    # Excluded from normal builds and CTest because timings depend on the host.
+    add_executable(extended_frame_benchmarks EXCLUDE_FROM_ALL tests/ExtendedFrameBenchmarks.cpp)
+    target_compile_definitions(extended_frame_benchmarks PRIVATE BOOST_ALL_NO_LIB NOMINMAX)
+    target_link_libraries(extended_frame_benchmarks PRIVATE maestro)
+    target_include_directories(extended_frame_benchmarks PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
     add_executable(alias_sampling_tests tests/AliasSamplingTests.cpp)
     target_compile_definitions(alias_sampling_tests PRIVATE BOOST_ALL_NO_LIB NOMINMAX)

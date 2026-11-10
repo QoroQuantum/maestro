@@ -32,16 +32,65 @@ namespace Utils
 
 using PathIntegralAmplitudeMap = std::remove_reference_t<decltype(std::declval<QC::PathIntegral::PathIntegralSimulator &>().GetAmplitudes())>;
 
-// Path-integral pruning can leave a non-unit norm. Sample conditionally
-// on the finite, positive retained mass, just as direct measurement does.
-inline double PathIntegralMass(const PathIntegralAmplitudeMap &amplitudes)
+// The retained mass of a path-integral state, weighed from amplitudes scaled
+// by 2^shift before squaring.
+struct PathIntegralMassScale
 {
     double total = 0.;
+    int shift = 0;
+};
+
+inline std::complex<double> ScalePathIntegralAmplitude(const std::complex<double> &amplitude, int shift)
+{
+    return {std::ldexp(amplitude.real(), shift), std::ldexp(amplitude.imag(), shift)};
+}
+
+// Path-integral pruning can leave a non-unit norm. Sample conditionally
+// on the finite, positive retained mass, just as direct measurement does.
+// As in QCSim's direct measurement, a total below 2^-900, or one that
+// overflows, is weighed again from amplitudes scaled by the exact power of
+// two that brings the largest component into [0.5, 1): squares below the
+// smallest double would vanish, and weights divided by a tiny total lose
+// precision. Ordinary states keep their unscaled weights.
+inline PathIntegralMassScale PathIntegralMass(const PathIntegralAmplitudeMap &amplitudes)
+{
+    PathIntegralMassScale mass;
     for (const auto &entry : amplitudes)
-        total += std::norm(entry.second);
-    if (!(total > 0.) || !std::isfinite(total))
+        mass.total += std::norm(entry.second);
+    if (!(mass.total >= 0x1p-900 && mass.total <= std::numeric_limits<double>::max()))
+    {
+        double largest = 0.;
+        for (const auto &entry : amplitudes)
+        {
+            const double re = std::abs(entry.second.real()), im = std::abs(entry.second.imag());
+            if (re > largest)
+                largest = re;
+            if (im > largest)
+                largest = im;
+        }
+        if (largest > 0. && std::isfinite(largest))
+        {
+            int exponent = 0;
+            std::frexp(largest, &exponent);
+            mass.shift = -exponent;
+            mass.total = 0.;
+            for (const auto &entry : amplitudes)
+                mass.total += std::norm(ScalePathIntegralAmplitude(entry.second, mass.shift));
+        }
+    }
+    if (!(mass.total > 0.) || !std::isfinite(mass.total))
         throw std::domain_error("Path integral sampling requires finite positive probability mass");
-    return total;
+    return mass;
+}
+
+// Calls build with the weight function of mass: plain squares for an
+// ordinary state, so its table is built exactly as before.
+template <class Build> void BuildPathIntegralTable(const PathIntegralMassScale &mass, const Build &build)
+{
+    if (mass.shift)
+        build([shift = mass.shift](const std::complex<double> &amplitude) { return std::norm(ScalePathIntegralAmplitude(amplitude, shift)); });
+    else
+        build([](const std::complex<double> &amplitude) { return std::norm(amplitude); });
 }
 
 class Alias : public AliasBase
@@ -95,15 +144,18 @@ class Alias : public AliasBase
 
     Alias(const PathIntegralAmplitudeMap &amplitudesMap)
     {
-        const double total = PathIntegralMass(amplitudesMap);
+        const auto mass = PathIntegralMass(amplitudesMap);
+        const double total = mass.total;
         statesTable.reserve(amplitudesMap.size());
-        SetAliasTable(amplitudesMap.size(), [&](const auto &add) {
-            size_t row = 0;
-            for (const auto &entry : amplitudesMap)
-            {
-                add(row++, (std::norm(entry.second) / total) * amplitudesMap.size());
-                statesTable.push_back(entry.first.getWords()[0]);
-            }
+        BuildPathIntegralTable(mass, [&](const auto &weight) {
+            SetAliasTable(amplitudesMap.size(), [&](const auto &add) {
+                size_t row = 0;
+                for (const auto &entry : amplitudesMap)
+                {
+                    add(row++, (weight(entry.second) / total) * amplitudesMap.size());
+                    statesTable.push_back(entry.first.getWords()[0]);
+                }
+            });
         });
     }
 
@@ -124,7 +176,8 @@ class AliasBig : public AliasBase
 
     AliasBig(const PathIntegralAmplitudeMap &amplitudesMap)
     {
-        const double total = PathIntegralMass(amplitudesMap);
+        const auto mass = PathIntegralMass(amplitudesMap);
+        const double total = mass.total;
         qubitCount = amplitudesMap.QubitCount();
         wordsPerState = (qubitCount + 63) / 64;
         if (wordsPerState && amplitudesMap.size() > statesTable.max_size() / wordsPerState)
@@ -132,15 +185,17 @@ class AliasBig : public AliasBase
         // All keys share a width. Store just their active words instead of a
         // fixed 1024-bit FastVectorBool per entry, without truncating high bits.
         statesTable.reserve(amplitudesMap.size() * wordsPerState);
-        SetAliasTable(amplitudesMap.size(), [&](const auto &add) {
-            size_t row = 0;
-            for (const auto &entry : amplitudesMap)
-            {
-                add(row, (std::norm(entry.second) / total) * amplitudesMap.size());
-                if (wordsPerState)
-                    statesTable.insert(statesTable.end(), entry.first.getWords(), entry.first.getWords() + wordsPerState);
-                ++row;
-            }
+        BuildPathIntegralTable(mass, [&](const auto &weight) {
+            SetAliasTable(amplitudesMap.size(), [&](const auto &add) {
+                size_t row = 0;
+                for (const auto &entry : amplitudesMap)
+                {
+                    add(row, (weight(entry.second) / total) * amplitudesMap.size());
+                    if (wordsPerState)
+                        statesTable.insert(statesTable.end(), entry.first.getWords(), entry.first.getWords() + wordsPerState);
+                    ++row;
+                }
+            });
         });
     }
 

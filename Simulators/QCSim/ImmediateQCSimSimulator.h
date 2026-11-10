@@ -427,6 +427,11 @@ class ImmediateQCSimSimulator : public ISimulator
         return configuration.GetConfiguration("sampling_policy") == "legacy";
     }
 
+    bool AllowMultinomialCounts() const
+    {
+        return Utils::Sampling::AllowsMultinomialCounts(configuration.GetConfiguration("counts_policy"), configuration.IsSet("sampling_policy"));
+    }
+
     Utils::Sampling::Options SamplingOptions() const
     {
         Utils::Sampling::Options options;

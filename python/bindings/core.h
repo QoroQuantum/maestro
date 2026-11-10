@@ -5,14 +5,17 @@
 
 // Shared tail of the noisy execute docstrings (functions and methods).
 #define MAESTRO_NOISY_EXECUTE_DOC                                                                                                                              \
-    "\n\nnoise_realizations=None selects one realization for deterministic DM/MPO channels and "                                                               \
+    "\n\nnoise_realizations=None selects one realization for deterministic exact channels (density matrix, "                                                   \
+    "MPO, and the QCSim Pauli propagator for the noise it applies exactly by default) and "                                                                    \
     "64 otherwise. An explicit positive count is honored, capped to shots. "                                                                                   \
     "noise_seed (also accepted as seed) is an unsigned 32-bit integer. It seeds noise injection and, "                                                         \
     "unless config.seed is set, measurement and readout. return_samples=True returns 'samples', a "                                                            \
     "(shots, clbits) uint8 array of shot records, instead of 'counts'. Results report 'sampling_strategy' "                                                    \
-    "when a dedicated sampler ran: 'reference_frame_v1' (noisy-Clifford frames), 'trajectory_v1' (each "                                                       \
-    "realization executed directly) or 'terminal_v1'. SimulatorConfig.counts_policy ('auto', 'legacy', "                                                       \
-    "'frame_v1') selects them; seeded calls under 'auto' keep their earlier sequences."
+    "when a dedicated sampler ran: 'reference_frame_v1' (noisy-Clifford frames), 'extended_frame_v1' "                                                         \
+    "(batched extended-stabilizer frames), 'trajectory_v1' (each realization executed directly) or "                                                           \
+    "'terminal_v1'. SimulatorConfig.counts_policy ('auto', 'legacy', "                                                                                         \
+    "'frame_v1', 'multinomial_v1') controls count sampling. 'auto' allows adaptive multinomial histograms with or without "                                    \
+    "a seed. Repeating the same request with the same seeds and configuration reproduces its histogram on the same build."
 
 namespace maestro_bindings
 {
@@ -36,7 +39,12 @@ CircuitPtr without_circuit_channels(const CircuitPtr &circuit);
 
 std::vector<std::string> ParseObservables(const nb::object &observables);
 // Emits ThermalApproximationWarning as a Python RuntimeWarning, once per call.
-void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config);
+// The configuration form decides as an executor that takes the configuration
+// as given does; a checkpoint passes the one it resolved. noisy_fidelity
+// resolves a candidate list inside the call, and then passes the evaluation
+// the call reports instead.
+void warn_thermal_approximation(const noise::NoiseModel &noise_model, const SimulatorConfig &config, const CircuitPtr &circuit);
+void warn_thermal_approximation(const noise::NoiseModel &noise_model, bool exact_channels, const CircuitPtr &circuit);
 nb::dict execute_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const SimulatorConfig &config, int shots, bool return_samples = false);
 nb::dict estimate_core(std::shared_ptr<Circuits::Circuit<double>> circuit, const std::vector<std::string> &paulis, const SimulatorConfig &config,
                        MaestroExecution::EstimationCache *cache = nullptr);

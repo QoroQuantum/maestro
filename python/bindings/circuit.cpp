@@ -357,7 +357,8 @@ void bind_circuit(nb::module_ &m)
         .def("noisy_execute", &NoisyExecute, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = nb::none(),
              "noise_seed"_a = nb::none(), "return_samples"_a = false,
              "Execute with exact Pauli/T1 channels for density-matrix/MPO "
-             "methods, or sampled trajectories for pure-state methods.\n\n"
+             "methods, exact Pauli channels on the QCSim Pauli propagator "
+             "(which samples T1), or sampled trajectories for pure-state methods.\n\n"
              "Example: qc.noisy_execute(nm, shots=1000)" MAESTRO_NOISY_EXECUTE_DOC)
         .def("noisy_estimate", &NoisyEstimate,
             "observables"_a, "noise_model"_a, "config"_a = SimulatorConfig{},
@@ -397,7 +398,8 @@ void bind_circuit(nb::module_ &m)
         .def("full_noise_execute", &FullNoiseExecute, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = nb::none(),
              "noise_seed"_a = nb::none(), "return_samples"_a = false,
              "Execute with combined noise: coherent + crosstalk + T1 + Pauli.\n\n"
-             "DM/MPO methods use exact channels for T1 and Pauli layers; "
+             "DM/MPO methods use exact channels for T1 and Pauli layers, and "
+             "the QCSim Pauli propagator for the Pauli layers (it samples T1); "
              "trajectory-only layers remain sampled.\n"
              "Example: qc.full_noise_execute(nm, shots=1000)" MAESTRO_NOISY_EXECUTE_DOC)
         .def("full_noise_estimate", &FullNoiseEstimate, "observables"_a, "noise_model"_a, "noise_realizations"_a = nb::none(), "config"_a = SimulatorConfig{},

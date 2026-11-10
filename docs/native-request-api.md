@@ -72,8 +72,13 @@ ideal execute/estimate. Results identify the backend/method actually used, which
 is always one of the listed candidates: without a cost model the first listed
 candidate that can hold the register runs (a 40-qubit density matrix yields to a
 listed MPO), and Clifford circuits move to a stabilizer only as a listed
-backend/method pair. When no listed candidate can be created, the request fails
-instead of running an unlisted backend; this includes a one-entry list.
+backend/method pair. A listed stabilizer never runs a non-Clifford circuit. When
+no listed candidate can be created, the request fails instead of running an
+unlisted backend; this includes a one-entry list. When candidates can be created
+but none can run the circuit, the request fails with the first one's error: for
+a stabilizer asked to run a non-Clifford circuit that is `native_failure`, as
+when the stabilizer itself rejects the gate; for a register too large for a
+backend it is that backend's own error.
 
 Fixed selection preserves multi-shot reuse: eligible circuits evolve once per
 execution job and sample repeatedly. Circuits with intermediate measurements,
@@ -104,7 +109,8 @@ and an optional single `conditional_reg`. Native additions are:
 ```
 
 Kraus matrices are flat row-major arrays with real or complex entries and require
-one/two targets and a mixed-state backend. Identity instructions remain present
+one/two targets and exact evaluation: a mixed-state backend or the QCSim
+`pauli_propagator`. Identity instructions remain present
 for noise injection. Gate parameter counts and U1/U2/U3 conventions are checked.
 
 `rxx` and `rzz` take one angle and two qubits. They expand exactly as the QASM
@@ -129,12 +135,15 @@ on its suffix measurements only.
 `pauli_channel` applies a Pauli channel to one or two qubits. `probabilities`
 has `4**len(qubits)` entries summing to one; base-4 digit `k` of an index selects
 I, X, Y or Z on `qubits[k]`, so one qubit is `[pI, pX, pY, pZ]` and two are
-`II, XI, YI, ZI, IX, XX, ... ZZ`. Density-matrix and MPO methods apply it exactly.
-Pure-state and MPS methods sample one Pauli per noise realization: the request
+`II, XI, YI, ZI, IX, XX, ... ZZ`. Density-matrix and MPO methods apply it exactly,
+and so does the QCSim `pauli_propagator`, which scales the Pauli terms of the
+observable it propagates. Pure-state and MPS methods sample one Pauli per noise
+realization: the request
 needs a `noise` block with trajectory evaluation, whose `channels` may then be
 omitted. Set `noise.realizations` to the shot count for independent draws per
 shot, as with Python's `noisy_execute(..., noise_realizations=shots)`. A general
-`kraus` instruction cannot be sampled and still needs exact mixed-state evaluation.
+`kraus` instruction cannot be sampled and still needs exact evaluation, on a
+mixed-state method or the QCSim `pauli_propagator`.
 Circuit `kraus` and `pauli_channel` instructions combine with a `noise` model:
 exact evaluation keeps them in place and adds the model's channels around them.
 
@@ -168,7 +177,7 @@ they cannot override the simulator or specify their own launch profiles.
 | `density_matrix_overlap` | `other_circuit` | `Tr(rho sigma)` of two mixed-state preparations, as `overlap` |
 | `fidelity_with_statevector` | `target_statevector` | `<psi|rho|psi> / Tr(rho)` against a normalized pure target, as `fidelity` |
 | `mirror_fidelity` | optional `observables` | Fidelity of the preparation followed by its inverse; with observables, their expectations on that mirror state |
-| `noisy_fidelity` | `noise` (any mode but `analytical`) | Ideal-versus-noisy fidelity `<psi|rho|psi>` across realizations; exact on DM/MPO |
+| `noisy_fidelity` | `noise` (any mode but `analytical`) | Ideal-versus-noisy fidelity `<psi|rho|psi>` across realizations; exact on DM/MPO, and on the QCSim `pauli_propagator` up to 24 qubits |
 | `incremental_evolve` | `step_circuit`, ordered `steps`, `observables` | Prepare once, advance to each step, observe without reset |
 | `checkpoint_batch` | `suffixes`, `execution.shots` | Save the prefix, restore for each suffix/shot; noise applies to suffixes, and with `noise.prefix` to the prefix too |
 | `batch` | `requests` | Independent native requests in one worker; validate all members first |
@@ -363,7 +372,7 @@ are rejected. Small floating-point thresholds retain their precision.
 | `max_simulators` | `max_simulators` | positive_integer | all |
 | `trajectory_policy` | `trajectory_policy` | `block_v1` or `shot_v1` (default) | QCSim statevector, density matrix, path integral; opt-in for stabilizer, extended stabilizer, MPS and MPO |
 | `trajectory_max_memory_mb` | `trajectory_max_memory_mb` | positive_integer | QCSim statevector, density matrix, stabilizer, MPS and MPO |
-| `counts_policy` | `` | `auto` (default), `legacy` or `frame_v1` | all (frames run only on QCSim) |
+| `counts_policy` | `` | `auto` (default), `legacy`, `frame_v1` or `multinomial_v1` | all (specialized samplers run on QCSim) |
 | `mpo_kraus_completeness_check` | `matrix_product_operator_kraus_completeness_check` | string | mpo |
 | `mpo_restore_trace_after_truncation` | `matrix_product_operator_restore_trace_after_truncation` | boolean | mpo |
 | `mpo_hermitize_after_truncation` | `matrix_product_operator_hermitize_after_truncation` | boolean | mpo |
@@ -497,9 +506,42 @@ CPU methods. Those comparisons do not guarantee identical rounding or truncation
 for every approximate method; disable optimization when making such comparisons.
 
 `evaluation:"auto"` uses exact channels on density-matrix/MPO methods and sampled
-realizations on pure-state methods. `exact` requires a mixed-state method;
-`trajectories` samples the native noise helper, not a general Kraus trajectory
-engine. Unsupported non-Pauli pure-state channels are rejected. Sampled T1 reset,
+realizations on pure-state methods. `exact` requires a mixed-state method or the
+QCSim `pauli_propagator`; `trajectories` samples the native noise helper, not a
+general Kraus trajectory engine.
+
+The QCSim `pauli_propagator` holds no density matrix. It applies the adjoint of
+each channel to the observable it propagates, so one execution gives the exact
+ensemble average, probabilities and samples, and an unrecorded reset is a
+deterministic operation. It holds no amplitudes either: `amplitudes`,
+`statevector`, `inner_product` and `mirror_fidelity` without observables are
+rejected there when the request is validated, while `probabilities` and
+`state_probability` are available. How `auto` resolves depends on the channels
+the request's circuits receive:
+
+- Every channel is diagonal in the Pauli basis (Pauli, depolarizing, dephasing,
+  phase damping, correlated phase flips): exact channels. Each channel only
+  scales terms, at about one extra pass per channel.
+- T1, thermal or idle relaxation with a finite T1 acts on the circuits: sampled
+  realizations, as before. Relaxation also sends Z to the identity. Without a
+  truncation threshold those branches fill the operator space of the
+  observable's light cone (`4^width` terms), which costs far more than the
+  trajectories. Ask for `evaluation:"exact"` to apply relaxation exactly, with
+  the calibrated T2; combine it with `pp_coefficient_threshold` for wide cones.
+- Relaxation counts by the channel it applies, not by its kind. A zero T1
+  probability is the identity. Thermal or idle relaxation towards equal
+  populations (`excited_population: 0.5`) only scales terms, at any T2 the
+  channel allows. Relaxation on a qubit that no noisy circuit of the request
+  gates, and idle relaxation without a positive delay, is never injected. All
+  of these stay exact.
+- The model has channels that cannot be sampled (generalized amplitude damping,
+  Kraus maps), or a circuit of the request holds a `kraus` instruction: exact
+  channels, for the whole request, relaxation included.
+
+Exact evaluation on the propagator is exact only without truncation thresholds;
+with a positive `pp_coefficient_threshold`, or a `pp_max_pauli_weight` below the
+register, it is an approximation, as any truncated propagation is, and
+`noise.approximations` then lists `Pauli_truncation`. Unsupported non-Pauli pure-state channels are rejected. Sampled T1 reset,
 finite realizations, analytical terminal-Pauli damping, and MPO truncation are
 reported as approximations. Analytical mode is estimator-only. Exact channels do
 not imply untruncated MPO evolution or remove stochastic coherent realizations.
@@ -507,10 +549,12 @@ not imply untruncated MPO evolution or remove stochastic coherent realizations.
 For thermal relaxation (including two-qubit gate and idle noise) with
 `T1 < T2 <= 2*T1`, sampled execution follows Python: it uses effective `T2 = T1`
 instead of rejecting the request. Results identify this approximation as
-`thermal_T2_clamped_to_T1` in `noise.approximations`. Execution emits one warning
-listing the affected qubits to stderr, which the local server retains in task
-logs; validation alone does not emit it. Exact density-matrix/MPO execution keeps
-the calibrated T2. Unphysical `T2 > 2*T1` and exact-only channels on sampled
+`thermal_T2_clamped_to_T1` in `noise.approximations` when the request's noisy
+circuits draw such relaxation (a gate, or for idle noise a positive delay, on the
+qubit; a zero duration is the identity and is not clamped). Execution emits one
+warning listing the affected qubits to stderr, which the local server retains in
+task logs; validation alone does not emit it. Exact density-matrix/MPO execution keeps
+the calibrated T2, as does `evaluation:"exact"` on the QCSim `pauli_propagator`. Unphysical `T2 > 2*T1` and exact-only channels on sampled
 backends remain errors.
 
 An explicit simulator seed (`execution.seed` or `simulator.options.seed`,
@@ -523,15 +567,18 @@ policy matters for unseeded `execute` requests: under the default `auto`, an
 unseeded request that the stabilizer simulator could run uses noisy-Clifford
 reference frames, reports `execution_metadata.sampling_strategy:
 "reference_frame_v1"` and rewrites `configured_options.counts_policy` to
-`"frame_v1"`, while a seeded `auto` request keeps the earlier executor and its
-counts. Replaying with `counts_policy: "frame_v1"` therefore reproduces such a
-run; replaying with `auto` returns the earlier executor's counts for that seed. MPI ranks share the generated
+`"frame_v1"`. Replay that policy along with the seed to use frames again.
+Seeded and unseeded QCSim count requests that resolve to adaptive terminal
+sampling report `"multinomial_v1"`. A noisy extended-stabilizer checkpoint
+reserved for frame sampling reports `"frame_v1"` if any suffix used frames
+and `"legacy"` if all suffixes used the ordinary fallback. MPI ranks share the generated
 seed through their communicator; validation alone does not generate a seed or
 require MPI initialization.
 `noise.prefix: true` (`checkpoint_batch` only) also applies the noise to the saved
 prefix, once, as exact channels; it requires deterministic exact evaluation
-(`density_matrix` or `matrix_product_operator`, without coherent or correlated
-noise) and reports `noise_scope: "prefix_and_suffix"` instead of
+(`density_matrix`, `matrix_product_operator` or the QCSim `pauli_propagator`,
+without coherent or correlated noise; relaxation on the `pauli_propagator` needs
+`evaluation:"exact"`) and reports `noise_scope: "prefix_and_suffix"` instead of
 `"suffix_only_ideal_prefix"`. The prefix draws from its own generator, so the
 suffixes' noise stream is unchanged.
 `noise.seed` is a uint32 (default lower 32 bits of the simulator seed) and drives
@@ -550,9 +597,10 @@ realization. Measurement outcomes and readout flips remain per-shot operations;
 DM/MPO resets are deterministic channels and run once when no recorded
 measurement branch intervenes. Exact channels evolve the density matrix/MPO before
 sampling, including fixed CPU MPO and eligible checkpoint suffixes. Terminal
-checkpoint suffixes are also sampled from one prepared state on QCSim statevector,
-stabilizer and MPS backends; a suffix reset on those pure-state backends still runs
-per shot, since the saved state may be entangled. Each checkpoint result reports its
+checkpoint suffixes are also sampled from one prepared state on the QCSim
+`pauli_propagator`, resets included (it replays every shot under `counts_policy:
+"legacy"`), and on QCSim statevector, stabilizer and MPS backends; a suffix reset on
+those pure-state backends still runs per shot, since the saved state may be entangled. Each checkpoint result reports its
 `sampling_strategy` (`terminal_v1`, `trajectory_v1`, or `mixed_v1` when only some
 realizations could be sampled from one state), `stochastic_execution`, and effective
 `realizations`. Recorded branches in `execute` and `checkpoint_batch` set
@@ -590,11 +638,12 @@ the legacy null-result failure. Repeating a seed reseeds an existing handle as
 well as a fresh worker; omitting it leaves the simulator's seed configuration
 unchanged.
 
-`SimpleExecute` also accepts `counts_policy` (`auto`, `legacy` or `frame_v1`,
+`SimpleExecute` also accepts `counts_policy` (`auto`, `legacy`, `frame_v1` or `multinomial_v1`,
 as in `simulator.options`). Under `auto`, an unseeded Clifford circuit on a
 network that admits the QCSim stabilizer is counted from reference frames, and
 the result reports `"sampling_strategy": "reference_frame_v1"`; seeded calls and
-`legacy` keep the network executor. A `trajectory_policy` in the configuration
+`legacy` keep the network executor. Its eligible terminal histograms use
+multinomial sampling under `auto` even with a seed. A `trajectory_policy` in the configuration
 object also gives that call's stabilizer, extended-stabilizer, MPS and MPO
 dynamic circuits logical shot streams. Omitting it keeps their 0.3.13 seeded
 sequences, even on a handle that an earlier call configured with one.
@@ -603,7 +652,8 @@ Fidelity operations use ideal inverse preparation. Delays are identity operation
 in that inverse; `noisy_fidelity` applies its noise only to the forward
 preparation: sampled Pauli/T1/coherent trajectories on pure states, or exact
 channels on density-matrix/MPO backends, where it reads `P(0...0)` after the
-inverse. It does not model a physical mirror experiment with noise and
+inverse. The QCSim `pauli_propagator` reads `P(0...0)` too, through one projector
+per qubit; each doubles the propagated terms, so it accepts at most 24 qubits. It does not model a physical mirror experiment with noise and
 elapsed-time effects on both halves.
 
 ## Distribution and lifecycle
@@ -685,16 +735,28 @@ including automatic method selection; they do not describe native Aer/Ex fusion.
 ### Counts policy and sampling strategy
 
 `simulator.options.counts_policy` selects how QCSim `execute` counts are sampled.
+`multinomial_v1` permits conditional-binomial sampling for terminal counts
+when the backend can cheaply obtain a sufficiently populated distribution.
+`auto` requests with or without an explicit seed can select this policy after frame eligibility is
+resolved. Replay using the returned seed and the reported
+`execution_metadata.configured_options.counts_policy`. The policy permits the
+optimization; the local count sampler checks its cost for each batch.
 `auto` (the default) uses noisy-Clifford reference frames for unseeded requests
-that the ordinary executor could itself run on the stabilizer simulator; seeded
-requests keep the earlier executor and its seeded counts. `legacy` always keeps
-the earlier executor. `frame_v1` opts into frames even with seeds, and for
+that the ordinary executor could itself run on the stabilizer simulator. Seeded
+requests can use the adaptive histogram path on supported backends. `legacy` keeps
+the earlier executor. On the QCSim `pauli_propagator`, `checkpoint_batch`
+suffixes sample their terminal measurements from the saved prefix; `legacy`
+replays every shot there instead, as earlier releases did, which also keeps
+their seeded histograms (readout errors are then drawn shot by shot). `frame_v1` opts into frames even with seeds, and for
 automatically selected methods. An explicit `candidates` list names every
 backend a request allows and replaces the requested one, so neither policy uses
 frames unless the list includes the QCSim stabilizer, and either may when it
 does, whatever the requested backend. Frames need a supported Clifford circuit, Pauli or readout
 noise, Kraus channels that are exact Pauli mixtures (phase damping, for
-example) and, with noise, one realization per shot; other requests fall back.
+example) and, with noise, one realization per shot; other requests fall back,
+as does thermal noise in the T1 < T2 <= 2 T1 window, which the trajectories
+clamp (`thermal_T2_clamped_to_T1`). `noise.seed` drives the circuit errors and
+the execution seed the measurements and readout, as on the trajectories.
 
 When frames run, `execution_metadata.sampling_strategy` is `"reference_frame_v1"`,
 the reported backend and method are `qcsim` and `stabilizer`,
@@ -729,6 +791,7 @@ realization, so a leading slice draws from the first realizations only.
 | Strategy | Rows |
 | --- | --- |
 | `reference_frame_v1` | Noisy-Clifford reference frames: a Stabilizer method, or automatic selection whose `candidates`, if listed, include the QCSim stabilizer; a supported Clifford circuit and, with noise, one realization per shot |
+| `extended_frame_v1` | Batched Pauli frames for a noisy QCSim `extended_stabilizer` request without `candidates`: an unseeded request under `counts_policy: "auto"`, or any request under `"frame_v1"`. The result's `configured_options.counts_policy` is then `"frame_v1"`, which replays it with the returned `seed`. Applies to Pauli or combined noise without exact channels, with readout, measurements and resets and no classical control. Rows of one noise realization share its errors. `noise.seed` drives the circuit errors and the execution seed drives measurements and readout. Relaxation that sampled execution draws as resets (T1, or thermal or idle relaxation with a finite T1, on a qubit the circuit gates or delays) needs one realization per shot, and thermal noise with T2 > T1 on such a qubit keeps scalar trajectories. The memory budget is soft: a shot that alone exceeds it runs by itself beyond it. Noisy `execute` counts and each `checkpoint_batch` suffix after a gate-only prefix report the same strategy |
 | `terminal_v1` | One prepared state sampled for every row (terminal measurements only) |
 | `trajectory_v1` | Each shot, or each noise realization, executed on its own |
 | `mixed_v1` | Checkpoint suffixes only: some realizations sampled from one prepared state, others shot by shot |
@@ -775,6 +838,21 @@ each distinct row once, packed, with its count; `capacity` counts entries and mu
 be at least `shots`. Sampling calls on one handle may run concurrently. Release
 the handle with `MaestroDestroyReferenceFrameSampler`. Python exposes the same
 compiled plan as `maestro.compile_reference_sampler`.
+
+With `simulator` set to the QCSim `extended_stabilizer` method (fixed selection,
+no `candidates`), the same handle compiles any circuit of that method's gates to
+batched extended-stabilizer frames: shots in batches that share one Clifford
+basis, each with independent noise and its own Pauli frame and amplitudes. The
+noise rules are the same as for reference frames, and channels apply exactly:
+in the T1 < T2 <= 2 T1 window, where `execute` clamps T2 to T1, the handle keeps
+T2. Sampling runs at most 16 batches at once, or fewer under `max_simulators`,
+within `trajectory_max_memory_mb`, which also pays for the cached noiseless
+head. A batch that does not fit runs afterwards, alone, with the rest of the
+budget, split down to single shots. Every shot draws from streams of its own,
+and a measurement draws the shot's physical outcome, so rows depend on the seed
+only, never on the batch, the budget, the worker count or the host. The budget
+is soft, as for `execute` and its trajectories: a shot that alone exceeds it runs
+by itself beyond it, with the draws it would have had.
 
 Noise targets must lie in the declared register. Python's
 `NoiseModel.native_channels(num_qubits)` therefore leaves out channels on
