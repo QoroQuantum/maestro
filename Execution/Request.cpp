@@ -482,11 +482,12 @@ void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, con
         }
         if (op->GetType() != Circuits::OperationType::kQuantumChannel)
             continue;
-        if (Mixed(config) && !sampled)
+        if (ExactNoiseApplies(config) && !sampled)
             continue;
         const auto channel = std::static_pointer_cast<Circuits::QuantumChannelOperation<>>(op);
         Supported(!channel->GetChannel().GetPauliProbabilities().empty(),
-                  "Explicit Kraus instructions require density_matrix or MPO with exact evaluation; only Pauli channels can be sampled");
+                  "Explicit Kraus instructions require density_matrix, MPO or the qcsim pauli_propagator, with exact evaluation; only Pauli "
+                  "channels can be sampled");
         Supported(sampled, "Pauli channel instructions on pure-state backends require a noise block with trajectory evaluation; "
                            "set noise.realizations to the shot count for independent draws");
     }
@@ -962,6 +963,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     if (const auto *devices = distribution.if_contains("devices"))
         Require(Array(*devices).size() < (uint64_t{1} << input.qubits), "Distribution requires at least one local qubit");
     auto noise = ParseNoise(Sub(request, "noise"), config, input.qubits);
+    // Automatic evaluation follows the circuit too. A checkpoint's noise acts
+    // on its suffixes, which are parsed further down and settle it there.
+    if (operation != "checkpoint_batch")
+        RefineAutomaticEvaluation(noise, config, input.qubits, {input.circuit.get()});
     const auto limit = UInt(request, "max_output_elements", 65536);
     Require(limit > 0 && limit <= 1048576, "max_output_elements must be in [1,1048576]");
     Require(!request.contains("outputs"), "Use operation-specific queries instead of outputs");
@@ -1000,8 +1005,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                        ? input.circuit->RemoveEndMeasurements()
                        : Unmeasured(input.circuit, operation == "inner_product" || operation == "mirror_fidelity" || operation == "noisy_fidelity");
     const bool stochastic_estimation = operation == "estimate" && HasStochasticEvolution(circuit, UsesExactQuantumChannels(config));
-    if (noise.enabled)
-    {
+    // Runs again if a checkpoint's suffixes change the automatic evaluation.
+    const auto resolveNoisePolicy = [&] {
         const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
         const bool estimator = operation == "estimate" || operation == "noisy_fidelity";
         noise.policy =
@@ -1016,7 +1021,9 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         // stochastic_execution reports that, but it is no approximation.
         if (stochastic_estimation)
             AddApproximation(noise, "finite_measurement_trajectories");
-    }
+    };
+    if (noise.enabled)
+        resolveNoisePolicy();
     std::vector<ParsedCircuit> additional;
     if (operation == "inner_product" || operation == "density_matrix_overlap")
     {
@@ -1064,6 +1071,14 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             if (noise.enabled)
                 ValidateNoisyCircuit(additional.back().circuit);
         }
+        // The noise acts on the suffixes, and on the prefix with noise.prefix.
+        NoisyCircuits noisyCircuits;
+        if (noise.prefix)
+            noisyCircuits.push_back(input.circuit.get());
+        for (const auto &suffix : additional)
+            noisyCircuits.push_back(suffix.circuit.get());
+        if (RefineAutomaticEvaluation(noise, config, input.qubits, noisyCircuits))
+            resolveNoisePolicy();
         if (noise.enabled && noise.prefix)
         {
             // The saved prefix evolves once, so noise applied to it must be
@@ -1071,8 +1086,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             const auto layer = noise.mode == "pauli" ? NoiseLayer::kPauli : noise.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
             const auto prefixPolicy = ResolveNoiseRealizations(std::nullopt, noise.model, config, layer, 64, circuit, false, noise.exact);
             Supported(noise.exact && !prefixPolicy.stochastic_noise,
-                      "noise.prefix requires deterministic exact evaluation: density_matrix or matrix_product_operator without coherent or "
-                      "correlated noise");
+                      "noise.prefix requires deterministic exact evaluation: density_matrix, matrix_product_operator or the qcsim "
+                      "pauli_propagator, without coherent or correlated noise; relaxation on the pauli_propagator needs evaluation \"exact\"");
         }
         if (noise.enabled)
         {
@@ -1112,7 +1127,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // state, which mixed-state backends provide; it needs no pure-state overlap.
     const bool mirrorObservables = operation == "mirror_fidelity" && !observables.empty();
     if (amplitudes || operation == "inner_product" || (operation == "mirror_fidelity" && !mirrorObservables))
+    {
         Supported(!Mixed(config), "A mixed state has no unique statevector or pure-state overlap");
+        // It propagates an observable, with or without noise: it can return
+        // probabilities and expectation values, but it never holds a state.
+        Supported(config.simulation_type != Simulators::SimulationType::kPauliPropagator,
+                  "pauli_propagator holds no amplitudes; request probabilities, state_probability or expectation values");
+    }
     if (MixedStateQuery(operation))
         Supported(MixedStateQueryApplies(config), operation + " requires the qcsim or gpu backend with density_matrix or matrix_product_operator");
     Supported(!noise.enabled || operation == "execute" || operation == "estimate" ||
@@ -1125,6 +1146,13 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // (as Python noisy_fidelity). Analytical damping is rejected above.
     if (operation == "noisy_fidelity")
         Supported(noise.enabled, "Noisy fidelity requires a noise block");
+    // The propagator has no amplitudes: it reads the fidelity as P(0...0),
+    // through one projector per qubit, and each projector doubles its terms.
+    if (operation == "noisy_fidelity" && config.simulator_type == Simulators::SimulatorType::kQCSim &&
+        config.simulation_type == Simulators::SimulationType::kPauliPropagator)
+        Supported(input.qubits <= Adjoint::kMaxProbabilityQubits, "noisy_fidelity on pauli_propagator supports at most " +
+                                                                      std::to_string(Adjoint::kMaxProbabilityQubits) +
+                                                                      " qubits: its cost doubles with every qubit");
     json::array basis;
     if (amplitudes || operation == "probabilities")
         basis = Basis(request, input.qubits, limit);
@@ -1349,11 +1377,12 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // Extended-stabilizer frames, decided the same way: an unseeded auto
     // request opts in before it receives the seed that replays it.
     const bool prefer_extended_frames = PreferExtendedFrames(config);
-    // A checkpoint can contain a mixture of frame and ordinary suffixes.
-    // Keep those requests on a single replayable frame policy.
-    const bool resolve_terminal_counts =
-        (operation == "execute" && !return_samples) || (operation == "checkpoint_batch" && !(prefer_extended_frames && noise.enabled));
-    if (resolve_terminal_counts && shots > 1 && PreferMultinomialCounts(config))
+    // Frames are tried per suffix. Pin the ordinary fallback now, so that a
+    // checkpoint with no frame-compatible suffix can replay with its returned
+    // seed. If any suffix uses frames, metadata records frame_v1 for the mix.
+    if (operation == "checkpoint_batch" && config.counts_policy == "auto" && prefer_extended_frames && noise.enabled)
+        config.counts_policy = "legacy";
+    else if (((operation == "execute" && !return_samples) || operation == "checkpoint_batch") && shots > 1 && PreferMultinomialCounts(config))
         config.counts_policy = "multinomial_v1";
     if (!config.seed)
     {
@@ -1990,9 +2019,15 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                     continue;
                 }
             }
-            TerminalCountSink writeCounts;
-            if (samples < shots && config.counts_policy == "multinomial_v1" && simulator->IsQcsim() && !simulator->GetConfigMap().count("sampling_policy"))
-                writeCounts = [&](size_t count, const Circuits::OperationState &state) { counts[Bits(state.GetAllBits(), input.clbits)] += count; };
+            // A checkpoint returns counts only, so occupied outcomes are added
+            // whole whenever readout is deterministic, whatever sampler drew
+            // them: expanding them into shots first would only cost memory.
+            const TerminalCountSink writeCounts = [&](size_t count, const Circuits::OperationState &state) {
+                counts[Bits(state.GetAllBits(), input.clbits)] += count;
+            };
+            const bool multinomial =
+                samples < shots && config.counts_policy == "multinomial_v1" && simulator->IsQcsim() && !simulator->GetConfigMap().count("sampling_policy");
+            const bool legacy = EffectiveCountsPolicy(config) == "legacy";
             for (size_t r = 0; r < samples; ++r)
             {
                 const auto noisy = Inject(suffixPlan, noise, rng);
@@ -2001,7 +2036,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
                 simulator->SetGatesCounter(0);
                 simulator->SetUpcomingGates(noisy->GetOperations());
                 Circuits::OperationState terminal_state(input.clbits);
-                if (repetitions > 1 && PreservesSavedStateWhileSampling(*simulator, static_cast<bool>(writeCounts)) &&
+                if (repetitions > 1 && PreservesSavedStateWhileSampling(*simulator, multinomial, legacy) &&
                     SamplePreparedTerminal(
                         *noisy, simulator, repetitions, terminal_state, Simulators::IState::DeriveSeed(*config.seed, r),
                         [&](size_t, const Circuits::OperationState &state) { ++counts[Bits(state.GetAllBits(), input.clbits)]; }, &bond, false, writeCounts))
@@ -2065,8 +2100,10 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
             }
             // A mixed state's fidelity to U|0> is P(0...0) after U^dagger. Exact
             // channels need no projection; a pure state's overlap is reported too.
+            // The Pauli propagator has no amplitudes: it reads P(0...0) as well,
+            // for the ensemble of exact channels and for a sampled trajectory.
             double fidelity = 0;
-            if (operation == "noisy_fidelity" && Mixed(config))
+            if (operation == "noisy_fidelity" && simulator->SupportsQuantumChannels())
                 fidelity = simulator->Probability(0);
             else
             {

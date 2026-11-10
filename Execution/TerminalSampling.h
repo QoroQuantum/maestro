@@ -22,13 +22,20 @@ inline bool HasResetOperation(const Circuits::Circuit<double> &circuit)
 // adapters and the QCSim statevector, stabilizer and MPS adapters draw shots
 // without the save slot; tensor-network sampling, for one, saves and restores
 // its own state between draws, so checkpoints keep replaying shots there.
-inline bool PreservesSavedStateWhileSampling(const Simulators::ISimulator &simulator, bool multinomialCounts = false)
+inline bool PreservesSavedStateWhileSampling(const Simulators::ISimulator &simulator, bool multinomialCounts = false, bool legacyCounts = false)
 {
-    if (simulator.SupportsQuantumChannels())
-        return true;
     using Method = Simulators::SimulationType;
     const auto method = simulator.GetSimulationType();
-    if (simulator.GetType() != Simulators::SimulatorType::kQCSim)
+    const bool qcsim = simulator.GetType() == Simulators::SimulatorType::kQCSim;
+    // The Pauli propagator replayed every shot before it applied channels.
+    // The legacy policy keeps that seeded stream: each shot draws its
+    // measurement and then its readout errors, an order that a histogram of
+    // the outcomes cannot reproduce.
+    if (legacyCounts && qcsim && method == Method::kPauliPropagator)
+        return false;
+    if (simulator.SupportsQuantumChannels())
+        return true;
+    if (!qcsim)
         return false;
     // Path-integral batches read the stored amplitudes. Extended stabilizer
     // queries the frame or samples on a private clone. Older count and row
@@ -70,8 +77,11 @@ using TerminalCountSink = std::function<void(size_t, const Circuits::OperationSt
 
 // On success, evolves the deterministic part exactly once from the CURRENT
 // simulator state, then emits (row index, classical state) for every sample.
-// With a count sink and deterministic readout, emits (count, state) per
-// occupied outcome instead. The row sink still handles stochastic readout.
+// With a count sink it emits (count, state) instead and never calls the row
+// sink: one call per occupied outcome when readout is deterministic, and one
+// call of count 1 per shot when readout errors are drawn. Those are drawn in
+// the order the row path draws them, so both give the same seeded histogram,
+// but counts have no row order and so need no permutation of the shots.
 // Never resets the simulator or overwrites its saved checkpoint. A false result
 // leaves both quantum and classical state untouched, for the trajectory fallback.
 // Unwritten classical bits keep their input values. Readout is independent per
@@ -103,7 +113,7 @@ bool SamplePreparedTerminal(const Circuits::Circuit<double> &input, const std::s
     }
     const Circuits::OperationState initial(state);
     const bool aggregate = writeCounts && !measurements->HasReadout();
-    const auto order = aggregate ? std::vector<size_t>{} : SampleRowOrder::Permutation(shots, seed, SampleRowOrder::kTerminalStream);
+    const auto order = writeCounts ? std::vector<size_t>{} : SampleRowOrder::Permutation(shots, seed, SampleRowOrder::kTerminalStream);
     const auto histogram = simulator->SampleCountsMany(qubits, shots);
     if (aggregate)
     {
@@ -137,7 +147,11 @@ bool SamplePreparedTerminal(const Circuits::Circuit<double> &input, const std::s
                 throw std::runtime_error("Sampling returned too many shots");
             state = initial;
             measurements->SetStateFromSample(outcome->first, state, readout);
-            write(order[row++], state);
+            if (writeCounts)
+                writeCounts(1, state);
+            else
+                write(order[row], state);
+            ++row;
         }
     if (row != shots)
         throw std::runtime_error("Sampling returned an incomplete shot matrix");

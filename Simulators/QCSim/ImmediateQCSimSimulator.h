@@ -427,11 +427,9 @@ class ImmediateQCSimSimulator : public ISimulator
         return configuration.GetConfiguration("sampling_policy") == "legacy";
     }
 
-    // Count executors resolve auto before deriving worker seeds. A bare
-    // simulator keeps its existing sampling_seed / SetSeed replay contract.
     bool AllowMultinomialCounts() const
     {
-        return !configuration.IsSet("sampling_policy") && configuration.GetConfiguration("counts_policy") == "multinomial_v1";
+        return Utils::Sampling::AllowsMultinomialCounts(configuration.GetConfiguration("counts_policy"), configuration.IsSet("sampling_policy"));
     }
 
     Utils::Sampling::Options SamplingOptions() const

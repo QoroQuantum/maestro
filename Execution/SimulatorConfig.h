@@ -15,6 +15,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace MaestroExecution
@@ -161,8 +162,7 @@ struct SimulatorConfig
     std::optional<std::string> trajectory_policy;
     std::optional<size_t> trajectory_max_memory_mb;
     std::optional<size_t> max_simulators;
-    // auto may optimize unseeded counts. Explicit versioned policies also
-    // opt seeded requests into their respective reproducible streams.
+    // auto allows adaptive terminal count sampling with or without a seed.
     std::string counts_policy = "auto";
     std::unordered_map<std::string, std::string> native_options;
 
@@ -184,6 +184,8 @@ struct SimulatorConfig
             throw std::invalid_argument("gpu_device must be nonnegative");
         RequireOneOf(trajectory_policy, {"block_v1", "shot_v1"}, "trajectory_policy");
         RequireOneOf(counts_policy, CountsPolicies(), "counts_policy");
+        if (const auto native = native_options.find("counts_policy"); native != native_options.end())
+            RequireOneOf(native->second, CountsPolicies(), "counts_policy");
         if (trajectory_max_memory_mb && (!*trajectory_max_memory_mb || *trajectory_max_memory_mb > (std::numeric_limits<size_t>::max() >> 20)))
             throw std::invalid_argument("trajectory_max_memory_mb must be a positive representable MiB count");
         if (max_cluster_qubits && !*max_cluster_qubits)
@@ -314,19 +316,21 @@ inline bool RunsOnlyQCSim(const SimulatorConfig &config)
                        [](const auto &candidate) { return candidate.first == Simulators::SimulatorType::kQCSim; });
 }
 
-// Whether every backend a request may run evolves an ensemble (a density
-// matrix or MPO), so planning may treat resets and channels outside the
-// observable support as maps that cancel. A candidate list replaces the
-// requested pair, and selection may run any of its entries.
+// Whether every backend a request may run evolves an ensemble: a density
+// matrix or MPO, or the QCSim Pauli propagator, whose observable passes
+// through the adjoint channels. Planning may then treat resets and channels
+// outside the observable support as maps that cancel. A candidate list
+// replaces the requested pair, and selection may run any of its entries.
 inline bool HasEnsembleState(const SimulatorConfig &config)
 {
-    const auto ensemble = [](Simulators::SimulationType method) {
-        return method == Simulators::SimulationType::kDensityMatrix || method == Simulators::SimulationType::kMatrixProductOperator;
+    const auto ensemble = [](Simulators::SimulatorType type, Simulators::SimulationType method) {
+        return method == Simulators::SimulationType::kDensityMatrix || method == Simulators::SimulationType::kMatrixProductOperator ||
+               Simulators::EvolvesExactQuantumChannels(type, method);
     };
     if (HasCandidateList(config))
         return std::all_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
-                           [&](const auto &candidate) { return ensemble(candidate.second); });
-    return ensemble(config.simulation_type);
+                           [&](const auto &candidate) { return ensemble(candidate.first, candidate.second); });
+    return ensemble(config.simulator_type, config.simulation_type);
 }
 
 inline bool CandidateListAdmitsStabilizer(const SimulatorConfig &config)
@@ -360,7 +364,32 @@ inline bool AdmitsReferenceFrames(const SimulatorConfig &config)
            (config.simulation_type == Simulators::SimulationType::kStabilizer || !config.fixed_backend);
 }
 
-// Seed zero is explicit too. Only an absent seed permits automatic policy changes.
+// ConfigureNetwork applies native counts_policy after the typed option.
+inline const std::string &EffectiveCountsPolicy(const SimulatorConfig &config)
+{
+    const auto native = config.native_options.find("counts_policy");
+    return native == config.native_options.end() ? config.counts_policy : native->second;
+}
+
+// ConfigureNetwork applies a typed seed after the native option map.
+inline std::optional<uint64_t> EffectiveSamplingSeed(const SimulatorConfig &config)
+{
+    if (config.seed)
+        return config.seed;
+    const auto native = config.native_options.find("seed");
+    if (native != config.native_options.end())
+        return std::stoull(native->second);
+    return std::nullopt;
+}
+
+// Apply a resolved policy to a per-call copy, including native configurations.
+inline void SetCountsPolicy(SimulatorConfig &config, std::string policy)
+{
+    config.native_options.erase("counts_policy");
+    config.counts_policy = std::move(policy);
+}
+
+// Seed zero is explicit too. Only an absent seed permits automatic reference frames.
 // auto never replaces a method the ordinary executor would honor. frame_v1 is an
 // explicit opt-in and may replace an automatically selected method, but an
 // explicit candidate list names every backend the request allows: frame_v1
@@ -370,23 +399,22 @@ inline bool PreferFrameCounts(const SimulatorConfig &config, std::optional<uint6
 {
     if (!AdmitsReferenceFrames(config) || config.enable_sampling_reduction)
         return false;
-    if (config.counts_policy == "frame_v1")
+    const auto &policy = EffectiveCountsPolicy(config);
+    if (policy == "frame_v1")
         return true;
-    return config.counts_policy == "auto" && AdmitsStabilizerExecution(config) && !config.seed && !noise_seed;
+    return policy == "auto" && AdmitsStabilizerExecution(config) && !config.seed && !noise_seed && !config.native_options.count("seed");
 }
 
-// Resolve this at the counts entry point, while user and internally generated
-// seeds can still be distinguished. The backend makes the cost-based decision
-// once it knows the actual measurement distribution.
-inline bool PreferMultinomialCounts(const SimulatorConfig &config, std::optional<uint64_t> noise_seed = std::nullopt)
+// The backend makes the cost-based choice once it knows the distribution.
+// The optional noise seed remains accepted by existing C++ callers.
+inline bool PreferMultinomialCounts(const SimulatorConfig &config, std::optional<uint64_t> = std::nullopt)
 {
-    if (config.counts_policy == "multinomial_v1")
-        return true;
-    if (config.counts_policy != "auto" || config.seed || noise_seed)
+    if (config.native_options.count("sampling_policy"))
         return false;
-    // Native C++ callers can pass the same settings through ConfigureNetwork's
-    // option maps. Preserve their explicit seed and sampler overrides too.
-    if (config.native_options.count("seed") || config.native_options.count("counts_policy") || config.native_options.count("sampling_policy"))
+    const auto &policy = EffectiveCountsPolicy(config);
+    if (policy == "multinomial_v1")
+        return true;
+    if (policy != "auto")
         return false;
     const auto supports = [](Simulators::SimulatorType backend, Simulators::SimulationType method) {
         using Method = Simulators::SimulationType;
@@ -414,9 +442,10 @@ inline bool PreferExtendedFrames(const SimulatorConfig &config, std::optional<ui
     if (config.simulator_type != Simulators::SimulatorType::kQCSim || config.simulation_type != Simulators::SimulationType::kExtendedStabilizer ||
         HasCandidateList(config) || config.enable_sampling_reduction)
         return false;
-    if (config.counts_policy == "frame_v1")
+    const auto &policy = EffectiveCountsPolicy(config);
+    if (policy == "frame_v1")
         return true;
-    return config.counts_policy == "auto" && !config.seed && !noise_seed;
+    return policy == "auto" && !config.seed && !noise_seed && !config.native_options.count("seed");
 }
 
 // Native Configure keys for typed options without a one-to-one key. Precision

@@ -8,9 +8,11 @@
 
 namespace MaestroExecution
 {
-inline bool HasEnsembleState(Simulators::SimulationType method)
+// As HasEnsembleState(const SimulatorConfig &) for one backend/method pair.
+inline bool HasEnsembleState(Simulators::SimulatorType type, Simulators::SimulationType method)
 {
-    return method == Simulators::SimulationType::kDensityMatrix || method == Simulators::SimulationType::kMatrixProductOperator;
+    return method == Simulators::SimulationType::kDensityMatrix || method == Simulators::SimulationType::kMatrixProductOperator ||
+           Simulators::EvolvesExactQuantumChannels(type, method);
 }
 
 // CPTP maps cancel outside the observable support in ensemble evolution. A

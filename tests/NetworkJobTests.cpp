@@ -1370,13 +1370,17 @@ void MultinomialTerminalDispatch()
 {
     auto network = std::make_shared<ThreadingNetwork>(Types::qubits_vector{10}, std::vector<size_t>{10});
     network->SetMaxSimulators(4);
-    network->Configure("counts_policy", "multinomial_v1");
     auto circuit = CF::CreateCircuit();
     std::shared_ptr<Simulators::ISimulator> prepared;
     std::vector<bool> executed;
     const auto workers = [&](Method method, size_t bits, size_t shots, bool terminal = true) {
         return network->ExecutionThreads(circuit, 10, 10, 10, shots, Backend::kQCSim, method, terminal, bits, prepared, executed);
     };
+    network->Configure("seed", "0");
+    Check(workers(Method::kExtendedStabilizer, 8, 2048) == 1, "The default seeded policy split a terminal marginal");
+    network->Configure("counts_policy", "legacy");
+    Check(workers(Method::kExtendedStabilizer, 8, 2048) == 4, "Legacy changed the terminal shot partition");
+    network->Configure("counts_policy", "auto");
     Check(workers(Method::kExtendedStabilizer, 8, 2048) == 1 && workers(Method::kExtendedStabilizer, 8, 2047) == 4, "Extended marginal crossover ignored");
     Check(workers(Method::kExtendedStabilizer, 9, 8192) == 4 && workers(Method::kExtendedStabilizer, 1, 2048, false) == 4,
           "Unsupported extended sampling lost its parallel workers");
@@ -1398,7 +1402,6 @@ void MultinomialTerminalDispatch()
     for (auto method : {Method::kMatrixProductState, Method::kMatrixProductOperator, Method::kExtendedStabilizer})
     {
         auto net = MakeNetwork(Backend::kQCSim, method);
-        net->Configure("counts_policy", "multinomial_v1");
         auto measured = CF::CreateCircuit();
         measured->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
         measured->AddOperation(CF::CreateMeasurement({{0, 0}, {0, 1}}));
@@ -1410,9 +1413,13 @@ void MultinomialTerminalDispatch()
                 net->Configure("seed", "0");
                 return onHost ? net->RepeatedExecuteOnHost(measured, 0, 256) : net->RepeatedExecute(measured, 256);
             };
+            net->RemoveConfiguration("counts_policy");
             const auto one = run(1);
+            net->Configure("counts_policy", "multinomial_v1");
             Check(one == run(4) && one.size() == 2 && one.at({false, false}) + one.at({true, true}) == 256,
                   "Terminal count policy split a seeded marginal batch");
+            net->Configure("counts_policy", "auto");
+            Check(one == run(4), "Explicit auto and the default chose different terminal count streams");
         }
     }
 }

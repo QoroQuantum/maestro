@@ -211,7 +211,7 @@ static bool ParseLegacyCountsPolicy(const boost::json::value &config, std::strin
 
 // Counts from compiled reference frames, under the rule MaestroExecution::
 // SampleCircuit applies: frame_v1 samples any circuit frames compile, auto only
-// an unseeded Clifford circuit, so seeded calls keep their sequences. The
+// an unseeded Clifford circuit. The
 // network must admit the QCSim stabilizer (a fixed Stabilizer method, or a
 // candidate set that includes it) and hold the circuit on its single host.
 static std::optional<Network::INetwork<>::ExecuteResults> LegacyFrameCounts(Network::INetwork<> &network, const std::shared_ptr<Circuits::Circuit<>> &circuit,
@@ -865,8 +865,7 @@ extern "C"
         // TODO: get from config the allowed simulators types and so on, if set
         auto start = std::chrono::high_resolution_clock::now();
         auto frames = LegacyFrameCounts(*network, circuit, nrShots, countsPolicy, configJson);
-        const bool explicitSeed = configJson.is_object() && configJson.as_object().contains("seed");
-        network->Configure("counts_policy", countsPolicy == "auto" && !explicitSeed && !frames ? "multinomial_v1" : countsPolicy.c_str());
+        network->Configure("counts_policy", countsPolicy.c_str());
         auto results = frames ? std::move(*frames) : network->RepeatedExecuteOnHost(circuit, 0, nrShots);
         auto end = std::chrono::high_resolution_clock::now();
 

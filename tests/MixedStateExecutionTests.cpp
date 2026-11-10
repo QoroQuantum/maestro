@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <map>
 
 void Check(bool, const char *);
 
@@ -80,19 +81,30 @@ void PreparedStateContract(Method method)
     state.SetBit(1);
     state.SetBit(4);
     std::vector<bool> seen(67, false);
-    const bool sampled = MaestroExecution::SamplePreparedTerminal(
-        *terminal, simulator, seen.size(), state, 19,
-        [&](size_t row, const Circuits::OperationState &sample) {
+    const std::vector<bool> expected{true, true, true, false, true};
+    const bool sampled =
+        MaestroExecution::SamplePreparedTerminal(*terminal, simulator, seen.size(), state, 19, [&](size_t row, const Circuits::OperationState &sample) {
             Check(row < seen.size() && !seen[row], "Terminal sampler emitted duplicate or invalid row indices");
             seen[row] = true;
-            Check(sample.GetAllBits() == std::vector<bool>({true, true, true, false, true}),
-                  "Terminal sampler lost initial bits, mapping, or per-occurrence readout");
-        },
-        nullptr, false, [](size_t, const auto &) { Check(false, "Readout errors were aggregated across shots"); });
+            Check(sample.GetAllBits() == expected, "Terminal sampler lost initial bits, mapping, or per-occurrence readout");
+        });
     Check(sampled && calls->load() == 1, "Prepared-state sampler evolved the circuit more than once");
     Check(std::all_of(seen.begin(), seen.end(), [](bool value) { return value; }), "Terminal sampler omitted rows");
     simulator->RestoreState();
     Check(std::abs(simulator->Probability(2) - 1.0) < 1e-10, "Terminal sampler overwrote the saved prefix");
+    // A count sink takes the place of the rows. Readout errors are drawn per
+    // shot, so it then receives the shots one at a time, never aggregated.
+    size_t counted = 0;
+    Check(MaestroExecution::SamplePreparedTerminal(
+              *terminal, simulator, seen.size(), state, 19, [](size_t, const auto &) { Check(false, "A count sink still expanded rows"); }, nullptr, false,
+              [&](size_t count, const Circuits::OperationState &sample) {
+                  Check(count == 1, "Readout errors were aggregated across shots");
+                  Check(sample.GetAllBits() == expected, "Counted shots lost initial bits, mapping, or per-occurrence readout");
+                  ++counted;
+              }) &&
+              counted == seen.size() && calls->load() == 2,
+          "A count sink did not receive every shot of a readout measurement once");
+    simulator->RestoreState();
 
     auto dynamic = CF::CreateCircuit();
     dynamic->AddOperation(std::make_shared<CountedX>(0, calls));
@@ -105,10 +117,47 @@ void PreparedStateContract(Method method)
     size_t writes = 0;
     Check(!MaestroExecution::SamplePreparedTerminal(*dynamic, simulator, 67, state, 19, [&](size_t, const Circuits::OperationState &) { ++writes; }),
           "Dynamic circuit incorrectly accepted terminal sampling");
-    Check(writes == 0 && calls->load() == 1 && state.GetAllBits() == before && simulator->GetGatesCounter() == 17,
+    Check(writes == 0 && calls->load() == 2 && state.GetAllBits() == before && simulator->GetGatesCounter() == 17,
           "Rejected terminal sampling changed circuit or classical execution state");
     Check(std::abs(simulator->Probability(2) - 1.0) < 1e-10 && simulator->RandomUniform() == reference->RandomUniform(),
           "Rejected terminal sampling changed the quantum state or RNG");
+}
+
+// A count sink skips the permutation of the shots, not the readout draws: with
+// readout errors it gives the histogram of the rows for the same seed.
+void CountSinkKeepsReadoutDraws(Method method)
+{
+    constexpr size_t shots = 3000;
+    auto circuit = CF::CreateCircuit();
+    circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+    auto readout = std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}, {1, 1}});
+    readout->SetReadout({{0.2, 0.1}, {0.05, 0.3}});
+    circuit->AddOperation(readout);
+    const auto histogram = [&](bool counts) {
+        auto simulator = Simulator(method);
+        Circuits::OperationState state(2);
+        std::map<std::vector<bool>, size_t> result;
+        size_t rows = 0, shotsCounted = 0;
+        MaestroExecution::TerminalCountSink sink;
+        if (counts)
+            sink = [&](size_t count, const Circuits::OperationState &sample) {
+                Check(count == 1, "Readout errors were aggregated across shots");
+                ++result[sample.GetAllBits()];
+                ++shotsCounted;
+            };
+        Check(MaestroExecution::SamplePreparedTerminal(
+                  *circuit, simulator, shots, state, 42,
+                  [&](size_t, const Circuits::OperationState &sample) {
+                      ++result[sample.GetAllBits()];
+                      ++rows;
+                  },
+                  nullptr, false, sink),
+              "A terminal readout measurement was not sampled from the prepared state");
+        Check(counts ? rows == 0 && shotsCounted == shots : rows == shots, "A terminal readout measurement used the wrong sink");
+        return result;
+    };
+    const auto rows = histogram(false);
+    Check(rows.size() == 4 && rows == histogram(true), "A count sink changed the seeded readout histogram");
 }
 
 void CheckpointMultinomialCounts()
@@ -144,8 +193,10 @@ void CheckpointMultinomialCounts()
         std::sort(result.counts.begin(), result.counts.end());
         return result;
     };
-    const auto oldCounts = run(legacy, 42, false).counts;
     const auto oldRows = run(legacy, 42, true).rows;
+    config.counts_policy = "multinomial_v1";
+    MaestroExecution::PrefixCheckpoint adaptive(prefix, 2, config);
+    const auto expectedCounts = run(adaptive, 42, false).counts;
     for (const std::string policy : {"auto", "multinomial_v1"})
     {
         config.counts_policy = policy;
@@ -153,11 +204,19 @@ void CheckpointMultinomialCounts()
         const auto first = run(checkpoint, std::nullopt, false);
         Check(first.width == 6 && first.counts.size() == 2 && first.rows.empty(), "Checkpoint count padding or storage changed");
         const auto seeded = run(checkpoint, 42, false).counts;
-        if (policy == "auto")
-            Check(seeded == oldCounts, "Seeded checkpoint counts changed after an unseeded count call");
+        Check(seeded == expectedCounts, "A prior unseeded checkpoint call changed the seeded adaptive histogram");
         Check(run(checkpoint, 42, true).rows == oldRows, "Count policy changed seeded checkpoint raw rows");
         Check(run(checkpoint, 42, false).counts == seeded, "Count replay changed after a raw checkpoint call");
     }
+    config.counts_policy = "auto";
+    config.seed = 0;
+    MaestroExecution::PrefixCheckpoint typedSeed(prefix, 2, config);
+    config.seed.reset();
+    config.native_options["seed"] = "0";
+    config.native_options["counts_policy"] = "auto";
+    MaestroExecution::PrefixCheckpoint nativeSeed(prefix, 2, config);
+    Check(run(typedSeed, std::nullopt, false).counts == run(nativeSeed, std::nullopt, false).counts, "Native seed zero lost its checkpoint count stream");
+    Check(run(typedSeed, std::nullopt, true).rows == run(nativeSeed, std::nullopt, true).rows, "Native seed zero lost its checkpoint row stream");
     // The small batches use the native fallback kernels. Both they and the
     // multinomial kernels must leave the same saved prefix for the next suffix.
     auto x = CF::CreateCircuit();
@@ -497,6 +556,8 @@ void TestMixedStateExecution()
         PureCheckpointTerminalSampling(method);
     for (const auto method : {Method::kStatevector, Method::kDensityMatrix})
         NestedTerminalMeasurementsAreSampled(method);
+    for (const auto method : {Method::kStatevector, Method::kDensityMatrix, Method::kPauliPropagator})
+        CountSinkKeepsReadoutDraws(method);
     NestedChannelsLeaveTheIdealBaseline();
     FidelityPreparesResetTargets();
     CandidateListsResolveOneBackend();

@@ -120,6 +120,25 @@ enum class SimulationType : int
                                also has unitary and superop methods */
 };
 
+// Whether a backend evolves the ensemble through exact channels: an unrecorded
+// reset or a Kraus channel is then one deterministic operation, not a sampled
+// branch. A density matrix and an MPO hold the mixed state itself. The QCSim
+// Pauli propagator holds no state at all: it applies the adjoint channel to
+// the observable it propagates, which yields the same ensemble averages,
+// probabilities and samples. This is ISimulator::SupportsQuantumChannels() of
+// the simulator the pair creates, for code that has only the pair.
+inline bool EvolvesExactQuantumChannels(SimulatorType type, SimulationType method)
+{
+#ifndef NO_QISKIT_AER
+    if (type == SimulatorType::kQiskitAer)
+        return method == SimulationType::kDensityMatrix;
+#endif
+    if (type == SimulatorType::kQCSim && method == SimulationType::kPauliPropagator)
+        return true;
+    return (type == SimulatorType::kQCSim || type == SimulatorType::kGpuSim) &&
+           (method == SimulationType::kDensityMatrix || method == SimulationType::kMatrixProductOperator);
+}
+
 /**
  * @class IState
  * @brief Interface class for a quantum computing simulator state.

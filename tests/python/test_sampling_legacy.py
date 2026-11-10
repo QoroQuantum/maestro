@@ -59,11 +59,17 @@ def test_seeded_fixture_records_independent_source_provenance():
     assert len(REFERENCE["cases"]) >= 10
 
 
-@pytest.mark.parametrize("policy", ["auto", "legacy"])
 @pytest.mark.parametrize("case", REFERENCE["cases"], ids=lambda case: case["id"])
-def test_seeded_counts_match_prechange_source_fixture(case, policy):
-    result = _run_case(case, policy)
+def test_legacy_counts_match_prechange_source_fixture(case):
+    result = _run_case(case, "legacy")
     assert "samples" not in result
     assert result["counts"] == case["counts"]
     assert sum(result["counts"].values()) == case["arguments"]["shots"]
     assert result.get("sampling_strategy") != "reference_frame_v1"
+
+
+@pytest.mark.parametrize("case", REFERENCE["cases"], ids=lambda case: case["id"])
+def test_auto_replays_same_version_counts_for_fixture_inputs(case):
+    counts = _run_case(case, "auto")["counts"]
+    assert counts == _run_case(case, "auto")["counts"]
+    assert sum(counts.values()) == case["arguments"]["shots"]

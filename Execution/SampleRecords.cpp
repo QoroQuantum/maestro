@@ -32,8 +32,9 @@ class RawSamplingSession
         {
             auto fixed = config;
             fixed.fixed_backend = true;
-            if (fixed.counts_policy == "multinomial_v1")
-                fixed.counts_policy = "legacy";
+            // Ordered rows use the per-shot sampler, including when a terminal
+            // histogram is expanded into a seeded permutation below.
+            SetCountsPolicy(fixed, "legacy");
             // A default network simulator also allocates each host's entangled
             // qubit: one idle qubit doubles statevector and quadruples density-
             // matrix work. Allocate the circuit's register exactly, once.
@@ -252,6 +253,7 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
     ShotRecords records;
     records.shots = shots;
     records.width = ClassicalWidth(*circuit);
+    const auto seed = EffectiveSamplingSeed(config);
     SampleStorageSize(shots, records.width);
     bool reference = false, terminal = false;
     records.simulator = config.simulator_type;
@@ -265,7 +267,7 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
     {
         if (auto plan = CompileReferenceSampler(circuit, std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1), records.width))
         {
-            records.rows = plan->Sample(shots, config.seed ? *config.seed : Utils::RandomStream::FreshSeed());
+            records.rows = plan->Sample(shots, seed ? *seed : Utils::RandomStream::FreshSeed());
             reference = true;
         }
     }
@@ -277,7 +279,7 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
             // Simulate only the qubits the circuit touches, as the network executor does.
             const QubitCompaction compaction(*circuit);
             RawSamplingSession session(compaction.Width(), config, true);
-            session.Sample(compaction.Apply(circuit), shots, config.seed, records.rows.data(), records.width);
+            session.Sample(compaction.Apply(circuit), shots, seed, records.rows.data(), records.width);
             records.max_bond_dimension = session.MaxBondDimension();
             terminal = session.TerminalCalls() != 0;
             RecordFusion(records, *session.Simulator());
@@ -288,10 +290,11 @@ ShotRecords SampleCircuitRows(const RecordCircuitPtr &circuit, const SimulatorCo
             // terminal measurements are sampled from one prepared state.
             auto single = config;
             single.max_simulators = 1;
-            if (single.counts_policy == "auto" || single.counts_policy == "multinomial_v1")
-                single.counts_policy = "legacy";
+            const auto &policy = EffectiveCountsPolicy(single);
+            if (policy == "auto" || policy == "multinomial_v1")
+                SetCountsPolicy(single, "legacy");
             const auto result = SampleCircuit(circuit, single, shots);
-            CopyCountSamples(result, records.rows.data(), shots, records.width, config.seed);
+            CopyCountSamples(result, records.rows.data(), shots, records.width, seed);
             records.max_bond_dimension = result.max_bond_dimension;
             terminal = shots > 1 && !circuit->HasOpsAfterMeasurements(UsesExactQuantumChannels(config));
             RecordFusion(records, result);
@@ -349,7 +352,8 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
         throw std::invalid_argument("shots must be >= 1.");
     config.Validate();
     const bool return_samples = options.rows;
-    const bool exact = options.exact_channels.value_or(UsesExactQuantumChannels(config));
+    const auto configured_seed = EffectiveSamplingSeed(config);
+    const bool exact = options.exact_channels ? *options.exact_channels : InjectsExactChannels(config, noise_model, *circuit);
     const NoiseLayer layer = options.layer;
     auto rng = MakeNoiseRng(config, noise_seed);
     auto policy = ResolveNoiseRealizations(noise_realizations, noise_model, config, layer, 64, circuit, false, exact);
@@ -449,9 +453,9 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
         if (auto frames = CompileReferenceSampler(channels, qubits, width))
         {
             // The scalar path's seed rules, as for extended frames below.
-            const uint64_t fresh = !config.seed && !noise_seed ? Utils::RandomStream::FreshSeed() : 0;
-            const uint64_t injection_seed = noise_seed ? *noise_seed : config.seed ? (*config.seed & UINT32_MAX) : fresh;
-            const uint64_t measurement_seed = config.seed ? *config.seed : noise_seed ? *noise_seed : fresh;
+            const uint64_t fresh = !configured_seed && !noise_seed ? Utils::RandomStream::FreshSeed() : 0;
+            const uint64_t injection_seed = noise_seed ? *noise_seed : configured_seed ? (*configured_seed & UINT32_MAX) : fresh;
+            const uint64_t measurement_seed = configured_seed ? *configured_seed : noise_seed ? *noise_seed : fresh;
             const ReferenceFrameSampler::Seeds seeds{injection_seed, measurement_seed};
             if (return_samples)
                 records.rows = frames->Sample(shots, seeds);
@@ -469,9 +473,9 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
         // The scalar path's seed rules: noise_seed (else the config seed)
         // drives circuit errors, the config seed (else noise_seed) the
         // measurements and readout, so each can change alone.
-        const uint64_t fresh = !config.seed && !noise_seed ? Utils::RandomStream::FreshSeed() : 0;
-        const uint64_t injection_seed = noise_seed ? *noise_seed : config.seed ? (*config.seed & UINT32_MAX) : fresh;
-        const uint64_t measurement_seed = config.seed ? *config.seed : noise_seed ? *noise_seed : fresh;
+        const uint64_t fresh = !configured_seed && !noise_seed ? Utils::RandomStream::FreshSeed() : 0;
+        const uint64_t injection_seed = noise_seed ? *noise_seed : configured_seed ? (*configured_seed & UINT32_MAX) : fresh;
+        const uint64_t measurement_seed = configured_seed ? *configured_seed : noise_seed ? *noise_seed : fresh;
         extended = SampleExtendedFrames(circuit, noise_model, config, qubits, width, shots, batches, injection_seed, measurement_seed, return_samples,
                                         records.rows, frame_counts);
     }
@@ -483,6 +487,19 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
         // Resolved once; each realization draws from the noise RNG in order.
         if (!plan)
             plan = std::make_unique<noise::NoiseInjectionPlan>(circuit, noise_model);
+        // `auto` may reach a QCSim composite: its components then sample a
+        // batch of counts at their own crossover, as they do for a native
+        // request. A fixed composite takes no frames and no request-level
+        // sampler. In a candidate list it may stand beside fallbacks: none of
+        // them reads the policy (the samplers that do make
+        // PreferMultinomialCounts choose multinomial_v1), so one that runs
+        // instead behaves as under `legacy`.
+        const auto composite = [](Simulators::SimulatorType backend) { return backend == Simulators::SimulatorType::kCompositeQCSim; };
+        const bool composite_listed = HasCandidateList(config) ? std::any_of(config.optimization_candidates.begin(), config.optimization_candidates.end(),
+                                                                             [&](const auto &candidate) { return composite(candidate.first); })
+                                                               : composite(config.simulator_type);
+        const bool composite_auto = EffectiveCountsPolicy(config) == "auto" && composite_listed;
+        const bool multinomial = PreferMultinomialCounts(config);
         Utils::RunRealizations(
             batches, workers, [&](size_t) { return InjectPlanned(layer, *plan, rng, exact); },
             [&](size_t worker, size_t batch, RecordCircuitPtr noisy) {
@@ -491,7 +508,15 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
                 auto execution_config = NoiseExecutionConfig(config, noise_seed, batch);
                 // Frames are selected for the entire request. Terminal counts
                 // may be batched only within this realization's distribution.
-                execution_config.counts_policy = !return_samples && count > 1 && PreferMultinomialCounts(config, noise_seed) ? "multinomial_v1" : "legacy";
+                const bool batched = !return_samples && count > 1;
+                const bool automatic = batched && !multinomial && composite_auto;
+                SetCountsPolicy(execution_config, batched && multinomial ? "multinomial_v1" : automatic ? "auto" : "legacy");
+                // Under `auto` the executor itself takes frames for an unseeded
+                // Clifford circuit when the stabilizer is admitted (SampleCircuit).
+                // Such a realization keeps `legacy`: it then runs on that
+                // stabilizer, which does not read the policy.
+                if (automatic && PreferFrameCounts(execution_config) && noisy->IsClifford())
+                    SetCountsPolicy(execution_config, "legacy");
                 if (direct && !execution_config.seed)
                     execution_config.seed = Simulators::IState::DeriveSeed(unseeded_measurements, batch);
                 // Raw rows on the network executor (MPS, MPO, other backends) run

@@ -158,9 +158,8 @@ void TestFrameCountRequests()
         Check(total == 80 && result.at("shots").to_number<uint64_t>() == 80, "Native Bell counts lost shots");
     }
 
-    // Either explicit seed source, including zero, must keep automatic counts
-    // on the previous stream. The public noise seed also seeds measurements
-    // when no simulator seed was supplied.
+    // Either explicit seed source, including zero, keeps a Stabilizer request
+    // off the automatic frame path. The noise seed also seeds measurements.
     for (const bool simulatorSeed : {false, true})
     {
         auto seeded = noisy;
@@ -176,6 +175,27 @@ void TestFrameCountRequests()
         Check(seededAutomatic.at("counts") == oldCounts.at("counts"), "Native noisy seed zero changed the legacy histogram");
         const auto *strategy = seededAutomatic.at("execution_metadata").as_object().if_contains("sampling_strategy");
         Check(!strategy || *strategy != "reference_frame_v1", "Explicit native seed zero incorrectly selected automatic frames");
+    }
+
+    auto terminal = noisy;
+    terminal["simulator"].as_object()["method"] = "statevector";
+    terminal["execution"].as_object()["shots"] = 512;
+    terminal["noise"].as_object()["realizations"] = 1;
+    terminal["noise"].as_object()["seed"] = 0;
+    auto &options = terminal["simulator"].as_object()["options"].as_object();
+    const auto automaticCounts = Call(terminal);
+    Check(automaticCounts.at("seed").to_number<uint64_t>() == 0 &&
+              automaticCounts.at("execution_metadata").at("configured_options").at("counts_policy") == "multinomial_v1",
+          "A noise-only seed disabled automatic terminal counts");
+    options["counts_policy"] = "multinomial_v1";
+    Check(Call(terminal).at("counts") == automaticCounts.at("counts"), "Noise-seeded automatic counts did not replay");
+    terminal["execution"].as_object()["return_samples"] = true;
+    options["counts_policy"] = "legacy";
+    const auto legacyRows = Call(terminal).at("samples");
+    for (const char *policy : {"auto", "multinomial_v1"})
+    {
+        options["counts_policy"] = policy;
+        Check(Call(terminal).at("samples") == legacyRows, "A count policy changed the ordered noise-seeded rows");
     }
 }
 
@@ -425,12 +445,10 @@ void TestNativeRandomSeeds()
         request["execution"].as_object()["seed"] = first.at("seed");
         request["simulator"].as_object()["options"] = j::object{{"counts_policy", first.at("execution_metadata").at("configured_options").at("counts_policy")}};
         Check(Call(request).at("counts") == first.at("counts"), "Returned seed and resolved policy cannot reproduce native sampling/readout");
-        // Existing results from the ordinary sampler still replay with their
-        // seed alone under auto, including noise and independent readout.
-        request["simulator"].as_object()["options"] = j::object{{"counts_policy", "legacy"}};
-        const auto ordinary = Call(request);
+        // This fixed statevector request resolves to the same adaptive policy
+        // with a returned seed as it did with the generated one.
         request["simulator"].as_object().erase("options");
-        Check(Call(request).at("counts") == ordinary.at("counts"), "Historical native counts no longer replay with their seed alone");
+        Check(Call(request).at("counts") == first.at("counts"), "The generated seed did not replay native automatic terminal counts");
         for (uint64_t seed : {uint64_t{0}, UINT64_MAX})
         {
             request["execution"].as_object()["seed"] = seed;

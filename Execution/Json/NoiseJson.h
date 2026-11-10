@@ -5,6 +5,15 @@
 
 namespace MaestroExecution
 {
+// Whether a request can evaluate its noise exactly, in one execution: on a
+// mixed-state method, or when every backend it may run applies channels
+// exactly. The QCSim Pauli propagator does, to the observable it propagates,
+// although it holds no density matrix (Mixed stays false for it).
+inline bool ExactNoiseApplies(const SimulatorConfig &config)
+{
+    return Mixed(config) || UsesExactQuantumChannels(config);
+}
+
 inline const std::map<std::string, std::string> &NoiseKinds()
 {
     static const std::map<std::string, std::string> kinds{
@@ -55,6 +64,9 @@ struct NoiseConfig
     noise::NoiseModel model;
     bool enabled = false;
     bool exact = false;
+    // evaluation "auto": the request's circuits may still turn it exact
+    // (RefineAutomaticEvaluation).
+    bool automatic = false;
     // checkpoint_batch: also apply the noise to the prefix, once (exact and
     // deterministic only), instead of keeping an ideal prefix.
     bool prefix = false;
@@ -86,6 +98,58 @@ inline std::string ThermalClampWarning(const std::vector<int> &qubits)
     return message.str();
 }
 
+// Whether a truncation threshold of the Pauli propagator is in effect on a
+// register of this size: a positive coefficient threshold, or a weight cap
+// below the register. Either one drops terms, with or without noise.
+inline bool TruncatesPauliTerms(const SimulatorConfig &config, size_t qubits)
+{
+    if (config.simulation_type != Method::kPauliPropagator)
+        return false;
+    const auto native = [&](const char *key) {
+        const auto it = config.native_options.find(key);
+        return it == config.native_options.end() ? std::optional<double>() : std::optional<double>(std::strtod(it->second.c_str(), nullptr));
+    };
+    const auto coefficient = config.pp_coefficient_threshold ? config.pp_coefficient_threshold : native("pauli_propagator_coefficient_threshold");
+    const auto weight = config.pp_max_pauli_weight ? std::optional<double>(static_cast<double>(*config.pp_max_pauli_weight))
+                                                   : native("pauli_propagator_pauli_weight_threshold");
+    return (coefficient && *coefficient > 0) || (weight && *weight < static_cast<double>(qubits));
+}
+
+// Everything that follows from noise.exact: the support check, the policy and
+// the approximations a result reports. Run again when the evaluation changes.
+inline void SettleNoiseEvaluation(NoiseConfig &result, const SimulatorConfig &config, size_t qubits)
+{
+    result.approximations.clear();
+    result.thermal_approximation_warning.clear();
+    Supported(result.exact || !result.model.has_additional_quantum_channels(),
+              "This noise model requires exact channel evolution: density_matrix, matrix_product_operator or the qcsim pauli_propagator");
+    // Match Python's sampled thermal policy without altering calibrated channels
+    // used by exact density-matrix/MPO evolution.
+    if (!result.exact)
+    {
+        const auto clamped = result.model.thermal_approximation_qubits();
+        if (!clamped.empty())
+        {
+            result.approximations.emplace_back("thermal_T2_clamped_to_T1");
+            result.thermal_approximation_warning = ThermalClampWarning(clamped);
+        }
+    }
+    if (!result.exact && result.model.has_t1())
+        result.approximations.emplace_back("sampled_T1_reset");
+    const auto layer = result.mode == "pauli" ? NoiseLayer::kPauli : result.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
+    result.policy = ResolveNoiseRealizations(result.requested_realizations, result.model, config, layer, 64, {}, false, result.exact);
+    result.realizations = result.mode == "analytical" ? 1 : result.policy.realizations;
+    if (result.policy.stochastic_noise && result.mode != "analytical")
+        result.approximations.emplace_back("finite_noise_realizations");
+    if (result.mode == "analytical")
+        result.approximations.emplace_back("terminal_Pauli_damping");
+    if (config.simulation_type == Method::kMatrixProductOperator)
+        result.approximations.emplace_back("MPO_truncation");
+    // Exact channels on the propagator are exact only while no term is dropped.
+    if (TruncatesPauliTerms(config, qubits))
+        result.approximations.emplace_back("Pauli_truncation");
+}
+
 inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig &config, size_t qubits)
 {
     NoiseConfig result;
@@ -98,8 +162,10 @@ inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig 
     Require(result.mode == "combined" || result.mode == "pauli" || result.mode == "coherent" || result.mode == "analytical", "Unknown noise mode");
     const auto evaluation = String(object, "evaluation", "auto");
     Require(evaluation == "auto" || evaluation == "exact" || evaluation == "trajectories", "Unknown noise evaluation");
-    result.exact = evaluation == "exact" || (evaluation == "auto" && Mixed(config));
-    Supported(!result.exact || Mixed(config), "Exact noise requires density_matrix or matrix_product_operator");
+    // "auto" is settled once the channels are known: see InjectsExactChannels.
+    result.automatic = evaluation == "auto";
+    result.exact = evaluation == "exact";
+    Supported(!result.exact || ExactNoiseApplies(config), "Exact noise requires density_matrix, matrix_product_operator or the qcsim pauli_propagator");
     if (const auto *value = object.if_contains("realizations"); value && !value->is_null())
     {
         if (value->is_string())
@@ -288,30 +354,23 @@ inline NoiseConfig ParseNoise(const json::object &object, const SimulatorConfig 
             Supported(kind.find("coherent_") == 0, "coherent mode accepts only coherent channels");
     }
     result.model.EnsureNoT1ThermalStack();
-    Supported(result.exact || !result.model.has_additional_quantum_channels(), "This noise model requires exact density-matrix/MPO evolution");
-    // Match Python's sampled thermal policy without altering calibrated channels
-    // used by exact density-matrix/MPO evolution.
-    if (!result.exact)
-    {
-        const auto qubits = result.model.thermal_approximation_qubits();
-        if (!qubits.empty())
-        {
-            result.approximations.emplace_back("thermal_T2_clamped_to_T1");
-            result.thermal_approximation_warning = ThermalClampWarning(qubits);
-        }
-    }
-    if (!result.exact && result.model.has_t1())
-        result.approximations.emplace_back("sampled_T1_reset");
-    const auto layer = result.mode == "pauli" ? NoiseLayer::kPauli : result.mode == "coherent" ? NoiseLayer::kCoherent : NoiseLayer::kCombined;
-    result.policy = ResolveNoiseRealizations(result.requested_realizations, result.model, config, layer, 64, {}, false, result.exact);
-    result.realizations = result.mode == "analytical" ? 1 : result.policy.realizations;
-    if (result.policy.stochastic_noise && result.mode != "analytical")
-        result.approximations.emplace_back("finite_noise_realizations");
-    if (result.mode == "analytical")
-        result.approximations.emplace_back("terminal_Pauli_damping");
-    if (config.simulation_type == Method::kMatrixProductOperator)
-        result.approximations.emplace_back("MPO_truncation");
+    if (result.automatic)
+        result.exact = Mixed(config) || InjectsExactChannels(config, result.model);
+    SettleNoiseEvaluation(result, config, qubits);
     return result;
+}
+
+// ParseNoise settles "auto" from the model alone. The circuits the noise is
+// injected into can still turn it exact on the Pauli propagator
+// (InjectsExactChannels), never back to trajectories. Returns whether the
+// evaluation changed; policy, realizations and approximations then follow it.
+inline bool RefineAutomaticEvaluation(NoiseConfig &noise, const SimulatorConfig &config, size_t qubits, const NoisyCircuits &circuits)
+{
+    if (!noise.enabled || !noise.automatic || noise.exact || !InjectsExactChannels(config, noise.model, circuits))
+        return false;
+    noise.exact = true;
+    SettleNoiseEvaluation(noise, config, qubits);
+    return true;
 }
 
 // Records an approximation once, however many stages report it.

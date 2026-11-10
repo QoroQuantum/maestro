@@ -19,7 +19,8 @@ class PrefixCheckpoint
     // and swap optimization are off, so suffix qubits keep their indices.
     // prefix_noise, when it has noise, is injected into the prefix as exact
     // channels: it evolves only once, so it must be deterministic there (a
-    // density-matrix/MPO backend, without coherent or correlated layers);
+    // density-matrix/MPO backend, or the QCSim Pauli propagator for noise it
+    // applies exactly by default, without coherent or correlated layers);
     // otherwise std::invalid_argument is thrown.
     MAESTRO_TRANSFORM_API PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubits, const SimulatorConfig &config = SimulatorConfig{},
                                            const noise::NoiseModel *prefix_noise = nullptr);
@@ -28,10 +29,12 @@ class PrefixCheckpoint
     PrefixCheckpoint &operator=(const PrefixCheckpoint &) = delete;
 
     // Sample suffix from the saved state. Terminal measurements on mixed-state
-    // and QCSim statevector/stabilizer/MPS backends reuse one prepared suffix
-    // state per realization. QCSim path integral and extended stabilizer also
-    // preserve the saved state when multinomial counts are enabled. Pure-state
-    // suffixes with resets replay per shot (PreservesSavedStateWhileSampling).
+    // backends, the QCSim Pauli propagator and QCSim statevector/stabilizer/MPS
+    // backends reuse one prepared suffix state per realization. QCSim path
+    // integral and extended stabilizer also preserve the saved state when
+    // multinomial counts are enabled. Pure-state suffixes with resets replay
+    // per shot, as the Pauli propagator does under the legacy counts policy
+    // (PreservesSavedStateWhileSampling).
     // Records span
     // max(qubits, num_measurements, the suffix's highest classical bit + 1)
     // bits; replayed rows keep shot order, prepared-state rows are shuffled
@@ -63,6 +66,13 @@ class PrefixCheckpoint
     size_t Qubits() const noexcept
     {
         return static_cast<size_t>(num_qubits_);
+    }
+
+    // The configuration every suffix runs with: the requested one, with a
+    // candidate list resolved to the backend that holds the register.
+    const SimulatorConfig &Config() const noexcept
+    {
+        return config_;
     }
 
   private:

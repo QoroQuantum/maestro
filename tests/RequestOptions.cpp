@@ -470,13 +470,27 @@ void TestTypedTrajectoryConfiguration()
 void TestFrameCountPolicy()
 {
     using namespace MaestroExecution;
-    for (const auto &[key, value] :
-         std::vector<std::pair<std::string, std::string>>{{"seed", "0"}, {"sampling_policy", "reproducible_v1"}, {"counts_policy", "legacy"}})
+    SimulatorConfig configured;
+    for (const auto seed : {0, 123})
     {
-        SimulatorConfig configured;
-        configured.native_options[key] = value;
-        Check(!PreferMultinomialCounts(configured), "Automatic multinomial policy bypassed an explicit native option");
+        configured.seed = seed;
+        Check(PreferMultinomialCounts(configured) && PreferMultinomialCounts(configured, seed), "A typed simulator or noise seed disabled adaptive counts");
+        configured.seed.reset();
+        configured.native_options["seed"] = std::to_string(seed);
+        Check(EffectiveSamplingSeed(configured) == seed && PreferMultinomialCounts(configured), "A native seed disabled adaptive counts");
     }
+    configured.counts_policy = "legacy";
+    configured.native_options["counts_policy"] = "auto";
+    Check(PreferMultinomialCounts(configured), "Native auto did not override the typed counts policy");
+    for (const char *policy : {"legacy", "frame_v1", "multinomial_v1"})
+    {
+        configured.native_options["counts_policy"] = policy;
+        Check(PreferMultinomialCounts(configured) == (std::string(policy) == "multinomial_v1"), "A native count policy was ignored");
+    }
+    configured.native_options["sampling_policy"] = "reproducible_v1";
+    Check(!PreferMultinomialCounts(configured), "A low-level sampler pin was ignored");
+    SetCountsPolicy(configured, "legacy");
+    Check(EffectiveCountsPolicy(configured) == "legacy" && !configured.native_options.count("counts_policy"), "A resolved counts policy was overridden");
     for (const char *policy : {"auto", "legacy", "frame_v1"})
     {
         const auto config = ParseConfig(json::object{{"backend", "qcsim"}, {"method", "stabilizer"}, {"options", json::object{{"counts_policy", policy}}}});

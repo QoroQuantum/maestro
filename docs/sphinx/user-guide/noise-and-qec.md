@@ -48,7 +48,8 @@ for more physical detail:
 | `qc.noisy_prob` | Path integral | Readout error correction | Single-outcome probabilities |
 
 N is the effective `noise_realizations`. Its default, `None`, selects one
-realization for deterministic density-matrix/MPO evolution. Sampled noise uses
+realization for deterministic density-matrix/MPO evolution, and for Pauli-type
+noise on the QCSim Pauli propagator (see {ref}`py_noise_cptp`). Sampled noise uses
 64 realizations for execution and 100 for estimation/fidelity. An explicit
 positive count is honored (execution caps it at `shots`). Noisy estimates also
 compute an ideal baseline. {doc}`/examples/noise-modes` compares the analytical
@@ -134,7 +135,8 @@ shot's record as a `(shots, clbits)` `uint8` array under `samples` (see
 `counts_policy="auto"` samples Clifford circuits with Pauli, readout and
 phase-damping noise through reference frames
 (`sampling_strategy: "reference_frame_v1"`) and runs other realizations directly
-(`"trajectory_v1"`); seeded calls keep their earlier sequences (see
+(`"trajectory_v1"`). When several shots share one realization, eligible terminal
+histograms can use multinomial sampling with or without a seed (see
 {ref}`py_counts_policy`). Unseeded `extended_stabilizer` runs with Pauli,
 readout and phase-damping noise use batched Pauli frames under any realization
 schedule (`sampling_strategy: "extended_frame_v1"`). A batch of shots shares one
@@ -236,10 +238,38 @@ The statevector backend rejects these channels with a `ValueError` instead of
 approximating them. `set_phase_damping_from_time(qubit, gate_time_s, t_phi_s)`
 sets phase damping from a dephasing time.
 
+The QCSim Pauli propagator (`SimulationType.PauliPropagator`) also evaluates
+channels exactly, without a density matrix: it applies the adjoint of each
+channel to the observable it propagates. One execution then gives the exact
+ensemble average, and the model above runs on it too. Which models use this
+automatically:
+
+- Pauli-type noise (Pauli and depolarizing channels, dephasing, phase damping,
+  correlated phase flips) is diagonal in the Pauli basis. Each channel only
+  scales terms, so the default is one exact realization instead of 64 or 100
+  sampled ones.
+- T1, thermal and idle relaxation that acts on the circuit keeps its sampled
+  realizations on the propagator. Relaxation also sends Z to the identity, and
+  without a truncation threshold those branches fill the operator space of the
+  observable's light cone (`4^width` terms), which costs far more than the
+  trajectories.
+- Relaxation counts by the channel it applies. A zero T1 probability, thermal
+  or idle relaxation towards equal populations (`excited_population=0.5`), and
+  relaxation on qubits the circuit never gates (or idle relaxation without a
+  delay) only scale terms or add nothing, so they stay exact, with the
+  calibrated T2.
+- A model with generalized amplitude damping or Kraus channels, which cannot be
+  sampled, runs exactly as a whole.
+
+Exact here means without a positive `pp_coefficient_threshold` and without a
+`pp_max_pauli_weight` below the register; with either the result is an
+approximation, as any truncated propagation is.
+
 With `noise_realizations=None` (the default), these Markovian channels evolve
 once. Terminal measurement counts and raw rows are then sampled from the prepared
 state, with independent classical readout errors. Unrecorded resets are also
-deterministic channels on mixed-state backends, so they do not require shot replay.
+deterministic channels on mixed-state backends and on the QCSim Pauli propagator,
+so they do not require shot replay.
 Checkpoint suffixes use the same preparation-and-sampling path, as do terminal
 checkpoint suffixes on QCSim statevector, stabilizer and MPS backends. QCSim supports
 DM and MPO, Aer supports DM, and the Linux GPU backend supports DM and MPO. A CPU

@@ -141,18 +141,18 @@ offer the same rows and compiled frames; see `docs/native-request-api.md`.
 
 | Policy | Behavior |
 |--------|----------|
-| `"auto"` (default) | Unseeded requests that the stabilizer simulator could run use reference frames; unseeded noisy requests with one realization per shot otherwise run their realizations directly. Seeded requests keep their earlier sequences. |
+| `"auto"` (default) | Eligible terminal counts use multinomial sampling with or without a seed. Unseeded requests may also use reference frames or direct noisy trajectories. |
 | `"legacy"` | Always the earlier executor |
 | `"frame_v1"` | Frames even with seeds, for any supported circuit and noise |
 | `"multinomial_v1"` | Draw eligible terminal histograms directly, including for seeded calls. The backend chooses from the measured shot count and support size. |
 
-Unseeded `"auto"` counts can also use multinomial sampling on QCSim statevectors,
+`"auto"` counts can use multinomial sampling on QCSim statevectors,
 density matrices, path integrals, a single measured MPS qubit or MPO qubit without truncation limits, and small
 extended-stabilizer marginals. The speedup is largest when many shots repeat
-the same outcomes. Explicit seeds under `"auto"` keep their historical counts,
-except for unnormalized inputs whose total weight (for path integrals, the
-total of the squared amplitudes) lies outside `[2^-900, 2^900]` or overflows,
-which earlier builds sampled with a bias or rejected.
+the same outcomes. Repeating a request with the same seed and configuration
+reproduces its histogram on the same build. Use `"legacy"` to select the
+per-shot count sampler used by earlier seeded requests. Ordered shot output
+continues to use its own sampling path.
 
 `sampling_policy` selects the lower-level statevector, density-matrix and
 path-integral sampler, and `trajectory_policy` the random streams of dynamic

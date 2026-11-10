@@ -229,7 +229,8 @@ std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits
     result.components = cones.size();
     result.simulator = config.simulator_type;
     result.method = config.simulation_type;
-    const auto seed = config.seed ? *config.seed : Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options);
+    const auto configured_seed = EffectiveSamplingSeed(config);
+    const auto seed = configured_seed ? *configured_seed : Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options);
     Network::INetwork<double>::ExecuteResults joint{{std::vector<bool>(bits, false), shots}};
     for (size_t c = 0; c < cones.size(); ++c)
     {
@@ -276,7 +277,7 @@ std::optional<SamplingResult> SampleDisjointCones(const std::shared_ptr<Circuits
 
         auto local_config = config;
         if (PreferMultinomialCounts(config))
-            local_config.counts_policy = "multinomial_v1";
+            SetCountsPolicy(local_config, "multinomial_v1");
         local_config.seed = Simulators::IState::DeriveSeed(seed, 2 * c);
         auto network = ConfigureNetwork(handle, local_config);
         if (!network || !network->GetSimulator())
@@ -373,14 +374,15 @@ SamplingResult SampleCircuit(const std::shared_ptr<Circuits::Circuit<double>> &c
     if (auto reduced = SampleDisjointCones(circuit, config, shots))
         return std::move(*reduced);
     const auto start = std::chrono::steady_clock::now();
-    if (PreferFrameCounts(config) && (config.counts_policy == "frame_v1" || circuit->IsClifford()))
+    if (PreferFrameCounts(config) && (EffectiveCountsPolicy(config) == "frame_v1" || circuit->IsClifford()))
     {
         const auto bits = circuit->GetBits();
         const size_t width = std::max(std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1), bits.empty() ? size_t{0} : *bits.rbegin() + 1);
         if (auto plan = CompileReferenceSampler(circuit, std::max(size_t{1}, circuit->GetMaxQubitIndex() + 1), width))
         {
             SamplingResult result;
-            const auto seed = config.seed ? *config.seed : Utils::RandomStream::FreshSeed();
+            const auto configured_seed = EffectiveSamplingSeed(config);
+            const auto seed = configured_seed ? *configured_seed : Utils::RandomStream::FreshSeed();
             // Outcomes are distinct: one insertion each, no merging.
             auto outcomes = plan->SampleCounts(shots, seed);
             result.counts.reserve(outcomes.size());
@@ -414,8 +416,6 @@ SamplingResult SampleCircuit(const std::shared_ptr<Circuits::Circuit<double>> &c
     auto network = ConfigureNetwork(handle, config);
     if (!network || !network->GetSimulator())
         throw Error("backend_unavailable", "Requested backend could not be created");
-    if (config.counts_policy == "auto" && PreferMultinomialCounts(config))
-        network->Configure("counts_policy", "multinomial_v1");
     if (config.fixed_backend &&
         (network->GetSimulator()->GetType() != config.simulator_type || network->GetSimulator()->GetSimulationType() != config.simulation_type))
         throw Error("backend_unavailable", "Requested fixed backend/method is unavailable");

@@ -6,10 +6,18 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <string_view>
 #include <type_traits>
 
 namespace Utils::Sampling
 {
+// Direct simulators and network shot partitioning interpret an unset policy
+// as auto. An explicit low-level sampler retains its own shot sequence.
+inline bool AllowsMultinomialCounts(std::string_view policy, bool samplerPinned)
+{
+    return !samplerPinned && (policy.empty() || policy == "auto" || policy == "multinomial_v1");
+}
+
 // Count maps only: each binomial draw must amortize its higher constant cost
 // and the probability pass. Measured single- and multi-threaded crossovers lie
 // between 8 and 16 shots per draw (the existing per-shot draw is RNG-bound).

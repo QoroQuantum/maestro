@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The QCSim `pauli_propagator` evaluates noise channels exactly in one
+  execution. It applies the adjoint of each channel to the observable it
+  propagates, so expectation values, probabilities and samples describe the
+  noisy ensemble without trajectories. Pauli-type noise (Pauli, depolarizing,
+  dephasing, phase damping, correlated phase flips) now resolves to one exact
+  realization there instead of 64 or 100 sampled ones. Generalized amplitude
+  damping, Kraus channels and circuit `kraus`/`pauli_channel` instructions,
+  previously rejected on this method, are accepted. `noisy_fidelity` requests
+  run on it up to 24 qubits, and a deterministic noisy checkpoint prefix
+  (`prefix_noise_model`, `noise.prefix`) is evolved once on it.
+  `noise.exact_configurations` in the capabilities lists it.
+
+### Changed
+
+- An unrecorded reset on the QCSim `pauli_propagator` is a deterministic
+  channel: it draws no random number and inserts no projector. Circuits with
+  mid-circuit resets no longer replay per shot or average measurement
+  trajectories there, and seeded runs that contain a reset give different
+  (still valid) samples than before.
+- T1, thermal or idle relaxation that acts on the circuit keeps sampled
+  realizations on the `pauli_propagator` under automatic evaluation, since
+  exact relaxation without a truncation threshold fills the operator space of
+  the observable's light cone. `evaluation: "exact"` (requests) or
+  `NoiseAdd::set_exact_channels(true)` applies it exactly, with the calibrated
+  T2. Relaxation is judged by the channel it applies: a zero T1 probability,
+  relaxation towards equal populations (`excited_population` 0.5) and
+  relaxation on qubits the circuit never gates or delays are exact. A circuit
+  `kraus` instruction beside relaxation makes the whole request exact.
+- `checkpoint_batch` and `PrefixCheckpointedSimulator` suffixes on the QCSim
+  `pauli_propagator` sample terminal measurements from the saved prefix
+  instead of replaying every shot. Under `counts_policy` `auto`, seeded counts
+  with readout error and seeded raw rows therefore differ from earlier
+  releases (both remain valid samples). `legacy` keeps the per-shot replay and
+  its seeded results.
+- `amplitudes`, `statevector`, `inner_product` and `mirror_fidelity` (without
+  observables) requests on `pauli_propagator` are rejected when the request is
+  validated, with `unsupported_capability`, instead of failing in the backend.
+- `noise.approximations` lists `Pauli_truncation` when a `pauli_propagator`
+  request runs with a positive `pp_coefficient_threshold` or a
+  `pp_max_pauli_weight` below the register.
+- `noisy_execute` and `full_noise_execute` keep `counts_policy="auto"` for
+  shared-realization count batches when the request may run `CompositeQCSim`
+  (fixed, or in a candidate list), so its components sample them adaptively,
+  as native requests already did. Only a realization that could itself take
+  reference frames (unseeded, Clifford, with the QCSim stabilizer listed)
+  keeps the per-shot sampler. Seeded `auto` histograms of such runs change;
+  `legacy` reproduces the earlier ones.
+- The help of the noisy execute functions, the Qiskit migration guide and the
+  errors for channels that cannot be sampled name the QCSim `pauli_propagator`
+  beside density matrix and MPO.
+
+### Fixed
+
+- Count-only checkpoint suffixes no longer build a permutation of all shots
+  (8 bytes per shot), whatever the counts policy. With deterministic readout
+  they add each occupied outcome once; with readout errors they add the shots
+  one at a time, drawing the errors in the same order as before, so seeded
+  counts are unchanged.
+- `noisy_fidelity` and `PrefixCheckpointedSimulator.execute_suffix` decide the
+  "T2 clamped to T1" warning from the backend a candidate list resolves to.
+  A list such as density matrix then statevector ran exact channels and warned
+  all the same, which failed the call under `warnings.simplefilter("error")`.
+  `noisy_fidelity` with a candidate list, which it resolves inside the call,
+  now warns after the run; every other call still warns before it.
+
 ## [0.3.14] - 2026-11-10
 
 ### Added

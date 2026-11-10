@@ -749,7 +749,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
-        const bool terminalSampling = !distCirc->HasOpsAfterMeasurementsWithWidth(IsMixedStateMethod(method), measuredWidth);
+        const bool terminalSampling = !distCirc->HasOpsAfterMeasurementsWithWidth(Simulators::EvolvesExactQuantumChannels(simType, method), measuredWidth);
         const size_t nrThreads = ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbitsResults, shots, simType, method, terminalSampling, measuredWidth, optSim, executed);
 
         std::mutex resultsMutex;
@@ -986,7 +986,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
-        const bool terminalSampling = !distCirc->HasOpsAfterMeasurementsWithWidth(IsMixedStateMethod(method), measuredWidth);
+        const bool terminalSampling = !distCirc->HasOpsAfterMeasurementsWithWidth(Simulators::EvolvesExactQuantumChannels(simType, method), measuredWidth);
         // WARNING: be sure to not put this above ChooseBestSimulator, as that one
         // can change the shots value!
         const size_t nrThreads = ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbits, shots, simType, method, terminalSampling, measuredWidth, optSim, executed);
@@ -3045,8 +3045,10 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         return std::nullopt;
     }
 
-    // Methods holding a mixed state: resets and Kraus channels evolve as
-    // deterministic channels instead of sampled branches.
+    // Methods holding a mixed state. The cost estimator does not rank them.
+    // Whether resets and Kraus channels are deterministic is a different
+    // question, which the Pauli propagator also answers yes to: see
+    // Simulators::EvolvesExactQuantumChannels.
     static bool IsMixedStateMethod(Simulators::SimulationType method)
     {
         return method == Simulators::SimulationType::kDensityMatrix || method == Simulators::SimulationType::kMatrixProductOperator;
@@ -3077,7 +3079,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         if (nrThreads > 1 && terminalSampling && simType == Simulators::SimulatorType::kQCSim &&
             (method == Simulators::SimulationType::kExtendedStabilizer || method == Simulators::SimulationType::kMatrixProductState ||
              method == Simulators::SimulationType::kMatrixProductOperator) &&
-            !configuration.IsSet("sampling_policy") && configuration.GetConfiguration("counts_policy") == "multinomial_v1")
+            Utils::Sampling::AllowsMultinomialCounts(configuration.GetConfiguration("counts_policy"), configuration.IsSet("sampling_policy")))
         {
             if (method == Simulators::SimulationType::kExtendedStabilizer && Utils::Sampling::PreferExtendedMarginalCounts(shots, measuredWidth))
                 return 1;
@@ -3348,10 +3350,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         auto result = configuration;
         if (type == Simulators::SimulatorType::kQCSim)
             result.SetConfiguration("reproducible_trajectory",
-                                    distCirc && distCirc->HasOpsAfterMeasurements(method == Simulators::SimulationType::kDensityMatrix ||
-                                                                                  method == Simulators::SimulationType::kMatrixProductOperator)
-                                        ? "true"
-                                        : "false");
+                                    distCirc && distCirc->HasOpsAfterMeasurements(Simulators::EvolvesExactQuantumChannels(type, method)) ? "true" : "false");
         const auto found = resolvedDistributedDevices.find(type);
         if (!Simulators::IsDistributedGpuSimulator(type) || !configuration.GetConfiguration("distributed_devices").empty() ||
             found == resolvedDistributedDevices.end())

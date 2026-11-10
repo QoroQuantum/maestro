@@ -162,7 +162,8 @@ void bind_noise(nb::module_ &m)
              "exp(-gate_time/T_phi). Realized exactly on every backend.")
         .def("set_generalized_amplitude_damping", &noise::NoiseModel::set_generalized_amplitude_damping, "qubit"_a, "gamma"_a, "excited_population"_a,
              "Set finite-temperature generalized amplitude damping after each "
-             "gate on a qubit. Requires an exact density-matrix or MPO backend.")
+             "gate on a qubit. Requires a backend that applies channels exactly: "
+             "density matrix, MPO or the QCSim Pauli propagator.")
         .def("set_thermal_relaxation", &noise::NoiseModel::set_thermal_relaxation, "qubit"_a, "gate_time_s"_a, "t1_s"_a, "t2_s"_a, "excited_population"_a = 0.0,
              "Set hardware-style T1/T2 thermal relaxation after each gate.\n\n"
              "This is the preferred way to specify decoherence. Because T1 and "
@@ -220,8 +221,9 @@ void bind_noise(nb::module_ &m)
             "    nm.set_kraus_channel([0, 2], [[[0,1,0,0],[1,0,0,0],"
             "[0,0,0,1],[0,0,1,0]]])")
         .def("has_additional_quantum_channels", &noise::NoiseModel::has_additional_quantum_channels,
-             "Return True if a channel that ONLY an exact density-matrix/MPO "
-             "backend can run is configured: generalized amplitude damping, "
+             "Return True if a channel that ONLY a backend applying channels "
+             "exactly (density matrix, MPO or the QCSim Pauli propagator) can "
+             "run is configured: generalized amplitude damping, "
              "correlated phase flips or custom Kraus maps. Phase damping and "
              "thermal relaxation are excluded -- both have an exact or "
              "well-defined stochastic realization on sampled backends.")
@@ -376,6 +378,7 @@ void bind_noise(nb::module_ &m)
     m.def("noisy_execute", &NoisyExecute, "circuit"_a, "noise_model"_a, "config"_a = SimulatorConfig{}, "shots"_a = 1024, "noise_realizations"_a = nb::none(),
           "noise_seed"_a = nb::none(), "return_samples"_a = false,
           "Execute with exact Pauli/T1 channels for density-matrix/MPO methods, "
+          "exact Pauli channels on the QCSim Pauli propagator (which samples T1), "
           "or sampled trajectories for pure-state methods. Shots are distributed "
           "evenly across 'noise_realizations' batches. Coherent, correlated and "
           "crosstalk noise are not applied and raise ValueError; use "
@@ -423,7 +426,8 @@ void bind_noise(nb::module_ &m)
           "noise_realizations"_a = nb::none(), "noise_seed"_a = nb::none(), "return_samples"_a = false,
           "Execute a circuit with combined noise (coherent + crosstalk + T1 + "
           "Pauli). Density-matrix/MPO methods apply Markovian T1 and Pauli layers "
-          "as exact channels; trajectory-only layers remain sampled.\n\n"
+          "as exact channels, and the QCSim Pauli propagator the Pauli layers (it "
+          "samples T1); trajectory-only layers remain sampled.\n\n"
           "Example:\n"
           "    nm = maestro.NoiseModel()\n"
           "    nm.set_all_coherent_depolarizing(n, 0.001)\n"

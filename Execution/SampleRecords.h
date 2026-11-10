@@ -63,7 +63,7 @@ inline bool SupportsDirectSamples(const SimulatorConfig &config)
 // per realization.
 inline bool PreferDirectTrajectoryCounts(const SimulatorConfig &config, std::optional<uint64_t> noise_seed)
 {
-    return SupportsDirectSamples(config) && config.counts_policy == "auto" && !config.seed && !noise_seed;
+    return SupportsDirectSamples(config) && EffectiveCountsPolicy(config) == "auto" && !EffectiveSamplingSeed(config) && !noise_seed;
 }
 
 inline size_t SamplingWorkers(const SimulatorConfig &config, size_t realizations, size_t qubits)
@@ -236,8 +236,9 @@ inline void RequireNoiseSeed(std::optional<uint64_t> noise_seed)
 inline std::mt19937 MakeNoiseRng(const SimulatorConfig &config, std::optional<uint64_t> &noise_seed)
 {
     RequireNoiseSeed(noise_seed);
-    if (!noise_seed && config.seed)
-        noise_seed = *config.seed & UINT32_MAX;
+    const auto configured_seed = EffectiveSamplingSeed(config);
+    if (!noise_seed && configured_seed)
+        noise_seed = *configured_seed & UINT32_MAX;
     else if (!noise_seed && config.simulator_type == Simulators::SimulatorType::kDistMpiGpuSim)
         noise_seed = Simulators::GenerateRandomSeed(config.simulator_type, config.distributed_options) & UINT32_MAX;
     if (noise_seed)
@@ -255,6 +256,7 @@ inline SimulatorConfig NoiseExecutionConfig(const SimulatorConfig &config, std::
     // Noisy workflows retain their requested backend, even for realizations
     // in which stochastic injection happens to insert no error.
     execution_config.auto_reduce = false;
+    execution_config.seed = EffectiveSamplingSeed(config);
     if (!execution_config.seed && noise_seed)
         execution_config.seed = *noise_seed;
     if (execution_config.seed)

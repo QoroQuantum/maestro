@@ -854,7 +854,10 @@ void NoiseAddBudgetsNetworkAllocation()
         Require(total == 8, "spectator noisy execution lost shots");
         Require(!foreign->load(), "crosstalk spectators were left out of the realization worker budget");
     }
-    for (const std::string observable : {"X", "XZZZZZZZZ"})
+    // Z on qubit 0 keeps the instrumented X gate in the observable's cone. A
+    // bit flip is diagonal in the Pauli basis, so it no longer mixes the axes
+    // of an X observable, which commutes with that gate and would drop it.
+    for (const std::string observable : {"Z", "ZZZZZZZZZ"})
     {
         // An expectation run allocates every position its observables name,
         // idle ones included: a nine-qubit Pauli string makes each realization

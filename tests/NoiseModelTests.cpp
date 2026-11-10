@@ -1550,6 +1550,293 @@ BOOST_AUTO_TEST_CASE(NoiseAddFollowsAutomaticallySelectedMixedStateBackend)
         }
 }
 
+// The QCSim Pauli propagator applies channels to the observable it propagates,
+// so it evaluates them exactly without holding a density matrix. Whether noise
+// injection uses that by default depends on the model: channels diagonal in
+// the Pauli basis only scale terms, while relaxation also sends Z to the
+// identity and, without a truncation threshold, fills the operator space of
+// the observable's light cone.
+BOOST_AUTO_TEST_CASE(PauliPropagatorExactChannelPolicyFollowsTheModel)
+{
+    using Backend = Simulators::SimulatorType;
+    using Method = Simulators::SimulationType;
+    BOOST_CHECK(Simulators::EvolvesExactQuantumChannels(Backend::kQCSim, Method::kPauliPropagator));
+    BOOST_CHECK(Simulators::EvolvesExactQuantumChannels(Backend::kQCSim, Method::kDensityMatrix));
+    BOOST_CHECK(Simulators::EvolvesExactQuantumChannels(Backend::kGpuSim, Method::kMatrixProductOperator));
+    // The GPU propagator still measures and flips on reset.
+    BOOST_CHECK(!Simulators::EvolvesExactQuantumChannels(Backend::kGpuSim, Method::kPauliPropagator));
+    BOOST_CHECK(!Simulators::EvolvesExactQuantumChannels(Backend::kQCSim, Method::kStatevector));
+    BOOST_CHECK(!Simulators::EvolvesExactQuantumChannels(Backend::kCompositeQCSim, Method::kStatevector));
+
+    MaestroExecution::SimulatorConfig propagator;
+    propagator.simulator_type = Backend::kQCSim;
+    propagator.simulation_type = Method::kPauliPropagator;
+    propagator.fixed_backend = true;
+    auto density = propagator, gpu = propagator;
+    density.simulation_type = Method::kDensityMatrix;
+    gpu.simulator_type = Backend::kGpuSim;
+    BOOST_CHECK(MaestroExecution::UsesExactQuantumChannels(propagator));
+    BOOST_CHECK(MaestroExecution::HasEnsembleState(propagator));
+    BOOST_CHECK(MaestroExecution::MayRunPauliPropagator(propagator));
+    BOOST_CHECK(!MaestroExecution::MayRunPauliPropagator(density));
+    BOOST_CHECK(!MaestroExecution::UsesExactQuantumChannels(gpu));
+    BOOST_CHECK(!MaestroExecution::HasEnsembleState(gpu));
+    auto mixed = propagator;
+    mixed.fixed_backend = false;
+    mixed.optimization_candidates = {{Backend::kQCSim, Method::kPauliPropagator}, {Backend::kQCSim, Method::kDensityMatrix}};
+    BOOST_CHECK(MaestroExecution::UsesExactQuantumChannels(mixed));
+    BOOST_CHECK(MaestroExecution::MayRunPauliPropagator(mixed));
+    mixed.optimization_candidates.emplace_back(Backend::kQCSim, Method::kStatevector);
+    BOOST_CHECK(!MaestroExecution::UsesExactQuantumChannels(mixed));
+
+    noise::NoiseModel pauli;
+    pauli.set_all_depolarizing(2, 0.1);
+    pauli.set_dephasing(0, 0.05);
+    pauli.set_qubit_noise(1, 0.01, 0.02, 0.03);
+    pauli.set_2q_depolarizing(0, 1, 0.02);
+    pauli.set_phase_damping(1, 0.1);
+    pauli.set_readout_error(0, 0.02, 0.01);
+    BOOST_CHECK(pauli.exact_channels_are_pauli_diagonal());
+    BOOST_CHECK(MaestroExecution::InjectsExactChannels(propagator, pauli));
+    BOOST_CHECK(MaestroExecution::InjectsExactChannels(density, pauli));
+    BOOST_CHECK(!MaestroExecution::InjectsExactChannels(gpu, pauli));
+
+    // Relaxation with a finite T1 is not diagonal, however it is configured.
+    noise::NoiseModel thermal, t1, idle;
+    thermal.set_thermal_relaxation(0, 1.0, 20.0, 15.0);
+    t1.set_t1(0, 0.1);
+    idle.set_idle_noise(0, 25.0, 25.0, 0.1);
+    for (const auto *model : {&thermal, &t1, &idle})
+    {
+        BOOST_CHECK(!model->exact_channels_are_pauli_diagonal());
+        BOOST_CHECK(!MaestroExecution::InjectsExactChannels(propagator, *model));
+        BOOST_CHECK(!MaestroExecution::InjectsExactChannels(mixed, *model));
+        // A mixed-state backend holds the state and is unaffected.
+        BOOST_CHECK(MaestroExecution::InjectsExactChannels(density, *model));
+    }
+    // An infinite T1 leaves pure dephasing, which is diagonal.
+    noise::NoiseModel dephasing;
+    dephasing.set_thermal_relaxation(0, 1.0, std::numeric_limits<double>::infinity(), 15.0);
+    BOOST_CHECK(dephasing.exact_channels_are_pauli_diagonal());
+    BOOST_CHECK(MaestroExecution::InjectsExactChannels(propagator, dephasing));
+    // Channels that cannot be sampled run exactly, with the whole model.
+    noise::NoiseModel damping = thermal;
+    damping.set_generalized_amplitude_damping(1, 0.1, 0.05);
+    BOOST_CHECK(!damping.exact_channels_are_pauli_diagonal());
+    BOOST_CHECK(MaestroExecution::InjectsExactChannels(propagator, damping));
+    noise::NoiseModel correlated;
+    correlated.set_correlated_phase_flip(0, 1, 0.05, 0.5);
+    BOOST_CHECK(correlated.exact_channels_are_pauli_diagonal());
+    BOOST_CHECK(MaestroExecution::InjectsExactChannels(propagator, correlated));
+
+    auto circuit = std::make_shared<Circuits::Circuit<>>();
+    circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+    circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+    const auto resolve = [&](const noise::NoiseModel &model, std::optional<bool> exact = std::nullopt) {
+        return MaestroExecution::ResolveNoiseRealizations(std::nullopt, model, propagator, MaestroExecution::NoiseLayer::kCombined, 100, circuit, true, exact);
+    };
+    auto policy = resolve(pauli);
+    BOOST_CHECK(policy.exact_channels && !policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 1u);
+    policy = resolve(thermal);
+    BOOST_CHECK(!policy.exact_channels && policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 100u);
+    policy = resolve(thermal, true);
+    BOOST_CHECK(policy.exact_channels && !policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 1u);
+    policy = resolve(damping);
+    BOOST_CHECK(policy.exact_channels);
+    BOOST_CHECK_EQUAL(policy.realizations, 1u);
+    // A caller can still sample a Pauli model.
+    policy = resolve(pauli, false);
+    BOOST_CHECK(!policy.exact_channels);
+    BOOST_CHECK_EQUAL(policy.realizations, 100u);
+    // Coherent disorder is sampled around the exact channels.
+    auto coherent = pauli;
+    coherent.set_all_coherent_depolarizing(2, 0.02);
+    policy = resolve(coherent);
+    BOOST_CHECK(policy.exact_channels && policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 100u);
+
+    // An unrecorded reset is a channel there: the evolution stays deterministic
+    // and terminal measurements can be sampled from one recorded circuit.
+    circuit->AddOperation(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{0}));
+    circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}, {1, 1}}));
+    BOOST_CHECK(!MaestroExecution::HasStochasticEvolution(circuit, MaestroExecution::UsesExactQuantumChannels(propagator)));
+    BOOST_CHECK(MaestroExecution::HasStochasticEvolution(circuit, MaestroExecution::UsesExactQuantumChannels(gpu)));
+    BOOST_CHECK(!circuit->HasOpsAfterMeasurements(MakeSimulator(Method::kPauliPropagator, 2)->SupportsQuantumChannels()));
+}
+
+// Automatic evaluation judges the channels a circuit receives by what they do.
+// Relaxation that is the identity or unital only scales terms, relaxation on
+// qubits the circuit never gates is not injected at all, and a Kraus
+// instruction cannot be sampled.
+BOOST_AUTO_TEST_CASE(PauliPropagatorExactChannelPolicyFollowsTheCircuit)
+{
+    using Channel = Simulators::QuantumChannel;
+    using MaestroExecution::InjectsExactChannels;
+    MaestroExecution::SimulatorConfig propagator;
+    propagator.simulator_type = Simulators::SimulatorType::kQCSim;
+    propagator.simulation_type = Simulators::SimulationType::kPauliPropagator;
+    propagator.fixed_backend = true;
+    auto statevector = propagator;
+    statevector.simulation_type = Simulators::SimulationType::kStatevector;
+
+    // Equal populations make thermal and idle relaxation unital at any T2, and
+    // a zero T1 probability (an infinite T1) is the identity.
+    noise::NoiseModel unital;
+    unital.set_thermal_relaxation(0, 1.0, 1.0, 2.0, 0.5);
+    unital.set_thermal_relaxation_2q(1, 1.0, 1.0, 1.5, 0.5);
+    unital.set_idle_noise(0, 25.0, 30.0, 0.5);
+    unital.set_t1(2, 0.0);
+    unital.set_t1_from_time(3, 1.0, std::numeric_limits<double>::infinity());
+    BOOST_CHECK(unital.has_sampled_resets());
+    BOOST_CHECK(unital.exact_channels_are_pauli_diagonal());
+    BOOST_CHECK(InjectsExactChannels(propagator, unital));
+    for (const double population : {0.0, 0.4, 0.6, 1.0})
+    {
+        auto biased = unital;
+        biased.set_thermal_relaxation(0, 1.0, 1.0, 2.0, population);
+        BOOST_CHECK(!biased.exact_channels_are_pauli_diagonal());
+        BOOST_CHECK(!InjectsExactChannels(propagator, biased));
+        biased = unital;
+        biased.set_idle_noise(0, 25.0, 30.0, population);
+        BOOST_CHECK(!biased.exact_channels_are_pauli_diagonal());
+    }
+    auto damped = unital;
+    damped.set_t1(2, 1e-6);
+    BOOST_CHECK(!damped.exact_channels_are_pauli_diagonal());
+
+    // Relaxation is injected where the circuit gates or delays a qubit.
+    const auto extended = [](const std::shared_ptr<Circuits::Circuit<>> &base, const std::shared_ptr<Circuits::IOperation<>> &op) {
+        auto result = std::make_shared<Circuits::Circuit<>>(base->GetOperations());
+        result->AddOperation(op);
+        return result;
+    };
+    auto circuit = std::make_shared<Circuits::Circuit<>>();
+    circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+    circuit->AddOperation(std::make_shared<Circuits::RyGate<>>(0, 0.4));
+    noise::NoiseModel elsewhere;
+    elsewhere.set_all_depolarizing(3, 0.1);
+    elsewhere.set_t1(1, 0.2);
+    elsewhere.set_idle_noise(2, 25.0, 25.0, 0.1);
+    BOOST_CHECK(!elsewhere.exact_channels_are_pauli_diagonal());
+    BOOST_CHECK(elsewhere.exact_channels_are_pauli_diagonal_on(*circuit));
+    BOOST_CHECK(!InjectsExactChannels(propagator, elsewhere));
+    BOOST_CHECK(InjectsExactChannels(propagator, elsewhere, *circuit));
+    // Only a backend that applies channels exactly is asked.
+    BOOST_CHECK(!InjectsExactChannels(statevector, elsewhere, *circuit));
+    const auto resolve = [&](const std::shared_ptr<Circuits::Circuit<>> &target) {
+        return MaestroExecution::ResolveNoiseRealizations(std::nullopt, elsewhere, propagator, MaestroExecution::NoiseLayer::kCombined, 100, target, true);
+    };
+    auto policy = resolve(circuit);
+    BOOST_CHECK(policy.exact_channels && !policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 1u);
+    const auto gated = extended(circuit, std::make_shared<Circuits::CXGate<>>(0, 1));
+    const auto delayed = extended(circuit, std::make_shared<Circuits::Delay<>>(2, 1e-3));
+    for (const auto &relaxing : {gated, delayed})
+    {
+        BOOST_CHECK(!elsewhere.exact_channels_are_pauli_diagonal_on(*relaxing));
+        BOOST_CHECK(!InjectsExactChannels(propagator, elsewhere, *relaxing));
+        policy = resolve(relaxing);
+        BOOST_CHECK(!policy.exact_channels && policy.stochastic_noise);
+        BOOST_CHECK_EQUAL(policy.realizations, 100u);
+    }
+    // A delay of no duration relaxes nothing.
+    BOOST_CHECK(elsewhere.exact_channels_are_pauli_diagonal_on(*extended(circuit, std::make_shared<Circuits::Delay<>>(2, 0.0))));
+
+    // A Kraus instruction has no sampled form: the relaxation beside it is
+    // then exact too, as with a Kraus channel of the model. A Pauli channel
+    // instruction can be sampled and decides nothing.
+    const auto instruction = [](const Channel &channel) { return std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{0}, channel); };
+    const auto kraus = extended(gated, instruction(Channel::AmplitudeDamping(0.2)));
+    const auto pauli = extended(gated, instruction(Channel::Pauli(0.1, 0.0, 0.1)));
+    BOOST_CHECK(MaestroExecution::HasKrausInstruction(*kraus));
+    BOOST_CHECK(!MaestroExecution::HasKrausInstruction(*pauli));
+    BOOST_CHECK(InjectsExactChannels(propagator, elsewhere, *kraus));
+    BOOST_CHECK(!InjectsExactChannels(propagator, elsewhere, *pauli));
+    BOOST_CHECK(!InjectsExactChannels(statevector, elsewhere, *kraus));
+    policy = resolve(kraus);
+    BOOST_CHECK(policy.exact_channels && !policy.stochastic_noise);
+    BOOST_CHECK_EQUAL(policy.realizations, 1u);
+    // A nested instruction counts, and so does any circuit of several (the
+    // suffixes of a checkpoint): one that draws relaxation samples them all,
+    // unless one holds a Kraus instruction.
+    auto nested = std::make_shared<Circuits::Circuit<>>();
+    nested->AddOperation(kraus);
+    BOOST_CHECK(MaestroExecution::HasKrausInstruction(*nested));
+    using MaestroExecution::NoisyCircuits;
+    BOOST_CHECK(InjectsExactChannels(propagator, elsewhere, NoisyCircuits{circuit.get(), circuit.get()}));
+    BOOST_CHECK(!InjectsExactChannels(propagator, elsewhere, NoisyCircuits{circuit.get(), gated.get()}));
+    BOOST_CHECK(!InjectsExactChannels(propagator, elsewhere, NoisyCircuits{gated.get(), pauli.get()}));
+    BOOST_CHECK(InjectsExactChannels(propagator, elsewhere, NoisyCircuits{gated.get(), nested.get()}));
+}
+
+BOOST_AUTO_TEST_CASE(NoiseAddInfersExactChannelsOnThePauliPropagator)
+{
+    using Method = Simulators::SimulationType;
+    const auto network = [](Method method) {
+        auto result = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{2}, std::vector<size_t>{2});
+        result->Configure("seed", "9");
+        result->CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+        result->SetMaxSimulators(1);
+        return result;
+    };
+    auto circuit = std::make_shared<Circuits::Circuit<>>();
+    circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+    circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+    circuit->AddOperation(std::make_shared<Circuits::RyGate<>>(1, 0.7));
+    const std::vector<std::string> observables{"ZZ", "XX", "ZI", "IY"};
+
+    noise::NoiseModel pauli;
+    pauli.set_all_depolarizing(2, 0.1);
+    pauli.set_qubit_noise(0, 0.01, 0.03, 0.05);
+    pauli.set_2q_depolarizing(0, 1, 0.04);
+    pauli.set_phase_damping(1, 0.2);
+    noise::NoiseAdd add, reference;
+    add.seed(3);
+    reference.seed(3);
+    auto values = add.full_noise_estimate(circuit, network(Method::kPauliPropagator), 0, observables, pauli);
+    BOOST_CHECK(add.last_realization_policy().exact_channels);
+    BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
+    auto expected = reference.full_noise_estimate(circuit, network(Method::kDensityMatrix), 0, observables, pauli);
+    BOOST_REQUIRE_EQUAL(values.size(), expected.size());
+    for (size_t i = 0; i < values.size(); ++i)
+        BOOST_CHECK_SMALL(values[i] - expected[i], 1e-9);
+
+    // Relaxation is sampled by default and exact on request, with T1 < T2 kept.
+    noise::NoiseModel thermal;
+    thermal.set_thermal_relaxation(0, 1.0, 3.0, 5.0, 0.1);
+    thermal.set_thermal_relaxation(1, 1.0, 4.0, 2.0);
+    thermal.set_thermal_relaxation_2q(0, 2.0, 3.0, 5.0, 0.1);
+    thermal.set_thermal_relaxation_2q(1, 2.0, 4.0, 2.0);
+    int warnings = 0;
+    add.set_warning_handler([&](const std::string &) { ++warnings; });
+    add.full_noise_estimate(circuit, network(Method::kPauliPropagator), 0, observables, thermal, 4);
+    BOOST_CHECK(!add.last_realization_policy().exact_channels);
+    BOOST_CHECK_EQUAL(warnings, 1); // sampled: T2 is clamped to T1 on qubit 0
+    add.set_exact_channels(true);
+    values = add.full_noise_estimate(circuit, network(Method::kPauliPropagator), 0, observables, thermal);
+    BOOST_CHECK(add.last_realization_policy().exact_channels);
+    BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
+    BOOST_CHECK_EQUAL(warnings, 1);
+    expected = reference.full_noise_estimate(circuit, network(Method::kDensityMatrix), 0, observables, thermal);
+    for (size_t i = 0; i < values.size(); ++i)
+        BOOST_CHECK_SMALL(values[i] - expected[i], 1e-9);
+    add.set_automatic_channels();
+
+    // Channels with no sampled form were rejected on this method before.
+    noise::NoiseModel damping;
+    damping.set_generalized_amplitude_damping(0, 0.2, 0.1);
+    damping.set_correlated_phase_flip(0, 1, 0.05, 0.5);
+    values = add.full_noise_estimate(circuit, network(Method::kPauliPropagator), 0, observables, damping);
+    BOOST_CHECK(add.last_realization_policy().exact_channels);
+    BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 1u);
+    expected = reference.full_noise_estimate(circuit, network(Method::kDensityMatrix), 0, observables, damping);
+    for (size_t i = 0; i < values.size(); ++i)
+        BOOST_CHECK_SMALL(values[i] - expected[i], 1e-9);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
 
 // ---------------------------------------------------------------- method agreement
@@ -1948,12 +2235,15 @@ std::string Name(Method method)
     }
 }
 
-// The exact expectation values: one realization of the inferred exact channels.
-std::vector<double> ExactEstimate(const CircuitPtr &circuit, const noise::NoiseModel &model, bool combined, Method method)
+// The exact expectation values: one realization of the exact channels, which
+// are inferred from the backend unless the caller asks for them.
+std::vector<double> ExactEstimate(const CircuitPtr &circuit, const noise::NoiseModel &model, bool combined, Method method, bool request = false)
 {
     auto network = AgreementNetwork(method, 4, 5);
     noise::NoiseAdd add;
     add.seed(5);
+    if (request)
+        add.set_exact_channels(true);
     const auto values = combined ? add.full_noise_estimate(circuit, network, 0, kAgreementObservables, model)
                                  : add.noisy_estimate_montecarlo(circuit, network, 0, kAgreementObservables, model);
     BOOST_CHECK(add.last_realization_policy().exact_channels);
@@ -1979,6 +2269,9 @@ BatchedEstimate MonteCarloEstimate(const CircuitPtr &circuit, const noise::Noise
         auto network = AgreementNetwork(method, 4, seed + batch);
         noise::NoiseAdd add;
         add.seed(static_cast<unsigned>(seed * 1009 + batch));
+        // These are the sampled trajectories. The Pauli propagator would
+        // otherwise evaluate the Pauli model exactly: see ExactEstimate.
+        add.set_exact_channels(false);
         const auto values = combined ? add.full_noise_estimate(circuit, network, 0, kAgreementObservables, model, realizations)
                                      : add.noisy_estimate_montecarlo(circuit, network, 0, kAgreementObservables, model, realizations);
         BOOST_CHECK(!add.last_realization_policy().exact_channels);
@@ -2041,8 +2334,14 @@ BOOST_AUTO_TEST_CASE(NoiseAddCountsAgreeAcrossMethods)
         const auto reference = NoisyCounts(circuit, model, relaxation, Method::kDensityMatrix, true, kReferenceShots, 4, 4242);
         uint64_t seed = relaxation ? 200 : 100;
         for (const auto &test : cases)
-            CheckSameCounts(NoisyCounts(circuit, model, relaxation, test.method, test.exact, test.shots, 4, seed += 17), reference,
+        {
+            // The Pauli propagator applies the Pauli model's channels, all
+            // diagonal in the Pauli basis, to the observable: exact, in one
+            // realization. Relaxation keeps its sampled trajectories there.
+            const bool exact = test.exact || (test.method == Method::kPauliPropagator && !relaxation);
+            CheckSameCounts(NoisyCounts(circuit, model, relaxation, test.method, exact, test.shots, 4, seed += 17), reference,
                             Name(test.method) + (relaxation ? " relaxation" : " Pauli") + " counts vs density matrix");
+        }
         // Negative control: 1.5x noise on the trajectories is detected.
         const auto stronger = relaxation ? RelaxationModel(1.5) : PauliModel(1.5);
         CheckDifferentCounts(NoisyCounts(circuit, stronger, relaxation, Method::kStatevector, false, kAgreementShots, 4, seed + 1), reference,
@@ -2115,6 +2414,13 @@ BOOST_AUTO_TEST_CASE(NoiseAddEstimatesAgreeAcrossMethods)
         const auto mpo = ExactEstimate(circuit, model, relaxation, Method::kMatrixProductOperator);
         for (size_t i = 0; i < exact.size(); ++i)
             BOOST_CHECK_MESSAGE(std::abs(mpo[i] - exact[i]) < 1e-8, "MPO" << kind << " <" << kAgreementObservables[i] << ">: " << mpo[i] << " vs " << exact[i]);
+        // The Pauli propagator holds no mixed state, yet one realization of the
+        // channels applied to the observable gives the same ensemble average:
+        // inferred for the Pauli model, on request for relaxation.
+        const auto propagator = ExactEstimate(circuit, model, relaxation, Method::kPauliPropagator, relaxation);
+        for (size_t i = 0; i < exact.size(); ++i)
+            BOOST_CHECK_MESSAGE(std::abs(propagator[i] - exact[i]) < 1e-8,
+                                "Pauli propagator exact" << kind << " <" << kAgreementObservables[i] << ">: " << propagator[i] << " vs " << exact[i]);
         uint64_t seed = relaxation ? 700 : 600;
         for (const auto &test : cases)
         {
@@ -2144,6 +2450,9 @@ BOOST_AUTO_TEST_CASE(NoiseAddTrajectoryMethodsAgreeRealizationByRealization)
         auto network = AgreementNetwork(method, 4, 77);
         noise::NoiseAdd add;
         add.seed(78);
+        // Trajectories on every method: the Pauli propagator would otherwise
+        // apply this Pauli model exactly instead of sampling it.
+        add.set_exact_channels(false);
         return add.noisy_estimate_montecarlo(circuit, network, 0, kAgreementObservables, model, 200);
     };
     const auto reference = run(Method::kStatevector);

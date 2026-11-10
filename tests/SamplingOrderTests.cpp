@@ -180,13 +180,18 @@ void MultinomialBackendCounts(SimulationType method)
     // Tensor chains split counts for one distinct measured qubit only.
     const bool mps = method == SimulationType::kMatrixProductState || method == SimulationType::kMatrixProductOperator;
     const Types::qubits_vector qubits = mps ? Types::qubits_vector{1, 1, 1} : Types::qubits_vector{2, 1, 2};
-    sim->SetSeed(0);
-    const auto original = sim->SampleCounts(qubits, shots);
-    const auto originalNext = sim->SampleCountsMany(qubits, shots);
+    const auto draw = [&] {
+        sim->SetSeed(0);
+        return std::pair{sim->SampleCounts(qubits, shots), sim->SampleCountsMany(qubits, shots)};
+    };
+    const auto defaultCounts = draw();
+    sim->Configure("counts_policy", "auto");
+    Require(draw() == defaultCounts, "setting auto explicitly changed the default seeded stream");
 
     sim->Configure("counts_policy", "multinomial_v1");
-    sim->SetSeed(0);
-    const auto counts = sim->SampleCounts(qubits, shots);
+    const auto adaptive = draw();
+    Require(adaptive == defaultCounts, "seeded auto skipped eligible multinomial counts or changed the following RNG stream");
+    const auto &counts = adaptive.first;
     Require(counts.size() == 2 && counts.at(0) + counts.at(7) == shots, "multinomial sampling lost correlated or repeated bits");
     Require(std::abs(double(counts.at(7)) - .25 * shots) < 7 * std::sqrt(.1875 * shots), "wrong multinomial marginal");
     sim->SetSeed(0);
@@ -197,10 +202,14 @@ void MultinomialBackendCounts(SimulationType method)
     Require(many.size() == 2 && many.at(std::vector<bool>(80, false)) == counts.at(0) && many.at(std::vector<bool>(80, true)) == counts.at(7),
             "wide multinomial counts changed seeded counts or repeated-bit projection");
 
+    sim->Configure("counts_policy", "legacy");
+    const auto historical = draw();
+    Require(historical != adaptive, "explicit legacy counts used the adaptive sampler");
     sim->Configure("sampling_policy", "reproducible_v1");
-    sim->SetSeed(0);
-    Require(sim->SampleCounts(qubits, shots) == original && sim->SampleCountsMany(qubits, shots) == originalNext,
-            "pinning the seeded sampler changed the previous histogram or subsequent RNG stream");
+    sim->Configure("counts_policy", "auto");
+    Require(draw() == historical, "reproducible_v1 pin lost the ordinary seeded stream");
+    sim->Configure("counts_policy", "multinomial_v1");
+    Require(draw() == historical, "explicit multinomial policy overrode the low-level sampler pin");
 }
 
 void SingleSiteMPSMultinomial()
@@ -674,6 +683,7 @@ void ExtendedMultinomial(bool approximate)
     const double p = (1. - std::sqrt(.5)) / 2.;
     const auto close = [&](size_t hits) { return std::abs(hits - shots * p) < 7. * std::sqrt(shots * p * (1. - p)); };
     const Types::qubits_vector selected{2, 0, 2};
+    sim.Configure("counts_policy", "legacy");
     sim.SetSeed(731);
     const auto original = sim.SampleCounts(selected, shots);
     const auto next = sim.SampleCountsMany(selected, 33);

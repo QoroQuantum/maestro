@@ -205,12 +205,14 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
     const json::object mixedStateQueries{{"operations", json::array{"density_matrix_overlap", "fidelity_with_statevector"}},
                                          {"supported_configurations", Configurations([](const auto &config) { return MixedStateQueryApplies(config); })},
                                          {"max_target_statevector_qubits", MaxTargetStatevectorQubits}};
-    const auto mixedConfigurations = Configurations([](const auto &config) { return Mixed(config); });
+    // Exact noise needs exact channels, not a density matrix to read back:
+    // the QCSim Pauli propagator is included.
+    const auto exactConfigurations = Configurations([](const auto &config) { return ExactNoiseApplies(config); });
     // The noise block: how realization counts resolve and what is reported.
     const json::object noise{
         {"modes", json::array{"combined", "pauli", "coherent", "analytical"}},
         {"evaluations", json::array{"auto", "exact", "trajectories"}},
-        {"exact_configurations", mixedConfigurations},
+        {"exact_configurations", exactConfigurations},
         {"realizations",
          json::object{
              {"accepts", json::array{"positive_integer", "null", "auto"}},
@@ -226,7 +228,7 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
         {"checkpoint_prefix", json::object{{"field", "prefix"},
                                            {"operations", json::array{"checkpoint_batch"}},
                                            {"requires", "deterministic exact evaluation: no coherent or correlated layers"},
-                                           {"supported_configurations", mixedConfigurations},
+                                           {"supported_configurations", exactConfigurations},
                                            {"noise_scope", json::array{"suffix_only_ideal_prefix", "prefix_and_suffix"}}}}};
     const json::object estimate{{"evaluations", json::array{"deterministic", "trajectory_average"}},
                                 {"dynamic_measurement_trajectories", kMeasurementTrajectories},
@@ -234,7 +236,7 @@ inline json::object NativeCapabilities(const std::set<std::string> &operations)
                                 {"single_stochastic_realization_standard_errors", "null"}};
     const json::object noisyFidelity{{"modes", json::array{"combined", "pauli", "coherent"}},
                                      {"supported_configurations", Configurations([](const auto &) { return true; })},
-                                     {"exact_configurations", mixedConfigurations},
+                                     {"exact_configurations", exactConfigurations},
                                      {"mixed_state_evaluation", "P(0...0) after the ideal circuit's adjoint"},
                                      {"single_stochastic_realization_standard_error", "null"}};
     const json::object automaticSelection{{"candidates", "simulator.candidates with selection automatic"},

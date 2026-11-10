@@ -27,7 +27,7 @@ for each selected component's minimum scratch allowance and a shared draw batch.
 
 | Policy | Count execution |
 | --- | --- |
-| `auto` | With no simulator or noise seed, use eligible frames as described below. Eligible QCSim terminal count batches can also use multinomial sampling. Explicit seeds keep their earlier sequence. |
+| `auto` | Use multinomial sampling for eligible QCSim terminal count batches with or without an explicit seed. Unseeded requests can also use frames and direct trajectories as described below. |
 | `legacy` | Keep the ordinary count/trajectory executor and never select the new frame-count path. |
 | `frame_v1` | Opt into frame counts even with explicit seeds. Other requested QCSim methods can use frames when backend optimization permits a stabilizer implementation. Unsupported requests fall back. |
 | `multinomial_v1` | Allow the terminal sampler to draw counts by conditional binomials, including with explicit seeds. Small batches and unsupported distributions use the existing backend sampler. |
@@ -37,7 +37,9 @@ path-integral rows, a single MPS output bit, a single bit of an MPO without a bo
 cap or truncation threshold, and small extended-stabilizer
 readouts. Rows expected to receive at most two shots are grouped per block, so a
 concentrated distribution with a long tail of tiny amplitudes also qualifies.
-A bare simulator opts in with `Configure("counts_policy", "multinomial_v1")`.
+A bare simulator applies the same cost thresholds to `SampleCounts` and
+`SampleCountsMany` by default, including after `SetSeed`. A QCSim composite
+with one component forwards its count request to that component's sampler.
 An explicit low-level `sampling_policy` pins the earlier sampler. Seeded
 `multinomial_v1` sequences use Boost.Random's binomial generator. The
 [implementation report](multinomial-sampling.md) describes the measured
@@ -69,11 +71,11 @@ same holds for a C++ `NoiseAdd` network whose optimization candidates exclude
 it.
 
 Seed zero is explicit, including through the Python `seed` alias for
-`noise_seed`. Under `auto`, a supplied `config.seed` or `noise_seed` therefore
-retains the existing seeded count sequence. `frame_v1` has its own seeded
-sequence and does not promise the histogram from the trajectory executor.
-Repeated requests with the same explicit seeds, policy and logical inputs
-reproduce that policy's results. `counts_policy` is a writable, validated
+`noise_seed`. Repeat the same request on the same build with the same seeds
+and configuration to reproduce its histogram. Eligible seeded `auto` counts
+can differ from older releases. Use `counts_policy="legacy"` to select the
+previous per-shot count sampler. Ordered shot requests keep their separate
+sampling path. `counts_policy` is a writable, validated
 configuration property and survives pickling.
 
 ```python
@@ -230,8 +232,8 @@ The native JSON request API accepts the setting in
 `"frame_v1"` policy in
 `execution_metadata.configured_options.counts_policy`, along with its returned
 top-level `seed` and, when noise is enabled, `noise.seed`. Replay those seeds
-and the resolved policy together: supplying a returned seed while leaving
-`counts_policy="auto"` selects the seeded ordinary path instead. Keep the
+and the resolved policy together. In particular, a returned seed with
+`auto` skips automatic frame selection. Keep the
 circuit, noise configuration, backend selection and logical request unchanged.
 Native C++ `NoiseAdd` helpers accept the same network configuration key; their
 frame optimization is limited to supported local single-host execution. Their
@@ -438,8 +440,9 @@ setting can change the seeded sequence.
 CDF blocks have fixed boundaries and a fixed summation order. Serial sorted
 sampling scatters results back to their original shot positions. Parallel
 sampling reads immutable tables, uses private integer counters, and consumes
-the same serially generated uniform sequence. The new batch kernels convert
-exactly one `mt19937_64` word per shot to a specified 53-bit value in `[0,1)`.
+the same serially generated uniform sequence. The per-shot CDF and alias
+samplers convert one `mt19937_64` word per shot to a 53-bit value in `[0,1)`.
+Eligible multinomial batches consume draws for conditional counts and rare-row placement.
 Packed and bit-vector count APIs select the same plan and consume the same RNG
 stream for the same request. Reordered and duplicate selected qubits retain
 their caller-specified positions.
@@ -657,8 +660,7 @@ number of stored rows, independent of the number of qubits.
   draws from Maestro's batch stream, one draw per shot under
   `sampling_policy=legacy`. That shifts later batches on that simulator, while
   QCSim's stream is unaffected. Reseed the simulator to replay an earlier
-  sequence after such a call. This is the one exception to replaying earlier
-  seeded counts.
+  sequence after such a call.
 * Alias construction is selected when `S >= max(512, M/4)` and its table fits the
   explicit scratch budget. Otherwise CDF lookup is used. Small CDFs can retain
   within-block cumulative probabilities; large serial CDF batches sort uniforms

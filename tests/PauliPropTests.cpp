@@ -1182,4 +1182,207 @@ BOOST_DATA_TEST_CASE_F(PauliSimMeasurementStressFixture, MeasurementBufferBookke
 }
 #endif
 
+namespace
+{
+std::shared_ptr<Simulators::ISimulator> NoiseTestSimulator(Simulators::SimulationType method, size_t qubits, const char *seed = "5")
+{
+    auto simulator = Simulators::SimulatorsFactory::CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+    simulator->AllocateQubits(qubits);
+    simulator->Initialize();
+    simulator->Configure("seed", seed);
+    return simulator;
+}
+
+// An entangled, non-Clifford state with weight on every Pauli axis.
+void PrepareNoiseTestState(Simulators::ISimulator &simulator)
+{
+    simulator.ApplyH(0);
+    simulator.ApplyRy(1, 0.7);
+    simulator.ApplyCX(0, 1);
+    simulator.ApplyRx(2, -0.4);
+    simulator.ApplyCX(1, 2);
+    simulator.ApplyRz(0, 0.3);
+    simulator.ApplyT(2);
+}
+
+// Every Pauli expectation and basis probability of two three-qubit simulators.
+void CheckSameEnsemble(Simulators::ISimulator &propagator, Simulators::ISimulator &density, const std::string &context)
+{
+    for (unsigned label = 0; label < 64; ++label)
+    {
+        std::string pauli(3, 'I');
+        for (int q = 0; q < 3; ++q)
+            pauli[q] = "IXYZ"[(label >> (2 * q)) & 3];
+        const double expected = density.ExpectationValue(pauli), value = propagator.ExpectationValue(pauli);
+        BOOST_CHECK_MESSAGE(std::abs(value - expected) < 1e-9, context << " <" << pauli << ">: " << value << " vs density matrix " << expected);
+    }
+    for (Types::qubit_t outcome = 0; outcome < 8; ++outcome)
+    {
+        const double expected = density.Probability(outcome), value = propagator.Probability(outcome);
+        BOOST_CHECK_MESSAGE(std::abs(value - expected) < 1e-9, context << " P(" << outcome << "): " << value << " vs density matrix " << expected);
+    }
+}
+} // namespace
+
+// The propagator applies the adjoint of a channel to the observable. For every
+// channel family, and for two-qubit channels that change when their qubits are
+// exchanged, it must agree with the density matrix, which applies the channel
+// to the state through the same interface and target order.
+BOOST_AUTO_TEST_CASE(QuantumChannelsMatchTheDensityMatrix)
+{
+    using Channel = Simulators::QuantumChannel;
+    using Method = Simulators::SimulationType;
+
+    struct Case
+    {
+        const char *name;
+        Types::qubits_vector targets;
+        Channel channel;
+    };
+
+    // II, XI, YI, ZI, IX, ...: base-4 digit i acts on targets[i].
+    std::vector<double> pair(16, 0.0);
+    pair[0] = 0.7;
+    pair[1] = 0.12;  // X on targets[0]
+    pair[12] = 0.08; // Z on targets[1]
+    pair[6] = 0.1;   // Y on targets[0], X on targets[1]
+    // Amplitude damping on targets[0] and a phase flip on targets[1], with
+    // targets[0] in the low bit of the Kraus index.
+    const auto flip = Channel::PhaseFlip(0.2), damping = Channel::AmplitudeDamping(0.3);
+    Channel::KrausOperators product;
+    for (const auto &second : flip.GetKrausOperators())
+        for (const auto &first : damping.GetKrausOperators())
+        {
+            Channel::Matrix kraus = Channel::Matrix::Zero(4, 4);
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 4; ++c)
+                    kraus(r, c) = second(r >> 1, c >> 1) * first(r & 1, c & 1);
+            product.push_back(kraus);
+        }
+    const std::vector<Case> cases{{"Pauli with px != py != pz", {1}, Channel::Pauli(0.05, 0.1, 0.2)},
+                                  {"depolarizing", {0}, Channel::Depolarizing(0.3)},
+                                  {"complete depolarizing", {2}, Channel::Depolarizing(0.75)},
+                                  {"bit flip with certainty", {1}, Channel::BitFlip(1.0)},
+                                  {"phase damping", {1}, Channel::PhaseDamping(0.4)},
+                                  {"amplitude damping", {2}, Channel::AmplitudeDamping(0.35)},
+                                  {"complete amplitude damping", {0}, Channel::AmplitudeDamping(1.0)},
+                                  {"generalized amplitude damping", {0}, Channel::GeneralizedAmplitudeDamping(0.3, 0.2)},
+                                  {"thermal relaxation with T1 < T2", {1}, Channel::ThermalRelaxation(1.0, 3.0, 5.0, 0.1)},
+                                  {"two-qubit Pauli", {2, 0}, Channel::Pauli(pair)},
+                                  {"two-qubit Pauli, exchanged", {0, 2}, Channel::Pauli(pair)},
+                                  {"two-qubit depolarizing", {0, 2}, Channel::TwoQubitDepolarizing(0.2)},
+                                  {"correlated phase flip", {1, 2}, Channel::CorrelatedPhaseFlip(0.1, 0.6)},
+                                  {"two-qubit Kraus", {2, 1}, Channel(product)},
+                                  {"two-qubit Kraus, exchanged", {1, 2}, Channel(product)}};
+    for (const auto &test : cases)
+    {
+        auto propagator = NoiseTestSimulator(Method::kPauliPropagator, 3), density = NoiseTestSimulator(Method::kDensityMatrix, 3);
+        BOOST_TEST(propagator->SupportsQuantumChannels());
+        for (auto *simulator : {propagator.get(), density.get()})
+        {
+            PrepareNoiseTestState(*simulator);
+            simulator->ApplyQuantumChannel(test.targets, test.channel);
+            // Gates after the channel: its adjoint then meets an observable
+            // that has already spread over the register.
+            simulator->ApplyCX(2, 0);
+            simulator->ApplyRy(1, 1.1);
+        }
+        CheckSameEnsemble(*propagator, *density, test.name);
+    }
+
+    auto propagator = NoiseTestSimulator(Method::kPauliPropagator, 2);
+    BOOST_CHECK_THROW(propagator->ApplyQuantumChannel({0, 1}, Channel::BitFlip(0.1)), std::invalid_argument);
+    BOOST_CHECK_THROW(propagator->ApplyQuantumChannel({2}, Channel::BitFlip(0.1)), std::invalid_argument);
+    BOOST_CHECK_THROW(propagator->ApplyQuantumChannel({1, 1}, Channel::TwoQubitDepolarizing(0.1)), std::invalid_argument);
+    BOOST_CHECK_THROW(propagator->ApplyQuantumChannel({}, Channel::BitFlip(0.1)), std::invalid_argument);
+    // A rejected channel records nothing.
+    BOOST_CHECK_CLOSE(propagator->ExpectationValue("ZZ"), 1.0, 1e-9);
+}
+
+// An unrecorded reset is a channel: no outcome is drawn, so it is independent
+// of the seed, and the simulator keeps describing the whole ensemble.
+BOOST_AUTO_TEST_CASE(ResetIsADeterministicChannel)
+{
+    using Method = Simulators::SimulationType;
+    auto first = NoiseTestSimulator(Method::kPauliPropagator, 3, "1"), second = NoiseTestSimulator(Method::kPauliPropagator, 3, "2");
+    auto density = NoiseTestSimulator(Method::kDensityMatrix, 3);
+    for (auto *simulator : {first.get(), second.get(), density.get()})
+    {
+        PrepareNoiseTestState(*simulator);
+        simulator->ApplyReset({1});
+        simulator->ApplyCX(1, 0);
+        simulator->ApplyReset({0, 2});
+        simulator->ApplyH(0);
+        simulator->ApplyCX(0, 2);
+    }
+    CheckSameEnsemble(*first, *density, "reset");
+    for (const char *pauli : {"XIX", "ZIZ", "IZI", "XXX", "YZY"})
+        BOOST_CHECK_EQUAL(first->ExpectationValue(pauli), second->ExpectationValue(pauli));
+    // A Bell pair after the resets, and qubit 1 left in a mixed state.
+    BOOST_CHECK_SMALL(first->ExpectationValue("XIX") - 1.0, 1e-9);
+    BOOST_CHECK_SMALL(first->ExpectationValue("ZIZ") - 1.0, 1e-9);
+
+    // The same circuit samples from one recorded program, with no replay.
+    const auto counts = first->SampleCounts({0, 1, 2}, 4000);
+    size_t correlated = 0;
+    for (const auto &[outcome, count] : counts)
+        if ((outcome & 1) == ((outcome >> 2) & 1))
+            correlated += count;
+    BOOST_CHECK_EQUAL(correlated, 4000u);
+    CheckSameEnsemble(*first, *density, "reset after sampling");
+
+    // A target outside the register fails the whole call: no qubit is reset.
+    auto oneQubit = NoiseTestSimulator(Method::kPauliPropagator, 1);
+    oneQubit->ApplyX(0);
+    BOOST_CHECK_THROW(oneQubit->ApplyReset({0, 1}), std::out_of_range);
+    BOOST_CHECK_SMALL(oneQubit->Probability(1) - 1.0, 1e-12);
+    oneQubit->ApplyReset({0});
+    BOOST_CHECK_SMALL(oneQubit->Probability(0) - 1.0, 1e-12);
+}
+
+// The cost model: a channel that is diagonal in the Pauli basis and a reset
+// act in place and never multiply the terms; a damping channel may add one.
+BOOST_AUTO_TEST_CASE(ChannelCostsFollowTheirBranching)
+{
+    using Channel = Simulators::QuantumChannel;
+    const auto cost = [](const std::shared_ptr<Circuits::IOperation<>> &noise) {
+        auto circuit = std::make_shared<Circuits::Circuit<>>();
+        circuit->AddOperation(std::make_shared<Circuits::RxGate<>>(0, 0.3));
+        if (noise)
+            circuit->AddOperation(noise);
+        return Simulators::QcsimPauliPropagator::GetCost(circuit);
+    };
+    const auto channel = [](const Types::qubits_vector &targets, const Channel &value) {
+        return std::make_shared<Circuits::QuantumChannelOperation<>>(targets, value);
+    };
+    // The rotation alone: 2 for its pass, 2 terms to sum.
+    const double ideal = cost(nullptr);
+    BOOST_CHECK_CLOSE(ideal, 4.0, 1e-9);
+    // In place: half a unit per qubit, and the term count is unchanged.
+    BOOST_CHECK_CLOSE(cost(channel({0}, Channel::Depolarizing(0.1))), ideal + 0.5, 1e-9);
+    BOOST_CHECK_CLOSE(cost(channel({0, 1}, Channel::TwoQubitDepolarizing(0.1))), ideal + 1.0, 1e-9);
+    // Phase damping is built from Kraus operators but is diagonal all the same.
+    BOOST_CHECK_CLOSE(cost(channel({0}, Channel::PhaseDamping(0.2))), ideal + 0.5, 1e-9);
+    // So is thermal relaxation towards equal populations, at any T2 it allows:
+    // the propagator must find it diagonal where the noise policy says it is.
+    BOOST_CHECK_CLOSE(cost(channel({0}, Channel::ThermalRelaxation(1.0, 1.0, 2.0, 0.5))), ideal + 0.5, 1e-9);
+    BOOST_CHECK_CLOSE(cost(channel({0}, Channel::ThermalRelaxation(0.3, 2.0, 1.5, 0.5))), ideal + 0.5, 1e-9);
+    BOOST_CHECK_CLOSE(cost(channel({0}, Channel::ThermalRelaxation(7.0, 3.0, 6.0, 0.5))), ideal + 0.5, 1e-9);
+    BOOST_CHECK_GT(cost(channel({0}, Channel::ThermalRelaxation(1.0, 1.0, 2.0, 0.4))), ideal + 2.0);
+    BOOST_CHECK_CLOSE(cost(std::make_shared<Circuits::Reset<>>(Types::qubits_vector{0})), ideal + 0.5, 1e-9);
+    // Damping sends Z to a mix of I and Z: two outputs, a small lasting growth.
+    const double damped = cost(channel({0}, Channel::AmplitudeDamping(0.2)));
+    BOOST_CHECK_GT(damped, ideal + 2.0);
+    BOOST_CHECK_LT(damped, ideal + 2.5);
+    // Channels after every gate must not compound like rotations do.
+    auto noisy = std::make_shared<Circuits::Circuit<>>(), clean = std::make_shared<Circuits::Circuit<>>();
+    for (int gate = 0; gate < 200; ++gate)
+    {
+        noisy->AddOperation(std::make_shared<Circuits::HadamardGate<>>(gate % 4));
+        clean->AddOperation(std::make_shared<Circuits::HadamardGate<>>(gate % 4));
+        noisy->AddOperation(channel({static_cast<Types::qubit_t>(gate % 4)}, Channel::Depolarizing(0.01)));
+    }
+    BOOST_CHECK_CLOSE(Simulators::QcsimPauliPropagator::GetCost(noisy), Simulators::QcsimPauliPropagator::GetCost(clean) + 100.0, 1e-9);
+}
+
 BOOST_AUTO_TEST_SUITE_END()

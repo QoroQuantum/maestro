@@ -1344,6 +1344,61 @@ class NoiseModel
     }
 
     /**
+     * True if every channel that exact injection applies is diagonal in the
+     * Pauli basis: Pauli and depolarizing channels, dephasing, phase damping
+     * and correlated phase flips. Such a channel only scales a propagated
+     * Pauli term. Relaxation towards a state (T1, thermal or idle relaxation
+     * with a finite T1, generalized amplitude damping) is not diagonal: it
+     * also sends Z to the identity, which adds terms. Caller-supplied Kraus
+     * maps are counted as not diagonal.
+     *
+     * Relaxation is judged by the channel it applies, not by its kind: a
+     * zero T1 probability is the identity, and thermal or idle relaxation
+     * towards equal populations (excited_population 0.5) is unital, so it
+     * only scales. exact_channels_are_pauli_diagonal_on() counts only the
+     * relaxation one circuit draws.
+     */
+    bool exact_channels_are_pauli_diagonal() const
+    {
+        if (!generalized_amplitude_damping_.empty() || !kraus_channels_.empty())
+            return false;
+        for (const auto *rates : {&t1_, &t1_2q_})
+            for (const auto &entry : *rates)
+                if (entry.second != 0.0)
+                    return false;
+        for (const auto *params : {&thermal_relaxation_params_, &thermal_relaxation_params_2q_})
+            for (const auto &entry : *params)
+                if (sends_z_to_identity_(entry.second))
+                    return false;
+        for (const auto &entry : idle_noise_)
+            if (!std::isinf(entry.second.t1) && entry.second.excited_population != 0.5)
+                return false;
+        return true;
+    }
+
+    /**
+     * exact_channels_are_pauli_diagonal() for one circuit: true if the
+     * channels exact injection adds to it are all diagonal in the Pauli
+     * basis. Relaxation on qubits the circuit never gates, and idle
+     * relaxation without a positive delay, adds nothing.
+     */
+    bool exact_channels_are_pauli_diagonal_on(const Circuits::Circuit<double> &circuit) const
+    {
+        if (!generalized_amplitude_damping_.empty() || !kraus_channels_.empty())
+            return false;
+        return !any_relaxation_site_(
+            circuit,
+            [this](int q, bool multi) {
+                const auto *params = get_thermal_relaxation_params(q, multi);
+                return get_t1_for_gate(q, multi) != 0.0 || (params && sends_z_to_identity_(*params));
+            },
+            [this](int q, double duration) {
+                const auto *idle = get_idle_noise(q);
+                return idle && sends_z_to_identity_(ThermalRelaxation{duration, idle->t1, idle->t2, idle->excited_population});
+            });
+    }
+
+    /**
      * True iff compute_damping() captures every layer that affects Pauli
      * expectations. Readout is ignored (it is a classical post-measurement
      * channel). Thermal, T1, gate-type Pauli, 2Q depolarizing, phase damping,
@@ -1539,6 +1594,13 @@ class NoiseModel
     {
         const auto *idle = get_idle_noise(q);
         return idle && !ThermalRelaxation{duration, idle->t1, idle->t2, idle->excited_population}.sampled_realization_is_exact();
+    }
+
+    // Whether the exact relaxation channel maps Z to a*I + b*Z with a != 0,
+    // which adds Pauli terms: a = decay_probability * (1 - 2 * excited_population).
+    static bool sends_z_to_identity_(const ThermalRelaxation &relaxation)
+    {
+        return relaxation.decay_probability() > 0.0 && relaxation.excited_population != 0.5;
     }
 
     // Where sampled injection relaxes qubits, as inject_noise_impl_ walks the
@@ -2025,7 +2087,7 @@ inline void append_sampled_pauli_channel_(std::shared_ptr<Circuits::Circuit<doub
     const auto &probabilities = channel_op->GetChannel().GetPauliProbabilities();
     if (probabilities.empty())
         throw std::invalid_argument("Only Pauli channels can be sampled on pure-state backends; use a "
-                                    "density-matrix or MPO backend for general Kraus channels");
+                                    "density-matrix or MPO backend, or the QCSim Pauli propagator, for general Kraus channels");
 
     std::uniform_real_distribution<double> dist(0.0, 1.0);
     double r = dist(rng);
@@ -2170,7 +2232,8 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_noise_impl_(const std::
     nm.EnsureNoT1ThermalStack();
     if (!exact_channels && nm.has_additional_quantum_channels())
         throw std::invalid_argument("Generalized amplitude damping, correlated phase flips and arbitrary "
-                                    "Kraus channels require a density-matrix or MPO exact-noise backend");
+                                    "Kraus channels require a density-matrix or MPO exact-noise backend, or the QCSim Pauli "
+                                    "propagator");
 
     auto out = std::make_shared<Circuits::Circuit<double>>();
     std::uniform_real_distribution<double> dist(0.0, 1.0);
@@ -2650,7 +2713,8 @@ inline std::shared_ptr<Circuits::Circuit<double>> inject_combined_noise_impl_(co
     nm.EnsureNoT1ThermalStack();
     if (!exact_channels && nm.has_additional_quantum_channels())
         throw std::invalid_argument("Generalized amplitude damping, correlated phase flips and arbitrary "
-                                    "Kraus channels require a density-matrix or MPO exact-noise backend");
+                                    "Kraus channels require a density-matrix or MPO exact-noise backend, or the QCSim Pauli "
+                                    "propagator");
 
     auto out = std::make_shared<Circuits::Circuit<double>>();
     std::uniform_real_distribution<double> dist(0.0, 1.0);

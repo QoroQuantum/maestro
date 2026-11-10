@@ -22,6 +22,7 @@ checks reject noise 1.5 times stronger than the reference's.
 """
 
 import math
+import warnings
 
 import numpy as np
 import pytest
@@ -286,6 +287,15 @@ def _check_ran(result, backend, method, strategy=None):
         assert result.get("sampling_strategy") == strategy, result.get("sampling_strategy")
 
 
+def _propagates_exactly(backend, method):
+    """The QCSim Pauli propagator applies channels to the observable it propagates.
+
+    Channels diagonal in the Pauli basis (the Pauli model) are then exact in one
+    realization by default. Relaxation keeps its sampled trajectories there.
+    """
+    return backend == B.QCSim and method == S.PauliPropagator
+
+
 def _execute(circuit, model, entry, backend, method, shots, seed, exact, **options):
     """Counts from one method. Trajectories draw an independent realization per shot."""
     config = _config(method, backend, seed=seed, **options)
@@ -347,6 +357,7 @@ def relaxation_reference():
 @pytest.mark.parametrize("backend,method,exact,shots,options,strategy", METHODS)
 def test_pauli_noise_counts_match_density_matrix(pauli_reference, backend, method, exact, shots, options, strategy):
     _skip_missing(backend)
+    exact = exact or _propagates_exactly(backend, method)
     result = _execute(_circuit(), _pauli_model(), "noisy_execute", backend, method, shots, seed=_seed(backend, method, 11), exact=exact,
                       **options)
     _check_ran(result, backend, method, strategy)
@@ -472,6 +483,8 @@ def test_estimates_match_density_matrix(exact_estimates, backend, method, exact,
     options = {"precision": "double"} if backend == B.Gpu else {}
     seed = _seed(backend, method, 31)
     config = _config(method, backend, seed=seed, **options)
+    if model_name == "pauli" and _propagates_exactly(backend, method):
+        exact, realizations = True, None
     if model_name == "pauli":
         result = _circuit(False).noisy_estimate_montecarlo(OBSERVABLES, _pauli_model(), realizations, config, noise_seed=seed + 1000)
     else:
@@ -486,7 +499,11 @@ def test_estimates_match_density_matrix(exact_estimates, backend, method, exact,
         _assert_estimates_match_exact(result, exact_estimates[model_name], label)
 
 
-PURE_STATE_METHODS = [S.Statevector, S.MatrixProductState, S.TensorNetwork, S.PauliPropagator, S.PathIntegral, S.ExtendedStabilizer]
+# The Pauli propagator is absent: it evaluates this Pauli model exactly rather
+# than sampling it (test_pauli_propagator_noise_evaluation). Its trajectory
+# path is compared realization by realization in the C++ suite, where
+# NoiseAdd.set_exact_channels(False) selects it.
+PURE_STATE_METHODS = [S.Statevector, S.MatrixProductState, S.TensorNetwork, S.PathIntegral, S.ExtendedStabilizer]
 
 
 def test_trajectory_methods_agree_realization_by_realization():
@@ -504,6 +521,120 @@ def test_trajectory_methods_agree_realization_by_realization():
     for method, result in results.items():
         assert result["expectation_values"] == pytest.approx(reference["expectation_values"], abs=1e-9), method.name
         assert result["realization_standard_errors"] == pytest.approx(reference["realization_standard_errors"], abs=1e-9), method.name
+
+
+def test_pauli_propagator_noise_evaluation(exact_estimates):
+    """Which models the QCSim Pauli propagator evaluates exactly by default."""
+    config = _config(S.PauliPropagator, seed=47)
+    # Channels diagonal in the Pauli basis: one exact realization.
+    result = _circuit(False).noisy_estimate_montecarlo(OBSERVABLES, _pauli_model(), None, config, noise_seed=49)
+    assert result["noise_evaluation"] == "exact_channels" and result["noise_realizations"] == 1
+    assert result["estimate_evaluation"] == "deterministic"
+    assert result["expectation_values"] == pytest.approx(exact_estimates["pauli"], abs=1e-8)
+    # An explicit count is honored and changes nothing: every realization is the ensemble.
+    repeated = _circuit(False).noisy_estimate_montecarlo(OBSERVABLES, _pauli_model(), 3, config, noise_seed=49)
+    assert repeated["noise_realizations"] == 3
+    assert repeated["expectation_values"] == pytest.approx(result["expectation_values"], abs=1e-12)
+    # Relaxation also sends Z to the identity: it keeps its sampled realizations.
+    result = _circuit(False, delays=True).full_noise_estimate(OBSERVABLES, _relaxation_model(), None, config, noise_seed=49)
+    assert result["noise_evaluation"] == "trajectories" and result["noise_realizations"] == 100
+    # Channels with no sampled form, rejected on this method before, run exactly.
+    damping = maestro.NoiseModel()
+    damping.set_generalized_amplitude_damping(0, 0.2, 0.1)
+    damping.set_correlated_phase_flip(1, 2, 0.05, 0.5)
+    result = _circuit(False).full_noise_estimate(OBSERVABLES, damping, None, config, noise_seed=49)
+    assert result["noise_evaluation"] == "exact_channels" and result["noise_realizations"] == 1
+    reference = _circuit(False).full_noise_estimate(OBSERVABLES, damping, None, _config(S.DensityMatrix), noise_seed=49)
+    assert result["expectation_values"] == pytest.approx(reference["expectation_values"], abs=1e-8)
+    # Terminal counts come from the one noisy circuit as well.
+    counts = _circuit().noisy_execute(_pauli_model(), config=config, shots=500, noise_seed=49)
+    assert counts["noise_evaluation"] == "exact_channels" and counts["noise_realizations"] == 1
+
+
+def test_pauli_propagator_judges_relaxation_by_its_channel():
+    """Relaxation that only scales Pauli terms, or never acts on the circuit, is exact by default."""
+    config = _config(S.PauliPropagator, seed=47)
+    dense = _config(S.DensityMatrix)
+
+    def estimate(model, circuit, on=config):
+        return circuit.full_noise_estimate(OBSERVABLES, model, None, on, noise_seed=49)
+
+    # Equal populations make thermal and idle relaxation unital. T2 above T1 is
+    # kept: sampled relaxation would clamp it to T1 and warn.
+    unital = maestro.NoiseModel()
+    for q in range(4):
+        unital.set_thermal_relaxation(q, 1.0, 20.0, 30.0, 0.5)
+        unital.set_thermal_relaxation_2q(q, 2.5, 20.0, 30.0, 0.5)
+    unital.set_idle_noise(3, 30.0, 40.0, 0.5)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        result = estimate(unital, _circuit(False, delays=True))
+    assert result["noise_evaluation"] == "exact_channels" and result["noise_realizations"] == 1
+    assert result["estimate_evaluation"] == "deterministic"
+    reference = estimate(unital, _circuit(False, delays=True), dense)
+    assert result["expectation_values"] == pytest.approx(reference["expectation_values"], abs=1e-8)
+    # Unequal populations send Z to the identity: sampled again, T2 clamped.
+    biased = maestro.NoiseModel()
+    biased.set_thermal_relaxation(0, 1.0, 20.0, 30.0, 0.4)
+    with pytest.warns(RuntimeWarning, match="T2 clamped to T1"):
+        result = estimate(biased, _circuit(False))
+    assert result["noise_evaluation"] == "trajectories" and result["noise_realizations"] == 100
+
+    # Relaxation on a qubit the circuit never gates, a zero T1 probability and
+    # idle relaxation without a delay add no channel at all.
+    spectator = maestro.NoiseModel()
+    spectator.set_all_depolarizing(4, 0.01)
+    spectator.set_t1(7, 0.2)
+    spectator.set_t1(0, 0.0)
+    spectator.set_idle_noise(1, 25.0, 25.0, 0.1)
+    result = estimate(spectator, _circuit(False))
+    assert result["noise_evaluation"] == "exact_channels" and result["noise_realizations"] == 1
+    reference = estimate(spectator, _circuit(False), dense)
+    assert result["expectation_values"] == pytest.approx(reference["expectation_values"], abs=1e-8)
+    # A delay on the idle qubit draws its relaxation: trajectories again.
+    waiting = _circuit(False)
+    waiting.delay(1, 2.0)
+    result = estimate(spectator, waiting)
+    assert result["noise_evaluation"] == "trajectories" and result["noise_realizations"] == 100
+    # Counts follow the same rule.
+    counts = _circuit().noisy_execute(spectator, config=config, shots=500, noise_seed=49)
+    assert counts["noise_evaluation"] == "exact_channels" and counts["noise_realizations"] == 1
+
+
+@pytest.mark.parametrize("exact", [S.PauliPropagator, S.DensityMatrix])
+def test_thermal_clamp_warning_follows_the_backend_a_candidate_list_selects(exact):
+    """noisy_fidelity and a checkpoint resolve a candidate list first: they warn only if that backend samples."""
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    suffix = QuantumCircuit()
+    suffix.h(0)
+    suffix.measure_all()
+    # T2 above T1, which sampled relaxation clamps. Equal populations keep the
+    # channel diagonal, so the propagator applies it exactly by default too.
+    model = maestro.NoiseModel()
+    model.set_thermal_relaxation(0, 1.0, 1.0, 2.0, 0.5)
+
+    def config(first, second):
+        return maestro.SimulatorConfig(optimization_candidates=[(B.QCSim, first), (B.QCSim, second)], seed=11)
+
+    def run_suffix(candidates):
+        return maestro.PrefixCheckpointedSimulator(QuantumCircuit(), 1, candidates).execute_suffix(suffix, shots=200, noise_model=model, noise_seed=5)
+
+    # The exact backend is listed first and runs: no clamp, so no warning.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        fidelity = circuit.noisy_fidelity(model, config=config(exact, S.Statevector), noise_seed=5)
+        counts = run_suffix(config(exact, S.Statevector))
+    assert fidelity["noise_evaluation"] == counts["noise_evaluation"] == "exact_channels"
+    assert fidelity["fidelity"] == pytest.approx((1 + math.exp(-0.5)) / 2, abs=1e-9)
+    assert counts["method"] == exact
+    # The statevector is listed first and samples the relaxation: it warns.
+    with pytest.warns(RuntimeWarning, match="T2 clamped to T1"):
+        fidelity = circuit.noisy_fidelity(model, config=config(S.Statevector, exact), noise_seed=5)
+    assert fidelity["noise_evaluation"] == "trajectories"
+    with pytest.warns(RuntimeWarning, match="T2 clamped to T1"):
+        counts = run_suffix(config(S.Statevector, exact))
+    assert counts["noise_evaluation"] == "trajectories" and counts["method"] == S.Statevector
 
 
 DISORDER_METHODS = [S.Statevector, S.MatrixProductState, S.MatrixProductOperator, S.DensityMatrix]

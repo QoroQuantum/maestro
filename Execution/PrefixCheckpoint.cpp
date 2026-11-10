@@ -34,13 +34,20 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
         }
     } probe_guard{probed};
 
+    config_.seed = EffectiveSamplingSeed(config_);
+    config_.native_options.erase("seed");
     auto executed_prefix = prefix;
     if (prefix && prefix_noise && prefix_noise->has_any())
     {
         const auto policy = ResolveNoiseRealizations(std::nullopt, *prefix_noise, config_, NoiseLayer::kCombined, 64, prefix);
+        // A backend that applies channels exactly and still samples is the
+        // Pauli propagator with relaxation (InjectsExactChannels).
+        if (!policy.exact_channels && UsesExactQuantumChannels(config_))
+            throw std::invalid_argument("Prefix noise must be deterministic: the QCSim Pauli propagator samples relaxation that acts on the "
+                                        "prefix (T1, thermal or idle noise towards unequal populations), which a prefix evolved once cannot be");
         if (!policy.exact_channels || policy.stochastic_noise)
-            throw std::invalid_argument("Prefix noise must be deterministic: exact channels on a density-matrix or MPO backend, "
-                                        "without coherent or correlated noise");
+            throw std::invalid_argument("Prefix noise must be deterministic: exact channels on a density-matrix or MPO backend or on the QCSim "
+                                        "Pauli propagator, without coherent or correlated noise");
         std::optional<uint64_t> seed = 0; // no sampled layer reads it
         auto rng = MakeNoiseRng(config_, seed);
         const noise::NoiseInjectionPlan plan(prefix, *prefix_noise);
@@ -143,12 +150,15 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
     // The suffix continues the saved prefix state, not a fresh register.
     const auto policy = ResolveNoiseRealizations(noise_realizations, *noise_model, config_, NoiseLayer::kCombined, 64, suffix, false, std::nullopt, false);
 
-    // A checkpoint can alternate raw rows, explicit per-call seeds and counts.
-    // Resolve the policy before creating batch seeds and before cloning workers.
+    // A checkpoint can alternate counts and ordered rows on the same simulator.
+    // Pin the sampler for this call before cloning its workers.
     const bool multinomial =
-        !rows && shots > 1 && simulator_->IsQcsim() && !simulator_->GetConfigMap().count("sampling_policy") && PreferMultinomialCounts(config_, noise_seed);
-    if (simulator_->IsQcsim() && (simulator_->GetConfiguration("counts_policy") == "multinomial_v1") != multinomial)
-        simulator_->Configure("counts_policy", multinomial ? "multinomial_v1" : "legacy");
+        !rows && shots > 1 && simulator_->IsQcsim() && !simulator_->GetConfigMap().count("sampling_policy") && PreferMultinomialCounts(config_);
+    const char *counts_policy = multinomial ? "multinomial_v1" : "legacy";
+    // What the caller asked for; the simulator is pinned to legacy for auto too.
+    const bool legacy = EffectiveCountsPolicy(config_) == "legacy";
+    if (simulator_->IsQcsim() && simulator_->GetConfiguration("counts_policy") != counts_policy)
+        simulator_->Configure("counts_policy", counts_policy);
 
     // The config is fixed when the checkpoint is built, so unlike
     // full_noise_execute its seed must not override the per-call seed: that
@@ -210,10 +220,12 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         // may branch on a pure-state backend, so CanSampleTerminal sends any
         // pure-state reset to the shot path. Backends whose sampler uses the
         // save slot also replay shots, keeping the prefix intact.
-        if (batch_shots > 1 && PreservesSavedStateWhileSampling(*simulator, multinomial))
+        if (batch_shots > 1 && PreservesSavedStateWhileSampling(*simulator, multinomial, legacy))
         {
+            // Counts take occupied outcomes whole whenever readout is
+            // deterministic, whatever sampler drew them; rows need each shot.
             TerminalCountSink writeCounts;
-            if (multinomial)
+            if (!rows)
                 writeCounts = [&](size_t count, const Circuits::OperationState &sample) { record(sample, 0, counts, count); };
             if (SamplePreparedTerminal(
                     *circuit, simulator, batch_shots, state, seed,

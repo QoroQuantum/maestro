@@ -449,7 +449,7 @@ bit order, weighted observables, primitives, registers and `if_test` for you.
   p/3 each for X, Y and Z. Aer's `depolarizing_error(λ, 1)` corresponds to
   `p = 3λ/4`.
 - **Noise sampling in `noisy_execute`.** Aer draws noise for every shot.
-  `noisy_execute` draws `noise_realizations` noise samples (automatic: one for deterministic DM/MPO channels, otherwise 64) and
+  `noisy_execute` draws `noise_realizations` noise samples (automatic: one for deterministic exact channels, on density matrix, MPO, and the QCSim Pauli propagator for the noise it applies exactly by default; otherwise 64) and
   splits the shots among them, so counts vary more between runs unless you set
   `noise_realizations=shots`.
 - **No primitives or `save_*` instructions.** Call `execute`, `estimate` or
