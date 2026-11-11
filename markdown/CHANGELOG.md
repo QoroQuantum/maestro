@@ -29,9 +29,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run on it up to 24 qubits, and a deterministic noisy checkpoint prefix
   (`prefix_noise_model`, `noise.prefix`) is evolved once on it.
   `noise.exact_configurations` in the capabilities lists it.
+- Native `execute` results report `execution_metadata.realization_workers`,
+  the number of workers that ran the noise realizations.
 
 ### Changed
 
+- A seed fixes the random streams of a request and no longer selects its
+  sampler. Under `counts_policy="auto"`, seeded requests take every path an
+  unseeded one would: reference frames, extended-stabilizer frames, direct
+  trajectory sessions, adaptive terminal sampling (for counts, shot rows and
+  checkpoint suffixes) and parallel realization workers. A seeded request
+  reproduces its result for the same request, seed, configuration and Maestro
+  version. Seeded results differ from 0.3.14 and may change between versions.
+  `counts_policy="legacy"`, `sampling_policy="legacy"` and
+  `trajectory_policy="block_v1"` remain as algorithm choices, without the
+  sequences of earlier releases.
+- QCSim stabilizer, extended-stabilizer, MPS and MPO dynamic circuits default
+  to `trajectory_policy="shot_v1"`, as the dense methods do, so their seeded
+  counts no longer depend on the worker count. Their terminal sampling evolves
+  the circuit once and draws fixed logical batches, also independently of the
+  worker count.
+- The native `sampling_policy="reproducible_v1"` option no longer disables
+  adaptive multinomial counts; only `"legacy"` does.
+- QCSim seeds its random engines directly instead of through `std::seed_seq`.
+  Reseeding a simulator costs about 0.6 µs instead of 10 µs, which removes
+  most of the per-shot cost of `shot_v1` trajectories.
 - An unrecorded reset on the QCSim `pauli_propagator` is a deterministic
   channel: it draws no random number and inserts no projector. Circuits with
   mid-circuit resets no longer replay per shot or average measurement
@@ -50,8 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pauli_propagator` sample terminal measurements from the saved prefix
   instead of replaying every shot. Under `counts_policy` `auto`, seeded counts
   with readout error and seeded raw rows therefore differ from earlier
-  releases (both remain valid samples). `legacy` keeps the per-shot replay and
-  its seeded results.
+  releases (both remain valid samples). `legacy` keeps the per-shot replay.
 - `amplitudes`, `statevector`, `inner_product` and `mirror_fidelity` (without
   observables) requests on `pauli_propagator` are rejected when the request is
   validated, with `unsupported_capability`, instead of failing in the backend.
@@ -62,9 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared-realization count batches when the request may run `CompositeQCSim`
   (fixed, or in a candidate list), so its components sample them adaptively,
   as native requests already did. Only a realization that could itself take
-  reference frames (unseeded, Clifford, with the QCSim stabilizer listed)
-  keeps the per-shot sampler. Seeded `auto` histograms of such runs change;
-  `legacy` reproduces the earlier ones.
+  reference frames (Clifford, with the QCSim stabilizer listed) keeps the
+  per-shot sampler. Seeded `auto` histograms of such runs change.
 - The help of the noisy execute functions, the Qiskit migration guide and the
   errors for channels that cannot be sampled name the QCSim `pauli_propagator`
   beside density matrix and MPO.
@@ -74,8 +94,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Count-only checkpoint suffixes no longer build a permutation of all shots
   (8 bytes per shot), whatever the counts policy. With deterministic readout
   they add each occupied outcome once; with readout errors they add the shots
-  one at a time, drawing the errors in the same order as before, so seeded
-  counts are unchanged.
+  one at a time, drawing the errors in the order the row path draws them.
+- An explicitly seeded classical random instruction replays its bits in an
+  unseeded request; only unseeded instructions draw fresh entropy.
+- Realization workers honor `max_simulators` when it is given as a native
+  option (`simulator.options` in native requests), as they do the typed setting.
 - `noisy_fidelity` and `PrefixCheckpointedSimulator.execute_suffix` decide the
   "T2 clamped to T1" warning from the backend a candidate list resolves to.
   A list such as density matrix then statevector ran exact channels and warned

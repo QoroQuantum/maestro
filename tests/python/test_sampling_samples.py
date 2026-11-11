@@ -215,6 +215,31 @@ def test_raw_terminal_readout_is_drawn_per_row(method):
         assert rows[:, 0].mean() == pytest.approx(0.7, abs=0.04)
 
 
+@pytest.mark.parametrize("method", [maestro.SimulationType.Statevector, maestro.SimulationType.MatrixProductState])
+@pytest.mark.parametrize("realizations", [1, 4])
+def test_noisy_raw_terminal_batches_replay_adaptive_rows(method, realizations):
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    circuit.t(0)
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.measure_all()
+    # A model that only affects readout still takes the noisy realization path.
+    model = maestro.NoiseModel()
+    model.set_readout_error(0, 0.05, 0.1)
+    kwargs = dict(shots=4096, noise_realizations=realizations, noise_seed=0, return_samples=True)
+    for policy in ("auto", "multinomial_v1"):
+        config = _config(method, workers=4, seed=0)
+        config.counts_policy = policy
+        first = circuit.noisy_execute(model, config=config, **kwargs)
+        assert first["sampling_strategy"] == "terminal_v1"
+        rows = _records(first, 4096, 2)
+        np.testing.assert_array_equal(rows, circuit.noisy_execute(model, config=config, **kwargs)["samples"])
+        p_one = (1 - math.cos(math.pi / 4)) / 2
+        assert rows[:, 1].mean() == pytest.approx(p_one, abs=0.03)
+        assert rows[:, 0].mean() == pytest.approx(p_one * 0.9 + (1 - p_one) * 0.05, abs=0.03)
+
+
 @pytest.mark.parametrize("method", [maestro.SimulationType.Statevector, maestro.SimulationType.DensityMatrix])
 def test_raw_mid_circuit_measurement_and_single_shot_keep_trajectories(method):
     circuit = QuantumCircuit()
@@ -233,6 +258,27 @@ def test_raw_mid_circuit_measurement_and_single_shot_keep_trajectories(method):
     one = terminal.execute(config=_config(method), shots=1, return_samples=True)
     assert one["sampling_strategy"] == "trajectory_v1"
     _records(one, 1, 1)
+
+
+@pytest.mark.parametrize("initial_reset", [False, True])
+def test_raw_reset_suffix_samples_independent_branches_after_shared_prefix(initial_reset):
+    # Resetting half a Bell pair must independently collapse its partner on
+    # every shot, even when the deterministic prefix is saved once.
+    circuit = QuantumCircuit()
+    if initial_reset:
+        circuit.reset(0)
+    circuit.h(0)
+    circuit.t(0)
+    circuit.cx(0, 1)
+    circuit.reset(0)
+    circuit.measure_all()
+    config = _config(maestro.SimulationType.Statevector, seed=0)
+    first = circuit.execute(config=config, shots=2048, return_samples=True)
+    assert first["sampling_strategy"] == "trajectory_v1"
+    rows = _records(first, 2048, 2)
+    assert not rows[:, 0].any()
+    assert rows[:, 1].mean() == pytest.approx(0.5, abs=0.045)
+    np.testing.assert_array_equal(rows, circuit.execute(config=config, shots=2048, return_samples=True)["samples"])
 
 
 @pytest.mark.parametrize("method", METHODS)
@@ -374,6 +420,39 @@ def test_raw_trajectory_rows_are_reproducible_across_worker_counts(method, reali
     serial = _records(circuit.full_noise_execute(model, config=_config(method), **kwargs), 137, 3)
     parallel = _records(circuit.full_noise_execute(model, config=_config(method, workers=4), **kwargs), 137, 3)
     np.testing.assert_array_equal(parallel, serial)
+
+
+@pytest.mark.parametrize("return_samples", [False, True])
+@pytest.mark.parametrize("readout", [False, True])
+@pytest.mark.parametrize("fixed_backend", [False, True])
+def test_terminal_mps_logical_batches_replay_across_workers(return_samples, readout, fixed_backend):
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.ry(1, 0.31)
+    circuit.measure_all()
+    model = maestro.NoiseModel()
+    model.set_all_depolarizing(2, 0.13)
+    if readout:
+        model.set_readout_error_symmetric(0, 0.2)
+    # Four fixed logical batches, including a one-shot tail. The same prepared
+    # state and RNG layout must be used with one physical worker or four.
+    shots = 769
+    results = []
+    for workers in [1, 4, 4]:
+        config = _config(maestro.SimulationType.MatrixProductState, workers=workers)
+        config.fixed_backend = fixed_backend
+        result = circuit.full_noise_execute(
+            model, config=config, shots=shots, noise_realizations=1,
+            noise_seed=3, return_samples=return_samples,
+        )
+        results.append(_records(result, shots, 2) if return_samples else result["counts"])
+    for result in results[1:]:
+        if return_samples:
+            np.testing.assert_array_equal(result, results[0])
+        else:
+            assert result == results[0]
+            assert sum(result.values()) == shots
 
 
 @pytest.mark.parametrize("method", [maestro.SimulationType.Stabilizer, maestro.SimulationType.Statevector])

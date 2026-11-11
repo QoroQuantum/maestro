@@ -141,25 +141,28 @@ offer the same rows and compiled frames; see `docs/native-request-api.md`.
 
 | Policy | Behavior |
 |--------|----------|
-| `"auto"` (default) | Eligible terminal counts use multinomial sampling with or without a seed. Unseeded requests may also use reference frames or direct noisy trajectories. |
-| `"legacy"` | Always the earlier executor |
-| `"frame_v1"` | Frames even with seeds, for any supported circuit and noise |
+| `"auto"` (default) | Eligible terminal counts, reference frames and direct noisy trajectories are available with or without a seed. |
+| `"legacy"` | Select the ordinary executor explicitly |
+| `"frame_v1"` | Request frames for a supported circuit, noise model and admitted backend |
 | `"multinomial_v1"` | Draw eligible terminal histograms directly, including for seeded calls. The backend chooses from the measured shot count and support size. |
 
 `"auto"` counts can use multinomial sampling on QCSim statevectors,
 density matrices, path integrals, a single measured MPS qubit or MPO qubit without truncation limits, and small
 extended-stabilizer marginals. The speedup is largest when many shots repeat
 the same outcomes. Repeating a request with the same seed and configuration
-reproduces its histogram on the same build. Use `"legacy"` to select the
-per-shot count sampler used by earlier seeded requests. Ordered shot output
-continues to use its own sampling path.
+reproduces its histogram within the same Maestro version. Algorithms and seeded
+sequences may change between versions. `"legacy"` is an algorithm override,
+not a guarantee of historical output. Ordered shot output uses a sampling path
+that preserves shot ordering and readout semantics.
 
 `sampling_policy` selects the lower-level statevector, density-matrix and
 path-integral sampler, and `trajectory_policy` the random streams of dynamic
 circuits (`"shot_v1"`, the default, gives counts independent of the worker
-count; `"block_v1"` keeps earlier seeded counts). Setting `trajectory_policy`
-explicitly also gives stabilizer, extended-stabilizer, MPS and MPO dynamic
-circuits worker-independent streams.
+count; `"block_v1"` schedules fixed logical blocks). The default applies to
+supported statevector, density-matrix, path-integral, stabilizer,
+extended-stabilizer, MPS and MPO trajectories. Explicitly setting the
+lower-level `sampling_policy="reproducible_v1"` also permits adaptive counts;
+`sampling_policy="legacy"` explicitly selects the ordinary low-level sampler.
 
 (py_circuit_measure)=
 ## Measurement

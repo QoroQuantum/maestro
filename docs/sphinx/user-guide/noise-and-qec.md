@@ -131,13 +131,13 @@ random streams, so seeded results do not depend on the worker count.
 
 The execute functions also accept `return_samples=True`, which returns each
 shot's record as a `(shots, clbits)` `uint8` array under `samples` (see
-{ref}`py_raw_samples`). With one realization per shot and no seed, the default
+{ref}`py_raw_samples`). With one realization per shot, the default
 `counts_policy="auto"` samples Clifford circuits with Pauli, readout and
 phase-damping noise through reference frames
 (`sampling_strategy: "reference_frame_v1"`) and runs other realizations directly
 (`"trajectory_v1"`). When several shots share one realization, eligible terminal
 histograms can use multinomial sampling with or without a seed (see
-{ref}`py_counts_policy`). Unseeded `extended_stabilizer` runs with Pauli,
+{ref}`py_counts_policy`). Eligible `extended_stabilizer` runs with Pauli,
 readout and phase-damping noise use batched Pauli frames under any realization
 schedule (`sampling_strategy: "extended_frame_v1"`). A batch of shots shares one
 Clifford basis, and shots of one realization share its errors. Some runs keep
@@ -150,7 +150,8 @@ scalar trajectories:
   realization: T1, or thermal or idle relaxation with a finite T1, after a gate
   (or, for idle relaxation, a delay) on that qubit.
 
-`counts_policy="frame_v1"` opts seeded runs in. As for scalar runs, `noise_seed`
+These automatic paths support both seeded and unseeded requests.
+`counts_policy="frame_v1"` explicitly requests eligible frames. As for scalar runs, `noise_seed`
 drives the circuit errors and `config.seed` the measurements and readout, on
 reference frames as on batched frames. Frames share `trajectory_max_memory_mb`
 among their batches, and their rows depend on neither the budget nor

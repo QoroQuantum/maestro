@@ -22,15 +22,14 @@ inline bool HasResetOperation(const Circuits::Circuit<double> &circuit)
 // adapters and the QCSim statevector, stabilizer and MPS adapters draw shots
 // without the save slot; tensor-network sampling, for one, saves and restores
 // its own state between draws, so checkpoints keep replaying shots there.
-inline bool PreservesSavedStateWhileSampling(const Simulators::ISimulator &simulator, bool multinomialCounts = false, bool legacyCounts = false)
+inline bool PreservesSavedStateWhileSampling(const Simulators::ISimulator &simulator, bool legacyCounts = false)
 {
     using Method = Simulators::SimulationType;
     const auto method = simulator.GetSimulationType();
     const bool qcsim = simulator.GetType() == Simulators::SimulatorType::kQCSim;
-    // The Pauli propagator replayed every shot before it applied channels.
-    // The legacy policy keeps that seeded stream: each shot draws its
-    // measurement and then its readout errors, an order that a histogram of
-    // the outcomes cannot reproduce.
+    // An explicit ordinary policy requests per-shot Pauli execution,
+    // including interleaved measurement and readout draws. Automatic
+    // execution can instead sample the prepared ensemble in a batch.
     if (legacyCounts && qcsim && method == Method::kPauliPropagator)
         return false;
     if (simulator.SupportsQuantumChannels())
@@ -38,10 +37,10 @@ inline bool PreservesSavedStateWhileSampling(const Simulators::ISimulator &simul
     if (!qcsim)
         return false;
     // Path-integral batches read the stored amplitudes. Extended stabilizer
-    // queries the frame or samples on a private clone. Older count and row
-    // policies keep replaying these two methods to retain their seeded streams.
-    return method == Method::kStatevector || method == Method::kStabilizer || method == Method::kMatrixProductState ||
-           (multinomialCounts && (method == Method::kPathIntegral || method == Method::kExtendedStabilizer));
+    // queries the frame or samples on a private clone. Both preserve the
+    // checkpoint for counts and ordered rows alike.
+    return method == Method::kStatevector || method == Method::kStabilizer || method == Method::kMatrixProductState || method == Method::kPathIntegral ||
+           method == Method::kExtendedStabilizer;
 }
 
 // Nested circuits are inlined before analysis (Circuit::InlinedComposites):

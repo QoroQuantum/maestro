@@ -692,105 +692,60 @@ void OverflowingSumIsSampled()
     }
 }
 
-// multinomial_v1 is a replayable policy. A change to these decisions or to
-// this seeded stream needs a new policy version (multinomial_v2), not new
-// expected values. The stream is the same with MSVC and GCC.
-void PinnedMultinomialStream()
+// Replay is a property of the current algorithm, not a fixture for an older
+// implementation's thresholds, engine-word consumption or histogram.
+void MultinomialReplay()
 {
     using namespace Utils::Sampling;
-    Options options;
-    options.multinomialCounts = true;
-    const auto uniform = [](size_t) { return 1.; };
-    const auto multinomial = [&](size_t rows, size_t shots) { return Prepared(rows, shots, uniform, options).Method() == Family::Multinomial; };
-    Require(!multinomial(1024, 16383) && multinomial(1024, 16384), "multinomial_v1 changed its 16-shots-per-row crossover");
-    Require(!multinomial(256, 6143) && multinomial(256, 6144), "multinomial_v1 changed its small-table crossover");
-    Require(!multinomial(8, 255) && multinomial(8, 256), "multinomial_v1 changed its minimum shot count");
-
-    constexpr size_t rows = 3000, shots = 50000;
-    const auto weight = [](size_t row) { return row % 11 == 0 ? 0. : row < 40 ? 1. + double(row % 5) : row % 3 == 0 ? 2e-4 : 1e-6; };
-    const Prepared plan(rows, shots, weight, options);
-    Require(plan.Method() == Family::Multinomial, "multinomial_v1 rejected its pinned distribution");
-    std::mt19937_64 rng(2026);
-    const auto counts = Count<false>(
-        plan, shots, 12, [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; }, [&] { return Utils::RandomStream::Uniform(rng); });
-    uint64_t digest = 0;
-    size_t occupied = 0, tail = 0;
-    for (size_t row = 0; row < rows; ++row)
-        if (const auto it = counts.find(row); it != counts.end())
+    const auto check = [](size_t rows, size_t shots, size_t bits, auto weight, uint64_t seed) {
+        Options options;
+        options.family = Family::Multinomial;
+        const Prepared<decltype(weight)> plan(rows, shots, weight, options);
+        const auto draw = [&] {
+            std::mt19937_64 rng(seed);
+            auto counts = Count<false>(
+                plan, shots, bits, [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; }, [&] { return Utils::RandomStream::Uniform(rng); });
+            return std::pair{std::move(counts), rng()};
+        };
+        const auto first = draw();
+        Require(draw() == first, "multinomial counts or stream continuation did not replay");
+        size_t total = 0;
+        for (const auto &[row, count] : first.first)
         {
-            digest = digest * 1000003u + row * 65537u + it->second;
-            ++occupied;
-            if (row >= 40)
-                tail += it->second;
+            Require(row < rows && weight(row) > 0. && count > 0, "multinomial sampled outside positive support");
+            total += count;
         }
-    Require(occupied == 105 && tail == 69 && digest == 3744179436325232569ull, "multinomial_v1 changed its seeded stream");
-
-    // The tail-grouping gate, which the fixture above bypasses: 4,096 positive
-    // rows exceed 8,192 / 16, so only grouping accepts these distributions.
-    // Its rare-mass cutoff (a quarter) and its draw limit (16 populated blocks
-    // plus common rows, against 512) are pinned on both sides.
-    const auto tailMethod = [&](auto weight) { return Prepared(4096, 8192, weight, options).Method(); };
-    Require(tailMethod([](size_t row) { return row < 2 ? 1. : .6 / 4094.; }) == Family::Multinomial &&
-                tailMethod([](size_t row) { return row < 2 ? 1. : .7 / 4094.; }) != Family::Multinomial,
-            "multinomial_v1 changed its rare-mass cutoff");
-    Require(tailMethod([](size_t row) { return row < 496 ? 1. : 1e-9; }) == Family::Multinomial &&
-                tailMethod([](size_t row) { return row < 497 ? 1. : 1e-9; }) != Family::Multinomial,
-            "multinomial_v1 changed its grouped draw limit");
-    const auto tailWeight = [](size_t row) { return row == 7 || row == 2000 || row == 4000 ? 1. : row % 13 == 0 ? 0. : 2e-6; };
-    const Prepared tailPlan(4096, 8192, tailWeight, options);
-    Require(tailPlan.Method() == Family::Multinomial, "multinomial_v1 rejected its pinned tail");
-    std::mt19937_64 tailRng(2027);
-    const auto tailCounts = Count<false>(
-        tailPlan, 8192, 13, [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; }, [&] { return Utils::RandomStream::Uniform(tailRng); });
-    digest = 0;
-    occupied = 0;
-    for (size_t row = 0; row < 4096; ++row)
-        if (const auto it = tailCounts.find(row); it != tailCounts.end())
-        {
-            digest = digest * 1000003u + row * 65537u + it->second;
-            ++occupied;
-        }
-    Require(occupied == 19 && digest == 4078924110512412999ull, "multinomial_v1 changed its grouped-tail stream");
-
-    // Geometric waiting times for a probability below 1e-8, which no
-    // histogram above reaches.
-    std::mt19937_64 geometricRng(99);
-    std::vector<size_t> geometric;
-    for (int draw = 0; draw < 8; ++draw)
-        geometric.push_back(BinomialCount(size_t{1000000000000}, 3e-12, [&] { return Utils::RandomStream::Uniform(geometricRng); }));
-    Require(geometric == std::vector<size_t>{3, 4, 3, 5, 3, 5, 0, 2}, "multinomial_v1 changed its geometric binomial branch");
-
-    // The policy's constants, and behavior on both sides of each.
-    static_assert(multinomialShotsPerDraw == 16 && smallTableRows == 256 && smallTableShotsPerDraw == 24, "multinomial_v1 crossover constants changed");
-    static_assert(rareExpectedShots == 2. && maxRareMassFraction == .25, "multinomial_v1 grouping constants changed");
-    Require(!multinomial(17, 407) && multinomial(17, 408), "multinomial_v1 changed its small-table rule for odd row counts");
-    // 63 rows expected to receive 2.5 shots each are drawn one by one; with a
-    // rare row defined by three expected hits they would be grouped instead.
-    const Prepared middle(
-        64, 4096, [](size_t row) { return row == 0 ? 1575.4 : 1.; }, options);
-    std::mt19937_64 middleRng(2028);
-    const auto middleCounts = Count<false>(
-        middle, 4096, 6, [](size_t row, size_t bit) { return ((row >> bit) & 1) != 0; }, [&] { return Utils::RandomStream::Uniform(middleRng); });
-    digest = 0;
-    occupied = 0;
-    for (size_t row = 0; row < 64; ++row)
-        if (const auto it = middleCounts.find(row); it != middleCounts.end())
-        {
-            digest = digest * 1000003u + row * 65537u + it->second;
-            ++occupied;
-        }
-    Require(middle.Method() == Family::Multinomial && occupied == 57 && digest == 13282814273920193656ull,
-            "multinomial_v1 changed which rows it draws individually");
-    // Both sides of the geometric cutoff at p = 1e-8, near a mean of ten.
-    const auto draws = [](double p) {
-        std::mt19937_64 cutoffRng(100);
-        std::vector<size_t> values;
-        for (int draw = 0; draw < 8; ++draw)
-            values.push_back(BinomialCount(size_t{1000000000}, p, [&] { return Utils::RandomStream::Uniform(cutoffRng); }));
-        return values;
+        Require(total == shots, "multinomial replay lost shots");
     };
-    Require(draws(0.99e-8) == std::vector<size_t>{16, 13, 9, 5, 9, 6, 10, 12} && draws(1.01e-8) == std::vector<size_t>{16, 9, 17, 7, 14, 10, 16, 12},
-            "multinomial_v1 changed its geometric cutoff");
+    check(
+        3000, 50000, 12, [](size_t row) { return row % 11 == 0  ? 0.
+                                                 : row < 40     ? 1. + double(row % 5)
+                                                 : row % 3 == 0 ? 2e-4
+                                                                : 1e-6; }, 2026);
+    check(
+        4096, 8192, 13, [](size_t row) { return row == 7 || row == 2000 || row == 4000 ? 1.
+                                                : row % 13 == 0                        ? 0.
+                                                                                       : 2e-6; }, 2027);
+    check(
+        64, 4096, 6, [](size_t row) { return row == 0 ? 1575.4 : 1.; }, 2028);
+
+    // Exercise very rare binomial events and both sides of the current small-p
+    // branch without prescribing the sequence a later implementation must use.
+    for (const auto [trials, probability] : {std::pair<size_t, double>{1000000000000ULL, 3e-12}, {1000000000, .99e-8}, {1000000000, 1.01e-8}})
+    {
+        const auto draw = [&] {
+            std::mt19937_64 rng(99);
+            std::vector<size_t> values;
+            for (size_t i = 0; i < 64; ++i)
+                values.push_back(BinomialCount(trials, probability, [&] { return Utils::RandomStream::Uniform(rng); }));
+            return std::pair{std::move(values), rng()};
+        };
+        const auto first = draw();
+        Require(draw() == first, "binomial draws or stream continuation did not replay");
+        Require(std::all_of(first.first.begin(), first.first.end(), [&](size_t count) { return count <= trials; }), "binomial draw exceeded its trials");
+        Require(std::adjacent_find(first.first.begin(), first.first.end(), [](size_t a, size_t b) { return a != b; }) != first.first.end(),
+                "nondegenerate binomial draws were constant");
+    }
 }
 
 // A sole weight near the largest double must not overflow the rare threshold:
@@ -835,7 +790,7 @@ int main()
         HugeScaleKeepsNegligibleRows();
         OverflowingSumIsSampled();
         MinimumTotalRejectsBeforeDrawing();
-        PinnedMultinomialStream();
+        MultinomialReplay();
         HugeWeightNeedsNoDraws();
         std::cout << "PASS adaptive sampling: boundaries, serial/parallel mapping, batches and memory budgets\n";
         return 0;

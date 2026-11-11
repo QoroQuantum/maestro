@@ -138,6 +138,45 @@ void BudgetsAndEmptyWork()
     Require(Utils::RealizationWorkerCount(2, 8) <= 2, "more workers than realizations");
     Require(Utils::LimitRealizationWorkersByMemory(8, size_t{1} << 20, 10, 2, 2) == 4, "checkpoint memory was not reserved");
     Require(Utils::LimitRealizationWorkersByMemory(8, size_t{1} << 20, 1, 2, 2) == 1, "memory bound lost the serial fallback");
+#ifdef MAESTRO_REALIZATION_NOISE_TESTS
+    MaestroExecution::SimulatorConfig config;
+    config.simulation_type = Simulators::SimulationType::kStatevector;
+    config.max_simulators = 8;
+    config.trajectory_max_memory_mb = 80;
+    // Twenty qubits need 16 MiB: five register-sized slots permit two direct
+    // workers, but only one network worker with its additional prepared source.
+    const auto cpuWorkers = Utils::RealizationWorkerCount(8, 8);
+    Require(MaestroExecution::SamplingWorkers(config, 8, 20) == std::min<size_t>(2, cpuWorkers), "direct-session memory accounting changed");
+    Require(MaestroExecution::SamplingWorkers(config, 8, 20, 3) == 1, "network trajectory's prepared source was not budgeted");
+    config.fixed_backend = true;
+    Require(MaestroExecution::NetworkRealizationCopies(config, false) == 2 && MaestroExecution::NetworkRealizationCopies(config, true) == 3,
+            "dense realization copy accounting changed");
+    for (const auto method :
+         {Simulators::SimulationType::kStabilizer, Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kMatrixProductOperator})
+    {
+        config.simulation_type = method;
+        Require(MaestroExecution::NetworkRealizationCopies(config, false) == 2 && MaestroExecution::NetworkRealizationCopies(config, true) == 4,
+                "tensor/tableau realization omitted its cloned checkpoint");
+    }
+    config.simulation_type = Simulators::SimulationType::kStatevector;
+    config.fixed_backend = false;
+    config.optimization_candidates = {{Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector},
+                                      {Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kMatrixProductState}};
+    Require(MaestroExecution::NetworkRealizationCopies(config, true) == 4, "candidate realization omitted the largest copy requirement");
+    Require(MaestroExecution::NetworkRealizationCopies(config, false) == 4, "one-shot candidate realization omitted its prepared checkpoint");
+    config.fixed_backend = true;
+    Require(MaestroExecution::NetworkRealizationCopies(config, true) == 3, "fixed backend counted an unselectable tensor candidate");
+    config.fixed_backend = false;
+    config.simulation_type = Simulators::SimulationType::kMatrixProductState;
+    config.optimization_candidates = {{Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector}};
+    Require(MaestroExecution::NetworkRealizationCopies(config, true) == 3, "candidate list did not replace the requested tensor method");
+    config.max_simulators.reset();
+    config.native_options["max_simulators"] = "1";
+    Require(MaestroExecution::EffectiveMaxSimulators(config) == 1 && MaestroExecution::SamplingWorkers(config, 8, 2) == 1,
+            "native worker limit did not constrain realization scheduling");
+    config.max_simulators = 3;
+    Require(MaestroExecution::EffectiveMaxSimulators(config) == 3, "typed worker limit did not override the native option");
+#endif
     Utils::RunRealizations(
         0, 4,
         [](size_t) {
@@ -591,7 +630,7 @@ void NoiseAddFrameCountPolicies()
                 add.seed(0);
             const auto counts = add.noisy_execute(circuit, makeNetwork(policy), 0, certain, 41, 41);
             Require(counts.size() == 1 && counts.at(std::vector<bool>(5, false)) == 41, "count policy changed a certain Pauli error");
-            const bool framed = std::string(policy) == "frame_v1" || (std::string(policy) == "auto" && !seeded);
+            const bool framed = std::string(policy) != "legacy";
             Require(framed ? calls->load() == 0 : calls->load() > 0, "count policy did not select the requested execution path");
         }
     // A requested non-Stabilizer method needs backend optimization. Under auto
@@ -642,18 +681,18 @@ void NoiseAddFrameCountPolicies()
     model.set_readout_error_symmetric(0, 0.1);
     for (bool configuredSeed : {false, true})
     {
-        auto automatic = makeNetwork("auto"), legacy = makeNetwork("legacy");
+        auto automatic = makeNetwork("auto"), replay = makeNetwork("auto");
         if (configuredSeed)
         {
             automatic->Configure("seed", "0");
-            legacy->Configure("seed", "0");
+            replay->Configure("seed", "0");
         }
         noise::NoiseAdd a, b;
         a.seed(0);
         b.seed(0);
         for (size_t call = 0; call < 2; ++call)
-            Require(a.full_noise_execute(bell, automatic, 0, model, 127, 127) == b.full_noise_execute(bell, legacy, 0, model, 127, 127),
-                    "automatic frame policy changed a seeded legacy histogram");
+            Require(a.full_noise_execute(bell, automatic, 0, model, 127, 127) == b.full_noise_execute(bell, replay, 0, model, 127, 127),
+                    "automatic frame policy did not replay a seeded call sequence");
     }
     auto frame = makeNetwork("frame_v1");
     noise::NoiseAdd framed;
@@ -937,6 +976,70 @@ void NoiseAddBudgetsNetworkAllocation()
         else if (Utils::RealizationWorkerCount(31, network->GetMaxSimulators()) > 1)
             Require(foreign->load(), "a known singleton backend unnecessarily disabled realization workers");
     }
+
+    for (const auto method :
+         {Simulators::SimulationType::kStabilizer, Simulators::SimulationType::kMatrixProductState, Simulators::SimulationType::kMatrixProductOperator})
+        for (const bool automatic : {false, true})
+        {
+            // With a bond cap of four, each two-qubit tensor/tableau estimate
+            // is just over 1 MiB. Reserve the caller, execution clone and spare
+            // first. Six MiB then admit only one two-copy fixed one-shot worker;
+            // eight MiB admit only one four-copy worker with a prepared source
+            // and cloned checkpoints. Thirty-two MiB permit parallel workers.
+            const bool mpo = method == Simulators::SimulationType::kMatrixProductOperator;
+            const int shots = mpo ? 129 : 8;
+            const size_t lowBudget = automatic || mpo ? 8 : 6;
+            auto foreign = std::make_shared<std::atomic<bool>>(false);
+            auto circuit = std::make_shared<Circuits::Circuit<>>();
+            circuit->AddOperation(std::make_shared<ObserveThreadX>(foreign, std::this_thread::get_id()));
+            circuit->AddOperation(std::make_shared<Circuits::HadamardGate<>>(0));
+            circuit->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+            circuit->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}, {1, 1}}));
+            noise::NoiseModel model;
+            model.set_bit_flip(1, 0.125);
+            const auto makeNetwork = [&](size_t budgetMB) {
+                auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{2}, std::vector<size_t>{2});
+                network->Configure("counts_policy", "legacy");
+                network->Configure("trajectory_max_memory_mb", std::to_string(budgetMB).c_str());
+                network->Configure("matrix_product_state_max_bond_dimension", "4");
+                network->SetMaxSimulators(4);
+                network->SetOptimizeSimulator(automatic);
+                if (automatic)
+                    network->RemoveAllOptimizationSimulatorsAndAdd(Simulators::SimulatorType::kQCSim, method);
+                network->GetController()->SetOptimizeCircuit(false);
+                network->CreateSimulator(Simulators::SimulatorType::kQCSim, method, Network::INetwork<>::kBackendPlaceholderQubits);
+                return network;
+            };
+            Circuits::Circuit<>::ExecuteResults serialCounts;
+            for (const size_t budgetMB : {lowBudget, size_t{32}})
+            {
+                foreign->store(false);
+                noise::NoiseAdd add;
+                add.seed(23);
+                add.set_exact_channels(false);
+                const auto counts = add.noisy_execute(circuit, makeNetwork(budgetMB), 0, model, shots, 8);
+                size_t total = 0;
+                for (const auto &entry : counts)
+                    total += entry.second;
+                Require(total == static_cast<size_t>(shots), "tensor/tableau memory budget lost noisy shots");
+                if (budgetMB == lowBudget)
+                {
+                    Require(!foreign->load(), "tensor/tableau realization budget omitted retained checkpoints and clones");
+                    serialCounts = counts;
+                }
+                else
+                {
+                    if (Utils::RealizationWorkerCount(8, 4) > 1)
+                        Require(foreign->load(), "tensor/tableau realization workers did not use the larger memory budget");
+                    Require(counts == serialCounts, "tensor/tableau memory budget changed seeded noisy counts");
+                }
+                noise::NoiseAdd replay;
+                replay.seed(23);
+                replay.set_exact_channels(false);
+                Require(replay.noisy_execute(circuit, makeNetwork(budgetMB), 0, model, shots, 8) == counts,
+                        "tensor/tableau memory-limited realizations did not replay");
+            }
+        }
 }
 
 void NoiseAddPreservesRealizationStreams()
@@ -1034,7 +1137,7 @@ void NoiseAddPreservesRealizationStreams()
 }
 
 // Monte Carlo estimates run on realization workers with the serial loop's
-// values, and unseeded multi-shot batches of terminal circuits on a dense
+// values, and multi-shot batches of terminal circuits on a dense
 // method run there too, keeping every shot.
 void NoiseAddParallelEstimatesAndBatches()
 {
@@ -1119,7 +1222,7 @@ void NoiseAddParallelEstimatesAndBatches()
             }
         }
 
-    // Unseeded: 8 realizations of 250 shots each, sampled from one prepared state.
+    // Eight realizations of 250 shots each, sampled from one prepared state.
     // Each realization draws its Pauli errors once for all 250 of its shots, so
     // bit-flip noise would move the correlated count in steps of 250 (with
     // depolarizing p = 0.05, two broken realizations happen ~9% of the time).
@@ -1132,22 +1235,46 @@ void NoiseAddParallelEstimatesAndBatches()
     noise::NoiseModel dephasing;
     dephasing.set_all_dephasing(2, 0.05);
     for (const auto method : {Method::kStatevector, Method::kDensityMatrix})
-    {
-        observed->values.clear();
-        noise::NoiseAdd unseeded;
-        unseeded.set_exact_channels(method == Method::kDensityMatrix);
-        const auto counts = unseeded.noisy_execute(bell, makeNetwork(4, method, nullptr), 0, dephasing, 2000, 8);
-        size_t total = 0, correlated = 0;
-        for (const auto &[bits, count] : counts)
+        for (const char *seed : {"0", static_cast<const char *>(nullptr)})
         {
-            total += count;
-            correlated += bits.size() >= 2 && bits[0] == bits[1] ? count : 0;
+            observed->values.clear();
+            noise::NoiseAdd injected;
+            if (seed)
+                injected.seed(0);
+            injected.set_exact_channels(method == Method::kDensityMatrix);
+            const auto counts = injected.noisy_execute(bell, makeNetwork(4, method, seed), 0, dephasing, 2000, 8);
+            size_t total = 0, correlated = 0;
+            for (const auto &[bits, count] : counts)
+            {
+                total += count;
+                correlated += bits.size() >= 2 && bits[0] == bits[1] ? count : 0;
+            }
+            Require(total == 2000, "parallel multi-shot batches lost shots");
+            Require(correlated == total, "parallel multi-shot batches lost Bell correlations");
+            if (parallelMachine)
+                Require(!observed->values.count(std::this_thread::get_id()), "multi-shot batches did not dispatch to worker threads");
+            if (seed)
+            {
+                noise::NoiseAdd replay;
+                replay.seed(0);
+                replay.set_exact_channels(method == Method::kDensityMatrix);
+                Require(replay.noisy_execute(bell, makeNetwork(4, method, seed), 0, dephasing, 2000, 8) == counts,
+                        "seeded parallel prepared-state batches did not replay");
+
+                MaestroExecution::SimulatorConfig config;
+                config.simulation_type = method;
+                config.fixed_backend = true;
+                config.optimize_circuit = false;
+                config.seed = 0;
+                config.max_simulators = 4;
+                observed->values.clear();
+                const auto records = MaestroExecution::ExecuteNoisy(bell, dephasing, config, 2000, 8, 0, {});
+                if (parallelMachine)
+                    Require(!observed->values.count(std::this_thread::get_id()), "seeded library batches did not dispatch to realization workers");
+                Require(records.counts == MaestroExecution::ExecuteNoisy(bell, dephasing, config, 2000, 8, 0, {}).counts,
+                        "seeded library prepared-state batches did not replay");
+            }
         }
-        Require(total == 2000, "parallel multi-shot batches lost shots");
-        Require(correlated == total, "parallel multi-shot batches lost Bell correlations");
-        if (parallelMachine)
-            Require(!observed->values.count(std::this_thread::get_id()), "unseeded multi-shot batches did not dispatch to worker threads");
-    }
 }
 
 // libmaestro's Monte Carlo estimates, fidelities and prefix checkpoints give

@@ -58,11 +58,11 @@ def test_unseeded_noisy_execute_runs_on_frames(return_samples, realizations):
         assert sum(result["counts"].values()) == 500
 
 
-def test_seeded_runs_keep_scalar_trajectories_unless_opted_in():
-    seeded = _circuit().noisy_execute(_model(), config=_config(seed=4), shots=200)
-    assert seeded.get("sampling_strategy") != "extended_frame_v1"
-    first = _circuit().noisy_execute(_model(), config=_config(seed=4, policy="frame_v1"), shots=200)
-    second = _circuit().noisy_execute(_model(), config=_config(seed=4, policy="frame_v1"), shots=200)
+@pytest.mark.parametrize("policy", ["auto", "frame_v1"])
+@pytest.mark.parametrize("seed", [0, 4])
+def test_seeded_runs_use_reproducible_frames(policy, seed):
+    first = _circuit().noisy_execute(_model(), config=_config(seed=seed, policy=policy), shots=200)
+    second = _circuit().noisy_execute(_model(), config=_config(seed=seed, policy=policy), shots=200)
     assert first["sampling_strategy"] == "extended_frame_v1"
     assert first["counts"] == second["counts"]
     legacy = _circuit().noisy_execute(_model(), config=_config(policy="legacy"), shots=50)
@@ -339,7 +339,9 @@ def test_checkpoint_suffixes_run_on_frames():
         suffix, shots=100, noise_model=_model(), return_samples=True)
     assert rows["sampling_strategy"] == "extended_frame_v1" and rows["samples"].shape == (100, 2)
     seeded = maestro.PrefixCheckpointedSimulator(prefix, 2, _config(seed=3)).execute_suffix(suffix, shots=100, noise_model=_model())
-    assert seeded["sampling_strategy"] != "extended_frame_v1"
+    assert seeded["sampling_strategy"] == "extended_frame_v1"
+    replay = maestro.PrefixCheckpointedSimulator(prefix, 2, _config(seed=3)).execute_suffix(suffix, shots=100, noise_model=_model())
+    assert seeded["counts"] == replay["counts"]
     # A prefix that measures collapses once for every suffix shot: no frames.
     measured = QuantumCircuit()
     measured.h(0)

@@ -266,6 +266,34 @@ void RandomSeedPolicy()
                 Check(seeded == run(circuit) && seeded == run(RandomCircuit(true, std::nullopt)), "Network seed zero did not control unseeded instructions");
             }
 
+    // Logical shot and block IDs must stay distinct from request entropy:
+    // explicitly seeded instructions replay while unseeded neighbors stay fresh.
+    for (auto method : {Method::kStatevector, Method::kDensityMatrix, Method::kPathIntegral, Method::kStabilizer, Method::kExtendedStabilizer,
+                        Method::kMatrixProductState, Method::kMatrixProductOperator})
+        for (const char *policy : {"shot_v1", "block_v1"})
+        {
+            auto network = MakeNetwork(Backend::kQCSim, method, 129);
+            network->Configure("trajectory_policy", policy);
+            auto circuit = RandomCircuit(true, 0);
+            std::vector<size_t> freshBits(64);
+            std::iota(freshBits.begin(), freshBits.end(), 65);
+            circuit->AddOperation(CF::CreateRandom(freshBits));
+            const auto run = [&] { return network->RepeatedExecuteOnHost(circuit, 0, 257); };
+            const auto explicitBits = [](const Counts &counts) {
+                Counts result;
+                for (const auto &[bits, count] : counts)
+                    result[std::vector<bool>(bits.begin(), bits.begin() + 65)] += count;
+                return result;
+            };
+            const auto first = run();
+            const auto repeat = run();
+            Check(first.size() == 257 && repeat.size() == 257, "Logical trajectories reused a classical instruction stream");
+            Check(explicitBits(first) == explicitBits(repeat), "Request entropy affected explicitly seeded logical instructions");
+            Check(first != repeat, "Unseeded logical instructions did not receive fresh entropy");
+            network->Configure("seed", "0");
+            Check(run() == run(), "Request seed zero failed to replay mixed logical instruction seeds");
+        }
+
     std::vector<size_t> bits(64);
     std::iota(bits.begin(), bits.end(), 0);
     const auto sample = [](const std::shared_ptr<Circuits::IOperation<>> &op) {
@@ -392,10 +420,9 @@ void NoiseClonePolicy()
             add.seed(42);
             const auto counts = add.noisy_execute(circuit, network, 0, model, 56, 7);
             Check(counts.size() == 1 && counts.begin()->second == 56 && !counts.begin()->first[0], "Noise realization batching changed the output");
-            // Both mixed-state methods prepare once per explicitly requested
+            // Every terminal method prepares once per explicitly requested
             // realization, independent of the sampling worker budget.
-            const size_t jobs = method == Method::kStatevector || method == Method::kDensityMatrix || method == Method::kMatrixProductOperator ? 1 : workers;
-            Check(calls->load() == 2 * 7 * jobs, "Noise clone optimized away gates or replayed the prefix per shot");
+            Check(calls->load() == 2 * 7, "Noise clone optimized away gates or replayed the prefix per shot");
         }
 }
 
@@ -701,7 +728,7 @@ void HostSimulatorReuse()
             circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
             // Both an already-sized simulator and one resized from the whole network
             // must be reused, and every invocation must begin in the zero state.
-            for (size_t shots : {size_t{8}, size_t{8}, size_t{1}})
+            for (size_t shots : {size_t{8}, size_t{8}, size_t{769}, size_t{1}})
             {
                 const auto existing = network->GetSimulator();
                 existing->ApplyX(0);
@@ -1395,7 +1422,9 @@ void MultinomialTerminalDispatch()
     network->Configure("mps_sample_measure_algorithm", "mps_apply_measure");
     Check(workers(Method::kMatrixProductState, 1, 8192) == 4, "Explicit MPS measurement algorithm lost its parallel workers");
     network->Configure("sampling_policy", "reproducible_v1");
-    Check(workers(Method::kExtendedStabilizer, 1, 8192) == 4, "Explicit sampling policy changed terminal shot partitioning");
+    Check(workers(Method::kExtendedStabilizer, 1, 8192) == 1, "Explicit default sampling policy split an adaptive terminal batch");
+    network->Configure("sampling_policy", "legacy");
+    Check(workers(Method::kExtendedStabilizer, 1, 8192) == 4, "Explicit legacy sampling policy lost its native shot workers");
 
     // Both public entry points should pass the distinct measured width and
     // draw one batch with the same seed regardless of the worker limit.
@@ -1422,6 +1451,56 @@ void MultinomialTerminalDispatch()
             Check(one == run(4), "Explicit auto and the default chose different terminal count streams");
         }
     }
+}
+
+// The first logical terminal batch samples the prepared state itself, and the
+// others either keep sampling it (one worker) or copy it afterwards. What a
+// sampler prepared for an earlier batch (an MPS moves the measured sites to the
+// head of its chain) must not change what a later one draws: the seeded counts
+// do not depend on the worker count, and the circuit is evolved once.
+void TerminalBatchesSampleThePreparedState()
+{
+    for (auto method : {Method::kStabilizer, Method::kExtendedStabilizer, Method::kMatrixProductState, Method::kMatrixProductOperator})
+        for (bool readout : {false, true})
+        {
+            const std::string context = " (method=" + std::to_string(static_cast<int>(method)) + ", readout=" + std::to_string(readout) + ")";
+            auto calls = std::make_shared<std::atomic<size_t>>(0);
+            auto circuit = CF::CreateCircuit();
+            circuit->AddOperation(std::make_shared<CountedX>(calls));
+            circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+            for (Types::qubit_t qubit = 0; qubit + 1 < 6; ++qubit)
+                circuit->AddOperation(CF::CreateGate(Gate::kCXGateType, qubit, qubit + 1));
+            circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 1));
+            circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 3));
+            // Measured sites that are neither adjacent nor at the head of the chain.
+            auto measured = std::static_pointer_cast<Circuits::MeasurementOperation<>>(CF::CreateMeasurement({{4, 0}, {1, 1}, {3, 2}}));
+            if (readout)
+                measured->SetReadout({{0.2, 0.35}, {0.4, 0.1}, {0.15, 0.25}});
+            circuit->AddOperation(measured);
+            auto network = MakeNetwork(Backend::kQCSim, method, 3, 6);
+            network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
+            network->Configure("seed", "11");
+            // The per-shot samplers: an adaptive one would draw a single full batch.
+            network->Configure("counts_policy", "legacy");
+            const auto run = [&](size_t workers, size_t shots) {
+                network->SetMaxSimulators(workers);
+                calls->store(0);
+                const auto counts = network->RepeatedExecuteOnHost(circuit, 0, shots);
+                Check(calls->load() == 1, "Terminal batches evolved the circuit again" + context);
+                size_t total = 0;
+                for (const auto &entry : counts)
+                    total += entry.second;
+                Check(total == shots, "Terminal batches lost shots" + context);
+                return counts;
+            };
+            // Five full batches and a one-shot tail, then a single batch.
+            const auto serial = run(1, 1281);
+            Check(serial.size() > 2, "Terminal batches collapsed the prepared state" + context);
+            Check(run(1, 1281) == serial, "Sampling the prepared state did not replay" + context);
+            for (size_t workers : {size_t{2}, size_t{4}})
+                Check(run(workers, 1281) == serial, "Seeded terminal batches depend on the worker count" + context);
+            Check(run(4, 256) == run(1, 256), "A single terminal batch depends on the worker count" + context);
+        }
 }
 
 void ClearedMpoStillSamplesInParallel()
@@ -1590,7 +1669,8 @@ void IndependentShotStreams()
 #ifdef _OPENMP
     const int previous = omp_get_max_threads();
 #endif
-    for (auto method : {Method::kStatevector, Method::kDensityMatrix, Method::kPathIntegral})
+    for (auto method : {Method::kStatevector, Method::kDensityMatrix, Method::kPathIntegral, Method::kStabilizer, Method::kExtendedStabilizer,
+                        Method::kMatrixProductState, Method::kMatrixProductOperator})
         for (bool prepared : {false, true})
             for (size_t shots : {size_t{1}, size_t{17}, size_t{257}})
             {
@@ -1823,17 +1903,24 @@ void UnseededExecuteStaysUnseeded()
     auto circuit = CF::CreateCircuit();
     for (Types::qubit_t qubit = 0; qubit < 4; ++qubit)
         circuit->AddOperation(CF::CreateGate(Gate::kHadamardGateType, qubit));
-    circuit->AddOperation(CF::CreateGate(Gate::kTGateType, 0)); // Not Clifford: keep the selected method.
     circuit->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}, {2, 2}, {3, 3}}));
     circuit->AddOperation(CF::CreateGate(Gate::kXGateType, 0));
     circuit->AddOperation(CF::CreateMeasurement({{0, 0}}));
-    for (auto method : {Method::kStatevector, Method::kDensityMatrix, Method::kPathIntegral})
+    auto terminal = CF::CreateCircuit();
+    for (Types::qubit_t qubit = 0; qubit < 4; ++qubit)
+        terminal->AddOperation(CF::CreateGate(Gate::kHadamardGateType, qubit));
+    terminal->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}, {2, 2}, {3, 3}}));
+    for (auto method : {Method::kStatevector, Method::kDensityMatrix, Method::kPathIntegral, Method::kStabilizer, Method::kExtendedStabilizer,
+                        Method::kMatrixProductState, Method::kMatrixProductOperator})
         for (bool host : {false, true})
             for (bool prepared : {false, true})
             {
                 const std::string context =
                     " (method=" + std::to_string(static_cast<int>(method)) + ", host=" + std::to_string(host) + ", prepared=" + std::to_string(prepared) + ")";
                 auto network = MakeNetwork(Backend::kQCSim, method, 4, 4);
+                // Match the execution width so Execute retains the actual job
+                // simulator instead of replacing it with a fresh placeholder.
+                network->CreateSimulator(Backend::kQCSim, method, 4);
                 network->GetController()->SetRemapper(std::make_shared<SingleHostRemapper>());
                 network->SetOptimizeSimulator(prepared);
                 if (host)
@@ -1845,6 +1932,59 @@ void UnseededExecuteStaysUnseeded()
                 const auto second = network->RepeatedExecute(circuit, 256);
                 Check(network->GetSimulator()->GetConfiguration("seed").empty(), "Network captured a trajectory seed after Execute" + context);
                 Check(first != second, "Unseeded executions after Execute replayed one stream" + context);
+                for (size_t workers : {size_t{1}, size_t{4}})
+                {
+                    network->SetMaxSimulators(workers);
+                    const auto sample = [&](const std::shared_ptr<Circuit> &input) {
+                        return host ? network->RepeatedExecuteOnHost(input, 0, 513) : network->RepeatedExecute(input, 513);
+                    };
+                    const auto firstTerminal = sample(terminal);
+                    Check(firstTerminal != sample(terminal), "Unseeded terminal batches replayed a captured execution seed" + context);
+                    Check(network->GetSimulator()->GetConfiguration("seed").empty(), "Terminal batches configured an execution seed" + context);
+                }
+            }
+}
+
+void TransientExecutionCloneStreams()
+{
+    for (auto method : {Method::kStabilizer, Method::kExtendedStabilizer, Method::kMatrixProductState, Method::kMatrixProductOperator})
+        for (bool seeded : {false, true})
+            for (const char *fusion : {"false", "true"})
+            {
+                const std::string context =
+                    " (method=" + std::to_string(static_cast<int>(method)) + ", seeded=" + std::to_string(seeded) + ", fusion=" + fusion + ")";
+                auto source = Simulators::SimulatorsFactory::CreateSimulator(Backend::kQCSim, method);
+                source->Configure("gate_fusion", fusion);
+                if (seeded)
+                    source->SetSeed(73);
+                source->AllocateQubits(3);
+                source->Initialize();
+                for (Types::qubit_t qubit = 0; qubit < 3; ++qubit)
+                    source->ApplyH(qubit);
+                source->SaveState();
+                source->SeedForExecution(0);
+                Check(source->GetConfiguration("seed") == (seeded ? "73" : ""), "Transient seeding changed user configuration" + context);
+                auto first = source->CloneForExecution(0);
+                auto repeated = source->CloneForExecution(0);
+                Check(first->GetConfiguration("seed") == (seeded ? "0" : ""), "Execution clone changed seed presence" + context);
+                for (size_t draw = 0; draw < 16; ++draw)
+                    Check(first->RandomUniform() == repeated->RandomUniform(), "Execution clone readout streams did not replay" + context);
+                Check(first->SampleCountsMany({0, 1, 2}, 513) == repeated->SampleCountsMany({0, 1, 2}, 513),
+                      "Execution clone measurement streams did not replay" + context);
+                source->Reset();
+                Check(source->GetConfiguration("sampling_seed") == "0", "Reset replaced the execution stream" + context);
+                if (!seeded)
+                {
+                    source->Initialize();
+                    Check(source->GetConfiguration("seed").empty() && source->GetConfiguration("sampling_seed") != "0",
+                          "Reinitialization retained a transient seed" + context);
+                }
+
+                source->SetSeed(73);
+                const auto ordinarySeed = source->Clone()->GetConfiguration("seed");
+                source->SetSeed(73);
+                source->CloneForExecution(11);
+                Check(source->Clone()->GetConfiguration("seed") == ordinarySeed, "Execution clone consumed an ordinary clone stream" + context);
             }
 }
 
@@ -2833,6 +2973,7 @@ try
     HostSimulatorReuse();
     ExecuteTrajectoryPreservesState();
     UnseededExecuteStaysUnseeded();
+    TransientExecutionCloneStreams();
     DistributedSimulatorReuse();
     RandomJobs();
     RandomSeedPolicy();
@@ -2853,6 +2994,7 @@ try
     KeptMixedCandidateIsPrepared();
     ClearedMpoStillSamplesInParallel();
     MultinomialTerminalDispatch();
+    TerminalBatchesSampleThePreparedState();
     ClassicalBitIdsDoNotDeferWires();
     MixedStateCandidates();
     ConfiguredCandidatesDecide();

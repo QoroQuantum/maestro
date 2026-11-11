@@ -887,11 +887,12 @@ void ExecuteNoisyDispatch()
             Require(options.rows ? records.rows.size() == 300 * width : total == 300, "frame records lost shots");
         }
 
-    // Seeded and legacy requests keep the scalar trajectories and their exact output.
+    // Seeded auto requests use reproducible frames; explicit legacy stays scalar.
     const auto seeded = ExecuteNoisy(circuit, model, MethodConfig(Method::kExtendedStabilizer, 5), 2000, size_t{2000}, std::nullopt, counts);
     const auto legacy = ExecuteNoisy(circuit, model, MethodConfig(Method::kExtendedStabilizer, 5, "legacy"), 2000, size_t{2000}, std::nullopt, counts);
-    Require(seeded.sampling_strategy != "extended_frame_v1" && legacy.sampling_strategy != "extended_frame_v1", "a seeded request changed its sampler");
-    Require(RecordsHistogram(seeded, width) == RecordsHistogram(legacy, width), "a seeded auto request lost its legacy sequence");
+    Require(seeded.sampling_strategy == "extended_frame_v1" && legacy.sampling_strategy != "extended_frame_v1", "seeded auto did not select frames");
+    const auto replay = ExecuteNoisy(circuit, model, MethodConfig(Method::kExtendedStabilizer, 5), 2000, size_t{2000}, std::nullopt, counts);
+    Require(RecordsHistogram(seeded, width) == RecordsHistogram(replay, width), "seeded auto frames did not replay");
     const auto unseededLegacy =
         ExecuteNoisy(circuit, model, MethodConfig(Method::kExtendedStabilizer, std::nullopt, "legacy"), 50, size_t{50}, std::nullopt, counts);
     Require(unseededLegacy.sampling_strategy != "extended_frame_v1", "legacy used frames");
@@ -991,10 +992,13 @@ void CheckpointSuffixesOnFrames()
     for (const auto &op : noisy->GetOperations())
         exact->AddOperation(op);
     RequireSameDistribution(RecordsHistogram(records, 2), DensityMatrixHistogram(exact, 2, shots, 41), "checkpoint frames vs density matrix");
-    // Seeded checkpoints keep scalar trajectories; a measuring prefix keeps them too.
+    // Seeded checkpoints use reproducible frames; a measuring prefix stays scalar.
     MaestroExecution::PrefixCheckpoint seeded(prefix, 2, MethodConfig(Method::kExtendedStabilizer, 5));
-    Require(seeded.ExecuteSuffix(suffix, 100, &model, std::nullopt, std::nullopt, 0, false).sampling_strategy != "extended_frame_v1",
-            "a seeded checkpoint changed its sampler");
+    MaestroExecution::PrefixCheckpoint replayed(prefix, 2, MethodConfig(Method::kExtendedStabilizer, 5));
+    const auto seededRecords = seeded.ExecuteSuffix(suffix, 100, &model, std::nullopt, std::nullopt, 0, false);
+    Require(seededRecords.sampling_strategy == "extended_frame_v1", "a seeded checkpoint did not use frames");
+    Require(RecordsHistogram(seededRecords, 2) == RecordsHistogram(replayed.ExecuteSuffix(suffix, 100, &model, std::nullopt, std::nullopt, 0, false), 2),
+            "seeded checkpoint frames did not replay");
     auto measuring = std::make_shared<Circuit>(prefix->GetOperations());
     measuring->AddOperation(Measure(0, 0));
     MaestroExecution::PrefixCheckpoint collapsed(measuring, 2, MethodConfig(Method::kExtendedStabilizer, std::nullopt));

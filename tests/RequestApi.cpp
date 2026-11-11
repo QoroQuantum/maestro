@@ -1,4 +1,5 @@
 // Small, independent checks of the public C ABI; no Python or GPU is required.
+#include "../Utils/Threads/RealizationWorkers.h"
 #include "../maestrolib/Interface.h"
 #include <boost/json.hpp>
 #include <cmath>
@@ -67,10 +68,10 @@ void TestFrameCountRequests()
 {
     auto request = Request("execute", 2, "h q[0]; cx q[0],q[1]; measure q -> c;", "stabilizer");
     request["execution"].as_object()["seed"] = 0;
-    request["simulator"].as_object()["options"] = j::object{{"counts_policy", "legacy"}};
-    const auto legacy = Call(request);
     request["simulator"].as_object()["options"] = j::object{{"counts_policy", "auto"}};
-    Check(Call(request).at("counts") == legacy.at("counts"), "Automatic seeded native counts changed the legacy sequence");
+    const auto seededAuto = Call(request);
+    Check(seededAuto.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1", "Seeded automatic native counts did not select frames");
+    Check(Call(request).at("counts") == seededAuto.at("counts"), "Seeded automatic native counts did not replay");
     request["simulator"].as_object()["options"] = j::object{{"counts_policy", "frame_v1"}};
     const auto framed = Call(request);
     Check(framed.at("execution_metadata").at("sampling_strategy") == "reference_frame_v1", "Explicit native frame counts did not select frames");
@@ -159,8 +160,8 @@ void TestFrameCountRequests()
         Check(total == 80 && result.at("shots").to_number<uint64_t>() == 80, "Native Bell counts lost shots");
     }
 
-    // Either explicit seed source, including zero, keeps a Stabilizer request
-    // off the automatic frame path. The noise seed also seeds measurements.
+    // Both seed sources, including zero, retain the automatic frame path.
+    // The noise seed also seeds measurements when there is no execution seed.
     for (const bool simulatorSeed : {false, true})
     {
         auto seeded = noisy;
@@ -168,14 +169,12 @@ void TestFrameCountRequests()
             seeded["execution"].as_object()["seed"] = 0;
         else
             seeded["noise"].as_object()["seed"] = 0;
-        seeded["simulator"].as_object()["options"] = j::object{{"counts_policy", "legacy"}};
-        const auto oldCounts = Call(seeded);
         seeded["simulator"].as_object()["options"] = j::object{{"counts_policy", "auto"}};
         const auto seededAutomatic = Call(seeded);
         Check(seededAutomatic.at("seed").to_number<uint64_t>() == 0, "Native automatic counts lost explicit seed zero");
-        Check(seededAutomatic.at("counts") == oldCounts.at("counts"), "Native noisy seed zero changed the legacy histogram");
+        Check(seededAutomatic.at("counts") == Call(seeded).at("counts"), "Native noisy seed zero did not replay");
         const auto *strategy = seededAutomatic.at("execution_metadata").as_object().if_contains("sampling_strategy");
-        Check(!strategy || *strategy != "reference_frame_v1", "Explicit native seed zero incorrectly selected automatic frames");
+        Check(strategy && *strategy == "reference_frame_v1", "Explicit native seed zero disabled automatic frames");
     }
 
     auto terminal = noisy;
@@ -190,14 +189,101 @@ void TestFrameCountRequests()
           "A noise-only seed disabled automatic terminal counts");
     options["counts_policy"] = "multinomial_v1";
     Check(Call(terminal).at("counts") == automaticCounts.at("counts"), "Noise-seeded automatic counts did not replay");
+
+    // Shots that share a noise realization are batched like one terminal
+    // request: two realizations resolve to the adaptive policy as one does.
+    auto shared = terminal;
+    shared["execution"].as_object()["shots"] = 2048;
+    shared["noise"].as_object()["realizations"] = 2;
+    auto &sharedOptions = shared["simulator"].as_object()["options"].as_object();
+    sharedOptions["counts_policy"] = "auto";
+    const auto sharedCounts = Call(shared);
+    Check(sharedCounts.at("noise").at("realizations").to_number<size_t>() == 2 &&
+              sharedCounts.at("execution_metadata").at("configured_options").at("counts_policy") == "multinomial_v1",
+          "Shared noise realizations did not resolve to adaptive terminal counts");
+    sharedOptions["counts_policy"] = "multinomial_v1";
+    Check(Call(shared).at("counts") == sharedCounts.at("counts"), "Shared-realization automatic counts differ from the explicit policy");
+
     terminal["execution"].as_object()["return_samples"] = true;
-    options["counts_policy"] = "legacy";
-    const auto legacyRows = Call(terminal).at("samples");
     for (const char *policy : {"auto", "multinomial_v1"})
     {
         options["counts_policy"] = policy;
-        Check(Call(terminal).at("samples") == legacyRows, "A count policy changed the ordered noise-seeded rows");
+        const auto seededRows = Call(terminal).at("samples");
+        Check(Call(terminal).at("samples") == seededRows, "Adaptive ordered noise-seeded rows did not replay");
     }
+}
+
+void TestSeededSharedRealizationWorkers()
+{
+    // More than one shot shares each sampled noisy circuit. Outer workers
+    // must execute the whole batch, with stable realization seeds, rather
+    // than silently running one shot or falling back because a seed is set.
+    for (const char *method : {"statevector", "density_matrix", "matrix_product_state"})
+        for (const bool dynamic : {false, true})
+        {
+            auto request =
+                Request("execute", 2,
+                        dynamic ? "h q[0]; cx q[0],q[1]; measure q[0]->c[0]; h q[0]; measure q->c;" : "h q[0]; cx q[0],q[1]; h q[1]; measure q->c;", method);
+            request["execution"].as_object()["shots"] = 257;
+            request["execution"].as_object()["seed"] = 0;
+            request["noise"] = j::object{{"mode", "pauli"},
+                                         {"evaluation", "trajectories"},
+                                         {"realizations", 19},
+                                         {"seed", 7},
+                                         {"channels", j::array{j::object{{"kind", "bit_flip"}, {"targets", j::array{0}}, {"probability", 0.17}}}}};
+            auto &simulator = request["simulator"].as_object();
+            simulator["selection"] = "fixed";
+            simulator["options"] = j::object{{"counts_policy", "multinomial_v1"}, {"trajectory_policy", "shot_v1"}, {"max_simulators", 1}};
+            if (std::string(method) == "matrix_product_state")
+                simulator["options"].as_object()["max_bond_dimension"] = 4;
+            const auto serial = Call(request);
+            Check(serial.at("execution_metadata").at("realization_workers").to_number<size_t>() == 1,
+                  "Native max_simulators=1 did not constrain realization workers");
+            simulator["options"].as_object()["max_simulators"] = 4;
+            const auto parallel = Call(request);
+            Check(parallel.at("shots").to_number<size_t>() == 257 && parallel.at("counts") == serial.at("counts"),
+                  "Parallel shared realizations changed their logical seeds or lost shots");
+            Check(Call(request).at("counts") == parallel.at("counts"), "Seeded shared realizations did not replay");
+            const auto workers = parallel.at("execution_metadata").at("realization_workers").to_number<size_t>();
+            const auto expectedWorkers = Utils::RealizationWorkerCount(19, 4);
+            const auto workerMessage = "Multi-shot native worker budget for " + std::string(method) + (dynamic ? " dynamic" : " terminal") + ": got " +
+                                       std::to_string(workers) + ", expected " + std::to_string(expectedWorkers);
+            Check(workers == expectedWorkers, workerMessage.c_str());
+        }
+
+    // A 15-qubit SV occupies 0.5 MiB. Three MiB hold one reserved source
+    // plus only one worker's three retained states, not two such workers.
+    auto bounded = Request("execute", 15, "h q; measure q[0]->c[0]; h q[0]; measure q->c;");
+    bounded["execution"].as_object()["shots"] = 12;
+    bounded["noise"] = j::object{{"mode", "pauli"},
+                                 {"evaluation", "trajectories"},
+                                 {"realizations", 4},
+                                 {"seed", 7},
+                                 {"channels", j::array{j::object{{"kind", "bit_flip"}, {"targets", j::array{0}}, {"probability", 0.17}}}}};
+    bounded["simulator"].as_object()["selection"] = "fixed";
+    bounded["simulator"].as_object()["options"] =
+        j::object{{"counts_policy", "multinomial_v1"}, {"trajectory_policy", "shot_v1"}, {"max_simulators", 4}, {"trajectory_max_memory_mb", 3}};
+    const auto limited = Call(bounded);
+    Check(limited.at("execution_metadata").at("realization_workers").to_number<size_t>() == 1,
+          "Dynamic realization workers exceeded the three-state memory budget");
+    Check(limited.at("shots").to_number<size_t>() == 12 && Call(bounded).at("counts") == limited.at("counts"),
+          "Memory-limited shared realizations lost shots or reproducibility");
+
+    // A two-qubit MPS with bond cap 4 is budgeted at just over 1 MiB per
+    // state. Eight MiB leave six slots after the reserved source: enough for
+    // only one four-copy dynamic worker, not two three-copy workers.
+    auto tensor = Request("execute", 2, "h q[0]; cx q[0],q[1]; measure q[0]->c[0]; h q[0]; measure q->c;", "matrix_product_state");
+    tensor["execution"].as_object()["shots"] = 12;
+    tensor["execution"].as_object()["seed"] = 0;
+    tensor["noise"] = bounded.at("noise");
+    tensor["simulator"].as_object()["selection"] = "fixed";
+    tensor["simulator"].as_object()["options"] =
+        j::object{{"counts_policy", "multinomial_v1"}, {"max_simulators", 4}, {"max_bond_dimension", 4}, {"trajectory_max_memory_mb", 8}};
+    const auto tensorLimited = Call(tensor);
+    Check(tensorLimited.at("execution_metadata").at("realization_workers").to_number<size_t>() == 1,
+          "Dynamic MPS realization workers omitted their clone-owned saved state");
+    Check(tensorLimited.at("shots").to_number<size_t>() == 12 && Call(tensor).at("counts") == tensorLimited.at("counts"),
+          "Memory-limited MPS shared realizations lost shots or reproducibility");
 }
 
 double Real(const j::value &value)
@@ -610,6 +696,7 @@ try
     TestNetworkSimulatorPlaceholders();
     TestCandidateWidthRequests();
     TestCandidateWorkerBudget();
+    TestSeededSharedRealizationWorkers();
     char *capabilities = MaestroGetCapabilitiesJson();
     Check(capabilities != nullptr, "Missing capabilities");
     auto caps = j::parse(capabilities).as_object();

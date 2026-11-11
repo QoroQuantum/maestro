@@ -155,8 +155,8 @@ struct SimulatorConfig
     std::optional<uint64_t> seed = std::nullopt;
     std::optional<int> gpu_device = std::nullopt;
     bool enable_causal_cone_reduction = true;
-    // Exact independent sampling of disjoint measurement cones. Opt-in because
-    // decomposing a seeded sampler changes its random streams.
+    // Exact independent sampling of disjoint measurement cones. Opt-in while
+    // automatic selection lacks a workload-based cost model.
     bool enable_sampling_reduction = false;
     // Average over unobserved reset outcomes when reducing pure trajectories.
     // Preserves ensemble expectations/distributions, not individual trajectories.
@@ -296,6 +296,15 @@ inline size_t RealizationBudgetMB(const SimulatorConfig &config)
     return value == config.native_options.end() ? 1024 : static_cast<size_t>(std::stoull(value->second));
 }
 
+// ConfigureNetwork applies the typed worker limit after native options.
+inline std::optional<size_t> EffectiveMaxSimulators(const SimulatorConfig &config)
+{
+    if (config.max_simulators)
+        return config.max_simulators;
+    const auto value = config.native_options.find("max_simulators");
+    return value == config.native_options.end() ? std::nullopt : std::optional<size_t>{static_cast<size_t>(std::stoull(value->second))};
+}
+
 // Bytes of one realization on `qubits` qubits, or 0 when unbounded or unknown.
 inline long double RealizationBytes(const SimulatorConfig &config, size_t qubits)
 {
@@ -336,6 +345,30 @@ inline long double MaxRealizationBytes(const SimulatorConfig &config, size_t qub
             return 0;
         largest = std::max(largest, bytes);
     }
+    return largest;
+}
+
+// Retained register copies for one network realization. A fixed one-shot job
+// needs no reusable shot checkpoint. Automatic selection can prepare a saved
+// prefix even for one shot. Dense clones share that prepared saved state,
+// whereas bounded tensor/tableau clones copy it. The latter bound also covers
+// private terminal measurement snapshots. State-byte workspace allowances do
+// not replace accounting for these independently retained copies.
+inline size_t NetworkRealizationCopies(const SimulatorConfig &config, bool multiple_shots)
+{
+    if (!multiple_shots && config.fixed_backend)
+        return 2;
+    const auto copies = [](Simulators::SimulationType method) {
+        return method == Simulators::SimulationType::kStabilizer || method == Simulators::SimulationType::kMatrixProductState ||
+                       method == Simulators::SimulationType::kMatrixProductOperator
+                   ? size_t{4}
+                   : size_t{3};
+    };
+    if (!HasCandidateList(config))
+        return copies(config.simulation_type);
+    size_t largest = 3;
+    for (const auto &candidate : config.optimization_candidates)
+        largest = std::max(largest, copies(candidate.second));
     return largest;
 }
 
@@ -422,27 +455,26 @@ inline void SetCountsPolicy(SimulatorConfig &config, std::string policy)
     config.counts_policy = std::move(policy);
 }
 
-// Seed zero is explicit too. Only an absent seed permits automatic reference frames.
 // auto never replaces a method the ordinary executor would honor. frame_v1 is an
 // explicit opt-in and may replace an automatically selected method, but an
 // explicit candidate list names every backend the request allows: frame_v1
 // uses the stabilizer only if that list includes it. Sampling reduction keeps
 // the ordinary executor, which splits disjoint measurement cones.
-inline bool PreferFrameCounts(const SimulatorConfig &config, std::optional<uint64_t> noise_seed = std::nullopt)
+inline bool PreferFrameCounts(const SimulatorConfig &config)
 {
     if (!AdmitsReferenceFrames(config) || config.enable_sampling_reduction)
         return false;
     const auto &policy = EffectiveCountsPolicy(config);
     if (policy == "frame_v1")
         return true;
-    return policy == "auto" && AdmitsStabilizerExecution(config) && !config.seed && !noise_seed && !config.native_options.count("seed");
+    return policy == "auto" && AdmitsStabilizerExecution(config);
 }
 
 // The backend makes the cost-based choice once it knows the distribution.
 // The optional noise seed remains accepted by existing C++ callers.
 inline bool PreferMultinomialCounts(const SimulatorConfig &config, std::optional<uint64_t> = std::nullopt)
 {
-    if (config.native_options.count("sampling_policy"))
+    if (const auto sampling = config.native_options.find("sampling_policy"); sampling != config.native_options.end() && sampling->second == "legacy")
         return false;
     const auto &policy = EffectiveCountsPolicy(config);
     if (policy == "multinomial_v1")
@@ -466,11 +498,10 @@ inline bool PreferMultinomialCounts(const SimulatorConfig &config, std::optional
 // Whether noisy extended_stabilizer shots may run on batched Pauli frames
 // (ExtendedFrameSampler): the QCSim extended stabilizer itself, as a direct
 // session runs it, so not a candidate list (the network selects from it) or
-// sampling reduction (the network splits measurement cones). The frames draw
-// another random sequence than scalar trajectories, so as for frame counts
-// auto changes only unseeded requests, frame_v1 opts seeded ones in and
+// sampling reduction (the network splits measurement cones). Both automatic
+// and explicitly requested frames support deterministic seeded execution;
 // legacy keeps the scalar trajectories.
-inline bool PreferExtendedFrames(const SimulatorConfig &config, std::optional<uint64_t> noise_seed = std::nullopt)
+inline bool PreferExtendedFrames(const SimulatorConfig &config)
 {
     if (config.simulator_type != Simulators::SimulatorType::kQCSim || config.simulation_type != Simulators::SimulationType::kExtendedStabilizer ||
         HasCandidateList(config) || config.enable_sampling_reduction)
@@ -478,7 +509,7 @@ inline bool PreferExtendedFrames(const SimulatorConfig &config, std::optional<ui
     const auto &policy = EffectiveCountsPolicy(config);
     if (policy == "frame_v1")
         return true;
-    return policy == "auto" && !config.seed && !noise_seed && !config.native_options.count("seed");
+    return policy == "auto";
 }
 
 // Native Configure keys for typed options without a one-to-one key. Precision

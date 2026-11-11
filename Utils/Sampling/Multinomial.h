@@ -11,11 +11,11 @@
 
 namespace Utils::Sampling
 {
-// Direct simulators and network shot partitioning interpret an unset policy
-// as auto. An explicit low-level sampler retains its own shot sequence.
-inline bool AllowsMultinomialCounts(std::string_view policy, bool samplerPinned)
+// Reproducibility does not prescribe a sampling algorithm. Only an explicit
+// legacy sampler excludes the adaptive count strategies.
+inline bool AllowsMultinomialCounts(std::string_view policy, std::string_view samplingPolicy)
 {
-    return !samplerPinned && (policy.empty() || policy == "auto" || policy == "multinomial_v1");
+    return samplingPolicy != "legacy" && (policy.empty() || policy == "auto" || policy == "multinomial_v1");
 }
 
 // Count maps only: each binomial draw must amortize its higher constant cost

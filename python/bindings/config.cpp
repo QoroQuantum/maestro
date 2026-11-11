@@ -220,14 +220,14 @@ void bind_config(nb::module_ &m)
                     "Require the selected simulator and method; disable automatic backend replacement, including reference-frame sampling.");
 
     BindConfigField(config_class, "counts_policy", &SimulatorConfig::counts_policy,
-                    "'auto' allows adaptive multinomial terminal counts with or without a seed. Unseeded requests may also use frames or direct trajectories. "
+                    "'auto' allows eligible adaptive terminal counts, frames and direct trajectories with or without a seed. "
                     "'legacy' uses the ordinary sampler, 'frame_v1' enables frame counts, and 'multinomial_v1' selects adaptive terminal counts. "
-                    "On the same build, the same request, seed and policy reproduce the histogram.");
+                    "The same request, seed and configuration reproduce the histogram within one Maestro version; sequences may change between versions.");
 
     BindConfigField(config_class, "allow_reset_marginalization", &SimulatorConfig::allow_reset_marginalization,
                     "Allow ensemble-equivalent reset marginalization; individual trajectories can change.");
     BindConfigField(config_class, "enable_sampling_reduction", &SimulatorConfig::enable_sampling_reduction,
-                    "Opt into exact independent sampling of disjoint measurement cones; changes seeded random streams.");
+                    "Opt into exact independent sampling of disjoint measurement cones; repeated seeded requests remain reproducible.");
     BindConfigField(config_class, "observable_error_tolerance", &SimulatorConfig::observable_error_tolerance,
                     "Opt-in absolute expectation error budget for bounded backward evaluation of exact noisy channels.");
     BindConfigField<false>(config_class, "min_cluster_qubits", &SimulatorConfig::min_cluster_qubits,
@@ -240,15 +240,14 @@ void bind_config(nb::module_ &m)
                     "Nonnegative overflow penalty relative to capped runtime cost. Default 1; zero charges runtime alone.");
 
     BindConfigField(config_class, "trajectory_policy", &SimulatorConfig::trajectory_policy,
-                    "QCSim dynamic circuits: 'block_v1' preserves existing seeded counts; 'shot_v1' "
+                    "QCSim dynamic circuits: 'block_v1' schedules fixed logical blocks; 'shot_v1' "
                     "distributes individual shots with streams independent of worker count. The "
-                    "policies give different seeded sequences. On statevector, density-matrix and "
-                    "path-integral runs None uses 'shot_v1'. Stabilizer, extended-stabilizer, MPS and "
-                    "MPO runs use a policy only when it is set; None keeps their earlier, "
-                    "worker-dependent seeded sequences. Terminal sampling is unaffected.");
+                    "policies can give different seeded sequences. None uses 'shot_v1' on supported "
+                    "QCSim statevector, density-matrix, path-integral, stabilizer, extended-stabilizer, "
+                    "MPS and MPO trajectories. Terminal sampling is unaffected.");
     BindConfigField<false>(config_class, "trajectory_max_memory_mb", &SimulatorConfig::trajectory_max_memory_mb,
                            "Positive MiB estimate limiting concurrent QCSim work: dense trajectory "
-                           "shots (and, under an explicit trajectory_policy, stabilizer and bounded MPS/MPO "
+                           "shots (including stabilizer and bounded MPS/MPO "
                            "shots), and parallel noise realizations (executions, estimates, fidelities) and "
                            "checkpoint suffixes of statevector, density-matrix, stabilizer and bounded MPS/MPO runs. None "
                            "uses 1024 MiB. This is a soft concurrency budget, not a process memory "

@@ -185,18 +185,16 @@ void CheckpointMultinomialCounts()
 
     auto config = Config(Method::kStatevector);
     config.seed.reset();
-    config.counts_policy = "legacy";
     const auto prefix = CF::CreateCircuit();
-    MaestroExecution::PrefixCheckpoint legacy(prefix, 2, config);
     const auto run = [&](MaestroExecution::PrefixCheckpoint &checkpoint, std::optional<uint64_t> seed, bool rows) {
         auto result = checkpoint.ExecuteSuffix(circuit, shots, nullptr, std::nullopt, seed, 6, rows);
         std::sort(result.counts.begin(), result.counts.end());
         return result;
     };
-    const auto oldRows = run(legacy, 42, true).rows;
     config.counts_policy = "multinomial_v1";
     MaestroExecution::PrefixCheckpoint adaptive(prefix, 2, config);
     const auto expectedCounts = run(adaptive, 42, false).counts;
+    const auto expectedRows = run(adaptive, 42, true).rows;
     for (const std::string policy : {"auto", "multinomial_v1"})
     {
         config.counts_policy = policy;
@@ -205,7 +203,7 @@ void CheckpointMultinomialCounts()
         Check(first.width == 6 && first.counts.size() == 2 && first.rows.empty(), "Checkpoint count padding or storage changed");
         const auto seeded = run(checkpoint, 42, false).counts;
         Check(seeded == expectedCounts, "A prior unseeded checkpoint call changed the seeded adaptive histogram");
-        Check(run(checkpoint, 42, true).rows == oldRows, "Count policy changed seeded checkpoint raw rows");
+        Check(run(checkpoint, 42, true).rows == expectedRows, "Adaptive checkpoint raw rows did not replay");
         Check(run(checkpoint, 42, false).counts == seeded, "Count replay changed after a raw checkpoint call");
     }
     config.counts_policy = "auto";
@@ -239,8 +237,40 @@ void CheckpointMultinomialCounts()
                           result.counts.front() == std::make_pair(std::vector<bool>{!inverted}, batch),
                       "Prepared count sampling overwrote its checkpoint or replayed the suffix");
             }
-        Check(checkpoint.ExecuteSuffix(measure, 17, nullptr, std::nullopt, 42, 1, true).sampling_strategy == "trajectory_v1",
-              "Checkpoint count policy changed the existing raw-record execution path");
+        Check(checkpoint.ExecuteSuffix(measure, 17, nullptr, std::nullopt, 42, 1, true).sampling_strategy == "terminal_v1",
+              "Safe checkpoint raw records replayed the terminal suffix");
+    }
+}
+
+// sampling_policy is a native option, not a Python SimulatorConfig property.
+// Exercise PrefixCheckpoint itself: specifying its default must keep adaptive
+// terminal sampling for both counts and ordered rows on the same checkpoint.
+void ExplicitSamplingPolicyKeepsAdaptiveCheckpoint(Method method)
+{
+    constexpr size_t shots = 4096;
+    auto prefix = CF::CreateCircuit();
+    prefix->AddOperation(CF::CreateGate(Gate::kHadamardGateType, 0));
+    auto suffix = CF::CreateCircuit();
+    suffix->AddOperation(CF::CreateMeasurement({{0, 0}, {1, 1}}));
+    auto config = Config(method);
+    config.counts_policy = "auto";
+    config.seed = 0;
+    MaestroExecution::PrefixCheckpoint implicit(prefix, 2, config);
+    config.native_options["sampling_policy"] = "reproducible_v1";
+    Check(MaestroExecution::PreferMultinomialCounts(config), "Explicit reproducible sampling disabled adaptive counts");
+    MaestroExecution::PrefixCheckpoint explicitDefault(prefix, 2, config);
+    const auto run = [&](MaestroExecution::PrefixCheckpoint &checkpoint, bool rows) {
+        auto result = checkpoint.ExecuteSuffix(suffix, shots, nullptr, std::nullopt, 0, 2, rows);
+        Check(result.sampling_strategy == "terminal_v1", "Explicit reproducible checkpoint replayed its terminal suffix");
+        std::sort(result.counts.begin(), result.counts.end());
+        return result;
+    };
+    const auto expectedCounts = run(implicit, false).counts;
+    const auto expectedRows = run(implicit, true).rows;
+    for (size_t repeat = 0; repeat < 2; ++repeat)
+    {
+        Check(run(explicitDefault, false).counts == expectedCounts, "Explicit reproducible checkpoint changed the adaptive histogram");
+        Check(run(explicitDefault, true).rows == expectedRows, "Explicit reproducible checkpoint changed adaptive ordered rows");
     }
 }
 
@@ -545,6 +575,8 @@ void NestedChannelsLeaveTheIdealBaseline()
 void TestMixedStateExecution()
 {
     CheckpointMultinomialCounts();
+    for (const auto method : {Method::kStatevector, Method::kExtendedStabilizer})
+        ExplicitSamplingPolicyKeepsAdaptiveCheckpoint(method);
     for (const auto method : {Method::kDensityMatrix, Method::kMatrixProductOperator})
     {
         PreparedStateContract(method);

@@ -177,7 +177,11 @@ class ImmediateQCSimSimulator : public ISimulator
             return {};
         const bool adaptiveSampling =
             std::string(MethodName()) == "statevector" || std::string(MethodName()) == "density_matrix" || std::string(MethodName()) == "path_integral";
-        if (adaptiveSampling && std::string(key) == "sampling_seed")
+        // Fusion wrappers use this runtime root for readout streams. It must
+        // remain separate from the user's persistent seed configuration.
+        const bool executionSampling = adaptiveSampling || std::string(MethodName()) == "stabilizer" || std::string(MethodName()) == "extended_stabilizer" ||
+                                       std::string(MethodName()) == "matrix_product_state" || std::string(MethodName()) == "matrix_product_operator";
+        if (executionSampling && std::string(key) == "sampling_seed")
             return std::to_string(samplingSeed);
         if (adaptiveSampling && std::string(key) == "sampling_policy" && !configuration.IsSet(key))
             return "reproducible_v1";
@@ -429,7 +433,7 @@ class ImmediateQCSimSimulator : public ISimulator
 
     bool AllowMultinomialCounts() const
     {
-        return Utils::Sampling::AllowsMultinomialCounts(configuration.GetConfiguration("counts_policy"), configuration.IsSet("sampling_policy"));
+        return Utils::Sampling::AllowsMultinomialCounts(configuration.GetConfiguration("counts_policy"), configuration.GetConfiguration("sampling_policy"));
     }
 
     Utils::Sampling::Options SamplingOptions() const

@@ -182,8 +182,8 @@ void bind_api(nb::module_ &m)
             }
             if (!plan)
                 return nb::none();
-            return nb::cast(ExtendedFramePlan{std::move(*plan), config.max_simulators.value_or(0), MaestroExecution::RealizationBudgetMB(config),
-                                              model->has_sampled_resets_on(*circuit)});
+            return nb::cast(ExtendedFramePlan{std::move(*plan), MaestroExecution::EffectiveMaxSimulators(config).value_or(0),
+                                              MaestroExecution::RealizationBudgetMB(config), model->has_sampled_resets_on(*circuit)});
         }
         if (!MaestroExecution::AdmitsReferenceFrames(config))
             return nb::none();

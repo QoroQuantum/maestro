@@ -232,19 +232,17 @@ void TestFixedBackendShotReuse()
                         // to the shared evolution. Genuine classical branches still
                         // replay their suffix per shot.
                         const bool exactChannels = config.simulation_type == Method::kDensityMatrix || config.simulation_type == Method::kMatrixProductOperator;
-                        const bool reproducibleSampling = config.simulation_type == Method::kStatevector || config.simulation_type == Method::kDensityMatrix;
                         const bool terminal = scenario == 0 || scenario == 4 || (exactChannels && (scenario == 2 || scenario == 5));
                         const std::string context = std::string(method) + " scenario=" + std::to_string(scenario) + " workers=" + std::to_string(workers) +
                                                     " shots=" + std::to_string(shots) + " on_host=" + std::to_string(onHost);
                         Check(circuit->HasOpsAfterMeasurements(exactChannels) != terminal, "Terminal classification disagrees with backend reset semantics");
-                        // SetMaxSimulators caps the workers at the hardware thread count.
-                        size_t jobs = terminal && (reproducibleSampling || exactChannels) ? 1 : network->GetMaxSimulators();
+                        // Terminal workers share one prepared prefix. Dynamic
+                        // logical jobs prepare once per active worker here.
+                        size_t jobs = terminal ? 1 : network->GetMaxSimulators();
 #ifdef _OPENMP
-                        if (reproducibleSampling)
+                        if (!terminal)
                             jobs = std::min(jobs, static_cast<size_t>(std::max(1, omp_get_max_threads())));
 #endif
-                        if (!reproducibleSampling && jobs > 1)
-                            jobs = (shots + shots / jobs - 1) / (shots / jobs);
                         for (int repeat = 0; repeat < 2; ++repeat)
                         {
                             *prefix = 0;
@@ -529,7 +527,9 @@ void TestFrameCountPolicy()
         Check(PreferMultinomialCounts(configured) == (std::string(policy) == "multinomial_v1"), "A native count policy was ignored");
     }
     configured.native_options["sampling_policy"] = "reproducible_v1";
-    Check(!PreferMultinomialCounts(configured), "A low-level sampler pin was ignored");
+    Check(PreferMultinomialCounts(configured), "Explicit reproducible sampling disabled multinomial counts");
+    configured.native_options["sampling_policy"] = "legacy";
+    Check(!PreferMultinomialCounts(configured), "Explicit legacy sampling did not override multinomial counts");
     SetCountsPolicy(configured, "legacy");
     Check(EffectiveCountsPolicy(configured) == "legacy" && !configured.native_options.count("counts_policy"), "A resolved counts policy was overridden");
     for (const char *policy : {"auto", "legacy", "frame_v1"})
@@ -538,7 +538,7 @@ void TestFrameCountPolicy()
         Check(config.counts_policy == policy, "Counts policy parser lost the option");
         auto seeded = config;
         seeded.seed = 0;
-        Check(PreferFrameCounts(seeded) == (std::string(policy) == "frame_v1"), "Counts policy treated seed zero as unseeded");
+        Check(PreferFrameCounts(seeded) == (std::string(policy) != "legacy"), "Seed zero disabled eligible frame counts");
         Check(PreferFrameCounts(config) == (std::string(policy) != "legacy"), "Unseeded counts policy selection");
         // auto keeps a requested non-Stabilizer method unless the automatic
         // candidates admit the stabilizer; frame_v1 needs automatic selection.
@@ -558,7 +558,7 @@ void TestFrameCountPolicy()
             Check(PreferFrameCounts(statevector) == expected, "Unseeded non-Stabilizer counts policy selection");
             auto seededStatevector = statevector;
             seededStatevector.seed = 0;
-            Check(PreferFrameCounts(seededStatevector) == (automatic && std::string(policy) == "frame_v1"), "Seeded non-Stabilizer counts policy selection");
+            Check(PreferFrameCounts(seededStatevector) == expected, "Seeded non-Stabilizer counts policy selection");
         }
         // An explicit candidate list names every allowed backend. It replaces a
         // requested Stabilizer method too, and binds frame_v1 as well as auto.
