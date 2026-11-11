@@ -989,9 +989,11 @@ void TestNetworkSimulatorPlaceholders()
         // Composer's cost model ranks lists with pure-state candidates; one
         // candidate, or only mixed-state ones, are resolved without it.
 #ifdef MAESTRO_ENABLE_COMPOSER
-        const bool ranked = std::any_of(candidates.begin(), candidates.end(), [](const auto &candidate) {
-            return candidate.second != Method::kDensityMatrix && candidate.second != Method::kMatrixProductOperator;
-        }) && candidates.size() > 1;
+        const bool ranked = std::any_of(candidates.begin(), candidates.end(),
+                                        [](const auto &candidate) {
+                                            return candidate.second != Method::kDensityMatrix && candidate.second != Method::kMatrixProductOperator;
+                                        }) &&
+                            candidates.size() > 1;
 #else
         const bool ranked = false;
 #endif
@@ -1002,19 +1004,14 @@ void TestNetworkSimulatorPlaceholders()
 
     // Every CPU backend runs a one-qubit circuit (the register a one-qubit
     // circuit maps to), through the network and directly.
-    Candidates backends{{Backend::kQCSim, Method::kStatevector},
-                        {Backend::kQCSim, Method::kMatrixProductState},
-                        {Backend::kQCSim, Method::kStabilizer},
-                        {Backend::kQCSim, Method::kTensorNetwork},
-                        {Backend::kQCSim, Method::kPauliPropagator},
-                        {Backend::kQCSim, Method::kExtendedStabilizer},
-                        {Backend::kQCSim, Method::kDensityMatrix},
-                        {Backend::kQCSim, Method::kMatrixProductOperator},
-                        {Backend::kQCSim, Method::kPathIntegral},
-                        {Backend::kCompositeQCSim, Method::kStatevector}};
+    Candidates backends{{Backend::kQCSim, Method::kStatevector},     {Backend::kQCSim, Method::kMatrixProductState},
+                        {Backend::kQCSim, Method::kStabilizer},      {Backend::kQCSim, Method::kTensorNetwork},
+                        {Backend::kQCSim, Method::kPauliPropagator}, {Backend::kQCSim, Method::kExtendedStabilizer},
+                        {Backend::kQCSim, Method::kDensityMatrix},   {Backend::kQCSim, Method::kMatrixProductOperator},
+                        {Backend::kQCSim, Method::kPathIntegral},    {Backend::kCompositeQCSim, Method::kStatevector}};
 #ifndef NO_QISKIT_AER
-    for (const auto method : {Method::kStatevector, Method::kMatrixProductState, Method::kStabilizer, Method::kTensorNetwork, Method::kExtendedStabilizer,
-                              Method::kDensityMatrix})
+    for (const auto method :
+         {Method::kStatevector, Method::kMatrixProductState, Method::kStabilizer, Method::kTensorNetwork, Method::kExtendedStabilizer, Method::kDensityMatrix})
         backends.emplace_back(Backend::kQiskitAer, method);
     backends.emplace_back(Backend::kCompositeQiskitAer, Method::kStatevector);
 #endif
