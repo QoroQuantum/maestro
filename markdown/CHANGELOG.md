@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.14] - 2026-11-11
+
 ### Added
 
 - `SimulatorConfig` exposes the Pauli propagation tuning options that native
@@ -32,6 +34,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native `execute` results report `execution_metadata.realization_workers`,
   the number of workers that ran the noise realizations.
 
+- Fast noisy sampling, shot rows and parallel realizations (`Execution/ReferenceFrameSampler`,
+  `Execution/SampleRecords`, `Execution/NoisyEstimation`, `Execution/PrefixCheckpoint`,
+  `Utils/Threads/RealizationWorkers`):
+  - Reference-frame (Pauli-frame) sampler for noisy Clifford circuits, used for
+    counts under `counts_policy` (`auto`, `legacy`, `frame_v1`), for shot rows,
+    and as a reusable compiled sampler (`compile_reference_sampler` /
+    `ReferenceFrameSampler` in Python and `MaestroCreateReferenceFrameSampler`
+    in the C ABI). Pauli-mixture Kraus channels such as phase damping compile to
+    frames.
+  - Shot rows (`return_samples=True` in Python, `execution.return_samples` in the
+    native JSON API, and `MaestroRunRequestSamples` in the C ABI) returning
+    per-shot classical bit matrices.
+  - Direct trajectory sessions, a precompiled `NoiseInjectionPlan`, and parallel
+    realization workers sharing `trajectory_max_memory_mb`; seeded results do
+    not depend on the worker count.
+- Batched Pauli-frame sampling for noisy QCSim `extended_stabilizer` circuits
+  (`ExtendedFrameBatch`, `ExtendedFrameSampler`, `extended_frame_v1`), exposed
+  through `ExecuteNoisy`, `PrefixCheckpoint`, native `execute` and
+  `checkpoint_batch`, `compile_reference_sampler`, and `maestro.sinter`.
+- Adaptive multinomial terminal count sampling (`Utils/Sampling/Multinomial.h`,
+  `counts_policy="multinomial_v1"`, and automatic unseeded selection under
+  `counts_policy="auto"`), drawing terminal histograms directly from outcome
+  probabilities via sequential binomial splits with rare-outcome grouping on
+  QCSim statevectors, density matrices, path integrals, 1-qubit MPS/MPO
+  marginals and up to 8-bit extended-stabilizer marginals.
+- Automatic realization policy (`Execution/NoisePolicy.h`) and prepared-state
+  reuse (`Execution/TerminalSampling.h`):
+  - Omitted `noise_realizations` (`None` in Python; omitted, `null` or `"auto"`
+    in JSON) resolves to 1 realization when exact density-matrix or MPO channels
+    make evolution deterministic, and 64 (counts) or 100 (estimates and
+    fidelity) otherwise.
+  - Terminal measurements on mixed-state backends and eligible QCSim
+    statevector, stabilizer and MPS runs sample one prepared state per
+    realization (`terminal_v1` / `mixed_v1`), including checkpoint suffixes and
+    exact prefix noise (`prefix_noise_model` / `noise.prefix`).
+  - `SimulatorConfig.optimization_candidates` bound in Python.
+- `INetwork::CaptureSimulatorSettings()` copies the settings made directly on
+  the network's simulator into the network, for code that re-creates the
+  simulator. Composer's parallel scheduler calls it, so a setting made only on
+  the simulator (a bond cap) holds for every scheduled run, not just the
+  first.
+
 ### Changed
 
 - A seed fixes the random streams of a request and no longer selects its
@@ -40,7 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trajectory sessions, adaptive terminal sampling (for counts, shot rows and
   checkpoint suffixes) and parallel realization workers. A seeded request
   reproduces its result for the same request, seed, configuration and Maestro
-  version. Seeded results differ from 0.3.14 and may change between versions.
+  version. Seeded results differ from 0.3.13 and may change between versions.
   `counts_policy="legacy"`, `sampling_policy="legacy"` and
   `trajectory_policy="block_v1"` remain as algorithm choices, without the
   sequences of earlier releases.
@@ -89,6 +133,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors for channels that cannot be sampled name the QCSim `pauli_propagator`
   beside density matrix and MPO.
 
+- A network's simulator is documented and treated as a backend template
+  (`INetwork::CreateSimulator`). Executions size their own register.
+  `kBackendPlaceholderQubits` (2) is the width to create a backend that only
+  selects execution, and configured backends are created at that width.
+- Without a cost model, a configured candidate list decides automatic
+  selection. The network simulator's backend runs first when it is listed,
+  then the others in the order they were added, on the register the circuit
+  maps to. A simulator outside a configured list never runs. The list a
+  network starts with is not configured, so its simulator still decides.
+  `GetOptimizationCandidates()` returns the configured list. Either way, and
+  with or without a seed, a Clifford circuit may move to a stabilizer backend
+  the list admits (QCSim's or Aer's for the default list); this is now
+  documented.
+
 ### Fixed
 
 - Count-only checkpoint suffixes no longer build a permutation of all shots
@@ -105,70 +163,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all the same, which failed the call under `warnings.simplefilter("error")`.
   `noisy_fidelity` with a candidate list, which it resolves inside the call,
   now warns after the run; every other call still warns before it.
-
-## [0.3.14] - 2026-11-10
-
-### Added
-
-- Fast noisy sampling, shot rows and parallel realizations (`Execution/ReferenceFrameSampler`,
-  `Execution/SampleRecords`, `Execution/NoisyEstimation`, `Execution/PrefixCheckpoint`,
-  `Utils/Threads/RealizationWorkers`):
-  - Reference-frame (Pauli-frame) sampler for noisy Clifford circuits, used for
-    counts under `counts_policy` (`auto`, `legacy`, `frame_v1`), for shot rows,
-    and as a reusable compiled sampler (`compile_reference_sampler` /
-    `ReferenceFrameSampler` in Python and `MaestroCreateReferenceFrameSampler`
-    in the C ABI). Pauli-mixture Kraus channels such as phase damping compile to
-    frames.
-  - Shot rows (`return_samples=True` in Python, `execution.return_samples` in the
-    native JSON API, and `MaestroRunRequestSamples` in the C ABI) returning
-    per-shot classical bit matrices.
-  - Direct trajectory sessions, a precompiled `NoiseInjectionPlan`, and parallel
-    realization workers sharing `trajectory_max_memory_mb`; seeded results do
-    not depend on the worker count.
-- Batched Pauli-frame sampling for noisy QCSim `extended_stabilizer` circuits
-  (`ExtendedFrameBatch`, `ExtendedFrameSampler`, `extended_frame_v1`), exposed
-  through `ExecuteNoisy`, `PrefixCheckpoint`, native `execute` and
-  `checkpoint_batch`, `compile_reference_sampler`, and `maestro.sinter`.
-- Adaptive multinomial terminal count sampling (`Utils/Sampling/Multinomial.h`,
-  `counts_policy="multinomial_v1"`, and automatic unseeded selection under
-  `counts_policy="auto"`), drawing terminal histograms directly from outcome
-  probabilities via sequential binomial splits with rare-outcome grouping on
-  QCSim statevectors, density matrices, path integrals, 1-qubit MPS/MPO
-  marginals and up to 8-bit extended-stabilizer marginals.
-- Automatic realization policy (`Execution/NoisePolicy.h`) and prepared-state
-  reuse (`Execution/TerminalSampling.h`):
-  - Omitted `noise_realizations` (`None` in Python; omitted, `null` or `"auto"`
-    in JSON) resolves to 1 realization when exact density-matrix or MPO channels
-    make evolution deterministic, and 64 (counts) or 100 (estimates and
-    fidelity) otherwise.
-  - Terminal measurements on mixed-state backends and eligible QCSim
-    statevector, stabilizer and MPS runs sample one prepared state per
-    realization (`terminal_v1` / `mixed_v1`), including checkpoint suffixes and
-    exact prefix noise (`prefix_noise_model` / `noise.prefix`).
-  - `SimulatorConfig.optimization_candidates` bound in Python.
-- `INetwork::CaptureSimulatorSettings()` copies the settings made directly on
-  the network's simulator into the network, for code that re-creates the
-  simulator. Composer's parallel scheduler calls it, so a setting made only on
-  the simulator (a bond cap) holds for every scheduled run, not just the
-  first.
-
-### Changed
-
-- A network's simulator is documented and treated as a backend template
-  (`INetwork::CreateSimulator`). Executions size their own register.
-  `kBackendPlaceholderQubits` (2) is the width to create a backend that only
-  selects execution, and configured backends are created at that width.
-- Without a cost model, a configured candidate list decides automatic
-  selection. The network simulator's backend runs first when it is listed,
-  then the others in the order they were added, on the register the circuit
-  maps to. A simulator outside a configured list never runs. The list a
-  network starts with is not configured, so its simulator still decides.
-  `GetOptimizationCandidates()` returns the configured list. Either way, and
-  with or without a seed, a Clifford circuit may move to a stabilizer backend
-  the list admits (QCSim's or Aer's for the default list); this is now
-  documented.
-
-### Fixed
 
 - An exception thrown by a network's shot worker (a stabilizer meeting a T
   gate) terminated the process. `Utils::ThreadsPool` now keeps the first one,
