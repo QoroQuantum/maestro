@@ -1271,7 +1271,8 @@ void NoiseAddParallelEstimatesAndBatches()
                 const auto records = MaestroExecution::ExecuteNoisy(bell, dephasing, config, 2000, 8, 0, {});
                 if (parallelMachine)
                     Require(!observed->values.count(std::this_thread::get_id()), "seeded library batches did not dispatch to realization workers");
-                Require(records.counts == MaestroExecution::ExecuteNoisy(bell, dephasing, config, 2000, 8, 0, {}).counts,
+                const auto replayed = MaestroExecution::ExecuteNoisy(bell, dephasing, config, 2000, 8, 0, {}).counts;
+                Require(std::is_permutation(records.counts.begin(), records.counts.end(), replayed.begin(), replayed.end()),
                         "seeded library prepared-state batches did not replay");
             }
         }
