@@ -121,7 +121,7 @@ jobs:
         python -m pip install -r tests/python/requirements.txt
         # test_sinter.py skips itself when stim or sinter is missing; fail instead.
         python -c "import stim, sinter, pymatching"
-        python -m pytest tests/python/test_bindings.py tests/python/test_adjoint.py tests/python/test_sinter.py tests/python/test_sampling_*.py -q -rs
+        python -m pytest tests/python/test_bindings.py tests/python/test_adjoint.py tests/python/test_pauli_propagation_config.py tests/python/test_sinter.py tests/python/test_sampling_*.py -q -rs
 
     - name: Build the Python docs
       # Pages with code run against the module built above, and any Sphinx
@@ -208,4 +208,4 @@ jobs:
     - name: Run adjoint and sampling Python tests
       run: |
         Copy-Item build/Release/maestro*.pyd maestro/
-        python -c "import glob, os, pytest; dll_dirs = [os.add_dll_directory(os.path.abspath('build/bin')), os.add_dll_directory(os.path.join(os.environ['BOOST_ROOT'], 'bin'))]; raise SystemExit(pytest.main(['tests/python/test_adjoint.py', *sorted(glob.glob('tests/python/test_sampling_*.py')), '-q', '-rs']))"
+        python -c "import glob, os, pytest; dll_dirs = [os.add_dll_directory(os.path.abspath('build/bin')), os.add_dll_directory(os.path.join(os.environ['BOOST_ROOT'], 'bin'))]; raise SystemExit(pytest.main(['tests/python/test_adjoint.py', 'tests/python/test_pauli_propagation_config.py', *sorted(glob.glob('tests/python/test_sampling_*.py')), '-q', '-rs']))"

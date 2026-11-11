@@ -55,6 +55,10 @@ The constructor takes every option by keyword only.
 | `pp_coefficient_threshold` | `float` or `None` | `None` | Pauli propagation: drop strings whose coefficient magnitude is at most this |
 | `pp_max_pauli_weight` | `int` or `None` | `None` | Pauli propagation: drop strings acting on more qubits than this |
 | `pp_gates_between_trims`, `pp_gates_between_deduplications` | `int` or `None` | `None` | Pauli propagation: how often, in primitive operations, to apply the two thresholds; deduplication also merges repeated strings. Unset, PauliPropagator deduplicates every 10 operations. |
+| `pp_workers` | `int` or `None` | `None` | Pauli propagation workers. GPU PauliPropagator estimates parallelise independent observables across 1 to 64 workers, each on its own CUDA stream; CPU PauliPropagator uses 0 to 1024 threads, where 0 picks a count from the hardware. The best count depends on the workload; more workers can add overhead on small batches. `None` uses the backend default, one worker on the GPU. |
+| `pp_max_fused_gates` | `int` or `None` | `None` | GPU Pauli propagation: most gates fused into one block, from 1 to 256; 1 disables fusion. `None` uses 64. (GPU access only) |
+| `pp_memory_limit_bytes` | `int` or `None` | `None` | GPU Pauli propagation: positive device memory budget in bytes. `None` uses 90% of available memory. (GPU access only) |
+| `pp_sampling_cache_nodes` | `int` or `None` | `None` | Pauli propagation: most nodes in the shot-sampling cache; 0 disables caching. `None` uses the backend default (8192 on the GPU). |
 | `path_integral_threshold` | `float` or `None` | `None` | PathIntegral trim threshold |
 | `enable_causal_cone_reduction` | `bool` | `True` | Drop gates and idle qubits outside the backward lightcone of the requested observables |
 | `enable_observable_clustering` | `bool` | `True` | Simulate groups of observables with disjoint lightcones separately, each on its own register |

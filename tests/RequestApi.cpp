@@ -18,6 +18,7 @@ void TestTypedTrajectoryConfiguration();
 void TestFrameCountPolicy();
 void TestFusionPublicInterfaces();
 void TestPauliPropagatorDedupDefault();
+void TestPauliTuningForwarding();
 void TestAutomaticGpuMixedStateFallback();
 void TestFixedBackendShotReuse();
 void TestNetworkSimulatorPlaceholders();
@@ -1038,6 +1039,7 @@ try
     TestFusionPublicInterfaces();
     TestFusionMetadata();
     TestPauliPropagatorDedupDefault();
+    TestPauliTuningForwarding();
     TestAutomaticGpuMixedStateFallback();
 
     std::cout << "Native request API: " << checks << " checks passed\n";

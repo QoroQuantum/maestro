@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `SimulatorConfig` exposes the Pauli propagation tuning options that native
+  requests already accept: `pp_workers`, `pp_max_fused_gates`,
+  `pp_memory_limit_bytes` and `pp_sampling_cache_nodes`. Each defaults to `None`,
+  which keeps the backend default. `pp_workers` lets GPU PauliPropagator estimates
+  spread independent observables across up to 64 workers, each on its own CUDA
+  stream; before this change, Python estimates always ran with one GPU worker.
+  Out-of-range values raise `ValueError` when the config is built or a field is
+  set, using the same limits as native requests.
+
 - The QCSim `pauli_propagator` evaluates noise channels exactly in one
   execution. It applies the adjoint of each channel to the observable it
   propagates, so expectation values, probabilities and samples describe the

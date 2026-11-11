@@ -75,6 +75,27 @@ inline void RequireOneOf(const std::optional<std::string> &value, const std::vec
     throw std::invalid_argument(message + "; got '" + *value + "'.");
 }
 
+// Range limits of the Pauli propagation tuning options, shared by native
+// requests (Options.h) and the typed SimulatorConfig fields. Returns an empty
+// string for a valid value, otherwise the error message.
+inline std::string PauliTuningError(const std::string &name, uint64_t value, bool gpu)
+{
+    constexpr auto kMax = static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+    if (name == "pp_workers")
+    {
+        if (gpu)
+            return value >= 1 && value <= 64 ? "" : "GPU pp_workers must be in [1, 64]";
+        return value <= 1024 ? "" : "pp_workers exceeds 1024";
+    }
+    if (name == "pp_max_fused_gates")
+        return value >= 1 && value <= 256 ? "" : "pp_max_fused_gates must be in [1, 256]";
+    if (name == "pp_memory_limit_bytes")
+        return value >= 1 && value <= kMax ? "" : "pp_memory_limit_bytes must be positive and at most 2**63 - 1";
+    if (name == "pp_sampling_cache_nodes")
+        return value <= kMax ? "" : "pp_sampling_cache_nodes must be at most 2**63 - 1";
+    return "";
+}
+
 struct SimulatorConfig
 {
     // Python exposes these typed fields directly. Native requests also use typed
@@ -122,6 +143,12 @@ struct SimulatorConfig
     std::optional<size_t> pp_max_pauli_weight = std::nullopt;
     std::optional<int> pp_gates_between_trims = std::nullopt;
     std::optional<int> pp_gates_between_deduplications = std::nullopt;
+    // Pauli propagation tuning; unset keeps the backend default. Limits are
+    // in PauliTuningError.
+    std::optional<uint64_t> pp_workers = std::nullopt;
+    std::optional<uint64_t> pp_max_fused_gates = std::nullopt;
+    std::optional<uint64_t> pp_memory_limit_bytes = std::nullopt;
+    std::optional<uint64_t> pp_sampling_cache_nodes = std::nullopt;
 
     // path integral parameters
     std::optional<double> path_integral_threshold = std::nullopt;
@@ -209,6 +236,12 @@ struct SimulatorConfig
              {std::pair{pp_gates_between_trims, "pp_gates_between_trims"}, std::pair{pp_gates_between_deduplications, "pp_gates_between_deduplications"}})
             if (cadence && *cadence < 1)
                 throw std::invalid_argument(std::string(name) + " must be positive");
+        for (const auto &[value, name] :
+             {std::pair{pp_workers, "pp_workers"}, std::pair{pp_max_fused_gates, "pp_max_fused_gates"},
+              std::pair{pp_memory_limit_bytes, "pp_memory_limit_bytes"}, std::pair{pp_sampling_cache_nodes, "pp_sampling_cache_nodes"}})
+            if (value)
+                if (const auto error = PauliTuningError(name, *value, simulator_type == Simulators::SimulatorType::kGpuSim); !error.empty())
+                    throw std::invalid_argument(error);
         for (const auto &entry : distributed_options)
             if (entry.first.compare(0, 12, "distributed_") != 0 && entry.first.compare(0, 4, "mpi_") != 0)
                 throw std::invalid_argument("distributed_options accepts only distributed_* and mpi_* keys");
@@ -620,6 +653,12 @@ inline std::shared_ptr<Network::INetwork<double>> ConfigureNetwork(unsigned long
     {
         network->Configure("pauli_propagator_pauli_weight_threshold", std::to_string(*config.pp_max_pauli_weight).c_str());
     }
+    for (const auto &[value, key] :
+         {std::pair{config.pp_workers, "pauli_propagator_workers"}, std::pair{config.pp_max_fused_gates, "pauli_propagator_max_fused_gates"},
+          std::pair{config.pp_memory_limit_bytes, "pauli_propagator_memory_limit_bytes"},
+          std::pair{config.pp_sampling_cache_nodes, "pauli_propagator_sampling_cache_nodes"}})
+        if (value)
+            network->Configure(key, std::to_string(*value).c_str());
     auto pp_gates_between_deduplications = config.pp_gates_between_deduplications;
     const auto native_deduplication = config.native_options.find("pauli_propagator_num_gates_between_deduplications");
     if (!pp_gates_between_deduplications && config.simulation_type == Simulators::SimulationType::kPauliPropagator &&
