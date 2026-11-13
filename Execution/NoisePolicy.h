@@ -178,6 +178,20 @@ inline bool SomeBackendHoldsQuantumChannels(const SimulatorConfig &config)
     return holds(config.simulator_type, config.simulation_type);
 }
 
+// A checkpoint prefix runs once. A backend that samples channels from its state
+// would draw one branch of the prefix's channel instructions there, and every
+// suffix shot would share it without a word: on such a backend a prefix takes
+// only channels with one branch, which are gates (Circuit::HasDrawnChannels).
+// Returns why the prefix cannot run there, or null where it can. One rule for
+// PrefixCheckpoint and for checkpoint_batch requests.
+inline const char *SampledPrefixRefusal(const Circuits::Circuit<double> &prefix, const SimulatorConfig &config)
+{
+    return prefix.HasDrawnChannels() && SamplesQuantumChannels(config)
+               ? "A checkpoint prefix runs once: its channel instructions need a backend that applies them exactly (density matrix, MPO or the QCSim "
+                 "Pauli propagator). Put channels that are sampled from the state in the suffixes"
+               : nullptr;
+}
+
 // Whether sampled realizations keep, as channel operations for the backend to
 // sample when it runs them, the noise that has no exact sampled lowering:
 // relaxation with T2 > T1, amplitude damping and Kraus maps. Without it that

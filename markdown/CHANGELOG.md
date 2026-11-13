@@ -96,7 +96,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   amplitude damping, correlated phase flips and Kraus channels.
 - A channel with one branch only, a unitary (`QuantumChannel.is_deterministic`),
   is a gate: nothing is drawn for it, and a circuit whose channels are all of
-  that kind evolves once for all its shots.
+  that kind evolves once for all its shots. A damping of zero
+  (`amplitude_damping(0)`, `generalized_amplitude_damping(0, p)`) is one: it
+  is the identity, and a Kraus operator that is zero is no branch.
 - Channel instructions run on `statevector` and `matrix_product_state` in a
   plain `execute` or `estimate`, with or without a noise model. A query of one
   state (`get_statevector`, `get_probabilities`, and the native `statevector`,
@@ -105,9 +107,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `noisy_fidelity` accepts channel instructions in its circuit, as noise the
   ideal circuit does not have, and a reset before any other operation on its
   qubit.
-- A checkpoint prefix that holds channel instructions raises `ValueError` on a
-  method that samples channels, since every suffix shot would share the one
-  branch drawn: put those channels in the suffixes.
+- A checkpoint prefix that holds channel instructions with a branch to draw
+  raises `ValueError` on a method that samples channels, since every suffix
+  shot would share the one branch drawn: put those channels in the suffixes. A
+  channel with one branch is a gate and may stay in the prefix.
+- The prefix of a `checkpoint_batch` request takes what the prefix of
+  `PrefixCheckpointedSimulator` takes: resets and channel instructions beside
+  gates, by the same rule. It took gates only
+  (`checkpoint_batch prefix requires a unitary circuit`). Its measurements are
+  still removed when they are terminal and refused otherwise.
 - `noisy_execute` warns that T2 is clamped to T1 only for qubits whose
   relaxation the circuit draws.
 - Seeded noisy results on the statevector, the matrix product state and the

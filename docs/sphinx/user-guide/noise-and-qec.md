@@ -297,7 +297,8 @@ and for the composite statevector, in the execute and estimate functions,
 - **A channel with one branch is a gate.** A mixture with a single unitary, a
   Pauli channel with one term or a single Kraus operator, such as a coherent
   over-rotation given as a channel, has nothing to draw
-  (`QuantumChannel.is_deterministic`). A circuit whose channels are all of that
+  (`QuantumChannel.is_deterministic`). So has a damping of zero, which is the
+  identity: a Kraus operator that is zero is no branch. A circuit whose channels are all of that
   kind evolves once for all its shots, an estimate of it is one evolution, and
   the shots of a realization share it.
 - **Statevector.** One pass over the state gives the reduced density matrix of
@@ -459,8 +460,9 @@ such deterministic noise to a prefix (it raises `ValueError` otherwise); crossta
 spectators outside the register stay in `|0>` and only contribute a phase, as for
 suffixes. The prefix's own channel instructions follow the same rule: the
 statevector and the matrix product state would draw one branch of them for every
-suffix shot to share, so a prefix that holds channel instructions raises
-`ValueError` there; put those channels in the suffixes. Dynamic checkpoint suffixes evolve their deterministic head once per
+suffix shot to share, so a prefix that holds channel instructions with a branch
+to draw raises `ValueError` there; put those channels in the suffixes. A channel
+with one branch is a gate and may stay in the prefix. Dynamic checkpoint suffixes evolve their deterministic head once per
 realization when all four retained states (the checkpoint's live state and saved
 prefix, the copy and its saved head) fit `trajectory_max_memory_mb`, then replay
 only their branches.

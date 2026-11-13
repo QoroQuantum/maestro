@@ -668,6 +668,48 @@ BOOST_AUTO_TEST_CASE(QuantumChannelRecordsHowItCanBeRealized)
 
     BOOST_CHECK_THROW(Channel::UnitaryMixture({0.5, 0.4}, {Eigen::MatrixXcd::Identity(2, 2), hadamard}), std::invalid_argument);
     BOOST_CHECK_THROW(Channel::UnitaryMixture({0.5, 0.5}, {Eigen::MatrixXcd::Identity(2, 2), 2.0 * hadamard}), std::invalid_argument);
+
+    // A damping of zero changes nothing: it is the identity, one branch, and so a gate, although its Kraus form has
+    // an operator that is zero (and the generalized one two multiples of the identity).
+    for (const Channel &still : {Channel::AmplitudeDamping(0.0), Channel::GeneralizedAmplitudeDamping(0.0, 0.3)})
+    {
+        BOOST_TEST(still.IsDeterministic());
+        BOOST_REQUIRE_EQUAL(still.GetKrausOperators().size(), 1);
+        BOOST_TEST(still.GetKrausOperators().front().isApprox(Eigen::MatrixXcd::Identity(2, 2)));
+        BOOST_TEST(kind(still) == static_cast<int>(Channel::FactorKind::kThermal));
+    }
+    // An operator that is zero is no branch of the others either: at zero temperature the generalized damping is
+    // the plain one, with its two operators.
+    BOOST_TEST(!damping.IsDeterministic());
+    BOOST_REQUIRE_EQUAL(damping.GetKrausOperators().size(), 2);
+    const Channel cold = Channel::GeneralizedAmplitudeDamping(0.2, 0.0);
+    BOOST_REQUIRE_EQUAL(cold.GetKrausOperators().size(), 2);
+    BOOST_TEST(cold.IsApprox(damping));
+    BOOST_TEST(!cold.IsDeterministic());
+    BOOST_REQUIRE_EQUAL(Channel::GeneralizedAmplitudeDamping(0.2, 1.0).GetKrausOperators().size(), 2);
+    BOOST_REQUIRE_EQUAL(Channel::GeneralizedAmplitudeDamping(0.2, 0.4).GetKrausOperators().size(), 4);
+}
+
+BOOST_AUTO_TEST_CASE(SuperoperatorMustBeSquareAndMatchItsTargets)
+{
+    // 4 x 4 on one qubit and 16 x 16 on two: both sides are checked, on the density matrix as on the operator.
+    for (const auto method : {Simulators::SimulationType::kDensityMatrix, Simulators::SimulationType::kMatrixProductOperator})
+    {
+        auto simulator = MakeQCSim(method, 2);
+        BOOST_REQUIRE(simulator->SupportsSuperoperators());
+        BOOST_CHECK_THROW(simulator->ApplySuperoperator({0}, Eigen::MatrixXcd::Identity(4, 3)), std::invalid_argument);
+        BOOST_CHECK_THROW(simulator->ApplySuperoperator({0}, Eigen::MatrixXcd::Identity(3, 4)), std::invalid_argument);
+        BOOST_CHECK_THROW(simulator->ApplySuperoperator({0}, Eigen::MatrixXcd::Identity(16, 16)), std::invalid_argument);
+        BOOST_CHECK_THROW(simulator->ApplySuperoperator({0, 1}, Eigen::MatrixXcd::Identity(16, 4)), std::invalid_argument);
+        BOOST_CHECK_THROW(simulator->ApplySuperoperator({0, 1}, Eigen::MatrixXcd::Identity(4, 16)), std::invalid_argument);
+        // The right shapes apply: a bit flip of qubit 0, conj(X) (x) X, then the identity on both.
+        Eigen::MatrixXcd flip = Eigen::MatrixXcd::Zero(4, 4);
+        flip(3, 0) = flip(2, 1) = flip(1, 2) = flip(0, 3) = 1.0;
+        simulator->ApplySuperoperator({0}, flip);
+        simulator->ApplySuperoperator({0, 1}, Eigen::MatrixXcd::Identity(16, 16));
+        BOOST_CHECK_SMALL(simulator->Probability(1) - 1.0, kQCSimDensityTolerance);
+        BOOST_CHECK_CLOSE(simulator->DensityMatrixPurity(), 1., 1e-8);
+    }
 }
 
 BOOST_AUTO_TEST_CASE(ComposedQuantumChannelKeepsItsPartsAndIsTheirProduct)

@@ -438,6 +438,32 @@ CircuitPtr Unmeasured(const CircuitPtr &circuit, bool unitary = false, const std
     return result;
 }
 
+// A checkpoint_batch prefix without its terminal measurements: only suffixes
+// are sampled. It runs once, before the saved state, and may hold what the
+// prefix of Python's PrefixCheckpointedSimulator may: gates and delays; resets,
+// which collapse once on a pure state, for every suffix shot; and channel
+// instructions, where the backend takes them (CheckChannels).
+CircuitPtr CheckpointPrefix(const CircuitPtr &circuit)
+{
+    auto result = std::make_shared<Circuit>();
+    bool measured = false;
+    for (const auto &op : circuit->GetOperations())
+    {
+        const auto type = op->GetType();
+        if (type == Circuits::OperationType::kMeasurement)
+        {
+            measured = true;
+            continue;
+        }
+        Supported(!measured, "This query requires terminal measurements only");
+        Supported(type == Circuits::OperationType::kGate || type == Circuits::OperationType::kDelay || type == Circuits::OperationType::kReset ||
+                      type == Circuits::OperationType::kQuantumChannel,
+                  "checkpoint_batch prefix takes gates, resets and channel instructions only");
+        result->AddOperation(op->Clone());
+    }
+    return result;
+}
+
 // The circuit noisy_fidelity evolves, without its terminal measurements. As
 // in Python's noisy_fidelity, it may hold channel instructions, which are noise
 // that the ideal circuit does not have, and resets that precede every other
@@ -650,8 +676,22 @@ bool HasMeasurementReadout(const CircuitPtr &circuit)
 //  - otherwise drawn by noise injection, once per realization: that needs a
 //    noise block with trajectory evaluation and a channel whose branches need
 //    no state (noise::has_sampled_form).
-void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, const NoiseConfig &noise, bool trajectories)
+// A checkpoint_batch prefix runs once, before the saved state, with or without
+// a noise block, as the prefix of Python's PrefixCheckpointedSimulator: a
+// backend that applies channels exactly takes its channel instructions, one
+// that samples them from its state takes those with one branch
+// (SampledPrefixRefusal), and the others hold none.
+void CheckChannels(const CircuitPtr &circuit, const SimulatorConfig &config, const NoiseConfig &noise, bool trajectories, bool prefix = false)
 {
+    if (prefix)
+    {
+        if (const char *refusal = SampledPrefixRefusal(*circuit, config))
+            Supported(false, refusal);
+        Supported(!circuit->HasQuantumChannels() || ExactNoiseApplies(config) || SamplesQuantumChannels(config),
+                  "A checkpoint prefix with channel instructions requires density_matrix, MPO or the qcsim pauli_propagator, which apply them "
+                  "exactly, or statevector or matrix_product_state for channels with one branch");
+        return;
+    }
     const bool sampled = noise.enabled && !noise.exact && noise.mode != "analytical";
     const bool drawn = trajectories && noise.mode != "analytical" && SamplesQuantumChannels(config);
     // Without a noise block the circuit runs as it is, on the candidate the
@@ -1177,7 +1217,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     // channels from its state, the answer is the state of one branch (as after
     // a reset on any pure-state backend), which the metadata reports.
     const bool oneState = operation == "statevector" || operation == "amplitudes" || operation == "probabilities" || operation == "state_probability";
-    CheckChannels(input.circuit, config, noise, operation == "execute" || operation == "estimate" || operation == "noisy_fidelity" || oneState);
+    CheckChannels(input.circuit, config, noise, operation == "execute" || operation == "estimate" || operation == "noisy_fidelity" || oneState,
+                  operation == "checkpoint_batch");
     // Estimates and disjoint sampling run only the gates inside the
     // observables' or measurements' cones, so a non-Clifford gate outside them
     // never reaches the stabilizer; the simulator's own error covers the rest.
@@ -1257,7 +1298,7 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         // are removed below, so readout on them would be dropped silently.
         Supported(!HasMeasurementReadout(input.circuit), "Measurement readout_error applies to checkpoint suffixes only; "
                                                          "prefix measurements are removed");
-        circuit = Unmeasured(input.circuit, true, "checkpoint_batch prefix");
+        circuit = CheckpointPrefix(input.circuit);
         Supported(noise.mode != "analytical", "Checkpoint suffixes require explicit noise evolution");
         const auto &suffixes = Array(Field(request, "suffixes"));
         Require(!suffixes.empty() && suffixes.size() <= 256, "Invalid suffix count");
@@ -1288,8 +1329,8 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
         }
         if (noise.enabled)
         {
-            // The policy above saw only the unitary prefix. The suffixes hold the
-            // sampled channels and the branches (reported per suffix below).
+            // The policy above saw only the prefix, which runs once. The suffixes
+            // hold the sampled channels and the branches (reported per suffix below).
             noise.policy.stochastic_execution = false;
             if (!noise.exact)
                 for (const auto &suffix : additional)

@@ -273,7 +273,8 @@ class QCSimDensityMatrixSimulator : public QCSimGateSimulator
         for (const Types::qubit_t target : targets)
             if (target >= nrQubits)
                 throw std::invalid_argument("Superoperator qubit is out of range");
-        if (superoperator.rows() != (targets.size() == 1 ? 4 : 16))
+        const Eigen::Index dimension = targets.size() == 1 ? 4 : 16;
+        if (superoperator.rows() != dimension || superoperator.cols() != dimension)
             throw std::invalid_argument("The superoperator size does not match its targets");
         if (!densityMatrix)
             throw std::runtime_error("QCSim density-matrix state is not initialized");

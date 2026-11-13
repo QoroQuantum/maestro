@@ -452,6 +452,33 @@ void TestSampledChannelRequests()
               "A flat Kraus list was drawn by a method that holds no channels");
     }
     {
+        // A damping of zero has one branch, the identity: the instruction is a gate, and a statevector evolves the
+        // circuit once for all its shots, as with a mixture of one unitary (TestDeterministicChannelInstructions).
+        const j::object flip{{"name", "x"}, {"qubits", j::array{0}}};
+        const auto counted = [&](const char *method, j::object factor) {
+            auto request = Request("execute", 1, "", method);
+            const j::object channel{{"name", "channel"}, {"qubits", j::array{0}}, {"factors", j::array{std::move(factor)}}};
+            const j::object read{{"name", "measure"}, {"qubits", j::array{0}}, {"clbits", j::array{0}}};
+            request["circuit"] = j::object{{"format", "instructions"}, {"num_qubits", 1}, {"num_clbits", 1}, {"source", j::array{flip, channel, read}}};
+            request["execution"].as_object()["shots"] = 200;
+            request["noise"] = j::object{{"seed", 5}, {"realizations", 1}, {"channels", j::array{}}};
+            return Call(request);
+        };
+        const j::object still{{"kind", "amplitude_damping"}, {"gamma", 0.0}};
+        const j::object stillWarm{{"kind", "generalized_amplitude_damping"}, {"gamma", 0.0}, {"excited_population", 0.3}};
+        for (const char *method : {"statevector", "matrix_product_state"})
+        {
+            for (const auto &factor : {still, stillWarm})
+            {
+                const auto result = counted(method, factor);
+                Check(result.at("counts") == j::object{{"1", 200}}, "A damping of zero changed the state");
+                Check(result.at("noise").at("realizations") == 1, "A damping of zero made every shot a realization");
+            }
+            Check(counted(method, j::object{{"kind", "amplitude_damping"}, {"gamma", 0.3}}).at("noise").at("realizations") == 200,
+                  "A damping that is drawn no longer makes every shot a realization");
+        }
+    }
+    {
         // Malformed factors are input errors.
         const auto malformed = [&](j::array qubits, j::value factors) {
             auto request = Request("estimate", 2, "", "density_matrix");

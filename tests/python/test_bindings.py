@@ -4208,6 +4208,22 @@ class TestCombinedNoiseExecution:
                 assert 1 <= result['realization_workers'] <= workers
         assert 'realization_workers' not in circuit(True).execute(config=config(3), shots=64)
 
+        # Frames draw every shot themselves: the workers sized for the
+        # realizations never run, and none is reported, for counts or for rows.
+        clifford = QuantumCircuit()
+        clifford.h(0)
+        clifford.cx(0, 1)
+        clifford.measure_all()
+        for method, source, strategy in (
+                (maestro.SimulationType.Stabilizer, clifford, 'reference_frame_v1'),
+                (maestro.SimulationType.ExtendedStabilizer, circuit(True), 'extended_frame_v1')):
+            frames = maestro.SimulatorConfig(
+                simulator_type=maestro.SimulatorType.QCSim, simulation_type=method, counts_policy='auto', max_simulators=3)
+            for return_samples in (False, True):
+                result = source.noisy_execute(nm, config=frames, shots=64, noise_realizations=64, return_samples=return_samples)
+                assert result['sampling_strategy'] == strategy
+                assert 'realization_workers' not in result
+
     def test_full_noise_execute_with_all_noise_types(self):
         """full_noise_execute works with coherent + T1 + crosstalk + Pauli."""
         from maestro.circuits import QuantumCircuit

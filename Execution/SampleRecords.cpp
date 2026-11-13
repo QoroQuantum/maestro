@@ -632,7 +632,8 @@ ShotRecords ExecuteNoisy(const RecordCircuitPtr &circuit, const noise::NoiseMode
     if (reference)
         std::tie(records.simulator, records.method) = std::pair{Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStabilizer};
     records.realizations = batches;
-    records.realization_workers = workers;
+    // Frames draw every shot themselves: the workers sized above for the realizations never ran.
+    records.realization_workers = reference || extended ? 0 : workers;
     if (return_samples)
     {
         records.components = 1;

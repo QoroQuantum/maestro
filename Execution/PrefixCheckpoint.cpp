@@ -36,13 +36,12 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
 
     config_.seed = EffectiveSamplingSeed(config_);
     config_.native_options.erase("seed");
-    // The prefix runs once. A backend that samples channels from its state
-    // would draw one branch of the prefix's channel instructions here, and
-    // every suffix shot would share it without a word: noise in a prefix has
-    // to be deterministic, as for prefix_noise below.
-    if (prefix && prefix->HasDrawnChannels() && SamplesQuantumChannels(config_))
-        throw std::invalid_argument("A checkpoint prefix runs once: its channel instructions need a backend that applies them exactly (density "
-                                    "matrix, MPO or the QCSim Pauli propagator). Put channels that are sampled from the state in the suffixes");
+    // The prefix runs once: noise in it has to be deterministic, as for
+    // prefix_noise below. A backend that samples channels from its state takes
+    // only its channels with one branch (SampledPrefixRefusal).
+    if (prefix)
+        if (const char *refusal = SampledPrefixRefusal(*prefix, config_))
+            throw std::invalid_argument(refusal);
     auto executed_prefix = prefix;
     if (prefix && prefix_noise && prefix_noise->has_any())
     {

@@ -898,6 +898,13 @@ class QuantumChannel
     // A one-qubit channel with its relaxation parameters attached.
     static QuantumChannel Thermal(KrausOperators kraus, const ThermalParameters &parameters)
     {
+        // A relaxation that changes nothing is the identity, one branch, however many operators it was written with
+        // (a generalized damping of zero has two multiples of it). Otherwise an operator that is zero is no branch:
+        // it is never drawn, and the ones left decide whether the channel is a gate (IsDeterministic).
+        if (parameters.decay == 0.0 && parameters.coherence == 1.0)
+            kraus = {Matrix::Identity(2, 2)};
+        else
+            kraus.erase(std::remove_if(kraus.begin(), kraus.end(), [](const Matrix &op) { return op.isZero(0.0); }), kraus.end());
         auto data = MakeKrausData(std::move(kraus));
         Factor factor;
         factor.kind = FactorKind::kThermal;
