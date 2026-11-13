@@ -1117,8 +1117,20 @@ try
         }
     Check(Call(prefixed("tensor_network", {flip, damping(0.0)}), false, true).at("error").at("code") == "unsupported_capability",
           "A checkpoint prefix held a channel on a backend that holds none");
-    // Its measurements run too, once: every suffix shot continues from the one outcome, and an operation that
-    // depends on it has it. The outcomes are not returned, since only suffixes are sampled.
+    // Its end measurements are removed, since only suffixes are sampled: a prefix that is a whole program, with
+    // its measurements at the end as OpenQASM has them, does not collapse the saved state, and every suffix shot
+    // samples it.
+    for (const char *method : {"statevector", "density_matrix"})
+    {
+        request = Request("checkpoint_batch", 2, "h q[0]; cx q[0],q[1]; measure q->c;", method);
+        request["suffixes"] = j::array{Request("execute", 2, "measure q->c;", method).at("circuit")};
+        request["execution"].as_object()["shots"] = 2000;
+        const j::object whole = Call(request).at("results").at(0).at("counts").as_object();
+        Check(whole.size() == 2 && whole.contains("00") && whole.contains("11") && std::abs(whole.at("11").to_number<double>() / 2000 - 0.5) < 0.05,
+              "The end measurements of a checkpoint prefix collapsed the saved state");
+    }
+    // A measurement that a later operation of the prefix reads or follows runs, once: every suffix shot continues
+    // from the one outcome, and the operation that depends on it has it. The outcome is not returned.
     for (const char *method : {"statevector", "density_matrix"})
     {
         request = Request("checkpoint_batch", 2, "h q[0]; measure q[0]->c[0]; if(c==1) x q[1];", method);
@@ -1128,8 +1140,8 @@ try
         Check(collapsed.size() == 1 && (collapsed.contains("00") || collapsed.contains("11")) && collapsed.begin()->value().to_number<size_t>() == 500,
               "A measurement in a checkpoint prefix did not collapse once for every suffix shot");
     }
-    // A noise block still acts on the suffixes of a prefix that measures: the measured qubit reads 1 in every shot,
-    // and the other, flipped in the suffix, is flipped back in a quarter of them.
+    // A noise block still acts on the suffixes of a prefix that ends with a measurement: the measured qubit reads 1
+    // in every shot, and the other, flipped in the suffix, is flipped back in a quarter of them.
     request = Request("checkpoint_batch", 2, "x q[0]; measure q[0]->c[0];");
     request["suffixes"] = j::array{Request("execute", 2, "x q[1]; measure q->c;").at("circuit")};
     request["execution"].as_object()["shots"] = 2000;

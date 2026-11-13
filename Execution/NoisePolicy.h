@@ -178,6 +178,18 @@ inline bool SomeBackendHoldsQuantumChannels(const SimulatorConfig &config)
     return holds(config.simulator_type, config.simulation_type);
 }
 
+// The circuit a checkpoint prefix runs: the prefix without its end measurements
+// (Circuit::RemoveEndMeasurements). Only suffixes are sampled, and a prefix that
+// is a whole program, as one parsed from OpenQASM is, ends with measurements
+// that would otherwise collapse the saved state once for every suffix shot. A
+// measurement that later operations of the prefix follow or read stays, and
+// collapses once. Plain execution keeps its measurements: they are what it
+// samples. One rule for PrefixCheckpoint and for checkpoint_batch requests.
+inline RecordCircuitPtr ExecutedCheckpointPrefix(const RecordCircuitPtr &prefix)
+{
+    return prefix ? prefix->RemoveEndMeasurements() : prefix;
+}
+
 // A checkpoint prefix runs once. A backend that samples channels from its state
 // would draw one branch of the prefix's channel instructions there, and every
 // suffix shot would share it without a word: on such a backend a prefix takes

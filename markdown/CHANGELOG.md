@@ -111,12 +111,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   raises `ValueError` on a method that samples channels, since every suffix
   shot would share the one branch drawn: put those channels in the suffixes. A
   channel with one branch is a gate and may stay in the prefix.
-- The prefix of a `checkpoint_batch` request runs as it is, like the prefix of
-  `PrefixCheckpointedSimulator`: it takes resets, measurements and channel
-  instructions beside gates, the channels by the same rule. It took gates only
-  (`checkpoint_batch prefix requires a unitary circuit`) and dropped terminal
-  measurements. A measurement in a prefix now collapses the state once, for
-  every suffix shot; its outcome is not returned.
+- A checkpoint prefix follows one set of rules in `PrefixCheckpointedSimulator`
+  and in `checkpoint_batch` requests. A request's prefix took gates only
+  (`checkpoint_batch prefix requires a unitary circuit`); it now takes resets,
+  channel instructions (by the rule above) and measurements that later
+  operations of the prefix follow or read, which run once. The end measurements
+  of a prefix are removed in both, since only suffixes are sampled: a prefix
+  that is a whole program, as one parsed from OpenQASM is, no longer collapses
+  the saved state in `PrefixCheckpointedSimulator`, where it did once for every
+  suffix shot. Plain execution keeps its measurements.
 - `noisy_execute` warns that T2 is clamped to T1 only for qubits whose
   relaxation the circuit draws.
 - Seeded noisy results on the statevector, the matrix product state and the

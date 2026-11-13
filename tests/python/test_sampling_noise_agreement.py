@@ -1733,46 +1733,70 @@ def test_a_checkpoint_prefix_takes_the_same_in_python_and_in_a_request():
                 assert abs(read / shots - ones) < 0.04, f"{case} on {name}: {label} read 1 in {read} of {shots} shots, expected {ones}"
 
 
+_BELL_QASM = 'OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[2];\ncreg c[2];\nh q[0];\ncx q[0],q[1];\nmeasure q -> c;\n'
+
+
 @pytest.mark.parametrize("method, name", [(S.Statevector, "statevector"), (S.MatrixProductState, "matrix_product_state"),
                                           (S.DensityMatrix, "density_matrix")])
-def test_a_measurement_in_a_checkpoint_prefix_collapses_once_in_python_and_in_a_request(method, name):
-    """A prefix runs once, so its measurement gives one outcome: every suffix shot continues from
-    it, through both entry points. Half of a Bell pair is measured; the suffix reads both qubits."""
+def test_a_checkpoint_prefix_drops_its_end_measurements_in_python_and_in_a_request(method, name):
+    """Only suffixes are sampled. A prefix that ends with its measurements, as a circuit parsed from
+    OpenQASM does, runs without them, so the saved state is not collapsed. A measurement that a later
+    operation of the prefix follows runs, and collapses once for every suffix shot. A plain execution
+    keeps its measurements. All of it through both entry points; the suffix reads both qubits of a Bell pair."""
     shots = 500
-    prefix = QuantumCircuit()
-    prefix.h(0)
-    prefix.cx(0, 1)
-    prefix.measure([(0, 0)])
     suffix = QuantumCircuit()
     suffix.measure([(0, 0), (1, 1)])  # measure_all() would read only the qubits the suffix itself uses
     config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QCSim, simulation_type=method, seed=3, fixed_backend=True)
-    counts = maestro.PrefixCheckpointedSimulator(prefix, 2, config).execute_suffix(suffix, shots=shots)["counts"]
-    request = {
-        "schema_version": 2, "operation": "checkpoint_batch",
-        "circuit": {"format": "instructions", "num_qubits": 2, "num_clbits": 2,
-                    "source": [{"name": "h", "qubits": [0]}, {"name": "cx", "qubits": [0, 1]},
-                               {"name": "measure", "qubits": [0], "clbits": [0]}]},
-        "suffixes": [{"format": "instructions", "num_qubits": 2, "num_clbits": 2,
-                      "source": [{"name": "measure", "qubits": [0, 1], "clbits": [0, 1]}]}],
-        "simulator": {"backend": "qcsim", "method": name, "selection": "fixed"},
-        "execution": {"shots": shots, "seed": 3},
-    }
-    native = _native_request(request)
-    assert native["ok"], native
-    for label, read in (("Python", dict(counts)), ("request", native["results"][0]["counts"])):
+    measured = {"format": "instructions", "num_qubits": 2, "num_clbits": 2,
+                "source": [{"name": "measure", "qubits": [0, 1], "clbits": [0, 1]}]}
+
+    def both(prefix, circuit):
+        """The counts of the suffix after this prefix: from Python, and from a request with the same prefix."""
+        counts = maestro.PrefixCheckpointedSimulator(prefix, 2, config).execute_suffix(suffix, shots=shots)["counts"]
+        native = _native_request({"schema_version": 2, "operation": "checkpoint_batch", "circuit": circuit, "suffixes": [measured],
+                                  "simulator": {"backend": "qcsim", "method": name, "selection": "fixed"},
+                                  "execution": {"shots": shots, "seed": 3}})
+        assert native["ok"], native
+        return (("Python", dict(counts)), ("request", native["results"][0]["counts"]))
+
+    def instructions(*source):
+        return {"format": "instructions", "num_qubits": 2, "num_clbits": 2,
+                "source": [{"name": "h", "qubits": [0]}, {"name": "cx", "qubits": [0, 1]}, *source]}
+
+    def bell():
+        prefix = QuantumCircuit()
+        prefix.h(0)
+        prefix.cx(0, 1)
+        return prefix
+
+    def whole(read):
+        return set(read) == {"00", "11"} and sum(read.values()) == shots and abs(read["11"] / shots - 0.5) < 0.1
+
+    # A whole program as the prefix: the pair parsed from OpenQASM, with `measure q -> c;` at its end.
+    parsed = maestro.QasmToCirc().parse_and_translate(_BELL_QASM)
+    for label, read in both(parsed, {"format": "openqasm", "num_qubits": 2, "num_clbits": 2, "source": _BELL_QASM}):
+        assert whole(read), f"{label} on {name}, a prefix parsed from OpenQASM: {read}"
+    # The same with one end measurement, built by hand.
+    prefix = bell()
+    prefix.measure([(0, 0)])
+    for label, read in both(prefix, instructions({"name": "measure", "qubits": [0], "clbits": [0]})):
+        assert whole(read), f"{label} on {name}, a prefix that ends with a measurement: {read}"
+    # Plain execution keeps the measurements: they are what it samples.
+    executed = parsed.execute(config=config, shots=shots)["counts"]
+    assert set(executed) == {"00", "11"} and sum(executed.values()) == shots
+
+    # A measurement that a later gate of the prefix follows runs: one outcome, for every suffix shot.
+    prefix = bell()
+    prefix.measure([(0, 0)])
+    prefix.z(0)
+    for label, read in both(prefix, instructions({"name": "measure", "qubits": [0], "clbits": [0]}, {"name": "z", "qubits": [0]})):
         assert len(read) == 1 and set(read) <= {"00", "11"} and sum(read.values()) == shots, f"{label} on {name}: {read}"
 
-    # A reset of that qubit instead: a pure state collapses once with it, so the other qubit reads the
-    # same in every shot; a density matrix applies the reset exactly and keeps both branches.
-    prefix = QuantumCircuit()
-    prefix.h(0)
-    prefix.cx(0, 1)
+    # A reset of that qubit: a pure state collapses once with it, so the other qubit reads the same in
+    # every shot; a density matrix applies the reset exactly and keeps both branches.
+    prefix = bell()
     prefix.reset(0)
-    counts = maestro.PrefixCheckpointedSimulator(prefix, 2, config).execute_suffix(suffix, shots=shots)["counts"]
-    request["circuit"]["source"][-1] = {"name": "reset", "qubits": [0]}
-    native = _native_request(request)
-    assert native["ok"], native
-    for label, read in (("Python", dict(counts)), ("request", native["results"][0]["counts"])):
+    for label, read in both(prefix, instructions({"name": "reset", "qubits": [0]})):
         assert set(read) <= {"00", "01"} and sum(read.values()) == shots, f"{label} on {name}: {read}"
         if method == S.DensityMatrix:
             assert abs(read.get("01", 0) / shots - 0.5) < 0.1, f"{label} on {name}: {read}"

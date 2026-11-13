@@ -1268,14 +1268,17 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     }
     if (operation == "checkpoint_batch")
     {
-        // The prefix runs once, as it is, before the saved state, like the prefix
-        // of Python's PrefixCheckpointedSimulator: its measurements, and on a pure
-        // state its resets, collapse once, for every suffix shot, and its channel
-        // instructions run where the backend takes them (CheckChannels). Only
-        // suffix measurements are sampled and returned, so readout on a prefix
-        // measurement would be dropped silently.
+        // The prefix runs once, before the saved state, by the rules of the prefix
+        // of Python's PrefixCheckpointedSimulator. Only suffix measurements are
+        // sampled and returned: the prefix's end measurements are removed
+        // (ExecutedCheckpointPrefix), so a prefix that is a whole program does not
+        // collapse the saved state, and readout on a prefix measurement would be
+        // dropped silently. A measurement that later operations follow or read,
+        // and on a pure state a reset, collapse once, for every suffix shot.
+        // Channel instructions run where the backend takes them (CheckChannels).
         Supported(!HasMeasurementReadout(input.circuit), "Measurement readout_error applies to checkpoint suffixes only; "
                                                          "the outcomes of prefix measurements are not returned");
+        circuit = ExecutedCheckpointPrefix(input.circuit);
         Supported(noise.mode != "analytical", "Checkpoint suffixes require explicit noise evolution");
         const auto &suffixes = Array(Field(request, "suffixes"));
         Require(!suffixes.empty() && suffixes.size() <= 256, "Invalid suffix count");

@@ -11,11 +11,14 @@
 
 namespace MaestroExecution
 {
-PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubits, const SimulatorConfig &config, const noise::NoiseModel *prefix_noise)
+PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &given, int num_qubits, const SimulatorConfig &config, const noise::NoiseModel *prefix_noise)
     : num_qubits_(std::max(1, num_qubits)), config_(config)
 {
-    if (prefix && num_qubits <= 0)
-        num_qubits_ = std::max(1, static_cast<int>(prefix->GetMaxQubitIndex()) + 1);
+    // The width is that of the circuit as given: a qubit it only measures counts.
+    if (given && num_qubits <= 0)
+        num_qubits_ = std::max(1, static_cast<int>(given->GetMaxQubitIndex()) + 1);
+    // What runs is the prefix without its end measurements (ExecutedCheckpointPrefix).
+    const RecordCircuitPtr prefix = ExecutedCheckpointPrefix(given);
     // The simulator is created explicitly below: resolve a candidate list to the
     // one backend it creates, so suffix noise policy and metadata describe it.
     // Probing several candidates already configures the network built below,
@@ -99,9 +102,9 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
         if (executed_prefix && !executed_prefix->GetOperations().empty())
             executed_prefix->ExecuteBD(simulator_, state, &max_bond_dim_);
         simulator_->SaveState();
-        // A prefix with measurements or resets collapsed once here, so every
-        // suffix shot shares that branch: frames, which branch per shot, then
-        // keep away. The extended stabilizer has no prefix noise (it needs
+        // A prefix with resets, or with measurements other than its end ones,
+        // collapsed once here, so every suffix shot shares that branch: frames,
+        // which branch per shot, then keep away. The extended stabilizer has no prefix noise (it needs
         // exact channels).
         frame_prefix_usable_ = config_.simulator_type == Simulators::SimulatorType::kQCSim &&
                                config_.simulation_type == Simulators::SimulationType::kExtendedStabilizer && executed_prefix == prefix &&

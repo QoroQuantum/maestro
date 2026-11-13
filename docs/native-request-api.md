@@ -121,13 +121,16 @@ suffixes, with or without a noise block. A query of one state (`statevector`,
 there it returns the state of one branch, as Python's `get_statevector` and
 `get_probabilities` do and as a mid-circuit reset does on any pure-state method;
 `execution_metadata.stochastic_execution` is then `true`, and the seed selects
-the branch. A `checkpoint_batch` prefix also runs once, as it is, before the
-state is saved, like the prefix of Python's `PrefixCheckpointedSimulator`. Its
-measurements collapse once, as do its resets on a pure-state method (a
-mixed-state backend applies a reset exactly), and every suffix shot continues
-from that one outcome; the outcomes of its measurements are not returned, since
-only suffixes are sampled, and an operation in the prefix that depends on one
-has it. Its channel instructions run where the backend takes them: a mixed-state
+the branch. A `checkpoint_batch` prefix also runs once, before the state is
+saved, by the rules of the prefix of Python's `PrefixCheckpointedSimulator`.
+Only suffixes are sampled, so its end measurements are removed, as for
+`estimate`: a prefix that is a whole program, with its measurements at the end,
+does not collapse the saved state. A measurement that later operations of the
+prefix follow or read runs, and collapses once, as does a reset on a pure-state
+method (a mixed-state backend applies a reset exactly): every suffix shot then
+continues from that one outcome, which is not returned. Plain `execute` keeps
+its measurements: they are what it samples. A prefix's channel instructions run
+where the backend takes them: a mixed-state
 backend and the `pauli_propagator` apply them exactly; `statevector` and
 `matrix_product_state` take only a channel with one branch, which is a gate,
 since every suffix shot would share a branch drawn there (put channels that are
@@ -181,8 +184,8 @@ with the measurement's own rates. Like model readout, it applies to measurement
 counts only: `execute` and `checkpoint_batch` accept it, and other operations
 reject it instead of silently dropping it. That includes the adjoint operations,
 the nested `other_circuit` and `step_circuit`, and the `checkpoint_batch` prefix,
-whose measurements collapse the state but return no outcome. A checkpoint
-applies readout on its suffix measurements only.
+whose terminal measurements are otherwise removed. A checkpoint applies readout
+on its suffix measurements only.
 
 `pauli_channel` applies a Pauli channel to one or two qubits. `probabilities`
 has `4**len(qubits)` entries summing to one; base-4 digit `k` of an index selects
