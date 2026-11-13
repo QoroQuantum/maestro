@@ -26,7 +26,11 @@ void bind_simulator(nb::module_ &m)
     nb::class_<Simulators::GateFusionStatistics>(m, "GateFusionStatistics")
         .def_ro("submittedGates", &Simulators::GateFusionStatistics::submittedGates)
         .def_ro("backendGates", &Simulators::GateFusionStatistics::backendGates)
-        .def_ro("fusedBlocks", &Simulators::GateFusionStatistics::fusedBlocks);
+        .def_ro("fusedBlocks", &Simulators::GateFusionStatistics::fusedBlocks)
+        .def_ro("unreadBlocks", &Simulators::GateFusionStatistics::unreadBlocks,
+                "Trajectory blocks applied before the state was read (the draw then decides whether to keep them).")
+        .def_ro("rereadBlocks", &Simulators::GateFusionStatistics::rereadBlocks,
+                "Of those, the blocks whose draw failed: the state was read after all and the block corrected.");
 
     nb::class_<Simulators::ISimulator>(m, "Simulator")
         .def("GetGateFusionMaxQubits", &Simulators::ISimulator::GetGateFusionMaxQubits)
@@ -95,6 +99,25 @@ void bind_simulator(nb::module_ &m)
             },
             "qubits"_a, "shots"_a = 1000)
         .def("ApplyReset", &Simulators::ISimulator::ApplyReset, "qubits"_a)
+        .def(
+            "ApplyQuantumChannel",
+            [](Simulators::ISimulator &self, const Types::qubits_vector &qubits, const Simulators::QuantumChannel &channel) {
+                self.ApplyQuantumChannel(qubits, channel);
+            },
+            "qubits"_a, "channel"_a,
+            "Apply a QuantumChannel to one or two qubits. A simulator that holds the ensemble (SupportsQuantumChannels) "
+            "applies it exactly; one that samples channels (SamplesQuantumChannels) applies one branch drawn from its "
+            "state; the others raise.")
+        .def(
+            "apply_channel",
+            [](Simulators::ISimulator &self, const Types::qubits_vector &qubits, const Simulators::QuantumChannel &channel) {
+                self.ApplyQuantumChannel(qubits, channel);
+            },
+            "qubits"_a, "channel"_a, "Alias of ApplyQuantumChannel.")
+        .def("SupportsQuantumChannels", &Simulators::ISimulator::SupportsQuantumChannels,
+             "Whether the simulator applies a channel exactly, to the ensemble it holds (density matrix, MPO, Pauli propagator).")
+        .def("SamplesQuantumChannels", &Simulators::ISimulator::SamplesQuantumChannels,
+             "Whether the simulator applies a channel as one branch drawn from its state (statevector, matrix product state).")
         .def("Probability", &Simulators::ISimulator::Probability, "outcome"_a)
         .def("Amplitude", &Simulators::ISimulator::Amplitude, "outcome"_a)
         .def("AllProbabilities", &Simulators::ISimulator::AllProbabilities)

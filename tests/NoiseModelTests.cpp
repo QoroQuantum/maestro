@@ -1132,24 +1132,176 @@ BOOST_AUTO_TEST_CASE(NoiseAddSeedReproducesRunsAndAdvancesRealizations)
     }
 }
 
+// Noise the backend draws as the circuit runs (damping on the statevector or
+// the matrix product state) leaves injection nothing to draw. The seed of a
+// NoiseAdd then joins a seed configured on the network, as the noise seed joins
+// the simulator seed in the Python and JSON entry points: either seed alone
+// changes the errors drawn, in counts and in estimates, serially and on
+// realization workers, whether the realizations share one circuit or a
+// coherent rotation keeps them apart. On a qubit of the circuit its signs are
+// drawn for each realization, from the NoiseAdd seed; on an idle qubit it
+// injects nothing, and the channel branches are all that seed can change.
+BOOST_AUTO_TEST_CASE(NoiseAddSeedJoinsTheNetworkSeedForNoiseTheBackendDraws)
+{
+    const auto circuit = [](bool measure) {
+        auto c = std::make_shared<Circuits::Circuit<>>();
+        for (Types::qubit_t q = 0; q < 3; ++q)
+            c->AddOperation(std::make_shared<Circuits::HadamardGate<>>(q));
+        c->AddOperation(std::make_shared<Circuits::CXGate<>>(0, 1));
+        c->AddOperation(std::make_shared<Circuits::CXGate<>>(1, 2));
+        for (Types::qubit_t q = 0; q < 3; ++q)
+        {
+            c->AddOperation(std::make_shared<Circuits::XGate<>>(q));
+            c->AddOperation(std::make_shared<Circuits::HadamardGate<>>(q));
+        }
+        if (measure)
+            c->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}, {1, 1}, {2, 2}}));
+        return c;
+    };
+    const std::vector<std::string> observables{"ZZII", "IXXI"};
+    for (const auto method : {Simulators::SimulationType::kStatevector, Simulators::SimulationType::kMatrixProductState})
+        for (const int coherent : {-1, 0, 3})
+            for (const size_t workers : {size_t{1}, size_t{4}})
+            {
+                noise::NoiseModel model;
+                for (int q = 0; q < 3; ++q)
+                    model.set_generalized_amplitude_damping(q, 0.2, 0.0);
+                if (coherent >= 0)
+                    model.set_coherent_rotation(coherent, 0.2, 0.1, 0.3);
+                const auto network = [&](std::optional<uint64_t> seed) {
+                    auto result = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{4}, std::vector<size_t>{4});
+                    result->SetMaxSimulators(workers);
+                    if (seed)
+                        result->Configure("seed", std::to_string(*seed).c_str());
+                    // Realization workers need a bond limit to size a matrix product state.
+                    result->Configure("matrix_product_state_max_bond_dimension", "16");
+                    result->SetOptimizeSimulator(false);
+                    result->CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+                    return result;
+                };
+                const auto counts = [&](std::optional<uint64_t> seed, unsigned noiseSeed) {
+                    noise::NoiseAdd add;
+                    add.seed(noiseSeed);
+                    return add.full_noise_execute(circuit(true), network(seed), 0, model, 60);
+                };
+                const auto estimate = [&](std::optional<uint64_t> seed, unsigned noiseSeed) {
+                    noise::NoiseAdd add;
+                    add.seed(noiseSeed);
+                    return add.full_noise_estimate(circuit(false), network(seed), 0, observables, model, 20);
+                };
+                const std::string where = std::string(method == Simulators::SimulationType::kStatevector ? "statevector" : "matrix product state") +
+                                          (coherent < 0    ? ""
+                                           : coherent == 0 ? ", coherent rotation on a circuit qubit"
+                                                           : ", coherent rotation on an idle qubit") +
+                                          (workers > 1 ? ", workers" : ", serial");
+                const auto check = [&](const auto &run, const char *what) {
+                    const auto base = run(42, 1);
+                    BOOST_CHECK_MESSAGE(run(42, 1) == base, what << " on " << where << ": the same two seeds gave another result");
+                    // Of three other seeds at least two give another result: counts of 60 shots can coincide once.
+                    int changed = 0;
+                    for (const unsigned noiseSeed : {2u, 3u, 77u})
+                        changed += run(42, noiseSeed) != base;
+                    BOOST_CHECK_MESSAGE(changed >= 2, what << " on " << where << ": the NoiseAdd seed changes nothing under a fixed network seed");
+                    changed = 0;
+                    for (const uint64_t seed : {43, 44, 45})
+                        changed += run(seed, 1) != base;
+                    BOOST_CHECK_MESSAGE(changed >= 2, what << " on " << where << ": the network seed changes nothing under a fixed NoiseAdd seed");
+                    // Without a network seed the NoiseAdd seed is the only one, and drives everything.
+                    const auto alone = run(std::nullopt, 1);
+                    BOOST_CHECK_MESSAGE(run(std::nullopt, 1) == alone, what << " on " << where << ": the NoiseAdd seed alone did not replay");
+                    changed = 0;
+                    for (const unsigned noiseSeed : {2u, 3u, 77u})
+                        changed += run(std::nullopt, noiseSeed) != alone;
+                    BOOST_CHECK_MESSAGE(changed >= 2, what << " on " << where << ": the NoiseAdd seed alone changes nothing");
+                };
+                check(counts, "counts");
+                check(estimate, "estimates");
+                // Successive calls on one object still advance, and a reseed replays them.
+                noise::NoiseAdd add;
+                add.seed(5);
+                const auto first = add.full_noise_execute(circuit(true), network(42), 0, model, 60);
+                const auto second = add.full_noise_execute(circuit(true), network(42), 0, model, 60);
+                const auto third = add.full_noise_execute(circuit(true), network(42), 0, model, 60);
+                BOOST_CHECK_MESSAGE(first != second || second != third, "successive calls on " << where << " repeated their counts");
+                add.seed(5);
+                BOOST_CHECK_MESSAGE(add.full_noise_execute(circuit(true), network(42), 0, model, 60) == first, "a reseed on " << where << " did not replay");
+            }
+}
+
 BOOST_AUTO_TEST_CASE(NoiseAddReportsThermalApproximationOncePerCall)
 {
     auto circuit = HadamardCircuit();
-    auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{1}, std::vector<size_t>{1});
-    network->CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kStatevector);
     noise::NoiseModel model;
-    model.set_thermal_relaxation(0, 1.0, 10.0, 15.0);
-    noise::NoiseAdd add;
+    model.set_thermal_relaxation(0, 0.5, 1.0, 1.8);
     int warnings = 0;
-    add.set_warning_handler([&](const std::string &message) {
+    const auto count = [&](const std::string &message) {
         BOOST_CHECK(message.find("T2 clamped to T1") != std::string::npos);
         ++warnings;
-    });
-    add.noisy_estimate_montecarlo(circuit, network, 0, {"X"}, model, 16);
-    BOOST_CHECK_EQUAL(warnings, 1);
-    add.set_exact_channels(true);
-    add.inject(circuit, model);
-    BOOST_CHECK_EQUAL(warnings, 1);
+    };
+    // A method that neither holds nor samples channels draws the relaxation as
+    // a reset and a phase flip, with T2 clamped to T1, and says so once.
+    {
+        auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{1}, std::vector<size_t>{1});
+        network->CreateSimulator(Simulators::SimulatorType::kQCSim, Simulators::SimulationType::kTensorNetwork);
+        noise::NoiseAdd add;
+        add.set_warning_handler(count);
+        add.seed(7);
+        const auto values = add.noisy_estimate_montecarlo(circuit, network, 0, {"X"}, model, 4000);
+        BOOST_CHECK_EQUAL(warnings, 1);
+        BOOST_REQUIRE_EQUAL(values.size(), 1u);
+        BOOST_CHECK_SMALL(values[0] - std::exp(-0.5), 0.05);
+        add.set_exact_channels(true);
+        add.inject(circuit, model);
+        BOOST_CHECK_EQUAL(warnings, 1);
+    }
+    // The statevector and the matrix product state sample the channel from
+    // their state: nothing is clamped, nothing is said, and the coherence is
+    // the calibrated one.
+    for (const auto method : {Simulators::SimulationType::kStatevector, Simulators::SimulationType::kMatrixProductState})
+    {
+        warnings = 0;
+        auto network = std::make_shared<Network::SimpleDisconnectedNetwork<>>(Types::qubits_vector{1}, std::vector<size_t>{1});
+        network->CreateSimulator(Simulators::SimulatorType::kQCSim, method);
+        noise::NoiseAdd add;
+        add.set_warning_handler(count);
+        add.seed(7);
+        const auto values = add.noisy_estimate_montecarlo(circuit, network, 0, {"X"}, model, 4000);
+        BOOST_CHECK_EQUAL(warnings, 0);
+        BOOST_REQUIRE_EQUAL(values.size(), 1u);
+        BOOST_CHECK_SMALL(values[0] - std::exp(-0.5 / 1.8), 0.05);
+        BOOST_CHECK(add.last_realization_policy().runtime_channels);
+
+        // Counts too, and a model no draw without the state can sample.
+        noise::NoiseModel damping;
+        damping.set_generalized_amplitude_damping(0, 0.3, 0.0);
+        auto flipped = std::make_shared<Circuits::Circuit<>>();
+        flipped->AddOperation(std::make_shared<Circuits::XGate<>>(0));
+        flipped->AddOperation(std::make_shared<Circuits::MeasurementOperation<>>(std::vector<std::pair<Types::qubit_t, size_t>>{{0, 0}}));
+        const auto counts = add.full_noise_execute(flipped, network, 0, damping, 4000, 1);
+        size_t ones = 0, total = 0;
+        for (const auto &[bits, shots] : counts)
+        {
+            total += shots;
+            if (!bits.empty() && bits[0])
+                ones += shots;
+        }
+        BOOST_CHECK_EQUAL(total, 4000u);
+        BOOST_CHECK_SMALL(static_cast<double>(ones) / 4000.0 - 0.7, 0.04);
+        BOOST_CHECK_EQUAL(warnings, 0);
+        // The backend draws all of that noise as the circuit runs: one circuit
+        // for every shot, each shot a realization, whatever number was asked
+        // for, as the Python and JSON entry points report it.
+        BOOST_CHECK_EQUAL(add.last_realization_policy().realizations, 4000u);
+        add.seed(7);
+        const auto replay = add.full_noise_execute(flipped, network, 0, damping, 4000, 1);
+        add.seed(7);
+        BOOST_CHECK(replay == add.full_noise_execute(flipped, network, 0, damping, 4000, 64));
+
+        // The one-off injectors lower the relaxation into gates and resets,
+        // whatever the execution before them resolved: they clamp, and say so.
+        add.inject(circuit, model);
+        BOOST_CHECK_EQUAL(warnings, 1);
+    }
 }
 
 /** Each coherent setter replaces only its own component, so axes compose. */

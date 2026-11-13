@@ -161,16 +161,19 @@ template <class State> class FusionSimulator : public State
 
     void ApplyGenericOneQubitGate(Types::qubit_t q, const Eigen::Matrix2cd &m) override
     {
+        this->NoteGenericGate(m);
         this->SubmitGate({FusionGate::Kind::kNone, {q}, {}, m});
     }
 
     void ApplyGenericTwoQubitGate(Types::qubit_t a, Types::qubit_t b, const Eigen::Matrix4cd &m) override
     {
+        this->NoteGenericGate(m);
         this->SubmitGate({FusionGate::Kind::kNone, {a, b}, {}, m});
     }
 
     void ApplyGenericThreeQubitGate(Types::qubit_t a, Types::qubit_t b, Types::qubit_t c, const ISimulator::Matrix8cd &m) override
     {
+        this->NoteGenericGate(m);
         this->SubmitGate({FusionGate::Kind::kNone, {a, b, c}, {}, m});
     }
 

@@ -43,7 +43,7 @@ were built.
 | Clifford gates only, any number of qubits; shots | `Stabilizer` | CPU | Raises an error on any non-Clifford gate. {ref}`Measured <evidence-stabilizer>`. |
 | Mostly Clifford with a few T gates; shots | `ExtendedStabilizer` | CPU | Approximate sampling. {ref}`Measured <evidence-extended-stabilizer>`. |
 | Expectation values on circuits too wide for a statevector; no shots | `PauliPropagator` | CPU; GPU¹ | Truncation is set by the `pp_*` options. {ref}`Measured <evidence-pauli-propagation>`. |
-| Noise channels that need the exact mixed state (amplitude damping, Kraus channels); about 10 qubits or fewer | `DensityMatrix`, or `MatrixProductOperator` for more qubits | CPU; GPU¹ | Density-matrix cost grows steeply with qubit count. {ref}`Measured <evidence-density-matrix>`. |
+| The exact mixed state under noise, with no sampling error, for any channel (amplitude damping, Kraus channels); about 10 qubits or fewer | `DensityMatrix`, or `MatrixProductOperator` for more qubits | CPU; GPU¹ | Density-matrix cost grows steeply with qubit count. `Statevector` and `MatrixProductState` sample the same channels, one trajectory per shot (see {ref}`py_noise_sampled_channels`). {ref}`Measured <evidence-density-matrix>`. |
 | Error-correction circuits written in Stim, decoded with Sinter | `maestro.sinter` samplers | CPU | Clifford circuits with Pauli noise use native reference frames; other circuits and noise models run as trajectories. {ref}`Measured <evidence-qec>`. |
 
 ¹ Requires GPU access; see {doc}`/getting-started/gpu-access`. GPU support per

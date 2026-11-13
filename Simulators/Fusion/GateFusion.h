@@ -107,7 +107,8 @@ template <class Gate> class GateFusion
     // matrix <- embed(gate on `order`) * matrix, without forming the embedding:
     // the gate acts on the row index bits of `order` within `to`, costing
     // dim^2 * 2^k instead of dim^3 multiply-adds.
-    static void ApplyLeft(const Eigen::MatrixXcd &gate, const Types::qubits_vector &order, const Types::qubits_vector &to, Eigen::MatrixXcd &matrix)
+    template <class GateMatrix, class Matrix>
+    static void ApplyLeft(const GateMatrix &gate, const Types::qubits_vector &order, const Types::qubits_vector &to, Matrix &matrix)
     {
         const size_t k = order.size(), sub = size_t{1} << k;
         if (k > 3)
@@ -278,6 +279,37 @@ template <class Gate> class GateFusion
     {
         while (!blocks_.empty())
             EmitOne(blocks_.begin()->first, emit);
+    }
+
+    // Removes every pending block that shares a qubit with `qubits` and hands
+    // it to `take`, oldest first, without emitting it. The caller then owns
+    // those gates: a mixed-state backend fuses them with the channel that
+    // follows them, which this cache cannot hold.
+    template <class Take> void Extract(const Types::qubits_vector &qubits, Take &&take)
+    {
+        std::vector<uint64_t> ids;
+        for (auto q : qubits)
+        {
+            const auto it = owners_.find(q);
+            if (it != owners_.end())
+                ids.push_back(it->second);
+        }
+        std::sort(ids.begin(), ids.end());
+        ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+        for (auto id : ids)
+        {
+            Block block = std::move(blocks_.at(id));
+            for (auto q : block.targets)
+                owners_.erase(q);
+            blocks_.erase(id);
+            take(std::move(block));
+        }
+    }
+
+    // The matrix of a block over its (sorted) targets, whether or not it has been merged.
+    static Eigen::MatrixXcd BlockMatrix(const Block &block)
+    {
+        return block.IsSingle() ? Embed(block.original.Matrix(), block.original.Targets(), block.targets) : block.matrix;
     }
 
   private:

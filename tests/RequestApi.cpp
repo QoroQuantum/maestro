@@ -284,6 +284,33 @@ void TestSeededSharedRealizationWorkers()
           "Dynamic MPS realization workers omitted their clone-owned saved state");
     Check(tensorLimited.at("shots").to_number<size_t>() == 12 && Call(tensor).at("counts") == tensorLimited.at("counts"),
           "Memory-limited MPS shared realizations lost shots or reproducibility");
+
+    // An estimate and a noisy fidelity run their realizations one after another
+    // on the request's simulator, and report that one worker as execute reports its own.
+    for (const char *operation : {"estimate", "noisy_fidelity"})
+    {
+        auto request = Request(operation, 2, "h q[0]; cx q[0],q[1];");
+        request["execution"].as_object()["seed"] = 3;
+        request["noise"] = bounded.at("noise");
+        if (std::string(operation) == "estimate")
+            request["observables"] = j::array{"ZZ"};
+        const auto metadata = Call(request).at("execution_metadata").as_object();
+        Check(metadata.contains("realization_workers") && metadata.at("realization_workers").to_number<size_t>() == 1,
+              "A noisy estimate or fidelity did not report the worker its realizations ran on");
+    }
+
+    // Shot rows whose realizations ran on realization workers report them too, within max_simulators.
+    auto rows = Request("execute", 2, "h q[0]; t q[0]; cx q[0],q[1]; measure q->c;");
+    rows["execution"].as_object()["shots"] = 12;
+    rows["execution"].as_object()["seed"] = 3;
+    rows["execution"].as_object()["return_samples"] = true;
+    rows["noise"] = bounded.at("noise");
+    rows["simulator"].as_object()["selection"] = "fixed";
+    rows["simulator"].as_object()["options"] = j::object{{"max_simulators", 2}};
+    const auto rowMetadata = Call(rows).at("execution_metadata").as_object();
+    Check(rowMetadata.contains("realization_workers") && rowMetadata.at("realization_workers").to_number<size_t>() >= 1 &&
+              rowMetadata.at("realization_workers").to_number<size_t>() <= 2,
+          "Noisy shot rows did not report the workers their realizations ran on");
 }
 
 double Real(const j::value &value)
@@ -703,6 +730,7 @@ try
     FreeResult(capabilities);
     Check(caps.at("build").at("version").is_string(), "Missing build version");
     Check(caps.at("build").at("source_revision").is_string(), "Missing build revision");
+    Check(caps.at("build").at("qcsim_revision").is_string() && !caps.at("build").at("qcsim_revision").as_string().empty(), "Missing QCSim revision");
     Check(caps.at("capability_scope") == "validation", "Capabilities must not promise device readiness");
     bool operatorQuery = false, precision = false, workers = false;
     for (const auto &diagnostic : caps.at("diagnostics").as_array())

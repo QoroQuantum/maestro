@@ -36,6 +36,13 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
 
     config_.seed = EffectiveSamplingSeed(config_);
     config_.native_options.erase("seed");
+    // The prefix runs once. A backend that samples channels from its state
+    // would draw one branch of the prefix's channel instructions here, and
+    // every suffix shot would share it without a word: noise in a prefix has
+    // to be deterministic, as for prefix_noise below.
+    if (prefix && prefix->HasDrawnChannels() && SamplesQuantumChannels(config_))
+        throw std::invalid_argument("A checkpoint prefix runs once: its channel instructions need a backend that applies them exactly (density "
+                                    "matrix, MPO or the QCSim Pauli propagator). Put channels that are sampled from the state in the suffixes");
     auto executed_prefix = prefix;
     if (prefix && prefix_noise && prefix_noise->has_any())
     {
@@ -50,7 +57,7 @@ PrefixCheckpoint::PrefixCheckpoint(const RecordCircuitPtr &prefix, int num_qubit
                                         "Pauli propagator, without coherent or correlated noise");
         std::optional<uint64_t> seed = 0; // no sampled layer reads it
         auto rng = MakeNoiseRng(config_, seed);
-        const noise::NoiseInjectionPlan plan(prefix, *prefix_noise);
+        const noise::NoiseInjectionPlan plan(prefix, *prefix_noise, false, OrdersForChain(config_, true));
         executed_prefix = InjectPlanned(NoiseLayer::kCombined, plan, rng, true);
         // As for suffixes: crosstalk spectators beyond a prefix that fits the
         // register stay in |0>, where their rotations are a global phase.
@@ -126,8 +133,8 @@ bool PrefixCheckpoint::HasNoise(const RecordCircuitPtr &suffix, const noise::Noi
     if (noise_model && noise_model->has_any())
         return true;
     // Circuit-level channels, including nested ones, need per-realization
-    // injection like a model does.
-    return suffix && suffix->HasQuantumChannels();
+    // injection like a model does, except those with one branch only, which are gates.
+    return suffix && suffix->HasDrawnChannels();
 }
 
 ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size_t shots, const noise::NoiseModel *noise_model,
@@ -308,7 +315,9 @@ ShotRecords PrefixCheckpoint::ExecuteSuffix(const RecordCircuitPtr &suffix, size
         // An unseeded call must not copy the same measurement RNG into
         // multiple workers. This stream is separate from noise injection.
         const uint64_t unseeded_measurements = noise_seed ? 0 : Utils::RandomStream::FreshSeed();
-        const noise::NoiseInjectionPlan plan(suffix, *noise_model);
+        // On a backend that samples channels from its state the realizations
+        // keep the channels no draw replaces: each shot draws their branches.
+        const noise::NoiseInjectionPlan plan(suffix, *noise_model, policy.runtime_channels, policy.chain_order);
         const bool exact = policy.exact_channels;
         // The checkpoint register is fixed. Crosstalk spectators beyond a
         // suffix that fits it stay in |0>, where their rotations are a global

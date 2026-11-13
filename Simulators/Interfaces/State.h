@@ -139,6 +139,29 @@ inline bool EvolvesExactQuantumChannels(SimulatorType type, SimulationType metho
            (method == SimulationType::kDensityMatrix || method == SimulationType::kMatrixProductOperator);
 }
 
+// Whether a backend takes a quantum channel as one sampled Kraus branch: a
+// pure-state backend that reads the branch probabilities from its state and
+// renormalizes, as it does for a measurement. Each execution is then one
+// trajectory, and averaging trajectories reproduces the channel. This is
+// ISimulator::SamplesQuantumChannels() of the simulator the pair creates.
+inline bool SamplesQuantumChannels(SimulatorType type, SimulationType method)
+{
+#ifndef NO_QISKIT_AER
+    // Aer samples its Kraus instruction on the statevector and the matrix product state.
+    if (type == SimulatorType::kQiskitAer)
+        return method == SimulationType::kStatevector || method == SimulationType::kMatrixProductState;
+#endif
+    // A composite is made of statevectors of its backend, and samples where they do.
+    if (type == SimulatorType::kCompositeQCSim)
+        return method == SimulationType::kStatevector;
+#ifndef NO_QISKIT_AER
+    if (type == SimulatorType::kCompositeQiskitAer)
+        return method == SimulationType::kStatevector;
+#endif
+    // QCSim samples them on the statevector and on the matrix product state.
+    return type == SimulatorType::kQCSim && (method == SimulationType::kStatevector || method == SimulationType::kMatrixProductState);
+}
+
 /**
  * @class IState
  * @brief Interface class for a quantum computing simulator state.
@@ -187,6 +210,23 @@ class IState
     double RandomUniform()
     {
         return auxUniform(auxRng);
+    }
+
+    /**
+     * @brief Uniform random number in [0, 1) from the channel-branch stream.
+     *
+     * A backend that samples quantum channels draws their branches from this
+     * stream, which is seeded with the simulator and separate from the
+     * measurement and readout streams: adding a channel to a circuit does not
+     * shift the measurement outcomes of the operations around it. A backend
+     * that leaves a draw to the engine it wraps cannot promise that: the Aer
+     * adapter draws Pauli and unitary-mixture branches here, but the branches
+     * that need the state are drawn by Aer's apply_kraus from the stream that
+     * also draws Aer's measurement outcomes (AerState::ApplyQuantumChannel).
+     */
+    double ChannelUniform()
+    {
+        return channelUniform(channelRng);
     }
 
     static uint64_t DeriveSeed(uint64_t seed, uint64_t stream)
@@ -594,6 +634,19 @@ class IState
     }
 
     /**
+     * @brief Returns whether ApplyQuantumChannel applies one sampled branch.
+     *
+     * True for a pure-state backend that draws a Kraus operator with the
+     * probability its state gives it and renormalizes. The state after the
+     * call is one trajectory of the channel, not the ensemble, so a state
+     * that has passed through a channel must not serve several shots.
+     */
+    virtual bool SamplesQuantumChannels() const
+    {
+        return false;
+    }
+
+    /**
      * @brief Applies a local CPTP quantum channel to one or two qubits.
      *
      * The order of target qubits has the same matrix convention as
@@ -605,6 +658,72 @@ class IState
         (void)targets;
         (void)channel;
         throw std::runtime_error("This simulator does not support exact quantum-channel evolution");
+    }
+
+    /** @brief Returns whether LocalDensityMatrix is available. */
+    virtual bool SupportsLocalDensityMatrix() const
+    {
+        return false;
+    }
+
+    /**
+     * @brief Reduced density matrix of one to three qubits of a pure state.
+     *
+     * qubits[0] is the least-significant bit of the row and column index. The
+     * state is not changed. Every probability a local operation on those
+     * qubits needs follows from it: for a Kraus operator E, tr(E rho E^dagger).
+     */
+    virtual Eigen::MatrixXcd LocalDensityMatrix(const Types::qubits_vector &qubits)
+    {
+        (void)qubits;
+        throw std::runtime_error("This simulator does not provide local reduced density matrices");
+    }
+
+    /** @brief Returns whether ApplyLocalMapNorm is available. */
+    virtual bool SupportsLocalMapNorm() const
+    {
+        return false;
+    }
+
+    /**
+     * @brief Applies a matrix to one to three qubits of a pure state and returns the squared norm of the result.
+     *
+     * The matrix need not be unitary; qubits[0] is the least-significant bit
+     * of its index. The state is left as the matrix leaves it, not
+     * renormalized, and the norm comes from the pass that applies the matrix.
+     * A caller that applies, on speculation, what a block of channels does
+     * when nothing happens reads from it how probable that was.
+     */
+    virtual double ApplyLocalMapNorm(const Types::qubits_vector &qubits, const Eigen::MatrixXcd &matrix)
+    {
+        (void)qubits;
+        (void)matrix;
+        throw std::runtime_error("This simulator does not apply local maps with their norm");
+    }
+
+    /** @brief Returns whether ApplySuperoperator is available. */
+    virtual bool SupportsSuperoperators() const
+    {
+        return false;
+    }
+
+    /**
+     * @brief Applies a local linear map to a mixed state, in superoperator form.
+     *
+     * Every local density block, indexed row + d * column with targets[0] the
+     * least-significant bit of both and d = 2 or 4, is multiplied by the 4x4 or
+     * 16x16 matrix. For Kraus operators E_k that matrix is sum_k conj(E_k) (x)
+     * E_k (QuantumChannel::Superoperator), and for a unitary U it is conj(U)
+     * (x) U. Maps applied one after another multiply, later ones on the left,
+     * which is how a gate, its noise and the gates around them become one pass.
+     *
+     * The matrix is trusted: only its shape is checked.
+     */
+    virtual void ApplySuperoperator(const Types::qubits_vector &targets, const Eigen::MatrixXcd &superoperator)
+    {
+        (void)targets;
+        (void)superoperator;
+        throw std::runtime_error("This simulator does not apply superoperators");
     }
 
     /** MPO extensions: bit vectors are q0-first; matrices use logical basis
@@ -1195,6 +1314,8 @@ class IState
     {
         auxRng.seed(DeriveSeed(seed, kAuxRngStream));
         auxUniform.reset();
+        channelRng.seed(DeriveSeed(seed, kChannelRngStream));
+        channelUniform.reset();
     }
 
     /**
@@ -1244,12 +1365,15 @@ class IState
   private:
     /** Stream id for the auxiliary RNG. Large so it cannot collide with the
      *  small per-job / per-sub-simulator stream ids passed to DeriveSeed. */
-    static constexpr uint64_t kAuxRngStream = 0x52454144ULL; // 'READ'
+    static constexpr uint64_t kAuxRngStream = 0x52454144ULL;     // 'READ'
+    static constexpr uint64_t kChannelRngStream = 0x4B524155ULL; // 'KRAU'
 
     std::unordered_set<std::shared_ptr<ISimulatorObserver>> observers; /**< The registered observers. */
     bool notifyObservers = true;                                       /**< A flag to indicate if observers should be notified. */
     std::mt19937_64 auxRng{Utils::RandomStream::FreshSeed()};          /**< Auxiliary stream, see RandomUniform. */
     std::uniform_real_distribution<double> auxUniform{0.0, 1.0};
+    std::mt19937_64 channelRng{Utils::RandomStream::FreshSeed()}; /**< Channel-branch stream, see ChannelUniform. */
+    std::uniform_real_distribution<double> channelUniform{0.0, 1.0};
 };
 
 } // namespace Simulators

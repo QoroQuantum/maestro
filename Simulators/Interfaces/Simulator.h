@@ -25,6 +25,11 @@ struct GateFusionStatistics
     uint64_t submittedGates = 0;
     uint64_t backendGates = 0;
     uint64_t fusedBlocks = 0;
+    // Blocks of sampled channels applied without reading the state first, and
+    // those among them that had to read it after all (see
+    // FusionState::ResolveWithoutReading).
+    uint64_t unreadBlocks = 0;
+    uint64_t rereadBlocks = 0;
 };
 
 /**
@@ -62,6 +67,23 @@ class ISimulator : public IState, std::enable_shared_from_this<ISimulator>
     // execute them. Flush() also waits; reads of the state flush on their own.
     virtual void FlushPendingGates()
     {
+    }
+
+    // Whether a quantum channel joins the operations held back for fusion
+    // instead of ending them. The circuit executor then leaves the pending
+    // operations alone around a channel operation.
+    virtual bool FusesQuantumChannels() const
+    {
+        return false;
+    }
+
+    // Steps over a circuit operation that changes no state (a delay) without
+    // emitting the operations held back for fusion. Returns false when the
+    // simulator needs them emitted at that position; the caller then treats
+    // the operation as any other boundary.
+    virtual bool SkipIdleOperation()
+    {
+        return false;
     }
 
     virtual void ApplyGenericThreeQubitGate(Types::qubit_t, Types::qubit_t, Types::qubit_t, const Matrix8cd &)

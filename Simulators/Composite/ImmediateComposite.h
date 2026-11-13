@@ -773,6 +773,118 @@ class ImmediateCompositeSimulator : public ISimulator
             simulator->Flush();
     }
 
+    // The components are pure states: a channel is taken as one sampled
+    // branch, when the components sample channels.
+    bool SamplesQuantumChannels() const override
+    {
+        return Simulators::SamplesQuantumChannels(type, SimulationType::kStatevector);
+    }
+
+    /**
+     * @brief Applies one sampled branch of a one- or two-qubit channel.
+     *
+     * Each part of the channel goes where its qubits are. A Pauli is drawn
+     * here and applied qubit by qubit, so a two-qubit Pauli error joins no
+     * components. A one-qubit Kraus set is drawn by the component that holds
+     * the qubit, from its own state. Only a two-qubit unitary or Kraus set
+     * joins the two components, as a two-qubit gate does. The reset of a
+     * relaxation with T2 <= T1 detaches its qubit, as any reset does.
+     */
+    void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel) override
+    {
+        if (!SamplesQuantumChannels())
+            throw std::runtime_error("This composite simulator does not support quantum channels");
+        if (targets.size() != channel.GetNumberOfQubits())
+            throw std::invalid_argument("The number of channel targets does not match its Kraus operators");
+        if (targets.empty() || targets.size() > 2 || (targets.size() == 2 && targets[0] == targets[1]))
+            throw std::invalid_argument("Quantum-channel target qubits must be one or two distinct qubits");
+        for (const Types::qubit_t target : targets)
+            if (target >= nrQubits)
+                throw std::invalid_argument("Quantum-channel qubit is out of range");
+
+        const auto draw = [](const std::vector<double> &probabilities, double random) {
+            size_t chosen = 0;
+            double accumulated = 0.;
+            for (size_t index = 0; index < probabilities.size(); ++index)
+            {
+                if (probabilities[index] <= 0.)
+                    continue;
+                chosen = index; // also the fallback if rounding leaves the draw above the last sum
+                accumulated += probabilities[index];
+                if (random < accumulated)
+                    break;
+            }
+            return chosen;
+        };
+
+        DontNotify();
+        try
+        {
+            const auto &factors = channel.GetFactors();
+            for (size_t f = 0; f < factors.size(); ++f)
+            {
+                const auto &factor = factors[f];
+                Types::qubits_vector qubits;
+                for (const size_t local : factor.qubits)
+                    qubits.push_back(targets[local]);
+                if (factor.kind == QuantumChannel::FactorKind::kPauli)
+                {
+                    const size_t index = draw(factor.probabilities, ChannelUniform());
+                    for (size_t k = 0; k < qubits.size(); ++k)
+                        switch ((index >> (2 * k)) & 3)
+                        {
+                        case 1:
+                            ApplyX(qubits[k]);
+                            break;
+                        case 2:
+                            ApplyY(qubits[k]);
+                            break;
+                        case 3:
+                            ApplyZ(qubits[k]);
+                            break;
+                        default:
+                            break;
+                        }
+                    continue;
+                }
+                if (factor.kind == QuantumChannel::FactorKind::kUnitaryMixture)
+                {
+                    const auto &unitary = factor.operators[draw(factor.probabilities, ChannelUniform())];
+                    if (qubits.size() == 1)
+                        ApplyGenericOneQubitGate(qubits[0], Eigen::Matrix2cd(unitary));
+                    else
+                        ApplyGenericTwoQubitGate(qubits[0], qubits[1], Eigen::Matrix4cd(unitary));
+                    continue;
+                }
+                QuantumChannel::ThermalMixture mixture;
+                if (factor.kind == QuantumChannel::FactorKind::kThermal && QuantumChannel::MixtureOf(factor.thermal, mixture))
+                {
+                    const double random = ChannelUniform();
+                    if (random >= mixture.identity + mixture.phaseFlip)
+                    {
+                        // To the thermal state: |0>, or |1> with the excited population.
+                        ApplyReset({qubits[0]});
+                        if ((random - mixture.identity - mixture.phaseFlip) / mixture.reset < factor.thermal.excitedStatePopulation)
+                            ApplyX(qubits[0]);
+                    }
+                    else if (random >= mixture.identity)
+                        ApplyZ(qubits[0]);
+                    continue;
+                }
+                if (qubits.size() == 2)
+                    JoinIfNeeded(qubits[0], qubits[1]);
+                GetSimulator(qubits[0])->ApplyQuantumChannel(qubits, channel.FactorChannel(f));
+            }
+        }
+        catch (...)
+        {
+            Notify();
+            throw;
+        }
+        Notify();
+        NotifyObservers(targets);
+    }
+
     /**
      * @brief Apply a generic one-qubit gate to the specified qubit.
      * @param qubit The qubit to apply the gate to.

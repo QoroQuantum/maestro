@@ -22,7 +22,7 @@ template <typename Time = Types::time_type> class QuantumChannelOperation : publ
 {
   public:
     QuantumChannelOperation(const Types::qubits_vector &targets, const Simulators::QuantumChannel &channel, Time delay = 0)
-        : IOperation<Time>(delay), targets_(targets), channel_(channel)
+        : IOperation<Time>(delay), targets_(targets), channel_(channel), deterministic_(channel.IsDeterministic())
     {
         if (targets_.size() != channel_.GetNumberOfQubits())
             throw std::invalid_argument("The number of channel targets does not match its Kraus operators");
@@ -66,6 +66,15 @@ template <typename Time = Types::time_type> class QuantumChannelOperation : publ
         return channel_;
     }
 
+    /**
+     * Whether the channel has one branch only, a unitary (QuantumChannel::IsDeterministic). Kept with the operation:
+     * the part of a circuit that is executed once is found for every job, and asks it of every channel.
+     */
+    bool IsDeterministic() const
+    {
+        return deterministic_;
+    }
+
     std::shared_ptr<IOperation<Time>> Clone() const override
     {
         return std::make_shared<QuantumChannelOperation<Time>>(targets_, channel_, IOperation<Time>::GetDelay());
@@ -88,6 +97,7 @@ template <typename Time = Types::time_type> class QuantumChannelOperation : publ
   private:
     Types::qubits_vector targets_;
     Simulators::QuantumChannel channel_;
+    bool deterministic_;
 };
 
 } // namespace Circuits

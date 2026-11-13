@@ -15,18 +15,19 @@
 #ifndef _SIMPLE_NETWORK_H_
 #define _SIMPLE_NETWORK_H_
 
+#include "../Circuit/ChainOrder.h"
 #include "../Estimators/SimulatorsEstimatorInterface.h"
 #include "../Utils/Sampling/Multinomial.h"
 #include "NetworkJob.h"
 #include "QubitRegister.h"
 #include "SimpleController.h"
 #include "SimpleHost.h"
-#include <exception>
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <charconv>
 #include <cstdlib>
+#include <exception>
 #include <optional>
 
 #include "../Simulators/TensorNetworks/MPSDummySimulator.h"
@@ -186,8 +187,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             GetState().SetResultsInOrder(first.first);
         }
 
-        if (recreate && hadSimulator && (!simulator || (simulator && (simType != simulator->GetType() || method != simulator->GetSimulationType() ||
-                                                      simulator->GetNumberOfQubits() != numQubits))))
+        if (recreate && hadSimulator &&
+            (!simulator ||
+             (simulator && (simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))))
             RecreateSimulatorKeepingResults(simType, method, templateQubits);
     }
 
@@ -250,8 +252,9 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             GetState().SetResultsInOrder(first.first);
         }
 
-        if (recreate && hadSimulator && (!simulator || (simulator && (simType != simulator->GetType() || method != simulator->GetSimulationType() ||
-                                                      simulator->GetNumberOfQubits() != numQubits))))
+        if (recreate && hadSimulator &&
+            (!simulator ||
+             (simulator && (simType != simulator->GetType() || method != simulator->GetSimulationType() || simulator->GetNumberOfQubits() != numQubits))))
             RecreateSimulatorKeepingResults(simType, method, templateQubits);
     }
 
@@ -750,7 +753,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         const bool reproducibleSampling = UsesReproducibleSampling(simType, method);
         size_t measuredWidth;
         const bool terminalSampling = !distCirc->HasOpsAfterMeasurementsWithWidth(Simulators::EvolvesExactQuantumChannels(simType, method), measuredWidth);
-        const size_t nrThreads = ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbitsResults, shots, simType, method, terminalSampling, measuredWidth, optSim, executed);
+        const size_t nrThreads =
+            ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbitsResults, shots, simType, method, terminalSampling, measuredWidth, optSim, executed);
 
         std::mutex resultsMutex;
 
@@ -995,7 +999,8 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
         const bool terminalSampling = !distCirc->HasOpsAfterMeasurementsWithWidth(Simulators::EvolvesExactQuantumChannels(simType, method), measuredWidth);
         // WARNING: be sure to not put this above ChooseBestSimulator, as that one
         // can change the shots value!
-        const size_t nrThreads = ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbits, shots, simType, method, terminalSampling, measuredWidth, optSim, executed);
+        const size_t nrThreads =
+            ExecutionThreads(distCirc, nrQubits, nrCbits, nrCbits, shots, simType, method, terminalSampling, measuredWidth, optSim, executed);
 
         std::mutex resultsMutex;
 
@@ -2426,7 +2431,6 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
     }
 
   public:
-
     std::shared_ptr<Simulators::ISimulator> ChooseBestSimulator(std::shared_ptr<Circuits::Circuit<Time>> &dcirc, size_t &counts, size_t nrQubits,
                                                                 size_t nrCbits, size_t nrResultCbits, Simulators::SimulatorType &simType,
                                                                 Simulators::SimulationType &method, std::vector<bool> &executed, bool multithreading = false,
@@ -3445,6 +3449,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
             // an MPO site carries a two-qubit (operator) physical index, so its
             // bonds grow like those of an MPS twice as long
             const size_t routedQubits = sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator ? 2 * nrQubits : nrQubits;
+            bool planned = false;
             if (mpsOptimizationQubitsNumberThreshold <= routedQubits)
             {
                 const auto maxBondDimValue =
@@ -3455,12 +3460,29 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
                 if (maxBondDimValue <= 0 || static_cast<int>(mpsOptimizationBondDimensionThreshold) <= maxBondDimValue)
                 {
+                    planned = true;
                     // need to be sure the circuit is correctly converted
                     dcirc->ConvertForCutting(); // convert the three qubit gates
                     auto layers = dcirc->ToMultipleQubitsLayersNoClone();
                     // Finalize source ordering before preparing fusion. Routing layers
                     // are only a cost model and must never replace executable operations.
                     auto ordered = Circuits::Circuit<Time>::LayersToCircuit(layers);
+                    // A circuit whose two-qubit operations form lines that do not run in index order
+                    // (a line through a device) gets its qubits placed along them: no swap is then
+                    // needed, so no layout can cost less and none is searched for (Circuits::ChainLine).
+                    const std::vector<long long int> line =
+                        optimizeInitialQubitsMap ? Circuits::ChainLine(ordered, nrQubits, sim->SwapGatesRelabelQubits()) : std::vector<long long int>();
+                    // Among the orders that are the same circuit, the one that keeps the chain's work
+                    // local (Circuits::ChainOrdered): QCSim's chains pay for the distance between
+                    // operations once a channel has taken them off their canonical form. The distance
+                    // is the one on the chain, so along the line when the qubits are placed there.
+                    if (sim->GetType() == Simulators::SimulatorType::kQCSim)
+                        ordered = Circuits::ChainOrdered(ordered,
+                                                         sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator
+                                                             ? Circuits::ChainOrder::kMixedState
+                                                         : sim->SamplesQuantumChannels() ? Circuits::ChainOrder::kSampledChannels
+                                                                                         : Circuits::ChainOrder::kNone,
+                                                         line.empty() ? nullptr : &line);
                     dcirc->SetOperations(ordered->GetOperations());
                     sim->SetUpcomingGates(dcirc->GetOperations());
                     if (sim->IsGateFusionEnabled())
@@ -3489,7 +3511,7 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
 
                     if (optimizeInitialQubitsMap)
                     {
-                        const auto optimalMap = dummySim.ComputeOptimalQubitsMap(layers);
+                        const auto optimalMap = line.empty() ? dummySim.ComputeOptimalQubitsMap(layers) : line;
                         sim->SetInitialQubitsMap(optimalMap);
                     }
 
@@ -3545,6 +3567,30 @@ template <typename Time = Types::time_type, class Controller = SimpleController<
                         // changed. Its routing setters already refresh the plan.
                         if (sim->GetType() != Simulators::SimulatorType::kQCSim)
                             sim->SetUpcomingGates(dcirc->GetOperations());
+                    }
+                }
+            }
+            // A register of that size whose bond limit is below the one a layout is planned for still gets
+            // the qubits of lines out of index order placed along them: finding the lines is one pass
+            // over the circuit, the chain then makes no swap, and QCSim's chains get the order along the
+            // lines, as a chain in index order has it from the noise plan. A smaller register is left
+            // alone: its swaps cost less than looking for the lines.
+            if (!planned && optimizeInitialQubitsMap && mpsOptimizationQubitsNumberThreshold <= routedQubits)
+            {
+                const auto line = Circuits::ChainLine(dcirc, nrQubits, sim->SwapGatesRelabelQubits());
+                if (!line.empty())
+                {
+                    sim->SetInitialQubitsMap(line);
+                    if (sim->GetType() == Simulators::SimulatorType::kQCSim)
+                    {
+                        const auto ordered = Circuits::ChainOrdered(dcirc,
+                                                                    sim->GetSimulationType() == Simulators::SimulationType::kMatrixProductOperator
+                                                                        ? Circuits::ChainOrder::kMixedState
+                                                                    : sim->SamplesQuantumChannels() ? Circuits::ChainOrder::kSampledChannels
+                                                                                                    : Circuits::ChainOrder::kNone,
+                                                                    &line);
+                        if (ordered != dcirc)
+                            dcirc->SetOperations(ordered->GetOperations());
                     }
                 }
             }

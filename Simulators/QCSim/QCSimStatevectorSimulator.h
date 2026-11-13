@@ -246,11 +246,13 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
 
         const size_t low = distinct.front();
         const bool contiguous = distinct.back() - low + 1 == distinct.size();
+
         struct ByteTable
         {
             unsigned shift;
             std::array<uint16_t, 256> value;
         };
+
         std::vector<ByteTable> tables;
         if (!contiguous)
             for (size_t j = 0; j < distinct.size(); ++j)
@@ -494,6 +496,152 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
         }
         Notify();
         NotifyObservers(qubits);
+    }
+
+    bool SamplesQuantumChannels() const override
+    {
+        return true;
+    }
+
+    bool SupportsLocalDensityMatrix() const override
+    {
+        return true;
+    }
+
+    Eigen::MatrixXcd LocalDensityMatrix(const Types::qubits_vector &qubits) override
+    {
+        if (!state)
+            throw std::runtime_error("QCSim statevector state is not initialized");
+        for (const Types::qubit_t qubit : qubits)
+            if (qubit >= nrQubits)
+                throw std::invalid_argument("Local density matrix qubit is out of range");
+        if (qubits.size() == 1)
+            return state->LocalDensityMatrix(qubits[0]);
+        if (qubits.size() == 2 && qubits[0] != qubits[1])
+            return state->LocalDensityMatrix(qubits[0], qubits[1]);
+        if (qubits.size() == 3 && qubits[0] != qubits[1] && qubits[0] != qubits[2] && qubits[1] != qubits[2])
+            return state->LocalDensityMatrix(qubits[0], qubits[1], qubits[2]);
+        throw std::invalid_argument("A local density matrix covers one to three distinct qubits");
+    }
+
+    bool SupportsLocalMapNorm() const override
+    {
+        return true;
+    }
+
+    double ApplyLocalMapNorm(const Types::qubits_vector &qubits, const Eigen::MatrixXcd &matrix) override
+    {
+        if (!state)
+            throw std::runtime_error("QCSim statevector state is not initialized");
+        for (const Types::qubit_t qubit : qubits)
+            if (qubit >= nrQubits)
+                throw std::invalid_argument("Local map qubit is out of range");
+        if (qubits.empty() || qubits.size() > 3)
+            throw std::invalid_argument("A local map with its norm acts on one to three distinct qubits");
+        double norm = 0.;
+        // As a gate: cached measurement data goes, and the qubits join those the samplers read.
+        RunNative([&] {
+            norm = qubits.size() == 1   ? state->ApplyLocalMapNorm(matrix, qubits[0])
+                   : qubits.size() == 2 ? state->ApplyLocalMapNorm(matrix, qubits[0], qubits[1])
+                                        : state->ApplyLocalMapNorm(matrix, qubits[0], qubits[1], qubits[2]);
+        });
+        for (const Types::qubit_t qubit : qubits)
+            samplingSupportQubits = std::max(samplingSupportQubits, size_t(qubit) + 1);
+        return norm;
+    }
+
+    /**
+     * @brief Applies one sampled branch of a one- or two-qubit channel.
+     *
+     * The state after the call is one trajectory of the channel. Each factor
+     * of the channel is realized the cheapest way that is exact: a Pauli or
+     * unitary mixture is drawn without reading the state, and a relaxation or
+     * general Kraus factor takes one Kraus operator with the probability the
+     * state gives it, read in a single pass from the reduced density matrix
+     * of its targets, and leaves the state normalized. Branches come from the
+     * channel stream (ChannelUniform), which SetSeed seeds.
+     */
+    void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel) override
+    {
+        if (targets.size() != channel.GetNumberOfQubits())
+            throw std::invalid_argument("The number of channel targets does not match its Kraus operators");
+        if (targets.empty() || targets.size() > 2 || (targets.size() == 2 && targets[0] == targets[1]))
+            throw std::invalid_argument("Quantum-channel target qubits must be one or two distinct qubits");
+        for (const Types::qubit_t target : targets)
+            if (target >= nrQubits)
+                throw std::invalid_argument("Quantum-channel qubit is out of range");
+        if (!state)
+            throw std::runtime_error("QCSim statevector state is not initialized");
+
+        DontNotify();
+        try
+        {
+            for (const auto &factor : channel.GetFactors())
+            {
+                const Types::qubit_t first = targets[factor.qubits[0]];
+                const Types::qubit_t second = factor.qubits.size() > 1 ? targets[factor.qubits[1]] : 0;
+                if (factor.kind == QuantumChannel::FactorKind::kPauli)
+                {
+                    const size_t index = DrawBranch(factor.probabilities, ChannelUniform());
+                    for (size_t k = 0; k < factor.qubits.size(); ++k)
+                    {
+                        const Types::qubit_t qubit = targets[factor.qubits[k]];
+                        switch ((index >> (2 * k)) & 3)
+                        {
+                        case 1:
+                            ApplyX(qubit);
+                            break;
+                        case 2:
+                            ApplyY(qubit);
+                            break;
+                        case 3:
+                            ApplyZ(qubit);
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+                }
+                else if (factor.kind == QuantumChannel::FactorKind::kUnitaryMixture)
+                {
+                    const auto &unitary = factor.operators[DrawBranch(factor.probabilities, ChannelUniform())];
+                    if (factor.qubits.size() == 1)
+                        ApplyGenericOneQubitGate(first, Eigen::Matrix2cd(unitary));
+                    else
+                        ApplyGenericTwoQubitGate(first, second, Eigen::Matrix4cd(unitary));
+                }
+                else
+                {
+                    double random = ChannelUniform();
+                    QuantumChannel::ThermalMixture mixture;
+                    const bool mixed = factor.kind == QuantumChannel::FactorKind::kThermal && QuantumChannel::MixtureOf(factor.thermal, mixture);
+                    if (mixed && random < mixture.identity)
+                        continue;
+                    if (mixed && random < mixture.identity + mixture.phaseFlip)
+                    {
+                        ApplyZ(first);
+                        continue;
+                    }
+                    if (mixed)
+                    {
+                        // Only the reset reads the state: its outcome takes what is left of the draw.
+                        random = std::min((random - mixture.identity - mixture.phaseFlip) / mixture.reset, std::nextafter(1.0, 0.0));
+                        const auto reset = QuantumChannel::ResetOperators(factor.thermal.excitedStatePopulation);
+                        RunNative([&] { state->ApplyKrausOperator(reset, random, first); });
+                    }
+                    else
+                        RunNative([&] { state->ApplyKrausOperator(factor.operators, random, first, second); });
+                    samplingSupportQubits = std::max({samplingSupportQubits, size_t(first) + 1, factor.qubits.size() > 1 ? size_t(second) + 1 : size_t{0}});
+                }
+            }
+        }
+        catch (...)
+        {
+            Notify();
+            throw;
+        }
+        Notify();
+        NotifyObservers(targets);
     }
 
     std::vector<std::complex<double>> GetStateVector() override
@@ -1054,6 +1202,48 @@ class QCSimStatevectorSimulator : public QCSimGateSimulator
     // An exact upper bound on occupied basis bits, never inferred from a probe.
     // Initialized/imported states set the bound; gates can only widen it.
     size_t samplingSupportQubits = 0, savedSamplingSupportQubits = 0;
+
+    // Index of the branch a uniform draw selects from probabilities that sum to one.
+    static size_t DrawBranch(const std::vector<double> &probabilities, double random)
+    {
+        size_t chosen = 0;
+        double accumulated = 0.;
+        for (size_t index = 0; index < probabilities.size(); ++index)
+        {
+            if (probabilities[index] <= 0.)
+                continue;
+            chosen = index; // also the fallback if rounding leaves the draw above the last sum
+            accumulated += probabilities[index];
+            if (random < accumulated)
+                break;
+        }
+        return chosen;
+    }
+
+    // Runs a state update other than a gate with the kernel threading rule of ApplyNativeGate.
+    template <class Function> void RunNative(Function &&function)
+    {
+        state->InvalidateMeasurements();
+
+        struct RestoreThreading
+        {
+            SamplingQubitRegister &state;
+            bool enabled;
+
+            ~RestoreThreading()
+            {
+                state.SetMultithreading(enabled);
+            }
+        } restore{*state, state->GetMultithreading()};
+
+        bool hasTeam = false;
+#ifdef _OPENMP
+        hasTeam = !omp_in_parallel() && omp_get_max_threads() > 1;
+#endif
+        if (!LegacySampling() && !hasTeam)
+            state->SetMultithreading(false);
+        function();
+    }
 
     template <class Gate, class... Qubits> void ApplyNativeGate(const Gate &gate, Qubits... qubits)
     {

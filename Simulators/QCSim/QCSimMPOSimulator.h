@@ -318,6 +318,39 @@ class QCSimMPOSimulator : public QCSimTensorChainSimulator
         return true;
     }
 
+    bool SupportsSuperoperators() const override
+    {
+        return true;
+    }
+
+    /**
+     * @brief Applies a local map on one or two qubits, in superoperator form.
+     *
+     * The fusion layer hands a gate, its noise and the gates around them on
+     * the same one or two qubits over as one map: one update of the chain,
+     * and one decomposition, where a gate followed by a two-qubit channel
+     * costs two. The matrix is trusted, as on the density matrix.
+     */
+    void ApplySuperoperator(const Types::qubits_vector &targets, const Eigen::MatrixXcd &superoperator) override
+    {
+        if (targets.empty() || targets.size() > 2 || (targets.size() == 2 && targets[0] == targets[1]))
+            throw std::invalid_argument("A superoperator acts on one or two distinct qubits");
+        const Eigen::Index dimension = Eigen::Index{1} << (2 * targets.size());
+        if (superoperator.rows() != dimension || superoperator.cols() != dimension)
+            throw std::invalid_argument("The superoperator does not match its targets");
+        for (const Types::qubit_t target : targets)
+            if (target >= nrQubits)
+                throw std::invalid_argument("Superoperator qubit is out of range");
+        if (!mpoSimulator)
+            throw std::runtime_error("QCSim MPO state is not initialized");
+        // As for a channel: the native update can route before it finishes.
+        InvalidateDummyHistory();
+        mpoSimulator->ApplySuperoperator(superoperator, static_cast<Eigen::Index>(targets[0]),
+                                         targets.size() > 1 ? static_cast<Eigen::Index>(targets[1]) : Eigen::Index{0});
+        InvalidateDummyHistory();
+        NotifyObservers(targets);
+    }
+
     void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel) override
     {
         if (!SupportsQuantumChannels())

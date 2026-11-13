@@ -103,15 +103,57 @@ and an optional single `conditional_reg`. Native additions are:
   {"name":"delay", "qubits":[0], "duration":0.000001},
   {"name":"kraus", "qubits":[0], "operators":[[0,1,1,0]]},
   {"name":"pauli_channel", "qubits":[0], "probabilities":[0.97,0.01,0.01,0.01]},
+  {"name":"channel", "qubits":[0,1], "factors":[
+    {"kind":"depolarizing", "probability":0.01},
+    {"kind":"thermal_relaxation", "qubits":[1], "duration":3e-7, "t1":5e-5, "t2":7e-5}]},
   {"name":"reset", "qubits":[0]},
   {"name":"measure", "qubits":[0], "clbits":[0], "readout_error":0.01}
 ]
 ```
 
-Kraus matrices are flat row-major arrays with real or complex entries and require
-one/two targets and exact evaluation: a mixed-state backend or the QCSim
-`pauli_propagator`. Identity instructions remain present
-for noise injection. Gate parameter counts and U1/U2/U3 conventions are checked.
+Kraus matrices are flat row-major arrays with real or complex entries, on one or
+two targets. A mixed-state backend and the QCSim `pauli_propagator` apply a
+channel instruction (`kraus`, `pauli_channel`, `channel`) exactly. `statevector`
+and `matrix_product_state` sample it from their state, one branch each time the
+circuit runs: in `execute`, `estimate`, `noisy_fidelity` and `checkpoint_batch`
+suffixes, with or without a noise block. A query of one state (`statevector`,
+`amplitudes`, `probabilities`, `state_probability`) runs the circuit once, so
+there it returns the state of one branch, as Python's `get_statevector` and
+`get_probabilities` do and as a mid-circuit reset does on any pure-state method;
+`execution_metadata.stochastic_execution` is then `true`, and the seed selects
+the branch. Under a `candidates` list and without a noise block, one candidate
+that holds channels is enough: the network tries its candidates in turn and
+runs the circuit on one that can, as Python's `execute` does. A noise block has
+to know how its realizations are built before a backend is selected, so there
+every candidate must qualify. The other pure-state methods need a noise block with trajectory
+evaluation, whose realizations draw the instruction into gates and resets, and
+accept only channels whose branches need no state: Pauli channels, one-qubit
+mixtures of unitaries, and relaxation with T2 <= T1. Identity instructions
+remain present for noise injection. Gate parameter counts and U1/U2/U3
+conventions are checked.
+
+`channel` holds a structured channel on one or two qubits: its `factors`, applied
+in order, as one instruction that keeps them apart. It is the request form of
+Python's `maestro.QuantumChannel` constructors composed with `then()`, and of
+`Simulators::QuantumChannel` in C++. A factor names its `kind` and parameters:
+
+| `kind` | Parameters |
+|---|---|
+| `pauli` | `probabilities`: 4 or 16 entries, as for `pauli_channel` |
+| `unitary_mixture` | `probabilities`, `unitaries` (flat row-major matrices) |
+| `kraus` | `operators` (flat row-major matrices) |
+| `depolarizing` | `probability`; one or two qubits |
+| `amplitude_damping`, `phase_damping` | `gamma` |
+| `generalized_amplitude_damping` | `gamma`, `excited_population` |
+| `thermal_relaxation` | `duration`, `t1`, `t2` (numbers or `"infinity"`), optional `excited_population` |
+
+A factor acts on all the instruction's qubits, in their order, unless it lists
+`qubits`: positions among the instruction's qubits (`[1]` is the second one,
+`[1, 0]` exchanges the two). A one-qubit factor of a two-qubit instruction must
+list its position. Keeping the factors apart matters on pure-state methods: a
+trajectory draws a Pauli or unitary-mixture factor without reading its state,
+and the methods that hold no channels can draw relaxation with T2 <= T1 into
+resets, which they cannot do for the same map given as a flat `kraus` list.
 
 `rxx` and `rzz` take one angle and two qubits. They expand exactly as the QASM
 parser expands qelib1.inc's gates: `cx; rz; cx`, between Hadamards on both
@@ -137,15 +179,17 @@ has `4**len(qubits)` entries summing to one; base-4 digit `k` of an index select
 I, X, Y or Z on `qubits[k]`, so one qubit is `[pI, pX, pY, pZ]` and two are
 `II, XI, YI, ZI, IX, XX, ... ZZ`. Density-matrix and MPO methods apply it exactly,
 and so does the QCSim `pauli_propagator`, which scales the Pauli terms of the
-observable it propagates. Pure-state and MPS methods sample one Pauli per noise
-realization: the request
-needs a `noise` block with trajectory evaluation, whose `channels` may then be
-omitted. Set `noise.realizations` to the shot count for independent draws per
-shot, as with Python's `noisy_execute(..., noise_realizations=shots)`. A general
-`kraus` instruction cannot be sampled and still needs exact evaluation, on a
-mixed-state method or the QCSim `pauli_propagator`.
-Circuit `kraus` and `pauli_channel` instructions combine with a `noise` model:
-exact evaluation keeps them in place and adds the model's channels around them.
+observable it propagates. `statevector` and `matrix_product_state` draw one
+Pauli each time the circuit runs. The other pure-state methods sample one Pauli
+per noise realization: the request needs a `noise` block with trajectory
+evaluation, whose `channels` may then be omitted. Set `noise.realizations` to
+the shot count for independent draws per shot, as with Python's
+`noisy_execute(..., noise_realizations=shots)`. A general `kraus` instruction,
+or a `channel` factor that needs the state, cannot be drawn that way: it needs
+exact evaluation or one of the two methods that sample from their state.
+Circuit channel instructions combine with a `noise` model: exact evaluation
+keeps them in place and adds the model's channels around them, and so does
+trajectory evaluation on a method that samples from its state.
 
 Operation-specific fields are accepted only by the operations listed below.
 For example, `other_circuit` on `execute` is an input error, even if that nested
@@ -509,8 +553,41 @@ for every approximate method; disable optimization when making such comparisons.
 
 `evaluation:"auto"` uses exact channels on density-matrix/MPO methods and sampled
 realizations on pure-state methods. `exact` requires a mixed-state method or the
-QCSim `pauli_propagator`; `trajectories` samples the native noise helper, not a
-general Kraus trajectory engine.
+QCSim `pauli_propagator`; `trajectories` runs sampled realizations.
+
+On `statevector` and `matrix_product_state` those are trajectories of the
+channels themselves. A realization draws what needs no state (Pauli and
+depolarizing errors, relaxation with T2 <= T1) and keeps every other channel for
+the backend, which applies one of its Kraus operators with the probability the
+state gives it each time the circuit runs. Relaxation with T2 > T1, T1 as
+amplitude damping, generalized amplitude damping, correlated phase flips and
+Kraus maps are therefore neither approximated nor refused there, and
+`noise.approximations` lists only `finite_noise_realizations`. When a model
+has such channels and no layer drawn per realization (coherent signs, OU or
+1/f disturbances), `execute` builds one circuit that holds all the noise as
+channels and runs every shot on it: each shot is a realization of its own,
+`noise.realizations` reports the shot count whatever was requested, and
+`noise.seed` and the execution seed together determine the draws. The
+realizations of `estimate` and `noisy_fidelity` and the shots of a
+`checkpoint_batch` suffix share such a circuit in the same way, and there too
+either seed alone changes the errors drawn. A channel with one branch only, a
+unitary (a `unitary_mixture` with one term, a Pauli channel with one, a single
+Kraus operator), is a gate and counts as none of this: nothing is drawn for
+it, and a circuit whose channels are all such evolves once for all its shots.
+Otherwise
+shots that share a realization share its drawn errors and draw the kept
+channels each on their own, and the two seeds still determine those branches
+together: with a layer drawn per realization beside the channels, on a qubit
+of the circuit or on an idle one, either seed alone changes them, in every
+operation. The other pure-state methods run realizations of
+gates and resets only, with the approximations and limits described below.
+
+On the QCSim `matrix_product_state` and `matrix_product_operator`, a circuit
+whose two-qubit gates and channels all act on neighbouring qubits runs in an
+order that keeps the chain's work local once a channel has acted. Operations
+on different qubits commute, so the circuit is the same; on
+`matrix_product_state` a seeded trajectory depends on that order. Circuits that
+need routing run as listed, and the layout and swap planning are unaffected.
 
 The QCSim `pauli_propagator` holds no density matrix. It applies the adjoint of
 each channel to the observable it propagates, so one execution gives the exact
@@ -543,21 +620,25 @@ the request's circuits receive:
 Exact evaluation on the propagator is exact only without truncation thresholds;
 with a positive `pp_coefficient_threshold`, or a `pp_max_pauli_weight` below the
 register, it is an approximation, as any truncated propagation is, and
-`noise.approximations` then lists `Pauli_truncation`. Unsupported non-Pauli pure-state channels are rejected. Sampled T1 reset,
-finite realizations, analytical terminal-Pauli damping, and MPO truncation are
+`noise.approximations` then lists `Pauli_truncation`. On the pure-state methods that do not sample channels,
+a model with generalized amplitude damping, correlated phase flips or Kraus maps is rejected, and T1 is drawn as a
+reset (`sampled_T1_reset`). Finite realizations, analytical terminal-Pauli damping, and MPO truncation are also
 reported as approximations. Analytical mode is estimator-only. Exact channels do
 not imply untruncated MPO evolution or remove stochastic coherent realizations.
 
 For thermal relaxation (including two-qubit gate and idle noise) with
-`T1 < T2 <= 2*T1`, sampled execution follows Python: it uses effective `T2 = T1`
-instead of rejecting the request. Results identify this approximation as
+`T1 < T2 <= 2*T1`, sampled execution follows Python. `statevector` and
+`matrix_product_state` sample the channel and keep the calibrated T2. The other
+pure-state methods (tensor network, path integral, stabilizer, extended
+stabilizer) use effective `T2 = T1` instead of rejecting the request. Results
+identify this approximation as
 `thermal_T2_clamped_to_T1` in `noise.approximations` when the request's noisy
 circuits draw such relaxation (a gate, or for idle noise a positive delay, on the
 qubit; a zero duration is the identity and is not clamped). Execution emits one
 warning listing the affected qubits to stderr, which the local server retains in
 task logs; validation alone does not emit it. Exact density-matrix/MPO execution keeps
-the calibrated T2, as does `evaluation:"exact"` on the QCSim `pauli_propagator`. Unphysical `T2 > 2*T1` and exact-only channels on sampled
-backends remain errors.
+the calibrated T2, as does `evaluation:"exact"` on the QCSim `pauli_propagator`. Unphysical `T2 > 2*T1`, and channels
+that need the state on a method that neither holds nor samples them, remain errors.
 
 An explicit simulator seed (`execution.seed` or `simulator.options.seed`,
 including zero) controls measurements and readout. Otherwise, an explicit
@@ -658,7 +739,11 @@ Fidelity operations use ideal inverse preparation. Delays are identity operation
 in that inverse; `noisy_fidelity` applies its noise only to the forward
 preparation: sampled Pauli/T1/coherent trajectories on pure states, or exact
 channels on density-matrix/MPO backends, where it reads `P(0...0)` after the
-inverse. The QCSim `pauli_propagator` reads `P(0...0)` too, through one projector
+inverse. Its circuit follows the rule of Python's `noisy_fidelity`. It may hold
+channel instructions: they are noise too, present in the forward preparation and
+absent from the ideal inverse. It may also reset a qubit before any other
+operation on it, which only prepares that qubit. Mid-circuit measurements, later
+resets and classical control have no unitary ideal and are refused. The QCSim `pauli_propagator` reads `P(0...0)` too, through one projector
 per qubit; each doubles the propagated terms, so it accepts at most 24 qubits. It does not model a physical mirror experiment with noise and
 elapsed-time effects on both halves.
 
@@ -697,8 +782,9 @@ Basis-index queries require fewer than 63 qubits. Batches allow 256 members and
 four nested levels. Physical memory limits still depend on the method; the worker
 process is the resource/failure boundary.
 
-This API does not add distributed density matrices/MPOs, arbitrary pure-state
-Kraus trajectories, Composer network orchestration, decoder/Sinter execution,
+This API does not add distributed density matrices/MPOs, Kraus trajectories on
+pure-state methods other than `statevector` and `matrix_product_state`, Composer
+network orchestration, decoder/Sinter execution,
 interactive handles across tasks, or an external artifact service.
 
 Build with `BUILD_PYTHON_BINDINGS=OFF`, `MAESTRO_BUILD_REQUEST_TESTS=ON`, and optionally
@@ -760,8 +846,8 @@ frames unless the list includes the QCSim stabilizer, and either may when it
 does, whatever the requested backend. Frames need a supported Clifford circuit, Pauli or readout
 noise, Kraus channels that are exact Pauli mixtures (phase damping, for
 example) and, with noise, one realization per shot; other requests fall back,
-as does thermal noise in the T1 < T2 <= 2 T1 window, which the trajectories
-clamp (`thermal_T2_clamped_to_T1`). `noise.seed` drives the circuit errors and
+as does thermal noise in the T1 < T2 <= 2 T1 window, which the trajectories of
+the stabilizer methods clamp (`thermal_T2_clamped_to_T1`). `noise.seed` drives the circuit errors and
 the execution seed the measurements and readout, as on the trajectories.
 
 When frames run, `execution_metadata.sampling_strategy` is `"reference_frame_v1"`,
@@ -777,8 +863,15 @@ realizations on several networks at once, within `max_simulators` and
 counts replay for the same request configuration. Multi-shot realizations keep
 their shared noise and execute as complete batches; outer workers use one inner
 simulator each. `execution_metadata.realization_workers` reports the actual
-outer concurrency for ordinary noisy execute requests. Checkpoint suffixes retain
-their defined call order.
+outer concurrency for ordinary noisy execute requests, and for shot-row
+requests whose realizations ran on such workers (a dedicated sampler, such as
+frames, draws the rows without them and leaves it out). Noisy `estimate` and
+`noisy_fidelity` requests run their realizations one after another on the
+request's simulator and report 1. Checkpoint suffixes retain
+their defined call order. The Python noisy execute, estimate and fidelity
+functions report the number as `realization_workers` in their result, by the
+same rule; there the realizations of an estimate and of a fidelity run on
+several workers.
 
 ### Shot rows
 
@@ -1031,9 +1124,13 @@ zero on failure.
 
 `capabilities` keeps schema version 2 and now includes `build.version` (the package
 version), `build.source_revision` (Git revision captured at CMake configuration,
-with `-dirty` for tracked modifications, or `unknown` in source archives), and
+with `-dirty` for tracked modifications, or `unknown` in source archives),
+`build.qcsim_revision` (the same for the QCSim sources the build compiled
+against, or `unknown` where they are not a Git checkout of their own), and
 `capability_scope: "validation"`. These identifiers are informational; use the
-catalog and request validation for feature negotiation.
+catalog and request validation for feature negotiation. Python returns the
+`build` object from `maestro.build_info()`, and `maestro.__version__` is its
+version.
 
 `noise` describes the noise block: its `modes`, `evaluations`, the
 `exact_configurations` that apply channels exactly, how omitted, `null` or `"auto"`
@@ -1136,6 +1233,13 @@ The initial-layout search keeps the circuit's own qubit order for an MPS unless
 the cost model predicts a layout at least four times cheaper; an MPO accepts any
 predicted improvement. Before simulation, qubits are compacted in ascending
 order, so a circuit's numbering is the chain order the search starts from.
+The search is skipped for a circuit whose two-qubit operations form lines that
+do not run in that order (every qubit has at most two partners and they close
+no ring, as for a circuit laid out on a line of a device): its qubits are placed
+along the lines, where no operation needs a swap. That also holds under a bond
+limit below the one from which a layout is searched for; a register too small
+for the search is left as it is. A circuit with a SWAP gate keeps the search
+when SWAP gates relabel the qubits.
 
 The same settings are available as Python `SimulatorConfig` keyword arguments
 and properties. `None` retains defaults. The compatibility flag

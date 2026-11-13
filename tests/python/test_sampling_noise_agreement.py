@@ -22,6 +22,7 @@ checks reject noise 1.5 times stronger than the reference's.
 """
 
 import math
+import random
 import warnings
 
 import numpy as np
@@ -628,13 +629,24 @@ def test_thermal_clamp_warning_follows_the_backend_a_candidate_list_selects(exac
     assert fidelity["noise_evaluation"] == counts["noise_evaluation"] == "exact_channels"
     assert fidelity["fidelity"] == pytest.approx((1 + math.exp(-0.5)) / 2, abs=1e-9)
     assert counts["method"] == exact
-    # The statevector is listed first and samples the relaxation: it warns.
-    with pytest.warns(RuntimeWarning, match="T2 clamped to T1"):
-        fidelity = circuit.noisy_fidelity(model, config=config(S.Statevector, exact), noise_seed=5)
-    assert fidelity["noise_evaluation"] == "trajectories"
-    with pytest.warns(RuntimeWarning, match="T2 clamped to T1"):
+    # The statevector is listed first. It samples the relaxation channel from its
+    # state, so nothing is clamped and nothing is said: its trajectories average
+    # to the calibrated fidelity, where the clamp would give (1 + exp(-1)) / 2.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        fidelity = circuit.noisy_fidelity(model, noise_realizations=REALIZATIONS, config=config(S.Statevector, exact), noise_seed=5)
         counts = run_suffix(config(S.Statevector, exact))
-    assert counts["noise_evaluation"] == "trajectories" and counts["method"] == S.Statevector
+    assert fidelity["noise_evaluation"] == counts["noise_evaluation"] == "trajectories" and counts["method"] == S.Statevector
+    assert abs(fidelity["fidelity"] - (1 + math.exp(-0.5)) / 2) <= Z_BOUND * fidelity["std_error"] + 1e-9
+    # A method that neither holds nor samples channels is listed first: it draws
+    # the relaxation as a reset and a phase flip, with T2 clamped, and warns.
+    with pytest.warns(RuntimeWarning, match="T2 clamped to T1"):
+        fidelity = circuit.noisy_fidelity(model, noise_realizations=REALIZATIONS, config=config(S.TensorNetwork, exact), noise_seed=5)
+    assert fidelity["noise_evaluation"] == "trajectories"
+    assert abs(fidelity["fidelity"] - (1 + math.exp(-1.0)) / 2) <= Z_BOUND * fidelity["std_error"] + 1e-9
+    with pytest.warns(RuntimeWarning, match="T2 clamped to T1"):
+        counts = run_suffix(config(S.Stabilizer, exact))
+    assert counts["noise_evaluation"] == "trajectories" and counts["method"] == S.Stabilizer
 
 
 DISORDER_METHODS = [S.Statevector, S.MatrixProductState, S.MatrixProductOperator, S.DensityMatrix]
@@ -707,10 +719,12 @@ def test_estimate_comparison_rejects_stronger_noise(exact_estimates):
 def test_set_t1_differs_from_exact_damping_only_in_coherence():
     """A documented difference, pinned so it cannot change silently.
 
-    set_t1 is exact amplitude damping on mixed states but a reset with
-    probability gamma on trajectories: the populations agree, the coherence is
-    (1 - gamma) instead of sqrt(1 - gamma). The agreement tests above therefore
-    use set_thermal_relaxation, which is consistent on both families.
+    set_t1 is exact amplitude damping on mixed states and on the backends that
+    sample channels from their state (the statevector, the matrix product
+    state). On the other trajectory backends it is a reset with probability
+    gamma: the populations agree, the coherence is (1 - gamma) instead of
+    sqrt(1 - gamma). The agreement tests above therefore use
+    set_thermal_relaxation, which is consistent everywhere.
     """
     gamma = 0.3
     model = maestro.NoiseModel()
@@ -719,9 +733,918 @@ def test_set_t1_differs_from_exact_damping_only_in_coherence():
     circuit.h(0)
     exact = circuit.noisy_estimate_montecarlo(["Z", "X"], model, None, _config(S.DensityMatrix))["expectation_values"]
     assert exact == pytest.approx([gamma, math.sqrt(1 - gamma)], abs=1e-10)
-    for method in (S.Statevector, S.MatrixProductState):
+    for method in (S.Statevector, S.MatrixProductState, S.TensorNetwork):
         sampled = circuit.noisy_estimate_montecarlo(["Z", "X"], model, 4000, _config(method, seed=97), noise_seed=101)
         (z, x), (ez, ex) = sampled["expectation_values"], sampled["realization_standard_errors"]
         assert abs(z - gamma) <= Z_BOUND * ez, method.name
-        assert abs(x - (1 - gamma)) <= Z_BOUND * ex, method.name
-        assert x < math.sqrt(1 - gamma) - Z_BOUND * ex, method.name
+        if method != S.TensorNetwork:
+            assert abs(x - math.sqrt(1 - gamma)) <= Z_BOUND * ex, method.name
+        else:
+            assert abs(x - (1 - gamma)) <= Z_BOUND * ex, method.name
+            assert x < math.sqrt(1 - gamma) - Z_BOUND * ex, method.name
+
+
+# ---------------------------------------------------------------- channels sampled from the state
+
+def _channel_model(scale=1.0, qubits=4):
+    """Noise with no exact sampled lowering: amplitude damping, relaxation with
+    T1 < T2 <= 2*T1 after gates and on delays, generalized amplitude damping and
+    a complex Kraus map, with depolarizing and readout error on top."""
+    m = maestro.NoiseModel()
+    m.set_t1(0, 0.06 * scale)
+    m.set_thermal_relaxation(1, 1.0 * scale, 20.0, 32.0)
+    m.set_thermal_relaxation_2q(1, 2.5 * scale, 20.0, 32.0, 0.1)
+    m.set_generalized_amplitude_damping(2, 0.08 * scale, 0.2)
+    gamma = 0.07 * scale
+    m.set_kraus_channel([3], [[[1.0, 0.0], [0.0, 1j * math.sqrt(1.0 - gamma)]], [[0.0, math.sqrt(gamma)], [0.0, 0.0]]])
+    m.set_idle_noise(qubits - 1, 30.0 / scale, 50.0 / scale)
+    m.set_all_depolarizing(qubits, 0.005 * scale)
+    m.set_readout_error(1, 0.02 * scale, 0.05 * scale)
+    return m
+
+
+def _channel_circuit():
+    """The generic circuit with channel instructions of its own: a gate error made
+    of a Pauli mixture and relaxation, on reversed targets, and amplitude damping."""
+    Channel = maestro.QuantumChannel
+    gate_error = (Channel.depolarizing(0.04, num_qubits=2)
+                  .then(Channel.thermal_relaxation(1.0, 20.0, 34.0), [0])
+                  .then(Channel.thermal_relaxation(1.0, 25.0, 18.0, 0.1), [1]))
+    c = QuantumCircuit()
+    c.h(0)
+    c.ry(1, 0.7)
+    c.rx(2, 1.1)
+    c.h(3)
+    c.cx(0, 1)
+    c.channel([1, 0], gate_error)
+    c.t(1)
+    c.cz(1, 2)
+    c.channel([2], Channel.amplitude_damping(0.15))
+    c.rz(3, 0.5)
+    c.cx(2, 3)
+    c.channel([2, 3], gate_error)
+    c.ry(0, 0.4)
+    c.cx(3, 0)
+    c.h(1)
+    c.measure_all()
+    return c
+
+
+# With gate fusion (off by default on registers this small) the statevector
+# resolves whole blocks of gates and channels from one reduced density matrix.
+SAMPLING_BACKENDS = [pytest.param(B.QCSim, S.Statevector, {}, id="qcsim-statevector"),
+                     pytest.param(B.QCSim, S.Statevector, {"gate_fusion": True}, id="qcsim-statevector-fused"),
+                     pytest.param(B.QCSim, S.MatrixProductState, {}, id="qcsim-mps"),
+                     pytest.param(B.CompositeQCSim, S.Statevector, {}, id="composite-qcsim-statevector"),
+                     pytest.param(getattr(B, "QiskitAer", None), S.Statevector, {}, id="aer-statevector"),
+                     pytest.param(getattr(B, "QiskitAer", None), S.MatrixProductState, {}, id="aer-mps")]
+
+
+@pytest.mark.parametrize("backend, method, options", SAMPLING_BACKENDS)
+def test_state_sampled_channels_match_the_density_matrix(backend, method, options):
+    """A backend that samples channels from its state runs the noise that has no
+    exact sampled form, one trajectory per shot, without approximating it."""
+    _skip_missing(backend)
+    circuit, model = _circuit(delays=True), _channel_model()
+    reference = _reference_counts(circuit, model, "full_noise_execute")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # no thermal approximation is announced, because none is made
+        result = _execute(circuit, model, "full_noise_execute", backend, method, SHOTS, seed=_seed(backend, method, 31), exact=False,
+                          **options)
+    _check_ran(result, backend, method)
+    assert result["noise_evaluation"] == "trajectories"
+    _assert_same_counts(result["counts"], reference, f"{backend} {method} state-sampled channels")
+
+    # The same checks tell stronger noise apart.
+    stronger = _execute(circuit, _channel_model(1.5), "full_noise_execute", backend, method, SHOTS, seed=_seed(backend, method, 32),
+                        exact=False, **options)
+    _assert_different_counts(stronger["counts"], reference, f"{backend} {method} state-sampled channels")
+
+
+@pytest.mark.parametrize("backend, method, options", SAMPLING_BACKENDS)
+def test_state_sampled_circuit_channels_match_the_density_matrix(backend, method, options):
+    """Channel instructions in the circuit itself, under an empty noise model."""
+    _skip_missing(backend)
+    circuit, model = _channel_circuit(), maestro.NoiseModel()
+    reference = _reference_counts(circuit, model, "full_noise_execute")
+    result = _execute(circuit, model, "full_noise_execute", backend, method, SHOTS, seed=_seed(backend, method, 33), exact=False, **options)
+    _check_ran(result, backend, method)
+    _assert_same_counts(result["counts"], reference, f"{backend} {method} circuit channels")
+
+
+@pytest.mark.parametrize("backend, method, options", SAMPLING_BACKENDS)
+def test_state_sampled_channel_estimates_match_the_density_matrix(backend, method, options):
+    _skip_missing(backend)
+    circuit, model = _circuit(measure=False, delays=True), _channel_model()
+    exact = maestro.full_noise_estimate(circuit, OBSERVABLES, model, config=_config(S.DensityMatrix))
+    assert exact["noise_evaluation"] == "exact_channels"
+    result = maestro.full_noise_estimate(circuit, OBSERVABLES, model, noise_realizations=REALIZATIONS,
+                                         config=_config(method, backend, seed=_seed(backend, method, 34), **options), noise_seed=91)
+    assert result["noise_evaluation"] == "trajectories"
+    _assert_estimates_match_exact(result, exact["expectation_values"], f"{backend} {method} state-sampled estimates")
+
+
+@pytest.mark.parametrize("backend, method, options", SAMPLING_BACKENDS)
+def test_state_sampled_channels_replay_and_share_realizations(backend, method, options):
+    """Equal seeds give equal counts. The backend draws all the noise as each shot
+    runs, so every shot is a realization of its own whatever number is asked for."""
+    _skip_missing(backend)
+    circuit, model = _circuit(delays=True), _channel_model()
+
+    def run(realizations, seed=17):
+        return circuit.full_noise_execute(model, config=_config(method, backend, seed=5, **options), shots=600,
+                                          noise_realizations=realizations, noise_seed=seed)
+
+    one_per_shot = run(600)
+    assert one_per_shot["noise_realizations"] == 600
+    assert one_per_shot["counts"] == run(600)["counts"]
+    assert one_per_shot["counts"] != run(600, seed=18)["counts"]
+    for requested in (8, None):
+        shared = run(requested)
+        assert shared["noise_realizations"] == 600 and sum(shared["counts"].values()) == 600
+        assert shared["counts"] == one_per_shot["counts"]
+
+
+@pytest.mark.parametrize("backend, method, options", SAMPLING_BACKENDS)
+def test_state_sampled_channels_in_fidelity_and_checkpoint_suffixes(backend, method, options):
+    """noisy_fidelity and a checkpoint suffix take the same noise the same way: every
+    realization keeps the channels no draw replaces, and the backend draws their
+    branches as it runs. Nothing is clamped, so nothing is announced."""
+    _skip_missing(backend)
+    model = _channel_model()
+    circuit = _circuit(measure=False, delays=True)
+    exact = circuit.noisy_fidelity(model, config=_config(S.DensityMatrix))
+    assert exact["noise_evaluation"] == "exact_channels"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        sampled = circuit.noisy_fidelity(model, noise_realizations=REALIZATIONS,
+                                         config=_config(method, backend, seed=_seed(backend, method, 35), **options), noise_seed=95)
+    assert sampled["noise_evaluation"] == "trajectories"
+    assert abs(sampled["fidelity"] - exact["fidelity"]) <= Z_BOUND * sampled["std_error"] + 1e-9, (
+        f"{backend} {method}: fidelity {sampled['fidelity']:.5f} vs exact {exact['fidelity']:.5f}, standard error {sampled['std_error']:.5f}")
+
+    # A suffix with channel instructions of its own, under the model, after a saved prefix.
+    prefix = QuantumCircuit()
+    prefix.ry(0, 0.3)
+    prefix.cx(0, 2)
+    prefix.rx(3, 0.9)
+    suffix = _channel_circuit()
+
+    def run(run_method, run_backend, seed, realizations=None, **run_options):
+        checkpoint = maestro.PrefixCheckpointedSimulator(prefix, 4, _config(run_method, run_backend, seed=seed, **run_options))
+        return checkpoint.execute_suffix(suffix, shots=SHOTS, noise_model=model, noise_realizations=realizations, noise_seed=97)
+
+    reference = run(S.DensityMatrix, B.QCSim, 3)
+    assert reference["noise_evaluation"] == "exact_channels"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        # One realization per shot: the shots of a realization share its depolarizing errors.
+        result = run(method, backend, _seed(backend, method, 37), SHOTS, **options)
+    assert result["noise_evaluation"] == "trajectories" and result["method"] == method
+    _assert_same_counts(result["counts"], reference["counts"], f"{backend} {method} checkpoint suffix")
+
+
+@pytest.mark.parametrize("backend, method, options", SAMPLING_BACKENDS)
+def test_either_seed_changes_noise_the_backend_draws_as_the_circuit_runs(backend, method, options):
+    """Amplitude damping alone is kept as channels the backend samples from its state:
+    injection draws nothing, so the noise seed has no realization to draw and joins the
+    simulator seed. With one of them fixed the other still changes the errors drawn, in
+    noisy_fidelity as in an estimate and in counts, and the same two repeat the result."""
+    _skip_missing(backend)
+    model = maestro.NoiseModel()
+    for qubit in range(4):
+        model.set_generalized_amplitude_damping(qubit, 0.2, 0.0)
+
+    def fidelity(seed, noise_seed):
+        return _circuit(measure=False).noisy_fidelity(model, noise_realizations=20, config=_config(method, backend, seed=seed, **options),
+                                                      noise_seed=noise_seed)["fidelity"]
+
+    def estimate(seed, noise_seed):
+        return tuple(maestro.noisy_estimate_montecarlo(_circuit(measure=False), OBSERVABLES[:2], model, noise_realizations=20,
+                                                       config=_config(method, backend, seed=seed, **options),
+                                                       noise_seed=noise_seed)["expectation_values"])
+
+    def counts(seed, noise_seed):
+        return tuple(sorted(maestro.noisy_execute(_circuit(), model, shots=60, config=_config(method, backend, seed=seed, **options),
+                                                  noise_seed=noise_seed)["counts"].items()))
+
+    for run in (fidelity, estimate, counts):
+        base = run(42, 1)
+        assert run(42, 1) == base, f"{backend} {method} {run.__name__}: the same two seeds gave another result"
+        # Three other seeds: a result may repeat once by chance, not every time.
+        assert sum(run(42, noise_seed) != base for noise_seed in (2, 3, 77)) >= 2, (
+            f"{backend} {method} {run.__name__}: the noise seed changes nothing under a fixed simulator seed")
+        assert sum(run(seed, 1) != base for seed in (43, 44, 45)) >= 2, (
+            f"{backend} {method} {run.__name__}: the simulator seed changes nothing under a fixed noise seed")
+
+
+@pytest.mark.parametrize("coherent_qubit", [0, 5], ids=["on-a-circuit-qubit", "on-an-idle-qubit"])
+@pytest.mark.parametrize("backend, method, options", SAMPLING_BACKENDS)
+def test_either_seed_changes_drawn_channels_beside_a_layer_of_its_own(backend, method, options, coherent_qubit):
+    """A coherent rotation is a layer of its own per realization, so the realizations
+    cannot share one circuit: its signs are drawn for each, and on an idle qubit it
+    injects nothing at all. The damping beside it is still drawn by the backend as
+    each realization runs, and the noise seed still joins the simulator seed for
+    those branches: either seed alone changes them. On the idle qubit the branches
+    are all the noise seed can change."""
+    _skip_missing(backend)
+    model = maestro.NoiseModel()
+    for qubit in range(4):
+        model.set_generalized_amplitude_damping(qubit, 0.2, 0.0)
+    model.set_coherent_rotation(coherent_qubit, 0.2, 0.1, 0.3)
+
+    def fidelity(seed, noise_seed):
+        return _circuit(measure=False).noisy_fidelity(model, noise_realizations=20, config=_config(method, backend, seed=seed, **options),
+                                                      noise_seed=noise_seed)["fidelity"]
+
+    def estimate(seed, noise_seed):
+        return tuple(maestro.full_noise_estimate(_circuit(measure=False), OBSERVABLES[:2], model, noise_realizations=20,
+                                                 config=_config(method, backend, seed=seed, **options),
+                                                 noise_seed=noise_seed)["expectation_values"])
+
+    def counts(seed, noise_seed):
+        return tuple(sorted(maestro.full_noise_execute(_circuit(), model, shots=60, config=_config(method, backend, seed=seed, **options),
+                                                       noise_seed=noise_seed)["counts"].items()))
+
+    for run in (fidelity, estimate, counts):
+        base = run(42, 1)
+        assert run(42, 1) == base, f"{backend} {method} {run.__name__}: the same two seeds gave another result"
+        assert sum(run(42, noise_seed) != base for noise_seed in (2, 3, 77)) >= 2, (
+            f"{backend} {method} {run.__name__}: the noise seed changes nothing under a fixed simulator seed")
+        assert sum(run(seed, 1) != base for seed in (43, 44, 45)) >= 2, (
+            f"{backend} {method} {run.__name__}: the simulator seed changes nothing under a fixed noise seed")
+
+
+def test_state_sampled_channels_beside_noise_drawn_per_realization():
+    """Coherent noise is drawn per realization, so the shots cannot share one
+    circuit: each realization then keeps as channels the noise that no Pauli draw
+    replaces, and the statevector samples those as it runs."""
+    circuit, model = _circuit(delays=True), _channel_model()
+    model.set_coherent_rotation(0, 0.25, 0.1, 0.2)
+    model.set_coherent_rotation(2, 0.1, 0.3, 0.15)
+
+    def run(method, seed, **options):
+        result = circuit.full_noise_execute(model, config=_config(method, seed=seed, **options), shots=SHOTS, noise_realizations=SHOTS,
+                                            noise_seed=seed + 1000)
+        assert result["noise_realizations"] == SHOTS
+        return result
+
+    reference = dict(run(S.DensityMatrix, 4242)["counts"])
+    for options in ({}, {"gate_fusion": True}):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            result = run(S.Statevector, 311 + len(options), **options)
+        assert result["noise_evaluation"] == "trajectories"
+        _assert_same_counts(result["counts"], reference, f"statevector {options} beside coherent noise")
+    without = _reference_counts(circuit, _channel_model(), "full_noise_execute")
+    _assert_different_counts(reference, without, "coherent rotations")
+
+
+@pytest.mark.parametrize("backend, method, options", SAMPLING_BACKENDS)
+def test_channel_instructions_are_drawn_per_shot_in_plain_execution(backend, method, options):
+    """Without any noise model, a backend that samples channels draws a branch of
+    every channel instruction for each shot: a Pauli channel as much as a damping
+    one, and whether or not the qubit it acts on is measured."""
+    _skip_missing(backend)
+    Channel = maestro.QuantumChannel
+    shots = 4000
+
+    def ones(circuit, seed):
+        counts = circuit.execute(_config(method, backend, seed=seed, **options), shots)["counts"]
+        assert sum(counts.values()) == shots
+        return sum(n for bits, n in counts.items() if bits[0] == "1") / shots
+
+    for name, channel, expected in (("bit flip", Channel.pauli([0.7, 0.3, 0.0, 0.0]), 0.7),
+                                    ("damping", Channel.amplitude_damping(0.4), 0.6),
+                                    ("relaxation", Channel.thermal_relaxation(1.0, 2.0, 1.5, 0.1), 0.1 + 0.9 * math.exp(-0.5))):
+        circuit = QuantumCircuit()
+        circuit.x(0)
+        circuit.channel([0], channel)
+        circuit.measure_all()
+        assert ones(circuit, 41) == pytest.approx(expected, abs=0.04), name
+
+    # A channel on a qubit that is never measured still conditions the one that is.
+    for name, channel in (("bit flip", Channel.pauli([0.5, 0.5, 0.0, 0.0])), ("damping", Channel.amplitude_damping(0.5))):
+        circuit = QuantumCircuit()
+        circuit.h(0)
+        circuit.cx(0, 1)
+        circuit.channel([1], channel)
+        circuit.measure([(0, 0)])
+        assert ones(circuit, 43) == pytest.approx(0.5, abs=0.04), name
+
+
+# ---------------------------------------------------------------- channels drawn without the state
+
+def _stateless_channel_circuit(noisy=True):
+    """Channel instructions whose branches need no state: a gate error made of a
+    Pauli mixture and relaxations with T2 <= T1, phase damping, a unitary mixture."""
+    Channel = maestro.QuantumChannel
+    s = 1.0 / math.sqrt(2.0)
+    gate_error = (Channel.depolarizing(0.04, num_qubits=2)
+                  .then(Channel.thermal_relaxation(1.0, 25.0, 18.0, 0.1), [0])
+                  .then(Channel.thermal_relaxation(1.0, 30.0, 30.0), [1]))
+    mixture = Channel.unitary_mixture([0.8, 0.2], [[[1.0, 0.0], [0.0, 1.0]], [[s, s], [s, -s]]])
+    c = QuantumCircuit()
+
+    def channel(qubits, which):
+        if noisy:
+            c.channel(qubits, which)
+
+    c.h(0)
+    c.ry(1, 0.7)
+    c.rx(2, 1.1)
+    c.h(3)
+    c.cx(0, 1)
+    channel([1, 0], gate_error)
+    c.t(1)
+    c.cz(1, 2)
+    channel([2], Channel.phase_damping(0.2))
+    c.rz(3, 0.5)
+    c.cx(2, 3)
+    channel([2, 3], gate_error)
+    channel([3], mixture)
+    c.ry(0, 0.4)
+    c.cx(3, 0)
+    channel([0], Channel.thermal_relaxation(2.0, 20.0, 15.0))
+    c.h(1)
+    c.measure_all()
+    return c
+
+
+@pytest.mark.parametrize("method, shots", [
+    pytest.param(S.TensorNetwork, SLOW_SHOTS, id="qcsim-tensor-network"),
+    pytest.param(S.PathIntegral, SHOTS, id="qcsim-path-integral"),
+    pytest.param(S.ExtendedStabilizer, SLOW_SHOTS, id="qcsim-extended-stabilizer"),
+])
+def test_channel_instructions_that_need_no_state_run_on_every_pure_state_method(method, shots):
+    """A backend that neither holds nor samples channels runs realizations in which
+    each such instruction has been drawn: a Pauli, a unitary, a phase flip or a reset."""
+    circuit, model = _stateless_channel_circuit(), maestro.NoiseModel()
+    reference = _reference_counts(circuit, model, "full_noise_execute")
+    result = _execute(circuit, model, "full_noise_execute", B.QCSim, method, shots, seed=_seed(B.QCSim, method, 61), exact=False)
+    _check_ran(result, B.QCSim, method)
+    assert result["noise_evaluation"] == "trajectories"
+    _assert_same_counts(result["counts"], reference, f"{method} channels drawn without the state")
+    # The same checks tell the circuit without its channels apart.
+    clean = dict(_stateless_channel_circuit(noisy=False).execute(_config(S.DensityMatrix, seed=4242), REFERENCE_SHOTS)["counts"])
+    _assert_different_counts(clean, reference, f"{method} channels drawn without the state")
+
+    # A part that needs the state has no drawn form there.
+    damped = QuantumCircuit()
+    damped.h(0)
+    damped.channel([0], maestro.QuantumChannel.amplitude_damping(0.2))
+    damped.measure_all()
+    with pytest.raises(ValueError, match="density-matrix or MPO"):
+        damped.full_noise_execute(model, config=_config(method), shots=10, noise_realizations=10)
+
+
+def test_stabilizer_runs_the_channels_whose_branches_are_clifford():
+    """A Pauli, a phase flip, a reset and a Clifford unitary are all the tableau can
+    apply: a channel made of such branches is drawn into H, S, Pauli and reset
+    operations. A branch that is no Clifford has no place on it."""
+    Channel = maestro.QuantumChannel
+    s = 1.0 / math.sqrt(2.0)
+    identity, hadamard, phase = [[1.0, 0.0], [0.0, 1.0]], [[s, s], [s, -s]], [[1.0, 0.0], [0.0, 1j]]
+    gate_error = (Channel.depolarizing(0.05, num_qubits=2)
+                  .then(Channel.thermal_relaxation(1.0, 25.0, 18.0, 0.1), [0])
+                  .then(Channel.thermal_relaxation(1.0, 30.0, 30.0), [1]))
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.channel([1, 0], gate_error)
+    circuit.s(1)
+    circuit.cx(1, 2)
+    circuit.channel([2], Channel.unitary_mixture([0.6, 0.25, 0.15], [identity, hadamard, phase]))
+    circuit.h(2)
+    circuit.channel([2], Channel.phase_damping(0.2))
+    circuit.cx(2, 3)
+    circuit.channel([2, 3], gate_error)
+    circuit.h(3)
+    circuit.measure_all()
+    model = maestro.NoiseModel()
+    reference = _reference_counts(circuit, model, "full_noise_execute")
+    for method in (S.Stabilizer, S.ExtendedStabilizer):
+        result = _execute(circuit, model, "full_noise_execute", B.QCSim, method, SHOTS, seed=_seed(B.QCSim, method, 71), exact=False,
+                          counts_policy="legacy")
+        _check_ran(result, B.QCSim, method)
+        _assert_same_counts(result["counts"], reference, f"{method} channels with Clifford branches")
+
+    t_gate = [[1.0, 0.0], [0.0, complex(s, s)]]
+    rotated = QuantumCircuit()
+    rotated.h(0)
+    rotated.channel([0], Channel.unitary_mixture([0.5, 0.5], [hadamard, t_gate]))
+    rotated.measure_all()
+    with pytest.raises((ValueError, RuntimeError)):
+        rotated.full_noise_execute(model, config=_config(S.Stabilizer, counts_policy="legacy"), shots=64, noise_realizations=64, noise_seed=3)
+
+
+# ---------------------------------------------------------------- chain order
+
+def _chain_circuit(qubits, measure=True, at=None):
+    """Gates between neighbours only, listed in an order that jumps along the chain,
+    with delays for the idle noise. `at` gives the qubit at each place of the chain
+    (the place itself by default): a line that does not run in index order, as that
+    of a circuit laid out on a device."""
+    rng = random.Random(7)
+    line = at is not None
+    at = at if line else list(range(qubits))
+    c = QuantumCircuit()
+    for q in range(qubits):
+        c.ry(at[q], 0.3 + 0.2 * q)
+    if line:
+        # every pair of neighbours at least once, so that the line is whole
+        for a in range(qubits - 1):
+            c.cz(at[a], at[a + 1])
+    for _ in range(5 * qubits):
+        a = rng.randrange(qubits - 1)
+        kind = rng.randrange(5)
+        if kind == 0:
+            c.cx(at[a], at[a + 1])
+        elif kind == 1:
+            c.cz(at[a], at[a + 1])
+        elif kind == 2:
+            c.rx(at[a + 1], rng.uniform(-1.5, 1.5))
+        elif kind == 3:
+            c.cx(at[a + 1], at[a])
+            c.delay(at[a], 2.0)
+        else:
+            c.t(at[a])
+            c.sx(at[a])
+    if measure:
+        c.measure_all()
+    return c
+
+
+def _device_line(qubits):
+    """The qubit at each place of a line through a device: the indices in steps of five."""
+    return [5 * place % qubits for place in range(qubits)]
+
+
+def _chain_model(qubits, scale=1.0):
+    """Noise on every qubit that a matrix product state has to sample from its state:
+    amplitude damping on the even ones, relaxation with T2 > T1 on the odd ones."""
+    m = maestro.NoiseModel()
+    for q in range(qubits):
+        if q % 2:
+            m.set_thermal_relaxation(q, 1.0 * scale, 20.0, 32.0)
+            m.set_thermal_relaxation_2q(q, 2.0 * scale, 20.0, 32.0, 0.1)
+        else:
+            m.set_t1(q, 0.04 * scale)
+    m.set_idle_noise(0, 30.0 / scale, 50.0 / scale)
+    m.set_all_depolarizing(qubits, 0.004 * scale)
+    return m
+
+
+@pytest.mark.parametrize("method, exact, shots", [(S.MatrixProductState, False, 5000), (S.MatrixProductOperator, True, SHOTS)],
+                         ids=["qcsim-mps", "qcsim-mpo"])
+def test_chain_ordered_circuits_match_the_density_matrix(method, exact, shots):
+    """The QCSim chains run a circuit of neighbouring gates in the order that keeps
+    their work local. It is the same circuit: counts follow the density matrix,
+    which runs it as listed."""
+    qubits = 6
+    circuit, model = _chain_circuit(qubits), _chain_model(qubits)
+    reference = _reference_counts(circuit, model, "full_noise_execute")
+    result = _execute(circuit, model, "full_noise_execute", B.QCSim, method, shots, seed=_seed(B.QCSim, method, 51), exact=exact)
+    _check_ran(result, B.QCSim, method)
+    _assert_same_counts(result["counts"], reference, f"{method} on a chain")
+    stronger = _execute(circuit, _chain_model(qubits, 2.0), "full_noise_execute", B.QCSim, method, shots, seed=_seed(B.QCSim, method, 52),
+                        exact=exact)
+    _assert_different_counts(stronger["counts"], reference, f"{method} on a chain")
+
+
+def test_chain_order_keeps_the_statistics_of_matrix_product_state_trajectories():
+    """Twelve qubits, where the network orders the circuit for the chain: the matrix
+    product state's trajectories average to what the statevector's do."""
+    qubits = 12
+    circuit, model = _chain_circuit(qubits, measure=False), _chain_model(qubits)
+    observables = ["Z" + "I" * 11, "I" * 5 + "Z" + "I" * 6, "I" * 11 + "Z", "ZZ" + "I" * 10, "I" * 4 + "ZZ" + "I" * 6, "I" * 10 + "ZZ",
+                   "XX" + "I" * 10, "I" * 6 + "XX" + "I" * 4, "I" * 3 + "YZ" + "I" * 7, "X" + "I" * 10 + "X"]
+    realizations = 400
+
+    def estimate(method, base):
+        result = maestro.full_noise_estimate(circuit, observables, model, noise_realizations=realizations,
+                                             config=_config(method, seed=_seed(B.QCSim, method, base)), noise_seed=base + 7)
+        assert result["noise_evaluation"] == "trajectories" and result["method"] == method
+        return result
+
+    chain, dense = estimate(S.MatrixProductState, 61), estimate(S.Statevector, 62)
+    _assert_estimates_agree(chain, dense, "matrix product state against statevector on a chain", observables)
+    # Not trivially: the noise moves these values.
+    ideal = circuit.estimate(observables, config=_config(S.Statevector))["expectation_values"]
+    moved = [abs(a - b) > Z_BOUND * e for a, b, e in zip(dense["expectation_values"], ideal, dense["realization_standard_errors"])]
+    assert sum(moved) >= 3
+
+
+@pytest.mark.parametrize("method, exact, shots", [(S.MatrixProductState, False, 5000), (S.MatrixProductOperator, True, SHOTS)],
+                         ids=["qcsim-mps", "qcsim-mpo"])
+def test_circuits_on_a_line_out_of_index_order_match_the_density_matrix(method, exact, shots):
+    """A circuit laid out on a device acts on a line of qubits whose indices are not
+    in order. The chains place the qubits along the line and order the circuit
+    there; it is the same circuit, and the counts follow the density matrix."""
+    qubits = 6
+    circuit, model = _chain_circuit(qubits, at=_device_line(qubits)), _chain_model(qubits)
+    reference = _reference_counts(circuit, model, "full_noise_execute")
+    result = _execute(circuit, model, "full_noise_execute", B.QCSim, method, shots, seed=_seed(B.QCSim, method, 53), exact=exact)
+    _check_ran(result, B.QCSim, method)
+    _assert_same_counts(result["counts"], reference, f"{method} on a line out of index order")
+    stronger = _execute(circuit, _chain_model(qubits, 2.0), "full_noise_execute", B.QCSim, method, shots, seed=_seed(B.QCSim, method, 54),
+                        exact=exact)
+    _assert_different_counts(stronger["counts"], reference, f"{method} on a line out of index order")
+
+
+def test_a_line_out_of_index_order_keeps_the_statistics_of_matrix_product_state_trajectories():
+    """Twelve qubits on a line that does not run in index order, where the network
+    places the qubits along the line: the matrix product state's trajectories average
+    to what the statevector's do, on the qubits the circuit names."""
+    qubits = 12
+    at = _device_line(qubits)
+    circuit, model = _chain_circuit(qubits, measure=False, at=at), _chain_model(qubits)
+
+    def pauli(*terms):
+        """A Pauli string with the given letters on the qubits at the given places of the line."""
+        letters = ["I"] * qubits
+        for place, letter in terms:
+            letters[at[place]] = letter
+        return "".join(letters)
+
+    observables = [pauli((0, "Z")), pauli((5, "Z")), pauli((11, "Z")), pauli((0, "Z"), (1, "Z")), pauli((4, "Z"), (5, "Z")),
+                   pauli((10, "Z"), (11, "Z")), pauli((0, "X"), (1, "X")), pauli((6, "X"), (7, "X")), pauli((3, "Y"), (4, "Z")),
+                   pauli((0, "X"), (11, "X"))]
+    realizations = 400
+
+    def estimate(method, base):
+        result = maestro.full_noise_estimate(circuit, observables, model, noise_realizations=realizations,
+                                             config=_config(method, seed=_seed(B.QCSim, method, base)), noise_seed=base + 7)
+        assert result["noise_evaluation"] == "trajectories" and result["method"] == method
+        return result
+
+    chain, dense = estimate(S.MatrixProductState, 63), estimate(S.Statevector, 64)
+    _assert_estimates_agree(chain, dense, "matrix product state against statevector on a line out of index order", observables)
+    ideal = circuit.estimate(observables, config=_config(S.Statevector))["expectation_values"]
+    moved = [abs(a - b) > Z_BOUND * e for a, b, e in zip(dense["expectation_values"], ideal, dense["realization_standard_errors"])]
+    assert sum(moved) >= 3
+
+
+# ---- The same channel through every entry point ---------------------------------------
+#
+# A structured channel reaches Maestro as a maestro.QuantumChannel in Python,
+# as a `channel` instruction in a native JSON request, and through a simulator
+# handle. Each must be the same map and run the same way.
+
+
+def _native_request(request):
+    """The result of a native JSON request, run by the library that serves this module."""
+    import ctypes
+    import json
+    import sys
+    from pathlib import Path
+
+    name = {"win32": "maestro.dll", "darwin": "libmaestro.dylib"}.get(sys.platform, "libmaestro.so")
+    library = None
+    for candidate in (Path(maestro._raw_maestro.__file__).parent / name, name):
+        try:
+            library = ctypes.CDLL(str(candidate))
+            break
+        except OSError:
+            continue
+    if library is None or not hasattr(library, "MaestroRunRequestJson"):
+        pytest.skip("the native library is not loadable beside the Python module")
+    library.MaestroRunRequestJson.restype = ctypes.c_void_p
+    library.MaestroRunRequestJson.argtypes = [ctypes.c_char_p]
+    library.FreeResult.argtypes = [ctypes.c_void_p]
+    pointer = library.MaestroRunRequestJson(json.dumps(request).encode())
+    try:
+        result = json.loads(ctypes.string_at(pointer).decode())
+    finally:
+        library.FreeResult(pointer)
+    return result
+
+
+_SURFACE_FACTORS = [
+    {"kind": "depolarizing", "probability": 0.1},
+    {"kind": "amplitude_damping", "qubits": [1], "gamma": 0.3},
+    {"kind": "thermal_relaxation", "qubits": [0], "duration": 0.3, "t1": 1.0, "t2": 1.6, "excited_population": 0.1},
+]
+_SURFACE_OBSERVABLES = ["ZI", "IZ", "XX", "ZZ", "YY"]
+
+
+def _surface_channel():
+    """_SURFACE_FACTORS as Python builds them."""
+    Q = maestro.QuantumChannel
+    return (Q.depolarizing(0.1, 2)
+            .then(Q.amplitude_damping(0.3), [1])
+            .then(Q.thermal_relaxation(0.3, 1.0, 1.6, 0.1), [0]))
+
+
+def _surface_circuit(measure=False):
+    circuit = QuantumCircuit()
+    circuit.h(0)
+    circuit.cx(0, 1)
+    circuit.channel([0, 1], _surface_channel())
+    if measure:
+        circuit.measure_all()
+    return circuit
+
+
+def test_a_line_out_of_index_order_runs_alike_in_python_and_in_a_request():
+    """Six qubits on a line that does not run in index order, with channels between
+    the gates, on the matrix product operator, which places the qubits along the
+    line. From Python and from a native request the expectation values are those of
+    the density matrix, which runs the circuit as it is listed."""
+    qubits = 6
+    at = _device_line(qubits)
+    damping = [{"kind": "amplitude_damping", "qubits": [0], "gamma": 0.1}]
+    source = [{"name": "ry", "qubits": [at[place]], "params": [0.3 + 0.2 * place]} for place in range(qubits)]
+    circuit = QuantumCircuit()
+    for place in range(qubits):
+        circuit.ry(at[place], 0.3 + 0.2 * place)
+    for layer in range(3):
+        for place in range(layer % 2, qubits - 1, 2):
+            source.append({"name": "cx", "qubits": [at[place], at[place + 1]]})
+            source.append({"name": "channel", "qubits": [at[place]], "factors": damping})
+            circuit.cx(at[place], at[place + 1])
+            circuit.channel([at[place]], maestro.QuantumChannel.amplitude_damping(0.1))
+        # from the far end, so that the circuit as listed jumps along the line
+        for place in reversed(range(qubits)):
+            source.append({"name": "rz", "qubits": [at[place]], "params": [0.2 + 0.05 * place]})
+            circuit.rz(at[place], 0.2 + 0.05 * place)
+
+    def pauli(*terms):
+        letters = ["I"] * qubits
+        for place, letter in terms:
+            letters[at[place]] = letter
+        return "".join(letters)
+
+    observables = [pauli((0, "Z")), pauli((3, "Z")), pauli((5, "Z")), pauli((0, "Z"), (1, "Z")), pauli((2, "X"), (3, "X")),
+                   pauli((4, "Y"), (5, "Z")), pauli((0, "X"), (5, "X"))]
+
+    def request(method):
+        return {"schema_version": 2, "operation": "estimate",
+                "circuit": {"format": "instructions", "num_qubits": qubits, "num_clbits": qubits, "source": source},
+                "simulator": {"backend": "qcsim", "method": method}, "execution": {"seed": 11}, "observables": observables}
+
+    exact = _native_request(request("density_matrix"))
+    assert exact["ok"], exact
+    native = _native_request(request("matrix_product_operator"))
+    assert native["ok"], native
+    assert native["expectation_values"] == pytest.approx(exact["expectation_values"], abs=1e-9)
+    config = maestro.SimulatorConfig(simulation_type=S.MatrixProductOperator, seed=11)
+    mine = circuit.estimate(observables, config=config)["expectation_values"]
+    assert mine == pytest.approx(exact["expectation_values"], abs=1e-9)
+    # Not trivially: the damping and the gates leave no observable at an extreme.
+    assert all(abs(value) < 0.999 for value in exact["expectation_values"])
+
+
+def _surface_request(operation, method, measure=False, **fields):
+    source = [{"name": "h", "qubits": [0]}, {"name": "cx", "qubits": [0, 1]},
+              {"name": "channel", "qubits": [0, 1], "factors": _SURFACE_FACTORS}]
+    if measure:
+        source.append({"name": "measure", "qubits": [0, 1], "clbits": [0, 1]})
+    return {"schema_version": 2, "operation": operation,
+            "circuit": {"format": "instructions", "num_qubits": 2, "num_clbits": 2, "source": source},
+            "simulator": {"backend": "qcsim", "method": method}, "execution": {"seed": 11}, **fields}
+
+
+def test_a_structured_channel_is_the_same_map_in_python_and_in_a_request():
+    """Exactly, on the density matrix: expectation values and the fidelity to the ideal state."""
+    config = maestro.SimulatorConfig(simulation_type=S.DensityMatrix, seed=11)
+    mine = _surface_circuit().estimate(_SURFACE_OBSERVABLES, config=config)["expectation_values"]
+    native = _native_request(_surface_request("estimate", "density_matrix", observables=_SURFACE_OBSERVABLES))
+    assert native["ok"], native
+    assert native["expectation_values"] == pytest.approx(mine, abs=1e-12)
+    assert abs(mine[3] - 1) > 0.1  # The channel does something.
+    # The factors stay apart on both sides.
+    assert [factor["kind"] for factor in _surface_channel().factors] == ["pauli", "thermal", "thermal"]
+    fidelity = maestro.noisy_fidelity(_surface_circuit(), maestro.NoiseModel(), config=config)["fidelity"]
+    request = _surface_request("noisy_fidelity", "density_matrix", noise={"channels": []})
+    assert _native_request(request)["fidelity"] == pytest.approx(fidelity, abs=1e-12)
+
+
+@pytest.mark.parametrize("method, name", [(S.Statevector, "statevector"), (S.MatrixProductState, "matrix_product_state")])
+def test_a_structured_channel_is_sampled_alike_in_python_and_in_a_request(method, name):
+    """Both entry points draw one branch per shot from the state, and agree with the density matrix."""
+    shots = 20000
+    exact = _native_request(_surface_request("probabilities", "density_matrix"))["probabilities"]
+    config = maestro.SimulatorConfig(simulation_type=method, seed=11)
+    python = _surface_circuit(measure=True).execute(config=config, shots=shots)["counts"]
+    request = _surface_request("execute", name, measure=True)
+    request["execution"]["shots"] = shots
+    native = _native_request(request)
+    assert native["ok"], native
+    # Count keys list classical bit 0 first; probabilities index qubit 0 as the low bit.
+    for counts in (python, native["counts"]):
+        assert sum(counts.values()) == shots
+        for index, probability in enumerate(exact):
+            key = f"{index & 1}{index >> 1}"
+            error = math.sqrt(max(probability * (1 - probability), 1e-4) / shots)
+            assert abs(counts.get(key, 0) / shots - probability) < 5 * error, (key, counts, exact)
+
+
+def test_one_state_of_a_sampled_channel_is_one_branch_in_python_and_in_a_request():
+    """get_statevector and a statevector request both run the circuit once: one branch, picked by the seed."""
+    damping = maestro.QuantumChannel.amplitude_damping(0.3)
+    circuit = QuantumCircuit()
+    circuit.x(0)
+    circuit.channel([0], damping)
+    kept = 0
+    for seed in range(1, 41):
+        state = maestro.get_statevector(circuit, maestro.SimulatorConfig(simulation_type=S.Statevector, seed=seed))
+        populations = [abs(a) ** 2 for a in state]
+        assert max(populations) == pytest.approx(1.0, abs=1e-12)
+        kept += populations[1] > 0.5
+    assert 18 < kept < 38  # About 0.7 of them.
+    kept = 0
+    for seed in range(1, 41):
+        request = {"schema_version": 2, "operation": "probabilities",
+                   "circuit": {"format": "instructions", "num_qubits": 1, "num_clbits": 1,
+                               "source": [{"name": "x", "qubits": [0]},
+                                          {"name": "channel", "qubits": [0], "factors": [{"kind": "amplitude_damping", "gamma": 0.3}]}]},
+                   "simulator": {"backend": "qcsim", "method": "statevector"}, "execution": {"seed": seed}}
+        result = _native_request(request)
+        assert result["ok"], result
+        assert max(result["probabilities"]) == pytest.approx(1.0, abs=1e-12)
+        assert result["execution_metadata"]["stochastic_execution"] is True
+        kept += result["probabilities"][1] > 0.5
+    assert 18 < kept < 38
+
+
+def test_a_placed_channel_exchanges_its_qubits():
+    Q = maestro.QuantumChannel
+    damping = Q.amplitude_damping(0.3)
+    first, second = Q.on_qubit(damping, 0, 2), Q.on_qubit(damping, 1, 2)
+    assert Q.placed(damping, [1], 2).is_approx(second)
+    assert Q.placed(first, [1, 0], 2).is_approx(second)
+    assert Q.placed(first, [0, 1], 2).is_approx(first)
+    assert not first.is_approx(second)
+    with pytest.raises(ValueError):
+        Q.placed(first, [0, 0], 2)
+    with pytest.raises(ValueError):
+        Q.placed(damping, [2], 2)
+
+
+def _handle(method, qubits=2, seed=5):
+    owner = maestro.Maestro()
+    handle = owner.create_simulator(B.QCSim, method)
+    simulator = owner.get_simulator(handle)
+    simulator.AllocateQubits(qubits)
+    simulator.InitializeSimulator()
+    simulator.set_seed(seed)
+    return owner, handle, simulator
+
+
+def test_a_simulator_handle_applies_channels_as_its_method_does():
+    """Exactly on the density matrix; one branch drawn from the state on the statevector and the MPS."""
+    damping = maestro.QuantumChannel.amplitude_damping(0.3)
+    owner, handle, simulator = _handle(S.DensityMatrix)
+    try:
+        assert simulator.SupportsQuantumChannels() and not simulator.SamplesQuantumChannels()
+        simulator.ApplyX(0)
+        simulator.ApplyQuantumChannel([0], damping)
+        assert simulator.Probability(1) == pytest.approx(0.7, abs=1e-12)
+        statistics = simulator.GetGateFusionStatistics()
+        assert statistics.unreadBlocks == 0 and statistics.rereadBlocks == 0
+    finally:
+        owner.destroy_simulator(handle)
+    for method in (S.Statevector, S.MatrixProductState):
+        kept = 0
+        for seed in range(1, 41):
+            owner, handle, simulator = _handle(method, seed=seed)
+            try:
+                assert simulator.SamplesQuantumChannels() and not simulator.SupportsQuantumChannels()
+                simulator.ApplyX(0)
+                simulator.apply_channel([0], damping)
+                one = simulator.Probability(1)
+                assert one == pytest.approx(round(one), abs=1e-12)
+                kept += one > 0.5
+            finally:
+                owner.destroy_simulator(handle)
+        assert 18 < kept < 38
+
+
+def test_a_channel_says_whether_it_is_a_gate():
+    Channel = maestro.QuantumChannel
+    x, identity = [[0, 1], [1, 0]], [[1, 0], [0, 1]]
+    assert Channel.unitary_mixture([1.0], [x]).is_deterministic
+    assert Channel.unitary_mixture([0.0, 1.0], [identity, x]).is_deterministic
+    assert Channel.pauli([0.0, 1.0, 0.0, 0.0]).is_deterministic
+    assert Channel.from_kraus([x]).is_deterministic
+    assert Channel.pauli([0.0, 1.0, 0.0, 0.0]).then(Channel.unitary_mixture([1.0], [x])).is_deterministic
+    assert not Channel.unitary_mixture([0.5, 0.5], [identity, x]).is_deterministic
+    assert not Channel.depolarizing(0.1).is_deterministic
+    assert not Channel.amplitude_damping(0.2).is_deterministic
+    assert not Channel.pauli([0.0, 1.0, 0.0, 0.0]).then(Channel.amplitude_damping(0.2)).is_deterministic
+
+
+@pytest.mark.parametrize("backend, method, options", SAMPLING_BACKENDS)
+def test_a_channel_with_one_unitary_branch_runs_as_the_gate_it_is(backend, method, options):
+    """A channel with one branch only, a unitary, draws nothing: a backend that samples
+    channels evolves the circuit once for all its shots, as with the gate in its place,
+    an estimate is one evolution, and a realization holds the shots asked of it. A
+    mixture of two unitaries is drawn shot by shot as before."""
+    _skip_missing(backend)
+    Channel = maestro.QuantumChannel
+    x, identity = [[0, 1], [1, 0]], [[1, 0], [0, 1]]
+    as_channel, drawn = Channel.unitary_mixture([1.0], [x]), Channel.unitary_mixture([0.5, 0.5], [identity, x])
+
+    def circuit(third, measure=True):
+        c = QuantumCircuit()
+        c.h(0)
+        c.cx(0, 1)
+        if third is None:
+            c.x(0)
+        else:
+            c.channel([0], third)
+        c.ry(1, 0.4)
+        c.cx(1, 2)
+        if measure:
+            c.measure_all()
+        return c
+
+    config = _config(method, backend, seed=_seed(backend, method, 61), **options)
+    gate = circuit(None).execute(config=config, shots=4000)
+    channel = circuit(as_channel).execute(config=config, shots=4000)
+    assert channel["counts"] == gate["counts"], f"{backend} {method}: the channel did not sample as the gate it is"
+    assert circuit(drawn).execute(config=config, shots=4000)["counts"] != gate["counts"]
+
+    observables = ["ZZI", "XIX", "IYY"]
+    expected = circuit(None, measure=False).estimate(observables, config=config)
+    estimated = circuit(as_channel, measure=False).estimate(observables, config=config)
+    assert not estimated["stochastic_execution"] and not expected["stochastic_execution"]
+    assert circuit(drawn, measure=False).estimate(observables, config=config)["stochastic_execution"]
+    assert estimated["expectation_values"] == pytest.approx(expected["expectation_values"], abs=1e-12)
+
+    readout = maestro.NoiseModel()
+    readout.set_readout_error(0, 0.02, 0.03)
+    shared = maestro.noisy_execute(circuit(as_channel), readout, shots=500, noise_realizations=1, config=config)
+    assert shared["noise_realizations"] == 1 and sum(shared["counts"].values()) == 500
+    per_shot = maestro.noisy_execute(circuit(drawn), readout, shots=500, noise_realizations=1, config=config)
+    assert per_shot["noise_realizations"] == 500
+
+
+def test_a_generic_gate_that_is_not_unitary_leaves_the_channels_after_it_unbiased():
+    """A generic gate need not be unitary. After one that is not, the fused statevector
+    no longer knows the norm of its state, which a block of channels applied before the
+    state is read would take for the probability that nothing happens: such blocks are
+    read first. The branch drawn is then the one fusion off draws, seed by seed."""
+    damping = maestro.QuantumChannel.amplitude_damping(0.25)
+
+    def decays(scale, fusion, where=0, read_first=False):
+        outcomes, unread = [], 0
+        for seed in range(1, 201):
+            owner, handle, simulator = _handle(S.Statevector, seed=seed)
+            try:
+                simulator.Configure("gate_fusion", "true" if fusion else "false")
+                if read_first:
+                    simulator.Configure("trajectory_blocks_read_first", "true")
+                simulator.set_seed(seed)
+                simulator.ApplyX(0)
+                if scale is not None:
+                    simulator.ApplyGenericOneQubitGate(where, [[scale, 0.0], [0.0, scale]])
+                simulator.ApplyQuantumChannel([0], damping)
+                simulator.Flush()
+                unread += simulator.GetGateFusionStatistics().unreadBlocks
+                # |00> against |01>: qubit 0 decayed or kept, whatever norm the gate gave the state
+                outcomes.append(simulator.Probability(0) > simulator.Probability(1))
+            finally:
+                owner.destroy_simulator(handle)
+        return outcomes, unread
+
+    reference, unread = decays(None, False)
+    # 200 seeds at a quarter: 50 expected, five sigma is 31
+    assert unread == 0 and 19 < sum(reference) < 81
+    assert decays(None, True, read_first=True) == (reference, 0)
+    fused, unread = decays(None, True)
+    assert fused == reference and unread > 100
+    unitary, unread = decays(1.0, True)
+    assert unitary == reference and unread > 100
+    for scale in (2.0, 0.5):
+        for where in (0, 1):
+            outcomes, unread = decays(scale, True, where)
+            assert unread == 0, f"scale {scale} on qubit {where}: {unread} blocks were applied before the state was read"
+            assert outcomes == reference, (
+                f"scale {scale} on qubit {where}: {sum(outcomes)} decays of 200 where fusion off gives {sum(reference)}")
+
+
+def test_a_checkpoint_prefix_refuses_channels_it_would_sample_once():
+    """A prefix runs once: a branch drawn there would be shared by every suffix shot."""
+    prefix = QuantumCircuit()
+    prefix.x(0)
+    prefix.channel([0], maestro.QuantumChannel.amplitude_damping(0.3))
+    suffix = QuantumCircuit()
+    suffix.measure_all()
+    for method in (S.Statevector, S.MatrixProductState):
+        config = maestro.SimulatorConfig(simulation_type=method, seed=3, fixed_backend=True)
+        with pytest.raises(ValueError, match="prefix runs once"):
+            maestro.PrefixCheckpointedSimulator(prefix, 1, config)
+        # In the suffix every shot draws its own branch.
+        moved = QuantumCircuit()
+        moved.channel([0], maestro.QuantumChannel.amplitude_damping(0.3))
+        moved.measure_all()
+        head = QuantumCircuit()
+        head.x(0)
+        counts = maestro.PrefixCheckpointedSimulator(head, 1, config).execute_suffix(moved, shots=8000)["counts"]
+        assert abs(counts.get("1", 0) / 8000 - 0.7) < 0.03
+    # A density matrix applies the prefix's channel exactly.
+    config = maestro.SimulatorConfig(simulation_type=S.DensityMatrix, seed=3, fixed_backend=True)
+    counts = maestro.PrefixCheckpointedSimulator(prefix, 1, config).execute_suffix(suffix, shots=8000)["counts"]
+    assert abs(counts.get("1", 0) / 8000 - 0.7) < 0.03

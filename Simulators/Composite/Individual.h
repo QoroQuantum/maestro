@@ -731,6 +731,16 @@ class IndividualSimulator : public ISimulator
      * Measures the qubits and for those that are 1, applies X on them
      * @param qubits A vector with the qubits to be reset.
      */
+    bool SamplesQuantumChannels() const override
+    {
+        return simulator->SamplesQuantumChannels();
+    }
+
+    void ApplyQuantumChannel(const Types::qubits_vector &targets, const QuantumChannel &channel) override
+    {
+        simulator->ApplyQuantumChannel(ConvertQubits(targets), channel);
+    }
+
     void ApplyReset(const Types::qubits_vector &qubits) override
     {
         simulator->ApplyReset(ConvertQubits(qubits));

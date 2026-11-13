@@ -15,3 +15,13 @@ the docstrings of the installed module.
    hardware
    sinter
    low-level
+
+Build identity
+--------------
+
+``maestro.__version__`` is the version of the installed build, and
+``build_info`` says which sources it was compiled from.
+
+.. currentmodule:: maestro
+
+.. autofunction:: build_info

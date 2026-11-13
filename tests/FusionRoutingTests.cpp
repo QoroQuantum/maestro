@@ -1395,6 +1395,163 @@ template <class Backend> static void AutomaticNetworkLayoutParity(size_t n)
     }
 }
 
+// A circuit on a line of qubits that does not run in index order, as one laid out on a device. The network places
+// the qubits along the line, which needs no swap, and orders the operations for the chain in those places: the same
+// order, and the same state, as for the circuit written on index neighbours.
+// The qubit at each place of a line through a register: the indices in steps of `step`, which shares no factor with
+// their number (0 5 10 3 8 1 ... for twelve qubits in steps of five).
+static std::vector<size_t> DeviceLine(size_t n, size_t step)
+{
+    std::vector<size_t> at(n);
+    for (size_t i = 0; i < n; ++i)
+        at[i] = i * step % n;
+    return at;
+}
+
+// Gates and sampled channels between neighbours of the line `at`, or of the chain in index order.
+static std::vector<Op> LineOperations(const std::vector<size_t> &at, bool line)
+{
+    const size_t n = at.size();
+    const auto q = [&](size_t place) { return line ? at[place] : place; };
+    std::vector<Op> ops;
+    for (size_t i = 0; i < n; ++i)
+        ops.push_back(CF::CreateGate(Kind::kRyGateType, q(i), 0, 0, .3 + .1 * static_cast<double>(i)));
+    for (size_t layer = 0; layer < 4; ++layer)
+    {
+        for (size_t i = layer % 2; i + 1 < n; i += 2)
+        {
+            ops.push_back(CF::CreateGate(Kind::kCXGateType, q(i), q(i + 1)));
+            ops.push_back(std::make_shared<Circuits::QuantumChannelOperation<>>(Types::qubits_vector{q(i)}, QuantumChannel::AmplitudeDamping(.05)));
+        }
+        // from the far end, so that the circuit as listed jumps along the chain
+        for (size_t i = n; i-- > 0;)
+            ops.push_back(CF::CreateGate(Kind::kRzGateType, q(i), 0, 0, .2 + .05 * static_cast<double>(i)));
+    }
+    return ops;
+}
+
+template <class Backend> static void DeviceLineLayout(size_t n, bool mpo)
+{
+    const std::vector<size_t> at = DeviceLine(n, 5);
+    std::vector<long long> identity(n), along(n);
+    std::iota(identity.begin(), identity.end(), 0);
+    for (size_t i = 0; i < n; ++i)
+        along[at[i]] = static_cast<long long>(i);
+    const auto operations = [&](bool line) { return LineOperations(at, line); };
+
+    std::vector<std::vector<size_t>> orders;
+    for (bool line : {false, true})
+    {
+        auto raw = std::make_shared<AutomaticRoutingProbe<Backend>>();
+        std::shared_ptr<ISimulator> sim = std::make_shared<RecordingSimulator>(raw);
+        sim->Configure("gate_fusion", "false");
+        ConfigureExactAutomatic(*sim, n);
+        AutomaticNetworkProbe net(Types::qubits_vector{n}, std::vector<size_t>{n});
+        net.Configure("matrix_product_state_max_bond_dimension", "64");
+        net.Configure("matrix_product_operator_max_bond_dimension", "64");
+        net.SetInitialQubitsMapOptimization(true);
+        net.SetMPSOptimizeSwaps(true);
+        const auto given = operations(line);
+        auto circuit = CF::CreateCircuit(given);
+        net.OptimizeMPSInitialQubitsMap(sim, circuit, n);
+        Check(!raw->initialMaps.empty(), "the network installed no layout for a chain");
+        Check(raw->initialMaps.back() == (line ? along : identity),
+              line ? "the qubits of a line were not placed along it" : "a chain in index order was given another layout");
+
+        // The place, in the circuit as given, of each operation of the circuit the network left.
+        std::vector<size_t> order;
+        for (const auto &op : circuit->GetOperations())
+            order.push_back(static_cast<size_t>(std::find(given.begin(), given.end(), op) - given.begin()));
+        Check(order.size() == given.size() && *std::max_element(order.begin(), order.end()) < given.size(),
+              "the layout pass replaced an operation of the circuit");
+        orders.push_back(order);
+
+        // Run as ordered: no qubit moves, and on the operator the state is that of the circuit as given.
+        auto reference = SimulatorsFactory::CreateSimulator(SimulatorType::kQCSim, SimulationType::kDensityMatrix);
+        reference->Configure("gate_fusion", "false");
+        reference->AllocateQubits(n);
+        reference->Initialize();
+        Circuits::OperationState state, referenceState;
+        state.AllocateBits(n);
+        referenceState.AllocateBits(n);
+        for (const auto &op : circuit->GetOperations())
+            op->Execute(sim, state);
+        sim->Flush();
+        Check(raw->NativeMap() == raw->initialMaps.back(), line ? "a circuit on a line was routed with swaps" : "a chain in index order was routed");
+        if (mpo)
+        {
+            for (const auto &op : given)
+                op->Execute(reference, referenceState);
+            CheckAutomaticState(sim, reference, true);
+        }
+    }
+    std::vector<size_t> listed(orders[0].size());
+    std::iota(listed.begin(), listed.end(), size_t{0});
+    Check(orders[0] != listed, "the chain order left a jumping circuit as it was listed");
+    Check(orders[0] == orders[1], "a line out of index order is not ordered as the same chain in index order");
+}
+
+// Below the sizes at which the network plans a layout. With a bond limit under 32 on a register of twelve routed
+// qubits or more, a line out of index order still gets its qubits placed along it and its operations ordered
+// along it (`placed`). A smaller register is left alone, and so is a chain in index order, as before.
+template <class Backend> static void DeviceLineBelowPlanning(size_t n, size_t step, const char *bondLimit, bool placed, Circuits::ChainOrder chain)
+{
+    const std::vector<size_t> at = DeviceLine(n, step);
+    std::vector<long long> along(n);
+    for (size_t i = 0; i < n; ++i)
+        along[at[i]] = static_cast<long long>(i);
+    for (bool line : {false, true})
+    {
+        auto raw = std::make_shared<AutomaticRoutingProbe<Backend>>();
+        std::shared_ptr<ISimulator> sim = std::make_shared<RecordingSimulator>(raw);
+        sim->Configure("gate_fusion", "false");
+        ConfigureExactAutomatic(*sim, n);
+        AutomaticNetworkProbe net(Types::qubits_vector{n}, std::vector<size_t>{n});
+        net.Configure("matrix_product_state_max_bond_dimension", bondLimit);
+        net.Configure("matrix_product_operator_max_bond_dimension", bondLimit);
+        net.SetInitialQubitsMapOptimization(true);
+        net.SetMPSOptimizeSwaps(true);
+        const auto given = LineOperations(at, line);
+        auto circuit = CF::CreateCircuit(given);
+        net.OptimizeMPSInitialQubitsMap(sim, circuit, n);
+        if (line && placed)
+        {
+            Check(raw->initialMaps.size() == 1 && raw->initialMaps.back() == along, "a line under a small bond limit was not placed along its qubits");
+            const auto ordered = Circuits::ChainOrdered(CF::CreateCircuit(given), chain, &along);
+            Check(ordered->GetOperations() != given && circuit->GetOperations() == ordered->GetOperations(),
+                  "a line under a small bond limit was not ordered along its qubits");
+        }
+        else
+        {
+            Check(raw->initialMaps.empty(), line ? "a small register on a line was given a layout" : "a chain in index order was given a layout");
+            Check(circuit->GetOperations() == given, "a circuit that gets no layout was reordered");
+        }
+        if (!line || placed)
+        {
+            Circuits::OperationState state;
+            state.AllocateBits(n);
+            const auto before = raw->NativeMap();
+            for (const auto &op : circuit->GetOperations())
+                op->Execute(sim, state);
+            sim->Flush();
+            Check(raw->NativeMap() == before, line ? "a circuit placed on its line was routed with swaps" : "a chain in index order was routed");
+        }
+    }
+    // With the layout optimization off nothing is placed.
+    auto raw = std::make_shared<AutomaticRoutingProbe<Backend>>();
+    std::shared_ptr<ISimulator> sim = std::make_shared<RecordingSimulator>(raw);
+    sim->Configure("gate_fusion", "false");
+    ConfigureExactAutomatic(*sim, n);
+    AutomaticNetworkProbe net(Types::qubits_vector{n}, std::vector<size_t>{n});
+    net.Configure("matrix_product_state_max_bond_dimension", bondLimit);
+    net.Configure("matrix_product_operator_max_bond_dimension", bondLimit);
+    net.SetInitialQubitsMapOptimization(false);
+    net.SetMPSOptimizeSwaps(true);
+    auto circuit = CF::CreateCircuit(LineOperations(at, true));
+    net.OptimizeMPSInitialQubitsMap(sim, circuit, n);
+    Check(raw->initialMaps.empty(), "a line was placed although the layout optimization is off");
+}
+
 struct AutomaticFusionInspection : Private::FusionState
 {
     static const ISimulator &Immediate(const Private::FusionState &sim)
@@ -1916,6 +2073,12 @@ int main(int argc, char **argv)
         AutomaticFusedSwap<Private::QCSimMPOSimulator>(6);
         AutomaticNetworkLayoutParity<Private::QCSimMPSSimulator>(12);
         AutomaticNetworkLayoutParity<Private::QCSimMPOSimulator>(6);
+        DeviceLineLayout<Private::QCSimMPSSimulator>(12, false);
+        DeviceLineLayout<Private::QCSimMPOSimulator>(6, true);
+        DeviceLineBelowPlanning<Private::QCSimMPSSimulator>(12, 5, "16", true, Circuits::ChainOrder::kSampledChannels);
+        DeviceLineBelowPlanning<Private::QCSimMPOSimulator>(6, 5, "16", true, Circuits::ChainOrder::kMixedState);
+        DeviceLineBelowPlanning<Private::QCSimMPSSimulator>(8, 5, "64", false, Circuits::ChainOrder::kSampledChannels);
+        DeviceLineBelowPlanning<Private::QCSimMPOSimulator>(4, 3, "64", false, Circuits::ChainOrder::kMixedState);
         AutomaticNetworkJobs();
         MultishotNetwork();
         FlushScopeAndRoutingSettings();
