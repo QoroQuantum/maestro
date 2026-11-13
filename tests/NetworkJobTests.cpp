@@ -9,7 +9,9 @@
 #include <atomic>
 #include <chrono>
 #include <iostream>
+#include <numeric>
 #include <optional>
+#include <random>
 #include <set>
 #include <thread>
 #ifdef _OPENMP
@@ -354,6 +356,100 @@ void MeasurementJobs()
                                                                                           "write/readout");
                             }
                         }
+        }
+}
+
+std::shared_ptr<Circuit> SwapParityCircuit(size_t qubits, size_t layers, unsigned seed)
+{
+    std::mt19937 rng(seed);
+    const double pi = std::acos(-1.);
+    std::uniform_real_distribution<double> angle(-pi, pi);
+    const std::array<Gate, 3> rotations{Gate::kRxGateType, Gate::kRyGateType, Gate::kRzGateType};
+    const std::array<Gate, 5> pairs{Gate::kCXGateType, Gate::kCZGateType, Gate::kCRxGateType, Gate::kCPGateType, Gate::kSwapGateType};
+    std::vector<Types::qubit_t> order(qubits);
+    std::iota(order.begin(), order.end(), 0);
+    auto circuit = CF::CreateCircuit();
+    for (size_t layer = 0; layer < layers; ++layer)
+    {
+        for (Types::qubit_t q = 0; q < qubits; ++q)
+            circuit->AddOperation(CF::CreateGate(rotations[rng() % rotations.size()], q, 0, 0, angle(rng)));
+        // Random pairings put most two-qubit gates far apart on the chain.
+        std::shuffle(order.begin(), order.end(), rng);
+        for (size_t i = 0; i + 1 < qubits; i += 2)
+            circuit->AddOperation(CF::CreateGate(pairs[rng() % pairs.size()], order[i], order[i + 1], 0, angle(rng)));
+        // The optimised path rewrites three-qubit gates before planning a route.
+        circuit->AddOperation(CF::CreateGate(layer % 2 ? Gate::kCSwapGateType : Gate::kCCXGateType, order[0], order[1], order[2]));
+    }
+    return circuit;
+}
+
+// disable_optimized_swapping switches off the initial-layout search and the
+// lookahead router. When the bond cap is at least the largest Schmidt rank the
+// register allows, nothing is truncated and the route cannot change the state,
+// so both settings must reproduce the dense result. Registers and caps sit above
+// the thresholds that turn the optimisation on (12 routed qubits, cap 32); the
+// lookahead check keeps a moved threshold from making the comparison vacuous.
+void SwapOptimizationKeepsExactResults()
+{
+    struct Case
+    {
+        Method method;
+        size_t qubits;
+        const char *cap; // 2^(n/2) for an MPS, 4^(n/2) for an MPO: never truncates
+    };
+
+    for (const Case c : {Case{Method::kMatrixProductState, 12, "64"}, Case{Method::kMatrixProductState, 14, "128"},
+                         Case{Method::kMatrixProductOperator, 6, "64"}, Case{Method::kMatrixProductOperator, 7, "64"}})
+        for (unsigned seed : {1u, 2u})
+        {
+            const bool mpo = c.method == Method::kMatrixProductOperator;
+            const auto circuit = SwapParityCircuit(c.qubits, 10, seed);
+            auto reference = Simulators::SimulatorsFactory::CreateSimulator(Backend::kQCSim, mpo ? Method::kDensityMatrix : Method::kStatevector);
+            reference->AllocateQubits(c.qubits);
+            reference->Initialize();
+            Circuits::OperationState referenceState;
+            referenceState.AllocateBits(c.qubits);
+            circuit->Execute(reference, referenceState);
+
+            for (bool optimise : {false, true})
+            {
+                const std::string label = std::string(mpo ? "MPO" : "MPS") + " n=" + std::to_string(c.qubits) + " seed=" + std::to_string(seed) +
+                                          (optimise ? " optimised swapping" : " disable_optimized_swapping");
+                auto network = std::make_shared<Net>(Types::qubits_vector{c.qubits}, std::vector<size_t>{c.qubits});
+                network->SetInitialQubitsMapOptimization(optimise);
+                network->SetMPSOptimizeSwaps(optimise);
+                network->SetLookaheadDepth(-1); // automatic depth, the SimulatorConfig default
+                Counts results;
+                std::mutex mutex;
+                Network::ExecuteJob<> job(std::static_pointer_cast<Circuit>(circuit->Clone()), results, 1, c.qubits, c.qubits, c.qubits, Backend::kQCSim,
+                                          c.method, mutex);
+                job.network = network;
+                job.optimiseMultipleShotsExecution = false;
+                job.config.SetConfiguration("matrix_product_state_max_bond_dimension", c.cap);
+                job.config.SetConfiguration("matrix_product_operator_max_bond_dimension", c.cap);
+                bool lookahead = !optimise;
+                job.onSimulatorReady = [&](const Simulators::ISimulator &sim) { lookahead = sim.IsRoutingLookaheadEnabled(); };
+                job.DoWork();
+                Check(job.optSim != nullptr, label + ": the job did not simulate");
+                Check(lookahead == optimise, label + ": lookahead routing does not follow the swap-optimisation setting");
+
+                double gap = 0.;
+                if (mpo)
+                {
+                    Types::qubits_vector all(c.qubits);
+                    std::iota(all.begin(), all.end(), 0);
+                    gap = (job.optSim->GetDensityMatrix(false) - reference->PartialTrace(all)).cwiseAbs().maxCoeff();
+                }
+                else
+                {
+                    const auto actual = job.optSim->GetStateVector();
+                    const auto expected = reference->GetStateVector();
+                    Check(actual.size() == expected.size(), label + ": statevector size changed");
+                    for (size_t i = 0; i < actual.size(); ++i)
+                        gap = std::max(gap, std::abs(actual[i] - expected[i]));
+                }
+                Check(gap < 1e-10, label + ": swap optimisation changed an untruncated result (max deviation " + std::to_string(gap) + ")");
+            }
         }
 }
 
@@ -2837,6 +2933,7 @@ try
     RandomJobs();
     RandomSeedPolicy();
     MeasurementJobs();
+    SwapOptimizationKeepsExactResults();
     NoiseClonePolicy();
     ConditionalOutputMapping();
     QCSimWorkerRandomStreams();
