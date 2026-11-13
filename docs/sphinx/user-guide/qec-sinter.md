@@ -35,6 +35,9 @@ noisy-Clifford reference frames, as Stim does, and samples them natively
 simulator can't: non-Clifford gates, coherent or device-level noise from a
 `NoiseModel`, and MPS or density-matrix simulation.
 
+To run Deltakit circuits, the deltakit-maestro plugin builds on these samplers;
+see {doc}`/getting-started/deltakit`.
+
 (py_sinter_install)=
 ## Install
 

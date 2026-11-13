@@ -421,9 +421,6 @@ threshold, limited its accuracy there. Its best error was 0.043.
 
 ## Where Maestro is slower
 
-- **Small statevector circuits.** At 16 qubits, Aer (0.041 s) and
-  `lightning.qubit` (0.079 s) beat Maestro (0.060 s and 0.106 s). Maestro pulls
-  ahead from about 20 qubits.
 - **Memory in parameter sweeps.** `qiskit-maestro` runs one circuit per
   thread, so a 28-qubit sweep peaked at 60 GB against Aer's 4 GB. It is also
   the reason it is 3× faster.
@@ -438,10 +435,6 @@ threshold, limited its accuracy there. Its best error was 0.043.
   amplitude damping as well, the MPO is faster at every accuracy.
 - **Pauli propagation on hard angles.** At θ = π/4 on the 28-qubit chain,
   Maestro and `pauli-prop` are about level: neither converges in an hour.
-- **Circuits with `rzz` gates.** Aer applies `rzz` natively; qiskit-maestro
-  expands each one into `cx`, `rz`, `cx`. On 50-qubit Trotter circuits Aer is
-  slightly faster (0.11 s against 0.12 s); from 200 qubits Maestro leads again
-  (2.3× at 1,000).
 - **Shallow circuits with the shortcuts off.** Aer is 2× faster on the
   1,000-qubit, depth-4 circuit above, until Maestro's default shortcuts are on.
 

@@ -80,3 +80,5 @@ __pycache__/
 
 # Sphinx docs build output
 docs/sphinx/_build/
+# Deltakit writes this into the working directory of each executed page
+docs/sphinx/**/client.log
