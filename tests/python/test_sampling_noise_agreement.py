@@ -1680,13 +1680,14 @@ def test_a_damping_of_zero_is_a_gate():
 
 def test_a_checkpoint_prefix_takes_the_same_in_python_and_in_a_request():
     """A prefix runs once. PrefixCheckpointedSimulator and a checkpoint_batch request take the same
-    resets and channel instructions in it, refuse the same ones, and prepare the same state."""
+    resets, measurements and channel instructions in it, refuse the same ones, and prepare the same state."""
     Q = maestro.QuantumChannel
     damped = {"kind": "amplitude_damping", "gamma": 0.3}
     # Each case: what follows an X on the qubit, in Python and as a request instruction, and the
     # probability of reading 1 where the prefix runs.
     cases = {
         "reset": (lambda c: c.reset(0), {"name": "reset", "qubits": [0]}, 0.0),
+        "measurement": (lambda c: c.measure([(0, 0)]), {"name": "measure", "qubits": [0], "clbits": [0]}, 1.0),
         "one unitary": (lambda c: c.channel([0], Q.unitary_mixture([1.0], [np.array([[0, 1], [1, 0]], dtype=complex)])),
                         {"name": "channel", "qubits": [0],
                          "factors": [{"kind": "unitary_mixture", "probabilities": [1.0], "unitaries": [[0, 1, 1, 0]]}]}, 0.0),
@@ -1703,7 +1704,7 @@ def test_a_checkpoint_prefix_takes_the_same_in_python_and_in_a_request():
     shots = 4000
     for case, (build, instruction, ones) in cases.items():
         for name, method in {**exact, **sampling, **neither}.items():
-            runs = case == "reset" or name in exact or (name in sampling and case in one_branch)
+            runs = case in ("reset", "measurement") or name in exact or (name in sampling and case in one_branch)
             prefix = QuantumCircuit()
             prefix.x(0)
             build(prefix)
@@ -1730,3 +1731,50 @@ def test_a_checkpoint_prefix_takes_the_same_in_python_and_in_a_request():
             counts = maestro.PrefixCheckpointedSimulator(prefix, 1, config).execute_suffix(suffix, shots=shots)["counts"]
             for label, read in (("Python", counts.get("1", 0)), ("request", native["results"][0]["counts"].get("1", 0))):
                 assert abs(read / shots - ones) < 0.04, f"{case} on {name}: {label} read 1 in {read} of {shots} shots, expected {ones}"
+
+
+@pytest.mark.parametrize("method, name", [(S.Statevector, "statevector"), (S.MatrixProductState, "matrix_product_state"),
+                                          (S.DensityMatrix, "density_matrix")])
+def test_a_measurement_in_a_checkpoint_prefix_collapses_once_in_python_and_in_a_request(method, name):
+    """A prefix runs once, so its measurement gives one outcome: every suffix shot continues from
+    it, through both entry points. Half of a Bell pair is measured; the suffix reads both qubits."""
+    shots = 500
+    prefix = QuantumCircuit()
+    prefix.h(0)
+    prefix.cx(0, 1)
+    prefix.measure([(0, 0)])
+    suffix = QuantumCircuit()
+    suffix.measure([(0, 0), (1, 1)])  # measure_all() would read only the qubits the suffix itself uses
+    config = maestro.SimulatorConfig(simulator_type=maestro.SimulatorType.QCSim, simulation_type=method, seed=3, fixed_backend=True)
+    counts = maestro.PrefixCheckpointedSimulator(prefix, 2, config).execute_suffix(suffix, shots=shots)["counts"]
+    request = {
+        "schema_version": 2, "operation": "checkpoint_batch",
+        "circuit": {"format": "instructions", "num_qubits": 2, "num_clbits": 2,
+                    "source": [{"name": "h", "qubits": [0]}, {"name": "cx", "qubits": [0, 1]},
+                               {"name": "measure", "qubits": [0], "clbits": [0]}]},
+        "suffixes": [{"format": "instructions", "num_qubits": 2, "num_clbits": 2,
+                      "source": [{"name": "measure", "qubits": [0, 1], "clbits": [0, 1]}]}],
+        "simulator": {"backend": "qcsim", "method": name, "selection": "fixed"},
+        "execution": {"shots": shots, "seed": 3},
+    }
+    native = _native_request(request)
+    assert native["ok"], native
+    for label, read in (("Python", dict(counts)), ("request", native["results"][0]["counts"])):
+        assert len(read) == 1 and set(read) <= {"00", "11"} and sum(read.values()) == shots, f"{label} on {name}: {read}"
+
+    # A reset of that qubit instead: a pure state collapses once with it, so the other qubit reads the
+    # same in every shot; a density matrix applies the reset exactly and keeps both branches.
+    prefix = QuantumCircuit()
+    prefix.h(0)
+    prefix.cx(0, 1)
+    prefix.reset(0)
+    counts = maestro.PrefixCheckpointedSimulator(prefix, 2, config).execute_suffix(suffix, shots=shots)["counts"]
+    request["circuit"]["source"][-1] = {"name": "reset", "qubits": [0]}
+    native = _native_request(request)
+    assert native["ok"], native
+    for label, read in (("Python", dict(counts)), ("request", native["results"][0]["counts"])):
+        assert set(read) <= {"00", "01"} and sum(read.values()) == shots, f"{label} on {name}: {read}"
+        if method == S.DensityMatrix:
+            assert abs(read.get("01", 0) / shots - 0.5) < 0.1, f"{label} on {name}: {read}"
+        else:
+            assert len(read) == 1, f"{label} on {name}: {read}"

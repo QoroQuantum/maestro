@@ -1096,7 +1096,8 @@ try
         return j::object{{"name", "channel"}, {"qubits", j::array{0}}, {"factors", j::array{j::object{{"kind", "amplitude_damping"}, {"gamma", gamma}}}}};
     };
     const auto ones = [&](const j::object &checkpoint) {
-        const auto &counts = Call(checkpoint).at("results").at(0).at("counts").as_object();
+        // A copy: the response it is read from does not outlive the statement.
+        const j::object counts = Call(checkpoint).at("results").at(0).at("counts").as_object();
         return counts.contains("1") ? counts.at("1").to_number<double>() / 2000 : 0.0;
     };
     for (const char *method : {"density_matrix", "statevector", "matrix_product_state"})
@@ -1116,13 +1117,32 @@ try
         }
     Check(Call(prefixed("tensor_network", {flip, damping(0.0)}), false, true).at("error").at("code") == "unsupported_capability",
           "A checkpoint prefix held a channel on a backend that holds none");
-    // Its measurements stay terminal and are removed: only suffixes are sampled.
-    request = Request("checkpoint_batch", 1, "measure q[0]->c[0]; x q[0];");
-    request["suffixes"] = j::array{Request("execute", 1, "measure q->c;").at("circuit")};
+    // Its measurements run too, once: every suffix shot continues from the one outcome, and an operation that
+    // depends on it has it. The outcomes are not returned, since only suffixes are sampled.
+    for (const char *method : {"statevector", "density_matrix"})
     {
-        const auto error = Call(request, false, true).at("error").as_object();
-        Check(error.at("code") == "unsupported_capability" && error.at("message") == "This query requires terminal measurements only",
-              "Checkpoint prefix error lost operation context");
+        request = Request("checkpoint_batch", 2, "h q[0]; measure q[0]->c[0]; if(c==1) x q[1];", method);
+        request["suffixes"] = j::array{Request("execute", 2, "measure q->c;", method).at("circuit")};
+        request["execution"].as_object()["shots"] = 500;
+        const j::object collapsed = Call(request).at("results").at(0).at("counts").as_object();
+        Check(collapsed.size() == 1 && (collapsed.contains("00") || collapsed.contains("11")) && collapsed.begin()->value().to_number<size_t>() == 500,
+              "A measurement in a checkpoint prefix did not collapse once for every suffix shot");
+    }
+    // A noise block still acts on the suffixes of a prefix that measures: the measured qubit reads 1 in every shot,
+    // and the other, flipped in the suffix, is flipped back in a quarter of them.
+    request = Request("checkpoint_batch", 2, "x q[0]; measure q[0]->c[0];");
+    request["suffixes"] = j::array{Request("execute", 2, "x q[1]; measure q->c;").at("circuit")};
+    request["execution"].as_object()["shots"] = 2000;
+    request["noise"] = j::object{{"mode", "pauli"},
+                                 {"evaluation", "trajectories"},
+                                 {"realizations", 2000},
+                                 {"seed", 7},
+                                 {"channels", j::array{j::object{{"kind", "bit_flip"}, {"targets", j::array{1}}, {"probability", 0.25}}}}};
+    request["simulator"].as_object()["selection"] = "fixed";
+    {
+        const j::object noisy = Call(request).at("results").at(0).at("counts").as_object();
+        const double kept = noisy.contains("11") ? noisy.at("11").to_number<double>() / 2000 : 0.0;
+        Check(noisy.size() == 2 && noisy.contains("10") && std::abs(kept - 0.75) < 0.04, "Suffix noise after a measuring checkpoint prefix is wrong");
     }
 
     for (const auto *field : {"other_circuit", "step_circuit", "suffixes", "steps", "requests", "diagnostics", "maintenance", "keep_qubits", "basis_states",

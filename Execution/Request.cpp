@@ -438,32 +438,6 @@ CircuitPtr Unmeasured(const CircuitPtr &circuit, bool unitary = false, const std
     return result;
 }
 
-// A checkpoint_batch prefix without its terminal measurements: only suffixes
-// are sampled. It runs once, before the saved state, and may hold what the
-// prefix of Python's PrefixCheckpointedSimulator may: gates and delays; resets,
-// which collapse once on a pure state, for every suffix shot; and channel
-// instructions, where the backend takes them (CheckChannels).
-CircuitPtr CheckpointPrefix(const CircuitPtr &circuit)
-{
-    auto result = std::make_shared<Circuit>();
-    bool measured = false;
-    for (const auto &op : circuit->GetOperations())
-    {
-        const auto type = op->GetType();
-        if (type == Circuits::OperationType::kMeasurement)
-        {
-            measured = true;
-            continue;
-        }
-        Supported(!measured, "This query requires terminal measurements only");
-        Supported(type == Circuits::OperationType::kGate || type == Circuits::OperationType::kDelay || type == Circuits::OperationType::kReset ||
-                      type == Circuits::OperationType::kQuantumChannel,
-                  "checkpoint_batch prefix takes gates, resets and channel instructions only");
-        result->AddOperation(op->Clone());
-    }
-    return result;
-}
-
 // The circuit noisy_fidelity evolves, without its terminal measurements. As
 // in Python's noisy_fidelity, it may hold channel instructions, which are noise
 // that the ideal circuit does not have, and resets that precede every other
@@ -1294,11 +1268,14 @@ json::object Run(const json::object &request, bool validate, unsigned depth, Sho
     }
     if (operation == "checkpoint_batch")
     {
-        // Only suffix measurements are sampled. The prefix's terminal measurements
-        // are removed below, so readout on them would be dropped silently.
+        // The prefix runs once, as it is, before the saved state, like the prefix
+        // of Python's PrefixCheckpointedSimulator: its measurements, and on a pure
+        // state its resets, collapse once, for every suffix shot, and its channel
+        // instructions run where the backend takes them (CheckChannels). Only
+        // suffix measurements are sampled and returned, so readout on a prefix
+        // measurement would be dropped silently.
         Supported(!HasMeasurementReadout(input.circuit), "Measurement readout_error applies to checkpoint suffixes only; "
-                                                         "prefix measurements are removed");
-        circuit = CheckpointPrefix(input.circuit);
+                                                         "the outcomes of prefix measurements are not returned");
         Supported(noise.mode != "analytical", "Checkpoint suffixes require explicit noise evolution");
         const auto &suffixes = Array(Field(request, "suffixes"));
         Require(!suffixes.empty() && suffixes.size() <= 256, "Invalid suffix count");

@@ -469,8 +469,8 @@ void TestMixedStateQueries()
     Check(ErrorCode(Call(misplaced, false)) == "invalid_input", "target_statevector on execute was accepted");
 }
 
-// A checkpoint prefix's terminal measurements are removed, so readout on them
-// is refused; suffix measurements still apply it.
+// The outcomes of a checkpoint prefix's measurements are not returned, so
+// readout on them is refused; suffix measurements still apply it.
 void TestCheckpointPrefixReadout()
 {
     auto measure = Gate("measure", {0});
